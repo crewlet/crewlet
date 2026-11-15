@@ -14,7 +14,13 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
-import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
+import {
+  ARGUMENTS_NOT_KNOWN,
+  HELD_ARGUMENTS,
+  SEALED_ARGUMENTS,
+  SEALED_RESULT,
+  UNKNOWN_ARGUMENTS,
+} from "~/lib/withheld.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -1545,5 +1551,66 @@ describe("a sealed call", () => {
     expect(screen.getByRole("region", { name: "gh_delete_repo · result" }).textContent).toBe(
       SEALED_RESULT,
     );
+  });
+});
+
+/**
+ * A CALL WHOSE ARGUMENTS ARE NOT KNOWN IS DRAWN AS ONE, WITH WHY.
+ *
+ * The execute record carries `{}` for a call whose arguments no record holds:
+ * one made with arguments in text that could not be read (what the model wrote
+ * did not parse, and the call was answered unrun, or the run's record of it
+ * does not read back), and one still in flight as its round was read, whose
+ * entry kept its identity alone. Drawn as they arrive, each read as the tool
+ * called with none, a different call. The card says the arguments are not
+ * known, and why, in the words the executors board and the trace use; a reason
+ * this build has no words for is still not known; and a call made with none is
+ * still drawn `{}`.
+ *
+ * Mutation: draw such a call's `{}`, tell the two reasons alike, or draw a
+ * reason this build does not know as `{}`, and the card says what the run
+ * never did.
+ */
+describe("a call whose arguments are not known", () => {
+  const unknown = (over: Partial<PhaseRecord["tools"][number]>) =>
+    phase({
+      roundsUsed: 1,
+      narration: [{ round: 1, content: "Working.", declined: false }],
+      tools: [
+        {
+          name: "slack_post",
+          round: 1,
+          args: "{}",
+          result: "slack_post was NOT run",
+          failed: true,
+          durationMs: 0,
+          origin: "",
+          server: "",
+          startedAt: "",
+          callId: "",
+          ...over,
+        },
+      ],
+    });
+  const argumentsOf = (over: Partial<PhaseRecord["tools"][number]>) => {
+    render(<PhaseCard record={unknown(over)} defaultOpen />);
+    fireEvent.click(screen.getByRole("button", { name: /^slack_post/ }));
+    return screen.getByRole("region", { name: "slack_post · arguments" }).textContent;
+  };
+
+  test("in text that could not be read says so", () => {
+    expect(argumentsOf({ argsUnknown: "unread" })).toBe(UNKNOWN_ARGUMENTS.unread);
+  });
+
+  test("still running as its round was read says no record keeps them", () => {
+    expect(argumentsOf({ argsUnknown: "unkept" })).toBe(UNKNOWN_ARGUMENTS.unkept);
+  });
+
+  test("for a reason this build has no words for is still not known", () => {
+    expect(argumentsOf({ argsUnknown: "truncated" })).toBe(ARGUMENTS_NOT_KNOWN);
+  });
+
+  test("a call made with none is still drawn as it was made", () => {
+    expect(argumentsOf({})).toBe("{}");
   });
 });

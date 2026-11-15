@@ -76,6 +76,12 @@ export interface ToolCall {
    *  run's question, never a failure. Absent on every other call. */
   held?: boolean;
   approved?: boolean;
+  /** Why no record says what the call was made with (`arguments_unknown`,
+   *  `ArgumentsUnknown` in contract/calls.ts, or a reason a newer engine
+   *  records): `args` is then not what it sent, and a reader draws it as
+   *  arguments not known ([argumentsInPlace] in lib/withheld.ts), never as a
+   *  call made with none. Absent on every other call. */
+  argsUnknown?: string;
 }
 
 /**
@@ -527,6 +533,11 @@ export function toolCalls(raw: unknown): ToolCall[] {
       failed: (rec.success === false || Boolean(rec.error)) && rec.held !== true,
       ...(rec.held === true ? { held: true } : {}),
       ...(rec.approved === true ? { approved: true } : {}),
+      // AND A CALL WHOSE ARGUMENTS ARE NOT KNOWN, whatever the reason: its
+      // `arguments` are `{}` or an object nobody wrote, never what it sent.
+      ...(typeof rec.arguments_unknown === "string" && rec.arguments_unknown
+        ? { argsUnknown: rec.arguments_unknown }
+        : {}),
       // How long the call took, and who answered it: the tool loop times
       // every call it runs, the bridge every call an executor run makes
       // over it, and the surface names the origin that served it. Absent

@@ -59,3 +59,38 @@ func TestACallTheLoopDoesNotRunIsOnTheRecord(t *testing.T) {
 		t.Errorf("ran %q, want only the call whose arguments parsed", ran)
 	}
 }
+
+// A CALL WHOSE ARGUMENTS DID NOT PARSE IS RECORDED AS ONE WHOSE ARGUMENTS ARE
+// NOT KNOWN, never as the tool called with none: its execution's Args is the
+// empty object the loop answered it on, and the phase record a person reads
+// draws that as `{}` unless the execution says the arguments did not read. A
+// call whose arguments parsed says nothing of the kind, the one made with none
+// included.
+//
+// Mutation: drop the mark the fold sets on a call with an arguments error, or
+// set it on a call whose arguments are empty, and this goes red.
+func TestACallWhoseArgumentsDidNotParseIsRecordedAsNotKnown(t *testing.T) {
+	t.Parallel()
+	s := newSurface("read")
+	prov := script(runOf(
+		llmtest.Response{Calls: []llmtest.Call{
+			{Name: "read", Args: `["not", "an object"]`},
+			{Name: "read", Args: `{"id": 7}`},
+			{Name: "read", Args: `{}`},
+		}},
+		says("Read it."),
+	))
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: s, MaxRounds: 5})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var got []string
+	for _, ex := range res.Executions {
+		got = append(got, ex.Name+":"+string(ex.ArgsUnknown))
+	}
+	want := []string{"read:unread", "read:", "read:"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("executions marked %q, want %q: only the call whose arguments did not parse "+
+			"is one whose arguments are not known", got, want)
+	}
+}

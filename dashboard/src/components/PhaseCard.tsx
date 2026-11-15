@@ -102,7 +102,7 @@ import {
   utf8Bytes,
 } from "~/lib/format.ts";
 import { droppedWords } from "~/lib/dropped.ts";
-import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
+import { argumentsInPlace, SEALED_RESULT } from "~/lib/withheld.ts";
 import {
   decisionLabel,
   decisionTone,
@@ -160,6 +160,7 @@ function ToolRecords({
   failed,
   held,
   approved,
+  argsUnknown,
 }: {
   name: string;
   args: string;
@@ -167,13 +168,16 @@ function ToolRecords({
   failed: boolean;
   held?: boolean;
   approved?: boolean;
+  argsUnknown?: string;
 }) {
   // A SEALED CALL'S `{}` IS NOT WHAT IT SENT: a call held for a person's
   // approval, and the one they approved, keep their arguments sealed on the
   // run's row and on no record, so their arguments — and the approved one's
   // result, handed to the run sealed — are said, as the executors board says
-  // them, never drawn as a call made with nothing.
-  const sealedArgs = approved ? SEALED_ARGUMENTS : held ? HELD_ARGUMENTS : "";
+  // them, never drawn as a call made with nothing. NOR IS THE `{}` OF A CALL
+  // WHOSE ARGUMENTS ARE NOT KNOWN (in text that could not be read, or a call
+  // still in flight as its round was read): said, with why, in their place.
+  const saidArgs = argumentsInPlace({ held, approved, argsUnknown });
   const prettyArgs = useMemo(() => indentJSON(args), [args]);
   // THE RESULT TOO, by the same rule: an MCP server's answer is a JSON
   // document as often as the call was. What is not one — a stack trace, a
@@ -210,7 +214,7 @@ function ToolRecords({
         plain
         selectable
         label={`${name} · arguments`}
-        code={sealedArgs || prettyArgs || "{}"}
+        code={saidArgs || prettyArgs || "{}"}
       />
       <div className="t-label">{failed ? "Error" : "Result"}</div>
       <CodeBlock
@@ -259,6 +263,7 @@ function ToolRow({
   failed,
   held,
   approved,
+  argsUnknown,
   running,
 }: {
   name: string;
@@ -269,6 +274,9 @@ function ToolRow({
    *  [ToolCall.held]. */
   held?: boolean;
   approved?: boolean;
+  /** Why the call's arguments are not known, where they are not: see
+   *  [ToolCall.argsUnknown]. */
+  argsUnknown?: string;
   /** The call is still in flight: since when, and the clock it is read on. */
   running?: { since: number; now: number };
 }) {
@@ -325,6 +333,7 @@ function ToolRow({
             failed={failed}
             held={held}
             approved={approved}
+            argsUnknown={argsUnknown}
           />
         )}
       </Disclosure>
@@ -656,6 +665,7 @@ function RoundBlock({
                   failed={t.failed}
                   held={t.held}
                   approved={t.approved}
+                  argsUnknown={t.argsUnknown}
                 />
               )),
               ...round.running.map((c, i) => (
