@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -124,7 +125,7 @@ import (
 // WHAT IT COSTS: a hand-back that settles nothing for as long as it lasts is
 // NAK'd again at the queue's backoff, at most every thirty seconds, each
 // delivery one claim attempt or one admission and, where this node keeps no
-// clock, one read of the run's row; and renewed about every seven and a half
+// clock and the delivery read no box, one read of the run's row; and renewed about every seven and a half
 // minutes, since the delivery with [renewReserve] left is the twentieth of
 // the broker's twenty-five, after nineteen returns spaced 1, 2, 4, 8 and 16
 // seconds and fourteen times thirty (451 s, about 361 s at the floor of the
@@ -256,9 +257,23 @@ func (c *Coordinator) renewing(ctx context.Context, ev types.ExecutorFinished, t
 // way. A row this node's own store does not answer says nothing, and the
 // delivery is left as it came: the waiter, whose store answers once this
 // node's does, announces the job again then.
+//
+// AND ONLY WHERE THE DELIVERY'S OWN COLLECTION READ NO BOX ([boxWasRead]): the
+// box's host reads the run's row through its store before it reads the box,
+// so a read of it says that host's waiter announces the job again from there,
+// and the release of a claim that read the box clears the record anyway
+// ([Coordinator.hostStoreSeen]). Read after every delivery, a successful one
+// cost a read of the coordination store for an answer that could not change
+// what it left. What is left reads it: a refusal of the node's gate, which
+// would otherwise be acknowledged while no waiter can announce the job, a
+// hand-back made before the box answered, an answer that settled nothing,
+// and the carry of a job lost with its host, which reads no box.
 func (c *Coordinator) unannouncedJob(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event) bool {
 	if c.hostClocked(ev.TurnID, ev.LaunchID) {
 		return true
+	}
+	if boxWasRead(ctx) {
+		return false
 	}
 	run, found, err := c.pending.Get(ctx, ev.TurnID)
 	return err == nil && found && unannouncedOnRow(run, ev.LaunchID, trigger)
@@ -333,22 +348,49 @@ func announcedAfter(trigger *events.Event, since time.Time) bool {
 	return trigger != nil && !renewal(trigger) && trigger.Timestamp.After(since)
 }
 
-// deliveredKey is the context key under which a delivery's attempt carries the
-// delivery itself ([delivering]).
+// deliveredKey is the context key under which a delivery's attempt carries
+// what it learns of the store of the host of its box ([delivering]).
 type deliveredKey struct{}
+
+// attempt is what a delivery of a job's completion carries through the
+// attempt it is made for: the delivery itself, and whether that attempt's
+// collection read the job's box.
+type attempt struct {
+	trigger *events.Event
+	boxRead atomic.Bool
+}
 
 // delivering is ctx carrying trigger, the delivery of a job's completion an
 // attempt is made for, so the release that hands its claim back records what
 // that delivery says of the store of the host of its box
-// ([Coordinator.hostStoreSeen]).
+// ([Coordinator.hostStoreSeen]), and the attempt's collection says whether it
+// read the box ([readTheBox]).
 func delivering(ctx context.Context, trigger *events.Event) context.Context {
-	return context.WithValue(ctx, deliveredKey{}, trigger)
+	return context.WithValue(ctx, deliveredKey{}, &attempt{trigger: trigger})
 }
 
 // deliveredIn is the delivery ctx's attempt is made for ([delivering]), or nil.
 func deliveredIn(ctx context.Context) *events.Event {
-	trigger, _ := ctx.Value(deliveredKey{}).(*events.Event)
-	return trigger
+	if a, ok := ctx.Value(deliveredKey{}).(*attempt); ok {
+		return a.trigger
+	}
+	return nil
+}
+
+// readTheBox records that the collection of the attempt ctx carries
+// ([delivering]) read the job's box. An attempt carried by nothing, a
+// re-fire's, records nothing.
+func readTheBox(ctx context.Context) {
+	if a, ok := ctx.Value(deliveredKey{}).(*attempt); ok {
+		a.boxRead.Store(true)
+	}
+}
+
+// boxWasRead reports whether the collection of the attempt ctx carries read
+// the job's box ([readTheBox]).
+func boxWasRead(ctx context.Context) bool {
+	a, ok := ctx.Value(deliveredKey{}).(*attempt)
+	return ok && a.boxRead.Load()
 }
 
 // hearAnnouncement ends this node's clock on the store of the host of the box

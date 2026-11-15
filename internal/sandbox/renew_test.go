@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1527,4 +1528,75 @@ func TestAWaiterAnnouncementMadeSinceTheClockEndsIt(t *testing.T) {
 				"record cleared", got.Status, got.Launch.HostStoreSilentSince)
 		}
 	})
+}
+
+// countedGets is a run store that counts its reads of a run's row.
+type countedGets struct {
+	PendingStore
+	gets atomic.Int64
+}
+
+func (s *countedGets) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	s.gets.Add(1)
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+// A SUCCESSFUL DELIVERY READS NO ROW FOR WHAT THE BOX'S HOST'S STORE SAYS. A
+// node that keeps no clock on that store reads the run's row before it lets a
+// delivery go, to learn whether the job's record says no waiter announces it
+// again; but a delivery whose own collection read the box needs no row for
+// that, since the box's host read the row through its store to license the
+// read. So a delivery that collects and resumes its job reads the store as
+// often handed to the coordinator's event handler as handed to the claim and
+// resume alone, whether the box is on this node's host or another's.
+//
+// Mutation: read the row after every delivery no clock covers, and each
+// successful delivery reads the store once more than its claim and resume do.
+func TestASuccessfulDeliveryReadsNoRowForItsHostsStore(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		remote bool
+	}{
+		{name: "a box on this node's host"},
+		{name: "a box on another node's host", remote: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// gets is how often a successful delivery of a finished job reads
+			// the store, handed to OnEvent where viaEvent is set and to
+			// OnCompleted otherwise.
+			gets := func(viaEvent bool) int64 {
+				rig := newCoordRig(t)
+				if tc.remote {
+					rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", rig.pending)}, nil)
+					rig.launchedBy("t1", "node-a")
+				} else {
+					rig.launch("t1")
+				}
+				rig.runner.Finish(wholeAccount())
+				counted := &countedGets{PendingStore: rig.coordinator.pending}
+				rig.coordinator.pending = counted
+				payload, ev := rig.completion("t1")
+				var err error
+				if viaEvent {
+					err = rig.coordinator.OnEvent(delivery(t.Context(), ev), ev)
+				} else {
+					err = rig.coordinator.OnCompleted(delivery(t.Context(), ev), payload, ev)
+				}
+				if err != nil {
+					t.Fatalf("the delivery = %v; want the job collected and its turn resumed", err)
+				}
+				if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+					t.Fatalf("the turn resumed %d times (%+v); want it resumed once, collected", len(resumed),
+						resumed)
+				}
+				return counted.gets.Load()
+			}
+			if claimed, delivered := gets(false), gets(true); delivered != claimed {
+				t.Fatalf("a successful delivery read the run's row %d times, and its claim and resume alone %d; "+
+					"want no read beyond them", delivered, claimed)
+			}
+		})
+	}
 }
