@@ -1192,6 +1192,35 @@ test("a person edits and deletes their own page comment, keyed, and nobody else'
   expect(removal?.key).toMatch(/^[0-9a-f-]{36}$/);
 });
 
+// A PAGE IN THE TRASH TAKES NO CHANGE TO A REMARK EITHER: the engine refuses
+// an edit or a removal of a comment on a trashed page as it refuses a new one,
+// so the reader's own remark there reads and offers neither. Mutation: mark
+// the reader's remark editable whatever the page's hold, and it offers Edit.
+test("a page in the trash offers no Edit or Delete on the reader's own comment", async () => {
+  mount(<PageView id={ID} />, {
+    page: detail(
+      {
+        comments: [
+          {
+            id: "c-1",
+            author: "jane",
+            author_kind: "human",
+            body: "Is step 2 still right?",
+            created_at: "2026-09-24T20:00:00Z",
+            updated_at: "2026-09-24T20:00:00Z",
+          } as never,
+        ],
+      },
+      { status: "trashed" },
+    ),
+    page_reads: reads(),
+  });
+  await settle();
+  const [mine] = within(region(/^Comments/)).getAllByRole("listitem");
+  expect(within(mine!).getByText("Is step 2 still right?")).toBeTruthy();
+  expect(within(mine!).queryByRole("button", { name: /Edit|Delete/ })).toBeNull();
+});
+
 // A UUID IS NOTHING A PERSON READS: until the page answers, and when it never will, a noun.
 test("the trail never prints a page's id", () => {
   expect(crumbsFor(["doclet", "pages", ID]).at(-1)).toEqual({ label: "Page" });
