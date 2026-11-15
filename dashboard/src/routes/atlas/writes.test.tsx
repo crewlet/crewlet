@@ -285,7 +285,8 @@ describe("a reader who may not write", () => {
   // drop the leave on success and the address stays on the erased entry.
   test("a purge of the entry leaves its page for the atlas", async () => {
     const admin = { ...ADA, grants: ["atlas", "admin"], acts: [...ATLAS_ACTS, "atlas_purge"] };
-    const { company } = mountEntry(admin);
+    // UNDECLARED: an entry the settings or the engine's records declare holds Purge.
+    const { company } = mountEntry(admin, "", { declared: false });
     fireEvent.click(await screen.findByRole("button", { name: /More to do with web-1/ }));
     const purge = await screen.findByRole("menuitem", { name: /Purge/ });
     await waitFor(() => expect(purge.getAttribute("aria-disabled")).not.toBe("true"));
