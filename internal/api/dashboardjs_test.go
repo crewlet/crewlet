@@ -2622,7 +2622,12 @@ const (
 	// editor for the settings that are not numbers: Doclet's four, Gitlet's
 	// identity domain, Chatlet's message horizon and the company clock, and
 	// a person's name) take it to 6227.3 KiB (6,376,767 bytes): 6228 KiB.
-	treeBudget = 5<<20 + 1160<<10
+	// The release train of a repository's, an SSH server's and an MCP
+	// server's edits, work and seats edited in place, and the settings that
+	// are not numbers changed in place, merged on kit 0.131.0, measures
+	// 6313.1 KiB (6,464,594 bytes), 46,487 bytes over the 6267.7 KiB of main
+	// it was built on: 6314 KiB.
+	treeBudget = 5<<20 + 1194<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
