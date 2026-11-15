@@ -2628,8 +2628,9 @@ const (
 	// 6313.1 KiB (6,464,594 bytes), 46,487 bytes over the 6267.7 KiB of main
 	// it was built on: 6314 KiB.
 	// Think harder and Settings › Ask Crewlet take it to 6324.8 KiB (6,476,618
-	// bytes), 11,693 over main's 6313.4 KiB: 6325 KiB.
-	treeBudget = 5<<20 + 1205<<10
+	// bytes), 11,693 over main's 6313.4 KiB: 6325 KiB. Its web research
+	// hosts take it to 6326.5 KiB (6,478,329 bytes): 6327 KiB.
+	treeBudget = 5<<20 + 1207<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

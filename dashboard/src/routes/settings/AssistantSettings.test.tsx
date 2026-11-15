@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import type { LimitsAnswer } from "~/contract/limits.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import {
@@ -9,7 +10,14 @@ import {
   stubEngine,
   validAnswer,
 } from "~/test/settingsScreen.tsx";
-import { AssistantSettings, chainOf, patchAt, toggled } from "./AssistantSettings.tsx";
+import {
+  AssistantSettings,
+  chainOf,
+  hostProblem,
+  hostsOf,
+  patchAt,
+  toggled,
+} from "./AssistantSettings.tsx";
 import { modelEntry } from "./models/fixtures.ts";
 
 afterEach(() => {
@@ -29,7 +37,11 @@ const DOC = {
       coder: { harness: "claude-code", model: "sonnet" },
     },
   },
-  assistant: { enabled: true, llm: ["ask-sonnet", "ask-haiku"] },
+  assistant: {
+    enabled: true,
+    llm: ["ask-sonnet", "ask-haiku"],
+    research: { hosts: ["docs.example.com"] },
+  },
 };
 
 const LIMITS: LimitsAnswer = {
@@ -58,7 +70,10 @@ const ENTRIES = {
 
 async function show() {
   mountSettings(
-    <AssistantSettings />,
+    <>
+      <AppAnnouncer />
+      <AssistantSettings />
+    </>,
     { config: DOC, limits: LIMITS, llm_entries: ENTRIES },
     { hash: "#/settings/ask-crewlet" },
   );
@@ -90,7 +105,10 @@ test("the page draws the assistant block as the document writes it", async () =>
   expect(
     within(screen.getByRole("row", { name: /Turned off for everybody/ })).getByText("None"),
   ).toBeTruthy();
-  expect(screen.getByText(/can reach any web host/)).toBeTruthy();
+  expect(
+    within(screen.getByRole("row", { name: /Hosts it may read/ })).getByText("docs.example.com"),
+  ).toBeTruthy();
+  expect(screen.getByText(/Quick answers read only the hosts under Web research/)).toBeTruthy();
 });
 
 test("a model added to the chain is saved as the chain, behind the models already in it", async () => {
@@ -129,4 +147,62 @@ test("a chain is read, toggled and written as the document's merge patch", () =>
   expect(patchAt("assistant.deliberate.llm", null)).toEqual({
     assistant: { deliberate: { llm: null } },
   });
+});
+
+async function openHosts() {
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /Change Hosts it may read/ }));
+  });
+  return screen.getByRole("textbox", { name: "New host" });
+}
+
+test("a host typed and not yet added is saved with the list, in lower case", async () => {
+  const calls = engine();
+  await show();
+  const box = await openHosts();
+  fireEvent.change(box, { target: { value: "API.example.com" } });
+  await save(box);
+  const write = calls.find((c) => c.method === "PATCH" && !c.path.includes("dry_run"))!;
+  expect(write.body).toMatchObject({
+    assistant: { research: { hosts: ["docs.example.com", "api.example.com"] } },
+  });
+});
+
+test("removing every host removes the research block, which turns web research off", async () => {
+  const calls = engine();
+  await show();
+  const box = await openHosts();
+  fireEvent.click(screen.getByRole("button", { name: /Remove host/ }));
+  await save(box);
+  const write = calls.find((c) => c.method === "PATCH" && !c.path.includes("dry_run"))!;
+  expect(write.body).toMatchObject({ assistant: { research: null } });
+});
+
+test("an address in place of a host is refused before anything is sent", async () => {
+  const calls = engine();
+  await show();
+  const box = await openHosts();
+  fireEvent.change(box, { target: { value: "https://docs.example.com/en" } });
+  await save(box);
+  expect(calls.filter((c) => c.method === "PATCH")).toEqual([]);
+  expect(
+    screen.getAllByText(/https:\/\/docs\.example\.com\/en is not a host name/).length,
+  ).toBeGreaterThan(0);
+});
+
+test("a host is checked as the engine checks it", () => {
+  const ok = ["docs.example.com", "api.example.com"];
+  expect(ok.map((_, i) => hostProblem(ok, i))).toEqual([null, null]);
+  for (const bad of [
+    "https://docs.example.com",
+    "docs.example.com:443",
+    "*.example.com",
+    "localhost",
+  ]) {
+    expect(hostProblem([bad], 0)).toBe(
+      `${bad} is not a host name. Write the host alone, with no scheme, port, path or wildcard, such as docs.example.com.`,
+    );
+  }
+  expect(hostProblem(["docs.example.com", "docs.example.com"], 1)).toMatch(/listed twice/);
+  expect(hostsOf({ hosts: [" Docs.Example.com "], draft: "" })).toEqual(["docs.example.com"]);
 });

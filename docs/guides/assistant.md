@@ -167,7 +167,7 @@ does not.
 An administrator can also change every setting of the block where it is read,
 on **Settings › Ask Crewlet** (`#/settings/ask-crewlet`): whether it is on,
 its model chain and the stronger chain, the bounds of a turn, the tool
-families turned off, and deep work. Each change is checked by the engine
+families turned off, the hosts web research may read, and deep work. Each change is checked by the engine
 before it is saved, as a configuration edit is.
 
 `crewlet validate` and every `/config` write refuse a chain that breaks the
@@ -335,7 +335,9 @@ engine reads it, never the model's own harness, whose web tools stay off
 Each read is a step the person sees with its address, and its text is the
 site's: a change Ask Crewlet proposes after reading one says it was prepared
 after reading a web page. List only the documentation hosts you trust, such as
-the vendors your integrations connect to.
+the vendors your integrations connect to. An administrator can change the list
+on **Settings › Ask Crewlet**, under Web research, where removing every host
+removes the block and turns web research off.
 
 ## Deep work
 
