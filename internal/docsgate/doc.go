@@ -25,7 +25,9 @@
 // every pull request and every package doc send people. A private
 // approximation (collapsing runs of hyphens, say) would pass anchors that are
 // dead on the renderer everybody reads this tree on, so the rule is written
-// out once and pinned by a table of headings with their known slugs.
+// out once, as internal/enginedocs' Anchor (which also names the sections
+// the Dashboard Assistant reads the documentation by), and pinned here by a
+// table of headings with their known slugs.
 //
 // # What it reads, and what it deliberately does not
 //

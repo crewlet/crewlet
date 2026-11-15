@@ -29,6 +29,7 @@ var all = sync.OnceValues(func() ([]Tool, error) {
 	}
 	out = append(out, writeTools()...)
 	out = append(out, interactionTools()...)
+	out = append(out, engineDocTools()...)
 	seen := map[string]bool{}
 	for i := range out {
 		t := &out[i]
@@ -76,8 +77,9 @@ func Lookup(name string) (Tool, bool) {
 // Offered are the tools this person may be offered now, in [Tools] order: a
 // read whose apps they hold, a write whose act tool is in acts (the viewer's
 // own list of what the authority table could admit them to,
-// internal/api/operator's Acts), and the page change and the link tool
-// always (a page change is held to the turn's accepts by [PageActionFor]).
+// internal/api/operator's Acts), and the page change, the link tool and the
+// engine's documentation always (a page change is held to the turn's accepts
+// by [PageActionFor]).
 //
 // A FILTER AND NEVER AUTHORITY. A tool the person could not take is not
 // offered, so the model cannot be talked into trying it; every call is still
@@ -98,7 +100,9 @@ func Offered(p iam.Principal, acts []string) []Tool {
 			if slices.Contains(acts, t.Act) || (isDotted(t.Act) && t.offeredTo(p)) {
 				out = append(out, t)
 			}
-		case KindPageAction, KindNavigate:
+		case KindPageAction, KindNavigate, KindDocs:
+			// THE ENGINE'S OWN DOCUMENTATION is everybody's, as its site
+			// is: it holds no company's data.
 			out = append(out, t)
 		}
 	}
