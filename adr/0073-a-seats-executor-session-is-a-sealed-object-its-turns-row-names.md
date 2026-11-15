@@ -307,19 +307,20 @@ a loss's add `JobEndBudget` (the wait and the kill, 145 seconds) to a
 collection's at the host's three-quarter share, about 193.3 seconds more, so a
 host's take after an end at its bound is still given its whole
 `SessionTakeBudget`. As `BoxReadBudget` (`internal/sandbox/boxhost.go`) computes
-it, a collection of a turn with no cap waits about 4,660.1 seconds and a stop's
-or a loss's about 4,853.5: the poll's 60-second bound, and at the share the
-take's 240 seconds, its reservation's 30, two 30-second graces and the four
-changes of the run's row its host makes, each at the slowest node's crossing
-(`coord.MaxValueCrossing`, about 780.03 seconds), so 60 + 3,450.1 / 0.75. The
-figures first given here, 460 and 653 seconds, were from before those changes
-were counted at their crossings.
+it, a collection of a turn with no cap waits about 4,660.1 seconds (a Claude
+Code one 20 more, for its main thread's read, `MainThreadReadWait`, below) and
+a stop's or a loss's about 4,853.5: the poll's 60-second bound, and at the
+share the take's 240 seconds, its reservation's 30, two 30-second graces and
+the four changes of the run's row its host makes, each at the slowest node's
+crossing (`coord.MaxValueCrossing`, about 780.03 seconds), so
+60 + 3,450.1 / 0.75. The figures first given here, 460 and 653 seconds, were
+from before those changes were counted at their crossings.
 `internal/sandbox.TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing`
 holds the collection's terms and
 `internal/sandbox.TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake` the end
-on top of them. No wire changes: a host's reply carries `Result.JobEnd` additively, an older
-engine never sends the request, and a script of an older build is asked nothing
-and killed.
+on top of them. No wire changes: a host's reply carries `Result.JobEnd`
+additively, an older engine never sends the request, and a script of an older
+build is asked nothing and killed.
 
 ## Amendment: a turn's first read holds the session it was handed
 
@@ -1501,10 +1502,14 @@ not it takes or keeps a capture, through `PendingStore.MarkHarnessEnd`, with no
 fence, as `MarkEndedAtDeadline` takes none; once recorded cut off it is cut off
 for the job, and nothing is recorded over a word this build does not know
 (`HarnessEnd.after`). It is written after the take, within the room the read
-leaves the take's own records (`recordsBy`): `BoxReadBudget` holds no time of
-its own for it, so a store slow to answer it costs neither the take nor the
-box's pause their time, and a record that does not land is never read as an own
-run. The read's result carries it back (`Result.HarnessEnd`) to the claim it
+leaves the take's own records (`recordsBy`): the grace they share and the
+crossing of this change of the run's row on the host's connection
+(`takeRecordsRoom`), which `BoxReadBudget` counts at the slowest node's
+crossing as one of the four changes a read makes (`boxReadChanges`); when this
+was first written `BoxReadBudget` held no time of its own for the record. So a
+store slow to answer it costs neither the take nor the box's pause their time,
+and a record that does not land is never read as an own run. The read's result
+carries it back (`Result.HarnessEnd`) to the claim it
 collects for, which was read before the record was written, for the resume that
 follows on that claim. The job's record and no other: the fact is the job's, a
 capture's stamp exists only where a capture was taken, and the record is
