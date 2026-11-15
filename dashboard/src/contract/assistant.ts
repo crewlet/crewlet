@@ -431,6 +431,8 @@ export interface AssistantTableCard {
   as_of: string;
   exports?: AssistantExports;
   open?: AssistantLink;
+  /** A step the person takes outside Crewlet, at an address the engine built. */
+  outside?: AssistantOutside;
 }
 
 /** A table card's column. */
@@ -454,6 +456,12 @@ interface AssistantLink {
   label: string;
   screen: string;
   href: string;
+}
+
+/** A step outside Crewlet at an https address the engine built, opened through the interstitial. */
+export interface AssistantOutside {
+  label: string;
+  url: string;
 }
 
 /** One record, or a list of records. */
@@ -484,6 +492,8 @@ export interface AssistantEntityCard {
   /** What one item and several are called ("policy", "policies"), where the card has a list. */
   items_noun?: AssistantNoun;
   open?: AssistantLink;
+  /** A step the person takes outside Crewlet, at an address the engine built. */
+  outside?: AssistantOutside;
 }
 
 /** What one thing and several are called, in the lower case a count is said with. */

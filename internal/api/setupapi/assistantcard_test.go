@@ -39,7 +39,8 @@ func TestTheSeatAccessCardReadsItsRoutesOwnAnswer(t *testing.T) {
 	}
 	held, _ := assistanttest.HoldCard(t, "get_seat_access/"+lane, tool.Cards[lane], answer,
 		assistanttest.ValueTypes{"record": reflect.TypeFor[seataccess.LaneView](),
-			"item": reflect.TypeFor[seataccess.Step]()})
+			"item":                    reflect.TypeFor[seataccess.Step](),
+			assistanttest.AnswerScope: reflect.TypeFor[seataccess.LaneView]()})
 	if held < 10 {
 		t.Errorf("the seat access card held %d paths; the walk is not reading its spec", held)
 	}
@@ -70,7 +71,8 @@ func TestTheCatalogueLookupReadsItsRoutesOwnAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	held, _ := assistanttest.HoldCard(t, "search_grant_catalogue", tool.Cards[""], answer,
-		assistanttest.ValueTypes{"row": reflect.TypeFor[seataccess.LookupEntry]()})
+		assistanttest.ValueTypes{"row": reflect.TypeFor[seataccess.LookupEntry](),
+			assistanttest.AnswerScope: reflect.TypeFor[seataccess.LaneView]()})
 	if held < 8 {
 		t.Errorf("the lookup's table held %d paths; the walk is not reading its spec", held)
 	}

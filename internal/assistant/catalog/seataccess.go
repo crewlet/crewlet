@@ -426,6 +426,7 @@ func seatAccessRead() Tool {
 			fact("Open requests", "requests", tText),
 			fact("Can be granted", "grantable", tText),
 			fact("In the catalogue", "permissions", tText),
+			fact("Add at the vendor first", "at_vendor.add", tText),
 			fact("Catalogue read", "catalogue_read_at", tDatetime),
 			fact("Account", "account", tText),
 			fact("Tool", "tool", tLabel),
@@ -435,7 +436,9 @@ func seatAccessRead() Tool {
 			fact("Refused because", "refusal", tText)},
 		Items: &cards.Items{Path: "plan", Label: "text", Fact: "by",
 			Noun: wire.Noun{One: "step for the next sync", Many: "steps for the next sync"}},
-		Open: &cards.Open{Screen: "integrations"}}}
+		Open: &cards.Open{Screen: "integrations"}},
+		// What a person adds at the vendor, at the address the catalogue built.
+		Outside: vendorStep}
 	// ONE CARD PER LANE, so the same agent read at two integrations is two
 	// records to the drawer rather than the second replacing the first.
 	specs := make(map[string]cards.Spec, len(lanes))
@@ -458,7 +461,7 @@ func seatAccessRead() Tool {
 			"offers it, and for each permission its grants and requests name: whether its " +
 			"level holds it, whether it changes things, and whether the company's own " +
 			"connection can grant it, or what a person must add to that connection at the " +
-			"vendor first and where. Look any other permission up with " +
+			"vendor first and where, which the card links to. Look any other permission up with " +
 			grantCatalogueTool + ". Read this whenever an agent says it lacks access, asks " +
 			"for a permission, or somebody asks whether an integration is set up right for " +
 			"an agent.",
@@ -495,6 +498,9 @@ func seatAccessRead() Tool {
 		},
 	}
 }
+
+// vendorStep reads the lane view's step at the vendor ([seataccess.VendorStep]).
+var vendorStep = &cards.Outside{Path: "at_vendor.url", Label: "at_vendor.label"}
 
 // grantCatalogueTool looks a permission up in a lane's catalogue for one agent.
 const grantCatalogueTool = "search_grant_catalogue"
@@ -540,7 +546,7 @@ func grantCatalogueSearch() Tool {
 				"handle": args.String("handle"), "lane": string(lane)},
 				query(args).str("q", "permission").values())
 		},
-		Cards: one(cards.Spec{Note: "lookup_note", Table: &cards.Table{
+		Cards: one(cards.Spec{Note: "lookup_note", Outside: vendorStep, Table: &cards.Table{
 			Title: "Permissions in the catalogue", Rows: "lookup", More: "lookup_more",
 			Brief: []string{"name", "level", "grantable", "missing"},
 			Columns: []cards.Column{col("name", "Permission", "name", tText),

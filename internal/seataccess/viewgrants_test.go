@@ -2,6 +2,7 @@ package seataccess_test
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -227,5 +228,33 @@ func TestTheOpenRequestsAreEveryOneStillOpen(t *testing.T) {
 	}
 	if len(open) != 2 || open[0].ID != "bbbbb22222" || open[1].ID != "aaaaa11111" {
 		t.Fatalf("open = %+v, want the two within the month, oldest first", open)
+	}
+}
+
+// WHAT TO ADD AT THE VENDOR IS ONE STEP: each permission the connection lacks,
+// once, at the catalogue's address; none where nothing is missing.
+func TestWhatToAddAtTheVendorIsOneStepFromTheCatalogue(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 15, 16, 0, 0, 0, time.UTC)
+	want := seataccess.Desired{Enabled: true, Level: "read"}
+	have := seataccess.Observed{Exists: true, Enabled: true, Level: "read"}
+	asked := seataccess.GrantRequest{ID: "abcde12345", Kind: integration.KindCloudflare,
+		Lane: seataccess.LaneCloudflare, Handle: "sre", Permission: "Origin Write", Hours: 4,
+		Reason: "add the origin rule", Item: "ENG-58", Ask: "jane-founder", AskedAt: now}
+	view, ok := seataccess.ViewOf(cloudflareAnswer(cloudflareView(now), want, have), "sre",
+		seataccess.LaneCloudflare, seataccess.ViewQuery{Requests: []seataccess.GrantRequest{asked},
+			Lookup: "origin", Now: now})
+	if !ok {
+		t.Fatal("the agent's lane was not found")
+	}
+	wantStep := &seataccess.VendorStep{Label: "Add to the company's connection at Cloudflare",
+		Add: []string{"Origin Rules: Edit"}, URL: "https://dash.cloudflare.com/profile/api-tokens"}
+	if !reflect.DeepEqual(view.AtVendor, wantStep) {
+		t.Errorf("at the vendor = %+v, want %+v", view.AtVendor, wantStep)
+	}
+	held, _ := seataccess.ViewOf(cloudflareAnswer(cloudflareView(now), want, have), "sre",
+		seataccess.LaneCloudflare, seataccess.ViewQuery{Lookup: "workers", Now: now})
+	if held.AtVendor != nil {
+		t.Errorf("a step at the vendor for permissions the connection holds: %+v", held.AtVendor)
 	}
 }

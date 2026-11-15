@@ -162,6 +162,7 @@ func shapes() map[string]reflect.Type {
 		"AssistantColumn":              reflect.TypeFor[wire.Column](),
 		"AssistantExports":             reflect.TypeFor[wire.Exports](),
 		"AssistantLink":                reflect.TypeFor[wire.Link](),
+		"AssistantOutside":             reflect.TypeFor[wire.Outside](),
 		"AssistantEntityCard":          reflect.TypeFor[wire.EntityCard](),
 		"AssistantFact":                reflect.TypeFor[wire.Fact](),
 		"AssistantEntityItem":          reflect.TypeFor[wire.EntityItem](),
