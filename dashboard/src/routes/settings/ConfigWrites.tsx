@@ -45,7 +45,6 @@ import {
   FormField,
   InlineCode,
   Input,
-  Modal,
   Skeleton,
   SourceEditor,
   useToast,
@@ -53,6 +52,7 @@ import {
   type SourceEditorHandle,
   type SourceMark,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   FileCodeGlyph,
   RefreshCwGlyph,

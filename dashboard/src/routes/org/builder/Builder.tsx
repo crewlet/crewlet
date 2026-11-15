@@ -190,13 +190,13 @@ import {
   Menu,
   type MenuEntry,
   ConfirmModal,
-  Modal,
   Skeleton,
   Switch,
   Tag,
   useMediaMatch,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 
 // ---------------------------------------------------------------------------
 // Surfaces

@@ -21,7 +21,6 @@ import {
   EmptyValue,
   InlineCode,
   Link,
-  Modal,
   PageNote,
   Switch,
   TableDateCell,
@@ -30,6 +29,7 @@ import {
   Text,
   type DescriptionListEntry,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { BugGlyph, FileTextGlyph, ListChecksGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";

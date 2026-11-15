@@ -539,6 +539,11 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-modal__body--fill",
+    why: "uilet's Modal writes it on a body one child fills, and stretches every child of that body. The dashboard's Modal keeps a place for a refused control's refusal inside the body, and styles/screens.css holds that place to its own height there, so a filled body never gives the refusal a share of its height. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-fact-list__row",
     why: "uilet's FactList writes it on each row, and shares the row by content with a value that can shrink to a word, so in the node editor a long value squeezed its label into a narrow wrapped column. styles/screens.css lets the row wrap, so a long value takes the next line. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

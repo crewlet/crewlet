@@ -22,7 +22,8 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, InlineCode } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { CheckGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { reloadFailure } from "./secretReload.ts";

@@ -17,11 +17,11 @@ import {
   DescriptionList,
   Disclosure,
   InlineCode,
-  Modal,
   TableStatusCell,
   Text,
   type DescriptionListEntry,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { FileTextGlyph, ListChecksGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";

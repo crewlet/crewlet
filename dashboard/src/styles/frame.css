@@ -845,6 +845,16 @@
   );
 }
 
+/* ---- The page bar's refusals ---------------------------------------------
+   WHAT A CONTROL IN THE PAGE BAR WAS REFUSED, on a line of the head under
+   the bar (`PageActions`, `useRefusalPlace`): on the bar's own inset, ruled
+   off the screen like the state bar's notices, and gone with the refusal.
+   Drawn in the bar it broke the bar onto a second line. */
+.page-refusals {
+  padding: var(--spacing-2) var(--crewlet-app-shell-inset);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
 /* ---- The state bar ------------------------------------------------------ */
 
 .state-bar {

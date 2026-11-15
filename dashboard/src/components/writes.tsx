@@ -24,7 +24,6 @@ import {
   Composer,
   FormField,
   Input,
-  Modal,
   Prose,
   ReadingPaneReasoning,
   Select,
@@ -33,6 +32,7 @@ import {
   type ComboboxOption,
   type SelectOption,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import {
   UndoGlyph,
   PinGlyph,

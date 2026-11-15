@@ -6380,6 +6380,26 @@ a.work-cal-chip {
   gap: var(--spacing-1);
   min-width: 0;
 }
+/* A ROW'S PLACE FOR ITS CONTROLS' REFUSALS (`useRefusalPlace`): outside the
+   row, so a refusal of one of its controls never reflows it (the page bar,
+   a header's actions, a dialog's foot). One refusal under another, and no
+   room at all while there is none. */
+.refusal-place {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.refusal-place:empty {
+  display: none;
+}
+/* A DIALOG WHOSE BODY ONE CHILD FILLS keeps it filling: the place under it is
+   its own height, never a share of the body's (the kit stretches every child
+   of a filled body). */
+.crewlet-modal__body--fill > .refusal-place {
+  flex: none;
+}
 /* WHY A LIST OR A BOARD TAKES NO CHANGE FROM THIS READER, said once above it —
    quiet, because it is a standing fact about the reader rather than an answer
    to something they just did. */

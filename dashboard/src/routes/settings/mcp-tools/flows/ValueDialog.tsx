@@ -24,7 +24,8 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Disclosure, FormField, Input, Modal, useToast } from "@crewlethq/ui";
+import { Button, Callout, Disclosure, FormField, Input, useToast } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import type {
   McpMemberServerStatus,
   McpValueAnswer,

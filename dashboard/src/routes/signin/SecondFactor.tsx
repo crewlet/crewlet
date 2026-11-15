@@ -45,12 +45,12 @@ import {
   DownloadButton,
   FormField,
   Input,
-  Modal,
   QrCode,
   Skeleton,
   Text,
   InlineCode,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { KeyGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";

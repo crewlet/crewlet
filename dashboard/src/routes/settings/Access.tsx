@@ -111,7 +111,6 @@ import {
   EmptyValue,
   InlineCode,
   Menu,
-  Modal,
   Skeleton,
   StatCard,
   StatGroup,
@@ -128,6 +127,7 @@ import {
   PageNote,
   peekRowActivation,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   EllipsisGlyph,
   KeyGlyph,

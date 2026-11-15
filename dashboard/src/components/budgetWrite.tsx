@@ -40,12 +40,12 @@ import {
   FormField,
   IconButton,
   Input,
-  Modal,
   Popover,
   returnFocus,
   Text,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import { PencilGlyph, SlidersVerticalGlyph } from "@crewlethq/icons/glyphs";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, PERIOD_WORDS, readCeiling, waitedOn, windowOf } from "~/lib/budget.ts";

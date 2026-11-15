@@ -34,7 +34,8 @@ import type { CheckStatus, SaveRules } from "./model/scheduler.ts";
 import type { BuilderMode } from "./model/transport.ts";
 import type { SavePhase } from "./useSave.ts";
 import { PlugGlyph, RotateCwGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Checkbox, Modal, Spinner } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, Spinner } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
 const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {

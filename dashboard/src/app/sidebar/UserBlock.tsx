@@ -138,7 +138,6 @@ import {
   DescriptionList,
   IconButton,
   IconButtonLink,
-  Modal,
   Popover,
   Select,
   Tag,
@@ -148,6 +147,7 @@ import {
   type AccountRowMenu,
   type MenuEntry,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { isThemeId } from "@crewlethq/tokens";
 import { KeyGlyph, LogInGlyph, LogOutGlyph, PaletteGlyph } from "@crewlethq/icons/glyphs";
 import { THEME_OPTIONS, useApplyTheme } from "~/app/appearance.tsx";

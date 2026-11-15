@@ -20,13 +20,13 @@ import {
   ButtonLink,
   Callout,
   Copyable,
-  Modal,
   RelativeTime,
   Spinner,
   StatusDot,
   Text,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { DEVICE_SIGN_IN_ENDED, type ModelDeviceStatus } from "~/contract/models.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";

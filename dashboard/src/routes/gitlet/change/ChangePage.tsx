@@ -32,17 +32,7 @@
  */
 
 import { useId, useState, type ReactNode } from "react";
-import {
-  Button,
-  EmptyState,
-  Input,
-  Modal,
-  Skeleton,
-  Stack,
-  Tabs,
-  Textarea,
-  tabId,
-} from "@crewlethq/ui";
+import { Button, EmptyState, Input, Skeleton, Stack, Tabs, Textarea, tabId } from "@crewlethq/ui";
 import {
   BellGlyph,
   DiffGlyph,
@@ -51,6 +41,7 @@ import {
   RotateCcwClockGlyph,
   ScrollTextGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Modal } from "~/components/Modal.tsx";
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";

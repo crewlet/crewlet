@@ -7,7 +7,8 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Button, Callout, ChoiceList, Modal, Text } from "@crewlethq/ui";
+import { Button, Callout, ChoiceList, Text } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import { DiffView } from "~/components/DiffView.tsx";
 import { refusalWords } from "~/lib/ceilings.ts";
 import { useQuery } from "~/lib/useQuery.ts";

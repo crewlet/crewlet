@@ -39,7 +39,6 @@ import {
   Inline,
   Input,
   List,
-  Modal,
   SegmentedControl,
   Spinner,
   Stack,
@@ -49,6 +48,7 @@ import {
   VisuallyHidden,
   type ChangeListRow,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   BanGlyph,
   CircleStopGlyph,

@@ -39,7 +39,6 @@ import {
   EmptyValue,
   IconButton,
   Input,
-  Modal,
   PageNote,
   Select,
   SettingsTable,
@@ -51,6 +50,7 @@ import {
   VisuallyHidden,
   type DataGridColumn,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   BadgeCheckGlyph,
   ChevronLeftGlyph,

@@ -5,7 +5,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { WriteButton } from "./WriteButton.tsx";
+import { RefusalsTo, WriteButton } from "./WriteButton.tsx";
 import type { Act } from "~/lib/useAct.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 
@@ -214,4 +214,53 @@ test.each([
   const alert = screen.getByRole("alert");
   expect(alert.textContent).toContain(sentence);
   expect(alert.textContent).not.toMatch(/You need .* access/);
+});
+
+/** A press the engine refused, as a node that is going away answers one. */
+const REFUSED = {
+  sentence: "This node is shutting down.",
+  hint: "",
+  hostRefusal: "",
+  retryable: true,
+  grants: [],
+  reason: "",
+  remedy: null,
+};
+
+// A CONTROL IN A ROW KEEPS THE ROW. The refusal was drawn in the control's own
+// box, which took the refusal's width and height, so the row it stood in (the
+// page bar, a header's actions, a dialog's foot) reflowed around it. A row
+// that keeps a place for its controls' refusals gets them there.
+//
+// Mutation: draw the refusal under the button whatever the row says.
+test("a control in a row draws its refusal in the row's place, never beside itself", () => {
+  const place = document.createElement("div");
+  document.body.append(place);
+  const { container } = render(
+    <RefusalsTo place={place}>
+      <WriteButton write={write({ refusal: REFUSED })} onPress={() => {}}>
+        Run now
+      </WriteButton>
+    </RefusalsTo>,
+  );
+  expect(place.querySelector('[role="alert"]')?.textContent).toContain(
+    "This node is shutting down.",
+  );
+  expect(container.querySelector(".write-button [role='alert']")).toBeNull();
+  // AND IT IS STILL THE CONTROL'S: its Retry sends the same press again.
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  place.remove();
+});
+
+// A ROW WHOSE PLACE IS NOT DRAWN YET draws the refusal nowhere until it is:
+// never in the row for a frame, where it would jump out a moment later.
+test("a row that has not drawn its place yet keeps the refusal out of the row", () => {
+  const { container } = render(
+    <RefusalsTo place={null}>
+      <WriteButton write={write({ refusal: REFUSED })} onPress={() => {}}>
+        Run now
+      </WriteButton>
+    </RefusalsTo>,
+  );
+  expect(container.querySelector("[role='alert']")).toBeNull();
 });

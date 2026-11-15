@@ -24,7 +24,6 @@ import {
   Button,
   EmptyState,
   LinkInterstitial,
-  Modal,
   Select,
   SheetGrid,
   Skeleton,
@@ -39,6 +38,7 @@ import {
   type SheetSort,
   type SheetSyncState,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { PlusGlyph, TableGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";

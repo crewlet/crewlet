@@ -19,12 +19,12 @@ import {
   Callout,
   Disclosure,
   FormField,
-  Modal,
   Select,
   Spinner,
   StepList,
   Text,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import type { McpCheckAnswer, McpCheckNodeView, McpMemberServerStatus } from "~/contract/mcp.ts";
 import { plural } from "~/lib/format.ts";
 import { testServer } from "../api.ts";

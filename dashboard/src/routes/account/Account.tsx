@@ -70,7 +70,6 @@ import {
   FormField,
   Input,
   Link,
-  Modal,
   Skeleton,
   Tag,
   Text,
@@ -84,6 +83,7 @@ import {
   TableTextCell,
   PageNote,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { KeyGlyph, MonitorGlyph, ShieldUserGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import {

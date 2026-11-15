@@ -71,7 +71,8 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Checkbox, InlineCode, Input, Modal, Tag } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, InlineCode, Input, Tag } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { ClockGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
 import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
 import { keepsOperation, newGateOpID, pathSegment, rest, RestError } from "~/protocol/index.ts";

@@ -10,7 +10,8 @@
  */
 
 import { useState } from "react";
-import { Button, ConfirmModal, Input, Modal, Stack } from "@crewlethq/ui";
+import { Button, ConfirmModal, Input, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import {
   credentialName,

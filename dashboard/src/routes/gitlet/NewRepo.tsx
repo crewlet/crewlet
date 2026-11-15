@@ -8,7 +8,8 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, FormField, Input, Modal, Select, Stack } from "@crewlethq/ui";
+import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { repoPath } from "~/lib/code.ts";

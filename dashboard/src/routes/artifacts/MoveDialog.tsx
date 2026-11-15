@@ -44,7 +44,8 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { Button, Combobox, Modal, useToast, type ComboboxOption } from "@crewlethq/ui";
+import { Button, Combobox, useToast, type ComboboxOption } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   FolderGlyph,
   FolderPlusGlyph,

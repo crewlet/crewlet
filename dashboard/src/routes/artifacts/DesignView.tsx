@@ -48,7 +48,6 @@ import {
   Callout,
   CanvasBoard,
   LayersList,
-  Modal,
   SegmentedControl,
   Skeleton,
   SlideStage,
@@ -57,6 +56,7 @@ import {
   type CanvasBoardSelection,
   type CanvasHandle,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import type { ArtifactDetail, ArtifactSource } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useRest } from "~/lib/useRest.ts";

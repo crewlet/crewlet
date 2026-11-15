@@ -19,12 +19,20 @@
  * is what keeps that fallback from flickering in the real application: the bar
  * is an ancestor in the same commit, so the lookup succeeds before the browser
  * paints and the controls never appear on the page first and jump.
+ *
+ * # A refused control keeps the bar
+ *
+ * The bar is a row of controls, so a write control in it draws its refusal in
+ * the place the frame keeps under the head ([PageRefusals]), never in the bar:
+ * drawn beside the control, the refusal broke the bar onto a second line and
+ * shoved the controls after it aside.
  */
 
 import { useContext, useLayoutEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Count } from "@crewlethq/ui";
-import { OwnHeaderSlot } from "./OwnHeader.tsx";
+import { RefusalsTo } from "~/components/WriteButton.tsx";
+import { OwnHeaderSlot, PageRefusals } from "./OwnHeader.tsx";
 
 /** The id the page bar's own slot carries. */
 export const PAGE_ACTIONS_SLOT = "page-actions";
@@ -36,9 +44,10 @@ export const PAGE_ACTIONS_SLOT = "page-actions";
 export const PAGE_LENSES_SLOT = "page-lenses";
 
 export function PageActions({ children }: { children: ReactNode }) {
+  const refusals = useContext(PageRefusals);
   return (
     <PageSlot id={PAGE_ACTIONS_SLOT} fallback="row gap-2 wrap page-actions">
-      {children}
+      <RefusalsTo place={refusals}>{children}</RefusalsTo>
     </PageSlot>
   );
 }

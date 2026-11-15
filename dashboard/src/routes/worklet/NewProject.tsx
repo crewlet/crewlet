@@ -42,16 +42,8 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  Button,
-  FormField,
-  Input,
-  KeyChip,
-  Modal,
-  Select,
-  Text,
-  type SelectOption,
-} from "@crewlethq/ui";
+import { Button, FormField, Input, KeyChip, Select, Text, type SelectOption } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { STRUCTURE_PATH } from "~/app/routes.ts";

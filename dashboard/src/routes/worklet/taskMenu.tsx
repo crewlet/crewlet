@@ -60,7 +60,6 @@ import {
   ConfirmField,
   FormField,
   Menu,
-  Modal,
   Select,
   SelectionBar,
   Textarea,
@@ -69,6 +68,7 @@ import {
   type MenuEntry,
   type MenuItem,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { EllipsisGlyph, FolderInputGlyph, TrashGlyph, UndoGlyph } from "@crewlethq/icons/glyphs";
 import { UNKNOWN_TITLE, useAct, type Act } from "~/lib/useAct.ts";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";

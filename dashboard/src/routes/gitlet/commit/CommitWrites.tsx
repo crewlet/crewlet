@@ -13,7 +13,8 @@
  */
 
 import { useState } from "react";
-import { Button, FormField, Input, Modal, Select, Stack } from "@crewlethq/ui";
+import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName, shortOID } from "~/lib/code.ts";
 import { branchWriteHeld } from "~/lib/repoWrites.ts";

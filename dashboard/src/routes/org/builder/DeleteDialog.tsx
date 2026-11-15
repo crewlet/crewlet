@@ -62,7 +62,8 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
 import { TrashGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Checkbox, Modal, SegmentedControl } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, SegmentedControl } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 
 type PlacedChoice = "keep" | "remove";
 

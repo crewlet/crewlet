@@ -24,7 +24,6 @@ import {
   FormField,
   FormRow,
   Input,
-  Modal,
   ReadOnlyField,
   SegmentedControl,
   Select,
@@ -34,6 +33,7 @@ import {
   useToast,
   type SelectOption,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   PauseGlyph,
   PencilGlyph,
