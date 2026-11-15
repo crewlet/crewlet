@@ -2,6 +2,7 @@ package engine
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"log/slog"
 	"os"
 	"reflect"
@@ -358,14 +359,16 @@ func TestTheBriefToldByAReadingReachesTheSandboxBesideTheOtherTwo(t *testing.T) 
 // session, without them, on a copy (the runner still holds the caller's), held
 // to its own briefs' floor, and one line says why they were not used; where
 // the session's own floor cannot be carried either, the session is dropped
-// whole and no line says the reading's briefs were dropped alone; and where
-// nothing caps the seat, the launch is held to their floor, the longest.
+// whole, its line naming its own briefs' floor, never the larger one with the
+// reading's, and no line says the reading's briefs were dropped alone; and
+// where nothing caps the seat, the launch is held to their floor, the longest.
 //
 // NOT PARALLEL: it swaps the process-wide logger.
 //
 // Mutation: leave the briefs told by a reading out of the floor, drop the whole
-// session where only their floor fails, drop them on the caller's session, or
-// log nothing, and a case goes red.
+// session where only their floor fails, drop them on the caller's session, log
+// nothing, or name the floor with the reading's briefs where both fail, and a
+// case goes red.
 func TestABriefToldByAReadingTheFloorCannotCarryIsDroppedAlone(t *testing.T) {
 	logs := captureLogs(t)
 	// ABOUT 70,000 TOKENS OF BRIEF, beside a 40,000-token session: 110,000,
@@ -435,6 +438,14 @@ func TestABriefToldByAReadingTheFloorCannotCarryIsDroppedAlone(t *testing.T) {
 			if (len(dropped) != 0) == tc.offered {
 				t.Errorf("the launch said %d executor_session_not_continued lines, offering the session: %v",
 					len(dropped), tc.offered)
+			}
+			if !tc.offered && len(dropped) == 1 {
+				without := *session
+				without.Exact = nil
+				own := fmt.Sprintf("needs %d tokens", keptFloor(staticFloor(l.company), &without).tokens())
+				if detail, _ := dropped[0]["detail"].(string); !strings.Contains(detail, own) {
+					t.Errorf("the line's detail is %q, want the session's own briefs' floor (%s)", detail, own)
+				}
 			}
 		})
 	}

@@ -768,10 +768,17 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		// session is still continued, told by its save point, which tells
 		// more and never less. On a copy of the session, never the caller's,
 		// whose continuation the runner still holds.
+		//
+		// AND WHERE THEIRS FAILS TOO, the session is dropped by its own
+		// briefs' floor, which its line names: the floor with the briefs told
+		// by a reading is one the session alone never needed.
 		if keptWhy != "" && s.Exact != nil {
 			without := *s
 			without.Exact = nil
-			if told := keptFloor(static, &without); carried(told) == "" {
+			told := keptFloor(static, &without)
+			if whyTold := carried(told); whyTold != "" {
+				keptWhy = whyTold
+			} else {
 				log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
 					"turn_id", l.turn.RunID, "detail", keptWhy, "outcome", floorUnusedOutcome)
 				req.Session, kept, keptWhy = &without, told, ""
