@@ -414,10 +414,11 @@ func (a *Applier) applyContainer(ctx context.Context, tx *sql.Tx, at applyContex
 	// `created_at` column kept the first, so a listing — which reads the
 	// document — reported a container as created when it was last renamed.
 	// The column is the first record's broker instant on every node, so
-	// reading it back keeps the document identical everywhere. At the
-	// column's own resolution from the first write, so the document says the
-	// same instant before an update and after one.
-	created := store.DecodeTime(store.EncodeTime(at.brokerAt))
+	// reading it back keeps the document identical everywhere — and the
+	// first write's document says the same instant as the column, since the
+	// state log hands the instant in the store's encoding on every path
+	// ([statelog.Record.StoredAt]).
+	created := at.brokerAt
 	var first sql.NullInt64
 	err = tx.QueryRowContext(ctx, `SELECT created_at FROM pages_containers
 		WHERE key = ?`, c.Key).Scan(&first)
