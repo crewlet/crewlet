@@ -3585,4 +3585,8 @@ at all. A call an earlier brief told as text is told again. The reading's up
 to fifteen seconds are spent before a budget refusal. A brief told by a
 reading longer than the held one is judged and floored on its own and dropped
 alone. An OpenCode cut-off relaunch is never read until its first request is
-judged and a reader of its sessions exists.
+judged and a reader of its sessions exists. The release a reading is read for
+is the box's word, its job's `--version` as the turn's row records it: a
+forged one still has to equal the relaunch box's own answer before its brief
+is chosen, and every record the reading reads still has to name a release at
+or past the writer floor.
