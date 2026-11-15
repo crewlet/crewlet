@@ -1462,7 +1462,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/service-accounts` | **Service accounts**, the machine principals: each with its stage, login, access and the seat it acts as, and the directory's report on them; an admin creates one (on a human seat or none) and mints its token, shown once *(needs Admin access)*. A row opens in the peek, as on People | `peek=person:{id}` |
 | `#/settings/tokens` | **API tokens**, this node's Tier A token labels, each joined to the directory row its login names and the seat that row binds (`/iam/node-tokens`), and, where the company document is managed, the tokens that alone may write it *(needs Admin access)*. Never a value. A person's own tokens are on their Account | |
 | `#/settings/sign-in` | **Sign-in policy**, how people sign in, as the engine serves it: the shortest password, whether two-step verification is required, how long a session lives (from sign-in and unused) and how long a step-up lasts, read-only and naming the node that answered *(needs Admin access)* | |
-| `#/settings/delegated-decisions` | **Settings › Delegated decisions** ([Delegated decisions](../guides/delegated-decisions.md)): whether delegation is on, each rule as the engine numbers it (the kinds it delegates, its delegates, the people it escalates to, the paths a merge or deploy rule always puts to people and its spot-check rate), the limits the engine holds every delegate to, then the digest (what delegates decided on one company day, the last whole one unless `day=` names another), the spot-checks and the flagged denials of the week before, one toolbar narrowing all three and each list's foot saying how many of its rows it shows and whether the log held more (`delegated_decisions`) *(an administrator's and the people a rule escalates to; the engine refuses anybody else, so the row names no grant)*. The switch, **Add a rule** and each rule's change and removal write the `delegated_decisions` block (`PATCH /config`), an administrator's | `day=` (a company day, `2026-11-09`) · `q=` · `verdict=allow\|escalate\|deny` · `by=agent\|person\|engine` |
+| `#/settings/delegated-decisions` | **Settings › Delegated decisions** ([Delegated decisions](../guides/delegated-decisions.md)): whether delegation is on, each rule as the engine numbers it (the kinds it delegates, its delegates, the people it escalates to, the paths a merge or deploy rule always puts to people and its spot-check rate), the limits the engine holds every delegate to, then the digest (what delegates decided on one company day, the last whole one unless `day=` names another), the spot-checks and the flagged denials of the week before, one toolbar narrowing all three and each list's foot saying how many of its rows it shows and whether the log held more (`delegated_decisions`) *(an administrator's and the people a rule escalates to; the engine refuses anybody else, so the row names no grant)*. The switch, **Add a rule** and each rule's change and removal write the `delegated_decisions` block (`PATCH /config`), an administrator's; the rule sheet offers the company's GitHub repositories, branches and check names (`delegated_repositories`, `delegated_branches`, `delegated_checks`) | `day=` (a company day, `2026-11-09`) · `q=` · `verdict=allow\|escalate\|deny` · `by=agent\|person\|engine` |
 | `#/settings/audit` | **Audit log**: every write a person or a token made, every call they made at runtime, the identity estate's own trail, every artifact's history (an administrator's read of somebody's private artifact said in words), and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs Admin access)*. No detail route | `window=` · `actor=` · `kind=worklet\|doclet\|config\|credentials\|runtime\|identity\|artifacts` |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes**, leases (each seat's holder and **since** when), duties, config rollout, and the fleet broker's members as the nodes advertise them and as its metadata group counts them *(needs Admin access)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs Admin access)*: `revisions` lands on the History lens; one revision's page draws no lenses. The Active lens's **Edit** (the document as YAML, a file importable over it, checked with `PUT /config?dry_run=true` before it is saved) and **Reload** (`POST /config/reload`), and a revision's **Revert to this revision** on its page and its peek (`POST /config/revisions/{id}/revert`, shown the diff it applies), each asked first and carrying the summary the person writes | `lens=active\|entities\|audit\|diff` |
@@ -10805,34 +10805,48 @@ is behind the settings table's copy control rather than drawn under its name.
 **Delegated decisions** (`#/settings/delegated-decisions`) is what agent seats
 decide in a person's place ([Delegated decisions](../guides/delegated-decisions.md),
 ADR-0125), read whole off `delegated_decisions`: whether delegation is on, each
-rule as the engine numbers it (an escalation names "rule 2"), its kinds in
-words (Commands on servers, Merges, Deploys) and, for a merge or deploy rule,
-the paths it always puts to people (`always_escalate_paths`, each as written in
-an outlined monospace tag, the first four and a count of the rest, the whole
-list on hover; "the built-in paths only" where it names none, and "not for
-commands" for a command rule) and the checks it requires (`required_checks`,
-each entry its repository and branch in an outlined monospace tag beside its
-check names, the first two and a count of the rest, every entry on hover;
-"what the branch requires" where it names none, and "not for commands" for a
-command rule), and the limits
-the engine holds every delegate to, the deadline and the two hourly caps, as a
-settings table whose rows are the Settings › Limits row (`LimitSetting`): each
-value beside the engine's default, and a pencil that changes its
-`delegated_decisions` key within the range the engine holds it to, so none can
-be switched off. The rules card's head holds a
-switch that turns delegation on or off and **Add a rule**, and each rule's
-row ends in a pencil and a bin; each is drawn for every reader and disabled
-with the reason for one who cannot write the document. The pencil and Add a
-rule open a side sheet filled from the company document as it is then (not
-from the rules this node applied, which may be older): the kinds as
-checkboxes, the delegates and the people it escalates to as seat pickers, the
-spot-check rate (empty is the engine's default), and, for a merge or deploy
-rule only, its paths and its required checks, one row per repository and
-branch. Save checks the whole rules list against the company first and says a
-refusal in the engine's words in the sheet; a rule changed since the sheet
-was filled is a conflict to reload, never written over. The bin asks first,
-saying that the rules after it move up one. All three are one write of the
-card (a change is the whole `rules` list, which a merge patch replaces), and
+rule as one numbered row of the kit's `List` (`numbered-divided`, numbered as
+the engine numbers it, since an escalation names "rule 2") that reads as a
+sentence: its kinds in words (Server commands, Merges, Deploys) → who decides
+("Release Manager decides", or a panel's two "decide together"), then who it
+escalates to, how often its decisions are reviewed ("Reviews 1 in 10"), and,
+for a merge or deploy rule, its checks (`required_checks`, each entry's
+repository and branch as inline code and its check names, the first two and a
+count of the rest, every entry on hover; "what each branch requires" where it
+names none) and the paths it always sends to people (`always_escalate_paths`,
+the first three and a count of the rest, the whole list on hover). Every seat
+is named with its face before its name (`InlineRef` with a `SeatAvatar`) and
+its handle on hover. With no rules the card says people decide every request.
+The limits the engine holds every delegate to, the deadline and the two hourly
+caps, are a settings table whose rows are the Settings › Limits row
+(`LimitSetting`): each value beside the engine's default, and a pencil that
+changes its `delegated_decisions` key within the range the engine holds it to,
+so none can be switched off. The rules card's head holds a switch that turns
+delegation on or off and **Add a rule**, and each rule's row ends in a pencil
+and a bin; each is drawn for every reader and disabled with the reason for one
+who cannot write the document. The pencil and Add a rule open a side sheet
+filled from the company document as it is then (not from the rules this node
+applied, which may be older), in four groups: **What it decides** (the kinds as
+checkboxes, each with a one-line meaning, a kind another rule decides held with
+that rule's number), **Who decides** (the agent, or two for a panel), **Who
+hears about it** (the people it escalates to, and **Spot-checks**: every
+decision, 1 in 5, 1 in 10 or 1 in 50, or a custom number within the engine's
+range, with a line saying what the choice means; the engine's default is
+written as no value) and, for a merge or deploy rule only, **Conditions**: its
+required checks, one entry per repository and branch, each picked from the
+company's GitHub repositories (`delegated_repositories`), that repository's
+branches (`delegated_branches`, its default branch filled in) and the check
+names on the branch's newest commit (`delegated_checks`), typing being the
+fallback for anything the lists do not show, and the paths it always sends to
+people. Both seat pickers are the kit's `TagsInput` with each option and chip
+drawing the seat's face, name and handle. A rule missing a kind, an agent or a
+person is held under that field before anything is sent; Save then checks the
+whole rules list against the company, and each problem the engine finds is
+shown under the field it names in the engine's words for a person
+(`said`), the callout pointing there; a rule changed since the sheet was
+filled is a conflict to reload, never written over. The bin asks first, saying
+that the rules after it move up one. All three are one write of the card (a
+change is the whole `rules` list, which a merge patch replaces), and
 *Saved, applying…* beside the switch says it until this node applied it. Under them one toolbar (a
 search over the seat, the request, the server and the reason; a verdict and
 who gave it, each the kit's `Select`; the day the digest covers, back a

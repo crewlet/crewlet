@@ -84,6 +84,7 @@ const ANSWER: DelegatedDecisionsAnswer = {
       range: { min: 1, max: 60 },
     },
   ],
+  sample: { default: 10, min: 1, max: 1000 },
   day: "2026-11-10",
   since: "2026-11-10T00:00:00Z",
   until: "2026-11-11T00:00:00Z",
@@ -105,10 +106,32 @@ const ORG = {
   ],
 };
 
+/** The company's GitHub as the rule form reads it: two repositories, a branch list and checks. */
+const GITHUB = {
+  delegated_repositories: {
+    connected: true,
+    repos: [
+      { repo: "acme/api", default_branch: "main", archived: false },
+      { repo: "acme/web", default_branch: "trunk", archived: false },
+      { repo: "acme/old", default_branch: "main", archived: true },
+    ],
+  },
+  delegated_branches: (params: { repo: string }) => ({
+    repo: params.repo,
+    branches: ["main", "release", "trunk"],
+    more: false,
+  }),
+  delegated_checks: (params: { repo: string; branch: string }) => ({
+    repo: params.repo,
+    branch: params.branch,
+    checks: ["build", "e2e"],
+  }),
+};
+
 async function show(viewer?: Record<string, unknown>) {
   const mounted = mountSettings(
     <DelegatedDecisions />,
-    { delegated_decisions: ANSWER },
+    { delegated_decisions: ANSWER, ...GITHUB },
     { hash: "#/settings/delegated-decisions", viewer, org: ORG },
   );
   await act(afterMicrotasks);
@@ -148,13 +171,18 @@ test("a rule's sheet is filled from the document and its save writes the whole l
   const calls = stubEngine(engine);
   await show();
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Change rule 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit rule 2" }));
   });
   await act(afterMicrotasks);
-  const sheet = screen.getByRole("dialog", { name: "Change rule 2" });
-  const rate = within(sheet).getByLabelText(/Spot-check one in/) as HTMLInputElement;
-  expect(rate.value).toBe("5");
+  const sheet = screen.getByRole("dialog", { name: "Edit rule 2" });
+  expect(within(sheet).getByRole("radio", { name: "1 in 5" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  expect(within(sheet).getByText(/review about 1 in 5 of the agent's decisions/)).toBeTruthy();
   expect(within(sheet).getByText("billing/**")).toBeTruthy();
+  fireEvent.click(within(sheet).getByRole("radio", { name: "Custom" }));
+  const rate = within(sheet).getByLabelText("Spot-check one decision in") as HTMLInputElement;
+  expect(rate.value).toBe("5");
   fireEvent.change(rate, { target: { value: "3" } });
   await act(async () => {
     fireEvent.submit(rate.closest("form")!);
@@ -166,7 +194,7 @@ test("a rule's sheet is filled from the document and its save writes the whole l
     _summary: "Delegated decisions: change rule 2 (Merges and Deploys)",
   });
   // A SAVE CLOSES THE SHEET; the card says the change is applying.
-  expect(screen.queryByRole("dialog", { name: "Change rule 2" })).toBeNull();
+  expect(screen.queryByRole("dialog", { name: "Edit rule 2" })).toBeNull();
   expect(screen.getByText("Saved, applying…")).toBeTruthy();
 });
 
@@ -193,17 +221,23 @@ test("the engine's refusal of a rule is said in the sheet, and nothing is saved"
   });
   await show();
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Change rule 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit rule 2" }));
   });
   await act(afterMicrotasks);
-  const sheet = screen.getByRole("dialog", { name: "Change rule 2" });
-  const rate = within(sheet).getByLabelText(/Spot-check one in/);
-  fireEvent.change(rate, { target: { value: "3" } });
+  const sheet = screen.getByRole("dialog", { name: "Edit rule 2" });
+  fireEvent.click(within(sheet).getByRole("radio", { name: "Every decision" }));
   await act(async () => {
-    fireEvent.submit(rate.closest("form")!);
+    fireEvent.submit(sheet.querySelector("form")!);
   });
   await act(afterMicrotasks);
-  expect(within(sheet).getByText(refusal)).toBeTruthy();
+  // UNDER THE FIELD IT NAMES, without the document path; the callout points there.
+  const people = within(sheet).getByRole("combobox", { name: "Escalates to" });
+  expect(people.getAttribute("aria-invalid")).toBe("true");
+  expect(
+    within(sheet).getByText("ops-lead is not a person; an escalation goes to people"),
+  ).toBeTruthy();
+  expect(within(sheet).getByText("Fix the fields marked above.")).toBeTruthy();
+  expect(within(sheet).queryByText(refusal)).toBeNull();
   expect(writes(calls)).toEqual([]);
 });
 
@@ -224,7 +258,7 @@ test("a rule is removed after asking, and the later rules move up", async () => 
   const [save] = writes(calls);
   expect(save!.body).toEqual({
     delegated_decisions: { rules: [RELEASE] },
-    _summary: "Delegated decisions: remove rule 1 (Commands on servers)",
+    _summary: "Delegated decisions: remove rule 1 (Server commands)",
   });
 });
 
@@ -235,7 +269,7 @@ test("a reader without the grant sees every control disabled with the reason", a
   const reason = CONFIG_WRITE_REASONS.no_grant;
   for (const control of [
     screen.getByRole("button", { name: /Add a rule/ }),
-    screen.getByRole("button", { name: "Change rule 1" }),
+    screen.getByRole("button", { name: "Edit rule 1" }),
     screen.getByRole("button", { name: "Remove rule 2" }),
   ]) {
     expect(control.getAttribute("title")).toBe(reason);
@@ -263,23 +297,23 @@ test("a limit the engine enforces is changed in place as a patch of its one key"
   const calls = stubEngine(engine);
   await show();
   const limits = screen.getByRole("table", { name: "What Crewlet enforces" });
-  const deadline = within(limits).getByRole("row", { name: /goes to people after/ });
+  const deadline = within(limits).getByRole("row", { name: /must answer within/ });
   expect(within(deadline).getByText("15 minutes")).toBeTruthy();
   expect(within(deadline).getByText("Default")).toBeTruthy();
-  await changeLimit(/Change A request no delegate answered goes to people after/, "1200");
+  await changeLimit(/Change An agent must answer within/, "1200");
   const [save] = writes(calls);
   expect(save!.headers.get("If-Match")).toBe('"r1"');
   expect(save!.body).toEqual({
     delegated_decisions: { deadline_seconds: 1200 },
     _summary:
-      "Delegated decisions: A request no delegate answered goes to people after set to 1200 " +
+      "Delegated decisions: An agent must answer within set to 1200 " +
       "(delegated_decisions.deadline_seconds)",
   });
   // THE SAVED VALUE, MARKED AS APPLYING, in the row it was changed in.
   const row = within(screen.getByRole("table", { name: "What Crewlet enforces" })).getByRole(
     "row",
     {
-      name: /goes to people after/,
+      name: /must answer within/,
     },
   );
   expect(within(row).getByText("20 minutes")).toBeTruthy();
@@ -291,7 +325,7 @@ test("a limit the engine enforces is changed in place as a patch of its one key"
 test("a limit outside its range is said beside the field, and nothing is sent", async () => {
   const calls = stubEngine(engine);
   await show();
-  await changeLimit(/Change Allows per kind and delegate/, "61");
+  await changeLimit(/Change Most allows per agent and kind/, "61");
   expect(calls).toEqual([]);
   expect(screen.getByRole("textbox").getAttribute("aria-invalid")).toBe("true");
   expect(screen.getAllByText("From 1 to 60.").length).toBeGreaterThan(0);
@@ -301,9 +335,164 @@ test("a limit outside its range is said beside the field, and nothing is sent", 
 // pencil disabled with the reason.
 test("a reader who may not change the document sees each limit's pencil held with the reason", async () => {
   await show(READER_VIEWER);
-  const pencil = screen.getByRole("button", { name: /Change Commands allowed per server/ });
+  const pencil = screen.getByRole("button", { name: /Change Most commands allowed per server/ });
   expect(
     pencil.getAttribute("aria-disabled") ?? String((pencil as HTMLButtonElement).disabled),
   ).toBe("true");
   expect(pencil.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.no_grant);
+});
+
+/** Merges in rule 2 alone, so deploys are free for a new rule. */
+const MERGE = { ...RELEASE, kinds: ["pr_merge"] };
+const MERGE_DOC = { name: "Acme", delegated_decisions: { enabled: true, rules: [SSH, MERGE] } };
+
+/** Shows the page over MERGE_DOC, whose saves `respond` answers. */
+async function showMerge(respond: (call: EngineCall) => Response = () => savedAnswer()) {
+  const calls = stubEngine((call) =>
+    call.method === "GET" ? engineAnswer(MERGE_DOC, 200, { ETag: '"r1"' }) : respond(call),
+  );
+  const answer = {
+    ...ANSWER,
+    rules: [ANSWER.rules[0]!, { ...ANSWER.rules[1]!, kinds: ["pr_merge"] }],
+  } as DelegatedDecisionsAnswer;
+  mountSettings(
+    <DelegatedDecisions />,
+    { delegated_decisions: answer, ...GITHUB },
+    {
+      hash: "#/settings/delegated-decisions",
+      org: ORG,
+    },
+  );
+  await act(afterMicrotasks);
+  return calls;
+}
+
+/** Opens the sheet for Add a rule, filled from the document. */
+async function openAdd() {
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /Add a rule/ }));
+  });
+  await act(afterMicrotasks);
+  return screen.getByRole("dialog", { name: "Add a rule" });
+}
+
+// A KIND IN ONE RULE ONLY: one another rule decides is offered disabled with
+// that rule's number, never a choice the engine would refuse.
+test("a kind another rule decides is held with that rule's number", async () => {
+  await showMerge();
+  const sheet = await openAdd();
+  const merges = within(sheet).getByRole("checkbox", { name: /Merges/ }) as HTMLInputElement;
+  expect(merges.disabled).toBe(true);
+  expect(within(sheet).getByText("Rule 2 already decides these.")).toBeTruthy();
+  expect(within(sheet).getByText("Rule 1 already decides these.")).toBeTruthy();
+  const deploys = within(sheet).getByRole("checkbox", { name: /Deploys/ }) as HTMLInputElement;
+  expect(deploys.disabled).toBe(false);
+  expect(
+    within(sheet).getByText("An agent deploys merged changes to an environment."),
+  ).toBeTruthy();
+});
+
+// WHAT EVERY RULE NEEDS is asked for under its field, and nothing is sent.
+test("a rule without an agent or a person is held under those fields", async () => {
+  const calls = await showMerge();
+  const sheet = await openAdd();
+  fireEvent.click(within(sheet).getByRole("checkbox", { name: /Deploys/ }));
+  await act(async () => {
+    fireEvent.submit(sheet.querySelector("form")!);
+  });
+  expect(within(sheet).getByText("Pick the agent that decides.")).toBeTruthy();
+  expect(within(sheet).getByText("Pick at least one person.")).toBeTruthy();
+  expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
+});
+
+// EVERY SEAT WITH ITS FACE: each option and each chosen chip draws the seat's
+// avatar, its name and its handle.
+test("the seat pickers draw each seat's face, name and handle", async () => {
+  stubEngine(engine);
+  await show();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Edit rule 2" }));
+  });
+  await act(afterMicrotasks);
+  const sheet = screen.getByRole("dialog", { name: "Edit rule 2" });
+  const chosen = within(sheet).getByRole("list", { name: "Chosen: Agent" });
+  expect(chosen.textContent).toContain("Release Reviewer @release-reviewer");
+  expect(chosen.querySelector(".crewlet-avatar")).not.toBeNull();
+  const field = within(sheet).getByRole("combobox", { name: "Agent" });
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  const option = within(sheet).getByRole("option", { name: /Security Engineer/ });
+  expect(option.textContent).toContain("@security-engineer");
+  expect(option.querySelector(".crewlet-avatar")).not.toBeNull();
+  // ONLY AGENTS DECIDE, and only people are escalated to.
+  expect(within(sheet).queryByRole("option", { name: /Ops Lead/ })).toBeNull();
+});
+
+// PICKED, NOT TYPED: the company's GitHub repositories, then the branch (the
+// repository's default to start), then the checks seen on that branch.
+test("a required-checks entry picks the repository, its branch and its checks", async () => {
+  const calls = stubEngine(engine);
+  await show();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Edit rule 2" }));
+  });
+  await act(afterMicrotasks);
+  const sheet = screen.getByRole("dialog", { name: "Edit rule 2" });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Add a repository" }));
+  const repo = within(sheet).getByRole("combobox", { name: "Repository 2" });
+  fireEvent.focus(repo);
+  fireEvent.change(repo, { target: { value: "web" } });
+  await act(afterMicrotasks);
+  // ARCHIVED REPOSITORIES are not offered; the typed text narrows the rest.
+  expect(within(sheet).queryByRole("option", { name: "acme/old" })).toBeNull();
+  expect(within(sheet).queryByRole("option", { name: "acme/api" })).toBeNull();
+  fireEvent.mouseDown(within(sheet).getByRole("option", { name: "acme/web" }));
+  await act(afterMicrotasks);
+  expect(
+    (within(sheet).getByRole("combobox", { name: "Branch 2" }) as HTMLInputElement).value,
+  ).toBe("trunk");
+  const checks = within(sheet).getByRole("combobox", { name: "Checks 2" });
+  fireEvent.keyDown(checks, { key: "ArrowDown" });
+  fireEvent.mouseDown(within(sheet).getByRole("option", { name: "e2e" }));
+  await act(async () => {
+    fireEvent.submit(sheet.querySelector("form")!);
+  });
+  await act(afterMicrotasks);
+  const [save] = writes(calls);
+  expect(save!.body).toEqual({
+    delegated_decisions: {
+      rules: [
+        SSH,
+        {
+          ...RELEASE,
+          required_checks: [
+            ...RELEASE.required_checks,
+            { repo: "acme/web", branch: "trunk", checks: ["e2e"] },
+          ],
+        },
+      ],
+    },
+    _summary: "Delegated decisions: change rule 2 (Merges and Deploys)",
+  });
+});
+
+// A kind is in one rule only: with every kind taken, Add a rule says so rather than open.
+test("with every kind in a rule, Add a rule is held with the reason", async () => {
+  stubEngine(engine);
+  const deploy = { ...ANSWER.rules[0]!, rule: 3, kinds: ["deploy"] };
+  const full = {
+    ...ANSWER,
+    rules: [ANSWER.rules[0]!, { ...ANSWER.rules[1]!, kinds: ["pr_merge"] }, deploy],
+  } as DelegatedDecisionsAnswer;
+  mountSettings(
+    <DelegatedDecisions />,
+    { delegated_decisions: full, ...GITHUB },
+    {
+      hash: "#/settings/delegated-decisions",
+      org: ORG,
+    },
+  );
+  await act(afterMicrotasks);
+  expect(screen.getByRole("button", { name: /Add a rule/ }).getAttribute("title")).toBe(
+    "Every kind of request has a rule. Edit one instead.",
+  );
 });

@@ -66,15 +66,27 @@ document is refused otherwise, and refused with a rule that names nobody to
 escalate to.
 
 An administrator can change all of it from **Settings › Delegated
-decisions** as well: its switch turns delegation on or off, **Add a rule**
-and each rule's pencil open the rule's fields filled from the company
-document, and each rule's bin removes it after asking (the rules after it move
-up one, and an escalation names a rule by its number). Each change is a
+decisions** as well. Each rule reads as one line there, for example "Merges and
+deploys → Release Manager decides · Escalates to Ops Lead · Reviews 1 in 10". The
+switch turns delegation on or off, **Add a rule** and each rule's pencil open
+the rule's sheet filled from the company document, and each rule's bin removes
+it after asking (the rules after it move up one, and an escalation names a rule
+by its number). The sheet groups the fields:
+
+| Group | Fields | Document key |
+|---|---|---|
+| What it decides | **Server commands**, **Merges**, **Deploys**, each with what it means; a kind another rule decides is shown with that rule's number | `kinds` |
+| Who decides | **Agent**: one agent, or two for a panel | `delegates` |
+| Who hears about it | **Escalates to**: the people; **Spot-checks**: every decision, 1 in 5, 1 in 10, 1 in 50 or a custom number, with a line saying what the choice means | `escalate_to`, `sample_one_in` |
+| Conditions (merges and deploys) | **Required checks** and **Always send to people** | `required_checks`, `always_escalate_paths` |
+
+Every seat picker shows each seat's picture, name and handle. Each change is a
 `PATCH /config` of the `delegated_decisions` block, checked against the whole
-company before it is stored, so a rule the engine refuses is refused there in
-the same words, and nothing is saved. Turning delegation off removes
-`enabled`, and an empty spot-check rate leaves `sample_one_in` out, so the
-document says the default rather than today's value of it.
+company before it is stored: a rule the engine refuses is refused with each
+problem under the field it names, in plain words, and nothing is saved. Turning
+delegation off removes `enabled`, and choosing the default spot-check rate
+leaves `sample_one_in` out, so the document says the default rather than
+today's value of it.
 
 The limits Crewlet holds every delegate to are on the same page, under **What
 Crewlet enforces**: the deadline and the two hourly caps, each with the
@@ -261,9 +273,9 @@ organization, or a seat's `integrations.github.repos`) is never read, and
 `crewlet validate` says so as an advisory. Gitlet changes are held to their
 target's own merge gate, which names its checks itself, so `required_checks`
 applies to GitHub repositories. **Settings › Delegated decisions** lists each
-rule's required checks beside its paths.
+rule's required checks on its line.
 
-When you add or change a rule there, the form offers the company's GitHub
+When you add or change a rule there, the sheet's **Required checks** offers the company's GitHub
 repositories to pick from, then the chosen repository's branches, then the
 check names reported on that branch's newest commit, leaving out any an
 agent's own app reported. They are read when the form asks, through the
@@ -281,5 +293,3 @@ agent's app installed on the repository, or none with Checks (Read-only).
   private repository: agent apps are not offered GitHub's Commit statuses
   permission, so a check the branch requires reads as unread, a check a rule
   requires is never met by one, and the merge or deploy goes to people.
-- Editing rules from the Settings view, which reads them; change them in the
-  company document.

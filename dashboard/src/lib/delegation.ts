@@ -92,16 +92,30 @@ export function verdictWords(verdict: string): {
     : { label: verdict.replaceAll("_", " "), tone: "neutral" };
 }
 
-/** What each act a rule may delegate is called (`delegated.Kind`). */
-const KIND_WORDS: Readonly<Record<string, string>> = {
-  ssh_operate: "Commands on servers",
-  pr_merge: "Merges",
-  deploy: "Deploys",
+/** What each act a rule may delegate is called (`delegated.Kind`), and what it is. */
+const KINDS: Readonly<Record<string, { words: string; meaning: string }>> = {
+  ssh_operate: {
+    words: "Server commands",
+    meaning: "An agent runs a command on one of your servers.",
+  },
+  pr_merge: { words: "Merges", meaning: "An agent merges a pull request or a Gitlet change." },
+  deploy: { words: "Deploys", meaning: "An agent deploys merged changes to an environment." },
 };
 
 /** An act in words; one this build does not name is said as written. */
 export function kindWords(kind: DelegatedAct): string {
-  return KIND_WORDS[kind] ?? kind;
+  return KINDS[kind]?.words ?? kind;
+}
+
+/** What an act is, in one sentence; "" for one this build does not name. */
+export function kindMeaning(kind: DelegatedAct): string {
+  return KINDS[kind]?.meaning ?? "";
+}
+
+/** A rule's acts as one phrase: "Merges and deploys". */
+export function kindsPhrase(kinds: readonly DelegatedAct[]): string {
+  const said = andList(kinds.map(kindWords));
+  return said.charAt(0).toUpperCase() + said.slice(1).toLowerCase();
 }
 
 /** "High confidence", "Low confidence"; nothing for a giver that states none. */
