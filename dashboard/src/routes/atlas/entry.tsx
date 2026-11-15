@@ -147,9 +147,14 @@ export function EntryHead({
  * OWN CARDS, so the words and the picture under them never disagree.
  */
 export function touchingSentence({ usedBy, reliesOn, around }: Touching): string {
-  const first = `${entries(usedBy)} ${usedBy === 1 ? "relies" : "rely"} on it`;
-  if (around === 0) return `${first}, and it relies on ${reliesOn.toLocaleString()}.`;
-  return `${first}, it relies on ${reliesOn.toLocaleString()}, and ${around.toLocaleString()} ${
+  // NONE IS SAID AS NOTHING, never "0 entries rely on it, and it relies on 0".
+  const first =
+    usedBy === 0
+      ? "Nothing relies on it"
+      : `${entries(usedBy)} ${usedBy === 1 ? "relies" : "rely"} on it`;
+  const relied = reliesOn === 0 ? "nothing" : reliesOn.toLocaleString();
+  if (around === 0) return `${first}, and it relies on ${relied}.`;
+  return `${first}, it relies on ${relied}, and ${around.toLocaleString()} ${
     around === 1 ? "stands" : "stand"
   } around it.`;
 }
@@ -188,7 +193,9 @@ export function Touches({
       ) : (
         <>
           <p>{touchingSentence(touching(near.nodes))}</p>
-          <Neighbourhood self={self} near={near} stacked={stacked} />
+          {/* AN ENTRY WITH NO NEIGHBOUR IS NOT DRAWN ALONE in a box of its
+              own: the sentence says it touches nothing. */}
+          {near.nodes.length > 1 && <Neighbourhood self={self} near={near} stacked={stacked} />}
         </>
       )}
     </Section>

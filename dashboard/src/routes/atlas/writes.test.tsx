@@ -176,7 +176,11 @@ describe("what the write controls send", () => {
 
   test("the words over an entry's diagram count what the diagram draws, the entries around it among them", () => {
     expect(touchingSentence({ usedBy: 0, reliesOn: 0, around: 1 })).toBe(
-      "0 entries rely on it, it relies on 0, and 1 stands around it.",
+      "Nothing relies on it, it relies on nothing, and 1 stands around it.",
+    );
+    // Mutation: count none as "0 entries" again.
+    expect(touchingSentence({ usedBy: 0, reliesOn: 0, around: 0 })).toBe(
+      "Nothing relies on it, and it relies on nothing.",
     );
     expect(touchingSentence({ usedBy: 1, reliesOn: 2, around: 0 })).toBe(
       "1 entry relies on it, and it relies on 2.",
@@ -227,10 +231,16 @@ describe("a reader who may not write", () => {
         .getAttribute("href"),
     ).toBe("#/company/org");
     fireEvent.click(screen.getByRole("button", { name: /More to do with web-1/ }));
+    // SAID ONCE, above the items, which stay listed and held. Mutation: leave
+    // each item its own copy of the sentence.
+    const menu = await screen.findByRole("menu");
+    const panel =
+      menu.closest("[role='dialog'], .crewlet-menu, .crewlet-popover") ?? menu.parentElement!;
+    expect(panel.textContent!.split(SEATLESS)).toHaveLength(2);
     for (const name of [/Set owner/, /Link a page/, /Merge with/, /Split/, /Retire/, /Purge/]) {
       const item = await screen.findByRole("menuitem", { name });
       expect(item.getAttribute("aria-disabled"), String(name)).toBe("true");
-      expect(item.textContent, String(name)).toContain(SEATLESS);
+      expect(item.textContent, String(name)).not.toContain(SEATLESS);
       expect(item.textContent, String(name)).not.toContain(WRITE_REASONS.not_served);
     }
   });

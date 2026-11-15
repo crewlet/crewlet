@@ -43,7 +43,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
-import { SeatlessNote, useSeatedAccess, useSeated } from "./access.tsx";
+import { SEATLESS, SeatlessNote, useSeatedAccess, useSeated } from "./access.tsx";
 import { LABEL_MAX, WAITING, WriteDialog } from "./AddEntry.tsx";
 import { ClaimList } from "./Decisions.tsx";
 import { EntryPicker, OwnerField, PageField, type OwnerChoice } from "./pickers.tsx";
@@ -56,6 +56,13 @@ export const PURGE_HELD = "Purging takes Admin access.";
 
 type Dialog =
   "correct" | "owner" | "relate" | "unrelate" | "page" | "merge" | "split" | "retire" | "purge";
+
+/** An item held by the seatless reason, without saying it again: the menu says it once. */
+function saidOnce(item: MenuEntry): MenuEntry {
+  if (item.kind === "separator" || item.description !== SEATLESS) return item;
+  const { description: _said, ...rest } = item;
+  return rest;
+}
 
 /** The names of the entries one entry's relations point at, by id. */
 export type Names = ReadonlyMap<string, string>;
@@ -79,6 +86,11 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
   const drawn = removable(entry);
   const draws = relationsFrom(entry.ref.kind).length > 0;
   const close = () => setDialog(null);
+  // HELD FOR ONE REASON, SAID ONCE: a reader holding no seat is offered no
+  // change at all, and the same two lines under each of seven items made a
+  // menu the height of a page that said one thing seven times. The menu says
+  // it once above its items, which stay held and listed.
+  const seatless = !correct.can && correct.reason === SEATLESS;
   // A PURGED ENTRY IS LEFT, as the toast says it is gone: its sheet closes
   // (and its selection with it), its page goes back to the atlas. It stayed
   // drawn, every control on it live, until a reload said Not Found.
@@ -169,7 +181,13 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
         >
           Correct
         </Button>
-        <Menu label={`More to do with ${entry.name}`} trigger="More" align="end" items={items} />
+        <Menu
+          label={`More to do with ${entry.name}`}
+          trigger="More"
+          align="end"
+          items={seatless ? items.map(saidOnce) : items}
+          header={seatless ? <span className="atlas-actions__held">{SEATLESS}</span> : undefined}
+        />
       </div>
       <SeatlessNote access={correct} />
       <RefusalNote write={confirm} />
