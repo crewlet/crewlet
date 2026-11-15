@@ -62,6 +62,36 @@ export function leadOf(runs: readonly Run[]): number {
 }
 
 /**
+ * Recent activity's rows: ONE PER PAGE, the newest row of each, and never the
+ * page the big tile leads with (`lead`, an index into `runs`, or -1), at most
+ * `max` of them, newest first.
+ *
+ * BY PAGE, NOT BY CHANGE. Three people answering one comment were three rows
+ * of the same page ("Meeting notes 8" three times running), and every comment
+ * on the page the big tile already opens was listed again beside it, so a
+ * morning's discussion of one page pushed every other page written that
+ * morning off the column. A page's newer changes say what happened to it
+ * lately; the rest are its History and the audit log's.
+ *
+ * A PAGE THAT IS GONE keeps its id on every change, so its changes are one row
+ * as well: the record that it existed, said once.
+ */
+export function pageRows(runs: readonly Run[], lead: number, max: number): Run[] {
+  const seen = new Set<string>();
+  const leadPage = lead >= 0 ? runs[lead]?.[0].page_id : undefined;
+  if (leadPage !== undefined) seen.add(leadPage);
+  const out: Run[] = [];
+  for (const run of runs) {
+    if (out.length >= max) break;
+    const page = run[0].page_id;
+    if (seen.has(page)) continue;
+    seen.add(page);
+    out.push(run);
+  }
+  return out;
+}
+
+/**
  * The revisions a save's line diff is read between: the one the save made and
  * the one before it, and whether the first is the page's current body.
  *

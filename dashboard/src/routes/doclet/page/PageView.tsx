@@ -97,6 +97,7 @@ import {
   useSpaces,
   type Who,
   NotInDoclet,
+  PathSteps,
 } from "../parts.tsx";
 import { withoutRepeatedTitle } from "./body.ts";
 import { PageCommentThread } from "./CommentThread.tsx";
@@ -159,19 +160,16 @@ function PageProps({
   return (
     <DescriptionList dense className="knowledge-props">
       <DescriptionList.Item term="Space">
-        <span className="knowledge-props-place">
+        <PathSteps>
           <a className="knowledge-props-link" href={href(["doclet", page.container])}>
             {spaceName}
           </a>
           {(detail.ancestors ?? []).map((a) => (
-            <span key={a.id} className="knowledge-props-step">
-              <span aria-hidden="true">/</span>
-              <a className="knowledge-props-link" href={href(pagePath(a.id))}>
-                {a.title}
-              </a>
-            </span>
+            <a key={a.id} className="knowledge-props-link" href={href(pagePath(a.id))}>
+              {a.title}
+            </a>
           ))}
-        </span>
+        </PathSteps>
       </DescriptionList.Item>
       <DescriptionList.Item term="Author">
         {author ? (

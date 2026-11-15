@@ -1423,7 +1423,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it *(needs Admin access)* | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
 | `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
-| `#/doclet` | **Doclet**: with no phrase, the landing (the newest change open to read, Recently written, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row sits on every Doclet screen and the search on its lists *(the whole of Doclet needs Doclet access)* | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
+| `#/doclet` | **Doclet**: with no phrase, the landing (the newest change open to read, Recent activity, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row sits on every Doclet screen and the search on its lists *(the whole of Doclet needs Doclet access)* | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
 | `#/doclet/{CONTAINER}` | **Space** (a knowledge container, by its key): its head, and its pages as an outline read one level at a time, with Create (a document or a folder) at the end of every open level | |
 | `#/doclet/new` | **New page**: the composer, filed where it was opened from | `space=` · `parent=` (a page id) |
 | `#/doclet/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
@@ -9122,16 +9122,22 @@ palette and the trail.
   page across the company takes the big tile, OPEN TO READ: the page's space
   and the way into it, its title, who changed it and when, what each save said
   (back-to-back saves of one page by one writer on one company day are one
-  row, "saved it twice"), the lines the newest save changed as the page's
+  row, "saved it twice", each note with its time; a single change's time is
+  the line above's alone), the lines the newest save changed as the page's
   History draws them (six at most, with the count of the rest and a link to
   that save; a save the line diff did not compare says so and links it, rather
   than listing the page's first lines as removed), and the page's opening,
   never ending on a heading with nothing
   under it. That costs ONE `page` read, of the featured page alone, and the
   `page_revision` before the save; a change to a page since purged never
-  leads. **Recently written** runs down the right with the rest of the same
-  `page_activity` read, never the featured change again, under the COMPANY's
-  days, Today and Yesterday cut at the company's midnight. Each row says its
+  leads. **Recent activity** runs down the right with the rest of the same
+  `page_activity` read (forty changes), ONE ROW PER PAGE with its newest
+  change, eleven pages at most, and never the featured page again, under the
+  COMPANY's days, Today and Yesterday cut at the company's midnight. By page
+  rather than by change, because three people answering one comment were three
+  rows of one page and every comment on the featured page was listed beside
+  it; and named for activity, since most of what moves a page lately is its
+  discussion. Home's widget of the same name folds its rows the same way. Each row says its
   time of day on that same clock (its age is the time's title, since an age
   under a date heading contradicted it) and its note: a save's own, a
   comment's words or a new page's first line, never the title again. **Every
@@ -9189,9 +9195,11 @@ columns. Four small
 
 Who files into a space and the tracker project it works in are named for a
 reader who may read the company document — an admin — in four states: read
-(which may be "no unit names it"), not held (the reader does not hold Admin),
-read in flight, refused. "Needs Admin access" is said only to a reader without
-it. A
+(which may be "No team owns this space"), not held (the reader does not hold
+Admin), read in flight, refused. "Needs Admin access" is said only to a reader
+without it. A space's head leaves out the team it is named after (a team's own
+space takes the team's name, and "Filed by Core" on Core said the title
+again), and says "Also filed by" for another team filing there. A
 project the space's key does not already name is drawn beside it as a dashed
 key, not only in a tooltip.
 

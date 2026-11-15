@@ -122,10 +122,13 @@ afterEach(() => {
   reloadForTest();
   location.hash = "#/";
   spacePages = 3;
+  configUnits = [];
   trashed = [];
   written = [{ id: "c-1", page_id: RUNBOOK, kind: "saved", at: "2026-09-24T22:00:00Z" }];
 });
 
+/** The company document's units, which a case about who files here fills. */
+let configUnits: unknown[] = [];
 /** What the space holds in the trash, which a case about the trash fills. */
 let trashed: unknown[] = [];
 /** The space's page count, which a case about an empty space sets to 0. */
@@ -171,6 +174,8 @@ function mount(viewer: unknown = JANE) {
         });
       case "page_activity":
         return Promise.resolve({ changes: written });
+      case "config":
+        return Promise.resolve({ units: configUnits });
       case "pages":
         if (p.status === "trashed") {
           return Promise.resolve({ pages: trashed, limit: 500, total: trashed.length });
@@ -238,6 +243,37 @@ test("the head names the space, what it is for, and when somebody last wrote in 
     kinds: "created,saved,renamed",
     limit: 1,
   });
+});
+
+// WHO FILES HERE IN A READER'S WORDS, and only where the name does not say
+// it. The head said "No unit names this space" (the company document's words)
+// and "Filed by Core" on Core, the space every team's own is named after.
+// Mutation: say every unit, or the old sentence, and this fails.
+test("the head says who files here in a reader's words, and never the space's own team again", async () => {
+  mount();
+  await settle();
+  let facts = screen.getByRole("list", { name: "About Engineering" });
+  expect(facts.textContent).toContain("No team owns this space");
+  expect(facts.textContent).not.toMatch(/unit/i);
+
+  cleanup();
+  configUnits = [{ name: "Engineering", space: "ENG", roles: [] }];
+  mount();
+  await settle();
+  facts = screen.getByRole("list", { name: "About Engineering" });
+  expect(facts.textContent).not.toContain("Filed by");
+  expect(facts.textContent).not.toContain("No team owns");
+
+  cleanup();
+  configUnits = [
+    { name: "Engineering", space: "eng", roles: [] },
+    { name: "Platform", space: "ENG", roles: [] },
+  ];
+  mount();
+  await settle();
+  facts = screen.getByRole("list", { name: "About Engineering" });
+  expect(facts.textContent).toContain("Also filed by Platform");
+  expect(facts.textContent).not.toContain("Engineering,");
 });
 
 // AN EMPTY SPACE HAS NOTHING WRITTEN, and says so: its header read "Last

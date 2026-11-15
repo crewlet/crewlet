@@ -25,7 +25,7 @@
  * with something wrong with it.
  */
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Children, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button, ButtonLink, EmptyState, Input, KeyChip, Menu, Tabs, Tag } from "@crewlethq/ui";
 import {
   ChevronDownGlyph,
@@ -463,6 +463,33 @@ export function NotInDoclet({
         </ButtonLink>
       }
     />
+  );
+}
+
+/**
+ * A place written as a path ("Core / ADR 1 / Meeting notes"): its first
+ * segment, then each next one behind a "/".
+ *
+ * A SEPARATOR TRAVELS WITH THE SEGMENT IT INTRODUCES. Each "/" and the segment
+ * after it are one unit that never breaks inside (`.knowledge-step`), so a path
+ * too long for its line breaks BEFORE a "/", never after it, and a long
+ * segment wraps its own words beside its "/". Drawn as loose items of one
+ * wrapping row, a page's "Space: Core / ADR 1: …" left the "/" alone on a line
+ * at every width, and the composer's "File it in [space] /" left it dangling
+ * at the end of a phone's line with the select it introduces under it.
+ */
+export function PathSteps({ children }: { children: ReactNode }) {
+  const [head, ...rest] = Children.toArray(children);
+  return (
+    <span className="knowledge-path">
+      {head}
+      {rest.map((step, i) => (
+        <span key={i} className="knowledge-step">
+          <span aria-hidden="true">/</span>
+          {step}
+        </span>
+      ))}
+    </span>
   );
 }
 

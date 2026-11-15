@@ -74,7 +74,7 @@ import { useAssistantDraft, useDraftState, writeParts, writeVia } from "~/app/as
 import { composerDraft, type ComposerValues } from "./composerDraft.ts";
 import { linkPageCommand } from "./page/LinkPicker.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageGlyph, pagePath, placesIn, useSpaces } from "./parts.tsx";
+import { PageGlyph, PathSteps, pagePath, placesIn, useSpaces } from "./parts.tsx";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 
 /** The composer's own entry in the slash menu: a new page links to any page. */
@@ -344,30 +344,31 @@ export function Composer() {
             <span className="knowledge-composer-label" aria-hidden="true">
               File it in
             </span>
-            <Select
-              size="sm"
-              width="auto"
-              ariaLabel="The space to file it in"
-              placeholder="Choose a space"
-              value={space || undefined}
-              options={spaceOptions}
-              onChange={(value) => {
-                setSpace(String(value));
-                setParent("");
-              }}
-            />
-            <span aria-hidden="true">/</span>
-            <Select
-              size="sm"
-              width="auto"
-              searchable
-              searchPlaceholder="Words from a title"
-              ariaLabel="The page it goes under"
-              disabled={!space}
-              value={parent}
-              options={parentOptions}
-              onChange={(value) => setParent(String(value))}
-            />
+            <PathSteps>
+              <Select
+                size="sm"
+                width="auto"
+                ariaLabel="The space to file it in"
+                placeholder="Choose a space"
+                value={space || undefined}
+                options={spaceOptions}
+                onChange={(value) => {
+                  setSpace(String(value));
+                  setParent("");
+                }}
+              />
+              <Select
+                size="sm"
+                width="auto"
+                searchable
+                searchPlaceholder="Words from a title"
+                ariaLabel="The page it goes under"
+                disabled={!space}
+                value={parent}
+                options={parentOptions}
+                onChange={(value) => setParent(String(value))}
+              />
+            </PathSteps>
           </div>
 
           <div className="knowledge-composer-row">
