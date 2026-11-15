@@ -5,7 +5,7 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { AssistantCardEvent, AssistantProposalCard } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
 import {
@@ -16,6 +16,7 @@ import {
 } from "../context.ts";
 import { CardBlock, type CardHandlers } from "./blocks.tsx";
 import { decisionFailure } from "./session.ts";
+import { TAINT_SOURCE_WORDS, cautionOf } from "./taint.ts";
 import type { ProposalLocal } from "./turn.ts";
 import { RestError } from "~/protocol/rest.ts";
 
@@ -306,4 +307,54 @@ test("a change to a page's body reads as a line diff, like its History", () => {
   // around the insertion the shortest edit calls new is the line diff's to say.
   expect(added).toHaveLength(3);
   expect(added.filter((text) => text !== "")).toEqual(["## TL;DR", "- One owner"]);
+});
+
+// A CHANGE PREPARED AFTER OUTSIDE TEXT SAYS SO FIRST (D25): the engine names
+// the surface the turn read, and the card leads with it in words, never the
+// engine's token. Mutation: drop `caution` from the card and the taint the
+// engine computed is invisible again.
+test("a proposal made after reading outside text leads with where that text was", () => {
+  draw({ scope: "server", state: "proposed", taint: "work_comment", summary: "File a task." });
+  const said = document.body.textContent ?? "";
+  expect(said).toContain(cautionOf("work_comment"));
+  expect(said).toContain("Prepared after reading a comment on a task");
+  expect(said).not.toContain("work_comment");
+  // It leads: read before what the change does.
+  expect(said.indexOf("Prepared after reading")).toBeLessThan(said.indexOf("File a task."));
+  cleanup();
+  draw({ scope: "server", state: "proposed", summary: "File a task." });
+  expect(document.body.textContent ?? "").not.toContain("Prepared after reading");
+});
+
+test("every surface the engine can name has its own words", () => {
+  const all = Object.entries(TAINT_SOURCE_WORDS);
+  expect(new Set(all.map(([, words]) => words)).size).toBe(all.length);
+  for (const [source, words] of all) {
+    expect(words, source).not.toMatch(/_|—/);
+    expect(cautionOf(source as keyof typeof TAINT_SOURCE_WORDS)).toContain(words);
+  }
+});
+
+// WHAT APPROVING INVOLVES IS SAID BEFORE THE PRESS: the engine's step-up flag
+// and the proposal's expiry, after which the approval is refused. Mutation:
+// drop `stepUp` or `expiresAt` and the identity check and a refusal for
+// lateness come as a surprise.
+test("the card says an approval asks for the person's identity, and when it expires", () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date("2026-10-24T10:27:00Z"));
+    draw({ scope: "server", state: "proposed", step_up: true });
+    const said = document.body.textContent ?? "";
+    expect(said).toContain("Approving asks you to confirm it’s you");
+    expect(said).toContain("Expires in 14m");
+    cleanup();
+    draw({ scope: "server", state: "proposed" });
+    expect(document.body.textContent ?? "").not.toContain("confirm it’s you");
+    cleanup();
+    // A settled card has no time left to count.
+    draw({ scope: "server", state: "applied", step_up: true });
+    expect(document.body.textContent ?? "").not.toContain("Expires");
+  } finally {
+    vi.useRealTimers();
+  }
 });
