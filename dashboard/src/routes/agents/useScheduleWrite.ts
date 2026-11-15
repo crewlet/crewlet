@@ -17,6 +17,7 @@ import { dryRunEntity, getEntity, putEntity } from "~/protocol/configWrite.ts";
 import { introducedWarnings } from "~/protocol/configAnswer.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
+import type { ActivatedRevision } from "~/lib/nodeStanding.ts";
 import {
   applyChange,
   entityPath,
@@ -41,7 +42,13 @@ export type ScheduleWriteState =
   /** The check passed and found what the change would introduce. */
   | { readonly kind: "warned"; readonly warnings: readonly ConfigWarning[] }
   | { readonly kind: "saving" }
-  | { readonly kind: "saved"; readonly done: string; readonly revisionId: string }
+  /** Stored, and activated as `revisionId` at `epoch`: what a follower of this node's apply reads. */
+  | {
+      readonly kind: "saved";
+      readonly done: string;
+      readonly revisionId: string;
+      readonly epoch: number;
+    }
   | { readonly kind: "refused"; readonly message: string; readonly reload: boolean };
 
 interface Prepared {
@@ -66,9 +73,13 @@ export function useScheduleWrite(
   {
     onSaved,
   }: {
-    /** Told once the change is stored, with what it did, said as done. */ onSaved?: (
-      done: string,
-    ) => void;
+    /**
+     * Told once the change is stored, with what it did, said as done, and the
+     * revision it activated: a screen drawing the schedule follows this node
+     * applying it (`ScheduleActions`), since what it draws is this node's
+     * applied company and changes only once the node applies the revision.
+     */
+    onSaved?: (done: string, activated: ActivatedRevision) => void;
   } = {},
 ): ScheduleWrite {
   const [state, setState] = useState<ScheduleWriteState>({ kind: "idle" });
@@ -99,8 +110,9 @@ export function useScheduleWrite(
       );
       prepared.current = null;
       if (outcome.kind === "saved") {
-        setState({ kind: "saved", done: write.done, revisionId: outcome.revisionId });
-        savedRef.current?.(write.done);
+        const activated = { revisionId: outcome.revisionId, epoch: outcome.epoch };
+        setState({ kind: "saved", done: write.done, ...activated });
+        savedRef.current?.(write.done, activated);
         return;
       }
       if (outcome.kind === "valid") {
@@ -162,8 +174,9 @@ export function useScheduleWrite(
           if (after.kind === "saved") {
             // A CHECK THE ENGINE STORED: saying so is the only answer that
             // cannot become a second save.
-            setState({ kind: "saved", done: write.done, revisionId: after.revisionId });
-            savedRef.current?.(write.done);
+            const activated = { revisionId: after.revisionId, epoch: after.epoch };
+            setState({ kind: "saved", done: write.done, ...activated });
+            savedRef.current?.(write.done, activated);
             return;
           }
           if (after.kind !== "valid") {

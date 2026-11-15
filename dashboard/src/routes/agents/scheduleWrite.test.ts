@@ -286,7 +286,9 @@ test("a pause reads the unit, checks it, and stores it under the revision it rea
       (coreUnit().schedules as unknown[])[1],
     ],
   });
-  expect(saved).toHaveBeenCalledWith("Paused “daily-standup”");
+  // WITH THE REVISION IT ACTIVATED, which the screen follows until this node
+  // applies it.
+  expect(saved).toHaveBeenCalledWith("Paused “daily-standup”", { revisionId: "rev-8", epoch: 8 });
 });
 
 // A REFUSED CHECK STORES NOTHING, and says where.
