@@ -877,6 +877,10 @@ func Register(r *Registry, s Sources) {
 		// configuration's, so an administrator's like the `config`
 		// question it is read beside. See [LimitRow].
 		r.Register("limits", Requires(iam.GrantAdmin), s.companyLimits)
+		// THE SETTINGS THAT ARE NOT NUMBERS, as the engine applies them,
+		// beside their defaults: an administrator's for the same reason.
+		// See [SettingRow].
+		r.Register("settings", Requires(iam.GrantAdmin), s.companySettings)
 		// Both are projections of the epoch: what the company DECLARES,
 		// which is a different question from what it has done.
 		r.Register("schedules", Everybody(), s.schedules)
