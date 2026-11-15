@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -34,7 +35,7 @@ var fetchWebPage = sync.OnceValues(func() (Tool, error) {
 			return get("GET /research/page", nil, query(a).str("url", "url").
 				num("from", "from", 0).values())
 		},
-		Cards: one(cards.Spec{Entity: &cards.Entity{ID: "url", Title: "title", Name: "Web page",
+		Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceWebPage, ID: "url", Title: "title", Name: "Web page",
 			Prose: true, Text: "text",
 			Facts: []cards.Fact{{Label: "Address", Path: "url", Type: tText, Mono: true},
 				fact("Read", "read_at", tDatetime),

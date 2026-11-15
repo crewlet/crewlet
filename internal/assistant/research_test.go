@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -71,7 +72,7 @@ func TestATurnReadsAFewPagesFencedAsTheSites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Follow(accepted.TurnID, 0)
+	frames := f.Follow(accepted.TurnID, 0)
 	var read, refused int
 	for _, m := range f.Model.Seen() {
 		if m.Role != llm.RoleTool {
@@ -88,5 +89,10 @@ func TestATurnReadsAFewPagesFencedAsTheSites(t *testing.T) {
 	if read != 8 || refused != 1 {
 		t.Errorf("the turn read %d pages fenced as the site's and refused %d, want 8 and 1",
 			read, refused)
+	}
+	card := evals.Last(frames, wire.EventCard)
+	if card == nil || card.Card.Card.Entity == nil || card.Card.Card.Entity.Kind != wire.ResourceWebPage ||
+		card.Card.Card.Entity.ID != "https://docs.example.com/rules" {
+		t.Errorf("a page read drew %+v, want a web_page card by its address", card)
 	}
 }
