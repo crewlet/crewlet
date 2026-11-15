@@ -440,7 +440,7 @@ func (in TrimInputs) snapshotFloor() Term {
 	// reader concluding this term deadlocks one node.
 	if len(in.Counted) < 2 {
 		return Term{Name: TermSnapshotFloor, Seq: SeqUnbounded, Known: true,
-			Detail: "a single node takes no snapshots; its recovery artefact is a " +
+			Detail: "a single node takes no snapshots; it is recovered from a " +
 				"backup, which the backup term gates"}
 	}
 	var have []uint64
