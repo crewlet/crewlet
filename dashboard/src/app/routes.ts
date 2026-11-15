@@ -256,6 +256,14 @@ export type MovedOrgPage = "edit" | "roster" | "teams";
 export const EDITOR_OPEN = { editor: "open" } as const;
 
 /**
+ * A seat's editor opened on one of its tabs (`editor=model`, `editor=advanced`):
+ * for a page that sends its reader to the one field it names.
+ */
+export const EDITOR_TABS = ["model", "advanced"] as const;
+export type EditorTab = (typeof EDITOR_TABS)[number];
+export const editorOpenAt = (tab: EditorTab) => ({ editor: tab }) as const;
+
+/**
  * Company › Principles, where the mission, the vision and the standing
  * policies are read and, by an administrator, written in place
  * (`routes/settings/principles/edit/address.ts` builds its edit address). Here

@@ -367,6 +367,8 @@ var contract = []Entry{
 	{"RetentionGenerationState", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 	{"RetentionIdentityCause", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 	{"RetentionTermName", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
+	{"SNAPSHOT_DONORS_REQUIRED", ReadScalar,
+		"internal/statelog.TestTheDashboardCountsTheDonorsTheSnapshotFloorRequires"},
 
 	// coverage.ts
 	{"Coverage", ReadInterface, "internal/eventfan.TestTheDashboardDeclaresExactlyTheCoverageTheEngineSends"},
@@ -394,6 +396,7 @@ var contract = []Entry{
 	{"SetupSSHServers", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupSSHServer", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupSSHInventoryCommand", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupSSHScannedKey", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"VerifyOutcome", ReadUnion, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupVerdict", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupVerdictFact", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
@@ -483,9 +486,20 @@ var contract = []Entry{
 		"internal/gitlet.TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo"},
 	{"CODE_SEARCH_TRIGRAM_BYTES", ReadScalar, "internal/codeindex.TestTheDashboardSearchesCodeAtTheTrigramsWidth"},
 
+	// mcp.ts
+	{"MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS", ReadScalar,
+		"internal/mcp.TestTheDashboardStatesTheEnginesTimeoutDefaults"},
+	{"MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS", ReadScalar,
+		"internal/mcp.TestTheDashboardStatesTheEnginesTimeoutDefaults"},
+
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryRepositoryState"},
 	{"REPO_SEARCH_MODES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEverySearchModeOfARepository"},
+	{"CODE_PATH_CLASSES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEveryPathClassAGateExempts"},
+	{"CODE_MAX_QUEUE_DEPTH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
+	{"CODE_MAX_QUEUE_BATCH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
+	{"CODE_DEFAULT_QUEUE_DEPTH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
+	{"CODE_DEFAULT_QUEUE_BATCH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
 	{"COMMAND_OUTCOMES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryOutcomeOfACommand"},
 	{"REPO_NAME", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
@@ -500,7 +514,6 @@ var contract = []Entry{
 	{"CODE_ALARM_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryCodeAlarm"},
 	{"CODE_MAX_BLAME_LINES", ReadScalar, "internal/gitlet.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers"},
 	{"CHANGE_PART_PAGE", ReadScalar, "internal/gitlet.TestTheDashboardReadsAChangesConversationAtTheEnginesPage"},
-	{"CODE_IDENTITY_DOMAIN", ReadScalar, "internal/gitlet.TestTheDashboardStatesTheCodePolicysDefaults"},
 	{"CHECK_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"CHECK_ENDED_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"CHECK_PURPOSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
@@ -526,6 +539,12 @@ var contract = []Entry{
 	{"LimitGroup", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"LimitUnit", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"SettingRange", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+
+	// settings.ts
+	{"SettingsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSettingsTheEngineSends"},
+	{"SettingRow", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSettingsTheEngineSends"},
+	{"SettingGroup", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheSettingsTheEngineSends"},
+	{"SettingKind", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheSettingsTheEngineSends"},
 
 	// signin.ts
 	{"SignInPolicyAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
@@ -715,6 +734,8 @@ var contract = []Entry{
 	{"BROKER_REMOVE_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastABrokerRemoval"},
 	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
 	{"OBJECT_FINDINGS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectFinding"},
+	{"OBJECT_COLLECT_INTERVAL_SECONDS", ReadScalar, "internal/api.TestTheDashboardStatesTheCollectorsCadence"},
+	{"OBJECT_AUDIT_INTERVAL_SECONDS", ReadScalar, "internal/api.TestTheDashboardStatesTheCollectorsCadence"},
 
 	// links.ts
 	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/doclet.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},

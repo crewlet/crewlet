@@ -22,10 +22,12 @@ import { Insights } from "./Insights.tsx";
 
 const save = vi.hoisted(() => vi.fn());
 const read = vi.hoisted(() => vi.fn());
+const check = vi.hoisted(() => vi.fn());
 vi.mock("~/protocol/configWrite.ts", async (original) => ({
   ...(await original<typeof import("~/protocol/configWrite.ts")>()),
   getConfig: read,
   savePatch: save,
+  dryRunPatch: check,
 }));
 
 const post = vi.hoisted(() => vi.fn());
@@ -96,6 +98,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   access.mockReturnValue({ can: true });
   read.mockResolvedValue({ kind: "document", document: {}, etag: '"rev"' });
+  check.mockResolvedValue({ kind: "valid", warnings: [], derived: null });
   save.mockResolvedValue({ kind: "saved", revisionId: "r", epoch: 2, warnings: [], derived: null });
   post.mockResolvedValue({});
 });
@@ -121,10 +124,29 @@ test("choosing to review accepts this build's catalogue, on the revision just re
     fireEvent.click(screen.getByRole("radio", { name: /Review each record first/ }));
   });
   await settled();
+  // CHECKED FIRST through the one setting write, then saved and watched.
+  expect(check.mock.calls.at(-1)?.[0]).toEqual({
+    diagnostics: { insights: { share: "review", accepted: 1 } },
+  });
   expect(save).toHaveBeenCalledOnce();
   const [patch, etag] = save.mock.calls[0] as unknown[];
   expect(patch).toEqual({ diagnostics: { insights: { share: "review", accepted: 1 } } });
   expect(etag).toBe('"rev"');
+  expect(screen.getByText("Saved, applying…")).toBeTruthy();
+});
+
+test("a choice the engine refuses saves nothing, and the list goes back to what it holds", async () => {
+  check.mockResolvedValue({ kind: "draining", detail: "" });
+  await mount(reading());
+  await act(async () => {
+    fireEvent.click(screen.getByRole("radio", { name: /Review each record first/ }));
+  });
+  await settled();
+  expect(save).not.toHaveBeenCalled();
+  expect(screen.getByText("Nothing was saved")).toBeTruthy();
+  expect((screen.getByRole("radio", { name: /^Don.t share/ }) as HTMLInputElement).checked).toBe(
+    true,
+  );
 });
 
 test("a sample record is the exact shape a class would send", async () => {

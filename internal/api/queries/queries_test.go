@@ -288,7 +288,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"diagnostics_insights": "admin",
 		"integrations":         "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
-		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",
+		"config_entities": "admin", "limits": "admin", "settings": "admin", "sign_in_policy": "admin",
 		// Where a model's executors can run, the catalogue a model step
 		// suggests from, and one device sign-in: the configuration's reader,
 		// and the one who starts a sign-in.

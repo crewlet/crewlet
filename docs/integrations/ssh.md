@@ -39,6 +39,13 @@ Each server is an entry in `integrations.ssh.hosts`, with its pinned host keys:
 
 A host id is part of every certificate principal for the server (`crewlet.<host id>.read` and `crewlet.<host id>.operate`), so changing it means running the server's setup again. A server shared by two companies takes a distinct host id in each.
 
+In the dashboard, an administrator does all four on **Company › Integrations › SSH › Settings**, under **Servers**:
+
+- **Add a server** takes its name, address, port, the two login users, a description and whether its read user may list containers. **Read its host keys** runs the scan and lists each key's fingerprint (a key the engine cannot pin is shown and left out), and the server is saved only once you tick that you compared each fingerprint with the server's console. You can paste the key lines from the server itself instead. Once saved, the server's setup opens, ready to copy.
+- Each server has **Edit**, which saves the server whole on the revision the list was read from: its allowlist and its Atlas switch are kept as they are, and a change somebody made meanwhile is refused rather than overwritten. Its name is fixed. **Server setup** shows its setup again, **Test connection** proves each step and keeps the result under the server, and **Remove** is held while an agent is granted the server.
+
+The answer of `GET /setup/integrations/ssh` carries what an edit sends back: each server's `host_keys` lines and `read_allowlist` beside its fingerprints, and the `revision_id` the servers were read from, which a `PUT` names as its `if_match`.
+
 ## The server setup
 
 The setup is one POSIX shell script, safe to run again: after a rotation, an allowlist change or a new operate user, run it again and it rewrites the same files. It:

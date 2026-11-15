@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -313,13 +314,15 @@ func (n *ChatletConfig) validate(path Path) error {
 		return nil
 	}
 	p.wrap(n.TypingStatus.validate(at(path, "typing_status")))
-	if d := n.MessageRetentionDays; d != nil && *d != 0 &&
-		(*d < MinMessageRetentionDays || *d > MaxMessageRetentionDays) {
-		p.add(at(path, "message_retention_days"), ErrOutOfRange,
-			"%d is outside %d..%d. Under a month, someone who was away could "+
-				"miss a decision before they read it. To keep messages longer, "+
-				"write 0, which keeps them for ever",
-			*d, MinMessageRetentionDays, MaxMessageRetentionDays)
+	// THE DECLARED RANGE, hole and all (settingRanges): 0 is for ever, and
+	// 1 to 29 days is refused, so the screen that changes it reads one rule.
+	if d := n.MessageRetentionDays; d != nil {
+		p.withinSaying(at(path, "message_retention_days"), float64(*d),
+			"under a month, someone who was away could miss a decision before they "+
+				"read it. To keep messages longer, write 0, which keeps them for ever",
+			fmt.Sprintf("Keep messages from %d days to %s, or for ever. Under a month, "+
+				"someone who was away could miss a decision before they read it.",
+				MinMessageRetentionDays, words.Count(MaxMessageRetentionDays/365, "year", "years")))
 	}
 	return p.err()
 }

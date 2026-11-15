@@ -102,12 +102,21 @@ function boundWords(row: LimitRow, n: number): string {
 
 /** Whether `range` admits `value`, as the engine's `config.Range.Admits` does. */
 export function rangeAdmits(range: SettingRange, value: number): boolean {
+  if (range.or_zero === true && value === 0) return true;
   if (value < range.min || (range.min_exclusive === true && value === range.min)) return false;
   return range.max === undefined || value <= range.max;
 }
 
-/** What a cap admits, in its own unit, as the sentence beside its field: "At least 1." */
-export function rangeWords(row: LimitRow, range: SettingRange): string {
+/**
+ * What a cap admits, in its own unit, as the sentence beside its field: "At
+ * least 1." A range that also admits 0 says it last, in `zeroWords` where the
+ * page knows what 0 means there ("0 keeps messages for ever").
+ */
+export function rangeWords(row: LimitRow, range: SettingRange, zeroWords?: string): string {
+  if (range.or_zero === true) {
+    const scale = rangeWords(row, { ...range, or_zero: false }).replace(/\.$/, "");
+    return `${scale}, or ${zeroWords ?? "0"}.`;
+  }
   const least = boundWords(row, range.min);
   if (range.max === undefined) {
     return range.min_exclusive ? `More than ${least}.` : `At least ${least}.`;
@@ -123,7 +132,7 @@ export function rangeWords(row: LimitRow, range: SettingRange): string {
  * admitted; any other value is held to its unit and then to the range the
  * engine holds the cap to.
  */
-export function readLimit(row: LimitRow, text: string): TypedLimit {
+export function readLimit(row: LimitRow, text: string, zeroWords?: string): TypedLimit {
   const typed = text.trim().replace(/%$/, "").trim();
   if (typed === "") return { ok: true, value: null };
   // A SIGN IS READ, so -2 is told the cap's range rather than that it is not
@@ -147,7 +156,7 @@ export function readLimit(row: LimitRow, text: string): TypedLimit {
       break;
   }
   if (row.range && !rangeAdmits(row.range, value)) {
-    return { ok: false, error: rangeWords(row, row.range) };
+    return { ok: false, error: rangeWords(row, row.range, zeroWords) };
   }
   return { ok: true, value };
 }
@@ -171,11 +180,15 @@ export function limitUnchanged(row: LimitRow, value: number | null): boolean {
  * person, a value the rest of the company's configuration cannot take, and
  * the operator's line stays where an operator reads it.
  */
-export function limitRefusal(row: LimitRow, problems: readonly ConfigProblem[]): string {
+export function limitRefusal(
+  row: LimitRow,
+  problems: readonly ConfigProblem[],
+  zeroWords?: string,
+): string {
   const said = new Set<string>();
   let unsaid = false;
   for (const p of problems) {
-    if (p.path === row.key && p.range) said.add(rangeWords(row, p.range));
+    if (p.path === row.key && p.range) said.add(rangeWords(row, p.range, zeroWords));
     else if (p.said) said.add(p.said);
     else unsaid = true;
   }

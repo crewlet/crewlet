@@ -42,10 +42,14 @@ const RecentRunsLimit = 50
 // node's, which is the one place that knows what became of each fire: the
 // dispatch ledger records `fired` when the scheduler sends it, before the
 // seat's node decides whether a later fire runs in its place.
+//
+// The engine's default cap rides beside them, so a form for a new schedule
+// says what an empty time limit means from the engine rather than a copy.
 func (s Sources) schedules(ctx context.Context, _ Params) (any, error) {
 	return map[string]any{
-		"schedules":   s.ConfiguredSchedules(),
-		"recent_runs": s.recentRuns(ctx),
+		"schedules":               s.ConfiguredSchedules(),
+		"recent_runs":             s.recentRuns(ctx),
+		"default_timeout_seconds": int(org.DefaultScheduleTimeout / time.Second),
 	}, nil
 }
 

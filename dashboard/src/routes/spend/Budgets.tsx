@@ -70,11 +70,18 @@ import {
   Card,
   EmptyValue,
   Meter,
+  SettingsTable,
   Skeleton,
   TableEntityCell,
   peekClickHandler,
 } from "@crewlethq/ui";
-import { BuildingComplexGlyph, DatabaseGlyph, KeyGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
+import {
+  BuildingComplexGlyph,
+  ClockGlyph,
+  DatabaseGlyph,
+  KeyGlyph,
+  UsersGlyph,
+} from "@crewlethq/icons/glyphs";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
@@ -93,6 +100,7 @@ import {
   type CeilingProposal,
 } from "./assistantActions.ts";
 import { QueryState } from "~/components/common.tsx";
+import { TextSetting } from "~/components/TextSetting.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
 import { PERIOD_HEADING, refusedWords, resetWords, windowName } from "~/lib/budgetWords.ts";
@@ -104,6 +112,7 @@ import { fmtCount, fmtExact, possessive } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, useOrgWriteAccessFor } from "~/lib/useWriteAccess.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/types.ts";
 
 /** How often the counters are re-read: the gate's own report cadence is 15s,
@@ -302,6 +311,43 @@ function assistantLine(answer: BudgetsAnswer): string {
 /** "the company's" as a sentence starts it. */
 function upperFirst(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * The company's clock, where every window on this page turns over: the
+ * engine's row of `timezone` (`settings`, an administrator's), beside its
+ * default and changed in place. A change moves every budget window and every
+ * schedule without a zone of its own, which the engine's check says before
+ * the save asks to go ahead. A reader who may not read the document sees the
+ * zone the windows answer was cut on.
+ */
+function CompanyClock({ zone }: { zone: string }) {
+  const viewer = useViewer();
+  const settings = useQuery("settings", undefined, { enabled: viewer.admin });
+  const row = settings.data?.settings.find((r) => r.key === "timezone");
+  return (
+    <Card as="section" padding="none">
+      <Card.Header icon={<ClockGlyph size="sm" />}>
+        <Card.Title id="company-clock">Company clock</Card.Title>
+      </Card.Header>
+      <SettingsTable aria-labelledby="company-clock">
+        {row ? (
+          <TextSetting
+            row={row}
+            label="Time zone"
+            area="Budgets"
+            reread="Reload to see the company clock as it is now."
+            onApplied={settings.refetch}
+            helper="Where every budget's day, week and month begins, and the clock a schedule without a zone of its own runs on."
+          />
+        ) : (
+          <SettingsTable.Row label="Time zone" settingKey="timezone">
+            {zone || "UTC"}
+          </SettingsTable.Row>
+        )}
+      </SettingsTable>
+    </Card>
+  );
 }
 
 export function Budgets() {
@@ -538,6 +584,8 @@ export function Budgets() {
                 />
               </Card>
             </div>
+
+            <CompanyClock zone={zone} />
           </div>
         </CeilingPrefillContext.Provider>
       )}

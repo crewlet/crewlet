@@ -2529,7 +2529,11 @@ between 30 and 3650, and **`0` to keep everything for ever** — is a policy
 decision rather than a bookkeeping one. `0` reads the opposite way here from
 `inbox.retention_days`, where it means "take the default": an
 inbox row is derived from history that answers for ever, and a message is not
-derived from anything.
+derived from anything. Its range is declared once with that hole in it (0, or
+30 to 3650), so the validator and the dashboard read one rule: Chatlet's page
+under Company › Integrations shows the horizon in force beside its default and
+changes it in place, saying a value in the hole beside the field before
+anything is sent.
 
 The prune is a record rather than a local delete, and that is forced rather
 than stylistic. A message's instant is the BROKER's, stamped when the record

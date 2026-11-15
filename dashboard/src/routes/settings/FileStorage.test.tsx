@@ -11,6 +11,7 @@ import {
   auditRow,
   auditSummary,
   backendSummary,
+  cadenceWords,
   collectSummary,
   FileStorage,
 } from "./FileStorage.tsx";
@@ -61,6 +62,17 @@ describe("file storage", () => {
     expect(new Set(Object.values(golden.fleet).map((b) => b.state))).toEqual(
       new Set(OBJECTS_STATES),
     );
+  });
+
+  // THE CADENCE IS THE ENGINE'S INTERVAL in words, held to the collector's
+  // constants by internal/api.TestTheDashboardStatesTheCollectorsCadence.
+  test("each pass's cadence is said from the engine's interval", () => {
+    expect(cadenceWords(3_600)).toBe("hourly");
+    expect(cadenceWords(86_400)).toBe("daily");
+    expect(cadenceWords(6 * 3_600)).toBe("every 6 hours");
+    renderCard(block("reported"));
+    expect(screen.getByText("hourly")).toBeTruthy();
+    expect(screen.getByText("daily")).toBeTruthy();
   });
 
   test("a report names the store, the node that ran it, and both passes", () => {

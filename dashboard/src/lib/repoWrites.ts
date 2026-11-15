@@ -97,9 +97,9 @@ export function searchModeHeld(
 }
 
 /**
- * Why the repository's details (its description, default branch and owner)
- * cannot be changed here, or undefined: a declared repository's are the
- * document's, and the rest is what holds any change to its life.
+ * Why the repository's details (its description, default branch, owner and
+ * who reads it) cannot be changed here, or undefined: a declared repository's
+ * are the document's, and the rest is what holds any change to its life.
  */
 export function detailsHeld(repo: CodeRepoDetail, viewer: Reader): string | undefined {
   if (repo.managed_by === "config") return DECLARED;
@@ -117,13 +117,14 @@ export function detailsHeld(repo: CodeRepoDetail, viewer: Reader): string | unde
  */
 export function detailsFormHeld(
   repo: CodeRepoDetail,
-  next: { description: string; defaultBranch: string; owner: string },
+  next: { description: string; defaultBranch: string; owner: string; visibility: string },
   branches: readonly string[],
 ): string | undefined {
   const changed =
     next.description.trim() !== (repo.description ?? "") ||
     next.defaultBranch !== repo.default_branch ||
-    next.owner !== ownerKey(repo.owner);
+    next.owner !== ownerKey(repo.owner) ||
+    next.visibility !== repo.visibility;
   if (!changed) return "Nothing is changed yet.";
   if (next.defaultBranch !== repo.default_branch && !branches.includes(next.defaultBranch)) {
     return `${repo.name} holds no branch ${next.defaultBranch}: choose one of its branches.`;
@@ -157,6 +158,49 @@ export function pullMirrorHeld(repo: CodeRepoDetail, viewer: Reader): string | u
   if (held) return held;
   if (repo.status === "archived")
     return `${repo.name} is archived: unarchive it to make it a pull mirror.`;
+  return undefined;
+}
+
+/**
+ * Why the repository cannot be archived, or undefined: what holds its details,
+ * and a pull mirror, which an archive would freeze, since an archived
+ * repository takes no sync (`gitlet.archiveRefusal`).
+ */
+export function archiveHeld(repo: CodeRepoDetail, viewer: Reader): string | undefined {
+  const held = detailsHeld(repo, viewer);
+  if (held) return held;
+  if (repo.mirrored || repo.remotes?.mirror_from) {
+    return `${repo.name} is a pull mirror, and an archived repository takes no sync: remove its pull mirror first.`;
+  }
+  return undefined;
+}
+
+/**
+ * Why the repository cannot be renamed, or undefined: what holds its details.
+ * The new name itself is the form's ([renameFormHeld]).
+ */
+export function renameHeld(repo: CodeRepoDetail, viewer: Reader): string | undefined {
+  return detailsHeld(repo, viewer);
+}
+
+/**
+ * Why a rename to `typed` cannot be sent yet, or undefined: a name the engine
+ * reads, of the repository's own kind. A project's name is one label, and a
+ * scratch repository keeps its seat's `<handle>.` (`gitlet.renameForm`).
+ */
+export function renameFormHeld(repo: CodeRepoSummary, typed: string): string | undefined {
+  const name = typed.trim();
+  if (name === repo.name || name === "") return "Type its new name.";
+  if (repo.kind === "scratch") {
+    const prefix = `${repo.owner.ref}.`;
+    if (!name.startsWith(prefix) || !isRepoName(name)) {
+      return `A scratch repository keeps its seat's name: ${prefix}<name>, in lowercase letters, digits and hyphens.`;
+    }
+    return undefined;
+  }
+  if (!isRepoName(name) || name.includes(".")) {
+    return "Name the project: lowercase letters, digits and hyphens.";
+  }
   return undefined;
 }
 
@@ -390,6 +434,91 @@ export function protectHeld(repo: CodeRepoSummary, viewer: Reader): string | und
   const held = lifeHeld(repo);
   if (held) return held;
   if (!isBound(viewer)) return UNBOUND;
+  return undefined;
+}
+
+/**
+ * Why the repository's path owners cannot be changed here, or undefined: what
+ * holds its details, and a scratch repository, which takes no path owners
+ * (it is its seat's own experiment).
+ */
+export function pathOwnersHeld(repo: CodeRepoDetail, viewer: Reader): string | undefined {
+  const held = detailsHeld(repo, viewer);
+  if (held) return held;
+  if (repo.kind === "scratch") {
+    return "A scratch repository takes no path owners: it is its seat's own.";
+  }
+  return undefined;
+}
+
+/**
+ * Why a reader cannot take globs from a path owner, beyond [pathOwnersHeld]:
+ * while a rule makes path owners approve merges (`owners_approve`), taking a
+ * glob loosens that rule, which only a person does (`gitlet`'s
+ * gatingOwnersTaken).
+ */
+export function pathOwnerTakeHeld(
+  repo: CodeRepoDetail,
+  viewer: Reader,
+  gating: boolean,
+): string | undefined {
+  const held = pathOwnersHeld(repo, viewer);
+  if (held) return held;
+  if (gating && !isPerson(viewer)) {
+    return "Only a person takes a path from its owner while a protection rule makes path owners approve its merges.";
+  }
+  return undefined;
+}
+
+/** The globs a person typed: by commas, spaces or lines, each once. */
+export function globsOf(typed: readonly string[]): string[] {
+  return [...new Set(typed.map((g) => g.trim()).filter(Boolean))];
+}
+
+/**
+ * What one `code_update_repo` sends to move one owner's globs from `had` to
+ * `wanted`, globs given and taken by name (`gitlet.PathOwnersChange`), never
+ * the list whole, so a glob another request gave meanwhile is kept; or null
+ * where nothing moved.
+ */
+export function pathOwnersArgs(
+  owner: { kind: string; ref: string },
+  wanted: readonly string[],
+  had: readonly string[],
+): {
+  add?: { owner: typeof owner; paths: string[] }[];
+  remove?: { owner: typeof owner; paths: string[] }[];
+} | null {
+  const want = globsOf(wanted);
+  const add = want.filter((g) => !had.includes(g));
+  const remove = had.filter((g) => !want.includes(g));
+  if (!add.length && !remove.length) return null;
+  return {
+    ...(add.length ? { add: [{ owner, paths: add }] } : {}),
+    ...(remove.length ? { remove: [{ owner, paths: remove }] } : {}),
+  };
+}
+
+/**
+ * Why a path owner form cannot be sent yet, or undefined: an owner chosen, a
+ * glob at least, and (for an owner already holding some) something changed.
+ */
+export function pathOwnerFormHeld(
+  owner: string,
+  wanted: readonly string[],
+  had: readonly string[],
+): string | undefined {
+  if (owner === "") return "Choose the unit or seat that owns the paths.";
+  const want = globsOf(wanted);
+  if (want.length === 0) {
+    return had.length ? "Name a path at least, or remove the owner." : "Name a path at least.";
+  }
+  if (want.some((g) => g.startsWith("/") || /\s/.test(g))) {
+    return "Name each path from the repository's root, with no spaces, such as src/** or docs/*.md.";
+  }
+  if (want.length === had.length && want.every((g) => had.includes(g))) {
+    return "Nothing is changed yet.";
+  }
   return undefined;
 }
 

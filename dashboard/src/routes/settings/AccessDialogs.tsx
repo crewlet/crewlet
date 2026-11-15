@@ -58,6 +58,8 @@ export interface EditableRow {
   kind: string;
   login?: string;
   name?: string;
+  /** The row's name or address is ciphertext this node cannot open. */
+  sealed?: boolean;
   seat?: string;
   grants?: string[] | null;
 }
@@ -361,9 +363,14 @@ export function OnYourself({
 }
 
 /**
- * Change somebody's login, seat or access — one `PATCH`, carrying only what
- * changed. The engine moves the login and the seat in one record before the
- * access, and a refusal part way names what had already landed.
+ * Change somebody's name, login, seat or access: one `PATCH`, carrying only
+ * what changed. The engine moves the login and the seat in one record before
+ * the name and the access, and a refusal part way names what had already
+ * landed.
+ *
+ * THE NAME ONLY WHERE THIS NODE HOLDS IT: a name this node's keyring cannot
+ * open is not known here, so the field is held with the reason rather than
+ * opened empty, where a Save would write over a name nobody read.
  *
  * WHAT CHANGED IS MEASURED AGAINST THE ROW THE DIALOG OPENED ON, never the
  * live one: the directory is read again every minute and when the tab comes
@@ -404,6 +411,7 @@ export function EditPersonDialog({
   const seats = useUnheldSeats();
   const [row] = useState(live);
   const machine = row.kind === "machine";
+  const [name, setName] = useState(row.sealed ? "" : (row.name ?? ""));
   const [login, setLogin] = useState(row.login ?? "");
   const [seat, setSeat] = useState(row.seat ?? NO_SEAT);
   const [grants, setGrants] = useState<string[]>(row.grants ?? []);
@@ -437,7 +445,11 @@ export function EditPersonDialog({
   const before = row.grants ?? [];
   const added = grants.filter((g) => !before.includes(g));
   const removed = before.filter((g) => !grants.includes(g));
+  // A NAME IS SENT TRIMMED, and only where it changed: clearing one is a
+  // setting of its own (the engine keeps "" as no name).
+  const changesName = !row.sealed && name.trim() !== (row.name ?? "");
   const change: Record<string, unknown> = {
+    ...(changesName ? { name: name.trim() } : {}),
     ...(changesLogin ? { login: login.trim() } : {}),
     ...(seat !== (row.seat ?? NO_SEAT) ? { seat } : {}),
     ...(added.length > 0 ? { add_grants: added } : {}),
@@ -493,6 +505,28 @@ export function EditPersonDialog({
         )
       }
     >
+      <FormField
+        label="Name"
+        optional
+        helper={
+          row.sealed
+            ? "This node can’t open the name it holds, so it can’t change it."
+            : machine
+              ? "What the service account is called in lists."
+              : "What they are called across Crewlet. Empty clears it."
+        }
+      >
+        {(field) => (
+          <Input
+            id={field.id}
+            aria-describedby={field.describedBy}
+            width="full"
+            value={name}
+            disabled={row.sealed === true}
+            onChange={(e) => setName(e.target.value)}
+          />
+        )}
+      </FormField>
       <FormField
         label="Login"
         helper={

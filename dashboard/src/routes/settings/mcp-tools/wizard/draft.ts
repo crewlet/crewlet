@@ -14,8 +14,9 @@
  * AN EDIT WRITES BACK WHAT IT READ. The entry the configuration holds (as
  * `GET /config/mcp-servers/{name}` answers it, values masked) is the base,
  * and the draft changes only the fields its steps show: a field this wizard
- * does not draw (timeouts, annotations, `optional_keys`, `enabled`) is
- * written back as it was.
+ * does not draw (annotations, `optional_keys`, `enabled`) is written back as
+ * it was. The start and call timeouts are drawn on the Connection step, an
+ * empty one the engine's default.
  *
  * AN OAUTH SIGN-IN IS THE ENTRY'S `oauth` BLOCK: a person's sign-in names how
  * the engine registers (`client`), with the company's own client's id, and
@@ -127,6 +128,13 @@ export interface Draft {
   args: string;
   /** Added before every tool name, with nothing between. */
   toolPrefix: string;
+  /**
+   * The start and call timeouts in seconds as typed (`startup_timeout_seconds`,
+   * `request_timeout_seconds`); "" is the engine's default, which leaves the
+   * field out.
+   */
+  startupTimeout: string;
+  requestTimeout: string;
   /** How the engine proves who it is to the server. */
   signIn: SignInChoice;
   /** How a person's OAuth sign-in registers the engine. */
@@ -180,6 +188,8 @@ export function emptyDraft(): Draft {
     command: "",
     args: "",
     toolPrefix: "",
+    startupTimeout: "",
+    requestTimeout: "",
     signIn: "none",
     oauthClient: "cimd",
     clientId: "",
@@ -298,6 +308,8 @@ export function fromServer(
     command: text(entity.command),
     args: Array.isArray(entity.args) ? entity.args.map(String).join("\n") : "",
     toolPrefix: text(entity.tool_prefix),
+    startupTimeout: seconds(entity.startup_timeout_seconds),
+    requestTimeout: seconds(entity.request_timeout_seconds),
     signIn:
       signIn === "oauth" && oauth?.grant === "client_credentials" ? "client_credentials" : signIn,
     oauthClient: client === "dcr" || client === "own" ? client : "cimd",
@@ -316,6 +328,11 @@ export function fromServer(
     // choosable even where the catalogue has since stopped listing it.
     supported: entry ? [...new Set<McpAuthMethod>([...entry.auth, signIn])] : null,
   };
+}
+
+/** A seconds field as the form holds it: "" where the entry leaves it to the default. */
+function seconds(v: unknown): string {
+  return typeof v === "number" && v > 0 ? String(v) : "";
 }
 
 /** The rows of the transport the draft has chosen: its headers, or its variables. */
@@ -388,6 +405,8 @@ const OWNED = [
   "headers",
   "env",
   "tool_prefix",
+  "startup_timeout_seconds",
+  "request_timeout_seconds",
   "shared",
   "oauth",
   "access",
@@ -410,6 +429,15 @@ export function entityOf(d: Draft, base: Record<string, unknown> | null): Record
   out.transport = d.transport;
   if (d.description.trim()) out.description = d.description.trim();
   if (d.toolPrefix.trim()) out.tool_prefix = d.toolPrefix.trim();
+  // A TIMEOUT LEFT EMPTY IS LEFT OUT, the engine's default; anything typed is
+  // sent for the engine to judge, a number as one.
+  for (const [field, typed] of [
+    ["startup_timeout_seconds", d.startupTimeout],
+    ["request_timeout_seconds", d.requestTimeout],
+  ] as const) {
+    const t = typed.trim();
+    if (t !== "") out[field] = Number.isFinite(Number(t)) ? Number(t) : t;
+  }
   // `shared` is written only to say false: unset is the shared default.
   if (!d.shared) out.shared = false;
   // WHO GETS IT, left out for every agent. A server an integration signs in
@@ -522,6 +550,8 @@ export function stepOf(p: ConfigProblem, transport: Draft["transport"]): Step {
     case "args":
     case "transport":
     case "tool_prefix":
+    case "startup_timeout_seconds":
+    case "request_timeout_seconds":
       return "connection";
     case "env":
     case "optional_keys":

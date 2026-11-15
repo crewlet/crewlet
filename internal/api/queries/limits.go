@@ -29,12 +29,15 @@ const (
 	LimitInbox LimitGroup = "inbox"
 	LimitAtlas LimitGroup = "atlas"
 	LimitCode  LimitGroup = "code"
+	// LimitChat is Chatlet's company-wide message horizon, which its own
+	// screen changes in place.
+	LimitChat LimitGroup = "chat"
 )
 
 // LimitGroups are every group, in drawing order. Settings › Limits draws the
 // first four; `delegated_decisions` answers the delegated rows.
 var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules, LimitDelegated,
-	LimitInbox, LimitAtlas, LimitCode}
+	LimitInbox, LimitAtlas, LimitCode, LimitChat}
 
 // LimitUnit is what a limit's number counts.
 type LimitUnit string
@@ -196,6 +199,16 @@ var limits = []limit{
 		read: func(c *config.Company) float64 {
 			_, most := c.Code.Scratch.Resolved()
 			return float64(most)
+		}},
+	// ZERO KEEPS MESSAGES FOR EVER, so it is Off: no horizon prunes them.
+	{key: "chat.chatlet.message_retention_days", group: LimitChat, unit: LimitDays,
+		zeroIsOff: true,
+		read: func(c *config.Company) float64 {
+			horizon, bounded := c.Chat.Chatlet.MessageRetention()
+			if !bounded {
+				return 0
+			}
+			return horizon.Hours() / 24
 		}},
 }
 

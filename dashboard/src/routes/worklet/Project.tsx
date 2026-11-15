@@ -64,6 +64,7 @@ import { ObjectHeader, type Fact as HeaderFact } from "~/app/frame/ObjectHeader.
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import {
+  Button,
   ButtonLink,
   Callout,
   Card,
@@ -110,6 +111,7 @@ import { ItemsView } from "./ItemsView.tsx";
 import { HistoryView } from "./History.tsx";
 import { ProjectFiles } from "./Files.tsx";
 import { ProjectFields, ProjectLabels } from "./ProjectSettings.tsx";
+import { TaskTypesDialog } from "./TaskTypes.tsx";
 import { FEED_PAGE } from "./feed.tsx";
 import { statusDot } from "./shapes/group.tsx";
 import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
@@ -299,6 +301,7 @@ export function Project({ projectKey }: { projectKey: string }) {
  * six fields had no screen that said so.
  */
 function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: RowChrome }) {
+  const [editingTypes, setEditingTypes] = useState(false);
   // `group_limit: 1` because only the COUNTS are drawn here and the engine runs
   // one paged statement per column — a column's rows are exactly what this
   // panel does not show, and zero is not a bound the grammar accepts.
@@ -363,7 +366,14 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
             </div>
           </div>
           <div className="col gap-1">
-            <span className="t-label">Types</span>
+            <div className="row gap-2">
+              <span className="t-label">Types</span>
+              {/* THE COMPANY'S, shared by every project: edited in a dialog
+                  of their own, drawn for every reader and held with why. */}
+              <Button size="small" variant="ghost" onClick={() => setEditingTypes(true)}>
+                Edit the company’s types
+              </Button>
+            </div>
             <div className="row gap-2 wrap">
               {(detail.types ?? [])
                 .filter((t) => !t.archived)
@@ -386,6 +396,7 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
           ) : null}
         </div>
       </Card>
+      {editingTypes && <TaskTypesDialog onClose={() => setEditingTypes(false)} />}
       <ProjectLabels detail={detail} />
       <ProjectFields detail={detail} />
       <ProjectFeed detail={detail} chrome={chrome} />

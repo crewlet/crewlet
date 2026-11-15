@@ -96,20 +96,37 @@ interface SetupSSHTest {
   steps: SetupSSHTestStep[];
 }
 
-/** One registered SSH server, its keys as fingerprints. */
+/**
+ * One registered SSH server, its keys as fingerprints and as the lines it pins,
+ * which an edit sends back whole with its allowlist.
+ */
 export interface SetupSSHServer {
   id: string;
   address: string;
   port: number;
   fingerprints: string[];
+  host_keys: string[];
   users: { read: string; operate?: string };
   description?: string;
   containers?: boolean;
+  /** The commands the read user may run, where they replace the default list. */
+  read_allowlist?: string[];
   /** Whether the engine itself reads the server for the atlas. Off when absent. */
   inventory?: boolean;
   /** Every agent naming it, on or off: it is not removed while one does. */
   granted_to: string[];
   last_test?: SetupSSHTest;
+}
+
+/**
+ * One host key a server presented to a scan (`ssh.ScannedKey`): its line, its
+ * type and fingerprint, and why it cannot be pinned where it cannot.
+ */
+export interface SetupSSHScannedKey {
+  line: string;
+  type: string;
+  fingerprint_sha256: string;
+  problem?: string;
 }
 
 /** One command of the atlas's inventory, as the server's gate takes it. */
@@ -121,6 +138,8 @@ interface SetupSSHInventoryCommand {
 
 /** The SSH integration's servers and the authority lines servers trust. */
 interface SetupSSHServers {
+  /** The revision the servers were read from: an edit's `if_match`. */
+  revision_id: string;
   ca_public_key?: string;
   next_ca_public_key?: string;
   /** The lines a rotation retired, newest last. */

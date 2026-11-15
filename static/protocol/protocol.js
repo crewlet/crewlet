@@ -4437,9 +4437,16 @@ var ACTIONS = {
 	code_update_repo: {
 		args: [
 			"repo",
+			"description",
+			"default_branch",
+			"visibility",
 			"search",
+			"owner",
+			"path_owners",
 			"mirror_from",
-			"mirror_to"
+			"mirror_to",
+			"archived",
+			"rename_to"
 		],
 		domain: "code",
 		apps: ["gitlet"],
@@ -4505,9 +4512,13 @@ var ACTIONS = {
 			"remove",
 			"merge_by",
 			"approvals",
+			"approvals_unless",
+			"human_paths",
 			"checks",
+			"landing",
 			"owners_approve",
 			"delete_source",
+			"agents_edit_checks",
 			"remove_gate"
 		],
 		domain: "code",
@@ -5249,6 +5260,9 @@ function newActOpID(now = Date.now()) {
 * takes one reads it.
 */
 async function act(tool, args, options = {}) {
+	const named = ACTIONS[tool].args;
+	const stray = Object.keys(args).filter((k) => !named.includes(k));
+	if (stray.length > 0) throw new Error(`act: ${tool}'s row in contract/actions.ts names no ${stray.join(", ")}`);
 	const opId = options.opId ?? newActOpID();
 	const floors = options.floors ?? session;
 	const unknown = (reason) => ({

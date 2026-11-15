@@ -72,6 +72,19 @@ describe("the request", () => {
     expect(JSON.parse(init.body as string)).toEqual({ args: { views: { add: ["v1"] } } });
   });
 
+  // AN ARGUMENT ITS ROW DOES NOT NAME IS REFUSED BEFORE ANYTHING IS SENT: a
+  // conditional spread escapes the type, and the row is the contract the
+  // engine's catalogue test holds. Mutation: drop the check in act(), and an
+  // unlisted argument reaches the wire here.
+  test("refuses an argument its row does not name, and sends nothing", async () => {
+    const calls = stub(async () => json(APPLIED, 200));
+    const extra = (true as boolean) ? { stray: 1 } : {};
+    await expect(
+      act("set_pins", { views: { add: ["v1"] }, ...extra }, { floors: new SessionFloors() }),
+    ).rejects.toThrow(/names no stray/);
+    expect(calls).toHaveLength(0);
+  });
+
   // THE ENGINE REFUSES A KEY THAT IS NOT A UUIDv7 — it reads the instant the
   // key carries — and a browser reached over plain http has no
   // `crypto.randomUUID` to mint one with.
