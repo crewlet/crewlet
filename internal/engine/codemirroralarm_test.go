@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
-	gitlethome "github.com/crewlet/crewlet/internal/gitlet/home"
 	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -50,13 +49,16 @@ roles:
 // THE MIRROR ALARM FIRES ON ITS HOME (M6-D16, ADR-0015), through the wiring a
 // running node has: a STARTED Gitlet node, alone the home of every repository,
 // whose push mirror's every dial is refused — so its home loop's mirrors
-// worker tries it at its first pass and again once its retry is due, each
-// attempt failing at the dial — raises nothing while the mirror is inside its
-// own refresh promise (gitlet.MirrorInterval and mirror.AttemptDeadline) and
+// worker tries it at a pass and again once its retry is due, each attempt
+// failing at the dial — raises nothing while the mirror is inside its own
+// refresh promise (gitlet.MirrorInterval and mirror.AttemptDeadline) and
 // code_mirror_failing, naming the repository, once it has gone that long
 // without being brought level: its reading through codeReading, and the alarm
 // the retention loop's evaluation of it stands. The node's clock is the
-// case's, moved past the promise rather than waited through.
+// case's, moved past the promise rather than waited through, and the home's
+// passes are the case's too (engine.PollHomeForTest): waiting for the loop's
+// own ticker sat out two of its gitlethome.Backstop minutes, two thirds of
+// the case's two minutes on CI, for a pass that is the same pass either way.
 //
 // Mutations: leave the mirrors' half out of the reading (codeReading), and
 // the alarm never fires; count a mirror as failing from its first failed
@@ -91,16 +93,25 @@ func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// waitDial waits for the mirrors' next dial: an attempt of the push
-	// mirror that reached its target. The deadline is three passes of the
-	// home's loop — its first, at Start, may find this node not yet listed
-	// — and room for a loaded machine.
+	// waitDial runs the home's passes until the mirrors' next dial: an
+	// attempt of the push mirror that reached its target. More than one pass,
+	// because the first may find this node not yet listed as the home; the
+	// deadline is room for a loaded machine, and only ends the wait.
 	waitDial := func(which string) {
 		t.Helper()
-		select {
-		case <-dialed:
-		case <-time.After(3*gitlethome.Backstop + time.Minute):
-			t.Fatalf("the push mirror's %s attempt never dialed its target", which)
+		deadline := time.Now().Add(time.Minute)
+		for {
+			if err := engine.PollHomeForTest(t.Context(), e); err != nil {
+				t.Fatalf("a pass of the home's loop: %v", err)
+			}
+			select {
+			case <-dialed:
+				return
+			case <-time.After(100 * time.Millisecond): //fixedwait:liveness
+			}
+			if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its firing only ends the wait
+				t.Fatalf("the push mirror's %s attempt never dialed its target", which)
+			}
 		}
 	}
 
@@ -134,10 +145,10 @@ func TestTheMirrorAlarmFiresOnItsHome(t *testing.T) {
 		if slices.Contains(kinds, statelog.KindCodeMirrorFailing) {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its firing only ends the wait
 			t.Fatalf("the node's alarms are %v with its push mirror failing past its refresh, want %s", kinds,
 				statelog.KindCodeMirrorFailing)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 }

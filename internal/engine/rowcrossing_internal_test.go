@@ -2,30 +2,62 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
+	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
-	"github.com/crewlet/crewlet/internal/coord/kv/kvtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// rowCrossingRate is the pace the cases below hold a leaf's link to, each way:
-// 160 KiB a second, about five times the slowest a link is allowed to be
-// (internal/objstore's MiBPace), so a run's row at its bound takes about
-// thirty-eight seconds to cross towards the member as a write, and its
-// leader's reply to a read of it about fifty-one back — each past the five
-// seconds each change below was held to, the read past the thirty seconds a
-// read was ever asked for, and far inside what a row at its bound is given at
-// the slowest pace allowed.
-const rowCrossingRate = 160 << 10
+// rowCrossing is the crossing the cases below give their store's connection
+// ([sandbox.PendingStore.RowCrossing]): an hour, far past either write's own
+// five seconds, so a budget that leaves it out is told apart from one that
+// counts it by any margin a reader can see.
+const rowCrossing = time.Hour
 
-// rowCrossingRoom is how far short of what one key holds a case's row is
-// seeded: the room the write a case makes adds to it, a few dozen bytes, so
-// the row it writes is at its bound still, and never past it.
-const rowCrossingRoom = 8 << 10
+// crossingMarks is a pending store whose connection takes rowCrossing to carry
+// a run's row at its bound, and which records, for each write the engine makes
+// on a run's row off the path that asked for it, the instant it was handed the
+// write and its context's deadline, on the case's bubble clock. It answers
+// every write as taken. Any other call reaches the nil store underneath and
+// panics, which is the case's mistake: these two writes call nothing else.
+type crossingMarks struct {
+	sandbox.PendingStore
 
-// THE ENGINE'S WRITES OF A RUN'S ROW AT ITS BOUND, ACROSS A LEAF'S LINK, LAND.
+	mu    sync.Mutex
+	given map[string]handedMark
+	done  chan string
+}
+
+// handedMark is one write as [crossingMarks] saw it.
+type handedMark struct {
+	at, deadline time.Time
+	set          bool
+}
+
+func (s *crossingMarks) RowCrossing() time.Duration { return rowCrossing }
+
+func (s *crossingMarks) note(ctx context.Context, write string) {
+	deadline, set := ctx.Deadline()
+	s.mu.Lock()
+	s.given[write] = handedMark{at: time.Now(), deadline: deadline, set: set}
+	s.mu.Unlock()
+	s.done <- write
+}
+
+func (s *crossingMarks) MarkSessionStart(ctx context.Context, _, _ string, _ sandbox.SessionStart) (bool, error) {
+	s.note(ctx, "MarkSessionStart")
+	return true, nil
+}
+
+func (s *crossingMarks) MarkPulled(ctx context.Context, _, _ string) (bool, error) {
+	s.note(ctx, "MarkPulled")
+	return true, nil
+}
+
+// THE ENGINE'S WRITES OF A RUN'S ROW ARE GIVEN THE ROW'S CROSSING.
 //
 // A node without the `data` role reaches the coordination store across its
 // leaf link, and a run's row weighs up to what one key holds (sandbox.RowBytes,
@@ -34,78 +66,61 @@ const rowCrossingRoom = 8 << 10
 // session a job's box started, and that a job's harness has asked for notes —
 // which a row of megabytes cannot cross on a link slower than about 1.2 MiB a
 // second: cut while its bytes were still crossing, each read as a store that
-// did not answer (crewlet/crewlet#1076); and the read each change begins with
-// was asked for no longer than thirty seconds, which a reply of eight
-// mebibytes cannot cross on a link slower than about 280 KiB a second
-// (crewlet/crewlet#1149). Here the link carries 160 KiB a second each way, so
-// each row's read takes about fifty-one seconds and its write thirty-eight,
-// and each change lands before the call that made it returns.
+// did not answer (crewlet/crewlet#1076). Each is now given its five seconds
+// AND the time the store's connection takes to carry a row at its bound, read
+// and written (sandbox.RowBudget): the deadline each write is handed is
+// exactly the two, on the case's clock.
 //
-// Mutation: hold either change to its five seconds again, without the
-// crossing of a change of a row at its bound (sandbox.RowBudget), or read the
-// row without its reply's crossing, and its row goes red.
-func TestTheEnginesWritesOfARunsRowAtItsBoundAcrossALeafsLinkLand(t *testing.T) {
+// How long a row takes to cross is the store's to say, and the store's own
+// suite holds it to a real link: internal/sandbox's
+// TestARunsRowAtItsBoundWrittenAcrossALeafsLinkLands writes a row at its bound
+// across a leaf's link held to 160 KiB a second, its read's reply included
+// (crewlet/crewlet#1149). This case held these two writes to that same link,
+// which spent three minutes of CI per run carrying bytes the store's suite
+// already carries; the engine's part is the budget, and that is what it reads.
+//
+// Mutation: hold either write to its five seconds again, without the crossing
+// (sandbox.RowBudget), and its row goes red.
+func TestTheEnginesWritesOfARunsRowAreGivenItsCrossing(t *testing.T) {
 	t.Parallel()
-	// ONE MEMBER AND ONE LEAF FOR EVERY CASE, which run one after another: a
-	// case's write is the only thing on the link, and the runner builds one
-	// reply of a row at its bound at a time — each case its own row, under a
-	// turn of its own.
-	across := kvtest.SlowLeaf(t, rowCrossingRate)
 	for _, c := range []struct {
 		name   string
-		turnID string
-		write  func(ctx context.Context, store sandbox.PendingStore, turnID string)
-		landed func(sandbox.PendingRun) bool
+		mark   string
+		reason time.Duration
+		write  func(ctx context.Context, store sandbox.PendingStore)
 	}{
 		{
-			name: "the session a job's box started", turnID: "t-session-start",
-			write: func(ctx context.Context, store sandbox.PendingStore, turnID string) {
-				newBridgeLedger(store, nil).recordStart(ctx, turnID, "launch-1", sandbox.SessionStartContinued)
-			},
-			landed: func(run sandbox.PendingRun) bool {
-				return run.Launch.SessionStart == sandbox.SessionStartContinued
+			name: "the session a job's box started", mark: "MarkSessionStart", reason: sessionStartRecordBudget,
+			write: func(ctx context.Context, store sandbox.PendingStore) {
+				newBridgeLedger(store, nil).recordStart(ctx, "t-session-start", "launch-1",
+					sandbox.SessionStartContinued)
 			},
 		},
 		{
-			name: "a job's first pull of its notes", turnID: "t-pull-mark",
-			write: func(ctx context.Context, store sandbox.PendingStore, turnID string) {
+			name: "a job's first pull of its notes", mark: "MarkPulled", reason: steerPublishBudget,
+			write: func(ctx context.Context, store sandbox.PendingStore) {
 				inbox := newRunSteers(steerSeals{}, store, nil).inbox(
-					runIdentity{turn: steer.Turn{TurnID: turnID, AgentHandle: "swe"}}, 1)
+					runIdentity{turn: steer.Turn{TurnID: "t-pull-mark", AgentHandle: "swe"}}, 1)
 				inbox.recordPulled(ctx, "launch-1")
 			},
-			landed: func(run sandbox.PendingRun) bool { return run.Steer.Pulled == "launch-1" },
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			turnID := c.turnID
-			raw, err := json.Marshal(sandbox.PendingRun{TurnID: turnID, AgentHandle: "swe",
-				Status: sandbox.StatusRunning, LaunchID: "launch-1", LaunchSeq: 1})
-			if err != nil {
-				t.Fatalf("encode the run: %v", err)
-			}
-			seeded := kvtest.AtTheBound(t, raw, rowCrossingRoom)
-			// SEEDED THROUGH THE MEMBER, whose own connection crosses no
-			// link: the case's time is the write's, not its setup's.
-			if _, err := across.Member.CreateSandboxRun(t.Context(), turnID, seeded); err != nil {
-				t.Fatalf("seed a row of %d bytes: %v", len(seeded), err)
-			}
-			c.write(t.Context(), sandbox.NewCoordStore(across.Leaf), turnID)
-			// READ BACK THROUGH THE MEMBER the moment the write returned: a
-			// write cut short is still crossing then, and the row does not
-			// hold it yet. Read once, as the member holds it (kvtest's
-			// Across.Holds).
-			held, found := across.Holds(t, turnID)
-			if !found {
-				t.Fatalf("read the row back: the member holds no run %s", turnID)
-			}
-			var run sandbox.PendingRun
-			if err := json.Unmarshal(held.Value, &run); err != nil {
-				t.Fatalf("read the row back: %v", err)
-			}
-			if !c.landed(run) {
-				t.Errorf("the write of a row of %d bytes across a link carrying %d KiB a second "+
-					"returned before it landed", len(seeded), rowCrossingRate>>10)
-			}
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				store := &crossingMarks{given: map[string]handedMark{}, done: make(chan string, 1)}
+				c.write(t.Context(), store)
+				if got := <-store.done; got != c.mark {
+					t.Fatalf("the write made %s, want %s", got, c.mark)
+				}
+				store.mu.Lock()
+				w := store.given[c.mark]
+				store.mu.Unlock()
+				if want := c.reason + rowCrossing; !w.set || w.deadline.Sub(w.at) != want {
+					t.Errorf("%s was given %v (deadline set: %v), want its %v and the crossing of a row "+
+						"at its bound, %v: %v", c.mark, w.deadline.Sub(w.at), w.set, c.reason, rowCrossing, want)
+				}
+			})
 		})
 	}
 }
