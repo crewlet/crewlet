@@ -558,6 +558,7 @@ type threadLine struct {
 	isVirtual, interruptedByShutdown, isCompactSummary          json.RawMessage
 	taskDelivery, batchToolUses                                 json.RawMessage
 	timestamp, isMeta, sourceToolAssistantUUID                  json.RawMessage
+	version                                                     json.RawMessage
 }
 
 // threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
@@ -593,6 +594,7 @@ type threadWire struct {
 	Timestamp     json.RawMessage `json:"timestamp"`
 	IsMeta        json.RawMessage `json:"isMeta"`
 	Source        json.RawMessage `json:"sourceToolAssistantUUID"`
+	Version       json.RawMessage `json:"version"`
 }
 
 // decodeThreadLine decodes whole line n, raw (its break dropped), into its
@@ -626,7 +628,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 		retracted: w.Retracted, replacements: w.Replacements,
 		isVirtual: w.IsVirtual, interruptedByShutdown: w.Shutdown, isCompactSummary: w.Summary,
 		taskDelivery: w.TaskDelivery, batchToolUses: w.Batch,
-		timestamp: w.Timestamp, isMeta: w.IsMeta, sourceToolAssistantUUID: w.Source,
+		timestamp: w.Timestamp, isMeta: w.IsMeta, sourceToolAssistantUUID: w.Source, version: w.Version,
 	}, nil
 }
 
@@ -1132,6 +1134,25 @@ func (l threadLine) OriginKind() (string, error) {
 // Read off the line's one decode, its raw `uuid`, never a second read of the
 // line.
 func (l threadLine) UUID() (string, error) { return wireString("uuid", l.uuid) }
+
+// Version is the record's `version`, the release of Claude Code that wrote
+// it: "" where the key is absent, and an error where it holds no string. It
+// is the box's word, as long as a line, handed out as written.
+//
+// EVERY CHAINED RECORD NAMES ITS OWN WRITER: each of the 11,727 chained
+// records of the 432 main and 89 subagent threads the probes kept of 2.1.310
+// and 2.1.322 carries a string `version`, its writer's release, whatever its
+// kind (user, assistant, attachment and system alike). A session continued
+// across releases holds the records of each, so the release a session's row
+// records, its last writer's, says nothing of the records an older one wrote
+// before it. The harness's bookkeeping carries one on some kinds and not on
+// others, which no reader reads.
+//
+// IN AN ACCESSOR, NEVER THE HEAD: one reader reads it, the reading of which
+// calls a kept session holds ([writerBelowFloor]), so a release that reshapes
+// it costs that reading alone, never a reader of hooks or of a transcript's
+// words.
+func (l threadLine) Version() (string, error) { return wireString("version", l.version) }
 
 // ToolUseResult is a user record's own `toolUseResult`, raw (an object, a list
 // or a string, as the tool's result had it); nil where it is absent and on

@@ -271,7 +271,9 @@ import (
 // unread, or is none of the releases the model of the resume was read from
 // ([claudeResumeRead], a set and never a range, since a release before, between
 // or after them may hand its model otherwise and the model says nothing of it);
-// its writer is older than [holdingsWriterFloor], or unknown; its caller left
+// its writer is older than [holdingsWriterFloor], or unknown, as the row
+// records it or as a chained record of the main thread names it
+// ([writerBelowFloor]); its caller left
 // while it waited for its slots, or between members or lines; the archive did
 // not open, is no gzip or no tar, or inflates past its bound; a member is named
 // absolutely or through `..`; a member it reads is held twice; the main thread
@@ -287,7 +289,9 @@ import (
 // past the model's bounds); a line of a subagent's thread is past its bound, or
 // its member or metadata past the archive's budget; more subagents than
 // [holdingsMaxAgents], or more legs than [holdingsMaxLegs]; or the stream does
-// not end at io.EOF. The error says which, in words a relaunch logs
+// not end at io.EOF. A chained record of a subagent's thread whose writer is
+// older than the floor, or unknown, leaves that subagent not whole, its calls
+// told under it. The error says which, in words a relaunch logs
 // ([holdingsError]). WHY A LINE'S OR THE ARCHIVE'S BOUND PASSED IN A SUBAGENT'S
 // THREAD ENDS THE WHOLE READING: a call's threads, uses and results are counted
 // over the whole archive, and a reading cut part way vouches for none of them.
@@ -313,9 +317,10 @@ import (
 // subagent's own load, files of a thread at its bounds
 // ([threadChainMaxRecords], [threadChainMaxCalls]), a metadata at
 // [holdingsMetaMaxBytes], the asked calls at [sandbox.MaxBridgeCalls],
-// subagents at [holdingsMaxAgents], legs at [holdingsMaxLegs], and the writer
-// at its floor. At its worst a reading holds the line reader's buffer; one line
-// and the slice that gathered it; the line's raw keys and its message's decode,
+// subagents at [holdingsMaxAgents], legs at [holdingsMaxLegs], and every
+// chained record's writer, and the session's, at its floor. At its worst a
+// reading holds the line reader's buffer; one line and the slice that gathered
+// it; the line's raw keys and its message's decode,
 // each at most a line; what the message's calls keep (a line of the smallest
 // results keeps about three times the line); one result's text; a metadata; the
 // model of one thread, at most [threadChainMaxRecords] records and
@@ -372,6 +377,15 @@ import (
 // on purpose ([releaseAtLeast]), failing open toward continuing a session,
 // where the reading fails closed, because what it counts held is never told
 // again.
+//
+// IT HOLDS EACH RECORD'S WRITER, NOT THE SESSION'S LAST ALONE: a box at the
+// carry's floor continues a session an older release wrote, so a session
+// continued across releases carries the records of each, and the reason above
+// is about the shape of what each release recorded. So the session's last
+// writer, as its row records it, is held to it before anything is opened
+// ([Runner.ReadHoldings]), and every chained record a reading reads by the
+// release it names ([writerBelowFloor]): in the main thread no reading, in a
+// subagent's thread not whole.
 const holdingsWriterFloor = "2.1.310"
 
 // holdingsMaxAgents is the most subagents a reading reads the members of.
@@ -815,6 +829,10 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 		case err != nil:
 			return &holdingsError{why: "the session's main thread was not read whole", cause: err}
 		}
+		if why, cause := writerBelowFloor(line); why != "" {
+			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread %s", line.N, why),
+				cause: cause}
+		}
 		record, message, err := chain.See(line)
 		if err != nil {
 			return &holdingsError{why: fmt.Sprintf("line %d of the session's main thread is no record", line.N),
@@ -842,6 +860,39 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 			return err
 		}
 	}
+}
+
+// writerBelowFloor is why line, a whole line of a thread the reading reads, is
+// a chained record ([threadHead.Chained]) no release at or after
+// [holdingsWriterFloor] wrote, and what gave it where something did; "" where
+// the record is in no chain, or a release at or after the floor wrote it. Its
+// `version` absent, no string, or a release this code cannot read or older
+// than the floor ([readsRelease]) is each below it.
+//
+// EVERY CHAINED RECORD, NOT THE LAST WRITER ALONE: a box at the carry's floor
+// or after it continues a session an older release wrote
+// ([claudeCarriedWriterFloor]), so a session can hold records of a release no
+// rule of the reading was measured on beside those of the release its row
+// records, the floor's reason holds of every one of them
+// ([holdingsWriterFloor]), and each names its own writer ([threadLine.Version]).
+// In the main thread no reading; in a subagent's thread not whole, so its calls
+// are told under it. The bookkeeping is held to nothing: no rule reads it.
+func writerBelowFloor(line threadLine) (string, error) {
+	if !line.Head.Chained() {
+		return "", nil
+	}
+	release, err := line.Version()
+	switch {
+	case err != nil:
+		return "is a record that names its writer in no shape Claude Code writes", err
+	case release == "":
+		return fmt.Sprintf("is a record that names no writer, where a reading reads only the records of Claude Code "+
+			"%s and later", holdingsWriterFloor), nil
+	case !readsRelease(release, holdingsWriterFloor):
+		return fmt.Sprintf("is a record of Claude Code %.64q, where a reading reads only the records of %s and "+
+			"later, the oldest they were measured on", release, holdingsWriterFloor), nil
+	}
+	return "", nil
 }
 
 // unplaced is no reading of a main thread where Claude Code's resume's model
@@ -1283,6 +1334,9 @@ func (w *holdingsWalk) subagentLine(agent string, a *subagentFacts, chain *threa
 	line threadLine) {
 
 	head := line.Head
+	if why, cause := writerBelowFloor(line); why != "" {
+		a.notWhole(fmt.Sprintf("line %d of its thread %s", line.N, why), cause)
+	}
 	if a.restarts.See(head) {
 		a.restarted = true
 		a.notWhole(fmt.Sprintf("its thread restarts at line %d", line.N), nil)
