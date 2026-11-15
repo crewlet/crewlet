@@ -338,6 +338,12 @@ operator_acted             # an operator tool call that is not a proven read,
                            # operation the call's key became, scoped to the
                            # caller, so a retry carries the same one),
                            # outcome, position or refusal
+own_record_marked          # the same record as operator_acted, for a call to
+                           # a tool that keeps the caller's own bookkeeping
+                           # (mark_chat_read, mark_inbox, the code inbox's
+                           # marks, set_pins): STORED, NOT FED, so a person
+                           # reading their rooms does not fill the activity
+                           # feed with their read cursors
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`

@@ -41,11 +41,15 @@ func auditedSurface(t *testing.T) (*operator.Server, *auditLog) {
 // payloadOf decodes one audit record's body.
 func payloadOf(t *testing.T, ev *events.Event) types.OperatorActed {
 	t.Helper()
-	acted, ok := events.DataAs[*types.OperatorActed](ev)
-	if !ok {
-		t.Fatalf("the record is a %s carrying %T, want an operator_acted", ev.Type, ev.Data)
+	if acted, ok := events.DataAs[*types.OperatorActed](ev); ok {
+		return *acted
 	}
-	return *acted
+	// A PERSON'S OWN BOOKKEEPING is the same record under its own type.
+	if own, ok := events.DataAs[*types.OwnRecordMarked](ev); ok {
+		return own.OperatorActed
+	}
+	t.Fatalf("the record is a %s carrying %T, want an operator_acted", ev.Type, ev.Data)
+	return types.OperatorActed{}
 }
 
 // A PERSON'S ASSISTANT, THEIR OWN PRESS AND THEIR SCRIPT ARE AUDITED ALIKE.

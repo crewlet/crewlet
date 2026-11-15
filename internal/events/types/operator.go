@@ -30,6 +30,7 @@ import (
 
 func init() {
 	events.Register[OperatorActed]()
+	events.Register[OwnRecordMarked]()
 	events.Register[BackupRequested]()
 }
 
@@ -48,6 +49,7 @@ const OperatorSource = "operator"
 // screen labels as nothing.
 var RuntimeAuditTypes = []string{
 	OperatorActed{}.EventType(),
+	OwnRecordMarked{}.EventType(),
 	BackupRequested{}.EventType(),
 	ModelActed{}.EventType(),
 	MCPServerActed{}.EventType(),
@@ -218,6 +220,44 @@ func NewOperatorActed(e OperatorActed) OperatorActed {
 	if e.Assistant != nil {
 		e.ConversationID = e.Assistant.ConversationID
 	}
+	return e
+}
+
+// OwnRecordMarked is one call a person made to a tool that keeps their OWN
+// BOOKKEEPING and nothing else: a room's read cursor, an inbox's read and
+// snooze marks, their pins. The same record [OperatorActed] is, field for
+// field, under a type of its own, because what a type is decides whether the
+// company's activity feed carries it (events.KeptOutOfFeed), and this one is
+// not activity: a person reading their rooms filled Live's Activity card and
+// the event log with "ran mark_chat_read: applied", four in a row, pushing out
+// what the company did. It is still the audit's, listed beside every other
+// runtime audit record. Which tools keep a person's own bookkeeping is the
+// tool catalogue's to declare (builtin.OwnBookkeeping), never decided here.
+//
+// EMBEDDED, so the wire keys are OperatorActed's own, flattened, and the two
+// records cannot drift apart field by field.
+type OwnRecordMarked struct {
+	OperatorActed
+}
+
+// EventType is the "own_record_marked" wire type.
+func (OwnRecordMarked) EventType() string { return "own_record_marked" }
+
+// Actor is whose bookkeeping it is: the caller, the one person a tool that
+// takes no name can act for.
+func (e OwnRecordMarked) Actor() string { return e.ActorName }
+
+// SummaryFor says it was the actor's own bookkeeping, through which tool, and
+// what became of it.
+func (e OwnRecordMarked) SummaryFor(actor string) string {
+	return lead(actor, "kept their own bookkeeping ("+e.Tool+"): "+
+		outcomeWords(e.Outcome, e.Refusal))
+}
+
+// NewOwnRecordMarked builds the audit record of one call that kept the
+// caller's own bookkeeping, as [NewOperatorActed] builds any other.
+func NewOwnRecordMarked(e OwnRecordMarked) OwnRecordMarked {
+	e.OperatorActed = NewOperatorActed(e.OperatorActed)
 	return e
 }
 

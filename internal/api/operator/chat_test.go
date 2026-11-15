@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
@@ -416,6 +417,53 @@ func TestEveryChatGestureIsAuditedAndNoChatReadIs(t *testing.T) {
 		case !read && recorded[tool] != 1:
 			t.Errorf("%s writes and was audited %d times, want once", tool, recorded[tool])
 		}
+	}
+}
+
+// A PERSON'S OWN BOOKKEEPING IS AUDITED APART FROM THE COMPANY'S ACTIVITY. A
+// person reading their rooms writes a read cursor a room, and each call's
+// record, an `operator_acted` the company's feed carried, filled Live's
+// Activity card and the event log with "ran mark_chat_read: applied", four in a
+// row, pushing out what the company did. A call to a tool that keeps only the
+// caller's own bookkeeping is now `own_record_marked`, which the feed leaves
+// out and the audit still keeps; every other write is `operator_acted` as
+// before.
+//
+// Mutation: audit every write as `operator_acted` again, or leave
+// `own_record_marked` out of the unfed types.
+func TestOwnBookkeepingIsAuditedApartFromTheCompanysActivity(t *testing.T) {
+	t.Parallel()
+	audit := &auditLog{}
+	s := chatSurface(t, &chatDesk{}, audit)
+	ctx := iam.WithPrincipal(t.Context(), founder)
+	for _, tool := range append(chatlet.Tools(), chatlet.OperatorOnlyTools()...) {
+		if _, err := s.Dispatch(ctx, operator.Call{
+			Transport: types.TransportAct, Key: newKey(), Tool: tool,
+			Args: map[string]any{},
+		}); err != nil {
+			t.Fatalf("%s: %v", tool, err)
+		}
+	}
+	marked, acted := 0, 0
+	for _, ev := range audit.published() {
+		tool := payloadOf(t, ev).Tool
+		own := ev.Type == (types.OwnRecordMarked{}).EventType()
+		if own != builtin.OwnBookkeeping(tool) {
+			t.Errorf("%s was audited as %s", tool, ev.Type)
+		}
+		if events.KeptOutOfFeed(ev.Type) != own {
+			t.Errorf("%s's record %s: kept out of the feed = %v, want %v",
+				tool, ev.Type, events.KeptOutOfFeed(ev.Type), own)
+		}
+		if own {
+			marked++
+		} else {
+			acted++
+		}
+	}
+	if marked == 0 || acted == 0 {
+		t.Fatalf("the chat half audited %d own-bookkeeping and %d company calls, want some of each",
+			marked, acted)
 	}
 }
 
