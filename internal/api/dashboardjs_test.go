@@ -1417,7 +1417,34 @@ const (
 	// wording for the count. The rail's group, the link dialog, the Work tab
 	// and the marks are the Worklet and atlas chunks'. So it moved to 408
 	// KiB, 2.23 seconds.
-	initialBudget = 408 << 10
+	// The Inbox badge counting what waits on the reader, and nothing else,
+	// took it to 408.5 KiB: the frame now reads the engine's decisions and
+	// counts the stopped seats the reader can act on and the conditions they
+	// decide, so the stopped-seat rule left a lazy row module for the entry's
+	// decisions module, and the attention queue gained each platform notice's
+	// fix destination and the reader's put-off marks (a small store beside
+	// the Home board's). Every list that draws these rows stays lazy. So it
+	// moved to 409 KiB, 2.23 seconds.
+	// The Inbox badge, a task's own menu and a kept range, built together on
+	// kit 0.126.1, took it to 409.8 KiB (419,627 bytes), 811 bytes past it.
+	// Each fit its own budget alone: over the 407.3 KiB they were built on,
+	// the badge added 1,628 bytes, a task's own menu 656 (its rules ride the
+	// one sheet, and it widened the write and work helpers the entry already
+	// reads) and a kept range 257 (the per-reader range store the page header
+	// reads), and main's own change and the kit 35 more. So it moved to 410
+	// KiB, 2.24 seconds.
+	// Kit 0.126.3 (a menu's header beside its items in the menu's panel, the
+	// scroller a palette's results and a modal's body take a Tab stop by, a
+	// card counting its titles) with the frame's own first-dial chip in the
+	// page bar and the sidebar's landing rule took it to 408.7 KiB: 409 KiB,
+	// 2.23 seconds.
+	// The release train of a page's own operations, the settings and
+	// schedule writes, and the repository and room writes, merged on kit
+	// 0.126.3 with the train before it, took it to 411.4 KiB (421,258 bytes),
+	// 1,631 bytes over the 409.8 KiB it was built on: nearly all of it the kit
+	// and the frame's first-dial chip and landing rule, as they measured
+	// alone. So it moved to 412 KiB, 2.25 seconds.
+	initialBudget = 412 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2392,11 +2419,96 @@ const (
 	// view's words, and the calls in flight it does not list, added 416
 	// bytes, nearly all script, and took it to 5975.0 KiB (6,118,443 bytes):
 	// 5976 KiB.
+	// A task's own menu on every Worklet shape and its page (Move to project,
+	// Move to trash with the subtask question and Undo, Restore and Delete
+	// permanently with its confirmation), a list's selection and its bar, the
+	// Start, Created and Updated filters, group by parent, and one writer for
+	// the grouping keys added 14,693 bytes, nearly all script, and took it to
+	// 5989.0 KiB (6,132,720 bytes): 5990 KiB.
+	// My work's Watching and Collaborating as the work list with its toolbar,
+	// the Queue's order folded into a phone's More, a saved view's settings
+	// in words with its Edit view, and Subgroup by placed with the grouping
+	// added 3,450 bytes, nearly all script, and took it to 5992.4 KiB
+	// (6,136,170 bytes): 5993 KiB.
+	// What waits on a person in one place (the engine's standing on every
+	// parked run read by Home, the Inbox, Live and a seat's page, the Inbox's
+	// group of what a reader may answer for somebody else, a badge counting
+	// what waits on them alone, a platform notice's fix and put-off marks,
+	// which standing alarms are in Needs you, and a failed read said with its
+	// Try again on every screen that drew it as empty) added 8,775 bytes,
+	// nearly all script, and took it to 5983.2 KiB (6,126,802 bytes): 5984 KiB.
+	// A range kept for its reader (the per-reader store and its hook), a
+	// model wizard that names its wait and returns to where it was opened, an
+	// atlas that says why a change is held and links what needs attention,
+	// and a skeleton on the screens that drew nothing while their read was
+	// out added 4,142 bytes, nearly all script, and took it to 5979.1 KiB
+	// (6,122,607 bytes): 5980 KiB.
+	// Kit 0.126.0 (a map's three levels of detail with its held titles, and a
+	// pill row that scrolls with its ring inside the tab), less this tree's
+	// own copy of the pill row's scroll rule, added 2,540 bytes, script and
+	// sheet, and took it to 5981.6 KiB (6,125,147 bytes): 5982 KiB.
+	// Built together on kit 0.126.1, a task's own menu, what waits on a person
+	// in one place and a kept range measure 6008.7 KiB (6,152,941 bytes), 409
+	// bytes over the three and the running phase's card added to the tree
+	// they were built on: 6009 KiB.
+	// The train's own fixes (one Try again where a screen draws its own, and a
+	// failed REST read asked again by the shared one) added 318 bytes, all
+	// script, and took it to 6009.0 KiB (6,153,259 bytes), 43 bytes past it:
+	// 6010 KiB.
 	// A model's test polled while it runs on its node's own time (the
 	// `llm_check` question, and what a test that found nothing says) added
 	// 1,284 bytes, nearly all script, and took it to 5976.3 KiB (6,119,749
 	// bytes): 5977 KiB.
-	treeBudget = 5<<20 + 857<<10
+	// The release train merged with that poll, on kit 0.126.2, measures
+	// 6010.7 KiB (6,154,943 bytes), 703 bytes past 6010 KiB: 6011 KiB.
+	// A page tidied from its own screen (Rename, Labels, Move, the trash with
+	// Restore and Delete permanently, a space's trash list), a draft's
+	// Publish on the page, in More and in the editor, an empty space's header,
+	// a disconnect the settings hold said as theirs, and the seat gestures'
+	// dialog held by the screen added 12,312 bytes, nearly all script, and
+	// took it to 5987.1 KiB (6,130,755 bytes): 5988 KiB.
+	// The settings that change the company document from the screens that
+	// show it (a limit's editor, the delegated-decision rules' switch, sheet
+	// and removal, a revision's Revert with its diff, Reload, and the whole
+	// document's editor with its check, problems and import), an artifact's
+	// Files panel, Move to's New folder and the new HTML page's question on
+	// leaving took it to 6016.0 KiB; a schedule's create, edit, pause,
+	// delete and run controls with the clock its times are drawn on added
+	// 20.1 KiB more, nearly all script, and took it to 6036.1 KiB
+	// (6,180,959 bytes, 62,516 over the last): 6037 KiB.
+	// A person's Gitlet writes (a new repository, its branches and their
+	// rules, a file edited, added or deleted, a commit reverted or picked, a
+	// change rebased, taken out of the queue or reverted, a finding
+	// answered, a repository deleted and restored), a room's archive and an
+	// administrator's retention, prune and erase, and the notice for a
+	// service the node starts on its restart added 46,844 bytes, nearly all
+	// script, and took it to 6020.8 KiB (6,165,287 bytes): 6021 KiB.
+	// Kit 0.126.3, its grid's named action column, a menu's panel and the
+	// palette's and modal's scrollers, added 5,634 bytes and took it to
+	// 6026.3 KiB (6,170,921 bytes): 6027 KiB.
+	// The release train of a page's own operations, the settings and
+	// schedule writes, and the repository and room writes, merged on kit
+	// 0.126.3 with the train before it, measures 6132.4 KiB (6,279,549
+	// bytes), 124,606 bytes over the 6010.7 KiB it was built on: 6133 KiB.
+	// Kit 0.128.0 (one-sentence delivery receipts, a thread line as long as
+	// what it says, an avatar centred on its line, Clamp) with a long task
+	// thread folded behind Show more, Jump to latest, the watchers' stack
+	// and a Chatlet transcript laid out where the page draws it added 3,713
+	// bytes, nearly all script, over the 6132.6 KiB of main on kit 0.127.0,
+	// and took it to 6136.3 KiB (6,283,579 bytes): 6137 KiB.
+	// A Gitlet repository laid out as a code host lays one out (its Code tab
+	// with the latest commit across the files, the README and the About rail,
+	// a file's card with its blame runs, Clone, commits banded by day, the
+	// Changes tab and an empty repository's card), on a sheet of its own,
+	// added 16,451 bytes, script and sheet, and took it to 6152.4 KiB
+	// (6,300,030 bytes): 6153 KiB.
+	// A Gitlet change reviewed as a code host lays one out (its byline, the
+	// merge box and its checklist, the activity rail of cards with faces, the
+	// rail of reviewers, a file tree beside the diff with a head on each
+	// file, revisions as cards, the commit page's cards and the listing's
+	// richer row) added 24,076 bytes, script and sheet, and took it to
+	// 6175.9 KiB (6,324,106 bytes): 6176 KiB.
+	treeBudget = 5<<20 + 1056<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

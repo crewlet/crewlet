@@ -292,8 +292,7 @@ func codeUnserved(err error) unserved {
 				"whether this company hosts code (GET /fleet and this node's log say why): ask another node"}
 	case errors.Is(err, engine.ErrCodeNeedsRestart):
 		return unserved{code: httpjson.CodeNativeBackendNeedsRestart,
-			detail: "this node's native runtime was running before Gitlet was turned on, and it serves " +
-				"Gitlet once restarted: ask another node, or restart this one"}
+			detail: httpjson.NeedsRestart("Gitlet")}
 	}
 	return unserved{code: httpjson.CodeQueryFailed}
 }

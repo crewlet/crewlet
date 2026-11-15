@@ -62,7 +62,7 @@ test("a reader is told to ask, and Preview is held", () => {
     ).length,
   ).toBeGreaterThan(0);
   expect(document.body.textContent).not.toContain("external_url");
-  const preview = screen.getAllByRole("button", { name: "Preview privately" })[0]!;
+  const preview = screen.getAllByRole("button", { name: "Save private draft" })[0]!;
   expect(preview.getAttribute("aria-disabled")).toBe("true");
 });
 

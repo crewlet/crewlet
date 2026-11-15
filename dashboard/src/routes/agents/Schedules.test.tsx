@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
+  CronReading,
   NextFires,
   OutcomeTag,
   ScheduleDefinition,
@@ -31,6 +32,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { Router } from "~/app/router.tsx";
 import { pinZoneForTest } from "~/lib/prefs.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
@@ -76,9 +78,32 @@ function row(over: Partial<ScheduleRow> = {}): ScheduleRow {
 // it.
 test("the fires are worked out in the schedule's zone, not in UTC", () => {
   render(<NextFires row={row()} now={NOW} count={3} />);
-  expect(screen.getAllByText(/00:00:00/).length).toBe(3);
-  expect(screen.queryByText(/09:00:00/)).toBeNull();
-  expect(screen.getByText("next 3 runs, in Asia/Tokyo")).toBeTruthy();
+  expect(screen.getAllByText(/09:00$/).length).toBe(3);
+  expect(screen.getByText("next 3 runs, on Asia/Tokyo time")).toBeTruthy();
+});
+
+// ONE CLOCK, NAMED, AND THE READER'S ONLY BESIDE IT. The heading said "in
+// Europe/Berlin" over times drawn on the reader's clock, and a footnote said
+// they were the reader's: a reader in Los Angeles read 00:30 for a 09:30
+// standup. Each fire is on the schedule's clock now, and the reader's own time
+// is a second, labelled line where their clock reads it differently, and
+// absent where it does not.
+//
+// Mutation: draw the rows with fmtDateTime again, and the Berlin 09:30 reads
+// 00:30 under a heading naming Berlin.
+test("each fire is on the schedule's clock, with the reader's time beside it only where it differs", () => {
+  pinZoneForTest("America/Los_Angeles");
+  const berlin = row({ cron: "30 9 * * *", timezone: "Europe/Berlin" });
+  render(<NextFires row={berlin} now={NOW} count={3} />);
+  expect(screen.getByText("next 3 runs, on Europe/Berlin time")).toBeTruthy();
+  expect(screen.getAllByText(/09:30$/).length).toBe(3);
+  expect(screen.getAllByText(/00:30 your time$/).length).toBe(3);
+  expect(document.body.textContent).not.toContain("Shown in your time zone");
+  cleanup();
+  pinZoneForTest("Europe/Berlin");
+  render(<NextFires row={berlin} now={NOW} count={3} />);
+  expect(screen.getAllByText(/09:30$/).length).toBe(3);
+  expect(screen.queryByText(/your time/)).toBeNull();
 });
 
 // AND A SCHEDULE THAT NAMES NO ZONE ARRIVES ON THE COMPANY'S CLOCK (ADR-0018):
@@ -89,7 +114,7 @@ test("the fires are worked out in the schedule's zone, not in UTC", () => {
 // on.
 test("a row is worked out in the zone the engine names, and never in a default", () => {
   render(<NextFires row={row({ timezone: "Asia/Tokyo" })} now={NOW} count={3} />);
-  expect(screen.getAllByText(/00:00:00/).length).toBe(3);
+  expect(screen.getAllByText(/09:00$/).length).toBe(3);
   cleanup();
   const { container } = render(<NextFires row={row({ timezone: "" })} now={NOW} count={3} />);
   expect(container.textContent).toBe("");
@@ -103,6 +128,7 @@ test("an outcome is named in words, and a skip is never the needs-you amber", ()
   const { container } = render(
     <>
       <OutcomeTag outcome="fired" />
+      <OutcomeTag outcome="fired_manually" />
       <OutcomeTag outcome="skipped_catchup" />
       <OutcomeTag outcome="skipped_paused" />
       <OutcomeTag outcome="skipped_superseded" />
@@ -112,6 +138,10 @@ test("an outcome is named in words, and a skip is never the needs-you amber", ()
   expect(
     screen.getByText("skipped · missed").closest(".crewlet-tag")?.getAttribute("title"),
   ).toMatch(/catchup window/);
+  // A RUN A PERSON ASKED FOR READS AS ONE, and as a run.
+  const manual = screen.getByText("fired · run now").closest(".crewlet-tag");
+  expect(manual?.getAttribute("title")).toMatch(/ran it now/);
+  expect(manual?.className).toContain("crewlet-tag--success");
   expect(container.querySelector(".crewlet-tag--warning")).toBeNull();
 });
 
@@ -230,6 +260,8 @@ async function mountScreen(
     grants?: string[];
     /** The fires both histories answer with, in place of the one fire. */
     runs?: Record<string, unknown>[];
+    /** Who reads the screen, in place of a person the engine serves nothing. */
+    viewer?: Record<string, unknown>;
   } = {},
 ) {
   Object.defineProperty(globalThis, "WebSocket", {
@@ -268,7 +300,7 @@ async function mountScreen(
         : what === "schedule_runs"
           ? { runs: over.runs ?? [fire], truncated: false }
           : what === "viewer"
-            ? { login: "ana", owner: "ana", acts: [], grants: over.grants ?? [] }
+            ? (over.viewer ?? { login: "ana", owner: "ana", acts: [], grants: over.grants ?? [] })
             : {},
     );
   const view = render(
@@ -547,4 +579,78 @@ test("an unknown schedule is Not Found, and only one with fires was removed", as
   });
   expect(removed.container.textContent).toContain("no longer declared");
   expect(removed.container.textContent).toContain("This schedule was removed");
+});
+
+// A FIRE'S TICK IS ON ITS SCHEDULE'S CLOCK, WITH THE ZONE NAMED. The cell drew
+// the reader's clock with nothing said, under a title holding the tick's label
+// on the schedule's: a 09:00 standup in Tokyo read 00:00 beside a label of
+// 0900. And a run a person asked for stood for no tick, and says so.
+// Mutation: draw the tick with fmtDateTime again.
+test("a fire's tick is drawn on its schedule's clock, with the zone named", async () => {
+  const { container } = await mountScreen(undefined, {
+    runs: [
+      fire(),
+      fire({
+        outcome: "fired_manually",
+        fire_label: "manual-0f3a",
+        fired_at: "2026-06-15T03:00:00Z",
+        scheduled_at: "2026-06-15T03:00:00Z",
+      }),
+    ],
+  });
+  const runs = gridWith(container, "For the tick");
+  expect(runs.textContent).toMatch(/09:00 GMT\+9/);
+  expect(runs.querySelector('[title*="Asia/Tokyo time"]')).not.toBeNull();
+  expect(runs.textContent).toContain("by hand");
+  expect(runs.textContent).toContain("fired · run now");
+});
+
+// THE SCHEDULE'S CONTROLS ARE DRAWN FOR EVERYBODY, each held with its reason
+// where it cannot act: New schedule on the list, and Run now, Edit, Pause and
+// Delete on a schedule's own page.
+test("the list offers a new schedule and a schedule's page its own controls", async () => {
+  await mountScreen();
+  expect(screen.getByRole("button", { name: /New schedule/ })).toBeTruthy();
+  cleanup();
+  await mountScreen(["role", "pm", "standup"]);
+  for (const name of [/Run now/, /Edit/, /Pause/, /Delete/]) {
+    expect(screen.getByRole("button", { name })).toBeTruthy();
+  }
+});
+
+// RUN NOW IS DRAWN FOR A READER WHO CANNOT RUN IT, disabled with the sentence
+// that says what would change that: it is the one control here that makes a
+// change through the act gate (`run_schedule`), so the write gate holds this
+// suite to drawing it for each reader the gate refuses.
+test.each([
+  ["an anonymous reader", { login: "", acts: [], grants: [] }, WRITE_REASONS.anonymous],
+  [
+    "a person the engine does not serve",
+    { login: "ana", owner: "ana", acts: [], grants: [] },
+    WRITE_REASONS.not_served,
+  ],
+])("Run now is drawn for %s, disabled with the reason", async (_who, viewer, reason) => {
+  await mountScreen(["role", "pm", "standup"], { viewer });
+  const button = screen.getByRole("button", { name: /Run now/ });
+  expect(button.getAttribute("aria-disabled")).toBe("true");
+  const said = (button.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+  expect(said).toContain(reason);
+});
+
+// THE CRON'S SENTENCE IS THE SCHEDULE'S CLOCK, said where the reader's reads
+// differently: "at 09:30 on weekdays" under a reader in Los Angeles read as
+// their morning. Mutation: drop the zone from CronReading's sentence.
+test("a cron's sentence names the schedule's clock where the reader's differs", () => {
+  pinZoneForTest("America/Los_Angeles");
+  const { container } = render(
+    <CronReading cron="30 9 * * 1-5" timezone="Europe/Berlin" now={NOW} />,
+  );
+  expect(container.textContent).toContain("Berlin time");
+  cleanup();
+  pinZoneForTest("Europe/Berlin");
+  const same = render(<CronReading cron="30 9 * * 1-5" timezone="Europe/Berlin" now={NOW} />);
+  expect(same.container.textContent).not.toContain("time");
 });

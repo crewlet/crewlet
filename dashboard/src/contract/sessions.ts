@@ -184,11 +184,12 @@ export interface ExecutorSessionRow {
    * Whether the box a launch gets takes the session up, and whether the seat's
    * budget can carry it, are the launch's to find out. Null where it cannot be
    * decided now — a run record or a log row that could not be read, a job still
-   * working or being collected, a capture still being kept, what the launch is
-   * launched on not to be said (every member of the seat's chain sitting out
-   * its plan, no node holding the seat, the node holding it not answering), a
-   * relaunch only the resume of its job's collection decides, a turn whose end
-   * is not on the log yet — which `not_continuable` then says: an unknown is
+   * working or being collected, a capture still being kept or whose record
+   * awaits the log's answer, what the launch is launched on not to be said
+   * (every member of the seat's chain sitting out its plan, no node holding
+   * the seat, the node holding it not answering), a relaunch only the resume
+   * of its job's collection decides, a turn whose end is not on the log yet —
+   * which `not_continuable` then says: an unknown is
    * never sent as a no. A transcript's later page leaves it null, its first
    * page having said it.
    */

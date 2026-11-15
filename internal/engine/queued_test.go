@@ -5,13 +5,18 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // A DELIVERY THE DISPATCH FINISHES WITH TAKES ITS QUEUED LINES DOWN, AND ONE
@@ -154,4 +159,101 @@ func TestTheDispatcherTellsOfADeadLetter(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A DELIVERY IS GONE WHEN IT WILL NOT COME BACK, AND ONLY THEN. What a seat's
+// park recorded for a delivery whose launch was refused below its floor is read
+// by that delivery's every try, and dropped once the dispatcher says the
+// delivery is gone: acknowledged, whether a turn ran on it or not, or
+// dead-lettered by its hand-back. A delivery handed back with deliveries left
+// comes back; and one requeued behind a person's pause, or the tail of a
+// partition that would not merge, comes back as copies carrying the same ids,
+// though the original is acknowledged. Told gone, its next try lost the wait it
+// was owed.
+//
+// Mutation: tell every outcome, tell a requeued delivery or tail, or tell no
+// dead-lettered one, and a case goes red.
+func TestOnlyADeliveryThatWillNotComeBackIsGone(t *testing.T) {
+	t.Parallel()
+	ready := inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
+	paused := ready
+	paused.Paused = true
+	for name, tc := range map[string]struct {
+		conds inbox.Conditions
+		// left is the delivery's deliveries left, none stated where negative.
+		left int
+		gone bool
+	}{
+		"a turn ran on it":                 {conds: ready, left: -1, gone: true},
+		"requeued behind a person's pause": {conds: paused, left: -1},
+		"handed back with deliveries left": {conds: inbox.Conditions{}, left: 3},
+		"handed back with none left":       {conds: inbox.Conditions{}, left: 0, gone: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d := dispatcher(t, &recorder{result: turn.Result{Decision: phase.Done}})
+			d.Conditions = func(string) inbox.Conditions { return tc.conds }
+			var gone []*events.Event
+			d.Gone = func(_ context.Context, handle string, evs []*events.Event) {
+				if handle != "pm" {
+					t.Errorf("gone for %q, want the seat dispatched", handle)
+				}
+				gone = append(gone, evs...)
+			}
+			delivered := ev("notification")
+			ctx := context.Background()
+			if tc.left >= 0 {
+				ctx = queue.WithHeadroom(ctx, []queue.Headroom{{ID: delivered.ID, Left: tc.left}})
+			}
+			d.Dispatch(ctx, "pm", []*events.Event{delivered})
+			if was := slices.Contains(gone, delivered); was != tc.gone {
+				t.Fatalf("the delivery is gone = %v, want %v", was, tc.gone)
+			}
+		})
+	}
+	// ACKNOWLEDGED WITH NO TURN RUN: the completion ledger had it as worked,
+	// so the dispatch drops it from what it holds and acknowledges the
+	// rest, which is nothing. It never comes back, so it is gone; read off
+	// what the dispatch still held instead, it was never told, and what its
+	// seat's park recorded for it sat in the seat's map until the seat was
+	// released.
+	t.Run("acknowledged unrun, the ledger had it as worked", func(t *testing.T) {
+		t.Parallel()
+		r := &recorder{result: turn.Result{Decision: phase.Done}}
+		d := dispatcher(t, r)
+		completions := ledgerstore.NewMemoryCompletions()
+		d.Completions = completions
+		var gone []*events.Event
+		d.Gone = func(_ context.Context, _ string, evs []*events.Event) { gone = append(gone, evs...) }
+		delivered := ev("notification")
+		ctx := context.Background()
+		if err := completions.Record(ctx, "pm", workkey.Derive([]string{delivered.ID.String()}), "", clock); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		if got := d.Dispatch(ctx, "pm", []*events.Event{delivered}); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("outcome = %v, want the worked delivery acknowledged", got.Outcome)
+		}
+		if len(r.reqs) != 0 {
+			t.Fatalf("a turn ran %d times on a delivery the ledger had as worked", len(r.reqs))
+		}
+		if !slices.Contains(gone, delivered) {
+			t.Fatal("a delivery acknowledged unrun was not told gone")
+		}
+	})
+	t.Run("a partition that would not merge", func(t *testing.T) {
+		t.Parallel()
+		d := dispatcher(t, &recorder{result: turn.Result{Decision: phase.Done}})
+		var gone []*events.Event
+		d.Gone = func(_ context.Context, _ string, evs []*events.Event) { gone = append(gone, evs...) }
+		head := said("ana", "first", clock)
+		tail := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
+		notifyStamp(tail, "slack:C1", "slack:C1")
+		if got := d.Dispatch(context.Background(), "ceo", []*events.Event{head, tail}); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("outcome = %v, want the head's turn acknowledged", got.Outcome)
+		}
+		if !slices.Contains(gone, head) || slices.Contains(gone, tail) {
+			t.Fatalf("gone: the head %v and the requeued tail %v, want the head alone",
+				slices.Contains(gone, head), slices.Contains(gone, tail))
+		}
+	})
 }

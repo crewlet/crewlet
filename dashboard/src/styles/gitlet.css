@@ -1,0 +1,1394 @@
+/* THE GITLET WORKSPACE (`routes/gitlet/`), and every screen that draws one of
+   its marks elsewhere (Home's changes waiting on a person, Settings › Gitlet,
+   a task's and a seat's changes): a sheet of its own, which arrives with the
+   first module that draws a `code-` class rather than in the first paint.
+
+   Laid out as a code host is laid out, and coloured by the one rule: nothing
+   here spends a hue but a state — a change merged, a meter met — and a diff
+   spends none at all (`diff.css`). A directory and a file are told apart by
+   their glyphs and their names, a seat by its own face, a picked line by a
+   rule at its edge. */
+
+/* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
+   move on its own, above the grid. A ruled box rather than a callout, since
+   nothing here is a fault: it is a list, read first. */
+.code-person-band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-block-end: var(--spacing-4);
+  padding: var(--spacing-3) var(--spacing-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+/* A live change's readiness in the Changes grid: a meter of its own width
+   beside its count, since the kit's meter fills its box and has none. */
+.code-readiness {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.code-readiness__meter {
+  flex: 0 0 4rem;
+}
+.code-readiness__count {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+.code-person-band__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ---- A change's page (`routes/gitlet/change/`) --------------------------- */
+
+/* THE BYLINE under the title: who wants to merge which revision of which
+   branch into which, the branches as chips that open their code. */
+.code-change-byline {
+  display: block;
+  margin-block-start: var(--spacing-1);
+}
+
+.code-branch-chip {
+  display: inline-block;
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-inset);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+/* THE DESCRIPTION: a card its owner opened, the first thing on the page. */
+.code-description {
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  overflow: hidden;
+}
+
+.code-description__head {
+  padding: var(--spacing-2) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
+.code-description__body {
+  padding: var(--spacing-4);
+}
+
+/* THE MERGE BOX: the standing across its head, the conditions, the controls. */
+.code-merge-box {
+  overflow: hidden;
+}
+
+.code-merge-box__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.code-merge-box__glyph {
+  flex: none;
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+
+/* COLOUR IS STATE: a change every condition of which is met is ready, done
+   with every question its gate asks. */
+.code-merge-box__glyph--done {
+  color: var(--color-feedback-success-ink);
+}
+
+.code-merge-box__title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-merge-box__said {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.code-merge-box__checks {
+  padding: var(--spacing-2) var(--spacing-4);
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-merge-box__controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-block-start: 1px solid var(--color-border-default);
+  background: var(--color-surface-subtle);
+}
+
+/* A LIVE CHANGE'S CONDITIONS TO MERGE: a glyph, the condition, and what it
+   waits on, a row each. */
+.code-checks-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.code-checks-list__lead {
+  margin: 0;
+}
+
+.code-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-checklist__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.code-checklist__glyph {
+  flex: none;
+  display: inline-flex;
+  padding-block-start: var(--spacing-0);
+  color: var(--color-text-tertiary);
+}
+
+/* COLOUR IS STATE: a condition met is done; one unmet waits on somebody. The
+   glyph's shape says the same to a reader who cannot tell the inks apart. */
+.code-checklist__glyph--met {
+  color: var(--color-feedback-success-ink);
+}
+
+.code-checklist__glyph--unmet {
+  color: var(--color-feedback-warning-ink);
+}
+
+.code-checklist__what {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--spacing-2);
+  min-width: 0;
+}
+
+.code-checklist__word {
+  font-weight: var(--font-weight-medium);
+}
+
+.code-checklist__said {
+  color: var(--color-text-secondary);
+}
+
+/* THE ACTIVITY: a heading, then the rail of what was said and done. */
+.code-activity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.code-activity__title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* THE RAIL: a line down the side every record hangs on, in log order. A card
+   stands to its right; a line's glyph sits on the rail itself, on the ground
+   that masks it. Nothing on it is a state, so nothing takes a hue. */
+.code-timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0 0 0 var(--spacing-8);
+  list-style: none;
+}
+
+.code-timeline::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: var(--spacing-4);
+  border-inline-start: 2px solid var(--color-border-default);
+}
+
+.code-timeline__item {
+  position: relative;
+  min-width: 0;
+}
+
+.code-tl-card {
+  overflow: hidden;
+}
+
+.code-tl-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
+.code-tl-card__marks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.code-tl-card__body {
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.code-tl-card__foot {
+  padding: var(--spacing-2) var(--spacing-4);
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+/* A LINE ON THE RAIL: its glyph on the rail, the sentence beside it. */
+.code-tl-event {
+  display: flex;
+  align-items: center;
+  min-height: var(--size-row-sm);
+  font-size: var(--font-size-sm);
+}
+
+.code-tl-event__glyph {
+  position: absolute;
+  inset-inline-start: calc(var(--spacing-4) - var(--spacing-8) - var(--spacing-3) + 1px);
+  display: inline-grid;
+  place-items: center;
+  inline-size: var(--spacing-6);
+  block-size: var(--spacing-6);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+  color: var(--color-text-secondary);
+}
+
+.code-tl-event__said {
+  min-width: 0;
+}
+
+/* A THREAD, as a card: its first comment, its replies, then a reply of the
+   reader's own and Resolve. */
+.code-thread {
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  overflow: hidden;
+}
+
+.code-thread__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
+.code-thread__body {
+  padding: var(--spacing-3) var(--spacing-4);
+}
+
+.code-thread__replies {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-thread__reply {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-block-start: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
+.code-thread__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+  border-block-start: 1px solid var(--color-border-default);
+  background: var(--color-surface-subtle);
+}
+
+/* A REPLY: one line beside its press, growing as it is written. In a
+   thread's foot it takes the row's room beside Resolve; under a finding it
+   is a row of the card's column. */
+.code-reply {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-thread__foot > .code-reply {
+  flex: 1 1 18rem;
+}
+
+.code-reply__field {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* A COMMENT OF THE READER'S OWN, at the foot: their face, then the box. */
+.code-compose {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+}
+
+.code-compose__box {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-compose__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.code-carries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+/* THE RAIL BESIDE THE CONVERSATION: a section a heading and its rows,
+   ruled apart. */
+.code-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.code-rail__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-block: var(--spacing-3);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-rail__section:first-child {
+  padding-block-start: 0;
+}
+
+.code-rail__title {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.code-rail__people {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-rail__people > li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-rail__person {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.code-rail__name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.code-rail__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-rail__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+}
+
+.code-rail__stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.code-rail__paths {
+  margin: 0;
+  padding-inline-start: var(--spacing-4);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.code-rail__branches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* PROVENANCE: the change's record, a card of its properties, at a reading
+   measure. */
+.code-provenance {
+  max-width: var(--size-measure);
+}
+
+/* THE FILES TAB: the tree beside the diff, the tree a column of its own width
+   on a wide page and above the diff on a narrow one. */
+.code-files {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+
+@container page (width < 720px) {
+  .code-files {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.code-files__totals {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* THE FILE TREE: directories with their glyph, files a row each — status
+   letter, name, counts — the one on screen pressed. */
+.code-ftree,
+.code-ftree__nested {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-0);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.code-ftree__nested {
+  padding-inline-start: var(--spacing-4);
+}
+
+.code-ftree__dir {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.code-ftree__dirname {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.code-ftree__file {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: start;
+  cursor: pointer;
+}
+
+.code-ftree__file:hover {
+  background: var(--color-surface-hover);
+}
+
+.code-ftree__file[aria-current="true"] {
+  background: var(--color-surface-pressed);
+  font-weight: var(--font-weight-medium);
+}
+
+.code-ftree__status {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  inline-size: var(--spacing-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+}
+
+.code-ftree__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-ftree__counts {
+  flex: none;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+/* ONE FILE'S DIFF: its head — path, what became of it, its counts, the way
+   to the file — then the diff. */
+.code-file {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.code-diff-head__path {
+  min-width: 0;
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.code-diff-head__facts {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-diff-head__view {
+  margin-inline-start: auto;
+}
+
+/* A FINDING ON A LINE, as a card under it: its weight, its subject, its
+   title and who raised it across its head. */
+.code-finding {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+}
+
+.code-finding__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-finding__title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-finding__by {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+}
+
+.code-suggestion {
+  margin: 0;
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A CHANGE AS A ROW NAMES IT: its title, then the line that places it. */
+.code-change-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  padding-block: var(--spacing-1);
+}
+
+.code-change-cell__title {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.code-change-cell__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-change-cell__who {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+}
+
+.code-change-cell__branches {
+  overflow-wrap: anywhere;
+}
+
+/* PROVENANCE: a label and its value a row, the labels one column. */
+.code-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-2) var(--spacing-4);
+  margin: 0;
+}
+
+.code-facts > div {
+  display: contents;
+}
+
+.code-facts dt {
+  color: var(--color-text-secondary);
+}
+
+.code-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A REPOSITORY'S PAGE (`routes/gitlet/repo/`). Its listings are plain ruled
+   tables and its file a column of numbered lines in the code face; nothing
+   here is a state, so nothing takes a hue. */
+.code-rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-rules > li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+/* IN SETTINGS' CARDS a rule is a row: what it says, then its controls at the
+   row's end, the rows ruled apart. */
+.code-rules__what {
+  display: flex;
+  flex: 1 1 18rem;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-rules > li:has(> .code-rules__what) + li:has(> .code-rules__what) {
+  padding-block-start: var(--spacing-2);
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-rules__pattern {
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Marks every Gitlet screen shares (`routes/gitlet/ui.tsx`) ----------- */
+
+/* A COMMIT'S ID: the kit's copy chip in the code face, at a list's size. */
+.code-sha {
+  font-size: var(--font-size-xs);
+}
+
+/* WHO DID WHAT, AND WHEN: a face, the name, the rest of the sentence and the
+   time, on one line that wraps between its words. */
+.code-byline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+  color: var(--color-text-secondary);
+}
+
+.code-byline__who {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.code-byline__verb {
+  min-width: 0;
+}
+
+.code-byline__when {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* AN ENTRY'S GLYPH, in the tertiary ink a word beside it reads past; a
+   directory's in the secondary, the step that says it opens further. Never
+   a hue: a folder is told by its drawing. */
+.code-glyph {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.code-glyph--dir {
+  color: var(--color-text-secondary);
+}
+
+/* CLONE: the address in a block of its own, and what git asks for under it. */
+.code-clone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  width: min(30rem, 80vw);
+  padding: var(--spacing-3);
+}
+
+.code-clone__head {
+  margin: 0;
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-clone__url {
+  min-width: 0;
+}
+
+.code-clone__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* ---- A repository's page (`routes/gitlet/repo/`) ------------------------- */
+
+/* THE BAR ABOVE THE CODE: the revision, the path, then the writes and the
+   clone pushed to its end, the whole wrapping on a narrow page. */
+.code-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1);
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+
+.code-crumbs__root {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-crumbs__step {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--spacing-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* THE SLASH IS READ BETWEEN THE NAMES, so it takes the tertiary rung a
+   word does (`styles/rungs.test.ts`). */
+.code-crumbs__slash {
+  color: var(--color-text-tertiary);
+}
+
+.code-crumbs__here {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-crumbs__link {
+  overflow-wrap: anywhere;
+}
+
+/* AT THE ROOT, the branches and tags the picker picks among, each a link to
+   its list, in the bar beside it. */
+.code-ref-counts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-4);
+  font-size: var(--font-size-sm);
+}
+
+.code-ref-counts__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-bar-end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+/* A DIRECTORY'S CARD: the latest commit across its head, the entries flush
+   under it. */
+.code-browser {
+  overflow: hidden;
+}
+
+.code-latest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-height: var(--size-row-md);
+  padding: var(--spacing-2) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
+.code-latest__who {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-latest__author {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-latest__subject {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-latest__end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.code-latest__when {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* AN ENTRY OF A DIRECTORY: its glyph and its name on one line. */
+.code-tree-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-tree-entry__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A FILE'S CARD: its name, size and controls across the head, its lines
+   flush under it. The head wraps rather than squeezing a control's label. */
+.code-blob {
+  overflow: hidden;
+}
+
+.code-blob__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-height: var(--size-row-md);
+  padding: var(--spacing-2) var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-blob__name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-blob__facts {
+  font-weight: var(--font-weight-regular);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-blob__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.code-blob__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.code-blob__note {
+  margin: 0;
+  padding: var(--spacing-3) var(--spacing-4);
+  color: var(--color-text-secondary);
+}
+
+/* LOAD MORE, inside a card: in the card's own padding, under the lines. */
+.code-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+}
+
+/* A FILE'S LINES: the number a button in its own track, the text in the
+   code face at the document's 13px, kept as git wrote it — a tab four
+   columns wide, as the code hosts draw one — and a line too wide scrolls the
+   file, never the page. */
+.code-source {
+  overflow-x: auto;
+  padding-block: var(--spacing-2);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-body);
+  tab-size: 4;
+}
+
+.code-source__line {
+  display: grid;
+  grid-template-columns: 7ch max-content;
+  column-gap: var(--spacing-4);
+  padding-inline-end: var(--spacing-4);
+}
+
+.code-source__line:hover {
+  background: var(--color-surface-hover);
+}
+
+/* A PICKED LINE IS RULED, not tinted, as a picked line of a diff is: a pick
+   is the reader's place, not the line's state. */
+.code-source__line[data-picked],
+.code-blame tr[data-picked] {
+  box-shadow: inset 2px 0 0 var(--color-border-strong);
+}
+
+.code-source__number {
+  padding: 0 var(--spacing-2) 0 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+}
+
+.code-source__number:hover,
+.code-source__number[aria-pressed="true"] {
+  color: var(--color-text-primary);
+}
+
+.code-source__number:hover {
+  text-decoration-line: underline;
+}
+
+.code-source__text {
+  white-space: pre;
+}
+
+/* A FILE'S BLAME: each run of lines one commit last changed headed by that
+   commit — when, who and its subject — ruled off the run before it. */
+.code-blame {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-body);
+  tab-size: 4;
+}
+
+.code-blame tr[data-run] td {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-blame td {
+  padding: 0 var(--spacing-2);
+  vertical-align: top;
+}
+
+.code-blame__commit {
+  width: 22rem;
+  max-width: 22rem;
+  padding-inline-start: var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border-inline-end: 1px solid var(--color-border-default);
+}
+
+/* A RUN'S HEAD IS ONE LINE TALL — its face sized by the text — so a line
+   that opens a run stands exactly where the file's own line does. */
+.code-blame__run {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-blame__when {
+  flex: none;
+  width: 7ch;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.code-blame__subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-blame__number {
+  width: 7ch;
+  text-align: right;
+  font-family: var(--font-family-mono);
+}
+
+.code-blame__text {
+  font-family: var(--font-family-mono);
+  white-space: pre;
+}
+
+/* THE README: a card under the files, its text at a reading measure. */
+.code-readme .prose {
+  max-width: var(--size-measure);
+}
+
+.code-readme__text {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* AN EMPTY REPOSITORY: its first file, and the commands that fill it, at a
+   reading measure. */
+.code-setup {
+  max-width: var(--size-measure);
+}
+
+/* THE ABOUT RAIL beside the code: the description, the counts, then the
+   properties. */
+.code-about {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.code-about__title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-about__stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-sm);
+}
+
+.code-about__stats > li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-about__glyph {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.code-about__owner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* A REF OF THE BRANCHES AND TAGS: its glyph, its name, its marks. */
+.code-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.code-ref__name {
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A SECTION OF A TAB BELOW ITS FIRST, with a heading of its own. */
+.code-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin-block-start: var(--spacing-6);
+}
+
+.code-section__title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ONE COMMIT OF THE HISTORY: its subject, then who wrote it, when, who
+   pushed it and its work item, on a second line that wraps. */
+.code-log-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  padding-block: var(--spacing-1);
+}
+
+.code-log-row__subject {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.code-log-row__by {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-log-row__author {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.code-log-row__work {
+  color: var(--color-text-tertiary);
+}
+
+/* ---- A commit's page (`routes/gitlet/commit/`) --------------------------- */
+
+/* THE BYLINE under its subject: who wrote it and when, its repository, its
+   parents and its whole id, wrapping between its parts. */
+.code-commit-byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  margin-block-start: var(--spacing-1);
+}
+
+.code-commit-byline__part {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+}
+
+/* HOW IT ARRIVED AND ITS CHANGES, side by side where there is room. */
+.code-commit-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-4);
+  align-items: start;
+}
+
+@container page (width < 720px) {
+  .code-commit-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.code-commit-card {
+  min-width: 0;
+}
+
+/* ---- Gitlet › Search ------------------------------------------------------ */
+
+/* The bar's filters, then the lines by repository and file. */
+.code-search-filters {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+/* EACH FILTER ITS OWN SIZE on one row, wrapping on a narrow screen, rather
+   than a field the row's full width each. */
+.code-search-filter {
+  flex: 1 1 12rem;
+  max-width: 20rem;
+  min-width: 0;
+}
+
+.code-search-coverage {
+  margin: 0;
+  padding-inline-start: var(--spacing-4);
+}
+
+.code-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.code-search-repo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-search-repo__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  margin: 0;
+}
+
+.code-search-file {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-search-file__path {
+  overflow-wrap: anywhere;
+}
+
+/* A result's path, linking to its file: chrome, the heading its lines hang
+   under, drawn in the link ink with no underline. A link inside a sentence
+   takes .prose-link instead. */
+.code-search-file__link {
+  color: var(--color-brand-accent-ink);
+}
+
+.code-search-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.code-search-line {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr);
+  gap: var(--spacing-2);
+  padding-inline: var(--spacing-2);
+}
+
+/* A line's number is read (and is the link to the line), so it takes the
+   tertiary rung: the faint one is about 3:1, a mark's floor, not a word's. */
+.code-search-line__number {
+  text-align: end;
+  color: var(--color-text-tertiary);
+}
+
+.code-search-line__text {
+  white-space: pre;
+}

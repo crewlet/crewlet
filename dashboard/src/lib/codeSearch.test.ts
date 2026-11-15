@@ -70,10 +70,9 @@ describe("a search's lines", () => {
 describe("a line's address", () => {
   // AT THE COMMIT ITS REPOSITORY WAS SEARCHED AT, never the branch, with the
   // line picked. Mutation: drop the ref, or the lines, and this fails.
-  test("is the file on Files at the searched commit, with its line picked", () => {
+  test("is the file on the Code tab at the searched commit, with its line picked", () => {
     const [group] = groupHits({ hits: [hit("web", "src/a.ts", 12)], tips: { web: TIP_WEB } });
     expect(hitAt(group!.tip, group!.files[0]!, 12)).toEqual({
-      tab: "files",
       ref: TIP_WEB,
       path: "src/a.ts",
       lines: "12",

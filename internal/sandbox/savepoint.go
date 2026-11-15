@@ -17,6 +17,10 @@ import "slices"
 // the briefs of the job now working were built from: no brief of the round
 // told it, and the session of the job that made it may not hold it. So no save
 // point holds either, whatever its number (internal/agent/runner's heldAt).
+// Nor a read the job's brief counted without listing it, its read cap spent,
+// which the session holds only as that count: the capture states those
+// ([SessionCapture.Omitted]), off the job's record ([LaunchRecord.OmittedCalls]),
+// and a continuation is told each whatever the point.
 // Every
 // other capture is packed where its harness may not have written every call
 // it made, and a harness writes a call to its record only once the model's
@@ -101,8 +105,9 @@ type savePlaces struct {
 // that its harness may not have written whole, at the NEWEST save point that
 // launch is known to hold (see the file comment): its save point
 // ([SessionCapture.Through]) and, off the same capture, the places an older
-// build reads it by — or the round's start, zero, where no capture that launch
-// is known to hold states one.
+// build reads it by and the reads at or below it the session holds only as a
+// count ([SessionCapture.Omitted]) — or the round's start, zero, where no
+// capture that launch is known to hold states one, which holds no read to owe.
 func (c *SessionCapture) placeAtNewest(from savePlaces) {
 	var newest *SessionCapture
 	point := 0
@@ -112,9 +117,10 @@ func (c *SessionCapture) placeAtNewest(from savePlaces) {
 		}
 	}
 	c.Through = new(point)
-	c.BridgeSeq, c.BridgeOpen = 0, nil
+	c.BridgeSeq, c.BridgeOpen, c.Omitted = 0, nil, nil
 	if newest != nil {
 		c.BridgeSeq, c.BridgeOpen = newest.BridgeSeq, slices.Clone(newest.BridgeOpen)
+		c.Omitted = slices.Clone(newest.Omitted)
 	}
 }
 

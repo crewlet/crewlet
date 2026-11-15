@@ -292,11 +292,58 @@ describe("the page", () => {
     mount("#/company/atlas", <Atlas />, company);
     expect(await screen.findByText("The company runs on")).toBeTruthy();
     expect(screen.getAllByText(`${company.nodes.length} entries`).length).toBeGreaterThan(0);
-    expect(await screen.findByText("5 in all")).toBeTruthy();
     const show = await screen.findByTitle("Show orders-db on the map");
     expect(show.textContent).toContain("A standing alarm is raised");
+    // THE WHOLE SENTENCE IS REACHABLE where two lines do not hold it.
+    const reason = show.querySelector(".clamp")!;
+    expect(reason.getAttribute("title")).toBe(reason.textContent);
     expect(await screen.findByText("Recorded this week")).toBeTruthy();
     expect(screen.getByText("Where it comes from")).toBeTruthy();
+  });
+
+  // MUTATION: draw the count as plain words again and the entries past the
+  // two cards are nowhere a reader can go.
+  test("how many need attention is a link per health to the catalogue narrowed to it", async () => {
+    const company = grownCompany();
+    mount("#/company/atlas?q=orders", <Atlas />, company);
+    const wrong = company.nodes.filter((node) => node.health !== "quiet");
+    expect(wrong.length).toBe(5);
+    await screen.findByText("Needs attention now");
+    let counted = 0;
+    for (const [health, label] of [
+      ["alerting", "Alerting"],
+      ["needs_look", "Needs a look"],
+    ] as const) {
+      const n = wrong.filter((node) => node.health === health).length;
+      if (n === 0) continue;
+      const link = await screen.findByRole("link", { name: new RegExp(`${label}\\. Show them`) });
+      expect(link.textContent).toBe(`${label} ${n}`);
+      // The health alone: the band is about the company, so the search is not carried.
+      expect(link.getAttribute("href")).toBe(`#/company/atlas?health=${health}`);
+      counted += n;
+    }
+    expect(counted).toBe(5);
+    expect(screen.queryByText(/in all$/)).toBeNull();
+  });
+
+  // MUTATION: read "the list has not answered" as an empty list and the tile
+  // says nothing needs attention under a count that says five do.
+  test("the tile never says nothing needs attention while its list is still being read", async () => {
+    const company = grownCompany();
+    mountAtlas("#/company/atlas", <Atlas />, company, {
+      answers: { atlas_entries: new Promise(() => {}) },
+    });
+    await screen.findByRole("link", { name: /Alerting\. Show them/ });
+    expect(screen.getByText("Reading what needs attention")).toBeTruthy();
+    expect(screen.queryByText("Nothing needs attention.")).toBeNull();
+  });
+
+  test("a company with nothing wrong is told so, once the list has answered", async () => {
+    const company = grownCompany();
+    const calm = { ...company, nodes: company.nodes.map((node) => ({ ...node, health: "quiet" })) };
+    mount("#/company/atlas", <Atlas />, calm as typeof company);
+    expect(await screen.findByText("Nothing needs attention.")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Show them in the catalogue/ })).toBeNull();
   });
 
   test("an empty atlas says what fills it, and draws no band of zeros", async () => {

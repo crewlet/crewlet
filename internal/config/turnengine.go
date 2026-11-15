@@ -71,18 +71,22 @@ type TurnEngine struct {
 	// again, so this is per extension rather than per turn.
 	ExtensionRoundStep int `yaml:"extension_round_step,omitempty" json:"extension_round_step,omitempty" js:"min=0" desc:"Maximum onboarding rounds one extension call may grant."`
 
-	// ExecutorMinBudgetTokens is a pre-flight floor on EVERY executor
-	// launch — a turn's first and each relaunch after a self_iterate:
-	// below this much budget left, or when the budget cannot be read, the
-	// launch is refused and the seat parks until the window turns over or
-	// a ceiling moves, rather than launching a run that dies mid-way having
-	// produced nothing. 0 turns the floor off. See
-	// [defaultExecutorMinBudgetTokens] for where the default comes from,
-	// and read it through [TurnEngine.ExecutorFloor].
+	// ExecutorMinBudgetTokens is the fixed part of a pre-flight floor on
+	// EVERY executor launch, a turn's first and each relaunch after a
+	// self_iterate: what a run's first request carries before its brief,
+	// which the launch counts beside it (internal/engine's launchFloor).
+	// Below that much budget left, or when the budget cannot be read, the
+	// launch is refused and the seat parks until the window turns over or a
+	// ceiling moves, rather than launching a run that dies mid-way having
+	// produced nothing; a launch that continues a session whose context a
+	// capture measured is held to the larger of this and that context with
+	// its brief. 0 turns the floor off for a launch whose context is not
+	// known. See [defaultExecutorMinBudgetTokens] for where the default comes
+	// from, and read it through [TurnEngine.ExecutorFloor].
 	//
 	// A POINTER for onboarding_max_tool_rounds' reason: an explicit 0 must
 	// survive the store, which decodes a revision onto the defaults.
-	ExecutorMinBudgetTokens *int `yaml:"executor_min_budget_tokens,omitempty" json:"executor_min_budget_tokens,omitempty" js:"min=0" desc:"Refuse an executor launch, and park the seat, below this remaining token budget (default 25000; 0 = no floor)."`
+	ExecutorMinBudgetTokens *int `yaml:"executor_min_budget_tokens,omitempty" json:"executor_min_budget_tokens,omitempty" js:"min=0" desc:"Fixed part of an executor launch's budget floor, counted beside the launch's brief: below the two, the launch is refused and the seat parked (default 25000; 0 = no floor for a launch whose session context is unknown)."`
 
 	// ConversationSession is how a seat's executor sessions are kept and
 	// continued across a conversation's turns. It is nested here rather
@@ -102,7 +106,10 @@ const (
 	// seat's system prompt. A floor below one such request refuses nothing
 	// it was meant to — the 2000 it replaced was sized for the brief the
 	// old `run_sandbox` tool handed a second agent, and passed every run
-	// that then died on its first round.
+	// that then died on its first round. It holds no brief: a brief's size
+	// is known only once the launch has it, and the launch counts it beside
+	// this (internal/engine's launchFloor), so no default here could be
+	// right for a one-line ask and a round's hundred calls alike.
 	defaultExecutorMinBudgetTokens = 25000
 
 	// defaultOnboardingRounds is the pass's own budget: activate the
@@ -140,8 +147,10 @@ func (t *TurnEngine) OnboardingRounds() int {
 	return *t.OnboardingMaxToolRounds
 }
 
-// ExecutorFloor is the remaining token budget below which an executor
-// launch is refused, applying the default: 0 is no floor.
+// ExecutorFloor is the executor launch floor's fixed part, applying the
+// default: the remaining token budget below which a launch is refused before
+// its brief is counted beside it. 0 is no floor for a launch whose context is
+// not known.
 func (t *TurnEngine) ExecutorFloor() int {
 	if t.ExecutorMinBudgetTokens == nil {
 		return defaultExecutorMinBudgetTokens
@@ -172,7 +181,8 @@ func (t *TurnEngine) validate(path Path) error {
 		name  string
 		value int
 	}{
-		// 0 is meaningful here: it turns the launch floor off.
+		// 0 is meaningful here: it turns the launch floor off for a launch
+		// whose context is not known.
 		{"executor_min_budget_tokens", t.ExecutorFloor()},
 		// 0 is meaningful here: it disables the dedicated onboarding pass.
 		{"onboarding_max_tool_rounds", t.OnboardingRounds()},

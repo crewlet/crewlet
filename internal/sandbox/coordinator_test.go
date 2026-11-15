@@ -381,7 +381,7 @@ func newCoordRigWith(t *testing.T, with func(*CoordinatorOptions)) *coordRig {
 	opts := CoordinatorOptions{
 		FailureKind: func(cause error) string { return "kind of: " + cause.Error() },
 		Pushes:      rig.pushes,
-		Audience:    rig.audience, Answers: rigAnswers(),
+		Audience:    rig.audience, Answers: rigAnswers(), Leads: rigLeads(),
 		Queue: base.queue, Pending: base.pending, Manager: base.manager,
 		Resume: rig.resumer, Account: rig.accountant,
 		Stopped: func(_ context.Context, handle, turnID string) {

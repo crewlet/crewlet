@@ -494,3 +494,11 @@ test("an atlas the server couldn't read is said", async () => {
   expect(screen.getByText(/The atlas's sources couldn't be read/)).toBeTruthy();
   expect(screen.queryByText("Nothing to change")).toBeNull();
 });
+
+// THE READ IN FLIGHT IS A SKELETON: the screen was its one sentence over an
+// empty page, which reads as a setup with nothing to change.
+test("the advisor in flight is a skeleton, and no claim that nothing needs changing", async () => {
+  await mount(new Promise(() => {}) as never);
+  expect(document.querySelector(".crewlet-skeleton")).not.toBeNull();
+  expect(screen.queryByText("Nothing to change")).toBeNull();
+});

@@ -242,6 +242,60 @@ func (p Prompt) Then(key, part string) Prompt {
 	return out
 }
 
+// Nested is p as a part of another prompt, told under a heading of its own:
+// every heading its builder opened a section with one level down, so its
+// sections read as parts of the message they are told under and never as
+// sections of the prompt that tells them, and NOT ANOTHER BYTE MOVED. How a
+// later brief tells again a send-back or a turn's task that a session may lack
+// (internal/agent/runner's leadAgain).
+//
+// THE OUTLINE SAYS WHICH LINES ARE THE BUILDER'S HEADINGS, and nothing else
+// can. The text holds somebody else's words under them: a trigger's body with
+// its own "## Triage" or a pull request's "# Title", a reviewer's notes, an
+// output the prior-work ledger quotes, a code block's "#include". Moving every
+// line that begins with a '#' would rewrite those words, inside the very fence
+// that says who wrote them, and a run that copied a line from them would copy
+// the rewritten one. So only a section marked [Section.Headed] moves, by its
+// first line, which is its own heading by the outline's invariant; an entry a
+// section holds under a heading of its own (an iteration of the prior-work
+// ledger, a turn of the conversation's endings) is that section's content, and
+// keeps its level.
+//
+// A prompt with no outline, or one whose outline does not tile its text, names
+// no heading of its builder's that can be found, and is returned as it is:
+// nothing nested rather than a word rewritten.
+func (p Prompt) Nested() Prompt {
+	total := 0
+	for _, s := range p.Sections {
+		if s.Bytes <= 0 {
+			return p
+		}
+		total += s.Bytes
+	}
+	if len(p.Sections) == 0 || total != len(p.Text) {
+		return p
+	}
+	out := Prompt{Sections: slices.Clone(p.Sections)}
+	var text strings.Builder
+	text.Grow(len(p.Text) + len(p.Sections))
+	at := 0
+	for i, s := range p.Sections {
+		part := p.Text[at : at+s.Bytes]
+		at += s.Bytes
+		// THE FIRST SECTION STARTS AT BYTE 0 whatever precedes its heading
+		// ([Builder.Build]), so its heading is its first line that is not
+		// blank.
+		if heading := len(part) - len(strings.TrimLeft(part, "\n")); s.Headed &&
+			strings.HasPrefix(part[heading:], "#") {
+			part = part[:heading] + "#" + part[heading:]
+			out.Sections[i].Bytes++
+		}
+		text.WriteString(part)
+	}
+	out.Text = text.String()
+	return out
+}
+
 // headingTitle is a heading part's title: its first non-blank line with the
 // leading #'s and the space after them removed.
 func headingTitle(part string) string {

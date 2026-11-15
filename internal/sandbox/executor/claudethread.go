@@ -30,13 +30,15 @@ import (
 // wrong answer, not a gap on a page. Every such reader (the one that confirms
 // a hook's note reached the model, the one that tells a relaunch which of its
 // calls a kept session holds, and the one that bounds what a continued
-// session's harness counts before its first request) reads a Claude Code
-// thread through this one layer, so the rules it is read by are held once.
-// The take's context meter
-// (measure.go) is no such reader and reads the main thread outside the layer:
-// it decides nothing of what the session recorded, only reads one figure, the
-// last request's input, for the launch floor, a best-effort figure that counts
-// nothing from a line it cannot read. The rules:
+// session's harness counts before its first request, at a take's context
+// meter and in the read that collects a job, [resumedReading]) reads a Claude
+// Code thread through this one layer, so the rules it is read by are held
+// once, each in one walk of a thread's whole lines that every reading of it
+// shares ([walkThread]). The walk's one decode outside this layer's options is
+// the launch floor's figure at the meter ([contextReading]), the last
+// request's input read off each whole line by the rule every capture's figure
+// has been read by, which decides nothing of what the session recorded and so
+// does not move with the layer. The rules:
 //
 //   - A MEMBER IS NAMED EXACTLY ([claudeMainThread], [claudeSubagentThread],
 //     [claudeSubagentMeta], [claudePrecompact], and [claudeMemberOf] the other
@@ -837,7 +839,8 @@ var threadDecoding = jsonv2.JoinOptions(
 // one decode every value this layer reads goes through, encoding/json/v2's,
 // and every value the package's other readers of a harness's record read (a
 // run's event stream, [claudeEventWire]; its result, [claudeResultWire]; a
-// person's transcript, [claudeRecord] and [openCodeMessageWire]). An object's
+// person's transcript, [claudeRecord] and [openCodeMessageWire]; what an
+// OpenCode session's steps measured, [openCodeMeasuredWire]). An object's
 // key fills the field it names exactly, a key written twice holds the last
 // value written, and a string's invalid UTF-8 or lone surrogate reads as
 // U+FFFD.
@@ -860,20 +863,23 @@ func wireDecode(raw []byte, v any) error {
 // engine host a header and a copy for every element, hundreds of MiB, before
 // anything refused the first. Its readers: a message's content
 // ([threadLine.Message]), a reply's applied context edits
-// ([threadLine.ToolResultsCleared]) and its usage's iterations
-// ([threadLine.Usage]), the results a content-replacement record replaces
-// ([threadLine.ReplacedResults]) and how many entries it lists
-// ([threadLine.ReplacementCount]), the calls a batch's reply was split into
-// ([threadLine.BatchToolUses]), the records a compaction's boundary says it
-// kept ([threadLine.Preserved]) and those a refused or malformed reply's
-// retry takes back ([threadLine.Retracted]), the lists a run's event stream
-// and a person's transcript of a session decode (a message's blocks,
-// [eachClaudeBlock]; a tool's answer, [toolAnswer]; an OpenCode step's items,
-// [eachOpenCodeItem]; a run's result's errors, [claudeResult.errorsSaid]), a
-// call's result content, which the reader that tells a relaunch which of its
-// calls a kept session holds (exact telling) reads no further than its second
-// element, and a loaded-tools record's list, which the scrub cuts a definition
-// out of where it sits in the line ([withoutDefinitions]).
+// ([threadLine.ToolResultsCleared]) and its usage's iterations ([readUsage], a
+// thread's reply's and a run's event stream's), the results a
+// content-replacement record replaces ([threadLine.ReplacedResults]) and how
+// many entries it lists ([threadLine.ReplacementCount]), the calls a batch's
+// reply was split into ([threadLine.BatchToolUses]), the records a
+// compaction's boundary says it kept ([threadLine.Preserved]) and those a
+// refused or malformed reply's retry takes back ([threadLine.Retracted]), the
+// lists an attachment's payload holds ([threadLine.AttachmentWellFormed]), the
+// lists a run's event stream and a person's transcript of a session decode (a
+// message's blocks, [eachClaudeBlock]; a tool's answer, [toolAnswer]; an
+// OpenCode step's items, [eachOpenCodeItem]; a run's result's errors,
+// [claudeResult.errorsSaid]; a page of an OpenCode session's message list,
+// [openCodeEvents.page]), a call's result content, which the reader that
+// tells a relaunch which of its calls a kept session holds (exact telling)
+// reads no further than its second element, and a loaded-tools record's list,
+// which the scrub cuts a definition out of where it sits in the line
+// ([withoutDefinitions]).
 func eachElement(list json.RawMessage, each func(element json.RawMessage, at int) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
 		return fmt.Errorf("is %s, not a list", wireKind(trimmed))
@@ -1112,16 +1118,16 @@ func (l threadLine) OriginKind() (string, error) {
 // of another type would cost each of them every line that carries it, which
 // is every chained line of every thread.
 //
-// ITS READER is the resumed count, which bounds what a continued session's
-// harness counts before its first request, to judge whether it may compact
-// there. It reads the uuid on a main compact_boundary record alone, and
-// compares the newest such boundary's with the one the launch's basis
-// recorded, to know whether the job appended a compaction of its own: never
-// by counting boundaries, since the harness's trim after a compaction drops
-// every boundary before the last ([claudeLocalGCFloor]), so a thread that
-// compacted again can hold no more of them than it did. A uuid that is
-// absent, empty or longer than 36 bytes, and this accessor's error, are no
-// reading to it.
+// ITS READER is the resumed count ([resumedReading]), which bounds what a
+// continued session's harness counts before its first request. It reads the
+// uuid of every line the restart rule flags ([threadRestarts.See]), and keeps
+// the newest's, which a later relaunch compares with the one the job's launch
+// handed it, to know whether the job restarted the session after its brief:
+// never by counting restarts, since the harness's trim after a compaction drops
+// every record before the last one ([claudeLocalGCFloor]), so a thread that
+// restarted again can hold no more of them than it did. A uuid that is absent,
+// empty or longer than 36 bytes, and this accessor's error, are no reading to
+// it.
 //
 // Read off the line's one decode, its raw `uuid`, never a second read of the
 // line.
@@ -3020,8 +3026,37 @@ func (l threadLine) Usage() (threadUsage, bool, error) {
 	if message.Usage == nil {
 		return u, false, nil
 	}
-	if !wireObject(message.Usage) {
-		return threadUsage{}, false, fmt.Errorf("usage is %s, not an object", wireKind(message.Usage))
+	if err = readUsage(message.Usage, &u); err != nil {
+		return threadUsage{}, false, err
+	}
+	return u, true, nil
+}
+
+// readUsage reads usage, a message's `usage` that is there, into u's four
+// counts, by the rule [threadLine.Usage] holds a reply's usage to: an object,
+// each count a whole number in digits alone at most 2^53 - 1 where present and
+// 0 where absent ([wireCount]), and its `iterations` no entry Claude Code
+// counts in the usage's place with other counts ([usageCounted]). Anything else
+// is an error, null among it, and u's counts are then not to be read.
+//
+// ONE RULE FOR A REPLY'S USAGE, IN A THREAD AND IN A RUN'S STREAM: a thread's
+// reply ([threadLine.Usage]), and a run's event stream, whose assistant lines
+// carry the same message the thread records ([claudeEvents.measure]), so the
+// figure a collection reads off the stream for the copy its box holds is read
+// by the rule the thread's reader reads it by, never by a rule of its own.
+//
+// TWO OTHER READERS OF A USAGE KEEP THEIR OWN READING, each for what its figure
+// is. The run's spend ([looseUsage]) reads a count of another kind as none and
+// the rest as written: it is what the run is charged, the share of the seat's
+// windows its requests took, and a count it cannot read costs the charge that
+// count, never the line's whole spend. A capture's measure of its archive
+// ([assistantInput]) reads with encoding/json, keys in any case and a null
+// count as 0: it is the figure every capture's stamp has carried, which every
+// reader of a stamp reads ([sandbox.SessionCapture.ContextTokens]) and a kept
+// capture's floor is made of, read alike whichever build took the capture.
+func readUsage(usage json.RawMessage, u *threadUsage) error {
+	if !wireObject(usage) {
+		return fmt.Errorf("usage is %s, not an object", wireKind(usage))
 	}
 	var counts struct {
 		Input      json.RawMessage `json:"input_tokens"`
@@ -3030,8 +3065,8 @@ func (l threadLine) Usage() (threadUsage, bool, error) {
 		Output     json.RawMessage `json:"output_tokens"`
 		Iterations json.RawMessage `json:"iterations"`
 	}
-	if err = wireDecode(message.Usage, &counts); err != nil {
-		return threadUsage{}, false, fmt.Errorf("usage: %w", err)
+	if err := wireDecode(usage, &counts); err != nil {
+		return fmt.Errorf("usage: %w", err)
 	}
 	for _, c := range [...]struct {
 		key string
@@ -3043,14 +3078,12 @@ func (l threadLine) Usage() (threadUsage, bool, error) {
 		{"usage.cache_read_input_tokens", counts.CacheRead, &u.CacheRead},
 		{"usage.output_tokens", counts.Output, &u.Output},
 	} {
+		var err error
 		if *c.to, err = wireCount(c.key, c.raw); err != nil {
-			return threadUsage{}, false, err
+			return err
 		}
 	}
-	if err = usageCounted(u, counts.Iterations); err != nil {
-		return threadUsage{}, false, err
-	}
-	return u, true, nil
+	return usageCounted(*u, counts.Iterations)
 }
 
 // The kinds of entry a usage's `iterations` lists that [usageCounted] reads:

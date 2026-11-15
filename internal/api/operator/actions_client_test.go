@@ -388,6 +388,8 @@ func fullSurface(t *testing.T) *operator.Server {
 			}},
 			AtlasWrite:   builtin.AtlasWriteDeps{Log: struct{ builtin.AtlasLog }{}},
 			AtlasRefresh: builtin.AtlasRefreshDeps{Sources: struct{ builtin.AtlasSourceDesk }{}},
+			// AND A SCHEDULE RUN NOW, which a schedule's page and peek send.
+			ScheduleRuns: builtin.ScheduleRunDeps{Runner: struct{ builtin.ScheduleRunner }{}},
 		}),
 		Org:    func() *org.Organization { return nil },
 		Runs:   builtin.RunDeps{Desk: struct{ builtin.RunDesk }{}},

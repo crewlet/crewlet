@@ -125,7 +125,10 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	"entry", "other", "to", "change", "fact", "relation", "value", "owner", "purged", "source", "word",
 	// AND ITS ASK FOR A READ OF A SOURCE: when it was made and whose it is, by
 	// their handle, which a source's card words itself.
-	"requested_at", "requested_by"}
+	"requested_at", "requested_by",
+	// A SCHEDULE RUN NOW: the schedule by the identity a screen opens it by,
+	// and each run's trace, which its history row carries too.
+	"scope_type", "scope_id", "trace_id"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product

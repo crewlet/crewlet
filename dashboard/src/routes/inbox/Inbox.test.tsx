@@ -12,6 +12,7 @@
  * promised nothing.
  */
 
+import { asReaders } from "~/test/decisions.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Announcer, AppShell, LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -460,9 +461,12 @@ function mount({
     const all: Record<string, Answer> = { ...QUIET, viewer, ...answers };
     if (what in all) {
       const answer = all[what];
-      return typeof answer === "function"
-        ? (answer as (p: Record<string, unknown>) => Promise<unknown>)(params ?? {})
-        : Promise.resolve(answer);
+      const given =
+        typeof answer === "function"
+          ? (answer as (p: Record<string, unknown>) => Promise<unknown>)(params ?? {})
+          : Promise.resolve(answer);
+      // WHAT THE FIXTURES LIST IS PUT TO THE READER, as the engine states it.
+      return what === "decisions" ? Promise.resolve(given).then(asReaders) : given;
     }
     return Promise.resolve({});
   }) as typeof socket.query;
@@ -540,6 +544,56 @@ function byline(): string {
 }
 
 describe("the list", () => {
+  // A RUN THE READER MAY ANSWER THAT WAITS ON SOMEBODY ELSE is its own group
+  // after Needs you, answered the same way, and counted as waiting on the
+  // reader by neither the group's figure nor the badge: the engine says which
+  // is which (`needs_you`, `may_answer`).
+  //
+  // Mutation: list every item `decisions` answers under Needs you, and this fails.
+  test("a run the reader may answer for somebody else is listed under Waiting on others", async () => {
+    const theirs = {
+      turn_id: "turn-11",
+      launch_id: "q11",
+      agent_handle: "cto",
+      status: "awaiting_clarification",
+      question: "May I rotate the staging keys?",
+      question_context: "",
+      audience_handles: ["ops"],
+      paused_at: "2026-09-22T09:48:00Z",
+      updated_at: "2026-09-22T09:48:00Z",
+      pause_ttl_seconds: 0,
+      put_to: ["ops"],
+      put_to_you: false,
+      may_answer: true,
+      needs_you: false,
+    };
+    mount({
+      answers: {
+        decisions: {
+          handle: "jane",
+          items: [
+            {
+              kind: "run",
+              at: theirs.paused_at,
+              run: theirs,
+              put_to_you: false,
+              may_answer: true,
+              needs_you: false,
+            },
+          ],
+          total: 0,
+          answerable: 1,
+          capped: false,
+        },
+        executors: { runs: [theirs] },
+      },
+    });
+    await settle();
+    expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
+    const group = screen.getByRole("region", { name: /^Waiting on others, you can answer/ });
+    expect(within(group).getByText(/rotate the staging keys/)).toBeTruthy();
+  });
+
   test("a decision leads the list under Needs you, and its notice is not listed again", async () => {
     mount({
       answers: {
@@ -912,6 +966,29 @@ describe("the list", () => {
     );
     const said = document.querySelector('[aria-live="polite"]')?.textContent ?? "";
     expect(said).toBe("Answered. Nothing else is waiting on you.");
+  });
+});
+
+describe("an update's row", () => {
+  // THE REASON IS A LABEL, AND WHAT WAS SAID FOLLOWS IT: the kit joins the
+  // row's words and its excerpt with a space, so a reason with no stop of its
+  // own read as one run-on sentence ("You reported it Mobile PR #22 is
+  // merged"). Mutation: drop the colon, and this fails.
+  test("ends its reason before what was said", async () => {
+    mount({
+      answers: {
+        inbox: inboxes({
+          unread: [
+            notice("r-7", { reason: "reporter", primary: true, excerpt: "The fix is merged." }),
+          ],
+        }),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /^Updates/ }));
+    await settle();
+    const text = document.querySelector(".crewlet-inbox-row__text")?.textContent ?? "";
+    expect(text).toMatch(/^You reported it: The fix is merged\./);
   });
 });
 

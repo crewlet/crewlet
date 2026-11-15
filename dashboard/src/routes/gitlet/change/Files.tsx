@@ -54,7 +54,7 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { lineSide } from "~/lib/patch.ts";
 import { usePatchPages } from "~/lib/patchPages.ts";
 import { useReviewDrafts, type DraftFinding, type ReviewDrafts } from "~/lib/reviewDrafts.ts";
-import { useSeatBadgeOf } from "~/lib/seats.ts";
+import { useNow } from "~/lib/clock.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -67,8 +67,13 @@ import type {
   CodeFindingRow,
   CodeRevisionRow,
 } from "~/protocol/index.ts";
+import { fmtCount, plural } from "~/lib/format.ts";
+import { DiffHead, FileTree } from "../FileTree.tsx";
 import { PatchPager } from "../PatchPager.tsx";
+import { repoHref } from "../paths.ts";
+import { Byline } from "../ui.tsx";
 import { ReplyComposer, Thread } from "./Conversation.tsx";
+import { FindingAnswer } from "./FindingAnswer.tsx";
 import {
   changePartParams,
   partMovedBy,
@@ -78,6 +83,7 @@ import {
   usePagedFindings,
 } from "./reads.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import "~/styles/gitlet.css";
 
 /** A whole number from 1 off the address, or null. */
 function wholeParam(value: string): number | null {
@@ -271,23 +277,12 @@ export function Files({
       >
         <div className="code-files">
           <Stack gap={2}>
-            <ul className="code-files__list" aria-label="Files changed">
-              {listed.map((f) => (
-                <li key={fileId(f)}>
-                  <button
-                    type="button"
-                    className="code-files__file"
-                    aria-current={f.path === shown || undefined}
-                    onClick={() => setFile(f.path)}
-                  >
-                    <span className="mono">{f.path}</span>{" "}
-                    <span className="muted">
-                      {f.status} +{f.added} −{f.deleted}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {files.data?.diff && (
+              <p className="code-files__totals">
+                {`${plural(files.data.diff.total, "file")} changed, +${fmtCount(files.data.diff.added)} −${fmtCount(files.data.diff.deleted)}`}
+              </p>
+            )}
+            <FileTree files={listed} current={shown} onOpen={(f) => setFile(f.path)} />
             {pagedFiles.more && (
               <span>
                 <Button
@@ -306,6 +301,9 @@ export function Files({
           {shown ? (
             <FileDiff
               change={change}
+              head={
+                rows.find((r) => r.n === rev)?.head ?? (rev === change.revision ? change.head : "")
+              }
               rev={rev}
               since={since}
               path={shown}
@@ -330,6 +328,7 @@ export function Files({
 /** One file's patch, with what is anchored to its lines drawn under them. */
 function FileDiff({
   change,
+  head,
   rev,
   since,
   path,
@@ -343,6 +342,8 @@ function FileDiff({
   moved,
 }: {
   change: CodeChangeDetail;
+  /** The revision's head, whole: where the file itself is read, or none where it is not known. */
+  head: string;
   rev: number;
   since: number | null;
   path: string;
@@ -444,6 +445,11 @@ function FileDiff({
 
   return (
     <section aria-label={`Changes to ${path}`} className="code-file">
+      <DiffHead
+        path={path}
+        file={entry}
+        viewHref={head ? repoHref(change.repo, { ref: head, path }) : undefined}
+      />
       {(outdated.length > 0 || threadsElsewhere.length > 0) && (
         <Disclosure title={`${outdated.length + threadsElsewhere.length} outdated on this file`}>
           <Stack gap={2}>
@@ -542,7 +548,7 @@ function FindingNote({
   replies: readonly CodeCommentRow[];
   applicable: boolean;
 }) {
-  const seatBadge = useSeatBadgeOf();
+  const now = useNow();
   const apply = useAct("code_apply_suggestions");
   const where = place?.gone
     ? "its file is gone from this revision"
@@ -553,7 +559,7 @@ function FindingNote({
         : null;
   return (
     <article className="code-finding" aria-label={`Finding: ${finding.title}`}>
-      <p className="row gap-1 wrap">
+      <div className="code-finding__head">
         {/* COLOUR IS STATE: a blocker holds the change back, which is the one
             weight that is a state of the change rather than a word about it. */}
         <Tag size="sm" variant={finding.severity === "blocker" ? "danger" : "neutral"}>
@@ -562,12 +568,16 @@ function FindingNote({
         <Tag size="sm" appearance="outline">
           {categoryWord(finding.category)}
         </Tag>
-        <strong>{finding.title}</strong>
-        <span className="muted">
-          {seatBadge(finding.raiser).name}, revision {finding.revision},{" "}
-          {findingStateWord(finding.state)}
+        <strong className="code-finding__title">{finding.title}</strong>
+        <span className="code-finding__by">
+          <Byline
+            who={finding.raiser}
+            verb={`raised it on revision ${finding.revision}`}
+            now={now}
+          />
+          <span className="muted">· {findingStateWord(finding.state)}</span>
         </span>
-      </p>
+      </div>
       {where && (
         <p className="muted mono">
           {finding.path}:{finding.line_start}
@@ -595,14 +605,17 @@ function FindingNote({
           )}
         </>
       )}
-      {replies.map((c) => (
-        <div key={c.id}>
-          <p>
-            <strong>{seatBadge(c.author).name}</strong>
-          </p>
-          <div className="prose md">{renderMarkdown(c.body)}</div>
-        </div>
-      ))}
+      {replies.length > 0 && (
+        <ol className="code-thread__replies" aria-label="Replies">
+          {replies.map((c) => (
+            <li key={c.id} className="code-thread__reply">
+              <Byline who={c.author} at={c.at} now={now} />
+              <div className="prose md">{renderMarkdown(c.body)}</div>
+            </li>
+          ))}
+        </ol>
+      )}
+      <FindingAnswer change={change} finding={finding} />
       <ReplyComposer change={change} target={{ finding: finding.id }} />
     </article>
   );

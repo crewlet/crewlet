@@ -679,6 +679,84 @@ func TestARenameThroughSaveIsDecidedAsARename(t *testing.T) {
 	}
 }
 
+// A DRAFT IS PUBLISHED THROUGH save_page, AND ONLY BY WHOEVER TIDIES THE PAGE.
+//
+// A page saved as a draft had no way out of it: the save took no status, so
+// nothing a person or an agent could call moved a draft to published. The
+// status the call names reaches the store, which is the one place a draft is
+// published. A status the page already has moves nothing; one the call does
+// not name leaves the page as it is, so an edit to a draft keeps it a draft;
+// and the trash is refused before anything lands, as a new page's is.
+//
+// Moving the status decides whether the company reads the page at all, so it
+// is [authz.ActionPagePublish] on the stored page, never the save any
+// colleague may make. The refusal lands NOTHING, the body half included, and
+// the control is the same colleague naming the status the page already has.
+//
+// Mutation: leave `status` out of the doclet.Save the tool builds and the
+// publish saves nothing; skip the ask and a colleague who leads nothing
+// publishes anybody's draft.
+func TestADraftIsPublishedThroughSaveByWhoeverTidiesThePage(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	kb.page.Page.Status = doclet.StatusDraft
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+
+	published := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "status": "published"})
+	if published.Failed {
+		t.Fatalf("publishing a draft was refused: %s", published.Output)
+	}
+	if len(kb.saved) != 1 || kb.saved[0].Status == nil || *kb.saved[0].Status != doclet.StatusPublished {
+		t.Fatalf("the store was handed %+v, want one save naming published", kb.saved)
+	}
+	if kb.saved[0].Body != nil {
+		t.Errorf("a publish that sent no body saved one: %q", *kb.saved[0].Body)
+	}
+
+	// NO STATUS NAMED, NONE MOVED: the page keeps the one it has.
+	callWork(t, reg, builtin.SavePageTool, map[string]any{"page": "p1", "base_version": 4, "body": "more"})
+	if len(kb.saved) != 2 || kb.saved[1].Status != nil {
+		t.Errorf("an edit that named no status handed the store %+v", kb.saved[1].Status)
+	}
+
+	// THE TRASH IS NOT A STATUS A SAVE NAMES, and neither is anything else.
+	for _, status := range []any{"trashed", "archived", 7} {
+		got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+			"page": "p1", "base_version": 4, "status": status})
+		if !got.Failed || !strings.Contains(got.Output, "`published` or `draft`") {
+			t.Errorf("a save naming status %v = %q, want it refused naming the two it takes", status, got.Output)
+		}
+	}
+	if len(kb.saved) != 2 {
+		t.Errorf("a refused status still saved: %d saves", len(kb.saved))
+	}
+
+	// DECIDED AS A PUBLISH, on the stored page.
+	strict := newFakeKB()
+	strict.page.Page.Status = doclet.StatusDraft
+	held := tools.NewRegistry()
+	if _, err := builtin.Register(held, builtin.Deps{
+		Pages:     builtin.PageDeps{Reader: strict, Writer: strict},
+		Authorize: builtin.Decide(chartRefuses),
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	refused := callWorkAs(colleagueCaller(), t, held, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "new", "status": "published"})
+	if !refused.Failed || !errors.Is(refused.Cause, builtin.ErrRefused) {
+		t.Fatalf("a colleague who leads nothing published somebody's draft: %s", refused.Output)
+	}
+	if len(strict.saved) != 0 {
+		t.Errorf("a refused publish still saved %d", len(strict.saved))
+	}
+	// THE CONTROL: the same colleague, the same edit, the status the page has.
+	if plain := callWorkAs(colleagueCaller(), t, held, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "new", "status": "draft"}); plain.Failed {
+		t.Fatalf("the control was refused too, so the case asserts nothing: %s", plain.Output)
+	}
+}
+
 // A PAGE WRITE STATES ITS OUTCOME AND ITS POSITION, as every work write does:
 // they are what a caller outside a turn — a person's assistant, the dashboard —
 // hands back as `min_position` so the read after its write includes it. And a

@@ -96,7 +96,8 @@ export function hitAt(
   line: number,
 ): Record<string, string> | null {
   if (file.pathB64) return null;
-  const at: Record<string, string> = { tab: "files" };
+  // THE CODE TAB IS THE PAGE'S LANDING, so a hit's address names no tab.
+  const at: Record<string, string> = {};
   if (tip) at.ref = tip;
   at.path = file.path;
   at.lines = String(line);

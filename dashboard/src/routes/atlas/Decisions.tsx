@@ -11,7 +11,9 @@ import { Tag } from "@crewlethq/ui";
 import { SetByLine } from "~/app/frame/ObjectHeader.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import type { AtlasClaimed, AtlasFactView } from "~/contract/atlas.ts";
-import { useAct, type Act } from "~/lib/useAct.ts";
+import type { Act } from "~/lib/useAct.ts";
+import { useAct } from "~/lib/useAct.ts";
+import { useSeated } from "./access.tsx";
 import { Cited, FactValue, sourceSetBy } from "./parts.tsx";
 import type { Decision, DecisionTool } from "./writes.ts";
 
@@ -68,12 +70,12 @@ export type DecisionWrites = { readonly [T in DecisionTool]: Act<T> };
 
 export function useDecisionWrites(): DecisionWrites {
   return {
-    atlas_confirm: useAct("atlas_confirm"),
-    atlas_correct: useAct("atlas_correct"),
-    atlas_unrelate: useAct("atlas_unrelate"),
-    atlas_relate: useAct("atlas_relate"),
-    atlas_set_owner: useAct("atlas_set_owner"),
-    atlas_retire: useAct("atlas_retire"),
+    atlas_confirm: useSeated(useAct("atlas_confirm")),
+    atlas_correct: useSeated(useAct("atlas_correct")),
+    atlas_unrelate: useSeated(useAct("atlas_unrelate")),
+    atlas_relate: useSeated(useAct("atlas_relate")),
+    atlas_set_owner: useSeated(useAct("atlas_set_owner")),
+    atlas_retire: useSeated(useAct("atlas_retire")),
   };
 }
 

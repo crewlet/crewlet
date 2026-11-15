@@ -70,6 +70,17 @@ export const STORAGE_KEYS = {
    */
   railShape: "crewlet_rail_shape/",
   /**
+   * The PREFIX of each reader's platform notices put off on this browser,
+   * each until when and as it stood (`lib/putOff.ts`): the reader's id
+   * follows it.
+   */
+  putOff: "crewlet_put_off/",
+  /**
+   * The PREFIX of each reader's last chosen range per screen, Home's and
+   * every `window=` screen's (`lib/keptRange.ts`): the reader's id follows it.
+   */
+  keptRanges: "crewlet_ranges/",
+  /**
    * Which principal this TAB was last read by, in `sessionStorage` rather
    * than `localStorage` — it describes one tab, and goes with everything else
    * the tab holds (`lib/reader.ts`).

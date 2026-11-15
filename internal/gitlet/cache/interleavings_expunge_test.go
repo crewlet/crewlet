@@ -693,10 +693,11 @@ func (x *expungeRun) cycle(cand gitlet.ExpungeCandidate, faults *gitletfault.Scr
 	deadline := time.Now().Add(time.Minute)
 	for {
 		out, err := cp.Expunge(x.in.t.Context(), cand)
+		//fixedwait:measure the poll's own deadline: at it cycle hands back Busy, which every caller fails
 		if out != compact.OutcomeBusy || time.Now().After(deadline) {
 			return out, err
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) //fixedwait:liveness
 		if fresh, ok := x.candidate(cand.ID); ok {
 			cand = fresh
 		}
@@ -883,6 +884,7 @@ func (e expungeCommitter) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.Re
 		defer x.mu.Unlock()
 		var out gitlet.ReadAnswer
 		for _, d := range r.drops {
+			//fixedwait:stated a drop's at and the query's Since are both on the interleaving's clock (in.clk.Now)
 			if !d.at.Before(q.ExpungeTips.Since) && !slices.Contains(out.Tips, d.old) {
 				out.Tips = append(out.Tips, d.old)
 			}

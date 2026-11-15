@@ -24,6 +24,8 @@ import {
   Text,
   TypeSpecimen,
   downloadBlob,
+  headingTag,
+  useHeadingLevel,
   useToast,
 } from "@crewlethq/ui";
 import {
@@ -268,9 +270,13 @@ export function VoiceBody({ voice }: { voice: BrandDocument["voice"] }) {
 }
 
 function VoiceList({ title, lines }: { title: string; lines: readonly string[] }) {
+  // ONE UNDER THE CARD'S OWN TITLE, which is the level the kit's Card declares
+  // for what it holds: a fixed h4 skipped a level under the brand page's h2
+  // cards.
+  const tag = headingTag(useHeadingLevel());
   return (
     <div className="brand-voice-list">
-      <Text as="h4" variant="label">
+      <Text as={tag} variant="label">
         {title}
       </Text>
       <List variant="bulleted" aria-label={title}>

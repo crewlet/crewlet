@@ -22,6 +22,21 @@
  * revision they opened (`Editor.tsx`). For a reader who cannot write, every
  * control stays drawn and says why.
  *
+ * # A draft says so, with the way out of it
+ *
+ * A page saved as a draft is listed in its space marked as one and found by
+ * no search. The page says that above its body with Publish beside it, and
+ * More holds the same press (and, on a published page, the way back to a
+ * draft): `save_page` with a `status` and nothing else, against the version on
+ * screen. Without it a draft stayed one for good, since the editor saved a
+ * body and nothing more.
+ *
+ * # Tidying it
+ *
+ * More holds Rename, Labels, Move and Move to trash (`Tidy.tsx`), each the
+ * engine's own route or `save_page`; a page in the trash says so above its
+ * body with Restore, and Delete permanently for an admin.
+ *
  * # What a wiki cannot tell you, and this can
  *
  * Its readers are seats and every read is a recorded act, so the page says
@@ -34,6 +49,7 @@
 import { useMemo } from "react";
 import {
   Button,
+  Callout,
   DescriptionList,
   Document,
   DocumentTitle,
@@ -46,9 +62,11 @@ import {
   ClockGlyph,
   CopyGlyph,
   EllipsisGlyph,
+  EyeOffGlyph,
   FileTextGlyph,
   PencilGlyph,
   PlusGlyph,
+  SendGlyph,
   StarGlyph,
 } from "@crewlethq/icons/glyphs";
 import { pageSpaceKey, pageUpKey } from "~/app/crumbs.ts";
@@ -56,6 +74,8 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useOwnStar, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import type { PageMenuEntry } from "~/app/header/PageHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
+import { useAct } from "~/lib/useAct.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -82,6 +102,7 @@ import { PageCommentThread } from "./CommentThread.tsx";
 import { Connections, Revisions } from "./Connections.tsx";
 import { PageEditor } from "./Editor.tsx";
 import { PageChanges, VersionView } from "./History.tsx";
+import { TrashedNotice, usePageTidy } from "./Tidy.tsx";
 import { WatchControl } from "./Watch.tsx";
 
 /** How often a page reads itself again, and how often who read it. */
@@ -184,7 +205,10 @@ function PageProps({
  * written in it), what it groups.
  */
 function PageBody({ detail, body }: { detail: PageDetail; body: string }) {
-  if (body.trim()) return <Document>{renderMarkdown(body, { anchors: true })}</Document>;
+  // THE BODY IS THE PAGE under its title's h2 (the trail holds the h1), so its
+  // first heading is an h3 whatever `#` it was written with.
+  if (body.trim())
+    return <Document>{renderMarkdown(body, { anchors: true, headingsFrom: 3 })}</Document>;
   const children = detail.children ?? [];
   if (!detail.folder) return <p className="knowledge-note">This page has no body.</p>;
   return (
@@ -265,6 +289,31 @@ export function PageView({ id }: { id: string }) {
     [page],
   );
 
+  // A PAGE'S STATUS IS MOVED BY ONE PRESS, against the version on screen:
+  // publish a draft, or take a published page back to one. The engine decides
+  // who may (the page's creator, its space's lead, an admin), and its refusal
+  // is said under the notice or in a toast, never swallowed.
+  const setStatus = useAct("save_page");
+  const draft = page?.status === "draft";
+  const moveStatus = async (to: "published" | "draft") => {
+    if (!page || setStatus.busy) return;
+    const result = await setStatus.run(
+      { page: page.id, base_version: page.version, status: to },
+      {
+        done: to === "published" ? `Published “${page.title}”` : `“${page.title}” is a draft again`,
+      },
+    );
+    if (result?.kind === "refused" && to === "draft") {
+      toast.show({
+        variant: "warning",
+        title: "The page is still published",
+        message: [result.sentence, result.hint].filter(Boolean).join(" "),
+      });
+    }
+  };
+
+  const tidy = usePageTidy(page);
+
   const path = pagePath(id);
   const starred = starredIn(stars, path);
   const toggleHistory = () => {
@@ -298,6 +347,30 @@ export function PageView({ id }: { id: string }) {
           },
           ...menuHold(canWrite),
         },
+        ...(page.status === "draft"
+          ? [
+              {
+                key: "publish",
+                label: "Publish",
+                icon: <SendGlyph size="sm" />,
+                description: "Every reader and every search finds it",
+                onSelect: () => void moveStatus("published"),
+                ...menuHold(canEdit),
+              },
+            ]
+          : page.status === "published"
+            ? [
+                {
+                  key: "unpublish",
+                  label: "Move back to draft",
+                  icon: <EyeOffGlyph size="sm" />,
+                  description: "No search finds a draft",
+                  onSelect: () => void moveStatus("draft"),
+                  ...menuHold(canEdit),
+                },
+              ]
+            : []),
+        ...tidy.entries,
         {
           key: "history",
           label: reading ? "Back to the page" : "History",
@@ -413,8 +486,34 @@ export function PageView({ id }: { id: string }) {
               )}
             </div>
             <article className="knowledge-read-page" aria-label={page.title}>
-              <DocumentTitle>{page.title}</DocumentTitle>
+              {/* AN h2, as every object's title is in the frame: the trail's
+                  last crumb is the page's h1 and already names it, and a
+                  second h1 gave a screen reader two titles. */}
+              <DocumentTitle as="h2">{page.title}</DocumentTitle>
               <PageProps detail={data} spaceName={spaceName} who={who} now={now} />
+              {page.status === "trashed" && !editing && <TrashedNotice page={page} />}
+              {draft && !editing && !reading && (
+                <Callout
+                  variant="neutral"
+                  title="This page is a draft"
+                  action={
+                    <WriteButton
+                      write={setStatus}
+                      size="small"
+                      variant="primary"
+                      showRefusal={false}
+                      leadingIcon={<SendGlyph size="sm" />}
+                      onPress={() => void moveStatus("published")}
+                    >
+                      Publish
+                    </WriteButton>
+                  }
+                >
+                  It is listed in its space marked as a draft, and no search finds it until it is
+                  published.
+                  <RefusalNote write={setStatus} />
+                </Callout>
+              )}
               {editing ? (
                 <PageEditor
                   key={page.id}
@@ -463,6 +562,7 @@ export function PageView({ id }: { id: string }) {
           </div>
         )}
       </QueryState>
+      {tidy.dialog}
     </>
   );
 }

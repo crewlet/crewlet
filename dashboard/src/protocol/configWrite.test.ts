@@ -6,7 +6,12 @@
  */
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { classifyConfigRefusal, introducedWarnings, unsettledSentence } from "./configAnswer.ts";
+import {
+  classifyConfigRefusal,
+  introducedWarnings,
+  isUnsealedRefusal,
+  unsettledSentence,
+} from "./configAnswer.ts";
 import {
   configTransport,
   createEntity,
@@ -14,9 +19,14 @@ import {
   dryRunEntity,
   dryRunPatch,
   getConfig,
+  dryRunDocument,
+  getConfigText,
   getEntity,
   outcomeOf,
   putEntity,
+  reloadConfig,
+  revertRevision,
+  saveDocument,
   savePatch,
 } from "./configWrite.ts";
 import type { ConfigWarning } from "./types.ts";
@@ -654,5 +664,118 @@ describe("one entity", () => {
     expect(call.url).toContain("/config/roles/pm?dry_run=true");
     expect(new Headers(call.init.headers).get("If-Match")).toBe('"r7"');
     expect(JSON.parse(call.init.body as string)).toEqual({ name: "PM", token_budget: { day: 5 } });
+  });
+});
+
+describe("a revision this node cannot open", () => {
+  // NOT A RACE: no re-read changes the answer, and reading one as
+  // `revision_advanced` offered a reload that met the same refusal for ever.
+  test.each([
+    "unsealed_revision",
+    "unsealed_fleet_revision",
+    "unreadable_revision",
+    "unreadable_fleet_revision",
+    "unknown_seal_revision",
+  ])("%s is a problem in the engine's words, naming the revision", (code) => {
+    const body = { error: code, revision_id: "r3", detail: "can't be read", hint: "replace it" };
+    const refusal = classifyConfigRefusal({ status: 409, body, fromEngine: true });
+    expect(refusal).toEqual({
+      kind: "problems",
+      problems: [{ path: "", segments: null, kind: code, message: "can't be read" }],
+      derived: null,
+      code,
+      hint: "replace it",
+      revisionId: "r3",
+    });
+    // Only an unsealed revision is one a whole document replaces.
+    expect(isUnsealedRefusal(refusal)).toBe(code.startsWith("unsealed_"));
+  });
+});
+
+describe("a write whose activation went unanswered", () => {
+  // IT STORED A REVISION, and says which and where: the one way to learn
+  // whether it landed without making a second revision over it.
+  test("names the revision it stored and the node holding it", () => {
+    const body = {
+      error: "unavailable",
+      outcome: "unknown",
+      stored_revision_id: "r9",
+      node: "node-a",
+      your_base: "r8",
+      detail: "the coordination store did not answer",
+    };
+    expect(classifyConfigRefusal({ status: 503, body, fromEngine: true })).toEqual({
+      kind: "unsettled",
+      answered: true,
+      status: 503,
+      detail: "the coordination store did not answer",
+      storedRevisionId: "r9",
+      node: "node-a",
+    });
+    // An unanswered write with no outcome names nothing it stored.
+    expect(
+      classifyConfigRefusal({ status: 503, body: { error: "unavailable" }, fromEngine: true }),
+    ).not.toHaveProperty("storedRevisionId");
+  });
+});
+
+describe("the writes of the whole document", () => {
+  // NO BODY AND NO If-Match: each changes nothing a person edited, so there
+  // is no edit to lose a race with; the summary travels in its header.
+  test("a reload and a revert carry their summary in X-Summary and nothing else", async () => {
+    const calls = stub(async () => json({ revision_id: "r9", epoch: 4, warnings: [] }, 201));
+    expect(await reloadConfig("rotate  the\ntoken", never())).toMatchObject({
+      kind: "saved",
+      revisionId: "r9",
+    });
+    await revertRevision("r 7", "back to r7", never());
+    const [reload, revert] = calls;
+    expect(reload!.init.method).toBe("POST");
+    expect(new URL(reload!.url).pathname).toBe("/config/reload");
+    expect(new Headers(reload!.init.headers).get("X-Summary")).toBe("rotate the token");
+    expect(reload!.init.body).toBeUndefined();
+    expect(new URL(revert!.url).pathname).toBe("/config/revisions/r%207/revert");
+    expect(new Headers(revert!.init.headers).get("X-Summary")).toBe("back to r7");
+    expect(new Headers(revert!.init.headers).get("If-Match")).toBeNull();
+  });
+
+  // A HEADER IS BYTES: the summary is sent as its UTF-8 bytes, which the
+  // engine reads back as the text written, whatever its script.
+  test("a summary in any script travels as its UTF-8 bytes", async () => {
+    const calls = stub(async () => json({ revision_id: "r9", epoch: 4, warnings: [] }, 201));
+    await reloadConfig("zurück zum Import \u{1F600}", never());
+    const sent = new Headers(calls[0]!.init.headers).get("X-Summary")!;
+    const bytes = Uint8Array.from(sent, (c) => c.charCodeAt(0));
+    expect(new TextDecoder().decode(bytes)).toBe("zurück zum Import \u{1F600}");
+  });
+
+  test("the document is read as text with its tag, and written back as YAML under it", async () => {
+    const calls = stub(async (_url, init) =>
+      init.method === "GET"
+        ? new Response("name: Acme\n", {
+            status: 200,
+            headers: { ...ENGINE_HEADERS, "Content-Type": "application/yaml", ETag: '"r7"' },
+          })
+        : json({ valid: true, base_revision_id: "r7", warnings: [] }, 200),
+    );
+    expect(await getConfigText(never())).toEqual({
+      kind: "text",
+      text: "name: Acme\n",
+      etag: '"r7"',
+    });
+    expect(new URL(calls[0]!.url).search).toBe("?format=yaml");
+    await dryRunDocument("name: Acme2\n", '"r7"', never());
+    await saveDocument("name: Acme2\n", '"r7"', "Rename", never());
+    const [, check, save] = calls;
+    for (const call of [check!, save!]) {
+      const headers = new Headers(call.init.headers);
+      expect(call.init.method).toBe("PUT");
+      expect(headers.get("If-Match")).toBe('"r7"');
+      expect(headers.get("Content-Type")).toBe("application/yaml");
+      expect(call.init.body).toBe("name: Acme2\n");
+    }
+    expect(new URL(check!.url).search).toBe("?dry_run=true");
+    expect(new Headers(check!.init.headers).get("X-Summary")).toBeNull();
+    expect(new Headers(save!.init.headers).get("X-Summary")).toBe("Rename");
   });
 });

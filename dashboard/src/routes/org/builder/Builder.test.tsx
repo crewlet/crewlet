@@ -697,6 +697,57 @@ describe("checking the draft", () => {
     expect(screen.getByTestId("problems CEO").textContent).toBe("0");
   });
 
+  // AN ADVISORY IS NOT A REFUSAL. A clean check still answers the engine's
+  // advisories, and one about no node (where a model entry's executors run)
+  // was drawn as the red refusal banner, in the engine's words alone. It is
+  // a warning under a plain title now, with the link to where it is set.
+  // Mutation: draw the document banner in the danger tone whatever it holds
+  // and this goes red.
+  test("an advisory about the whole configuration is a warning that links to its setting", async () => {
+    const engine = new Engine(company());
+    const advise = (answer: Record<string, unknown>) =>
+      json({
+        ...answer,
+        warnings: [
+          {
+            kind: "advisory",
+            ref: "",
+            path: "providers.sandbox.default_run_in",
+            segments: ["providers", "sandbox", "default_run_in"],
+            seat: "",
+            unit: "",
+            from: "",
+            to: "",
+            message:
+              "a `direct` box runs as the engine's own user; run it in `container` or `e2b` to hold it to them",
+          },
+        ],
+      });
+    engine.script = (r, e) =>
+      r.query.get("dry_run") === "true"
+        ? e
+            .answer(r)
+            .json()
+            .then((answer) => advise(answer as Record<string, unknown>))
+        : null;
+    mountBuilder({ engine });
+    await screen.findByText("Configuration OK");
+    const banner = await screen.findByRole("group", {
+      name: "Warnings about the whole configuration",
+    });
+    expect(
+      screen.queryByRole("group", { name: "Problems with the whole configuration" }),
+    ).toBeNull();
+    expect(banner.className).toContain("warning");
+    expect(banner.className).not.toContain("danger");
+    expect(banner.getAttribute("role")).toBe("group");
+    expect(within(banner).getByText(/The engine runs this company, with 1 warning/)).toBeDefined();
+    expect(within(banner).getByText(/runs as the engine/).textContent).toMatch(/^A /);
+    expect(within(banner).getByRole("link", { name: "Open Models" }).getAttribute("href")).toBe(
+      href(["settings", "models"]),
+    );
+  });
+
   test("the live region says what an edit did, and undo from the keyboard reverts it", async () => {
     const engine = new Engine(company());
     const { checkChange } = mountBuilder({ engine });

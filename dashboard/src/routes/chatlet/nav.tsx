@@ -99,8 +99,9 @@ export type ChatPane =
 export type ChatDialog =
   | { kind: "new-room" }
   | { kind: "shortcuts" }
-  | { kind: "delete"; channelID: string; message: ChatMessageView }
-  | { kind: "people" | "topic" | "description" | "template"; room: string };
+  | { kind: "delete" | "erase"; channelID: string; message: ChatMessageView }
+  | { kind: "archive"; room: string; archive: boolean }
+  | { kind: "people" | "topic" | "description" | "template" | "retention" | "prune"; room: string };
 
 // ---------------------------------------------------------------------------
 // Addresses

@@ -45,6 +45,7 @@ import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
  * 1,440 bars for a page of fifty attempts.
  */
 const CHECKS_OFFER: Offer = {
+  screen: "gitlet.checks",
   ranges: ["1d", "7d", "30d"],
   custom: true,
   fallback: "1d",

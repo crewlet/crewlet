@@ -21,7 +21,7 @@ import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
-import { OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { OWN_SEAT_DIRECT, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type {
   AgentRow,
@@ -1068,10 +1068,10 @@ function pageMore(): string[] {
 }
 
 // THE BAR KEEPS PAUSE OR RESUME, its "More" the rest of the seat's controls:
-// with Pause and stop, Steer and Direct message beside them the bar cut the
+// with Pause and stop, Steer and the seat's second way in beside them the bar cut the
 // trail's own name and wrapped onto two rows. Mutation: draw the turn's
 // controls in the bar again.
-test("the bar holds Pause, and Pause and stop, Steer and Direct message are in its More", async () => {
+test("the bar holds Pause, and Pause and stop, Steer and Ask as a task are in its More", async () => {
   mount("#/company/org/seats/swe", {
     shell: true,
     answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
@@ -1080,7 +1080,7 @@ test("the bar holds Pause, and Pause and stop, Steer and Direct message are in i
   await settle();
   const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
   expect(within(bar).getByRole("button", { name: "Pause SWE" })).toBeDefined();
-  for (const name of [/^Pause and stop/, /^Steer/, /^Direct message/]) {
+  for (const name of [/^Pause and stop/, /^Steer/, /^Ask as a task/]) {
     expect(within(bar).queryByRole("button", { name }), String(name)).toBeNull();
   }
   fireEvent.click(within(bar).getByRole("button", { name: "More on SWE" }));
@@ -1088,7 +1088,7 @@ test("the bar holds Pause, and Pause and stop, Steer and Direct message are in i
     .getAllByRole("menuitem")
     .map((el) => el.querySelector(".crewlet-menu__label")?.textContent ?? "");
   expect(entries).toEqual(
-    expect.arrayContaining(["Direct message", "Pause and stop", "Steer its turn"]),
+    expect.arrayContaining(["Ask as a task", "Pause and stop", "Steer its turn"]),
   );
 });
 
@@ -1115,13 +1115,14 @@ test("the phone's More holds every action but Message, and each opens what its b
   }
   expect(screen.getByRole("button", { name: "Message" }).closest(".page-action-folds")).toBeNull();
   const names = pageMore();
-  // WATCH LIVE FIRST while it works, as it leads the bar. DIRECT MESSAGE is
+  // WATCH LIVE FIRST while it works, as it leads the bar. ASK AS A TASK is
   // folded with the rest: the company runs Chatlet until the engine says
-  // otherwise, and the reader holds Chatlet through admin.
+  // otherwise and the reader holds Chatlet through admin, so Message is the
+  // conversation and the ask is the More's.
   // PAUSE AND STOP, folded with the rest, is one press away as well.
   expect(names.slice(0, 8)).toEqual([
     "Watch live",
-    "Direct message",
+    "Ask as a task",
     "Assign task",
     "Pause",
     "Pause and stop",
@@ -1217,8 +1218,9 @@ test("a folded action is held in the menu with the reason", async () => {
 
 // MESSAGE'S OWN-SEAT HOLD IS THE BUTTON'S RULE, and the folded entry asks the
 // same rule rather than the bare act: on the reader's own seat both are held
-// in one sentence, and on anybody else's both are free. Mutation: fold the
-// entry on `useWriteAccess` alone and the first half goes red.
+// in one sentence (the conversation's, since the company runs Chatlet until
+// the engine says otherwise), and on anybody else's both are free. Mutation:
+// fold the entry on `useWriteAccess` alone and the first half goes red.
 test("Message folded on a phone is held on your own seat as the button is", async () => {
   mount("#/company/org/seats/swe", {
     shell: true,
@@ -1228,11 +1230,11 @@ test("Message folded on a phone is held on your own seat as the button is", asyn
   await settle();
   const inline = screen.getByRole("button", { name: "Message" });
   expect(inline.getAttribute("aria-disabled")).toBe("true");
-  expect(inline.getAttribute("title")).toBe(OWN_SEAT_MESSAGE);
+  expect(inline.getAttribute("title")).toBe(OWN_SEAT_DIRECT);
   pageMore();
   const folded = screen.getByRole("menuitem", { name: /^Message/ });
   expect(folded.getAttribute("aria-disabled")).toBe("true");
-  expect(folded.textContent).toContain(OWN_SEAT_MESSAGE);
+  expect(folded.textContent).toContain(OWN_SEAT_DIRECT);
   cleanup();
 
   mount("#/company/org/seats/swe", {
@@ -1668,10 +1670,20 @@ const inboxPage = (n: number, more: boolean) => ({
   ...(more ? { next_cursor: "c1" } : {}),
 });
 
-// THE INBOX'S OWN COUNT, NEVER THE RECORD'S `unread`. That list holds the
-// EXCEPTIONS below the read mark — notices marked unread again — so a person
-// with fifty waiting read "Unread 0" beside a sidebar badge saying 50+.
-test("your own day's Unread is the sidebar badge's count, and the day is yours", async () => {
+/** A `decisions` answer of n things waiting on the person, capped or not. */
+const waitingOn = (handle: string, n: number, capped = false) => ({
+  handle,
+  items: [],
+  total: n,
+  answerable: 0,
+  capped,
+});
+
+// WHAT WAITS ON THEM, THE BADGE'S OWN COUNT: never the record's `unread`, which
+// holds the EXCEPTIONS below the read mark (a person with fifty waiting read
+// "Unread 0" beside a badge saying 50+), and never their unread updates, which
+// ask nothing of them (fifty mentions read as fifty things to do).
+test("your own day's Waiting is the sidebar badge's count, and the day is yours", async () => {
   mount("#/company/org/seats/jane", {
     shell: true,
     answers: {
@@ -1684,16 +1696,18 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
         acts: [],
       },
       inbox: inboxPage(50, true),
+      decisions: waitingOn("jane", 50, true),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
-  await waitFor(() => expect(tile("Unread").textContent).toContain("50+"));
+  await waitFor(() => expect(tile("Waiting").textContent).toContain("50+"));
   // THE SIDEBAR'S INBOX ROW, which carries the same figure as its badge.
   const nav = document.querySelector(".crewlet-sidebar-nav") as HTMLElement;
   const row = within(nav).getByRole("link", { name: /Inbox/ });
   expect(row.textContent).toContain("50+");
-  // ONE READING: the frame's, never a second read of the same inbox.
-  expect(askedFor("inbox")).toHaveLength(1);
+  // ONE READING: the frame's, never a second read of what waits.
+  expect(askedFor("decisions").filter((a) => !a.params.handle)).toHaveLength(1);
+  expect(askedFor("decisions").filter((a) => a.params.handle)).toHaveLength(0);
   expect(screen.getByText("Your day")).toBeTruthy();
   const day = screen.getByText("Your day").closest(".prof-day-head") as HTMLElement;
   expect(within(day).getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("#/inbox");
@@ -1728,7 +1742,7 @@ test("your own seat points to your Account, and a colleague's does not", async (
   expect(screen.queryByRole("heading", { name: "Your account" })).toBeNull();
 });
 
-test("an operator reading a colleague's day asks that colleague's inbox", async () => {
+test("an operator reading a colleague's day asks what waits on that colleague", async () => {
   mount("#/company/org/seats/jane", {
     answers: {
       viewer: {
@@ -1739,14 +1753,16 @@ test("an operator reading a colleague's day asks that colleague's inbox", async 
         acts: [],
       },
       inbox: (p: Record<string, unknown>) =>
-        p.handle === "jane" ? inboxPage(7, false) : inboxPage(0, false),
+        p.handle === "jane" ? inboxPage(30, true) : inboxPage(0, false),
+      decisions: (p: Record<string, unknown>) =>
+        p.handle === "jane" ? waitingOn("jane", 7) : waitingOn("cto", 0),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
-  await waitFor(() => expect(tile("Unread").textContent).toContain("7"));
-  expect(askedFor("inbox").map((a) => a.params.handle)).toContain("jane");
+  await waitFor(() => expect(tile("Waiting").textContent).toContain("7"));
+  expect(askedFor("decisions").map((a) => a.params.handle)).toContain("jane");
   expect(screen.getByText("Their day")).toBeTruthy();
-  expect(tile("Unread").textContent).toContain("waiting on them");
+  expect(tile("Waiting").textContent).toContain("waiting on them");
 });
 
 /** The chart with SWE's charter replaced. */
@@ -3420,26 +3436,38 @@ test("the trail names the seat and the unit it sits in, and titles the tab with 
   expect(document.title).toBe("SWE · Crewlet");
 });
 
-// WITHOUT WORKLET, MESSAGE AND ASSIGN TAKE THEIR WRAPPERS WITH THEM:
-// the buttons drew nothing and their empty spans still took the bar's gap.
-// Mutation: keep the spans whatever the services, and the bar holds two
-// empty children.
-test("a company running no Worklet leaves no empty slot in the seat's bar", async () => {
-  mount("#/company/org/seats/swe", {
-    shell: true,
-    agents: [WORKING],
-    org: {
-      ...ORG,
-      services: { tracker: "jira", knowledge: "doclet", chat: "chatlet" },
-    } as OrgProjection,
-  });
-  await settle();
-  const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
-  expect(
-    [...bar.querySelectorAll(":scope > span")].filter((s) => s.childElementCount === 0),
-  ).toEqual([]);
-  expect(within(bar).queryByRole("button", { name: /^Message/ })).toBeNull();
-});
+// WITHOUT WORKLET, ASSIGN TAKES ITS WRAPPER WITH IT, and so does Message where
+// there is no Chatlet to open a conversation in either: the buttons drew
+// nothing and their empty spans still took the bar's gap. On Chatlet, Message
+// is the conversation and stays. Mutation: keep the spans whatever the
+// services, and the bar holds empty children; draw Message off Worklet alone,
+// and the Chatlet case loses it.
+test.each([
+  ["Chatlet", "chatlet", true],
+  ["a vendor's chat", "vendor", false],
+])(
+  "a company running no Worklet, on %s, leaves no empty slot in the seat's bar",
+  async (_, chat, message) => {
+    mount("#/company/org/seats/swe", {
+      shell: true,
+      answers: {
+        viewer: { ...OPERATOR, grants: [...OPERATOR.grants, "chatlet"], acts: EVERY_ACT },
+      },
+      agents: [WORKING],
+      org: {
+        ...ORG,
+        services: { tracker: "jira", knowledge: "doclet", chat, code: "none" },
+      } as OrgProjection,
+    });
+    await settle();
+    const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
+    expect(
+      [...bar.querySelectorAll(":scope > span")].filter((s) => s.childElementCount === 0),
+    ).toEqual([]);
+    expect(within(bar).queryByRole("button", { name: /^Message/ }) !== null).toBe(message);
+    expect(within(bar).queryByRole("button", { name: /^Assign task/ })).toBeNull();
+  },
+);
 
 // A PARKED RUN IS ANSWERED FROM ITS SEAT WITH WHAT IT ASKED WHOLE. The live
 // entry the seat's page draws from carries no launch, which an answer names,
@@ -3471,6 +3499,11 @@ test("a parked run is answered from its seat with its context and options", asyn
               recommended: "three",
               role: "contributor",
             },
+            // PUT TO THE READER, as the engine states it.
+            put_to: ["jane"],
+            put_to_you: true,
+            may_answer: true,
+            needs_you: true,
           },
         ],
       },

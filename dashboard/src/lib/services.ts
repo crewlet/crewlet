@@ -16,7 +16,8 @@
  *
  * # What the dashboard does with it
  *
- * A place that reads a service the company does not run is HIDDEN, never
+ * A place that reads a service the company does not run, or one this node
+ * serves only once it restarts ([awaitsRestart]), is HIDDEN, never
  * locked (`app/nav.ts`'s `serviceShown`): the sidebar row, the palette's
  * destination, the `g` chord, the Home widget, the control that would file a
  * task. There is nothing to ask an admin for, and a lock would say there was.
@@ -77,15 +78,30 @@ function run(tracker: boolean, knowledge: boolean, chat: boolean, code: boolean)
   return RUN.get(runKey(tracker, knowledge, chat, code))!;
 }
 
-/** Which services run, from what the engine said: every one, until it has said. */
+/**
+ * Which services run, from what the engine said: every one, until it has
+ * said. A service the node serves only once restarted ([awaitsRestart]) does
+ * not run HERE yet, so it is no row, no destination and no control, like one
+ * the company does not run; its address says why and what brings it.
+ */
 export function servicesRun(services: OrgServices | null | undefined): ServicesRun {
   if (!services) return run(true, true, true, true);
   return run(
-    services.tracker === "worklet",
-    services.knowledge === "doclet",
-    services.chat === "chatlet",
-    services.code === "gitlet",
+    services.tracker === "worklet" && !awaitsRestart(services, "tracker"),
+    services.knowledge === "doclet" && !awaitsRestart(services, "knowledge"),
+    services.chat === "chatlet" && !awaitsRestart(services, "chat"),
+    services.code === "gitlet" && !awaitsRestart(services, "code"),
   );
+}
+
+/**
+ * Whether the company runs `service` as Crewlet's own and the node that
+ * answered serves it only once restarted (`OrgServices.restart`): it was
+ * already running when the company turned the service on, and a node starts
+ * its own services as it boots.
+ */
+export function awaitsRestart(services: OrgServices | null | undefined, service: Service): boolean {
+  return services?.restart?.includes(service) === true;
 }
 
 /** What the engine said the company runs, or null until it has. */
@@ -115,6 +131,14 @@ interface RememberedCompany {
 
 const SERVICE_FIELDS = ["tracker", "knowledge", "chat", "code"] as const;
 
+/** Whether a remembered `restart` is what the engine sends: absent, or a list of words. */
+function restartOk(restart: unknown): boolean {
+  return (
+    restart === undefined ||
+    (Array.isArray(restart) && restart.every((service) => typeof service === "string"))
+  );
+}
+
 /** What [rememberCompany] last stored, or null where it is absent, refused or malformed. */
 export function rememberedCompany(): RememberedCompany | null {
   try {
@@ -124,7 +148,8 @@ export function rememberedCompany(): RememberedCompany | null {
     const ok =
       services === null ||
       (typeof services === "object" &&
-        SERVICE_FIELDS.every((f) => typeof (services as Record<string, unknown>)[f] === "string"));
+        SERVICE_FIELDS.every((f) => typeof (services as Record<string, unknown>)[f] === "string") &&
+        restartOk((services as Record<string, unknown>).restart));
     if (typeof name !== "string" || !ok) return null;
     return { name, services: services as OrgServices | null };
   } catch {

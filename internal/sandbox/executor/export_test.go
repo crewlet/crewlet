@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"io"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -67,6 +69,9 @@ type OpenCodeTimes struct {
 	// its MCP servers to connect, Sync how often it exports a login it was
 	// given, and Stop how long it gives a process of its own to go.
 	Listen, MCP, Sync, Stop time.Duration
+	// Call and SessionCall are how long it waits for each kind of call to its
+	// own server ([openCodeBounded]).
+	Call, SessionCall time.Duration
 	// Clock is the command the script reads the time from, in whole seconds.
 	Clock string
 }
@@ -75,11 +80,36 @@ type OpenCodeTimes struct {
 // for the cases about a wait running out, a sync coming round or a stop that
 // must not wait, at lengths a test can tell apart.
 func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, times OpenCodeTimes) string {
+	run := openCodeRunTimes()
 	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, session, paths, openCodeTimes{
-		listen: cmp.Or(times.Listen, openCodeListenWait), mcp: cmp.Or(times.MCP, openCodeMCPWait),
-		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, sandbox.JobStopGrace),
-		clock: cmp.Or(times.Clock, openCodeClock),
+		listen: cmp.Or(times.Listen, run.listen), mcp: cmp.Or(times.MCP, run.mcp),
+		sync: cmp.Or(times.Sync, run.sync), stop: cmp.Or(times.Stop, run.stop),
+		call: cmp.Or(times.Call, run.call), sessionCall: cmp.Or(times.SessionCall, run.sessionCall),
+		clock: cmp.Or(times.Clock, run.clock),
 	}))
+}
+
+// RecordStart is where the run a session record names began in its session,
+// as the record says it ([parseSessionRecord]): whether it began the session,
+// and the message it began after.
+func RecordStart(text string) (began bool, after string) {
+	rec := parseSessionRecord(text)
+	return rec.began, rec.from
+}
+
+// OpenCodeCursorTail is how much of a list answer's end a run's script reads
+// its cursor from ([openCodeCursor]).
+const OpenCodeCursorTail = openCodeCursorTail
+
+// OpenCodeEndPath is the most a run's script spends after an end request
+// reaches it while its harness runs, at the waits Command runs it at
+// ([openCodeEndPath]).
+func OpenCodeEndPath() time.Duration { return openCodeEndPath(openCodeRunTimes()) }
+
+// OpenCodeEndCallTags is the tags of every call a run's script makes to its own
+// server that no end request ends ([openCodeEndCalls]), sorted.
+func OpenCodeEndCallTags() []string {
+	return slices.Sorted(maps.Keys(openCodeEndCalls(openCodeRunTimes())))
 }
 
 // ClaudeCodeCommandTimed is [ClaudeCode.Command] with the harness given stop to
@@ -195,3 +225,51 @@ const (
 // ReleaseAtLeast reports whether a Claude Code release is at or after floor,
 // as every gate on the engine's side reads one ([releaseAtLeast]).
 func ReleaseAtLeast(version, floor string) bool { return releaseAtLeast(version, floor) }
+
+// SkippedLine, handed to [StreamRequest] as a line, is one past the stream's
+// bound ([MaxLineBytes]) rather than a line read.
+const SkippedLine = "\x00a line past the stream's bound"
+
+// StreamRequest is what h's decoder reads off a stream of lines of the newest
+// request of the session its run worked in ([contextReader]): the measure, and
+// where there is none, why, and whether that is a reading that failed, as the
+// collection logs it at warning.
+func StreamRequest(h Harness, lines ...string) (sandbox.RequestMeasure, string, bool) {
+	dec := h.Events()
+	for _, line := range lines {
+		if line == SkippedLine {
+			dec.Skipped(int64(maxLineBytes)+1, maxLineBytes)
+			continue
+		}
+		dec.Line([]byte(line))
+	}
+	reader, ok := dec.(contextReader)
+	if !ok {
+		return sandbox.RequestMeasure{}, "the harness's decoder reads no request", false
+	}
+	read := reader.request()
+	return read.measure, read.why, read.failed
+}
+
+// FollowedNames is how many message ids an OpenCode decoder holds while a live
+// reading follows it ([openCodeEvents.named]): first read before the reading
+// first takes its entries, and the rest after, counted before it takes them
+// again.
+func FollowedNames(first string, rest ...string) int {
+	d := &openCodeEvents{}
+	d.Line([]byte(first))
+	_ = d.Entries()
+	for _, line := range rest {
+		d.Line([]byte(line))
+	}
+	return len(d.named)
+}
+
+// OpenCodeContextPages and OpenCodeContextBytes are the most pages, and bytes
+// in all, a run's script asks of its session's message list; and
+// OpenCodeContextEvent the type of the lines it prints them in.
+const (
+	OpenCodeContextPages = openCodeContextPages
+	OpenCodeContextBytes = openCodeContextBytes
+	OpenCodeContextEvent = openCodeContextEvent
+)

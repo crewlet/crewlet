@@ -12,7 +12,9 @@
  * thread and its details read, and `directory.ts` for a leave): a unit's room
  * takes no leave and no added people, since its membership is the org
  * chart's; a conversation is the people in it; an archived room takes no new
- * people; a kind this build cannot classify takes nothing. A gesture the
+ * people; a kind this build cannot classify takes nothing; and an archive, or
+ * opening the room again, is its creator's, its team's lead's or an admin's
+ * (`roomLifecycle.ts`). A gesture the
  * engine would refuse is not offered, rather than offered and refused.
  */
 
@@ -35,7 +37,9 @@ import {
   InfoGlyph,
   LinkGlyph,
   LogOutGlyph,
+  PackageGlyph,
   PencilGlyph,
+  RotateCcwGlyph,
   SearchGlyph,
   StarGlyph,
   UserPlusGlyph,
@@ -50,6 +54,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { canLeave } from "./directory.ts";
 import { stackMember } from "./Face.tsx";
 import { roomMissing, useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
+import { useRoomGestures } from "./RoomAdmin.tsx";
 import { NOTIFY_LABEL, NOTIFY_MEANS, useNotifyLevel } from "./notify.tsx";
 import { useChatPeople } from "./people.ts";
 import { unreadIn } from "./rooms.ts";
@@ -79,6 +84,7 @@ export function RoomActions({ tight }: { tight: boolean }) {
   const leave = useAct("leave_channel");
   const { rules } = useRoomScope();
   const assistant = useAssistantControl();
+  const gestures = useRoomGestures(open?.detail.data?.channel);
   // A ROOM THAT IS NOT THERE takes nothing: the room says so, with its way on.
   if (!open || roomMissing(open)) return null;
 
@@ -236,6 +242,30 @@ export function RoomActions({ tight }: { tight: boolean }) {
       icon: <CopyGlyph size="sm" />,
       onSelect: copy,
     },
+    // ARCHIVING IS NOT ANY MEMBER'S (`roomLifecycle.ts`): drawn for every reader
+    // of a named room once its answer has come, and held with the engine's
+    // own sentence for anybody but its creator, its team's lead or an admin.
+    ...(gestures.archivable && detail.data
+      ? [
+          { kind: "separator" as const, key: "before-archive" },
+          held(
+            detail.data.channel.archived_at
+              ? {
+                  key: "reopen",
+                  label: "Reopen room",
+                  icon: <RotateCcwGlyph size="sm" />,
+                  onSelect: () => nav.openDialog({ kind: "archive", room: id, archive: false }),
+                }
+              : {
+                  key: "archive",
+                  label: "Archive room",
+                  icon: <PackageGlyph size="sm" />,
+                  onSelect: () => nav.openDialog({ kind: "archive", room: id, archive: true }),
+                },
+            gestures.archive,
+          ),
+        ]
+      : []),
     // A LEAVE ONLY WHERE THE ROOM TAKES ONE (`directory.ts`): a unit's room
     // is the org chart's and a conversation is its people, and each says so
     // in the room's details rather than here.

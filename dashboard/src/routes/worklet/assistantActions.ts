@@ -58,11 +58,23 @@ function chipLabel(name: string, labels: LabelContext): string {
 const onlyTrue = (label: string) => (value: string) =>
   value === "true" ? null : `${label} is a switch: it is on, or it is cleared.`;
 
-/** An axis the list groups by, as Group by offers it. */
-function axisCheck(value: string): string | null {
-  return value === "none" || GROUP_AXES.some((a) => a.value === value)
-    ? null
-    : `This list cannot be grouped by "${value}".`;
+/**
+ * An axis the list groups by, as Group by offers it AT THIS SCOPE: the same
+ * set [groupAxisOptions] gives the menu. Checked against every axis whatever
+ * the scope, an assistant could group a project's own list by project, which
+ * the engine refuses (every row is in that project), and the whole list
+ * answered a refusal where the menu could never have sent one.
+ */
+function axisCheck(workspace: boolean) {
+  return (value: string): string | null => {
+    if (value === "none") return null;
+    const axis = GROUP_AXES.find((a) => a.value === value);
+    if (!axis) return `This list cannot be grouped by "${value}".`;
+    if (axis.workspace && !workspace) {
+      return `Every task here is in this project, so it cannot be grouped by ${axis.label.toLowerCase()}.`;
+    }
+    return null;
+  };
 }
 
 /**
@@ -73,6 +85,7 @@ function axisCheck(value: string): string | null {
 export function workKeys(
   home: "chip" | "arrangement",
   labels: LabelContext,
+  workspace = true,
 ): Record<string, UrlActionKey> {
   const keys: Record<string, UrlActionKey> = {};
   for (const [name, at] of Object.entries(URL_HOMES)) {
@@ -100,9 +113,9 @@ export function workKeys(
       case "group_by":
       case "group_by2":
         keys[name] = {
-          label: name === "group_by" ? "Group by" : "Then group by",
+          label: name === "group_by" ? "Group by" : "Subgroup by",
           history: "filter",
-          check: axisCheck,
+          check: axisCheck(workspace),
           words: (v) => (v === "none" ? "No grouping" : axisName(v) || v),
         };
         break;

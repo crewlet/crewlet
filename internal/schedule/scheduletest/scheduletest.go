@@ -545,7 +545,8 @@ var minuteCases = []testCase{
 		// fixture's, so a backend that matched on the handle as well
 		// answers false.
 		for _, outcome := range []schedule.Outcome{
-			schedule.OutcomeFired, schedule.OutcomeSkippedPaused, schedule.OutcomeSkippedCatchup,
+			schedule.OutcomeFired, schedule.OutcomeFiredManually, schedule.OutcomeSkippedPaused,
+			schedule.OutcomeSkippedCatchup,
 		} {
 			key := aKey()
 			key.FireLabel = "outcome-" + string(outcome)
@@ -557,6 +558,35 @@ var minuteCases = []testCase{
 				h.t.Fatalf("a minute held by a %s row reads unclaimed, so the catchup pass "+
 					"records it as missed", outcome)
 			}
+		}
+	}},
+
+	{"a_run_a_person_asked_for_holds_its_ask_and_no_minute", func(h *harness) {
+		// A run a person asked for is claimed under the ask's own label,
+		// as `fired_manually`, beside the tick of the same minute: both
+		// rows land, each keeps its outcome, and the tick's minute reads
+		// held only once the tick claimed it, so an ask never answers the
+		// catchup pass's question about a minute it did not stand for.
+		ask := aRun(aKey())
+		ask.FireLabel = schedule.ManualFireLabel("op-1")
+		ask.Outcome = schedule.OutcomeFiredManually
+		h.claimed(ask)
+		h.refused(ask)
+		tick := aRun(aKey())
+		if h.minuteClaimed(tick.FireMinute) {
+			h.t.Fatal("a run a person asked for holds the minute of the tick it was asked in")
+		}
+		h.claimed(tick)
+		if !h.minuteClaimed(tick.FireMinute) || !h.minuteClaimed(ask.FireMinute) {
+			h.t.Fatal("the tick and the ask do not each hold their own label")
+		}
+		outcomes := map[string]schedule.Outcome{}
+		for _, row := range h.rows() {
+			outcomes[row.FireLabel] = row.Outcome
+		}
+		if outcomes[ask.FireLabel] != schedule.OutcomeFiredManually ||
+			outcomes[tick.FireLabel] != schedule.OutcomeFired || len(outcomes) != 2 {
+			h.t.Fatalf("rows by label = %v, want the ask fired_manually beside the tick fired", outcomes)
 		}
 	}},
 

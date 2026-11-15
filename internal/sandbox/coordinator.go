@@ -204,6 +204,15 @@ type ResumeRequest struct {
 	// count that included it would leave the first of those unmarked.
 	BridgedRead int
 
+	// Leads is the turn's leads kept beside the run's row
+	// ([PendingStore.Leads]), read by the coordinator beside the log inside
+	// the resume's frame: every lead of the run the part keeps, oldest first,
+	// and how many earlier ones are not kept, past the part's bound or
+	// because the part could not give them back where the row counts them;
+	// never "no leads" for a part the store could not read, which is said
+	// unread ([Coordinator.leadsAt], [TurnLeads.Unread]).
+	Leads TurnLeads
+
 	// Answer is what the resumed turn files as its executor's report: the
 	// collected run's own account of itself ([runReport]). Already redacted
 	// — it is published on the executor's phase record. Empty on a person's
@@ -453,6 +462,14 @@ type CoordinatorOptions struct {
 	// inside the seal, so a coordinator without it could neither record an
 	// answer nor resume with one. See answerseal.go.
 	Answers *AnswerSeal
+
+	// Leads seals the leads a launch's brief opened with into the run's
+	// leads, kept beside its record, for every later brief to a session of
+	// the work that may lack that brief ([NewLeadSeal], over the fleet
+	// keyring; leads.go). Nil keeps no lead of a brief: a coordinator built
+	// without an engine (a test's), whose runs keep the leads they hold and
+	// add none.
+	Leads *LeadSeal
 
 	// Ended is called for every run this node finishes with, whatever
 	// finished it — collected, parked on its question, failed, torn down or
@@ -975,8 +992,9 @@ type Coordinator struct {
 	account Accountant
 	// audience is [CoordinatorOptions.Audience].
 	audience AudienceResolver
-	// answers is [CoordinatorOptions.Answers].
+	// answers is [CoordinatorOptions.Answers], leads [CoordinatorOptions.Leads].
 	answers  *AnswerSeal
+	leads    *LeadSeal
 	condense Condenser
 	// pushes is [CoordinatorOptions.Pushes].
 	pushes RunPushes
@@ -1026,6 +1044,10 @@ type Coordinator struct {
 	endWait time.Duration
 	endPoll time.Duration
 	now     func() time.Time
+
+	// mainThreadWait bounds the read of a job's main thread at its collection
+	// ([MainThreadReadWait], [Coordinator.readMainThread]), a test's its own.
+	mainThreadWait time.Duration
 
 	// keepLife is the lifetime every keep runs under, off the read that took
 	// its capture ([Coordinator.keepLater]), and keeping counts them:
@@ -1239,6 +1261,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
 		answers:      opts.Answers,
+		leads:        opts.Leads,
 		condense:     opts.Condense,
 		ended:        opts.Ended,
 		recovered:    opts.Recovered,
@@ -1258,6 +1281,10 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		relaunchWait: relaunchCaptureWait,
 		endWait:      JobEndWait,
 		endPoll:      jobEndPoll,
+
+		// THE ONE WAIT every reading of a job's main thread shares.
+		mainThreadWait: MainThreadReadWait,
+
 		spoolDir:     opts.SpoolDir,
 		sessionRetry: sessionRetryBase,
 		recordBudget: sessionRecordBudget,
@@ -1998,6 +2025,14 @@ func (c *Coordinator) collectClaimed(ctx context.Context, run PendingRun) (Pendi
 	// this claim — a round a replaced sign-in carries on in the job's box —
 	// reads it here.
 	run.Launch.HarnessEnd = run.Launch.HarnessEnd.after(result.HarnessEnd)
+	// AND WHAT ITS NEWEST REQUEST CARRIED, by the rule the record follows
+	// ([LaunchRecord.Context]), for the same resume: a round carried on in the
+	// job's box is held to that copy's measure.
+	run.Launch.Context = run.Launch.measured(result.LastRequest, run.LaunchID)
+	// AND WHAT CLAUDE CODE COUNTS ITS COPY AT, by the rule the record follows
+	// ([LaunchRecord.counted]), for the same resume: a round carried on in the
+	// job's box is told what that copy may have compacted away.
+	run.Launch.ResumedCount = run.Launch.counted(result.ResumedCount)
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishCollected(ctx, run, result)
 	return run, result, true, nil
@@ -2147,7 +2182,8 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 			"error", cause.Error(),
 			"detail", "the collection was stopped by this node, not by its box; the claim is "+
 				"handed back uncounted and the completion is retried")
-		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil); err != nil {
+		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil,
+			BudgetWindow{}); err != nil {
 			//nolint:nilerr // As below: the run has been ended and announced.
 			return nil
 		}
@@ -2181,7 +2217,8 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 		// itself, so nothing is retried off this delivery; and one it did
 		// not answer is this node's to make again ([Coordinator.unclaimAt]),
 		// after which only that host's waiter or this delivery asks again.
-		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil); err != nil || !clocked {
+		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil,
+			BudgetWindow{}); err != nil || !clocked {
 			//nolint:nilerr // Ended and announced where the hand-back was refused, as below; acknowledged
 			// otherwise, no clock running on that host's store.
 			return nil
@@ -2235,7 +2272,8 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 				"without; the claim is handed back uncounted and the collection is asked again "+
 				"until the store answers, or until the box timeout where only the box's host "+
 				"finds it silent")
-		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil); err != nil {
+		if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{}, nil,
+			BudgetWindow{}); err != nil {
 			//nolint:nilerr // As below: the run has been ended and announced.
 			return nil
 		}
@@ -2277,7 +2315,8 @@ func (c *Coordinator) collectFailedAt(ctx context.Context, run PendingRun, cause
 	// delivery after the read would otherwise start a run of its own each
 	// time and never be given up ([Release.BoxAnswered]).
 	run.BoxAnswered = false
-	if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{collectFailed: now}, nil); err != nil {
+	if err := c.unclaimAt(ctx, run, collectUnrevertedDetail, failure{collectFailed: now}, nil,
+		BudgetWindow{}); err != nil {
 		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
 		// did not go back, so the run has been ended and announced, and a
 		// redelivered completion would find nothing to claim.
@@ -2565,6 +2604,13 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// session was taken, kept and then retired by the same collection.
 	at.exhausted = ranOutOfContext(asCollected(run, result, ended))
 	at.refused = requestRefused(asCollected(run, result, ended))
+	// THE JOB'S MAIN THREAD, read once on the box's host before the take, by
+	// every reading the collection asks of it (mainthread.go): what Claude Code
+	// counts the session at before its next request, for a Claude Code job.
+	// Kept on the result, with the least window its run reported, and written
+	// with how the harness ended, after the take, in the one write that records
+	// the job's end.
+	result.ResumedCount = c.readMainThread(ctx, run, box, runner, read, at, result).Count
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	result.Kept = kept
 	defer c.keepLater(ctx, spooled)
@@ -2580,7 +2626,11 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	if read != BoxReadCollect {
 		return result, ended, nil
 	}
-	c.markHarnessEnd(ctx, run, result.HarnessEnd)
+	// AND WHAT THE COPY'S NEWEST REQUEST CARRIED, as the run's own account
+	// measured it, and what Claude Code counts the copy at, as the read of its
+	// main thread above found it, in the same write.
+	c.markHarnessEnd(ctx, run, EndRead{End: result.HarnessEnd, Request: result.LastRequest,
+		Count: result.ResumedCount})
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {
@@ -4129,8 +4179,13 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// a relaunch built from it can tell ([ResumeRequest.BridgedRead]).
 		read := calls.Appends()
 		calls = calls.withHeld(run)
+		// AND THE TURN'S LEADS beside the row, in the same frame: what a
+		// relaunch continuing a session that may lack its brief tells again
+		// ([Coordinator.leadsAt]), never "none" for a part it could not read.
+		leads := c.leadsAt(ctx, run)
 		err = c.resume.Resume(ctx, ResumeRequest{
-			Run: run, Bridged: calls, BridgedRead: read, Answer: answer, Success: success, Trigger: trigger,
+			Run: run, Bridged: calls, BridgedRead: read, Leads: leads, Answer: answer, Success: success,
+			Trigger:       trigger,
 			DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 			Pushed: outcome.Pushed, PushedElided: outcome.PushedElided, PushedUnread: outcome.PushedUnread,
 			InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
@@ -4291,7 +4346,13 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			}
 			failed.resumeFailed = now
 		}
-		if unclaimErr := c.unclaimAt(ctx, run, resumeUnrevertedDetail, failed, nil); unclaimErr != nil {
+		// AND THE WINDOW AN ANSWER'S RELAUNCH WAS REFUSED BELOW ITS FLOOR IN,
+		// onto the job's record ([Release.RelaunchRefusedIn]): the answer's
+		// wait is its series', in this node's memory, but the relaunch its
+		// next attempt makes, here or on the seat's next holder, reads the
+		// row, and waits for its brief's room no longer than that window.
+		if unclaimErr := c.unclaimAt(ctx, run, resumeUnrevertedDetail, failed, nil,
+			refusal.Window); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, and the same answer the
 			// acted-and-broke branch above gives for the same reason:
 			// the run has been settled, so the completion is not sent
@@ -4375,6 +4436,27 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// The ordinary ending: the turn came back and the run is finished, so
 	// whatever drove the resume did its whole job.
 	return AnswerConsumed, nil
+}
+
+// leadsAt is the turn's leads beside run's row as its resume reads them
+// ([PendingStore.Leads]): where the store cannot give them, every lead the row
+// counts, said as not kept and never as none ([PendingRun.LeadsAppended]), and
+// the read marked unread ([TurnLeads.Unread]), so the leads the job's record
+// marks are handed on by their numbers to the job the relaunch opens, for a
+// later read that answers to tell. A resume is not refused for it, as it is
+// for a log it cannot read: a lead told again is a message the session may
+// already show, and the brief says how many it cannot tell.
+func (c *Coordinator) leadsAt(ctx context.Context, run PendingRun) TurnLeads {
+	leads, err := c.pending.Leads(ctx, run)
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_leads_part_unread", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"not_kept", run.LeadsAppended, "error", err.Error(),
+			"detail", "every lead the run's record counts is told as not kept by the relaunch this resume "+
+				"builds, rather than told again; the job that relaunch opens marks the ones this job's "+
+				"record marks, so a later resume that reads them tells them")
+		return TurnLeads{Cut: run.LeadsAppended, Unread: true}
+	}
+	return leads
 }
 
 // markResumeBegun records on a claim of a collected job what the turn resuming
@@ -4728,11 +4810,14 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // release the store did not answer keeps the claim, which still holds the seat
 // on the store's row.
 func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, detail string) error {
-	return c.unclaimAt(ctx, run, detail, failure{}, nil)
+	return c.unclaimAt(ctx, run, detail, failure{}, nil, BudgetWindow{})
 }
 
 // unclaimHeld hands back a claim whose resume the seat's conditions refused,
-// holding the run's resume until refusal lifts ([Release.Hold]).
+// holding the run's resume until refusal lifts ([Release.Hold]), and counting
+// onto the job's record the window its relaunch was refused below its floor
+// in, where the refusal names one ([Release.RelaunchRefusedIn]): the relaunch
+// the hold's lifting lets the turn try again reads it.
 //
 // A REFUSAL ONLY AN EVENT LIFTS is held until [answerWaitBackstop], the bound
 // a recorded answer's series waits for the same signal: the signal lifts it
@@ -4747,15 +4832,17 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 		"reason", refusal.Reason, "until", refusal.Until.UTC().Format(time.RFC3339),
 		"detail", "the job stays collected in its paused box and its seat held behind it; "+
 			"its completion is announced again when the refusal lifts")
-	return c.unclaimAt(ctx, run, resumeUnrevertedDetail, failure{}, &refusal)
+	return c.unclaimAt(ctx, run, resumeUnrevertedDetail, failure{}, &refusal, refusal.Window)
 }
 
 // unclaimAt is [Coordinator.unclaim] for a claim handed back because the
 // collection it was taken for, or the resume after it, failed: failed is what
 // the release counts onto the job's record, and its zero value is any other
 // hand-back; detail is the sentence the run's ending reaches an operator's
-// board with where the store refuses the release; and hold, where set, holds
-// the run's resume back ([Release.Hold]).
+// board with where the store refuses the release; hold, where set, holds the
+// run's resume back ([Release.Hold]); and refusedIn, where it names a window,
+// is the one the claim's resume had its relaunch refused below its floor in,
+// which the release counts onto the job's record ([Release.RelaunchRefusedIn]).
 //
 // EVERY HAND-BACK IS RECORDED BY [Coordinator.handingBackLocked] and made by
 // [Coordinator.unclaimOwing], and a release the store did not answer is kept
@@ -4763,7 +4850,7 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 // of the job starts on this node while the release is on its way
 // ([Coordinator.claimCompletion]).
 func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, detail string, failed failure,
-	hold *Refusal,
+	hold *Refusal, refusedIn BudgetWindow,
 ) error {
 	// AND WHAT THE CLAIM LEARNED OF THE STORE OF THE HOST OF THE JOB'S BOX,
 	// onto the job's record, so a restart or the seat's next holder reads it
@@ -4772,6 +4859,7 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, detail stri
 	c.mu.Lock()
 	cr, moved := c.handingBackLocked(run, detail, failed, hold)
 	cr.release.HostStoreSilent, cr.release.HostStoreAnswered = silent, answered
+	cr.release.RelaunchRefusedIn = refusedIn
 	c.mu.Unlock()
 	moved()
 	return c.unclaimOwing(ctx, cr)

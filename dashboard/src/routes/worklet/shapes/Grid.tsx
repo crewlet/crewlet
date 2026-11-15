@@ -102,6 +102,7 @@ import {
   type ColumnChoice,
   type DataGridBand,
   type DataGridColumn,
+  type DataGridSelection,
 } from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import { Assignee, DueMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
@@ -112,6 +113,7 @@ import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
 import { RestoreButton } from "~/components/writes.tsx";
 import { AssigneeCell, InlineEdits, PriorityCell, WorkStatusCell } from "./cells.tsx";
+import { TaskRowMenu, type TaskActions } from "../taskMenu.tsx";
 import type {
   WorkActivityRecord,
   WorkGroup,
@@ -515,9 +517,19 @@ export function WorkGrid({
   sort,
   defaultSort,
   onSort,
+  actions,
+  selection,
 }: {
   /** Which column set, and which `cols=` key. */
   shape: GridShape;
+  /**
+   * The trash's gestures, where the screen offers them: each row then ends in
+   * its own menu (Move to trash, or Restore and Delete permanently in the
+   * trash). See `../taskMenu.tsx`.
+   */
+  actions?: TaskActions;
+  /** The rows picked for the selection bar, where the screen offers one. */
+  selection?: DataGridSelection<WorkSummary>;
   /**
    * THE READER'S ORDER, as the screen resolved it: the address's `sort=`, with
    * an explicit "default order" spelled as the container's own. The screen
@@ -597,7 +609,20 @@ export function WorkGrid({
     };
   }, [rows, groups, chrome, detail, workspace, removals, seats, assigneeFixed]);
 
-  const columns = useMemo(() => buildColumns(shape, ctx), [shape, ctx]);
+  // THE ROW'S MENU ENDS EVERY ROW, after the columns a reader chooses: an
+  // action column is none of them, so it is drawn whatever `cols=` names.
+  const columns = useMemo(() => {
+    const out = buildColumns(shape, ctx);
+    if (!actions) return out;
+    return out.concat({
+      key: "menu",
+      header: "",
+      label: "More",
+      action: true,
+      shrink: true,
+      cell: (row) => <TaskRowMenu row={row} actions={actions} inTrash={Boolean(removals)} />,
+    });
+  }, [shape, ctx, actions, removals]);
 
   const labels = useMemo(
     () => ({
@@ -652,6 +677,7 @@ export function WorkGrid({
       // through it; the collapsed grid was the one that did not.
       onRowActivate={peekRowActivation<WorkSummary>((row) => onOpen(row))}
       isSelected={(row) => itemAddress(row) === selected}
+      selection={selection}
       // THE ORDER IS THE QUERY'S. See the header: the grid writes `sort=`,
       // the screen sends it, and the engine orders the whole set.
       serverSorted

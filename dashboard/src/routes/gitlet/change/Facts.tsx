@@ -11,17 +11,26 @@
  */
 
 import type { ReactNode } from "react";
-import { EmptyValue, Stack, Tag } from "@crewlethq/ui";
+import { Card, EmptyValue, Stack, Tag } from "@crewlethq/ui";
+import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { codeReasonPhrase, commitPath, refName, shortOID } from "~/lib/code.ts";
+import { changePath, codeReasonPhrase, commitPath, refName, shortOID } from "~/lib/code.ts";
+import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodeRevisionRow } from "~/protocol/index.ts";
+import { Byline, Face, ShaChip } from "../ui.tsx";
+import { TimelineCard, TimelineList } from "./Timeline.tsx";
 import { CHANGE_POLL_MS } from "./reads.ts";
+import "~/styles/gitlet.css";
 
-/** The change's revisions, newest first, each with the facts its home recorded. */
+/**
+ * The change's revisions, newest first, each a card on the rail: who pushed it
+ * and when, its head with its copy, the facts its home recorded, and the way
+ * to its files and to what it changed since the revision before it.
+ */
 export function Commits({
   change,
   revisions,
@@ -29,24 +38,42 @@ export function Commits({
   change: CodeChangeDetail;
   revisions: readonly CodeRevisionRow[];
 }) {
-  const seatBadge = useSeatBadgeOf();
+  const now = useNow();
   if (revisions.length === 0) return <p className="muted">No revision is recorded yet.</p>;
+  const files = (at: Record<string, string>) =>
+    href(changePath(change.repo, change.number), { tab: "files", ...at });
   return (
-    <ol className="code-timeline" aria-label="Revisions">
+    <TimelineList label="Revisions">
       {revisions.map((r) => (
-        <li key={r.n} className="code-entry">
-          <p>
-            <strong>Revision {r.n}</strong>{" "}
-            <a
-              className="mono prose-link"
-              href={href(commitPath(change.repo, r.head))}
-              title={r.head}
-            >
-              {shortOID(r.head)}
-            </a>{" "}
-            {r.n === change.revision && <Tag appearance="outline">head</Tag>} pushed by{" "}
-            {seatBadge(r.pusher).name} <span className="muted">{fmtDateTime(r.at)}</span>
-          </p>
+        <TimelineCard
+          key={r.n}
+          label={`Revision ${r.n}`}
+          head={<Byline who={r.pusher} verb={`pushed revision ${r.n}`} at={r.at} now={now} />}
+          marks={
+            <>
+              {r.n === change.revision && <Tag appearance="outline">head</Tag>}
+              <ShaChip oid={r.head} />
+            </>
+          }
+          foot={
+            <span className="row gap-3 wrap">
+              <a className="t-link" href={href(commitPath(change.repo, r.head))}>
+                Its head commit →
+              </a>
+              <a
+                className="t-link"
+                href={files(r.n === change.revision ? {} : { rev: String(r.n) })}
+              >
+                Its files →
+              </a>
+              {r.n > 1 && (
+                <a className="t-link" href={files({ rev: String(r.n), since: String(r.n - 1) })}>
+                  What it changed since revision {r.n - 1} →
+                </a>
+              )}
+            </span>
+          }
+        >
           {r.facts ? (
             <p className="muted">
               Against {refName(r.facts.target_ref).name} at{" "}
@@ -65,9 +92,9 @@ export function Commits({
           ) : (
             <p className="muted">Its home has not measured it yet.</p>
           )}
-        </li>
+        </TimelineCard>
       ))}
-    </ol>
+    </TimelineList>
   );
 }
 
@@ -158,14 +185,12 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
       : []),
   ];
   return (
-    <dl className="code-facts">
-      {rows.map((row) => (
-        <div key={row.label}>
-          <dt>{row.label}</dt>
-          <dd>{row.value}</dd>
-        </div>
-      ))}
-    </dl>
+    <Card className="code-provenance">
+      <PropertiesRail
+        headings="sentence"
+        groups={[{ properties: rows.map((row) => ({ label: row.label, value: row.value })) }]}
+      />
+    </Card>
   );
 }
 
@@ -198,16 +223,28 @@ export function Notified({ change }: { change: CodeChangeDetail }) {
       }
     >
       <Stack gap={3}>
-        <ol className="code-timeline" aria-label="Whom it notified">
+        <TimelineList label="Whom it notified">
           {records.map((r) => (
-            <li key={r.record_id} className="code-entry">
-              <p className="muted">{fmtDateTime(r.at)}</p>
+            <TimelineCard
+              key={r.record_id}
+              label={`Notified ${fmtDateTime(r.at)}`}
+              head={
+                <time className="code-byline__when" dateTime={r.at} title={fmtDateTime(r.at)}>
+                  {fmtDateTime(r.at)}
+                </time>
+              }
+            >
               {r.excerpt && <p>{r.excerpt}</p>}
-              <ul className="code-person-band__list">
+              <ul className="code-rail__people" aria-label="Who heard">
                 {r.recipients.map((who) => (
                   <li key={who.handle}>
-                    {seatBadge(who.handle).name}{" "}
-                    <span className="muted">· {codeReasonPhrase(who.reason, "about")}</span>
+                    <Face who={who.handle} />
+                    <span className="code-rail__person">
+                      <span className="code-rail__name">{seatBadge(who.handle).name}</span>
+                      <span className="code-rail__note">
+                        {codeReasonPhrase(who.reason, "about")}
+                      </span>
+                    </span>
                     {who.addressed && (
                       <Tag size="sm" appearance="outline">
                         asked
@@ -221,9 +258,9 @@ export function Notified({ change }: { change: CodeChangeDetail }) {
                   </li>
                 ))}
               </ul>
-            </li>
+            </TimelineCard>
           ))}
-        </ol>
+        </TimelineList>
         {read.data?.next && <p className="muted">Older records are past this page.</p>}
       </Stack>
     </QueryState>

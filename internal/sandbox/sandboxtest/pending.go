@@ -20,6 +20,7 @@ package sandboxtest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,6 +84,12 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
+		{"AJobsMeasureIsItsOwnOrCarriedAlongItsCopy", testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy},
+		{"AMeasureLandsWhereTheEndIsAlreadyRecorded", testAMeasureLandsWhereTheEndIsAlreadyRecorded},
+		{"AJobsCountIsItsOwnReadsAndNeverCarried", testAJobsCountIsItsOwnReadsAndNeverCarried},
+		{"ACountLandsWhereTheEndIsAlreadyRecorded", testACountLandsWhereTheEndIsAlreadyRecorded},
+		{"ALaunchRecordsWhatTheBriefItHandedLeftOut", testALaunchRecordsWhatTheBriefItHandedLeftOut},
+		{"TheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch", testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch},
 		{"AResumedTurnsCarryIsItsClaimsOwn", testAResumedTurnsCarryIsItsClaimsOwn},
 		{"ALaunchARowsNewerLeaseOutranksIsRefused", testALaunchARowsNewerLeaseOutranksIsRefused},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
@@ -107,6 +114,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AStopOfAJobACollectionReadIsRefused", testAStopOfAJobACollectionReadIsRefused},
 		{"AJobKeepsTheInstantItWasFirstCollected", testAJobKeepsTheInstantItWasFirstCollected},
 		{"AReleaseCountsAFailedResumeOntoTheJob", testAReleaseCountsAFailedResumeOntoTheJob},
+		{"ARefusedRelaunchsWindowStaysOnItsJobUntilTheNextLaunch", testARefusedRelaunchsWindowStaysOnItsJobUntilTheNextLaunch},
 		{"ARefusedRelaunchIsAnError", testARefusedRelaunchIsAnError},
 		{"ANewerLeasesEndingIsStillASeatNotHeld", testANewerLeasesEndingIsStillASeatNotHeld},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
@@ -213,6 +221,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
 		{"ListRunsListsEveryStatus", testListRunsListsEveryStatus},
 		{"ARunRowCarriesItsRepositoriesAndFloor", testARunRowCarriesItsRepositoriesAndFloor},
+		{"AnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns", testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns},
 	}
 	raw = append(raw, noteRawCases...)
 	raw = append(raw, bytesRawCases...)
@@ -477,7 +486,7 @@ func testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands(t *testing.T, s sa
 	mustClaim(t, s, "t-ended")
 	mark := func(job string, end sandbox.HarnessEnd) bool {
 		t.Helper()
-		ok, err := s.MarkHarnessEnd(ctx, "t-ended", job, end)
+		ok, err := s.MarkHarnessEnd(ctx, "t-ended", job, sandbox.EndRead{End: end})
 		if err != nil {
 			t.Fatalf("MarkHarnessEnd(%s, %q): %v", job, end, err)
 		}
@@ -502,14 +511,15 @@ func testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands(t *testing.T, s sa
 	if mark(launch, sandbox.HarnessEndOwnRun) || recorded() != sandbox.HarnessEndCutOff {
 		t.Errorf("an own run was recorded over a cut-off end: the record says %q", recorded())
 	}
-	if _, err := s.MarkHarnessEnd(ctx, "t-ended", launch, "saved"); err == nil {
+	if _, err := s.MarkHarnessEnd(ctx, "t-ended", launch, sandbox.EndRead{End: "saved"}); err == nil {
 		t.Error("an end this build does not know was taken")
 	}
 	mustBeginLaunch(t, s, run("t-ended"))
 	if got := recorded(); got != "" {
 		t.Errorf("the next job's record says %q, want nothing said", got)
 	}
-	if ok, err := s.MarkHarnessEnd(ctx, "t-none", "job-1", sandbox.HarnessEndCutOff); err != nil || ok {
+	if ok, err := s.MarkHarnessEnd(ctx, "t-none", "job-1", sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		ok {
 		t.Errorf("an end of a run with no record = %v, %v", ok, err)
 	}
 }
@@ -528,7 +538,8 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 	ctx := t.Context()
 	const turn = "t-ended-writes"
 	launch := mustLaunched(t, s, run(turn))
-	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, sandbox.HarnessEndCutOff); err != nil || !ok {
+	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		!ok {
 		t.Fatalf("MarkHarnessEnd = %v, %v", ok, err)
 	}
 	check := func(step string) {
@@ -561,6 +572,522 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 	mustBeginLaunch(t, s, run(turn))
 	if got := mustGet(t, s, turn).Launch.HarnessEnd; got != "" {
 		t.Errorf("the next launch's job reads %q, the job before's end, want nothing said", got)
+	}
+}
+
+// A JOB'S MEASURE IS ITS OWN, OR CARRIED ALONG ITS COPY. The read that collects a
+// job records what the newest request of the session its box ran carried, beside
+// how its harness ended, by the copy's lineage: a request the job's own run
+// made is the job's own measure, of that job; an earlier request of the session
+// it took up is the measure the record carried where its figure is the same and
+// the box did not say it started a session of its own, and else the session's,
+// whose job is not known; none keeps what the record
+// carried, the measure of the session its launch handed its run, unless its box
+// said it started a session of its own, whose figure the carried one never was.
+// And every write of the job's record after it writes it back as it read it,
+// under its own key, until the next launch's record, which starts with none.
+//
+// Mutation: invert any of the four, record a carried figure as the job's own
+// request, or rebuild the job's record in a write that is not a relaunch's, and
+// a check goes red.
+func testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy(t *testing.T, s sandbox.PendingStore) {
+	carried := &sandbox.SessionMeasure{Tokens: 61000, Source: sandbox.MeasureCapture, Launch: "job-earlier"}
+	// launched opens turn's job, its attach naming its command and the measure
+	// its launch carried, and claims it, as its collection is made on a claim.
+	launched := func(t *testing.T, turn string) (string, sandbox.PendingRun) {
+		t.Helper()
+		launch := mustLaunched(t, s, run(turn))
+		if err := s.AttachSandbox(t.Context(), turn, sandbox.BoxRef{SandboxID: "box-" + turn, CommandID: "cmd-" + turn,
+			Brief: sandbox.BriefContinued, Context: carried}, sandbox.Fence{}); err != nil {
+			t.Fatalf("the attach that names the job's command: %v", err)
+		}
+		if got := mustGet(t, s, turn).Launch.Context; !sameMeasure(got, carried) {
+			t.Fatalf("the attach recorded the measure %+v, want the one its launch carried, %+v", got, carried)
+		}
+		return launch, mustClaim(t, s, turn)
+	}
+	for name, tc := range map[string]struct {
+		turn    string
+		started sandbox.SessionStart
+		read    sandbox.RequestMeasure
+		want    func(launch string) *sandbox.SessionMeasure
+	}{
+		"a request the job's own run made": {turn: "t-measure-own",
+			read: sandbox.RequestMeasure{Tokens: 4320, Own: true},
+			want: func(launch string) *sandbox.SessionMeasure {
+				return &sandbox.SessionMeasure{Tokens: 4320, Source: sandbox.MeasureRequest, Launch: launch}
+			},
+		},
+		"an earlier request of the session, the figure carried": {turn: "t-measure-carried",
+			read: sandbox.RequestMeasure{Tokens: 61000},
+			want: func(string) *sandbox.SessionMeasure { return carried },
+		},
+		"an earlier request of the session its box started, the carried figure by chance": {
+			turn: "t-measure-fresh-earlier", started: sandbox.SessionStartFresh,
+			read: sandbox.RequestMeasure{Tokens: 61000},
+			want: func(string) *sandbox.SessionMeasure {
+				return &sandbox.SessionMeasure{Tokens: 61000, Source: sandbox.MeasureSession}
+			},
+		},
+		"an earlier request of the session, another figure": {turn: "t-measure-session",
+			read: sandbox.RequestMeasure{Tokens: 70000},
+			want: func(string) *sandbox.SessionMeasure {
+				return &sandbox.SessionMeasure{Tokens: 70000, Source: sandbox.MeasureSession}
+			},
+		},
+		"no request, the box having said nothing": {turn: "t-measure-unsaid",
+			want: func(string) *sandbox.SessionMeasure { return carried },
+		},
+		"no request, the box having taken the session up": {turn: "t-measure-continued",
+			started: sandbox.SessionStartContinued,
+			want:    func(string) *sandbox.SessionMeasure { return carried },
+		},
+		"no request, the box having started a session of its own": {turn: "t-measure-fresh",
+			started: sandbox.SessionStartFresh,
+			want:    func(string) *sandbox.SessionMeasure { return nil },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			turn := tc.turn
+			launch, claimed := launched(t, turn)
+			if tc.started != "" {
+				if ok, err := s.MarkSessionStart(ctx, turn, launch, tc.started); err != nil || !ok {
+					t.Fatalf("MarkSessionStart = %v, %v", ok, err)
+				}
+			}
+			if _, err := s.MarkHarnessEnd(ctx, turn, launch, sandbox.EndRead{End: sandbox.HarnessEndOwnRun,
+				Request: tc.read}); err != nil {
+				t.Fatalf("MarkHarnessEnd: %v", err)
+			}
+			want := tc.want(launch)
+			check := func(step string) {
+				t.Helper()
+				got := mustGet(t, s, turn).Launch.Context
+				if !sameMeasure(got, want) {
+					t.Errorf("after %s the job's record holds the measure %+v, want %+v", step, got, want)
+				}
+			}
+			check("the read that collected the job")
+			mustRelease(t, s, claimed)
+			check("the release of its claim")
+			if err := s.SetStatus(ctx, turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+				t.Fatal(err)
+			}
+			check("a status write")
+			if _, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+				Call: sandbox.BridgeCall{Name: "read_page"}}); err != nil {
+				t.Fatal(err)
+			}
+			check("a bridged call")
+			park(t, s, turn)
+			check("a park")
+			mustBeginLaunch(t, s, run(turn))
+			if got := mustGet(t, s, turn).Launch.Context; got != nil {
+				t.Errorf("the next launch's job reads the measure %+v, the job before's, want none", got)
+			}
+		})
+	}
+}
+
+// A JOB'S COUNT IS ITS OWN READS', AND NEVER CARRIED. The read that collects a job
+// records what Claude Code counts the copy its box holds at beside how its harness
+// ended: the read's count wherever it made one, a mark among them, so a later
+// read that could not bound the copy replaces an earlier bound; the record's own
+// where a read made none; a mark longer than a record carries written as
+// unread; and a restart longer than a uuid's written as none read and the count
+// as unread whatever its mark, as the read of a thread whose newest restart's
+// uuid does not read writes it, so a record never keeps a mark that leaves the
+// identity known beside no identity. Every write of the job's record after it
+// keeps it, and the next launch's record starts with none: a count is the read
+// of this job's copy, never a lineage's.
+//
+// Mutation: carry the count through the relaunch's reset, write a mark or a
+// restart past its bound whole, keep a marked count's mark beside the restart
+// its bound drops, or keep an earlier bound over a later mark, and a check goes
+// red.
+func testAJobsCountIsItsOwnReadsAndNeverCarried(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-count-own"
+	launch := mustLaunched(t, s, run(turn))
+	claimed := mustClaim(t, s, turn)
+	bound := &sandbox.ResumedCount{Tokens: 42_000, Window: 200_000, Restart: new("u-1")}
+	long := strings.Repeat("u", sandbox.RestartIDMaxBytes+1)
+	mark := func(read *sandbox.ResumedCount) {
+		t.Helper()
+		if _, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndOwnRun,
+			Count: read}); err != nil {
+			t.Fatalf("MarkHarnessEnd: %v", err)
+		}
+	}
+	check := func(step string, want *sandbox.ResumedCount) {
+		t.Helper()
+		if got := mustGet(t, s, turn).Launch.ResumedCount; !sameCount(got, want) {
+			t.Errorf("after %s the job's record holds the count %+v, want %+v", step, got, want)
+		}
+	}
+	mark(bound)
+	check("the read that collected the job", bound)
+	mark(nil)
+	check("a read that made no count", bound)
+	mark(&sandbox.ResumedCount{Mark: sandbox.CountMedia, Restart: new(long)})
+	check("a marked read naming a restart past its bound", &sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	mark(bound)
+	mark(&sandbox.ResumedCount{Tokens: 42_000, Restart: new(long)})
+	check("a read naming a restart past its bound", &sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	mark(&sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	check("a later read that could not bound the copy", &sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	mark(&sandbox.ResumedCount{Mark: sandbox.CountMark(strings.Repeat("m", 33))})
+	check("a read naming a mark past its bound", &sandbox.ResumedCount{Mark: sandbox.CountUnread})
+	mark(bound)
+	mustRelease(t, s, claimed)
+	check("the release of its claim", bound)
+	if err := s.SetStatus(t.Context(), turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	check("a status write", bound)
+	park(t, s, turn)
+	check("a park", bound)
+	mustBeginLaunch(t, s, run(turn))
+	check("the next launch's begin", nil)
+}
+
+// A COUNT LANDS WHERE THE END IS ALREADY RECORDED. The read that collects a job
+// records its harness's end, its newest request's measure and its count in one
+// write, which lands where any changes: a collection made again, whose end the
+// first read recorded already, brings a count the first had none of. The same
+// read again changes nothing.
+//
+// Mutation: write only where the end or the measure changes, and the count is
+// never recorded.
+func testACountLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-count-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		!ok {
+		t.Fatalf("the first read's record = %v, %v", ok, err)
+	}
+	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("")}
+	read := sandbox.EndRead{End: sandbox.HarnessEndCutOff, Count: count}
+	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || !ok {
+		t.Fatalf("a read bringing a count beside the end recorded = %v, %v, want it written", ok, err)
+	}
+	if got := mustGet(t, s, turn).Launch.ResumedCount; !sameCount(got, count) {
+		t.Errorf("the job's record holds the count %+v, want %+v", got, count)
+	}
+	if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || ok {
+		t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+	}
+}
+
+// sameCount reports whether a and b say the same of a session's count, a nil one
+// none at all.
+func sameCount(a, b *sandbox.ResumedCount) bool {
+	switch {
+	case a == nil || b == nil:
+		return a == b
+	case (a.Restart == nil) != (b.Restart == nil):
+		return false
+	case a.Restart != nil && *a.Restart != *b.Restart:
+		return false
+	}
+	return a.Tokens == b.Tokens && a.Mark == b.Mark && a.Window == b.Window
+}
+
+// sameMeasure reports whether a and b say the same of a session's measure: its
+// figure, where it came from and whose it is, a nil one none at all.
+func sameMeasure(a, b *sandbox.SessionMeasure) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Tokens == b.Tokens && a.Source == b.Source && a.Launch == b.Launch
+}
+
+// A MEASURE LANDS WHERE THE END IS ALREADY RECORDED. The read that collects a job
+// records its harness's end and its newest request's measure in one write, which
+// lands where either changes: a collection made again, whose end the first read
+// recorded already, brings a measure the first had none of, and a test of the end
+// alone would drop it. The same end and measure again change nothing.
+//
+// Mutation: write only where the end changes, and the measure is never recorded.
+func testAMeasureLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-measure-after-end"
+	launch := mustLaunched(t, s, run(turn))
+	mustClaim(t, s, turn)
+	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil ||
+		!ok {
+		t.Fatalf("the first read's record = %v, %v", ok, err)
+	}
+	read := sandbox.EndRead{End: sandbox.HarnessEndCutOff, Request: sandbox.RequestMeasure{Tokens: 4320, Own: true}}
+	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, read); err != nil || !ok {
+		t.Fatalf("a read bringing a measure beside the end recorded = %v, %v, want it written", ok, err)
+	}
+	if got := mustGet(t, s, turn).Launch; got.HarnessEnd != sandbox.HarnessEndCutOff ||
+		!sameMeasure(got.Context, &sandbox.SessionMeasure{Tokens: 4320, Source: sandbox.MeasureRequest, Launch: launch}) {
+		t.Errorf("the job's record says %q and holds the measure %+v, want the cut-off end and the job's own "+
+			"request", got.HarnessEnd, got.Context)
+	}
+	if ok, err := s.MarkHarnessEnd(ctx, turn, launch, read); err != nil || ok {
+		t.Errorf("the same read again = %v, %v, want nothing written", ok, err)
+	}
+}
+
+// A LAUNCH RECORDS WHAT THE BRIEF IT HANDED LEFT OUT, AND EVERY WRITE OF THE
+// JOB'S RECORD KEEPS IT. The reads of the round the brief a job's run read
+// counted without listing them, and those of the fresh brief its box falls back
+// to beside a brief that continues a session, are written with the brief by the
+// attach that names the job's command (never by the attach before the job,
+// which names none and unsays nothing), and every write of the record after it
+// writes them back as it read them, under their own keys: a status, a lease, a
+// park, a bridged call, a claim and its release, each of which comes before the
+// relaunch that reads them. Only the next launch, which replaces the job's
+// record whole, says none again.
+//
+// Mutation: drop either set from the attach, record them on the attach before
+// the job, or leave them off the wire, and a check goes red.
+func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-omitted"
+	mustBeginLaunch(t, s, run(turn))
+	if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-omitted", BriefOmitted: []int{1},
+		FreshOmitted: []int{2}}, sandbox.Fence{}); err != nil {
+		t.Fatalf("the attach before the job: %v", err)
+	}
+	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted) != 0 {
+		t.Errorf("the attach before the job recorded %v and %v left out, want none: it names no command",
+			got.BriefOmitted, got.FreshOmitted)
+	}
+	if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-omitted", CommandID: "cmd-omitted",
+		Brief: sandbox.BriefContinued, BriefOmitted: []int{13, 14}, FreshOmitted: []int{15}},
+		sandbox.Fence{}); err != nil {
+		t.Fatalf("the attach that names the job's command: %v", err)
+	}
+	check := func(step string) {
+		t.Helper()
+		got := mustGet(t, s, turn).Launch
+		if !slices.Equal(got.BriefOmitted, []int{13, 14}) || !slices.Equal(got.FreshOmitted, []int{15}) {
+			t.Errorf("after %s the job's record says its briefs left out %v and %v, want [13 14] and [15]",
+				step, got.BriefOmitted, got.FreshOmitted)
+		}
+	}
+	check("the attach that names the job's command")
+	if suspended, err := s.MarkSuspended(ctx, turn, suspension()); err != nil || !suspended {
+		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
+	}
+	check("the park of its launch")
+	if err := s.SetStatus(ctx, turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	check("a status write")
+	if _, err := s.ClaimOwnership(ctx, turn, "node-b", 2); err != nil {
+		t.Fatal(err)
+	}
+	check("a lease")
+	launch := mustGet(t, s, turn).LaunchID
+	if _, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "read_page"}}); err != nil {
+		t.Fatal(err)
+	}
+	check("a bridged call")
+	claimed := mustClaim(t, s, turn)
+	check("the claim")
+	mustRelease(t, s, claimed)
+	check("its release")
+	park(t, s, turn)
+	check("a park on a question")
+	mustBeginLaunch(t, s, run(turn))
+	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted) != 0 {
+		t.Errorf("the next launch's job reads %v and %v left out, the job before's, want none", got.BriefOmitted,
+			got.FreshOmitted)
+	}
+}
+
+// THE TURN'S LEADS ARE KEPT BESIDE ITS ROW AND OUTLIVE EVERY RELAUNCH. What
+// carried each session of the turn on is kept beside the run's record, in a
+// part of its own (sandbox.PendingStore.Leads): the attach that names a job's
+// command takes the leads its brief opened with of its own into it, each once,
+// numbered as taken, held to their share with the oldest dropped first and
+// still counted, and marks on the job's record, by those numbers, every lead
+// its brief told (sandbox.LaunchRecord.LeadMarks). The record keeps the marks
+// and the count of the leads taken, never a lead's bytes. The reset that opens
+// the next job clears the job's marks with the rest of its record and leaves
+// the leads as they are, the very bytes and every key a later build added to
+// one, and the count with them, whatever the reset's run carries.
+//
+// Mutation: clear the part at a reset or keep the job before's marks there,
+// write a lead back without its carried keys, lose the cut, put a lead's bytes
+// on the record, or let a reset drop the count, and a check goes red.
+func testTheTurnsLeadsAreKeptBesideItsRowAndOutliveEveryRelaunch(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-leads"
+	// A THIRD OF THE SHARE EACH, so the third job's own lead drops the first.
+	lead := func(job string) sandbox.KeptLead {
+		return sandbox.KeptLead{Kind: sandbox.LeadKindAnswer, Job: job, Seq: 1, Round: 1,
+			Sealed: bytes.Repeat([]byte("s"), sandbox.MaxKeptLeadBytes/3),
+			Extra:  map[string]json.RawMessage{"later": json.RawMessage(`"a later build's key"`)}}
+	}
+	// attach is the attach that names the running job's command, its brief's
+	// leads named for the run and the job as the row names them.
+	attach := func(own []sandbox.KeptLead, told []sandbox.LeadRef) sandbox.PendingRun {
+		t.Helper()
+		row := mustGetIn(ctx, t, s, turn)
+		if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-leads", CommandID: "cmd-" + row.LaunchID,
+			Brief: sandbox.BriefContinued, Leads: sandbox.BriefLeads{Run: row.LeadsRun, Job: row.LaunchID,
+				Counted: row.LeadsAppended, Own: own, Told: told}}, sandbox.Fence{}); err != nil {
+			t.Fatalf("the attach that names %s's command: %v", row.LaunchID, err)
+		}
+		return mustGetIn(ctx, t, s, turn)
+	}
+	read := func(row sandbox.PendingRun) sandbox.TurnLeads {
+		t.Helper()
+		leads, err := s.Leads(ctx, row)
+		if err != nil {
+			t.Fatalf("Leads: %v", err)
+		}
+		return leads
+	}
+	jobs := func(leads []sandbox.KeptLead) (names []string, numbers []int) {
+		for _, kept := range leads {
+			names, numbers = append(names, kept.Job), append(numbers, kept.Appended)
+		}
+		return names, numbers
+	}
+	asWritten := func(t *testing.T, kept sandbox.KeptLead, job string) {
+		t.Helper()
+		if !bytes.Equal(kept.Sealed, lead(job).Sealed) || string(kept.Extra["later"]) != `"a later build's key"` {
+			t.Errorf("%s's lead is kept re-made: %d bytes sealed, carried keys %v", job, len(kept.Sealed),
+				kept.Extra)
+		}
+	}
+	mustBeginLaunch(t, s, run(turn))
+	before := mustGet(t, s, turn)
+	if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-leads", Leads: sandbox.BriefLeads{
+		Run: before.LeadsRun, Job: before.LaunchID, Own: []sandbox.KeptLead{lead("job-0")}}},
+		sandbox.Fence{}); err != nil {
+		t.Fatalf("the attach before the job: %v", err)
+	}
+	if got := read(mustGet(t, s, turn)); len(got.Kept) != 0 || got.Cut != 0 {
+		t.Errorf("the attach before the job kept leads %+v with %d cut, want none: it names no command", got.Kept,
+			got.Cut)
+	}
+	first := attach([]sandbox.KeptLead{lead("job-1")}, nil)
+	if names, numbers := jobs(read(first).Kept); !slices.Equal(names, []string{"job-1"}) ||
+		!slices.Equal(numbers, []int{1}) || !slices.Equal(first.Launch.LeadMarks, []int{1}) ||
+		first.LeadsAppended != 1 {
+		t.Fatalf("the first job keeps leads %v numbered %v, its record marks %v and counts %d; want job-1's, "+
+			"numbered 1, marked and counted", names, numbers, first.Launch.LeadMarks, first.LeadsAppended)
+	}
+	sealed := base64.StdEncoding.EncodeToString(lead("job-1").Sealed)
+	if raw, err := json.Marshal(first); err != nil || bytes.Contains(raw, []byte(sealed)) {
+		t.Errorf("the job's record holds the bytes of the lead it marks (%v): it keeps the marks and the count "+
+			"alone", err)
+	}
+	next := run(turn)
+	next.Continues = true
+	mustBeginLaunch(t, s, next)
+	reset := mustGet(t, s, turn)
+	if len(reset.Launch.LeadMarks) != 0 || reset.LeadsAppended != 1 || reset.LeadsRun != first.LeadsRun {
+		t.Fatalf("the next job's record marks %v, counts %d and names run %q for its leads; want none of the "+
+			"job before's marks, the count and the run kept (%q)", reset.Launch.LeadMarks, reset.LeadsAppended,
+			reset.LeadsRun, first.LeadsRun)
+	}
+	got := read(reset)
+	if names, _ := jobs(got.Kept); !slices.Equal(names, []string{"job-1"}) || got.Cut != 0 {
+		t.Fatalf("after the reset the turn's leads read %v with %d cut, want job-1's, kept as they were", names,
+			got.Cut)
+	}
+	asWritten(t, got.Kept[0], "job-1")
+	second := attach([]sandbox.KeptLead{lead("job-2")}, []sandbox.LeadRef{{Job: "job-1", Kind: sandbox.LeadKindAnswer}})
+	if names, numbers := jobs(read(second).Kept); !slices.Equal(names, []string{"job-1", "job-2"}) ||
+		!slices.Equal(numbers, []int{1, 2}) || !slices.Equal(second.Launch.LeadMarks, []int{1, 2}) ||
+		second.LeadsAppended != 2 {
+		t.Errorf("the second job keeps leads %v numbered %v, its record marks %v and counts %d; want job-1's "+
+			"told again and its own, both marked", names, numbers, second.Launch.LeadMarks, second.LeadsAppended)
+	}
+	// A SEND-BACK OPENS A NEW ROUND AND KEEPS THE TURN'S LEADS ALL THE SAME.
+	mustBeginLaunch(t, s, run(turn))
+	third := attach([]sandbox.KeptLead{lead("job-3")}, nil)
+	got = read(third)
+	if names, numbers := jobs(got.Kept); !slices.Equal(names, []string{"job-2", "job-3"}) ||
+		!slices.Equal(numbers, []int{2, 3}) || got.Cut != 1 || !slices.Equal(third.Launch.LeadMarks, []int{3}) ||
+		third.LeadsAppended != 3 {
+		t.Errorf("the third job keeps leads %v numbered %v with %d cut, its record marks %v and counts %d; want "+
+			"job-1 dropped and counted, job-2 told by no brief of its, and its own marked", names, numbers,
+			got.Cut, third.Launch.LeadMarks, third.LeadsAppended)
+	}
+	for i, job := range []string{"job-2", "job-3"} {
+		if i < len(got.Kept) {
+			asWritten(t, got.Kept[i], job)
+		}
+	}
+	mustBeginLaunch(t, s, next)
+	fourth := mustGet(t, s, turn)
+	if got := read(fourth); len(got.Kept) != 2 || got.Cut != 1 || fourth.LeadsAppended != 3 ||
+		len(fourth.Launch.LeadMarks) != 0 {
+		t.Errorf("the fourth job reads %d leads with %d cut, its record counting %d and marking %v; want the two "+
+			"and the cut kept, the count kept and no mark", len(got.Kept), got.Cut, fourth.LeadsAppended,
+			fourth.Launch.LeadMarks)
+	}
+}
+
+// AN EARLIER RUN'S LEADS ARE NONE OF THE TURN'S NEXT RUN'S. A turn's record can
+// be removed and created again, and the store may leave a part of the earlier
+// run beside the new record (coord's removeRunPart leaves a part beside a
+// record created again): the leads part names the run it is of, and the record
+// the run its leads are kept for (sandbox.PendingRun.LeadsRun), so a part of
+// another run reads as none of this one's, every lead the record counts said as
+// not kept; and the record's next attach that takes a lead replaces it, its
+// own lead numbered past every lead the record counted, so the leads the
+// replaced part took with it are still counted.
+//
+// Mutation: read a part whatever run it names, take into another run's part,
+// or start the replacing part's numbers at none, and a check goes red.
+func testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx := t.Context()
+	const turn = "t-leads-earlier"
+	attach := func(job string) sandbox.PendingRun {
+		t.Helper()
+		row := mustGetIn(ctx, t, s, turn)
+		own := sandbox.KeptLead{Kind: sandbox.LeadKindAnswer, Job: row.LaunchID, Seq: row.LaunchSeq, Round: 1,
+			Sealed: []byte(job + "'s answer")}
+		if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-earlier", CommandID: "cmd-" + job,
+			Brief: sandbox.BriefContinued, Leads: sandbox.BriefLeads{Run: row.LeadsRun, Job: row.LaunchID,
+				Counted: row.LeadsAppended, Own: []sandbox.KeptLead{own}}}, sandbox.Fence{}); err != nil {
+			t.Fatalf("the attach that names %s's command: %v", job, err)
+		}
+		return mustGetIn(ctx, t, s, turn)
+	}
+	mustBeginLaunch(t, s, run(turn))
+	first := attach("job-1")
+	// A PART OF ANOTHER RUN OF THE TURN, as a record removed and created again
+	// can find beside it.
+	earlier, err := json.Marshal(map[string]any{"run": "an-earlier-run", "appends": 1,
+		"leads": []sandbox.KeptLead{{Kind: sandbox.LeadKindAnswer, Job: "job-earlier", Seq: 1, Round: 1,
+			Appended: 1, Sealed: []byte("an earlier run's answer")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := runs.MutateSandboxRunPart(ctx, turn, coord.RunLeads,
+		func(coord.Record, bool) ([]byte, error) { return earlier, nil })
+	if err != nil || !ok {
+		t.Fatalf("staging another run's leads beside the record: %v, %v", ok, err)
+	}
+	got, err := s.Leads(ctx, first)
+	if err != nil || len(got.Kept) != 0 || got.Cut != 1 {
+		t.Errorf("beside a part of another run the record reads leads %+v with %d cut, %v; want none of them, "+
+			"and the one lead it counts said as not kept", got.Kept, got.Cut, err)
+	}
+	next := run(turn)
+	next.Continues = true
+	mustBeginLaunch(t, s, next)
+	second := attach("job-2")
+	got, err = s.Leads(ctx, second)
+	if err != nil || len(got.Kept) != 1 || got.Kept[0].Job != second.LaunchID || got.Kept[0].Appended != 2 ||
+		got.Cut != 1 || !slices.Equal(second.Launch.LeadMarks, []int{2}) || second.LeadsAppended != 2 {
+		t.Errorf("the next attach reads leads %+v with %d cut, its record marking %v and counting %d, %v; want "+
+			"its own lead alone, numbered 2 past the one the replaced part took with it, which is counted",
+			got.Kept, got.Cut, second.Launch.LeadMarks, second.LeadsAppended, err)
 	}
 }
 
@@ -625,7 +1152,15 @@ func testAResumedTurnsCarryIsItsClaimsOwn(t *testing.T, s sandbox.PendingStore) 
 
 func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.PendingRun {
 	t.Helper()
-	got, ok, err := s.Get(t.Context(), turnID)
+	return mustGetIn(t.Context(), t, s, turnID)
+}
+
+// mustGetIn is mustGet under ctx, for a closure that holds its case's context:
+// the read goes under the context the case threads to every other call it
+// makes, never one it makes of its own.
+func mustGetIn(ctx context.Context, t *testing.T, s sandbox.PendingStore, turnID string) sandbox.PendingRun {
+	t.Helper()
+	got, ok, err := s.Get(ctx, turnID)
 	if err != nil {
 		t.Fatalf("get %s: %v", turnID, err)
 	}
@@ -1771,6 +2306,70 @@ func testAReleaseCountsAFailedResumeOntoTheJob(t *testing.T, s sandbox.PendingSt
 	if got := mustGet(t, s, "t1"); got.Launch.ResumeFailures != 0 ||
 		!got.Launch.ResumeFailingSince.IsZero() {
 		t.Fatal("a relaunch's job inherited the failed resumes of the job before it")
+	}
+}
+
+// A REFUSED RELAUNCH'S WINDOW STAYS ON ITS JOB UNTIL THE NEXT LAUNCH. A resume
+// whose relaunch the seat's budget refused below its floor is handed back
+// naming the window it was refused in, and the release counts that onto the
+// job's record, for the turn's next relaunch to wait for its floor no longer
+// than that window: written by a release that names one, held or not (an
+// answer's wait is its own series', with no hold on the row), replaced by a
+// later one, KEPT by a release that names none, since a resume that failed in
+// between tried no relaunch, and never a window that is no window. The
+// relaunch that goes out is the one it was kept for, and its job's record
+// starts without it.
+func testARefusedRelaunchsWindowStaysOnItsJobUntilTheNextLaunch(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	day := sandbox.BudgetWindow{Period: "day", Label: "2026-09-23"}
+	held := releaseOf(mustClaim(t, s, "t1"))
+	// PAST ITS INSTANT, so the next claim takes the run: a hold that still
+	// stands refuses every claim (testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts).
+	held.Hold = &sandbox.Refusal{Condition: "budget", Until: time.Now().UTC().Add(-time.Minute), Window: day}
+	held.RelaunchRefusedIn = day
+	if released, err := s.ReleaseClaim(ctx, "t1", held); err != nil || !released {
+		t.Fatalf("release t1 held = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != day {
+		t.Fatalf("a held release left the job's record naming %+v, want the window %+v its relaunch was "+
+			"refused in", got.Launch.RelaunchRefusedIn, day)
+	}
+	failed := releaseOf(mustClaim(t, s, "t1"))
+	failed.ResumeFailedAt = base
+	if released, err := s.ReleaseClaim(ctx, "t1", failed); err != nil || !released {
+		t.Fatalf("release t1 failed = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != day {
+		t.Fatalf("a release naming no window left %+v, want the earlier %+v kept for the relaunch it has not "+
+			"tried yet", got.Launch.RelaunchRefusedIn, day)
+	}
+	next := sandbox.BudgetWindow{Period: "week", Label: "2026-W40"}
+	turned := releaseOf(mustClaim(t, s, "t1"))
+	turned.RelaunchRefusedIn = next
+	if released, err := s.ReleaseClaim(ctx, "t1", turned); err != nil || !released {
+		t.Fatalf("release t1 turned back = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != next || got.HeldFor != "" {
+		t.Fatalf("a release naming a window and no hold left %+v held for %q, want %+v and no hold",
+			got.Launch.RelaunchRefusedIn, got.HeldFor, next)
+	}
+	for _, none := range []sandbox.BudgetWindow{{Period: "day", Label: "2026-02-30"},
+		{Period: "fortnight", Label: "2026-09-23"}, {Period: "day", Label: "2026-W40"}} {
+		bogus := releaseOf(mustClaim(t, s, "t1"))
+		bogus.RelaunchRefusedIn = none
+		if released, err := s.ReleaseClaim(ctx, "t1", bogus); err != nil || !released {
+			t.Fatalf("release t1 naming %+v = %v, %v", none, released, err)
+		}
+		if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != next {
+			t.Fatalf("a release naming %+v, which is no window, left %+v, want %+v kept", none,
+				got.Launch.RelaunchRefusedIn, next)
+		}
+	}
+	mustLaunched(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); got.Launch.RelaunchRefusedIn != (sandbox.BudgetWindow{}) {
+		t.Fatalf("a relaunch's job inherited the window %+v the job before it was refused in",
+			got.Launch.RelaunchRefusedIn)
 	}
 }
 

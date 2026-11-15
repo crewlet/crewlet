@@ -20,6 +20,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -108,7 +109,10 @@ type slowWriter struct {
 	reloads atomic.Int32
 }
 
-func (w *slowWriter) Apply(context.Context, []byte, string, iam.Actor) error           { return nil }
+func (w *slowWriter) Apply(context.Context, []byte, string, iam.Actor) error { return nil }
+func (w *slowWriter) Disconnect(context.Context, integration.Kind, string, iam.Actor) ([]string, error) {
+	return nil, nil
+}
 func (w *slowWriter) Seat(context.Context, string) ([]byte, error)                     { return nil, nil }
 func (w *slowWriter) SetSeat(context.Context, string, []byte, string, iam.Actor) error { return nil }
 func (w *slowWriter) Reload(ctx context.Context, _ string, _ iam.Actor) error {

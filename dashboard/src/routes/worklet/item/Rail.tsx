@@ -27,6 +27,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import {
+  AvatarStack,
   Button,
   EmptyValue,
   IconButton,
@@ -58,7 +59,8 @@ import { pathOf } from "~/app/frame/objects.ts";
 import { SeatChip } from "~/components/common.tsx";
 import { AssignButton } from "~/components/writes.tsx";
 import { PriorityMark, StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
-import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
+import { andList } from "~/lib/words.ts";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -1321,10 +1323,23 @@ export function Cost({ detail }: { detail: WorkItemDetail }) {
 }
 
 /**
+ * How many watchers' faces the rail draws before it counts the rest: the
+ * kit's own default for a stack, the most a glance at who reads.
+ */
+const WATCHERS_SHOWN = 4;
+
+/**
  * Who follows the task, and — for the reader — following it or not.
  *
  * MUTED IS NOT THE SAME AS NOT WATCHING, and both travel: a set that carried
  * only the difference would silently re-add everybody on the next mention.
+ *
+ * LAID OUT AS THE RAIL'S OTHER SECTIONS ARE: the label over its content, and
+ * the content one row, who watches at its start and the reader's own press
+ * at its end. WHO WATCHES IS THE KIT'S STACK, one size and one overlap for a
+ * person and an agent alike, named once for a screen reader and, for the
+ * pointer, by its title. Drawn face by face in inline spans, a person's
+ * initials sat lower than an agent's character beside them.
  */
 function Watching({ detail, chrome }: { detail: WorkItemDetail; chrome: RowChrome }) {
   const item = detail.task;
@@ -1339,43 +1354,51 @@ function Watching({ detail, chrome }: { detail: WorkItemDetail; chrome: RowChrom
   const me = viewer.owner;
   const mine = me !== "" && watchers.includes(me) && !muted.has(me);
   const seatName = chrome.seatName ?? ((h: string) => h);
+  const names = andList(watchers.map((h) => `${seatName(h)}${muted.has(h) ? " (muted)" : ""}`));
   return (
     <section className="task-rail-section task-watching" aria-label="Watching">
       <span className="task-lbl">Watching</span>
-      <span className="task-watchers">
+      <div className="task-watching-row">
         {watchers.length === 0 ? (
           <span className="t-caption">Nobody</span>
         ) : (
-          watchers.map((handle) => (
-            <span key={handle} title={`${seatName(handle)}${muted.has(handle) ? " (muted)" : ""}`}>
-              <SeatAvatar
-                name={seatName(handle)}
-                kind={chrome.seatKind?.(handle) === "human" ? "human" : "agent"}
-                avatar={chrome.seatAvatar?.(handle)}
-                size="xs"
-              />
-            </span>
-          ))
+          <AvatarStack
+            members={watchers.map((handle) => ({
+              id: handle,
+              ...seatBadge(
+                seatName(handle),
+                chrome.seatKind?.(handle),
+                chrome.seatAvatar?.(handle),
+              ),
+            }))}
+            // THE RAIL'S FACE SIZE, as its people chips draw theirs; the kit
+            // overlaps this step by 2px, which keeps both initials clear.
+            size="xs"
+            max={WATCHERS_SHOWN}
+            label={`Watching: ${names}`}
+            title={names}
+          />
         )}
-      </span>
-      {edits && (
-        <Button
-          size="small"
-          variant="ghost"
-          leadingIcon={mine ? <EyeOffGlyph size="sm" /> : <EyeGlyph size="sm" />}
-          loading={edits.busy}
-          disabledReason={edits.can ? undefined : edits.reason}
-          onClick={() =>
-            void edits.edit(
-              { watch: !mine },
-              mine ? `Stopped watching ${item.key}` : `Watching ${item.key}`,
-              false,
-            )
-          }
-        >
-          {mine ? "Unwatch" : "Watch"}
-        </Button>
-      )}
+        {edits && (
+          <Button
+            size="small"
+            variant="ghost"
+            flush
+            leadingIcon={mine ? <EyeOffGlyph size="sm" /> : <EyeGlyph size="sm" />}
+            loading={edits.busy}
+            disabledReason={edits.can ? undefined : edits.reason}
+            onClick={() =>
+              void edits.edit(
+                { watch: !mine },
+                mine ? `Stopped watching ${item.key}` : `Watching ${item.key}`,
+                false,
+              )
+            }
+          >
+            {mine ? "Unwatch" : "Watch"}
+          </Button>
+        )}
+      </div>
       {watchers.some((h) => muted.has(h)) && (
         <span className="t-caption">
           {`Muted: ${watchers

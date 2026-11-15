@@ -107,7 +107,13 @@ test("every removal request states the entry's tag, and the removal goes through
   const onDone = vi.fn();
   render(
     <Router>
-      <RemoveDialog model={data.models[0]!} data={data} onClose={() => {}} onDone={onDone} />
+      <RemoveDialog
+        model={data.models[0]!}
+        data={data}
+        onClose={() => {}}
+        onDone={onDone}
+        onRemoved={() => {}}
+      />
     </Router>,
   );
   await screen.findByText("Ready to remove");
@@ -150,7 +156,13 @@ test.each([403, 413])(
     const onDone = vi.fn();
     render(
       <Router>
-        <RemoveDialog model={data.models[0]!} data={data} onClose={() => {}} onDone={onDone} />
+        <RemoveDialog
+          model={data.models[0]!}
+          data={data}
+          onClose={() => {}}
+          onDone={onDone}
+          onRemoved={() => {}}
+        />
       </Router>,
     );
     await screen.findByText("Ready to remove");

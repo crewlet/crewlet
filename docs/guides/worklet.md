@@ -814,6 +814,13 @@ each column into swimlanes:
 Every axis draws the absent value as its own labelled column — "nobody is
 assigned" is a question a board answers, not a row it hides.
 
+**`parent` groups on the parent task's id**, and each column is headed with
+the parent's key and title (`ENG-12 · Rotate the build keys`), read off the
+parent's own row, so a column is named even when the filter admits only the
+subtasks. The work no task holds is the "(no parent)" column. Ask it with
+`subtasks=separate`, which filters each task on its own; the default filters
+the roots and lets their subtrees ride along.
+
 **`unit` and `routing_unit` group on the team's key**, which is what every
 write stores, and each column is headed with the team's current name. Loading
 a column further takes either spelling — `group=eng` and `group=Engineering`
@@ -1487,8 +1494,10 @@ is already back. A restore of an item that is not in the trash and has nothing
 in the trash with it says there is nothing to restore.
 
 Neither is `purge`, which destroys every row on every data node and has no
-inverse. That one is `crewlet worklet purge`, with a typed confirmation and a
-required reason, and it is deliberately not a tool at all.
+inverse. That one is an administrator's own gesture, with a typed confirmation
+and a required reason: `crewlet worklet purge`, the dashboard's **Delete
+permanently** in the trash, or `POST /worklet/items/{key}/purge` on the human
+write surface. It is deliberately not a tool at all.
 
 Five of those count as a **delivery**: create, update, comment, merge and
 move. A turn woken by an assignment answers by moving the task, commenting on
@@ -1628,7 +1637,11 @@ drawn for everybody and held with that reason for anybody without it.
   screen under a name (shared, or kept to you), and a link to the whole
   inventory. Then **what narrows it**: a removable chip per narrowing, ending
   in **+ Filter** (priority by *is*, *is not* or *≥* a step, labels by *any
-  of*, *all of* or *not*). At the far end, **Show** (**Open**, **Recent**: open
+  of*, *all of* or *not*, and four dates: **Due**, **Start**, **Created** and
+  **Updated**, each by the ranges that ask its own question). A narrowing the
+  shape on screen does not apply stays as a muted chip that says so: a board
+  draws every column, so a narrowing to one is "not on a board", and the
+  calendar's own month is its due window. At the far end, **Show** (**Open**, **Recent**: open
   work and what finished this week, the board's own default, so its Done lane
   holds the week's deliveries, **Closed** and **All**) and **Group by**, each
   showing what it is set to, on a board the lanes past its edge, and the
@@ -1641,7 +1654,13 @@ drawn for everybody and held with that reason for anybody without it.
   priority, the board and the list draw every value the company declares and
   say which of them are empty, because those three are closed sets whose order
   means something; grouped on an assignee, a tag or a label they draw only the
-  values work is actually in. The trash is a filter here rather than a tab,
+  values work is actually in; grouped by **Parent**, each band is one task's
+  subtasks, headed with that task's key and title. A band that holds more
+  than its page ends in a link to the list narrowed to it, on the timeline as
+  on the list. An archived project's own Tasks lens lists its archived work,
+  which is what somebody opens a retired project to read. A view saved on a
+  team or on a person opens as its own query from the sidebar and the views
+  inventory. The trash is a filter here rather than a tab,
   which is what the engine says it is: a listing carrying `removed=true`. A
   list with nothing on it says which of three things emptied it — a narrowing
   that matched nothing, a scope with nothing in it, or a tracker nothing has
@@ -1652,6 +1671,26 @@ drawn for everybody and held with that reason for anybody without it.
   ("SWE · executing", "SWE · reviewing · round 2 of 4"), matched on the
   task the engine charges that turn to. A card's labels give way to a "+N"
   before its mark row wraps, so the token count keeps its place.
+
+  **Every task has a menu** (the ellipsis at the end of a list or table row,
+  on a board card's corner and beside a timeline row's name; a calendar day's
+  task opens its peek, which has the same menu in its header). It holds
+  **Move to project…**, **Move to trash**, and in the trash **Restore** and
+  **Delete permanently**. A move takes one top-level task and its subtasks to
+  the project you choose, re-keyed there with their old keys still opening
+  them; a subtask's entry is held, since it moves with its parent, and the
+  lead of the task's project decides it.
+  A list or a table also takes a **selection**: tick rows (Shift ticks a
+  range) and the bar over the grid moves them all to the trash, or restores
+  them all in the trash. Moving a task with subtasks asks first whether they
+  go with it (`subtree`); a task without any goes at once, and the toast that
+  says so carries **Undo**, which restores exactly what the removal took.
+  **Delete permanently** is an administrator's, one task at a time: it names
+  what is lost, asks for the reason the project's lead is told, and is made
+  by typing the task's key, which is the purge's own confirmation. The same
+  menu is on a task's own page, in the header's **More**. Everybody sees these
+  entries; whoever cannot make one sees it held, with the sentence that says
+  why, and a refusal is said in the engine's own words.
 
   **What you change here is made as you.** Drag a card — in the manual order,
   which is a project's default — to reorder it or move it to another lane
@@ -1677,7 +1716,10 @@ drawn for everybody and held with that reason for anybody without it.
   announced change has **Who this reached**: the people it woke and why. The
   three histories are read a page at a time, and **Earlier activity** reads
   further back — the merged list only ever shows a stretch of time that is
-  complete in all three. The rail ends with **what this task has cost** —
+  complete in all three. A long comment is folded behind **Show more**,
+  except the newest, and a thread of six entries or more offers **Jump to
+  latest**, so a standing task that collects a report a day opens on the
+  latest one. The rail ends with **what this task has cost** —
   turns, tokens and agent time, from the task's own counters — and its
   hand-offs against the engine's budget.
 

@@ -59,6 +59,14 @@ class InertWebSocket {
 }
 
 /** The block where it lives: under a client, the frame's session read, a router and a toaster. */
+/** The account menu's header: what the menu names as its description. */
+function headerOf(menu: HTMLElement): HTMLElement {
+  const id = menu.getAttribute("aria-describedby");
+  const header = id ? document.getElementById(id) : null;
+  expect(header, "the menu names its header as its description").not.toBeNull();
+  return header!;
+}
+
 function block(viewer: ViewerState, seatName = ""): ReactNode {
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -93,6 +101,8 @@ const nobody: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  failed: null,
+  failedRefusal: null,
   configWriter: true,
   configManagedBy: [],
   assistant: "disabled",
@@ -406,10 +416,12 @@ describe("who the block says this is", () => {
     render(block(ada, "Founder"));
     fireEvent.click(screen.getByRole("button", { name: /your menu/ }));
     const menu = await screen.findByRole("menu", { name: "Your account" });
-    const header = menu.querySelector(".crewlet-menu__header")!;
+    // THE HEADER DESCRIBES THE MENU from beside it: inside role=menu it was
+    // owned by a list that may own only items.
+    const header = headerOf(menu);
     expect(header.textContent).toBe("AccessWorklet");
-    expect(menu.getAttribute("aria-describedby")).toBe(header.id);
-    expect(menu.textContent).not.toContain("Signed in as");
+    expect(menu.contains(header)).toBe(false);
+    expect(menu.closest(".crewlet-menu")!.textContent).not.toContain("Signed in as");
     expect(header.textContent).not.toContain("ada.lovelace");
   });
 
@@ -428,7 +440,7 @@ describe("who the block says this is", () => {
     );
     fireEvent.click(row);
     const menu = await screen.findByRole("menu", { name: "Your account" });
-    const header = menu.querySelector(".crewlet-menu__header")!;
+    const header = headerOf(menu);
     expect(header.textContent).toBe("AccessAdminSigned invia API token review");
     expect(within(header as HTMLElement).getByText("via API token review")).toBeTruthy();
     cleanup();
@@ -437,7 +449,7 @@ describe("who the block says this is", () => {
     expect(person.getAttribute("title")).toBe("Your account and signing out");
     fireEvent.click(person);
     const own = await screen.findByRole("menu", { name: "Your account" });
-    expect(own.querySelector(".crewlet-menu__header")!.textContent).toBe("AccessWorklet");
+    expect(headerOf(own).textContent).toBe("AccessWorklet");
   });
 
   // THE BLOCK IS THE ACCOUNT'S ROW, so on the Account it is current as a
@@ -474,7 +486,7 @@ describe("who the block says this is", () => {
     expect(await screen.findByText("Can’t check who you are")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /your menu/ }));
     const menu = await screen.findByRole("menu", { name: "Your account" });
-    expect(within(menu).getByText("We couldn’t check who’s signed in.")).toBeTruthy();
+    expect(within(headerOf(menu)).getByText("We couldn’t check who’s signed in.")).toBeTruthy();
     expect(within(menu).getByRole("menuitem", { name: /^Account/ })).toBeTruthy();
     expect(within(menu).getByRole("menuitem", { name: "Sign out" })).toBeTruthy();
     expect(within(menu).queryByRole("menuitem", { name: /^Sign out everywhere/ })).toBeNull();

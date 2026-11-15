@@ -1630,8 +1630,8 @@ var claudeHostedOff = []string{"CLAUDE_CODE_REMOTE"}
 //     harness's own threshold code, 2.1.310 and 2.1.322 alike), either of which
 //     would have it compact a session at a point the engine does not reckon
 //     with: the window [claudeSessionLayout] pins, less the harness's own
-//     headroom, which docs/concepts/code-sandbox.md states and every floor the
-//     engine continues a session by is held to.
+//     headroom, which docs/concepts/code-sandbox.md states and which a
+//     continuation's telling is judged by (internal/sandbox's SendsWhole).
 //
 // Set by a seat's role.sandbox.env or by an image, any of them is unset rather
 // than refused, as [claudeSwitchesOff] is: the run's compaction is the
@@ -1938,13 +1938,23 @@ func (r claudeResult) sinceLastResult() (map[string]claudeModelUsage, bool, erro
 
 // claudeModelUsage is one model's spend as Claude Code's result states it per
 // model, in camelCase as `modelUsage` and its per-run sibling print it
-// ([claudeModelUsageWire]).
+// ([claudeModelUsageWire]), and the context window the process held the model
+// to.
 type claudeModelUsage struct {
 	InputTokens              int
 	OutputTokens             int
 	CacheReadInputTokens     int
 	CacheCreationInputTokens int
 	CostUSD                  float64
+	// ContextWindow is the window the process computed for the model, the
+	// one it compacts under (`contextWindow`, 2.1.310 and 2.1.322 alike): the
+	// model's own as the release's catalog, an alias's retarget, an account's
+	// default model and a switch that holds every model to 200,000 tokens
+	// made it in that box. 0 where it is absent or no number. What a
+	// continuation of the copy is judged under, where it is less than the
+	// engine's own reading of the model's window
+	// ([claudeEvents.reportedWindow], internal/sandbox's SendsWhole).
+	ContextWindow int64
 }
 
 // claudeModelUsageWire is one model's spend as its decode leaves it, each key
@@ -1955,6 +1965,7 @@ type claudeModelUsageWire struct {
 	CacheReadInputTokens     json.RawMessage `json:"cacheReadInputTokens"`
 	CacheCreationInputTokens json.RawMessage `json:"cacheCreationInputTokens"`
 	CostUSD                  json.RawMessage `json:"costUSD"`
+	ContextWindow            json.RawMessage `json:"contextWindow"`
 }
 
 // looseModelUsage is the spend raw holds, DECODED LOOSELY, as the whole decode
@@ -1969,6 +1980,7 @@ func looseModelUsage(raw json.RawMessage) claudeModelUsage {
 		InputTokens: int(looseInt(w.InputTokens)), OutputTokens: int(looseInt(w.OutputTokens)),
 		CacheReadInputTokens:     int(looseInt(w.CacheReadInputTokens)),
 		CacheCreationInputTokens: int(looseInt(w.CacheCreationInputTokens)), CostUSD: looseFloat(w.CostUSD),
+		ContextWindow: looseInt(w.ContextWindow),
 	}
 }
 

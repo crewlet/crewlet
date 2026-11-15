@@ -20,10 +20,12 @@
  * who owns it, which seats read it, its default branch and where that stands,
  * its last push, its size and the rules that protect it.
  *
- * # One write: an import
+ * # Two writes: a new repository, and an import
  *
- * "Import a repository" (`ImportRepo.tsx`) is the listing's one write, a
- * person's: a new project filled from another host, or a pull mirror of one.
+ * "New repository" (`NewRepo.tsx`) makes an empty project a unit owns, and
+ * "Import a repository" (`ImportRepo.tsx`), a person's alone, a new project
+ * filled from another host or a pull mirror of one. A deleted repository is
+ * listed under the Deleted filter, and restored on its own page.
  * A declared repository's settings are the company document's (`code.repos`,
  * its `managed_by` is `config`), and every activation settles them: the way to
  * change one is the configuration, which the empty state offers a reader who
@@ -59,6 +61,7 @@ import { usePaged } from "~/lib/usePaged.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import type { CodeRepoSummary, CodeReposAnswer } from "~/protocol/index.ts";
 import { ImportRepoButton } from "./ImportRepo.tsx";
+import { NewRepoButton } from "./NewRepo.tsx";
 import { repoHref } from "./paths.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
@@ -119,6 +122,7 @@ export function Repositories() {
           active={status !== ""}
         />
         <ImportRepoButton />
+        <NewRepoButton />
       </PageToolbar>
       {paged.loading && rows.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading repositories" />
@@ -141,7 +145,7 @@ export function Repositories() {
                 }
               : {
                   title: "No repositories yet",
-                  hint: "A repository is declared in the company document's code.repos, and each activation creates the ones it names.",
+                  hint: "Create one with New repository, import one from another host, or declare it in the company document's code.repos, which each activation creates.",
                   ...(canConfigure
                     ? {
                         action: (

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/cache"
@@ -35,7 +36,15 @@ func prepare(t *testing.T, dir string) cache.Layout {
 // carries this cache's tag. Open empties tmp/ and scratch/ at every boot, so
 // gitlet.cache_dir pointed at a populated directory — /var, a home — would
 // otherwise empty /var/tmp; and a directory another tool tagged under the
-// same standard is that tool's.
+// same standard is that tool's. A directory it took, Prepared again, it finds
+// prepared and rewrites nothing: the tag keeps its inode, its bytes and the
+// modification the case stated for it — an instant long past, which any write
+// moves to now. Read off the tag's own stamp before and after, the claim
+// passed a rewrite in place within one tick of a coarse file clock.
+//
+// Mutation: a second Prepare rewrites the tag it finds its own, in place
+// (writeTag in adoptDirectory's tagOurs arm), on the filesystem's clock or on a
+// two-second one.
 func TestPrepareRefusesADirectoryThatIsNotACache(t *testing.T) {
 	t.Parallel()
 
@@ -179,8 +188,16 @@ func TestPrepareRefusesADirectoryThatIsNotACache(t *testing.T) {
 			}
 
 			// A second Prepare finds it prepared and rewrites nothing — once
-			// the first has given its claim back.
-			before, err := os.Stat(filepath.Join(resolved, "CACHEDIR.TAG"))
+			// the first has given its claim back. The tag's modification is
+			// put at a stated instant first, an even second every file clock
+			// holds exactly, so a write of it lands elsewhere however coarse
+			// the clock that stamps it.
+			tagPath := filepath.Join(resolved, "CACHEDIR.TAG")
+			stated := time.Date(2001, time.February, 3, 4, 5, 6, 0, time.UTC)
+			if err := os.Chtimes(tagPath, stated, stated); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Stat(tagPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -189,12 +206,18 @@ func TestPrepareRefusesADirectoryThatIsNotACache(t *testing.T) {
 			if again.Dir != layout.Dir || again.Home != layout.Home || again.Held != layout.Held {
 				t.Errorf("a second Prepare = %+v, want %+v", again, layout)
 			}
-			after, err := os.Stat(filepath.Join(resolved, "CACHEDIR.TAG"))
+			after, err := os.Stat(tagPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()) || read(t, filepath.Join(resolved, "CACHEDIR.TAG")) != tag {
-				t.Error("a second Prepare rewrote the tag")
+			if !os.SameFile(before, after) {
+				t.Error("a second Prepare replaced the tag with a new file")
+			}
+			if !after.ModTime().Equal(stated) {
+				t.Errorf("a second Prepare rewrote the tag: modified at %v, want the stated %v", after.ModTime(), stated)
+			}
+			if got := read(t, tagPath); got != tag {
+				t.Errorf("a second Prepare changed the tag to %q, want %q", got, tag)
 			}
 		})
 	}

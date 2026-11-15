@@ -27,7 +27,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
-import { DECLARED, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
+import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
 afterEach(() => {
@@ -100,6 +100,9 @@ const json = (payload: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
+/** A revision as the engine resolves it: a whole ref as it is, a bare name as a branch. */
+const wholeRef = (rev: string) => (rev.startsWith("refs/") ? rev : `refs/heads/${rev}`);
+
 /** A read of content by a ref, as the engine answers one: bare, with the ref it resolved. */
 const byRef = (url: URL, part: Record<string, unknown>) => ({
   repo: "web",
@@ -108,7 +111,7 @@ const byRef = (url: URL, part: Record<string, unknown>) => ({
     ? {}
     : {
         resolved: {
-          ref: { ref: `refs/heads/${url.searchParams.get("ref") ?? "main"}`, oid: HEAD },
+          ref: { ref: wholeRef(url.searchParams.get("ref") ?? "main"), oid: HEAD },
         },
         position: POSITION,
       }),
@@ -406,25 +409,33 @@ function mount(hash: string, repo = "web", viewer: unknown = ADMIN_VIEWER) {
 
 const reads = (asked: URL[], what: string) => asked.filter((u) => u.pathname === `/query/${what}`);
 
-// THE OVERVIEW IS THE REPOSITORY'S ROW AND ITS README: the header names the
-// repository and its owner off the chart, and the README at the default
-// branch's root is read at the commit that listing resolved, rendered.
-// Mutation: read the README at the branch rather than the commit the root was
-// listed at, and the two could be two revisions — this fails.
-test("the overview is the repository's row and the README at the commit its root was listed at", async () => {
+// THE CODE TAB IS THE REPOSITORY'S LANDING, as a code host's is: the header
+// names the repository under its owner off the chart, with its description;
+// the root's files stand under the latest commit, read at the commit the root
+// was listed at; and the README at that root is read at the same commit,
+// rendered in a card of its own. Mutation: read the README or the latest
+// commit at the branch rather than the commit the root was listed at, and the
+// three could be three revisions — this fails.
+test("the code tab is the root's files, its latest commit and its README, at one commit", async () => {
   const asked = stubEngine();
   mount("#/gitlet/repos/web");
 
   expect(await screen.findByRole("heading", { name: "Hello storefront" })).toBeTruthy();
   // THE FILE IS NAMED AS IT IS: never in the label register, whose capitals
   // would print README.MD.
-  const name = screen.getByRole("link", { name: "README.md" });
+  const name = screen.getByRole("heading", { name: "README.md" });
   expect(name.closest(".t-label")).toBeNull();
-  expect(screen.getByText("Engineering")).toBeTruthy();
+  expect(screen.getAllByText("Engineering").length).toBeGreaterThan(0);
   expect(screen.getByText("The storefront")).toBeTruthy();
   const readme = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "README.md");
   expect(readme?.searchParams.get("ref")).toBe(HEAD);
   expect(reads(asked, "code_repo")[0]?.searchParams.get("name")).toBe("web");
+  // THE LATEST COMMIT, one commit of the root's history at the listed commit.
+  expect(await screen.findByRole("link", { name: "Start the storefront" })).toBeTruthy();
+  const latest = reads(asked, "code_log")[0];
+  expect(latest?.searchParams.get("ref")).toBe(HEAD);
+  expect(latest?.searchParams.get("limit")).toBe("1");
+  expect(screen.getByRole("table", { name: "Files" })).toBeTruthy();
 });
 
 // A PATH IS ONE READ, AT THE ADDRESS'S REVISION: a directory under the root
@@ -433,13 +444,11 @@ test("the overview is the repository's row and the README at the commit its root
 // an entry without it, and this fails.
 test("a directory is read at the address's revision and its entries open at it", async () => {
   const asked = stubEngine();
-  mount("#/gitlet/repos/web?tab=files&ref=feature&path=src");
+  mount("#/gitlet/repos/web?ref=feature&path=src");
 
   const table = await screen.findByRole("table", { name: "Files" });
   const link = within(table).getByRole("link", { name: "app.go" });
-  expect(link.getAttribute("href")).toBe(
-    "#/gitlet/repos/web?tab=files&ref=feature&path=src%2Fapp.go",
-  );
+  expect(link.getAttribute("href")).toBe("#/gitlet/repos/web?ref=feature&path=src%2Fapp.go");
   const read = reads(asked, "code_blob").find((u) => u.searchParams.get("path") === "src");
   expect(read?.searchParams.get("ref")).toBe("feature");
 });
@@ -450,7 +459,7 @@ test("a directory is read at the address's revision and its entries open at it",
 // start, and this fails.
 test("a directory's entries are drawn on the data grid, sortable once the whole directory is here", async () => {
   stubEngine();
-  mount("#/gitlet/repos/web?tab=files");
+  mount("#/gitlet/repos/web");
 
   const table = await screen.findByRole("table", { name: "Files" });
   expect(table.classList.contains("crewlet-data-grid")).toBe(true);
@@ -466,19 +475,18 @@ test("a directory's entries are drawn on the data grid, sortable once the whole 
 // fails.
 test("the revision picker's branches and tags are read once while the reader moves", async () => {
   const asked = stubEngine();
-  mount("#/gitlet/repos/web?tab=files");
+  mount("#/gitlet/repos/web");
 
-  await screen.findByRole("link", { name: "src/" });
+  await screen.findByRole("link", { name: "src" });
   await waitFor(() => expect(reads(asked, "code_refs")).toHaveLength(2));
   act(() => {
-    location.hash = "#/gitlet/repos/web?tab=files&path=src";
+    location.hash = "#/gitlet/repos/web?path=src";
   });
   expect(await screen.findByRole("link", { name: "app.go" })).toBeTruthy();
   act(() => {
     location.hash = "#/gitlet/repos/web?tab=commits";
   });
-  const history = await screen.findByRole("table", { name: "History of main" });
-  expect(onTheRight(history, "Authored")).toBe(true);
+  expect(await screen.findByRole("table", { name: "History of main" })).toBeTruthy();
 
   const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
   expect(listings.sort()).toEqual([null, "refs/tags/"]);
@@ -491,7 +499,7 @@ test("the revision picker's branches and tags are read once while the reader mov
 // fails.
 test("a file's picked lines are its address, and its Permalink names the commit", async () => {
   stubEngine();
-  mount("#/gitlet/repos/web?tab=files&path=src%2Fapp.go&lines=2");
+  mount("#/gitlet/repos/web?path=src%2Fapp.go&lines=2");
 
   const line2 = await screen.findByRole("button", { name: "Line 2" });
   expect(line2.getAttribute("aria-pressed")).toBe("true");
@@ -500,7 +508,7 @@ test("a file's picked lines are its address, and its Permalink names the commit"
 
   const permalink = screen.getByRole("link", { name: "Permalink" });
   expect(permalink.getAttribute("href")).toBe(
-    `#/gitlet/repos/web?tab=files&ref=${HEAD}&path=src%2Fapp.go&lines=2`,
+    `#/gitlet/repos/web?ref=${HEAD}&path=src%2Fapp.go&lines=2`,
   );
 
   fireEvent.click(screen.getByRole("button", { name: "Line 3" }), { shiftKey: true });
@@ -517,7 +525,7 @@ test("a file's picked lines are its address, and its Permalink names the commit"
 // without keeping the lines, and this fails.
 test("a press on a line does not split the file's text again", async () => {
   stubEngine();
-  mount("#/gitlet/repos/web?tab=files&path=src%2Fapp.go");
+  mount("#/gitlet/repos/web?path=src%2Fapp.go");
 
   const line1 = await screen.findByRole("button", { name: "Line 1" });
   const split = vi.spyOn(String.prototype, "split");
@@ -536,15 +544,19 @@ test("a press on a line does not split the file's text again", async () => {
 });
 
 // THE BLAME IS READ AT THE COMMIT THE FILE WAS, and each run of lines one
-// commit changed last is headed by that commit and its author once.
-// Mutation: blame the branch, or head every line, and this fails.
+// commit changed last is headed by that commit once — its subject, the link
+// to the commit, with its author in the face beside it. Mutation: blame the
+// branch, or head every line, and this fails.
 test("the blame is read at the file's commit and heads each run of lines once", async () => {
   const asked = stubEngine();
-  mount("#/gitlet/repos/web?tab=files&path=src%2Fapp.go&lens=blame");
+  mount("#/gitlet/repos/web?path=src%2Fapp.go&lens=blame");
 
   const table = await screen.findByRole("table", { name: /Who last changed each line/ });
-  expect(within(table).getAllByText("Ada")).toHaveLength(1);
-  expect(within(table).getAllByText("Grace")).toHaveLength(1);
+  expect(within(table).getAllByRole("link", { name: "Start" })).toHaveLength(1);
+  expect(within(table).getAllByRole("link", { name: "Run" })).toHaveLength(1);
+  expect(within(table).getByRole("link", { name: "Run" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${OTHER}`,
+  );
   await waitFor(() => expect(reads(asked, "code_blame").length).toBeGreaterThan(0));
   expect(reads(asked, "code_blame")[0]?.searchParams.get("ref")).toBe(HEAD);
 });
@@ -579,7 +591,7 @@ const bigStarts = (asked: URL[], what: string) =>
 test("a file opens at a picked line past its first page, and reads back from there", async () => {
   const scrolled = watchScrolls();
   const asked = stubEngine();
-  mount(`#/gitlet/repos/web?tab=files&path=src%2Fbig.go&lines=2400`);
+  mount(`#/gitlet/repos/web?path=src%2Fbig.go&lines=2400`);
 
   const line = await screen.findByRole("button", { name: "Line 2400" });
   expect(line.getAttribute("aria-pressed")).toBe("true");
@@ -617,7 +629,7 @@ test("a file opens at a picked line past its first page, and reads back from the
 test("a blame opens at a picked line past its first range and reads on across ranges", async () => {
   const scrolled = watchScrolls();
   const asked = stubEngine();
-  mount(`#/gitlet/repos/web?tab=files&path=src%2Fbig.go&lens=blame&lines=2400`);
+  mount(`#/gitlet/repos/web?path=src%2Fbig.go&lens=blame&lines=2400`);
 
   const line = await screen.findByRole("button", { name: "Line 2400" });
   expect(line.getAttribute("aria-pressed")).toBe("true");
@@ -653,16 +665,17 @@ test("a blame opens at a picked line past its first range and reads on across ra
 // the file again from it, and this fails.
 test("a link past a file's end opens the file from its first line, saying so", async () => {
   const asked = stubEngine();
-  mount(`#/gitlet/repos/web?tab=files&path=src%2Fbig.go&lines=3100`);
+  mount(`#/gitlet/repos/web?path=src%2Fbig.go&lines=3100`);
 
   expect(await screen.findByRole("button", { name: "Line 1" })).toBeTruthy();
   expect(screen.getByText(/it has no line 3100/)).toBeTruthy();
   expect(bigStarts(asked, "code_blob")).toEqual(["3050", null]);
 });
 
-// A BRANCH OPENS ITS FILES: the default branch at the bare Files address, any
-// other by its name. Mutation: link the default branch by name, or every
-// branch to the default, and this fails.
+// A BRANCH OPENS ITS FILES: the default branch at the repository's own
+// address, any other by its name — and the tags under them, each at its whole
+// ref. Mutation: link the default branch by name, every branch to the
+// default, or a tag by its short name, and this fails.
 test("the branches are the engine's refs, each opening its files", async () => {
   stubEngine();
   mount("#/gitlet/repos/web?tab=branches");
@@ -672,8 +685,14 @@ test("the branches are the engine's refs, each opening its files", async () => {
   const links = within(grid)
     .getAllByRole("link")
     .map((a) => a.getAttribute("href"));
-  expect(links).toContain("#/gitlet/repos/web?tab=files&ref=feature");
-  expect(links).toContain("#/gitlet/repos/web?tab=files");
+  expect(links).toContain("#/gitlet/repos/web?ref=feature");
+  expect(links).toContain("#/gitlet/repos/web");
+  const tags = await screen.findByRole("table", { name: "Tags of web" });
+  expect(
+    within(tags)
+      .getAllByRole("link")
+      .map((a) => a.getAttribute("href")),
+  ).toContain("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1");
 });
 
 // THE HISTORY IS READ AT THE REVISION AND THE PATH, with who pushed each
@@ -860,9 +879,9 @@ test.each([
 );
 
 // AN IMPORTING REPOSITORY SAYS HOW FAR ITS IMPORT WENT, and where its mirrors
-// stand, on the Overview's rail. Mutation: drop the import's progress or the
-// pull mirror's line from the rail, and this fails.
-test("the overview's rail says how far an import went and where the mirrors stand", async () => {
+// stand, on the About rail beside its code. Mutation: drop the import's
+// progress or the pull mirror's line from the rail, and this fails.
+test("the About rail says how far an import went and where the mirrors stand", async () => {
   const source = { url: "https://forge.example.com/acme/web.git" };
   stubEngine(
     detail({
@@ -881,4 +900,188 @@ test("the overview's rail says how far an import went and where the mirrors stan
   expect(
     screen.getByText("Follows https://forge.example.com/acme/web.git; not synced yet."),
   ).toBeTruthy();
+});
+
+/** A person the engine serves every repository and branch write for. */
+const MAINTAINER = {
+  ...ADMIN_VIEWER,
+  acts: [
+    "code_delete_repo",
+    "code_restore_repo",
+    "code_protect_branch",
+    "code_create_branch",
+    "code_delete_branch",
+    "code_commit_files",
+  ],
+};
+
+// A DELETE IS ASKED ONLY ONCE ITS NAME IS TYPED, and sends one
+// code_delete_repo naming the repository. Mutation: let the press through
+// before the name matches, or send on the first press, and this fails.
+test("a repository is deleted only once its name is typed back", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  const del = await screen.findByRole("button", { name: "Delete repository" });
+  await waitFor(() => expect(del.getAttribute("title")).toBeNull());
+  fireEvent.click(del);
+  const dialog = await screen.findByRole("dialog", { name: "Delete web?" });
+  const confirm = within(dialog).getByRole("button", { name: "Delete repository" });
+  fireEvent.click(confirm);
+  expect(acted).toHaveLength(0);
+  fireEvent.change(within(dialog).getByLabelText(/to confirm/), { target: { value: "web" } });
+  fireEvent.click(confirm);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({ tool: "code_delete_repo", args: { repo: "web" } });
+});
+
+// A DECLARED REPOSITORY'S LIFE IS THE COMPANY DOCUMENT'S: its delete and its
+// protection are drawn and held with where they are changed. Mutation: hide
+// them, or let a declared repository through, and this fails.
+test("a declared repository's delete and protection are held with where they are changed", async () => {
+  stubEngine(detail(), []);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  const del = await screen.findByRole("button", { name: "Delete repository" });
+  await waitFor(() => expect(del.getAttribute("title")).toBe(DECLARED_LIFE));
+  expect(screen.getByRole("button", { name: "Protect a branch" }).getAttribute("title")).toBe(
+    DECLARED_LIFE,
+  );
+});
+
+// A DELETED REPOSITORY SAYS SO ABOVE ITS TABS and offers its restore, one
+// code_restore_repo naming it. Mutation: drop the notice or its press and this
+// fails.
+test("a deleted repository says so and is restored by one request", async () => {
+  const acted: Acted[] = [];
+  stubEngine(
+    detail({ managed_by: "tools", status: "deleted", deleted_at: "2026-10-30T10:00:00Z" }),
+    acted,
+  );
+  mount("#/gitlet/repos/web", "web", MAINTAINER);
+
+  const restore = await screen.findByRole("button", { name: "Restore repository" });
+  await waitFor(() => expect(restore.getAttribute("title")).toBeNull());
+  // THE NOTICE ABOVE THE TABS, and not the reason each held write gives.
+  expect(screen.getByText(/is deleted, since/)).toBeTruthy();
+  fireEvent.click(restore);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({ tool: "code_restore_repo", args: { repo: "web" } });
+});
+
+// A BRANCH IS DELETED AT THE HEAD ITS ROW SHOWS, confirmed in the page first:
+// a push made since is refused rather than lost. Mutation: send no
+// expected_head, or send on the row's press, and this fails.
+test("a branch is deleted at the head its row showed, after a confirmation", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=branches", "web", MAINTAINER);
+
+  const del = await screen.findByRole("button", { name: "Delete feature" });
+  await waitFor(() => expect(del.getAttribute("title")).toBeNull());
+  fireEvent.click(del);
+  const dialog = await screen.findByRole("alertdialog");
+  expect(dialog.textContent).toContain(OTHER.slice(0, 7));
+  expect(acted).toHaveLength(0);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete branch" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_delete_branch",
+    args: { repo: "web", branch: "feature", expected_head: OTHER },
+  });
+});
+
+// A BRANCH A RULE NAMES ALREADY IS EDITED WHERE ITS RULE IS DRAWN WHOLE: its
+// row says it is protected and leads to Settings, while a branch no rule
+// names opens a new rule on itself. Mutation: draw Protect on every row, and
+// main's new-rule form would start from the engine's defaults; this fails.
+test("a protected branch leads to its rule, and another opens a new one", async () => {
+  stubEngine(detail({ managed_by: "tools" }), []);
+  mount("#/gitlet/repos/web?tab=branches", "web", MAINTAINER);
+
+  const grid = await screen.findByRole("table", { name: "Branches of web" });
+  const link = await within(grid).findByRole("link", { name: "Protection →" });
+  expect(link.getAttribute("href")).toContain("tab=settings");
+  expect(within(grid).getAllByRole("link", { name: "Protection →" })).toHaveLength(1);
+  expect(within(grid).getAllByRole("button", { name: "Protect" })).toHaveLength(1);
+  expect(within(grid).getByText("protected")).toBeTruthy();
+});
+
+// A FILE EDITED IN THE BROWSER IS ONE COMMIT ON THE BRANCH ON SCREEN, at the
+// commit the page's read resolved, carrying the whole file. Mutation: commit
+// at the address's spelling rather than the resolution, or drop the head, and
+// this fails.
+test("a file edited here is one commit on the branch read, at the commit it resolved", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?path=src%2Fapp.go", "web", MAINTAINER);
+
+  const edit = await screen.findByRole("button", { name: "Edit" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(edit);
+  const dialog = await screen.findByRole("dialog", { name: "Edit src/app.go" });
+  const text = (await within(dialog).findByLabelText("File contents")) as HTMLTextAreaElement;
+  expect(text.value).toBe("package app\n\nfunc Run() {}\n");
+  fireEvent.change(text, { target: { value: "package app\n\nfunc Run() { start() }\n" } });
+  fireEvent.change(within(dialog).getByLabelText("Commit message"), {
+    target: { value: "Start on run" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Commit to main" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_commit_files",
+    args: {
+      repo: "web",
+      branch: "main",
+      expected_head: HEAD,
+      message: "Start on run",
+      files: [
+        { op: "put", path: "src/app.go", content: "package app\n\nfunc Run() { start() }\n" },
+      ],
+    },
+  });
+});
+
+// AN EMPTY REPOSITORY IS FILLED HERE: its first file is a root commit that
+// makes its default branch, sent with no head, since nothing was read.
+// Mutation: hide the control on an empty repository, or send an empty
+// expected_head, which the engine refuses, and this fails.
+test("an empty repository's first file is a root commit on its default branch", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools", head: undefined, branches: 0, refs: 0 }), acted);
+  mount("#/gitlet/repos/web", "web", MAINTAINER);
+
+  const add = await screen.findByRole("button", { name: "Add a file" });
+  await waitFor(() => expect(add.getAttribute("title")).toBeNull());
+  fireEvent.click(add);
+  const dialog = await screen.findByRole("dialog", { name: "New file in web" });
+  expect(dialog.textContent).toMatch(/first commit of web/);
+  fireEvent.change(within(dialog).getByLabelText("Path"), { target: { value: "README.md" } });
+  fireEvent.change(within(dialog).getByLabelText("File contents"), {
+    target: { value: "# web\n" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Commit message"), {
+    target: { value: "Add a README" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Commit to main" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_commit_files",
+    args: {
+      repo: "web",
+      branch: "main",
+      message: "Add a README",
+      files: [{ op: "put", path: "README.md", content: "# web\n" }],
+    },
+  });
+});
+
+// A TAG TAKES NO COMMIT: the controls are drawn and held, saying so.
+test("a file read at a tag is held from a commit, with the reason", async () => {
+  stubEngine(detail({ managed_by: "tools" }), []);
+  mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1&path=src%2Fapp.go", "web", MAINTAINER);
+
+  const edit = await screen.findByRole("button", { name: "Edit" });
+  await waitFor(() => expect(edit.getAttribute("title")).toMatch(/Choose a branch/));
 });

@@ -163,8 +163,8 @@ func continuingKept(kept SessionCapture) LaunchRequest {
 func launchRestoring(t *testing.T, rig *coordRig, restore SessionRestore, req LaunchRequest) (LaunchResult, error) {
 	t.Helper()
 	c, err := NewCoordinator(CoordinatorOptions{
-		Answers: rigAnswers(),
-		Queue:   rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Answers: rigAnswers(), Leads: rigLeads(),
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{}, Pushes: &pushSpy{},
 		Lease:    leased(rigLease),
 		Restore:  restore,
@@ -418,6 +418,87 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 			got.release()
 			if left := restoreSpools(t, rig); len(left) != 0 {
 				t.Errorf("the run's start left the spool it carried the session in: %v", left)
+			}
+		})
+	}
+}
+
+// A NOT-CONTINUED LINE NAMES WHAT THE LAUNCH CONTINUES INSTEAD. A launch whose
+// chosen session is refused falls to the session the box it reuses holds, the
+// job before's own copy, where it has one it may continue, and to a session of
+// its own otherwise; the line saying why the chosen one was refused is written
+// once that is decided, and names it — never "a session of its own" for a run
+// that goes on in the box's copy. A launch that refuses nothing says nothing,
+// and one that refuses the box's copy too says each, naming the same fallback.
+//
+// Mutation: log the refusal before the fallback is decided, or name a session
+// of its own whatever the launch continues, and a case goes red.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
+	const (
+		refusedKept = "not the one its launch was asked to continue"
+		ranOut      = "ran out of"
+	)
+	for _, tc := range []struct {
+		name                   string
+		chosen, reused, ranOut bool
+		kind                   BriefKind
+		session, outcome       string
+		reasons                []string
+	}{
+		{name: "a refused kept session, the box's copy continued", chosen: true, reused: true,
+			kind: BriefContinued, session: "sess-ask", outcome: continuesBoxCopy, reasons: []string{refusedKept}},
+		{name: "a refused kept session in a box of its own", chosen: true,
+			kind: BriefFresh, outcome: startsItsOwn, reasons: []string{refusedKept}},
+		{name: "a refused kept session, the box's copy run out of context", chosen: true, reused: true,
+			ranOut: true, kind: BriefFresh, outcome: startsItsOwn, reasons: []string{refusedKept, ranOut}},
+		{name: "the box's copy run out of context, nothing chosen", reused: true, ranOut: true,
+			kind: BriefFresh, outcome: startsItsOwn, reasons: []string{ranOut}},
+		{name: "the box's copy, nothing chosen", reused: true, kind: BriefContinued, session: "sess-ask"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			rig := newCoordRig(t)
+			rig.coordinator.spoolDir = t.TempDir()
+			key := objstore.KeyAt(time.Now())
+			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: true,
+				Through: new(0), Object: key.String(), ObjectHash: strings.Repeat("a", 64), ObjectSize: 14}
+			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, kept)},
+				archives: map[string][]byte{key.String(): []byte("the transcript")}}
+			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Capture: &kept, Kept: &kept}
+			if tc.ranOut {
+				opened.ExhaustedSessions = []string{"sess-ask"}
+			}
+			req := continuingKept(kept)
+			// REFUSED: the record keeps another capture than the one the
+			// launch was asked to continue.
+			req.Session.CaptureSeq = 2
+			if !tc.chosen {
+				req.Session = nil
+			}
+			req.Continue = &Continuation{SessionID: "sess-ask", Brief: "carry on in the box you left"}
+			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
+				rig.runner, tc.reused, false)
+			t.Cleanup(got.release)
+			if got.kind != tc.kind || got.session != tc.session {
+				t.Fatalf("the launch hands a %s brief and session %q, want a %s brief and %q", got.kind,
+					got.session, tc.kind, tc.session)
+			}
+			var lines []string
+			for line := range strings.Lines(logs.String()) {
+				if strings.Contains(line, "msg=executor_session_not_continued") {
+					lines = append(lines, line)
+				}
+			}
+			if len(lines) != len(tc.reasons) {
+				t.Fatalf("logged %d not-continued lines, want %d: %q", len(lines), len(tc.reasons), lines)
+			}
+			for i, line := range lines {
+				if !strings.Contains(line, tc.reasons[i]) || !strings.Contains(line, tc.outcome) {
+					t.Errorf("line %d is %q, want it saying %q and naming what the launch continues: %q", i,
+						line, tc.reasons[i], tc.outcome)
+				}
 			}
 		})
 	}
@@ -1159,8 +1240,13 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 // and only that, in a company that keeps no session. A lost job's box continues
 // nothing. And it is undecided, never a no, wherever a relaunch would not decide
 // now either: a job still working, or a claim whose read has not taken the job's
-// final capture and whose turn has not begun, a capture still being kept, a
-// target that cannot be said, a round lost a second time, and a collected job's
+// final capture and whose turn has not begun, a capture still being kept, one
+// whose record awaits the log's answer, which the relaunch asks again and
+// continues where it landed — but for an earlier job's, which no relaunch
+// continues, one whose object is past the window a record may name it in,
+// which the ask refuses unasked, and in a company that keeps no session,
+// whose relaunch asks nothing — a target that cannot be said, a round lost a
+// second time, and a collected job's
 // resume, which carries its round on in its box only where its sign-in was
 // replaced while it ran — each until the resumed turn says, as it begins, what
 // it does with the round: from then on, its review included, the row is decided
@@ -1174,8 +1260,10 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 // it ran — read any undecided state as a no, read a claim whose read took the
 // final capture, or whose turn has said what it does, as one still collecting,
 // leave a turn that said it undecided, let a box of another harness or cell
-// count as the parked one, or tell a refused capture the row names by the
-// run's record alone, and a case goes red.
+// count as the parked one, tell a refused capture the row names by the
+// run's record alone, decide a capture whose record awaits its answer, or
+// wait on one past its window, an earlier job's, or one in a company that
+// keeps no session, and a case goes red.
 func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
@@ -1196,6 +1284,13 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 	moved.Node = "node-b"
 	final := kept
 	final.Final = true
+	// unanswered is the job's capture after its kept one, its object minted at
+	// minted, its record sent and never answered.
+	unanswered := func(minted time.Time) *SessionCapture {
+		c := kept
+		c.CaptureSeq, c.State, c.Object, c.At = 2, CaptureUnresolved, objstore.KeyAt(minted).String(), minted
+		return &c
+	}
 	for name, tc := range map[string]struct {
 		run      func(*PendingRun)
 		target   RelaunchTarget
@@ -1283,6 +1378,25 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 			begun.CaptureSeq, begun.State, begun.At = 2, CaptureBegun, now.Add(-time.Second)
 			r.Capture = &begun
 		}},
+		"a capture whose record awaits its answer": {target: target, whyHolds: "asks the executor log",
+			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-time.Minute)) }},
+		"a lost job's capture whose record awaits its answer": {target: target, whyHolds: "asks the executor log",
+			run: func(r *PendingRun) {
+				r.Status, r.Launch.Collected, r.Lost = StatusRunning, true, &JobLoss{Cause: LossBoxGone}
+				r.Capture = unanswered(now.Add(-time.Minute))
+			}},
+		"a capture whose record went unanswered past the window a record may name it in": {target: target,
+			decided: true, in: ContinuesInParkedBox, whyHolds: "its record was never answered",
+			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-objstore.RecordWithin - time.Minute)) }},
+		"an earlier job's capture whose record awaits its answer": {target: target, decided: true,
+			in: ContinuesInParkedBox, whyHolds: "has left no capture", run: func(r *PendingRun) {
+				r.LaunchSeq, r.Capture = 3, unanswered(now.Add(-time.Minute))
+			}},
+		"a capture whose record awaits its answer, in a company that keeps no session": {decided: true,
+			in: ContinuesInParkedBox, whyHolds: "keeps no executor session",
+			target: RelaunchTarget{Harness: "claude-code", Placement: Direct, Node: "node-a",
+				Restorer: fakeRestorer{}, NoKept: NoKeptSession},
+			run: func(r *PendingRun) { r.Capture = unanswered(now.Add(-time.Minute)) }},
 		"a target that cannot be said": {whyHolds: "sitting out",
 			target: RelaunchTarget{Undecided: true, Why: "every member is sitting out its plan"}},
 		"no member at all": {decided: true, whyHolds: "no runner member",
@@ -1325,8 +1439,10 @@ func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
 // ANSWER: where the decision reaches the row's capture and the row names
 // another than the one its run's record keeps — a copy of the log behind the
 // record — never where it names the kept one, which decides as the relaunch's
-// read would, nor where the job still works, its capture is still being kept,
-// or its turn has ended, which decide without the row's capture.
+// read would, nor where the job still works, its capture is still being kept
+// or awaits its record's answer, or its turn has ended, which decide without
+// the row's capture. A capture unanswered past the window a record may name it
+// in awaits nothing, and its row is read again.
 //
 // Mutation: read every live row again, or none, and a case goes red.
 func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
@@ -1343,6 +1459,14 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 	ended.Ended = true
 	working := run()
 	working.Status, working.LaunchSeq = StatusRunning, 3
+	// unanswered is a run whose newest capture's record was sent and never
+	// answered, its object minted at minted.
+	unanswered := func(minted time.Time) *PendingRun {
+		r := run()
+		r.Capture = &SessionCapture{LaunchSeq: 2, CaptureSeq: 3, State: CaptureUnresolved,
+			Object: objstore.KeyAt(minted).String(), At: minted, Through: new(0)}
+		return r
+	}
 	for name, tc := range map[string]struct {
 		row   executorkeep.TurnRow
 		run   *PendingRun
@@ -1353,6 +1477,10 @@ func TestARowIsReadAgainOnlyWhereThatCanChangeItsAnswer(t *testing.T) {
 		"a row whose job is still working": {row: naming(1), run: working},
 		"an ended turn's row":              {row: ended, run: run()},
 		"a row whose run is over":          {row: naming(1)},
+		"a row whose newest capture awaits its record's answer": {row: naming(3),
+			run: unanswered(now.Add(-time.Minute))},
+		"a row whose newest capture went unanswered past its window": {row: naming(3),
+			run: unanswered(now.Add(-objstore.RecordWithin - time.Minute)), again: true},
 	} {
 		if got := RereadsRow(tc.row, tc.run, now); got != tc.again {
 			t.Errorf("%s: read again %v, want %v", name, got, tc.again)

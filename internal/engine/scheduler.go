@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
@@ -242,4 +243,62 @@ type schedulerLoop struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+}
+
+// ScheduleRunToolDeps is what a person runs one schedule now through on this
+// node. Who asks and the chart are the surface's, set per call. The zero value
+// where this node reaches no fleet claim store or no queue: the tool is not
+// served there.
+func ScheduleRunToolDeps(e *Engine) builtin.ScheduleRunDeps {
+	if e == nil || e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
+		return builtin.ScheduleRunDeps{}
+	}
+	return builtin.ScheduleRunDeps{Runner: e}
+}
+
+// RunScheduleNow fires one schedule on a person's ask, from THIS node.
+//
+// NOT THE DUTY HOLDER'S. The tick is a fleet singleton because every node
+// evaluating every schedule is duplicated work, never because a peer's fire
+// would be wrong: the claim is the fleet's and the fire is an event on the
+// runner seat's inbox, which the node holding that seat consumes. An ask
+// evaluates nothing, so the node a person reached claims it and sends it, and
+// its row in this node's own ledger reaches the schedule's history through
+// this node's usage day, as a tick's does from the duty holder's.
+//
+// UNDER THE CONDITIONS THE LOOP IS ARMED UNDER ([Engine.schedulerRuns]), less
+// the one that the company declares a schedule, which an ask naming one has
+// answered: a company that switched scheduling off runs none by hand either,
+// and a run sent to a company with no model would sit behind every seat's
+// hold and start whenever a provider arrived.
+func (e *Engine) RunScheduleNow(ctx context.Context, ask schedule.ManualAsk) ([]schedule.ManualRun, error) {
+	c := e.Company()
+	switch {
+	case c == nil || !e.mode.Publishes() || e.backends == nil || e.backends.Fleet == nil ||
+		e.backends.Queue == nil:
+		return nil, schedule.ErrNotPublishing
+	case !c.Config.Scheduling.Runs():
+		return nil, schedule.ErrSchedulingOff
+	case c.Models == nil:
+		return nil, schedule.ErrNoModel
+	case !e.admits():
+		// A NODE THAT CANNOT APPLY THE CURRENT EPOCH fires nothing, as its
+		// tick does not: the schedule it would fire is the previous
+		// company's.
+		return nil, schedule.ErrNotPublishing
+	}
+	claimer, err := e.scheduleClaimer()
+	if err != nil {
+		return nil, err
+	}
+	manual, err := schedule.NewManual(schedule.ManualOptions{
+		Publisher: e.wakes(),
+		Ledger:    claimer,
+		Paused:    e.seatPaused,
+		Mailboxes: e.mailboxConfirmer(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return manual.Fire(ctx, ask)
 }

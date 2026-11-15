@@ -69,6 +69,15 @@ import (
 //     whether the server was serving, and answers as 2.0.32 does — which
 //     ends a run working in that session, where FAKE_RUN_UNTIL names
 //     `interrupted`;
+//   - `api session.message.list` records its parameters in `listed`, a line
+//     a call, and answers the page `pages/<cursor>` holds in the case's
+//     directory, `pages/first` where it is handed no cursor, and nothing
+//     where the case wrote no such page; and, where FAKE_LIST_UNTIL is set,
+//     it holds its answer until the case's directory holds the file that
+//     names, the file `listing` saying it was asked: a page under way that a
+//     case can time an end request into;
+//   - any other `api` operation fails with "Operation not found", as
+//     OpenCode answers an operation its API does not have;
 //   - `auth import` keeps what it was given as its database, and `auth export`
 //     prints that database, whether through the server or beside it — taking
 //     FAKE_EXPORT_SLEEP seconds over it where that is set, the file
@@ -76,7 +85,8 @@ import (
 //   - `run` holds the session it names, as `run --session` creates one it
 //     does not hold; keeps its stdin and the password it presented, puts
 //     FAKE_REFRESH in the database where that is set — a login refreshed
-//     mid-run — and
+//     mid-run — prints a text event, naming the step FAKE_RUN_MESSAGE where
+//     that is set, and
 //     then works for FAKE_RUN_SLEEP seconds, and until the case's directory holds
 //     the file FAKE_RUN_UNTIL names, before it exits — with FAKE_RUN_TERM_EXIT
 //     where a SIGTERM ends it first, as a client given one exits with a status
@@ -95,20 +105,56 @@ import (
 // `serve` keeps the content it was handed, in `serve-config`; and, in
 // `steered`, the CREWLET_STEER_SESSION it was handed — `<session>|<subcommand>`.
 //
+// A SERVER'S END IS READ OFF WHAT THE KERNEL DOES AS IT EXITS, never off its
+// pid: kill(pid, 0) and `kill -0` succeed on a server that was stopped and is
+// not yet reaped, which its parent, the script, may never get to, and nothing
+// reaps for it in a container whose first process reaps nothing (#1164, as
+// #1080 was). So:
+//
+//   - `serve` holds `serve.alive` in the case's directory open for writing for
+//     its whole life, and nothing else holds it: the one command it runs
+//     before it serves is handed it closed, and the sleep it serves as is the
+//     server itself (`exec`). The kernel closes every descriptor a process
+//     holds as it exits, before anything reaps it, so a case that holds the
+//     read end ([serverPipe]) reads a server gone, zombie or not, off a pipe
+//     with no writer left ([assertServerStopped]). Where the case made no such
+//     pipe the same open makes a plain file, so a case that reads no server's
+//     end needs none.
+//   - whether the server was still serving, where a call records it, is the
+//     state the kernel reports for its pid (`up`), in which a zombie is Z:
+//     /proc/<pid>/stat where the kernel keeps one, and `ps` where it keeps
+//     none, as on darwin, where this file builds too. Not the pipe, which sh
+//     cannot ask without waiting: it has no open that does not block, and a
+//     read end opened on a pipe whose server has gone waits for a writer that
+//     never comes — the very case the reading has to answer.
+//
 // FAKE_PIPE_CUT=<n> is an OpenCode that cuts what it writes into a PIPE: the
-// answers that can run long (`session export`, `api mcp.list` and `api
-// session.inbox.list`) stop after their first n bytes where its stdout is a
-// pipe, with success, and are printed whole into anything else, as 2.0.32 and
-// 2.1.4 stop a large answer written into a pipe after a 64 KiB multiple and
-// exit 0, and write it whole into a regular file (measured on both, a
-// session's export through gzip and through cat). A pipe is told by `[ -p
-// /dev/stdout ]`, which dash, bash and busybox ash all answer alike.
+// answers that can run long (`session export`, `api mcp.list`, `api
+// session.inbox.list` and `api session.message.list`'s pages) stop after their
+// first n bytes where its stdout is a pipe, with success, and are printed whole
+// into anything else, as 2.0.32 and 2.1.4 stop a large answer written into a
+// pipe after a 64 KiB multiple and exit 0, and write it whole into a regular
+// file (measured on both, a session's export through gzip and through cat). A
+// pipe is told by `[ -p /dev/stdout ]`, which dash, bash and busybox ash all
+// answer alike. A page is printed as its case wrote it, byte for byte
+// (`answerfile`), rather than as a line (`answer`), since the pages' budget
+// cases measure what the pages put into the stream to the byte.
 //
 // FAKE_SERVE=listen-only is a server that says where it listens and never
 // prints a password; FAKE_SERVE=silent one that says nothing at all; and
 // FAKE_SERVE=password-first one that prints its password a second before it
 // says where it listens. Each writes `serve-settled` once it has printed all it
 // ever will.
+//
+// FAKE_HANG names, space-separated, the kinds of call to the run's own server
+// that server takes and never answers — an `api` operation by its name
+// (`session.get`), `session.export` and `auth.export` for the two exports
+// through it: such a call records its kind and its pid in `hung`, as it is
+// taken, and then waits, as a client waits on a server that never answers,
+// until it is ended — and with FAKE_HANG_DEAF set it ignores SIGTERM, so only
+// SIGKILL ends it; with FAKE_HANG_ONCE set only the first call of each kind
+// hangs, and every later one is answered. A call beside the server
+// (`--standalone`) never hangs.
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
@@ -118,11 +164,26 @@ authed() {
   [ "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" = "$(cat "$d/server-password" 2> /dev/null)" ] && return 0
   echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
 }
+hangs() {
+  case " ${FAKE_HANG-} " in *" $1 "*) ;; *) return 0;; esac
+  if [ -n "${FAKE_HANG_ONCE:-}" ]; then [ ! -e "$d/hung-$1" ] || return 0; : > "$d/hung-$1"; fi
+  echo "$1 $$" >> "$d/hung"
+  [ -z "${FAKE_HANG_DEAF:-}" ] || trap '' TERM
+  exec sleep 3600
+}
 hold() { mkdir -p "$d/sessions" && : > "$d/sessions/$1"; }
 held() { [ -n "$1" ] && [ -e "$d/sessions/$1" ]; }
 serving() { : > "$d/serve-settled"; exec sleep 60; }
+up() {
+  p=$(cat "$d/serve.pid" 2> /dev/null); [ -n "$p" ] || return 1
+  if [ -r /proc/self/stat ]; then st=$(sed 's/.*) //' "/proc/$p/stat" 2> /dev/null); else st=$(ps -o stat= -p "$p" 2> /dev/null | tr -d ' '); fi
+  case "$st" in '' | [ZX]*) return 1 ;; esac
+}
 answer() {
   if [ -n "${FAKE_PIPE_CUT:-}" ] && [ -p /dev/stdout ]; then printf '%s\n' "$1" | head -c "$FAKE_PIPE_CUT"; else printf '%s\n' "$1"; fi
+}
+answerfile() {
+  if [ -n "${FAKE_PIPE_CUT:-}" ] && [ -p /dev/stdout ]; then head -c "$FAKE_PIPE_CUT" < "$1"; else cat "$1"; fi
 }
 case "$1" in
 --version)
@@ -132,7 +193,7 @@ auth)
   case "$2" in
   import) cat > "$d/imported"; cp "$d/imported" "$d/db" ;;
   export)
-    [ "$3" != --server ] || authed
+    [ "$3" != --server ] || { authed; hangs auth.export; }
     if [ -n "${FAKE_EXPORT_SLEEP:-}" ]; then : > "$d/exporting"; sleep "$FAKE_EXPORT_SLEEP"; fi
     cat "$d/db" 2> /dev/null ;;
   esac ;;
@@ -143,11 +204,12 @@ serve)
     cat "$FAKE_VALUES/v1" > "$d/served-value" 2> /dev/null
     if [ -e "$FAKE_VALUES-fresh" ]; then echo yes; else echo no; fi > "$d/served-beside-other"
   fi
+  exec 9> "$d/serve.alive"
   echo $$ > "$d/serve.pid"
   [ "${FAKE_SERVE:-}" != silent ] || serving
   if [ "${FAKE_SERVE:-}" = password-first ]; then
     printf '%s' pw-secret > "$d/server-password"
-    echo "server password pw-secret"; sleep 1
+    echo "server password pw-secret"; sleep 1 9>&-
     echo "server listening on http://127.0.0.1:4242"
     serving
   fi
@@ -158,7 +220,7 @@ serve)
   [ -z "$minted" ] || echo "server password $pw"
   serving ;;
 api)
-  if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; fi
+  if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
@@ -176,18 +238,24 @@ api)
     [ -n "$inbox" ] || inbox='{"data":[]}'
     answer "$inbox" ;;
   session.inbox.cancel)
-    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then served=serving; else served=stopped; fi
+    if up; then served=serving; else served=stopped; fi
     echo "${3#sessionID=} ${5#inboxID=} $served" >> "$d/cancelled" ;;
   session.interrupt)
-    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then served=serving; else served=stopped; fi
+    if up; then served=serving; else served=stopped; fi
     echo "${3#sessionID=} $served" >> "$d/interrupted"
     echo '{"interrupted":true}' ;;
+  session.message.list)
+    shift; echo "$*" >> "$d/listed"
+    if [ -n "${FAKE_LIST_UNTIL:-}" ]; then : > "$d/listing"; while [ ! -e "$d/$FAKE_LIST_UNTIL" ]; do sleep 0.05; done; fi
+    cur=; for a; do case "$a" in cursor=*) cur=${a#cursor=};; esac; done
+    [ ! -e "$d/pages/${cur:-first}" ] || answerfile "$d/pages/${cur:-first}" ;;
+  *) echo "Error: Operation not found: $1" >&2; exit 1 ;;
   esac ;;
 session)
   case "$2" in
   export)
-    if [ "$3" = --standalone ]; then id=$4; else [ "$3" != --server ] || authed; id=$5; fi
-    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
+    if [ "$3" = --standalone ]; then id=$4; else [ "$3" != --server ] || { authed; hangs session.export; }; id=$5; fi
+    if up; then echo "$id serving" >> "$d/exported"; else echo "$id stopped" >> "$d/exported"; fi
     held "$id" || { echo "Error: Session not found: $id" >&2; exit 1; }
     if [ -n "${FAKE_SESSION_EXPORT_SLEEP:-}" ]; then : > "$d/packing"; sleep "$FAKE_SESSION_EXPORT_SLEEP"; fi
     if [ -n "${FAKE_SESSION_EXPORT:-}" ]; then answer "$FAKE_SESSION_EXPORT"; else
@@ -218,7 +286,9 @@ run)
   if [ -n "${FAKE_REFRESH+set}" ]; then printf '%s' "$FAKE_REFRESH" > "$d/db"; fi
   [ -z "${FAKE_RUN_TERM_EXIT:-}" ] || trap 'exit "$FAKE_RUN_TERM_EXIT"' TERM
   : > "$d/refreshed"
-  echo '{"type":"text","part":{"text":"done"}}'
+  if [ -n "${FAKE_RUN_MESSAGE:-}" ]; then
+    echo '{"type":"text","part":{"messageID":"'"$FAKE_RUN_MESSAGE"'","text":"done"}}'
+  else echo '{"type":"text","part":{"text":"done"}}'; fi
   [ -z "${FAKE_RUN_SLEEP:-}" ] || [ -n "${FAKE_RUN_UNTIL:-}" ] || exec sleep "$FAKE_RUN_SLEEP"
   [ -z "${FAKE_RUN_SLEEP:-}" ] || sleep "$FAKE_RUN_SLEEP"
   [ -z "${FAKE_RUN_UNTIL:-}" ] || while [ ! -e "$d/$FAKE_RUN_UNTIL" ]; do sleep 0.05; done
@@ -273,6 +343,9 @@ type scriptOpts struct {
 	// ([sandbox.RunRequest.FreshWiring]); the fake's server records which it
 	// started on, and whether the other was still in the box.
 	values, freshValues string
+	// pages is what the fake's server answers `session.message.list` with, by
+	// the cursor it is handed, "first" for none.
+	pages map[string]string
 	// exportMessages, where set, is the messages the export of a session the
 	// fake holds carries (`export-messages` in the case's directory), for a
 	// case whose export has to be longer than an environment variable holds.
@@ -310,6 +383,9 @@ type scriptJob struct {
 	cmd            *exec.Cmd
 	stdout, stderr bytes.Buffer
 	exited         chan error
+	// alive is the read end of the pipe the fake's server holds for as long
+	// as it runs ([serverPipe]); nil for pieces, which start no server.
+	alive *os.File
 }
 
 // scriptRun is what one execution of the script left.
@@ -319,6 +395,8 @@ type scriptRun struct {
 	code            int
 	calls           []string
 	document, brief string
+	// alive is its job's [scriptJob.alive].
+	alive *os.File
 }
 
 // signalsDeliverable gives every script this file starts the default action
@@ -359,6 +437,7 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		}
 	}
 	writeStandIn(t, filepath.Join(bin, "opencode"), fakeOpenCode)
+	alive := serverPipe(t, dir)
 	paths := executor.Paths{Home: home}
 	if !o.unconfigured {
 		if err := os.WriteFile(paths.OpenCodeConfig(), []byte(scriptConfig), 0o600); err != nil {
@@ -399,6 +478,14 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			t.Fatal(err)
 		}
 	}
+	for cursor, page := range o.pages {
+		if err := os.MkdirAll(filepath.Join(dir, "pages"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pages", cursor), []byte(page), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if o.exportMessages != "" {
 		if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(o.exportMessages), 0o600); err != nil {
 			t.Fatal(err)
@@ -436,7 +523,7 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		argv = []string{"sh"}
 	}
 
-	j := &scriptJob{t: t, dir: dir, home: home, paths: paths, exited: make(chan error, 1)}
+	j := &scriptJob{t: t, dir: dir, home: home, paths: paths, exited: make(chan error, 1), alive: alive}
 	args := append(append([]string{}, argv[1:]...), "-c", script)
 	j.cmd = exec.Command(argv[0], args...) //nolint:gosec // the script under test
 	j.cmd.Dir = dir
@@ -453,6 +540,29 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	// Whatever a failed case left running goes with it.
 	t.Cleanup(func() { _ = syscall.Kill(-j.cmd.Process.Pid, syscall.SIGKILL) })
 	return j
+}
+
+// serverPipe makes the pipe the fake's server holds open for writing for as
+// long as it runs (`serve.alive` in dir, [fakeOpenCode]) and holds its read
+// end for the case, which reads the server's end off it
+// ([assertServerStopped]).
+//
+// Opened before the script starts and without waiting for a writer
+// (O_NONBLOCK): a pipe opened for writing waits for a reader, so the server's
+// own open would hang on a pipe nobody held, and a read end opened plainly
+// would wait for a server the case may never see start.
+func serverPipe(t *testing.T, dir string) *os.File {
+	t.Helper()
+	path := filepath.Join(dir, "serve.alive")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("making the server's pipe: %v", err)
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // under the test's own dir
+	if err != nil {
+		t.Fatalf("opening the server's pipe: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f
 }
 
 // caseClock is the clock a clocked case's script reads: the time the case last
@@ -618,7 +728,7 @@ func (j *scriptJob) waitWithin(limit time.Duration, why string) scriptRun {
 		j.t.Fatalf("the script had not exited after %s, and %s; calls:\n%s", limit, why,
 			strings.Join(j.calls(), "\n"))
 	}
-	run := scriptRun{dir: j.dir, home: j.home, stdout: j.stdout.String(), stderr: j.stderr.String()}
+	run := scriptRun{dir: j.dir, home: j.home, stdout: j.stdout.String(), stderr: j.stderr.String(), alive: j.alive}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		run.code = exit.ExitCode()
@@ -1304,13 +1414,25 @@ func TestTheRunsServerIsStoppedWithIt(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		run := runScript(t, scriptOpts{shell: sh})
-		assertServerStopped(t, run.dir)
+		assertServerStopped(t, run)
 	})
 }
 
-func assertServerStopped(t *testing.T, dir string) {
+// assertServerStopped fails the case if the run's server is still running
+// once the run is over: if its pipe ([serverPipe]) still has a writer. None
+// left is a server that has exited, reaped or not, since the kernel closes a
+// process's descriptors as it exits; kill(pid, 0), which this read replaces,
+// succeeds on a server the run stopped and nothing has reaped yet (#1164).
+//
+// ONE READ, WHICH NEVER WAITS. The run is over, so its server is gone already
+// or it outlived the run, and the pipe answers which at once: no data and no
+// writer is end of file, a writer still holding it is EAGAIN. A read that
+// waited for end of file would wait for nothing on a server that is gone, and
+// on one that outlived the run would end only when it did, which the fake's
+// does by itself after sixty seconds ([fakeOpenCode]), and pass it.
+func assertServerStopped(t *testing.T, run scriptRun) {
 	t.Helper()
-	raw := readIn(t, dir, "serve.pid")
+	raw := readIn(t, run.dir, "serve.pid")
 	if raw == "" {
 		t.Fatal("no server was started")
 	}
@@ -1318,9 +1440,26 @@ func assertServerStopped(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := syscall.Kill(pid, 0); err == nil {
+	conn, err := run.alive.SyscallConn()
+	if err != nil {
+		t.Fatalf("reading the server's pipe: %v", err)
+	}
+	var n int
+	var readErr error
+	if err := conn.Read(func(fd uintptr) bool {
+		n, readErr = syscall.Read(int(fd), make([]byte, 1))
+		return true // answered as it stands: never wait for the pipe to change
+	}); err != nil {
+		t.Fatalf("reading the server's pipe: %v", err)
+	}
+	switch {
+	case errors.Is(readErr, syscall.EAGAIN):
 		_ = syscall.Kill(pid, syscall.SIGKILL)
-		t.Fatalf("the server (pid %d) outlived the run", pid)
+		t.Fatalf("the server (pid %d) outlived the run: it still holds its pipe", pid)
+	case readErr != nil:
+		t.Fatalf("reading the server's pipe: %v", readErr)
+	case n != 0:
+		t.Fatalf("the server's pipe held %d byte, which nothing writes", n)
 	}
 }
 
@@ -1358,7 +1497,7 @@ func TestARunThatStartedNothingToStopEndsAtOnce(t *testing.T) {
 			if run.code != 1 {
 				t.Fatalf("exit %d, want the refusal's 1:\n%s", run.code, run.stderr)
 			}
-			assertServerStopped(t, run.dir)
+			assertServerStopped(t, run)
 		})
 	})
 }
@@ -1418,7 +1557,7 @@ func TestAServerThatNeverPrintsWhatTheRunNeedsIsNamed(t *testing.T) {
 				if run.callIndex("run ") >= 0 {
 					t.Errorf("the brief was run anyway:\n%s", strings.Join(run.calls, "\n"))
 				}
-				assertServerStopped(t, run.dir)
+				assertServerStopped(t, run)
 			})
 		}
 	})
@@ -1445,8 +1584,9 @@ func TestTheRunWaitsForTheServersAddressAndItsPassword(t *testing.T) {
 }
 
 // THE RUN'S EXIT IS THE RUN'S, and its usage follows it: the session's report,
-// asked of the run's own session, as the stream's last line — which the
-// decoder reads as the run's tokens and price.
+// asked of the run's own session once the run has ended, as a line of its own
+// type, which the decoder reads as the run's tokens and price. Not the stream's
+// last line: the session's message list's pages are printed after it.
 func TestTheScriptReportsTheSessionsUsageAndKeepsTheRunsExit(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -1645,13 +1785,17 @@ func TestNothingOfARunOutlivesIt(t *testing.T) {
 //
 // Every kill the script makes and every sleep it starts and sees end are
 // recorded, by functions standing in for both, and the exporter is stopped
-// part way through an export.
+// part way through an export. The tenth-of-a-second waits a shell polls with
+// — end's, and a bounded call's, which the exporter's exports are — are no
+// sleep the exporter starts, and are left out: one in the exporter's own
+// shell would be recorded under that shell's pid, which the script's stop
+// signals by design.
 //
 // Mutation: keep the sleep's pid after its wait, and the trap kills it.
 func TestTheLoginExporterSignalsNoPidItHasReaped(t *testing.T) {
 	t.Parallel()
 	const recorder = `kill() { echo "kill $*" >> "$FAKE_DIR/pids"; command kill "$@"; }
-sleep() { __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids"; command sleep "$@"; echo "end $__p" >> "$FAKE_DIR/pids"; }
+sleep() { [ "$1" != 0.1 ] || { command sleep "$@"; return; }; __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids"; command sleep "$@"; echo "end $__p" >> "$FAKE_DIR/pids"; }
 `
 	j := startScript(t, scriptOpts{
 		shell: boxShell{name: "sh-recording-pids", prelude: recorder},
@@ -1717,7 +1861,7 @@ sleep() { __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids";
 func TestAnExporterStoppedAsItStartsGoesAtOnce(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
-		j := startPieces(t, sh, "trap 'exit 143' TERM\nkeep() { :; }\n"+
+		j := startPieces(t, sh, "trap 'exit 143' TERM\nkeep() { :; }\nunbound() { :; }\n"+
 			executor.OpenCodeStops(stretchedStop)+"n=0\nwhile [ \"$n\" -lt 20 ]; do\n"+
 			executor.OpenCodeExporter(time.Hour, "sync")+" &\nxpid=$!\nunsync\n"+
 			"n=$((n+1))\ndone\n")
@@ -1751,7 +1895,7 @@ func TestAStopAsTheExporterStartsItsSleepLeavesNoSleep(t *testing.T) {
 		exporter = strings.Replace(exporter, cut.old, cut.new, 1)
 	}
 	forEachShell(t, func(t *testing.T, sh boxShell) {
-		j := startPieces(t, sh, "keep() { :; }\n"+exporter+" &\nwait $!\n")
+		j := startPieces(t, sh, "keep() { :; }\nunbound() { :; }\n"+exporter+" &\nwait $!\n")
 		run := j.waitWithin(promptEnd, "an exporter that stopped itself did not go")
 		if run.code != 0 {
 			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
@@ -1900,7 +2044,7 @@ func TestASignalledRunExportsItsLoginBeforeItGoes(t *testing.T) {
 				if last := run.calls[len(run.calls)-1]; last != "auth export --standalone" {
 					t.Errorf("the last call was %q, want the export beside the going server", last)
 				}
-				assertServerStopped(t, run.dir)
+				assertServerStopped(t, run)
 				j.assertGroupGone()
 			})
 		}
@@ -2015,7 +2159,7 @@ func TestAnEndedOpenCodeRunExportsItsSessionBeforeItsServerStops(t *testing.T) {
 		if _, err := os.Stat(j.paths.SessionCapture()); err != nil {
 			t.Errorf("the ended run left no capture: %v\n%s", err, run.stderr)
 		}
-		assertServerStopped(t, run.dir)
+		assertServerStopped(t, run)
 		j.assertGroupGone()
 	})
 }
@@ -2051,7 +2195,7 @@ func TestAnOpenCodeRunAskedToEndAsItsServerStartsGoesAtOnce(t *testing.T) {
 		if !strings.Contains(readIn(t, run.home+"/.crewlet", "session"), "id ses_") {
 			t.Error("the run asked to end before its server listened recorded no session")
 		}
-		assertServerStopped(t, run.dir)
+		assertServerStopped(t, run)
 		j.assertGroupGone()
 	})
 }

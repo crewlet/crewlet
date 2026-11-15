@@ -177,6 +177,79 @@ export function layoutDays(
 }
 
 /**
+ * The transcript's rows placed as the page draws them: a row's own height, and
+ * for the first row of each day the day's label and rule above it (`chrome`)
+ * as well. The window is laid out in these, so the place it gives a row is
+ * the place the row is drawn at.
+ */
+export function placedHeights(
+  days: readonly Day[],
+  heightOf: (index: number) => number,
+  chrome: number,
+): (index: number) => number {
+  const opens = new Set<number>();
+  for (const day of days) {
+    const first = day.rows[0];
+    if (first) opens.add(first.index);
+  }
+  return (index) => heightOf(index) + (opens.has(index) ? chrome : 0);
+}
+
+/** One day the window draws, with the height of its own rows the window leaves out. */
+export interface DrawnDay {
+  day: Day;
+  /** The day's rows inside the window, drawn. */
+  rows: DayRow[];
+  /** The height of the day's rows above the window, which a spacer inside the day stands for. */
+  above: number;
+  /** The height of the day's rows below the window, likewise. */
+  below: number;
+}
+
+/** The days a row window draws, and what stands for the days it does not. */
+export interface DaysInWindow {
+  days: DrawnDay[];
+  /** The height of every whole day above the window: its rows, its label and its rule. */
+  padTop: number;
+  /** The same, below it. */
+  padBottom: number;
+}
+
+/**
+ * Splits the days by the window of rows `[start, end)`.
+ *
+ * WHAT IS NOT DRAWN IS STOOD FOR AT ITS DRAWN HEIGHT, so moving the window
+ * moves nothing on screen. A day the window does not reach is left out whole,
+ * and the spacer standing for it counts its label and rule (`chrome`) as well
+ * as its rows: counting the rows alone, each day that left the window lifted
+ * everything after it by the height of its rule, the thread's place keeping
+ * moved the scroll back by as much, and that scroll moved the window again.
+ */
+export function daysInWindow(
+  days: readonly Day[],
+  start: number,
+  end: number,
+  heightOf: (index: number) => number,
+  chrome: number,
+): DaysInWindow {
+  const out: DaysInWindow = { days: [], padTop: 0, padBottom: 0 };
+  for (const day of days) {
+    let above = 0;
+    let below = 0;
+    const rows: DayRow[] = [];
+    for (const row of day.rows) {
+      if (row.index < start) above += heightOf(row.index);
+      else if (row.index >= end) below += heightOf(row.index);
+      else rows.push(row);
+    }
+    if (rows.length > 0) out.days.push({ day, rows, above, below });
+    else if (out.days.length === 0) out.padTop += chrome + above + below;
+    else out.padBottom += chrome + above + below;
+  }
+  return out;
+}
+
+/**
  * When a list row's last word was said, in two lengths for one place: the
  * time today, "Yesterday", then the date ("November 16" wide, "Nov 16"
  * narrow), with its year once it is not this year's. The row draws the one
