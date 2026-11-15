@@ -132,6 +132,11 @@ test("the page opens on the starting layouts, the first one focused", () => {
   expect(screen.getByRole("button", { name: "Create and ask" }).getAttribute("aria-disabled")).toBe(
     "true",
   );
+  const create = screen.getByRole("button", { name: "Create design" });
+  expect(create.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById(create.getAttribute("aria-describedby")!)?.textContent).toBe(
+    "Pick a layout.",
+  );
 });
 
 test("a layout lays its boards on the canvas and the list beside it", () => {
@@ -211,21 +216,57 @@ test("Command Enter in the hand-off creates and asks", async () => {
   expect(run).toHaveBeenCalledOnce();
 });
 
-// THE HAND-OFF IS THE PAGE'S ONE WAY TO MAKE A DESIGN: it arrives open, and
-// closed, the bar's Ask an agent is the primary that opens it again, as is
-// Command Enter from the canvas.
-test("closed, Ask an agent is the bar's primary, and Command Enter opens it again", () => {
+// CREATE DESIGN IS THE BAR'S OWN ACTION, as every kind's is: with the panel
+// closed it makes the design from the boards alone, shared with nobody and
+// with no task filed, and opens it. The bar reads as every kind's does: Ask
+// an agent before Cancel, and the kind's action last. It was the page's one
+// way to make a design, so a person who placed boards themselves could not.
+test("closed, Create design makes the design from the boards alone and opens it", async () => {
   mount();
   pickLanding();
   const panel = screen.getByRole("complementary", { name: "Ask an agent" });
   expect(within(panel).getByText("3 boards")).toBeTruthy();
   fireEvent.click(within(panel).getByRole("button", { name: "Close ask an agent" }));
   expect(screen.queryByRole("complementary", { name: "Ask an agent" })).toBeNull();
-  const tool = screen.getAllByRole("button", { name: "Ask an agent" })[0]!;
-  expect(tool.className).toContain("primary");
-  fireEvent.keyDown(document.body, { key: "Enter", metaKey: true });
-  expect(screen.getByRole("complementary", { name: "Ask an agent" })).toBeTruthy();
-  expect(run).not.toHaveBeenCalled();
+  const bar = screen.getByRole("banner");
+  const [ask, cancel, made] = ["Ask an agent", "Cancel", "Create design"].map(
+    (name) => within(bar).getAllByRole("button", { name })[0]!,
+  );
+  const before = (a: Node, b: Node) =>
+    (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  expect(before(ask!, cancel!) && before(cancel!, made!)).toBe(true);
+  expect(made!.className).toContain("primary");
+  expect(ask!.className).not.toContain("primary");
+  const create = screen.getByRole("button", { name: "Create design" });
+  expect(create.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.change(screen.getByRole("textbox", { name: /^Design name/ }), {
+    target: { value: "Launch" },
+  });
+  expect(create.getAttribute("aria-disabled")).toBeNull();
+  await act(async () => {
+    fireEvent.click(create);
+  });
+  expect(run).toHaveBeenCalledOnce();
+  const req = run.mock.calls[0]![0];
+  expect(req.body).toMatchObject({ kind: "design", title: "Launch", starter: true });
+  expect(req.body.shares).toBeUndefined();
+  expect(fileArtifactTask).not.toHaveBeenCalled();
+  expect(location.hash).toBe(`#/artifacts/${ID}`);
+});
+
+// THE LAYOUT THE BOARDS WERE LAID FROM STAYS CHOSEN: back on the layouts, it is
+// the one marked, and the one focus lands on.
+test("back on the layouts, the one the boards came from is marked chosen", () => {
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "App screens" }));
+  FakeResizeObserver.all.forEach((o) => o.resize(1000, 700));
+  fireEvent.click(screen.getByRole("button", { name: "Layouts" }));
+  const chosen = screen.getByRole("button", { name: "App screens" });
+  expect(chosen.getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "Landing page" }).getAttribute("aria-pressed")).toBe(
+    "false",
+  );
+  expect(document.activeElement).toBe(chosen);
 });
 
 test("Cancel asks before discarding what was laid out", () => {
