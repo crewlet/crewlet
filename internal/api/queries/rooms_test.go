@@ -145,6 +145,8 @@ func everySeam(t *testing.T) queries.Sources {
 		AgentAccess:  func(context.Context) ([]queries.AgentAccessRow, error) { return nil, nil },
 		// WHAT DELEGATES DECIDED, read off an access log holding nothing.
 		Delegated: emptyVerdicts{},
+		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB.
+		DelegatedGitHub: ruleGitHub{},
 		// THE ATLAS, read off a node that runs no company yet.
 		Atlas:    builtin.AtlasDeps{},
 		Insights: coordmemory.NewFleet(),

@@ -167,6 +167,51 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	}
 }
 
+// THE RULE'S FORM READS WHAT ITS GITHUB ANSWERS SEND. Settings › Delegated
+// decisions reads `delegated_repositories`, `delegated_branches` and
+// `delegated_checks` as the three answers `contract/delegated.ts` declares,
+// each held both ways over an answer that read and one that could not, so the
+// optional `unread` is exercised too.
+//
+// Mutation: rename `default_branch` or `more` on either side, or answer an
+// unread list without saying why, and this is red.
+func TestTheRuleFormReadsWhatItsGitHubAnswersSend(t *testing.T) {
+	t.Parallel()
+	shapes := map[string][]map[string]any{}
+	add := func(iface string, g ruleGitHub, what string, params map[string]any) map[string]any {
+		body, err := askRuleGitHub(t, g, what, params)
+		if err != nil {
+			t.Fatalf("%s %v: %v", what, params, err)
+		}
+		shapes[iface] = append(shapes[iface], body)
+		return body
+	}
+	read := add("DelegatedRepositoriesAnswer", ruleGitHub{}, "delegated_repositories", nil)
+	add("DelegatedRepositoriesAnswer", ruleGitHub{off: true}, "delegated_repositories", nil)
+	add("DelegatedRepositoriesAnswer", ruleGitHub{noApps: true}, "delegated_repositories", nil)
+	shapes["DelegatedRepository"] = rowsOf(t, read["repos"])
+	add("DelegatedBranchesAnswer", ruleGitHub{}, "delegated_branches", map[string]any{"repo": "acme/api"})
+	add("DelegatedBranchesAnswer", ruleGitHub{}, "delegated_branches", map[string]any{"repo": "acme/gone"})
+	add("DelegatedChecksAnswer", ruleGitHub{}, "delegated_checks", map[string]any{"repo": "acme/api", "branch": "main"})
+	add("DelegatedChecksAnswer", ruleGitHub{}, "delegated_checks",
+		map[string]any{"repo": "acme/locked", "branch": "main"})
+	// AN ANSWER WITH NOTHING TO OFFER SAYS WHY, except a company with no
+	// GitHub, which says it is not connected.
+	for iface, rows := range shapes {
+		for _, row := range rows {
+			for _, key := range []string{"repos", "branches", "checks"} {
+				if list, ok := row[key].([]any); ok && len(list) == 0 && row["unread"] == nil &&
+					row["connected"] != false {
+					t.Errorf("%s offered nothing and said nothing: %v", iface, row)
+				}
+			}
+		}
+	}
+	for iface, rows := range shapes {
+		holdShape(t, iface, rows, false)
+	}
+}
+
 // A HELD CALL'S CARD READS WHAT ITS DELEGATION SENDS. A parked run's
 // `held_call.delegation` on the executors board is read as `HeldDelegation`
 // and the answer and escalation shapes composed into it

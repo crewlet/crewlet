@@ -174,3 +174,44 @@ export interface DelegatedDecisionsAnswer {
   flagged: DelegatedVerdictRow[];
   flagged_more: boolean;
 }
+
+/**
+ * `GET /delegated-decisions/repositories`: the company's GitHub repositories
+ * an agent's app covers, which a rule's required checks name. An
+ * administrator's.
+ */
+export interface DelegatedRepositoriesAnswer {
+  /** False for a company that runs no GitHub. */
+  connected: boolean;
+  repos: DelegatedRepository[];
+  /** Why nothing could be listed, where it could not; a name can still be typed. */
+  unread?: string;
+}
+
+/** One GitHub repository a rule can name. */
+export interface DelegatedRepository {
+  /** As owner/name. */
+  repo: string;
+  default_branch: string;
+  archived: boolean;
+}
+
+/** `GET /delegated-decisions/branches?repo=`: one repository's branches. */
+export interface DelegatedBranchesAnswer {
+  repo: string;
+  branches: string[];
+  /** GitHub holds more branches than were read; one past them is typed. */
+  more: boolean;
+  unread?: string;
+}
+
+/**
+ * `GET /delegated-decisions/checks?repo=&branch=`: the check names on the
+ * branch's newest commit a rule can require, none an agent's own app reported.
+ */
+export interface DelegatedChecksAnswer {
+  repo: string;
+  branch: string;
+  checks: string[];
+  unread?: string;
+}

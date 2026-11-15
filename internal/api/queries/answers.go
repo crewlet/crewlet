@@ -114,6 +114,10 @@ type Sources struct {
 	// reads (ADR-0125); nil serves no such question.
 	Delegated DelegatedReads
 
+	// DelegatedGitHub is the company's GitHub a rule's form offers
+	// (delegatedgithub.go); nil serves none of its three questions.
+	DelegatedGitHub DelegatedGitHub
+
 	// Atlas is the atlas's reads on this node (atlas.go); nil serves no
 	// atlas question.
 	Atlas AtlasReads
@@ -1183,6 +1187,13 @@ func Register(r *Registry, s Sources) {
 		// WHAT DELEGATES DECIDED, for the people they answer to: decided
 		// per caller against the rules' escalate_to (ADR-0125).
 		r.Register("delegated_decisions", DecidedBy(authz.ActionDelegatedRead), s.delegatedDecisions)
+	}
+	if s.DelegatedGitHub != nil {
+		// WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB, for the
+		// administrator who writes the rule into the document.
+		r.Register("delegated_repositories", Requires(iam.GrantAdmin), s.delegatedRepositories)
+		r.Register("delegated_branches", Requires(iam.GrantAdmin), s.delegatedBranches)
+		r.Register("delegated_checks", Requires(iam.GrantAdmin), s.delegatedChecks)
 	}
 	if s.Artifacts != nil {
 		// THE ARTIFACTS, each decided per artifact by the artifacts' one

@@ -263,6 +263,15 @@ target's own merge gate, which names its checks itself, so `required_checks`
 applies to GitHub repositories. **Settings › Delegated decisions** lists each
 rule's required checks beside its paths.
 
+When you add or change a rule there, the form offers the company's GitHub
+repositories to pick from, then the chosen repository's branches, then the
+check names reported on that branch's newest commit, leaving out any an
+agent's own app reported. They are read when the form asks, through the
+agents' own apps (`GET /delegated-decisions/repositories`, `/branches` and
+`/checks`, an administrator's). A repository, branch or check the lists do not
+show can still be typed, and where nothing could be read the form says why: no
+agent's app installed on the repository, or none with Checks (Read-only).
+
 ## What is not supported yet
 
 - Merges on GitLab: GitLab records no approval of one commit, so nothing could
