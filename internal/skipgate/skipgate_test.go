@@ -1090,3 +1090,38 @@ func TestTheCPULineSaysWhatTheCommandUsed(t *testing.T) {
 		t.Errorf("cpuUse(nil) = %q, want %q", got, want)
 	}
 }
+
+// THE SLOWEST LIST IS THE LONGEST FIRST, SUBTESTS INCLUDED, AND NO MORE.
+//
+// A suite run as subtests of one test spends its time in those subtests,
+// and the -timings file stops at the top level, so the list is where they
+// are seen: it must rank them beside top-level tests, cut at n, break ties
+// by name so two runs of one measurement print one list, and print nothing
+// for a run that timed nothing rather than a header over an empty list.
+func TestTheSlowestListIsTheLongestFirst(t *testing.T) {
+	t.Parallel()
+
+	timed := []timedTest{
+		{"internal/a", "TestShort", 0.5},
+		{"internal/b", "TestSuite/case_two", 40},
+		{"internal/a", "TestTie", 7},
+		{"internal/b", "TestSuite", 61.25},
+		{"internal/a", "TestAlsoTie", 7},
+		{"internal/c", "TestSkipped", 0},
+	}
+	got := slowest(timed, 4)
+	want := "skipgate: the 4 slowest tests and subtests:\n" +
+		"     61.250s  internal/b TestSuite\n" +
+		"     40.000s  internal/b TestSuite/case_two\n" +
+		"      7.000s  internal/a TestAlsoTie\n" +
+		"      7.000s  internal/a TestTie\n"
+	if got != want {
+		t.Errorf("slowest(…, 4) =\n%s\nwant\n%s", got, want)
+	}
+	if got := slowest(timed[:2], 25); !strings.HasPrefix(got, "skipgate: the 2 slowest") {
+		t.Errorf("slowest of 2 timed tests, asked for 25, =\n%s\nwant a list of the 2", got)
+	}
+	if got := slowest(nil, 25); got != "" {
+		t.Errorf("slowest of nothing = %q, want nothing printed", got)
+	}
+}
