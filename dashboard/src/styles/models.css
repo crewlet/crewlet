@@ -35,7 +35,10 @@
   gap: var(--spacing-3);
 }
 
-.models-host > * {
+/* THE LINES TAKE THE BLOCK'S WIDTH AND ITS ACTION KEEPS ITS OWN: stretched
+   with the rest, "Check again" was a bar the width of the form, the one
+   button in the dashboard drawn that way. */
+.models-host > :not(button) {
   align-self: stretch;
 }
 

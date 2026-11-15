@@ -154,6 +154,19 @@ test("the figures say how many are not ready and why, and the card does not coun
   expect(head).not.toMatch(/\d/);
 });
 
+// THE CALLS THE TILE COUNTS are every call made, refused and failed ones
+// included, as Token spend counts them; where they spent nothing the tile
+// says so rather than "0 over 887 calls".
+test("the tokens tile says the calls spent nothing where they did", () => {
+  mount(
+    modelsData({
+      entries: [modelEntry({ key: "default", usage: { days: 7, calls: 887, total_tokens: 0 } })],
+    }),
+  );
+  expect(tile("Tokens, 7 days")).toContain("887 calls, none spent tokens");
+  expect(tile("Tokens, 7 days")).not.toContain("over 887 calls");
+});
+
 test("Add model is the page's action, and opens the add flow", () => {
   const onFlow = mount();
   const add = within(document.querySelector<HTMLElement>(".page-actions")!).getByRole("button", {

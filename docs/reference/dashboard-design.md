@@ -9646,7 +9646,10 @@ ranked lists give their words one column, half the card, so their bars start at
 one x down the page and a team's name is not cut at the kit's 128px. Every card
 in a row stretches to the tallest, so the row's edges line up and nothing
 leaves a hole under it. A stretched card keeps its content at the top and its
-foot on the floor, the stacked lists' last card takes what the stack leaves,
+foot on the floor, and an EMPTY card's state stands in the middle of what its
+head and foot leave (By agent beside two empty lists stood 390px tall with its
+empty state at the top over a band of nothing, which read as a card that
+failed to fill), the stacked lists' last card takes what the stack leaves,
 and a card whose partner is absent (no task spend to rank on a tracker that is
 not Worklet) takes the whole row. In the top row the hero's figure stays
 at its top while the budget and the tiles stand on its floor, level with the
@@ -9674,9 +9677,12 @@ the page column's, not the window's.
   cache has **no cache tile** — not 0%, which would be a claim about caching
   nobody made.
 - **The median task** is Worklet's own `totals=spend_tokens:median` over
-  the tasks FINISHED in the window that spent anything, with how many. On a
-  company whose tracker is not Worklet, `work_items` is not served and the
-  tile is not drawn.
+  the tasks FINISHED in the window that spent anything, with how many. Where
+  no such task finished, the figure is `EmptyValue`'s mark ("No task finished
+  in this window spent tokens") and the line under it ends "none in this
+  window": the words "No tasks" in the figure's place read with the label as
+  one phrase. On a company whose tracker is not Worklet, `work_items` is not
+  served and the tile is not drawn.
 - **A reader without Worklet is asked nothing about tasks.** The overview is
   everybody's and a task is Worklet's, so the median tile and the most
   expensive tasks card each say *Needs Worklet access* (the card with no
@@ -9686,9 +9692,19 @@ the page column's, not the window's.
 - **Daily tokens by phase** is the kit's `StackedColumns` over the engine's four
   bands, each in its `BANDS` hue, and the legend is always those four — the
   engine answers a band nothing spent in at zero; the split control offers the
-  contract's six `GROUPS`, and any split but phase draws the engine's top four
-  and a residual. A seat band is labelled with the seat's name, as the table
-  under it names it, and a team band with the unit's. The comparison is the
+  contract's six `GROUPS` (Phase, Model, Provider, Agent, Team, Worker: each
+  `label` and the title's `noun` are the names the cards use, so the control
+  no longer says Seat and Unit beside By agent and By team), and any split but
+  phase draws the engine's top four and a residual, listing only the bands
+  that spent (the engine names a band for every team or model that made a
+  call, a call that spent nothing included). "The four biggest, and
+  everything else as one band" is said only where the engine folded a
+  residual. A seat band is labelled with the seat's name, as the table under
+  it names it, and a team band with the unit's. **A window that spent no
+  token is one empty state**, never an axis: the figure is tokens, so it is
+  empty when nothing spent, not when nothing was called, and a window of
+  refused calls says "No tokens spent in this window" with how many calls
+  were made ("887 calls, none spent tokens") and why they spent nothing. The comparison is the
   hero's; the chart draws no ghost of the window before. The legend stands at
   the end of the title's row, and on a card too narrow for both (a phone) it
   takes a row of its own under the title, still at the end.
@@ -9707,7 +9723,15 @@ the page column's, not the window's.
   per-turn spend is the turn list's.
 - **By model** is the engine's `by_provider`: each configured provider entry,
   the models it answered with, who used it (the top three and how many more)
-  and its tokens. **By team** is `token_series{group: unit}` asked for every
+  and its tokens. An entry whose calls spent nothing is no row of it, and
+  where none spent, its empty state counts the calls made, as Settings ›
+  Models counts them, rather than claiming no model was called.
+  **Which calls a count counts** is said once, in `lib/spend.ts`
+  (`UNSPENT_CALLS`, `callsWords`), on every screen that draws a count of
+  calls beside a count of tokens (Token spend's chart and By model, Models'
+  tokens tile and a model's usage card): the engine counts every call made,
+  one its model refused or one that failed included, and such a call spends
+  no token. **By team** is `token_series{group: unit}` asked for every
   team; **Auxiliary model** is `by_worker` — what the seats' cheap model spent,
   by purpose (`memory filter`, `condense thread`, `persist decider`, …) and its
   provider calls. A breakdown rather than an addition: every one of those calls

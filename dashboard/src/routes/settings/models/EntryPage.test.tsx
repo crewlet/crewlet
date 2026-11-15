@@ -198,3 +198,19 @@ test("a seat running every job on the model is named once, under Everything", ()
   expect(within(list).getAllByRole("link", { name: /QA/ })).toHaveLength(1);
   expect(list.textContent).toContain("Everything");
 });
+
+// WHICH CALLS ARE COUNTED, where they spent nothing: every call made is
+// counted, a refused or failed one included, as Token spend counts it, and
+// "Calls 945, Tokens 0" with nothing under it read as a fault of the page.
+test("a model's usage says its calls spent nothing where they did", () => {
+  page({ key: "default", usage: { days: 7, calls: 945, total_tokens: 0 } });
+  const usage = screen.getByText("Usage, last 7 days").closest(".crewlet-card") as HTMLElement;
+  expect(usage.textContent).toContain("945");
+  expect(usage.textContent).toContain(
+    "None of them spent tokens. A call that is refused or fails is counted and spends no tokens.",
+  );
+  cleanup();
+  page({ key: "default", usage: { days: 7, calls: 40, total_tokens: 900_000 } });
+  const spent = screen.getByText("Usage, last 7 days").closest(".crewlet-card") as HTMLElement;
+  expect(spent.textContent).not.toContain("None of them spent tokens");
+});

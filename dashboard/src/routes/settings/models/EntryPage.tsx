@@ -41,6 +41,7 @@ import {
   DEFAULT_HARNESS_TIMEOUT_SECONDS,
 } from "~/contract/models.ts";
 import { fmtClock, fmtCount, fmtDate, fmtExact, listed, plural, relTime } from "~/lib/format.ts";
+import { UNSPENT_CALLS } from "~/lib/spend.ts";
 import {
   CATEGORY_JOBS,
   CATEGORY_ORDER,
@@ -574,13 +575,23 @@ function UsageCard({ model }: { model: ModelView }) {
             No calls in the last {plural(usage.days, "day")}.
           </Text>
         ) : (
-          <DescriptionList
-            dense
-            items={[
-              ["Calls", fmtExact(usage.calls)],
-              ["Tokens", fmtCount(usage.total_tokens)],
-            ]}
-          />
+          <>
+            <DescriptionList
+              dense
+              items={[
+                ["Calls", fmtExact(usage.calls)],
+                ["Tokens", fmtCount(usage.total_tokens)],
+              ]}
+            />
+            {/* WHICH CALLS, where they spent nothing: every call made is
+                counted, a refused or failed one included, as Token spend
+                counts them, and "Calls 945, Tokens 0" read as a fault. */}
+            {usage.total_tokens <= 0 && (
+              <Text as="p" variant="caption" tone="secondary">
+                None of them spent tokens. {UNSPENT_CALLS}
+              </Text>
+            )}
+          </>
         )}
       </Card.Body>
     </Card>

@@ -6,11 +6,13 @@
 
 import { useMemo } from "react";
 import { CircleDashedGlyph } from "@crewlethq/icons/glyphs";
-import { Card, Link, TableNumberCell } from "@crewlethq/ui";
+import { Card, Link, TableEntityCell, TableNumberCell } from "@crewlethq/ui";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { href } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtCount } from "~/lib/format.ts";
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { wakeWords } from "~/lib/wakes.ts";
 import type { TurnOutcomeRow } from "~/protocol/turnOutcomes.ts";
@@ -23,6 +25,10 @@ export function NothingTurns({
   words: string | null;
 }) {
   const answer = useQuery("turn_outcomes", params);
+  // EACH AGENT BY ITS NAME, as By agent above draws it: the answer keys a row
+  // on the seat's handle, and the handle drawn as the name put `agent-ceo` on
+  // the same screen as "Agent CEO".
+  const badgeOf = useSeatBadgeOf();
   // THE COSTLIEST FIRST: a row is worth reading for what its turns spent.
   const rows = useMemo(
     () =>
@@ -58,7 +64,12 @@ export function NothingTurns({
             icon: "circle-check",
           }}
           columns={[
-            { key: "seat", header: "Agent", sortValue: (r) => r.seat, cell: (r) => r.seat },
+            {
+              key: "seat",
+              header: "Agent",
+              sortValue: (r) => badgeOf(r.seat).name,
+              cell: (r) => <TableEntityCell {...plainSeat(badgeOf(r.seat))} />,
+            },
             {
               key: "wake",
               header: "Woken by",
