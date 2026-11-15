@@ -571,6 +571,73 @@ func TestAMultiByteIdentifierIsNeverAPiece(t *testing.T) {
 	}
 }
 
+// A VALUE IS SHOWN WHOLE EXACTLY WHERE ITS LINE SHOWS IT. ShowsWhole is what
+// a caller comparing a told call with a held one reads to know which of the
+// told call's values a model can compare, so it must agree with the line itself on every side of the budget: a value
+// it calls whole that the line fits is a rewrite compared as the value, and a
+// value it calls a piece that the line shows is a difference nobody sees.
+// Each case renders one call under a Fitted that marks every piece CallPieces
+// names, and reads the value back off the line. Mutations: ShowsWhole always
+// true, the long string and the long object red; always false, the short ones
+// red; judged in bytes rather than runes, the multi-byte string red.
+func TestAValueIsShownWholeExactlyWhereItsLineShowsIt(t *testing.T) {
+	t.Parallel()
+	const marker = "(a rewrite of the piece)"
+	cases := []struct {
+		name  string
+		value any
+		whole bool
+	}{
+		{"a string at the budget", strings.Repeat("a", ValueLimit), true},
+		{"a string one rune past it", strings.Repeat("a", ValueLimit+1), false},
+		{"multi-byte runes within it, past it in bytes", strings.Repeat("営", ValueLimit), true},
+		{"multi-byte runes past it", strings.Repeat("営", ValueLimit+1), false},
+		{"a number", 42, true},
+		{"a short object", map[string]any{"path": "docs/a.md", "n": 3}, true},
+		{"a long object", map[string]any{"rows": strings.Split(strings.Repeat("row,", 100), ",")}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			calls := []Call{{Name: "put", Args: map[string]any{"v": tc.value}}}
+			opts := Format(nil, nil)
+			opts.Fitted = Fitted{}
+			for _, p := range CallPieces(calls, opts) {
+				opts.Fitted[p] = marker
+			}
+			line := FormatCalls(calls, opts)
+			args, ok := strings.CutPrefix(line, "- put(")
+			if !ok {
+				t.Fatalf("the line reads %q, want one line of put", line)
+			}
+			args, _, ok = strings.Cut(args, ") → ")
+			if !ok {
+				t.Fatalf("the line reads %q, want its outcome after its arguments", line)
+			}
+			var shown map[string]any
+			if err := json.Unmarshal([]byte(args), &shown); err != nil {
+				t.Fatalf("the line's arguments %q are not JSON: %v", args, err)
+			}
+			encoded, err := json.Marshal(tc.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var sent any
+			if err := json.Unmarshal(encoded, &sent); err != nil {
+				t.Fatal(err)
+			}
+			lineShowsIt := reflect.DeepEqual(shown["v"], sent) && !strings.Contains(line, marker)
+			if lineShowsIt != tc.whole {
+				t.Fatalf("the line shows the value whole: %v, want %v (the case is mislabelled or the render moved):\n%s",
+					lineShowsIt, tc.whole, line)
+			}
+			if got := ShowsWhole(tc.value, opts); got != lineShowsIt {
+				t.Errorf("ShowsWhole = %v, but the line shows the value whole: %v:\n%.300s", got, lineShowsIt, line)
+			}
+		})
+	}
+}
+
 // A FAILED CALL'S ERROR IS A PIECE; A SUCCESSFUL CALL'S RESULT IS NOT CARRIED
 // AT ALL, and a skipped meta-tool contributes nothing to fit.
 func TestCallPiecesNamesExactlyWhatARenderShows(t *testing.T) {

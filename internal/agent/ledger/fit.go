@@ -106,6 +106,26 @@ func valuePiece(value any, limit int) (Piece, bool) {
 	return Piece{Kind: PieceArgument, Text: text, Limit: limit}, true
 }
 
+// ShowsWhole reports whether a call's line rendered under opts shows the
+// argument value as itself, rather than as a piece its caller fits: in place
+// of a fitted piece the line shows the caller's rewrite, or the value omitted
+// by its size and digest ([github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit]),
+// and neither is the value.
+//
+// IT IS THE RENDER'S OWN TEST, [valuePiece]'s answer, never a second rule
+// beside it: a value is shown whole exactly where [renderArgs] carries it
+// as itself, judged in runes as the budget is, and by the line's own JSON
+// for a value that is not a string. So a caller that asks what a model
+// reading the line can compare with a call it holds, taking a value the line
+// does not show whole for one that may equal anything, asks the render, and
+// the two never part: were it a rule of its own and stricter, a value the
+// line shows would be taken for one that may equal anything; were it looser,
+// a rewrite would be compared as the value.
+func ShowsWhole(value any, opts FormatOptions) bool {
+	_, piece := valuePiece(value, opts.ValueLimit)
+	return !piece
+}
+
 // CallPieces is every payload [FormatCalls] would need fitted for these calls
 // under these options, each once. Of a [FormatCallGroups] render it is the
 // pieces of the groups' concatenation (slices.Concat), which shows exactly the
