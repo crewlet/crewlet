@@ -309,10 +309,7 @@ test("a change to a page's body reads as a line diff, like its History", () => {
   expect(added.filter((text) => text !== "")).toEqual(["## TL;DR", "- One owner"]);
 });
 
-// A CHANGE PREPARED AFTER OUTSIDE TEXT SAYS SO FIRST (D25): the engine names
-// the surface the turn read, and the card leads with it in words, never the
-// engine's token. Mutation: drop `caution` from the card and the taint the
-// engine computed is invisible again.
+// A proposal made after outside text leads with where that text was, in words.
 test("a proposal made after reading outside text leads with where that text was", () => {
   draw({ scope: "server", state: "proposed", taint: "work_comment", summary: "File a task." });
   const said = document.body.textContent ?? "";
@@ -335,10 +332,7 @@ test("every surface the engine can name has its own words", () => {
   }
 });
 
-// WHAT APPROVING INVOLVES IS SAID BEFORE THE PRESS: the engine's step-up flag
-// and the proposal's expiry, after which the approval is refused. Mutation:
-// drop `stepUp` or `expiresAt` and the identity check and a refusal for
-// lateness come as a surprise.
+// The card says before the press that approving asks for a step-up, and when it expires.
 test("the card says an approval asks for the person's identity, and when it expires", () => {
   vi.useFakeTimers();
   try {

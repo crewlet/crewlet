@@ -11,13 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// A PROPOSAL MADE AFTER READING OUTSIDE TEXT SAYS SO, AND WHERE (D25): an
-// executor's question is a third party's text, so a task proposed after
-// reading one carries the taint its card shows, naming an agent's question
-// rather than the API answer that carried it; a task proposed after reading
-// only the company's own records carries none. Mutation: label every read
-// colleague again, or taint on the tool's static trust, and the first case is
-// clean; taint with the tool's static Source and it names api_answer.
+// A proposal made after an executor's question is tainted as an agent's
+// question, not as the API answer that carried it; one after company records is not.
 func TestAProposalAfterOutsideTextIsTainted(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

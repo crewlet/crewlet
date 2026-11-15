@@ -982,11 +982,8 @@ func artifactKinds() []string {
 	return out
 }
 
-// outsideWhere is the trust of an answer whose rows (at rows) may carry an
-// executor's question at field: the one label decided for an executor's
-// words (provenance.Executor), its surface included, where any row carries
-// one, and where none does the engine's own records, a colleague's by the one
-// rule for a surface the engine hosts.
+// outsideWhere labels an answer whose rows may carry an executor's question:
+// provenance.Executor's label where one does, the hosted rule's trust otherwise.
 func outsideWhere(rows, field string) func(Args, any) Trusted {
 	return func(_ Args, answer any) Trusted {
 		if carriesRunAsk(answer, rows, field) {

@@ -96,11 +96,8 @@ type Expect struct {
 	// model, which hears every answer; a live model's answers travel inside
 	// its own harness, and the expectation is not judged there.
 	Refusals [][]string `yaml:"refusals"`
-	// Taint is the outside surface every proposal the turn ends with names
-	// as the text it read before proposing (one of provenance.Sources, which
-	// the card puts in words), or TaintNone for proposals that must name
-	// none. So a case holds the engine to marking a change somebody else's
-	// text may have asked for where the person decides it (D25).
+	// Taint is the outside surface every proposal must name (a provenance
+	// source), or TaintNone for none (D25).
 	Taint string `yaml:"taint"`
 }
 

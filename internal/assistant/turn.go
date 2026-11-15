@@ -130,10 +130,8 @@ func (t *turn) firstOutput() {
 	}
 }
 
-// tainted notes a fenced answer, from the surface src, that at the trust it
-// earned somebody outside the company wrote. The surface is the one the read
-// found the outside text in ([catalog.Result.Source]), so a proposal names
-// "an agent's question" rather than the API answer that carried it.
+// tainted notes an answer from surface src that, at its trust, somebody
+// outside the company wrote.
 func (t *turn) tainted(src provenance.Source, trust provenance.Trust) {
 	if !outsideTrust(trust) {
 		return

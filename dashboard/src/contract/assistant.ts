@@ -162,11 +162,7 @@ type AssistantProposalScope = "server" | "page";
 /** How much care a proposal asks of the person approving it; absent for an ordinary change. */
 type AssistantProposalRisk = "destructive";
 
-/**
- * The surface whose outside text a turn read before it proposed a change
- * (`provenance.Sources`): the card says it in words, so the person weighs a
- * change somebody else's text may have asked for.
- */
+/** The surface whose outside text a turn read before proposing (`provenance.Sources`). */
 export type AssistantTaintSource =
   | "page_body"
   | "page_comment"

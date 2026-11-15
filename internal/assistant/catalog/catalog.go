@@ -171,16 +171,9 @@ var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate, KindDocs, 
 // Valid reports whether k is a kind this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 
-// Trusted is what a read's answer earned, as its tool's TrustOf decides it:
-// how far the model may rely on it, and, where it found text written outside
-// the company, the surface that text came from (an agent's question, a
-// connected knowledge base's page), empty where it cannot tell.
-//
-// THE SURFACE IS WHAT A PROPOSAL NAMES, NOT THE FENCE. The model reads the
-// whole answer under one fence, the tool's Source with this trust; a proposal
-// the turn makes afterwards names the surface its outside text came from
-// (D25), so the person reads "an agent's question" rather than "an API
-// answer", which every route's answer is.
+// Trusted is what a read's TrustOf decides: the answer's trust and, where it
+// can tell, the surface its outside text came from, which a later proposal
+// names (D25). The model's fence keeps the tool's own Source.
 type Trusted struct {
 	Trust  provenance.Trust
 	Source provenance.Source

@@ -1,16 +1,6 @@
 /**
- * What a proposal's taint says: the surface whose outside text the turn read
- * before it proposed the change, in words, and the caution the card leads
- * with (D25).
- *
- * THE ENGINE NAMES THE SURFACE, THE DASHBOARD SAYS IT. A proposal carries one
- * of `provenance.Sources` (`AssistantTaintSource`, held to the engine's set by
- * the assistant wire's closed-set gate), so a surface added on the engine
- * fails that gate until it has words here, and no card ever shows a raw token.
- *
- * A CAUTION, NEVER A VERDICT. Reading outside text is not proof that it asked
- * for the change: the card says where the turn read it and asks the person to
- * check the change is what they asked for. Nothing here holds Approve.
+ * Words for a proposal's taint: the surface whose outside text the turn read
+ * before proposing (D25). A caution, never a verdict: nothing here holds Approve.
  */
 
 import type { AssistantTaintSource } from "~/contract/assistant.ts";
