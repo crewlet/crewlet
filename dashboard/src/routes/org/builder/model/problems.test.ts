@@ -229,4 +229,24 @@ describe("placeProblems", () => {
     );
     expect(index.byNode.get("unit:sales")!.map((p) => p.message)).toEqual(["a warning"]);
   });
+
+  // A SEAT'S MODEL FOR ITS ROUTINES, REVIEWS, DELEGATED WORK AND JUDGE is
+  // chosen on Settings › Models, by what each model is for; the builder edits
+  // the seat's own chain only. So a warning there stays on the seat and
+  // links to where it is changed. Mutation: link only a node's schedules.
+  test("a seat's model for a job beside its own work links to Settings › Models", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
+      warnings: [
+        warning(["units", 1, "roles", 0, "llm_auxiliary"]),
+        warning(["units", 1, "roles", 0, "llm_review"]),
+        warning(["units", 1, "roles", 0, "llm"]),
+      ],
+    });
+    expect(index.byNode.get("seat:account-executive")?.map((p) => p.link)).toEqual([
+      "models",
+      "models",
+      null,
+    ]);
+  });
 });

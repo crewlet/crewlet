@@ -11,7 +11,9 @@
  * acknowledgement before Save enables.
  *
  * THE WARNINGS ARE THE ENGINE'S, for exactly the body the save will send: the
- * check of the current draft is a dry run of that same request.
+ * check of the current draft is a dry run of that same request. They are the
+ * lines the banner over the chart draws ([draftWarningLines]), so the two say
+ * the same thing and count it the same way.
  *
  * THE AUDIT SUMMARY CARRIES THE WRITE ID. The operator's sentence is recorded
  * with the revision, followed by the write id, which is what lets the builder
@@ -23,11 +25,11 @@ import { engineSentence } from "./EngineSentence.tsx";
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
-import type { ConfigWarning } from "~/protocol/index.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
-import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
+import { ACKNOWLEDGEMENT_TEXT, WarningLines } from "./dialogParts.tsx";
 import type { Acknowledgement, ChangeSet, EntityRef, OnboardingCause } from "./model/changes.ts";
 import type { PlacedProblem } from "./model/problems.ts";
+import type { WarningLine } from "./model/warnings.ts";
 import type { CheckStatus, SaveRules } from "./model/scheduler.ts";
 import type { BuilderMode } from "./model/transport.ts";
 import type { SavePhase } from "./useSave.ts";
@@ -157,8 +159,8 @@ export function ReviewSaveDialog({
   changes: ChangeSet;
   rules: SaveRules;
   status: CheckStatus;
-  /** The current check's warnings: a dry run of exactly this save. */
-  warnings: readonly ConfigWarning[];
+  /** The current check's warnings, one line for each thing to know: a dry run of exactly this save. */
+  warnings: readonly WarningLine[];
   problemCount: number;
   documentProblems: readonly PlacedProblem[];
   phase: SavePhase;
@@ -303,11 +305,7 @@ export function ReviewSaveDialog({
       {warnings.length > 0 && (
         <section className="col gap-1" aria-label="Warnings">
           <strong>The engine will run this, with {plural(warnings.length, "warning")}</strong>
-          <ul className="org-builder-list">
-            {warnings.map((w, i) => (
-              <li key={i}>{engineSentence(w.message)}</li>
-            ))}
-          </ul>
+          <WarningLines lines={warnings} />
         </section>
       )}
 

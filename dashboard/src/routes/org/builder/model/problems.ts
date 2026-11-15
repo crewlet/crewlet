@@ -16,7 +16,8 @@
  * the principles (`mission`, `vision`, `policies`) with a link to Company ›
  * Principles, the one place they are written, a model entry or the sandbox
  * default (`providers.llm.*`, `providers.sandbox.*`) with a link to Settings ›
- * Models, where an entry's cell is chosen, `integrations.*` with a link
+ * Models, where an entry's cell is chosen (as is a seat's model for its
+ * review, delegated work, routines and judge, though that stays on its node), `integrations.*` with a link
  * to Company › Integrations (the Datadog
  * fallback and GitLab access levels are edited from seats, but a problem at
  * the company's integration block is fixed there), and any schedule problem,
@@ -32,6 +33,7 @@
 
 import type { ConfigProblem, ConfigWarning, Derived } from "~/protocol/index.ts";
 import { warningWords } from "~/protocol/configAnswer.ts";
+import { SEAT_JOB_FIELDS } from "~/contract/models.ts";
 import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./keys.ts";
 import {
   COMPANY_FIELDS,
@@ -72,6 +74,8 @@ export interface ProblemIndex {
   readonly byNode: ReadonlyMap<NodeKey, readonly PlacedProblem[]>;
   /** What names no node, in the engine's order. */
   readonly document: readonly PlacedProblem[];
+  /** Every one of them, wherever it was placed, in the engine's order. */
+  readonly all: readonly PlacedProblem[];
   readonly problemCount: number;
   readonly warningCount: number;
 }
@@ -79,6 +83,7 @@ export interface ProblemIndex {
 export const EMPTY_PROBLEMS: ProblemIndex = {
   byNode: new Map(),
   document: [],
+  all: [],
   problemCount: 0,
   warningCount: 0,
 };
@@ -95,6 +100,7 @@ export interface Findings {
 export function placeProblems(sent: IndexedDocument, findings: Findings): ProblemIndex {
   const byNode = new Map<NodeKey, PlacedProblem[]>();
   const document: PlacedProblem[] = [];
+  const all: PlacedProblem[] = [];
   const { keyOfHandle } = placeDerivation(sent.index, findings.derived ?? null);
   const seatPath = (handle: string): readonly Segment[] =>
     sent.index.segmentsOf.get(keyOfHandle.get(handle) ?? seatKey(handle)) ?? [];
@@ -119,6 +125,7 @@ export function placeProblems(sent: IndexedDocument, findings: Findings): Proble
       link: linkFor(segments, node, field),
       source,
     };
+    all.push(placed);
     if (node === null) document.push(placed);
     else {
       const list = byNode.get(node);
@@ -131,7 +138,7 @@ export function placeProblems(sent: IndexedDocument, findings: Findings): Proble
   const warnings = findings.warnings ?? [];
   for (const problem of problems) place("problem", problem);
   for (const warning of warnings) place("warning", warning);
-  return { byNode, document, problemCount: problems.length, warningCount: warnings.length };
+  return { byNode, document, all, problemCount: problems.length, warningCount: warnings.length };
 }
 
 /** The node a path names, and the field below it; document level when it names none. */
@@ -165,7 +172,14 @@ function linkFor(
   node: NodeKey | null,
   field: readonly Segment[],
 ): ProblemLink | null {
-  if (node !== null && node !== COMPANY_KEY) return field[0] === "schedules" ? "schedules" : null;
+  if (node !== null && node !== COMPANY_KEY) {
+    if (field[0] === "schedules") return "schedules";
+    // A SEAT'S MODEL FOR A JOB BESIDE ITS OWN WORK (a review, delegated work,
+    // its routines, the judge) is chosen on Settings › Models, by what each
+    // model is for; the builder edits the seat's own chain and only shows
+    // these.
+    return typeof field[0] === "string" && JOB_MODEL_FIELDS.includes(field[0]) ? "models" : null;
+  }
   if (segments[0] === "scheduling") return "schedules";
   if (segments[0] === "integrations") return "integrations";
   // WHERE A MODEL ENTRY RUNS, and the default its entries take, are chosen
@@ -178,6 +192,11 @@ function linkFor(
     return "principles";
   return null;
 }
+
+/** A seat's model fields for every job but its own work, which Settings › Models chooses. */
+const JOB_MODEL_FIELDS: readonly string[] = Object.values(SEAT_JOB_FIELDS).filter(
+  (f) => f !== SEAT_JOB_FIELDS.executor,
+);
 
 /** How many problems (not warnings) a node carries, for its badge. */
 export function problemCountOf(index: ProblemIndex, key: NodeKey): number {
