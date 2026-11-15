@@ -16,9 +16,6 @@ import { pathSegment, rest } from "~/protocol/rest.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { grantEntry, grantReach, hoursWords, newGrant, type RequestOption } from "~/lib/grants.ts";
 
-/** The access routes this dialog reads and saves through, as the Agents tab does. */
-const access = (kind: string) => `/setup/integrations/${pathSegment(kind)}/access`;
-
 /** What the dialog has read: the request, and the integration's Agents tab it saves on. */
 type Read =
   | { state: "reading" }
@@ -50,7 +47,13 @@ export function RequestGrantDialog({
           `/setup/access/requests/${pathSegment(option.id)}`,
           ctl.signal,
         )) as AccessGrantRequest;
-        const answer = (await rest.get(access(request.kind), ctl.signal)) as AccessAnswer;
+        // THE AGENTS TAB'S OWN ROUTE, read and saved as the tab does
+        // (`accessApi`), each path written out so the dev server's proxy gate
+        // reads it.
+        const answer = (await rest.get(
+          `/setup/integrations/${pathSegment(request.kind)}/access`,
+          ctl.signal,
+        )) as AccessAnswer;
         setRead({ state: "read", request, answer });
       } catch (err) {
         if (!ctl.signal.aborted) setRead({ state: "gone", words: refusalText(err) });
@@ -96,7 +99,7 @@ export function RequestGrantDialog({
       // a save in between is refused rather than overwritten, and a fresh
       // sign-in asked by the transport where the permission is a write.
       await rest.put(
-        access(answer.kind),
+        `/setup/integrations/${pathSegment(answer.kind)}/access`,
         {
           seats: {
             [seat.handle]: {
