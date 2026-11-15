@@ -63,11 +63,23 @@ type roundTripJS struct {
 	trip  func(ctx context.Context) error
 	acked []string
 	on    func(n int)
+
+	// most, when above 0, is the most rows it acknowledges: every publish
+	// past them is refused ([errPastMost]), so a case whose call goes on
+	// re-reading a page it can no longer mark fails on its own terms rather
+	// than running until the test binary times out.
+	most int
 }
+
+// errPastMost is a roundTripJS's refusal of a row past its most.
+var errPastMost = errors.New("the changelog was asked for more rows than the seat holds")
 
 func (j *roundTripJS) Publish(ctx context.Context, subject string, _ []byte,
 	_ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 
+	if j.most > 0 && len(j.acked) >= j.most {
+		return nil, errPastMost
+	}
 	if j.trip != nil {
 		if err := j.trip(ctx); err != nil {
 			return nil, err
@@ -81,9 +93,10 @@ func (j *roundTripJS) Publish(ctx context.Context, subject string, _ []byte,
 }
 
 // syncerOver is a syncer of the seat over db whose changelog is js, which
-// answers publishes and nothing else, so it publishes and never hydrates.
+// answers publishes and nothing else, so it publishes and never hydrates: it
+// HOLDS the seat as the node that has held it all along ([heldFromEmpty]).
 func syncerOver(db *store.DB, js jetstream.JetStream) *Syncer {
-	return New(db, js, func(string) string { return seat.AgentID })
+	return heldFromEmpty(New(db, js, func(string) string { return seat.AgentID }), seat.Handle)
 }
 
 // registered is the registry's entry for the table named, so a case says
@@ -437,65 +450,19 @@ func TestARowWhosePublishFailedIsWhereTheNextPublishStarts(t *testing.T) {
 	}
 }
 
-// A PUBLISH THAT OUTLIVES A FORGET DOES NOT START ITS TABLE AGAIN.
-//
-// A cycle publishes from a snapshot of the seats it holds and takes no seat's
-// lock, so a release can run the seat's flush and [Syncer.Forget] while the
-// cycle is still publishing it. The publish in flight goes on, as it did when
-// it read its table whole: it continues the table it is in, and re-creates
-// the seat's marks as it has rows acknowledged. So each page is read above
-// the larger of the mark and the last row the publish had acknowledged
-// itself, its cursor: a Forget between two pages, after one page's last mark
-// and before the next page's read, leaves the cursor ahead of the zeroed
-// mark, and a page read from the mark alone sends the table back to its
-// first row. The case puts the Forget there through the syncer's seam, since
-// the publish of a row cannot: the row's own mark, set once it is
-// acknowledged, re-creates a mark forgotten inside its publish at the
-// cursor's value.
-//
-// Mutation: read each page from the mark alone, and this goes red.
-func TestAPublishThatOutlivesAForgetDoesNotStartItsTableAgain(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	ids := writeNotes(t, db, 300, noteWidth)
-	numbers := noteNumbers(t, ids)
-	js := &roundTripJS{}
-	s := syncerOver(db, js)
-	pages := 0
-	s.beforePage = func(_ markRange, table string) {
-		if table != "agent_diary" {
-			return
-		}
-		// BETWEEN THE FIRST PAGE AND THE SECOND.
-		if pages++; pages == 2 {
-			s.Forget(seat.Handle)
-		}
-	}
-	if _, err := s.PublishOwn(t.Context(), seat.Handle); err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-	if pages < 3 {
-		t.Fatalf("the %d notes were read in %d pages; this case needs a Forget between "+
-			"two pages and a page after it", len(ids), pages)
-	}
-	if got := numbersOf(t, js.acked, numbers); !slices.Equal(got, span(1, len(ids))) {
-		t.Fatalf("a publish a Forget overtook between its first two pages had notes %s "+
-			"acknowledged, want each of the %d once, in order", runsOf(got), len(ids))
-	}
-}
-
 // A PUBLISH SKIPS WHAT ANOTHER PUBLISH OF THE SEAT HAD ACKNOWLEDGED.
 //
-// Two publishes of one seat can run at once: a cycle publishes from a
-// snapshot of the seats it holds and takes no seat's lock, so a release's
-// flush runs beside it. Each page is read above the larger of the seat's mark
-// and the call's own cursor, so a page read after the other call has had rows
-// acknowledged starts above them, and the two send again at most the page
-// each already held. The case runs the second publish, whole, inside the
-// first's publish of its first row.
+// Two publishes of one seat's range can overlap: a cycle takes no seat's
+// lock, and the row it was sending as the seat's release began is
+// acknowledged, and moves the mark, while the release's flush carries the
+// range. Each page is read above the seat's mark, read again at each page, so
+// a page read after the other call has had rows acknowledged starts above
+// them, and the two send again at most the page each already held. The case
+// holds that to a wider overlap than the one row, under one holding: it runs
+// the second publish, whole, inside the first's publish of its first row.
 //
-// Mutation: read each page from the call's own cursor alone, and the first
-// publish sends the table again from where its first page ended.
+// Mutation: read the mark once per table rather than at each page, and the
+// first publish sends the table again from where its first page ended.
 func TestAPublishSkipsWhatARacingPublishOfTheSeatHadAcknowledged(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

@@ -2,6 +2,7 @@ package seat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -45,7 +46,93 @@ type heldSeat struct {
 	// starts receiving work before its children are up runs its first turn
 	// with an empty tool surface.
 	establishing bool
+
+	// cut ends the acquire hook's context while the seat is establishing: set
+	// as the seat enters the held set, and cleared once it is established.
+	//
+	// THE HOOK HAS NO TOTAL, and it runs under the seat's own lock, so nothing
+	// that has to end the seat may wait for that lock while it runs: a lease
+	// the heartbeat finds lost, a drain giving the node's seats back. They cut
+	// the hook instead ([heldSeat.cutLocked]) and never take the lock; the claim
+	// that is running the hook gives the seat back once the hook returns
+	// ([Host.tryClaim]). A hook that ignores its context is not shortened by a
+	// cut, and whatever it returns is discarded: a cut seat is never
+	// established. The heartbeat never waits for it; a drain waits for its
+	// give-back only as long as the drain's own bound ([Host.AwaitCut]).
+	cut context.CancelFunc
+
+	// cutBy is why the seat was cut, and empty while it is not. A cut seat is
+	// no longer held to what acts on a seat as held — [Host.Held],
+	// [Host.HeldSeats], [Host.Provable] and the heartbeat's renews leave it
+	// out — because its lease is lost or is being given back. What counts the
+	// LEASES this node has in the store still counts it until its give-back,
+	// because the lease is still there: the room a pass claims against
+	// ([Host.roomLocked]), the count this node advertises to its peers
+	// ([Host.placedCount]), and the epoch a write made on its behalf is fenced
+	// with ([Host.EpochFor], [Host.Fence]), which a hook still writing after
+	// its cut is held to.
+	cutBy cutCause
+
+	// settled is closed once the claim that took the seat has established it
+	// or given it back: set as the seat enters the held set, and closed by
+	// that claim alone ([Host.tryClaim]).
+	//
+	// FOR A DRAIN, WHICH CUTS RATHER THAN WAITS, and still has to know when
+	// what it cut is gone ([Host.AwaitCut]): a cut seat is out of [Host.Held],
+	// so the drain's [Host.ReleaseAll] never reaches it, and its give-back —
+	// the seat's teardown and its lease — would otherwise run on beside the
+	// subsystems a stop tears down after the drain.
+	settled chan struct{}
 }
+
+// cutCause is why an establishing seat's acquire hook was cut.
+type cutCause string
+
+const (
+	// cutDrained is a drain begun while the seat was being taken: the node is
+	// leaving, so the seat is given back and the node does not back off it.
+	cutDrained cutCause = "drained"
+
+	// cutLeaseLost is a lease the heartbeat found lost — a renew that answered
+	// false, or a store unreachable past the TTL — while the seat was being
+	// taken. A peer may hold it already, so the node backs off it as it does
+	// any lease it lost.
+	cutLeaseLost cutCause = "lease_lost"
+)
+
+// errSeatCut is the failure a claim records for a seat cut while it was being
+// taken whose acquire hook returned nil anyway: the seat is not established
+// ([Host.tryClaim]).
+var errSeatCut = errors.New("seat: cut while it was being taken")
+
+// Valid reports whether c is a cause this build knows.
+func (c cutCause) Valid() bool {
+	switch c {
+	case cutDrained, cutLeaseLost:
+		return true
+	default:
+		return false
+	}
+}
+
+// cutLocked cuts an establishing seat for cause, reporting the hook's cancel
+// for the caller to call once it has let Host.mu go, or nil when the seat is not
+// establishing or was cut already: the first cut's cause stands. The caller
+// holds Host.mu and never the seat's lock.
+//
+// THE CAUSE IS RECORDED WHATEVER THE CANCEL IS, so a cut seat is never
+// established ([Host.tryClaim]) even for an entry that carries none.
+func (e *heldSeat) cutLocked(cause cutCause) context.CancelFunc {
+	if !e.establishing || e.cutBy != "" {
+		return nil
+	}
+	e.cutBy = cause
+	return e.cut
+}
+
+// isCut reports whether the seat was cut while it was being taken. The caller
+// holds Host.mu.
+func (e *heldSeat) isCut() bool { return e.cutBy != "" }
 
 // undeadSeat is a seat whose teardown could not be proven, and what is being
 // done about it.
@@ -328,6 +415,19 @@ type Host struct {
 	running  bool
 	draining bool
 
+	// drainStop is the allowance of the stop the drain is part of, as
+	// [Host.BeginDrain] was handed it, and nil while the node is not draining
+	// or its drain carried none.
+	//
+	// FOR THE GIVE-BACKS THE DRAIN CAUSES AND DOES NOT MAKE ITSELF: a seat
+	// the drain cut while it was being taken is given back by the claim that
+	// took it, and a lease a claim took as the drain began is handed straight
+	// back by that claim ([Host.tryClaim]). Those claims run on the pass's
+	// context, which carries no stop, so on their own each would begin an
+	// allowance of its own beside the stop's, and a stop against an
+	// unreachable store would spend one allowance more for every one of them.
+	drainStop *StopBudget
+
 	// withdrawn is whether this node has stepped out of placement because it
 	// cannot serve its seats (see [Host.setWithdrawn]), as of the last sweep.
 	withdrawn bool
@@ -458,6 +558,11 @@ func (h *Host) Owner() string { return h.owner }
 // same seat — and the release then tears down the consumer the claim just
 // created, leaving a seat that is owned in the lease table and dead in this
 // process, with nothing to notice.
+//
+// NOTHING THAT ENDS A SEAT STILL BEING TAKEN WAITS FOR IT. An acquire hook has
+// no total, so the heartbeat finding the lease lost and a drain cut that hook
+// through its context instead of taking this lock ([heldSeat.cut]), and the
+// claim holding the lock gives the seat back.
 func (h *Host) lockSeat(handle string) func() {
 	h.mu.Lock()
 	l := h.seatLocks[handle]
@@ -571,11 +676,14 @@ func (h *Host) MayStart(handle string) (int64, bool) {
 // read before the store call it records — the claim's ([Host.Sweep]) and each
 // renew's ([Host.Heartbeat]) — so the TTL is counted from no later than the
 // store counts it.
+//
+// A SEAT CUT WHILE IT WAS BEING TAKEN is not provable, whatever its renew's
+// age: its lease is lost, or it is being given back by a drain ([heldSeat.cut]).
 func (h *Host) Provable(handle string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	held := h.held[handle]
-	return held != nil && elapsed(h.now(), held.renewedAt) < h.ttl
+	return held != nil && !held.isCut() && elapsed(h.now(), held.renewedAt) < h.ttl
 }
 
 // EpochFor is the fencing token for a seat, or false if not held here.
@@ -674,10 +782,27 @@ func (h *Host) HeartbeatInterval() time.Duration { return h.heartbeat }
 // teardown was never proven — and INCLUDES a seat whose acquire hook is
 // still running, because that lease is genuinely held and genuinely renewed.
 // "May a turn start here?" is [Host.MayStart], never this.
+//
+// UNLESS THAT SEAT WAS CUT ([heldSeat.cut]): a lease lost or a drain begun
+// while its hook ran. Its lease is gone or being given back by the claim that
+// took it, so nothing may act on it as held — not the memory cycle publishing
+// it, not a drain's [Host.ReleaseAll], which would wait on the seat's lock for
+// the hook the cut is ending, and not a sandbox apply preparing it.
 func (h *Host) Held() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return slices.Sorted(maps.Keys(h.held))
+	return h.heldLocked()
+}
+
+// heldLocked is [Host.Held] for a caller holding Host.mu.
+func (h *Host) heldLocked() []string {
+	out := make([]string, 0, len(h.held))
+	for _, handle := range slices.Sorted(maps.Keys(h.held)) {
+		if !h.held[handle].isCut() {
+			out = append(out, handle)
+		}
+	}
+	return out
 }
 
 // NeedsRole reports whether the company, as this host reads it, needs a node
@@ -695,7 +820,8 @@ func (h *Host) NeedsRole(role placement.NodeRole) bool {
 	return h.roleNeeded == nil || h.roleNeeded(role)
 }
 
-// HeldSeats is [Host.Held] as the seats themselves, in the same order.
+// HeldSeats is [Host.Held] as the seats themselves, in the same order: a seat
+// cut while it was being taken is left out of both.
 //
 // For a caller that has to NAME something durable about a held seat — its
 // mailbox, its lease — where the handle is only its label. It reads what the
@@ -705,8 +831,9 @@ func (h *Host) NeedsRole(role placement.NodeRole) bool {
 func (h *Host) HeldSeats() []placement.Seat {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	out := make([]placement.Seat, 0, len(h.held))
-	for _, handle := range slices.Sorted(maps.Keys(h.held)) {
+	handles := h.heldLocked()
+	out := make([]placement.Seat, 0, len(handles))
+	for _, handle := range handles {
 		out = append(out, h.held[handle].seat)
 	}
 	return out
@@ -814,6 +941,13 @@ func (h *Host) stampBeat() {
 // synchronous in general, and a caller that needs the seats held waits for
 // them.
 //
+// A DRAIN BEGUN BEFORE IT HOLDS THROUGH IT. Start leaves [Host.BeginDrain]'s
+// flag as it finds it — [Host.Stop] is what ends a drain — so a stop decided
+// while the node around this host is still starting (a signal during an
+// engine's boot) makes the first pass claim nothing and announce nothing. It
+// used to clear the flag, and that pass claimed the node's whole share onto a
+// node already leaving, running every claimed seat's acquire hook to its end.
+//
 // It reports no error because none of its work has a failure a caller could
 // act on: an unreachable store means this node claims nothing yet and
 // retries on its own loops, which is what it would do with any error a
@@ -825,7 +959,6 @@ func (h *Host) Start(ctx context.Context) {
 		return
 	}
 	h.running = true
-	h.draining = false
 	h.lastBeat = h.now()
 	loopCtx, cancel := context.WithCancel(ctx)
 	h.cancel = cancel
@@ -847,6 +980,17 @@ func (h *Host) Start(ctx context.Context) {
 // are taken, and the seats in hand keep their leases alive so their turns
 // can finish. [Host.ReleaseAll] is the second half.
 //
+// A SEAT STILL BEING TAKEN IS CUT ([heldSeat.cut]), under the same lock the
+// flag is set under, so no claim can establish a seat after the drain was
+// decided: its acquire hook's context ends, and the claim running it gives the
+// seat back as never established ([ReasonAcquireFailed]) without backing off
+// it, as a step of the stop ctx carries ([Host.drainStop]); [Host.AwaitCut] is
+// how the drain learns that give-back is done. The drain used to wait for it
+// instead, since its release takes the
+// seat's lock and the claim holds that lock for the whole hook — and a hook
+// has no total: it spawns MCP children, hydrates the seat's memory and
+// recovers an interrupted executor.
+//
 // Presence is dropped immediately. A draining node that keeps its presence
 // lease stays in every peer's divisor, so they compute a share that reserves
 // capacity for a node which will never claim again — and this node's seats
@@ -856,10 +1000,60 @@ func (h *Host) Start(ctx context.Context) {
 func (h *Host) BeginDrain(ctx context.Context) {
 	h.mu.Lock()
 	h.draining = true
-	held := len(h.held)
+	h.drainStop = stopBudgetOf(ctx)
+	var cuts []context.CancelFunc
+	for _, entry := range h.held {
+		if cut := entry.cutLocked(cutDrained); cut != nil {
+			cuts = append(cuts, cut)
+		}
+	}
+	held := len(h.heldLocked())
 	h.mu.Unlock()
+	for _, cut := range cuts {
+		cut()
+	}
 	h.releaseNodePresence(ctx)
 	log.InfoContext(ctx, "seat_host_draining", "node", h.nodeID, "held", held)
+}
+
+// AwaitCut waits, for as long as ctx allows, until every claim whose seat was
+// cut while it was being taken ([heldSeat.cut]) has given that seat back, and
+// reports how many had not when ctx ended.
+//
+// THE DRAIN'S OTHER HALF OF A CUT. [Host.BeginDrain] cuts rather than waits,
+// so that nothing waits on a seat's lock for a hook with no total, and a cut
+// seat leaves [Host.Held] at once — so the drain's [Host.ReleaseAll] never
+// reaches it, and without this a drain would report done while a claim was
+// still giving a seat back: its teardown and its lease give-back running on
+// beside whatever the stop tears down after the drain. A cut hook that reads
+// its context returns promptly, and its give-back is bounded by the drain's
+// allowance ([Host.drainStop]); one that ignores its context is waited for up
+// to ctx, as the drain's wait for its turns is.
+func (h *Host) AwaitCut(ctx context.Context) int {
+	h.mu.Lock()
+	var settling []chan struct{}
+	for _, entry := range h.held {
+		if entry.isCut() && entry.settled != nil {
+			settling = append(settling, entry.settled)
+		}
+	}
+	h.mu.Unlock()
+	for i, settled := range settling {
+		select {
+		case <-settled:
+		case <-ctx.Done():
+			left := 0
+			for _, rest := range settling[i:] {
+				select {
+				case <-rest:
+				default:
+					left++
+				}
+			}
+			return left
+		}
+	}
+	return 0
 }
 
 // ResumeClaiming undoes [Host.BeginDrain]: claim again, and count again.
@@ -874,6 +1068,7 @@ func (h *Host) ResumeClaiming(ctx context.Context) {
 		return
 	}
 	h.draining = false
+	h.drainStop = nil
 	h.mu.Unlock()
 	h.renewNodePresence(ctx)
 	log.InfoContext(ctx, "seat_host_resumed", "node", h.nodeID)
@@ -922,9 +1117,18 @@ func (h *Host) Draining() bool {
 }
 
 // Stop halts the loops, hands every seat back, and gives up presence.
+//
+// AND ENDS A DRAIN, a host's that never ran included, so a host stopped can be
+// started again undrained:
+// [Host.Start] leaves the flag as it finds it, which is what lets a drain
+// begun before it hold through its first pass.
 func (h *Host) Stop(ctx context.Context) {
 	h.mu.Lock()
 	if !h.running {
+		// A HOST THAT NEVER RAN still ends a drain begun before it, so it
+		// too starts undrained.
+		h.draining = false
+		h.drainStop = nil
 		h.mu.Unlock()
 		return
 	}
@@ -968,6 +1172,8 @@ func (h *Host) Stop(ctx context.Context) {
 	clear(h.unprovenAdmission)
 	clear(h.acquireBackoffs)
 	clear(h.seatLocks)
+	h.draining = false
+	h.drainStop = nil
 	h.mu.Unlock()
 	log.InfoContext(ctx, "seat_host_stopped", "node", h.nodeID)
 }

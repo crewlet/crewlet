@@ -170,7 +170,11 @@ func TestAnotherDomainsTokenIsNoTicket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtoken.New: %v", err)
 	}
-	if _, verdict, _ := tickets.Open(other.Mint(subject, time.Hour)); verdict != ticket.Invalid {
+	others, err := other.Mint(subject, time.Hour)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	if _, verdict, _ := tickets.Open(others); verdict != ticket.Invalid {
 		t.Fatalf("another domain's token over the same subject opened %v", verdict)
 	}
 }
@@ -301,7 +305,11 @@ func TestASignedSubjectNoMintWritesIsRefused(t *testing.T) {
 	}
 	id := artifacts.IDFor("op-1").String()
 	sign := func(json string) string {
-		return signer.Mint(base64.RawURLEncoding.EncodeToString([]byte(json)), time.Hour)
+		token, err := signer.Mint(base64.RawURLEncoding.EncodeToString([]byte(json)), time.Hour)
+		if err != nil {
+			t.Fatalf("Mint: %v", err)
+		}
+		return token
 	}
 	refused := map[string]string{
 		"unsorted capabilities": `{"a":"` + id + `","v":1,"p":"x","k":"session:a","c":["db","assets"],"x":0,"d":"index.html","n":"abc","e":"2026-10-17T12:30:00Z"}`,

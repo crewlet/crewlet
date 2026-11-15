@@ -70,9 +70,13 @@
 // spelling, and a token's shape to the rule: the tag's [tagLen] characters,
 // the HMAC-SHA256's 43 in unpadded base64url, and a subject that holds no dot
 // (its separator; a subject that did would make a token [Signer.Validate]
-// refuses), no whitespace and no `[`, which a token's place in a URL path
-// rules out — every issuer's subject is a trace id, a nonce and a run id, or
-// base64url.
+// refuses), no `[`, no `\` and none of the space, tab, line feed, form feed
+// and carriage return the rule reads as `\s` ([subjectEnds]), which a
+// token's place in a URL path rules out — every issuer's subject is a trace
+// id, a nonce and a run id, or base64url. And it runs to [redact.MaxReach]
+// bytes at most, as far as the rule reads one. [Signer.Mint] refuses any other subject, so no token is
+// minted that a box could print unredacted; the test holds both directions,
+// byte by byte and at the bound.
 //
 // # One implementation, because it was two
 //
@@ -101,6 +105,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // version prefixes every token, so a future format can be told from this one
@@ -233,23 +239,61 @@ func New(opts Options) (*Signer, error) {
 	return s, nil
 }
 
+// ErrSubject reports a subject [Signer.Mint] refuses: one internal/redact
+// would not know a token over by its shape.
+var ErrSubject = errors.New("runtoken: a token over this subject would not be redacted")
+
 // Mint returns a token scoped to one subject, valid for ttl, signed under the
-// keyring's active key and naming it.
+// keyring's active key and naming it, or refuses a subject its token could
+// not carry ([ErrSubject]).
 //
 // The SUBJECT is whatever the endpoint needs to know about the caller and
 // nothing more: a trace id for the telemetry receiver, a run id for the tool
 // bridge. It is not secret — it travels in a URL — so it must never be a
-// value that grants anything on its own. And it holds no dot, no whitespace
-// and no `[`: a token whose subject held one is a token internal/redact does
-// not know by its shape (the package doc's "The version is what redaction
-// keys on"), so a box that printed it would have it persisted as printed.
-func (s *Signer) Mint(subject string, ttl time.Duration) string {
+// value that grants anything on its own.
+//
+// AND IT IS ONE REDACTION KNOWS A TOKEN BY ([redactable]), or it is refused:
+// a token whose subject held a dot, a `[`, a `\`, a space, a tab, a line
+// feed, a form feed or a carriage return ([subjectEnds]), or ran past
+// [redact.MaxReach] bytes, is a token internal/redact does not know by its
+// shape (the package doc's "The version is what redaction keys on"), so a
+// box that printed it would have it persisted as printed. That was a rule
+// every caller was trusted to keep, and nothing held it. Refused with an
+// error, never a panic: a subject can carry what a person named, as a Slack
+// install's state carries a seat's handle and an app's id.
+func (s *Signer) Mint(subject string, ttl time.Duration) (string, error) {
+	if err := redactable(subject); err != nil {
+		return "", err
+	}
 	if ttl < minTTL {
 		ttl = minTTL
 	}
 	payload := version + "." + s.activeTag + "." + subject + "." +
 		strconv.FormatInt(s.now().Add(ttl).Unix(), 10)
-	return payload + "." + s.sign(s.keys[s.activeTag], payload)
+	return payload + "." + s.sign(s.keys[s.activeTag], payload), nil
+}
+
+// subjectEnds are the bytes internal/redact reads no run token's subject
+// across: the dot that ends it, `[`, which opens a marker, `\`, which opens
+// an escaped line break, and what RE2 reads as `\s`, a space, a tab, a line
+// feed, a form feed and a carriage return. No more: a vertical tab or a space
+// past ASCII is a subject's to it, and refused here, a token it redacts would
+// go unminted.
+const subjectEnds = ".[\\ \t\n\f\r"
+
+// redactable refuses a subject a token over which internal/redact would not
+// know by its shape ([Signer.Mint]): one holding a byte of [subjectEnds], or
+// longer than [redact.MaxReach].
+func redactable(subject string) error {
+	if len(subject) > redact.MaxReach {
+		return fmt.Errorf("%w: it is %d bytes, past the %d internal/redact reads a token's subject to",
+			ErrSubject, len(subject), redact.MaxReach)
+	}
+	if i := strings.IndexAny(subject, subjectEnds); i >= 0 {
+		return fmt.Errorf("%w: it holds %q at byte %d, where internal/redact ends a token's subject",
+			ErrSubject, subject[i:i+1], i)
+	}
+	return nil
 }
 
 // Validate returns the token's subject, or empty for one that is forged,

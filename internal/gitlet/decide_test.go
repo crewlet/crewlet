@@ -237,6 +237,63 @@ func TestThePushDecide(t *testing.T) {
 	}
 }
 
+// NO PUSH DELETES THE DEFAULT BRANCH (rule 5b), whoever sends it and whatever
+// rule protects it or does not: deleted, the repository's HEAD would name
+// nothing, every clone would check nothing out and every page that starts at
+// the default branch would start nowhere, while the repository still holds its
+// other branches. A protected default branch is refused by the rule that names
+// it (5 before 5b); once another branch is the default, the old one deletes as
+// any branch does.
+//
+// Mutation: drop rule 5b from working.decide and "the default branch" lands ok.
+func TestNoPushDeletesTheDefaultBranch(t *testing.T) {
+	t.Parallel()
+	e := decideEstate(t)
+	moved := settingsFor("", "refs/heads/locked")
+	moved.DefaultBranch = "feature"
+	e.apply(rec(t, RepoSubject(decideRepo), OpSettings, Scope{RepoPath(decideRepo)},
+		SettingsRecord{RepoID: decideRepo, Settings: moved}))
+	for name, tc := range map[string]struct {
+		c      Command
+		by     PrincipalKind
+		result CommandResult
+		reason Refusal
+		detail string
+	}{
+		"the default branch": {cmd("refs/heads/feature", oid("F"), ZeroOID), PrincipalOperator, ResultNG,
+			RefusalDefaultBranch, "feature is web's default branch"},
+		"the default branch, by a seat": {cmd("refs/heads/feature", oid("F"), ZeroOID), PrincipalAgent, ResultNG,
+			RefusalDefaultBranch, "make another branch the default first"},
+		"the old default branch": {cmd("refs/heads/main", oid("A"), ZeroOID), PrincipalOperator, ResultOK, "", ""},
+		"the default branch moved": {cmd("refs/heads/feature", oid("F"), oid("G")), PrincipalOperator, ResultOK,
+			"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var answers []decided
+			if tc.by == PrincipalAgent {
+				// THE OWNER'S LEAD, whose grant covers a deletion: refused for
+				// the branch, never for the grant.
+				_, answers = decideSeats(t, e, DefaultLimits(), pushBy(seatPusher("eng-lead"), tc.c))
+			} else {
+				_, answers = decideIn(t, e, DefaultLimits(), proposalOf(tc.c))
+			}
+			got := answers[0].commands[0]
+			if got.Result != tc.result || got.Reason != tc.reason || !strings.Contains(got.Detail, tc.detail) {
+				t.Fatalf("decided %s %s (%q), want %s %s saying %q", got.Result, got.Reason, got.Detail,
+					tc.result, tc.reason, tc.detail)
+			}
+		})
+	}
+
+	// A PROTECTED DEFAULT BRANCH is refused by its rule, which names it.
+	protected := decideEstate(t)
+	_, answers := decideIn(t, protected, DefaultLimits(), proposalOf(cmd("refs/heads/main", oid("A"), ZeroOID)))
+	if got := answers[0].commands[0]; got.Reason != RefusalProtectedDelete {
+		t.Fatalf("a protected default branch's deletion was decided %s %s, want protected_delete", got.Result,
+			got.Reason)
+	}
+}
+
 // A BATCH IS DECIDED IN ORDER, each push against what the ones before it did:
 // the refs a push moves, the creates it counts against the bound and the
 // bytes its pack adds.

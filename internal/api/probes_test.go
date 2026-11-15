@@ -261,8 +261,11 @@ func TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone(t *testing.T) {
 	if err != nil || receiver == nil {
 		t.Fatalf("the receiver: %v, %v", receiver, err)
 	}
-	export := strings.TrimPrefix(receiver.RunEnv("trace-abc", "span", "turn-1", "engineer", true,
-		time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://127.0.0.1:8080")
+	env, err := receiver.RunEnv("trace-abc", "span", "turn-1", "engineer", true, time.Hour)
+	if err != nil {
+		t.Fatalf("RunEnv: %v", err)
+	}
+	export := strings.TrimPrefix(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://127.0.0.1:8080")
 	if !strings.HasPrefix(export, auth.OTLPPrefix) {
 		t.Fatalf("a box on the host was handed no export path of this node's: %q", export)
 	}

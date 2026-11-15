@@ -67,8 +67,8 @@ func (o *order) GitOrder(string) ([]string, error) { return slices.Clone(o.nodes
 // tokens mints a token naming the attempt it is for.
 type tokens struct{}
 
-func (tokens) Mint(k gitlet.CheckKey, repo string, timeout time.Duration) string {
-	return fmt.Sprintf("chk-%s-%s-%d-%s", repo, k.Name, k.Attempt, timeout)
+func (tokens) Mint(k gitlet.CheckKey, repo string, timeout time.Duration) (string, error) {
+	return fmt.Sprintf("chk-%s-%s-%d-%s", repo, k.Name, k.Attempt, timeout), nil
 }
 
 // cell is one fake backend of the catalogue whose boxes run a check's command

@@ -152,6 +152,12 @@ func NewStopBudget(total time.Duration) *StopBudget { return &StopBudget{total: 
 // stopBudgetKey carries a [StopBudget] on a context.
 type stopBudgetKey struct{}
 
+// stopBudgetOf is the allowance ctx carries, or nil where it carries none.
+func stopBudgetOf(ctx context.Context) *StopBudget {
+	b, _ := ctx.Value(stopBudgetKey{}).(*StopBudget)
+	return b
+}
+
 // WithStopBudget is ctx carrying b, for every step of the stop it bounds.
 func WithStopBudget(ctx context.Context, b *StopBudget) context.Context {
 	if b == nil {
@@ -172,7 +178,7 @@ func WithStopBudget(ctx context.Context, b *StopBudget) context.Context {
 // asks takes [context.WithoutCancel], because a caller's deadline has usually
 // passed by then and a release that inherited it would do nothing.
 func WithinStop(ctx context.Context, ttl time.Duration) context.Context {
-	if b, ok := ctx.Value(stopBudgetKey{}).(*StopBudget); ok && b != nil {
+	if stopBudgetOf(ctx) != nil {
 		return ctx
 	}
 	return WithStopBudget(ctx, NewStopBudget(StopAllowance(ttl)))
@@ -186,8 +192,8 @@ func WithinStop(ctx context.Context, ttl time.Duration) context.Context {
 // WITHOUT A BUDGET, ctx is returned as it is: a step outside a stop keeps
 // whatever bound its caller gave it.
 func StopStep(ctx context.Context) (context.Context, context.CancelFunc) {
-	b, ok := ctx.Value(stopBudgetKey{}).(*StopBudget)
-	if !ok || b == nil {
+	b := stopBudgetOf(ctx)
+	if b == nil {
 		return ctx, func() {}
 	}
 	deadline := b.begin(time.Now())

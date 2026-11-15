@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -96,6 +97,42 @@ func TestACallerBoundToNobodyOpensNoSession(t *testing.T) {
 	}
 	if url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1", Surface: s.surface}); url != "" {
 		t.Fatalf("a session with no caller was opened: %s", url)
+	}
+}
+
+// A RUN WHOSE TOKENS NO SURFACE WOULD REDACT OPENS NO SESSION: a token whose
+// subject holds what internal/redact ends a subject at, as a run id holding a
+// dot would put there, or runs past redact.MaxReach, is one no surface knows
+// by its shape, and runtoken refuses to mint it. Both of a job's tokens are
+// minted before anything is filed, so a job whose own token fits but whose
+// other one, a mark longer, does not is refused whole, leaving nothing live.
+//
+// Mutation: answer a token's refusal with an endpoint, or mint the other token
+// only when it is asked for, and a refused job is handed one, or leaves its
+// session live.
+func TestARunWhoseTokensNoSurfaceWouldRedactOpensNoSession(t *testing.T) {
+	t.Parallel()
+	s := serve(t)
+	if url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep.1", Launch: "job-1", Surface: s.surface,
+		Caller: nobody{bound: true}}); url != "" || s.bridge.Live() != 0 {
+		t.Fatalf("a run id holding a dot opened a session at %q, %d live", url, s.bridge.Live())
+	}
+	// The subject a job's own token over run "deep-1" carries, and from it
+	// the run id whose own token's subject is exactly as long as redaction
+	// reads, its other token's a mark longer.
+	url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1", Surface: s.surface,
+		Caller: nobody{bound: true}})
+	parts := strings.Split(url[strings.LastIndexByte(url, '/')+1:], ".")
+	if len(parts) != 5 {
+		t.Fatalf("the job's token %q is no token", url)
+	}
+	live := s.bridge.Live()
+	session := &mcpbridge.Session{RunID: "deep-" + strings.Repeat("1", redact.MaxReach-len(parts[2])+1),
+		Launch: "job-2", Surface: s.surface, Caller: nobody{bound: true}}
+	if url := s.bridge.Open(t.Context(), session); url != "" || s.bridge.Live() != live ||
+		s.bridge.FreshEndpoint(session) != "" {
+		t.Errorf("a job whose other token runs past what redaction reads opened a session at %q, %d live "+
+			"against %d", url, s.bridge.Live(), live)
 	}
 }
 

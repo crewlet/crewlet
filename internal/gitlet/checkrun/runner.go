@@ -55,9 +55,10 @@ type Boxes interface {
 // Tokens mints a check's box's credential: Gitlet's CheckTokens, which
 // this package reaches through the engine rather than importing the host. The
 // token names the attempt and the repository's name the box is given, and is
-// valid for timeout and gitlet.CheckBoxGrace more; "" is none minted.
+// valid for timeout and gitlet.CheckBoxGrace more; an error names why none is
+// minted.
 type Tokens interface {
-	Mint(attempt gitlet.CheckKey, repo string, timeout time.Duration) string
+	Mint(attempt gitlet.CheckKey, repo string, timeout time.Duration) (string, error)
 }
 
 // Uploader stores a failed run's kept log as one object — the fleet's object

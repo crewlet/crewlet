@@ -40,7 +40,10 @@ func TestAJobIsHandedEachPathJoinedOntoItsOwnBoxsHome(t *testing.T) {
 	if err := direct.WriteFile(t.Context(), tokenPath, []byte("the token")); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	env := jobEnvFor(m, req, direct)
+	env, err := jobEnvFor(m, req, direct)
+	if err != nil {
+		t.Fatalf("jobEnvFor: %v", err)
+	}
 	if held, err := os.ReadFile(env["CLI_TOKEN_FILE"]); err != nil || string(held) != "the token" {
 		t.Errorf("a direct box's job was handed %q, which reads %q (%v): want the file the box wrote",
 			env["CLI_TOKEN_FILE"], held, err)
@@ -50,7 +53,9 @@ func TestAJobIsHandedEachPathJoinedOntoItsOwnBoxsHome(t *testing.T) {
 	}
 
 	container, _ := NewContainerBoxAt(t.TempDir())
-	env = jobEnvFor(m, req, container)
+	if env, err = jobEnvFor(m, req, container); err != nil {
+		t.Fatalf("jobEnvFor: %v", err)
+	}
 	if want := "/home/user/" + tokenPath; env["CLI_TOKEN_FILE"] != want {
 		t.Errorf("a container box's job was handed %q, want %q", env["CLI_TOKEN_FILE"], want)
 	}

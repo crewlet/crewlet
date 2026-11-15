@@ -2,6 +2,7 @@ package seat
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -618,27 +619,78 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took bool, re
 	// before the flag is one the drain's release reads in the held set and
 	// gives back, and once the flag is set nothing is entered — so no claim
 	// can slip between the drain's decision and its release. The lease
-	// just taken goes straight back, with nothing attached to it.
+	// just taken goes straight back, with nothing attached to it, as a step
+	// of the drain's stop ([Host.drainStop]).
 	h.mu.Lock()
 	if h.draining {
+		drainStop := h.drainStop
 		h.mu.Unlock()
-		h.giveBackUnattached(ctx, handle, *lease)
+		h.giveBackUnattached(WithStopBudget(ctx, drainStop), handle, *lease)
 		return false, "", true
 	}
-	h.held[handle] = &heldSeat{seat: seat, lease: *lease, renewedAt: asked, establishing: true}
+
+	// ON A CONTEXT OF ITS OWN, which the heartbeat and a drain can end without
+	// this seat's lock ([heldSeat.cut]): a lease lost or a drain begun while
+	// the hook runs CUTS it, where they used to wait on the lock for a hook
+	// with no total. SETTLED once this claim has established the seat or
+	// given it back, which is what a drain that cut it waits for
+	// ([Host.AwaitCut]).
+	hookCtx, cut := context.WithCancel(ctx)
+	defer cut()
+	settled := make(chan struct{})
+	defer close(settled)
+	entry := &heldSeat{seat: seat, lease: *lease, renewedAt: asked, establishing: true,
+		cut: cut, settled: settled}
+	h.held[handle] = entry
 	h.mu.Unlock()
 	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
 
-	if err := h.notifyAcquire(ctx, seat, *lease); err != nil {
+	err = h.notifyAcquire(hookCtx, seat, *lease)
+	// THE CUT IS READ AND THE SEAT ESTABLISHED UNDER ONE LOCK, the one a cut is
+	// made under, so a seat is either cut or established and never both. A
+	// CUT SEAT IS NEVER ESTABLISHED, whatever its hook returned: a hook that
+	// ignored its context and finished is building on a lease that is lost or
+	// being given back.
+	h.mu.Lock()
+	cutBy, drainStop := entry.cutBy, h.drainStop
+	if cutBy == "" && err == nil {
+		entry.establishing = false
+		entry.cut = nil
+	}
+	h.mu.Unlock()
+	if cutBy != "" && err == nil {
+		err = fmt.Errorf("%w: %s", errSeatCut, cutBy)
+	}
+
+	if err != nil {
 		// A seat whose takeover pipeline failed must not stay claimed: it
 		// would look owned to the fleet while nothing runs it. Give it
 		// straight back so a peer can try — and back off here, because
 		// retrying a config-shaped failure every 5 s spins at the cost of
 		// an MCP fork each time.
-		log.ErrorContext(ctx, "seat_acquire_hook_failed", "seat", handle, "epoch", lease.Epoch, "error", err)
-		h.mu.Lock()
-		h.acquireBackoffs[handle] = h.now().Add(h.acquireBackoff)
-		h.mu.Unlock()
+		//
+		// A CUT IS SAID AS ONE, not as a hook that failed: a drain's is the
+		// node leaving, and a lost lease's is a peer holding the seat. The
+		// drain's alone is not backed off, because the node is leaving and a
+		// backoff speaks only about a claim it will not make; a lost lease
+		// is, as [Host.dropLostSeat] backs off any lease it lost.
+		switch cutBy {
+		case cutDrained:
+			log.InfoContext(ctx, "seat_acquire_cut", "seat", handle, "epoch", lease.Epoch,
+				"cause", string(cutBy), "error", err)
+		case cutLeaseLost:
+			log.WarnContext(ctx, "seat_acquire_cut", "seat", handle, "epoch", lease.Epoch,
+				"cause", string(cutBy), "error", err,
+				"hint", "the seat's lease was lost while it was being taken, so a peer may "+
+					"hold it; this node gives it back and stands back for one backoff")
+		default:
+			log.ErrorContext(ctx, "seat_acquire_hook_failed", "seat", handle, "epoch", lease.Epoch, "error", err)
+		}
+		if cutBy != cutDrained {
+			h.mu.Lock()
+			h.acquireBackoffs[handle] = h.now().Add(h.acquireBackoff)
+			h.mu.Unlock()
+		}
 		// Fenced, and already inside this seat's lock. The reason tells the
 		// hook the seat was never fully established, so it must tolerate
 		// half-spawned children and a consumer that was never attached.
@@ -648,23 +700,24 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took bool, re
 		// cancels the pass, and a give-back that inherits that releases
 		// nothing — the seat then lapses on its TTL, outside the held set
 		// the stop gives back.
-		h.releaseLocked(WithinStop(context.WithoutCancel(ctx), h.ttl),
-			handle, ReasonAcquireFailed)
+		//
+		// A SEAT A DRAIN CUT is given back as a step of the drain's stop
+		// ([Host.drainStop]), as the drain gives back every seat it holds:
+		// on an allowance of its own, a stop against an unreachable store
+		// would spend one more for every seat it cut. Any other give-back
+		// here is outside a stop, and bounded as one that begins one.
+		stop := context.WithoutCancel(ctx)
+		if cutBy == cutDrained {
+			stop = WithStopBudget(stop, drainStop)
+		}
+		h.releaseLocked(WithinStop(stop, h.ttl), handle, ReasonAcquireFailed)
 		return false, "", false
 	}
 
-	h.mu.Lock()
-	entry := h.held[handle]
-	if entry != nil {
-		entry.establishing = false
-	}
-	h.mu.Unlock()
 	// THE EDGE INTO ADMISSION, said out loud: nothing else reports it, and
 	// whatever the acquire hook was refused while the seat established is
 	// waiting on exactly this. See [Hooks.OnEstablished].
-	if entry != nil {
-		h.notifyEstablished(ctx, seat, *lease)
-	}
+	h.notifyEstablished(ctx, seat, *lease)
 
 	// Counted as claimed only once the seat is ESTABLISHED. The hook gives
 	// a failed takeover straight back — a bad MCP command, a credential

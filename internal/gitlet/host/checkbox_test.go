@@ -1,6 +1,7 @@
 package host_test
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -44,8 +45,8 @@ func aCheck(id, repo, oid, name string, attempt int) host.CheckRunRef {
 // whole — and to nothing past its check's timeout and the box's grace; a
 // token of another domain over the same keyring is refused, as is one minted
 // under another keyring; and a ref no attempt has, or a timeout no check runs
-// for, is a caller's bug, answered no token at all. The token is known by its
-// shape to redaction, as every per-run token is.
+// for, is a caller's bug, refused by name and no token at all. The token is
+// known by its shape to redaction, as every per-run token is.
 //
 // Mutations: carry the names raw in the subject — a dotted name's token no
 // longer verifies, red; mint for the timeout alone — the token is refused
@@ -57,7 +58,7 @@ func TestACheckTokenNamesItsAttempt(t *testing.T) {
 	k := runtoken.KeyMaterial{ID: "k1", Material: "a fleet's key"}
 	tokens := checkTokens(t, boxRing("k1", k), clock)
 	ref := aCheck(uuid.NewString(), "dev.notes", strings.Repeat("a1", 20), "lint.go", 3)
-	token := tokens.Mint(ref, 10*time.Minute)
+	token := mintedCheck(t, tokens, ref, 10*time.Minute)
 	if got, ok := tokens.Verify(token); !ok || got != ref {
 		t.Fatalf("a minted check token verifies to %+v %v, want %+v", got, ok, ref)
 	}
@@ -85,24 +86,24 @@ func TestACheckTokenNamesItsAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := tokens.Verify(bridge.Mint("chk~x", time.Hour)); ok {
+	if got, ok := tokens.Verify(minted(t, bridge, "chk~x", time.Hour)); ok {
 		t.Errorf("a bridge token over the same keyring was admitted as a check's: %+v", got)
 	}
-	for name, bad := range map[string]func() string{
-		"an attempt past the last": func() string {
+	for name, bad := range map[string]func() (string, error){
+		"an attempt past the last": func() (string, error) {
 			return tokens.Mint(aCheck(ref.Attempt.RepoID, "web", ref.Attempt.OID, "unit", gitlet.MaxCheckAttempts+1),
 				time.Minute)
 		},
-		"a repository no name names": func() string {
+		"a repository no name names": func() (string, error) {
 			return tokens.Mint(aCheck(ref.Attempt.RepoID, "Web", ref.Attempt.OID, "unit", 1), time.Minute)
 		},
-		"no timeout": func() string { return tokens.Mint(ref, 0) },
-		"a timeout past the ceiling": func() string {
+		"no timeout": func() (string, error) { return tokens.Mint(ref, 0) },
+		"a timeout past the ceiling": func() (string, error) {
 			return tokens.Mint(ref, gitlet.CheckTimeoutCeiling+time.Second)
 		},
 	} {
-		if got := bad(); got != "" {
-			t.Errorf("%s was minted %q, want no token", name, got)
+		if got, err := bad(); !errors.Is(err, host.ErrNoCheckRun) || got != "" {
+			t.Errorf("%s was minted %q (%v), want host.ErrNoCheckRun", name, got, err)
 		}
 	}
 }
@@ -122,20 +123,20 @@ func TestARunTokenIsNoCheckToken(t *testing.T) {
 	boxes, checks := boxTokens(t, ring), checkTokens(t, ring, nil)
 	run := aRunRef()
 	check := aCheck(uuid.NewString(), gitlettest.RepoName, strings.Repeat("b2", 20), "unit", 1)
-	if got, ok := boxes.Verify(checks.Mint(check, time.Minute)); ok {
+	if got, ok := boxes.Verify(mintedCheck(t, checks, check, time.Minute)); ok {
 		t.Errorf("a check's token verified as a run's: %+v", got)
 	}
-	if got, ok := checks.Verify(boxes.Mint(run)); ok {
+	if got, ok := checks.Verify(mintedBox(t, boxes, run)); ok {
 		t.Errorf("a run's token verified as a check's: %+v", got)
 	}
 	for _, crossed := range []struct {
 		user, token string
 		valid       bool
 	}{
-		{host.BoxUser, checks.Mint(check, time.Minute), false},
-		{gitlet.CheckUser, boxes.Mint(run), false},
-		{host.BoxUser, boxes.Mint(run), true},
-		{gitlet.CheckUser, checks.Mint(check, time.Minute), true},
+		{host.BoxUser, mintedCheck(t, checks, check, time.Minute), false},
+		{gitlet.CheckUser, mintedBox(t, boxes, run), false},
+		{host.BoxUser, mintedBox(t, boxes, run), true},
+		{gitlet.CheckUser, mintedCheck(t, checks, check, time.Minute), true},
 	} {
 		if got := host.VerifyBox(boxes, checks, crossed.user, crossed.token); got != crossed.valid {
 			t.Errorf("a token presented as %q verifies %v, want %v", crossed.user, got, crossed.valid)
@@ -148,9 +149,9 @@ func TestARunTokenIsNoCheckToken(t *testing.T) {
 	c, _ := boxCase(t, gitlettest.SoloOptions{Logger: lines.logger(), Shape: gitlettest.Shape{WrapEstate: rec.wrap}})
 	rows := c.Rows()
 	live, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
-	runToken := c.Fleet.Runs().Token(live)
-	checkToken := gitlettest.NewCheckTokens(t).Mint(aCheck(rows.Repo.ID, gitlettest.RepoName, rows.Refs["refs/heads/main"],
-		"unit", 1), time.Minute)
+	runToken := c.Fleet.Runs().Token(t, live)
+	checkToken := mintedCheck(t, gitlettest.NewCheckTokens(t), aCheck(rows.Repo.ID, gitlettest.RepoName,
+		rows.Refs["refs/heads/main"], "unit", 1), time.Minute)
 	reads := len(rec.seen("read:" + string(gitlet.ReadCheckBox)))
 	for _, crossed := range []struct {
 		name, user, token, says string
@@ -189,7 +190,8 @@ func TestTheCheckAPIAdmitsACheckTokenAsItsGitDoes(t *testing.T) {
 	f := c.Fleet.(*gitlettest.SoloFleet)
 	key := gitlet.CheckKey{RepoID: rows.Repo.ID, OID: head, Target: "refs/heads/main", Name: "unit", Attempt: 1}
 	queueCheck(t, f, key)
-	token := gitlettest.NewCheckTokens(t).Mint(host.CheckRunRef{Attempt: key, Repo: gitlettest.RepoName}, time.Minute)
+	token := mintedCheck(t, gitlettest.NewCheckTokens(t), host.CheckRunRef{Attempt: key, Repo: gitlettest.RepoName},
+		time.Minute)
 	live, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
 	mux := http.NewServeMux()
 	mux.HandleFunc(host.PatternBoxGitletTree, func(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +229,7 @@ func TestTheCheckAPIAdmitsACheckTokenAsItsGitDoes(t *testing.T) {
 		says                   string
 	}{
 		{"no credential", gitlettest.RepoName, "", "", http.StatusUnauthorized, "as `check` with its check's token"},
-		{"an executor's token", gitlettest.RepoName, host.BoxUser, c.Fleet.Runs().Token(live), http.StatusForbidden,
+		{"an executor's token", gitlettest.RepoName, host.BoxUser, c.Fleet.Runs().Token(t, live), http.StatusForbidden,
 			"answers a check's box"},
 		{"another repository", "other", gitlet.CheckUser, token, http.StatusForbidden, "was given"},
 		{"a name no repository takes", "Web", gitlet.CheckUser, token, http.StatusNotFound, "not found"},
@@ -294,7 +296,7 @@ func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 	key := gitlet.CheckKey{RepoID: rows.Repo.ID, OID: head, Target: "refs/heads/main", Name: "lint.go", Attempt: 1}
 	queueCheck(t, f, key)
 	tokens := gitlettest.NewCheckTokens(t)
-	token := tokens.Mint(host.CheckRunRef{Attempt: key, Repo: gitlettest.RepoName}, 10*time.Minute)
+	token := mintedCheck(t, tokens, host.CheckRunRef{Attempt: key, Repo: gitlettest.RepoName}, 10*time.Minute)
 	box := gitlettest.NewCheckBox(t, f, token)
 	ran := host.RecordGit(f.Nodes()[0].Host())
 	from, fetched := len(ran()), len(f.Fetched())
@@ -368,7 +370,7 @@ func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 	unknown.Attempt = 2
 	before := len(rec.seen("read:" + string(gitlet.ReadCheckBox)))
 	refused("an attempt never queued", gitlettest.RepoName, boxFetchAdvert, "version=2",
-		tokens.Mint(host.CheckRunRef{Attempt: unknown, Repo: gitlettest.RepoName}, time.Minute),
+		mintedCheck(t, tokens, host.CheckRunRef{Attempt: unknown, Repo: gitlettest.RepoName}, time.Minute),
 		http.StatusForbidden, "check_unknown", "is unknown here")
 	if got := rec.seen("read:" + string(gitlet.ReadCheckBox))[before:]; len(got) != 2 ||
 		got[0].level != statelog.ReadStale || got[1].level != statelog.ReadLinearizable {
@@ -418,8 +420,8 @@ func TestACheckBoxFetchesAtItsChecksSession(t *testing.T) {
 	key := gitlet.CheckKey{RepoID: rows.Repo.ID, OID: head, Target: "refs/heads/main", Name: "lint.go", Attempt: 1}
 	queueCheck(t, f, key)
 	tokens := gitlettest.NewCheckTokens(t)
-	box := gitlettest.NewCheckBox(t, f, tokens.Mint(host.CheckRunRef{Attempt: key, Repo: gitlettest.RepoName},
-		10*time.Minute))
+	box := gitlettest.NewCheckBox(t, f, mintedCheck(t, tokens, host.CheckRunRef{Attempt: key,
+		Repo: gitlettest.RepoName}, 10*time.Minute))
 	barriers, synced := rec.linearizable(), len(rec.seen("state"))
 
 	boxWork := box.Init()

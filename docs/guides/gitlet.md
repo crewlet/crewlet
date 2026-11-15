@@ -100,7 +100,9 @@ branch cannot be moved to a commit that does not descend from it, without
 `allow_delete` it cannot be deleted, and `direct_push: none` freezes it — while
 the default, `persons`, takes a person's push to it and never a seat's.
 `crewlet validate` warns about every repository whose default branch no rule
-protects, since anybody who may push could then force-push or delete it. Every
+protects, since anybody who may push could then force-push it. No push
+deletes a repository's default branch, protected or not: make another branch
+the default first ([What git prints](../concepts/gitlet.md#what-git-prints-and-what-it-means)). Every
 field, the pattern grammar and what each change does at its activation are in
 [Declaring repositories](../concepts/gitlet.md#declaring-repositories).
 

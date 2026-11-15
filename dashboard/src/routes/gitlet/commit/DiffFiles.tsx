@@ -10,6 +10,11 @@
  * it. `file=` is the file whose patch is drawn, `line=` the line of its newer
  * side the patch marks and opens at (a check's failure points there), and
  * `layout=` how, each a filter of the page it is on.
+ *
+ * IT STANDS IN A GAPPED COLUMN, a page's `.code-section` under its title: its
+ * toolbar is a page's sticky band (`PageToolbar`, `.toolbar`), which hands its
+ * top padding back to the gap above it, so drawn straight under a caption in
+ * a box with no gap it covers the caption's lower half.
  */
 
 import { useCallback, useEffect, useMemo } from "react";

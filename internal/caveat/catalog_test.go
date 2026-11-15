@@ -106,6 +106,8 @@ var refusalSamples = map[string]caveat.Refusal{
 	"RepositoryFull":                 caveat.RepositoryFull(),
 	"MergeAskedForSomebodyWhoMayNot": caveat.MergeAskedForSomebodyWhoMayNot(),
 	"QueueEntryNotYours":             caveat.QueueEntryNotYours(),
+	"ReviewOfYourOwnChange":          caveat.ReviewOfYourOwnChange(),
+	"DefaultBranchKept":              caveat.DefaultBranchKept(),
 	"ScheduleSwitchedOff":            caveat.ScheduleSwitchedOff(),
 	"SchedulingSwitchedOff":          caveat.SchedulingSwitchedOff(),
 	"SchedulesWaitForAModel":         caveat.SchedulesWaitForAModel(),

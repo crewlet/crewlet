@@ -1005,7 +1005,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// with the launch's environment above: its token lives a fixed span from
 	// its minting ([otelTokenTTL]), and whatever the box's provisioning took
 	// would come off the job's own.
-	jobEnv := jobEnvFor(m, req, box)
+	jobEnv, err := jobEnvFor(m, req, box)
+	if err != nil {
+		c.abandon(ctx, m, req, fence, box.ID())
+		return LaunchResult{}, fmt.Errorf("sandbox: the job's telemetry endpoint: %w", err)
+	}
 	// AND, FOR A RUN THAT CONTINUES A SESSION, HOW ITS BOX IS WIRED WHERE ITS
 	// SCRIPT STARTS ONE OF ITS OWN INSTEAD: the job's other bridge token, so
 	// the token its harness dials is the box's word on which session it
@@ -1534,15 +1538,22 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 // address is written in the engine host's network, and a loopback one reaches
 // nothing from inside a container ([EngineAddress]). An operator's own value
 // is left as written, in the box's network already.
-func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
+//
+// A TRACE ID NO TOKEN CAN CARRY REDACTED IS REFUSED with an error
+// ([OtelTokens.Mint]), and the job's start with it, rather than handed to a
+// box as a token every surface would publish.
+func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
 	if m.telemetry == nil {
-		return req.Spec.Env
+		return req.Spec.Env, nil
 	}
-	added := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
+	added, err := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
 		req.Turn.TurnID, req.Turn.AgentHandle, req.Spec.Placement == Direct,
 		otelTokenTTL(req.Spec))
+	if err != nil {
+		return nil, err
+	}
 	if len(added) == 0 {
-		return req.Spec.Env
+		return req.Spec.Env, nil
 	}
 	if endpoint, ok := added[otelBoxEndpointVar]; ok {
 		added[otelBoxEndpointVar] = EngineAddress(box, endpoint)
@@ -1554,7 +1565,7 @@ func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) map[string]string
 	for k, v := range req.Spec.Env {
 		env[k] = v
 	}
-	return env
+	return env, nil
 }
 
 // otelTokenTTL is how long a run's export endpoint stays valid.
@@ -1581,17 +1592,18 @@ func otelTokenTTL(spec Spec) time.Duration {
 // with the run's telemetry ([withTelemetry]), and beneath both each of
 // [LaunchRequest.HomePaths] joined onto box's own home, so the path is right
 // in every backend's box. A copy where it adds a path, never the launch's map.
-func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
-	env := withTelemetry(m, req, box)
-	if len(req.HomePaths) == 0 {
-		return env
+// An error where the telemetry's token cannot be minted ([withTelemetry]).
+func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
+	env, err := withTelemetry(m, req, box)
+	if err != nil || len(req.HomePaths) == 0 {
+		return env, err
 	}
 	out := make(map[string]string, len(env)+len(req.HomePaths))
 	for name, rel := range req.HomePaths {
 		out[name] = path.Join(box.Home(), rel)
 	}
 	maps.Copy(out, env)
-	return out
+	return out, nil
 }
 
 // RunEnvFor is [withTelemetry] under a name a test can reach.
@@ -1601,7 +1613,7 @@ func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
 // end up inside a box that a test cannot look into, and getting the order
 // wrong sends somebody else's spans to the engine — silently, because they do
 // arrive somewhere.
-func RunEnvFor(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
+func RunEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
 	return withTelemetry(m, req, box)
 }
 

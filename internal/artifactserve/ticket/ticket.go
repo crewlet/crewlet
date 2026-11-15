@@ -128,7 +128,11 @@ func (c *Codec) Mint(claims artifacts.TicketClaims) (string, error) {
 	// THE GRACE RIDES ON THE TOKEN, never on the claims: the token outlives
 	// the claims by the grace, so a ticket that simply ran out still
 	// verifies and is answered Expired rather than Invalid.
-	return c.signer.Mint(subject, claims.Expires.Sub(now)+artifacts.TicketExpiredGrace), nil
+	token, err := c.signer.Mint(subject, claims.Expires.Sub(now)+artifacts.TicketExpiredGrace)
+	if err != nil {
+		return "", fmt.Errorf("ticket: a token over the claims: %w", err)
+	}
+	return token, nil
 }
 
 // lifetimeOf is the longest a ticket minted for purpose may live.

@@ -11,6 +11,16 @@
  * the reason (`lib/repoWrites.ts`): a repository that is archived, deleted,
  * importing or a pull mirror takes no push, a new branch takes write, and a
  * delete takes maintain.
+ *
+ * THE DEFAULT BRANCH HAS NO DELETE. The engine refuses its deletion whoever
+ * asks (`default_branch`): every clone checks it out, and a repository whose
+ * default branch is gone reads as empty while it holds every other branch. It
+ * is let go by making another branch the default first, on the Settings tab,
+ * after which its row offers Delete like any other.
+ *
+ * A NEW BRANCH STARTS AT ANY BRANCH, so it is held only for a repository that
+ * holds none. One whose default branch holds nothing while others are live
+ * names where it starts, since the default branch it would start at is empty.
  */
 
 import { useState } from "react";
@@ -29,9 +39,9 @@ export function NewBranchButton({ repo }: { repo: CodeRepoDetail }) {
   const [open, setOpen] = useState(false);
   const held =
     branchWriteHeld(repo, viewer) ??
-    (repo.head
+    (repo.branches > 0
       ? undefined
-      : `${repo.name} holds no commit yet: its first branch arrives with its first push, or its first file added on the Files tab.`);
+      : `${repo.name} holds no branch yet: its first arrives with its first push, or with its first file added on the Code tab.`);
   return (
     <>
       <WriteButton
@@ -52,7 +62,13 @@ function NewBranchDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () 
   const write = useAct("code_create_branch");
   const [name, setName] = useState("");
   const [at, setAt] = useState("");
-  const blocked = branchFormHeld(name);
+  // WHERE IT STARTS, which the empty default branch cannot be.
+  const startsAtDefault = Boolean(repo.head);
+  const blocked =
+    branchFormHeld(name) ??
+    (startsAtDefault || at.trim() !== ""
+      ? undefined
+      : `Name where it starts: ${repo.default_branch}, the default branch, holds no commit.`);
   const submit = async () => {
     if (!pressable(write, blocked)) return;
     const branch = name.trim();
@@ -103,8 +119,12 @@ function NewBranchDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () 
         </FormField>
         <FormField
           label="Starts at"
-          optional
-          helper={`A branch, a tag or a commit. ${repo.default_branch} when left empty.`}
+          optional={startsAtDefault}
+          helper={
+            startsAtDefault
+              ? `A branch, a tag or a commit. ${repo.default_branch} when left empty.`
+              : `A branch, a tag or a commit: ${repo.default_branch}, the default branch, holds no commit.`
+          }
         >
           {(field) => (
             <Input
@@ -112,7 +132,7 @@ function NewBranchDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () 
               aria-describedby={field.describedBy}
               width="full"
               spellCheck={false}
-              placeholder={repo.default_branch}
+              placeholder={startsAtDefault ? repo.default_branch : "release"}
               value={at}
               onChange={(event) => setAt(event.target.value)}
             />
@@ -123,13 +143,28 @@ function NewBranchDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () 
   );
 }
 
-/** One branch's Delete, confirmed in the page. */
+/**
+ * One branch's Delete, confirmed in the page; none on the repository's default
+ * branch, which nothing deletes (see the file's doc).
+ */
 export function DeleteBranchButton({ repo, row }: { repo: CodeRepoDetail; row: CodeRefRow }) {
+  const name = refName(row.ref).name;
+  if (name === repo.default_branch) return null;
+  return <DeleteBranch repo={repo} row={row} name={name} />;
+}
+
+function DeleteBranch({
+  repo,
+  row,
+  name,
+}: {
+  repo: CodeRepoDetail;
+  row: CodeRefRow;
+  name: string;
+}) {
   const write = useAct("code_delete_branch");
   const viewer = useViewer();
   const [confirming, setConfirming] = useState(false);
-  const name = refName(row.ref).name;
-  const isDefault = name === repo.default_branch;
   return (
     <>
       <WriteButton
@@ -146,12 +181,7 @@ export function DeleteBranchButton({ repo, row }: { repo: CodeRepoDetail; row: C
         open={confirming}
         destructive
         title={`Delete the branch ${name}?`}
-        message={
-          `${name} is deleted at ${row.oid ? shortOID(row.oid) : "its head"}, the head listed here: a push made to it since is refused rather than lost. Its commits stay in the repository's history, and a change that proposes it loses its source.` +
-          (isDefault
-            ? ` It is ${repo.name}'s default branch, which a clone checks out and a change is proposed into.`
-            : "")
-        }
+        message={`${name} is deleted at ${row.oid ? shortOID(row.oid) : "its head"}, the head listed here: a push made to it since is refused rather than lost. Its commits stay in the repository's history, and a change that proposes it loses its source.`}
         cancelLabel="Keep it"
         confirmLabel="Delete branch"
         onClose={() => setConfirming(false)}

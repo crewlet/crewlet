@@ -43,6 +43,9 @@ import (
 //     live change's source (named) or target, or last set by somebody else;
 //  5. a protection ([ProtectionRefusal]), every matching rule consulted —
 //     and a rule that takes a person's push alone refuses everybody else's;
+//     5b. a deletion of the repository's default branch, whoever pushes it
+//     (default_branch, [DefaultBranchRefusal]), after the protections, so a
+//     protected default branch is refused by the rule that names it;
 //  6. a create beside a live ref above it or with a live ref below it
 //     (ref_conflict, [working.beside]);
 //  7. a create past MaxRefsPerRepo live refs (repo_refs) — past HALF of them
@@ -945,6 +948,9 @@ func pushRowsIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]PushR
 type working struct {
 	name string
 	now  time.Time
+	// defaultBranch is the repository's default branch, by name: the one
+	// branch no push deletes (rule 5b, [DefaultBranchRefusal]).
+	defaultBranch string
 
 	// targets is every ref the batch names, every directory its creates would
 	// make and each create's upper bound ([readAround]), that has a ROW: its
@@ -1005,8 +1011,8 @@ func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, b
 	if err != nil {
 		return nil, fmt.Errorf("gitlet: read the refs a batch names: %w", err)
 	}
-	w := &working{name: repo.name, now: now, targets: targets, live: repo.refs, bytes: repo.liveBytes,
-		packs: repo.livePacks, occupied: map[string]string{}, touched: map[string]bool{}}
+	w := &working{name: repo.name, now: now, defaultBranch: repo.defaultBranch, targets: targets, live: repo.refs,
+		bytes: repo.liveBytes, packs: repo.livePacks, occupied: map[string]string{}, touched: map[string]bool{}}
 	if err = w.readAround(ctx, tx, repoID, batch, open, seen, deleted); err != nil {
 		return nil, err
 	}
@@ -1557,6 +1563,11 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits, g Gra
 		}
 		if r, detail := v.verdict(push, i, *c, p.Principal.Kind); r != "" {
 			refuse(c, r, detail)
+			continue
+		}
+		// 5b THE DEFAULT BRANCH, which no push deletes, whoever sends it.
+		if r, why := DefaultBranchRefusal(*c, w.name, w.defaultBranch); r != "" {
+			refuse(c, r, why)
 			continue
 		}
 		if current == ZeroOID {

@@ -224,11 +224,16 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 			rig := newCoordRig(t)
 			run := rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
-			endpoint := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, false, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
-			tokens := []string{
-				strings.TrimPrefix(endpoint, engine+"/otlp/"),
-				bridge.Mint("7c9e6679f4a14f3a9d1c0b2e8f5a6d3b~"+run.TurnID, time.Hour),
+			env, err := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, false, time.Hour)
+			if err != nil {
+				t.Fatalf("RunEnv: %v", err)
 			}
+			endpoint := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
+			bridged, err := bridge.Mint("7c9e6679f4a14f3a9d1c0b2e8f5a6d3b~"+run.TurnID, time.Hour)
+			if err != nil {
+				t.Fatalf("Mint: %v", err)
+			}
+			tokens := []string{strings.TrimPrefix(endpoint, engine+"/otlp/"), bridged}
 			printed := "OTEL_EXPORTER_OTLP_ENDPOINT=" + endpoint + "\n" +
 				`{"mcpServers": {"crewlet": {"type": "http", "url": "` + engine + "/mcp/" + tokens[1] + `"}}}`
 			finished, asked := result(printed)

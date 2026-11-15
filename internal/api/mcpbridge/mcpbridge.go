@@ -1120,6 +1120,25 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	}
 
 	opened := newBinding(ctx, s, where, b.calls)
+	// AND A TOKEN ITS SUBJECT CANNOT BE CARRIED IN: a run id holding what
+	// internal/redact ends a token's subject at, a dot or a space, or one so
+	// long the subject runs past what redaction reads, makes a token no
+	// surface knows by its shape, which runtoken refuses to mint
+	// (runtoken.ErrSubject). BOTH OF THE JOB'S TOKENS ARE MINTED HERE, its
+	// own and its other ([Bridge.FreshEndpoint]), before anything is filed,
+	// for the reason no empty answer files anything: the other one, minted
+	// when asked for as it was, could be refused only after its session was
+	// filed, which a caller reading the refusal as no session opened would
+	// leave live.
+	token, err := b.signer.Mint(opened.subject(false), b.ttlOf(s))
+	if err == nil {
+		opened.other, err = b.signer.Mint(opened.subject(true), b.ttlOf(s))
+	}
+	if err != nil {
+		log.Error("mcp_bridge_token_refused", "run_id", s.RunID, "launch_id", s.Launch, "seat", s.Handle,
+			"error", err)
+		return ""
+	}
 	s.mu.Lock()
 	s.live = opened
 	s.mu.Unlock()
@@ -1164,7 +1183,7 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 		}
 		previous.endKeeping(opened.steer, how)
 	}
-	return base + PathPrefix + b.signer.Mint(opened.subject(false), b.ttlOf(s))
+	return base + PathPrefix + token
 }
 
 // FreshEndpoint is the endpoint of s's live opening under the job's OTHER token:
@@ -1173,6 +1192,7 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 // A request on it reaches the same opening as one on [Bridge.Open]'s, and says
 // the box started that session of its own ([Session.Started]). "" where s has
 // no live opening, or no base reaches its box — the cases Open answers "" for.
+// The token is the one Open minted beside the job's own.
 func (b *Bridge) FreshEndpoint(s *Session) string {
 	if b == nil || s == nil {
 		return ""
@@ -1184,7 +1204,7 @@ func (b *Bridge) FreshEndpoint(s *Session) string {
 	if opened == nil || base == "" {
 		return ""
 	}
-	return base + PathPrefix + b.signer.Mint(opened.subject(true), b.ttlOf(s))
+	return base + PathPrefix + opened.other
 }
 
 // ttlOf is how long a token minted for s's opening lasts: the bridge's own
@@ -1925,6 +1945,10 @@ type binding struct {
 	// route is where the opening lives ([route]): the second part of what a
 	// token names, and, for a seat's, what [Bridge.ReleaseSeat] ends it by.
 	route route
+	// other is the job's OTHER token ([Bridge.FreshEndpoint]), minted with
+	// its own when the opening opened ([Bridge.Open]) and set before it is
+	// filed, so read-only after.
+	other string
 
 	// ctx is the run's launch context with its cancellation removed — what
 	// every call runs under. Held, against the rule that a context is

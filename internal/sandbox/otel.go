@@ -61,9 +61,14 @@ func NewOtelTokens(opts OtelTokenOptions) (*OtelTokens, error) {
 	return &OtelTokens{signer: signer}, nil
 }
 
-// Mint returns a token scoped to one trace, valid for ttl.
-func (t *OtelTokens) Mint(traceID string, ttl time.Duration) string {
-	return t.signer.Mint(traceID, ttl)
+// Mint returns a token scoped to one trace, valid for ttl, or refuses a trace
+// id no token can carry redacted (runtoken.ErrSubject).
+func (t *OtelTokens) Mint(traceID string, ttl time.Duration) (string, error) {
+	token, err := t.signer.Mint(traceID, ttl)
+	if err != nil {
+		return "", fmt.Errorf("sandbox: a telemetry token for trace %q: %w", traceID, err)
+	}
+	return token, nil
 }
 
 // Validate returns the token's trace id, or empty for one that is forged,
@@ -166,16 +171,21 @@ func (r *OtelReceiver) Reaches(onHost bool) string {
 }
 
 // EndpointFor mints one run's OTLP endpoint, for a box on this node's host or
-// elsewhere ([OtelReceiver.Reaches]), or "" where no address reaches that box.
+// elsewhere ([OtelReceiver.Reaches]), or "" where no address reaches that box;
+// an error where its token cannot be minted ([OtelTokens.Mint]).
 //
 // The token is IN THE PATH, so the box's exporter needs no headers — which is
 // what lets OTEL_EXPORTER_OTLP_HEADERS stay empty inside the sandbox.
-func (r *OtelReceiver) EndpointFor(traceID string, onHost bool, ttl time.Duration) string {
+func (r *OtelReceiver) EndpointFor(traceID string, onHost bool, ttl time.Duration) (string, error) {
 	base := r.Reaches(onHost)
 	if base == "" {
-		return ""
+		return "", nil
 	}
-	return base + otelTokenPath + r.tokens.Mint(traceID, ttl)
+	token, err := r.tokens.Mint(traceID, ttl)
+	if err != nil {
+		return "", err
+	}
+	return base + otelTokenPath + token, nil
 }
 
 // otelTokenPath is what precedes a run's own export token in its endpoint
@@ -288,19 +298,20 @@ const OtelKeyDomain = "crewlet.otlp.v1"
 // address it exports to ([OtelReceiver.Reaches]). A box no address reaches
 // gets NOTHING, not an environment naming an endpoint it cannot dial: its
 // exporter then exports nowhere, which is what a box with no receiver did all
-// along.
+// along. A trace id no token can carry redacted is refused with an error
+// ([OtelTokens.Mint]), and the launch with it.
 func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, onHost bool,
 	ttl time.Duration,
-) map[string]string {
+) (map[string]string, error) {
 	if traceID == "" {
 		// NO TRACE, NO ENDPOINT. A token scoped to an empty trace would
 		// authenticate every run's export as every other run's, which is
 		// the one property the scoping exists for.
-		return nil
+		return nil, nil
 	}
-	endpoint := r.EndpointFor(traceID, onHost, ttl)
-	if endpoint == "" {
-		return nil
+	endpoint, err := r.EndpointFor(traceID, onHost, ttl)
+	if err != nil || endpoint == "" {
+		return nil, err
 	}
 	env := map[string]string{
 		otelBoxEndpointVar:            endpoint,
@@ -315,7 +326,7 @@ func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, onHost boo
 		// W3C traceparent: version-traceid-spanid-flags, sampled.
 		env["TRACEPARENT"] = "00-" + traceID + "-" + spanID + "-01"
 	}
-	return env
+	return env, nil
 }
 
 // The environment the receiver is configured from.

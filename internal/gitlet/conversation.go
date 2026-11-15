@@ -83,6 +83,14 @@ const (
 	// reviewer who may not review it: a seat below review on the repository,
 	// or an author of the change, whose review counts for nothing.
 	ConversationRefusalNotPermitted ConversationRefusal = "not_permitted"
+	// ConversationRefusalOwnChange is a review by an author of the change:
+	// an author's review of their own change, its approval above all, counts
+	// for nothing, so none is taken, whatever the author's access. Its own
+	// code rather than not_permitted, which it shares a rule with no other
+	// refusal of, so the person who meets it is told what it is (the change
+	// is theirs, and somebody else reviews it) rather than that the change is
+	// not theirs to make.
+	ConversationRefusalOwnChange ConversationRefusal = "own_change"
 	// ConversationRefusalNoReviewer is an ask of a reviewer the chart does
 	// not hold: no seat by that handle.
 	ConversationRefusalNoReviewer ConversationRefusal = "no_reviewer"
@@ -148,7 +156,8 @@ const (
 func ConversationRefusals() []ConversationRefusal {
 	return []ConversationRefusal{
 		ConversationRefusalRepoDeleted, ConversationRefusalRepoArchived, ConversationRefusalChangeNotFound,
-		ConversationRefusalNotPermitted, ConversationRefusalNoReviewer, ConversationRefusalTooManyReviewers,
+		ConversationRefusalNotPermitted, ConversationRefusalOwnChange, ConversationRefusalNoReviewer,
+		ConversationRefusalTooManyReviewers,
 		ConversationRefusalUnknownRevision, ConversationRefusalChangeClosed, ConversationRefusalChangeMerged,
 		ConversationRefusalThreadGone, ConversationRefusalNotAuthor, ConversationRefusalNotRaiser,
 		ConversationRefusalFindingGone, ConversationRefusalTooManyFindings, ConversationRefusalSuperseded,

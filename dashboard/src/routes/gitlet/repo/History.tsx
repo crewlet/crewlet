@@ -36,7 +36,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { refName } from "~/lib/code.ts";
+import { noDefaultHead, refName } from "~/lib/code.ts";
 import { fmtDate, fmtDateTime, plural, readerDay, relTime } from "~/lib/format.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -392,8 +392,17 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
   const rows = paged.items;
   const bands = useMemo(() => byDay(rows), [rows]);
   if (!repo.head && rev === "") {
-    return (
+    // THE DEFAULT BRANCH HOLDS NOTHING: with no branch at all there is no
+    // history to read, and with others live the picker reaches theirs.
+    return repo.branches === 0 ? (
       <p className="muted">Nobody has pushed a branch yet: {repo.default_branch} has no history.</p>
+    ) : (
+      <>
+        <PageToolbar>
+          <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={setRev} />
+        </PageToolbar>
+        <p className="muted">{noDefaultHead(repo)}</p>
+      </>
     );
   }
   return (

@@ -412,6 +412,24 @@ func (n *Node) stopConverging() {
 	n.wg.Wait()
 }
 
+// BeginDrain is [Node.Drain]'s first step alone: this node stops claiming,
+// gives up its presence, and cuts every seat it is still taking
+// ([seat.Host.BeginDrain]), and nothing waits for a turn or gives a seat back.
+//
+// EXPORTED FOR A STOP DECIDED BEFORE THE NODE HAS STARTED, which cannot run a
+// whole drain yet: an engine whose start is cancelled while the seat host's
+// first pass runs begins the drain here at once, so the pass claims nothing
+// more and cuts what it is establishing
+// ([github.com/crewlet/crewlet/internal/engine.Engine.Start]). The whole drain
+// follows as that stop's shutdown.
+//
+// Its presence give-back is a step of the stop ctx carries, or of one this
+// node's TTL begins ([seat.WithinStop]) — the allowance Drain hands it when
+// Drain is what calls it, so the drain's give-backs still share one.
+func (n *Node) BeginDrain(ctx context.Context) {
+	n.host.BeginDrain(seat.WithinStop(context.WithoutCancel(ctx), n.host.TTL()))
+}
+
 // drainLogInterval is how often a drain says how much work is left.
 //
 // It is a REPORTING cadence, not a deadline — see Drain for why there is no
@@ -421,19 +439,25 @@ func (n *Node) stopConverging() {
 const drainLogInterval = 10 * time.Second
 
 // Drain performs this node's graceful departure and returns once its seats
-// are handed back.
+// are handed back, the ones it cut while they were being taken among them.
 //
 // The three steps are one operation because no layer below can do them alone:
 // the seat host knows about leases but not about consumers, and the queue
 // knows about consumers but not about who owns a seat.
 //
 //  1. Stop claiming and give up presence, so peers stop reserving capacity
-//     for a node that will never claim again.
+//     for a node that will never claim again ([Node.BeginDrain]). A seat
+//     still being taken is cut rather than waited for.
 //  2. Quiesce every held seat: no NEW work is taken, and the seats keep
 //     renewing so the turns already running can finish.
 //  3. Once no handler and no turn is running ([Node.waitInFlight]), release
 //     the seats: mailbox intact, lease given back, so a peer can take over
-//     immediately rather than waiting out a TTL.
+//     immediately rather than waiting out a TTL. Then wait for every seat
+//     step 1 cut to be given back by the claim that was taking it
+//     ([seat.Host.AwaitCut]), which no release here reaches: a cut seat is
+//     out of the held set, and its give-back — the seat's teardown and its
+//     lease — must not run on beside what the stop tears down after the
+//     drain.
 //
 // Step 3 waits INDEFINITELY, bounded only by ctx. That is deliberate: a turn
 // parked mid-LLM-round is making progress a timer cannot see, and cutting it
@@ -494,7 +518,7 @@ func (n *Node) Drain(ctx context.Context) {
 	// — see the doc above. Free of ctx's cancellation, and carrying the
 	// allowance every one of them is a step of.
 	stop := seat.WithinStop(context.WithoutCancel(ctx), n.host.TTL())
-	n.host.BeginDrain(stop)
+	n.BeginDrain(stop)
 
 	// THE GATE FIRST, before the mailboxes quiesce. Quiescing stops NEW
 	// deliveries, but a turn already delivered and parked behind a slot is
@@ -563,7 +587,19 @@ func (n *Node) Drain(ctx context.Context) {
 	}
 
 	n.host.ReleaseAll(stop, seat.ReasonDrain)
-	n.log.Info("drain_complete", "still_held", len(n.host.Held()))
+	// BOUNDED BY ctx, as the wait for turns is: a cut hook that reads its
+	// context returns at once, and its give-back is a step of the stop's
+	// allowance, so only a hook that ignores its cut is waited for here, and
+	// only for as long as the caller lets the drain run.
+	giving := n.host.AwaitCut(ctx)
+	if giving > 0 {
+		n.log.Warn("drain_cut_seats_unsettled", "seats", giving, "error", ctx.Err(),
+			"detail", "a seat cut while it was being taken is still being given "+
+				"back by the claim that took it, whose acquire hook has not "+
+				"returned since its cut; it is given back once that hook "+
+				"returns, before this node's seat host stops")
+	}
+	n.log.Info("drain_complete", "still_held", len(n.host.Held())+giving)
 }
 
 // waitInFlight waits up to one [drainLogInterval] for this node's work to end,

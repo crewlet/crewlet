@@ -1171,7 +1171,7 @@ func newBenchBox(b *testing.B, f *gitlettest.SoloFleet, rows gitlettest.Rows, gi
 	base := []string{"HOME=" + home, "GIT_CONFIG_GLOBAL=" + global, "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_ATTR_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C"}
 	env := appendConfig(b, boxEnv(b, base, git, sandbox.BoxGit{Base: proxy.srv.URL + "/box/git", User: host.BoxUser,
-		Token: f.Runs().Token(run), Name: "Alice", Email: "alice@seats.invalid"}), overrides...)
+		Token: f.Runs().Token(b, run), Name: "Alice", Email: "alice@seats.invalid"}), overrides...)
 	version, err := boxTry(b, b.TempDir(), env, "git version")
 	if err != nil {
 		b.Fatalf("the box's git: %v\n%s", err, version)

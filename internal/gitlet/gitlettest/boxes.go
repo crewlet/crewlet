@@ -120,8 +120,16 @@ func (r *FixtureRuns) Launch(seat string, floor statelog.Position, grants ...hos
 	return ref
 }
 
-// Token is ref's git credential, as the launch hands it to the box.
-func (r *FixtureRuns) Token(ref host.BoxRunRef) string { return r.tokens.Mint(ref) }
+// Token is ref's git credential, as the launch hands it to the box, failing t
+// where none is minted.
+func (r *FixtureRuns) Token(t testing.TB, ref host.BoxRunRef) string {
+	t.Helper()
+	token, err := r.tokens.Mint(ref)
+	if err != nil {
+		t.Fatalf("minting launch %s's credential: %v", ref.LaunchID, err)
+	}
+	return token
+}
 
 // End ends ref's run: its job left its box and its collection is reading
 // what it pushed (status resumed).
@@ -383,7 +391,7 @@ const BoxUser = host.BoxUser
 // the git the fleet's persons run (Fleet.ClientGit).
 func NewBox(t testing.TB, f Fleet, ref host.BoxRunRef) *Person {
 	t.Helper()
-	return clientWith(t, f.ClientGit(), BoxUser, f.Runs().Token(ref))
+	return clientWith(t, f.ClientGit(), BoxUser, f.Runs().Token(t, ref))
 }
 
 // NewCheckBox is a check's box's git presenting token, its check's: a client

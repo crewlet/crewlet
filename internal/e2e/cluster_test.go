@@ -562,7 +562,14 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	if err != nil {
 		return fail(refusal("engine.New", err))
 	}
-	if err := e.Start(ctx); err != nil {
+	// ON THE TEST'S CONTEXT, NOT THE ATTEMPT'S: a context that ends while an
+	// engine starts is that engine's stop, which begins its drain
+	// ([engine.Engine.Start]), so an attempt whose deadline passed mid-start
+	// would hand back a member that started without error and never claims a
+	// seat — reported as a cluster that came up, and failing later on
+	// whatever the case reads first. The test's context is the member's
+	// lifetime, as it is wireAPI's below.
+	if err := e.Start(t.Context()); err != nil { //nolint:contextcheck // see above
 		return fail(fmt.Errorf("engine.Start: %w", err))
 	}
 

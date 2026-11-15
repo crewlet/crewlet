@@ -121,13 +121,17 @@ func jsOn(t *testing.T, conn *nats.Conn) jetstream.JetStream {
 	return client
 }
 
+// syncerOn is a syncer of the seat over db on the broker conn reaches. It
+// HOLDS the seat as the node that has held it all along ([heldFromEmpty]), so
+// a case publishes the seat with it as a node holding it does; a hydration it
+// runs takes the seat anew, its holding with it.
 func syncerOn(t *testing.T, db *store.DB, conn *nats.Conn) *Syncer {
 	t.Helper()
 	s := New(db, jsOn(t, conn), func(string) string { return seat.AgentID })
 	if s == nil {
 		t.Fatal("New returned nil with a store and a connection")
 	}
-	return s
+	return heldFromEmpty(s, seat.Handle)
 }
 
 // THE FIX, end to end and through a real broker: a seat runs on one node,
@@ -424,13 +428,11 @@ func TestRepublishingCollapsesOntoOneMessagePerRow(t *testing.T) {
 	db := openStore(t)
 	seedMemory(t, db)
 
-	syncer := syncerOn(t, db, conn)
 	for range 4 {
-		// A fresh watermark each time is what a restarted node does, and
-		// it is the case that would grow the stream if compaction were
-		// not doing its job.
-		syncer.Forget(seat.Handle)
-		if _, err := syncer.PublishOwn(ctx, seat.Handle); err != nil {
+		// A fresh syncer each time, with no watermark, is what a restarted
+		// node is, and it is the case that would grow the stream if
+		// compaction were not doing its job.
+		if _, err := syncerOn(t, db, conn).PublishOwn(ctx, seat.Handle); err != nil {
 			t.Fatalf("publish: %v", err)
 		}
 	}
@@ -502,7 +504,8 @@ func TestHydrationTakesOnlyTheSeatItAsksFor(t *testing.T) {
 	}
 	// Publish both seats. The peer's syncer resolves its own agent id.
 	syncerOn(t, db, conn).PublishOwn(ctx, seat.Handle)
-	peer := New(db, jsOn(t, conn), func(string) string { return "other-agent-id" })
+	peer := heldFromEmpty(New(db, jsOn(t, conn), func(string) string { return "other-agent-id" }),
+		"ceo")
 	if _, err := peer.PublishOwn(ctx, "ceo"); err != nil {
 		t.Fatalf("publish the peer: %v", err)
 	}

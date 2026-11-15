@@ -417,7 +417,7 @@ There is no pool of agent instances. Three structures answer the questions a poo
 - **Which seats this node runs**: the seat host (`internal/seat`), from the leases it holds. A node claims its fair share, attaches each seat's mailbox last, and releases a seat whose role an apply removed. See [Seat Ownership](seat-ownership.md).
 - **Who an event is for**: the party registry (`notify.Registry`), rebuilt on every apply, which resolves a handle, a role name, a derived agent id, an email or an external ID on any connected surface. Resolution is derived from the organization, so the node that consumes a delivery can route to a seat it is not running.
 
-A failure is scoped to a turn, not to an instance: a phase that breaks fails that turn (see [Turn Engine](turn-engine.md)), and a seat whose acquire hook fails is released and not re-attempted on that node for one lease TTL, which gives a peer a clear run at it.
+A failure is scoped to a turn, not to an instance: a phase that breaks fails that turn (see [Turn Engine](turn-engine.md)), and a seat whose acquire hook fails, or whose lease is lost while that hook runs, is released and not re-attempted on that node for one lease TTL, which gives a peer a clear run at it ([Seat Ownership](seat-ownership.md#establishing-a-seat-and-giving-it-back)).
 
 Since each agent is a unique individual, there is no load-balancing or role-based routing. Task assignment is a team lead decision, not an engine algorithm.
 
@@ -756,7 +756,9 @@ flowchart TD
    would build is about to be torn down; and the stop is announced in the
    audit log (`org_stopped`).
 2. **Stop claiming and give up presence**, so peers stop reserving a share of
-   the company for a node that will never claim again.
+   the company for a node that will never claim again. A seat still being
+   taken is [cut](seat-ownership.md#establishing-a-seat-and-giving-it-back)
+   rather than waited for.
 3. **Close the concurrency gate.** Turns still parked at it are released at
    once and their deliveries deferred (left unacked, so a peer picks them up
    rather than waiting out a redelivery timer) instead of starting fresh LLM
@@ -809,7 +811,9 @@ flowchart TD
    it](code-sandbox.md#durability-completion-and-observability)).
 6. **Release every seat**, each lease given back with its mailbox intact, so
    peers can claim them at once rather than waiting out the lease TTL, and
-   each seat's last lifecycle event published. The drain then logs
+   each seat's last lifecycle event published, and wait for every seat
+   step 2 cut to be given back by the claim that was taking it, within the
+   drain's bound. The drain then logs
    `drain_complete`. Releasing a seat ends its executor runs' sessions on the
    [tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
    without waiting for a tool call still running on them, so no lease is held

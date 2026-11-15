@@ -234,6 +234,45 @@ export function changeLive(state: CodeChangeState): boolean {
 }
 
 /**
+ * What a repository whose default branch holds no commit says of itself, by
+ * what it does hold: nobody has pushed a branch yet, or its OTHER branches are
+ * live and the default branch alone holds nothing (its first push went to
+ * another branch, or the default was deleted before the engine kept it), where
+ * one of them is read instead or made the default on its Settings tab.
+ *
+ * NEVER "nobody has pushed" FROM THE DEFAULT BRANCH ALONE: `head` is that one
+ * branch's tip, and a repository holding three pushed branches said nothing
+ * had been pushed.
+ */
+export function noDefaultHead(repo: {
+  readonly default_branch: string;
+  readonly branches: number;
+}): string {
+  if (repo.branches === 0) {
+    return `Nobody has pushed a branch yet: its default branch, ${repo.default_branch}, holds no commit.`;
+  }
+  const others =
+    repo.branches === 1 ? "another branch" : `${repo.branches.toLocaleString()} other branches`;
+  return `Its default branch, ${repo.default_branch}, holds no commit, though it holds ${others}: read one of them, or make one the default on the Settings tab.`;
+}
+
+/**
+ * Whether the reader is one of a change's AUTHORS, as the engine counts them
+ * (`gitlet.ChangeAuthor`): the seat a person holds, or an agent's own, with
+ * the party kind it wrote as. An author's review counts for nothing, so the
+ * engine takes none (`own_change`), and the change page holds its verdicts
+ * for them. A reader the directory binds to no seat is nobody's author.
+ */
+export function authoredBy(
+  change: { readonly authors: readonly { author: string; kind: string }[] },
+  reader: { readonly handle: string; readonly kind: string },
+): boolean {
+  if (reader.handle === "") return false;
+  const kind = reader.kind === "human" ? "person" : reader.kind;
+  return change.authors.some((a) => a.author === reader.handle && a.kind === kind);
+}
+
+/**
  * The value of the listing's state filter that names no state: every change,
  * whatever its state — which the engine lists only where a repository, a work
  * item, a reviewer or a need narrows the walk, since it keeps no index of

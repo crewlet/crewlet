@@ -267,6 +267,10 @@ const (
 	// CodeDeleteBranch deletes a branch, the remedy the code log's branch
 	// alarm names.
 	CodeDeleteBranch = "code_delete_branch"
+	// CodeUpdateRepo changes a repository's settings, its default branch
+	// among them: the remedy Gitlet's refusal of a default branch's deletion
+	// names.
+	CodeUpdateRepo = "code_update_repo"
 	// CodeRepoReaders is who reads a repository, by the route its counter
 	// is summed across.
 	CodeRepoReaders = "code_repo_readers"

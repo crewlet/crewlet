@@ -123,7 +123,7 @@ func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 		Name: gitlettest.RepoName, Access: gitlet.AccessWrite, Branch: "refs/heads/" + branch},
 		host.BoxGrant{RepoID: loneRows.Repo.ID, Name: lone, Access: gitlet.AccessWrite, Branch: loneOwn})
 	box := boxEnv(t, person.Git().Environ(), git, sandbox.BoxGit{Base: f.Nodes()[0].URL() + "/box/git",
-		User: host.BoxUser, Token: f.Runs().Token(run), Name: "Alice", Email: "alice@seats.invalid"})
+		User: host.BoxUser, Token: f.Runs().Token(t, run), Name: "Alice", Email: "alice@seats.invalid"})
 
 	runStep(t, t.TempDir(), box, sandbox.GitVersionStep())
 
