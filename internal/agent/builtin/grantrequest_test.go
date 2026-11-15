@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -372,12 +373,14 @@ func TestARequestsGrantIsChosenOnlyAtTheAccessWritesProof(t *testing.T) {
 		raise  bool
 		saved  bool
 		says   string
+		token  bool
 	}{
-		{"an administrator within the window", grantAdmin(true, ""), false, true, ""},
-		{"an administrator raising, in person", grantAdmin(true, ""), true, true, ""},
-		{"an administrator past the window", grantAdmin(false, ""), false, false, "setup.access.write"},
-		{"a machine token raising", grantAdmin(true, "pat:0123"), true, false, "setup.access.raise"},
-		{"an agent holding every grant", everyGrant(), false, false, "setup.access.write"},
+		{"an administrator within the window", grantAdmin(true, ""), false, true, "", false},
+		{"an administrator raising, in person", grantAdmin(true, ""), true, true, "", false},
+		{"an administrator past the window", grantAdmin(false, ""), false, false, "setup.access.write", false},
+		{"a machine token raising", grantAdmin(true, "pat:0123"), true, false, "setup.access.raise", true},
+		{"a machine token, read-only", grantAdmin(true, "pat:0123"), false, true, "", false},
+		{"an agent holding every grant", everyGrant(), false, false, "setup.access.write", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -393,6 +396,11 @@ func TestARequestsGrantIsChosenOnlyAtTheAccessWritesProof(t *testing.T) {
 			}
 			if !c.saved && (!got.Failed || !strings.Contains(got.Output, c.says)) {
 				t.Errorf("refusal %q does not name %s", got.Output, c.says)
+			}
+			var refused *builtin.DecisionRefused
+			if c.token && (!errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonTokenRefused ||
+				!strings.Contains(got.Output, "needs the person here")) {
+				t.Errorf("a token at a fresh proof was refused %v (%q), want token_refused", got.Cause, got.Output)
 			}
 		})
 	}
