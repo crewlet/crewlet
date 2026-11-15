@@ -266,8 +266,9 @@ import (
 // the relaunch, where the session's id names no thread; the ask asks about no
 // call, holds more than a round's log lists, or asks about a call whose id is
 // none the log keeps or is carried by another call of the ask; THE GATE: the
-// release that continues the session ([sandbox.HoldingsAsk.Resumer], the
-// relaunch box's, as its `--version` answered before the brief was chosen) is
+// release that continues the session ([sandbox.HoldingsAsk.Resumer]: the
+// writer's, the relaunch's best word, a brief told by the reading handed only
+// to a box whose harness answers that release before its brief is chosen) is
 // unread, or is none of the releases the model of the resume was read from
 // ([claudeResumeRead], a set and never a range, since a release before, between
 // or after them may hand its model otherwise and the model says nothing of it);

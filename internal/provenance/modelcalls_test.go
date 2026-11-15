@@ -31,14 +31,15 @@ const modulePath = "github.com/crewlet/crewlet"
 // the one a conversation's next turn continues, is a model's context before it
 // reads a word of its brief, so the type that names which session is restored
 // into a run (sandbox.CarriedSession, the restore carrier) is an input, and so
-// is the continuation that tells it what it lacks (SessionContinuation): each
+// is the continuation that tells it what it lacks (SessionContinuation, and
+// beside it the briefs told by a reading of what it holds, ExactTelling): each
 // function that chooses either is listed with the tests that hold whose session
 // it is and what it reads.
 var modelInputs = map[string][]string{
 	modulePath + "/internal/providers/llm": {"Request"},
 	modulePath + "/internal/agent/runner":  {"AgentRunRequest", "Continuation", "SessionContinuation"},
 	modulePath + "/internal/sandbox": {"LaunchRequest", "Continuation", "RunRequest", "SessionContinuation",
-		"CarriedSession"},
+		"ExactTelling", "CarriedSession"},
 	modulePath + "/internal/assistant": {"DeepRun"},
 }
 
@@ -244,6 +245,7 @@ var modelCalls = map[string]modelCall{
 		"internal/sandbox.TestARestoredSessionIsTheSeatsAndTheTurnsOwn",
 		"internal/sandbox.TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows",
 		"internal/sandbox.TestTheBriefMatchesWhatTheRunHas",
+		"internal/sandbox.TestABriefToldByAReadingIsHandedOnlyToABoxThatAnswersItsRelease",
 		"internal/executordomain.TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor",
 	}},
 	// AND OF THE SESSION A CONVERSATION'S LAST TURN LEFT, the base the turn's

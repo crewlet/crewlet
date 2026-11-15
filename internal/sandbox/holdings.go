@@ -91,9 +91,16 @@ type HoldingsAsk struct {
 	// that many.
 	Calls []LoggedCall
 
-	// Resumer is the release of the harness that continues the session: the
-	// relaunch box's, as it answered `--version` at its launch, read before
-	// the brief is chosen, in the form [CarryCheck.Version] keeps it
+	// Resumer is the release of the harness that continues the session, as
+	// the relaunch knows it when it writes its briefs: the release that
+	// WROTE the session (the turn's row's, which the job's box answered
+	// `--version` with before its harness started), the relaunch's best word,
+	// since its own box is acquired inside the launch, after its briefs are
+	// written. A brief told by the reading is handed only to a box whose
+	// harness answers exactly this release before its brief is chosen
+	// ([ExactTelling], [Coordinator.continueKept]), so the release that
+	// resumes is the one read for, and every other box is handed the brief
+	// told by the save point. In the form [CarryCheck.Version] keeps it
 	// ("2.1.310", a release [ValidRelease] holds). "" means unread, and no
 	// reader holds it.
 	//
