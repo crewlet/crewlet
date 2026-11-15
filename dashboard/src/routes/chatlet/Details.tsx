@@ -667,7 +667,6 @@ function RemoveMemberDialog({
       icon={<XGlyph size="md" />}
       title={`Remove ${person.name} from ${where}?`}
       dismissable={!remove.busy}
-      closeDisabledReason="Waiting for the engine to answer."
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={remove.busy}>
