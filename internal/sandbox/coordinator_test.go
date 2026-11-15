@@ -463,12 +463,10 @@ func (r *coordRig) completion(turnID string) (types.ExecutorFinished, *events.Ev
 // completionIn is completion from inside a call the coordinator made, under
 // that call's context.
 //
-// STAMPED AT THE JOB'S START, as the waiter's announcement is made when it
-// first finds the job over and keeps its stamp through every delivery of it:
-// before anything a case does to the job, a clock on the store of its box's
-// host included, so it is never read as that waiter's announcement made since
-// that clock started ([announcedAfter]). A case that has the waiter announce
-// the job again later stamps the announcement itself.
+// IT SAYS NO READ OF THE RUN'S ROW ([rowAskedField]), so it is never read as
+// the waiter's announcement made from a read since a clock on the store of the
+// job's box's host started ([announcedAfter]): a case that has the waiter
+// announce the job from a later read says that read itself ([askedRow]).
 func (r *coordRig) completionIn(ctx context.Context, turnID string) (types.ExecutorFinished, *events.Event) {
 	run := r.getIn(ctx, turnID)
 	payload := types.ExecutorFinished{
@@ -476,11 +474,7 @@ func (r *coordRig) completionIn(ctx context.Context, turnID string) (types.Execu
 		TurnID: run.TurnID, LaunchID: run.LaunchID,
 		SandboxID: run.SandboxID, Harness: run.Harness,
 	}
-	ev := events.New(payload, events.TraceContext{TraceID: run.TraceID})
-	if started := run.Launch.StartedAt; !started.IsZero() {
-		ev.Timestamp = started.UTC()
-	}
-	return payload, ev
+	return payload, events.New(payload, events.TraceContext{TraceID: run.TraceID})
 }
 
 // ---------------------------------------------------------------------

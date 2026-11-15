@@ -535,9 +535,9 @@ func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRea
 // read its host answers with its store answering, whatever the read came to,
 // the box's own failure to be read included ([Coordinator.noteHostStore]): the
 // silence it times is over, and that host's waiter announces the job again
-// from there. And it goes at that waiter's announcement of the job made after
-// the clock started ([Coordinator.hearAnnouncement]), which that waiter made
-// only having read the run's row through that store: kept past it, while a
+// from there. And it goes at that waiter's announcement of the job made from a
+// read of the run's row through that store asked after the clock started
+// ([Coordinator.hearAnnouncement], [rowAskedField]): kept past it, while a
 // refusal that settles nothing lasted, every announcement the waiter made from
 // there was handed back and renewed beside the one already in flight, one more
 // chain for each. A FAILED ATTEMPT IS OTHERWISE NO SETTLE, and keeps it: a
@@ -643,10 +643,10 @@ func (c *Coordinator) hostClockedSince(turnID, launch string) (time.Time, bool) 
 // ([Coordinator.hostClocked]); answered where the collection read the box, or
 // counted a failure to read it, which the host could say only with its store
 // answering (failed is what the release counts), or where the delivery the
-// claim was made for is a waiter's announcement of the job made after the
-// silence run's record holds ([announcedAfter]); and neither for a claim that
-// learned nothing of it, a host that did not answer at all among them, which
-// leaves the record as it stands.
+// claim was made for is a waiter's announcement of the job made from a read of
+// the run's row asked after the silence run's record holds ([announcedAfter]);
+// and neither for a claim that learned nothing of it, a host that did not
+// answer at all among them, which leaves the record as it stands.
 func (c *Coordinator) hostStoreSeen(ctx context.Context, run PendingRun, failed failure) (time.Time, bool) {
 	if since, clocked := c.hostClockedSince(run.TurnID, run.LaunchID); clocked {
 		return since, false

@@ -267,12 +267,11 @@ type Release struct {
 	// host of the job's box answers: its collection read the box, or found it
 	// failing to be read, which that host could say only where its store
 	// answered, or the delivery it was made for is a waiter's announcement of
-	// the job made after the silence its record holds ([announcedAfter]),
-	// which that waiter made only having read the run's row through that
-	// store. The release clears that record. Neither leaves it as it stands:
-	// a claim that learned nothing of that store, a host that did not answer
-	// at all among them. A release cannot say both, and one that does is
-	// refused.
+	// the job made from a read of the run's row through that store, asked
+	// after the silence its record holds ([announcedAfter]). The release
+	// clears that record. Neither leaves it as it stands: a claim that
+	// learned nothing of that store, a host that did not answer at all among
+	// them. A release cannot say both, and one that does is refused.
 	HostStoreAnswered bool
 
 	// Fence is the lease the claim was taken under.
@@ -4837,11 +4836,12 @@ type LaunchRecord struct {
 	// without it.
 	//
 	// AN INSTANT, NOT A FLAG, because a waiter's announcement of the job made
-	// after it ends it ([announcedAfter]), and one made before it does not:
-	// that waiter announced the job having read its row through the store
-	// this records as silent, so an announcement made later says the store
-	// answered since, while one made earlier, still being delivered, says
-	// nothing of it.
+	// from a read of its row asked after it ends it ([announcedAfter]), and
+	// one whose read was asked before it does not: that waiter read the row
+	// through the store this records as silent, and says when it asked
+	// ([rowAskedField]), so a read asked later says the store answered since,
+	// while one asked earlier says nothing of it, however late its
+	// announcement was made or delivered.
 	//
 	// ON THE JOB'S RECORD because the clock is in one node's memory: while
 	// that host's store is silent its waiter announces nothing, so a

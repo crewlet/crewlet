@@ -4051,12 +4051,14 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // before its last, so a restart, a release or a clearing nothing signals loses
 // nothing, and the two arriving together resume the run once. A drain's and a
 // seat let go of still DEFER it, which hands it on rather than acknowledging it.
-// A DELIVERY THAT IS THAT HOST'S WAITER'S OWN ANNOUNCEMENT, made after the
-// clock or the record began, ends both and is acknowledged on its refusal as
-// above: that waiter read the run's record through the store they say is
-// silent, and announces the job again from there. The coordinator's renewals
-// are marked as such, so it never takes one for that announcement
-// (internal/sandbox's renew.go).
+// A DELIVERY THAT IS THAT HOST'S WAITER'S OWN ANNOUNCEMENT, made from a read
+// of the run's record asked after the clock or the record began, which the
+// announcement says, ends the clock, a claim of it clears the record, and it
+// is acknowledged on its refusal as above: that waiter read the run's record
+// through the store they say is silent, and announces the job again from
+// there. One whose read was asked before ends nothing, however late it was
+// made. The coordinator's renewals are marked as such and read no record, so
+// it never takes one for that announcement (internal/sandbox's renew.go).
 //
 // # Everything else NAKs
 //
@@ -4089,12 +4091,13 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // message's. Nothing turns on it: the cut fires only once the queue's own
 // broker connection is closed for good, so no outcome of that delivery reaches
 // the broker, and the message comes back to the seat's next holder when its
-// ack wait lapses, as every delivery a lost connection held does. A refusal that waits is still acknowledged
-// whatever the context, as above. A failure the completion itself caused (a
-// resume that failed, a refusal that names nothing to wait on) stays the
-// message's wherever a waiter announces the job again; while none can, it is
-// marked and handed back as the node's with every other hand-back (above),
-// since its delivery is then what carries the completion.
+// ack wait lapses, as every delivery a lost connection held does. A refusal
+// that waits is still acknowledged whatever the context, as above. A failure
+// the completion itself caused (a resume that failed, a refusal that names
+// nothing to wait on) stays the message's wherever a waiter announces the job
+// again; while none can, it is marked and handed back as the node's with every
+// other hand-back (above), since its delivery is then what carries the
+// completion.
 //
 // THIS NODE'S OWN STORE'S SILENCE TAKES NOTHING MORE. A delivery that
 // dead-letters while it lasts loses nothing: the waiter's schedule never stops

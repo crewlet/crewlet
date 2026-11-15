@@ -145,6 +145,9 @@ func (w *Waiter) follow(ctx context.Context, n Nudge) {
 		if manager == nil || !w.holdsDuty() {
 			return
 		}
+		// WHEN THE STORE WAS ASKED FOR THE ROW, which an announcement made
+		// from it says ([rowAskedField]).
+		read := w.now()
 		run, found, err := w.pending.Get(ctx, n.TurnID)
 		if err != nil {
 			// The STORE did not answer, which says nothing about the run:
@@ -156,7 +159,7 @@ func (w *Waiter) follow(ctx context.Context, n Nudge) {
 			run.SandboxID == "" || run.Held(w.now()) || !w.drivesRun(manager, run) {
 			return
 		}
-		if w.pollNow(ctx, manager, run) {
+		if w.pollNow(ctx, manager, run, read) {
 			return
 		}
 	}
@@ -164,9 +167,10 @@ func (w *Waiter) follow(ctx context.Context, n Nudge) {
 
 // pollNow polls one run as a pass's task would — a slot of its own, the box
 // claimed for it alone, bounded by the duty it runs under — and reports
-// whether it announced the run's completion. A run a pass's task is already
-// polling is left to it.
-func (w *Waiter) pollNow(ctx context.Context, manager *Manager, run PendingRun) bool {
+// whether it announced the run's completion; read is when the store was asked
+// for the row run was read from. A run a pass's task is already polling is
+// left to it.
+func (w *Waiter) pollNow(ctx context.Context, manager *Manager, run PendingRun, read time.Time) bool {
 	if !w.acquireSlot(ctx) {
 		return false
 	}
@@ -180,7 +184,7 @@ func (w *Waiter) pollNow(ctx context.Context, manager *Manager, run PendingRun) 
 		return false
 	}
 	defer w.end(run.TurnID)
-	return w.pollBounded(ctx, taskCtx, manager, run)
+	return w.pollBounded(ctx, taskCtx, manager, run, read)
 }
 
 // holdsDuty reports whether this waiter may poll now: one that claims no duty
@@ -309,6 +313,10 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 		}
 		return
 	}
+	// WHEN THE STORE WAS ASKED TO RECORD THE LOSS, which the announcement made
+	// once it answered says ([rowAskedField]): a write of the run's row it
+	// answered, as a read is.
+	read := w.now()
 	markCtx, markDone := w.rowContext(ctx)
 	marked, err := w.pending.MarkLost(markCtx, run.TurnID, run.LaunchID,
 		JobLoss{Cause: LossLaunchNodeGone, Node: run.LaunchNode, At: now})
@@ -340,7 +348,7 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 	if !due {
 		return
 	}
-	if err := w.publishCompletion(ctx, run, first); err != nil {
+	if err := w.publishCompletion(ctx, run, first, read); err != nil {
 		w.unannounce(run.TurnID)
 		log.WarnContext(ctx, "sandbox_completion_publish_failed", "turn_id", run.TurnID,
 			"error", err.Error())

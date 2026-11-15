@@ -1416,16 +1416,17 @@ func TestAJobNoWaiterAnnouncesIsRenewedByItsRow(t *testing.T) {
 
 // waiterAnnounces publishes t1's completion as the host's waiter announces it
 // on its schedule once its store answers again, and returns its id: a fresh
-// announcement, made a second after the delivery in hand on the bubble's
-// clock, so it is stamped after any clock a collection started at that
-// delivery. Called only inside a bubble, from a case's delivery hook.
+// announcement, made from a read of the run's row its store answered a second
+// after the delivery in hand on the bubble's clock, so after any clock a
+// collection started at that delivery. Called only inside a bubble, from a
+// case's delivery hook.
 //
 //fixedwait:bubble
 func (r *renewRig) waiterAnnounces(t *testing.T) uuid.UUID {
 	t.Helper()
 	time.Sleep(time.Second)
 	_, ev := r.completion("t1")
-	ev.Timestamp = time.Now().UTC()
+	askedRow(ev, time.Now())
 	if err := r.broker.Publish(t.Context(), sweControl(), ev); err != nil {
 		t.Errorf("the waiter's announcement: %v", err)
 	}
@@ -1434,15 +1435,16 @@ func (r *renewRig) waiterAnnounces(t *testing.T) uuid.UUID {
 
 // A WAITER'S ANNOUNCEMENT MADE SINCE THE CLOCK STARTED ENDS IT, AND A RENEWAL
 // NEVER DOES. The waiter that drives a box announces its job only having read
-// the run's row through its store, so its announcement made after the clock on
-// that store started says the store answered since: it ends this node's clock
-// and, on the release a claim of it makes, the job's record of the silence,
-// and a refusal of it is acknowledged as any is where a waiter stands behind
-// it. A renewal is marked as one ([renewalField]) and says nothing of that
-// store. Unmarked and unheard, the clock and its record stood through every
-// announcement the waiter made once its store answered again, and while a
-// refusal that settles nothing lasted, each was handed back and renewed beside
-// the chain already in flight: one more chain for every announcement.
+// the run's row through its store, and says when it asked for that read
+// ([rowAskedField]), so its announcement made from a read asked after the
+// clock on that store started says the store answered since: it ends this
+// node's clock and, on the release a claim of it makes, the job's record of the
+// silence, and a refusal of it is acknowledged as any is where a waiter stands
+// behind it. A renewal is marked as one ([renewalField]) and says nothing of
+// that store. Unmarked and unheard, the clock and its record stood through
+// every announcement the waiter made once its store answered again, and while
+// a refusal that settles nothing lasted, each was handed back and renewed
+// beside the chain already in flight: one more chain for every announcement.
 //
 // Mutation: read a renewal as the waiter's announcement, and the chain the
 // renewals carry is acknowledged at its first refusal with nothing left to
@@ -1473,16 +1475,19 @@ func TestAWaiterAnnouncementMadeSinceTheClockEndsIt(t *testing.T) {
 				}
 			})
 			r.announce(t)
+			// RESUMED FIRST: a chain acknowledged with nothing left to carry
+			// the completion ends the deliveries before the waiter's later
+			// announcements, which is this case's failure and not its premise's.
+			resumed := r.resumer.calls()
+			if len(resumed) != 1 || resumed[0].Lost != nil || resumed[0].Ended.Text != wholeAccount().Text {
+				t.Fatalf("the turn resumed %d times (%+v); want it resumed once on its box's account",
+					len(resumed), resumed)
+			}
 			if len(waiter) != 3 {
 				t.Fatalf("the premise: the waiter announced the job %d times; want 3", len(waiter))
 			}
 			if dead := r.broker.DeadLetters(sweControl(), topics.AgentControlGroup(uuid.MustParse(sweID))); len(dead) != 0 {
 				t.Fatalf("%d of the job's announcements were dead-lettered", len(dead))
-			}
-			resumed := r.resumer.calls()
-			if len(resumed) != 1 || resumed[0].Lost != nil || resumed[0].Ended.Text != wholeAccount().Text {
-				t.Fatalf("the turn resumed %d times (%+v); want it resumed once on its box's account",
-					len(resumed), resumed)
 			}
 			seen := r.deliveries()
 			for i, d := range seen {
@@ -1512,13 +1517,13 @@ func TestAWaiterAnnouncementMadeSinceTheClockEndsIt(t *testing.T) {
 			t.Fatal("the premise: the hand-back recorded no silence of the host's store")
 		}
 		// THE NODE RESTARTS, keeping no clock, and the host's waiter
-		// announces the job a second after the silence was recorded; the
-		// host itself then does not answer the claim's read, which says
-		// nothing of its store.
+		// announces the job from a read its store answered a second after
+		// the silence was recorded; the host itself then does not answer
+		// the claim's read, which says nothing of its store.
 		rig.restart(t, rig.queue, "node-b", rigLease, nil)
 		rig.coordinator.boxes = &boxAsks{err: fmt.Errorf("%w: node-a, within a minute", ErrBoxHostSilent)}
 		_, ev := rig.completion("t1")
-		ev.Timestamp = since.Add(time.Second)
+		askedRow(ev, since.Add(time.Second))
 		if err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev); err != nil {
 			t.Fatalf("the waiter's announcement whose read the host did not answer = %v; want it acknowledged, "+
 				"its waiter announcing the job again", err)
@@ -1526,6 +1531,84 @@ func TestAWaiterAnnouncementMadeSinceTheClockEndsIt(t *testing.T) {
 		if got := rig.get("t1"); got.Status != StatusRunning || !got.Launch.HostStoreSilentSince.IsZero() {
 			t.Fatalf("the release left the run %s, its host's store silent since %v; want it running, the "+
 				"record cleared", got.Status, got.Launch.HostStoreSilentSince)
+		}
+	})
+}
+
+// AN ANNOUNCEMENT MADE FROM A READ ASKED BEFORE THE CLOCK STARTED ENDS NOTHING,
+// HOWEVER LATE IT WAS MADE. The waiter that drives a box reads the run's row,
+// then polls the box, then announces the job: a poll can take a minute
+// ([pollBound]) after the wait for a slot, so a silence of its store that
+// begins between the read and the announcement, and that a collection finds
+// meanwhile, starts a clock before the announcement is stamped. The stamp says
+// nothing of that silence, and the read it was made from says the store
+// answered before it ([rowAskedField]). So the clock stands through it and a
+// refusal of it is handed back, to be renewed, and a claim of it whose
+// collection learns nothing of the host's store leaves the job's record of the
+// silence standing.
+//
+// Mutation: compare the announcement's own stamp with the clock's start, and a
+// refusal of it is acknowledged with its host's store still silent and the
+// clock ended, and a claim of it the host does not answer clears the record, so
+// that every refusal after it is acknowledged with no waiter able to announce
+// the job.
+func TestAnAnnouncementFromAReadBeforeTheClockEndsNothing(t *testing.T) {
+	t.Parallel()
+	// readBefore makes ev the host's waiter's announcement made a minute after
+	// since, from a read of the run's row its store answered a second before.
+	readBefore := func(ev *events.Event, since time.Time) {
+		ev.Timestamp = since.Add(time.Minute)
+		askedRow(ev, since.Add(-time.Second))
+	}
+	// atTheLimit refuses every resume on a condition that clears by waiting,
+	// whose refusal is acknowledged wherever a waiter stands behind it.
+	atTheLimit := func(context.Context, string, ResumeRoute) (context.Context, func(), error) {
+		return nil, nil, &TurnRefused{Refusal: Refusal{Condition: conditionLimit,
+			Reason: "every model of the seat's chain is at its usage limit"}}
+	}
+
+	t.Run("a refusal of it while the clock runs", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		since := rig.get("t1").Launch.HostStoreSilentSince
+		if since.IsZero() || !clocked(rig) {
+			t.Fatalf("the premise: clocked %v, the record silent since %v; want both", clocked(rig), since)
+		}
+		rig.coordinator.gate = atTheLimit
+		_, ev := rig.completion("t1")
+		readBefore(ev, since)
+		err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev)
+		if got := controlResult(err); !errors.Is(err, ErrUnannounced) || got.Outcome != queue.OutcomeNak {
+			t.Errorf("a refusal of the announcement made from a read before the clock = %v, left %s; want it "+
+				"handed back as no waiter's to announce again", err, got.Outcome)
+		}
+		if !clocked(rig) {
+			t.Error("the announcement made from a read before the clock started ended it")
+		}
+	})
+
+	t.Run("a claim of it the host does not answer, after a restart", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		handedBackUnsettled(t, rig, "the host's store did not answer")
+		since := rig.get("t1").Launch.HostStoreSilentSince
+		if since.IsZero() {
+			t.Fatal("the premise: the hand-back recorded no silence of the host's store")
+		}
+		rig.restart(t, rig.queue, "node-b", rigLease, nil)
+		rig.coordinator.boxes = &boxAsks{err: fmt.Errorf("%w: node-a, within a minute", ErrBoxHostSilent)}
+		_, ev := rig.completion("t1")
+		readBefore(ev, since)
+		if err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev); !errors.Is(err, ErrUnannounced) {
+			t.Errorf("the announcement made from a read before the clock, its host not answering = %v; want "+
+				"it handed back as no waiter's to announce again", err)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || !got.Launch.HostStoreSilentSince.Equal(since) {
+			t.Errorf("the release left the run %s, its host's store silent since %v; want it running, still "+
+				"silent since %v", got.Status, got.Launch.HostStoreSilentSince, since)
 		}
 	})
 }

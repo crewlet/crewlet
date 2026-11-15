@@ -486,6 +486,56 @@ func TestACompletionCarriesTheOriginalTrace(t *testing.T) {
 	}
 }
 
+// AN ANNOUNCEMENT SAYS WHEN ITS WAITER ASKED THE STORE FOR THE ROW IT WAS MADE
+// FROM, NEVER WHEN IT WAS MADE. The seat's holder reads that instant as the
+// store of the box's host answering since it found that store silent, which
+// ends its renewal of the job's completion ([announcedAfter]), and the box is
+// polled between the read and the announcement: a poll that takes a minute
+// leaves the announcement a minute after the read, and a silence that began in
+// between, read off the announcement's own instant, was read as over while it
+// lasted.
+//
+// Mutation: say the instant the announcement is made, or none, and the read it
+// says is a minute late, or missing.
+func TestAnAnnouncementSaysWhenItsRowWasRead(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.launch("t1")
+	clock := &stepClock{at: rig.now}
+	waiter, err := NewWaiter(WaiterOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
+		Now: clock.now,
+	})
+	if err != nil {
+		t.Fatalf("NewWaiter: %v", err)
+	}
+	// THE POLL TAKES A MINUTE, and finds the job over.
+	rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
+		clock.advance(time.Minute)
+		return JobEnded, nil
+	}
+	read := clock.now()
+	if fired, err := waiter.Tick(t.Context()); err != nil || fired != 1 {
+		t.Fatalf("the pass announced %d completions, %v; want the finished job announced", fired, err)
+	}
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	announced := 0
+	for _, p := range rig.queue.published {
+		if _, ok := p.event.Data.(*types.ExecutorFinished); !ok {
+			continue
+		}
+		announced++
+		if asked := rowAsked(p.event); !asked.Equal(read) {
+			t.Fatalf("the announcement to %s says its row was read at %v; want %v, when the pass asked the "+
+				"store for its listing, a minute before the poll ended", p.topic, asked, read)
+		}
+	}
+	if announced == 0 {
+		t.Fatal("the pass announced nothing")
+	}
+}
+
 // A completion event is a pure control signal — the outcome is read at collect
 // time, so nothing about the result may ride on the wire.
 func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {

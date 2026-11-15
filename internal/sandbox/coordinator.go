@@ -1574,9 +1574,10 @@ func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
 // RENEWED here, where the delivery in hand is, whatever the hand-back:
 // announced afresh before that delivery is the last its budget allows, and
 // acknowledged once the fresh announcement is out (renew.go). A DELIVERY THAT
-// IS THE WAITER'S ANNOUNCEMENT OF THE JOB MADE SINCE ends both
-// ([announcedAfter]): that waiter read the row through the store they say is
-// silent, and announces the job again from there.
+// IS THE WAITER'S ANNOUNCEMENT OF THE JOB, MADE FROM A READ ASKED SINCE, ends
+// the clock, and a claim of it clears the record ([announcedAfter]): that
+// waiter read the row through the store they say is silent, and announces the
+// job again from there.
 func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	if ev == nil {
 		return nil
