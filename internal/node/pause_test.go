@@ -98,7 +98,11 @@ func resume(t *testing.T, f *fleet, nodeID, handle string) {
 	f.mu.Lock()
 	q := f.queues[nodeID]
 	f.mu.Unlock()
-	if err := q.ResumeTopic(t.Context(), inbox(handle), inboxGroup(handle), pausedHold); err != nil {
+	at, err := q.Attachment(t.Context(), inbox(handle), inboxGroup(handle))
+	if err != nil {
+		t.Fatalf("Attachment: %v", err)
+	}
+	if err := q.ResumeTopic(t.Context(), inbox(handle), inboxGroup(handle), at, pausedHold); err != nil {
 		t.Fatalf("ResumeTopic: %v", err)
 	}
 }

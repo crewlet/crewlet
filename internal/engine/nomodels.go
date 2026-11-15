@@ -115,8 +115,12 @@ func (e *Engine) pause(ctx context.Context, handle, reason string) error {
 		return err
 	}
 	subject, group := topics.AgentInbox(id), topics.AgentInboxGroup(id)
+	at, err := e.backends.Queue.Attachment(ctx, subject, group)
+	if err != nil {
+		return err
+	}
 	e.modelHolds.mu.Lock()
-	err = e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonNoTurnEngine)
+	err = e.backends.Queue.PauseTopic(ctx, subject, group, at, pauseReasonNoTurnEngine)
 	if err == nil {
 		e.modelHolds.record(id, handle)
 	}
@@ -154,7 +158,11 @@ func (e *Engine) releaseModelHolds(ctx context.Context) {
 	for _, id := range ids {
 		handle := held[id]
 		subject, group := topics.AgentInbox(id), topics.AgentInboxGroup(id)
-		if err := e.backends.Queue.ResumeTopic(ctx, subject, group, pauseReasonNoTurnEngine); err != nil {
+		at, err := e.backends.Queue.Attachment(ctx, subject, group)
+		if err == nil {
+			err = e.backends.Queue.ResumeTopic(ctx, subject, group, at, pauseReasonNoTurnEngine)
+		}
+		if err != nil {
 			// Kept on the record, so the next release tries it again. A
 			// resume fails only on a client that has stopped, which is a
 			// process on its way out; forgetting the hold would be the one

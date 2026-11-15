@@ -141,12 +141,20 @@ func (r *answerResumer) resumedWith() []string {
 type inboxHold struct{ q queue.EventQueue }
 
 func (h inboxHold) Hold(ctx context.Context, handle string) error {
-	return h.q.PauseTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle),
+	at, err := h.q.Attachment(ctx, fixtureInbox(handle), fixtureInboxGroup(handle))
+	if err != nil {
+		return err
+	}
+	return h.q.PauseTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle), at,
 		string(inbox.HoldSandbox))
 }
 
 func (h inboxHold) Release(ctx context.Context, handle string) error {
-	return h.q.ResumeTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle),
+	at, err := h.q.Attachment(ctx, fixtureInbox(handle), fixtureInboxGroup(handle))
+	if err != nil {
+		return err
+	}
+	return h.q.ResumeTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle), at,
 		string(inbox.HoldSandbox))
 }
 

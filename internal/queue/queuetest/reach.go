@@ -165,10 +165,12 @@ func (s *suite) runReachability(t *testing.T) {
 				}
 			}
 		}
+		at, atErr := q.Attachment(ctx, "reach.t", "g")
 		local(
 			verbResult{"Quiesce", second(q.Quiesce(ctx, "reach.t", "g"))},
-			verbResult{"PauseTopic", q.PauseTopic(ctx, "reach.t", "g", holdReason)},
-			verbResult{"ResumeTopic", q.ResumeTopic(ctx, "reach.t", "g", holdReason)},
+			verbResult{"Attachment", atErr},
+			verbResult{"PauseTopic", q.PauseTopic(ctx, "reach.t", "g", at, holdReason)},
+			verbResult{"ResumeTopic", q.ResumeTopic(ctx, "reach.t", "g", at, holdReason)},
 			verbResult{"Unquiesce", second(q.Unquiesce(ctx, "reach.t", "g"))},
 		)
 		// AND A RESUME HANDS OUT NOTHING the broker cannot deliver: the
@@ -218,7 +220,7 @@ func deadlineState(err error) string {
 
 // brokerVerbs sends every verb that has to REACH the broker, concurrently and
 // under ctx, and reports what each answered. The complement of the attachment
-// verbs runReachability sends itself, and together with them the twenty-one
+// verbs runReachability sends itself, and together with them the twenty-two
 // lifecycleVerbs sends.
 func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResult {
 	topic := ns + ".broker"

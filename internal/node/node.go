@@ -651,8 +651,12 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 	}
 
 	if n.cfg.AttachHolds != nil {
+		at, err := n.cfg.Queue.Attachment(ctx, inbox, group)
+		if err != nil {
+			return fmt.Errorf("node: read seat %q's attachment before attaching it: %w", handle, err)
+		}
 		for _, hold := range n.cfg.AttachHolds(s.ID) {
-			if err := n.cfg.Queue.PauseTopic(ctx, inbox, group, hold); err != nil {
+			if err := n.cfg.Queue.PauseTopic(ctx, inbox, group, at, hold); err != nil {
 				// REFUSED rather than attached without it: a seat whose
 				// hold could not be taken would run the mail it exists to
 				// keep. A pause fails only on a client that has stopped.

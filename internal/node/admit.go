@@ -321,11 +321,13 @@ func (n *Node) holdInbox(ctx context.Context, handle, reason string, hold bool) 
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
-	var err error
-	if hold {
-		err = n.cfg.Queue.PauseTopic(ctx, inbox, group, reason)
-	} else {
-		err = n.cfg.Queue.ResumeTopic(ctx, inbox, group, reason)
+	at, err := n.cfg.Queue.Attachment(ctx, inbox, group)
+	if err == nil {
+		if hold {
+			err = n.cfg.Queue.PauseTopic(ctx, inbox, group, at, reason)
+		} else {
+			err = n.cfg.Queue.ResumeTopic(ctx, inbox, group, at, reason)
+		}
 	}
 	if err != nil {
 		n.log.Warn("seat_turn_hold_failed", "handle", handle, "hold", hold, "error", err.Error())

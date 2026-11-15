@@ -61,12 +61,21 @@
 //     back, failed only for a reason of the node's own — on its UNHANDLED
 //     subject, a healthy delivery no member handled, where a reader that
 //     can handle it now finds it again.
-//   - A failed verb is MARKED with one of three sentinels when the failure is
+//   - A PAUSE HOLD IS TAKEN FOR ONE ATTACHMENT, which its caller names
+//     (Attachment): the pair's attachment from one Detach to the next, live
+//     or about to be made. A hold asked for an attachment a Detach has ended
+//     is refused, and so never gates the attachment after it. Keyed by the
+//     pair alone, a hold whose PauseTopic landed after its seat's release
+//     was carried onto the next attachment of that inbox on the node, which
+//     then consumed nothing, and nothing that knew of the hold was left to
+//     lift it.
+//   - A failed verb is MARKED with one of four sentinels when the failure is
 //     one a caller acts on, and nothing else about it may be branched on:
 //     ErrTooLarge (the event can never fit — permanent), ErrNotLive (this
-//     queue consumes and answers nothing until it is started again) and
+//     queue consumes and answers nothing until it is started again),
 //     ErrUnavailable (the broker did not answer — a CONDITION, which the
-//     same call made again in a moment may clear). An unmarked failure is
+//     same call made again in a moment may clear) and ErrAttachmentGone (a
+//     hold named an attachment that has ended). An unmarked failure is
 //     none of those: the caller's own mistake, or a broker answer that
 //     waiting does not change.
 package queue
@@ -91,10 +100,11 @@ var log = logging.Get("queue.contract")
 
 // ErrTooLarge reports that an event does not fit on the wire.
 //
-// ONE OF THE THREE SENTINELS THE LAYERS ABOVE MAY BRANCH ON — ErrNotLive and
-// ErrUnavailable are the others — and for the same reason as both: they must
-// not branch on which backend is running, so each one translates its own
-// refusal into this and callers ask one question everywhere.
+// ONE OF THE FOUR SENTINELS THE LAYERS ABOVE MAY BRANCH ON — ErrNotLive,
+// ErrUnavailable and ErrAttachmentGone are the others — and for the reason
+// all four exist: the layers above must not branch on which backend is
+// running, so each backend translates its own refusal into this and callers
+// ask one question everywhere.
 //
 // It exists because "too large" is the one publish failure that is PERMANENT.
 // The reasons a publish fails that trying again does answer — a broker
@@ -491,11 +501,12 @@ type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 // started, stopped, or holding a connection its broker client has closed for
 // good, which no later call reopens and which stops the node.
 //
-// ONE OF THE THREE SENTINELS THE LAYERS ABOVE MAY BRANCH ON — see ErrTooLarge
-// and ErrUnavailable for the others — because they must not branch on which
-// backend is running: each backend keeps its own error (jetstream.ErrClosed,
-// jetstream.ErrConnectionLost, memory.ErrNotStarted) and wraps this, so
-// errors.Is(err, queue.ErrNotLive) is the same question everywhere.
+// ONE OF THE FOUR SENTINELS THE LAYERS ABOVE MAY BRANCH ON — see ErrTooLarge,
+// ErrUnavailable and ErrAttachmentGone for the others — because they must
+// not branch on which backend is running: each backend keeps its own error
+// (jetstream.ErrClosed, jetstream.ErrConnectionLost, memory.ErrNotStarted)
+// and wraps this, so errors.Is(err, queue.ErrNotLive) is the same question
+// everywhere.
 //
 // It exists because "the queue is down" is not a failure for every caller. A
 // seat release detaches the mailbox and the seat host KEEPS THE LEASE if that
@@ -529,11 +540,11 @@ var ErrNotLive = errors.New("queue: not live")
 // still be consuming it.
 //
 // THE VERBS ABOUT THIS NODE'S OWN ATTACHMENTS NEVER ANSWER IT — Quiesce,
-// Unquiesce, Detach, PauseTopic and ResumeTopic touch no broker, and must not
-// need one: a node that can no longer prove it owns a seat quiesces that
-// seat's mailbox on exactly the outage that cost it the proof, when the
-// coordination store rides the same broker. Every other verb has to reach the
-// broker and may.
+// Unquiesce, Detach, Attachment, PauseTopic and ResumeTopic touch no broker,
+// and must not need one: a node that can no longer prove it owns a seat
+// quiesces that seat's mailbox on exactly the outage that cost it the proof,
+// when the coordination store rides the same broker. Every other verb has to
+// reach the broker and may.
 //
 // IT IS NOT A STATEMENT THAT NOTHING HAPPENED, exactly as no failed publish
 // ever was: a publish whose acknowledgement did not arrive may still have
@@ -548,6 +559,33 @@ var ErrNotLive = errors.New("queue: not live")
 // ends while the connection is down is marked, because the connection is why
 // nothing answered.
 var ErrUnavailable = errors.New("queue: broker unavailable")
+
+// ErrAttachmentGone reports a PauseTopic for an attachment that is not the
+// pair's current one: a Detach has ended it, or it is the zero Attachment,
+// which names none. Nothing was held.
+//
+// ONE OF THE FOUR SENTINELS THE LAYERS ABOVE MAY BRANCH ON, and what it tells
+// a caller is that the seat it decided to hold is no longer attached under
+// the attachment it decided for: the release that ended it dropped every hold
+// it carried, and the holder that attaches next takes its own. So it is an
+// answer, never a condition to retry: asking again under the same attachment
+// is refused again, and asking under the current one would hold an attachment
+// the caller's decision was never about.
+var ErrAttachmentGone = errors.New("queue: the attachment the hold was taken for has ended")
+
+// Attachment names ONE ATTACHMENT of a (topic, group) pair on one client: the
+// span from one Detach of the pair to the next, whether a consumer is attached
+// in it yet or not. A client mints them from one counter, so no two
+// attachments of any pair on it share a value, and the zero Attachment names
+// none: every PauseTopic refuses it, and a ResumeTopic under it lifts nothing.
+//
+// It is what a pause hold is taken for. A hold has to be taken BEFORE its
+// consumer starts (an engine that knows a seat is busy holds first and
+// attaches after), so the queue cannot tell a hold meant for the next
+// attachment from one meant for the attachment a release has just ended by
+// looking at whether anything is attached: only the caller knows which it
+// decided for, and it says so with this.
+type Attachment uint64
 
 // StreamHandler receives broadcast events. Stream delivery is best-effort:
 // there is no ack, and a handler's failure is logged, never redelivered.
@@ -1377,15 +1415,15 @@ type EventQueue interface {
 	// client live.
 	//
 	// What a backend may NOT do is answer DIFFERENTLY PER VERB. Before
-	// Start, all twenty-one of the publish, subscription, attachment,
+	// Start, all twenty-two of the publish, subscription, attachment,
 	// ephemeral and dead-letter verbs must give the same answer: Publish,
 	// Subscribe, SubscribeBatch, Quiesce, Unquiesce, Detach,
 	// EnsureSubscription, DeleteSubscription, ListSubscriptions,
-	// SubscribeStream, PauseTopic, ResumeTopic, Serve, Ask, Broadcast,
-	// Listen, KeepDeadLetter, DeadLettersOn, DeadLetterFrame,
+	// SubscribeStream, Attachment, PauseTopic, ResumeTopic, Serve, Ask,
+	// Broadcast, Listen, KeepDeadLetter, DeadLettersOn, DeadLetterFrame,
 	// DeadLetterMarks and DropDeadLetter. Either they all refuse, or none
 	// of them require it. Capabilities.RequiresStart says which, and
-	// queuetest sends all twenty-one to hold a backend to one answer.
+	// queuetest sends all twenty-two to hold a backend to one answer.
 	//
 	// A caller cannot reason about a lifecycle whose rules change per
 	// method, and this is not hypothetical: a twin that refused Publish
@@ -1421,8 +1459,20 @@ type EventQueue interface {
 	// events. One-way: once paused, the engine is shutting down.
 	PauseDelivery(ctx context.Context) error
 
-	// PauseTopic pauses ONE subscription's delivery under a named
-	// reason. Holds are reason-scoped and keyed by the (topic, group)
+	// Attachment is the (topic, group) pair's CURRENT attachment on this
+	// client: the one attached now or, with none attached, the one the
+	// next attach makes. It changes only when a Detach (or Stop) ends it,
+	// so a caller reads it where it decides to hold a seat and names it
+	// in every PauseTopic and ResumeTopic that decision makes. It touches
+	// no broker.
+	Attachment(ctx context.Context, topic, group string) (Attachment, error)
+
+	// PauseTopic pauses ONE subscription's delivery under a named reason,
+	// for the attachment at names, and refuses with ErrAttachmentGone,
+	// holding nothing, when at is not the pair's current attachment. A
+	// hold taken before anything attaches gates the attach it was taken
+	// for; one asked for an attachment a Detach has ended never gates the
+	// one after it. Holds are reason-scoped and keyed by the (topic, group)
 	// PAIR, so a second subsystem gating the same inbox cannot release
 	// the first one's hold by lifting its own, and a hold on one group
 	// does not gate every other group on a shared subject. The engine
@@ -1431,10 +1481,14 @@ type EventQueue interface {
 	// spent budget window, and a detached executor holding the seat
 	// (or an answer's resume it owes) — see internal/agent/inbox's Hold
 	// and the engine's budget park.
-	PauseTopic(ctx context.Context, topic, group, reason string) error
+	PauseTopic(ctx context.Context, topic, group string, at Attachment, reason string) error
 
-	// ResumeTopic releases one reason's hold, flushing when none remain.
-	ResumeTopic(ctx context.Context, topic, group, reason string) error
+	// ResumeTopic releases one reason's hold on the attachment at names,
+	// flushing when none remain. Under an attachment that has ended it
+	// lifts nothing and answers nil: the Detach that ended it dropped every
+	// hold it carried, so the hold named is not in force, and a hold the
+	// next attachment took under the same reason is not this caller's.
+	ResumeTopic(ctx context.Context, topic, group string, at Attachment, reason string) error
 
 	// WaitForHandlers waits for in-flight handlers, returning how many
 	// were still running when the wait ended. Zero means a clean drain;
@@ -1455,7 +1509,7 @@ type EventQueue interface {
 
 	// Stop closes the connection.
 	//
-	// AFTERWARDS EVERY ONE OF THE TWENTY-ONE VERBS REFUSES. A requirement
+	// AFTERWARDS EVERY ONE OF THE TWENTY-TWO VERBS REFUSES. A requirement
 	// rather than a capability, and the asymmetry with the pre-Start rule
 	// is the point: "not connected yet" is a state a backend may
 	// legitimately not have — JetStream's Open connects, so there is

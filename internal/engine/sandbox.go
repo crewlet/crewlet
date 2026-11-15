@@ -3432,7 +3432,11 @@ func (h seatHold) Hold(ctx context.Context, handle string) error {
 	if err != nil {
 		return err
 	}
-	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, string(inbox.HoldSandbox))
+	at, err := h.engine.backends.Queue.Attachment(ctx, subject, group)
+	if err != nil {
+		return err
+	}
+	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, at, string(inbox.HoldSandbox))
 }
 
 func (h seatHold) Release(ctx context.Context, handle string) error {
@@ -3440,7 +3444,11 @@ func (h seatHold) Release(ctx context.Context, handle string) error {
 	if err != nil {
 		return err
 	}
-	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, string(inbox.HoldSandbox))
+	at, err := h.engine.backends.Queue.Attachment(ctx, subject, group)
+	if err != nil {
+		return err
+	}
+	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, at, string(inbox.HoldSandbox))
 }
 
 // inboxOf is the inbox a hold on handle sits on, named by the seat's id — the

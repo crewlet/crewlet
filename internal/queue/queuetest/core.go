@@ -383,12 +383,12 @@ func (s *suite) runCore(t *testing.T) {
 				}
 				return res
 			})
-			if err := q.PauseTopic(ctx, topic, "grp", "test"); err != nil {
+			if err := q.PauseTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
 				t.Fatalf("PauseTopic: %v", err)
 			}
 			publish(ctx, t, q, topic, newEvent("e1"))
 			publish(ctx, t, q, topic, newEvent("e2"))
-			if err := q.ResumeTopic(ctx, topic, "grp", "test"); err != nil {
+			if err := q.ResumeTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
 				t.Fatalf("ResumeTopic: %v", err)
 			}
 			return seen
@@ -415,12 +415,12 @@ func (s *suite) runCore(t *testing.T) {
 				}
 				return res
 			})
-			if err := q.PauseTopic(ctx, topic, "grp", "test"); err != nil {
+			if err := q.PauseTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
 				t.Fatalf("PauseTopic: %v", err)
 			}
 			publish(ctx, t, q, topic, newEvent("e1"))
 			publish(ctx, t, q, topic, newEvent("e2"))
-			if err := q.ResumeTopic(ctx, topic, "grp", "test"); err != nil {
+			if err := q.ResumeTopic(ctx, topic, "grp", attachmentOf(ctx, t, q, topic, "grp"), "test"); err != nil {
 				t.Fatalf("ResumeTopic: %v", err)
 			}
 			seen.awaitLabels(t, "the deferral", "e1")
@@ -660,12 +660,12 @@ func (s *suite) runCore(t *testing.T) {
 			}
 			return queue.Ack()
 		})
-		if err := q.PauseTopic(ctx, topic, group, "test"); err != nil {
+		if err := q.PauseTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		publish(ctx, t, q, topic, newEvent("e1"))
 		publish(ctx, t, q, topic, newEvent("e2"))
-		if err := q.ResumeTopic(ctx, topic, group, "test"); err != nil {
+		if err := q.ResumeTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 
@@ -811,7 +811,7 @@ func (s *suite) runCore(t *testing.T) {
 		failedBy, handedBy := newJournal(), newJournal()
 		subscribe(ctx, t, first, topic, group, func(hctx context.Context, ev *events.Event) queue.Result {
 			failedBy.record(labelOf(ev))
-			if err := first.PauseTopic(hctx, topic, group, "queuetest-failed-elsewhere"); err != nil {
+			if err := first.PauseTopic(hctx, topic, group, attachmentOf(hctx, t, first, topic, group), "queuetest-failed-elsewhere"); err != nil {
 				t.Errorf("PauseTopic: %v", err)
 			}
 			return queue.Nak(errors.New("the message cannot be handled"))
@@ -834,7 +834,7 @@ func (s *suite) runCore(t *testing.T) {
 		subscribe(ctx, t, q, "topic.a", "grp", recordingHandler(a))
 		subscribe(ctx, t, q, "topic.b", "grp", recordingHandler(b))
 
-		if err := q.PauseTopic(ctx, "topic.a", "grp", "test"); err != nil {
+		if err := q.PauseTopic(ctx, "topic.a", "grp", attachmentOf(ctx, t, q, "topic.a", "grp"), "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		publish(ctx, t, q, "topic.a", newEvent("a1"))
@@ -845,7 +845,7 @@ func (s *suite) runCore(t *testing.T) {
 		b.awaitLabels(t, "an unpaused topic to keep flowing", "b1")
 		a.staysAt(ctx, t, 0, "a paused topic buffers rather than delivering")
 
-		if err := q.ResumeTopic(ctx, "topic.a", "grp", "test"); err != nil {
+		if err := q.ResumeTopic(ctx, "topic.a", "grp", attachmentOf(ctx, t, q, "topic.a", "grp"), "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		a.awaitLabels(t, "the held events to flush in publish order", "a1", "a2")
@@ -861,18 +861,18 @@ func (s *suite) runCore(t *testing.T) {
 		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
 
 		for _, reason := range []string{holdReason, "second-subsystem"} {
-			if err := q.PauseTopic(ctx, "seat.inbox", "grp", reason); err != nil {
+			if err := q.PauseTopic(ctx, "seat.inbox", "grp", attachmentOf(ctx, t, q, "seat.inbox", "grp"), reason); err != nil {
 				t.Fatalf("PauseTopic(%s): %v", reason, err)
 			}
 		}
 		publish(ctx, t, q, "seat.inbox", newEvent("work"))
 
-		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
+		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", attachmentOf(ctx, t, q, "seat.inbox", "grp"), holdReason); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		j.staysAt(ctx, t, 0, "one subsystem released its hold and un-gated another's")
 
-		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", "second-subsystem"); err != nil {
+		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", attachmentOf(ctx, t, q, "seat.inbox", "grp"), "second-subsystem"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		j.awaitLabels(t, "the last hold to release the topic", "work")
@@ -888,7 +888,7 @@ func (s *suite) runCore(t *testing.T) {
 		subscribe(ctx, t, q, "crewlet.events.agent_phase_started", "held-grp", recordingHandler(held))
 		subscribe(ctx, t, q, "crewlet.events.agent_phase_started", "free-grp", recordingHandler(free))
 
-		if err := q.PauseTopic(ctx, "crewlet.events.agent_phase_started", "held-grp", holdReason); err != nil {
+		if err := q.PauseTopic(ctx, "crewlet.events.agent_phase_started", "held-grp", attachmentOf(ctx, t, q, "crewlet.events.agent_phase_started", "held-grp"), holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("t"))
@@ -901,7 +901,7 @@ func (s *suite) runCore(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
 		// Releasing a hold that was never taken must not error.
-		if err := q.ResumeTopic(ctx, "never.paused", "grp", "test"); err != nil {
+		if err := q.ResumeTopic(ctx, "never.paused", "grp", attachmentOf(ctx, t, q, "never.paused", "grp"), "test"); err != nil {
 			t.Fatalf("ResumeTopic on an unpaused subscription: %v", err)
 		}
 	})
@@ -1143,7 +1143,7 @@ func (s *suite) runCore(t *testing.T) {
 	// The two points get different rules, and the asymmetry is deliberate —
 	// see queue.EventQueue's Start and Stop.
 
-	// BEFORE START a backend picks its answer and applies it to all twenty-one.
+	// BEFORE START a backend picks its answer and applies it to all twenty-two.
 	t.Run("an_unstarted_queue_answers_the_same_way_for_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.newQueue(t)
@@ -1185,7 +1185,7 @@ func (s *suite) runCore(t *testing.T) {
 	//
 	// Deleting it costs nothing, because this case is the GENERAL form of the
 	// same fix and is strictly stronger: it is ungated, it runs on both
-	// backends, and it requires all twenty-one verbs (PauseTopic among them) to
+	// backends, and it requires all twenty-two verbs (PauseTopic among them) to
 	// refuse with queue.ErrNotLive. A hold that cannot be TAKEN cannot survive
 	// anything, so the window is closed by construction rather than by
 	// observation, and it is closed for every verb rather than for the one
@@ -1363,6 +1363,14 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 	// a live queue answers that drop nil, so what is read is again only
 	// whether the verb refused.
 	letters := topics.DeadLetter(topic, "g")
+	// THE HOLD NAMES WHAT Attachment ANSWERED, so on a live queue the two
+	// hold verbs are asked under the pair's own attachment and answer as a
+	// hold does rather than as a refused attachment; on one that is not
+	// live Attachment refuses, and so must they, with the zero one. Sent
+	// BEFORE the Detach below, which ends that attachment.
+	at, atErr := q.Attachment(ctx, topic, "g")
+	pauseErr := q.PauseTopic(ctx, topic, "g", at, "test")
+	resumeErr := q.ResumeTopic(ctx, topic, "g", at, "test")
 	return []verbResult{
 		{"Publish", q.Publish(ctx, topic, newEvent(topic))},
 		{"Subscribe", q.Subscribe(ctx, topic, "g", func(context.Context, *events.Event) queue.Result {
@@ -1378,8 +1386,9 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"DeleteSubscription", second(q.DeleteSubscription(ctx, topic, "g"))},
 		{"ListSubscriptions", listErr(q.ListSubscriptions(ctx, ns+".>"))},
 		{"SubscribeStream", streamErr},
-		{"PauseTopic", q.PauseTopic(ctx, topic, "g", "test")},
-		{"ResumeTopic", q.ResumeTopic(ctx, topic, "g", "test")},
+		{"Attachment", atErr},
+		{"PauseTopic", pauseErr},
+		{"ResumeTopic", resumeErr},
 		{"Serve", serveErr},
 		{"Ask", askErr},
 		{"Broadcast", q.Broadcast(ctx, topic, []byte("probe"))},

@@ -192,8 +192,12 @@ func (e *Engine) holdPausedInbox(ctx context.Context, handle string) error {
 		return err
 	}
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
+	at, err := e.backends.Queue.Attachment(ctx, subject, group)
+	if err != nil {
+		return err
+	}
 	e.pauses.mu.Lock()
-	err = e.backends.Queue.PauseTopic(ctx, subject, group, seatPauseHold)
+	err = e.backends.Queue.PauseTopic(ctx, subject, group, at, seatPauseHold)
 	if err == nil {
 		e.recordHeldLocked(seat)
 	}
@@ -462,7 +466,11 @@ func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 // holds the lock; the queue call does not drain, so that is safe.
 func (e *Engine) takePauseHoldLocked(ctx context.Context, seat uuid.UUID) {
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	if err := e.backends.Queue.PauseTopic(ctx, subject, group, seatPauseHold); err != nil {
+	at, err := e.backends.Queue.Attachment(ctx, subject, group)
+	if err == nil {
+		err = e.backends.Queue.PauseTopic(ctx, subject, group, at, seatPauseHold)
+	}
+	if err != nil {
 		// A pause fails only on a client that has stopped, which is a
 		// process on its way out. The screening is the backstop: it reads
 		// the same copy and holds whatever reaches it.
@@ -487,7 +495,11 @@ func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) 
 		return
 	}
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	if err := e.backends.Queue.ResumeTopic(ctx, subject, group, seatPauseHold); err != nil {
+	at, err := e.backends.Queue.Attachment(ctx, subject, group)
+	if err == nil {
+		err = e.backends.Queue.ResumeTopic(ctx, subject, group, at, seatPauseHold)
+	}
+	if err != nil {
 		// Kept on the record, as the no-model release keeps its own, so a
 		// later lift tries again: a resume fails only on a client that has
 		// stopped.

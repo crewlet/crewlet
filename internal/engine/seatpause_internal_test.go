@@ -184,8 +184,12 @@ func TestAPausedSeatParksAndHoldsItsInboxWhenADeliveryRacesTheHold(t *testing.T)
 	// The watch took the hold already. Dropping it here is the state a
 	// delivery races into: the pause has reached this node's copy and the
 	// inbox is not held yet.
+	at, err := q.Attachment(t.Context(), topics.AgentInbox(ceoSeat), topics.AgentInboxGroup(ceoSeat))
+	if err != nil {
+		t.Fatalf("Attachment: %v", err)
+	}
 	if err := q.ResumeTopic(t.Context(), topics.AgentInbox(ceoSeat),
-		topics.AgentInboxGroup(ceoSeat), seatPauseHold); err != nil {
+		topics.AgentInboxGroup(ceoSeat), at, seatPauseHold); err != nil {
 		t.Fatalf("ResumeTopic: %v", err)
 	}
 	sendTask(t, q, "ceo", "raced")

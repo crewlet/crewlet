@@ -127,9 +127,13 @@ func (p *seatParks[B]) take(ctx context.Context, e *Engine, spec parkSpec, seat 
 	handle string, basis B, until time.Time, why string) error {
 
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
+	at, err := e.backends.Queue.Attachment(ctx, subject, group)
+	if err != nil {
+		return err
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := e.backends.Queue.PauseTopic(ctx, subject, group, spec.hold); err != nil {
+	if err := e.backends.Queue.PauseTopic(ctx, subject, group, at, spec.hold); err != nil {
 		return err
 	}
 	p.recordLocked(ctx, e, spec, seat, &seatParking[B]{handle: handle, basis: basis, until: until}, why)
@@ -225,7 +229,11 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 	p.mu.Unlock()
 
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	if err := e.backends.Queue.ResumeTopic(ctx, subject, group, spec.hold); err != nil {
+	at, err := e.backends.Queue.Attachment(ctx, subject, group)
+	if err == nil {
+		err = e.backends.Queue.ResumeTopic(ctx, subject, group, at, spec.hold)
+	}
+	if err != nil {
 		// Kept on the record with no alarm, as the no-model release keeps
 		// its own: a resume fails only on a client that has stopped, which
 		// is a process on its way out, and the record is what
@@ -290,7 +298,11 @@ func (p *seatParks[B]) forget(ctx context.Context, e *Engine, spec parkSpec, sea
 	p.mu.Unlock()
 
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	if err := e.backends.Queue.ResumeTopic(ctx, subject, group, spec.hold); err != nil {
+	at, err := e.backends.Queue.Attachment(ctx, subject, group)
+	if err == nil {
+		err = e.backends.Queue.ResumeTopic(ctx, subject, group, at, spec.hold)
+	}
+	if err != nil {
 		log.DebugContext(ctx, "seat_park_hold_not_lifted", "seat", parking.handle,
 			"agent_id", seat.String(), "reason", spec.hold, "error", err)
 	}
