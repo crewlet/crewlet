@@ -112,3 +112,61 @@ func TestAResumeThatFailedKeepsTheSeatOnTheRecord(t *testing.T) {
 		t.Errorf("record = %v after a resume the queue refused, want ceo kept", got)
 	}
 }
+
+// A NO-MODEL PAUSE TAKEN WHILE THE RELEASE IS LIFTING KEEPS THE SEAT HELD.
+//
+// The release drops the record under its lock and resumes outside it. A
+// delivery screened against a revision with no model, installed after the one
+// the release is for, pauses the seat in between: the same attachment held
+// again, which changes nothing on the queue, and recorded. The late resume then
+// lifted that pause's hold, and the seat was recorded paused with its inbox not
+// held. So each lift reads the record again once its resume has returned, and
+// takes back the hold of a pause recorded meanwhile.
+//
+// Mutation: drop the read after the resume, and the seat is left recorded
+// paused with its inbox unheld.
+func TestANoModelPauseTakenAsTheReleaseLiftsKeepsTheSeatHeld(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, q := engineOn(t)
+	noModel := e.Company()
+	if err := e.pause(ctx, "ceo", "no turn engine"); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	e.epoch.current.Store(companyFor(t, `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    zulu:
+      model: claude-sonnet-5
+roles:
+  - name: CEO
+    handle: ceo
+  - name: CTO
+    handle: cto
+`))
+
+	staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(seatOf("ceo")),
+		hold: pauseReasonNoTurnEngine, fold: func() {
+			// THE PROVIDER REMOVED AGAIN, and a delivery screened against
+			// that revision pauses the seat in the release's window.
+			e.epoch.current.Store(noModel)
+			if err := e.pause(ctx, "ceo", "no turn engine"); err != nil {
+				t.Errorf("the pause in the release's window: %v", err)
+			}
+		}}
+	e.backends.Queue = staged
+	e.releaseModelHolds(ctx)
+
+	if !staged.fired.Load() {
+		t.Fatal("the release lifted no no-model hold, so nothing was staged in its window")
+	}
+	if got := recorded(e); !slices.Equal(got, []string{"ceo"}) {
+		t.Fatalf("record = %v, want the pause taken in the release's window", got)
+	}
+	if got := noModelHolds(e, q, "ceo"); !slices.Equal(got, []string{"ceo"}) {
+		t.Errorf("the seat is recorded paused with its inbox unheld: the release's late "+
+			"resume took the hold the pause in its window owns (held: %v)", got)
+	}
+}

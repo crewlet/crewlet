@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -154,6 +155,11 @@ func (e *Engine) pause(ctx context.Context, handle, reason string) error {
 //
 // The caller has already made that epoch current: a delivery the release lets
 // through is screened and run against the company that has a model.
+//
+// OUTSIDE THE LOCK for each queue call, for the reason [Engine.pause] gives,
+// and a pause recorded while that call is in flight would lose its hold to it,
+// so each lift reads the record again once its call returns
+// ([Engine.reholdModelHold]).
 func (e *Engine) releaseModelHolds(ctx context.Context) {
 	e.modelHolds.mu.Lock()
 	held := maps.Clone(e.modelHolds.seats)
@@ -183,9 +189,44 @@ func (e *Engine) releaseModelHolds(ctx context.Context) {
 					"until the next release")
 			continue
 		}
+		e.reholdModelHold(ctx, id)
 		log.InfoContext(ctx, "seat_inbox_resumed", "handle", handle,
 			"reason", pauseReasonNoTurnEngine)
 	}
+}
+
+// reholdModelHold takes back the hold of a no-model pause recorded for seat id
+// while the release was lifting its earlier one, which that lift has just
+// taken from it.
+//
+// THE WINDOW is the release's own: it drops the record under the lock and
+// resumes outside it, and a pause taken between the two (a delivery screened
+// against a revision with no model) re-holds the same attachment, which a hold one per reason leaves
+// unchanged on the queue, and records itself. The resume then lifts the hold
+// that pause owns: the seat stays recorded paused with its inbox not held,
+// until its next delivery meets the screening and pauses it again, at the cost
+// of one of that delivery's attempts. Read again under the lock once the
+// resume has returned, a pause recorded meanwhile takes its hold back, for the
+// attachment its record names, which is the one the seat holds now or one its
+// release has ended, which the queue refuses. A pause taken after this read
+// holds by itself, and the apply that adds a model releases it again.
+func (e *Engine) reholdModelHold(ctx context.Context, id uuid.UUID) {
+	e.modelHolds.mu.Lock()
+	defer e.modelHolds.mu.Unlock()
+	hold, again := e.modelHolds.seats[id]
+	if !again {
+		return
+	}
+	subject, group := topics.AgentInbox(id), topics.AgentInboxGroup(id)
+	err := e.backends.Queue.PauseTopic(ctx, subject, group, hold.inbox, pauseReasonNoTurnEngine)
+	if err == nil || errors.Is(err, queue.ErrAttachmentGone) {
+		return
+	}
+	// A pause fails only on a client that has stopped, a process on its way
+	// out; the record stays for the next release.
+	log.WarnContext(ctx, "seat_inbox_not_paused", "handle", hold.handle, "error", err,
+		"detail", "this seat's no-model pause stands but its inbox is not held; a "+
+			"delivery to it pauses it again")
 }
 
 // seatID resolves a seat handle to the id its mailbox is named by, through

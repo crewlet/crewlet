@@ -917,3 +917,57 @@ func TestAProbeRefusedWithANextTryAlreadyPastWaitsBeforeItAsksAgain(t *testing.T
 			parks, harness.ShortestSitOut)
 	}
 }
+
+// A PARK TAKEN WHILE A RELEASE OF THE SEAT IS LIFTING KEEPS THE SEAT HELD.
+//
+// A release drops its record under the parks' lock and resumes outside it. A
+// park taken in between (a delivery on another partition that met the
+// condition) holds the same attachment again, which changes nothing on the
+// queue, and records itself, and the late resume then lifted that park's hold:
+// the seat was recorded parked with its inbox not held. So the release reads
+// the record again once its resume has returned, and takes back the hold of a
+// park recorded meanwhile. Shared by both kinds of park (seatpark.go); the
+// provider's is the one taken with no alarm, so nothing but the case moves it.
+//
+// Mutation: drop the read after the resume, and the seat is left recorded
+// parked with its inbox unheld.
+func TestAParkTakenAsItsSeatsReleaseLiftsKeepsTheSeatHeld(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, q := engineOn(t)
+	seat := seatOf("ceo")
+	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
+	if err := e.providerParks.take(ctx, e, providerParkSpec, seat, "ceo", providerBasis{},
+		time.Time{}, "every model is limited"); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+
+	staged := &foldAtResume{EventQueue: q, subject: subject, hold: providerParkSpec.hold,
+		fold: func() {
+			if err := e.providerParks.take(ctx, e, providerParkSpec, seat, "ceo",
+				providerBasis{}, time.Time{}, "every model is limited again"); err != nil {
+				t.Errorf("the park in the release's window: %v", err)
+			}
+		}}
+	e.backends.Queue = staged
+	if !e.providerParks.release(ctx, e, providerParkSpec, seat, "a probe was answered") {
+		t.Fatal("the release lifted nothing")
+	}
+
+	if !staged.fired.Load() {
+		t.Fatal("the release lifted no park hold, so nothing was staged in its window")
+	}
+	parking := e.providerParks.parking(seat)
+	if parking == nil {
+		t.Fatal("the park taken in the release's window is not recorded")
+	}
+	if !slices.Contains(q.(*memory.Queue).PauseHolds(subject, group), providerParkSpec.hold) {
+		t.Errorf("the seat is recorded parked with its inbox unheld %v: the release's late "+
+			"resume took the hold the park in its window owns",
+			q.(*memory.Queue).PauseHolds(subject, group))
+	}
+	if parking.inbox != e.inboxOf(seat) {
+		t.Errorf("the park is recorded for attachment %d, want %d, which its release lifts",
+			parking.inbox, e.inboxOf(seat))
+	}
+}

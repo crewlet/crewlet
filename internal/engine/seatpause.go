@@ -37,7 +37,11 @@ import (
 //     preparation on the node that acquires a paused seat takes it again
 //     before the node attaches the inbox ([Engine.acquireInbox]). Every hold
 //     is taken and recorded as ONE STEP under the lock the pauses are folded
-//     under, so a resume finds either no hold or the record of one.
+//     under, so a resume finds either no hold or the record of one. The lift
+//     is the one step that leaves the lock for its queue call, and a pause
+//     folded while that call is in flight would lose its hold to it, so the
+//     lift reads the pause again once the call returns and takes back the
+//     hold of one in force ([Engine.liftPauseHold]).
 //   - ANSWER THE SCREENING. [inbox.Conditions.Paused] and PauseUnknown are
 //     read off this cache, so a delivery that raced the hold is held and
 //     parked rather than run, and one that arrives before this node has read
@@ -526,7 +530,8 @@ func (e *Engine) takePauseHoldLocked(ctx context.Context, seat uuid.UUID) {
 //
 // OUTSIDE THE LOCK for the queue call, because the in-memory twin's resume
 // drains synchronously into the seat's handler, and the first thing that
-// handler does is read this copy.
+// handler does is read this copy. The cost of that is a window between the
+// record's drop and the resume, which the read after the resume closes.
 func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) {
 	e.pauses.mu.Lock()
 	at, held := e.pauses.held[seat]
@@ -549,6 +554,24 @@ func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) 
 				"is replaced")
 		return
 	}
+	// AND A PAUSE FOLDED WHILE THE LIFT WAS IN FLIGHT HOLDS AGAIN. The lock
+	// is free between the cache's change that asked for this lift and the
+	// resume, and a pause folded there re-holds the attachment this lift
+	// names (a hold is one per reason, so that take changes nothing on the
+	// queue) and records it, a record this lift may already have dropped
+	// or drops next: the resume then lifts the hold that pause owns, and the
+	// seat would stay paused, recorded held or not, with its inbox not held,
+	// until its next delivery met the screening, which holds it again at the
+	// cost of one of that delivery's attempts. So the pause is read again
+	// under the lock once the resume has returned, and one in force takes
+	// its hold back, for the attachment the seat holds now, and records it
+	// ([Engine.takePauseHoldLocked]). A pause folded after this read takes
+	// its own; a lift after it reads again after its own resume.
+	e.pauses.mu.Lock()
+	if _, paused := e.pauses.pauses[seat]; paused {
+		e.takePauseHoldLocked(ctx, seat)
+	}
+	e.pauses.mu.Unlock()
 	log.InfoContext(ctx, "seat_pause_lifted", "seat", e.seatLabel(seat),
 		"agent_id", seat.String(), "reason", why)
 }

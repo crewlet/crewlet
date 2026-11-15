@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"slices"
 	"sync"
@@ -53,6 +54,12 @@ import (
 // and records no park, the forget drops the record of one it finds
 // ([seatParks.forget]), and a park that finds its seat gone once it is taken
 // undoes itself.
+//
+// A RELEASE AND A RE-PARK of one seat agree through the record: a park takes
+// its hold and records it as one step under the parks' lock, and a release
+// drops the record under that lock and lifts the hold outside it, then reads
+// the record again and takes back the hold of a park recorded meanwhile, which
+// its lift took from it ([seatParks.reholdParked]).
 //
 // HOLDS ARE KEYED BY REASON, so two parks on one inbox (a seat whose window is
 // spent AND whose model is limited) are two holds, and neither release lifts
@@ -220,7 +227,9 @@ func (p *seatParks[B]) release(ctx context.Context, e *Engine, spec parkSpec, se
 //
 // OUTSIDE THE LOCK for the queue call, because the in-memory twin's resume
 // drains synchronously into the seat's handler, and a delivery that finds the
-// condition still there comes straight back to the park.
+// condition still there comes straight back to the park. A park taken while
+// that call is in flight would lose its hold to it, so the release reads the
+// record again once the call returns ([seatParks.reholdParked]).
 func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkSpec,
 	seat uuid.UUID, parking *seatParking[B], why string) bool {
 
@@ -256,9 +265,48 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 				"client is replaced")
 		return false
 	}
+	p.reholdParked(ctx, e, spec, seat)
 	log.InfoContext(ctx, spec.released, "seat", parking.handle,
 		"agent_id", seat.String(), "reason", why)
 	return true
+}
+
+// reholdParked takes back the hold of a park recorded while a release of the
+// seat's earlier park was in flight, which that release's resume has just
+// lifted.
+//
+// THE WINDOW is the release's own: it drops its record under the lock and
+// resumes outside it, and a park taken between the two (a delivery on another
+// partition that met the condition, or the resumed mail meeting it again)
+// re-holds the same attachment, which a hold one per reason leaves unchanged
+// on the queue, and records itself. The resume then lifts the hold that park
+// owns: the seat stays recorded parked, its alarm armed, with its inbox not
+// held, until its next delivery meets the condition and parks it again, at
+// the cost of one of that delivery's attempts. Read again under the lock once
+// the resume has returned, a park in force takes its hold back, for the
+// attachment its record names, which is the one the seat holds now or one its
+// release has ended, which the queue refuses and the release's forget drops.
+// A park taken after this read holds by itself, and a release after it reads
+// again after its own resume.
+func (p *seatParks[B]) reholdParked(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	parking := p.seats[seat]
+	if parking == nil {
+		return
+	}
+	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
+	err := e.backends.Queue.PauseTopic(ctx, subject, group, parking.inbox, spec.hold)
+	if err == nil || errors.Is(err, queue.ErrAttachmentGone) {
+		return
+	}
+	// A pause fails only on a client that has stopped, a process on its way
+	// out; the record stays for the release that lifts it, and the
+	// screening holds whatever reaches the seat meanwhile.
+	log.WarnContext(ctx, "seat_park_hold_not_retaken", "seat", parking.handle,
+		"agent_id", seat.String(), "hold", spec.hold, "error", err,
+		"detail", "this seat's park stands but its inbox is not held; a delivery "+
+			"that meets the condition parks it again")
 }
 
 // changed is every parked seat whose basis keep says no longer holds, in a
