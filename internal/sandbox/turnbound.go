@@ -219,7 +219,8 @@ func deadlineDetail(deadline time.Time, delivered []string, elided int) string {
 // completion went, and the run is resumed once a node that reads it holds the
 // seat. Once no live node reads the state's version, as after a rollback, it
 // is counted like the run's own, so the seat is not held for ever by a state
-// nobody running can read.
+// nobody running can read; and a reply kind this build does not read, which
+// is no part of that version, once no live node runs another build.
 func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now time.Time, cause error) bool {
 	attempts := run.Launch.ResumeFailures + 1
 	since := run.Launch.ResumeFailingSince

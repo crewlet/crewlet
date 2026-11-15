@@ -60,8 +60,9 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // as the engine's own defect. Once no live node may, it counts, so a rollback
 // that leaves no node reading the version of the run's parked state holds the
 // seat no longer than the give-up does. A reply kind is no part of that
-// version: an unknown one beside a state every live node reads is not counted
-// while another node is live.
+// version, so an unknown one is not counted while a live node runs another
+// build, and counted once every live node runs this one, which reads it
+// nowhere.
 var ErrResumeElsewhere = fmt.Errorf("%w; another node or build may", ErrResumeUnavailable)
 
 // ErrResumeAbandoned reports a resumed turn that broke and must not be resumed
@@ -478,12 +479,13 @@ type CoordinatorOptions struct {
 
 	// ResumableElsewhere reports whether a live node other than this one may
 	// resume run: one whose build reads the version of the run's parked
-	// state. A resume that failed on [ErrResumeElsewhere] is not counted
-	// toward the give-up while one may, nor while the answer cannot be read
-	// (the next failure asks again); once none may, it is, so a rollback
-	// cannot hold the seat for ever ([Coordinator.runsOwnFailure]). The fleet
-	// it reads sits above this package (internal/engine's
-	// fleetReadsParkedState); nil counts every such failure as the run's.
+	// state, or, for a reply kind this build does not read, one that runs
+	// another build. A resume that failed on [ErrResumeElsewhere] is not
+	// counted toward the give-up while one may, nor while the answer cannot
+	// be read (the next failure asks again); once none may, it is, so a
+	// rollback cannot hold the seat for ever ([Coordinator.runsOwnFailure]).
+	// The fleet it reads sits above this package (internal/engine's
+	// resumableElsewhere); nil counts every such failure as the run's.
 	ResumableElsewhere func(ctx context.Context, run PendingRun) (bool, error)
 
 	// Resume re-enters a suspended turn. Required: every node that builds a

@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -34,6 +35,7 @@ import (
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/version"
 )
 
 // The knob has three states and the manager's input carries a pointer for
@@ -1139,6 +1141,83 @@ func TestTheEnginesCoordinatorCountsAResumeAnotherBuildCanMakeOnlyOnceNoneIsLive
 				t.Errorf("resumable elsewhere = %v, want %v", got, tc.elsewhere)
 			}
 		})
+	}
+}
+
+// THE ENGINE'S COORDINATOR BOUNDS A RESUME A REPLY KIND KEEPS FROM THIS BUILD
+// BY THE LIVE NODES' BUILDS, never by the parked state's version, which a reply
+// kind is no part of: a run whose reply this build does not read is resumable
+// elsewhere while a live node runs another build (the newer one that wrote the
+// kind, or one that does not say which it runs), so the give-up counts nothing,
+// and not once every live node runs this build, which reads it nowhere, so it
+// counts. Read by the version, a rollback that left two nodes of this build
+// held the seat for as long as both lived, each reading the other as able to
+// resume it. A fleet that cannot be read is an error, which the coordinator
+// counts as nothing and warns of (internal/sandbox's runsOwnFailure).
+//
+// Mutation: bound the reply's failure by the parked state's version again, or
+// read a node that does not say its build as this build's, or answer an
+// unread fleet as nobody, and a row goes red.
+func TestTheEnginesCoordinatorCountsAReplyNoBuildLiveReads(t *testing.T) {
+	t.Parallel()
+	live := t.Context()
+	unread := sandbox.PendingRun{TurnID: "t1", AgentHandle: "app", Reply: "later",
+		ExecuteState: runParkedAtVersion(t, execstate.Version).ExecuteState}
+	if _, err := resumeReply(unread); !errors.Is(err, sandbox.ErrResumeElsewhere) {
+		t.Fatalf("the premise: reply %q is one another build may read, got %v", unread.Reply, err)
+	}
+	for name, tc := range map[string]struct {
+		builds    []string
+		down      bool
+		elsewhere bool
+	}{
+		"two builds live":                         {builds: []string{version.String(), "v9.9.9"}, elsewhere: true},
+		"a node that does not say its build":      {builds: []string{version.String(), ""}, elsewhere: true},
+		"one build fleet-wide":                    {builds: []string{version.String(), version.String()}},
+		"no other node live":                      {},
+		"a fleet that cannot be read, two builds": {builds: []string{"v9.9.9"}, down: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := coordtest.NewFaulty(memory.New())
+			presentOnBuild(live, t, backend, "node-self", version.String())
+			for i, build := range tc.builds {
+				presentOnBuild(live, t, backend, "node-"+strconv.Itoa(i), build)
+			}
+			if tc.down {
+				backend.Break(nil)
+			}
+			e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: backend},
+				answers: testAnswers(), testNode: "node-self"}
+			got, err := e.coordinatorOptions(nil, nil).ResumableElsewhere(live, unread)
+			if tc.down {
+				if err == nil {
+					t.Fatalf("an unread fleet answered %v with no error; want the read's failure, "+
+						"which counts nothing", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("the fleet's answer: %v", err)
+			}
+			if got != tc.elsewhere {
+				t.Errorf("resumable elsewhere = %v, want %v", got, tc.elsewhere)
+			}
+		})
+	}
+}
+
+// presentOnBuild publishes a live node's presence saying it runs build, or no
+// build at all for "", and that it reads this build's parked state version, so
+// only its build tells it apart.
+func presentOnBuild(ctx context.Context, t *testing.T, backend coord.Backend, node, build string) {
+	t.Helper()
+	status := coord.NodeStatus{ParkedStateVersion: execstate.Version, Build: build}
+	if _, _, err := backend.TryAcquire(ctx, coord.NodeResource(node), coord.AcquireOptions{
+		Owner: node + ":1", TTL: time.Hour, Preferred: node, Ungated: true,
+		Meta: map[string]any{coord.StatusKey: status.Meta()},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

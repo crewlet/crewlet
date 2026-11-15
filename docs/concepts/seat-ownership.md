@@ -846,7 +846,9 @@ a roll, or a seat or a company that is not the node's) while a live node reads
 the version of the run's parked state: the run is resumed once a node that
 can holds the seat. Once no live node reads it, as after a rollback, it counts
 like the run's own, so a state nobody running can read holds the seat no longer
-than the give-up does. A condition only an operator clears (this node's disk
+than the give-up does. A reply kind is no part of that version, so one this
+build does not read waits only while a live node runs another build, and
+counts once every live node runs this one. A condition only an operator clears (this node's disk
 full, read-only or failing, its open files at their limit, the fleet's nodes
 holding different keys or running different builds) is the node's too, so the
 give-up never ends a run held by one: the run and its seat wait for the
