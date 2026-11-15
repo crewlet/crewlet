@@ -59,7 +59,10 @@ import (
 // its hold and records it as one step under the parks' lock, and a release
 // drops the record under that lock and lifts the hold outside it, then reads
 // the record again and takes back the hold of a park recorded meanwhile, which
-// its lift took from it ([seatParks.reholdParked]).
+// its lift took from it ([seatParks.reholdParked]). What a release says of the
+// seat beyond its hold (a provider park's probe and its notice) it says as it
+// drops the record, under the same lock, so a park taken after the drop says
+// its own after it ([Engine.releaseProviderParking]).
 //
 // HOLDS ARE KEYED BY REASON, so two parks on one inbox (a seat whose window is
 // spent AND whose model is limited) are two holds, and neither release lifts
@@ -192,7 +195,7 @@ func (p *seatParks[B]) armLocked(ctx context.Context, e *Engine, spec parkSpec,
 	wait := max(parking.until.Sub(e.now()), 0)
 	released := context.WithoutCancel(ctx)
 	parking.alarm = p.arm(wait, func() {
-		p.releaseParking(released, e, spec, seat, parking, why)
+		p.releaseParking(released, e, spec, seat, parking, why, nil)
 	})
 }
 
@@ -217,7 +220,7 @@ func (p *seatParks[B]) release(ctx context.Context, e *Engine, spec parkSpec, se
 	why string) bool {
 
 	if parking := p.parking(seat); parking != nil {
-		return p.releaseParking(ctx, e, spec, seat, parking, why)
+		return p.releaseParking(ctx, e, spec, seat, parking, why, nil)
 	}
 	return false
 }
@@ -225,13 +228,20 @@ func (p *seatParks[B]) release(ctx context.Context, e *Engine, spec parkSpec, se
 // releaseParking lifts the hold parking took, if parking is still the seat's
 // record, reporting whether it did.
 //
+// dropped, where the kind of park has more to say of the seat than its hold,
+// says it as the record is dropped, under the parks' lock: a park of the seat
+// is taken under that lock, so one taken after the drop says what it says of
+// the seat after this, and one taken before it replaced the record, which this
+// then finds and leaves alone ([Engine.releaseProviderParking]). It makes no
+// queue call and takes no lock a park's take holds across its own.
+//
 // OUTSIDE THE LOCK for the queue call, because the in-memory twin's resume
 // drains synchronously into the seat's handler, and a delivery that finds the
 // condition still there comes straight back to the park. A park taken while
 // that call is in flight would lose its hold to it, so the release reads the
 // record again once the call returns ([seatParks.reholdParked]).
 func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkSpec,
-	seat uuid.UUID, parking *seatParking[B], why string) bool {
+	seat uuid.UUID, parking *seatParking[B], why string, dropped func()) bool {
 
 	p.mu.Lock()
 	if p.seats[seat] != parking {
@@ -242,6 +252,9 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 	}
 	delete(p.seats, seat)
 	parking.disarm()
+	if dropped != nil {
+		dropped()
+	}
 	p.mu.Unlock()
 
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)

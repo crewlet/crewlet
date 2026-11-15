@@ -689,18 +689,27 @@ func TestAPauseFoldedAsAResumeIsLiftedKeepsTheSeatHeld(t *testing.T) {
 // foldAtResume is a queue that runs fold once, at the resume of hold on one
 // inbox and before that resume reaches the queue: the window a lift leaves
 // between dropping its record under its lock and its queue call outside it.
+// Late, it runs fold once the resume has reached the queue and before it
+// returns, where the in-memory twin hands the resumed mail over.
 type foldAtResume struct {
 	queue.EventQueue
 	subject, hold string
+	late          bool
 	fold          func()
 	fired         atomic.Bool
 }
 
 func (s *foldAtResume) ResumeTopic(ctx context.Context, topic, group string, at queue.Attachment, reason string) error {
-	if topic == s.subject && reason == s.hold && s.fired.CompareAndSwap(false, true) {
-		s.fold()
+	if topic != s.subject || reason != s.hold || !s.fired.CompareAndSwap(false, true) {
+		return s.EventQueue.ResumeTopic(ctx, topic, group, at, reason)
 	}
-	return s.EventQueue.ResumeTopic(ctx, topic, group, at, reason)
+	if !s.late {
+		s.fold()
+		return s.EventQueue.ResumeTopic(ctx, topic, group, at, reason)
+	}
+	err := s.EventQueue.ResumeTopic(ctx, topic, group, at, reason)
+	s.fold()
+	return err
 }
 
 // A SEAT'S RELEASE LEAVES NO RECORD OF A PAUSE HOLD BEHIND.

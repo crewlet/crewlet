@@ -971,3 +971,81 @@ func TestAParkTakenAsItsSeatsReleaseLiftsKeepsTheSeatHeld(t *testing.T) {
 			parking.inbox, e.inboxOf(seat))
 	}
 }
+
+// A PARK ON ITS CHAIN TAKEN AS THE PROBE'S RELEASE LIFTS IS LEFT WHOLE: HELD,
+// PROBED AND ANNOUNCED.
+//
+// The probe's answer releases the seat's park, and a turn that meets the limit
+// again parks the seat on the same chain in the release's window: before its
+// resume reaches the queue (a turn on another partition), or once it has (the
+// resumed mail, which the in-memory twin hands over inside the resume). The
+// release then took the seat off the probe the new park had just joined, and
+// announced the seat released after the new park had announced it parked:
+// held, with nothing left to release it, and drawn released on every screen.
+// So the release's own effects on the seat are decided with its record's drop,
+// before any park after it can be taken.
+//
+// Mutation: take the seat off its probe after the resume rather than with the
+// drop, and the park taken in the window is left on no probe; announce the
+// release after the resume, and the seat is drawn released.
+func TestAParkOnItsChainTakenAsItsProbesReleaseLiftsIsLeftWhole(t *testing.T) {
+	t.Parallel()
+	for _, late := range []bool{false, true} {
+		name := "before the resume reaches the queue"
+		if late {
+			name = "once the resume has reached the queue"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			reset := parkedAt.Add(time.Hour)
+			model := &limitedModel{reset: reset}
+			r := newProbeRig(t, model)
+			model.now = r.clock
+			e, q := r.e, r.q
+			lead, err := e.seatID("lead")
+			if err != nil {
+				t.Fatalf("seatID: %v", err)
+			}
+			subject, group := topics.AgentInbox(lead), topics.AgentInboxGroup(lead)
+			r.park(t, "lead", reset)
+
+			staged := &foldAtResume{EventQueue: q, subject: subject, hold: pauseReasonProvider,
+				late: late, fold: func() { r.park(t, "lead", reset.Add(time.Hour)) }}
+			e.backends.Queue = staged
+			r.at(reset.Add(time.Second))
+			live := r.alarms.live()
+			if len(live) != 1 {
+				t.Fatalf("%d alarms armed for one seat's park, want its probe's one", len(live))
+			}
+			live[0].fire()
+
+			if !staged.fired.Load() {
+				t.Fatal("the probe's answer lifted no park hold, so nothing was staged in its window")
+			}
+			parking := e.providerParks.parking(lead)
+			if parking == nil {
+				t.Fatal("the park taken in the release's window is not recorded")
+			}
+			if !slices.Contains(q.PauseHolds(subject, group), pauseReasonProvider) {
+				t.Errorf("the seat is recorded parked with its inbox unheld %v",
+					q.PauseHolds(subject, group))
+			}
+			e.limitProbes.mu.Lock()
+			probe := e.limitProbes.probes[probeKeyOf(parking.basis)]
+			probed := probe != nil && probe.seats[lead] != ""
+			e.limitProbes.mu.Unlock()
+			if !probed || len(r.alarms.live()) != 1 {
+				t.Errorf("the seat is parked on no probe (on one: %v, alarms armed: %d): the "+
+					"release took it off the probe its new park joined, and nothing releases it",
+					probed, len(r.alarms.live()))
+			}
+			e.parkNotices.mu.Lock()
+			last := string(e.parkNotices.sent["lead"])
+			e.parkNotices.mu.Unlock()
+			if !strings.HasPrefix(last, `{"type":"seat_provider_parked"`) {
+				t.Errorf("the last notice published for the seat is %s, want its new park: the "+
+					"release was announced after the park that followed it", last)
+			}
+		})
+	}
+}

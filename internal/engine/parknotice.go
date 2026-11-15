@@ -37,7 +37,10 @@ import (
 //     is published released, once, and never parked after it.
 //   - PUBLISHED BY ITS CALLER while the broker answers, as before, so what the
 //     caller decided is published before it returns; one caller at a time
-//     drains, and a seat's notices go out in the order they were decided.
+//     drains, and a seat's notices go out in the order they were decided. A
+//     caller that decides one under a lock no publish may be made under notes
+//     it there and publishes it once it has let go ([parkNotices.note]): the
+//     order it was noted in is its place among the seat's notices.
 //   - HELD AND RETRIED ON A BACKOFF once the broker refuses: no caller
 //     publishes while they are held, and each attempt publishes every waiting
 //     notice in turn and stops at the first refusal, since a broker that
@@ -121,6 +124,15 @@ type parkNotices struct {
 // another caller is publishing (which then publishes it too) or notices are
 // held.
 func (n *parkNotices) post(ctx context.Context, publish parkPublisher, handle string, ev *events.Event) {
+	n.note(ctx, handle, ev)
+	n.flush(ctx, publish)
+}
+
+// note hands one seat's notice over without publishing it, for a caller that
+// decides it under a lock no publish may be made under and calls
+// [parkNotices.flush] once it has let go. Noted, it is the seat's newest: a
+// notice noted after it replaces it, and it replaces any noted before it.
+func (n *parkNotices) note(ctx context.Context, handle string, ev *events.Event) {
 	key, err := json.Marshal(struct {
 		Type string         `json:"type"`
 		Data events.Payload `json:"data"`
@@ -131,8 +143,8 @@ func (n *parkNotices) post(ctx context.Context, publish parkPublisher, handle st
 		return
 	}
 	n.mu.Lock()
+	defer n.mu.Unlock()
 	if n.stopped {
-		n.mu.Unlock()
 		return
 	}
 	if n.waiting == nil {
@@ -147,14 +159,18 @@ func (n *parkNotices) post(ctx context.Context, publish parkPublisher, handle st
 	switch {
 	case bytes.Equal(ahead, key):
 		delete(n.waiting, handle)
-		n.mu.Unlock()
 		return
 	case bytes.Equal(n.waiting[handle].key, key):
-		n.mu.Unlock()
 		return
 	}
 	n.waiting[handle] = parkNotice{ev: ev, key: key}
-	if n.draining || n.held {
+}
+
+// flush publishes every waiting notice before returning, unless another
+// caller is publishing (which then publishes them too) or notices are held.
+func (n *parkNotices) flush(ctx context.Context, publish parkPublisher) {
+	n.mu.Lock()
+	if n.stopped || n.draining || n.held || len(n.waiting) == 0 {
 		n.mu.Unlock()
 		return
 	}

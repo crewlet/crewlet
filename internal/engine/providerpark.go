@@ -879,15 +879,31 @@ func (e *Engine) releaseProviderPark(ctx context.Context, seat uuid.UUID, why st
 // releaseProviderParking lifts the hold parking took, if it is still the
 // seat's park, says so, and signals the resumes waiting on a limit (see the
 // file's doc), reporting whether it did.
+//
+// THE SEAT TAKEN OFF ITS PROBE AND ITS RELEASE NOTED AS THE RECORD IS DROPPED,
+// under the parks' lock ([seatParks.releaseParking]), and the notice published
+// once the release has let go of it. A turn that meets the limit again in the
+// release's window parks the seat on the same chain, and that park joins the
+// chain's probe and notes the seat parked after its take, which the lock puts
+// after the drop. Both used to come after the queue's resume, and so after
+// that park: the release took the seat off the probe the park had just joined
+// and noted it released after the park had noted it parked, so the seat, whose
+// hold the release takes back ([seatParks.reholdParked]) or the park took after
+// the resume, stayed held with no probe left to release it, and every screen
+// drew it released. The probes' and the notices' locks are taken under the
+// parks' one here and nowhere the other way round.
 func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, parking *providerParking, why string) bool {
-	if !e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why) {
+	released := e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why, func() {
+		e.leaveLimitProbe(seat, parking.basis)
+		e.noteProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
+	})
+	e.parkNotices.flush(ctx, e.publishParkNotice)
+	if !released {
 		return false
 	}
-	e.leaveLimitProbe(seat, parking.basis)
 	// RELEASED, NOT ANSWERED: a park soon after continues this wait
 	// ([limitProbes.waits]); one that ends it forgets it after this.
 	e.parkReleased(seat)
-	e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
 	e.readmitResumes(waitProvider)
 	return true
 }
@@ -948,6 +964,14 @@ func (e *Engine) stopProviderParks() {
 // backoff while the broker refuses. The park holds whether or not a screen
 // hears of it.
 func (e *Engine) publishProviderPark(ctx context.Context, handle string, payload events.Payload) {
+	e.noteProviderPark(ctx, handle, payload)
+	e.parkNotices.flush(ctx, e.publishParkNotice)
+}
+
+// noteProviderPark hands handle's seat's notice to [parkNotices] without
+// publishing it, for a release that decides it under the parks' lock and
+// publishes it once it has let go ([Engine.releaseProviderParking]).
+func (e *Engine) noteProviderPark(ctx context.Context, handle string, payload events.Payload) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
 	}
@@ -971,7 +995,7 @@ func (e *Engine) publishProviderPark(ctx context.Context, handle string, payload
 		return
 	}
 	ev.Source = role.Name
-	e.parkNotices.post(ctx, e.publishParkNotice, handle, ev)
+	e.parkNotices.note(ctx, handle, ev)
 }
 
 // publishParkNotice hands one park notice to the broker.
