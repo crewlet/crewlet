@@ -1,13 +1,15 @@
 /**
  * GITLET'S PAGES, LAID OUT: a comparison's title stays clear of the files'
- * sticky toolbar under it.
+ * sticky toolbar under it, and the clone panel shows its whole address.
  */
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { page } from "vitest/browser";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { InertWebSocket, LayoutClient } from "~/test/layout.tsx";
 import { eventually } from "~/test/settle.ts";
 import { ComparePage } from "./commit/ComparePage.tsx";
+import { RepositoryPage } from "./repo/RepositoryPage.tsx";
 
 const POSITION = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 12 };
 const BASE = "3a3ecae0123456789abcdef0123456789abcdef0";
@@ -79,6 +81,23 @@ function answer(url: URL): Response {
           deleted: 0,
         },
         preview: { state: "clean" },
+        position: POSITION,
+        level: "session",
+      });
+    case "/query/code_tree":
+      return json({
+        repo: "web",
+        ref: url.searchParams.get("ref") ?? BASE,
+        commit: BASE,
+        kind: "tree",
+        tree: {
+          tree: BASE,
+          entries: [
+            { mode: "040000", type: "tree", oid: HEAD, path: "cmd" },
+            { mode: "100644", type: "blob", oid: HEAD, path: "go.mod", size: 1200 },
+          ],
+          total: 2,
+        },
         position: POSITION,
         level: "session",
       });
@@ -159,3 +178,58 @@ test("a comparison's title stays clear of the files' toolbar", async () => {
   const band = toolbar.getBoundingClientRect();
   expect(band.top).toBeGreaterThanOrEqual(Math.floor(under.bottom));
 });
+
+// THE CLONE PANEL SHOWS ITS WHOLE ADDRESS. The kit's panel is a declared
+// width range (at most 380px) that scrolls what it cannot hold, and the clone
+// block once asked for 30rem of its own: wider than its panel, it scrolled
+// sideways the moment the panel handed focus to its first control, the copy
+// button at the block's far end, so the heading read "TPS" and the address
+// lost its scheme. Mutation: give `.code-clone` its `width: min(30rem, 80vw)`
+// back, and the panel scrolls sideways and the heading starts left of it.
+for (const width of [1440, 390]) {
+  test(`the clone panel holds its whole address, inside its card and the viewport, at ${width}px`, async () => {
+    await page.viewport(width, 900);
+    location.hash = "#/gitlet/repos/web";
+    mount(<RepositoryPage repo="web" />, width);
+    const clone = await eventually(() => {
+      const button = [...document.querySelectorAll("button")].find(
+        (b) => b.textContent === "Clone",
+      );
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    const card = await eventually(() => {
+      const listing = document.querySelector(".code-browser");
+      expect(listing?.textContent).toContain("go.mod");
+      return listing!;
+    });
+    clone.click();
+    // PLACED, AND HOLDING FOCUS: the scroll came with the focus the panel
+    // hands in once it has somewhere to be, so the case measures after it.
+    const panel = await eventually(() => {
+      const el = document.querySelector<HTMLElement>('.crewlet-popover[aria-label="Clone web"]');
+      expect(el).toBeTruthy();
+      expect(el!.style.visibility).not.toBe("hidden");
+      expect(el!.contains(document.activeElement)).toBe(true);
+      return el!;
+    });
+    expect(panel.scrollWidth).toBeLessThanOrEqual(panel.clientWidth);
+    expect(panel.scrollLeft).toBe(0);
+    const box = panel.getBoundingClientRect();
+    for (const part of panel.querySelectorAll(
+      ".code-clone__head, .code-clone__url, .code-clone__note",
+    )) {
+      const at = part.getBoundingClientRect();
+      expect(at.left).toBeGreaterThanOrEqual(box.left);
+      expect(at.right).toBeLessThanOrEqual(box.right);
+    }
+    const head = panel.querySelector(".code-clone__head")!;
+    expect(head.textContent).toBe("Clone with HTTPS");
+    expect(head.scrollWidth).toBeLessThanOrEqual(head.clientWidth);
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(window.innerWidth);
+    const under = card.getBoundingClientRect();
+    expect(box.left).toBeGreaterThanOrEqual(Math.floor(under.left));
+    expect(box.right).toBeLessThanOrEqual(Math.ceil(under.right));
+  });
+}
