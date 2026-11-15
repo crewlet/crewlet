@@ -7684,6 +7684,16 @@ a.live-row:hover {
   text-align: left;
   cursor: pointer;
 }
+/* THE KEY NEVER WRAPS and never shrinks; the title takes what is left and
+   truncates. See [PickList]. */
+.composer-pick-key {
+  flex: none;
+  white-space: nowrap;
+}
+.composer-pick-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .composer-pick:hover {
   background: var(--color-surface-hover);
 }

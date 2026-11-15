@@ -377,14 +377,11 @@ test("the Make row offers every kind on All and Yours, each opening its kind's o
   mount("all");
   const make = screen.getByRole("region", { name: "Start a new artifact" });
   const tiles = within(make).getAllByRole("link");
-  expect(tiles.map((t) => t.getAttribute("aria-label"))).toEqual([
-    "Docs",
-    "Slides",
-    "Design",
-    "Dashboard",
-    "HTML",
-    "Sheet",
-  ]);
+  // NAMED BY THE TITLE EACH SHOWS, in its own words rather than a label laid
+  // over them (axe label-content-name-mismatch), in the row's order.
+  const kinds = ["Docs", "Slides", "Design", "Dashboard", "HTML", "Sheet"];
+  expect(kinds.map((kind) => within(make).getByRole("link", { name: kind }))).toEqual(tiles);
+  for (const tile of tiles) expect(tile.hasAttribute("aria-label")).toBe(false);
   // WHAT EACH IS FOR is read as the link's description, never run into its name.
   const described = (t: HTMLElement) =>
     document.getElementById(t.getAttribute("aria-describedby") ?? "")?.textContent;

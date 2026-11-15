@@ -113,6 +113,7 @@ import {
   answeredTexts,
   askContext,
   askHeadline,
+  askIsItsTask,
   askIsMessage,
   askTexts,
   closedReplyPlaceholder,
@@ -136,6 +137,7 @@ import {
   type FollowThrough,
   type InboxRow,
   type Who,
+  titleBeside,
 } from "./model.ts";
 import { Badge } from "./InboxColumn.tsx";
 import { NoticeActions } from "./NoticeActions.tsx";
@@ -280,7 +282,10 @@ function OpenPane({
   const frame: Frame = {
     who,
     name: rowName(row, who),
-    task: item ? <TaskLink item={item} label={rowKey(row)} title={title} /> : null,
+    // THE TITLE ONLY BESIDE A QUESTION THAT IS NOT IT ([titleBeside]).
+    task: item ? (
+      <TaskLink item={item} label={rowKey(row)} title={titleBeside(row, title)} />
+    ) : null,
     address: item ? itemAddress(item) : "",
     itemKey: rowKey(row),
     byline: (sentence, note) => (
@@ -551,7 +556,17 @@ function AskPane({
   // replaces: an answer given here, never the one the pane opened on.
   const landing = useFocusLanding(answer !== null && answer !== before);
   const recommended = options.find((o) => o.id === decision?.recommended);
-  const context = askContext(ask);
+  // AN ASK FILED WITH ITS TASK IS THE TASK'S TITLE, and what the asker wrote
+  // beside it is the task's description (`create_work_item{ask}`), which the
+  // ask row does not carry: read here, it is the context the person answers
+  // from, as the task page shows it.
+  const own = askIsItsTask(ask) && askContext(ask) === "";
+  const task = useQuery(
+    "work_item",
+    { id: frame.address },
+    { enabled: own && frame.address !== "" },
+  );
+  const context = own ? (task.data?.task.body ?? "").trim() : askContext(ask);
   // THE ASK'S OWN TASK IS NOT EVIDENCE of anything: the byline names it.
   const evidence = (decision?.evidence ?? []).filter(
     (ev) => !(ev.kind === "task" && (ev.ref === ask.id || ev.ref === ask.key)),

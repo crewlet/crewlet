@@ -193,6 +193,31 @@ export function detailItem(detail: WorkItemDetail): ItemRef {
 }
 
 /**
+ * The address a task's page moves to when it was opened by another of the
+ * task's names, or null where it already stands at the task's address.
+ *
+ * A MOVE RE-KEYS A TASK AND ITS OLD KEY STILL OPENS IT (`former_keys`), so a
+ * page opened at `ENG-56` (by a bookmark, a link, or the Move it was just
+ * moved by) answered as `LEAD-43` and kept the old key in the address and in
+ * the trail, which names the project by the key it reads there. The same
+ * holds for a task opened by its id while it has a key of its own.
+ *
+ * ONLY A NAME THE ANSWER ITSELF CARRIES, so an answer to the address before
+ * (kept while the new one is asked) never sends the page back to it.
+ */
+export function movedAddress(opened: string, detail: WorkItemDetail): string | null {
+  const address = itemAddress(detailItem(detail));
+  if (opened === address) return null;
+  const { task } = detail;
+  const named = opened.toUpperCase();
+  const known =
+    opened === task.id ||
+    (task.former_keys ?? []).includes(named) ||
+    (!detail.key_collision && task.key === named);
+  return known ? address : null;
+}
+
+/**
  * The `backend` a turn's work item names when the item lives in Worklet. Every
  * turn and event record stores it, so it keeps this spelling; a screen
  * compares against it and names the item in Worklet's words instead.

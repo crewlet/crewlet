@@ -27,21 +27,22 @@ import { useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
+  Combobox,
   ConfirmField,
   FormField,
   Input,
   Modal,
-  Select,
   TagsInput,
   Text,
   confirmMatches,
   useToast,
+  type ComboboxOption,
 } from "@crewlethq/ui";
 import {
-  FolderGlyph,
   FolderInputGlyph,
   HashGlyph,
   RotateCcwGlyph,
+  SearchGlyph,
   TrashGlyph,
   TypeGlyph,
 } from "@crewlethq/icons/glyphs";
@@ -58,7 +59,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { pathSegment, type Page } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
 import { RefusalNote } from "~/components/WriteButton.tsx";
-import { PageGlyph, pagePath, placesIn } from "../parts.tsx";
+import { pagePath, placesIn } from "../parts.tsx";
 import { PAGES_WINDOW } from "../usePagedPages.ts";
 
 /** What a tidy press opens. */
@@ -294,7 +295,25 @@ export function movePlaces<P extends { id: string; parent_id?: string | null | u
   return pages.filter((p) => !beneath.has(p.id));
 }
 
-/** Another page of its space to file it under, or the space's top. */
+/** The value the list gives the space's top, which has no page id of its own. */
+const TOP = "top";
+
+/**
+ * How many places the list stands tall before it scrolls: six, the kit's own
+ * default and the Artifacts Move dialog's, a screenful without the dialog
+ * outgrowing a laptop window.
+ */
+const MOVE_ROWS = 6;
+
+/**
+ * Another page of its space to file it under, or the space's top.
+ *
+ * THE LIST IS THE DIALOG'S BODY (the kit's inline `Combobox`, as Artifacts'
+ * Move dialog draws it): always on screen under a field that filters it by
+ * words from a title or its path, at one height. It was a popup `Select`,
+ * whose panel opened down over the dialog's own foot and hid Cancel and Move
+ * for as long as it was open.
+ */
 function MoveDialog({ page, onClose }: { page: Page; onClose: () => void }) {
   const save = useAct("save_page");
   const places = useQuery("pages", {
@@ -305,20 +324,24 @@ function MoveDialog({ page, onClose }: { page: Page; onClose: () => void }) {
   });
   const current = page.parent_id ?? "";
   const [parent, setParent] = useState(current);
+  const [phrase, setPhrase] = useState("");
   const filed = useMemo(
     () => placesIn(movePlaces(places.data?.pages ?? [], page.id)),
     [places.data, page.id],
   );
-  const options = [
-    { value: "", label: "Top of the space", leading: <FolderGlyph size="sm" /> },
-    ...filed.map(({ page: p, path }) => ({
-      value: p.id,
-      label: p.title,
-      text: `${path} ${p.title}`,
-      leading: <PageGlyph folder={p.folder} />,
-      ...(path ? { description: `in ${path}` } : {}),
-    })),
+  const words = phrase.trim().toLowerCase();
+  const all = [
+    { id: "", title: "Top of the space", path: "" },
+    ...filed.map(({ page: p, path }) => ({ id: p.id, title: p.title, path })),
   ];
+  const options: ComboboxOption[] = all
+    .filter((p) => !words || `${p.path} ${p.title}`.toLowerCase().includes(words))
+    .map((p) => {
+      const hint = [p.path && `in ${p.path}`, p.id === current && "Current"]
+        .filter(Boolean)
+        .join(" · ");
+      return { value: p.id || TOP, label: p.title, ...(hint ? { hint } : {}) };
+    });
   const held = parent === current ? "It is filed there now." : undefined;
   const submit = async () => {
     if (held || save.busy) return;
@@ -351,14 +374,27 @@ function MoveDialog({ page, onClose }: { page: Page; onClose: () => void }) {
     >
       <FormField label="File it under" helper="A page of the same space, or its top.">
         {(field) => (
-          <Select
+          <Combobox
             id={field.id}
-            searchable
-            searchPlaceholder="Words from a title"
-            ariaLabel="The page it goes under"
-            value={parent}
+            aria-describedby={field.describedBy}
+            label="The page it goes under"
+            placeholder="Words from a title"
+            leading={<SearchGlyph size="sm" />}
+            width="full"
+            autoFocus
+            value={phrase}
+            onValueChange={setPhrase}
+            inline
+            rows={MOVE_ROWS}
+            chosen={parent || TOP}
             options={options}
-            onChange={(value) => setParent(String(value))}
+            onCommit={(option) => setParent(option.value === TOP ? "" : option.value)}
+            commitOn="click"
+            emptyMessage={
+              places.loading
+                ? "Reading the space’s pages…"
+                : `No page of this space matches “${phrase.trim()}”.`
+            }
           />
         )}
       </FormField>

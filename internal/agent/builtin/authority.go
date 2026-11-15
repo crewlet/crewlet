@@ -361,6 +361,11 @@ var subjectOf = map[string]subject{
 	// name no strip of theirs reads, and one that marked it protected was
 	// then refused their own next save.
 	worklet.SaveWorkViewTool: {kind: authz.KindView, personal: "personal", container: "container"},
+	// AND A DELETE NAMES ONLY THE VIEW'S ID, so the view it takes away is
+	// a stored row the gate cannot form: the tool reads it and asks
+	// [authz.ActionViewDelete] of its owner and container, as a save asks
+	// of the view it replaces.
+	worklet.DeleteWorkViewTool: {kind: authz.KindView, inTool: true},
 
 	// THE TRASH IS DECIDED BY THE TASK'S OWN ROW — its project and its
 	// reporter — which is stored and never an argument: the tools take a

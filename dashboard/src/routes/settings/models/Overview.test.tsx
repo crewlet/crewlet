@@ -115,9 +115,16 @@ test("Used by leads with Everything, counts the rest whole, and names every seat
   mount();
   const uses = row("default").querySelector<HTMLAnchorElement>(".models-uses")!;
   expect(uses.querySelector(".models-uses__label")?.textContent).toBe("Everything");
-  expect(uses.querySelector(".models-uses__more")?.textContent).toBe("+1");
+  expect(uses.querySelector(".models-uses__more [aria-hidden]")?.textContent).toBe("+1");
   expect(uses.textContent).toContain("2 seats");
-  expect(uses.getAttribute("aria-label")).toBe(
+  // NAMED BY WHAT IT SHOWS, the lead use first, with the whole breakdown as
+  // its description: an aria-label of "Used for …" over "Everything +1"
+  // did not contain what is on screen (axe label-content-name-mismatch).
+  expect(uses.hasAttribute("aria-label")).toBe(false);
+  expect(
+    within(row("default")).getByRole("link", { name: /^Everything, and 1 more use, 2 seats$/ }),
+  ).toBe(uses);
+  expect(document.getElementById(uses.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
     "Used for Everything: Backend Engineer; Coding: Product Manager",
   );
   expect(uses.getAttribute("href")).toContain("settings/models/default");

@@ -83,6 +83,10 @@ func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
 			v.Name = strings.Repeat("x", worklet.MaxViewName+1)
 		}, "shorten the name"},
 		{"a fourth shape", func(v *worklet.View) { v.Type = "gantt" }, "not a view shape"},
+		{"a deletion a save carries", func(v *worklet.View) {
+			at := wednesday
+			v.DeletedAt, v.DeletedBy = &at, "ana"
+		}, "delete it with delete_work_view"},
 		{"a container kind that is not one", func(v *worklet.View) {
 			v.Container = worklet.Container{Kind: "team", ID: "eng"}
 		}, "not a container a view can belong to"},

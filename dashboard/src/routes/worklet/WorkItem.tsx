@@ -48,7 +48,7 @@
  * for exactly this reader (`App.tsx`'s `Screen`).
  */
 
-import { useId, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 import {
   ButtonLink,
   Callout,
@@ -72,7 +72,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { heldReason, heldSetting, itemHold } from "~/lib/heldConversation.ts";
 import { ADVISOR_POLL_MS } from "~/lib/useAttention.ts";
-import { href, useNavigator } from "~/app/router.tsx";
+import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import { RestoreButton } from "~/components/writes.tsx";
@@ -102,6 +102,7 @@ import {
   type LabelContext,
   detailItem,
   itemAddress,
+  movedAddress,
   projectPath,
   WORKLET_ITEM_BACKEND,
   readsBlocked,
@@ -151,14 +152,11 @@ const READ_ONLY = "The fields, checklists and description are read-only here.";
 export function itemFlags(detail: WorkItemDetail) {
   const item = detail.task;
   const blocked = readsBlocked({ ...item, blocked: detail.blocked });
-  if (!blocked && !item.archived && !item.removed) return undefined;
+  // IN THE TRASH IS NOT A FLAG HERE: [RemovedNote] is its one mark, drawn
+  // wherever these are, and a chip over it said the same thing twice.
+  if (!blocked && !item.archived) return undefined;
   return (
     <span className="row gap-1 task-flags">
-      {/* IN THE TRASH, AND SAID FIRST. The detail read does not filter
-          removed tasks, so a removed task's page resolves and answers exactly
-          like a live one's — without this it rendered as an ordinary open
-          task. */}
-      {item.removed && <Tag variant="danger">In the trash</Tag>}
       {blocked && (
         <Tag variant="danger" appearance="outline">
           Blocked
@@ -188,19 +186,43 @@ export function HeldNote({ hold }: { hold: AdvisorNotice }) {
  * The removal, said where the reader is about to act on the task: who, when,
  * and whether it went with its container.
  */
-export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number }) {
+/**
+ * Why a task in the trash takes no change: the engine freezes a tombstoned
+ * task (no comment, body, field or relation of it changes) until a restore.
+ */
+const RESTORE_FIRST = "Restore it to change it.";
+export const IN_THE_TRASH = `It is in the trash. ${RESTORE_FIRST}`;
+
+/**
+ * The one mark of a task in the trash, said where the task is read: who put
+ * it there, by name, when, and that it reads only until it is restored.
+ *
+ * BY NAME, as every other row on the page names its actor: the tombstone
+ * records the seat's handle and its kind, which printed "jane-founder
+ * (human)" beside a feed that says "Jane Founder".
+ */
+export function RemovedNote({
+  tomb,
+  now,
+  seatName,
+}: {
+  tomb: WorkTombstone;
+  now: number;
+  seatName?: ((handle: string) => string) | undefined;
+}) {
+  const by = tomb.by ? (seatName?.(tomb.by) ?? tomb.by) : "";
   return (
     <Callout variant="warning" icon={<TrashGlyph size="md" />}>
       <span>
-        <strong>In the trash.</strong> Removed by {tomb.by || "somebody"}
-        {tomb.kind ? ` (${tomb.kind})` : ""} {relTime(tomb.at, now)}
+        <strong>In the trash.</strong>
+        {` Moved to the trash${by ? ` by ${by}` : ""} ${relTime(tomb.at, now)}`}
         {tomb.removed_with ? (
           <>
             {" "}
             along with <InlineCode>{tomb.removed_with}</InlineCode>
           </>
         ) : null}
-        .
+        {`. ${RESTORE_FIRST}`}
       </span>
     </Callout>
   );
@@ -420,6 +442,14 @@ export function WorkItem({ id }: { id: string }) {
   // it by: its key, or its id where another task claimed that key first.
   const address = state.data ? itemAddress(detailItem(state.data)) : "";
   const railProps = state.data && { detail: state.data, chrome, project: project.data, now };
+  // THE ADDRESS FOLLOWS THE TASK: opened by a key a move left it, or by its
+  // id, the page stands at the address it answers to now, and the trail with
+  // it. A replace, so Back does not return to the old name.
+  const route = useRoute();
+  const moved = state.data ? movedAddress(id, state.data) : null;
+  useEffect(() => {
+    if (moved) nav.replace(["worklet", moved], route.query);
+  }, [moved, nav, route.query]);
 
   // "THIS TASK, ON ITS OWN BOARD", with the rail open: the project is a path
   // and the task is the frame's `peek=` token.
@@ -507,6 +537,7 @@ export function WorkItem({ id }: { id: string }) {
             label={item.key}
             version={item.version}
             seatName={chrome.seatName}
+            held={item.removed ? IN_THE_TRASH : ""}
           >
             <div className="task-frame" ref={frame}>
               <div className="task-main">
@@ -551,7 +582,9 @@ export function WorkItem({ id }: { id: string }) {
                   ) : (
                     <>
                       {itemFlags(state.data)}
-                      {item.removed && <RemovedNote tomb={item.removed} now={now} />}
+                      {item.removed && (
+                        <RemovedNote tomb={item.removed} now={now} seatName={chrome.seatName} />
+                      )}
                       {held && <HeldNote hold={held} />}
                       <Coverage answer={state.data} />
                       <ItemEditNote readOnly={READ_ONLY} />
@@ -645,6 +678,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
               label={item.key}
               version={item.version}
               seatName={chrome.seatName}
+              held={item.removed ? IN_THE_TRASH : ""}
             >
               {/* IDENTITY AND STATE MARKS ONLY: the rail below is in the SAME
                   column and states every field once. */}
@@ -667,7 +701,9 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
               />
               {actions.dialog}
               <div className="col gap-3 task-peek">
-                {item.removed && <RemovedNote tomb={item.removed} now={now} />}
+                {item.removed && (
+                  <RemovedNote tomb={item.removed} now={now} seatName={chrome.seatName} />
+                )}
                 <Coverage answer={state.data} />
                 <ItemEditNote readOnly={READ_ONLY} />
                 <ItemRail

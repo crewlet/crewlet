@@ -122,6 +122,16 @@ test("off by default, it says what is sent and what never is before anybody opts
   expect(screen.getByText(/up to five lines of Crewlet's code that led there/)).toBeTruthy();
 });
 
+// THE GUIDE'S LINK SITS INSIDE THE NOTE'S SENTENCE, so it carries the
+// underline register: the kit's link marks itself by ink alone until hovered,
+// 1.18:1 against the words around it in the dark theme. Mutation: drop
+// `.prose-link` from it.
+test("the link inside the note's sentence is underlined as one", async () => {
+  await mount(reading());
+  const link = screen.getByRole("link", { name: /How it works/ });
+  expect(link.classList.contains("prose-link")).toBe(true);
+});
+
 test("turning it on writes the one setting, on the revision just read, with its summary", async () => {
   await mount(reading());
   await act(async () => {

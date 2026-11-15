@@ -107,7 +107,9 @@ import { reasonAbout } from "~/lib/reasons.ts";
 import { activityOf, doingWords, statusOf, type OrgIndex } from "~/lib/seats.ts";
 import {
   changeClauses,
+  changeLabel,
   changeMark,
+  changePhrase,
   describeChange,
   statusLabel,
   type LabelContext,
@@ -216,6 +218,9 @@ export function Activity({
   // disabled with the reason.
   const worklet = viewer.worklet;
   const asked = !viewer.loading && !viewer.anonymous && !worklet;
+  // IN THE TRASH THE TASK IS FROZEN (`worklet.inTheTrash`): no reply, answer
+  // or comment is offered, since the engine would refuse each one.
+  const frozen = Boolean(item.removed);
 
   const { socket } = useClient();
   // BY ITS ID, which names this task and no other: a key two tasks hold
@@ -420,10 +425,10 @@ export function Activity({
               chrome={labels}
               index={index}
               now={now}
-              onReply={asked ? undefined : setReplyTo}
+              onReply={asked || frozen ? undefined : setReplyTo}
               newest={entry.kind === "comment" && entry.comment.id === newestComment}
               answer={
-                entry.kind === "comment" && mine.has(entry.comment.id)
+                !frozen && entry.kind === "comment" && mine.has(entry.comment.id)
                   ? {
                       item: address,
                       label: item.key,
@@ -447,7 +452,9 @@ export function Activity({
         </ol>
       )}
 
-      {!asked && (tab === "all" || tab === "comments") && (
+      {/* NOTHING IS SAID ON A TASK IN THE TRASH: the engine refuses every
+          comment on it until a restore, which the page's note offers. */}
+      {!asked && !frozen && (tab === "all" || tab === "comments") && (
         <div className="task-compose">
           {replyTo && (
             <div className="task-compose-reply">
@@ -593,8 +600,16 @@ export function changeSentence(
   // label the other change feeds draw, and then to its kind.
   const clauses = changeClauses(record.fields, chrome);
   if (clauses.length > 0) return { what: andList(clauses), why: "" };
+  // "CHANGED" GOES BEFORE WHAT MOVED, a field's delta ("changed Due: Nov 3 →
+  // Nov 5"), and nowhere else. A kind with nothing to compare (a removal, a
+  // restore, a purge) is its own verb phrase ("moved it to the trash"): the
+  // label the History draws for it was put after "changed", and the row read
+  // "Jane Founder changed Removed it".
   const said = describeChange(record, chrome);
-  return { what: said ? `changed ${said}` : record.kind.replaceAll("_", " "), why: "" };
+  if (!said || said === changeLabel(record.kind)) {
+    return { what: changePhrase(record.kind), why: "" };
+  }
+  return { what: `changed ${said}`, why: "" };
 }
 
 function ChangeRow({

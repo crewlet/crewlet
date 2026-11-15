@@ -112,6 +112,12 @@ export const STORAGE_KEYS = {
    * until a review sends them, and gone with it.
    */
   reviewDrafts: "crewlet.code.review_drafts/",
+  /**
+   * The New task sheet's unsent draft and the door it was opened from, in
+   * `sessionStorage` (`routes/worklet/newTaskDraft.ts`): a reload keeps what
+   * was typed, and filing it, discarding it or closing the tab lets it go.
+   */
+  newTaskDraft: "crewlet.worklet.new_task_draft",
   /** How the Artifacts gallery is drawn, `grid` or `list` (`routes/artifacts/Gallery.tsx`). */
   artifactsShape: "crewlet.artifacts.shape",
   /**

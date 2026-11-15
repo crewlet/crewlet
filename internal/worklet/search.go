@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/search"
@@ -188,12 +190,35 @@ func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, err
 	case limit > MaxSearchLimit:
 		limit = MaxSearchLimit
 	}
+	keyed, err := s.keyed(ctx, q.Text)
+	if err != nil {
+		return SearchAnswer{}, err
+	}
 	ranked, err := s.rank.Candidates(ctx, q)
 	if err != nil {
 		return SearchAnswer{}, err
 	}
 	answer := SearchAnswer{Hits: make([]Ranked, 0, limit), Outcome: ranked.Outcome}
+	// AN EXACT KEY IS ITS TASK, AND IT LEADS. The index ranks words, and a
+	// key is not one: "ENG-2" splits into "eng" and "2", which rank every
+	// body that mentions ENG-2 (its subtasks, the tasks it blocks) above
+	// the task itself, and the task is often not ranked at all. A person
+	// who types a key into a box that says "a key, or words from its
+	// title" means that task, so it is placed first, by the key directory
+	// a point read resolves through, and the ranking follows without it.
+	listed := make(map[string]bool, len(keyed))
+	for _, row := range keyed {
+		if len(answer.Hits) == limit {
+			break
+		}
+		row.Rank = len(answer.Hits) + 1
+		answer.Hits = append(answer.Hits, row)
+		listed[row.ID] = true
+	}
 	if len(ranked.Docs) == 0 {
+		if len(answer.Hits) > 0 {
+			return answer, nil
+		}
 		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, because that is the
 		// only answer it changes: a search that found something has
 		// found it whether or not the index is still catching up, and
@@ -221,6 +246,9 @@ func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, err
 			continue
 		}
 		row, held := rows[doc.ID]
+		if listed[doc.ID] {
+			continue
+		}
 		if !held {
 			// INDEXED AND GONE. The index is behind this node's own
 			// rows by design — see the indexer's own orphan sweep —
@@ -252,6 +280,66 @@ func rankedItemsStatement(n int) string {
 		       assignee, priority
 		  FROM tracker_tasks
 		 WHERE removed_at IS NULL AND id IN (` + placeholders(n) + `)`
+}
+
+// keyedItemsStatement is [Searcher.keyed]'s read, named for the plan test:
+// the task the key directory opens a key on, then any other live task whose
+// own key it is (a duplicate the engine flags `key_collision`), in that order.
+//
+// THE DIRECTORY FIRST, in [taskReadScopeStatement]'s order, because it holds
+// every key a task answers to (the current one and those a move or a rename
+// left it) and opens a key two tasks hold on the one that claimed it: the
+// hit that leads is the task a point read of the key returns.
+const keyedItemsStatement = `
+		SELECT t.id, t.key, t.key_collision, t.project_key, t.type, t.title,
+		       t.status, t.assignee, t.priority
+		  FROM tracker_task_keys k
+		  JOIN tracker_tasks t ON t.id = k.task_id
+		 WHERE k.key = ? AND t.removed_at IS NULL
+		UNION ALL
+		SELECT id, key, key_collision, project_key, type, title, status,
+		       assignee, priority
+		  FROM tracker_tasks
+		 WHERE key = ? AND removed_at IS NULL`
+
+// keyed is the live tasks a search text names by key, the one the key opens
+// first, or none when the text is not exactly one task key.
+//
+// EXACTLY ONE KEY, case aside: a key inside a sentence is words, which the
+// ranking is for, and "eng-2" typed in lower case is still the key.
+func (s *Searcher) keyed(ctx context.Context, text string) ([]Ranked, error) {
+	key := strings.ToUpper(strings.TrimSpace(text))
+	if key == "" || taskKeyPattern().FindString(key) != key {
+		return nil, nil
+	}
+	var out []Ranked
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
+		out = out[:0]
+		rows, err := tx.QueryContext(ctx, keyedItemsStatement, key, key)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var row Ranked
+			var collision int
+			if err := rows.Scan(&row.ID, &row.Key, &collision, &row.Project,
+				&row.Type, &row.Title, &row.Status, &row.Assignee,
+				&row.Priority); err != nil {
+				return err
+			}
+			if slices.ContainsFunc(out, func(r Ranked) bool { return r.ID == row.ID }) {
+				continue
+			}
+			row.KeyCollision = collision == 1
+			out = append(out, row)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read the task %s names: %w", key, err)
+	}
+	return out, nil
 }
 
 // itemsByID reads what a ranked hit has to carry, for one batch of candidates.

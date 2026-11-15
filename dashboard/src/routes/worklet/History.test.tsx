@@ -15,7 +15,7 @@
  * for somebody else.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { History, HistoryView } from "./History.tsx";
@@ -111,6 +111,25 @@ function cellOf(container: HTMLElement, head: string): HTMLElement[] {
 
 /** The bar's pickers, by the dimension each one narrows. */
 const picker = (name: string) => screen.getByRole("combobox", { name });
+
+// THE CHART MAKES NO CLAIM BEFORE AN ANSWER. "No change came back for this
+// window to chart" was drawn whenever no rows were held, which is also true
+// while the read is out and after it failed, where it read as the answer.
+test("the chart waits for an answer, and a failed read says only its error", async () => {
+  servingWith((what) => (what === "work_activity" ? new Promise(() => {}) : {}));
+  const loading = mount();
+  await act(async () => {});
+  expect(loading.container.textContent).not.toContain("No change came back");
+  cleanup();
+
+  servingWith((what) => {
+    if (what === "work_activity") throw new Error("internal");
+    return {};
+  });
+  const failed = mount();
+  await waitFor(() => expect(screen.getByText(/didn.t load/)).toBeTruthy());
+  expect(failed.container.textContent).not.toContain("No change came back");
+});
 
 // THE WINDOW IS A WALL-CLOCK RANGE, which is what a reader choosing one means:
 // the engine's own `from`/`to` over the AUTHORED instants, never a log

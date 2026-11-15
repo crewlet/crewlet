@@ -2513,7 +2513,13 @@ const (
 	// and the comparison each moved ref opens, and a search's file cards)
 	// added 2,313 bytes, script and sheet, and took it to 6178.1 KiB
 	// (6,326,419 bytes): 6179 KiB.
-	treeBudget = 5<<20 + 1059<<10
+	// Kit 0.128.1 (value pickers, the search field and the make-row tiles
+	// named by the words they show) with the second audit's Worklet, Inbox,
+	// Home and Doclet fixes (an ask's context, a frozen trashed task, a moved
+	// task's address, a New task draft kept for the tab, saved views deleted
+	// where they are read, one Inbox row per engine pause) added 4,934 bytes,
+	// script and sheet, and took it to 6183.0 KiB (6,331,353 bytes): 6183 KiB.
+	treeBudget = 5<<20 + 1063<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

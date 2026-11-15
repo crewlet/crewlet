@@ -74,6 +74,11 @@ func (u *unknownWriter) WriteView(_ context.Context, opID string,
 	return u.answer(opID)
 }
 
+func (u *unknownWriter) DeleteView(_ context.Context, opID, _ string,
+	_ worklet.ViewPrior) (worklet.WriteResult, error) {
+	return u.answer(opID)
+}
+
 // ViewPrior holds every view a case names, as a shared tab on ENG: a save
 // naming an id no view holds is refused before it writes anything.
 func (u *unknownWriter) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
@@ -180,6 +185,7 @@ func unknownOperatorCalls() map[string]map[string]any {
 		worklet.RemoveWorkItemTool:     {"item": "ENG-1"},
 		worklet.RestoreWorkItemTool:    {"item": "ENG-1"},
 		worklet.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
+		worklet.DeleteWorkViewTool:     {"id": "v-1"},
 		worklet.SetPrioritiesTool:      {"items": []any{"ENG-1"}},
 		worklet.SetPinsTool:            {"views": map[string]any{"add": []any{"v-1"}}},
 		worklet.MarkInboxTool:          {"primary_reasons": []any{"mention"}},

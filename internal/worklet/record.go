@@ -1505,8 +1505,19 @@ type View struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
+	// DeletedAt is set on a view somebody deleted, with who deleted it.
+	// The row stays, for a removed file's reason ([Writer.DeleteView]):
+	// every view upsert is guarded by its record's version, and a guard
+	// needs a row to compare against. No read lists, runs or replaces a
+	// deleted view.
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	DeletedBy string     `json:"deleted_by,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
+
+// Deleted reports whether somebody deleted the view.
+func (v View) Deleted() bool { return v.DeletedAt != nil }
 
 // Favorite is one thing a person starred.
 type Favorite struct {

@@ -797,6 +797,7 @@ func taskReads() map[string]indexedRead {
 		"each row's labels":          seek(tags, rowTagsStatement(3), task, other, "t-00003"),
 		"each row's spend":           seek(key, rowSpendStatement(3), task, other, "t-00003"),
 		"ranked hits":                seek(key, rankedItemsStatement(3), task, other, "t-00003"),
+		"a key a search names":       seek(keys, keyedItemsStatement, "ENG-1", "ENG-1"),
 		"an activity page's keys":    seek(key, taskKeysStatement(3), task, other, "t-00003"),
 		"the tasks of runs":          seek(key, turnPlacesStatement(3), "r-1", "r-2", "r-3"),
 		// A PERSON'S OWN WORK: the asks put to them, waiting and closed

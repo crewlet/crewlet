@@ -150,7 +150,10 @@ export function Diagnostics() {
         When the engine runs into a bug in its own code, it can let the Crewlet team know so they
         can fix it. It&rsquo;s off until an admin turns it on, and reports are anonymous: nothing
         about your company is ever sent.{" "}
-        <Link href={GUIDE} external size="inherit">
+        {/* A LINK INSIDE THE SENTENCE carries the underline register: the
+            kit's link marks itself by its ink alone until hovered, which in
+            the dark theme is 1.18:1 against the words around it. */}
+        <Link href={GUIDE} external size="inherit" className="prose-link">
           How it works
         </Link>
       </PageNote>

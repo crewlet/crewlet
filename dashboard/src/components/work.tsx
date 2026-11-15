@@ -278,7 +278,14 @@ export function Assignee({
         name={label}
         size={size}
         kind={seatKind?.(handle) === "human" ? "human" : "agent"}
-        avatar={seatAvatar?.(handle)}
+        // A BADGE DRAWN ALONE IS ITS SEAT'S INITIALS. Every agent that chose
+        // no look carries the same one (the original Crewlet, in purple), so a
+        // column of badges with no names beside them drew seven agents as one
+        // picture, and Agent CTO could not be told from Agent SWE without
+        // hovering. The identity rule's initials tell them apart; where the
+        // name is printed beside the badge, the character the seat chose is
+        // decoration and is drawn.
+        avatar={showName ? seatAvatar?.(handle) : undefined}
         decorative={showName}
         status={status}
       />

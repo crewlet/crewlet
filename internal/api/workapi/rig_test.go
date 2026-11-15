@@ -207,6 +207,8 @@ type writes struct {
 	views   []worklet.View
 	authz   []worklet.PersonAuthority
 
+	deletedViews []string
+
 	// result, caveats and err are what the next write answers.
 	result  statelog.Result
 	caveats []caveat.Caveat
@@ -402,6 +404,15 @@ func (b *bound) WriteView(_ context.Context, opID string, view worklet.View,
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
 	b.w.views = append(b.w.views, view)
+	return b.w.answer(opID)
+}
+
+func (b *bound) DeleteView(_ context.Context, opID, id string,
+	_ worklet.ViewPrior) (worklet.WriteResult, error) {
+
+	b.w.mu.Lock()
+	defer b.w.mu.Unlock()
+	b.w.deletedViews = append(b.w.deletedViews, id)
 	return b.w.answer(opID)
 }
 

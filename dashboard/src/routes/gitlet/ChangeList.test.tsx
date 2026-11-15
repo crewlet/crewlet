@@ -300,6 +300,42 @@ test("Home's card says none only of a listing that ended, and points past its bo
   expect(await within(person).findByText("No change waits on a person.")).toBeTruthy();
 });
 
+// NOTHING WAITING IS SAID ONCE, in one treatment: with both listings ended
+// and nothing kept, the card draws one empty state where the two halves were,
+// never a caption under the first half beside a full empty state under the
+// second. Mutation: give the claim back to the second half alone, and the
+// first half's caption draws beside it.
+test("Home's card says nothing waits once when both listings ended with nothing", async () => {
+  stubFetch((url) =>
+    url.pathname === "/query/code_changes" ? { position: POSITION, level: "session" } : undefined,
+  );
+  mount(<CodeWaiting />);
+
+  expect(await screen.findByText("Nothing waits on a person")).toBeTruthy();
+  expect(screen.queryByText("No change is asking your review.")).toBeNull();
+  expect(screen.queryByText("No change waits on a person.")).toBeNull();
+  expect(screen.queryByRole("region", { name: "Asking your review" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Waiting on a person" })).toBeNull();
+});
+
+// ONE HALF WITH ROWS, the other found none: that half says so on its own line,
+// as the first half always did, never as a card-sized empty state.
+test("Home's card says a half's none on one line when the other half has rows", async () => {
+  stubFetch((url) =>
+    url.pathname === "/query/code_changes"
+      ? url.searchParams.get("needs") === "review"
+        ? { changes: [change("web", 42)], position: POSITION, level: "session" }
+        : { position: POSITION, level: "session" }
+      : undefined,
+  );
+  mount(<CodeWaiting />);
+
+  expect(await screen.findByText("web!42")).toBeTruthy();
+  const person = screen.getByRole("region", { name: "Waiting on a person" });
+  expect(await within(person).findByText("No change waits on a person.")).toBeTruthy();
+  expect(screen.queryByText("Nothing waits on a person")).toBeNull();
+});
+
 const seat = (handle: string) => ({ handle, name: handle }) as unknown as Seat;
 
 const ACTIVITY = {
