@@ -428,6 +428,9 @@ assistant:
   proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
   retention_days: 30                    # conversation history, 1..365
   token_budget: { day: 200000 }         # per person, optional
+  deliberate:                           # optional: a stronger model for hard questions
+    llm: [assistant-strong]             # held to llm's rules, same budgets
+    decision_briefs: true               # Brief me on this decision uses it too
   deep_work:                            # optional: absent is quick mode only
     llm: assistant-deep                 # a Claude Code entry (harness: claude-code)
     timeout_seconds: 1200               # one run's wall clock, 60..1200
@@ -444,6 +447,8 @@ assistant:
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
+| `deliberate.llm` | none | A stronger chain for hard questions, first key first. A person asks for it one question at a time with **Think harder** in the drawer, which is offered only when this is set. Every member is held to `llm`'s rules below, and its rounds are charged to the same budgets. Required when `deliberate` is set. |
+| `deliberate.decision_briefs` | false | **Brief me on this decision** runs on `deliberate.llm` too. |
 | `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`harness: claude-code`), run as its harness's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
 | `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
 | `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |

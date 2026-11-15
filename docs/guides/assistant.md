@@ -180,6 +180,17 @@ recommended starting point: choosing among roughly thirty tools and shaping
 their arguments is where small models fail measurably, and a frontier model's
 per-round cost is rarely justified for lookups.
 
+**A stronger model for hard questions.** Set `assistant.deliberate.llm` to a
+second chain, for example a frontier model, and the drawer offers **Think
+harder** beside **Attach image**. A person presses it for one question, which
+then runs on that chain; the next question runs on `assistant.llm` again, and
+a turn that proposes a change resumes on the same chain after its approval.
+With `decision_briefs: true`, **Brief me on this decision** uses it as well.
+The chain is held to the same rules as `assistant.llm` and charged to the same
+budgets, and a question asking for it in a company that sets none is refused
+naming the setting. Each turn's end is logged with the chain it ran on
+(`strength` on `assistant_turn_ended`).
+
 Before switching models, run the evaluation suites against the candidate
 (`crewlet assistant eval`, below). Keep `turn_timeout_seconds` at its default
 of 900 seconds unless measurements on your hosts justify another value: a

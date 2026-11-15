@@ -744,6 +744,8 @@ export interface AssistantTurnRequest {
   page_context: AssistantPageContext | null;
   /** What the question asks for; absent is `ask`. A brief needs the page context. */
   mode?: AssistantTurnMode;
+  /** Think harder: this one question runs on the company's stronger chain. */
+  deliberate?: boolean;
   // --- deep work (im-deep) ---
   /** Files uploaded to the conversation for this question. */
   attachments?: string[];
@@ -895,6 +897,8 @@ export interface AssistantViewerAssistant {
   model?: AssistantModelNotice;
   /** A question's images are read: only deep work reads them, so absent where the company has none. */
   reads_images?: boolean;
+  /** The company sets a stronger chain a question can ask for: the composer offers Think harder. */
+  deliberate?: boolean;
 }
 
 /**

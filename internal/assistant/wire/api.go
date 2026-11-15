@@ -25,6 +25,9 @@ type TurnRequest struct {
 	// Mode is what the question asks for; absent is [TurnAsk]. A
 	// [TurnBrief] needs the page context, which says what it covers.
 	Mode TurnMode `json:"mode,omitempty"`
+	// Deliberate is Think harder: this question runs on `assistant.deliberate`.
+	// Refused where the company sets none.
+	Deliberate bool `json:"deliberate,omitempty"`
 	// --- deep work (im-deep) ---
 	// Attachments are files the person uploaded to the conversation for
 	// this question, at most [AttachmentsPerTurn].
@@ -227,6 +230,10 @@ type ViewerAssistant struct {
 	// reads them, so false where the company has none, and the composer
 	// does not take them.
 	ReadsImages bool `json:"reads_images,omitempty"`
+	// Deliberate is whether the company sets a stronger chain a question can
+	// ask for ([TurnRequest.Deliberate]), so the composer offers Think
+	// harder only where a question asking it would be answered.
+	Deliberate bool `json:"deliberate,omitempty"`
 }
 
 // ModelNotice is the model problem a person is told before they ask: the

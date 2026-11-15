@@ -60,6 +60,7 @@ type Service interface {
 	Eligible(p iam.Principal) (bool, wire.ViewerReason)
 	ModelNotice(ctx context.Context, p iam.Principal) *wire.ModelNotice
 	ReadsImages() bool
+	Deliberates() bool
 	Conversations(ctx context.Context, p iam.Principal, cursor string, limit int) (wire.ConversationList, error)
 	Create(ctx context.Context, p iam.Principal, key string) (wire.ConversationSummary, error)
 	Transcript(ctx context.Context, p iam.Principal, id uuid.UUID) (wire.Transcript, error)
@@ -186,9 +187,12 @@ func (s *Surface) Viewer(ctx context.Context, p iam.Principal) wire.ViewerAssist
 		return wire.ViewerAssistant{Reason: wire.ViewerNoPermission}
 	}
 	if notice := s.svc.ModelNotice(ctx, p); notice != nil {
-		return wire.ViewerAssistant{Reason: wire.ViewerModelNotReady, Model: notice}
+		// The stronger chain may answer while the quick one cannot.
+		return wire.ViewerAssistant{Reason: wire.ViewerModelNotReady, Model: notice,
+			Deliberate: s.svc.Deliberates()}
 	}
-	return wire.ViewerAssistant{Available: true, ReadsImages: s.svc.ReadsImages()}
+	return wire.ViewerAssistant{Available: true, ReadsImages: s.svc.ReadsImages(),
+		Deliberate: s.svc.Deliberates()}
 }
 
 // maxBody bounds a request body: a question (4000 characters, at most

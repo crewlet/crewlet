@@ -102,6 +102,9 @@ type turn struct {
 	deep deepState
 	// brief is a brief turn's own state ([wire.TurnBrief], brief.go).
 	brief briefState
+	// strength is the chain the turn runs on ([Strength]): kept when it
+	// parks, so the segment an approval resumes answers on the same model.
+	strength Strength
 }
 
 // write is the record caller for this segment, with no step yet.
@@ -647,7 +650,8 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 	t.publishAudit(ctx, state, end.ErrorCode, duration)
 	ended := []any{"turn", t.id, "conversation", t.conversation, "state", string(state),
 		"error_code", end.ErrorCode, "steps", end.Steps, "duration_ms", duration.Milliseconds(),
-		"input_tokens", end.InputTokens, "output_tokens", end.OutputTokens}
+		"input_tokens", end.InputTokens, "output_tokens", end.OutputTokens,
+		"strength", string(t.strength)}
 	if end.ErrorCode == string(wire.ErrorBriefInvalid) && err != nil {
 		// A BRIEF THAT COULD NOT BE WRITTEN SAYS WHY where the turn's end is
 		// read: the last refusal's reason, or the brief's own cap.
@@ -772,6 +776,9 @@ type parked struct {
 	// none: the loop a resumed segment continues still holds that answer
 	// ([turn.taintedBy]).
 	Outside string `json:"outside,omitempty"`
+	// Strength is the chain the segment ran on ([Strength]); absent is
+	// [Quick], what every segment ran on before a stronger chain existed.
+	Strength Strength `json:"strength,omitempty"`
 }
 
 // parkedTail is how many frames a segment tells after its park record has
@@ -787,7 +794,7 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
 		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail, Deep: t.deep.parked,
-		Page: t.page, Outside: string(t.outside)}
+		Page: t.page, Outside: string(t.outside), Strength: t.strength}
 	if t.anchor != uuid.Nil {
 		keep.Anchor = t.anchor.String()
 	}
