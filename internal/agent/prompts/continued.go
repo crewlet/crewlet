@@ -222,6 +222,25 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 	" happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
 	" write among them again; one marked `→ error` did not take effect."
 
+// shownAgainHeader introduces the calls the session above holds that a brief
+// lists again ([AfterSave.Shown]): each is one a call in another list of the
+// brief could be taken for, the same tool with arguments that read alike in
+// that call's line. That list's words, and the late calls', say a call shown
+// both above and in it is ONE call, made once; so a model that saw the told
+// call's like in the session could take the told call for it and lose it,
+// re-issuing nothing or reading it as a call that never ran.
+//
+// TRUE ON EVERY PATH, OF THE CALLS IT HEADS: each is one the session holds, so
+// it says the session shows them, never that it lacks one; and it says the
+// call in the other list is one of its own, made as well, so the two are never
+// read as one call shown twice. It names neither list, which differ by path
+// (the calls since a save point the session may already show, the late
+// calls), and needs neither: "another list of this message" is true of both.
+const shownAgainHeader = "## Calls the session above shows, listed again" +
+	"\nThe session above shows each of these calls. Each is listed again because a call in another list" +
+	" of this message names the same tool with arguments that read alike here: that one is a call of its" +
+	" own, made as well as this one, never this one shown twice."
+
 // lateCallsHeader introduces the calls of the round that finished only after
 // the run that made them stopped waiting for them, and the ones still in flight
 // as the round was read ([AfterSave.Late]): calls an earlier run of the work
@@ -335,8 +354,9 @@ type AfterSave struct {
 	// counted without listing them, its read cap spent, which the session holds
 	// only as that count (internal/agent/runner's heldAt, Resume.Owed and
 	// SessionBasis.Owed): the reads its job's brief left out, as the prior-work
-	// ledger renders them within its budgets, under one read cap with Calls'
-	// and Late's, spent on these LAST (ledger.FormatCallGroups), "" for none.
+	// ledger renders them within its budgets, under one read cap with Calls',
+	// Late's and Shown's, spent on these after Late and Calls and before Shown,
+	// whose calls the session holds (ledger.FormatCallGroups), "" for none.
 	// Told first, in a section of their own ([owedHeader]): they are the
 	// oldest calls the brief tells. Reads only, since only a read is ever
 	// counted rather than listed, and settled before that message was built,
@@ -351,8 +371,8 @@ type AfterSave struct {
 
 	// Calls are the calls its round's record still lists that came after the
 	// save, as the prior-work ledger renders them within its budgets, under
-	// one read cap with Late's and Owed's, spent on Late first and on Owed
-	// last (ledger.FormatCallGroups), "" for none. For a run that starts a
+	// one read cap with Late's, Owed's and Shown's, spent on Late first, then
+	// on these, then on Owed and Shown (ledger.FormatCallGroups), "" for none. For a run that starts a
 	// session of its own ([CalledBefore]), every call of the round but Late's.
 	Calls string
 
@@ -394,14 +414,29 @@ type AfterSave struct {
 	// never as calls it lacks, and the dropped ones counted since that point.
 	Interrupted bool
 
+	// Shown are calls of the round the session holds that a call told in Calls
+	// or Late could be taken for: the same tool, with arguments that read alike
+	// in the told call's line (internal/agent/runner's readAlike), as the
+	// prior-work ledger renders them within its budgets, under one read cap with
+	// the other lists', spent on these after every other
+	// (ledger.FormatCallGroups), "" for none. Told after Calls and before Late,
+	// in a section of their own ([shownAgainHeader]), whose words say the
+	// session shows each and that the told one is a call of its own: the words
+	// above Calls (where the session may already show them) and above Late say a
+	// call shown both in the session and in the list is ONE call, so a told call
+	// whose like the session shows could be read as that call and lost. Never
+	// set for a run that starts a session of its own ([CalledBefore]), which
+	// holds no call of the round.
+	Shown string
+
 	// Late are the calls of the round that finished only after the run that
 	// made them stopped waiting for them — its record took them after that run
 	// was replaced by a relaunch that carried the work on
 	// (sandbox.BridgeCall.Late), or the run gave up on them, or its session
 	// ended, before they returned (sandbox.BridgeCall.Abandoned) — as the
 	// prior-work ledger renders them within its budgets, under one read cap
-	// with Calls' and Owed's, spent on these first, "" for none: none of them
-	// is among Calls. Told in a section of their own, under
+	// with Calls', Owed's and Shown's, spent on these first, "" for none: none
+	// of them is among Calls. Told in a section of their own, under
 	// [lateCallsHeader], whatever Interrupted says ([lateBeforeHeader] for a
 	// run that starts a session of its own).
 	//
@@ -453,13 +488,22 @@ type AfterSave struct {
 // then the calls dropped after the save, then the late calls dropped), since
 // every count says the tally is below it ([tallyBesideLast]).
 //
+// THE CALLS THE SESSION SHOWS THAT A TOLD CALL COULD BE TAKEN FOR COME AFTER
+// THE CALLS SINCE THE SAVE AND BEFORE THE LATE ONES ([AfterSave.Shown]), in a
+// section of their own: so the order is the held submission, the owed reads,
+// the calls since the save, the calls listed again, then the late calls. They
+// follow the list most of their likes are in, and the late section, whose
+// words also say a call shown twice is one, stays last, as it is on every
+// path.
+//
 // A SUCCESSFUL SUBMISSION AMONG EITHER LIST is said to be none of the work's,
 // right after the list it is in and in words true of that list: the calls
 // after the save ([AfterSave.EarlierSubmission]) and the late ones
 // ([AfterSave.LateSubmission]). AND ONE THE SESSION HOLDS IS SAID FIRST
 // ([AfterSave.HeldSubmission]), before every section and where none lists a
 // call: it is in no list, and the session that shows it is the one the brief
-// continues.
+// continues. A submission listed again is one of those, so its section says
+// nothing of it.
 func CalledAfter(after AfterSave) string {
 	var sections []string
 	if after.HeldSubmission {
@@ -471,6 +515,9 @@ func CalledAfter(after AfterSave) string {
 	}
 	if since := calledSince(after, tally[1]); since != "" {
 		sections = append(sections, since)
+	}
+	if shown := toldList(shownAgainHeader, after.Shown, "", "", ""); shown != "" {
+		sections = append(sections, shown)
 	}
 	if late := lateSection(lateCallsHeader, after, tally[2]); late != "" {
 		sections = append(sections, late)

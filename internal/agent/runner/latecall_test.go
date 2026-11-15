@@ -182,8 +182,18 @@ func TestALateCallIsToldApartUnderWordsOfItsOwn(t *testing.T) {
 			t.Errorf("a session (cut off: %v) is told the call after its save apart from them:\n%s",
 				interrupted, brief)
 		}
-		if strings.Contains(brief, "the held one") {
-			t.Errorf("a session (cut off: %v) is told a call it holds:\n%s", interrupted, brief)
+		// HELD, so told in no list of calls the session may lack; and LISTED
+		// AGAIN where it was cut off, under words that say the session shows
+		// it: its call after the save, told as one it may already show, names
+		// the held call's tool, and neither call's arguments carry the digest
+		// that would let their lines read apart.
+		told, again, _ := strings.Cut(since, listedAgainHeading)
+		if strings.Contains(told, "the held one") || strings.Contains(apart, "the held one") {
+			t.Errorf("a session (cut off: %v) is told a call it holds as one it may lack:\n%s", interrupted, brief)
+		}
+		if strings.Contains(again, "the held one") != interrupted {
+			t.Errorf("a session (cut off: %v) lists the held call again %v, want %v:\n%s", interrupted,
+				strings.Contains(again, "the held one"), interrupted, brief)
 		}
 	}
 }

@@ -277,8 +277,7 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// LACK THEM, by one expression ([sessionHolds.keptCalls]), which a reading
 	// of what the session holds swaps for its own answer.
 	from, owed, mayShow := holds.keptCalls(basis)
-	called, omitted := r.calledAfter(ctx, round, from, owed, withHeld(leadHeld, again), surface, b)
-	called.Interrupted = mayShow
+	called, omitted := r.calledAfter(ctx, round, from, owed, mayShow, withHeld(leadHeld, again), surface, b)
 	after = append(after, prompts.CalledAfter(called))
 	// THEN THE NOTES IT HAS NOT READ, past its cursor, and the ones fresh holds,
 	// a note the run's bridge served a harness among either told as one it may
@@ -401,7 +400,7 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 	end, leadHeld := r.cfg.Resume.HarnessEnd, leadsHeld(carry)
 	var called prompts.AfterSave
 	if !holds.lacks() {
-		called, omitted = r.calledAfter(ctx, round, nil, r.cfg.Resume.Owed, leadHeld, surface, b)
+		called, omitted = r.calledAfter(ctx, round, nil, r.cfg.Resume.Owed, false, leadHeld, surface, b)
 		if calls := prompts.CalledAfter(called); calls != "" {
 			after = []string{calls}
 		}
@@ -585,6 +584,11 @@ func (r *Runner) checkoutName() string {
 // (below). A through of zero tells every call of the round: a fresh run's
 // ([prompts.CalledBefore]), and a copy cut off ([Runner.calledInPlace]).
 //
+// mayShow says the calls after the point are told as calls the session may
+// already show ([prompts.AfterSave.Interrupted], set here and nowhere else): a
+// session whose record says it was, or may have been, cut off, or one that may
+// be a summary, as its path's telling decides ([sessionHolds.keptCalls]).
+//
 // A DROPPED LATE CALL IS COUNTED UNDER THE LATE CALLS' WORDS, WHATEVER THE
 // POINT: it keeps no mark and no number, so no save point can be read against
 // it, and counted under the words of calls after a save it would read as one
@@ -674,7 +678,8 @@ func (r *Runner) checkoutName() string {
 // ONE READ CAP FOR EVERY LIST ([ledger.FormatCallGroups]), never one each: they
 // are one round's calls, told in one brief, and capped apart they would be
 // told several times the reads the cap allows a round. It is SPENT LATE FIRST,
-// OWED LAST, whatever order the brief tells them in. The session never shows a
+// THEN THE CALLS AFTER THE POINT, THEN OWED, THEN THE CALLS LISTED AGAIN
+// (below), whatever order the brief tells them in. The session never shows a
 // late call's outcome as told here: it shows the call with none, as still
 // running, as interrupted or as failed, or not at all, so a late read left out
 // leaves an outcome the session surely lacks, where a call after the save may
@@ -683,7 +688,9 @@ func (r *Runner) checkoutName() string {
 // the save most of the cap, where a long round's calls after the save, told
 // first, could leave out every late read. The owed reads are the session's
 // already as a count, so they take what the cap leaves, and what they cannot
-// take is owed again. A read's line carries nothing the read returned, so a
+// take is owed again. The calls listed again take what is left after that:
+// the session holds each of them, so a read among them left out is one it
+// shows already. A read's line carries nothing the read returned, so a
 // read listed and a read counted are alike one the session may run again. The
 // fit is over the lists together, which names exactly what the one cap shows.
 //
@@ -693,14 +700,36 @@ func (r *Runner) checkoutName() string {
 // ([ledger.ShownCallGroups], [leftOut]) and never off a rule of this package's,
 // so what the launch records its brief left out ([sandbox.BriefTold]) is what
 // the brief counted. Never a late call, which every continuation tells again,
-// nor one with no place, an older build's append, which no record can name.
-func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, owed []int, leadHeld []string,
-	surface *tools.Surface, b provenance.Boundary) (prompts.AfterSave, []int) {
+// nor one listed again, which the session holds, nor one with no place, an
+// older build's append, which no record can name.
+//
+// AND A CALL THE SESSION HOLDS THAT A TOLD CALL COULD BE TAKEN FOR IS LISTED
+// AGAIN ([prompts.AfterSave.Shown]), under words that say the session shows it
+// and that the told one is a call of its own, made as well. The words over the
+// calls after a point the session may already show, and over the late calls,
+// say a call shown both in the session and in the list is ONE call, made once:
+// so where a held call and a told call name one tool with arguments that read
+// alike in the told call's line ([readAlike]), a model that saw the held call
+// could take the told one for it and lose it, re-issuing nothing or reading
+// it as a call that never ran. That is reachable wherever a point holds calls
+// beside a late one (a capture whose harness ended its own run, placed by its
+// own read; a capture cut off that another build stamped; the copy whose
+// harness ended its own run, which holds every call but the late ones), on
+// every harness. The held side is every call of the round held at the point
+// ([heldAt]); never a skipped meta-tool's, the call a person approved that the
+// lead tells, which no list holds, nor a call the log dropped, which keeps no
+// arguments to compare. The told side is every late call and the calls after
+// the point where mayShow; never the owed reads, whose words say an earlier
+// message counted them, and never a list under words that say its calls are
+// not in the session, where no call is shown twice. Fitted, capped and defused
+// with the other lists, each rendered only where it is not empty, since an
+// empty list renders as "(none)".
+func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, owed []int, mayShow bool,
+	leadHeld []string, surface *tools.Surface, b provenance.Boundary) (prompts.AfterSave, []int) {
 
 	var (
-		late       []ledger.Call
-		after, owe []BridgedCall
-		out        prompts.AfterSave
+		held, late, after, owe []BridgedCall
+		out                    = prompts.AfterSave{Interrupted: mayShow}
 	)
 	if through != nil {
 		out.Dropped = droppedAfterSave(round, *through)
@@ -711,6 +740,7 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 			continue
 		}
 		if heldAt(call, through, owed) {
+			held = append(held, call)
 			out.HeldSubmission = out.HeldSubmission || (call.Name == SubmitWorkTool && !call.Failed)
 			continue
 		}
@@ -718,7 +748,7 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 			continue
 		}
 		if call.Late || call.Abandoned {
-			late = append(late, call.Call)
+			late = append(late, call)
 			out.LateSubmission = out.LateSubmission || (call.Name == SubmitWorkTool && !call.Failed)
 			continue
 		}
@@ -743,25 +773,39 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	// before making it again. Never a submission: it is failed.
 	for _, call := range inAdmissionOrder(round.unfinished) {
 		if !slices.Contains(r.cfg.SkipNames, call.Name) {
-			late = append(late, call.Call)
+			late = append(late, call)
 		}
 	}
 	out.OwedDropped = owedGone(round, owed)
 	var omitted []int
 	if len(late)+len(after)+len(owe) > 0 {
 		opts := ledger.Format(r.cfg.SkipNames, surface.Universe().KnownReads())
-		// LATE FIRST, OWED LAST: the order the one cap is spent in.
-		groups := [][]ledger.Call{late, bridgedLedger(after), bridgedLedger(owe)}
+		// THE HELD CALLS A TOLD CALL COULD BE TAKEN FOR, listed again: the
+		// told calls whose words leave open that the session shows them or a
+		// call like them are every late one, and the calls after the point
+		// only where they are told as calls it may already show.
+		told := late
+		if mayShow {
+			told = slices.Concat(late, after)
+		}
+		again := listedAgain(held, told, opts)
+		// LATE FIRST, OWED AND THE CALLS LISTED AGAIN LAST: the order the one
+		// cap is spent in.
+		groups := [][]ledger.Call{bridgedLedger(late), bridgedLedger(after), bridgedLedger(owe),
+			bridgedLedger(again)}
 		opts.Fitted = ledgerfit.Fit(ctx, r.cfg.Compact, ledger.CallPieces(slices.Concat(groups...), opts))
-		told := ledger.FormatCallGroups(groups, opts)
+		rendered := ledger.FormatCallGroups(groups, opts)
 		if len(late) > 0 {
-			out.Late = provenance.Neutralise(b, told[0])
+			out.Late = provenance.Neutralise(b, rendered[0])
 		}
 		if len(after) > 0 {
-			out.Calls = provenance.Neutralise(b, told[1])
+			out.Calls = provenance.Neutralise(b, rendered[1])
 		}
 		if len(owe) > 0 {
-			out.Owed = provenance.Neutralise(b, told[2])
+			out.Owed = provenance.Neutralise(b, rendered[2])
+		}
+		if len(again) > 0 {
+			out.Shown = provenance.Neutralise(b, rendered[3])
 		}
 		shown := ledger.ShownCallGroups(groups, opts)
 		for i, group := range [][]BridgedCall{after, owe} {
@@ -776,6 +820,76 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		out.Tally = provenance.Neutralise(b, ledger.FormatElided(round.elided, r.cfg.SkipNames))
 	}
 	return out, omitted
+}
+
+// listedAgain is every call of held, the calls of a round a brief tells no
+// session it lacks, that a call of told could be taken for ([readAlike]), in
+// held's order: the calls [Runner.calledAfter] lists again, under words that
+// say the session shows them ([prompts.AfterSave.Shown]).
+//
+// ONE PASS IS THE WHOLE ANSWER. A call listed again is told as one the session
+// shows, never as one it may lack, so it is no told call another held call
+// could be taken for: matching held against told alone, and never against what
+// it lists, is a fixed point.
+func listedAgain(held, told []BridgedCall, opts ledger.FormatOptions) []BridgedCall {
+	var out []BridgedCall
+	for _, h := range held {
+		if slices.ContainsFunc(told, func(t BridgedCall) bool { return readAlike(h, t, opts) }) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// readAlike reports whether a model reading the line a brief tells t by,
+// rendered under opts, could take it for h, a call the session it continues
+// shows whole: the same tool, and arguments that read alike in t's line. Its
+// result is never compared: a successful call's line carries none, and two
+// calls of one tool whose arguments read alike read alike whatever they
+// returned.
+//
+// PER ARGUMENT, AS THE LINE SHOWS IT, never by the calls' digests alone. A
+// line shows a value as itself only where it fits the ledger's budget
+// ([ledger.ShowsWhole]); a longer one is a rewrite or omitted by its size, so
+// two writes to one path whose contents differ past the budget read alike in
+// their lines, digests apart. So a value t's line does not show whole may
+// equal anything, and h's and t's arguments read apart only where some key is
+// in one and not the other (a key the line shows is seen, whatever its value)
+// or t's line shows a value whole that h's differs from.
+//
+// ALIKE WHEREVER EITHER CALL'S ARGUMENTS ARE NOT KNOWN WHOLE: withheld
+// ([ledger.Call.Withheld]), in flight ([ledger.Call.Unfinished]), kept less
+// than whole by the run's record ([BridgedCall.ArgsBytes]), or with no digest,
+// nothing having recorded them. Nothing says they read apart, and the one
+// direction that costs anything is reading two calls apart that a model takes
+// for one: listing a held call again that no told call could be taken for
+// costs a line, while leaving one out loses the told call.
+func readAlike(h, t BridgedCall, opts ledger.FormatOptions) bool {
+	switch {
+	case h.Name != t.Name:
+		return false
+	case !argsKnownWhole(h) || !argsKnownWhole(t) || h.Digest == t.Digest:
+		return true
+	}
+	for key, tv := range t.Args {
+		hv, ok := h.Args[key]
+		if !ok || (ledger.ShowsWhole(tv, opts) && !reflect.DeepEqual(hv, tv)) {
+			return false
+		}
+	}
+	for key := range h.Args {
+		if _, ok := t.Args[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// argsKnownWhole reports whether call's arguments are known whole: neither
+// withheld nor in flight, kept whole by the run's record, and digested where
+// they were admitted ([readAlike]).
+func argsKnownWhole(call BridgedCall) bool {
+	return !call.Withheld && !call.Unfinished && call.ArgsBytes == 0 && call.Digest != ""
 }
 
 // leftOut is the calls of group a render left out, shown being the calls of it
@@ -844,9 +958,7 @@ func owedGone(round roundCalls, owed []int) int {
 func (r *Runner) calledInPlace(ctx context.Context, round roundCalls, leadHeld []string,
 	surface *tools.Surface, b provenance.Boundary) (prompts.AfterSave, []int) {
 
-	called, omitted := r.calledAfter(ctx, round, new(0), nil, leadHeld, surface, b)
-	called.Interrupted = true
-	return called, omitted
+	return r.calledAfter(ctx, round, new(0), nil, true, leadHeld, surface, b)
 }
 
 // heldAt reports whether a session saved at through holds call: one the round's

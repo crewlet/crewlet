@@ -533,8 +533,19 @@ func TestAKeptCaptureCutOffSaysWhetherItsJobRestarted(t *testing.T) {
 		if calls < 0 || !strings.Contains(brief[calls:], "a later issue") {
 			t.Errorf("%s: the calls after the save are not told as calls it may already show:\n%s", name, brief)
 		}
-		if got := strings.Contains(brief, "an earlier issue"); got != tc.fromAll {
+		// HELD BELOW THE SAVE where its job did not restart, so in no list of
+		// calls it may lack, and listed again under words that say the session
+		// shows it: the call after the save, told as one it may already show,
+		// names its tool, and neither call's arguments carry the digest that
+		// would let their lines read apart. Told from the round's start where
+		// its job restarted, so held nowhere and listed again nowhere.
+		told, again, _ := strings.Cut(brief, listedAgainHeading)
+		if got := strings.Contains(told, "an earlier issue"); got != tc.fromAll {
 			t.Errorf("%s: the call before the save is told %v, want %v:\n%s", name, got, tc.fromAll, brief)
+		}
+		if got := strings.Contains(again, "an earlier issue"); got == tc.fromAll {
+			t.Errorf("%s: the call before the save is listed again %v, want %v:\n%s", name, got, !tc.fromAll,
+				brief)
 		}
 	}
 }

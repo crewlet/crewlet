@@ -103,8 +103,10 @@ type FormatOptions struct {
 // every call of the round for a run of its own, which [FormatElided] follows
 // there as it does a round here; the late ones (those that finished only after
 // their run stopped waiting for them, those nobody waited for, and those still
-// in flight); and the reads an earlier brief to the session counted without
-// listing them, rendered together under one read cap ([FormatCallGroups]).
+// in flight); the reads an earlier brief to the session counted without
+// listing them; and the calls the session holds that a told call could be
+// taken for, listed again, rendered together under one read cap
+// ([FormatCallGroups]).
 // The caller fits the pieces it names and sets [FormatOptions.Fitted].
 func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{
@@ -177,9 +179,10 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 
 // FormatCallGroups renders the lists of calls one brief tells under headings
 // of its own (internal/agent/runner's calledAfter: the late ones, those still
-// in flight among them; the calls after a session's save; and the reads an
-// earlier brief counted without listing them), one string per group in the
-// order given, each as [FormatCalls] renders a
+// in flight among them; the calls after a session's save; the reads an
+// earlier brief counted without listing them; and the calls the session holds
+// that a told call could be taken for, listed again), one string per group in
+// the order given, each as [FormatCalls] renders a
 // list, "(none)" and its omitted line included, UNDER ONE READ CAP:
 // [FormatOptions.MaxReadCalls] counts the read lines of every group together,
 // spent in the order the groups are given, and each group's omitted line counts

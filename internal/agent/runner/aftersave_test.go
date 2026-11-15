@@ -341,6 +341,58 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 	}
 }
 
+// THE CALLS LISTED AGAIN TAKE THE READ CAP LAST, AND ARE NEVER OWED. A cut-off
+// capture holds its round's first four reads, and the brief tells twelve reads
+// after its save as calls it may already show, the first four alike the held
+// ones. The four held reads are listed again, under the same one cap as every
+// list: spent after the calls the session may lack, which take all twelve
+// lines, so the listing counts its four reads without listing one. And they
+// are no reads the brief owes the session: it holds them, so the launch
+// records nothing left out.
+//
+// Mutation: spend the cap on the calls listed again first, and four of the
+// calls after the save are counted rather than listed; record the reads the
+// listing left out as owed, and the launch records four.
+func TestTheCallsListedAgainTakeTheReadCapLastAndAreNeverOwed(t *testing.T) {
+	t.Parallel()
+	read := func(channel string, seq int) runner.BridgedCall {
+		call := numbered("slack_history", map[string]any{"channel": channel}, seq, seq)
+		call.Digest = turnctx.ArgsDigest(call.Args)
+		return call
+	}
+	var bridged []runner.BridgedCall
+	for n := 1; n <= 4; n++ {
+		bridged = append(bridged, read(fmt.Sprintf("C%d", n), n))
+	}
+	for n := 1; n <= ledger.MaxReadCalls; n++ {
+		bridged = append(bridged, read(fmt.Sprintf("C%d", n), 4+n))
+	}
+	basis := keptBasis
+	basis.Through, basis.Interrupted = 4, true
+	s := lostRelaunch(t, basis, runner.Resume{Bridged: bridged}).Session
+
+	at := strings.Index(s.Brief, cutOffHeader)
+	if at < 0 {
+		t.Fatalf("the reads after the save are not told as calls the session may already show:\n%s", s.Brief)
+	}
+	since, again, listed := strings.Cut(s.Brief[at:], listedAgainHeading)
+	if !listed {
+		t.Fatalf("the held reads are not listed again:\n%s", s.Brief)
+	}
+	if reads := strings.Count(since, "- slack_history("); reads != ledger.MaxReadCalls ||
+		strings.Contains(since, "omitted") {
+		t.Errorf("the calls after the save list %d reads, want all %d and none omitted:\n%s", reads,
+			ledger.MaxReadCalls, s.Brief)
+	}
+	if strings.Contains(again, "- slack_history(") || !strings.Contains(again, "(+4 further read call(s) omitted)") {
+		t.Errorf("the calls listed again are not the cap's last, counted rather than listed:\n%s", s.Brief)
+	}
+	if len(s.Told.Omitted) != 0 {
+		t.Errorf("the launch records %v left out, want none: the session holds the reads listed again",
+			s.Told.Omitted)
+	}
+}
+
 // A CARRIED-ON RELAUNCH LAUNCHES NOTHING WHEN THE CALLS AFTER ITS SAVE FILL THE
 // WINDOW. Telling a continued session the calls after its save rewrites a
 // payload past its budget with the seat's auxiliary model, charged to the

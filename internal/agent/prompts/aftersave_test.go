@@ -583,3 +583,44 @@ func TestEveryCountThatSaysTheTallyIsBelowHasItBelow(t *testing.T) {
 		}
 	}
 }
+
+// THE CALLS LISTED AGAIN ARE SAID TO BE THE ONES THE SESSION SHOWS. A call the
+// session holds that a told call could be taken for is listed again under words
+// that say the session shows it and that the told call is one of its own, made
+// as well, never that the session lacks it; after the calls since the save and
+// before the late calls, the owed reads and the held submission's line before
+// them all; and no section at all where none is listed again.
+//
+// Mutation: drop the section, place it anywhere else, or word it as calls the
+// session may lack, and this goes red.
+func TestTheCallsListedAgainAreSaidToBeTheOnesTheSessionShows(t *testing.T) {
+	t.Parallel()
+	const (
+		owed   = "- slack_history({\"channel\":\"C0\"}) → success (read)"
+		listed = "- slack_post({\"text\":\"hi\"}) → success"
+		shown  = "- slack_post({\"text\":\"hi\"}) → success"
+		late   = "- jira_create({\"summary\":\"the late one\"}) → success"
+	)
+	got := CalledAfter(AfterSave{HeldSubmission: true, Owed: owed, Calls: listed, Shown: shown, Late: late,
+		Interrupted: true})
+	want := strings.Join([]string{heldSubmission, owedHeader + "\n" + owed, calledSinceHeader + "\n" + listed,
+		shownAgainHeader + "\n" + shown, lateCallsHeader + "\n" + late}, "\n\n")
+	if got != want {
+		t.Errorf("a session with a call listed again is told:\n%s\nwant:\n%s", got, want)
+	}
+	if got := CalledAfter(AfterSave{Late: late}); strings.Contains(got, shownAgainHeader) {
+		t.Errorf("a session with no call listed again is told the section:\n%s", got)
+	}
+	for _, said := range []string{"The session above shows each of these calls",
+		"names the same tool with arguments that read alike here", "a call of its own, made as well as this one",
+		"never this one shown twice"} {
+		if !strings.Contains(shownAgainHeader, said) {
+			t.Errorf("the heading of the calls listed again does not say %q:\n%s", said, shownAgainHeader)
+		}
+	}
+	for _, unsaid := range []string{"not in it", "may not show", "\u2014"} {
+		if strings.Contains(shownAgainHeader, unsaid) {
+			t.Errorf("the heading of the calls listed again says %q:\n%s", unsaid, shownAgainHeader)
+		}
+	}
+}

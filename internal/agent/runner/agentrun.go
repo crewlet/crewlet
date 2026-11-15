@@ -830,8 +830,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// session up after all. The base's continuation takes it whole. Never the
 	// call a person approved that the reseed's lead tells, which is made only
 	// after this, below, nor one an earlier answer it tells approved.
-	freshTold, freshOmitted := r.calledAfter(ctx, round, new(0), nil, slices.Concat(leadsHeld(carry), answers.held),
-		built, fence)
+	freshTold, freshOmitted := r.calledAfter(ctx, round, new(0), nil, false,
+		slices.Concat(leadsHeld(carry), answers.held), built, fence)
 	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
 	// ([Runner.executeAsAgentRun]): the prior rounds' payloads and the calls
 	// each brief tells, each past its budget, are rewritten by the seat's
