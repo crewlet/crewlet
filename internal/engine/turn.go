@@ -1691,10 +1691,10 @@ func nakFailure(ctx context.Context, err error) queue.Result {
 //
 // NOT A RESUME ANOTHER NODE OR BUILD CAN MAKE ([sandbox.ErrResumeElsewhere]):
 // the control topic hands that back as the node's as well ([controlOutcome]),
-// but it is no failure of this node's, and the give-up counts it by its own
-// read of the live nodes' builds ([sandbox.CoordinatorOptions.ResumableElsewhere])
-// rather than never, which this answer would make it. A mailbox's turn never
-// meets it.
+// but it is no failure of this node's, and the give-up counts it once no live
+// node reads the version of the run's parked state
+// ([sandbox.CoordinatorOptions.ResumableElsewhere]) rather than never, which
+// this answer would make it. A mailbox's turn never meets it.
 func nodesFailure(ctx context.Context, err error) bool {
 	return storeUnheard(err) || queue.NodeFault(ctx, err) || infrastructureFailure(err)
 }

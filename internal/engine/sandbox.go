@@ -1349,7 +1349,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// Not a second read of the epoch, which is the one thing this
 		// must not do (see [resumeInput.Company]). Handed back rather
 		// than settled: a caller that assembled a resume without its
-		// epoch is a defect here, and a peer can still resume the run.
+		// epoch is a defect here. A defect of this build, which every
+		// node of it meets, so it is no resume another node can make
+		// ([sandbox.ErrResumeElsewhere]), and the give-up counts it.
 		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
 			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
 	}
@@ -4250,12 +4252,13 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // nothing to wait on is not one: it stays the message's (below). A DRAIN'S
 // CUT IS NOT ONE: it ends only the turn's admission context (internal/node's
 // cut), never the delivery's, so a hand-back it interrupted reads as no
-// failure of this node's here and is NAK'd as the message's. Nothing turns on it: the cut fires only once the queue's own
-// broker connection is closed for good, so no outcome of that delivery reaches
-// the broker, and the message comes back to the seat's next holder when its
-// ack wait lapses, as every delivery a lost connection held does. A refusal
-// that waits is still acknowledged whatever the context, as above, unless a
-// store's silence stands in front of it. A failure the completion itself
+// failure of this node's here and is NAK'd as the message's. Nothing turns on
+// it: the cut fires only once the queue's own broker connection is closed for
+// good, so no outcome of that delivery reaches the broker, and the message
+// comes back to the seat's next holder when its ack wait lapses, as every
+// delivery a lost connection held does. A refusal that waits is still
+// acknowledged whatever the context, as above, unless a store's silence
+// stands in front of it. A failure the completion itself
 // caused (a resume that failed for what it ran, a refusal that names nothing
 // to wait on) stays the message's wherever a waiter announces the job
 // again; while none can, it is marked and handed back as the node's with every

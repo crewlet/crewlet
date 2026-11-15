@@ -62,10 +62,11 @@ import (
 // gets past. What the operator sees, condition by condition:
 //
 //   - every one: each attempt's `sandbox_resume_failed` line, at error, its
-//     `error` naming the condition (its `attempt` stays at the count of the
-//     run's own failures, which these leave alone): the system's own
-//     words for a disk or the open files (such as "no space left on device",
-//     "read-only file system", "input/output error", "too many open files"),
+//     `error` naming the condition (its `attempt` does not rise for these:
+//     it numbers only the run's own failures): the system's or the store
+//     driver's own words for a disk or the open files (such as "no space
+//     left on device", "database is full", "read-only file system",
+//     "input/output error", "too many open files"),
 //     the estate's "finish the upgrade" for builds that differ, and a note or
 //     a run's record this node could not verify for keys that differ;
 //   - a full disk that is the volume holding this node's databases: the

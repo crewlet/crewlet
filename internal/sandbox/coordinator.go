@@ -38,9 +38,10 @@ import (
 // completion reaches its seat's owner by construction — but "rare" is not
 // "never": a lease can move between the publish and the receive.
 //
-// One another node or build can get past is [ErrResumeElsewhere]; any other
-// (a run with no parked state, a state that is no state, a refusal that names
-// nothing to wait on) is met again wherever the run goes.
+// One another node or build can get past is [ErrResumeElsewhere]. A run with
+// no parked state and a state that is no state are met again wherever the run
+// goes, and a refusal that names nothing to wait on is decided by what refused
+// it (internal/engine's controlOutcome).
 var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run")
 
 // ErrResumeElsewhere is an [ErrResumeUnavailable] another node or build can
@@ -57,8 +58,10 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // counted, a roll that kept an older node holding the seat for half an hour
 // ended a run a newer node had parked, and the engine's issue report filed it
 // as the engine's own defect. Once no live node may, it counts, so a rollback
-// that leaves no node of the build that wrote the state holds the seat no
-// longer than the give-up does.
+// that leaves no node reading the version of the run's parked state holds the
+// seat no longer than the give-up does. A reply kind is no part of that
+// version: an unknown one beside a state every live node reads is not counted
+// while another node is live.
 var ErrResumeElsewhere = fmt.Errorf("%w; another node or build may", ErrResumeUnavailable)
 
 // ErrResumeAbandoned reports a resumed turn that broke and must not be resumed
@@ -195,9 +198,13 @@ var ErrRunEnding = errors.New("sandbox: the run's ending is decided, so it takes
 // It must return an error wrapping [ErrResumeAbandoned] when the turn broke in a
 // way a retry must not repeat; see that sentinel for which ways those are.
 //
-// It must return an error wrapping [ErrResumeUnavailable] when this node has
-// no seat to resume into, so the caller reverts the claim instead of settling
-// the run.
+// It must return an error wrapping [ErrResumeUnavailable] when this node
+// cannot resume the run, so the caller reverts the claim instead of settling
+// it, and wrapping [ErrResumeElsewhere] where another node or build can (no
+// seat here to resume into, a state or a reply kind this build does not
+// read): the control topic hands that back as the node's, and the give-up
+// counts it only once no live node may
+// ([CoordinatorOptions.ResumableElsewhere]).
 type Resumer interface {
 	Resume(ctx context.Context, req ResumeRequest) error
 }
