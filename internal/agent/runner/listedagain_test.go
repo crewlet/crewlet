@@ -236,10 +236,16 @@ func TestAValueReadsAsTheValueItIsNeverAsItsSpelling(t *testing.T) {
 // with no digest or in text the engine could not read back, or a held call's
 // kept less than whole or not read back. So the held call is
 // listed again beside a told call of its tool whose arguments, as far as they
-// are known, differ.
+// are known, differ. A call whose record did not read back is marked so
+// (ledger.Call.ArgsUnread), and its line says so in place of its arguments,
+// never `slack_post()`, the tool called with none; marked, it reads so
+// whatever arguments it carries, as a withheld call does, since its line
+// shows none of them; and a record of an older build, which marks no call,
+// leaves its arguments nil, which read so too.
 //
 // Mutation: read a call kept less than whole, or one whose arguments were not
-// read back, as one known whole, and its cases go red.
+// read back, as one known whole, and its cases go red; read the mark by the
+// arguments it leaves nil alone, and the marked calls carrying arguments do.
 func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testing.T) {
 	t.Parallel()
 	// WITHHELD, though it carries arguments and their digest, which no record
@@ -252,9 +258,17 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 	heldShort.ArgsBytes = 70_000
 	undigested := numbered("slack_post", map[string]any{"channel": "C1", "text": "told"}, 2, 2)
 	unreadToldCall := post("told", 2)
-	unreadToldCall.Args = nil
+	unreadToldCall.Args, unreadToldCall.ArgsUnread = nil, true
 	unreadHeldCall := post("hi", 1)
-	unreadHeldCall.Args = nil
+	unreadHeldCall.Args, unreadHeldCall.ArgsUnread = nil, true
+	olderUnreadHeldCall := post("hi", 1)
+	olderUnreadHeldCall.Args = nil
+	// MARKED, though it carries arguments and their digest: its line says its
+	// arguments did not read back whatever it holds.
+	markedToldCall := post("told", 2)
+	markedToldCall.ArgsUnread = true
+	markedHeldCall := post("hi", 1)
+	markedHeldCall.ArgsUnread = true
 	inFlight := []runner.BridgedCall{{Call: ledger.Call{Name: "slack_post", Result: runner.UnfinishedNote,
 		Failed: true, Digest: post("told", 2).Digest, Unfinished: true}, Seq: 2}}
 	for name, round := range map[string]runner.Resume{
@@ -269,10 +283,19 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 			Bridged: []runner.BridgedCall{post("hi", 1), unreadToldCall}},
 		"a held call whose record could not be read back": {
 			Bridged: []runner.BridgedCall{unreadHeldCall, post("told", 2)}},
+		"a held call an older build could not read back": {
+			Bridged: []runner.BridgedCall{olderUnreadHeldCall, post("told", 2)}},
+		"a told call marked as not read back, carrying arguments": {
+			Bridged: []runner.BridgedCall{post("hi", 1), markedToldCall}},
+		"a held call marked as not read back, carrying arguments": {
+			Bridged: []runner.BridgedCall{markedHeldCall, post("told", 2)}},
 	} {
 		brief := lostRelaunch(t, cutOffKept(1), round).Session.Brief
 		want := `"text":"hi"`
-		if round.Bridged[0].Args == nil {
+		switch held := round.Bridged[0]; {
+		case held.ArgsUnread:
+			want = "- slack_post(arguments recorded in text that does not read back) → success"
+		case held.Args == nil:
 			want = "- slack_post() → success"
 		}
 		if again, listed := sectionOf(brief, listedAgainHeading); !listed || !strings.Contains(again, want) {

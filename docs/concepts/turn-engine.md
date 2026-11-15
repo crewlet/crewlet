@@ -215,6 +215,8 @@ The block rides the **user** message for the executor, never its system prompt: 
 
 **A call counted by tool is read like one listed.** A record that no longer lists calls one by one counts them by tool — a long run's middle its row dropped, a parked turn's rounds condensed past their calls, rounds a park dropped whole — and the executor's header says those calls ran all the same: the ones not counted as failed already ran, read by the rules of a `→ success` line, and one counted with an unknown outcome may have taken effect, so it is checked before it is made again.
 
+**A call whose arguments are not known never reads as one made with none.** Its line says why in their place: sealed for a person's approval (a call held for one, and the call they approved), kept on no record (a call still in flight as its round was read, whose entry keeps its identity alone), or recorded in text that does not read back (a record something cut or damaged). Drawn `tool()`, each read as the tool called with none, a different call, and a run told to check whether one took effect before making it again had nothing to check by. A call made with no arguments is still drawn `tool()`, and one recorded in text that does not read back is counted, where no digest of it was recorded, as a call of its tool whose arguments are not known.
+
 ### What the ledger budgets, and why
 
 One principle decides every budget: **budget payloads, never structure — and rewrite a payload, never cut it.**

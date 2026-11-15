@@ -358,6 +358,70 @@ func TestFailureRendersAsFailureNotSuccess(t *testing.T) {
 	}
 }
 
+// A CALL OF UNKNOWN OUTCOME SAYS NO RECORD KEEPS ITS ARGUMENTS. A call still
+// in flight as its round was read keeps its identity alone on every record
+// (Call.Unfinished), so nothing says what it was called with; drawn `name()`,
+// its line read as the tool called with none, a different call, and a run told
+// to check whether it took effect before making it again had nothing to check
+// by. One that carries arguments is drawn with them, a failed call with none
+// that is not of unknown outcome is still drawn `name()`, and a withheld call
+// still says its arguments are sealed.
+//
+// Mutation: drop the clause, and the first line reads `set_status()`; draw
+// every call with no arguments so, and the plain failure does too; draw it so
+// whatever it carries, and the second line loses its arguments; let it win
+// over a withheld call, and the sealed line goes.
+func TestACallOfUnknownOutcomeSaysNoRecordKeepsItsArguments(t *testing.T) {
+	t.Parallel()
+	got := FormatCalls([]Call{
+		{Name: "set_status", Result: "unknown", Failed: true, Digest: "d1", Unfinished: true},
+		{Name: "set_status", Args: map[string]any{"status": "draft"}, Result: "unknown", Failed: true,
+			Unfinished: true},
+		{Name: "slack_post", Result: "channel_not_found", Failed: true},
+		{Name: "close_issue", Result: "asked a person", Failed: true, Withheld: true, Unfinished: true},
+	}, Format(nil, nil))
+	want := strings.Join([]string{
+		"- set_status(arguments kept on no record) → error: unknown",
+		`- set_status({"status":"draft"}) → error: unknown`,
+		"- slack_post() → error: channel_not_found",
+		"- close_issue(arguments sealed for a person's approval, kept on no record) → error: asked a person",
+	}, "\n")
+	if got != want {
+		t.Errorf("the calls render\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A CALL WHOSE ARGUMENTS DID NOT READ BACK SAYS SO. A record that holds a
+// call's arguments as text that does not read back (Call.ArgsUnread) says it
+// was made with some and no longer says which; drawn `name()`, its line read
+// as the tool called with none. So its line says they did not read back,
+// whatever its arguments hold, as a withheld call's says they are sealed; a
+// call its record says was made with none is still drawn `name()`; and a
+// withheld call still says its arguments are sealed.
+//
+// Mutation: drop the clause, and the first line reads `jira_create()`; draw it
+// so only where no arguments are held, and the second line shows them; let it
+// win over a withheld call, and the sealed line goes.
+func TestACallWhoseArgumentsDidNotReadBackSaysSo(t *testing.T) {
+	t.Parallel()
+	got := FormatCalls([]Call{
+		{Name: "jira_create", Result: "created", Digest: "d1", ArgsUnread: true},
+		{Name: "jira_create", Args: map[string]any{"summary": "a stray value"}, Result: "created",
+			ArgsUnread: true},
+		{Name: "jira_create", Result: "created"},
+		{Name: "close_issue", Result: "asked a person", Failed: true, Withheld: true, ArgsUnread: true},
+	}, Format(nil, nil))
+	want := strings.Join([]string{
+		"- jira_create(arguments recorded in text that does not read back) → success",
+		"- jira_create(arguments recorded in text that does not read back) → success",
+		"- jira_create() → success",
+		"- close_issue(arguments sealed for a person's approval, kept on no record) → error: asked a person",
+	}, "\n")
+	if got != want {
+		t.Errorf("the calls render\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestNoIterationsRendersNothing(t *testing.T) {
 	t.Parallel()
 	// The first round of every turn. Callers drop the whole section on an

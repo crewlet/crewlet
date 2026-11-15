@@ -207,7 +207,10 @@ const UnfinishedNote = "This call's outcome is unknown: its turn stopped waiting
 // for a person's approval and the one they approved
 // ([ledger.Call.Withheld]), whose arguments ride sealed — is seeded as a call
 // matching no other ([turnctx.SeededCall.Unknown],
-// [turnctx.CallLog.SeedUnknown]): an over-count, the safe direction.
+// [turnctx.CallLog.SeedUnknown]): an over-count, the safe direction. So is a
+// call with no digest whose arguments its record holds in text that does not
+// read back ([ledger.Call.ArgsUnread]): seeded by the nil arguments it reads
+// as, it was counted as the tool called with none, a different call.
 //
 // A CALL WITH NO DIGEST, AND NONE WITHHELD — one a build before it recorded,
 // whose arguments it kept whole — is seeded by its canonical arguments, made
@@ -232,10 +235,11 @@ func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.
 	for _, group := range groups {
 		for _, call := range group {
 			switch {
-			case call.Withheld, call.Unfinished && call.Digest == "":
+			case call.Withheld, (call.Unfinished || call.ArgsUnread) && call.Digest == "":
 				// A CALL WHOSE ARGUMENTS NO RECORD HOLDS: one held for a
-				// person's approval, and one whose entry kept no digest of
-				// them, its tool one that may ask first.
+				// person's approval, one whose entry kept no digest of
+				// them, its tool one that may ask first, and one whose
+				// record of them does not read back.
 				calls.Seed(turnctx.SeededCall{Tool: call.Name, Unknown: true})
 				continue
 			case call.Digest != "":

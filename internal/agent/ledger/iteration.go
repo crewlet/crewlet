@@ -60,11 +60,27 @@ type Call struct {
 	// update refused by the store (internal/sandbox's BridgeLog.InFlight). It
 	// is Failed, so no reader takes it for a delivery or a submission, and its
 	// Result says its effects may stand and are to be checked before it is
-	// made again, never that it failed; Args are empty, an entry keeping none.
+	// made again, never that it failed; Args are empty, an entry keeping none,
+	// and its line says no record keeps them ([FormatCalls]).
 	// A later segment's call log counts it by Digest, or, where it has none —
 	// a tool that may ask a person first — as a call of its tool whose
 	// arguments are not known, never as the tool called with none.
 	Unfinished bool `json:"Unfinished,omitempty"`
+
+	// ArgsUnread is a call whose arguments its record holds as text that
+	// does not read back (internal/tools' ReadArgs answers nil for it): a
+	// record something truncated or damaged. Args are nil on it, as they are
+	// on a call its record says was made with none (no text at all), so this
+	// says which of the two it is. Its line says its arguments did not read back
+	// whatever Args holds ([FormatCalls]), and every reader that compares or
+	// counts calls by their arguments reads it as a call of its tool whose
+	// arguments are not known: drawn or counted as the tool called with
+	// none, it is a different call.
+	//
+	// ADDITIVE ON THE WIRE: a build before it drops the key where a parked
+	// turn's closed rounds carry it, and draws and counts the call as it
+	// always did, as one with no arguments.
+	ArgsUnread bool `json:"ArgsUnread,omitempty"`
 }
 
 // FormatOptions controls how a run of calls renders.
@@ -165,7 +181,11 @@ func ShownCallGroups(groups [][]Call, opts FormatOptions) [][]Call {
 //
 // Each line is `- name(args) → success | error: text`, with a trailing
 // "(read)" when the tool is positively annotated read-only. A call whose
-// arguments every record withholds says so in their place ([Call.Withheld]).
+// arguments are not known says why in their place, never `name()`, which reads
+// as the tool called with none: every record withholds them
+// ([Call.Withheld]), its record holds them in text that does not read back
+// ([Call.ArgsUnread]), or its outcome is unknown and no record keeps them
+// ([Call.Unfinished]).
 //
 // No calls — or none that survive Skip — renders "(none)" rather than an empty
 // string, so a reader sees an explicit "no action taken" signal rather than an
@@ -228,12 +248,22 @@ func renderCalls(calls, shown []Call, opts FormatOptions) string {
 			readsShown++
 		}
 		args := renderArgs(call.Args, opts)
-		if call.Withheld {
+		switch {
+		case call.Withheld:
 			// SAID, never drawn as `()`: a call whose arguments every record
 			// withholds made a call with arguments, and `tool()` reads as
 			// the tool called with none — a different call, and a repeat a
 			// reader takes for a retry of nothing.
 			args = withheldArgs
+		case call.ArgsUnread:
+			// SAID WHATEVER ARGS HOLDS, as a withheld call's are: its record
+			// says only that it was made with some.
+			args = unreadArgs
+		case call.Unfinished && len(call.Args) == 0:
+			// SAID, for the same reason: its entry kept its identity alone,
+			// so no record says what it was called with. One that carries
+			// arguments is drawn with them.
+			args = unkeptArgs
 		}
 		lines = append(lines, "- "+call.Name+"("+args+") → "+outcome+marker)
 	}
@@ -255,6 +285,17 @@ func renderCalls(calls, shown []Call, opts FormatOptions) string {
 // held, whose arguments wait sealed for a person's approval, and the one the
 // person approved, made off those sealed arguments.
 const withheldArgs = "arguments sealed for a person's approval, kept on no record"
+
+// unreadArgs is what [FormatCalls] renders in place of the arguments of a call
+// whose record holds them in text that does not read back ([Call.ArgsUnread]):
+// it was made with arguments, and its record no longer says which.
+const unreadArgs = "arguments recorded in text that does not read back"
+
+// unkeptArgs is what [FormatCalls] renders in place of the arguments of a call
+// whose outcome is unknown ([Call.Unfinished]) and which carries none: its log
+// entry kept its identity alone, so no record holds what it was called with,
+// and `tool()` would read as the tool called with none, a different call.
+const unkeptArgs = "arguments kept on no record"
 
 // noCalls is what [FormatCalls] renders for a run of calls that shows none.
 const noCalls = "(none)"

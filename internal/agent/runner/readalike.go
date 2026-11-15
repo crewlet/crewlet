@@ -32,8 +32,8 @@ import (
 // ([ledger.Call.Withheld]), in flight ([ledger.Call.Unfinished]), kept less
 // than whole by the run's record ([BridgedCall.ArgsBytes]), with no digest,
 // nothing having recorded them, or recorded in text the engine could not read
-// back (nil arguments, [tools.ReadArgs]), which its line draws as no arguments
-// at all. Nothing says they read apart, and the one direction that costs
+// back ([ledger.Call.ArgsUnread], whose line says so; nil arguments, which a
+// record of an older build leaves unmarked). Nothing says they read apart, and the one direction that costs
 // anything is reading two calls apart that a model takes for one: listing a
 // held call again that no told call could be taken for costs a line, while
 // leaving one out loses the told call.
@@ -67,9 +67,13 @@ func readAlike(h, t BridgedCall, opts ledger.FormatOptions) bool {
 // sealed whatever the call carries ([ledger.Call.Withheld]), so a reader
 // compares none of them, and were a record ever to keep some, comparing them
 // would read apart two calls whose lines read alike, the one direction that
-// loses a call.
+// loses a call. NOT READ BACK IS ITS OWN TEST for the same reason: its line
+// says its arguments did not read back whatever the call carries
+// ([ledger.Call.ArgsUnread]). Nil arguments stay a test of their own too, for
+// a record an older build read, which marks no call so.
 func argsKnownWhole(call BridgedCall) bool {
-	return !call.Withheld && !call.Unfinished && call.ArgsBytes == 0 && call.Digest != "" && call.Args != nil
+	return !call.Withheld && !call.Unfinished && !call.ArgsUnread && call.ArgsBytes == 0 &&
+		call.Digest != "" && call.Args != nil
 }
 
 // valuesAlike reports whether a reader could take h and t, two argument values

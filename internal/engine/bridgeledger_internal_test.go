@@ -153,6 +153,45 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	}
 }
 
+// A CALL WHOSE RECORDED ARGUMENTS DO NOT READ BACK IS MARKED SO, and one the
+// log recorded with no arguments is not. The log spells a call made with none
+// as no text at all, and text that does not read back (cut, spliced, or not an
+// argument document) is a record something damaged, of a call made with
+// some: both decode to no arguments, and only the mark tells them apart, so
+// the first is drawn as the tool called with none and the second says its
+// arguments did not read back, never as a call made with none.
+//
+// Mutation: mark no call, and the damaged records draw `jira_create()`; mark
+// every call whose arguments decode to none, and the call made with none says
+// its arguments did not read back.
+func TestACallWhoseRecordedArgumentsDoNotReadBackIsMarkedSo(t *testing.T) {
+	t.Parallel()
+	got := bridgedCalls([]sandbox.BridgeCall{
+		{Name: "jira_create", Args: "not json", Output: "created", Digest: "d1"},
+		{Name: "jira_create", Args: `{"summary":"a"}{"summary":"b"}`, Output: "created", Digest: "d2"},
+		{Name: "jira_create", Output: "created", Digest: "d3"},
+		{Name: "jira_create", Args: `{"summary":"a"}`, Output: "created", Digest: "d4"},
+	})
+	calls := make([]ledger.Call, 0, len(got))
+	for _, call := range got {
+		calls = append(calls, call.Call)
+	}
+	want := strings.Join([]string{
+		"- jira_create(arguments recorded in text that does not read back) → success",
+		"- jira_create(arguments recorded in text that does not read back) → success",
+		"- jira_create() → success",
+		`- jira_create({"summary":"a"}) → success`,
+	}, "\n")
+	if lines := ledger.FormatCalls(calls, ledger.Format(nil, nil)); lines != want {
+		t.Errorf("the resumed turn draws the calls\n%s\nwant\n%s", lines, want)
+	}
+	for i, unread := range []bool{true, true, false, false} {
+		if got[i].ArgsUnread != unread || got[i].Args != nil && unread {
+			t.Errorf("call %d reads %+v, want marked as not read back: %v", i, got[i].Call, unread)
+		}
+	}
+}
+
 // WHAT THE LOG KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity on
 // the turn's record of the call, and the size of the whole arguments and output
 // where the log kept less, which the collection's replay decides by — and the
