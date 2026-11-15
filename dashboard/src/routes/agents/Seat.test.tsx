@@ -3250,7 +3250,8 @@ const schedule = (over: Partial<ScheduleRow>): ScheduleRow => ({
   task: "Post the standup",
   target: "",
   enabled: true,
-  timeout_seconds: 0,
+  timeout_seconds: 1800,
+  timeout_default: true,
   catchup: false,
   runners: ["swe"],
   next_run: new Date(Date.now() + 3_600_000).toISOString(),
@@ -3378,6 +3379,14 @@ test("the settings tab names a seat's credentials and prints none of their value
   expect(screen.getByText("swe@example.com")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Edit in org" }).getAttribute("href")).toBe(
     "#/company/org?seat=swe&editor=open",
+  );
+  // THE AUXILIARY MODEL AND LEARNING ARE EDITED IN STRUCTURE, and each link
+  // opens the editor on the tab that edits it.
+  expect(screen.getByRole("link", { name: "Edit models" }).getAttribute("href")).toBe(
+    "#/company/org?seat=swe&editor=model",
+  );
+  expect(screen.getByRole("link", { name: /^Change .*learning$/ }).getAttribute("href")).toBe(
+    "#/company/org?seat=swe&editor=advanced",
   );
 });
 

@@ -2,6 +2,7 @@ package worklet_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -446,6 +447,40 @@ func TestAnArchivedEntryIsOutOfTheDefaultCatalogue(t *testing.T) {
 	got := typeSlugs(r.catalogue(worklet.CatalogueQuery{Archived: true}).Types)
 	if !containsString(got, "retired") {
 		t.Fatalf("an archived type is unreachable even when asked for: %v", got)
+	}
+}
+
+// THE COMPANY'S OWN DECLARATIONS RIDE BESIDE THE EFFECTIVE SET, archived ones
+// included whatever the read asked: a write of `types` replaces exactly
+// these, so a screen that sent back the effective set would copy every
+// builtin into the company's words, and one that sent back the live types
+// alone would drop a retired declaration.
+func TestACatalogueReadCarriesTheDeclarationsAWriteReplaces(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	declared := []worklet.TaskType{
+		{Slug: "bug", Name: "Defect"},
+		{Slug: "incident", Name: "Incident"},
+		{Slug: "retired", Name: "Retired", Archived: true},
+	}
+	if _, err := r.writer.WriteTypes(t.Context(), "op-declared", declared); err != nil {
+		t.Fatalf("WriteTypes: %v", err)
+	}
+	r.drain()
+
+	answer := r.catalogue(worklet.CatalogueQuery{})
+	if got := typeSlugs(answer.DeclaredTypes); !slices.Equal(got, []string{"bug", "incident", "retired"}) {
+		t.Fatalf("declared types = %v, want exactly the company's three, the archived one included", got)
+	}
+	for _, d := range answer.DeclaredTypes {
+		if d.Builtin {
+			t.Errorf("declared type %q says builtin: the flag is the effective set's, and "+
+				"sent back it would be written as the company's", d.Slug)
+		}
+	}
+	if got := typeSlugs(answer.Types); !containsString(got, "task") {
+		t.Errorf("the effective set lost the builtins: %v", got)
 	}
 }
 

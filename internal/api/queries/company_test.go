@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
@@ -160,6 +161,14 @@ func TestSchedulesProjectsWhatIsConfigured(t *testing.T) {
 	// to tell "nothing has fired" from "this answer has no history half".
 	if _, present := body["recent_runs"]; !present {
 		t.Error("the answer carries no recent_runs key at all")
+	}
+	// THE ENGINE'S DEFAULT CAP, so a form for a new schedule reads what an
+	// empty time limit means rather than keeping a copy of the constant.
+	if got, want := body["default_timeout_seconds"], float64(org.DefaultScheduleTimeout/time.Second); got != want {
+		t.Errorf("default_timeout_seconds = %v, want the engine's %v", got, want)
+	}
+	if row["timeout_default"] != true {
+		t.Errorf("a schedule with no cap of its own says timeout_default = %v, want true", row["timeout_default"])
 	}
 }
 

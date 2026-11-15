@@ -2611,6 +2611,12 @@ const (
 	// setup, test and remove, and an MCP server's timeouts in its wizard
 	// added 23,241 bytes, script and sheet, and took it to 6279.1 KiB
 	// (6,429,813 bytes): 6280 KiB.
+	// Editing work and seats in place (a chat member removed, the company's
+	// task types, a seat's per-phase models, learning, workers, placement
+	// and box, the diagnostics switches on the one setting write, and the
+	// schedule cap and audit window said from the engine) added 19,037 bytes
+	// over main's 6256.4 KiB and took it to 6275.0 KiB (6,425,609 bytes):
+	// 6276 KiB.
 	treeBudget = 5<<20 + 1160<<10
 )
 

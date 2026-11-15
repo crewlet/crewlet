@@ -367,6 +367,8 @@ var contract = []Entry{
 	{"RetentionGenerationState", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 	{"RetentionIdentityCause", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 	{"RetentionTermName", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
+	{"SNAPSHOT_DONORS_REQUIRED", ReadScalar,
+		"internal/statelog.TestTheDashboardCountsTheDonorsTheSnapshotFloorRequires"},
 
 	// coverage.ts
 	{"Coverage", ReadInterface, "internal/eventfan.TestTheDashboardDeclaresExactlyTheCoverageTheEngineSends"},
@@ -727,6 +729,8 @@ var contract = []Entry{
 	{"BROKER_REMOVE_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastABrokerRemoval"},
 	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
 	{"OBJECT_FINDINGS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectFinding"},
+	{"OBJECT_COLLECT_INTERVAL_SECONDS", ReadScalar, "internal/api.TestTheDashboardStatesTheCollectorsCadence"},
+	{"OBJECT_AUDIT_INTERVAL_SECONDS", ReadScalar, "internal/api.TestTheDashboardStatesTheCollectorsCadence"},
 
 	// links.ts
 	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/doclet.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},

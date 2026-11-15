@@ -2009,7 +2009,12 @@ export interface ScheduleRow {
    *  defaulted — see `schedule.Row`. */
   target: string;
   enabled: boolean;
+  /** The cap a run is held to: the engine's default where the schedule sets
+   *  none, which `timeout_default` says. */
   timeout_seconds: number;
+  /** True when the schedule writes no cap of its own and runs to the
+   *  engine's default. */
+  timeout_default: boolean;
   catchup: boolean;
   /** The seats a fire actually reaches, resolved from the scope and target. */
   runners: string[];
@@ -2054,6 +2059,8 @@ export interface ScheduleRunRow {
 
 export interface SchedulesAnswer {
   schedules: ScheduleRow[];
+  /** The cap a schedule that sets none runs to, as the engine holds it. */
+  default_timeout_seconds: number;
   /** The COMPANY's newest fires, capped across every schedule — so a company
    *  with twenty hourly ones fills this in a couple of hours. One schedule's
    *  own history is `schedule_runs`. */
@@ -3440,6 +3447,10 @@ export interface WorkCatalogueAnswer {
   /** The EFFECTIVE set: what this build ships plus what the company declared,
    *  a declaration replacing a builtin of the same slug. */
   types: WorkTypeDef[];
+  /** The company's OWN type declarations, archived ones included whatever was
+   *  asked: what a write of `types` replaces, so a writer sends back exactly
+   *  these with its change, never the effective set. */
+  declared_types: WorkTypeDef[];
   /** The WORKSPACE's declarations. A project declares its own beside them. */
   fields: WorkFieldDef[];
   policy_version: number;

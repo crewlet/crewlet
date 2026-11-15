@@ -200,6 +200,19 @@ test("a link that names a seat and asks for its editor opens it, and spends the 
   expect(query().get("seat")).toBe("ceo");
 });
 
+// A LINK MAY NAME THE TAB: a seat page's Learning sends its reader to the
+// tab that edits it, not to the editor's first tab.
+test("a link that names a seat editor's tab opens the editor on it", async () => {
+  mount("#/company/org/table?seat=ceo&editor=advanced");
+  const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
+  expect(
+    within(editor)
+      .getByRole("tab", { name: /^Advanced/ })
+      .getAttribute("aria-selected"),
+  ).toBe("true");
+  await waitFor(() => expect(query().has("editor")).toBe(false));
+});
+
 test("a link that names a unit and asks for its editor opens that unit's editor", async () => {
   mount("#/company/org/table?unit=engineering&editor=open");
   expect(await screen.findByRole("dialog", { name: "Edit Engineering" })).toBeDefined();

@@ -885,7 +885,11 @@ holds the `scheduler` fleet duty.
   them where it differs. **New schedule**, and on a schedule's page **Edit**,
   **Pause** or **Resume** and **Delete**, rewrite the seat or team that
   declares it through the configuration routes (Admin, or a lead inside their
-  own team); **Run now** is [running it now](#running-a-schedule-now).
+  own team); **Run now** is [running it now](#running-a-schedule-now). A
+  schedule's Cap says when it is the engine's default rather than a
+  `timeout_seconds` of its own, and the form's empty time limit names that
+  default, both read from the answer (`timeout_default`,
+  `default_timeout_seconds`).
 - **The history is the replicated usage domain's**
   ([ADR-0020](../../adr/0020-a-nodes-own-day-is-a-compacted-domain.md)), not
   the ledger of whichever node answers. Each data node derives the fires its

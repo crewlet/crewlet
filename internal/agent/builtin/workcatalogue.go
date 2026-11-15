@@ -104,7 +104,8 @@ func (t *writeWorkCatalogue) Description() string {
 		"REPLACES the one it names, and each declaration in it is WHOLE — a " +
 		"key you leave out is cleared, `config` and its options included — so " +
 		"read " + worklet.GetWorkCatalogueTool + " and send back what it gave you with your " +
-		"change in it, never a field composed from scratch. The two lists are " +
+		"change in it (for `types`, its `declared_types`, the company's own), " +
+		"never a field composed from scratch. The two lists are " +
 		"separate writes: sending only `types` leaves the fields alone, and " +
 		"the reverse. The built-in types (task, bug, epic, story, spike, " +
 		"chore, milestone) are always available; carry one here only to " +

@@ -46,6 +46,7 @@ import type { NodeKey } from "./model/keys.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
 import type { EditPartIntent, FieldSet, Intent } from "./model/operations.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
+import { PHASE_MODEL_FIELDS } from "./nodeFacts.ts";
 
 // ---------------------------------------------------------------------------
 // Shapes
@@ -119,7 +120,31 @@ export interface SeatForm {
   readonly project: string;
   /** The knowledge container the seat writes in (`space`), owned likewise. */
   readonly space: string;
+  /**
+   * Each per-phase chain beside `llm` (`llm_review`, `llm_subagent`,
+   * `llm_auxiliary`, `llm_judge`), as keys in order; `null` for one written
+   * as a per-phase mapping, which the editor shows but does not edit.
+   */
+  readonly phaseModels: Readonly<Record<PhaseModelField, readonly string[] | null>>;
+  /** `learning_enabled`: "" for the company's default, else "on" or "off". */
+  readonly learning: Learning;
+  /** The delegate templates the seat may use (`workers`); empty is every one. */
+  readonly workers: readonly string[];
+  /** The node the seat is pinned to (`placement.node`); "" for none. */
+  readonly placementNode: string;
+  /** The labels a node must carry (`placement.labels`), each as `key=value`. */
+  readonly placementLabels: readonly string[];
+  /** `sandbox.pause_ttl_seconds` as typed: digits, or empty for the default. */
+  readonly pauseTTL: string;
+  /** `sandbox.max_turns` as typed: digits, or empty for the default. */
+  readonly maxTurns: string;
 }
+
+/** One of the per-phase chains a seat may carry beside `llm` ([PHASE_MODEL_FIELDS]). */
+export type PhaseModelField = (typeof PHASE_MODEL_FIELDS)[number];
+
+/** A seat's own learning setting: unset follows the company. */
+export type Learning = "" | "on" | "off";
 
 /** A calendar window a `token_budget:` caps: `day`, `week` or `month`. */
 export type BudgetWindow = keyof TokenBudget;
@@ -225,7 +250,54 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
     accessLevel,
     project: text(data.project),
     space: text(data.space),
+    phaseModels: Object.fromEntries(
+      PHASE_MODEL_FIELDS.map((field) => [field, llmChain(data[field] as PhaseLLM | undefined)]),
+    ) as Record<PhaseModelField, string[] | null>,
+    learning: data.learning_enabled === true ? "on" : data.learning_enabled === false ? "off" : "",
+    workers: strings(data.workers),
+    placementNode: text(getPath(data, ["placement", "node"])),
+    placementLabels: labelEntries(getPath(data, ["placement", "labels"])),
+    pauseTTL: numberText(getPath(data, ["sandbox", "pause_ttl_seconds"])),
+    maxTurns: numberText(getPath(data, ["sandbox", "max_turns"])),
   };
+}
+
+/** A number the document holds, as its box shows it; empty where it holds none. */
+function numberText(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+}
+
+/** A label map as `key=value` entries, in the document's order. */
+function labelEntries(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  return Object.entries(value).map(([key, v]) => `${key}=${String(v)}`);
+}
+
+/**
+ * Why a typed placement label cannot be written, or undefined: each is
+ * `key=value`, a key at most once, as `placement.labels` maps one to one.
+ */
+export function placementLabelsError(entries: readonly string[]): string | undefined {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const at = entry.indexOf("=");
+    const key = at > 0 ? entry.slice(0, at).trim() : "";
+    if (key === "") return `“${entry}” is not a label: write it as key=value.`;
+    if (seen.has(key)) return `The label ${key} is named twice: a node carries one value for it.`;
+    seen.add(key);
+  }
+  return undefined;
+}
+
+/**
+ * Why a typed whole number of the executor box cannot be written, or
+ * undefined: empty is the default, else digits, zero included (`0` means
+ * never pause, or no round cap, which the engine reads as a setting).
+ */
+export function wholeNumberError(typed: string): string | undefined {
+  const t = typed.trim();
+  if (t === "" || /^\d+$/.test(t)) return undefined;
+  return "Write a whole number, or leave it empty for the default.";
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +422,27 @@ function llmValue(chain: readonly string[], wasList: boolean): PhaseLLM | undefi
   return [...chain];
 }
 
+/** A learning setting as the document writes it: removed for the company's default. */
+const learningValue = (learning: Learning): boolean | undefined =>
+  learning === "" ? undefined : learning === "on";
+
+/** Placement labels as the document writes them: a map, removed when empty. */
+function labelsValue(entries: readonly string[]): Record<string, string> | undefined {
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(
+    entries.map((entry) => {
+      const at = entry.indexOf("=");
+      return [entry.slice(0, at).trim(), entry.slice(at + 1).trim()];
+    }),
+  );
+}
+
+/** A typed whole number as the document writes it: removed when empty. */
+function wholeValue(typed: string): number | undefined {
+  const t = typed.trim();
+  return t === "" ? undefined : Number(t);
+}
+
 export function seatParts(
   key: NodeKey,
   data: ConfigRole,
@@ -440,6 +533,32 @@ export function seatParts(
     ),
     ...textPart(["project"], initial.project, form.project, line),
     ...textPart(["space"], initial.space, form.space, line),
+    // ONE PART PER PHASE, as `llm` is written: a chain written as a mapping
+    // is shown and left alone.
+    ...PHASE_MODEL_FIELDS.flatMap((field) => {
+      const before = initial.phaseModels[field];
+      const after = form.phaseModels[field];
+      if (before === null || after === null) return [];
+      return changed(
+        [field],
+        llmValue(before, Array.isArray(data[field])),
+        llmValue(after, Array.isArray(data[field])),
+      );
+    }),
+    ...changed(["learning_enabled"], learningValue(initial.learning), learningValue(form.learning)),
+    ...changed(["workers"], listValue(initial.workers), listValue(form.workers)),
+    ...textPart(["placement", "node"], initial.placementNode, form.placementNode, line),
+    ...changed(
+      ["placement", "labels"],
+      labelsValue(initial.placementLabels),
+      labelsValue(form.placementLabels),
+    ),
+    ...changed(
+      ["sandbox", "pause_ttl_seconds"],
+      wholeValue(initial.pauseTTL),
+      wholeValue(form.pauseTTL),
+    ),
+    ...changed(["sandbox", "max_turns"], wholeValue(initial.maxTurns), wholeValue(form.maxTurns)),
   ];
   const levelChanged = form.accessLevel !== initial.accessLevel;
   if (set.length > 0 || levelChanged) {
