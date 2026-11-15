@@ -977,11 +977,12 @@ snapshot again before you start restoring, rebuilding or adding nodes.
   not run the activated revision: one on an older epoch, one that refused it
   or applied it only in part, one on another revision, and one that has
   reported nothing.
-- **Each node's heartbeat** also carries how each of its MCP servers
+- **Each node's status record** carries how each of its MCP servers
   started — one row per server, counting the
-  instances that started and failed, with one failure's reason. See
-  [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
-- **What is firing on each node** rides the same heartbeat: every
+  instances that started and failed, with one failure's reason — beside its
+  models, its runners and what it runs on. See
+  [Its status record](../concepts/coordination.md#its-status-record).
+- **What is firing on each node** rides its heartbeat: every
   [alarm](../reference/alarms.md) the node's own table has up, by its kind
   and with when the node raised it, the longest-standing first. `GET /fleet`
   lists them on each node's row (`alarms`), so one read says what is wrong
