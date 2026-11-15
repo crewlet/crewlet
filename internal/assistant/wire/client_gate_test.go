@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // closedSets is every closed set the dashboard declares, by the TypeScript
@@ -46,6 +47,8 @@ func closedSets() map[string][]string {
 		"AssistantTurnMode":        strs(wire.TurnModes),
 		"AssistantBriefTone":       strs(wire.BriefTones),
 		"AssistantBriefActionKind": strs(wire.BriefActionKinds),
+		// A proposal's taint is the surface its outside text came from.
+		"AssistantTaintSource": strs(provenance.Sources),
 		// --- deep work (im-deep) ---
 		"AssistantDeepState":           strs(wire.DeepStates),
 		"AssistantAttachmentMediaType": wire.AttachmentMediaTypes,

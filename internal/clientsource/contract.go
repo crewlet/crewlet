@@ -593,6 +593,7 @@ var contract = []Entry{
 	{"AssistantProposalState", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantProposalScope", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantProposalRisk", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
+	{"AssistantTaintSource", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantChangeKind", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantWordOp", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantColumnType", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},

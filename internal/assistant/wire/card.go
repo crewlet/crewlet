@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -219,10 +220,9 @@ type ProposalCard struct {
 	// Audience is who will see the result where visibility changes (a
 	// share, a comment others are notified of).
 	Audience []string `json:"audience,omitempty"`
-	// Taint names the outside source the turn read before proposing, so
-	// the person weighs a change that text somebody else wrote may have
-	// asked for (D25).
-	Taint string `json:"taint,omitempty"`
+	// Taint is the surface (one of provenance.Sources) whose outside text the
+	// turn read before proposing (D25); absent for none.
+	Taint provenance.Source `json:"taint,omitempty"`
 	// StepUp is a change whose verb asks the person to confirm it is them
 	// before it executes.
 	StepUp bool `json:"step_up,omitempty"`

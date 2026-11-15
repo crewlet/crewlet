@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // A RESUMED SEGMENT IS TAINTED BY WHAT ITS MODEL HOLDS (D25). A proposal names
@@ -117,7 +118,7 @@ func TestAResumedSegmentIsTaintedByWhatItsModelHolds(t *testing.T) {
 				t.Fatalf("the resumed segment proposed nothing: %+v", f.Store.Proposals())
 			}
 			for which, got := range map[string]struct {
-				taint string
+				taint provenance.Source
 				want  bool
 			}{
 				"the first segment's proposal": {p.Card.Proposal.Taint, tc.first},
