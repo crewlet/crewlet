@@ -16,10 +16,13 @@
 //
 // On each project agents may use, the provisioner holds Project IAM Admin three
 // times, each under a condition listing one level's roles, so it can grant and
-// revoke only the level table, one list per write. In the identity project it
-// holds Service Account Admin, which reaches only Crewlet's own accounts. A
-// project is offered to agents only when all three conditions and the owner's
-// crewletOperator role are exactly this package's ([discover]).
+// revoke only the level table, one list per write, and once more where the
+// owner adds a grants list of roles a seat may be granted on request
+// (grants.go). In the identity project it holds Service Account Admin, which
+// reaches only Crewlet's own accounts. A project is offered to agents only when
+// all three conditions and the owner's crewletOperator role are exactly this
+// package's and no role its grants list names could mint, act as another
+// identity or grant access ([discover]).
 //
 // # Only what the ledger records is the engine's
 //
