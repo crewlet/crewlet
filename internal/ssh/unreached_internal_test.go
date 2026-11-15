@@ -22,13 +22,11 @@ func dialFailing(err error) dialer {
 	return func(context.Context, string, string) (net.Conn, error) { return nil, err }
 }
 
-// The ways a dial to a server fails, as the net package reports each: what a
-// scan and the reach step of Test connection are handed.
+// The ways a dial fails, as the net package reports each.
 var dialFailures = []struct {
 	name string
 	err  error
-	// said is what the person must be told; operator lists what they must
-	// not be: the dial's own words, the resolver's address.
+	// said must appear in the words; operator (the dial's text) must not.
 	said     []string
 	operator []string
 }{
@@ -67,14 +65,8 @@ var dialFailures = []struct {
 	},
 }
 
-// A SERVER THAT CANNOT BE REACHED IS SAID BY HOW IT FAILED, for the person who
-// typed its address: a name that does not resolve is told to check the name,
-// a refusing port to check the port, a silent server to check the firewall,
-// and none of them reads the dial's own error. The scan before a server is
-// added and Test connection's reach step dial the same way and say the same.
-//
-// Mutation: answer err.Error() in either place, or drop a case from
-// unreachedWords so it falls to the last one, and this is red.
+// An unreachable server is said by how it failed, with that cause's remedy and
+// none of the dial's text, alike by Scan and Test connection's reach step.
 func TestAServerThatCannotBeReachedIsSaidByHowItFailed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range dialFailures {
@@ -98,7 +90,7 @@ func TestAServerThatCannotBeReachedIsSaidByHowItFailed(t *testing.T) {
 					}
 				}
 			}
-			// THE CHAIN IS KEPT for the operator's log, and its sentinels match.
+			// The chain is kept for the log.
 			if !errors.Is(err, tc.err) {
 				t.Errorf("the scan's error %v lost the dial's", err)
 			}
@@ -106,8 +98,7 @@ func TestAServerThatCannotBeReachedIsSaidByHowItFailed(t *testing.T) {
 	}
 }
 
-// A SERVER THAT ANSWERS WITH NO KEY TO PIN is told apart from one that does not
-// answer: it was reached, so the person is sent to paste its keys by hand.
+// A server that answers with no key to pin is sent to paste its keys by hand.
 func TestAServerThatAnswersWithNoKeyToPinIsSentToItsKeyFiles(t *testing.T) {
 	t.Parallel()
 	// A connection whose far end hangs up at once: reached, and no handshake.
@@ -128,7 +119,7 @@ func TestAServerThatAnswersWithNoKeyToPinIsSentToItsKeyFiles(t *testing.T) {
 	}
 }
 
-// A PORT THAT CANNOT BE DIALLED is said with the range a port takes.
+// A port out of range is said with the range.
 func TestAScanOfAPortOutOfRangeSaysTheRange(t *testing.T) {
 	t.Parallel()
 	_, err := scan(t.Context(), dialFailing(errors.New("not dialled")), "web-1.example.com", 70000)

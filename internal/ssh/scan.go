@@ -44,8 +44,8 @@ var ErrNoHostKey = errors.New("ssh: the server presented no host key the engine 
 var errScanUnreached = errors.New("ssh: the address did not answer")
 
 // Scan reads the host keys the server at address and port presents, through
-// the same address rule a registered host is held to. A scan that reads no key
-// fails with a [*ScanError], which says why in a person's words.
+// the same address rule a registered host is held to. It fails with a
+// [*ScanError] carrying a person's words.
 func Scan(ctx context.Context, address string, port int) ([]ScannedKey, error) {
 	return scan(ctx, guardedDial, address, port)
 }
@@ -91,8 +91,7 @@ func scan(ctx context.Context, dial dialer, address string, port int) ([]Scanned
 		if lastErr == nil {
 			lastErr = ErrNoHostKey
 		}
-		// IT ANSWERED, and offered none of the algorithms asked for: the keys
-		// are still on the server, to be pasted by hand.
+		// It answered with no algorithm asked for: its keys can still be pasted.
 		return nil, scanFailed(fmt.Sprintf("%s answered on port %d but presented no host key Crewlet can pin. "+
 			"Paste the server's keys from /etc/ssh/ssh_host_*_key.pub instead.", address, port),
 			fmt.Errorf("%w: %w", ErrNoHostKey, lastErr))
@@ -100,8 +99,7 @@ func scan(ctx context.Context, dial dialer, address string, port int) ([]Scanned
 	return out, nil
 }
 
-// ScanPort reports whether port can be dialled: 1 to 65535, after an empty
-// port has been read as 22.
+// ScanPort reports whether port can be dialled (1 to 65535).
 func ScanPort(port int) bool { return port >= 1 && port <= 65535 }
 
 // PortWords is a port that cannot be dialled, said for a person.

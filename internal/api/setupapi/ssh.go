@@ -204,9 +204,7 @@ func (s *Service) sshScan(w http.ResponseWriter, r *http.Request) {
 	}
 	keys, err := sshint.Scan(r.Context(), req.Address, req.Port)
 	if err != nil {
-		// THE PERSON IS TOLD WHICH WAY IT FAILED and what to check, in the
-		// scan's own words for them; the chain, which names the engine's
-		// resolver, is the operator's.
+		// The person reads the scan's words; the chain goes to the log.
 		slog.InfoContext(r.Context(), "ssh_scan_failed", "address", req.Address, "port", req.Port, "err", err)
 		said := "The server's host keys could not be read. Check the address and port."
 		if failed, ok := errors.AsType[*sshint.ScanError](err); ok {

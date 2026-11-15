@@ -6,15 +6,8 @@ import (
 	"testing"
 )
 
-// A NEGATIVE MCP TIMEOUT IS REFUSED IN A PERSON'S WORDS as well as the
-// operator's. The server's edit wizard offers both timeouts as fields, and
-// its Review said the refusal as the operator's line, document path and all
-// ("mcp_servers[0].request_timeout_seconds: value out of range: ..."): the
-// person's words name the field as the wizard labels it and say what to do,
-// and carry no path, key or Go value.
-//
-// Mutation: write either fault with p.add rather than p.addSaying, and this
-// is red.
+// A negative MCP timeout is refused in a person's words too: the field named
+// as the wizard labels it, the default offered, no path, key or value.
 func TestANegativeMCPTimeoutIsRefusedInAPersonsWords(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ field, named string }{

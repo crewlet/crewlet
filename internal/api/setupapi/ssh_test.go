@@ -657,8 +657,7 @@ func TestTheSSHAuditsPageIsTheReadersOwn(t *testing.T) {
 	}
 }
 
-// A SCAN OF A PORT NO SERVER CAN LISTEN ON is refused beside the port field,
-// in a person's words, before anything is dialled.
+// A port out of range is refused beside the port field before anything is dialled.
 func TestAnSSHScanOfAPortOutOfRangeIsRefusedAtThePort(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
