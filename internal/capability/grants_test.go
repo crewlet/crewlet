@@ -34,7 +34,8 @@ func TestASeatIsToldTheGrantsItsCredentialHolds(t *testing.T) {
 	text := capability.YourAccess(now)
 	for _, want := range []string{
 		"Beside it: Origin Write on example.com until 2026-11-15 18:00 UTC.",
-		"When Cloudflare refuses a call for a permission you lack, ask for that one permission with request_access",
+		"When Cloudflare refuses a call for a permission you lack (403 \"request is not authorized\"), ask for " +
+			"that one permission with request_access",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Your access lacks %q:\n%s", want, text)
