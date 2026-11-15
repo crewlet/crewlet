@@ -244,7 +244,13 @@ export function HoldingList({
       header: "Held for",
       shrink: true,
       align: "right",
-      cell: (row) => <span className="t-caption">{heldFor(row.held_since, now)}</span>,
+      // NOT RECORDED IS SAID AS SUCH, never as a span counted from nothing.
+      cell: (row) =>
+        row.held_since ? (
+          <span className="t-caption">{heldFor(row.held_since, now)}</span>
+        ) : (
+          <EmptyValue label="Not recorded" />
+        ),
     };
     return [
       c.priority,

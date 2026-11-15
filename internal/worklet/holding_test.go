@@ -1,7 +1,9 @@
 package worklet_test
 
 import (
+	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,5 +198,36 @@ func TestHoldingUpCountsTheAgentWorkWaitingOnAPerson(t *testing.T) {
 	}
 	if none := r.myWorkWith("owner", nil); none.HoldingAgents != (worklet.HoldingAgents{}) {
 		t.Errorf("with no agent seats named the summary = %+v, want nothing counted", none.HoldingAgents)
+	}
+}
+
+// AN ITEM HELD BY A QUESTION IS HELD SINCE THE QUESTION WAS PUT: the person
+// was asked, not handed the item, so no change of its assignee says when they
+// came to hold it, and an item nobody was ever assigned has none at all. It
+// read the zero instant, which a reader drew as "held for 739,933 days"; and
+// where nothing is recorded the row says nothing rather than year 1.
+//
+// Mutation: read the hand-over for an asked row too, and q reads zero.
+func TestAnItemHeldByAQuestionIsHeldSinceItWasPut(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "q", "")
+	asked := wednesday.Add(-90 * time.Minute)
+	askOn(t, r, "op-ask", "q", worklet.Comment{ID: "c-ask", Task: "q", Author: "backend",
+		AuthorKind: worklet.AuthorAgent, Body: "Merge it?", Ask: "owner", CreatedAt: asked})
+
+	held := r.myWork("owner").HoldingUp
+	if len(held) != 1 || held[0].ID != "q" || held[0].Asked != "c-ask" {
+		t.Fatalf("holding up = %+v, want q, held by c-ask", held)
+	}
+	if !held[0].HeldSince.Equal(asked) {
+		t.Errorf("q is held since %s, want %s, when the question was put", held[0].HeldSince, asked)
+	}
+	raw, err := json.Marshal(worklet.HoldingRow{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "held_since") {
+		t.Errorf("a row with no recorded instant says %s, want no held_since at all", raw)
 	}
 }

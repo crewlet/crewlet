@@ -5621,8 +5621,10 @@ export interface WorkHoldingRow extends WorkSummary {
   blocks_capped?: boolean;
   /** Who holds the waiting work, the person left out, sorted, at most eight. */
   holders: string[];
-  /** When it was last assigned, or filed already assigned. */
-  held_since: string;
+  /** When the person came to hold it: when it was last assigned (or filed
+   *  already assigned), or when the question it is held by was put. Absent
+   *  where neither is recorded. */
+  held_since?: string;
   /** The open question to the person this row is held by, its comment id,
    *  where they hold the item by being asked: the item itself waits on them. */
   asked?: string;
