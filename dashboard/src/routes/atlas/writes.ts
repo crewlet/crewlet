@@ -19,7 +19,7 @@ import {
   type AtlasReviewItem,
   type AtlasVendor,
 } from "~/contract/atlas.ts";
-import { KINDS, RELATIONS, factLabel, valueWord } from "./words.ts";
+import { KINDS, RECORDS, RELATIONS, factLabel, valueWord } from "./words.ts";
 
 /** An entry as a write names it: its kind and key, which names one member of a merged entry. */
 export function entryArg(ref: { kind: AtlasKind; key: string }): string {
@@ -176,6 +176,80 @@ export interface Decision {
 
 /** Who made a claim, as far as deciding it goes. */
 type Voice = { source: { kind: string } };
+
+/** Where a person changes what the company settings declare. */
+export interface DeclaredPlace {
+  readonly label: string;
+  readonly path: readonly string[];
+}
+
+/**
+ * An entry the engine computes again on every read, from the company settings
+ * or its own records, and so changes nowhere in the atlas: who declares it,
+ * and the page a person changes it on where the dashboard has one.
+ */
+export interface Declared {
+  /** Who declares it, opening a sentence: "The company settings", "Gitlet". */
+  readonly by: string;
+  /** "declare" or "declares", agreeing with `by`. */
+  readonly verb: "declare" | "declares";
+  readonly place: DeclaredPlace | null;
+}
+
+/** The page each kind the settings declare is changed on, where there is one. */
+const SETTINGS_PLACES: Partial<Record<AtlasKind, DeclaredPlace>> = {
+  model_provider: { label: "Open Models", path: ["settings", "models"] },
+  tool_server: { label: "Open MCP & tools", path: ["settings", "mcp-tools"] },
+  host: { label: "Open SSH", path: ["company", "integrations", "ssh"] },
+  vendor_account: { label: "Open Integrations", path: ["company", "integrations"] },
+  domain: { label: "Open Cloudflare", path: ["company", "integrations", "cloudflare"] },
+  repository: { label: "Open Integrations", path: ["company", "integrations"] },
+};
+
+/** Whether a source is one the engine computes on every read: the settings, or its own records. */
+const computed = (voice: Voice) =>
+  voice.source.kind === "settings" || voice.source.kind === "records";
+
+/**
+ * Who declares an entry the engine computes again on every read, or null for
+ * one only people, agents, integrations or a repository's files have said.
+ *
+ * THE ENGINE'S RULE, READ OFF THE ENTRY'S OWN SOURCES (`atlas.SourceKind`'s
+ * `Computed`): what the company settings or the engine's own records declare
+ * is never stored in the atlas, so a write cannot retire or purge it (the next
+ * read brings it back), and the engine refuses one that tries rather than
+ * record what the next read undoes. The settings are named first: they are
+ * what a person changes.
+ */
+export function declaredBy(entry: Pick<AtlasEntry, "ref" | "sources">): Declared | null {
+  const source =
+    entry.sources.find((s) => s.kind === "settings") ??
+    entry.sources.find((s) => s.kind === "records");
+  return source ? declarer(source, entry.ref.kind) : null;
+}
+
+/**
+ * The settings or the records a computed claim comes from, NAMED AS THE ENGINE
+ * NAMES THEM (`builtin.declarer`): the company settings, Gitlet by name, and
+ * every other record family as the engine's own records.
+ */
+export function declarer(source: Voice["source"] & { name?: string }, kind: AtlasKind): Declared {
+  if (source.kind === "settings") {
+    return { by: "The company settings", verb: "declare", place: SETTINGS_PLACES[kind] ?? null };
+  }
+  if (source.name === "gitlet") return { by: RECORDS.gitlet!, verb: "declares", place: null };
+  return { by: "The engine’s own records", verb: "declare", place: null };
+}
+
+/**
+ * The claim that declares a relation where the atlas cannot change it, or
+ * null: its shown claim, or another live claim on it, that comes from the
+ * settings or the engine's records (`builtin.declared`), which the engine
+ * refuses to take back here.
+ */
+export function declaredClaim<V extends Voice>(shown: V, others: readonly V[] = []): V | null {
+  return computed(shown) ? shown : (others.find(computed) ?? null);
+}
 
 /**
  * Why a disagreement is not decided in the atlas, or null where it is. What
