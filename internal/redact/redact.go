@@ -2030,6 +2030,22 @@ func armoured(s string) bool {
 // lines — only one written on it, read back from an END as far as the marker,
 // whose words are no piece of a key ([lineBack]).
 //
+// AND NO KEY'S BLOCK IS READ ACROSS A LINE HOLDING ONE, forward from its BEGIN
+// or back from its END ([keyReader.read], [wrapping.readBack], [backHold]),
+// since a marker can stand for far more text than its own: a password's value
+// of 64 KiB is nineteen bytes once replaced, and a token's run as long. Read
+// across, a line the bound had kept a BEGIN or an END from reaching, with the
+// value between them, was within the bound of it on a second pass, and was
+// redacted with the lines between as a key's: redacting twice was not
+// redacting once. So a read stops at the first line a pass has redacted in:
+// every line before it is as the first pass read it, so a second pass reads
+// no further than the first did. What that costs is a key with a line quoting
+// a marker between two of its lines and one of its armours alone in the text:
+// the lines on the other side of that line are published, as a key's two
+// halves with both armours in the text are redacted apart, the line between
+// them kept. A text no pass has redacted holds a marker only where it quotes
+// one.
+//
 // A marker beside an armour is what a pass leaves around an armour it read no
 // key from — had it read one, the armour would be inside the key's marker — and
 // a second pass has to read none there either: redacting twice is redacting
@@ -2091,10 +2107,11 @@ const maxKeyLine = 76 + 1
 // armour and no marker ([rule.next]); and an armour line holding a marker,
 // before its armour or after it, holds no key read across its lines
 // ([marked]), and one written on it is read back from its END no further
-// than the marker ([lineBack]). The one exception is the last the package
-// doc lists as still published: a key's piece on the line of a value read
-// below a password's key that a key's END line goes on to, which a second
-// pass can redact.
+// than the marker ([lineBack]); and no key's block is read across a line
+// holding a marker, which can stand for more text than its own ([marked]).
+// The one exception is the last the package doc lists as still published: a
+// key's piece on the line of a value read below a password's key that a key's
+// END line goes on to, which a second pass can redact.
 func Secrets(text string) string {
 	if text == "" {
 		return text
@@ -2770,13 +2787,18 @@ func (r *keyReader) read(pos int) keyBlock {
 		line := r.text[pos:lineEnd]
 		if strings.Contains(line, "-----") {
 			if e := keyEnd.FindStringIndex(line); e != nil {
-				if !armoured(line[:e[0]]) && r.closes(pos, line[:e[0]]) {
+				// An END line holding a marker, before its armour or
+				// after it, closes nothing, as one is read back from
+				// nothing ([linesBack]).
+				if !armoured(line[:e[0]]) && !marked(line) && r.closes(pos, line[:e[0]]) {
 					return keyBlock{end: pos + e[1], closed: true, endArmour: pos + e[0]}
 				}
 				return r.ended()
 			}
 		}
-		if armoured(line) {
+		if armoured(line) || marked(line) {
+			// Another armour, or a line a pass has redacted in, which
+			// the read never crosses ([marked]).
 			return r.ended()
 		}
 		trimmed := trimLine(line)
@@ -3170,7 +3192,9 @@ func (w wrapping) readBack(text string, lineS, armour int) (int, bool) {
 			break
 		}
 		line := text[start:end]
-		if armoured(line) {
+		if armoured(line) || marked(line) {
+			// Another armour, or a line a pass has redacted in, which
+			// the read never crosses ([marked]).
 			break
 		}
 		trimmed := trimLine(line)
@@ -4000,7 +4024,8 @@ func backHold(text string) int {
 			break
 		}
 		line := text[start:end]
-		if armoured(line) {
+		if armoured(line) || marked(line) {
+			// What the read back stops at ([wrapping.readBack]).
 			break
 		}
 		trimmed := trimLine(line)

@@ -609,13 +609,16 @@ func TestARedactedKeyReadsAsTheArmourItReplaced(t *testing.T) {
 // back across a cut went past to the key's line only once it was a marker; and
 // a key on one line between a run at a key's width and an END, whose BEGIN's
 // armour stopped that read the first time and whose marker, words, did not stop
-// it the second.
+// it the second; and a password's value or a token's run, a line long, between
+// an armour and a line at a key's width further from it than the bound of the
+// read from the armour, which once it was a marker put that line within it.
 //
 // Mutation: make the password's rule replace its whole match again, or its
 // value whole, escaped breaks and all, or let the value run on through an
 // armour or a marker, or a token's into an armour; or read an armour line
 // holding a marker, before its armour or after it, or a key on one line back
-// across a marker: each changes its own case's second pass.
+// across a marker, or a read back from an END across a line holding one: each
+// changes its own case's second pass.
 func TestARuleReplacesNothingAKeyIsReadAcross(t *testing.T) {
 	escaped := func(lines ...string) string { return `{"log": "` + strings.Join(lines, `\n`) + `\n"}` + "\n" }
 	for name, text := range map[string]string{
@@ -645,11 +648,42 @@ func TestARuleReplacesNothingAKeyIsReadAcross(t *testing.T) {
 			" xyz Done -----END RSA PRIVATE KEY-----\n",
 		"a key on one line between a run at a key's width and an END": "ZZ " + keyLine + " -----BEGIN RSA PRIVATE KEY----- " +
 			keyLine + " -----END RSA PRIVATE KEY----- x -----END RSA PRIVATE KEY-----\n",
+		"a password's value between an END and a line past the read back's bound": strings.Repeat("Ab3+", 12) + `=="pwd=abc\n` +
+			strings.Repeat("s", redact.MaxKeyBlockBytes-24) + "\n-----END RSA PRIVATE KEY-----",
+		"a token's run between an END and a line past the read back's bound": keyLine + `\neyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.` +
+			strings.Repeat("S", 43) + strings.Repeat("s", redact.MaxKeyBlockBytes+6) + "\n-----END RSA PRIVATE KEY-----\\n",
+		"a password's value running the line after a BEGIN past the bound": "-----BEGIN OPENSSH PRIVATE KEY-----\\n" +
+			keyLine + " | Password: |" + strings.Repeat("=", redact.MaxKeyBlockBytes-75) + "\\n",
+		"a password's value running a line before an END past the bound": "-----BEGIN RSA PRIVATE KEY-----\n" +
+			keyLine + " pwd=" + strings.Repeat("h", redact.MaxKeyBlockBytes) + " -----END RSA PRIVATE KEY-----\n",
+		"a token after an END, running its line past a BEGIN's bound": "-----BEGIN RSA PRIVATE KEY-----\n\n" +
+			strings.Repeat("s", redact.MaxKeyBlockBytes-70) + "-----END RSA PRIVATE KEY-----crewlet_rt1.Tq0d_8-x.subj.1792927401." +
+			strings.Repeat("S", 40) + "a_-",
 	} {
 		once := redact.Secrets(text)
 		if twice := redact.Secrets(once); twice != once {
 			t.Errorf("%s: a second pass changed\n%q\nto\n%q", name, once, twice)
 		}
+	}
+}
+
+// NO END READS A KEY BACK ACROSS A LINE A PASS HAS REDACTED IN, whose marker
+// may stand for more than the bound of the read back: a line at a key's width
+// above one is not read as the END's key, and a live view does not hold it for
+// an END that could come, since none could read it.
+//
+// Mutation: read back from an END across a line holding a marker, and the
+// key's line is redacted; hold a line above one for an END not written yet,
+// and it is not shown.
+func TestNoKeyIsReadBackAcrossALineHoldingAMarker(t *testing.T) {
+	t.Parallel()
+	text := keyLine + "\n" + redact.Marker + "api-key]\n"
+	if got := redact.Settled(text); got != len(text) {
+		t.Errorf("Settled(%q) = %d, want all %d bytes", text, got, len(text))
+	}
+	whole := text + "-----END RSA PRIVATE KEY-----\n"
+	if got := redact.Secrets(whole); got != whole {
+		t.Errorf("Secrets(%q) = %q, want it unchanged", whole, got)
 	}
 }
 
