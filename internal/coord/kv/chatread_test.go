@@ -429,12 +429,25 @@ func (k *answerLost) Purge(ctx context.Context, key string, opts ...jetstream.KV
 // and refused, so a person told "may have been recorded" would be told
 // something false, which is what the [coord.ChatReads] contract promises an
 // unmarked error never means.
+//
+// THE WINDOWS BETWEEN ATTEMPTS ARE THE CASE'S, each over the moment it is
+// asked for ([roundTrip.after]) and counted: on the real clock this flush sat
+// out about two hundred and fifty of them, eighty seconds of CI, on its way
+// to the answer that is its subject. That it waits is held here, by the
+// count; how long each window is, by casline's own suite (casWindow).
 func TestAFlushThatLosesEveryAttemptSaysNothingLanded(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	f, _ := chatReadFleet(t, "founder")
 	refusing := &lostForever{KeyValue: f.chatReads}
 	f.chatReads = refusing
+	var waits atomic.Int64
+	f.chatReadTrips.after = func(time.Duration) <-chan time.Time {
+		waits.Add(1)
+		over := make(chan time.Time, 1)
+		over <- chatReadAt0
+		return over
+	}
 
 	_, err := f.AdvanceChatRead(ctx, "founder", coord.ChatReadDelta{
 		Cursors: map[string]int64{"room-c": 11}, At: chatReadAt0,
@@ -449,6 +462,16 @@ func TestAFlushThatLosesEveryAttemptSaysNothingLanded(t *testing.T) {
 	if n := refusing.refused.Load(); n != fleetCASAttempts {
 		t.Fatalf("the flush was refused %d time(s), want every one of its %d attempts: "+
 			"a write another writer beat is a lost race, not an outage", n, fleetCASAttempts)
+	}
+	// A window before every attempt after the first, at the first level up,
+	// once the bucket's round trip has the two samples a window is counted
+	// in (roundTrip): the fixture's own writes may have given it them, or
+	// the flush's first two attempts do — a window before every attempt but
+	// the first, or but the first two, and never fewer.
+	if n := waits.Load(); n < fleetCASAttempts-2 || n > fleetCASAttempts-1 {
+		t.Fatalf("the flush waited %d time(s) between its %d attempts, want a window before each "+
+			"after the first, or the first two while the round trip seeds: %d or %d", n,
+			fleetCASAttempts, fleetCASAttempts-1, fleetCASAttempts-2)
 	}
 	f.chatReads = refusing.KeyValue
 	state, err := f.ChatRead(ctx, "founder")
