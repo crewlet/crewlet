@@ -41,10 +41,11 @@
 // [claudeSubagentThread], [claudeSubagentMeta], [claudePrecompact], and
 // [claudeMemberOf] back), never by [claudeThread], which takes any session's
 // file for the main thread; a whole line at a time through the scrub's own
-// [readLine] at the scrub's own bounds, a last piece with no break never a
-// line, and a line or a member past its bound the end of the reading, never a
-// skip; every whole line decoded into its head before anything reads it, with
-// no keyword prefilter, every value as the harness's own JSON.parse reads it,
+// [readLine] at the layer's own line bound and the plaintext a kept session's
+// scrub reads, a last piece with no break never a line, and a line or a
+// member past its bound the end of the reading, never a skip; every whole
+// line decoded into its head before anything reads it, with no keyword
+// prefilter, every value as the harness's own JSON.parse reads it,
 // under one set of options ([threadDecoding]: every key exactly as written,
 // never matched by case as encoding/json matches a struct's fields, a key
 // written twice by its last value, and a string's invalid UTF-8 or lone

@@ -45,11 +45,11 @@ import (
 //     way), never by [claudeThread], which takes any session's file for the
 //     main thread: a reader that decides something of one session must never
 //     read another session's file as it.
-//   - A WHOLE LINE AT A TIME, through the scrub's own [readLine] at the scrub's
-//     own bounds ([threadLineMax], [threadPlainMax]): one copy of the line
-//     primitive, so a reader never holds a line the take's scrub would have
-//     refused, and a last piece with no break is never a line
-//     ([threadReader.Next]).
+//   - A WHOLE LINE AT A TIME, through the scrub's own [readLine], one copy of
+//     the line primitive, at the layer's own line bound ([threadLineMax]) and
+//     the plaintext a kept session's scrub reads ([threadPlainMax]): a reader
+//     never holds a line longer than the layer's bound, and a last piece with
+//     no break is never a line ([threadReader.Next]).
 //   - PAST A BOUND, THE READING IS OVER: a line or a member past its bound
 //     ends it, with nothing skipped, since a reader that skipped a line would
 //     decide from a thread with a hole in it.
@@ -85,12 +85,35 @@ import (
 // as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
 // that follows one call (a skill's).
 
-// threadLineMax is the longest whole line a Claude Code thread is read with,
-// its break included: the scrub's own piece ([scrubPieceMaxBytes]). The take's
-// scrub refused every session holding a longer line, so a reader of a kept
-// archive meets one only where a redaction grew a line, and a reader of a
-// box's live thread stops where the take would refuse the session.
-const threadLineMax = scrubPieceMaxBytes
+// threadLineMax is the longest line the thread layer reads, its break
+// included: 8 MiB.
+//
+// PAST IT, A READING FAILS CLOSED. [threadReader.Next] answers
+// errThreadBound, and every reader on the layer turns that into no reading
+// or cannot tell. A longer line costs its thread a reading, never a false
+// hold.
+//
+// IT BOUNDS THE READER'S MEMORY, NOT WHAT A SESSION HOLDS, and it is the
+// layer's own, never the take's scrub's: the scrub's bounds are what a kept
+// session is refused past, and Claude Code itself keeps no line bound, a
+// whole-PDF Read writing 55,924,056 bytes on one line at its 20 MiB file
+// limit.
+//
+// 8 MiB keeps one line's decode within the slot a reading takes. Measured
+// with BenchmarkAThreadChainAtItsBounds, arm the_reading_line_beside_it: a
+// line at this bound of the smallest results a message holds, decoded by
+// See beside a chain at both of its bounds, held 101 MiB at most (the
+// largest live heap, the collector at GOGC=10). A relaunch's reading of the
+// same line after the same thread held 102 MiB (BenchmarkAReadingAtItsBounds),
+// and a node's collection 109 MiB at its worst line, a reply's id at this
+// bound of bytes no UTF-8 holds, which the count and the chain each decode
+// (arm the_counts_id_line_beside_it). Each is within the about 133 MiB a
+// seat's read for words holds at its worst in one transcript slot
+// ([SeatTranscriptReadsAtOnce]), what a reading in that slot and a node's
+// collection are both held to. [threadChain]'s and [Runner.ReadHoldings]'s
+// bounds are stated at these figures, so another value runs those benchmarks
+// again.
+const threadLineMax = 8 << 20
 
 // threadPlainMax is the most of one member a reader reads: the plaintext one
 // reading of an archive yields to the take's scrub at the bound a kept
