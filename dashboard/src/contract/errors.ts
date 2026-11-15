@@ -99,6 +99,7 @@ export const ACT_ERRORS = {
   // The authority table's, through the one refusal mapping.
   unauthorized: "You don’t have access to this.",
   step_up_required: "Confirm it’s you first.",
+  token_refused: "This needs you here in person, signed in as yourself.",
   // The transport's own.
   unknown_tool:
     "This engine does not support that change. It may be running a different version. Reload the page.",
