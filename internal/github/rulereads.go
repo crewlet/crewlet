@@ -13,9 +13,7 @@ import (
 )
 
 // What a delegated-decisions rule offers to name from the company's GitHub
-// (ADR-0125): the repositories the agents' apps are installed on, a
-// repository's branches and the check names on a branch's newest commit, each
-// read through the agents' own apps, as every other company read is.
+// (ADR-0125): repositories, branches and check names, read through the agents' apps.
 
 // ErrOutsideCompany reports a repository under an owner the company's GitHub
 // does not name, where nothing is read for the company.
@@ -114,10 +112,8 @@ func (l *SeatLookup) Branches(ctx context.Context, owner, repo string) ([]string
 	return names, more, nil
 }
 
-// CheckNames is the check runs' names on branch's newest commit in repo, each
-// once and sorted, read through the first agent's app that covers it. A run
-// no app reported, or one an agent's own app did, is left out: neither ever
-// passes a check a rule requires.
+// CheckNames is the check run names on branch's newest commit, once and sorted,
+// leaving out runs no app or an agent's own app reported: neither passes one.
 func (l *SeatLookup) CheckNames(ctx context.Context, owner, repo, branch string) ([]string, error) {
 	var agents Reporters
 	for _, seat := range l.Opts.Seats {

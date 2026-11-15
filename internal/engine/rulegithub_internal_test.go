@@ -15,10 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// A RULE IS OFFERED ONLY WHAT THE COMPANY'S GITHUB NAMES: a repository an
-// agent's app also covers under another owner is not one, and a read of a
-// branch there is refused before any request, as a rule's checks there are
-// never read.
+// A rule is offered only repositories under the company's GitHub owners; a
+// branch read elsewhere is refused before any request.
 //
 // Mutation: drop the owner filter or the refusal, and this is red.
 func TestARuleIsOfferedOnlyTheCompanysRepositories(t *testing.T) {

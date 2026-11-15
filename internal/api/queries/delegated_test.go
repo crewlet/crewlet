@@ -174,11 +174,8 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	}
 }
 
-// THE RULE'S FORM READS WHAT ITS GITHUB ANSWERS SEND. Settings › Delegated
-// decisions reads `delegated_repositories`, `delegated_branches` and
-// `delegated_checks` as the three answers `contract/delegated.ts` declares,
-// each held both ways over an answer that read and one that could not, so the
-// optional `unread` is exercised too.
+// The rule form reads its three GitHub answers as `contract/delegated.ts`
+// declares them, over an answer that read and one that could not.
 //
 // Mutation: rename `default_branch` or `more` on either side, or answer an
 // unread list without saying why, and this is red.

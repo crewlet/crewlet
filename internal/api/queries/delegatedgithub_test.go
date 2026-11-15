@@ -13,10 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// ruleGitHub is a company's GitHub as a rule's form reads it: acme/api reads
-// whole, acme/locked answers its branches and refuses its check runs, and
-// any other repository no agent's app covers; noApps is a company whose
-// agents have no app installed.
+// ruleGitHub reads acme/api whole and refuses acme/locked's check runs; any
+// other repository no app covers. noApps has no app installed.
 type ruleGitHub struct{ off, noApps bool }
 
 func (g ruleGitHub) GitHubRepositories(context.Context) ([]github.InventoryRepo, error) {

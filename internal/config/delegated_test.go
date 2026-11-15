@@ -300,11 +300,8 @@ func TestADelegatedLimitIsTheDocumentsWithinItsRange(t *testing.T) {
 	}
 }
 
-// Every refusal of a rule carries a person's words beside the operator's, so
-// Settings › Delegated decisions shows it under its field: no key, no path.
-//
-// Mutation: record any of them with add rather than addSaying, and its said is
-// empty; leave a key in one, and it reads as a key to a person.
+// Every refusal of a rule carries a person's words, with no key or path, for
+// the form to show under its field.
 func TestARuleRefusalIsSaidInAPersonsWords(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ name, rules, path, said string }{

@@ -14,10 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/github"
 )
 
-// ruleGitHub stands in for what a rule's form reads: two installations
-// covering overlapping repositories, a repository only the second covers, one
-// with more branches than a listing reads, and check runs from CI, an agent's
-// own app and a source with no app.
+// ruleGitHub is two installations over overlapping repositories, one past the
+// branch bound, and check runs from CI, an agent's app and no app.
 func ruleGitHub(t *testing.T) string {
 	t.Helper()
 	repos := map[string]string{
@@ -74,11 +72,8 @@ func ruleLookup(t *testing.T, base string, seats ...github.SeatApp) *github.Seat
 	return &github.SeatLookup{Opts: github.SeatAppOptions{APIBase: base, WebBase: base, Org: "acme", Seats: seats}}
 }
 
-// A RULE OFFERS EVERY REPOSITORY AN AGENT'S APP COVERS, each once whatever
-// case an installation lists it in, sorted, a seat that cannot mint skipped.
-//
-// Mutation: read only the first seat that answers, or key the union by the
-// name as written, and this is red.
+// A rule offers every repository an agent's app covers, once whatever its case,
+// sorted, skipping a seat that cannot mint.
 func TestARulesRepositoriesAreEveryAgentsInstallationsOnce(t *testing.T) {
 	t.Parallel()
 	base := ruleGitHub(t)
@@ -107,11 +102,8 @@ func TestARulesRepositoriesWithNoInstalledAppSaySo(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S BRANCHES are read through the first app that covers it, and a
-// listing longer than it reads says so rather than reading as whole.
-//
-// Mutation: stop at the first seat's 404, or drop the row past the bound, and
-// this is red.
+// A repository's branches are read through the first app that covers it, and a
+// listing past the bound says there are more.
 func TestARulesBranchesAreReadThroughAnAppThatCoversTheRepository(t *testing.T) {
 	t.Parallel()
 	lookup := ruleLookup(t, ruleGitHub(t), installedSeat(t, "sre", 41), installedSeat(t, "release", 42))
@@ -128,11 +120,8 @@ func TestARulesBranchesAreReadThroughAnAppThatCoversTheRepository(t *testing.T) 
 	}
 }
 
-// THE CHECK NAMES ON A BRANCH'S NEWEST COMMIT are the ones a rule can require:
-// a run an agent's own app reported, or one no app did, never passes one.
-//
-// Mutation: keep the agent's run or the run with no app, or stop deduplicating,
-// and this is red.
+// The check names on a branch's newest commit leave out runs an agent's own app
+// or no app reported: neither passes a required check.
 func TestARulesCheckNamesLeaveOutWhatNeverPassesOne(t *testing.T) {
 	t.Parallel()
 	lookup := ruleLookup(t, ruleGitHub(t), installedSeat(t, "sre", 41))

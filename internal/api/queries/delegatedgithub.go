@@ -11,11 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// What a delegated-decisions rule offers to name from the company's GitHub
-// (ADR-0125): `GET /delegated-decisions/repositories`, `/branches?repo=` and
-// `/checks?repo=&branch=`, read through the agents' own apps for the rule's
-// required checks. What could not be read is said in `unread`, never an empty
-// list that reads as "there are none", and a repository can always be typed.
+// The rule form's GitHub reads (ADR-0125): repositories, branches and check names.
+// What could not be read is said in `unread`, never as an empty list.
 //
 // AN ADMINISTRATOR'S, as the company document a rule is written into is.
 
