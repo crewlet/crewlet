@@ -822,20 +822,21 @@ func (w *Writer) zone() *time.Location {
 // refused, and the kinds the applier rewrites words and writes a resolution on
 // are only ever this writer's own.
 //
-// AND NO GESTURE TAKES A REMARK DOWN, so a comment under the removal kind
-// ([ChangeCommentRemoved]) is refused as well. Nothing forms that kind and the
-// applier writes nothing for it; taken here for a post, as a comment under any
-// other kind is, it posted the remark its record said it took down, or
-// answered one already on the thread as though it had come down while it
-// stood.
+// AND A REMARK IS TAKEN DOWN THROUGH [Writer.RemoveComment] alone, so a
+// comment under the removal kind ([ChangeCommentRemoved]) is refused as well:
+// that writer forms the removal from the stored row inside the decide, under
+// the author rule, and refuses a remark that asks or answers. Taken here, a
+// caller would be stating a remark it read in another transaction, under no
+// rule at all.
 func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	ifMatch uint64, patch TaskPatch, kind ChangeKind,
 	notify *Notify) (WriteResult, error) {
 
 	if patch.Comment != nil && kind == ChangeCommentRemoved {
 		return WriteResult{}, invalid("a removal of comment %s on task %s is "+
-			"not a patch: no gesture takes a remark down, so nothing forms "+
-			"that kind", patch.Comment.ID, id)
+			"not a patch: a remark is taken down through RemoveComment, which "+
+			"forms the removal from the stored row and refuses anybody but its "+
+			"author or a moderator", patch.Comment.ID, id)
 	}
 	if patch.Comment != nil && kind == ChangeCommentEdited {
 		return WriteResult{}, invalid("an edit of comment %s on task %s is not "+
@@ -867,8 +868,8 @@ type amendment func(ctx context.Context, tx *sql.Tx, current Task,
 	patch TaskPatch) (TaskPatch, error)
 
 // ErrNotAuthor reports an edit or a resolve of a remark by somebody who did not
-// write it.
-var ErrNotAuthor = errors.New("worklet: only its author may edit or resolve a comment")
+// write it, or a removal by somebody who neither wrote it nor moderates.
+var ErrNotAuthor = errors.New("worklet: only its author may edit, resolve or remove a comment")
 
 // EditComment rewrites one comment's body, AS ITS AUTHOR.
 //
@@ -1009,6 +1010,91 @@ func (w *Writer) ResolveComment(ctx context.Context, opID, taskID, project,
 				resolved.Withdrawal = withdrawal
 			}
 			patch.Comment = &resolved
+			return patch, nil
+		})
+}
+
+// CommentAuthority is what a caller may do to a remark somebody else wrote.
+//
+// A VALUE RATHER THAN A BOOL for [PersonAuthority]'s reason, and it states
+// the DECISION: the caller asks the authority table about the remark and
+// passes what came back, because this package holds no chart and no grants.
+type CommentAuthority struct {
+	// Moderate reports a caller admitted to take down a remark they did not
+	// write, which the table admits on admin alone. There is no edit
+	// equivalent: a removal takes words down where everybody can see they
+	// are gone, and an edit would put words in somebody's mouth.
+	Moderate bool
+}
+
+// RemoveComment takes one remark down: its row stays, flagged and with its
+// words blanked, so the replies under it still resolve against something.
+//
+// # The author, or a moderator
+//
+// Its author takes their own remark down, and an admin moderating takes
+// down anybody's ([CommentAuthority]). Both are read against the row inside
+// the snapshot, as [Writer.EditComment] reads them, so a removal racing an
+// edit contends at the broker on the task's subject.
+//
+// # Never a remark that asks or answers
+//
+// A question has its own way to close, which says why: its asker withdraws
+// it, or the person it asks answers it. Taking it down would leave an ask on
+// somebody's board with no question behind it, or close it with nothing said.
+// An answer closed a question and said what was decided, so taking it down
+// would leave the question closed with no answer, or reopen it for a person
+// who answered it. Each is refused naming the gesture that does what the
+// caller meant: withdraw the question, or edit the words.
+//
+// # Quiet
+//
+// A removal tells nobody: a remark taken down is not news, and a wake about
+// it would quote what was just taken down. The removal's own history row
+// names who took it down, and every surface that quoted the remark (its post's
+// history row and the inbox notices it left) stops quoting it ([removeComment]).
+func (w *Writer) RemoveComment(ctx context.Context, opID, taskID, project,
+	commentID string, authority CommentAuthority) (WriteResult, error) {
+
+	if strings.TrimSpace(commentID) == "" {
+		return WriteResult{}, invalid("a removal names no comment")
+	}
+	at := w.Now()
+	return w.updateTask(ctx, opID, taskID, project, NoIfMatch,
+		TaskPatch{Comment: &Comment{ID: commentID, Removed: true}},
+		ChangeCommentRemoved, nil,
+		func(ctx context.Context, tx *sql.Tx, _ Task,
+			patch TaskPatch) (TaskPatch, error) {
+
+			held, err := readComment(ctx, tx, taskID, commentID)
+			if err != nil {
+				return TaskPatch{}, err
+			}
+			stored := held[0]
+			switch {
+			case stored.Removed:
+				return TaskPatch{}, fmt.Errorf("%w: comment %s was already removed",
+					ErrNoComment, commentID)
+			case !authority.Moderate && stored.Author != w.Actor:
+				return TaskPatch{}, fmt.Errorf("%w: comment %s was written by "+
+					"%s, and a remark is taken down by whoever made it and by "+
+					"nobody else but an admin", ErrNotAuthor, commentID, stored.Author)
+			case stored.Ask != "":
+				return TaskPatch{}, invalid("comment %s asks %s a question, and a "+
+					"question is not taken down: its asker withdraws it, saying why, "+
+					"or %s answers it", commentID, stored.Ask, stored.Ask)
+			case stored.Answers != nil && *stored.Answers != "":
+				return TaskPatch{}, invalid("comment %s answers a question, and an "+
+					"answer is not taken down: the question it closed would be left "+
+					"with no answer. Edit its words instead", commentID)
+			}
+			// THE STORED COMMENT WITH ITS WORDS TAKEN DOWN, whole, for an
+			// edit's reason: the record states the remark as it now stands,
+			// and the apply blanks and flags the row whatever the record
+			// carries ([removeComment]).
+			removed := stored
+			removed.Body, removed.Removed, removed.UpdatedAt = "", true, at
+			patch.Comment = &removed
 			return patch, nil
 		})
 }
@@ -1378,11 +1464,12 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 }
 
 // postsComment reports whether a patch POSTS its comment: it carries one,
-// under any kind but the two a remark's own gestures form from its stored row,
-// an edit ([Writer.EditComment]) and a resolve ([Writer.ResolveComment]).
+// under any kind but the three a remark's own gestures form from its stored
+// row, an edit ([Writer.EditComment]), a resolve ([Writer.ResolveComment]) and
+// a removal ([Writer.RemoveComment]).
 func postsComment(patch TaskPatch, kind ChangeKind) bool {
 	return patch.Comment != nil && kind != ChangeCommentEdited &&
-		kind != ChangeCommentResolved
+		kind != ChangeCommentResolved && kind != ChangeCommentRemoved
 }
 
 // PostedRemark is what a remark already on its task asked and answered, as its

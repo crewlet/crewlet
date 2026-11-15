@@ -201,6 +201,7 @@ type writes struct {
 	targets []string
 	purged  []string
 	edited  []string
+	removed []string
 	inbox   []string
 	pins    []string
 	prios   []string
@@ -341,6 +342,15 @@ func (b *bound) EditComment(_ context.Context, opID, _, _, commentID, body strin
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
 	b.w.edited = append(b.w.edited, commentID+"|"+body)
+	return b.w.answer(opID)
+}
+
+func (b *bound) RemoveComment(_ context.Context, opID, _, _, commentID string,
+	authority worklet.CommentAuthority) (worklet.WriteResult, error) {
+
+	b.w.mu.Lock()
+	defer b.w.mu.Unlock()
+	b.w.removed = append(b.w.removed, fmt.Sprintf("%s|moderate=%v", commentID, authority.Moderate))
 	return b.w.answer(opID)
 }
 

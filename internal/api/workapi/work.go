@@ -69,6 +69,12 @@ func (s *Service) workRoutes(mount mounter) {
 	// asked arm covers answering an open ask, not rewriting what was said.
 	route("PATCH /worklet/items/{key}/comments/{cid}", task(authz.ActionWorkComment),
 		(*served).patchItemComment)
+	// AND TAKING IT DOWN, decided the same way once the author is read: the
+	// remark's author, or an admin moderating. Admitted on the tracker's
+	// read, as a page comment's removal is on the knowledge base's, because
+	// a moderator is admitted by the row and not by commenting.
+	route("DELETE /worklet/items/{key}/comments/{cid}", task(authz.ActionWorkRead),
+		(*served).deleteItemComment)
 	// A PLACE ON A BOARD IS `place_work_item`, decided on the task's kind
 	// as the tool's own gate decides it.
 	route("POST /worklet/items/{key}/rank", task(authz.ActionWorkPlace).Rewriting(),
@@ -390,6 +396,64 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	}
 	answer(w, key, result.Outcome, result.Unvouched, builtin.ReceiptOf(map[string]any{
 		"comment_id": cid, "edited": true,
+		"outcome": string(result.Outcome), "position": positionOf(result.Position),
+		"version": result.Version,
+	}, detail))
+}
+
+// deleteItemComment takes one remark on a work item down, AS ITS AUTHOR or as
+// an admin moderating.
+//
+// DECIDED TWICE, as an edit is: the table answers "may you act on this remark"
+// ([authz.ClassAuthored]: its author, or an admin), and the tracker's writer
+// takes the removal from the author, or from a caller the table admitted for
+// some other reason as a moderator, and refuses a remark that asks or answers
+// ([worklet.Writer.RemoveComment]).
+func (s *served) deleteItemComment(w http.ResponseWriter, r *http.Request) {
+	args, ok := readArgs(w, r)
+	if !ok || !only(w, args) {
+		return
+	}
+	cid := strings.TrimSpace(r.PathValue("cid"))
+	detail, ok := s.readTask(w, r, r.PathValue("key"), worklet.DetailWants{Comment: cid})
+	if !ok {
+		return
+	}
+	if len(detail.Comments) == 0 {
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
+			map[string]string{"detail": "there is no comment " + cid + " on " +
+				detail.Named()})
+		return
+	}
+	stored := detail.Comments[0]
+	d, ok := s.decide(w, r, authz.ActionWorkCommentRemove, authz.Object{
+		Kind: authz.KindTask, Container: detail.Task.Project, Author: stored.Author,
+	})
+	if !ok {
+		return
+	}
+	key, ok := operationKey(w, r)
+	if !ok {
+		return
+	}
+	actor, ok := s.actor(w, r)
+	if !ok {
+		return
+	}
+	opID, ok := keyedOp(w, r, key, "comment-remove", cid, args)
+	if !ok {
+		return
+	}
+	result, err := s.Tracker(actor).RemoveComment(r.Context(), opID, detail.Task.ID,
+		detail.Task.Project, cid, worklet.CommentAuthority{Moderate: d.Reason != authz.ReasonAuthor})
+	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
+		string(authz.ActionWorkCommentRemove), key, result.Outcome, result.Position, err)
+	if err != nil {
+		failErr(w, r, err, key)
+		return
+	}
+	answer(w, key, result.Outcome, result.Unvouched, builtin.ReceiptOf(map[string]any{
+		"comment_id": cid, "removed": true,
 		"outcome": string(result.Outcome), "position": positionOf(result.Position),
 		"version": result.Version,
 	}, detail))

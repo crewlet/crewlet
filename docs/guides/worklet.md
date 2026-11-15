@@ -2179,7 +2179,13 @@ Its author may correct a question's wording afterwards
 (`PATCH /worklet/items/{key}/comments/{cid}`), and that changes its words and
 nothing else: an answered question stays answered and nobody is asked it
 again, and the person it asks, the answer it closed and the decision it carries
-stay what its post made them. A remark is posted once: a re-run of the call
+stay what its post made them. A remark that asks or answers nothing can also be
+taken down (`DELETE` on the same address), by its author or by an admin
+moderating: the row stays on the thread with its words blanked, so the replies
+under it still read in order, and neither the item's history nor anybody's
+inbox goes on quoting it. A question or an answer is never taken down, since
+the ask would be left with no question behind it or closed with no answer:
+withdraw the question, or edit the words. A remark is posted once: a re-run of the call
 that posted it finds it on the thread and changes nothing — not its words, not
 its answer, not who follows the item — whatever has happened to it since, the
 item having been trashed included. And it is answered as that remark: the

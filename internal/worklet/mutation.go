@@ -73,7 +73,10 @@ import (
 // deltas, which are derived from the kinds it knows.
 // Version 17 is a saved view somebody deleted ([View.DeletedAt]): a build
 // reading 16 would apply the record as a save and keep the view listed.
-const RecordVersion = 17
+// Version 18 is a remark taken down ([Comment.Removed], [Writer.RemoveComment]):
+// a build reading 17 would apply the removal as nothing, keeping the words
+// every newer node blanked.
+const RecordVersion = 18
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -155,6 +158,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Relation.Kind atlas_entry", Since: 16, Path: []string{"mutation", "relations", "kind"},
 		Equals: string(RelationEntry)},
 	{Name: "View.DeletedAt", Since: 17, Op: string(OpPatch), Path: []string{"mutation", "deleted_at"}},
+	{Name: "Comment.Removed", Since: 18, Op: string(OpPatch), Path: []string{"mutation", "comment", "removed"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
