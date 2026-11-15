@@ -343,8 +343,8 @@ func TestACommitIsAnsweredWithItsPushAndItsChanges(t *testing.T) {
 				return gitlet.ReadAnswer{Pushes: []gitlet.PushRow{{PushID: q.Push}}}, nil
 			}
 			return gitlet.ReadAnswer{Repo: stubRepo(q.Repo), Position: rowsAt, Level: q.Fresh.Level,
-				Commit: &gitlet.CommitChanges{Commit: q.Commit, Revisions: []gitlet.CommitRevision{{Change: change,
-					N: 2}}}}, nil
+				Commit: &gitlet.CommitChanges{Commit: q.Commit, Revisions: []gitlet.CommitRevision{{
+					Change: gitlet.ChangeLanding{ChangeName: change}, N: 2}}}}, nil
 		},
 		git: func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 			return gitlet.GitAnswer{Kind: q.Kind, Log: &gitlet.LogAnswer{Commits: []gitlet.LogCommit{{OID: q.Log.Rev,
@@ -358,7 +358,7 @@ func TestACommitIsAnsweredWithItsPushAndItsChanges(t *testing.T) {
 	}
 	got, ok := answer.(queries.CodeCommit)
 	if !ok || got.Commit.OID != whole || got.PushedBy == nil || got.Push == nil || got.Push.PushID != "p7" ||
-		len(got.Revisions) != 1 || got.Revisions[0].Change != change || got.Position != rowsAt {
+		len(got.Revisions) != 1 || got.Revisions[0].Change.ChangeName != change || got.Position != rowsAt {
 		t.Fatalf("the commit answered %+v, want it, its push and its revision", answer)
 	}
 	if len(stub.asked) != 2 || stub.asked[0].Kind != gitlet.ReadCommit || stub.asked[0].Commit != whole ||

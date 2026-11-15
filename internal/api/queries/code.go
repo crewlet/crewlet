@@ -33,8 +33,10 @@ import (
 // `code_tree`, `code_blob`, `code_log`, `code_blame`, `code_diff`,
 // `code_compare` and `code_commit`, decided per repository alike — the Gitlet
 // node that answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
-// (codechecks.go): `code_queue`, `code_checks`, `code_check` and
-// `code_check_log`, decided per repository alike; AND A SEARCH OF ITS LINES
+// (codechecks.go): `code_queue`, `code_checks`, `code_check`,
+// `code_check_log` and `code_commit_marks`, the marks a history page's
+// commits carry (their checks and the changes they landed with), decided per
+// repository alike; AND A SEARCH OF ITS LINES
 // (codesearch.go): `code_search`, decided per repository alike by every Gitlet
 // node that answers a part of it, and read back at no session floor, since it
 // answers at the tip it names.
@@ -261,6 +263,23 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 		}
 		q.Change = n
 	}
+	// A HISTORY PAGE'S COMMITS are the request's `commits`: comma-separated
+	// in a query string, or a list of strings off a socket frame, each the
+	// reader's to refuse (a whole id, once, at most gitlet.MaxCommitMarks).
+	if kind == gitlet.ReadCommitMarks {
+		listed, ok := p.List("commits")
+		if !ok {
+			return gitlet.ReadQuery{}, fmt.Errorf("%w: the commits parameter is whole commit ids, "+
+				"comma-separated", ErrBadParams)
+		}
+		for _, v := range listed {
+			for oid := range strings.SplitSeq(v, ",") {
+				if oid = strings.TrimSpace(oid); oid != "" {
+					q.CommitMarks = append(q.CommitMarks, oid)
+				}
+			}
+		}
+	}
 	// WHO OWNS A REPOSITORY'S PATHS AND ITS RULES' MERGE GATES are answered
 	// to a question that ASKS for them, `path_owners=true` and `gates=true`
 	// ([gitlet.ReadQuery.PathOwners], [gitlet.ReadQuery.Gates]), and to no other:
@@ -484,5 +503,6 @@ func registerCode(r *Registry, s Sources) {
 	r.Register("code_checks", gated, s.codeRead(gitlet.ReadChecks, "code_checks"))
 	r.Register("code_check", gated, s.codeRead(gitlet.ReadCheck, "code_check"))
 	r.Register("code_check_log", gated, s.codeCheckLog)
+	r.Register("code_commit_marks", gated, s.codeRead(gitlet.ReadCommitMarks, "code_commit_marks"))
 	r.Register("code_search", gated, s.codeSearch)
 }

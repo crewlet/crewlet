@@ -2659,6 +2659,12 @@ grant on the repository as every other read of it is:
 - **`check`**: one attempt whole, named by its commit, its target branch, its
   check and its number — its row, the definition it ran under, the last of
   its output, the failures its ending named and its kept log;
+- **`commit_marks`**: what a history page draws beside up to 100 commits of
+  one repository, in one snapshot: for each branch a commit was checked for,
+  where its checks stand, each check's latest attempt rolled up as a merge
+  gate reads it, and the changes whose merge commit it is and the revisions
+  it heads, each with how it landed ([What a history page
+  carries](#what-a-history-page-carries));
 - **`checks_due`**: the engine's own, which no person or seat may make — the
   work the repository's home polls for: the live changes whose head has no
   **dispatch** for its target naming the checks file the target's reading
@@ -2685,6 +2691,54 @@ and its kept log 32 KiB a page from the object store — and
 `code_get_change`'s `checks` part a change's head's attempts in a line each,
 every word a check printed fenced as `check_log`, text nobody in the company
 wrote ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
+
+### What a history page carries
+
+A list of commits draws, beside each one, where its checks stand and the
+change it landed with, read for a whole page of commits at once from the
+rows (`commit_marks`, the `code_commit_marks` question). The commits are the
+page's own, named by their whole ids; the read never asks git whether one
+exists, and a commit the rows name nothing of carries nothing.
+
+**Where its checks stand** is a **rollup** of each check's latest attempt of
+the commit for one branch, one for each branch it was checked for (at most
+four). Every screen that draws a set of checks reads the same rollup, judged
+as the merge gate judges a check, so a row never says "passing" where the
+gate waits:
+
+- its one word, the first that holds: **failing** (a check failed, or
+  errored where the home does not queue it again), **running**, **pending**
+  (queued, errored and queued again by the home, or in a state a later
+  build records), **cancelled** (a head its next push moved on from, which a
+  row does not draw red), then **passed**;
+- how many of the required checks passed or were skipped, of how many
+  ("Passed 2 of 2"), which is the gate's own reading: a cancelled required
+  check has not passed;
+- the counts by state, the newest ending, the oldest start of one still
+  running, and the failing checks by name, required first.
+
+**The change it landed with** is each change whose merge commit it is and
+each revision it heads, with how it landed once merged: the merge commit,
+when, which way (`push`, `direct` or `queue`) and by whom. A row names a
+few (four of each); a commit's page names them all.
+
+**A commit's page** (`code_commit`) names, beside each change merged
+through its gate, that **gate** as the rows keep it, since the merge record
+keeps no snapshot of it:
+
+- the approvals of the revision it merged at. An approval of an earlier
+  revision is not named, though the gate counts one whose code the merged
+  revision kept unchanged;
+- the checks that gated it: a direct merge's on the change's head for its
+  target, which the gate judged; a queue landing's on the tip its land
+  record left the branch at, since a queue lands a train's tested prefix on
+  that tip's checks. An entry inside a train names the train's checks, and
+  its own commit carries none. The candidates a landing landed are removed
+  with it, so the tip is read from the landing rows, which the queue keeps
+  as long as the checks are kept;
+- a person's reason for merging past the gate, where one did.
+
+A push's merge has no gate: who pushed it is the push's.
 
 ### Check boxes
 
@@ -2993,6 +3047,13 @@ past.
   day.
 - **A check queued and never ended is kept** until it ends, or its repository
   is purged.
+- **A history page reads what is kept.** A commit whose attempts all ended
+  more than 30 days ago carries no checks on a history page, which says
+  nothing about whether it was checked; and a merge whose merged revision was
+  pushed more than 30 days ago, and whose gate's checks no row keeps, names
+  them as no longer kept (`gone`): the rows that named them, the attempts
+  and the queue's landings, keep the same 30 days, and the attempts ended
+  after that push.
 - **A repository's purge takes its checks and their logs** with the rest of
   it, and a check record about a purged repository — a runner ending a check
   its repository's purge outran — writes nothing on any node.

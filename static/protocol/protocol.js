@@ -169,6 +169,7 @@ var SESSION_QUERIES = {
 		"code_checks",
 		"code_check",
 		"code_check_log",
+		"code_commit_marks",
 		"inbox"
 	]
 };
