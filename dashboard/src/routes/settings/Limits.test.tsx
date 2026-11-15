@@ -90,7 +90,12 @@ test("each cap carries its name, its key, its value and its source", async () =>
   await show(LIMITS);
   const turn = screen.getByRole("table", { name: "Guardrails on every turn" });
   const changed = within(turn).getByRole("row", { name: /Tool rounds on a first turn/ });
-  expect(within(changed).getByText("turn_engine.onboarding_max_tool_rounds")).toBeDefined();
+  // THE KEY IS THE KIT'S COPY CONTROL after the name, named by the key.
+  expect(
+    within(changed).getByRole("button", {
+      name: "Copy the setting's key, turn_engine.onboarding_max_tool_rounds",
+    }),
+  ).toBeDefined();
   expect(
     within(changed)
       .getAllByRole("cell")
@@ -203,7 +208,8 @@ test("a cap is checked by the engine, then saved as a patch of its one key", asy
   // this node applied, which is still the value before.
   const row = screen.getByRole("row", { name: /Review rounds per turn/ });
   expect(within(row).getByText("5")).toBeTruthy();
-  expect(within(row).getByRole("status").textContent).toBe("applying…");
+  // THE WRITE'S OWN STATUS, beside the key's copy status the row also holds.
+  expect(within(row).getByText("applying…").getAttribute("role")).toBe("status");
   expect(screen.queryByRole("textbox")).toBeNull();
 });
 
@@ -236,7 +242,7 @@ test("the applying mark goes once this node applied the revision", async () => {
   expect(asked.filter((q) => q === "limits").length).toBeGreaterThan(before);
   const row = screen.getByRole("row", { name: /Review rounds per turn/ });
   expect(within(row).getByText("5")).toBeTruthy();
-  expect(within(row).queryByRole("status")).toBeNull();
+  expect(within(row).queryByText("applying…")).toBeNull();
   expect(within(row).getByText("Changed from 3")).toBeTruthy();
 });
 
@@ -325,7 +331,12 @@ test("what is typed is held to the cap's unit before any request", async () => {
 test("the engine's constant has no pencil", async () => {
   await show(LIMITS);
   const row = screen.getByRole("row", { name: /A scheduled turn's time limit/ });
-  expect(within(row).queryByRole("button")).toBeNull();
+  // Only the key's copy control: no pencil.
+  expect(
+    within(row)
+      .queryAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent),
+  ).toEqual([expect.stringMatching(/^Copy the setting's key, /)]);
 });
 
 // NEVER HIDDEN: a reader who cannot write the document sees every pencil,
