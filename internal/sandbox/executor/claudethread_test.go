@@ -761,17 +761,14 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 	}
 }
 
-// fewestAllocations is how many heap objects read allocates, the fewest of
-// many calls after one that warms it up, GOMAXPROCS one while it measures, as
-// [allocationsOf]'s is: many, since a decode takes its decoder from a pool,
-// which under the race detector drops a quarter of what is put back, so a
-// call can pay for a decoder afresh; the fewest of twenty does not.
+// fewestAllocations is the fewest heap objects of fewestCalls calls of read,
+// after a warm-up, at GOMAXPROCS one.
 func fewestAllocations(read func()) uint64 {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	read()
 	fewest := uint64(math.MaxUint64)
 	var before, after runtime.MemStats
-	for range 20 {
+	for range fewestCalls {
 		runtime.ReadMemStats(&before)
 		read()
 		runtime.ReadMemStats(&after)
@@ -779,6 +776,11 @@ func fewestAllocations(read func()) uint64 {
 	}
 	return fewest
 }
+
+// fewestCalls: under -race sync.Pool drops a quarter of puts and a decode makes
+// about five pool round trips, so one call in four costs only its own objects;
+// the fewest of 200 misses that one run in 10^23 (of 20, one in 250).
+const fewestCalls = 200
 
 // A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: a line whose JSON fails
 // before any whole value (a record a later write tore into, a line of white
