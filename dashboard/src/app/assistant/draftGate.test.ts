@@ -269,7 +269,7 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/repo/RepoLife.tsx": "modal: a repository delete's reason, in its dialog",
   "routes/gitlet/repo/RepoWrites.tsx":
     "modal: a repository's details and its mirrors, in their dialogs",
-  "components/LimitSetting.tsx":
+  "components/SettingEditor.tsx":
     "saved per change: one setting's value, in the panel its pencil opens, written by that " +
     "panel's own Save",
   "components/TitleField.tsx":
