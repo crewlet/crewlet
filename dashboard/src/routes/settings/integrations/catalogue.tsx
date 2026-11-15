@@ -1342,6 +1342,7 @@ export function SurfaceDeliveries({ surface, name }: { surface: string; name: st
       >
         {rows.length > 0 && (
           <DataGrid<EventRecord>
+            name={`deliveries-${surface}`}
             rows={rows}
             rowKey={(e) => e.id}
             defaultSort="-at"
@@ -1844,6 +1845,7 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
         <Card.Title>Provisioning passes</Card.Title>
       </Card.Header>
       <DataGrid<SetupRun>
+        name="passes"
         rows={runs}
         rowKey={(run) => run.run_id}
         defaultSort="-ran"

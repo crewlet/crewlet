@@ -8,8 +8,9 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 
-import { DataGrid } from "./DataGrid.tsx";
+import { addressKeys, DataGrid } from "./DataGrid.tsx";
 import { Router } from "~/app/router.tsx";
+import { expectConsole } from "~/test/console.ts";
 
 afterEach(() => {
   cleanup();
@@ -133,6 +134,65 @@ describe("the address", () => {
     // The way back clears the key.
     fireEvent.click(screen.getByRole("button", { name: "Show every column" }));
     expect(location.hash).not.toContain("cols.list=");
+  });
+});
+
+/**
+ * TWO GRIDS NEVER READ ONE KEY. The address is the document's, so two grids
+ * on one key re-sort each other: Account's sessions re-sorted whenever its
+ * tokens were sorted by Created. A mounted grid registers the keys it reads,
+ * and a second reader is reported, which fails any case that mounts the pair.
+ */
+describe("one reader per address key", () => {
+  test("names the key two unnamed grids would both read", () => {
+    expectConsole("error", /Two grids read the address key "sort"/);
+    expectConsole("error", /Two grids read the address key "cols"/);
+    location.hash = "#/x";
+    render(
+      <Router>
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={COLUMNS} />
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={COLUMNS} />
+      </Router>,
+    );
+  });
+
+  test("lets named grids, and a grid whose screen owns its sort, sit beside one another", () => {
+    location.hash = "#/x";
+    render(
+      <Router>
+        <DataGrid<Row> rows={ROWS} name="sessions" rowKey={(r) => r.id} columns={COLUMNS} />
+        <DataGrid<Row> rows={ROWS} name="tokens" rowKey={(r) => r.id} columns={COLUMNS} />
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={COLUMNS} />
+      </Router>,
+    );
+    // AND A SORT PRESS ON ONE MOVES ITS KEY ALONE.
+    const [, tokensWho] = screen.getAllByRole("button", { name: "Who" });
+    fireEvent.click(tokensWho!);
+    expect(location.hash).toContain("sort.tokens=who");
+    expect(location.hash).not.toContain("sort.sessions=");
+    expect(location.hash).not.toMatch(/[?&]sort=/);
+  });
+
+  test("forgets an unmounted grid, so the screen after it may read the same key", () => {
+    location.hash = "#/x";
+    const first = render(
+      <Router>
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={COLUMNS} />
+      </Router>,
+    );
+    first.unmount();
+    render(
+      <Router>
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={COLUMNS} />
+      </Router>,
+    );
+  });
+
+  test("reads the sort's key only where the screen does not own the sort", () => {
+    expect(addressKeys(undefined, undefined, false)).toEqual(["sort", "cols"]);
+    expect(addressKeys("tokens", undefined, false)).toEqual(["sort.tokens", "cols.tokens"]);
+    expect(addressKeys(undefined, "list", false)).toEqual(["sort", "cols.list"]);
+    expect(addressKeys("view", undefined, true)).toEqual(["cols.view"]);
   });
 });
 

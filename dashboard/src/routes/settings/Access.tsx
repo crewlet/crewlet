@@ -1013,6 +1013,7 @@ export function People() {
                 loading={seats.loading && !seats.data}
               >
                 <DataGrid<HumanSeat>
+                  name="seats"
                   rows={seatRows}
                   rowKey={(s) => s.handle}
                   defaultSort="seat"
@@ -1662,6 +1663,7 @@ function Invitations({
         loading={invitations.loading && !invitations.data}
       >
         <DataGrid<InvitationRow>
+          name="invitations"
           rows={rows}
           rowKey={(i) => i.id}
           defaultSort="expires"
@@ -2213,6 +2215,7 @@ function Principal({
           loading={credentials.loading && !credentials.data}
         >
           <DataGrid<CredentialRow>
+            name="credentials"
             rows={credentials.data ?? []}
             rowKey={(c) => c.id}
             defaultSort="method"
@@ -2311,6 +2314,7 @@ function Principal({
             loading={sessions.loading && !sessions.data}
           >
             <DataGrid<SessionRow>
+              name="sessions"
               rows={sessions.data ?? []}
               rowKey={(s) => s.lineage}
               defaultSort="started"
