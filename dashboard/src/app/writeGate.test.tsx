@@ -131,6 +131,13 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "gesture with no button, so the reason it cannot act is one line above the lanes",
     suite: "routes/worklet/shapes/Board.test.tsx",
   },
+  "routes/worklet/ProjectSettings.tsx": {
+    why:
+      "a project's Add label, Rename and Archive on each label, and Add field, Edit and " +
+      "Archive on each of its own fields (write_project's tag facets and its fields), on " +
+      "About, each held with the sentence that says why where the reader cannot act",
+    suite: "routes/worklet/ProjectSettings.test.tsx",
+  },
   "routes/worklet/taskMenu.tsx": {
     why:
       "a task's Move to project, Move to trash, Restore and Delete permanently — menu entries on its page, " +

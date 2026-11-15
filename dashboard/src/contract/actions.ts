@@ -200,11 +200,23 @@ export const ACTIONS = {
     scope: "person",
   },
   write_project: {
-    // "EDIT PROJECT" on a project's page: the lead's target date. A project's
-    // settings are what every seat's tracker reads, so this is a COMPANY
-    // write, offered only on the project's own page — and the engine decides
-    // who may make it: the project's lead, or an admin.
-    args: ["project", "target_date"],
+    // A PROJECT'S OWN SETTINGS, on its page and nowhere else: "Edit project"
+    // (the lead's target date and default assignee), About's labels (declare,
+    // rename, archive) and fields (the project's own declarations, sent whole),
+    // and the page's Archive project. A project's settings are what every
+    // seat's tracker reads, so this is a COMPANY write. The engine decides
+    // each facet on its own: declaring a label is any colleague's, the rest
+    // the project's lead's or an admin's, and archiving also a person's.
+    args: [
+      "project",
+      "target_date",
+      "default_assignee",
+      "archived",
+      "fields",
+      "tags_add",
+      "tags_rename",
+      "tags_archive",
+    ],
     domain: "tracker",
     apps: ["worklet"],
     refreshes: [],

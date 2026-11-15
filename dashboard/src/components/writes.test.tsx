@@ -285,6 +285,39 @@ test("editing a project sets its target date, and clearing it sends null", async
   expect(sent[1]!.body.args).toEqual({ project: "ENG", target_date: null });
 });
 
+// ONLY WHAT MOVED IS SENT, because the engine decides each facet on its own:
+// a lead who chose a default assignee is not asked about the archive, and the
+// archive is a press that says what it is. Mutation: send every facet and the
+// args carry the unchanged target and archive.
+test("editing a project sends only the facets that moved, and archiving says so first", async () => {
+  mount(
+    <EditProjectButton
+      project="ENG"
+      name="Core platform"
+      target="2031-06-30"
+      assignee=""
+      archived={false}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit project" }));
+  let dialog = await screen.findByRole("dialog", { name: "Edit Core platform" });
+  pick(within(dialog).getByLabelText("Default assignee"), /^Ada Okonkwo/);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0]!.body.args).toEqual({ project: "ENG", default_assignee: "ada" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(document.body.textContent).toContain("New work in Core platform now lands on Ada Okonkwo");
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit project" }));
+  dialog = await screen.findByRole("dialog", { name: "Edit Core platform" });
+  fireEvent.click(within(dialog).getByRole("switch", { name: /Archived/ }));
+  // THE PRESS THAT TAKES IT OUT OF CIRCULATION NAMES ITSELF, under a callout.
+  expect(within(dialog).getByText(/Nobody can file new work in Core platform/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Archive project" }));
+  await waitFor(() => expect(sent).toHaveLength(2));
+  expect(sent[1]!.body.args).toEqual({ project: "ENG", archived: true });
+});
+
 // ENTER IS A SUBMIT THE SAVE BUTTON NEVER SEES: the dialog is a form, so a
 // second Enter while the first answer is pending reached the write again and
 // sent it twice.

@@ -1832,9 +1832,23 @@ drawn for everybody and held with that reason for anybody without it.
   declared its `project` key; a project declared on a seat rather than on a
   unit has none, so the line says which unit owns it instead. A project nothing
   has been filed into says so and offers **New task**, rather than showing an
-  empty list. **Edit project** sets or clears the target date
-  (`write_project{target_date}`) — the project's lead may, and so may a person
-  acting as themselves; a seat that does not lead the project is refused.
+  empty list. **Edit project** sets or clears the target date, picks the
+  **default assignee** (a seat from the chart, or nobody, which leaves new work
+  to the lead's triage) and archives or unarchives the project
+  (`write_project{target_date, default_assignee, archived}`). It sends only
+  what you changed, and archiving names itself on the button and says what it
+  does before it is pressed. The project's lead may, and so may an admin;
+  archiving is a person's, never an agent's. About lists the project's
+  **Labels** with **Add label** (any colleague may declare one), and
+  **Rename** and **Archive** on each (the lead's); archived labels are listed
+  under them, since the tasks filed under one keep it. Its **Fields** card
+  lists the fields the project declares itself, with **Add field**, **Edit**
+  and **Archive** (the lead's), beside the company's fields its tasks carry as
+  well. A field's slug and type stay once it exists, a dropdown's choice taken
+  out is archived rather than dropped, and archiving a label or a field asks
+  first, since neither comes back. **Files** lists the project's files with
+  **Upload**, and **Replace** and **Remove** on each row (see
+  [A project's files](#a-projects-files)).
 - **Search** (`#/worklet/search`) ranks the company's work against a phrase:
   **Hybrid** (the default: words and meaning, each ranked and then fused),
   **Keyword** (the words, BM25) or **Meaning** (`semantic`: what the text is

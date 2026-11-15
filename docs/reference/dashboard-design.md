@@ -5576,7 +5576,9 @@ a tool arrives in it with the control that sends it. The controls
 | Create task (the New task sheet) | A work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}`, only what was set |
 | Message, where the company runs the engine's own chat and you hold Chatlet (chat's New direct message, the seat chosen) | A seat's page and peek | `open_dm{to}`: opening one that exists is that conversation |
 | Message elsewhere, and Ask as a task in More where Message is the conversation (the same sheet, titled "Ask {seat}") | A seat's page and peek | `create_work_item{title, project, assignee, ask, …}`: the answer lands in your Inbox |
-| Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
+| Edit project (the target date, the default assignee, archived) | A project's page bar | `write_project{project, target_date?, default_assignee?, archived?}`, only what moved; `null` clears the date, `""` sends new work to triage; a company write, whose authority the engine decides per facet |
+| Add label · Rename · Archive (a label) | A project's About, Labels | `write_project{project, tags_add}` (any colleague) / `{tags_rename}` / `{tags_archive}` (the lead's) |
+| Add field · Edit · Archive (a field) | A project's About, Fields | `write_project{project, fields}`: the project's own declarations (`own_fields`, archived ones included) sent whole with the one change |
 | Upload · Replace · Remove (a file) | A project's Files | `PUT /worklet/files/{project}/{path}` with the file's bytes (Replace with `If-Match` on the version on screen) / `DELETE` with `If-Match`, each keyed |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Edit · Delete (your own comment) | A task's activity, on a comment you wrote, and not on a task in the trash | `PATCH /worklet/items/{id}/comments/{cid} {body}`, rewritten in place where Enter saves / `DELETE` on the same address after a confirmation, each keyed; Delete is not offered on a question or an answer, which the engine never takes down |
@@ -8014,11 +8016,11 @@ is one of the rules on this page applied to a tracker.
   its target, its census, its vocabulary and its latest changes — is the
   **About** lens; a finding on the project's own record (a unit the chart lost)
   is drawn over every lens, because it is a fact about the work below. The
-  page bar ends with **Edit project** — the lead's target date, a company write
-  (`write_project{target_date}`) whose authority the engine decides, titled
-  with the project's NAME and confirmed with the day as the Target fact writes
-  it ("Set Core's target to 30 Oct 2026", never the wire's ISO form) — and
-  **New task**, filed into this project. A project that declares no purpose
+  page bar ends with **New task**, filed into this project, and **Edit
+  project**: the lead's target date, default assignee and archive, a company
+  write (`write_project`) whose authority the engine decides, titled with the
+  project's NAME and confirmed with the day as the Target fact writes it ("Set
+  Core's target to 30 Oct 2026", never the wire's ISO form). A project that declares no purpose
   says so in a sentence for a person ("Add a purpose in Structure."), not a
   configuration key in backticks.
 - **A lens keeps its filters.** The lenses over a project (Tasks, About,

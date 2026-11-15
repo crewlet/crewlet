@@ -358,7 +358,7 @@ test("a vocabulary a project does not declare is a sentence, not a gap", async (
     work_activity: { records: [], complete: true },
   });
   mount();
-  await waitFor(() => expect(screen.getByText("This project declares no labels")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("This project declares no labels yet")).toBeTruthy());
   expect(screen.getByText("This project declares no fields of its own")).toBeTruthy();
 });
 
