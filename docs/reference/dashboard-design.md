@@ -5452,7 +5452,9 @@ nobody else, so the same words are the button's `title` while it is held — a
 pointer resting on it sees why — and a screen reader, which reads a described
 button's description rather than its title, hears it once. A form whose
 primary action is held also writes the reason on the page beside it (the New
-task sheet's foot), because neither reaches a touch screen. The seven reasons,
+task sheet's foot), because neither reaches a touch screen; where the reason
+is one field's value (a name in the wrong shape, a number out of range), that
+field draws it as its error and is marked invalid (`lib/formHold.ts`). The seven reasons,
 in the order you clear them (`lib/useWriteAccess.ts`) — and being bound to no
 seat is not one of them, since the engine makes a credential's change all the
 same, under its own login:
@@ -10656,7 +10658,14 @@ messages for ever, and 1 to 29 days is refused beside the field); no other
 kind copies a rule, and a refusal is the engine's, said in the words its rule
 wrote for a person. Going back to the default removes the key, and an Off a
 setting has of its own (`knowledge.skills_container: ""`) is a value written.
-The places: Settings › Limits; Delegated decisions; Settings › Gitlet (the
+A number's source names the default it replaced (*Changed from 30 days*); any
+other kind's says *Changed* alone, since its default can be a long text, and
+its field names the default instead. The pencil is drawn for every reader and
+held with the reason for one who cannot change the document; the reason is
+the kit tooltip's, opened by hover, keyboard focus and a press, so a touch
+reader is told too. A reader the `limits` or `settings` row is not served to
+(an administrator's answers) still gets the row with its held pencil, its
+value from the page's own answer where it has one. The places: Settings › Limits; Delegated decisions; Settings › Gitlet (the
 scratch policy and the identity domain); Worklet's, Doclet's and Chatlet's
 Settings under Integrations (the inbox horizon; the company pages space, the
 tool skills space, the search reach and search by meaning; the company's

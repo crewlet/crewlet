@@ -43,6 +43,7 @@ import {
   CODE_MAX_QUEUE_DEPTH,
   CODE_PATH_CLASSES,
 } from "~/contract/code.ts";
+import { fieldError, fieldHeld, formHeld, holdReason, type FormHold } from "~/lib/formHold.ts";
 import { PATH_CLASS_WORDS } from "~/lib/protection.ts";
 import { protectFormHeld, protectHeld, protectionPattern } from "~/lib/repoWrites.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -189,21 +190,27 @@ export function protectArgs(
 /**
  * Why a gate's form cannot be sent yet, or undefined: the queue's depth and
  * batch are whole numbers inside the engine's bounds (`gitlet.MaxQueueDepth`,
- * `MaxQueueBatch`), each from 1. Judged only for a gated rule.
+ * `MaxQueueBatch`), each from 1, said under the field. Judged only for a gated rule.
  */
 export function landingHeld(
   form: Pick<ProtectForm, "gated" | "depth" | "batch">,
-): string | undefined {
+): FormHold<"depth" | "batch"> | undefined {
   if (!form.gated) return undefined;
   const bad = (typed: string, max: number) => {
     const n = Number(typed);
     return typed.trim() === "" || !Number.isInteger(n) || n < 1 || n > max;
   };
   if (bad(form.depth, CODE_MAX_QUEUE_DEPTH)) {
-    return `Changes tested at once is a whole number from 1 to ${CODE_MAX_QUEUE_DEPTH}.`;
+    return fieldHeld(
+      "depth",
+      `Changes tested at once is a whole number from 1 to ${CODE_MAX_QUEUE_DEPTH}.`,
+    );
   }
   if (bad(form.batch, CODE_MAX_QUEUE_BATCH)) {
-    return `Changes per candidate is a whole number from 1 to ${CODE_MAX_QUEUE_BATCH}.`;
+    return fieldHeld(
+      "batch",
+      `Changes per candidate is a whole number from 1 to ${CODE_MAX_QUEUE_BATCH}.`,
+    );
   }
   return undefined;
 }
@@ -338,10 +345,11 @@ function ProtectDialog({
     ),
   };
   const args = protectArgs(held, sent);
-  const blocked =
+  const hold: FormHold<"pattern" | "depth" | "batch"> | undefined =
     protectFormHeld(typed) ??
     landingHeld(form) ??
-    (held && Object.keys(args).length === 0 ? "Nothing is changed yet." : undefined);
+    (held && Object.keys(args).length === 0 ? formHeld("Nothing is changed yet.") : undefined);
+  const blocked = holdReason(hold);
   const named = protectionPattern(typed);
   const checked = checkNames(form.checks).length > 0;
   const submit = async () => {
@@ -383,6 +391,7 @@ function ProtectDialog({
           <FormField
             label="Branches or tags"
             helper="A branch's name, or a pattern such as refs/heads/release/* or refs/tags/v*."
+            error={fieldError(hold, "pattern")}
           >
             {(field) => (
               <Input
@@ -541,6 +550,7 @@ function ProtectDialog({
                 <FormField
                   label="Changes tested at once"
                   helper={`How many candidates its merge queue tests together, 1 to ${CODE_MAX_QUEUE_DEPTH}.`}
+                  error={fieldError(hold, "depth")}
                 >
                   {(field) => (
                     <Input
@@ -560,6 +570,7 @@ function ProtectDialog({
                 <FormField
                   label="Changes per candidate"
                   helper={`How many waiting changes one candidate takes, 1 to ${CODE_MAX_QUEUE_BATCH}.`}
+                  error={fieldError(hold, "batch")}
                 >
                   {(field) => (
                     <Input

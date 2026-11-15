@@ -13,6 +13,7 @@
  */
 
 import { expect, test } from "vitest";
+import { holdReason } from "./formHold.ts";
 import type { CodeRepoDetail, Viewer } from "~/protocol/index.ts";
 import {
   DECLARED,
@@ -200,26 +201,36 @@ test("a search mode is set by whoever a seat binds, never by a credential bound 
 
 test("a mirror form is sent only with an https URL, a variable's name, and a push mirror's seat", () => {
   const url = "https://forge.example.com/acme/web.git";
-  expect(mirrorFormHeld("pull", url, "", "")).toBeUndefined();
-  expect(mirrorFormHeld("pull", "http://forge.example.com/web.git", "", "")).toMatch(/https URL/);
-  expect(mirrorFormHeld("pull", "git@forge.example.com:acme/web.git", "", "")).toMatch(/https URL/);
-  expect(mirrorFormHeld("pull", url, "glpat-abc123", "")).toMatch(/never the token/);
-  expect(mirrorFormHeld("push", url, "", "cto")).toMatch(/push authenticates/);
-  expect(mirrorFormHeld("push", url, "FORGE_TOKEN", " ")).toMatch(/seat the push is made as/);
-  expect(mirrorFormHeld("push", url, "FORGE_TOKEN", "cto")).toBeUndefined();
+  expect(holdReason(mirrorFormHeld("pull", url, "", ""))).toBeUndefined();
+  expect(holdReason(mirrorFormHeld("pull", "http://forge.example.com/web.git", "", ""))).toMatch(
+    /https URL/,
+  );
+  expect(holdReason(mirrorFormHeld("pull", "git@forge.example.com:acme/web.git", "", ""))).toMatch(
+    /https URL/,
+  );
+  expect(holdReason(mirrorFormHeld("pull", url, "glpat-abc123", ""))).toMatch(/never the token/);
+  expect(holdReason(mirrorFormHeld("push", url, "", "cto"))).toMatch(/push authenticates/);
+  expect(holdReason(mirrorFormHeld("push", url, "FORGE_TOKEN", " "))).toMatch(
+    /seat the push is made as/,
+  );
+  expect(holdReason(mirrorFormHeld("push", url, "FORGE_TOKEN", "cto"))).toBeUndefined();
 });
 
 test("an import form is sent only with a project's name, an https URL, a variable's name and an owner", () => {
   const url = "https://forge.example.com/acme/web.git";
-  expect(importFormHeld("web", url, "", "engineering")).toBeUndefined();
-  expect(importFormHeld("web", url, "FORGE_TOKEN", "engineering")).toBeUndefined();
-  expect(importFormHeld("Web_App", url, "", "engineering")).toMatch(/Name the project/);
-  expect(importFormHeld("cto.scratch", url, "", "engineering")).toMatch(/Name the project/);
-  expect(importFormHeld("web", "http://forge.example.com/web.git", "", "engineering")).toMatch(
-    /https URL/,
+  expect(holdReason(importFormHeld("web", url, "", "engineering"))).toBeUndefined();
+  expect(holdReason(importFormHeld("web", url, "FORGE_TOKEN", "engineering"))).toBeUndefined();
+  expect(holdReason(importFormHeld("Web_App", url, "", "engineering"))).toMatch(/Name the project/);
+  expect(holdReason(importFormHeld("cto.scratch", url, "", "engineering"))).toMatch(
+    /Name the project/,
   );
-  expect(importFormHeld("web", url, "ghp_secret", "engineering")).toMatch(/never the token/);
-  expect(importFormHeld("web", url, "", "")).toMatch(/owns it/);
+  expect(
+    holdReason(importFormHeld("web", "http://forge.example.com/web.git", "", "engineering")),
+  ).toMatch(/https URL/);
+  expect(holdReason(importFormHeld("web", url, "ghp_secret", "engineering"))).toMatch(
+    /never the token/,
+  );
+  expect(holdReason(importFormHeld("web", url, "", ""))).toMatch(/owns it/);
 });
 
 // A REPOSITORY'S LIFE IS HELD WHERE THE ENGINE REFUSES IT: a declared one is
@@ -247,21 +258,21 @@ test("a new project is named in the engine's grammar, owned by a unit, by whoeve
   expect(createHeld(PERSON)).toBeUndefined();
   expect(createHeld(AGENT)).toBeUndefined();
   expect(createHeld(MACHINE)).toBe(UNBOUND);
-  expect(createFormHeld("web", "engineering")).toBeUndefined();
-  expect(createFormHeld("Web", "engineering")).toMatch(/Name the project/);
+  expect(holdReason(createFormHeld("web", "engineering"))).toBeUndefined();
+  expect(holdReason(createFormHeld("Web", "engineering"))).toMatch(/Name the project/);
   // A DOTTED NAME IS A SEAT'S SCRATCH REPOSITORY, which only that seat makes.
-  expect(createFormHeld("cto.notes", "engineering")).toMatch(/Name the project/);
-  expect(createFormHeld("web", "")).toMatch(/owns it/);
+  expect(holdReason(createFormHeld("cto.notes", "engineering"))).toMatch(/Name the project/);
+  expect(holdReason(createFormHeld("web", ""))).toMatch(/owns it/);
 });
 
 test("a protection rule names refs and is set only on a repository a tool made", () => {
   expect(protectionPattern("main")).toBe("refs/heads/main");
   expect(protectionPattern(" refs/tags/v* ")).toBe("refs/tags/v*");
   expect(protectionPattern("")).toBe("");
-  expect(protectFormHeld("release/*")).toBeUndefined();
-  expect(protectFormHeld("refs/tags/v*")).toBeUndefined();
-  expect(protectFormHeld("")).toMatch(/Name the branches or tags/);
-  expect(protectFormHeld("refs/notes/x")).toMatch(/Name the branches or tags/);
+  expect(holdReason(protectFormHeld("release/*"))).toBeUndefined();
+  expect(holdReason(protectFormHeld("refs/tags/v*"))).toBeUndefined();
+  expect(holdReason(protectFormHeld(""))).toMatch(/Name the branches or tags/);
+  expect(holdReason(protectFormHeld("refs/notes/x"))).toMatch(/Name the branches or tags/);
   expect(protectHeld(repo(), PERSON)).toBeUndefined();
   expect(protectHeld(repo({ managed_by: "config" }), PERSON)).toBe(DECLARED_LIFE);
   expect(protectHeld(repo({ status: "deleted" }), PERSON)).toMatch(/restore it first/);
@@ -299,15 +310,38 @@ test("a commit from the browser names a file from the root, a change and a messa
 // name it has is no change. Mutation: let a dotted name rename a project, or a
 // scratch repository leave its seat's prefix, and this fails.
 test("a rename keeps a project one label and a scratch repository its seat's", () => {
-  expect(renameFormHeld(repo(), "web")).toBe("Type its new name.");
-  expect(renameFormHeld(repo(), "storefront")).toBeUndefined();
-  expect(renameFormHeld(repo(), "cto.web")).toMatch(/Name the project/);
+  expect(holdReason(renameFormHeld(repo(), "web"))).toBe("Type its new name.");
+  expect(holdReason(renameFormHeld(repo(), "storefront"))).toBeUndefined();
+  expect(holdReason(renameFormHeld(repo(), "cto.web"))).toMatch(/Name the project/);
   const scratch = repo({ kind: "scratch", name: "cto.try", owner: { kind: "seat", ref: "cto" } });
-  expect(renameFormHeld(scratch, "cto.again")).toBeUndefined();
-  expect(renameFormHeld(scratch, "pm.again")).toMatch(/cto\.<name>/);
-  expect(renameFormHeld(scratch, "again")).toMatch(/cto\.<name>/);
+  expect(holdReason(renameFormHeld(scratch, "cto.again"))).toBeUndefined();
+  expect(holdReason(renameFormHeld(scratch, "pm.again"))).toMatch(/cto\.<name>/);
+  expect(holdReason(renameFormHeld(scratch, "again"))).toMatch(/cto\.<name>/);
   expect(renameHeld(repo({ managed_by: "config" }), PERSON)).toBe(DECLARED);
   expect(renameHeld(repo(), MACHINE)).toBe(UNBOUND);
+});
+
+// A refused value names its field, which draws the sentence; an empty or
+// unchanged one holds the form alone, so no form opens on an error.
+test("a value in the wrong shape is its field's to say, and nothing typed is the form's", () => {
+  expect(renameFormHeld(repo(), "Shop Front")?.field).toBe("name");
+  expect(renameFormHeld(repo(), "web")?.field).toBeUndefined();
+  expect(createFormHeld("", "engineering")?.field).toBeUndefined();
+  expect(createFormHeld("Web", "engineering")?.field).toBe("name");
+  expect(importFormHeld("web", "", "", "engineering")?.field).toBeUndefined();
+  expect(importFormHeld("web", "http://forge.example.com/a.git", "", "engineering")?.field).toBe(
+    "url",
+  );
+  expect(importFormHeld("web", "https://forge.example.com/a.git", "ghp_x", "eng")?.field).toBe(
+    "credential",
+  );
+  expect(protectFormHeld("")?.field).toBeUndefined();
+  expect(protectFormHeld("refs/notes/x")?.field).toBe("pattern");
+  expect(pathOwnerFormHeld("unit:eng", ["src /**"], [])?.field).toBe("paths");
+  expect(pathOwnerFormHeld("unit:eng", ["src/**"], ["src/**"])?.field).toBeUndefined();
+  expect(
+    mirrorFormHeld("push", "https://forge.example.com/a.git", "", "cto")?.field,
+  ).toBeUndefined();
 });
 
 // A PULL MIRROR IS NEVER ARCHIVED (`gitlet.archiveRefusal`): an archived
@@ -339,12 +373,16 @@ test("a path owner's globs are given and taken by name", () => {
 // repository takes none; and taking a glob while a rule gates on path owners
 // is a person's. Mutation: let any of them through, and this fails.
 test("a path owner form is held until it names an owner and a path, and taking one may be a person's", () => {
-  expect(pathOwnerFormHeld("", ["src/**"], [])).toMatch(/Choose the unit or seat/);
-  expect(pathOwnerFormHeld("unit:eng", [], [])).toBe("Name a path at least.");
-  expect(pathOwnerFormHeld("unit:eng", [], ["src/**"])).toMatch(/or remove the owner/);
-  expect(pathOwnerFormHeld("unit:eng", ["/src/**"], [])).toMatch(/from the repository's root/);
-  expect(pathOwnerFormHeld("unit:eng", ["src/**"], ["src/**"])).toBe("Nothing is changed yet.");
-  expect(pathOwnerFormHeld("unit:eng", ["src/**"], [])).toBeUndefined();
+  expect(holdReason(pathOwnerFormHeld("", ["src/**"], []))).toMatch(/Choose the unit or seat/);
+  expect(holdReason(pathOwnerFormHeld("unit:eng", [], []))).toBe("Name a path at least.");
+  expect(holdReason(pathOwnerFormHeld("unit:eng", [], ["src/**"]))).toMatch(/or remove the owner/);
+  expect(holdReason(pathOwnerFormHeld("unit:eng", ["/src/**"], []))).toMatch(
+    /from the repository's root/,
+  );
+  expect(holdReason(pathOwnerFormHeld("unit:eng", ["src/**"], ["src/**"]))).toBe(
+    "Nothing is changed yet.",
+  );
+  expect(holdReason(pathOwnerFormHeld("unit:eng", ["src/**"], []))).toBeUndefined();
   expect(pathOwnersHeld(repo({ kind: "scratch" }), PERSON)).toMatch(/takes no path owners/);
   expect(pathOwnerTakeHeld(repo(), AGENT, true)).toMatch(/Only a person/);
   expect(pathOwnerTakeHeld(repo(), AGENT, false)).toBeUndefined();

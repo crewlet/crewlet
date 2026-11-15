@@ -1242,10 +1242,14 @@ test("a repository is renamed by one call naming the new name alone", async () =
   const field = within(dialog).getByLabelText(/^New name/);
   fireEvent.change(field, { target: { value: "cto.web" } });
   await waitFor(() => expect(press.getAttribute("title")).toMatch(/Name the project/));
+  // The reason is said under the field too, which is marked invalid.
+  expect(field.getAttribute("aria-invalid")).toBe("true");
+  expect(within(dialog).getByRole("alert").textContent).toMatch(/Name the project/);
   fireEvent.click(press);
   expect(acted).toHaveLength(0);
   fireEvent.change(field, { target: { value: "storefront" } });
   await waitFor(() => expect(press.getAttribute("title")).toBeNull());
+  expect(field.getAttribute("aria-invalid")).toBeNull();
   fireEvent.click(press);
   await waitFor(() => expect(acted).toHaveLength(1));
   expect(acted[0]).toEqual({
