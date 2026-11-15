@@ -157,12 +157,14 @@ import (
 // holder's own included. And A LIVE ROW IS DECIDED ON THE LOG AS A RELAUNCH
 // READS IT: read again at the relaunch's level ([executordomain.RelaunchRead])
 // where the page was read below it and the row names another capture than the one
-// its run's record keeps, or the record keeps none ([sandbox.RereadsRow]),
+// its run's record keeps, or the record keeps none, or holds a newer capture of
+// the job a relaunch would follow that it does not keep ([sandbox.RereadsRow]),
 // since a copy of the log behind the record would read a session a relaunch
-// continues as one the log no longer names — and nowhere else, since a read at
-// that level appends a barrier to the executor log, and a row naming the kept
-// capture already decides as one read there would. An ended row is decided on
-// the snapshot its page was read in, which `read_level` states.
+// continues as one the log no longer names (the log may have taken that newer
+// one unseen by its stamp); and nowhere else, since a read at that level
+// appends a barrier to the executor log, and a row naming the kept capture
+// beside nothing newer already decides as one read there would. An ended row
+// is decided on the snapshot its page was read in, which `read_level` states.
 //
 // A TRANSCRIPT'S LATER PAGES DO NOT DECIDE IT AGAIN: its first page, read with
 // no cursor, says it beside the transcript's opening, and every later page —
@@ -595,7 +597,8 @@ func nextLaunch(conversationKey string) sandbox.ContinuedBy {
 // the row as a relaunch reads it: read again at the relaunch's level
 // ([executordomain.RelaunchRead]) where the caller's read was below it and the
 // decision reaches a row that names another capture than the run's record
-// keeps ([sandbox.RereadsRow]), and row itself everywhere else, which decides
+// keeps, or one beside a newer capture of the job the record did not keep
+// ([sandbox.RereadsRow]), and row itself everywhere else, which decides
 // as that read would — undecided where the read again fails.
 //
 // A ROW READ AGAIN IS DECIDED ON THE HEAD THAT READ NAMED, never the page's: the

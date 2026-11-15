@@ -404,16 +404,19 @@ func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 // A person's answer carries a parked run on in the box it parked in, continuing
 // the session that box holds whatever became of its capture — so a run whose
 // kept capture no relaunch restores (written by a release no other box
-// continues, or not kept at all) is still continuable, only in its parked box,
+// continues, or no capture of its job kept at all) is still continuable, only in its parked box,
 // with the reason no other box would, its answer recorded or its answer's claim
 // under way as much as parked; and not where the relaunch could not continue in
 // that box: its box gone (a pause past its time-to-live), its record naming no
 // session, the relaunch's member another harness or in another cell, a box on
 // an engine host that is not the host of the node holding the seat — the seat
 // moved since its job launched — or a box that ran another session of the turn
-// than the row's, started in its place, each saying why.
+// than the row's, started in its place, each saying why. A newer capture of
+// its job that was not kept is none of these: the relaunch continues the one
+// the job kept, in any box.
 //
-// Mutation: decide the row on the kept capture alone, read a box the relaunch
+// Mutation: decide the row on the kept capture alone, continue only the job's
+// newest capture, read a box the relaunch
 // would not continue in as one it would — skip its host, or the session it
 // holds — or read an answer's claim as a run no answer carries on, and a case
 // goes red.
@@ -437,8 +440,8 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 	}{
 		"its kept capture, in any box":   {target: claudeTarget(), continues: true},
 		"a release no other box resumes": {target: refusing, continues: true, inParked: true},
-		"a capture that was not kept": {target: claudeTarget(), continues: true, inParked: true,
-			run: func(r *sandbox.PendingRun) {
+		"a newer capture that was not kept, beside the one its job kept": {target: claudeTarget(),
+			continues: true, run: func(r *sandbox.PendingRun) {
 				refused := *r.Kept
 				refused.CaptureSeq, refused.State, refused.Reason = 2, sandbox.CaptureRefused, "past the seat's budget"
 				r.Capture = &refused
@@ -816,38 +819,71 @@ func (l *levelledSessions) readAgain() int {
 // row at linearizable, continues the newer. So the row is read again at the
 // relaunch's level, once, and decided on that: continuable in any box with no
 // reason, where the behind copy alone read it as a log naming another capture.
-// The run's job was collected and its box handed back, so nothing else would
-// continue its session.
+// And where the record keeps the older capture and stamps a newer one of the
+// job refused, which the log took all the same, unseen by that stamp: the
+// behind copy names the kept one, which a relaunch would continue past the
+// refused one, and a read at the relaunch's level names the newer, which no
+// relaunch continues, so the row is read again there and decided not
+// continued, saying the log keeps it. The run's job was collected and its box
+// handed back, so nothing else would continue its session.
 //
-// Mutation: decide the row on the page's own read, and it says no.
+// Mutation: decide the row on the page's own read, or read a row naming the
+// kept capture again only where the record keeps none newer of the job, and a
+// case says the opposite.
 func TestALiveRowIsDecidedOnTheLogAsARelaunchReadsIt(t *testing.T) {
 	t.Parallel()
-	behind, run := liveSession(executor.ClaudeCodeName)
-	newer := *run.Kept
-	newer.CaptureSeq = 2
-	run.Capture, run.Kept = &newer, &newer
-	run.Status, run.Launch.Collected, run.SandboxID = sandbox.StatusRunning, true, ""
-	applied := behind
-	applied.CaptureSeq = 2
-	store, _ := sessionObjectStore(t)
-	s := sessionSources(t, nil, store)
-	onLog := &levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{behind}},
-		through: map[string]executordomain.Session{behind.Turn: applied}}
-	s.ExecutorSessions = onLog
-	s.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{run}}
-	s.RelaunchTargets = targetOf(claudeTarget())
-	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
-	if err != nil {
-		t.Fatalf("executor_sessions: %v", err)
-	}
-	got := rowsByTurn(t, page)[behind.Turn]
-	if got.Continuable == nil || !*got.Continuable || got.ContinuesIn != sandbox.ContinuesInAnyBox ||
-		got.NotContinuable != "" {
-		t.Errorf("a row read from a copy behind the run's record is %s, want continuable in any box with "+
-			"no reason, as a relaunch reading the log at its level continues it", decided(got))
-	}
-	if n := onLog.readAgain(); n != 1 {
-		t.Errorf("the row was read again at the relaunch's level %d times, want once", n)
+	for name, tc := range map[string]struct {
+		// refused stamps the newer capture refused, the record keeping the
+		// older; else the record keeps the newer.
+		refused   bool
+		continues bool
+		why       string
+	}{
+		"a copy behind the capture the record keeps": {continues: true},
+		"a copy behind a capture the record refused and the log took": {refused: true,
+			why: "the executor log keeps it all the same"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			behind, run := liveSession(executor.ClaudeCodeName)
+			newer := *run.Kept
+			newer.CaptureSeq = 2
+			run.Capture, run.Kept = &newer, &newer
+			if tc.refused {
+				older := *run.Kept
+				older.CaptureSeq = 1
+				newer.State, newer.Reason = sandbox.CaptureRefused, "its taker node-a stopped before it was kept"
+				run.Kept = &older
+			}
+			run.Status, run.Launch.Collected, run.SandboxID = sandbox.StatusRunning, true, ""
+			applied := behind
+			applied.CaptureSeq = 2
+			store, _ := sessionObjectStore(t)
+			s := sessionSources(t, nil, store)
+			onLog := &levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{behind}},
+				through: map[string]executordomain.Session{behind.Turn: applied}}
+			s.ExecutorSessions = onLog
+			s.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{run}}
+			s.RelaunchTargets = targetOf(claudeTarget())
+			page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+			if err != nil {
+				t.Fatalf("executor_sessions: %v", err)
+			}
+			got := rowsByTurn(t, page)[behind.Turn]
+			switch {
+			case got.Continuable == nil || *got.Continuable != tc.continues:
+				t.Errorf("a row read from a copy behind the log is %s, want continues %v as a relaunch "+
+					"reading the log at its level decides it", decided(got), tc.continues)
+			case tc.continues && (got.ContinuesIn != sandbox.ContinuesInAnyBox || got.NotContinuable != ""):
+				t.Errorf("a row read from a copy behind the run's record is %s, want continuable in any box "+
+					"with no reason", decided(got))
+			case !strings.Contains(got.NotContinuable, tc.why):
+				t.Errorf("the row is %s, want it saying %q", decided(got), tc.why)
+			}
+			if n := onLog.readAgain(); n != 1 {
+				t.Errorf("the row was read again at the relaunch's level %d times, want once", n)
+			}
+		})
 	}
 }
 
@@ -902,8 +938,9 @@ func TestARowReadAgainIsDecidedOnTheHeadItsOwnReadNamed(t *testing.T) {
 // A ROW NAMING ITS RUN'S KEPT CAPTURE IS NOT READ AGAIN, nor is a row the
 // decision never reaches. A read at the relaunch's level appends a barrier to
 // the executor log, and a row that already names the capture the run's record
-// keeps decides as that read would — a newer capture is stamped on the record
-// before a byte of it moves — while one whose job still works, or whose turn
+// keeps, where the record holds no newer capture of the job, decides as that
+// read would (a newer capture is stamped on the record before a byte of it
+// moves), while one whose job still works, or whose turn
 // has ended, is decided without its capture at all. So a page of such rows,
 // asked every minute, reads the log once, at its own level. And a transcript's
 // later page decides nothing again: its first page says it, once, and a later

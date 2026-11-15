@@ -10892,7 +10892,7 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   decided by the one decision that launch takes, of the member of the seat's
   executor chain it would be launched on now, the first not sitting out its
   plan. **A relaunch** decides it as a relaunch does — the turn live and not
-  ending, the newest capture of the job a relaunch would follow kept, stating
+  ending, the newest kept capture of the job a relaunch would follow, stating
   its save point and named by the row, and a runner that restores its harness,
   format and release
   ([A relaunch continues the turn's
@@ -10938,8 +10938,9 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   has neither taken its final capture nor begun its turn; its capture is still
   being kept, or its record was sent and never answered, which a relaunch asks
   the executor log for again before it decides, continuing the capture where it
-  landed (until the capture's object is past the twelve hours a record may name
-  it in, when the ask refuses it unasked); a capture of an earlier job of the
+  landed, and otherwise the newest capture that job kept before it (until the
+  capture's object is past the twelve hours a record may name it in, when the
+  ask refuses it unasked); a capture of an earlier job of the
   turn is still being kept while the turn has kept none of its own, since once
   one lands a relaunch no longer continues the session the turn's first launch
   was handed (beside a capture the turn kept, an earlier job's keep changes

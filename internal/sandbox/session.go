@@ -226,12 +226,15 @@ import (
 // read as all the turn did, never as one its turn went on past
 // (internal/executordomain's Session.WentOn).
 //
-// THAT RELAUNCH STARTS WITHOUT IT AS ONE DOES THAT WILL NOT WAIT OUT A SLOW
-// KEEP ([relaunchCaptureWait], [Coordinator.continuedWithout]): in the base the
+// THAT RELAUNCH STARTS WITHOUT IT, AS ONE WHOSE JOB KEPT NOTHING BEFORE A SLOW
+// KEEP DOES ([relaunchCaptureWait], [Coordinator.continuedWithout]): in the base the
 // turn's first launch froze, where the turn has kept nothing and its row still
 // held that base when the relaunch read it — the late record landing only
 // after — and otherwise in a session of its own, or the one its job's box
-// holds where it carries the run on in that box.
+// holds where it carries the run on in that box. Beside an older capture its
+// job kept, which a relaunch past a slow keep continues, it starts without that
+// one too: the turn's row names the newer, and a relaunch restores only the
+// object the row names ([ContinuityOf]).
 //
 // NOT PRESENCE, which answers another question. A draining node gives its
 // presence up at once while its keeps still upload, so a taker read as gone

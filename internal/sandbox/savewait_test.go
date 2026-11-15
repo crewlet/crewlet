@@ -274,17 +274,18 @@ func TestASaveWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 // anybody kept: the turn's end and a relaunch each ask it again under its own
 // operation, as they ask the newest capture: the end before it records, so
 // its record keeps the save it landed; the relaunch before it decides, so the
-// record it decides on keeps the save, and its run is told the turn's own
-// session is there to read. A build that reads the newest place alone never
-// asks it. AND THE END ASKS IT RATHER THAN WAIT FOR IT: a save whose record
-// went unanswered is no keep in flight, as an unanswered newest capture is
-// not, since nothing of it is being kept any more and only an ask can say
-// whether the log took it, so the end's wait ends at once beside it.
+// record it decides on keeps the save, which it continues past the refused
+// final take, and its run is told the turn's own session is there to read. A
+// build that reads the newest place alone never asks it. AND THE END ASKS IT
+// RATHER THAN WAIT FOR IT: a save whose record went unanswered is no keep in
+// flight, as an unanswered newest capture is not, since nothing of it is being
+// kept any more and only an ask can say whether the log took it, so the end's
+// wait ends at once beside it.
 //
 // Mutation: ask the newest capture alone, and neither asks the save: the end
-// records beside a record keeping nothing, and the relaunch decides on one;
-// count a save awaiting its answer as a keep in flight, and the end's wait
-// runs to its whole bound before the end asks it.
+// records beside a record keeping nothing, and the relaunch decides on one,
+// continuing nothing; count a save awaiting its answer as a keep in flight,
+// and the end's wait runs to its whole bound before the end asks it.
 func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -298,9 +299,12 @@ func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T)
 			t.Parallel()
 			inBubble(t, func(t *testing.T) {
 				rig, writes, _ := keepingRig(t)
-				rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
+				rig.runner.Carries = true
 				run := rig.launchKept(t, "t1")
 				save, final := overtakenSave(t, rig, "t1", "", 0, CaptureBegun)
+				// THE LOG TOOK THE SAVE'S RECORD, which an ask lands.
+				rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{
+					"t1": keptRow(t, comeOut(save, CaptureLanded))}}
 				stampOut(t, rig, "t1", save, CaptureUnresolved)
 				stampOut(t, rig, "t1", final, CaptureRefused)
 				asked := len(writes.captured())
@@ -323,10 +327,14 @@ func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T)
 					}
 				} else {
 					lostWithItsBox(t, rig, run)
-					continued, _ := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+					continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
 					if continued.KeptTurn != "t1" {
 						t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, "+
 							"whose save its ask landed", continued.KeptTurn)
+					}
+					if why != "" || !continued.Capture.sameTake(save) {
+						t.Errorf("the relaunch continues %+v (%q), want the save its ask landed, past the refused "+
+							"final take", continued, why)
 					}
 				}
 				records := writes.captured()[asked:]
@@ -345,8 +353,9 @@ func TestAnUnresolvedSaveIsAskedAgainBeforeARelaunchOrAnEndDecides(t *testing.T)
 // newest capture. A final take of the job overtook a save still uploading, and
 // the final take was refused: the save is the job's newest session anybody may
 // keep, so a relaunch waits its short wait for it, and decides on the record
-// as it stands once the save landed: the record keeping it, and the turn's
-// own session named to the relaunch's run as one it may read. A save still
+// as it stands once the save landed: the record keeping it, the relaunch
+// continuing it past the refused final take, and the turn's own session named
+// to the relaunch's run as one it may read. A save still
 // being kept when the wait runs out is named by its own place, never by the
 // refused final take that holds the newest place.
 //
@@ -359,10 +368,13 @@ func TestARelaunchWaitsBrieflyForASaveOfTheJobItFollows(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
 			rig, _, _ := keepingRig(t)
-			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
+			rig.runner.Carries = true
 			rig.coordinator.relaunchWait = 10 * time.Second
 			run := rig.launchKept(t, "t1")
 			save, _ := overtakenSave(t, rig, "t1", "", 0, CaptureRefused)
+			// THE LOG TAKES THE SAVE'S RECORD as its keep lands.
+			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{
+				"t1": keptRow(t, comeOut(save, CaptureLanded))}}
 			lostWithItsBox(t, rig, run)
 			landing := make(chan struct{})
 			go func() {
@@ -380,6 +392,10 @@ func TestARelaunchWaitsBrieflyForASaveOfTheJobItFollows(t *testing.T) {
 			}
 			if kept := rig.get("t1").Kept; kept == nil || !kept.sameTake(save) {
 				t.Errorf("the row keeps %+v, want the save that landed while the relaunch waited", kept)
+			}
+			if why != "" || !continued.Capture.sameTake(save) {
+				t.Errorf("the relaunch continues %+v (%q), want the save that landed while it waited, past the "+
+					"refused final take", continued, why)
 			}
 		})
 	})

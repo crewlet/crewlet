@@ -365,12 +365,14 @@ func askingAbout(ids ...string) HoldingsAsk {
 // decision that continues a kept session (ContinuityOf) still continues the
 // turn's row with the runner that reads it: that runner is handed the archive
 // the row names and an opener streaming exactly the row's object, its reading
-// is the answer, and no spool is left. Anything else is no reading, said, the
+// is the answer, and no spool is left; beside a newer capture of its job
+// begun, too, past which its relaunch continues the one the job kept. Anything
+// else is no reading, said, the
 // runner never asked and nothing streamed: a node that keeps no session, or a
 // company that keeps none; no runner that reads; no run record; a record that
 // keeps another capture, or one whose harness ended its own run; a row naming
 // another capture, or none; a turn ended, or whose end is decided; a session
-// that ran out of context; a newer capture of its job begun; a runner that
+// that ran out of context; a runner that
 // does not restore the archive; and an ask of no call, or of more than a
 // round's log lists, or for a session continued by a release nobody read,
 // which no reader holds.
@@ -392,6 +394,14 @@ func TestHoldingsAreReadOnlyOfTheCaptureItsRelaunchContinues(t *testing.T) {
 		why string
 	}{
 		"the capture its relaunch continues": {},
+		"the capture its relaunch continues, beside a newer one of its job begun": {
+			world: func(t *testing.T, w *holdingsWorld, _ *holdingsQuestion) {
+				begun := w.kept
+				begun.CaptureSeq, begun.State, begun.At = w.kept.CaptureSeq+1, CaptureBegun, w.rig.now
+				if took, err := w.rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
+					t.Fatalf("stamping the newer capture = %v, %v", took, err)
+				}
+			}},
 
 		"a node that keeps no session": {why: "built with nothing to restore one from",
 			world: func(_ *testing.T, w *holdingsWorld, _ *holdingsQuestion) { w.rig.coordinator.restore = nil }},
@@ -430,14 +440,6 @@ func TestHoldingsAreReadOnlyOfTheCaptureItsRelaunchContinues(t *testing.T) {
 			world: func(t *testing.T, w *holdingsWorld, _ *holdingsQuestion) {
 				if err := w.rig.pending.RetireSessions(t.Context(), "t1", []string{"s-1"}); err != nil {
 					t.Fatalf("RetireSessions: %v", err)
-				}
-			}},
-		"a newer capture of its job begun": {why: "was not kept",
-			world: func(t *testing.T, w *holdingsWorld, _ *holdingsQuestion) {
-				begun := w.kept
-				begun.CaptureSeq, begun.State, begun.At = w.kept.CaptureSeq+1, CaptureBegun, w.rig.now
-				if took, err := w.rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
-					t.Fatalf("stamping the newer capture = %v, %v", took, err)
 				}
 			}},
 		"a runner that does not restore it": {why: "older than 2.1.300",

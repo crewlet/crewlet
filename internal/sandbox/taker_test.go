@@ -662,14 +662,17 @@ func relaunchAfterTaker(t *testing.T, gone, landed bool,
 // of its own — beside a record the log may well have taken. Its taker's lease
 // has lapsed, so the relaunch's wait settles it from the turn's row at once:
 // one the row names landed, and is continued; one it does not was refused,
-// which the relaunch says. A taker whose lease still holds is waited for, and
-// once the wait has run out the turn's row is read again: a capture it names
-// landed, and is continued; one it does not is still being kept.
+// and the relaunch continues the capture the job kept before it. A taker whose
+// lease still holds is waited for, and once the wait has run out the turn's
+// row is read again: a capture it names landed, and is continued; one it does
+// not is still being kept, and left so, the relaunch continuing the capture
+// the job kept before it.
 //
-// Mutation: drop the settle from the relaunch's wait, and the first two cases
-// say the capture is still being kept; drop the read past the wait, and the
-// third says so too; settle a held taker's capture refused where the log has
-// not taken it, and the fourth's stamp is no longer left begun.
+// Mutation: settle a capture landed only where its taker is gone, or drop the
+// read past the wait, and the third case continues the older capture; settle a
+// held taker's capture refused where the log has not taken it, and the
+// fourth's stamp is no longer left begun; continue only the job's newest
+// capture, and the second and the fourth continue nothing.
 func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 	t.Parallel()
 	t.Run("its record landed", func(t *testing.T) {
@@ -690,9 +693,9 @@ func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
 			rig, begun, continued, why := relaunchAfterTaker(t, true, false, 2*time.Second)
-			if !strings.Contains(why, "its taker node-a stopped before it was kept") ||
-				strings.Contains(why, "still being kept") || continued.Capture.CaptureSeq != 0 {
-				t.Fatalf("the relaunch continues %+v (%q), want none, said: its taker stopped", continued, why)
+			if why != "" || continued.Capture.CaptureSeq != begun.CaptureSeq-1 {
+				t.Fatalf("the relaunch continues %+v (%q), want the capture its job kept before the one its "+
+					"stopped taker never kept", continued, why)
 			}
 			if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureRefused {
 				t.Errorf("the row holds %+v, want the begun capture refused", c)
@@ -715,10 +718,10 @@ func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 	t.Run("its taker's lease still holds, and its record is not on the log", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, begun, _, why := relaunchAfterTaker(t, false, false, 50*time.Millisecond)
-			if !strings.Contains(why, "still being kept") {
-				t.Fatalf("the relaunch answered %q, want the capture of a taker still holding its lease waited for",
-					why)
+			rig, begun, continued, why := relaunchAfterTaker(t, false, false, 50*time.Millisecond)
+			if why != "" || continued.Capture.CaptureSeq != begun.CaptureSeq-1 {
+				t.Fatalf("the relaunch continues %+v (%q), want the capture its job kept before the one a taker "+
+					"still holding its lease is keeping", continued, why)
 			}
 			if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureBegun {
 				t.Errorf("the row holds %+v, want the live taker's capture left begun", c)
@@ -757,7 +760,7 @@ func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 // record's budget; read it past the relaunch's wait only for a capture still
 // being kept, and the relaunch of a capture past its budget starts without
 // it; read or settle the newest capture alone, and the end waits out the
-// save's whole budget, or the relaunch leaves the save unsettled; read the
+// save's whole budget, or the relaunch starts without the save; read the
 // lease or the row past the wait under the relaunch's own context, or settle
 // under no deadline of its own, and a slow store holds the relaunch an hour.
 func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
@@ -836,16 +839,16 @@ func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
 					t.Fatalf("the premise: node-a's taker lease is %+v, want it still held at %d", held,
 						lease.Epoch)
 				}
+				if why != "" || !continued.Capture.sameTake(save) || continued.Capture.State != CaptureLanded {
+					t.Fatalf("the relaunch continues %+v (%q), want the save the log took, settled landed past "+
+						"the refused final take", continued, why)
+				}
 				if kept := rig.get("t1").Kept; kept == nil || !kept.sameTake(save) || kept.State != CaptureLanded {
-					t.Fatalf("the row keeps %+v (%q), want the save the log took, settled landed past the wait",
-						kept, why)
+					t.Errorf("the row keeps %+v, want the save settled landed", kept)
 				}
-				if continued.KeptTurn != "t1" {
-					t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, whose "+
-						"save the read past the wait settled landed", continued.KeptTurn)
-				}
-				if len(restore.askedFor()) == 0 {
-					t.Error("the turn's row was never read, want it read past the wait to settle the save")
+				if read := restore.askedFor(); len(read) != 2 {
+					t.Errorf("the turn's row was read %v, want once past the wait to settle the save and once "+
+						"to decide", read)
 				}
 			})
 		})
@@ -1430,33 +1433,43 @@ func TestATakeWithNoTakerLeaseBeginsNoCapture(t *testing.T) {
 // taker lease on its stamps, so nothing says whether the take that left one
 // begun still runs: a relaunch waits for it its fifteen seconds as before, and
 // a stamp older than a capture can take is read as one whose node stopped or
-// whose budget ran out — no lease read, and the log never read, for a taker
-// nobody named.
+// whose budget ran out. No lease is read, and the log is never read to settle
+// it, for a taker nobody named: the relaunch continues the capture its job
+// kept before it either way, reading the turn's row once, to decide, and the
+// line naming the stamp it went past says which it was.
+//
+// IN A SYNCTEST BUBBLE, and not parallel: it captures the process-wide logger
+// ([captureLogs]).
 //
 // Mutation: read a lease for a stamp with no taker, or settle one from the log,
-// and a check below goes red.
+// or tell one past a capture's budget as still being kept, and a check below
+// goes red.
 func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
-	t.Parallel()
 	for _, c := range []struct {
 		name string
 		age  time.Duration
-		why  string
+		line string
 	}{
-		{name: "younger than a capture can take", why: "still being kept"},
+		{name: "younger than a capture can take",
+			line: "(launch 1, capture 2) may still be kept: it is still being kept"},
 		{name: "older than a capture can take", age: SessionCaptureBudget,
-			why: "it was still being kept, or was begun and never finished"},
+			line: "(launch 1, capture 2) was not kept: it was still being kept, or was begun and never finished"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
 			inBubble(t, func(t *testing.T) {
+				logs := captureLogs(t)
 				store := newTakerStore()
 				rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
 				rig.coordinator.relaunchWait = 50 * time.Millisecond
 				begun := takenBy(t, rig, kept, "", 0)
 				rig.now = rig.now.Add(c.age)
-				if _, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner); !strings.Contains(why,
-					c.why) {
-					t.Fatalf("the relaunch answered %q, want %q", why, c.why)
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				if why != "" || !continued.Capture.samePlace(kept) {
+					t.Fatalf("the relaunch continues %+v (%q), want the capture its job kept before the stamp",
+						continued, why)
+				}
+				if lines := passedOverLines(logs); len(lines) != 1 || !strings.Contains(lines[0], c.line) {
+					t.Errorf("logged %q, want one line saying %q", lines, c.line)
 				}
 				if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
 					t.Errorf("the row holds %+v, want the older build's capture left begun", got)
@@ -1464,8 +1477,9 @@ func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 				if reads := store.readsAll(); reads != 0 {
 					t.Errorf("a lease was read %d times, want none for a stamp that names no taker", reads)
 				}
-				if asked := restore.askedFor(); len(asked) != 0 {
-					t.Errorf("the log was read %v, want nothing read for a stamp that names no taker", asked)
+				if asked := restore.askedFor(); len(asked) != 1 {
+					t.Errorf("the turn's row was read %v, want it read once, by the decision, and never by a "+
+						"settle of a stamp that names no taker", asked)
 				}
 			})
 		})
