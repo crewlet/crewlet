@@ -13089,7 +13089,12 @@ reading a marker. `digest` is the call's identity, the SHA-256 of its whole
 arguments as the run counts its calls, absent on a call no tool admitted (one
 refused after the run's tools closed, or whose arguments did not parse) and on
 a `held` or `approved` call, whose arguments ride the record sealed and are
-never digested in the clear. `call_id` is the id the run's harness gave the
+never digested in the clear. `args_unparsed: true` marks a call whose
+arguments did not parse: the bridge answered it unrun, with `failed: true`,
+holding no object of what the model wrote, so it has no `args`, as a call made
+with none has none. It is a call made with arguments that are not known, and
+the executors board says so rather than drawing it as one made with none;
+absent on every other call and on a call an older engine recorded. `call_id` is the id the run's harness gave the
 call, as its box sent it: Claude Code's `tool_use` id, the id its own session
 names the call by. It is absent where the harness sent none (OpenCode), on an
 `approved` call, on a skill load a harness's hook reported, on a call an older
