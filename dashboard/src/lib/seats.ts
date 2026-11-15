@@ -1387,7 +1387,7 @@ export function heldBy(
 /**
  * The kit tone a state's pill takes, the same fill its avatar's status badge
  * stands on: WORKING IS INFO, NEEDS YOU IS WARNING, STOPPED IS DANGER, and idle
- * is neutral. Amber is reserved for the one state that asks for a person.
+ * and paused are neutral. Amber is reserved for the one state that asks for a person.
  */
 export function toneOf(state: ShownState | undefined): SeatTone | "neutral" {
   switch (state) {
@@ -1395,8 +1395,10 @@ export function toneOf(state: ShownState | undefined): SeatTone | "neutral" {
       return "info";
     case "needs":
       return "warning";
+    // A PAUSE IS A STATE A PERSON (or the engine, with its reason) CHOSE, not
+    // a failure: drawn in the danger tone it read as an error stacked over
+    // the seat's real failure. Neutral, as an idle seat is.
     case "stopped":
-    case "paused":
       return "danger";
     default:
       return "neutral";
@@ -1487,11 +1489,23 @@ export function nameOfIn(index: OrgIndex): NameOf {
   return (key) => index.byHandle.get(key)?.name ?? loginWords(key);
 }
 
+/**
+ * Who paused a seat, as a sentence names them: the engine for a pause it took
+ * itself (`by_kind` `system`, a seat whose every model refused its sign-in,
+ * say), and otherwise the pauser by [NameOf].
+ */
+export function pauserOf(
+  paused: { by: string; by_kind?: string },
+  nameOf: NameOf = AS_WRITTEN,
+): string {
+  return paused.by_kind === "system" ? "the engine" : nameOf(paused.by);
+}
+
 /** Why a stopped seat cannot take work, in a sentence, keyed on the engine's reason. */
 export function stoppedLine(row: AgentRow | null | undefined, nameOf: NameOf = AS_WRITTEN): string {
   switch (row?.stopped_reason) {
     case "paused":
-      return row.paused?.by ? `paused by ${nameOf(row.paused.by)}` : "paused";
+      return row.paused?.by ? `paused by ${pauserOf(row.paused, nameOf)}` : "paused";
     case "unplaced":
       return "not placed on any node";
     case "budget":
@@ -1594,7 +1608,7 @@ export function labelOf(
     case "offline":
       return "No state from the engine yet";
     case "paused": {
-      const by = row?.paused?.by ? `${word} by ${nameOf(row.paused.by)}` : word;
+      const by = row?.paused?.by ? `${word} by ${pauserOf(row.paused, nameOf)}` : word;
       const since = row?.paused?.at ? sinceWords(row.paused.at, now) : "";
       return since ? `${by} · ${since}` : by;
     }

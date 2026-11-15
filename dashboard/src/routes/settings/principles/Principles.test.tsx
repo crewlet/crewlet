@@ -142,6 +142,33 @@ test("a vision of two paragraphs keeps its break, as written", () => {
   expect(passage?.textContent).toBe(vision);
 });
 
+// THE PRINCIPLES ARE WRITTEN IN THE MARKDOWN THE AGENTS' PROMPTS TAKE, and a
+// tool named in backticks read as two stray backticks around a word: it is
+// code, in a policy and in a statement alike, and a statement keeps its
+// breaks. Mutation: draw a policy as its raw string and the backticks show.
+test("a policy and a statement draw their inline code", () => {
+  const store = mount();
+  const vision = "Agents remember with `reflect_and_persist`.\n\nPages are shared.";
+  act(() =>
+    store.applyOrg(
+      withDerived({
+        ...ACME,
+        vision,
+        policies: ["Capture facts via `reflect_and_persist`, passing `ttl_days`."],
+      }),
+    ),
+  );
+  const policies = screen.getByRole("region", { name: "Standing policies" });
+  expect(within(policies).getByText("reflect_and_persist").tagName).toBe("CODE");
+  expect(within(policies).getByText("ttl_days").tagName).toBe("CODE");
+  expect(policies.textContent).not.toContain("`");
+  const card = screen.getByRole("region", { name: "Vision" });
+  expect(within(card).getByText("reflect_and_persist").tagName).toBe("CODE");
+  expect(card.querySelector(".crewlet-text--passage")?.textContent).toBe(
+    "Agents remember with reflect_and_persist.\n\nPages are shared.",
+  );
+});
+
 // EVERY CARD NAMES ITS PART WITH A GLYPH OF ITS OWN in its head: a target for
 // what the company is for, a telescope for where it is heading, a scroll for
 // the rules it wrote down. Mutation: swap two glyphs and the drawing differs.

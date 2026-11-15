@@ -695,8 +695,10 @@ export const AgentsAccess = memo(function AgentsAccess({
         </p>
       ))}
 
+      {/* ONE KEY PER INTEGRATION: an agent's Access tab draws a grid for each
+          integration it reaches, and one shared `access` key re-sorted them all. */}
       <DataGrid<AccessRow>
-        name="access"
+        name={`access-${kind}`}
         rows={rows}
         rowKey={(row) => row.key}
         aria-label={only ? `Access on ${name}` : `Agents on ${name}`}

@@ -34,7 +34,9 @@ import { ChunkRegion, lazyScreen } from "~/app/lazyScreen.ts";
 import { href } from "~/app/router.tsx";
 import { unreadSentences } from "~/lib/advisorUnread.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import type { AdvisorFinding, AdvisorSeverity } from "~/protocol/advisor.ts";
+import type { AdvisorFinding, AdvisorPage, AdvisorSeverity } from "~/protocol/advisor.ts";
+import { marked } from "~/ui/Problems.tsx";
+import { TAKE_BACKUP } from "~/lib/backups.ts";
 
 /**
  * An atlas finding's fix (ADR-0141), from the atlas's own chunk: its pickers
@@ -183,6 +185,35 @@ function GoLiveCheck({ owner, unread }: { owner: AdvisorFinding[]; unread: strin
   );
 }
 
+/**
+ * Where an `open_page` fix is taken, by the page the engine names: the one
+ * gesture there, opened on arrival, so the row's action is the step rather
+ * than a page to look for it on. The pages are the contract's
+ * (`ADVISOR_PAGES`), held to the engine's.
+ */
+const PAGE_FIXES: Readonly<
+  Record<AdvisorPage, { path: string[]; query?: Record<string, string>; action: string }>
+> = {
+  backups: { path: ["settings", "backups"], query: { take: TAKE_BACKUP }, action: "Take a backup" },
+};
+
+/**
+ * A finding's quieter line under its title.
+ *
+ * WHAT TO DO, where it is a step rather than a change to send (outside the
+ * engine, or on a page of this dashboard), is read without opening the row.
+ * Elsewhere the row names what it is about, UNLESS THE TITLE ALREADY DOES: the
+ * engine writes a seat's finding with the seat in its title ("Agent CEO learns
+ * on the model it works on."), and the name again under it said one fact twice
+ * on every row.
+ */
+export function findingMeta(f: AdvisorFinding): string | undefined {
+  if (f.fix.kind === "external_step" || f.fix.kind === "open_page") return f.fix.sentence;
+  const subject = f.subject.name ?? "";
+  if (!subject || f.title.includes(subject)) return undefined;
+  return subject;
+}
+
 /** One finding as a row of the list: what is wrong, why, and its one action. */
 function findingItem(
   f: AdvisorFinding,
@@ -190,6 +221,7 @@ function findingItem(
   assistant: AssistantControl | null,
 ): AttentionItem {
   const subject = f.subject.name ?? "";
+  const meta = findingMeta(f);
   let action;
   if (review && assistant && f.fix.kind === "draft_with_assistant" && f.fix.prompt) {
     // A DRAFT IS ASKED OF ASK CREWLET, whose own preview binds the approval.
@@ -222,6 +254,13 @@ function findingItem(
         {subject ? `Open ${subject}` : "Open it"}
       </Link>
     );
+  } else if (review && f.fix.kind === "open_page" && f.fix.page && f.fix.page in PAGE_FIXES) {
+    const page = PAGE_FIXES[f.fix.page as AdvisorPage];
+    action = (
+      <Link href={href(page.path, page.query)} size="caption">
+        {page.action}
+      </Link>
+    );
   } else if (review && f.fix.kind === "open_setting") {
     action = (
       <Link href={href(["settings", "config"])} size="caption">
@@ -240,15 +279,16 @@ function findingItem(
     // BY HANDLE, never by name: two seats may share a display name.
     key: [f.class, f.path, f.subject.seat, f.subject.unit, f.subject.schedule].join("\u0000"),
     tone: TONE[f.severity],
-    title: f.title,
-    // WHAT TO DO, where it happens outside the engine, is read without opening
-    // the row; elsewhere the row names what it is about.
-    meta: f.fix.kind === "external_step" ? f.fix.sentence : subject || undefined,
+    // THE ENGINE'S SENTENCES, drawn as every engine sentence is ([marked]): a
+    // value in backticks is code and a recorded instant a time, never the
+    // punctuation it travelled in.
+    title: marked(f.title),
+    meta: meta === undefined ? undefined : marked(meta),
     action,
     details: (
       <div className="col gap-1">
-        <Text as="p">{f.why}</Text>
-        {review && f.fix.kind !== "external_step" && <Text as="p">{f.fix.sentence}</Text>}
+        <Text as="p">{marked(f.why)}</Text>
+        {review && meta !== f.fix.sentence && <Text as="p">{marked(f.fix.sentence)}</Text>}
         {f.fix.kind === "open_setting" && f.fix.setting && (
           <Text as="p" tone="secondary">
             The setting: <InlineCode>{f.fix.setting}</InlineCode>

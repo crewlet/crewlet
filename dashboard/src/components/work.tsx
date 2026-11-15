@@ -703,7 +703,10 @@ export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | und
     const nobody = `Nobody is reviewing ${pullName(dead.id)}`;
     return held.length > 1 ? `${nobody} +${held.length - 1}` : nobody;
   }
-  const named = held.map((edge) => keyOf?.(edge.id)).find(Boolean);
+  // THE EDGE NAMES ITS BLOCKER ITSELF (`key`), so a list that holds no row
+  // for a blocker in another project still says which task holds this one
+  // up; a row this page does hold is read first, as it is the newest.
+  const named = held.map((edge) => keyOf?.(edge.id) || edge.key).find(Boolean);
   if (!named) return held.length > 1 ? `Blocked · ${held.length}` : "Blocked";
   return held.length > 1 ? `Blocked · ${named} +${held.length - 1}` : `Blocked · ${named}`;
 }

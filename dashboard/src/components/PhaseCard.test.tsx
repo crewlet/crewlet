@@ -154,12 +154,13 @@ describe("a settled phase's zero is a number", () => {
   test("a phase that spent nothing says 0, not “not recorded”", () => {
     const { container } = render(<PhaseCard record={phase({ totalTokens: 0, failed: true })} />);
     const tokens = container.querySelector('[title="total tokens"]');
-    expect(tokens?.textContent).toBe("0");
+    expect(tokens?.textContent).toBe("0 tokens");
   });
 
   test("and the same for the rounds it never took", () => {
     const { container } = render(<PhaseCard record={phase({ failed: true })} />);
-    expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("0r");
+    // IN WORDS: "sonnet 1r 0 437ms" read as a code, not a phase's facts.
+    expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("0 rounds");
   });
 
   // AN ELLIPSIS MARKS WHERE THE ZERO REALLY IS AN ABSENCE: a phase still
@@ -364,7 +365,7 @@ describe("the tool-round count", () => {
     const { container } = render(
       <PhaseCard record={phase({ live: true, roundsUsed: 3, narration: [], tools: [] })} />,
     );
-    expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("3r");
+    expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("3 rounds");
   });
 
   test("a live phase whose first round has not come back draws the marked absence", () => {
@@ -572,7 +573,9 @@ describe("an executor round's launches", () => {
       totalTokens: 200,
     });
     render(<PhaseCard record={phase()} launches={[LAUNCH, second]} />);
-    expect(screen.getByTitle("total tokens, its launches included").textContent).toBe("9,900");
+    expect(screen.getByTitle("total tokens, its launches included").textContent).toBe(
+      "9,900 tokens",
+    );
   });
 
   // A LAUNCH WHOSE ROUND HAS NO RECORD IN HAND is drawn on its own, and says

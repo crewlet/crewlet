@@ -29,10 +29,10 @@ import {
   IconButton,
   Input,
   Menu,
-  Modal,
   SelectionBar,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import {
   CircleStopGlyph,
   CompassGlyph,

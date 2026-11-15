@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -123,6 +124,28 @@ func TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix(t *testing.T) {
 	}
 	if got != advisor.AccessPrefix {
 		t.Errorf("the dashboard's prefix is %q, the engine's %q", got, advisor.AccessPrefix)
+	}
+}
+
+// EVERY PAGE A FIX OPENS IS ONE THE DASHBOARD TAKES IT ON, and the other way
+// round: a page the engine names that the dashboard does not know is a
+// finding whose row offers no way to take its step.
+func TestTheDashboardTakesEveryPageAFixOpens(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "ADVISOR_PAGES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := clientsource.Strings(body)
+	var want []string
+	for _, p := range advisor.Pages() {
+		if !p.Valid() {
+			t.Errorf("page %q is not valid", p)
+		}
+		want = append(want, string(p))
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard takes fixes on %v, the engine opens %v", got, want)
 	}
 }
 

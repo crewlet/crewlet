@@ -76,13 +76,13 @@ import {
   ConfirmModal,
   FormField,
   Input,
-  Modal,
   Select,
   TagsInput,
   Textarea,
   type ComboboxOption,
   type SelectOption,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
 import type { NewTaskPreset } from "~/app/newTask.ts";

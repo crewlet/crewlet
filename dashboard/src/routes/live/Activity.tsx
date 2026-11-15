@@ -60,6 +60,8 @@ import type { Coverage } from "~/contract/coverage.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useGridPage } from "~/lib/gridPage.ts";
+import { useStableList } from "~/lib/useStableList.ts";
 import {
   spanWords,
   stepOf,
@@ -76,7 +78,10 @@ import { CATEGORIES } from "~/contract/categories.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
+/** Rows a page of the log holds: what the engine is asked for, and what is drawn per press. */
 const PAGE = 100;
+
+const eventId = (e: FeedRow) => e.id;
 
 /**
  * WHICH WINDOWS THE LOG HAS.
@@ -196,7 +201,7 @@ export function Activity() {
     setFetched(false);
   }, [category, actor, seat, trace, channel, failedOnly, windowKey]);
 
-  const rows = useMemo(() => {
+  const held = useMemo(() => {
     const seen = new Set<string>();
     // A LIVE ROW IS ANY SEAT'S until the id says otherwise. The paged rows
     // are already the seat's — the engine filtered them — but the socket
@@ -258,6 +263,22 @@ export function Activity() {
     since,
     until,
   ]);
+  // THE SAME LIST WHILE IT HOLDS THE SAME ROWS. `since` and `until` are the
+  // clock, so the filter above runs once a second and hands back a new array
+  // of the same rows every time; kept, a tick is no change to the grid, and a
+  // push is a change of one row.
+  const rows = useStableList(held, eventId);
+  // A PAGE AT A TIME, of every row this tab holds: the live ring and every
+  // page fetched, about five hundred rows and ten thousand elements once the
+  // first page lands. Drawn whole they held the main thread for seconds on
+  // open. The window grows by the same page the engine is asked for, so
+  // "Load older" draws the next page whether this tab holds it already or
+  // has to ask, and a new filter or window starts again from one page.
+  const page = useGridPage(
+    rows,
+    [category, actor, seat, trace, channel, onlyFailed, q, windowKey].join("\n"),
+    PAGE,
+  );
 
   // THE AXIS IS THE ENGINE'S. This tab holds at most the last 400 events and
   // the store's window it never holds, so a histogram folded here would be
@@ -337,6 +358,17 @@ export function Activity() {
   }, [fetched, loadOlder]);
 
   const filtered = !!(category || actor || seat || trace || channel || q || failedOnly);
+  // ONE CONTROL FOR OLDER ROWS: the next page this tab holds, else the next
+  // page the engine has, drawn as it lands.
+  const showOlder =
+    page.onLoadMore ??
+    (() => {
+      page.extend();
+      void loadOlder();
+    });
+  // THE END OF THE WINDOW is the engine's last page with every row it held
+  // drawn: rows still undrawn are older events the reader has not seen.
+  const atEnd = exhausted && !page.onLoadMore;
 
   return (
     <>
@@ -527,7 +559,7 @@ export function Activity() {
         {rows.length ? (
           // THE DATE, once per day, AS A BAND: a date is a property of the rows
           // under it, so the time column stays a wall clock for every row.
-          <EventGrid events={rows} label="Events" />
+          <EventGrid events={page.rows} label="Events" />
         ) : (
           // AN EMPTY LIST IS A CLAIM, and only one of the three ways to hold no
           // rows supports it. A page still in flight has not been shown to hold
@@ -569,7 +601,7 @@ export function Activity() {
             ) : (
               <PageFailed error={pageError} />
             ))}
-          {exhausted ? (
+          {atEnd ? (
             // THE END OF WHAT WAS ASKED, NOT OF THE STORE. Pages are bounded
             // by the window and narrowed by the filters, so "exhausted" means
             // nothing older in THIS window matches — it said "the beginning of
@@ -582,17 +614,12 @@ export function Activity() {
             </span>
           ) : (
             <>
-              <Button
-                size="small"
-                variant="secondary"
-                onClick={() => void loadOlder()}
-                disabled={paging}
-              >
+              <Button size="small" variant="secondary" onClick={showOlder} disabled={paging}>
                 {paging ? "Loading…" : `Load ${PAGE} older`}
               </Button>
               <span className="spacer" />
               <span>
-                {older.length > 0 && `${older.length} older rows fetched · `}
+                {page.loadedNote && `${page.loadedNote} · `}
                 {eventHistoryLabel(engine?.event_history_seconds)}
               </span>
             </>

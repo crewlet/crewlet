@@ -104,8 +104,15 @@ export function rankWidths(nodes: readonly TreeInput[]): number[] {
  *
  * ESTIMATED FROM THE FIT IT WOULD HAVE HAD. A chart this wide is fitted by its
  * widest rank, so showing a narrower one scales the fit by the ratio; the kit
- * does not lay out a chart it is not asked to draw. Rank 0 is the floor: on a
- * phone, where even three cards in a rank are too small, the top is what opens.
+ * does not lay out a chart it is not asked to draw.
+ *
+ * RANK 1 IS THE FLOOR, fitted however small. Where even the root's own
+ * children are too many to read (seven cards across a desktop canvas, three on
+ * a phone), the chart used to open on the root alone: one card in an empty
+ * canvas, which says nothing of the company and leaves the reader to guess
+ * that it opens. The root and the seats and units directly under it, fitted,
+ * show its shape, each closed unit saying how many seats it holds, and a zoom
+ * or a press reads the rest. A chart of two ranks or fewer opens whole.
  */
 export function openingDepth(
   widths: readonly number[],
@@ -117,7 +124,7 @@ export function openingDepth(
   for (let depth = widths.length - 2; depth > 0; depth--) {
     if ((fit * widest) / Math.max(...widths.slice(0, depth + 1)) >= legible) return depth;
   }
-  return 0;
+  return widths.length > 2 ? 1 : null;
 }
 
 /**

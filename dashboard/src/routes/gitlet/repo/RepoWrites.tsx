@@ -12,7 +12,8 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, ConfirmModal, FormField, Input, Modal, Select, Stack } from "@crewlethq/ui";
+import { Button, ConfirmModal, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName } from "~/lib/code.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";

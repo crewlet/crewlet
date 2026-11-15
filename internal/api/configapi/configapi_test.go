@@ -1718,7 +1718,10 @@ func TestAnUnsupportedPatchFormatIsRefusedWithAcceptPatch(t *testing.T) {
 		if mediaType != "" {
 			headers["Content-Type"] = mediaType
 		}
-		ok := s.do(t, http.MethodPatch, "/config", `{"mission":"ship it"}`, headers)
+		// A MISSION OF ITS OWN each time: the same patch sent again leaves
+		// the document as it is, which stores nothing.
+		ok := s.do(t, http.MethodPatch, "/config",
+			`{"mission":"ship it as `+mediaType+`"}`, headers)
 		if ok.Code != http.StatusCreated {
 			t.Errorf("PATCH with Content-Type %q = %d, want 201: %s",
 				mediaType, ok.Code, ok.Body.String())

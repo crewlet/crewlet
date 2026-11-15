@@ -55,6 +55,7 @@ const (
 	ClassHealthUnheld           = Class(config.ClassHealthUnheld)
 	ClassAuxiliaryModel         = Class(config.ClassAuxiliaryModel)
 	ClassScheduleFrequent       = Class(config.ClassScheduleFrequent)
+	ClassDirectBox              = Class(config.ClassDirectBox)
 	ClassConfigAdvisory   Class = "config.advisory"
 	ClassConfigReference  Class = "config.reference"
 	ClassConfigAdmission  Class = "config.admission"

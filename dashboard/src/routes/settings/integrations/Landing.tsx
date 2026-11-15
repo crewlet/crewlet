@@ -140,7 +140,7 @@ export function Landing({
       {model && model.tools.some((t) => t.configured) && <Activity model={model} now={now} />}
       {model?.base && (
         <footer className="int-landing-foot">
-          <EngineAddress value={model.base} />
+          <EngineAddress value={model.base.value} loopback={model.base.loopback} />
         </footer>
       )}
     </div>

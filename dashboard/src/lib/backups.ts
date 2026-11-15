@@ -49,7 +49,18 @@ export const OUTCOME_WORDS: Record<BackupOutcome, string> = {
   failed: "Failed",
 };
 
+/** The value of `take` that opens the Take a backup dialog on arrival: what a
+ *  notice that a backup is missing links to (`lib/attention.ts`), and the
+ *  backup alarm's own gesture. */
+export const TAKE_BACKUP = "backup";
+
 /** Whose word the trim takes, in one sentence. */
+/** Which backups a log's trim counts, as the figure on Backups says it. */
+export const POLICY_LABELS: Record<BackupPolicy, string> = {
+  engine: "Any node's",
+  operator: "Confirmed only",
+};
+
 export const POLICY_WORDS: Record<BackupPolicy, string> = {
   engine: "Each log's trim counts the newest verified copy of it any node wrote.",
   operator: "Each log counts only copies of it an operator confirmed off the host.",

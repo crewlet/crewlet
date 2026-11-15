@@ -11,6 +11,7 @@
  */
 
 import {
+  Disclosure,
   EmptyState,
   FindingList,
   Link,
@@ -37,6 +38,7 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtDuration, plural, relTime } from "~/lib/format.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { ATLAS_POLL_MS } from "./filters.ts";
 import { sourceName } from "./words.ts";
 // THE ATLAS'S OWN SHEET, for a reader who opens this page first.
@@ -78,16 +80,36 @@ export function refreshBlocked(source: AtlasSourceStanding, now: number): string
   return undefined;
 }
 
-/** What a source was refused and how its last read failed, as findings. */
-function findingsOf(source: AtlasSourceStanding): Finding[] {
+/**
+ * What a source was refused and how its last read failed, as findings. A
+ * failed read says so in a sentence first, with the way to the integration
+ * whose credential or settings it read with, and the engine's own words
+ * (the error as it was chained, from the vendor's answer up) behind a
+ * disclosure: they were the whole of what the card said, under "Failed".
+ */
+function findingsOf(source: AtlasSourceStanding, name: string): Finding[] {
   const out: Finding[] = [];
   if (source.state === "failed") {
     out.push({
       key: "fault",
       tone: "danger",
-      message:
-        source.last_error ??
-        "The read did not finish. An administrator is shown why. The atlas keeps what the last whole read found.",
+      message: (
+        <>
+          The last read of {name} did not finish, so the atlas keeps what its last whole read found.
+          Its credential and what it reads are set in{" "}
+          <Link href={href(["company", "integrations", source.kind])} size="inherit">
+            Integrations › {name}
+          </Link>
+          .
+          {source.last_error ? (
+            <Disclosure title="What the read said" size="compact" variant="aside">
+              <span className="mono">{source.last_error}</span>
+            </Disclosure>
+          ) : (
+            " An administrator is shown why."
+          )}
+        </>
+      ),
     });
   }
   for (const one of source.unread) {
@@ -126,7 +148,8 @@ function SourceCard({ source, now }: { source: AtlasSourceStanding; now: number 
   const refresh = useAct("atlas_refresh");
   const name = sourceName(source.kind);
   const state = SOURCE_STATES[source.state];
-  const findings = findingsOf(source);
+  const findings = findingsOf(source, name);
+  const seatBadge = useSeatBadgeOf();
   const servers = source.kind === "ssh";
   // A SOURCE NEVER READ HAS NO BODY: its card is its name, its state and its action.
   const body =
@@ -186,7 +209,8 @@ function SourceCard({ source, now }: { source: AtlasSourceStanding; now: number 
           {source.refresh_requested_at && (
             <Text variant="body" tone="secondary">
               {source.refresh_requested_by
-                ? `${source.refresh_requested_by} asked for a read ${relTime(source.refresh_requested_at, now)}.`
+                ? // WHO ASKED, BY THEIR NAME: the engine records the seat's handle.
+                  `${seatBadge(source.refresh_requested_by).name} asked for a read ${relTime(source.refresh_requested_at, now)}.`
                 : `A read was asked for ${relTime(source.refresh_requested_at, now)}.`}{" "}
               It is made within a minute.
             </Text>

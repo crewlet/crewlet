@@ -19,6 +19,7 @@ import { CpuGlyph } from "@crewlethq/icons/glyphs";
 import { BarList, Card, DATA_COLORS, EmptyState, Skeleton } from "@crewlethq/ui";
 import { usedByParts, usedByWords } from "./model.ts";
 import { fmtCount } from "~/lib/format.ts";
+import { UNSPENT_CALLS, callsWords, spentOnly } from "~/lib/spend.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import type { Rollup } from "~/protocol/types.ts";
 
@@ -32,7 +33,10 @@ export function ByModel({
   words: string | null;
 }) {
   const badgeOf = useSeatBadgeOf();
-  const rows = (rollup?.by_provider ?? []).filter((p) => p.total_tokens > 0);
+  // WHERE TOKENS WENT, so an entry whose calls spent nothing is no row of it
+  // (`spentOnly`); the empty state says those calls were made.
+  const rows = spentOnly(rollup?.by_provider ?? []);
+  const calls = rollup?.totals.calls ?? 0;
   return (
     <Card className="spend-card spend-list" padding="none">
       <Card.Header
@@ -54,12 +58,22 @@ export function ByModel({
         ) : rows.length === 0 ? (
           // ONE EMPTY STATE FOR EVERY EMPTY CARD ON THE PAGE: a ranked list's
           // bare sentence beside the tables' and the chart's empty states read
-          // as two kinds of answer to one question.
-          <EmptyState
-            size="compact"
-            title="No model served a call in this window"
-            description="A provider entry appears once it serves a call."
-          />
+          // as two kinds of answer to one question. AND IT COUNTS THE CALLS
+          // MODELS COUNTS: "no model served a call" over a window of 887
+          // refused calls contradicted Settings › Models, which counts them.
+          calls > 0 ? (
+            <EmptyState
+              size="compact"
+              title="No model spent tokens in this window"
+              description={`${callsWords(calls, 0)}. ${UNSPENT_CALLS}`}
+            />
+          ) : (
+            <EmptyState
+              size="compact"
+              title="No model was called in this window"
+              description="A model entry appears once a call is made to it."
+            />
+          )
         ) : (
           <BarList
             className="spend-bars"

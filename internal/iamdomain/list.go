@@ -543,6 +543,12 @@ type SessionRecord struct {
 	// sessions needs told apart from a whole one.
 	EnrolmentOnly bool
 
+	// UserAgent and Remote are the browser that opened the session and the
+	// address it opened from ([Session.UserAgent]), so a person can tell
+	// their sessions apart; empty where the start named none.
+	UserAgent string
+	Remote    string
+
 	// Superseded marks a session a COUNTER ended: opened before the
 	// company's last invalidation, or at a revocation epoch its person has
 	// since moved past ([sessionSuperseded]). The company's invalidation
@@ -624,6 +630,7 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 			// in the document.
 			if held, err := DecodeSession(doc); err == nil {
 				row.EnrolmentOnly = held.EnrolmentOnly
+				row.UserAgent, row.Remote = held.UserAgent, held.Remote
 			}
 			row.Epoch = uint64(epoch)
 			row.Superseded = sessionSuperseded(uint64(start), row.Epoch,

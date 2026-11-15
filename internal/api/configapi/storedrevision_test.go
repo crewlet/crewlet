@@ -171,7 +171,12 @@ mcp_servers:
 	if err := json.Unmarshal(read.Body.Bytes(), &served); err != nil {
 		t.Fatal(err)
 	}
-	servers, err := json.Marshal(map[string]any{"mcp_servers": served["mcp_servers"]})
+	// AND A CHANGE BESIDE THEM, so the write stores a revision: the masks
+	// sent back alone restore to the document as it is, which stores
+	// nothing ([TestAPartialWriteThatChangesNothingStoresNothing]).
+	servers, err := json.Marshal(map[string]any{
+		"mcp_servers": served["mcp_servers"], "mission": "a mission the write changes",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -55,6 +55,7 @@ import {
   Skeleton,
   peekClickHandler,
   TimeRangePicker,
+  VisuallyHidden,
 } from "@crewlethq/ui";
 import {
   BrainGlyph,
@@ -95,8 +96,9 @@ import { cutInto, spanOf, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { AgentRow, EventSeries, ExecutorRow, InboxWaiting } from "~/protocol/index.ts";
-import { waitingWords } from "~/lib/inboxWaiting.ts";
+import { waitingCount } from "~/lib/inboxWaiting.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { phaseWord } from "~/lib/waterfall.ts";
 
 /**
  * WHICH WINDOWS THE STRIP HAS: the short end of the shared vocabulary, since
@@ -152,7 +154,17 @@ const SEAT_EVENTS_POLL_MS = 15_000;
  * of the executor a phase of its own: it is its round's work, filed and
  * filtered as `execute`.
  */
-const PHASES = ["execute", "review", "onboarding", "subagent", "judge"] as const;
+const PHASES = ["context", "execute", "review", "onboarding", "subagent", "judge"] as const;
+
+/**
+ * The phase picker's options, IN THE WORDS a running turn's steps say them
+ * ([phaseWord]: "Context", "Execute", "Review"): the picker listed the engine's
+ * ids ("execute", "review", "subagent") beside cards naming the same phases in
+ * words, and had no Context at all, the step a turn spends gathering its
+ * context in. Context is no model call, so it keeps running turns and no
+ * settled phase.
+ */
+const PHASE_OPTIONS = PHASES.map((p) => ({ value: p, label: phaseWord(p) }));
 
 /**
  * What Ask Crewlet may set on Live, as the controls write it: the window from
@@ -167,11 +179,7 @@ export function liveFilterKeys(
   return {
     window: windowKey(STRIP_OFFER, now),
     seat: seatKey("Seat", seats, "filter"),
-    phase: choiceKey(
-      "Phase",
-      PHASES.map((p) => ({ value: p, label: p })),
-      "filter",
-    ),
+    phase: choiceKey("Phase", PHASE_OPTIONS, "filter"),
     failed: choiceKey("Failures", [{ value: "true", label: "Failed phases" }], "filter"),
   };
 }
@@ -338,10 +346,7 @@ export function LiveNow() {
             width="auto"
             value={phase}
             onChange={(value) => setPhase(String(value))}
-            options={[
-              { value: "", label: "Every phase" },
-              ...PHASES.map((p) => ({ value: p, label: p })),
-            ]}
+            options={[{ value: "", label: "Every phase" }, ...PHASE_OPTIONS]}
             ariaLabel="Phase"
             placeholder="Every phase"
             active={phase !== ""}
@@ -637,6 +642,9 @@ function InBoxRow({
   now: number;
   onOpen: () => void;
 }) {
+  // THE RUNNING TURN'S ROW'S WORDS (`waitingCount`): one count of what is
+  // queued, with what it is in its tooltip and read out with the row.
+  const queued = waitingCount(waiting);
   return (
     // A REAL LINK to the executor's page, peeking on a plain click — the rule
     // every row in the product follows, written once in `peekClickHandler`.
@@ -651,7 +659,12 @@ function InBoxRow({
         <span className="truncate t-caption">
           {who}
           {run.harness ? ` · ${run.harness}` : ""}
-          {waitingWords(waiting).map((word) => ` · ${word.text}`)}
+          {queued && (
+            <span title={queued.detail}>
+              <span aria-hidden="true"> · {queued.text}</span>
+              <VisuallyHidden>{queued.detail}</VisuallyHidden>
+            </span>
+          )}
         </span>
       </span>
       <span className="t-caption nowrap">{relTime(run.started_at, now)}</span>

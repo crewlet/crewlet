@@ -1036,6 +1036,30 @@ describe("a question asked before its agent's access changed", () => {
   });
 });
 
+// ONE TIME FORMAT DOWN THE LIST: a condition's row said "since 22:56" beside
+// an ask's "12m", two ways of saying when in one column.
+test("a condition's row says when it began in the list's own short form", async () => {
+  const paused = new Date(Date.now() - 11 * 60_000).toISOString();
+  mount({
+    agents: [
+      {
+        id: "pm",
+        agent_id: "pm",
+        handle: "pm",
+        role: "PM",
+        activity: "stopped",
+        stopped_reason: "paused",
+        paused: { by: "jane", by_kind: "human", at: paused, stop_running: false },
+      },
+    ],
+    answers: { decisions: decisionsOf(askItem()) },
+  });
+  await settle();
+  const needs = screen.getByRole("region", { name: /^Needs you/ });
+  expect(needs.textContent).toContain("11m");
+  expect(needs.textContent).not.toMatch(/since \d{1,2}:\d{2}/);
+});
+
 describe("the pane", () => {
   // AN ASK FILED WITH ITS TASK (`create_work_item{ask}`) IS THE TASK'S TITLE,
   // and what the asker wrote beside it is the task's description: the pane
@@ -2116,6 +2140,12 @@ describe("the pane", () => {
         args: { read_through: "CREWLET_CODE_LOG@1:5", seen: "CREWLET_CODE_LOG@1:5" },
       },
     ]);
+    // ONE PRESS, ONE TOAST: each source's write raised its own "Marked all
+    // read", two identical toasts for one gesture.
+    const toasts = [...document.querySelectorAll(".crewlet-toast")].filter((t) =>
+      t.textContent?.includes("Marked all read"),
+    );
+    expect(toasts).toHaveLength(1);
   });
 
   // A READER WITHOUT GITLET MARKS ONLY WORKLET'S HALF (ADR-0110): the engine

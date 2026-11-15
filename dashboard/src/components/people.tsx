@@ -46,7 +46,6 @@ import {
   FormField,
   InlineCode,
   Input,
-  Modal,
   Tag,
   Text,
   type SelectOption,
@@ -58,6 +57,7 @@ import {
   TableDateCell,
   type DataGridColumn,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 
 import { QueryState } from "~/components/common.tsx";

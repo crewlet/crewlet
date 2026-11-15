@@ -704,7 +704,10 @@ function AssignedRow({ row, now }: { row: WorkSummary; now: number }) {
         <span className="work-key mono prof-row-key" title={row.key}>
           {row.key}
         </span>
-        <Text variant="inherit" truncate className="prof-row-title">
+        {/* TWO LINES, AND THE WHOLE TITLE ON HOVER: cut to one line, two
+            tasks that begin alike ("Spike: compare Cilium and C…") read as
+            one task listed twice. */}
+        <Text variant="inherit" className="prof-row-title clamp" title={row.title}>
           {row.title}
         </Text>
         <PriorityMark priority={row.priority} />

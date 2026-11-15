@@ -376,16 +376,9 @@ export function HistoryView({
                   {loaded}
                 </span>
               )}
-              {more && records.length > 0 && (
-                <Button
-                  size="small"
-                  variant="ghost"
-                  onClick={() => void loadOlder()}
-                  disabled={paging}
-                >
-                  Load older
-                </Button>
-              )}
+              {/* THE WAY TO OLDER CHANGES IS THE FOOT'S ALONE, where the rows
+                  run out: a second "Load older" here said the same press twice
+                  on one screen. The bar says how many are shown. */}
             </span>
           </span>
         </div>
@@ -577,7 +570,12 @@ function ChangeGrid({
         ),
       who: (line) => <ChangeAuthor line={line} chrome={chrome} />,
       whoFits: true,
-      turn: (line) => (line.kind === "record" ? line.record.turn_id : undefined),
+      // A TURN COLUMN ONLY WHERE A ROW HAS A TURN: a person's change and the
+      // engine's bookkeeping carry none, and a column empty on every row was
+      // width the sentence needed.
+      turn: lines.some((line) => line.kind === "record" && line.record.turn_id)
+        ? (line) => (line.kind === "record" ? line.record.turn_id : undefined)
+        : undefined,
     },
     now,
   );

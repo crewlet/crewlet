@@ -364,10 +364,16 @@ func TestAPatchNamingAKeyThisBuildCannotRepresentIsRefused(t *testing.T) {
 		t.Parallel()
 		s := newSurface(t)
 		seedNewerPeer(t, s)
-		patchOnly(t, s, `{"integrations": {"gitlab": null}}`, summaryHeader)
-		integrations, _ := storedTree(t, s)["integrations"].(map[string]any)
-		if _, still := integrations["gitlab"]; still {
-			t.Errorf("the section the patch deleted is still stored: %v", integrations)
+		// A SECTION THE DOCUMENT HOLDS: deleting one it does not hold leaves
+		// the document as it is, which stores nothing and proves nothing.
+		providers, _ := storedTree(t, s)["providers"].(map[string]any)
+		if llm, _ := providers["llm"].(map[string]any); llm["yankee"] == nil {
+			t.Fatalf("the fixture holds no yankee provider to delete: %v", providers)
+		}
+		patchOnly(t, s, `{"providers": {"llm": {"yankee": null}}}`, summaryHeader)
+		providers, _ = storedTree(t, s)["providers"].(map[string]any)
+		if llm, _ := providers["llm"].(map[string]any); llm["yankee"] != nil {
+			t.Errorf("the section the patch deleted is still stored: %v", llm)
 		}
 		assertNewerKeysKept(t, s, "a patch deleting a known section")
 	})
@@ -394,7 +400,22 @@ func TestAnEntityWriteKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 			if entity.Code != http.StatusOK {
 				t.Fatalf("GET = %d: %s", entity.Code, entity.Body)
 			}
-			res := s.do(t, http.MethodPut, "/config/"+tc.kind+"/"+tc.id, entity.Body.String(), summaryHeader)
+			// EDITED, so a revision is stored to read the newer keys back
+			// from: the entity sent back as it stands stores nothing.
+			var edited map[string]any
+			if err := json.Unmarshal(entity.Body.Bytes(), &edited); err != nil {
+				t.Fatalf("the read is not the entity: %v", err)
+			}
+			if tc.kind == configapi.EntityMCPServers {
+				edited["description"] = "edited by an older build"
+			} else {
+				edited["model"] = "claude-opus-5"
+			}
+			body, err := json.Marshal(edited)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := s.do(t, http.MethodPut, "/config/"+tc.kind+"/"+tc.id, string(body), summaryHeader)
 			if res.Code != http.StatusCreated {
 				t.Fatalf("PUT = %d, want 201: %s", res.Code, res.Body)
 			}

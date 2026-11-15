@@ -26,12 +26,21 @@
 import { createContext, useContext, useLayoutEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AppShell } from "@crewlethq/ui";
+import { RefusalsTo } from "~/components/WriteButton.tsx";
 
 /**
  * Where the head lands: the element the frame drew for it, `null` while the
  * frame has not drawn it yet, `undefined` where there is no frame at all.
  */
 export const OwnHeaderSlot = createContext<HTMLElement | null | undefined>(undefined);
+
+/**
+ * The place on the page's head, under its bar, where a control in the bar
+ * draws what it was refused (`PageActions`, and a screen's own bar here): the
+ * element the frame drew, `null` while it has not drawn it, `undefined` where
+ * there is no frame, and a control draws it under itself.
+ */
+export const PageRefusals = createContext<HTMLElement | null | undefined>(undefined);
 
 /** Set by the frame: a screen says it draws its own head while it is mounted. */
 export const OwnHeaderRequest = createContext<(own: boolean) => void>(() => {});
@@ -45,8 +54,11 @@ export function OwnPageHeader({ children }: { children: ReactNode }) {
     request(true);
     return () => request(false);
   }, [request]);
+  // A BAR LIKE THE FRAME'S: a refusal of a control in it is drawn under the
+  // head, never in the bar (`PageActions`).
+  const refusals = useContext(PageRefusals);
   if (slot === undefined) return <>{children}</>;
-  return slot ? createPortal(children, slot) : null;
+  return slot ? createPortal(<RefusalsTo place={refusals}>{children}</RefusalsTo>, slot) : null;
 }
 
 /**

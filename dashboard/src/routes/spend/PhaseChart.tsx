@@ -22,22 +22,13 @@
 
 import { Card, SegmentedControl, StackedColumns } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
-import { bandsOf, unbandedTokens } from "~/lib/spend.ts";
+import { GROUPS } from "~/contract/spend.ts";
+import { UNSPENT_CALLS, bandsOf, callsWords, unbandedTokens } from "~/lib/spend.ts";
 import { companyDateLabel, fmtCount, fmtExact } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
 
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { TokenSeries } from "~/protocol/types.ts";
-
-/** What each split is called in the card's title: "Daily tokens by phase". */
-const GROUP_NOUN: Record<string, string> = {
-  phase: "phase",
-  model: "model",
-  provider: "provider",
-  seat: "agent",
-  unit: "team",
-  worker: "background worker",
-};
 
 export function PhaseChart({
   series,
@@ -61,7 +52,16 @@ export function PhaseChart({
   // THE ENGINE'S LABEL FOR EVERY BAND (`bandsOf`): a seat band is keyed by
   // its agent id and labelled by the engine with its current name, so there
   // is no chart lookup to make here.
-  const bands = bandsOf(data, drawn);
+  // A SPLIT BUT PHASE LISTS ONLY WHAT SPENT. The engine names a band for
+  // every model, seat or team that made a call, a call that spent nothing
+  // included, and a legend of four teams at zero tokens is a legend of
+  // nothing. Filtered AFTER `bandsOf`, so each band keeps the hue its place
+  // gave it. By phase it is always the four (see `series` below).
+  const bands = bandsOf(data, drawn).filter((b) => drawn === "phase" || b.total > 0);
+  // "THE FOUR BIGGEST" ONLY WHERE THE ENGINE FOLDED THE REST: with no
+  // residual band every band is drawn, and the sentence claimed a fold of
+  // nothing, over two teams or none.
+  const folded = bands.some((b) => b.key === "");
   const today = dayLabelIn(Date.now(), zone);
   const labels = new Map(
     (data?.series ?? []).map((p) => [
@@ -77,7 +77,9 @@ export function PhaseChart({
     ]),
   }));
   const unbanded = unbandedTokens(data);
-  const noun = GROUP_NOUN[drawn] ?? drawn;
+  // What the split is called in the card's title ("Daily tokens by team"):
+  // the contract's noun, the one the control's label and the cards use.
+  const noun = GROUPS.find((g) => g.value === drawn)?.noun ?? drawn;
 
   return (
     <Card className="spend-card spend-chart">
@@ -86,12 +88,21 @@ export function PhaseChart({
         refusal={series.refusal}
         detail={series.detail}
         loading={series.loading && !data}
+        // THE FIGURE IS TOKENS, so it is empty when nothing SPENT, which is
+        // not when nothing was called: a call refused or failed is counted
+        // and spends nothing, and gated on calls the chart drew an invented
+        // 0 to 4 scale and a legend over a window of refused calls.
         empty={
-          data && data.totals.calls === 0
-            ? {
-                title: "No model calls in this window",
-                hint: "Widen the window.",
-              }
+          data && data.totals.total_tokens <= 0
+            ? data.totals.calls > 0
+              ? {
+                  title: "No tokens spent in this window",
+                  hint: `${callsWords(data.totals.calls, 0)}. ${UNSPENT_CALLS}`,
+                }
+              : {
+                  title: "No model calls in this window",
+                  hint: "Widen the window.",
+                }
             : undefined
         }
       >
@@ -102,13 +113,13 @@ export function PhaseChart({
             head={
               <div className="spend-chart-head">
                 <h2 className="spend-title">Daily tokens by {noun}</h2>
-                {drawn !== "phase" && (
+                {drawn === "worker" ? (
+                  <span className="spend-caption">Background work only</span>
+                ) : drawn !== "phase" && folded ? (
                   <span className="spend-caption">
-                    {drawn === "worker"
-                      ? "Background work only"
-                      : "The four biggest, and everything else as one band"}
+                    The four biggest, and everything else as one band
                   </span>
-                )}
+                ) : null}
               </div>
             }
             // EVERY BAND THE ENGINE NAMED, in its order: a band's colour is
@@ -116,7 +127,7 @@ export function PhaseChart({
             // window never spent in answered at zero and kept in the legend
             // — the sentence above names all four, and a legend that lost
             // Workers in a quiet month disagreed with it. Its zero parts draw
-            // nothing. Any other split lists only what spent.
+            // nothing. Any other split lists only what spent (`bands`).
             series={bands.map((b) => ({ id: b.key, name: b.label, color: b.color }))}
             buckets={buckets}
             // THE PLOT TAKES THE ROW'S HEIGHT. Drawn at a fixed 12rem beside a

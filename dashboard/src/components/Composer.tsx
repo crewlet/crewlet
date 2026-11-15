@@ -33,13 +33,13 @@ import {
   FormField,
   IconButton,
   Input,
-  Modal,
   Select,
   Text,
   Textarea,
   useSendOnEnter,
   type SelectOption,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import {
   CircleQuestionMarkGlyph,
   FileTextGlyph,

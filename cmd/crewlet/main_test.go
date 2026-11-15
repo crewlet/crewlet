@@ -1796,6 +1796,13 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 			t.Errorf("warnings[%d] carries no message: %+v", i, g)
 		}
 		g.Message = ""
+		// THE PERSON'S WORDS ARE PROSE TOO, so likewise only present: a classed
+		// advisory carries them (config.Warning.Person), an unclassed one none.
+		if (g.Person != "") != (w.Class != "") {
+			t.Errorf("warnings[%d] person words = %q, want them exactly when it has a class: %+v",
+				i, g.Person, g)
+		}
+		g.Person = ""
 		if !reflect.DeepEqual(g, w) {
 			t.Errorf("warnings[%d] = %+v, want %+v", i, g, w)
 		}

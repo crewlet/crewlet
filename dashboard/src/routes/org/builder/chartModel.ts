@@ -212,6 +212,40 @@ export interface Structure {
 // ---------------------------------------------------------------------------
 
 /**
+ * Every seat in a node, by its key: the node itself for a seat, and for the
+ * company or a unit every seat in it and in every unit under it, as the
+ * structure draws them.
+ *
+ * ONE COUNT FOR THE CHART AND THE TABLE. The table counted a unit's seats
+ * through its sub-units ("department · 2 seats") while the chart counted only
+ * the seats placed directly in it ("Department · 0 seats"), so one company
+ * read as two. Read once per structure.
+ */
+export function seatsUnder(structure: Structure): ReadonlyMap<string, readonly SeatView[]> {
+  const known = seatsUnderOf.get(structure);
+  if (known) return known;
+  const under = new Map<string, SeatView[]>();
+  const walk = (node: TreeInput): SeatView[] => {
+    const view = structure.nodes.get(node.id as NodeKey);
+    const own = view?.type === "seat" ? [view] : [];
+    const all = [...own, ...(node.children ?? []).flatMap(walk)];
+    under.set(node.id, all);
+    return all;
+  };
+  structure.tree.forEach(walk);
+  seatsUnderOf.set(structure, under);
+  return under;
+}
+const seatsUnderOf = new WeakMap<Structure, ReadonlyMap<string, readonly SeatView[]>>();
+
+/** How many units the company holds, at every depth. */
+export function unitCount(structure: Structure): number {
+  let units = 0;
+  for (const view of structure.nodes.values()) if (view.type === "unit") units++;
+  return units;
+}
+
+/**
  * The key of the seat of the draft a handle names, for reading a handle the
  * engine reported (a manager, a lead, an automatic report) as a node.
  * `undefined` when the draft holds no seat of it. Whether the fact the handle

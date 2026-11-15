@@ -11,7 +11,8 @@
  */
 
 import { useMemo } from "react";
-import { Modal, Skeleton, useToast } from "@crewlethq/ui";
+import { Skeleton, useToast } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { adoptBrand } from "~/lib/brand/api.ts";
 import type { Adoption } from "~/lib/brand/brand.ts";

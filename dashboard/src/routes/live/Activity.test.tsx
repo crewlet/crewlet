@@ -28,6 +28,23 @@ import { withDerived } from "~/test/org.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { healthFrame } from "~/test/health.ts";
 import type { EngineHealth } from "~/contract/health.ts";
+import { fmtTime } from "~/lib/format.ts";
+import { withoutActor } from "~/lib/words.ts";
+
+// HOW MUCH OF THE LOG EACH CHANGE DRAWS, counted where the grid draws it: a
+// row's time cell is the one caller of `fmtTime` on this screen (a row's
+// cells drawn), and the grid's title for "What happened" the one caller of
+// `withoutActor` (a row laid out by the grid at all).
+vi.mock("~/lib/format.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/lib/format.ts")>();
+  return { ...real, fmtTime: vi.fn(real.fmtTime) };
+});
+vi.mock("~/lib/words.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/lib/words.ts")>();
+  return { ...real, withoutActor: vi.fn(real.withoutActor) };
+});
+const cellsDrawn = vi.mocked(fmtTime);
+const rowsLaidOut = vi.mocked(withoutActor);
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -388,6 +405,9 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
  * Mount the log at `hash` over a store holding `live` rows, answering the
  * pages and the axis with `answer`; returns what each question was asked.
  */
+/** The store the last `mountAt` mounted over, for a case that pushes into it. */
+const storeOf: { current: Store | null } = { current: null };
+
 async function mountAt(
   hash: string,
   live: Record<string, unknown>[],
@@ -400,6 +420,7 @@ async function mountAt(
   location.hash = hash;
   const asked: { what: string; params: Record<string, unknown> }[] = [];
   const store = new Store();
+  storeOf.current = store;
   if (health) store.applyHealth(health);
   for (const row of live) store.applyEvent(row as never);
   const socket = new LiveSocket(store);
@@ -555,4 +576,135 @@ test("the When chart in flight is a skeleton, not an empty card", () => {
   const card = screen.getByText("When").closest(".crewlet-card") as HTMLElement;
   expect(card.querySelector(".crewlet-skeleton")).not.toBeNull();
   expect(screen.queryByText("Nothing was published in this window")).toBeNull();
+});
+
+/** The event rows the log's grid has in the document. */
+function drawnRows(): number {
+  return screen
+    .getByRole("table", { name: "Events" })
+    .querySelectorAll(".crewlet-data-grid__row:not(.crewlet-data-grid__row--summary)").length;
+}
+
+/** `n` live rows, newest first, each a second older than the one before. */
+function liveRows(n: number, prefix = "l"): Record<string, unknown>[] {
+  // Applied oldest first, as the socket pushes them.
+  return Array.from({ length: n }, (_, i) =>
+    liveRow(`${prefix}-${n - 1 - i}`, `live ${n - 1 - i}`, {
+      timestamp: new Date(Date.now() - 60_000 - (n - 1 - i) * 1_000).toISOString(),
+    }),
+  );
+}
+
+/** A page of `n` rows the engine answers, an hour older than the live ring. */
+function enginePage(n: number, from: number) {
+  return Array.from({ length: n }, (_, i) =>
+    liveRow(`p-${from + i}`, `paged ${from + i}`, {
+      timestamp: new Date(Date.now() - 3_600_000 - (from + i) * 1_000).toISOString(),
+    }),
+  );
+}
+
+// THE LOG DRAWS A PAGE, NOT EVERYTHING IT HOLDS. The live ring (400 rows) and
+// the window's first page (100) were all drawn on open: about ten thousand
+// elements, which held the main thread for seconds. "Load older" draws the
+// next page from what the tab holds before it asks the engine for more.
+//
+// Mutation: hand the grid every row (`rows` for `page.rows`), and all five
+// hundred are in the document; reveal no held row, and the press asks the
+// engine at once.
+test("five hundred events draw one page, and Load older draws the next", async () => {
+  let pages = 0;
+  const asked = await mountAt("#/live/events", liveRows(400), (what) => {
+    if (what !== "events")
+      return { bucket: "hour", bars: [], total: 0, failed: 0, by_category: {} };
+    const from = pages++ * 100;
+    return {
+      events: enginePage(100, from),
+      next: { before_time: new Date(0).toISOString(), before_id: `p-${from + 99}` },
+      exhausted: false,
+    };
+  });
+  const fetched = () => asked.filter((a) => a.what === "events").length;
+  expect(fetched()).toBe(1);
+  expect(drawnRows()).toBe(100);
+  expect(screen.getByText(/100 of 500 shown/)).toBeTruthy();
+
+  // FOUR PRESSES draw the rest of what the tab holds, and ask nothing.
+  for (const shown of [200, 300, 400, 500]) {
+    fireEvent.click(screen.getByRole("button", { name: "Load 100 older" }));
+    await afterMicrotasks();
+    expect(drawnRows()).toBe(shown);
+  }
+  expect(fetched()).toBe(1);
+
+  // THE NEXT asks the engine, and draws what it answers as it lands.
+  fireEvent.click(screen.getByRole("button", { name: "Load 100 older" }));
+  await afterMicrotasks();
+  expect(fetched()).toBe(2);
+  expect(drawnRows()).toBe(600);
+  location.hash = "#/";
+});
+
+// THE OLDEST EVENT IS THE LAST ONE DRAWN, never the engine's last page while
+// rows it held are still undrawn: "That is the oldest event in this window"
+// over a page with four hundred older rows behind it is a false statement.
+//
+// Mutation: end the footer on `exhausted` alone.
+test("the log says it reached the oldest event only once every held row is drawn", async () => {
+  await mountAt("#/live/events", liveRows(150), (what) =>
+    what === "events"
+      ? { events: [], next: null, exhausted: true }
+      : { bucket: "hour", bars: [], total: 0, failed: 0, by_category: {} },
+  );
+  expect(drawnRows()).toBe(100);
+  expect(screen.queryByText("That is the oldest event in this window.")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Load 100 older" }));
+  await afterMicrotasks();
+  expect(drawnRows()).toBe(150);
+  expect(screen.getByText("That is the oldest event in this window.")).toBeTruthy();
+  location.hash = "#/";
+});
+
+// A PASSING SECOND HANDS THE GRID NOTHING NEW. The window's edges are the
+// clock, so the log's rows were filtered into a new list every second, and
+// the grid laid every row out again for as long as the tab stayed open. (A
+// row's "how long ago" still moves: its own time cell reads the clock.)
+//
+// Mutation: hand the grid the filtered list itself (no `useStableList`), and
+// every drawn row is laid out once a second.
+test("a passing second lays out no row of the log again", async () => {
+  await mountAt("#/live/events", liveRows(50));
+  expect(drawnRows()).toBe(50);
+  rowsLaidOut.mockClear();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  expect(rowsLaidOut).not.toHaveBeenCalled();
+  location.hash = "#/";
+});
+
+// A PUSH DRAWS ITS OWN ROW, and the grid lays out one page at most: each
+// event the socket pushed drew every row the log held again, which is what
+// froze the tab for as long as events streamed in.
+//
+// Mutation: draw the cells inline in the grid, and every row is drawn again;
+// hand the grid every held row, and the push lays out all of them.
+test("a pushed event draws its own row, and the grid lays out one page at most", async () => {
+  const live = liveRows(400);
+  await mountAt("#/live/events", live);
+  rowsLaidOut.mockClear();
+  cellsDrawn.mockClear();
+  await act(async () => {
+    storeOf.current!.applyEvent(
+      liveRow("pushed", "just pushed", {
+        timestamp: new Date(Date.now() - 30_000).toISOString(),
+      }) as never,
+    );
+  });
+  expect(screen.getByText("just pushed")).toBeTruthy();
+  expect(cellsDrawn).toHaveBeenCalledTimes(1);
+  // ONE PAGE laid out by the grid (its title for each row), and the pushed
+  // row's own cell: never the four hundred rows this tab holds.
+  expect(rowsLaidOut.mock.calls.length).toBeLessThanOrEqual(100 + 1);
+  location.hash = "#/";
 });

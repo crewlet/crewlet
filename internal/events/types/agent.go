@@ -756,13 +756,25 @@ func (e TurnCompleted) Role() string { return e.RoleName }
 // against — it keys every per-agent row.
 func (e TurnCompleted) AgentID() string { return e.Agent }
 
-// SummaryFor names the review outcome (done, self_iterate), which is the one
-// thing that distinguishes two turns of the same seat in a feed.
+// SummaryFor says how the turn ended, which is the one thing that tells two
+// turns of the same seat apart in a feed, IN WORDS. It read "completed turn
+// (failed)": a turn called completed and failed in one line, with the review
+// outcome's wire value in brackets. An outcome this build does not know is
+// said as a finished turn, never by its value.
 func (e TurnCompleted) SummaryFor(actor string) string {
-	if e.ReviewOutcome != "" {
-		return lead(actor, "completed turn ("+e.ReviewOutcome+")")
+	switch e.ReviewOutcome {
+	case "failed":
+		if actor == "" {
+			return "A turn failed"
+		}
+		return actor + "'s turn failed"
+	case "self_iterate":
+		return lead(actor, "finished a turn and goes again")
+	case "skipped":
+		return lead(actor, "skipped a turn that asked nothing of it")
+	default:
+		return lead(actor, "finished a turn")
 	}
-	return lead(actor, "completed turn")
 }
 
 // AgentPhaseStarted opens each onboarding / execute / review phase.

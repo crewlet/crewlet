@@ -39,7 +39,7 @@ import {
   getEntity,
   putEntity,
   savePatch,
-  type ConfigWriteOutcome,
+  type ConfigCheckOutcome,
 } from "~/protocol/configWrite.ts";
 import { introducedWarnings } from "~/protocol/configAnswer.ts";
 import { isAbort } from "~/protocol/rest.ts";
@@ -152,6 +152,12 @@ export function useCeilingWrite(
         });
         return;
       }
+      if (outcome.kind === "unchanged") {
+        // THE ENGINE ALREADY HOLDS IT: the write left the document as it
+        // was, and stored nothing to apply.
+        setState({ kind: "unchanged" });
+        return;
+      }
       if (outcome.kind === "valid") {
         // A 200 to a write is a check the engine took for one, which stored
         // nothing; saying "saved" over it would be the one lie this avoids.
@@ -215,7 +221,7 @@ export function useCeilingWrite(
 
           // 3. The check, beside the company's own warnings as they stand, so
           // only what THIS change introduces is shown.
-          const check = (body: Record<string, unknown>): Promise<ConfigWriteOutcome> =>
+          const check = (body: Record<string, unknown>): Promise<ConfigCheckOutcome> =>
             scope.kind === "seat"
               ? dryRunEntity("roles", scope.handle, body, etag, signal)
               : dryRunPatch(body, etag, signal);

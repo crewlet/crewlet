@@ -35,12 +35,12 @@ import {
   EmptyState,
   FormField,
   Input,
-  Modal,
   Skeleton,
   Stack,
   Tag,
   Textarea,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";

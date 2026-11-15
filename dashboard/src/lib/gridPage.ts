@@ -9,7 +9,7 @@
  * read as an order over everything.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { parseGridSort, type DataGridColumn } from "@crewlethq/ui";
 import { fmtCount } from "./format.ts";
 import { collator } from "./formatters.ts";
@@ -46,7 +46,17 @@ export function sortGridRows<T>(
 /** What a paged grid takes: its rows, the way to more, and what is loaded. */
 export interface GridPage<T> {
   rows: T[];
+  /** One more page of the rows held, or undefined where every one is drawn. */
   onLoadMore: (() => void) | undefined;
+  /**
+   * One more page drawn whether or not its rows are held yet, for a screen
+   * whose source pages too: it asks the source for the rest in the same
+   * press, and what the source answers is drawn as it lands rather than
+   * behind a second press. Grown from the rows drawn, never from the count
+   * last asked, so a page that came back short (or failed) does not leave
+   * the window wider than a page past what the reader has seen.
+   */
+  extend: () => void;
   loadedNote: string | undefined;
 }
 
@@ -54,6 +64,11 @@ export interface GridPage<T> {
  * The first `count` of `rows`, growing a page per Load more. Back to one page
  * whenever `reset` changes (a new window, filter or sort), since more rows of
  * a different question are not what the reader asked for.
+ *
+ * THE PAGE KEEPS ITS IDENTITY while the rows and the count do. A fresh slice
+ * on every render made every render of the screen a new list to the grid,
+ * so a screen that re-renders once a second (a clock on it) drew every row
+ * again once a second, and no `memo` below it could tell that nothing moved.
  */
 export function useGridPage<T>(
   rows: readonly T[],
@@ -63,9 +78,11 @@ export function useGridPage<T>(
   const [paged, setPaged] = useState({ reset, count: size });
   const count = paged.reset === reset ? paged.count : size;
   const more = rows.length > count;
+  const drawn = useMemo(() => rows.slice(0, count), [rows, count]);
   return {
-    rows: rows.slice(0, count),
+    rows: drawn,
     onLoadMore: more ? () => setPaged({ reset, count: count + size }) : undefined,
+    extend: () => setPaged({ reset, count: Math.min(count, rows.length) + size }),
     loadedNote: more ? `${fmtCount(count)} of ${fmtCount(rows.length)} shown` : undefined,
   };
 }

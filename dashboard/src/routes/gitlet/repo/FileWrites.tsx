@@ -31,7 +31,8 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, Callout, FormField, Input, Modal, Skeleton, Stack, Textarea } from "@crewlethq/ui";
+import { Button, Callout, FormField, Input, Skeleton, Stack, Textarea } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { isWholeOID, refName, shortOID } from "~/lib/code.ts";
 import { fmtBytes } from "~/lib/format.ts";

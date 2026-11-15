@@ -35,9 +35,12 @@
  * Each cap the company document carries (`settable`, the engine's own word
  * for it) has a pencil beside its value, drawn for every reader and disabled
  * with the reason for one who cannot write the document. It opens a field
- * for that one cap: the value is checked against the whole company by the
- * engine before it is stored (`lib/useSettingWrite.ts`), so a number the
- * engine cannot run is refused in the engine's words and nothing is saved.
+ * for that one cap, which says a value outside the cap's range as it is
+ * typed ("At least 1."), from the range the engine's answer carries, and
+ * holds Save while the value is that or is the one in force already. The
+ * value is then checked against the whole company by the engine before it is
+ * stored (`lib/useSettingWrite.ts`), and a refusal is said in a person's
+ * words, never the document's keys (`lib/limits.ts`'s limitRefusal).
  * An empty field is the default, which removes the key (`lib/limits.ts`).
  * The value a save wrote is drawn, marked as applying, until this node has
  * applied the revision and the answer carries it. The schedule timeout is
@@ -67,7 +70,15 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { QueryState } from "~/components/common.tsx";
 import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
 import { fmtSetting } from "~/lib/format.ts";
-import { limitPlan, limitText, limitTyping, readLimit, type LimitRow } from "~/lib/limits.ts";
+import {
+  limitPlan,
+  limitRefusal,
+  limitText,
+  limitTyping,
+  limitUnchanged,
+  readLimit,
+  type LimitRow,
+} from "~/lib/limits.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSettingWrite } from "~/lib/useSettingWrite.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -214,10 +225,24 @@ function LimitRowLine({ cap, onApplied }: { cap: LimitRow; onApplied: () => void
   const write = useSettingWrite({
     reread: "Reload to see the limits as they are now.",
     onApplied,
+    problemWords: (problems) => limitRefusal(cap, problems),
   });
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
-  const [error, setError] = useState<string | undefined>();
+  // WHAT IS TYPED, READ AS IT IS TYPED: a value outside the cap's range is
+  // said under the field before Save, not sent for the engine to refuse.
+  const read = readLimit(cap, text);
+  const error = read.ok ? undefined : read.error;
+  // SAVE IS HELD while there is nothing it could save: a value the cap
+  // cannot take, or the one in force already.
+  const held =
+    write.state.kind === "warned"
+      ? undefined
+      : !read.ok
+        ? read.error
+        : limitUnchanged(cap, read.value)
+          ? "This is the limit already."
+          : undefined;
   // The value the last save wrote (null: the default), drawn while it applies.
   const [expected, setExpected] = useState<number | null | undefined>(undefined);
   const pencil = useRef<HTMLButtonElement>(null);
@@ -261,7 +286,6 @@ function LimitRowLine({ cap, onApplied }: { cap: LimitRow; onApplied: () => void
   function open() {
     write.reset();
     setText(cap.value === cap.default ? "" : limitText(cap, cap.value));
-    setError(undefined);
     setEditing(true);
   }
 
@@ -281,12 +305,9 @@ function LimitRowLine({ cap, onApplied }: { cap: LimitRow; onApplied: () => void
       write.confirm();
       return;
     }
-    const read = readLimit(cap, text);
-    if (!read.ok) {
-      setError(read.error);
-      return;
-    }
-    setError(undefined);
+    // ENTER SUBMITS THE FORM WITHOUT THE BUTTON, so the hold is checked here
+    // too.
+    if (held !== undefined || !read.ok) return;
     setExpected(read.value);
     write.submit(limitPlan(cap, label, read.value));
   }
@@ -363,7 +384,6 @@ function LimitRowLine({ cap, onApplied }: { cap: LimitRow; onApplied: () => void
                   disabled={write.busy}
                   onChange={(event) => {
                     setText(event.target.value);
-                    setError(undefined);
                     if (write.state.kind !== "idle" && !write.busy) write.reset();
                   }}
                 />
@@ -385,6 +405,8 @@ function LimitRowLine({ cap, onApplied }: { cap: LimitRow; onApplied: () => void
                   size="small"
                   variant="primary"
                   loading={write.busy}
+                  disabledReason={held}
+                  title={held}
                   onClick={write.state.kind === "warned" ? write.confirm : undefined}
                 >
                   {write.state.kind === "warned" ? "Save anyway" : "Save"}

@@ -1478,12 +1478,12 @@ a.prof-row:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* TWO LINES BEFORE THE CUT (`.clamp`), with the whole title on its hover: on
+   one line two tasks that begin alike read as one task listed twice. */
 .prof-row-title {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  padding-block: var(--spacing-1);
   font-size: var(--font-size-sm);
 }
 .prof-day {
@@ -4396,6 +4396,14 @@ a.knowledge-reader-how:hover {
   top: var(--spacing-1);
   box-shadow: var(--shadow-sm);
 }
+/* THE CARD MAKES ROOM FOR ITS MENU: the menu stands on the card's top-right
+   corner, which is where the holder's badge ends the top row, and on a screen
+   with no hover it is always shown, so every badge was half covered (initials
+   cut to one letter). The top row keeps the menu's width clear, so the badge sits
+   beside it whether or not it is shown. */
+.work-col-slot:has(> .task-row-menu) .work-card-top {
+  padding-inline-end: calc(var(--size-control-sm) + var(--spacing-1));
+}
 .tl-name-row > .task-row-menu {
   top: 50%;
   transform: translateY(-50%);
@@ -5617,6 +5625,21 @@ span.list-position-step {
   padding-top: 10px;
   border-top: 1px solid var(--color-border-default);
 }
+/* A SECTION'S ADD ACTION SITS AT ITS START, as every rail action does: a
+   column stretches its children, so "Link an atlas entry" was a full-width
+   button with its words centred under a left-aligned "New artifact". */
+.task-rail-section > button {
+  align-self: flex-start;
+}
+/* AN ESTIMATE'S FIELDS SAY WHAT THEY HOLD, above each box: a placeholder is
+   gone the moment a number is typed. */
+.task-rail-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
 .task-rail-link-row {
   display: flex;
   align-items: center;
@@ -6379,6 +6402,26 @@ a.work-cal-chip {
   align-items: flex-start;
   gap: var(--spacing-1);
   min-width: 0;
+}
+/* A ROW'S PLACE FOR ITS CONTROLS' REFUSALS (`useRefusalPlace`): outside the
+   row, so a refusal of one of its controls never reflows it (the page bar,
+   a header's actions, a dialog's foot). One refusal under another, and no
+   room at all while there is none. */
+.refusal-place {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.refusal-place:empty {
+  display: none;
+}
+/* A DIALOG WHOSE BODY ONE CHILD FILLS keeps it filling: the place under it is
+   its own height, never a share of the body's (the kit stretches every child
+   of a filled body). */
+.crewlet-modal__body--fill > .refusal-place {
+  flex: none;
 }
 /* WHY A LIST OR A BOARD TAKES NO CHANGE FROM THIS READER, said once above it —
    quiet, because it is a standing fact about the reader rather than an answer
@@ -8295,6 +8338,26 @@ a.live-row:hover {
 .spend-card {
   min-width: 0;
 }
+/* AN EMPTY CARD'S STATE STANDS IN THE MIDDLE OF THE HEIGHT ITS ROW GIVES IT.
+   A row is one height, so a card with nothing to list is stretched to its
+   neighbour's: By agent beside two stacked empty lists stood 390px tall with
+   its empty state at the top and a band of nothing under it, which read as a
+   card that failed to fill. The state, or whatever holds it (the grid, the
+   card's body), takes the spare height and centres it; a card with content
+   keeps it at the top. */
+.spend-card:has(> .crewlet-empty-state, > * > .crewlet-empty-state) {
+  display: flex;
+  flex-direction: column;
+}
+.spend-card > .crewlet-empty-state {
+  flex: 1 0 auto;
+}
+.spend-card > :has(> .crewlet-empty-state) {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  justify-content: center;
+}
 /* EVERY SPEND CARD HEADS WITH THE KIT'S `Card.Header`, as every other card
    in Settings does: an icon, the title, the window as its subtitle. A body
    line under it keeps the card's inset on every side. */
@@ -8693,9 +8756,13 @@ a.live-row:hover {
 .budget-row > .budget-tile {
   border-left: 1px solid var(--color-border-default);
 }
+/* THE SCOPE'S SENTENCE KEEPS NO ONE-WORD LAST LINE: it ends on the reset
+   dates, and on a tablet it broke "Dec 1." at its space, leaving "1." alone
+   under "the month on Dec". `pretty` carries a word down with it. */
 .budget-row-scope {
   margin: 0;
   align-self: center;
+  text-wrap: pretty;
 }
 /* Narrow, the row is a column: the scope's line, then each window under the
    one before it, as the table's phone card stacks its cells. */
@@ -8774,9 +8841,14 @@ a.live-row:hover {
   gap: var(--spacing-2);
   min-width: 0;
 }
-.budget-cell-used {
+/* THE SEAT'S SPEND OPENS ITS CEILING'S PHRASE ("2M of 40M tokens"), in the
+   figure's own weight and ink. */
+.ceiling-spent {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
+}
+.ceiling-value .muted {
+  color: var(--color-text-tertiary);
 }
 
 /* The ceiling, as a figure with its pencil or as the field that edits it. */
@@ -9027,6 +9099,20 @@ a.live-row:hover {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* ---- Account ------------------------------------------------------------- */
+
+/* ONE OF THE SECURITY CARD'S LINES (`routes/account/Account.tsx`): its name and
+   what is true of it now, the gesture beside it. TWO TRACKS, THE WORDS
+   WRAPPING: a wrapping row sized the words to their one line, so at 390 the
+   longer sentence dropped its button under it while a shorter one kept its
+   button beside it. */
+.account-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-3);
 }
 
 /* ---- Artifacts ------------------------------------------------------- */

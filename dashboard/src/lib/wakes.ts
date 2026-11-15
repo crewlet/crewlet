@@ -4,6 +4,7 @@
  */
 
 import type { WakeKind } from "~/contract/spend.ts";
+import { PHRASES } from "~/contract/reasons.ts";
 
 export interface WakeWords {
   /** What woke the turns. */
@@ -34,7 +35,8 @@ const KINDS: Record<WakeKind, (reason: string, seat: string) => WakeWords> = {
           path: ["worklet"],
         }
       : {
-          label: reason === "pickup" ? "Work handed to it while idle" : `Work items${why(reason)}`,
+          label:
+            reason === "pickup" ? "Work handed to it while idle" : `Work items${workWhy(reason)}`,
           who: "Whoever assigns it work or mentions it",
           path: ["worklet"],
         },
@@ -69,6 +71,18 @@ const KINDS: Record<WakeKind, (reason: string, seat: string) => WakeWords> = {
 
 function why(reason: string): string {
   return reason ? ` (${said(reason)})` : "";
+}
+
+/**
+ * A work item's reason in the words its routing is said in: the same
+ * reasons the inbox and a task's routing phrase (`contract/reasons.ts`), in
+ * the voice about somebody else ("the unit's lead"), never the value as
+ * written ("lead fallback"). One this build has no phrase for is said as
+ * written, as every unknown reason is.
+ */
+function workWhy(reason: string): string {
+  const phrase = PHRASES[reason]?.about;
+  return phrase ? ` (${phrase})` : why(reason);
 }
 
 function isKind(kind: string): kind is WakeKind {

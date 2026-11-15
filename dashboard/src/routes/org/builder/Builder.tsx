@@ -151,7 +151,8 @@ import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, heldEdits, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { PROBLEM_LINKS, ScreenLink, screenPath } from "./dialogParts.tsx";
+import { PROBLEM_LINKS, ScreenLink, WarningLines, screenPath } from "./dialogParts.tsx";
+import { draftWarningLines, type WarningLine } from "./model/warnings.ts";
 import { chartKindOf } from "~/ui/orgNodes.tsx";
 import {
   type GlyphProps,
@@ -189,13 +190,13 @@ import {
   Menu,
   type MenuEntry,
   ConfirmModal,
-  Modal,
   Skeleton,
   Switch,
   Tag,
   useMediaMatch,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 
 // ---------------------------------------------------------------------------
 // Surfaces
@@ -1694,7 +1695,12 @@ function BuilderScreen({
     !projected &&
     !created &&
     !(isRecord(llm) && Object.keys(llm).length > 0);
-  const documentProblems = problemsCurrent ? state.check.problems.document : [];
+  const documentRefusals = problemsCurrent
+    ? state.check.problems.document.filter((p) => p.severity === "problem")
+    : [];
+  // ONE LIST FOR THE BANNER AND THE REVIEW ([draftWarningLines]). Read after
+  // the screen's early returns, so it is a plain call and no hook.
+  const warnings = draftWarningLines(state);
 
   /*
    * WHAT THE CHART DRAWS IN ITS OWN CORNER. The console chart keeps one group
@@ -2193,7 +2199,7 @@ function BuilderScreen({
             {refusal}
           </Callout>
         )}
-        {documentProblems.length > 0 && <DocumentProblems problems={documentProblems} />}
+        <DocumentProblems refusals={documentRefusals} warnings={warnings} />
 
         {savedRevision && <AfterSaveStrip saved={savedRevision} onDismiss={clearSavedRevision} />}
 
@@ -2428,14 +2434,13 @@ function ReviewPanel({
       }),
     [state, current],
   );
-  const outcome = current ? state.check.outcome : null;
   return (
     <ReviewSaveDialog
       mode={state.mode}
       changes={changes}
       rules={rules}
       status={status}
-      warnings={outcome?.status === "clean" ? outcome.warnings : []}
+      warnings={draftWarningLines(state)}
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
       phase={phase}
@@ -2527,7 +2532,7 @@ function DialogHost({
 }
 
 /**
- * What the engine said about the whole configuration, on no one node.
+ * What the engine said about the configuration as a whole.
  *
  * A REFUSAL AND AN ADVISORY ARE TWO BANNERS. A check that passed still
  * answers its advisories (a setting that is valid and carries a consequence),
@@ -2535,10 +2540,20 @@ function DialogHost({
  * read as a configuration the engine refused. So the refusals keep the danger
  * tone, and the advisories are a warning under a plain title
  * that says the engine runs this, each with the link to where it is set.
+ *
+ * THE REFUSALS ARE THE ONES ON NO NODE, because a node's own is drawn on the
+ * node and stops the save there. THE WARNINGS ARE ALL OF THEM, grouped
+ * ([draftWarningLines]): the review lists every warning of the same check, and
+ * a banner counting only the ones on no node said "1 warning" over a review of
+ * nine.
  */
-function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) {
-  const refusals = problems.filter((p) => p.severity === "problem");
-  const advisories = problems.filter((p) => p.severity === "warning");
+function DocumentProblems({
+  refusals,
+  warnings,
+}: {
+  refusals: readonly PlacedProblem[];
+  warnings: readonly WarningLine[];
+}) {
   return (
     <>
       {refusals.length > 0 && (
@@ -2552,16 +2567,16 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
           <ProblemItems problems={refusals} />
         </Callout>
       )}
-      {advisories.length > 0 && (
+      {warnings.length > 0 && (
         <Callout
           variant="warning"
           className="org-builder-problems"
           role="group"
-          aria-label="Warnings about the whole configuration"
+          aria-label="Warnings about the configuration"
           icon={<TriangleAlertGlyph size="sm" />}
-          title={`The engine runs this company, with ${plural(advisories.length, "warning")} to know about`}
+          title={`The engine runs this company, with ${plural(warnings.length, "warning")} to know about`}
         >
-          <ProblemItems problems={advisories} />
+          <WarningLines lines={warnings} />
         </Callout>
       )}
     </>

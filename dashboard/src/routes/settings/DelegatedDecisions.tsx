@@ -39,7 +39,6 @@ import {
   EmptyValue,
   IconButton,
   Input,
-  Modal,
   PageNote,
   Select,
   SettingsTable,
@@ -51,6 +50,7 @@ import {
   VisuallyHidden,
   type DataGridColumn,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   BadgeCheckGlyph,
   ChevronLeftGlyph,
@@ -78,7 +78,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtCount, plural, tsKey } from "~/lib/format.ts";
+import { companyDateLabel, fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
 import {
   confidenceWords,
@@ -232,7 +232,11 @@ export function DelegatedDecisions() {
                   icon={<ChevronLeftGlyph size="sm" />}
                   onClick={() => setDay(shiftDay(data.day, -1))}
                 />
-                <span className="t-caption t-num">{data.day}</span>
+                {/* THE DAY AS EVERY OTHER DATE IS SAID, never the engine's
+                    `2026-11-15` label: today by its name, another by its date. */}
+                <span className="t-caption t-num" title={data.day}>
+                  {data.complete ? companyDateLabel(data.day) : "Today"}
+                </span>
                 <IconButton
                   size="sm"
                   variant="ghost"
@@ -247,7 +251,9 @@ export function DelegatedDecisions() {
             <VerdictsCard
               name="decided"
               icon={<ListChecksGlyph size="sm" />}
-              title={data.complete ? `Decided on ${data.day}` : "Decided today, so far"}
+              title={
+                data.complete ? `Decided on ${companyDateLabel(data.day)}` : "Decided today, so far"
+              }
               subtitle={
                 data.complete
                   ? "Every request a verdict decided on that company day"

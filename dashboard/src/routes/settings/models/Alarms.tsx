@@ -14,7 +14,14 @@
  * measurement, with the vendor's words appended ("401 invalid x-api-key"), and
  * a vendor's advice can name a command other than the one this page gives. The
  * title names the cause and the body the effect, in plain words; what the
- * engine recorded stays one disclosure away, whole.
+ * engine recorded stays one disclosure away, whole, drawn as the engine's
+ * sentences are ([marked]): its instant in the reader's zone, never the RFC
+ * 3339 stamp the line carries for the logs.
+ *
+ * THE DISCLOSURE SAYS WHAT THE BODY DOES NOT. A credential's body already says
+ * who it stops ("It stops every job for every seat…"), so the same clauses
+ * again under Details were the banner twice; they are listed there only for a
+ * limit, whose body says who waits rather than who it stops.
  */
 
 import type { ReactNode } from "react";
@@ -32,6 +39,7 @@ import {
 } from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { ModelAlarm } from "~/protocol/models.ts";
+import { marked } from "~/ui/Problems.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import {
   credentialAction,
@@ -70,7 +78,7 @@ export interface AlarmCard {
   body: ReactNode;
   /** Each model's own line as the engine recorded it, vendor's words included. */
   recorded: { key: string; detail: string }[];
-  /** Who it stops, a line per job, for the disclosure. */
+  /** Who it stops, a line per job, for the disclosure: empty where the body says it. */
   stops: string[];
   fix: AlarmFix | null;
   /** For a limit holding seats, the way to move them; null otherwise. */
@@ -290,14 +298,16 @@ export function alarmCards(data: Pick<ModelsData, "alarms" | "models" | "seats">
       const keys = entries.map((e) => e.key);
       const models = keys.map((k) => byKey.get(k)).filter((m): m is ModelView => !!m);
       const stops = stopsOf(models, data.seats);
+      const said = words(alarm.kind, keys, models, data.seats, entries, stops, now);
       cards.push({
         id: `${alarm.kind}:${id}`,
         kind: alarm.kind,
         tone: ALARM_TONE[alarm.kind],
         keys,
-        ...words(alarm.kind, keys, models, data.seats, entries, stops, now),
+        title: said.title,
+        body: said.body,
         recorded: entries.map((e) => ({ key: e.key, detail: e.detail })),
-        stops,
+        stops: said.saysStops ? [] : stops,
         fix: CREDENTIAL_KINDS.includes(alarm.kind)
           ? credentialFix(models[0], keys[0]!)
           : { label: "Retry now", flow: "retry", key: keys[0]! },
@@ -309,7 +319,7 @@ export function alarmCards(data: Pick<ModelsData, "alarms" | "models" | "seats">
   return cards.sort((a, b) => rank[a.tone] - rank[b.tone]);
 }
 
-/** An alarm's title and its one body line, by kind. */
+/** An alarm's title and its one body line, by kind, and whether that line says who it stops. */
 function words(
   kind: ModelAlarmKind,
   keys: string[],
@@ -318,7 +328,7 @@ function words(
   entries: NonNullable<ModelAlarm["entries"]>,
   stops: readonly string[],
   now: number,
-): { title: ReactNode; body: ReactNode } {
+): { title: ReactNode; body: ReactNode; saysStops: boolean } {
   const first = models[0];
   const noun = credentialNoun(first);
   const variable = models.length > 1 ? first?.admin?.sign_in.variable : null;
@@ -357,6 +367,7 @@ function words(
             : "No seat runs on it yet."}
         </>
       ),
+      saysStops: true,
     };
   }
 
@@ -379,6 +390,7 @@ function words(
           {stops.length > 0 ? ` Once it expires it stops ${clauses(stops)}.` : null}
         </>
       ),
+      saysStops: true,
     };
   }
 
@@ -421,6 +433,7 @@ function words(
           {together}
         </>
       ),
+      saysStops: false,
     };
   }
   return {
@@ -437,6 +450,7 @@ function words(
         Seats with a fallback model use it meanwhile.
       </>
     ),
+    saysStops: false,
   };
 }
 
@@ -524,12 +538,14 @@ export function Alarms({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
                       ))}
                     </ul>
                   ) : null}
-                  {/* WHAT THE ENGINE RECORDED, whole: the vendor's own words are here, never in the lead. */}
+                  {/* WHAT THE ENGINE RECORDED, whole: the vendor's own words are
+                      here, never in the lead, in the engine's sentence drawn as
+                      prose rather than as a log line. */}
                   <ul className="models-alarm__list">
                     {card.recorded.map((r) => (
                       <li key={r.key}>
-                        <Text as="span" variant="caption" tone="secondary" className="mono">
-                          {r.detail}
+                        <Text as="span" variant="caption" tone="secondary">
+                          {marked(r.detail)}
                         </Text>
                       </li>
                     ))}

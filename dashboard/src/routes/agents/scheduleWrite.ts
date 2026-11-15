@@ -40,7 +40,7 @@ import { managedSentence, unsettledSentence } from "~/protocol/configAnswer.ts";
 import type { ConfigProblem, ScheduleRow } from "~/protocol/types.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import { handleLabel } from "~/lib/seats.ts";
-import { parseCron } from "~/lib/cron.ts";
+import { cronProblem } from "~/lib/cron.ts";
 import { knownZone } from "~/lib/formatters.ts";
 
 /** What declares a schedule: a seat (`role`) or a team (`unit`). */
@@ -202,9 +202,11 @@ export function draftProblems(
   const name = draft.name.trim();
   if (name === "") out.name = "Give the schedule a name.";
   else if (taken.includes(name)) out.name = "Another schedule here already has this name.";
-  if (draft.cron.trim() === "") out.cron = "Say when it runs, as a cron expression.";
-  else if (parseCron(draft.cron.trim()) === null)
-    out.cron = "This is not a cron expression: five fields, minute hour day month weekday.";
+  // THE FIELD THAT IS WRONG, named as the engine's grammar finds it ("The
+  // minute must be 0 to 59."), never one sentence for every mistake.
+  const cron = draft.cron.trim();
+  const cronWrong = cron === "" ? "Say when it runs, as a cron expression." : cronProblem(cron);
+  if (cronWrong) out.cron = cronWrong;
   const zone = draft.timezone.trim();
   if (zone !== "" && knownZone(zone) === null) out.timezone = "This is not a time zone.";
   if (draft.task.trim() === "") out.task = "Say what the run should do.";

@@ -6,6 +6,7 @@
  * when the administrator presses Apply, under the entity's own tag.
  */
 
+import type { ADVISOR_PAGES } from "../contract/advisor.ts";
 import type { AtlasKind } from "../contract/atlas.ts";
 
 /** What ignoring a finding costs. */
@@ -33,11 +34,15 @@ export interface AdvisorOption {
   change: AdvisorChange;
 }
 
+/** One page an `open_page` fix is taken on. */
+export type AdvisorPage = (typeof ADVISOR_PAGES)[number];
+
 /** What fixes a finding. */
 export interface AdvisorFix {
   kind:
     | "config_change"
     | "open_setting"
+    | "open_page"
     | "external_step"
     | "draft_with_assistant"
     | "atlas_act"
@@ -50,6 +55,8 @@ export interface AdvisorFix {
   setting?: string;
   /** Where an `external_step` is taken, where one was named. */
   url?: string;
+  /** The dashboard page an `open_page` fix is taken on (`ADVISOR_PAGES`). */
+  page?: AdvisorPage | (string & {});
   /** The question a `draft_with_assistant` fix asks Ask Crewlet. */
   prompt?: string;
   /** The atlas tool call an `atlas_act` fix sends, once per entry the finding names. */

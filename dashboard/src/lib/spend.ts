@@ -38,6 +38,23 @@ export function spentOnly<T extends { total_tokens: number }>(rows: readonly T[]
 }
 
 /**
+ * What a count of model calls COUNTS, said where it would otherwise be read
+ * as calls that spent: the engine counts every call MADE (`tokens.PhaseCalls`),
+ * one its model refused or one that failed included, and such a call spends no
+ * token. Models counted "0 tokens over 887 calls" while Token spend dropped the
+ * same calls and said no model served one, so each screen read as the other's
+ * mistake. Every screen that draws a count of calls beside a count of tokens
+ * says it in these words.
+ */
+export const UNSPENT_CALLS = "A call that is refused or fails is counted and spends no tokens.";
+
+/** "887 calls", or "887 calls, none spent tokens" where the calls spent nothing. */
+export function callsWords(calls: number, tokens: number): string {
+  const count = plural(calls, "call");
+  return calls > 0 && tokens <= 0 ? `${count}, none spent tokens` : count;
+}
+
+/**
  * A phase band's colour: its data hue, from `BANDS`.
  *
  * The ENGINE folds every phase into one of four bands (`tokens.PhaseBand`) and

@@ -32,7 +32,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Button, Callout, FormField, Input, Modal, Text } from "@crewlethq/ui";
+import { Button, Callout, FormField, Input, Text } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { refusalText } from "~/lib/refusal.ts";
 import { STILL_WORKING } from "~/lib/waiting.ts";

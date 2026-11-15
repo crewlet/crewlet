@@ -10,6 +10,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
+import { fmtDateTime, fmtDateTimeFull } from "~/lib/format.ts";
 import { Problems, marked, paths, split, withProblems } from "./Problems.tsx";
 
 afterEach(cleanup);
@@ -181,6 +182,24 @@ test("a path inside a refusal takes the message's ink, and one in prose does not
   expect(screen.getByText("integrations.jira.webhook_secret").className).not.toContain(
     "crewlet-inline-code--inherit",
   );
+});
+
+// AN INSTANT IS DRAWN AS A TIME, NOT AS THE STAMP. The engine's sentences are
+// log lines too, so they carry RFC 3339 in UTC ("refused at
+// 2026-11-14T22:58:34Z"), and drawn as written that was the one machine string
+// in a sentence a person reads. It reads in the reader's own zone, as every
+// recorded instant does, with the whole of it a pointer away.
+test("an instant in a sentence is drawn as a time in the reader's zone", () => {
+  const stamp = "2026-11-14T22:58:34Z";
+  const { container } = render(
+    <span>{marked(`default's sign-in was refused at ${stamp}: Not logged in`)}</span>,
+  );
+  expect(container.textContent).not.toContain(stamp);
+  const time = container.querySelector("time");
+  expect(time?.getAttribute("datetime")).toBe(stamp);
+  expect(time?.textContent).toBe(fmtDateTime(stamp));
+  expect(time?.getAttribute("title")).toBe(fmtDateTimeFull(stamp));
+  expect(container.textContent).toContain("Not logged in");
 });
 
 // A MAP KEY IS WRITTEN AS THE OPERATOR WROTE IT. A server name can carry a

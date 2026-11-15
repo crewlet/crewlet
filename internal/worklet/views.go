@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -371,14 +372,14 @@ func checkView(view *View) error {
 	case view.ID == "":
 		return invalid("a view write names no view id")
 	case view.Name == "":
-		return invalid("view %s has no name, and a tab with no "+
+		return invalidSaying(caveat.ViewUnnamed(), "view %s has no name, and a tab with no "+
 			"label is one nobody can pick", view.ID)
 	case len(view.Name) > MaxViewName:
-		return invalid("view %s's name is %d bytes and the "+
+		return invalidSaying(caveat.ViewNameTooLong(), "view %s's name is %d bytes and the "+
 			"maximum is %d — shorten the name rather than having it cut",
 			view.ID, len(view.Name), MaxViewName)
 	case !view.Type.Valid():
-		return invalid("%q is not a view shape — the shapes are "+
+		return invalidSaying(caveat.ViewShapeUnknown(ViewTypeNames()), "%q is not a view shape: the shapes are "+
 			"%s", view.Type, strings.Join(ViewTypeNames(), ", "))
 	case !ValidContainerKind(view.Container.Kind):
 		return invalid("%q is not a container a view can belong "+
@@ -404,7 +405,7 @@ func checkView(view *View) error {
 		// the authority of a caller who needed no more than their own
 		// record to save it. Where a person wants their own view first,
 		// that is a PIN, which is theirs alone.
-		return invalid("view %s is personal (%s's) and cannot be "+
+		return invalidSaying(caveat.ViewPersonalDefault(), "view %s is personal (%s's) and cannot be "+
 			"its container's default: the default is the landing tab for "+
 			"everybody, and nobody else sees a personal view. Share it to "+
 			"make it the default, or pin it to put it first for its owner",
@@ -419,14 +420,14 @@ func checkView(view *View) error {
 		// A GUARD ON THE MAP'S SIZE. What refuses a key that is not a
 		// filter is [ParseQuery] below, which rejects an unknown
 		// parameter rather than ignoring it.
-		return invalid("view %s carries %d query parameters and "+
+		return invalidSaying(caveat.ViewFiltersTooLarge(), "view %s carries %d query parameters and "+
 			"the maximum is %d", view.ID, len(view.Params), MaxViewParamKeys)
 	case paramsBytes(view.Params) > MaxViewParamsBytes:
 		// AND ONE ON ITS WEIGHT, because thirty-two keys say nothing
 		// about the size of a `q` or an `any` branch: one record with a
 		// megabyte of saved query is a record every data node stores,
 		// ships in every snapshot and re-reads on every replay.
-		return invalid("view %s's query is %d bytes and the "+
+		return invalidSaying(caveat.ViewFiltersTooLarge(), "view %s's query is %d bytes and the "+
 			"maximum is %d — a saved view is a filter, not a document",
 			view.ID, paramsBytes(view.Params), MaxViewParamsBytes)
 	}
@@ -450,7 +451,7 @@ func checkView(view *View) error {
 		params[key] = value
 	}
 	if _, err := ParseQuery(params, time.Now().UTC(), time.UTC); err != nil {
-		return invalid("view %s's query does not parse, so saving "+
+		return invalidSaying(caveat.ViewFilterUnreadable(), "view %s's query does not parse, so saving "+
 			"it would store a view nobody can open: %w", view.ID, err)
 	}
 	return nil

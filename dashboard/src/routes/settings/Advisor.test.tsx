@@ -127,12 +127,16 @@ const REVIEW = {
   ],
 };
 
-async function mount(answer: AdvisorAnswer, assistant: AssistantControl = NO_ASSISTANT) {
+async function mount(
+  answer: AdvisorAnswer,
+  assistant: AssistantControl = NO_ASSISTANT,
+  review: unknown = REVIEW,
+) {
   location.hash = "#/settings/advisor";
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    Promise.resolve(what === "viewer" ? ADMIN_VIEWER : what === "go_live_review" ? REVIEW : answer);
+    Promise.resolve(what === "viewer" ? ADMIN_VIEWER : what === "go_live_review" ? review : answer);
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
@@ -270,16 +274,80 @@ const BACKUP: AdvisorFinding = {
   title: "Your company has no recent verified backup.",
   path: "",
   fix: {
-    kind: "external_step",
-    sentence: "Take a backup now, then schedule one to a place off this server.",
+    kind: "open_page",
+    page: "backups",
+    sentence: "Take a backup now, then schedule backups that are copied off this server.",
     options: [],
   },
 };
 
-test("a step outside the engine says what to do on the row, and offers no change", async () => {
+// A STEP TAKEN ON A PAGE HERE IS THAT PAGE'S GESTURE: the backup finding's row
+// opens Backups & retention's own Take a backup, where its sentence used to
+// send a person to a command for it.
+test("a step taken on a page of the dashboard says what to do and opens its gesture", async () => {
   await mount({ revision: "r1", findings: [BACKUP], unread: [] });
   expect(screen.getByText(BACKUP.fix.sentence)).toBeTruthy();
+  const link = screen.getByRole("link", { name: "Take a backup" });
+  expect(link.getAttribute("href")).toBe("#/settings/backups?take=backup");
   expect(screen.queryByRole("button", { name: "Review the change" })).toBeNull();
+});
+
+// THE ROW NAMES WHAT IT IS ABOUT ONCE. The engine writes a seat's finding with
+// the seat in its title, and the name again under it said one fact twice on
+// every row; a title that names nobody still gets its subject under it.
+test("a row names its subject only where its title does not", async () => {
+  const learns: AdvisorFinding = {
+    ...HEALTH,
+    class: "learning.auxiliary_model",
+    severity: "note",
+    subject: { kind: "seat", seat: "ceo", name: "Agent CEO" },
+    title: "Agent CEO learns on the model it works on.",
+  };
+  const unnamed: AdvisorFinding = {
+    ...HEALTH,
+    class: "schedule.frequent",
+    subject: { kind: "schedule", schedule: "digest", name: "Daily digest" },
+    title: "A schedule runs twelve or more times a day.",
+  };
+  await mount({ revision: "r1", findings: [learns, unnamed], unread: [] });
+  expect(screen.getAllByText(/Agent CEO/)).toHaveLength(1);
+  expect(screen.getByText("Daily digest")).toBeTruthy();
+});
+
+// THE ENGINE'S WORDS ARE DRAWN AS ITS SENTENCES ARE EVERYWHERE: a value it
+// wrote in backticks is code, never the punctuation it travelled in.
+test("a value in backticks in a finding is drawn as code", async () => {
+  const ticked: AdvisorFinding = {
+    ...BACKUP,
+    why: "Nothing runs `crewlet backup` for you.",
+  };
+  await mount({ revision: "r1", findings: [ticked], unread: [] });
+  fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+  expect(document.body.textContent).not.toContain("`");
+  expect(screen.getByText("crewlet backup").tagName).toBe("CODE");
+});
+
+// AGENTS TOLD THE SAME ARE ONE ENTRY, headed by every name: an entry each drew
+// one box sentence six times over, and the agent told something different was
+// the one a reader had to find.
+test("the go-live review says what several agents are told alike once", async () => {
+  const box = { cell: "direct", memory_bytes: 8 * 2 ** 30, observed: true };
+  const alike = { integrations: [], mcp: [], boxes: [box] };
+  const review = {
+    agents: [
+      { seat: "ceo", name: "Agent CEO", access: alike },
+      { seat: "pm", name: "Agent PM", access: { ...alike } },
+      { seat: "ai", name: "Agent AI", access: { ...alike, boxes: [{ ...box, observed: false }] } },
+      { seat: "cto", name: "Agent CTO", access: { ...alike } },
+    ],
+  };
+  await mount({ revision: "r1", findings: [], unread: [] }, NO_ASSISTANT, review);
+  const many = screen.getByRole("region", {
+    name: "What Agent CEO, Agent PM, and Agent CTO can do",
+  });
+  expect(many).toBeTruthy();
+  expect(screen.getByRole("region", { name: "What Agent AI can do" })).toBeTruthy();
+  expect(screen.getAllByText("Runs in")).toHaveLength(2);
 });
 
 test("two findings of one class about two seats sharing a name are two rows", async () => {

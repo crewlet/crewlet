@@ -30,11 +30,11 @@ import {
   InlineCode,
   Input,
   List,
-  Modal,
   Stepper,
   Text,
   type StepperStep,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import type { AccessSeat } from "~/contract/access.ts";
 import type { SetupVerdict } from "~/protocol/index.ts";
 import { marked } from "~/ui/Problems.tsx";

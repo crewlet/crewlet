@@ -18,10 +18,10 @@ import {
   ConfirmField,
   FormField,
   Input,
-  Modal,
   Stack,
   confirmMatches,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { fmtDateTime } from "~/lib/format.ts";
 import { deleteHeld, restoreHeld } from "~/lib/repoWrites.ts";

@@ -41,7 +41,7 @@ describe("the spend window and split", () => {
   test("take only a split the chart draws, worded as the menu words it", () => {
     expect(parseUrlPatch({ group: "model" }, keys).ok).toBe(true);
     expect(parseUrlPatch({ group: "turn" }, keys).ok).toBe(false);
-    expect(keys.group!.words!("seat")).toBe("Seat");
+    expect(keys.group!.words!("seat")).toBe("Agent");
     expect(keys.window!.words!("7d")).toBe("7 days");
   });
 

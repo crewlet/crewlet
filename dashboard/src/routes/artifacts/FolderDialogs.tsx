@@ -20,15 +20,8 @@
  */
 
 import { useState } from "react";
-import {
-  ArtifactAccessGlyph,
-  Button,
-  ChoiceList,
-  FormField,
-  Input,
-  Modal,
-  useToast,
-} from "@crewlethq/ui";
+import { ArtifactAccessGlyph, Button, ChoiceList, FormField, Input, useToast } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { TrashGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { artifactFolderPath } from "~/app/routes.ts";

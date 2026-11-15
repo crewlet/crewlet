@@ -129,7 +129,10 @@ test("a revision's page reverts to it after showing what it changes", async () =
     `#/settings/config/revisions/${EARLIER}`,
   );
   await press(screen.getByRole("button", { name: /Revert to this revision/ }));
-  const ask = screen.getByRole("dialog", { name: /Revert to revision 01JCFGBBBB/ });
+  // NAMED BY WHEN IT WAS WRITTEN, as the history lists it, never by a
+  // clipped id.
+  const ask = screen.getByRole("dialog", { name: /Revert to the revision from .+\?/ });
+  expect(screen.queryByRole("dialog", { name: /01JCFG/ })).toBeNull();
   expect(asked).toContain("config_diff");
   expect(within(ask).getByText("integrations.datadog.route_to")).toBeTruthy();
   expect(calls).toEqual([]);
@@ -144,7 +147,7 @@ test("a revision's page reverts to it after showing what it changes", async () =
   expect(calls.map(request)).toEqual([`POST /config/revisions/${EARLIER}/revert`]);
   expect(calls[0]!.headers.get("X-Summary")).toBe("back to the first import: datadog pages nobody");
   expect(calls[0]!.headers.get("If-Match")).toBeNull();
-  expect(screen.queryByRole("dialog", { name: /Revert to revision/ })).toBeNull();
+  expect(screen.queryByRole("dialog", { name: /Revert to the revision from/ })).toBeNull();
 });
 
 test("the active revision offers no revert, and says why", async () => {
@@ -162,7 +165,7 @@ test("a summary in any script is sent whole", async () => {
     `#/settings/config/revisions/${EARLIER}`,
   );
   await press(screen.getByRole("button", { name: /Revert to this revision/ }));
-  const ask = screen.getByRole("dialog", { name: /Revert to revision/ });
+  const ask = screen.getByRole("dialog", { name: /Revert to the revision from/ });
   type(within(ask).getByLabelText("Summary"), "zurück zum Import");
   await press(within(ask).getByRole("button", { name: "Revert" }));
   const sent = calls[0]!.headers.get("X-Summary")!;
@@ -192,7 +195,7 @@ test("a revert whose activation went unanswered says which revision it stored", 
     `#/settings/config/revisions/${EARLIER}`,
   );
   await press(screen.getByRole("button", { name: /Revert to this revision/ }));
-  const ask = screen.getByRole("dialog", { name: /Revert to revision/ });
+  const ask = screen.getByRole("dialog", { name: /Revert to the revision from/ });
   type(within(ask).getByLabelText("Summary"), "back to the first import");
   await press(within(ask).getByRole("button", { name: "Revert" }));
   expect(
@@ -376,6 +379,8 @@ test("an unsealed active revision is replaced by a whole document, under its own
   });
   await press(screen.getByRole("button", { name: "Replace the document" }));
   expect(screen.getByText(unsealed.detail)).toBeTruthy();
+  // THE API'S ADVICE IS NOT DRAWN: the screen says what to do in its own words.
+  expect(document.body.textContent).not.toContain("PUT /config");
   const editor = screen.getByLabelText("The company document, as YAML") as HTMLTextAreaElement;
   expect(editor.value).toBe("");
   type(editor, YAML);

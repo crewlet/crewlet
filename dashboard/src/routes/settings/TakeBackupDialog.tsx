@@ -14,7 +14,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Button, Callout, InlineCode, Modal, useToast, ValueField } from "@crewlethq/ui";
+import { Button, Callout, InlineCode, useToast, ValueField } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { withProblems } from "~/ui/Problems.tsx";
 import { rest } from "~/protocol/index.ts";

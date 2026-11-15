@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/caveat/caveattest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -151,10 +152,22 @@ func TestAScheduleIsCountedOnItsBusiestDay(t *testing.T) {
 	}
 }
 
+// everyClass is a company that raises every advisory class: two agents
+// learning on their own model, neither holding the health grant, one
+// schedule firing hourly, and the company hosting code with its boxes in the
+// `direct` cell by default.
+func everyClass(t *testing.T) *config.Company {
+	t.Helper()
+	return parsed(t, "name: Acme\n"+setupModels+"  sandbox:\n    local: {}\n    default_run_in: direct\n"+
+		"roles:\n  - name: SRE\n    llm: big\n    schedules:\n"+
+		"      - name: poll\n        cron: \"0 * * * *\"\n        task: Look.\n"+
+		"  - name: Dev\n    llm: big\n"+
+		"code:\n  backend: gitlet\n")
+}
+
 func TestEveryAdvisoryClassIsValidAndRaisedSomewhere(t *testing.T) {
 	t.Parallel()
-	c := parsed(t, "name: Acme\n"+setupModels+"roles:\n  - name: SRE\n    llm: big\n    schedules:\n"+
-		"      - name: poll\n        cron: \"0 * * * *\"\n        task: Look.\n")
+	c := everyClass(t)
 	var raised []config.AdvisoryClass
 	for _, w := range c.AdvisoryWarnings() {
 		if w.Class != "" {
@@ -171,5 +184,63 @@ func TestEveryAdvisoryClassIsValidAndRaisedSomewhere(t *testing.T) {
 	}
 	if config.AdvisoryClass("something.else").Valid() {
 		t.Error("an unlisted class is valid")
+	}
+}
+
+// EVERY CLASSED ADVISORY SPEAKS TO THE PERSON WHO OWNS THE COMPANY, beside the
+// operator's sentence, and no other warning claims to.
+//
+// The owner reads a warning on the org chart and in a save's review, where the
+// operator's sentence put `providers.llm.default`, `llm_auxiliary` and a Tier A
+// keyring in front of a founder. So a classed advisory carries Person, worded
+// as every sentence a person is shown is (caveattest.Problems: no field, no
+// tool, no backtick, no em dash, a full stop), and Message stays the
+// operator's, naming the key `crewlet validate` sends them to.
+//
+// Mutation: drop the person words from [config.classed], or put one back in
+// operator vocabulary, and this goes red.
+func TestEveryClassedAdvisorySpeaksToThePersonWhoOwnsTheCompany(t *testing.T) {
+	t.Parallel()
+	seen := map[config.AdvisoryClass]bool{}
+	for _, w := range everyClass(t).Warnings() {
+		if w.Class == "" {
+			if w.Person != "" {
+				t.Errorf("an unclassed warning claims a person's words: %+v", w)
+			}
+			continue
+		}
+		seen[w.Class] = true
+		if w.Person == "" || w.Person == w.Message {
+			t.Errorf("%s: no words for a person beside the operator's: %+v", w.Class, w)
+			continue
+		}
+		for _, problem := range caveattest.Problems(w.Person) {
+			t.Errorf("%s: its person words are not worded for a person: %s: %q", w.Class, problem, w.Person)
+		}
+	}
+	for _, class := range config.AdvisoryClasses {
+		if !seen[class] {
+			t.Errorf("%s is never raised here, so its words are not checked", class)
+		}
+	}
+}
+
+// SEVEN AGENTS LEARNING ON THEIR OWN MODEL ARE ONE THING TO KNOW. The person's
+// words of a class whose subject is a seat named apart (Warning.Seat) are the
+// same for every seat, so a screen groups them and says them once, with how
+// many agents; the operator's sentence still names each seat's entry.
+//
+// Mutation: name the seat in the person words, and the two differ.
+func TestOneClassSaysTheSameToAPersonAboutEverySeat(t *testing.T) {
+	t.Parallel()
+	got := classedWarnings(everyClass(t), config.ClassAuxiliaryModel)
+	if len(got) != 2 {
+		t.Fatalf("auxiliary advisories = %+v, want one for each of the two agents", got)
+	}
+	if got[0].Seat == got[1].Seat || got[0].Message == got[1].Message {
+		t.Errorf("the two advisories do not name their own seats apart: %+v", got)
+	}
+	if got[0].Person != got[1].Person {
+		t.Errorf("one class says two things to a person: %q and %q", got[0].Person, got[1].Person)
 	}
 }

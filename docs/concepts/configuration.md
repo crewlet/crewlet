@@ -977,7 +977,11 @@ correctly-serving node out of a load balancer's rotation for being behind.
 `company_config` is an append-only table — every change is a new revision. It
 is swept; that is described under [what a revision is
 not](#a-revision-is-immutable-as-a-configuration-not-as-an-archive-of-people)
-below. The schema:
+below. A write of part of the document that changes nothing, a `PATCH /config`
+or a per-entity `PUT` that leaves the document as it stands, is no change and
+stores none: it answers with the revision that already says it
+([A write that changes nothing](../reference/api-endpoints.md#a-write-that-changes-nothing)).
+The schema:
 
 ```sql
 CREATE TABLE company_config (

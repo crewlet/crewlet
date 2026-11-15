@@ -38,7 +38,9 @@ import { setDensity } from "~/lib/prefs.ts";
 import { Home } from "~/routes/home/Home.tsx";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { installWindow } from "~/testing.tsx";
-import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
+import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT, PageActions } from "./frame/PageActions.tsx";
+import { WriteButton } from "~/components/WriteButton.tsx";
+import type { Act } from "~/lib/useAct.ts";
 import { Project } from "~/routes/worklet/Project.tsx";
 import { ReadCursors, packPosition } from "~/routes/chatlet/cursor.ts";
 import { LoneRoom } from "~/routes/chatlet/testkit.tsx";
@@ -1070,6 +1072,25 @@ describe("the page header", () => {
     expect(spend.closest(".crewlet-nav-group--locked")).toBeNull();
   });
 
+  // THE ROOM AT THE PAGE'S END IS THE SECTION'S. The column sticks only as
+  // far as the frame reaches, so the toast room drawn after the frame pushed
+  // the column up by its height at the end of every scroll, and the column's
+  // rule stopped as far short of the sheet's foot. Mutation: draw the room
+  // after the frame again and it is no longer in the section's body.
+  test("a section's room for a toast is inside the frame, so the column sticks to the end", async () => {
+    location.hash = "#/settings/secrets";
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    const body = document.querySelector<HTMLElement>(".crewlet-section-frame__body")!;
+    expect(body).not.toBeNull();
+    const room = body.lastElementChild as HTMLElement;
+    expect(room.getAttribute("aria-hidden")).toBe("true");
+    expect(parseFloat(room.style.height)).toBeGreaterThan(0);
+    // Nothing of the screen follows the frame in the content column.
+    expect(document.querySelector(".crewlet-section-frame")?.nextElementSibling).toBeNull();
+  });
+
   // ON A PHONE THE COLUMN IS ONE ROW NAMING THE SECTION. Stacked whole it put
   // every section's own content ~520px down. The toggle names where the
   // reader is and says whether the list is open, and picking a section (the
@@ -1412,6 +1433,65 @@ test("the page header's controls slot spaces a screen's controls at the kit's co
   const trigger = document.getElementById("assistant-trigger");
   expect(trigger).not.toBeNull();
   expect(slot?.nextElementSibling?.contains(trigger)).toBe(true);
+});
+
+/** A write the engine refused, as a schedule that is switched off answers Run now. */
+const REFUSED_RUN: Act<"run_schedule"> = {
+  access: { can: true, as: "ada", acts: ["run_schedule"] },
+  busy: false,
+  refusal: {
+    sentence: "This schedule is switched off, so nothing was run.",
+    hint: "",
+    hostRefusal: "",
+    retryable: false,
+    grants: [],
+    reason: "",
+    remedy: null,
+  },
+  run: vi.fn(async () => null),
+  retry: vi.fn(async () => null),
+  dismiss: vi.fn(),
+};
+
+function RefusedInBar({ own }: { own: boolean }) {
+  const control = (
+    <WriteButton write={REFUSED_RUN} onPress={() => {}}>
+      Run now
+    </WriteButton>
+  );
+  return own ? (
+    <OwnPageHeader>{control}</OwnPageHeader>
+  ) : (
+    <PageActions>
+      {control}
+      <button type="button">Edit</button>
+    </PageActions>
+  );
+}
+
+// A REFUSED CONTROL IN THE PAGE BAR KEEPS THE BAR. Its refusal was drawn in the
+// bar beside it, which broke the bar onto a second line: Run now above the
+// trail, the sentence wrapped across the bar, Edit and Delete shoved aside.
+// It is drawn on a line of the head under the bar, in a screen's own bar too.
+//
+// Mutation: drop the place from the head, or the route from `PageActions` or
+// `OwnPageHeader`, and the refusal is in the bar.
+test.each([
+  ["the frame's bar", false],
+  ["a screen's own bar", true],
+])("a refusal of a control in %s is drawn under the bar, not in it", async (_, own) => {
+  const { store, socket } = answering({});
+  mountShell(store, socket, <RefusedInBar own={own} />);
+  await settle();
+  const alert = screen.getByRole("alert");
+  expect(alert.textContent).toContain("switched off");
+  const head = document.querySelector(".page-head")!;
+  const place = alert.closest(".page-refusals");
+  expect(place, "the refusal is not in the head's place under the bar").not.toBeNull();
+  expect(head.contains(place)).toBe(true);
+  const bar = own ? place!.previousElementSibling : head.querySelector(".page-bar");
+  expect(bar?.contains(screen.getByRole("button", { name: "Run now" }))).toBe(true);
+  expect(bar?.contains(alert)).toBe(false);
 });
 
 // WHERE THE PEEK IS A COLUMN IS A WIDTH PER FRAME, not one per window.

@@ -10,6 +10,7 @@
 
 import { Button, Callout } from "@crewlethq/ui";
 import type { SettingWrite } from "~/lib/useSettingWrite.ts";
+import { warningWords } from "~/protocol/configAnswer.ts";
 
 export function SettingWriteStatus({
   write,
@@ -32,7 +33,7 @@ export function SettingWriteStatus({
         <Callout variant="warning" title="The engine accepts this, with a warning">
           <ul className="ceiling-warnings">
             {state.warnings.map((w) => (
-              <li key={`${w.path}:${w.message}`}>{w.message}</li>
+              <li key={`${w.path}:${w.message}`}>{warningWords(w)}</li>
             ))}
           </ul>
         </Callout>
@@ -40,7 +41,6 @@ export function SettingWriteStatus({
       {state.kind === "refused" && (
         <Callout variant="danger" title="Nothing was saved">
           <span>{state.message}</span>
-          {state.hint && <span> {state.hint}</span>}
           {state.reload && (
             <div className="row gap-2">
               <Button size="small" variant="secondary" onClick={onReload}>

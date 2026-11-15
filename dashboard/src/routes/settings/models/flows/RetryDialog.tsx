@@ -13,7 +13,8 @@
  */
 
 import { useRef, useState } from "react";
-import { Button, Callout, Modal, RelativeTime, Text, useToast } from "@crewlethq/ui";
+import { Button, Callout, RelativeTime, Text, useToast } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { fmtClock, listed } from "~/lib/format.ts";
 import type { CredentialLimited } from "~/protocol/models.ts";
 import { retryModel } from "../api.ts";

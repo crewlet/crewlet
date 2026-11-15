@@ -22,9 +22,16 @@
  * properties rail passes NO facts. The caller decides: plenty of peeks have no
  * rail under them, and for those the fact line is the only place the object's
  * own values are stated. See `routes/worklet/WorkItem.tsx` for the worked case.
+ *
+ * # Its actions are a row, and a refusal is not drawn in it
+ *
+ * A write control among the header's actions draws what it was refused on a
+ * line of its own under the header ([useRefusalPlace]): drawn beside the
+ * control, the refusal widened the actions and pushed the title aside.
  */
 
 import type { ReactElement, ReactNode } from "react";
+import { RefusalsTo, useRefusalPlace } from "~/components/WriteButton.tsx";
 import {
   FactLine as KitFactLine,
   ObjectHeader as KitObjectHeader,
@@ -153,19 +160,23 @@ export function ObjectHeader({
   actions?: ReactNode;
   size?: "page" | "peek";
 }) {
+  const refusals = useRefusalPlace();
   return (
-    <KitObjectHeader
-      kind={kind}
-      icon={typeof icon === "string" ? <NamedGlyph name={icon} size="xs" /> : icon}
-      mark={mark}
-      description={description}
-      identifier={identifier}
-      within={within}
-      title={title}
-      status={status}
-      facts={facts?.map(kitFact)}
-      actions={actions}
-      size={size}
-    />
+    <>
+      <KitObjectHeader
+        kind={kind}
+        icon={typeof icon === "string" ? <NamedGlyph name={icon} size="xs" /> : icon}
+        mark={mark}
+        description={description}
+        identifier={identifier}
+        within={within}
+        title={title}
+        status={status}
+        facts={facts?.map(kitFact)}
+        actions={actions && <RefusalsTo place={refusals.element}>{actions}</RefusalsTo>}
+        size={size}
+      />
+      {refusals.place}
+    </>
   );
 }
