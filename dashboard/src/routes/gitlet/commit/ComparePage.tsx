@@ -31,7 +31,9 @@ import { useState } from "react";
 import {
   Button,
   Callout,
+  Checkbox,
   EmptyState,
+  FormField,
   Input,
   Modal,
   Skeleton,
@@ -45,7 +47,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { changeLive, changePath, isRepoName, parseChangeRef, shortOID } from "~/lib/code.ts";
-import { fmtCount, plural } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type {
@@ -55,7 +57,8 @@ import type {
   CodeMergePreview,
   CodeRepoDetail,
 } from "~/protocol/index.ts";
-import { commitHref, repoHref } from "../paths.ts";
+import { ReviewerPicker } from "../ReviewerPicker.tsx";
+import { repoHref } from "../paths.ts";
 import { subjectOf } from "../repo/History.tsx";
 import { RefPicker, revisionWord, useRevisions } from "../repo/refs.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
@@ -227,14 +230,16 @@ function Comparison({ repo, base, head }: { repo: CodeRepoDetail; base: string; 
         facts.ahead === 0 ? (
           <p className="muted">{`${headWord} has no commit ${baseWord} lacks: it changed nothing since the two parted.`}</p>
         ) : (
-          <section aria-label="What it changed">
-            {/* A CAPTION, NOT A LABEL: it names a branch and a commit, which
-                the label register's capitals would rewrite. */}
-            <p className="t-caption">
+          // A SECTION OF THE PAGE, AS A COMMIT'S DIFF IS: the files' toolbar
+          // under the title is a sticky band that hands its top padding back
+          // to the gap above it, so it stands in the section's gapped column.
+          // Under a bare caption in a plain section it covered the caption's
+          // lower half. The toolbar's own line says how many files and lines.
+          <section aria-label="What it changed" className="code-section">
+            <h2 className="code-section__title">
               What <span className="mono">{headWord}</span> changed since{" "}
               <span className="mono">{shortOID(facts.merge_base)}</span>
-              {`: ${plural(facts.total, "file")}, +${fmtCount(facts.added)} −${fmtCount(facts.deleted)}`}
-            </p>
+            </h2>
             <DiffFiles repo={repo.name} base={facts.merge_base} head={facts.head} />
           </section>
         )
@@ -403,8 +408,10 @@ function OpenChange({
 
 /**
  * The change, before it is opened: its title (head's subject), a description,
- * the work item (the one head's push was charged to), reviewers, and whether
- * it opens as a draft — sent as ONE `code_open_change`.
+ * the work item (the one head's push was charged to), reviewers picked from
+ * the chart, and whether it opens as a draft, sent as ONE `code_open_change`.
+ * Every field is a labelled kit field on the form's rhythm, as Gitlet's other
+ * dialogs are; the subtitle names the commit it opens at.
  */
 function OpenChangeDialog({
   repo,
@@ -428,12 +435,8 @@ function OpenChangeDialog({
   const [title, setTitle] = useState(subject);
   const [body, setBody] = useState("");
   const [work, setWork] = useState(workItem);
-  const [who, setWho] = useState("");
+  const [reviewers, setReviewers] = useState<string[]>([]);
   const [draft, setDraft] = useState(false);
-  const reviewers = who
-    .split(/[\s,]+/)
-    .map((h) => h.trim().replace(/^@/, ""))
-    .filter(Boolean);
   const submit = async () => {
     const result = await write.run(
       {
@@ -482,49 +485,68 @@ function OpenChangeDialog({
         </>
       }
     >
-      <Input
-        aria-label="Title"
-        placeholder="What the change does"
-        value={title}
-        onChange={(event) => setTitle(event.target.value)}
-      />
-      <Textarea
-        aria-label="Description"
-        placeholder="Why, and what to look at (optional)"
-        value={body}
-        rows={5}
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <Input
-        aria-label="Work item"
-        placeholder="ENG-42, or <tracker>:<id> (optional)"
-        value={work}
-        onChange={(event) => setWork(event.target.value)}
-      />
-      {workItem && work === workItem && (
-        <p className="t-caption">
-          The work item the push that brought {shortOID(head)} was charged to.
-        </p>
-      )}
-      <Input
-        aria-label="Reviewers"
-        placeholder="Handles to ask, separated by commas (optional)"
-        value={who}
-        onChange={(event) => setWho(event.target.value)}
-      />
-      <label className="row gap-1">
-        <input
-          type="checkbox"
+      <Stack gap={3}>
+        <FormField label="Title">
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              width="full"
+              placeholder="What the change does"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          )}
+        </FormField>
+        <FormField label="Description" optional helper="Why, and what to look at.">
+          {(field) => (
+            <Textarea
+              id={field.id}
+              aria-describedby={field.describedBy}
+              value={body}
+              rows={5}
+              onChange={(event) => setBody(event.target.value)}
+            />
+          )}
+        </FormField>
+        <FormField
+          label="Work item"
+          optional
+          helper={
+            workItem && work === workItem
+              ? `The task the push that brought ${shortOID(head)} was charged to.`
+              : "The task the change does, by its key."
+          }
+        >
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              width="full"
+              spellCheck={false}
+              placeholder="ENG-42"
+              value={work}
+              onChange={(event) => setWork(event.target.value)}
+            />
+          )}
+        </FormField>
+        <FormField label="Reviewers" optional helper="Each is asked to review it.">
+          {(field) => (
+            <ReviewerPicker
+              id={field.id}
+              describedBy={field.describedBy}
+              value={reviewers}
+              onChange={setReviewers}
+            />
+          )}
+        </FormField>
+        <Checkbox
+          label="Open it as a draft"
+          description="A draft merges nowhere until it is marked ready for review."
           checked={draft}
-          onChange={(event) => setDraft(event.target.checked)}
+          onCheckedChange={setDraft}
         />
-        Open it as a draft
-      </label>
-      <p className="t-caption">
-        <a className="prose-link" href={commitHref(repo.name, head)}>
-          {`Read ${shortOID(head)}`}
-        </a>
-      </p>
+      </Stack>
     </Modal>
   );
 }
