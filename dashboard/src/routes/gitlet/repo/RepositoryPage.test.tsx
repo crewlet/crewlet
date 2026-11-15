@@ -16,6 +16,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Announcer } from "@crewlethq/ui";
 import { onTheRight } from "~/test/codeScreens.tsx";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -401,6 +402,8 @@ function mount(hash: string, repo = "web", viewer: unknown = ADMIN_VIEWER) {
           <Router>
             <RepositoryPage repo={repo} />
           </Router>
+          {/* A LIST'S ROW REMOVED IS SAID, as the app's own announcer says it. */}
+          <Announcer label="Announcements" />
         </ViewerProvider>
       </SessionReading>
     </ClientContext.Provider>,
@@ -1200,4 +1203,177 @@ test("a file read at a tag is held from a commit, with the reason", async () => 
 
   const edit = await screen.findByRole("button", { name: "Edit" });
   await waitFor(() => expect(edit.getAttribute("title")).toMatch(/Choose a branch/));
+});
+
+// WHO READS A REPOSITORY IS ONE OF ITS DETAILS: the form's Read by sends
+// `visibility` alone where it moved. Mutation: leave visibility out of the
+// form or the call, or send it unmoved, and this fails.
+test("who reads a repository is a details change naming only the visibility", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  const edit = await screen.findByRole("button", { name: "Edit details" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(edit);
+  const dialog = await screen.findByRole("dialog", { name: "web's details" });
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "Read by" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Its owner's seats" }));
+  const save = within(dialog).getByRole("button", { name: "Save details" });
+  await waitFor(() => expect(save.getAttribute("title")).toBeNull());
+  fireEvent.click(save);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({ tool: "code_update_repo", args: { repo: "web", visibility: "unit" } });
+});
+
+// A RENAME IS A RECORD OF ITS OWN: one code_update_repo naming `rename_to`
+// alone, held until the name is a project's. Mutation: fold the rename into a
+// details change, or let a scratch-shaped name through, and this fails.
+test("a repository is renamed by one call naming the new name alone", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  const rename = await screen.findByRole("button", { name: "Rename" });
+  await waitFor(() => expect(rename.getAttribute("title")).toBeNull());
+  fireEvent.click(rename);
+  const dialog = await screen.findByRole("dialog", { name: "Rename web" });
+  const press = within(dialog).getByRole("button", { name: "Rename" });
+  const field = within(dialog).getByLabelText(/^New name/);
+  fireEvent.change(field, { target: { value: "cto.web" } });
+  await waitFor(() => expect(press.getAttribute("title")).toMatch(/Name the project/));
+  fireEvent.click(press);
+  expect(acted).toHaveLength(0);
+  fireEvent.change(field, { target: { value: "storefront" } });
+  await waitFor(() => expect(press.getAttribute("title")).toBeNull());
+  fireEvent.click(press);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_update_repo",
+    args: { repo: "web", rename_to: "storefront" },
+  });
+});
+
+// AN ARCHIVE IS CONFIRMED, then one call naming `archived` alone; an archived
+// repository offers its unarchive; a pull mirror's archive is held with why.
+// Mutation: archive on the first press, send another field, offer Archive on an
+// archived repository, or let a pull mirror's archive through, and this fails.
+test("a repository is archived after a confirmation, and unarchived by one press", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  const archive = await screen.findByRole("button", { name: "Archive repository" });
+  await waitFor(() => expect(archive.getAttribute("title")).toBeNull());
+  fireEvent.click(archive);
+  const dialog = await screen.findByRole("dialog", { name: "Archive web?" });
+  expect(acted).toHaveLength(0);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({ tool: "code_update_repo", args: { repo: "web", archived: true } });
+  cleanup();
+
+  const again: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools", status: "archived" }), again);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+  const unarchive = await screen.findByRole("button", { name: "Unarchive repository" });
+  expect(screen.queryByRole("button", { name: "Archive repository" })).toBeNull();
+  await waitFor(() => expect(unarchive.getAttribute("title")).toBeNull());
+  fireEvent.click(unarchive);
+  await waitFor(() => expect(again).toHaveLength(1));
+  expect(again[0]).toEqual({ tool: "code_update_repo", args: { repo: "web", archived: false } });
+  cleanup();
+
+  stubEngine(detail({ managed_by: "tools", mirrored: true }));
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+  const mirror = await screen.findByRole("button", { name: "Archive repository" });
+  await waitFor(() => expect(mirror.getAttribute("title")).toMatch(/is a pull mirror/));
+});
+
+// A PATH OWNER IS GIVEN GLOBS, ITS GLOBS ARE CHANGED BY NAME, AND IT IS TAKEN
+// OFF WITH EVERY GLOB IT HOLDS, each one code_update_repo's `path_owners`.
+// Mutation: send an owner's globs whole, or remove fewer than it holds, and
+// this fails.
+test("a path owner is added, edited by glob, and removed, each one settings change", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+  const engineering = { kind: "unit", ref: "engineering" };
+
+  const edit = await screen.findByRole("button", { name: "Edit the paths Engineering owns" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(edit);
+  let dialog = await screen.findByRole("dialog", { name: "Paths Engineering owns" });
+  fireEvent.click(within(dialog).getByRole("button", { name: /Remove path 1/ }));
+  fireEvent.change(within(dialog).getByRole("textbox", { name: /new path/i }), {
+    target: { value: "app/**" },
+  });
+  const save = within(dialog).getByRole("button", { name: "Save" });
+  await waitFor(() => expect(save.getAttribute("title")).toBeNull());
+  fireEvent.click(save);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_update_repo",
+    args: {
+      repo: "web",
+      path_owners: {
+        add: [{ owner: engineering, paths: ["app/**"] }],
+        remove: [{ owner: engineering, paths: ["src/**"] }],
+      },
+    },
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove Engineering as a path owner" }));
+  fireEvent.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove owner" }),
+  );
+  await waitFor(() => expect(acted).toHaveLength(2));
+  expect(acted[1]).toEqual({
+    tool: "code_update_repo",
+    args: { repo: "web", path_owners: { remove: [{ owner: engineering, paths: ["src/**"] }] } },
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Add a path owner" }));
+  dialog = await screen.findByRole("dialog", { name: "Add a path owner to web" });
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "Owner" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "CTO" }));
+  fireEvent.change(within(dialog).getByRole("textbox", { name: /new path/i }), {
+    target: { value: "docs/**" },
+  });
+  const add = within(dialog).getByRole("button", { name: "Add owner" });
+  await waitFor(() => expect(add.getAttribute("title")).toBeNull());
+  fireEvent.click(add);
+  await waitFor(() => expect(acted).toHaveLength(3));
+  expect(acted[2]).toEqual({
+    tool: "code_update_repo",
+    args: {
+      repo: "web",
+      path_owners: { add: [{ owner: { kind: "seat", ref: "cto" }, paths: ["docs/**"] }] },
+    },
+  });
+});
+
+// A DECLARED REPOSITORY'S NAME, ARCHIVE AND PATH OWNERS ARE THE DOCUMENT'S:
+// drawn and held with where they are changed. Mutation: hide one, or let a
+// declared repository through, and this fails.
+test("a declared repository's rename, archive and path owners are held with the document's sentence", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail(), acted);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  const rename = await screen.findByRole("button", { name: "Rename" });
+  await waitFor(() => expect(rename.getAttribute("title")).toBe(DECLARED));
+  for (const name of [
+    "Archive repository",
+    "Add a path owner",
+    "Edit the paths Engineering owns",
+    "Remove Engineering as a path owner",
+  ]) {
+    expect(screen.getByRole("button", { name }).getAttribute("title"), name).toBe(DECLARED);
+  }
+  fireEvent.click(rename);
+  fireEvent.click(screen.getByRole("button", { name: "Archive repository" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(acted).toHaveLength(0);
 });

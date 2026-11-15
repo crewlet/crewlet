@@ -35,6 +35,10 @@ type SSHTests interface {
 
 // SSHServers is the SSH integration's extension of its answer.
 type SSHServers struct {
+	// RevisionID is the revision the servers were read from: what an edit,
+	// which sends a server whole, names as its if_match, so a change made
+	// meanwhile is refused rather than overwritten.
+	RevisionID string `json:"revision_id"`
 	// CAPublicKey is the line servers trust; NextCAPublicKey a staged
 	// rotation's. Never a private key.
 	CAPublicKey     string `json:"ca_public_key,omitempty"`
@@ -68,14 +72,22 @@ func sshInventoryCommands() []SSHInventoryCommand {
 }
 
 // SSHServer is one registered server, with its keys as fingerprints.
+//
+// ITS KEY LINES AND ALLOWLIST AS WRITTEN ride beside them: a PUT replaces a
+// server whole, so an edit sends both back unchanged. Both are public (the
+// lines are each server's ssh_host_*_key.pub) and already in the document an
+// administrator reads.
 type SSHServer struct {
 	ID           string              `json:"id"`
 	Address      string              `json:"address"`
 	Port         int                 `json:"port"`
 	Fingerprints []string            `json:"fingerprints"`
+	HostKeys     []string            `json:"host_keys"`
 	Users        config.SSHHostUsers `json:"users"`
 	Description  string              `json:"description,omitempty"`
 	Containers   bool                `json:"containers,omitempty"`
+	// ReadAllowlist replaces the default read allowlist where it is set.
+	ReadAllowlist []string `json:"read_allowlist,omitempty"`
 	// Inventory is whether the engine itself reads the server for the atlas.
 	Inventory bool `json:"inventory,omitempty"`
 	// GrantedTo is every agent naming it, on or off.
@@ -97,13 +109,14 @@ func (s *Service) heldAuthority(ref string) *setup.SSHCertificateAuthority {
 	return ca
 }
 
-// sshServers is the extension of the SSH answer for company.
-func (s *Service) sshServers(ctx context.Context, company *config.Company) (*SSHServers, error) {
+// sshServers is the extension of the SSH answer for company, read from
+// revision.
+func (s *Service) sshServers(ctx context.Context, company *config.Company, revision string) (*SSHServers, error) {
 	block := company.Integrations.SSH
 	if block == nil {
 		return nil, nil
 	}
-	out := &SSHServers{SetupVersion: sshint.SetupVersion, Hosts: []SSHServer{},
+	out := &SSHServers{RevisionID: revision, SetupVersion: sshint.SetupVersion, Hosts: []SSHServer{},
 		InventoryCommands:   sshInventoryCommands(),
 		RetiredCAPublicKeys: s.retiredAuthorities()}
 	if out.RetiredCAPublicKeys == nil {
@@ -125,7 +138,11 @@ func (s *Service) sshServers(ctx context.Context, company *config.Company) (*SSH
 	for _, h := range block.Hosts {
 		server := SSHServer{ID: h.ID, Address: h.Address, Port: h.PortOrDefault(), Users: h.Users,
 			Description: h.Description, Containers: h.Containers, Inventory: h.Inventory, Fingerprints: []string{},
+			HostKeys: slices.Clone(h.HostKeys), ReadAllowlist: slices.Clone(h.ReadAllowlist),
 			GrantedTo: company.SSHHostGrantees(h.ID)}
+		if server.HostKeys == nil {
+			server.HostKeys = []string{}
+		}
 		if server.GrantedTo == nil {
 			server.GrantedTo = []string{}
 		}

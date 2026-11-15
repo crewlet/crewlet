@@ -223,9 +223,15 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   },
   "routes/gitlet/repo/RepoWrites.tsx": {
     why:
-      "a repository's settings writes — its search mode, its pull and push mirrors " +
-      "(code_update_repo) and Purge unreachable history (code_purge_unreachable) — " +
-      "each a WriteButton held with the gate's sentence",
+      "a repository's settings writes: its details, its name, its archive, its search " +
+      "mode, its pull and push mirrors (code_update_repo) and Purge unreachable history " +
+      "(code_purge_unreachable), each a WriteButton held with the gate's sentence",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
+  "routes/gitlet/repo/PathOwners.tsx": {
+    why:
+      "a repository's path owners: Add a path owner, and an owner's Edit and Remove " +
+      "(code_update_repo's path_owners), each a WriteButton held with the gate's sentence",
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
   "routes/gitlet/NewRepo.tsx": {

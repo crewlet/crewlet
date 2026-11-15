@@ -2606,7 +2606,12 @@ const (
 	// and Google Cloud) and the settings changed in place, merged with main's
 	// audit follow-ups on kit 0.131.0, measures 6267.7 KiB (6,418,107 bytes),
 	// 11,535 bytes over the 6256.4 KiB of main it was built on: 6268 KiB.
-	treeBudget = 5<<20 + 1148<<10
+	// A repository's rename, archive, readers and path owners, every field of
+	// a merge gate in its form and its line, the SSH servers' add, edit,
+	// setup, test and remove, and an MCP server's timeouts in its wizard
+	// added 23,241 bytes, script and sheet, and took it to 6279.1 KiB
+	// (6,429,813 bytes): 6280 KiB.
+	treeBudget = 5<<20 + 1160<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

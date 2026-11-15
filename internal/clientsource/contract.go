@@ -394,6 +394,7 @@ var contract = []Entry{
 	{"SetupSSHServers", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupSSHServer", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupSSHInventoryCommand", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
+	{"SetupSSHScannedKey", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"VerifyOutcome", ReadUnion, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupVerdict", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
 	{"SetupVerdictFact", ReadInterface, "internal/api/setupapi.TestTheSetupFormReadsWhatTheSetupWireSends"},
@@ -483,9 +484,20 @@ var contract = []Entry{
 		"internal/gitlet.TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo"},
 	{"CODE_SEARCH_TRIGRAM_BYTES", ReadScalar, "internal/codeindex.TestTheDashboardSearchesCodeAtTheTrigramsWidth"},
 
+	// mcp.ts
+	{"MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS", ReadScalar,
+		"internal/mcp.TestTheDashboardStatesTheEnginesTimeoutDefaults"},
+	{"MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS", ReadScalar,
+		"internal/mcp.TestTheDashboardStatesTheEnginesTimeoutDefaults"},
+
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryRepositoryState"},
 	{"REPO_SEARCH_MODES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEverySearchModeOfARepository"},
+	{"CODE_PATH_CLASSES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEveryPathClassAGateExempts"},
+	{"CODE_MAX_QUEUE_DEPTH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
+	{"CODE_MAX_QUEUE_BATCH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
+	{"CODE_DEFAULT_QUEUE_DEPTH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
+	{"CODE_DEFAULT_QUEUE_BATCH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
 	{"COMMAND_OUTCOMES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryOutcomeOfACommand"},
 	{"REPO_NAME", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},

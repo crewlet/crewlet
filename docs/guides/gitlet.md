@@ -147,7 +147,13 @@ browser, each write one commit or one ref moved, as you:
 
 Its protection rules are set on its **Settings** tab ([Protecting a
 branch](#protecting-a-branch)), and it is deleted and restored there too
-([Delete and restore a repository](#delete-and-restore-a-repository)).
+([Delete and restore a repository](#delete-and-restore-a-repository)). The
+same tab changes its details (description, default branch, owning unit and
+which seats read it) with **Edit details**, its name with **Rename**
+([Renaming a repository](#renaming-a-repository)), its path owners with **Add
+a path owner** and each owner's **Edit** and **Remove**, and turns it
+read-only with **Archive repository** (and back with **Unarchive
+repository**), each one `code_update_repo` made as you.
 
 ## Give each person a token
 
@@ -1272,7 +1278,8 @@ tools](../concepts/gitlet.md#repositories-made-by-tools).
 ### Renaming a repository
 
 A repository a tool made is renamed with `code_update_repo`'s `rename_to`, by
-the seat that maintains it or by you through your assistant. The new name
+the seat that maintains it, or by you through your assistant or with
+**Rename** on its **Settings** tab. The new name
 keeps its kind's form: a scratch repository keeps its seat's handle
 (`docs-writer.parser`), and a project stays one label. **The old name
 redirects for 30 days**: a clone or a fetch of the old URL still works — git
