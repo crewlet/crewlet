@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -1628,7 +1629,7 @@ func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 	}
 	select {
 	case err := <-done:
-		if !errors.Is(err, errPullRefused) {
+		if !errors.Is(err, jsapi.ErrPullRefused) {
 			t.Fatalf("a pull whose consumer was deleted under it returned %v, "+
 				"want the refusal — an empty answer reads as a quiet log", err)
 		}
@@ -1728,7 +1729,7 @@ func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 	}
-	if _, err := cons.Fetch(t.Context(), 10, 1<<20, 5*time.Second); !errors.Is(err, errPullRefused) {
+	if _, err := cons.Fetch(t.Context(), 10, 1<<20, 5*time.Second); !errors.Is(err, jsapi.ErrPullRefused) {
 		t.Fatalf("the fetch after the consumer went returned %v, want the refusal", err)
 	}
 

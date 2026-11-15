@@ -36,6 +36,18 @@
 // timed out on its first call, and the same client on the domain created a
 // stream, published under a per-subject expectation, fetched from a durable
 // consumer and compare-and-set a KV key.
+//
+// # And the requests a caller makes past the client
+//
+// A caller that needs a request the client does not make in the shape it
+// needs makes it through this package, addressed here: a stream leader's read
+// of one message ([Leader]), the paged listings ([Leader.Subjects], [Meta]),
+// and a reader's pulls of a consumer it made for one read ([Pulls]) — asked by
+// hand on one inbox the reader holds for the whole read, every word the server
+// sends about a pull named ([Event]), and which of them ends it counted as the
+// server counts it, so one rule serves every reader that pulls a consumer
+// itself (internal/queue/jetstream's copy reads and dead-letter listings; its
+// domain consumers' standing pull reads its statuses with [PullStatus]).
 package jsapi
 
 import (

@@ -34,8 +34,34 @@ func leaderServer(t *testing.T) (*server.Server, *jsapi.Leader) {
 // API built with opts.
 func leaderServerFor(t *testing.T, opts ...jetstream.JetStreamOpt) (*server.Server, jetstream.JetStream) {
 	t.Helper()
+	srv, nc := testBroker(t, "jsapi-leader-test")
+	// The account's own API, as [jsapi.Account] builds it — through
+	// jetstream.New, which is that API with the client's options.
+	js, err := jetstream.New(nc, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api, err := jsapi.Of(js); err != nil || api != jsapi.Account() {
+		t.Fatalf("the case's client speaks %v (%v), want the account's own API", api, err)
+	}
+	if _, err := js.CreateStream(t.Context(), jetstream.StreamConfig{
+		Name: "LOG", Subjects: []string{"log.>"},
+	}); err != nil {
+		t.Fatalf("create the stream: %v", err)
+	}
+	if _, err := js.Publish(t.Context(), "log.a", []byte("held")); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	return srv, js
+}
+
+// testBroker is a broker named name with no JetStream domain ([jsapitest]'s
+// requirement), in this process and listening nowhere, and a connection to it
+// — the one broker every case of this package's own reads stands up.
+func testBroker(t *testing.T, name string) (*server.Server, *nats.Conn) {
+	t.Helper()
 	srv, err := server.NewServer(&server.Options{
-		ServerName:        "jsapi-leader-test",
+		ServerName:        name,
 		JetStream:         true,
 		DontListen:        true,
 		StoreDir:          brokertest.TempDir(t),
@@ -58,24 +84,7 @@ func leaderServerFor(t *testing.T, opts ...jetstream.JetStreamOpt) (*server.Serv
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(nc.Close)
-	// The account's own API, as [jsapi.Account] builds it — through
-	// jetstream.New, which is that API with the client's options.
-	js, err := jetstream.New(nc, opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if api, err := jsapi.Of(js); err != nil || api != jsapi.Account() {
-		t.Fatalf("the case's client speaks %v (%v), want the account's own API", api, err)
-	}
-	if _, err := js.CreateStream(t.Context(), jetstream.StreamConfig{
-		Name: "LOG", Subjects: []string{"log.>"},
-	}); err != nil {
-		t.Fatalf("create the stream: %v", err)
-	}
-	if _, err := js.Publish(t.Context(), "log.a", []byte("held")); err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-	return srv, js
+	return srv, nc
 }
 
 // A LEADER READ A MEMBER DROPS IS ASKED AGAIN.
