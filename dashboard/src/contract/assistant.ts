@@ -512,6 +512,12 @@ interface AssistantEntityItem {
   label: string;
   fact?: string;
   depth?: number;
+  /**
+   * What the item carries beyond its label and fact, each a detail the
+   * drawer leaves out and the model reads (a comment's question, whom it
+   * asks, its options and the recommendation). Absent on an item with none.
+   */
+  facts?: AssistantFact[];
   open?: AssistantLink;
 }
 

@@ -107,24 +107,19 @@ type itemDigest struct {
 	Label string `json:"label"`
 	Fact  string `json:"fact,omitempty"`
 	Depth int    `json:"depth,omitempty"`
+	// Facts are the item's details by label, each in the words the card
+	// holds, an instant on the company's clock.
+	Facts map[string]string `json:"facts,omitempty"`
 }
 
 func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte, error) {
 	d := entityDigest{Kind: e.Kind, ID: e.ID, Key: e.Key, Title: e.Title,
 		Subtitle: e.Subtitle, Text: e.Text}
-	if len(e.Facts) > 0 {
-		d.Facts = map[string]string{}
-		for _, f := range e.Facts {
-			d.Facts[f.Label] = f.Value
-			if f.Type == wire.ColumnDatetime {
-				d.Facts[f.Label] = Clock(f.Value, zone)
-			}
-		}
-	}
+	d.Facts = factDigest(e.Facts, zone)
 	items := make([]itemDigest, 0, len(e.Items))
 	for _, it := range e.Items {
 		items = append(items, itemDigest{ID: it.ID, Label: it.Label, Fact: it.Fact,
-			Depth: it.Depth})
+			Depth: it.Depth, Facts: factDigest(it.Facts, zone)})
 	}
 	d.ItemsTotal = len(items)
 	d.MoreExist = e.ItemsMore
@@ -148,6 +143,22 @@ func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte,
 		d.TextOmitted, d.Text = len(d.Text), ""
 	}
 	return fit(func() (any, int) { return &d, len(items) }, set, budget)
+}
+
+// factDigest is facts by label as the model reads them, every instant on the
+// company's clock; nil for none.
+func factDigest(facts []wire.Fact, zone *time.Location) map[string]string {
+	if len(facts) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(facts))
+	for _, f := range facts {
+		out[f.Label] = f.Value
+		if f.Type == wire.ColumnDatetime {
+			out[f.Label] = Clock(f.Value, zone)
+		}
+	}
+	return out
 }
 
 // onClock is a table's rows with every instant in its datetime columns said on
