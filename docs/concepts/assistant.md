@@ -346,6 +346,13 @@ cards. The raw data a step read is not kept beyond what a card showed (except, w
 a proposal waits for you, the bounded context the answer resumes from), and no
 credential is ever stored.
 
+**A long conversation keeps its earlier findings.** Ask Crewlet reads a
+conversation's last twelve messages as they are. Once more have gathered,
+it writes a short summary of the earlier ones, stored encrypted with the
+conversation and deleted with it, and reads that summary in their place. A
+summary of messages you can no longer see (you lost access to an app they read
+through) is not used.
+
 **An administrator may read a conversation for a compliance reason.** This is
 a separate, audited action: the administrator must confirm their identity,
 must give a reason, and cannot do it through Ask Crewlet. Every such read is

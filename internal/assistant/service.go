@@ -500,9 +500,13 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 	earlier := historyEntries(history, ts.Person)
 	t.used(historyApps(earlier))
+	summary := summaryOf(history, ts.Person)
+	if summary != nil {
+		t.used(summary.Apps)
+	}
 	t.deep.attachments = attached
 	in := promptInput{Person: ts.Person, Apps: iam.Expand(ts.Person.Grants), Now: s.now(),
-		History: earlier, Page: ts.Page, Boundary: t.boundary, Question: input,
+		History: earlier, Summary: summary, Page: ts.Page, Boundary: t.boundary, Question: input,
 		Proposable: proposable(tools), Deep: offersDeep(tools), DeepConfigured: s.ReadsImages(),
 		Attachments: refsOf(attached)}
 	if c != nil {
