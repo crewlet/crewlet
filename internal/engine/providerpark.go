@@ -219,7 +219,9 @@ type limitProbes struct {
 	// fifteen minutes went out and came back with every config change. A wait
 	// ends when the chain answers (or stops reporting a limit) or the seat
 	// leaves this node; a park that follows a release for any other reason
-	// within [parkCarryWindow] is the same wait.
+	// within [parkCarryWindow] is the same wait, and so is one taken in a
+	// release's own window, which the release leaves standing on its record
+	// ([Engine.unlessParked]).
 	waits map[uuid.UUID]parkWait
 }
 
@@ -641,25 +643,67 @@ func (e *Engine) endLimitProbe(ctx context.Context, key probeKey, probe *limitPr
 			e.releaseProviderParking(ctx, seat, parking, why)
 		}
 		// THE WAIT IS OVER: the chain answered, or stopped reporting a
-		// limit.
+		// limit, unless the seat met it again in the release's window and
+		// stands parked on it ([Engine.unlessParked]).
 		e.endParkWait(seat)
 	}
 }
 
 // parkReleased marks seat's wait as released at this instant, without ending
-// it: a park within [parkCarryWindow] continues it.
+// it: a park within [parkCarryWindow] continues it. A park of the seat that
+// stands keeps it unmarked ([Engine.unlessParked]).
 func (e *Engine) parkReleased(seat uuid.UUID) {
+	e.unlessParked(seat, func(p *limitProbes) {
+		if wait, known := p.waits[seat]; known {
+			wait.releasedAt = e.now()
+			p.waits[seat] = wait
+		}
+	})
+}
+
+// endParkWait forgets when seat began waiting, its wait over, unless a park of
+// the seat stands, which keeps it ([Engine.unlessParked]).
+func (e *Engine) endParkWait(seat uuid.UUID) {
+	e.unlessParked(seat, func(p *limitProbes) { delete(p.waits, seat) })
+}
+
+// unlessParked settles seat's wait record under the probes' lock, unless a
+// provider park of the seat stands, which owns the record.
+//
+// A PARK TAKEN IN A RELEASE'S WINDOW. A release drops its record under the
+// parks' lock and resumes the inbox outside it, and only then marks the wait
+// released ([Engine.releaseProviderParking]), or, for a probe's answer, ends
+// it ([Engine.endLimitProbe]). A turn that meets the limit again in between
+// parks the seat again and joins a probe, carrying the wait's start, and the
+// release's late mark or end then lands on the record that park stands on:
+// marked released, a re-park of the standing seat on another chain more than
+// [parkCarryWindow] later began a new wait; ended, the next release found no
+// record to mark and the re-park after it began a new wait too, though the
+// seat had waited throughout. The Models page and `llm_limit_waiting` read the
+// probe's own instant while the park stands, so only that carry read wrong.
+//
+// UNDER THE PARKS' LOCK, which a park records itself under before it joins a
+// probe: a park recorded before this read keeps the record for its join, and
+// one recorded after it waits for this to settle the record, which it then
+// reads as a release or an end. The parks' lock is taken before the probes'
+// one here as in the release's drop ([seatParks.releaseParking]), and nothing
+// takes them the other way round.
+func (e *Engine) unlessParked(seat uuid.UUID, settle func(p *limitProbes)) {
+	parks := &e.providerParks
+	parks.mu.Lock()
+	defer parks.mu.Unlock()
+	if parks.seats[seat] != nil {
+		return
+	}
 	p := &e.limitProbes
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if wait, known := p.waits[seat]; known {
-		wait.releasedAt = e.now()
-		p.waits[seat] = wait
-	}
+	settle(p)
 }
 
-// endParkWait forgets when seat began waiting: its wait is over.
-func (e *Engine) endParkWait(seat uuid.UUID) {
+// forgetParkWait forgets when seat began waiting, whatever park stands: the
+// seat has left this node ([Engine.forgetProviderPark]).
+func (e *Engine) forgetParkWait(seat uuid.UUID) {
 	p := &e.limitProbes
 	p.mu.Lock()
 	delete(p.waits, seat)
@@ -902,7 +946,9 @@ func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, par
 		return false
 	}
 	// RELEASED, NOT ANSWERED: a park soon after continues this wait
-	// ([limitProbes.waits]); one that ends it forgets it after this.
+	// ([limitProbes.waits]); one that ends it forgets it after this. A park
+	// taken in this release's window stands on the wait, and is left it
+	// ([Engine.unlessParked]).
 	e.parkReleased(seat)
 	e.readmitResumes(waitProvider)
 	return true
@@ -927,7 +973,7 @@ func (e *Engine) reconcileProviderParks(ctx context.Context, next *Company) {
 // (see [seatParks.forget]), and says the seat no longer waits here: the node
 // that takes it asks its own models on the first delivery.
 func (e *Engine) forgetProviderPark(ctx context.Context, seat uuid.UUID) {
-	e.endParkWait(seat)
+	e.forgetParkWait(seat)
 	if parking, ok := e.providerParks.forget(seat); ok {
 		e.leaveLimitProbe(seat, parking.basis)
 		e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: seatReleasedHere})

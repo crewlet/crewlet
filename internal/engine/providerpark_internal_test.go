@@ -543,9 +543,16 @@ func (r *probeRig) at(now time.Time) {
 // park parks handle on the entry's limit, tried again at retry.
 func (r *probeRig) park(t *testing.T, handle string, retry time.Time) {
 	t.Helper()
-	refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: retry,
+	r.parkOn(t, handle, "default", retry)
+}
+
+// parkOn parks handle on the limit of a chain of the one entry key, tried
+// again at retry.
+func (r *probeRig) parkOn(t *testing.T, handle, key string, retry time.Time) {
+	t.Helper()
+	refusal := &llm.Error{Kind: llm.KindRateLimit, Key: key, RetryAt: retry,
 		Err: errors.New("You've hit your 5-hour limit")}
-	limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+	limit, limited := chain.Limited(&chain.Error{Attempted: []string{key},
 		Failures: []error{refusal}, Err: refusal})
 	if !limited {
 		t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
@@ -969,6 +976,141 @@ func TestAParkTakenAsItsSeatsReleaseLiftsKeepsTheSeatHeld(t *testing.T) {
 	if parking.inbox != e.inboxOf(seat) {
 		t.Errorf("the park is recorded for attachment %d, want %d, which its release lifts",
 			parking.inbox, e.inboxOf(seat))
+	}
+}
+
+// A PARK TAKEN IN A RELEASE'S WINDOW KEEPS ITS WAIT.
+//
+// A seat's wait record is what a later park carries its start from
+// ([limitProbes.waits]). A release marks it released, or, for a probe's answer,
+// ends it, once its resume has returned, and a turn that meets the limit again
+// in between parks the seat on the record first: the release's late mark or
+// end then landed on the wait that park stands on. Ended, the park's own
+// release later found no record to mark, and the seat's re-park within
+// [parkCarryWindow] of it began a new wait; marked, the standing seat's re-park
+// on another chain more than [parkCarryWindow] after the release began a new
+// wait. Either way a seat that had waited throughout read as newly waiting, and
+// `llm_limit_waiting`, judged at fifteen minutes, went out.
+//
+// Mutation: let either the release's mark or the probe's end land on the
+// record of a park that stands, and its subtest fails.
+func TestAParkTakenInAReleasesWindowKeepsItsWait(t *testing.T) {
+	t.Parallel()
+	for _, answered := range []bool{true, false} {
+		name := "a probe's answer ends the wait under a park in its window"
+		if !answered {
+			name = "a release marks the wait released under a park in its window"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			reset := parkedAt.Add(time.Hour)
+			model := &limitedModel{reset: reset}
+			r := newProbeRig(t, model)
+			model.now = r.clock
+			e, q := r.e, r.q
+			lead, err := e.seatID("lead")
+			if err != nil {
+				t.Fatalf("seatID: %v", err)
+			}
+			r.park(t, "lead", reset)
+
+			since := func(key string) time.Time {
+				t.Helper()
+				for _, row := range e.parkedByEntry()[key] {
+					if row.Seat == lead {
+						return row.Since
+					}
+				}
+				t.Fatalf("the seat is not waiting on %s: %+v", key, e.parkedByEntry())
+				return time.Time{}
+			}
+			staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(lead),
+				hold: pauseReasonProvider, fold: func() { r.park(t, "lead", reset.Add(time.Hour)) }}
+			e.backends.Queue = staged
+			released := reset.Add(time.Second)
+			r.at(released)
+			if answered {
+				live := r.alarms.live()
+				if len(live) != 1 {
+					t.Fatalf("%d alarms armed for one seat's park, want its probe's one", len(live))
+				}
+				live[0].fire()
+			} else if !e.releaseProviderPark(ctx, lead, "the seat's models changed") {
+				t.Fatal("the release lifted nothing")
+			}
+			if !staged.fired.Load() {
+				t.Fatal("the release lifted no park hold, so nothing was staged in its window")
+			}
+			if e.providerParks.parking(lead) == nil {
+				t.Fatal("the park taken in the release's window is not recorded")
+			}
+			if got := since("default"); !got.Equal(parkedAt) {
+				t.Fatalf("the park in the release's window waits from %v, want %v, the wait it "+
+					"carried", got, parkedAt)
+			}
+
+			if answered {
+				// THE WINDOW PARK'S OWN RELEASE, by an apply, and its
+				// re-park within the carry window.
+				r.at(released.Add(time.Minute))
+				if !e.releaseProviderPark(ctx, lead, "the seat's models changed") {
+					t.Fatal("the window park's release lifted nothing")
+				}
+				r.at(released.Add(time.Minute + parkCarryWindow/2))
+				r.park(t, "lead", reset.Add(2*time.Hour))
+				if got := since("default"); !got.Equal(parkedAt) {
+					t.Errorf("the re-park within %v of the window park's release waits from "+
+						"%v, want %v: the probe's answer ended the wait that park stood on",
+						parkCarryWindow, got, parkedAt)
+				}
+				return
+			}
+			// THE STANDING SEAT PARKED ON ANOTHER CHAIN, longer after the
+			// release than a park would carry a released wait.
+			r.at(released.Add(2 * parkCarryWindow))
+			r.parkOn(t, "lead", "spare", reset.Add(2*time.Hour))
+			if got := since("spare"); !got.Equal(parkedAt) {
+				t.Errorf("the standing seat's park on another chain waits from %v, want %v: "+
+					"the release marked released the wait the park in its window stood on",
+					got, parkedAt)
+			}
+		})
+	}
+}
+
+// A SEAT'S RELEASE FORGETS ITS WAIT, PARKED OR NOT.
+//
+// A release that finds a park standing leaves the seat's wait record to it
+// ([Engine.unlessParked]), but the seat's release by this node forgets the
+// record before it forgets the park, and a wait is this node's only while it
+// holds the seat. Left to the park it was about to forget, the record outlived
+// the seat, and a park after the node took the seat again carried a start from
+// before it let go.
+//
+// Mutation: forget the wait on the seat's release only where no park stands,
+// and this fails.
+func TestASeatsReleaseForgetsItsWaitUnderItsPark(t *testing.T) {
+	t.Parallel()
+	reset := parkedAt.Add(time.Hour)
+	model := &limitedModel{reset: reset}
+	r := newProbeRig(t, model)
+	model.now = r.clock
+	lead, err := r.e.seatID("lead")
+	if err != nil {
+		t.Fatalf("seatID: %v", err)
+	}
+	r.park(t, "lead", reset)
+	r.e.forgetProviderPark(t.Context(), lead)
+
+	again := parkedAt.Add(10 * time.Second)
+	r.at(again)
+	r.park(t, "lead", reset)
+	for _, row := range r.e.parkedByEntry()["default"] {
+		if row.Seat == lead && !row.Since.Equal(again) {
+			t.Errorf("the seat parked after its release waits from %v, want a new wait at %v: "+
+				"the release left its wait to the park it forgot", row.Since, again)
+		}
 	}
 }
 
