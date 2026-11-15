@@ -298,11 +298,12 @@ func TestEverySandboxClassIsACondition(t *testing.T) {
 // mail that failed on a condition of the infrastructure is handed back as the
 // failing node's own, and one that failed on anything else as the mail's, by
 // [builtin.InfrastructureKind] over the kind its record carries; so the side
-// of every kind is decided once, here. The work's side is exactly the kinds a
-// piece of work can cause (worksKinds): a write the state log refused for what
-// it is, a deadline, an abandoned wait, and of a coding sandbox's classes the
-// one ruled the work's (sandboxClassSides). Every other condition, and every
-// other kind the package declares, is the node's. A state log's refusal of
+// of every kind is decided once, here. The work's side is exactly the kinds
+// worksKinds names, each one a piece of work can cause (a write the state log
+// refused for what it is, a deadline, an abandoned wait), and the coding
+// sandbox class sandboxClassSides leaves with the work, a provider refusing
+// the company's credentials. Every other condition, and every other kind the
+// package declares, is the node's. A state log's refusal of
 // the write itself and its every other refusal are two kinds, one a side
 // each, held for every reason the log names; and every class the sandbox
 // names has a side decided here, so a class added there fails until one is.

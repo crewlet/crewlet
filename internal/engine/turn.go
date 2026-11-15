@@ -1682,8 +1682,12 @@ func nakFailure(ctx context.Context, err error) queue.Result {
 //   - A HAND-BACK MADE WHILE NO WAITER CAN ANNOUNCE ITS JOB
 //     ([sandbox.ErrUnannounced], [controlOutcome] says why).
 //
-// The last two are marks only the sandbox coordinator makes; a mailbox's turn
-// meets them where its launch or its resume asks the coordinator a step.
+// The last two are marks the sandbox coordinator makes on a completion's
+// claim, collection, park and refusal record and on its hand-backs, which
+// only the seat's control topic delivers: no step a mailbox's turn asks of
+// the coordinator, its executor's launch ([sandbox.Coordinator.Launch]),
+// makes either. The mailbox reads them as the node's all the same, so the
+// two handlers cannot come to disagree on one.
 func nodesFailure(ctx context.Context, err error) bool {
 	return storeUnheard(err) || queue.NodeFault(ctx, err) || infrastructureFailure(err)
 }
