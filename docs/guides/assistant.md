@@ -495,9 +495,10 @@ last check and an agent's last applied differ (`two-access-clocks`, which
 proposes nothing). `answer-a-question-by-its-option` measures a question
 put to the person: what waits on them lists the question with its options by
 id, the recommendation and what it cites, and the answer is proposed by the
-option chosen, and `answer-only-your-own-question` asks it to answer a
-question put to somebody else, which is refused before any card. The flags
-and the suite format are in the
+option chosen; `what-a-task-waits-on` reads a task with the task it is filed
+under and both directions of its links; and `answer-only-your-own-question`
+asks it to answer a question put to somebody else, which is refused before
+any card. The flags and the suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 
