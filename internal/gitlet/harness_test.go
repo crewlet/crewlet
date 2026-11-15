@@ -364,6 +364,8 @@ func (n *node) drain() {
 		if n.storedAt != nil {
 			storedAt = n.storedAt(seq, storedAt)
 		}
+		// AS THE FRAMEWORK'S LOOP HANDS IT ([statelog.AppliedInstant]).
+		storedAt = statelog.AppliedInstant(storedAt)
 		env, err := gitlet.Domain{}.Envelope(payload)
 		if err != nil {
 			n.t.Errorf("decode record %d: %v", seq, err)

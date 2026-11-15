@@ -1059,7 +1059,12 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 				plan.Cursor)
 		}
 		if ok {
-			names = storedAt
+			// IN THE STORE'S ENCODING ([AppliedInstant]), as every
+			// other path that sets the checkpoint's instant holds it:
+			// the runner keeps this value until its next commit, and a
+			// stance or `retention status` read meanwhile would report
+			// the broker client's nanoseconds in the node's zone.
+			names = AppliedInstant(storedAt)
 		}
 	}
 
