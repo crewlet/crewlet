@@ -1444,7 +1444,18 @@ const (
 	// 1,631 bytes over the 409.8 KiB it was built on: nearly all of it the kit
 	// and the frame's first-dial chip and landing rule, as they measured
 	// alone. So it moved to 412 KiB, 2.25 seconds.
-	initialBudget = 412 << 10
+	// Worklet's task operations on kit 0.130.1 took it to 412.7 KiB, about
+	// 700 bytes past it (the kit's share of it its copyable setting keys and
+	// a comment thread's own Edit and Delete in the shared chunks), the rest
+	// in modules every first screen already reads: a due or start date
+	// read on the company's calendar (a row's due mark, through a lean
+	// lib/companyDay.ts rather than range.ts, whose windows had ridden into the
+	// entry with it and cost 2 KiB), a watch said as the gesture and a feed's
+	// labels in the change renderer, the act rows for a merge and a task's
+	// dependencies, and a read's last answer dropped once the engine says it
+	// is gone. The merge, priorities, link and project dialogs are Worklet's
+	// chunk. So it moved to 413 KiB, 2.26 seconds.
+	initialBudget = 413 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2524,7 +2535,14 @@ const (
 	// a repository whose default branch holds nothing read from its other
 	// branches) added 5,828 bytes, nearly all script, and took it to
 	// 6188.7 KiB (6,337,181 bytes): 6189 KiB.
-	treeBudget = 5<<20 + 1069<<10
+	// Kit 0.130.1 (a comment thread's own Edit and Delete, copyable setting
+	// keys) with Worklet's task operations (relation kinds and their removal,
+	// Merge into, a task on the reader's priorities, a remark edited and taken
+	// down on a task and on a page, a project's labels, fields, default
+	// assignee and archive, its files uploaded, replaced and removed, and
+	// every day field on the company's calendar) added 35,861 bytes, script
+	// and sheet, and took it to 6223.7 KiB (6,373,042 bytes): 6224 KiB.
+	treeBudget = 5<<20 + 1104<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
