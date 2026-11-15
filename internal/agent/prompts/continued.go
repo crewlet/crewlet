@@ -223,6 +223,82 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 	" happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
 	" write among them again; one marked `→ error` did not take effect."
 
+// readHeader introduces the calls after the newest point a session cut off is
+// known to hold where a reading of its archive found it holding some of them,
+// which the list then leaves out ([AfterSave.Read]): in place of
+// [calledSinceHeader], whose "they are every call the run working in it made
+// since the last point" is false of a list a reading thinned.
+//
+// TRUE ON EVERY PATH A TELLING BY A READING TAKES: the session may still show
+// some of the calls listed (a call the reading could not hold whole, one it
+// was not asked about, one whose records it could not place), so a call shown
+// both above and here is still one call; "less any it found the session holds
+// or lists below" is true of the calls it held, which no list tells, and of
+// the late calls and a subagent's, which sections below it list. Never "any"
+// of what it left out, which is true of none. NO LONGER THAN THE HEADER IT
+// REPLACES (471 bytes each), so the exact telling's header never outgrows the
+// cut-off one.
+const readHeader = "## Calls this run made that the session above may not show" +
+	"\nThe session above may show some of these: the run's calls through your tools since the last point" +
+	" the engine knows it reached, less any it found the session holds or lists below. A call shown both" +
+	" above and here is ONE call, made once, not two. They happened, and their outcomes stand: a call" +
+	" marked `→ success` ALREADY RAN, so do NOT issue a write among them again; one marked `→ error` did" +
+	" not take effect."
+
+// subagentsHeader heads the calls a reading of a session cut off found in the
+// threads of subagents whose report the session does not hold
+// ([AfterSave.Subagents]), each under a heading naming its subagent
+// ([subagentsSection]). Claude Code hands a resumed session's model the main
+// thread alone, which holds a subagent's work only as its report, and the
+// reading found none for these: so the session surely lacks what each call
+// returned, and the words claim nothing of it, never that a call is shown
+// twice.
+const subagentsHeader = "## Calls subagents of this run made" +
+	"\nThe run working in the session above started each subagent named below, and the session may not hold" +
+	" its report of what it did. These are the calls each made through your tools. They happened, and their" +
+	" outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a write among them again; one" +
+	" marked `→ error` did not take effect."
+
+// SubagentCalls is the calls a reading told under one subagent's name
+// ([AfterSave.Subagents]): its agent id (Agent) and name (Name, "" for none),
+// each defused by the caller, the name the box's words cut to a value's
+// length; its calls (Calls), rendered as the prior-work ledger renders a
+// round's calls, under the one read cap; and whether a successful
+// `submit_work` is among them (Submission), said not to stand right after
+// them ([earlierSubmission]).
+type SubagentCalls struct {
+	Agent, Name, Calls string
+	Submission         bool
+}
+
+// subagentsSection is [CalledAfter]'s section of the calls told under
+// subagents' names: [subagentsHeader], then per subagent with a call listed a
+// `### Subagent <agent>: <name>` line (`### Subagent <agent>` where it has no
+// name), its calls, and that a submission among them does not stand where one
+// is ([SubagentCalls.Submission]). "" where none lists a call.
+func subagentsSection(subs []SubagentCalls) string {
+	var parts []string
+	for _, s := range subs {
+		calls := strings.TrimSpace(s.Calls)
+		if calls == "" {
+			continue
+		}
+		heading := "### Subagent " + s.Agent
+		if s.Name != "" {
+			heading += ": " + s.Name
+		}
+		part := heading + "\n" + calls
+		if s.Submission {
+			part += "\n" + earlierSubmission
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return subagentsHeader + "\n\n" + strings.Join(parts, "\n\n")
+}
+
 // shownAgainHeader introduces the calls the session above may show that a
 // brief lists again ([AfterSave.Shown]): each is one a call in another list of
 // the brief could be taken for. That list's words, and the late calls', say a
@@ -539,9 +615,13 @@ type AfterSave struct {
 
 	// Calls are the calls its round's record still lists that came after the
 	// save, as the prior-work ledger renders them within its budgets, under
-	// one read cap with Late's, Owed's and Shown's, spent on Late first, then
-	// on these, then on Owed and Shown (ledger.FormatCallGroups), "" for none. For a run that starts a
-	// session of its own ([CalledBefore]), every call of the round but Late's.
+	// one read cap with Late's, Subagents', Owed's and Shown's, spent on Late
+	// first, then on Subagents', then on these, then on Owed and Shown
+	// (ledger.FormatCallGroups), "" for none: but, where Read, those a reading
+	// of the session's archive found it holding, and those it found in an
+	// unreported subagent's thread, which Subagents lists. For a run that
+	// starts a session of its own ([CalledBefore]), every call of the round
+	// but Late's.
 	Calls string
 
 	// EarlierSubmission says a successful `submit_work` is among Calls, which
@@ -578,9 +658,26 @@ type AfterSave struct {
 	// to hold, not where it ends (internal/sandbox's savepoint.go) — or, for
 	// the copy a job's own box holds where its harness may have been cut off,
 	// the round's start (internal/agent/runner's calledInPlace): some of the
-	// calls may be in it as well. They are told under [calledSinceHeader],
-	// never as calls it lacks, and the dropped ones counted since that point.
+	// calls may be in it as well. They are told under [calledSinceHeader], or
+	// [readHeader] where Read, never as calls it lacks, and the dropped ones
+	// counted since that point.
 	Interrupted bool
+
+	// Read says a reading of the archive of the session, cut off, told Calls
+	// (internal/agent/runner's heldReading): the calls it found the session
+	// holding are in no list, so Calls are headed by [readHeader], whose
+	// words are true of a list a reading thinned, in place of
+	// [calledSinceHeader]'s, which say the list holds every call since the
+	// point. Set only beside Interrupted.
+	Read bool
+
+	// Subagents are the calls a reading found in the threads of subagents
+	// whose report the session does not hold, one group per subagent in the
+	// order of its first told call, each under its subagent's name
+	// ([subagentsSection]), rendered under the one read cap after Late's and
+	// before Calls'. Told after Calls and before Shown, under
+	// [subagentsHeader]. Nil where no reading told the brief.
+	Subagents []SubagentCalls
 
 	// Shown are calls the session may show that a call told in Calls or Late
 	// could be taken for (internal/agent/runner's readAlike: the same tool, and
@@ -666,11 +763,13 @@ type AfterSave struct {
 // then the calls dropped after the save, then the late calls dropped), since
 // every count says the tally is below it ([tallyBesideLast]).
 //
-// THE CALLS THE SESSION SHOWS THAT A TOLD CALL COULD BE TAKEN FOR COME AFTER
-// THE CALLS SINCE THE SAVE AND BEFORE THE LATE ONES ([AfterSave.Shown]), in a
-// section of their own: so the order is the held submission, the other calls
-// the session may show ([AfterSave.Other]), the owed reads, the calls since
-// the save, the calls listed again, then the late calls. They follow the list
+// THE CALLS A READING TOLD UNDER SUBAGENTS' NAMES COME RIGHT AFTER THE CALLS
+// SINCE THE SAVE ([AfterSave.Subagents]), and THE CALLS THE SESSION SHOWS THAT
+// A TOLD CALL COULD BE TAKEN FOR AFTER THEM AND BEFORE THE LATE ONES
+// ([AfterSave.Shown]), each in a section of its own: so the order is the held
+// submission, the other calls the session may show ([AfterSave.Other]), the
+// owed reads, the calls since the save, the subagents' calls, the calls
+// listed again, then the late calls. They follow the list
 // most of their likes are in, and the late section, whose words also say a
 // call shown twice is one, stays last, as it is on every path. THE OTHER CALLS
 // COME BEFORE EVERY LIST, since their words speak of the lists below them, and
@@ -706,6 +805,9 @@ func CalledAfter(after AfterSave) string {
 	if since := calledSince(after, tally[1]); since != "" {
 		sections = append(sections, since)
 	}
+	if subs := subagentsSection(after.Subagents); subs != "" {
+		sections = append(sections, subs)
+	}
 	if shown := toldList(shownAgainHeader, after.Shown, "", "", ""); shown != "" {
 		sections = append(sections, shown)
 	}
@@ -738,8 +840,9 @@ func tallyBesideLast(tally string, counts ...int) []string {
 }
 
 // calledSince is [CalledAfter]'s section of the calls after the save — or,
-// of a session cut off, since the newest point it is known to hold — "" where
-// the record lists none and dropped none; tally is the record's tally where
+// of a session cut off, since the newest point it is known to hold, under
+// [readHeader] where a reading thinned it — "" where the record lists none and
+// dropped none; tally is the record's tally where
 // this section's count is the last the brief gives, "" where a later one says
 // it ([tallyBesideLast]).
 //
@@ -749,7 +852,10 @@ func tallyBesideLast(tally string, counts ...int) []string {
 // calls listed above it, as [lateSubmission] follows the late calls.
 func calledSince(after AfterSave, tally string) string {
 	header := calledAfterHeader
-	if after.Interrupted {
+	switch {
+	case after.Read:
+		header = readHeader
+	case after.Interrupted:
 		header = calledSinceHeader
 	}
 	dropped := ""

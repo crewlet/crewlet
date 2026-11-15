@@ -216,6 +216,17 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 	}},
+	// AND BESIDE IT THE ONE TOLD BY A READING OF WHAT A CUT-OFF SESSION HOLDS,
+	// composed by the same keptSession before the budget check, its calls
+	// defused under the turn's token and the subagents it names, the box's
+	// words, defused and cut; led only puts the lead in front of them once the
+	// check has passed, and attaches them where their own first request sends
+	// the session whole.
+	"internal/agent/runner/firstrequest.go:led": {tests: []string{
+		"internal/agent/runner.TestACutOffKeptSessionIsToldOnlyTheCallsItsReadingDoesNotHold",
+		"internal/agent/runner.TestASubagentNamedInABriefIsDefusedAndCut",
+		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
+	}},
 	// THE CONTINUATION OF THE SESSION A CONVERSATION'S LAST TURN LEFT: the
 	// engine's own lead — the turn boundary and the new box, the base's turn
 	// and home defused under the launching segment's token, in a schedule's

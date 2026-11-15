@@ -23,7 +23,11 @@ import (
 // which of those calls the session holds the logged result of.
 // [Coordinator.HoldingsOf] is that reading, for the relaunch's telling to ask
 // before it writes the brief, and to tell the session exactly the calls it
-// lacks.
+// lacks: internal/agent/runner asks it once per relaunch, through the engine's
+// launcher (runner.HoldingsAsker), only of a capture cut off whose first
+// request it judges, and hands the briefs told by it beside the ones told by
+// the save point ([ExactTelling]), which the launch hands only to a box whose
+// harness answers the release it was read for ([Coordinator.continueKept]).
 //
 // FACTS, AND NEVER A REFUSAL. A reading answers what the archive holds of each
 // call it was asked about ([SessionHoldings]), and one rule turns those facts

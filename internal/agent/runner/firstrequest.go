@@ -44,6 +44,18 @@ import (
 // only in a summary's words ([sessionHolds.closedSummarized]), which no value
 // of a listed call can be compared with: its brief says so of the tools its
 // told calls name ([Runner.otherCalls]).
+//
+// AND A KEPT SESSION CUT OFF IS READ FOR THE CALLS IT HOLDS, where this build
+// judges its first request ([firstRequest.judges]) by its brief
+// ([keptTellings]): the reading, asked once per path, before any brief is
+// led, tells a third telling of the path, told only the calls the session
+// does not hold, which the launch may hand in place of the default
+// ([ExactTelling]). ONE VALUE PER TELLING THE LAUNCH MAY HAND: the default's,
+// decided once by its verdict as above, and the third telling's, the held
+// telling's value, judged on that telling's own brief ([keptTellings.led]),
+// since a brief that drops held calls and adds sections of its own is not
+// ordered against the held one. The guard reads the value of the telling the
+// launch handed ([Runner.sessionDecided]).
 
 // firstRequest is how a relaunch judges whether the session a path continues
 // holds, at its run's first request, what a telling that counts it as held says
@@ -79,13 +91,25 @@ const (
 	compactsWhatever
 )
 
-// settled is the verdict before any brief is built: another harness's session
-// is held whatever its brief, and one that does not send whole with no brief at
-// all compacts whatever its brief, since a longer brief never sends whole where
-// a shorter one does not.
+// judges reports whether this build judges the path's first request: whether
+// the harness that continues the session compacts it by a rule this build
+// models, Claude Code's (internal/sandbox's SendsWhole). THE ONE PREDICATE the
+// verdicts and the attach of a telling by a reading read ([firstRequest.settled],
+// [firstRequest.compacts], [keptTellings.led]): a session of a harness this
+// build does not judge is held whatever its brief, and is never handed a brief
+// told by a reading, since nothing here can say that its first request hands
+// its model the history the reading read (ADR-0073, a reading's caller judges
+// the continuation's first request). A harness whose first request the launch
+// learns to judge is taught here.
+func (f firstRequest) judges() bool { return f.harness == sandbox.ClaudeCodeHarness }
+
+// settled is the verdict before any brief is built: the session of a harness
+// this build does not judge is held whatever its brief, and one that does not
+// send whole with no brief at all compacts whatever its brief, since a longer
+// brief never sends whole where a shorter one does not.
 func (f firstRequest) settled() firstRequestVerdict {
 	switch {
-	case f.harness != sandbox.ClaudeCodeHarness:
+	case !f.judges():
 		return heldWhatever
 	case !f.window.SendsWhole(f.count, ""):
 		return compactsWhatever
@@ -94,10 +118,10 @@ func (f firstRequest) settled() firstRequestVerdict {
 }
 
 // compacts is THE VERDICT: whether Claude Code may compact the session before
-// it reads brief. False for another harness's session. The one call into the
-// predicate in this package.
+// it reads brief. False for the session of a harness this build does not judge
+// ([firstRequest.judges]). The one call into the predicate in this package.
 func (f firstRequest) compacts(brief string) bool {
-	return f.harness == sandbox.ClaudeCodeHarness && !f.window.SendsWhole(f.count, brief)
+	return f.judges() && !f.window.SendsWhole(f.count, brief)
 }
 
 // sessionHolds is what a path's telling may count the session it continues as
@@ -172,8 +196,9 @@ func restartedAnywhere(count *sandbox.ResumedCount) bool {
 // the same as calls it may already show where it may lack its job's brief or
 // its harness may compact it ([sessionHolds.lacks]); and every call of the
 // round from its start, owing none, so, where it may be a summary
-// ([sessionHolds.summarized]). A reading of what the session holds swaps this
-// one expression for its own answer.
+// ([sessionHolds.summarized]). A reading of what a cut-off session holds is
+// asked of the calls this expression tells and handed to the telling beside it
+// ([Runner.heldReading], [Runner.calledAfter]), which tells none it holds.
 func (h sessionHolds) keptCalls(basis SessionBasis) (from *int, owed []int, mayShow bool) {
 	if h.summarized() {
 		return new(0), nil, true
@@ -218,8 +243,10 @@ func inPlaceRestarted(resume *Resume) bool {
 // judged is f's verdict on brief, the held telling's whole brief, where the
 // path was left to its brief, and logged where it switches the telling:
 // executor_session_may_compact names the path, the bound or the mark, the
-// window it was judged under and the point.
-func (r *Runner) judged(ctx context.Context, f firstRequest, path, brief string) bool {
+// window it was judged under and the point. exact says a telling by a reading
+// rides beside the telling it switches to ([keptTellings.led]), which the
+// launch may hand in its place, so the line's outcome says so.
+func (r *Runner) judged(ctx context.Context, f firstRequest, path, brief string, exact bool) bool {
 	if !f.compacts(brief) {
 		return false
 	}
@@ -233,11 +260,16 @@ func (r *Runner) judged(ctx context.Context, f firstRequest, path, brief string)
 	if reported > 0 && reported < window {
 		window = reported
 	}
+	outcome := "the continuation is told as a cut-off one, and its guard arms no skill"
+	if exact {
+		outcome += ", unless the launch hands the brief told by its reading (executor_session_holdings_read; " +
+			"where it does not, executor_session_holdings_unused says why)"
+	}
 	log.InfoContext(ctx, "executor_session_may_compact", "agent_id", r.cfg.Turn.AgentID,
 		"turn_id", r.cfg.Turn.RunID, "path", path, "bound", bound, "mark", string(mark),
 		"reported_window", reported, "standard_window", f.window.Standard, "known", f.window.Known,
 		"brief_tokens", sandbox.ClaudeCharge(len(brief)), "point", sandbox.CompactionPoint(window),
-		"outcome", "the continuation is told as a cut-off one, and its guard arms no skill")
+		"outcome", outcome)
 	return true
 }
 
@@ -248,14 +280,37 @@ func (r *Runner) judged(ctx context.Context, f firstRequest, path, brief string)
 // before any brief does not rule it out ([firstRequest.settled]). Its lead, and
 // so the verdict, comes once the call a person approved is made
 // ([keptTellings.led]).
+//
+// AND THE ONE TOLD BY A READING OF WHAT THE SESSION HOLDS (exact), where the
+// session was cut off and the verdict is the brief's to decide
+// ([Runner.heldReading]): told by the held telling's value, so as calls the
+// session may already show, but told none of the calls the reading finds it
+// holding, and the calls the reading finds in an unreported subagent's thread
+// under that subagent's name. Nil where none was asked, the reading read none,
+// or it holds and moves no call, where it would tell what the held telling
+// tells. Its rewrites are spent before the budget's last ask with the other
+// two's, a piece the held telling fitted answered from the compactor's cache.
 type keptTellings struct {
 	f            firstRequest
 	holds        sessionHolds
 	held, summed *keptBrief
+	exact        *keptBrief
 }
 
 // keptTellings builds the kept path's tellings of basis ([Runner.keptSession]).
 // Nothing where basis names no kept session.
+//
+// THE READING IS ASKED HERE, ONCE PER PATH, and never per telling
+// ([Runner.heldReading]): only of a kept capture whose harness was cut off
+// ([SessionBasis.MayLackBrief]), which is the only capture a reading reads,
+// and only where the verdict before any brief is the brief's to decide
+// (byBrief, which needs [firstRequest.judges]): a reading may be used only
+// where its caller judged that the continuation's first request hands its
+// model the history the reading read, and a session that compacts whatever
+// its brief, or whose harness this build does not judge, is never told by one.
+// A restart in the capture's job is no bar: the reading counts a call only past
+// the main thread's last restart, and the telling it thins keeps every word a
+// session that may be a summary is told.
 func (r *Runner) keptTellings(ctx context.Context, basis SessionBasis, round roundCalls, current int,
 	leadHeld []toldHeld, history []ledger.Iteration, surface *tools.Surface, fresh []steer.Note,
 	branch string) keptTellings {
@@ -269,12 +324,19 @@ func (r *Runner) keptTellings(ctx context.Context, basis SessionBasis, round rou
 	}
 	verdict := t.f.settled()
 	if verdict != compactsWhatever {
-		t.held = r.keptSession(ctx, basis, round, current, leadHeld, history, surface, fresh, branch, t.holds)
+		t.held = r.keptSession(ctx, basis, round, current, leadHeld, history, surface, fresh, branch, t.holds, nil)
 	}
 	if verdict != heldWhatever {
 		summarized := t.holds
 		summarized.compacts = true
-		t.summed = r.keptSession(ctx, basis, round, current, leadHeld, history, surface, fresh, branch, summarized)
+		t.summed = r.keptSession(ctx, basis, round, current, leadHeld, history, surface, fresh, branch, summarized,
+			nil)
+	}
+	if verdict == byBrief && basis.MayLackBrief() {
+		if read := r.heldReading(ctx, basis, round, t.holds); read != nil {
+			t.exact = r.keptSession(ctx, basis, round, current, leadHeld, history, surface, fresh, branch, t.holds,
+				read)
+		}
 	}
 	return t
 }
@@ -287,23 +349,66 @@ func (r *Runner) keptTellings(ctx context.Context, basis SessionBasis, round rou
 // them: the one for a box other than the one the session was last worked in.
 // Monotone, so never an oscillation: the compacted telling is never the shorter,
 // and handed wherever the held one may compact, whatever its own length.
+//
+// AND BESIDE IT THE TELLING BY A READING ([SessionContinuation.Exact]), decided
+// FIRST, so the default's line can say whether it rides beside it: attached
+// only where this build judges the first request ([firstRequest.judges]) and
+// its own longer brief sends the session whole, JUDGED ON ITS OWN BRIEF through
+// the one predicate, never by the held brief's verdict, since it drops held
+// calls and may add sections of its own, so it is ordered against neither
+// default. It may ride beside the summarized telling, a shorter brief that
+// sends whole where the held one compacts. Where it may compact it is not
+// attached, and executor_session_holdings_unused says so. ONE VALUE PER
+// TELLING THE LAUNCH MAY HAND: the default's, decided here as ever, and the
+// exact telling's (exactHolds), the held telling's value and the calls its
+// reading holds, which the guard reads where the launch hands that telling
+// ([Runner.sessionDecided]). Its Resumer is the release that wrote the
+// session ([SessionBasis.Release]): the launch hands its briefs only to a box
+// whose harness answers that release.
 func (t keptTellings) led(ctx context.Context, r *Runner, lead string,
-	own []sandbox.Lead) (*SessionContinuation, sessionHolds) {
+	own []sandbox.Lead) (*SessionContinuation, sessionHolds, exactHolds) {
 
-	held, holds := t.held.led(lead, own), t.holds
-	if t.summed == nil {
-		return held, holds
+	var exact *ExactTelling
+	var value exactHolds
+	if t.exact != nil && t.f.judges() {
+		told := t.exact.led(lead, own)
+		if !t.f.compacts(told.Replaced) {
+			exact = &ExactTelling{Resumer: t.exact.basis.Release, Brief: told.Brief, Replaced: told.Replaced,
+				Told: told.Told}
+			value = exactHolds{holds: t.holds, held: t.exact.readHeld}
+		} else {
+			log.InfoContext(ctx, "executor_session_holdings_unused", "agent_id", r.cfg.Turn.AgentID,
+				"turn_id", r.cfg.Turn.RunID,
+				"detail", "its harness may compact the session before it reads the brief told by the reading",
+				"outcome", "the relaunch is handed the telling without the reading")
+		}
 	}
-	summed := t.summed.led(lead, own)
-	brief := summed.Replaced
-	if held != nil {
-		brief = held.Replaced
+	picked, holds := t.held.led(lead, own), t.holds
+	if t.summed != nil {
+		summed := t.summed.led(lead, own)
+		brief := summed.Replaced
+		if picked != nil {
+			brief = picked.Replaced
+		}
+		if r.judged(ctx, t.f, "kept", brief, exact != nil) {
+			picked, holds.compacts = summed, true
+		}
 	}
-	if !r.judged(ctx, t.f, "kept", brief) {
-		return held, holds
+	if picked != nil {
+		picked.Exact = exact
 	}
-	holds.compacts = true
-	return summed, holds
+	return picked, holds, value
+}
+
+// exactHolds is the value a kept path's telling by a reading was decided by
+// ([keptTellings.led]): the held telling's (holds), its own brief judged to
+// send the session whole, and the calls its reading finds the session holding
+// (held), which its guard counts beside the ones its save point holds
+// ([Runner.sessionDecided]). Zero where no telling by a reading rides beside
+// the default.
+type exactHolds struct {
+	holds sessionHolds
+	held  []BridgedCall
 }
 
 // inPlaceTelling is one telling of the copy a job's box holds, but for its lead
@@ -377,10 +482,10 @@ func (t inPlaceTellings) led(ctx context.Context, r *Runner, lead string) (inPla
 	switch {
 	case t.summed == nil:
 		return *t.held, holds
-	case t.held != nil && !r.judged(ctx, t.f, "in_place", t.held.led(lead)):
+	case t.held != nil && !r.judged(ctx, t.f, "in_place", t.held.led(lead), false):
 		return *t.held, holds
 	case t.held == nil:
-		r.judged(ctx, t.f, "in_place", t.summed.led(lead))
+		r.judged(ctx, t.f, "in_place", t.summed.led(lead), false)
 	}
 	holds.compacts = true
 	return *t.summed, holds

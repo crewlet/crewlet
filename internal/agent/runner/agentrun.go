@@ -417,6 +417,10 @@ type SessionBasis struct {
 	// read the record marks unanswered, and is stopped there again by the
 	// turn's carried reads where that mark landed after the capture was
 	// stamped ([Runner.notesHeldBy]). Zero holds none of the round's calls.
+	// Through is what the record says the session holds, the one test by the
+	// save point ([heldAt]); of a session cut off, a reading of its archive
+	// may find it holding more, by each call's own key ([HoldingsAsker]), and
+	// the brief told by that reading tells none of those either.
 	Through    int
 	NoteCursor int
 
@@ -646,8 +650,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// AND JUDGED ON THAT LEAD, known before the budget is asked: where
 		// its harness may hand the session to its model as a summary, the
 		// telling of a session that may be one is handed ([firstRequest]).
-		briefs.kept, briefs.keptHolds = r.keptTellings(ctx, basis, collected, round, nil, history, built, fresh,
-			"").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
+		briefs.kept, briefs.keptHolds, briefs.exact = r.keptTellings(ctx, basis, collected, round, nil, history,
+			built, fresh, "").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -908,7 +912,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// after this, below, nor one an earlier answer it tells approved. And
 	// nothing of the closed rounds listed again: the run holds no session that
 	// shows them, and its brief renders every one of them as work already done.
-	freshTold, freshOmitted := r.calledAfter(ctx, round, new(0), nil, history, toldAs{fresh: true,
+	freshTold, freshOmitted, _ := r.calledAfter(ctx, round, new(0), nil, history, toldAs{fresh: true,
 		leads: slices.Concat(leadsHeld(carry, state.Round), answers.held), rendered: history}, built, fence)
 	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
 	// ([Runner.executeAsAgentRun]): the prior rounds' payloads and the calls
@@ -985,7 +989,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if carry.keeps() {
 		switch {
 		case basis.Continues():
-			briefs.kept, briefs.keptHolds = kept.led(ctx, r, lead, own)
+			briefs.kept, briefs.keptHolds, briefs.exact = kept.led(ctx, r, lead, own)
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its
