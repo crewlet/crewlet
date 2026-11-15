@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,16 @@ type Spec struct {
 	// holds nothing (a search that could not run, and why), which an empty
 	// answer hands the model in place of a card ([Built.Empty]).
 	Note string
+	// Outside, where named, is a step outside Crewlet the answer carries ([wire.Outside]).
+	Outside *Outside
+}
+
+// Outside is the paths, from the answer's root, to a step's address and words.
+// The address must be a field tagged `link:"engine"` (held by the catalogue's
+// suite); a value that is not an absolute https address draws no link.
+type Outside struct {
+	Path  string
+	Label string
 }
 
 // Table is a table card over a list in the answer.
@@ -280,6 +291,10 @@ func (s Spec) Paths() []Path {
 		}
 	}
 	add("", s.Note)
+	if o := s.Outside; o != nil {
+		add("", o.Path)
+		add("", o.Label)
+	}
 	if t := s.Table; t != nil {
 		add("", t.Rows)
 		add("row", t.Expand)
@@ -317,6 +332,9 @@ type Path struct{ From, Path string }
 func (s Spec) Validate() error {
 	if (s.Table == nil) == (s.Entity == nil) {
 		return errors.New("cards: a spec is exactly one of a table and an entity")
+	}
+	if o := s.Outside; o != nil && (o.Path == "" || o.Label == "") {
+		return errors.New("cards: an outside step names the path to its address and to its words")
 	}
 	var links []*Open
 	if t := s.Table; t != nil {
@@ -454,8 +472,33 @@ func BuildWith(spec Spec, answer []byte, now time.Time, o Options) (Built, error
 	if spec.Note != "" {
 		built.Note = text(lookup(doc, spec.Note))
 	}
+	if out := outsideOf(spec.Outside, doc); out != nil {
+		switch {
+		case built.Card.Table != nil:
+			built.Card.Table.Outside = out
+		case built.Card.Entity != nil:
+			built.Card.Entity.Outside = out
+		}
+		if err = built.Card.Validate(); err != nil {
+			return Built{}, err
+		}
+	}
 	built.Zone = o.Zone
 	return built, nil
+}
+
+// outsideOf is the step spec reads from doc, or nil without an https address and words.
+func outsideOf(spec *Outside, doc any) *wire.Outside {
+	if spec == nil {
+		return nil
+	}
+	out := &wire.Outside{Label: text(lookup(doc, spec.Label)), URL: text(lookup(doc, spec.Path))}
+	u, err := url.Parse(out.URL)
+	if strings.TrimSpace(out.Label) == "" || err != nil || u.Scheme != "https" || u.Host == "" ||
+		u.User != nil {
+		return nil
+	}
+	return out
 }
 
 // decode reads one JSON value, numbers kept as written.
