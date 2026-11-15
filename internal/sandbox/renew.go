@@ -41,27 +41,39 @@ import (
 // SO NO DELIVERY OF THE COMPLETION IS ACKNOWLEDGED WHILE THE CLOCK RUNS, OR
 // WHILE THE RUN'S ROW SAYS NO WAITER ANNOUNCES ITS JOB ([unannouncedOnRow]),
 // unless the run settled, which drops the clock ([hostUnsettled]) and moves the
-// row on: every other answer hands it back, marked [ErrUnannounced], and
-// renews it, WHATEVER ITS KIND ([Coordinator.renewing]). The host's own answer that its store did not
-// answer; a claim this node's own store does not answer, or one this node
-// refuses while a release it owes is out ([errReleaseOwed]); a host that does not
-// answer the read at all ([ErrBoxHostSilent]), which is acknowledged only where
-// no clock runs; a record of the job's loss this node's store did not take
-// ([Coordinator.loseWithHost]), or a carry of its round that fails after it;
-// a refusal of the node's gate, or a completion this node holds off itself
+// row on: every other answer hands it back, marked [ErrUnannounced], and renews
+// it, WHATEVER ITS KIND ([Coordinator.renewing]). The host's own answer that
+// its store did not answer; a claim this node's own store does not answer, or
+// one this node refuses while a release it owes is out ([errReleaseOwed]); a
+// host that does not answer the read at all ([ErrBoxHostSilent]), which is
+// acknowledged only where no clock runs and the run's row says nothing of one;
+// a record of the job's loss this node's store did not take
+// ([Coordinator.loseWithHost]), or a carry of its round that fails after it; a
+// refusal of the node's gate, or a completion this node holds off itself
 // ([Coordinator.keepRefused]), which is kept for its condition's signal
-// besides; and an answer that settled nothing, a claim another attempt holds
-// or a resume the run's row holds for the seat's budget ([HeldError]), whose
-// host's waiter would announce the job once that hold lifts. This node's
-// memory of the job, a completion it keeps for a condition included, outlives
-// neither its restart nor its letting go of the seat, so while the clock runs
-// the delivery is the one copy of the completion that does. KEYED ON THE
-// CLOCK, NEVER ON THE HAND-BACK'S KIND: renewed for the host's answer alone, a
-// claim or a release the store did not answer meanwhile was NAK'd until its
-// budget was spent, and a host that did not answer for a minute, a refusal
-// whose condition nothing signals clearing, and a resume held on its row each
-// had their completion acknowledged, and each left the job with nothing to
-// drive it.
+// besides; and an answer that settled nothing, a claim another attempt holds or
+// a resume the run's row holds for the seat's budget ([HeldError]), whose
+// host's waiter would announce the job once that hold lifts. This node's memory
+// of the job, a completion it keeps for a condition included, outlives neither
+// its restart nor its letting go of the seat, so while the clock runs the
+// delivery is the one copy of the completion that does. KEYED ON THE CLOCK,
+// NEVER ON THE HAND-BACK'S KIND: renewed for the host's answer alone, a claim
+// or a release the store did not answer meanwhile was NAK'd until its budget
+// was spent, and a host that did not answer for a minute, a refusal whose
+// condition nothing signals clearing, and a resume held on its row each had
+// their completion acknowledged, and each left the job with nothing to drive
+// it.
+//
+// Before the delivery in hand is the last its budget allows ([renewReserve],
+// [queue.DeliveriesLeftFor]), the completion is announced afresh: a new event
+// of the same completion ([events.New]: a fresh id, which the stream's
+// duplicate window would otherwise drop, and with it a fresh budget), to the
+// seat's control topic, PUBLISHED BEFORE THE DELIVERY IN HAND IS ACKNOWLEDGED,
+// which it then is, so the fresh one carries the completion on and each renewal
+// leaves one announcement in flight, never a growing number. A renewal the
+// broker does not take leaves the delivery in hand NAK'd, with deliveries still
+// left to make it again on. A duplicate is harmless either way: the claim is
+// made once.
 //
 // AND ON THE ROW, NEVER ON ONE NODE'S MEMORY ALONE ([Coordinator.unannouncedJob]).
 // The clock goes with a restart, and the seat's next holder starts with none,
@@ -88,21 +100,16 @@ import (
 // again on its schedule (reannounce.go, TestAnUnclaimedCompletionIsAnnouncedAgain).
 //
 // WHAT IT COSTS: a hand-back that settles nothing for as long as it lasts is
-// NAK'd again at the queue's backoff, at most every thirty seconds, one claim
-// attempt each, and renewed about every two and a half minutes
-// ([renewReserve]); the longest such is a carry whose resume its row holds for
-// the seat's budget while the clock runs, for as long as that hold lasts. A
-// duplicate the claim makes once, and nothing dead-letters.
-// Before the delivery in hand is the last its budget allows ([renewReserve],
-// [queue.DeliveriesLeftFor]), the completion is announced afresh: a new event
-// of the same completion ([events.New]: a fresh id, which the stream's
-// duplicate window would otherwise drop, and with it a fresh budget), to the
-// seat's control topic, PUBLISHED BEFORE THE DELIVERY IN HAND IS ACKNOWLEDGED,
-// which it then is, so the fresh one carries the completion on and each renewal
-// leaves one announcement in flight, never a growing number. A renewal the
-// broker does not take leaves the delivery in hand NAK'd, with deliveries still
-// left to make it again on. A duplicate is harmless either way: the claim is
-// made once.
+// NAK'd again at the queue's backoff, at most every thirty seconds, each
+// delivery one claim attempt or one admission and, where this node keeps no
+// clock, one read of the run's row; and renewed about every seven and a half
+// minutes, since the delivery with [renewReserve] left is the twentieth of
+// the broker's twenty-five, after nineteen returns spaced 1, 2, 4, 8 and 16
+// seconds and fourteen times thirty (451 s, about 361 s at the floor of the
+// backoff's jitter; internal/queue/jetstream's LeastTimeToDeadLetter). The
+// longest such is a carry whose resume its row holds for the seat's budget
+// while the clock runs, for as long as that hold lasts. A duplicate the claim
+// makes once, and nothing dead-letters.
 //
 // A RE-FIRE HAS NO DELIVERY IN HAND. A completion this node kept for a
 // condition and re-fires once it clears ([Coordinator.refire]) was kept from a
@@ -128,11 +135,12 @@ import (
 // ([Coordinator.renewing], [Coordinator.refire]).
 //
 // NOTHING IS RENEWED WHILE NEITHER THE CLOCK NOR THE ROW SAYS SO: a step this
-// node's own store did not answer is NAK'd and nothing more, since the waiter that drives the box, whose
-// store does answer or answers once the silence is over, announces the job
-// again on its schedule ([Coordinator.collectFailedAt]); and a delivery whose
-// count the transport did not state is NAK'd as before this existed, since a
-// missing number is no evidence of a spent budget.
+// node's own store did not answer is NAK'd and nothing more, since the waiter
+// that drives the box, whose store does answer or answers once the silence is
+// over, announces the job again on its schedule
+// ([Coordinator.collectFailedAt]); and a delivery whose count the transport
+// did not state is NAK'd as before this existed, since a missing number is no
+// evidence of a spent budget.
 
 // renewReserve is how many further deliveries a completion's delivery has when
 // a hand-back while the clock on its box's host runs is announced afresh

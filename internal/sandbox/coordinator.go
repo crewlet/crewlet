@@ -6998,8 +6998,12 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	maps.DeleteFunc(c.launchStops, func(_ string, s launchStop) bool { return s.handle == handle })
 	// AND ANY COMPLETION IT WAS WAITING TO RE-FIRE: the run is unclaimed,
 	// and the waiter that drives its box announces it to the successor, or,
-	// while that waiter cannot, the delivery handed back for it does
-	// (renew.go).
+	// while that waiter cannot and this node's clock or the run's row says
+	// so, the delivery handed back for it does (renew.go). A refusal of a
+	// job no collection had read since its host's store went silent was
+	// acknowledged, neither saying so yet: that job waits for the host's
+	// store to answer, when its waiter announces it (renew.go's one path
+	// left).
 	for turnID, kept := range c.refused {
 		if kept.ev.AgentHandle == handle {
 			delete(c.refused, turnID)
