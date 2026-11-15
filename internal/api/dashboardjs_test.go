@@ -2490,7 +2490,13 @@ const (
 	// schedule writes, and the repository and room writes, merged on kit
 	// 0.126.3 with the train before it, measures 6132.4 KiB (6,279,549
 	// bytes), 124,606 bytes over the 6010.7 KiB it was built on: 6133 KiB.
-	treeBudget = 5<<20 + 1013<<10
+	// Kit 0.128.0 (one-sentence delivery receipts, a thread line as long as
+	// what it says, an avatar centred on its line, Clamp) with a long task
+	// thread folded behind Show more, Jump to latest, the watchers' stack
+	// and a Chatlet transcript laid out where the page draws it added 3,713
+	// bytes, nearly all script, over the 6132.6 KiB of main on kit 0.127.0,
+	// and took it to 6136.3 KiB (6,283,579 bytes): 6137 KiB.
+	treeBudget = 5<<20 + 1017<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
