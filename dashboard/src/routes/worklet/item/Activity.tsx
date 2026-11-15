@@ -605,7 +605,7 @@ export function changeSentence(
   // Acceptance", so each move is a clause with a verb ([changeClauses]); a
   // record whose fields say nothing this build can phrase falls back to the
   // label the other change feeds draw, and then to its kind.
-  const clauses = changeClauses(record.fields, chrome);
+  const clauses = changeClauses(record.fields, chrome, record.actor);
   if (clauses.length > 0) return { what: andList(clauses), why: "" };
   // "CHANGED" GOES BEFORE WHAT MOVED, a field's delta ("changed Due: Nov 3 →
   // Nov 5"), and nowhere else. A kind with nothing to compare (a removal, a

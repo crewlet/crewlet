@@ -799,6 +799,13 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
   if (record.kind === "created" && Object.keys(record.fields ?? {}).length > 0) {
     return filedSentence(record.fields, ctx);
   }
+  // A WATCH OR AN UNWATCH IS SAID AS ONE ([ownWatch]), whatever else moved.
+  const watch = ownWatch(record.fields, record.actor);
+  if (watch.own) {
+    const own = watch.own.charAt(0).toUpperCase() + watch.own.slice(1);
+    const more = deltaSentence(watch.rest, ctx);
+    return more ? `${own}, ${more}` : own;
+  }
   const moved = deltaSentence(record.fields, ctx);
   if (moved) return moved;
   // THE PROSE THE BODY RENDERS TO, not its source. The excerpt is a cut of a
@@ -1192,6 +1199,42 @@ function setMoves(raw: unknown): { added: string[]; removed: string[] } | null {
   return added.length > 0 || removed.length > 0 ? { added, removed } : null;
 }
 
+/**
+ * The record's maker's own Watch or Unwatch, read out of the two sets the
+ * gesture moves, and the fields left to say as they are.
+ *
+ * ONE GESTURE, TWO SETS. Watch puts whoever pressed it in `watchers` and takes
+ * them out of `muted`, and Unwatch does the reverse (`internal/worklet`'s
+ * watch write), in one record. Worded set by set, a person's own press read
+ * "added Jane Founder to the muted and removed Jane Founder from the
+ * watchers". So the maker's move is said as the gesture it was, and anybody
+ * else's (an assignment that made somebody a watcher) keeps its set words.
+ * A record that moves its maker both ways says nothing of its own, rather
+ * than guess which.
+ */
+function ownWatch(
+  fields: Record<string, unknown> | undefined,
+  actor: string | undefined,
+): { own: "started watching" | "stopped watching" | null; rest: Record<string, unknown> } {
+  const all = fields ?? {};
+  if (!actor) return { own: null, rest: all };
+  const watchers = setMoves(all.watchers);
+  const muted = setMoves(all.muted);
+  const started = !!(watchers?.added.includes(actor) || muted?.removed.includes(actor));
+  const stopped = !!(watchers?.removed.includes(actor) || muted?.added.includes(actor));
+  if (started === stopped) return { own: null, rest: all };
+  const rest: Record<string, unknown> = { ...all };
+  for (const field of ["watchers", "muted"] as const) {
+    const moved = setMoves(all[field]);
+    if (!moved) continue;
+    const added = moved.added.filter((h) => h !== actor);
+    const removed = moved.removed.filter((h) => h !== actor);
+    if (added.length === 0 && removed.length === 0) delete rest[field];
+    else rest[field] = { ...(all[field] as object), added, removed };
+  }
+  return { own: started ? "started watching" : "stopped watching", rest };
+}
+
 /** One set's moves as a label: "Watchers: added Ana, Bo; removed Cy". */
 function setClause(
   field: string,
@@ -1200,6 +1243,12 @@ function setClause(
 ): string {
   const named = (members: string[]) => members.map((m) => deltaValue(field, m, ctx)).join(", ");
   const parts: string[] = [];
+  // THE MUTED SET IS NOBODY'S WORD: it is who stopped watching a task.
+  if (field === "muted") {
+    if (moved.added.length > 0) parts.push(`Muted for ${named(moved.added)}`);
+    if (moved.removed.length > 0) parts.push(`Unmuted for ${named(moved.removed)}`);
+    return parts.join("; ");
+  }
   if (moved.added.length > 0) parts.push(`added ${named(moved.added)}`);
   if (moved.removed.length > 0) parts.push(`removed ${named(moved.removed)}`);
   return `${humanize(field)}: ${parts.join("; ")}`;
@@ -1371,9 +1420,12 @@ function fieldLabel(field: string): string {
 export function changeClauses(
   fields: Record<string, unknown> | undefined,
   ctx: LabelContext,
+  actor?: string,
 ): string[] {
-  const out: string[] = [];
-  for (const [field, raw] of Object.entries(fields ?? {})) {
+  // THE MAKER'S OWN WATCH OR UNWATCH FIRST, as the gesture ([ownWatch]).
+  const watch = ownWatch(fields, actor);
+  const out: string[] = watch.own ? [watch.own] : [];
+  for (const [field, raw] of Object.entries(watch.rest)) {
     if (BOOKKEEPING.has(field) || NEVER_SAID.has(field)) continue;
     if (field === "body") {
       const delta = raw as { from?: unknown; to?: unknown } | null;
@@ -1385,7 +1437,7 @@ export function changeClauses(
     // block ENG-4"); any other set as members added to or removed from it.
     const moved = setMoves(raw);
     if (moved) {
-      const relation = RELATION_WORDS[field];
+      const relation = RELATION_WORDS[field] ?? MEMBER_WORDS[field];
       const named = (members: string[]) => members.map((m) => deltaValue(field, m, ctx)).join(", ");
       if (moved.added.length > 0)
         out.push(
@@ -1455,6 +1507,14 @@ const RELATION_WORDS: Record<string, { added: string; removed: string }> = {
   linked: { added: "linked it to", removed: "unlinked it from" },
   duplicates: { added: "marked it a duplicate of", removed: "unmarked it as a duplicate of" },
   parent: { added: "filed it under", removed: "took it out of" },
+};
+
+/**
+ * How a sentence says somebody joined or left a set whose name is no word a
+ * person uses: `muted` is the people who stopped watching a task.
+ */
+const MEMBER_WORDS: Record<string, { added: string; removed: string }> = {
+  muted: { added: "muted it for", removed: "unmuted it for" },
 };
 
 /** A field's name mid-sentence: the tracker's own word, lower-case. */

@@ -2095,6 +2095,53 @@ test("a task's page moves to its address from another of its names, and only fro
   expect(movedAddress("ENG-5", duplicate)).toBeNull();
 });
 
+// WATCH AND UNWATCH ARE ONE GESTURE OVER TWO SETS: the maker joins `watchers`
+// and leaves `muted`, or the reverse, in one record. Worded set by set it read
+// "Jane Founder added Jane Founder to the muted and removed Jane Founder from
+// the watchers". Mutation: drop the actor from [changeClauses] and the set
+// words come back.
+test("a person's own Watch and Unwatch read as the gesture, never as set edits", () => {
+  const ctx: LabelContext = { seatName: (h) => (h === "jane" ? "Jane Founder" : h) };
+  const unwatch = {
+    watchers: { from: "", to: "", removed: ["jane"] },
+    muted: { from: "", to: "", added: ["jane"] },
+  };
+  const watch = {
+    watchers: { from: "", to: "", added: ["jane"] },
+    muted: { from: "", to: "", removed: ["jane"] },
+  };
+  expect(changeClauses(unwatch, ctx, "jane")).toEqual(["stopped watching"]);
+  expect(changeClauses(watch, ctx, "jane")).toEqual(["started watching"]);
+  expect(describeChange(record({ kind: "watchers", actor: "jane", fields: unwatch }), ctx)).toBe(
+    "Stopped watching",
+  );
+  expect(describeChange(record({ kind: "watchers", actor: "jane", fields: watch }), ctx)).toBe(
+    "Started watching",
+  );
+  // UNWATCHING A TASK ONE NEVER WATCHED moves the muted set alone.
+  expect(changeClauses({ muted: { added: ["jane"] } }, ctx, "jane")).toEqual(["stopped watching"]);
+  // SOMEBODY ELSE'S MOVE keeps its set's words, and nobody reads "the muted".
+  expect(changeClauses({ watchers: { added: ["ada"] } }, ctx, "jane")).toEqual([
+    "added ada to the watchers",
+  ]);
+  expect(changeClauses({ muted: { added: ["ada"] } }, ctx, "jane")).toEqual(["muted it for ada"]);
+  expect(
+    describeChange(
+      record({
+        kind: "watchers",
+        actor: "jane",
+        fields: { muted: { from: "", to: "", added: ["ada"] } },
+      }),
+      ctx,
+    ),
+  ).toBe("Muted for ada");
+  // AND THE GESTURE IS SAID BESIDE WHATEVER ELSE THE RECORD MOVED.
+  expect(changeClauses({ ...watch, watchers: { added: ["jane", "ada"] } }, ctx, "jane")).toEqual([
+    "started watching",
+    "added ada to the watchers",
+  ]);
+});
+
 // A DAY IN A SENTENCE IS THE COMPANY'S: "set the due date to Nov 30" for a day
 // picked as the 30th, read here in Berlin west of a Tokyo company, where its
 // midnight is the afternoon of the 29th. Mutation: read it on the reader's
