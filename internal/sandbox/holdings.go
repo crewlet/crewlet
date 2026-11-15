@@ -86,10 +86,11 @@ type HoldingsReader interface {
 }
 
 // HoldingsAsk is what a relaunch asks a reading about: the round's listed
-// calls that have an outcome, as the run's log keeps them, the ones its
-// telling asks about marked ([LoggedCall.Asked]). The unasked ones ride it
-// too, so a reader can refuse an ask in which an asked call's id is not that
-// call's alone.
+// calls that have an outcome, as the run's log keeps them, but the ones a
+// person approved, which the engine made on its host and which no session
+// holds; the ones its telling asks about marked ([LoggedCall.Asked]). The
+// unasked ones ride it too, so a reader can refuse an ask in which an asked
+// call's id is not that call's alone.
 type HoldingsAsk struct {
 	// Calls are 1 to [MaxBridgeCalls] calls: a round's log lists at most
 	// that many.
@@ -124,10 +125,13 @@ type LoggedCall struct {
 	// where the log recorded none.
 	ID string
 
-	// Asked marks a call the relaunch's telling asks about: a listed call
-	// after the save point that is neither late nor abandoned, nor the call
-	// a person approved, each of which the telling decides before any
-	// reading.
+	// Asked marks a call the relaunch's telling asks about: one it would
+	// otherwise list after the save point or among the owed reads (a read an
+	// earlier brief counted without listing it, which lies at or below the
+	// point), whose key the reader can name, valid and carried by no other
+	// call of the round (internal/agent/runner's holdingsAsk). Never a late
+	// or an abandoned call, a skipped meta-tool's, nor one the save point
+	// holds, each of which the telling decides before any reading.
 	Asked bool
 
 	// Failed, Output and OutputBytes are the call's outcome as the log keeps
