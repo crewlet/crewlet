@@ -62,6 +62,35 @@ func parked() execstate.State {
 	}
 }
 
+// A CLOSED ROUND'S CALL KEEPS WHAT ITS RECORD SAYS OF ITS ARGUMENTS ACROSS THE
+// PARK: that their text did not read back (ledger.Call.ArgsUnread), beside the
+// other marks of arguments not known. The collection that reads the round's
+// calls next is often another process, and a mark lost here draws the call as
+// the tool called with none and seeds its call log so.
+//
+// Mutation: leave the mark off the row, and the call comes back unmarked.
+func TestAClosedRoundsCallKeepsWhatItsRecordSaysOfItsArguments(t *testing.T) {
+	t.Parallel()
+	state := parked()
+	calls := []ledger.Call{
+		{Name: "jira_create", Result: "created", Digest: "d1", ArgsUnread: true},
+		{Name: "set_status", Result: "unknown", Failed: true, Unfinished: true},
+		{Name: "close_issue", Result: "asked a person", Failed: true, Withheld: true},
+	}
+	state.Iterations[0].Calls = calls
+	blob, err := execstate.Encode(state)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, ok, err := execstate.Decode(blob)
+	if err != nil || !ok {
+		t.Fatalf("Decode = %v, %v", ok, err)
+	}
+	if !reflect.DeepEqual(got.Iterations[0].Calls, calls) {
+		t.Errorf("the closed round's calls came back as %+v, want %+v", got.Iterations[0].Calls, calls)
+	}
+}
+
 // WHAT THE REST OF THE TURN NEEDS SURVIVES THE ROW, because the segment that
 // collects the run is often another process on another node, and every field
 // here is something no other record holds for it.

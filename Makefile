@@ -200,8 +200,9 @@ SKIPGATE = $(GO) run ./internal/skipgate
 #   TEST_WEIGHTS=FILE the measured seconds per package (a skipgate -timings
 #                     file) the partition deals and orders by. It must exist;
 #                     empty, or unset, deals by package count in go list's order.
-#   TEST_TIMINGS=FILE write how long each package that passed took; ci.yml
-#                     merges its shards' files into the next run's TEST_WEIGHTS.
+#   TEST_TIMINGS=FILE write how long each package that passed took, and each of
+#                     its top-level tests; ci.yml merges its shards' files into
+#                     the next run's TEST_WEIGHTS.
 #   TEST_SHARD=I/N    run the I-th of N shards of the half, dealt by weight.
 #
 # Membership of a half never depends on any of them: `go doc

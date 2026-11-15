@@ -149,7 +149,15 @@ func submitted(calls []ledger.Call) bool {
 // AND THE CALLS IT HELD IN FLIGHT (unfinished, [Resume.Unfinished]): begun,
 // their identity on the record, and not finished as the log was read — each
 // a call whose outcome is unknown ([ledger.Call.Unfinished]).
+//
+// AND THE ROUND THEY ARE OF (of): the open round on a relaunch, the collected
+// round on a send-back, whose closed rounds also hold it last, and the round
+// reopened or collected elsewhere. A brief that lists again a closed round's
+// call ([Runner.closedShown]) reads by it which entry of the closed rounds is
+// this round, whose calls it tells by their own rules. Set wherever a
+// roundCalls is built, so no brief reads its zero.
 type roundCalls struct {
+	of         int
 	bridged    []BridgedCall
 	unfinished []BridgedCall
 	elided     []ledger.Elided
@@ -207,7 +215,11 @@ const UnfinishedNote = "This call's outcome is unknown: its turn stopped waiting
 // for a person's approval and the one they approved
 // ([ledger.Call.Withheld]), whose arguments ride sealed — is seeded as a call
 // matching no other ([turnctx.SeededCall.Unknown],
-// [turnctx.CallLog.SeedUnknown]): an over-count, the safe direction.
+// [turnctx.CallLog.SeedUnknown]): an over-count, the safe direction. So is a
+// call with no digest whose arguments were in text that could not be read
+// ([ledger.Call.ArgsUnread]), its record's text not reading back or the
+// model's not parsing: seeded by the nil arguments it reads as, it was counted
+// as the tool called with none, a different call.
 //
 // A CALL WITH NO DIGEST, AND NONE WITHHELD — one a build before it recorded,
 // whose arguments it kept whole — is seeded by its canonical arguments, made
@@ -232,10 +244,11 @@ func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.
 	for _, group := range groups {
 		for _, call := range group {
 			switch {
-			case call.Withheld, call.Unfinished && call.Digest == "":
+			case call.Withheld, (call.Unfinished || call.ArgsUnread) && call.Digest == "":
 				// A CALL WHOSE ARGUMENTS NO RECORD HOLDS: one held for a
-				// person's approval, and one whose entry kept no digest of
-				// them, its tool one that may ask first.
+				// person's approval, one whose entry kept no digest of
+				// them, its tool one that may ask first, and one whose
+				// record of them does not read back.
 				calls.Seed(turnctx.SeededCall{Tool: call.Name, Unknown: true})
 				continue
 			case call.Digest != "":

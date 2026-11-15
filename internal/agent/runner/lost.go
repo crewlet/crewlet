@@ -133,10 +133,11 @@ type carried interface {
 	continuation(provenance.Boundary) string
 	reseed(provenance.Boundary) string
 	// tellsHeld is the held call the continuation tells what became of
-	// ([Asked.Held]), "" where it tells none: the call a person approved for
-	// it is told there, by the lead of the brief the continuation opens, and
-	// in no list of the round's calls that brief tells ([Runner.calledAfter]).
-	tellsHeld() string
+	// ([Asked.Held]), by its id and its tool, "" and "" where it tells none:
+	// the call a person approved for it is told there, by the lead of the
+	// brief the continuation opens, and in no list of the round's calls that
+	// brief tells ([Runner.calledAfter]).
+	tellsHeld() (id, tool string)
 	// lead is what carries the round on as the run keeps it beside its
 	// record, for a later brief to a session that may lack the one this opens
 	// to tell again (leads.go), nil where the engine's own words carry it on: a
@@ -168,12 +169,14 @@ func (a *Asked) refusal() error                            { return nil }
 // made and what it returned, or that it may or may not have taken effect — or
 // that it was not made, where nothing of it is in the round's log. "" for a
 // question about no held call, and for a reply refused, whose continuation
-// tells only the refusal (a chat reply never answers a held call).
-func (a *Asked) tellsHeld() string {
+// tells only the refusal (a chat reply never answers a held call). By its id,
+// which the call a person approved for it carries ([BridgedCall.HeldID]), and
+// its tool.
+func (a *Asked) tellsHeld() (id, tool string) {
 	if a.Held == nil || a.Refused != nil {
-		return ""
+		return "", ""
 	}
-	return a.Held.HeldID
+	return a.Held.HeldID, a.Held.Tool
 }
 
 // what names the carrying on, an answer's or a refused reply's.
@@ -196,7 +199,7 @@ func (l *Lost) session() string                         { return "" }
 func (l *Lost) boxKept() bool                           { return l.BoxKept }
 func (l *Lost) continuation(provenance.Boundary) string { return l.Continuation() }
 func (l *Lost) reseed(provenance.Boundary) string       { return l.Reseed() }
-func (l *Lost) tellsHeld() string                       { return "" }
+func (l *Lost) tellsHeld() (id, tool string)            { return "", "" }
 func (l *Lost) lead() *sandbox.Lead                     { return nil }
 func (l *Lost) keeps() bool                             { return sandbox.KeptAfterLoss(l.Losses) }
 func (l *Lost) branch() string                          { return "" }

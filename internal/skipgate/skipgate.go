@@ -82,18 +82,51 @@
 //
 // writes `importpath<TAB>seconds` into FILE for every package that passed or
 // had no test files, read from the package-level records this program already
-// reads to reach its verdict. It is the file internal/solo/partition reads
-// with -weights to start the longest packages first, and ci.yml keeps it from
-// each passing run on main as the next run's weights. A FAILED package is left
-// out: its elapsed time stops wherever the failure stopped it, so it is not a
-// measurement of the package — and ci.yml keeps only a passing run's file
-// anyway.
+// reads to reach its verdict, and under each such package one
+// `importpath<TAB>Test<TAB>seconds` line for every TOP-LEVEL test that passed
+// or skipped, from that test's own record. It is the file
+// internal/solo/partition reads with -weights to start the longest packages
+// first, and ci.yml keeps it from each passing run on main as the next run's
+// weights; the merged file is the `test-weights` artifact, the one place a
+// person can read which tests a package's time goes to. A FAILED package is
+// left out, its tests with it: its elapsed time stops wherever the failure
+// stopped it, so it is not a measurement of the package — and ci.yml keeps
+// only a passing run's file anyway.
+//
+// A test's seconds are its ACTIVE span, read from the stamps test2json puts
+// on its events ([span]): from its `run` to its result, its parallel
+// subtests included, less the time t.Parallel held it paused for a slot. Not
+// the test's own Elapsed, which stops when its body returns and so leaves out
+// every parallel subtest; a record with no stamp, which test2json never
+// writes, falls back to it. So a package's tests sum to MORE than the package
+// took whenever they overlap, and a test's seconds grow with what ran beside
+// it: the package line is the binary's wall time, a test line is that test's
+// span within it. A span is not a cost: it holds the time its parallel
+// subtests sat waiting for a slot behind the rest of the package, so a test of
+// eleven microsecond subtests read 172 s in a package of heavy git cases. Read
+// it beside its subtests' own spans (the slowest list) and the run's CPU line
+// before taking it for work. Subtests are inside their parent's seconds and
+// get no line of their own.
 //
 // The file is CREATED before the test command starts, so a path that cannot
 // be written fails in a second rather than after the whole suite, and a
 // previous run's file at the same path is emptied rather than left to be read
 // as this run's. It is FILLED after the verdict has been printed, whatever the
 // verdict, so a write that fails can add to the verdict and never hide it.
+//
+// # What a run used, and where it went
+//
+// When the command exits, the gate prints how much CPU it and every process
+// it waited for used, against the wall time and the CPUs this process may run
+// on (`the run used 3612 CPU-seconds in 1057 s, 3.4 of 4 CPUs busy on
+// average`), and then the [slowestShown] longest tests and subtests that
+// passed or skipped. The first line is how a reader of a CI log tells a shard
+// that is CPU-bound, which only another runner makes faster, from one that
+// sits waiting, which more parallelism on the same runner would. It is the
+// process's own accounting, read from the exited command (os.ProcessState's
+// UserTime and SystemTime, which include its waited-for children: every test
+// binary `go test` ran), never a sampler beside it. The list is the one place
+// a subtest's time is seen, since the -timings file stops at the top level.
 package main
 
 import (
@@ -107,9 +140,11 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // event is the slice of test2json's schema this needs.
@@ -121,6 +156,45 @@ type event struct {
 	// Elapsed is the seconds a package's test binary ran, on its
 	// package-level pass, fail or skip record (and a test's, on its own).
 	Elapsed float64
+	// Time is when test2json saw the event, which it stamps on every one.
+	Time time.Time
+}
+
+// span is one test's time ACTIVE, from its event stamps: from `run` to its
+// result, less every stretch between a `pause` and the `cont` that resumed
+// it. Not the test's own Elapsed, which the testing package stops when the
+// test's body returns, BEFORE its parallel subtests run: a test whose
+// subtests call t.Parallel reports its own setup alone (internal/coord/kv's
+// TestContract reported 0.25 s over a suite of ninety-nine cases), so a
+// weight read from it would put a suite's whole cost at nothing.
+type span struct {
+	started time.Time
+	active  time.Duration
+	paused  bool
+}
+
+// at reads a span's events. A `cont` for a test that is not paused is not a
+// resume: in verbose mode cmd/go prints `=== CONT` whenever the output
+// switches back to a test, which says nothing about its clock.
+func (s *span) at(action string, now time.Time) {
+	switch action {
+	case "run":
+		s.started = now
+	case "pause":
+		if !s.paused {
+			s.active += now.Sub(s.started)
+			s.paused = true
+		}
+	case "cont":
+		if s.paused {
+			s.started = now
+			s.paused = false
+		}
+	case "pass", "fail", "skip":
+		if !s.paused {
+			s.active += now.Sub(s.started)
+		}
+	}
 }
 
 // finish is how one package's test binary ended.
@@ -197,6 +271,23 @@ type report struct {
 	// prints, which is what the -timings file is read against. Narrower than
 	// ran: a stream cut off mid-package has records for it and no result.
 	finished map[string]finish
+
+	// topLevel is the seconds of every top-level test that passed or
+	// skipped, by FULL import path and then test name: the -timings file's
+	// test lines. A subtest is inside its parent's seconds, and a failed test
+	// is no measurement of itself, so neither is here.
+	topLevel map[string]map[string]float64
+
+	// timed is every test, subtests included, that passed or skipped, with
+	// its seconds: what the slowest-tests list at the end of a run is drawn
+	// from.
+	timed []timedTest
+}
+
+// timedTest is one test's own record of how long it took.
+type timedTest struct {
+	pkg, test string
+	elapsed   float64
 }
 
 // passed is every package, by its short path, whose binary reported pass:
@@ -228,8 +319,10 @@ func (r report) passed() map[string]bool {
 // swallowed those would hide the one failure nobody can debug without them.
 func read(in *bufio.Scanner, out *os.File) report {
 	r := report{ran: map[string]bool{}, reported: map[string]bool{},
-		measuredSeen: map[string]bool{}, finished: map[string]finish{}}
+		measuredSeen: map[string]bool{}, finished: map[string]finish{},
+		topLevel: map[string]map[string]float64{}}
 	buffered := map[string][]string{}
+	spans := map[string]*span{}
 
 	for in.Scan() {
 		line := in.Bytes()
@@ -285,6 +378,21 @@ func read(in *bufio.Scanner, out *os.File) report {
 		}
 
 		key := e.Package + "\x00" + e.Test
+		elapsed := e.Elapsed
+		if !e.Time.IsZero() {
+			switch e.Action {
+			case "run", "pause", "cont", "pass", "fail", "skip":
+				sp := spans[key]
+				if sp == nil {
+					sp = &span{}
+					spans[key] = sp
+				}
+				sp.at(e.Action, e.Time)
+				if !sp.started.IsZero() {
+					elapsed = sp.active.Seconds()
+				}
+			}
+		}
 		switch e.Action {
 		case "output":
 			buffered[key] = append(buffered[key], e.Output)
@@ -293,6 +401,15 @@ func read(in *bufio.Scanner, out *os.File) report {
 			r.reported[short(e.Package)+"\x00"+e.Test] = true
 			if m := measurement(short(e.Package), e.Test); m != nil {
 				r.measuredSeen[m.Package+"\x00"+m.Test] = true
+			}
+			if e.Action != "fail" {
+				r.timed = append(r.timed, timedTest{pkg: short(e.Package), test: e.Test, elapsed: elapsed})
+			}
+			if e.Action != "fail" && !strings.Contains(e.Test, "/") {
+				if r.topLevel[e.Package] == nil {
+					r.topLevel[e.Package] = map[string]float64{}
+				}
+				r.topLevel[e.Package][e.Test] = elapsed
 			}
 		}
 		switch e.Action {
@@ -363,8 +480,9 @@ func flush(out *os.File, buffered map[string][]string, pkg string) int {
 
 // writeTimings writes the -timings file's body; see the package doc.
 //
-// Sorted by import path, so the file is a function of what ran. Seconds to
-// the millisecond, which is test2json's own precision.
+// Sorted by import path, each package's line followed by its tests' lines in
+// name order, so the file is a function of what ran. Seconds to the
+// millisecond, which is test2json's own precision.
 //
 // Its shape is internal/solo/partition's to read, strictly, and it outlives
 // this run: ci.yml merges the shards' files into the next run's weights.
@@ -376,6 +494,9 @@ func writeTimings(w io.Writer, r report) error {
 	for _, p := range slices.Sorted(maps.Keys(r.finished)) {
 		if f := r.finished[p]; f.action != "fail" {
 			fmt.Fprintf(&timings, "%s\t%s\n", p, strconv.FormatFloat(f.elapsed, 'f', 3, 64))
+			for _, test := range slices.Sorted(maps.Keys(r.topLevel[p])) {
+				fmt.Fprintf(&timings, "%s\t%s\t%s\n", p, test, strconv.FormatFloat(r.topLevel[p][test], 'f', 3, 64))
+			}
 		}
 	}
 	_, err := io.WriteString(w, timings.String())
@@ -384,7 +505,7 @@ func writeTimings(w io.Writer, r report) error {
 
 func main() {
 	fs := flag.NewFlagSet("skipgate", flag.ContinueOnError)
-	timingsPath := fs.String("timings", "", "write how long each package that passed took to `file`")
+	timingsPath := fs.String("timings", "", "write how long each package that passed, and each of its top-level tests, took to `file`")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "usage: %s [-timings FILE] -- go test -json <packages>\n", os.Args[0])
 		fs.PrintDefaults()
@@ -434,6 +555,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "skipgate: %v\n", err)
 		exit(1)
 	}
+	started := time.Now()
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "skipgate: starting %q: %v\n", argv[0], err)
 		exit(1)
@@ -459,6 +581,8 @@ func main() {
 	// Waited for BEFORE anything is decided, so the producer's own verdict is
 	// in hand rather than inferred from what it managed to say.
 	producer := cmd.Wait()
+	fmt.Fprintln(os.Stderr, cpuUse(cmd.ProcessState, time.Since(started), runtime.NumCPU()))
+	fmt.Fprint(os.Stderr, slowest(r.timed, slowestShown))
 	if scanErr != nil {
 		fmt.Fprintf(os.Stderr, "\nskipgate: reading the test stream: %v\n", scanErr)
 		exit(1)
@@ -508,6 +632,70 @@ func main() {
 		len(unlisted) > 0 || len(stale) > 0 || len(staleMeasured) > 0)
 	fmt.Fprintln(os.Stderr, note)
 	exit(code)
+}
+
+// cpuUse is the line that says how busy the run kept the machine; see the
+// package doc. cpus is the CPUs this process may run on, its affinity mask
+// rather than the host's count, which is the budget a container or a pinned
+// runner actually has. A command that never exited has no accounting
+// (ps == nil), and the line says so rather than printing a zero that reads as
+// an idle run.
+func cpuUse(ps *os.ProcessState, wall time.Duration, cpus int) string {
+	if ps == nil {
+		return "skipgate: the command did not exit, so the CPU it used is unknown"
+	}
+	return cpuLine(ps.UserTime()+ps.SystemTime(), wall, cpus)
+}
+
+// slowestShown is how many tests the end of a run lists, longest first.
+//
+// Enough to name every test that holds a CI shard open: a shard's floor is
+// its heaviest package, and the heaviest (internal/engine,
+// internal/gitlet/gitletcluster) spend their time in a dozen or two tests
+// and subtests each. More is a CI log nobody scrolls; the -timings file has
+// every top-level test.
+const slowestShown = 25
+
+// slowest lists the n longest tests and subtests that passed or skipped,
+// longest first, ties by package then name, so the list is a function of
+// the run. It is the one place subtests are timed: a suite run as subtests
+// of one test (a fleet suite, a contract suite) spends its time there, and
+// the -timings file, which the partition deals by, stops at the top level.
+// Nothing timed, nothing printed.
+func slowest(timed []timedTest, n int) string {
+	if len(timed) == 0 || n <= 0 {
+		return ""
+	}
+	sorted := slices.Clone(timed)
+	slices.SortFunc(sorted, func(a, b timedTest) int {
+		switch {
+		case a.elapsed > b.elapsed:
+			return -1
+		case a.elapsed < b.elapsed:
+			return 1
+		}
+		if c := strings.Compare(a.pkg, b.pkg); c != 0 {
+			return c
+		}
+		return strings.Compare(a.test, b.test)
+	})
+	sorted = sorted[:min(n, len(sorted))]
+	var b strings.Builder
+	fmt.Fprintf(&b, "skipgate: the %d slowest tests and subtests:\n", len(sorted))
+	for _, t := range sorted {
+		fmt.Fprintf(&b, "  %9.3fs  %s %s\n", t.elapsed, t.pkg, t.test)
+	}
+	return b.String()
+}
+
+// cpuLine is cpuUse's arithmetic, over values.
+func cpuLine(used, wall time.Duration, cpus int) string {
+	busy := 0.0
+	if wall > 0 {
+		busy = used.Seconds() / wall.Seconds()
+	}
+	return fmt.Sprintf("skipgate: the run used %.0f CPU-seconds in %.0f s, %.1f of %d CPUs busy on average",
+		used.Seconds(), wall.Seconds(), busy, cpus)
 }
 
 // Verdict decides the run from what the stream said and what the producer did.

@@ -765,6 +765,12 @@ type Call struct {
 	// call as one of its tool whose arguments are not known.
 	Digest string
 
+	// ArgsUnparsed marks a call whose arguments did not parse: answered and
+	// not run, its Args empty because the bridge holds no object of them, not
+	// because the model sent none (sandbox.BridgeCall.ArgsUnparsed). Without
+	// it the record of the call reads as the tool called with none.
+	ArgsUnparsed bool
+
 	// CallID is the id the call's HARNESS gave it, as the box sent it in the
 	// request's `_meta` under [Session.CallIDMeta] — for Claude Code, the
 	// model's tool_use id — read once as the call arrives ([Session.callIDOf])
@@ -2126,13 +2132,14 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	}
 	if in.ArgumentsError != "" {
 		// ANSWERED, NOT RUN, and recorded: the call was made, and an empty
-		// object in place of what the model wrote is a call it never made.
+		// object in place of what the model wrote is a call it never made,
+		// so the record says its arguments did not parse (ArgsUnparsed).
 		// Not admitted to the run's call log, since nothing ran.
 		o.holdRefusalLocked(in.Over)
 		o.mu.Unlock()
 		out := toolloop.UnparsedArguments(in.Name, in.ArgumentsError)
 		o.record(Call{Call: tools.Call{Name: in.Name, Output: out, Failed: true,
-			Cause: tools.RefusalInvalid}, Seq: seq, CallID: callID}, time.Time{})
+			Cause: tools.RefusalInvalid}, Seq: seq, CallID: callID, ArgsUnparsed: true}, time.Time{})
 		return refused(out)
 	}
 	// THE IDENTITY IT WILL BE COUNTED BY in the run's call log, which its

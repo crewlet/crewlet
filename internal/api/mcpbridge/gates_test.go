@@ -248,7 +248,9 @@ func TestASuspendIsRefusedAndRecordedAsACallThatRan(t *testing.T) {
 }
 
 // EVERY RECORDED CALL SAYS WHEN IT RAN, FOR HOW LONG AND WHO ANSWERED, and a
-// call whose arguments did not parse is recorded unrun, untimed and failed.
+// call whose arguments did not parse is recorded unrun, untimed and failed,
+// marked as one whose arguments did not parse: recorded with none and
+// unmarked, it reads as the tool called with none.
 func TestARecordedCallCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	t.Parallel()
 	g := newGated(t)
@@ -273,8 +275,12 @@ func TestARecordedCallCarriesItsTimingAndWhoAnswered(t *testing.T) {
 			"duration and origin", ran)
 	}
 	unrun := rows[1]
-	if unrun.Seq != 2 || !unrun.Failed || !unrun.StartedAt.IsZero() || unrun.Duration != 0 {
-		t.Errorf("the call that did not run is recorded %+v, want it failed and untimed", unrun)
+	if unrun.Seq != 2 || !unrun.Failed || !unrun.StartedAt.IsZero() || unrun.Duration != 0 ||
+		!unrun.ArgsUnparsed || len(unrun.Args) != 0 {
+		t.Errorf("the call that did not run is recorded %+v, want it failed, untimed and marked unparsed", unrun)
+	}
+	if ran.ArgsUnparsed {
+		t.Errorf("the call that ran is marked as one whose arguments did not parse: %+v", ran)
 	}
 	if n := len(g.byName["read_page"].seen()); n != 1 {
 		t.Errorf("the tool ran %d times, want only the call whose arguments parsed", n)
