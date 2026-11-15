@@ -189,8 +189,8 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 }
 
 // templates are the argument lists a read runs: "<oid>" a whole id, "<range>"
-// two joined by "...", and "<abbrevs>" one or more `--disambiguate=` of
-// validated hex, ending the list.
+// two joined by "...", "<abbrevs>" one or more `--disambiguate=` of
+// validated hex, ending the list, and "<oids>" one or more whole ids, ending it.
 var templates = [][]string{
 	{"cat-file", "--batch-check", "-Z"},
 	{"cat-file", "--batch-check=%(objectmode) %(objectname) %(objecttype)", "-Z"},
@@ -220,6 +220,7 @@ var templates = [][]string{
 	{"grep", "-I", "-n", "-z", "--no-color", "--full-name", "-E", "-i", "-e", "<pattern>", "--end-of-options",
 		"<oid>"},
 	{"grep", "-I", "-n", "-z", "--no-color", "--full-name", "-e", "^", "--end-of-options", "<oid>"},
+	{"log", "-z", "--no-walk=unsorted", "--no-mailmap", "--no-color", "--no-notes", query.LogFormat, "<oids>"},
 }
 
 // logLiteralTemplate is the magic a history's path follows `--` with.
@@ -272,6 +273,18 @@ func fits(args, tmpl []string) bool {
 		for _, a := range args[len(head):] {
 			hex, ok := strings.CutPrefix(a, "--disambiguate=")
 			if !ok || !gitlet.ValidRev(hex) || gitref.ValidOID(hex) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(tmpl) > 0 && tmpl[len(tmpl)-1] == "<oids>" {
+		head := tmpl[:len(tmpl)-1]
+		if len(args) <= len(head) || !slices.Equal(args[:len(head)], head) {
+			return false
+		}
+		for _, a := range args[len(head):] {
+			if !gitref.ValidOID(a) {
 				return false
 			}
 		}

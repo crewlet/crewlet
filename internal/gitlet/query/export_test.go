@@ -59,3 +59,6 @@ func SetPatchSpoolWait(s *Server, d time.Duration) { s.patchSpoolWait = d }
 
 // ErrStopped is the cause a read's context ends with when its server stops.
 var ErrStopped = errStopped
+
+// LogFormat is the format every log a read runs names, its fields NUL-ended.
+const LogFormat = logFormat

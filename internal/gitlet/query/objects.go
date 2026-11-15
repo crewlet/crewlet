@@ -86,6 +86,11 @@ func revsOf(q gitlet.GitQuery) []string {
 		revs = []string{q.Diff.Base, q.Diff.Head}
 	case gitlet.GitCompare:
 		revs = []string{q.Compare.Base, q.Compare.Head}
+	case gitlet.GitTips:
+		revs = slices.Clone(q.Tips.OIDs)
+		if q.Tips.Base != "" && !slices.Contains(revs, q.Tips.Base) {
+			revs = append(revs, q.Tips.Base)
+		}
 	case gitlet.GitLandedIn:
 		revs = []string{q.LandedIn.Commit, q.LandedIn.TargetOID}
 	case gitlet.GitRevisionFacts:
