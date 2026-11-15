@@ -272,7 +272,7 @@ test("a limit the engine enforces is changed in place as a patch of its one key"
   expect(save!.body).toEqual({
     delegated_decisions: { deadline_seconds: 1200 },
     _summary:
-      "Delegated decisions: A request no delegate answered goes to people after set to 1200 " +
+      "Delegated decisions: A request no delegate answered goes to people after set to 20 minutes " +
       "(delegated_decisions.deadline_seconds)",
   });
   // THE SAVED VALUE, MARKED AS APPLYING, in the row it was changed in.
