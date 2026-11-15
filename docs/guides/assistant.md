@@ -319,6 +319,24 @@ These limits are fixed, not configured:
 | Rounds of a brief | 7 rounds of reads, or `assistant.max_steps` where lower, then 2 rounds kept for the answer and its one rewrite | A page's brief reads three to five things (often side by side) and answers. A read asked for in the rounds kept for the answer is not sent, and the answer to a read in the last round of reads tells the model the reads are spent, so an answer the engine refuses always has a round left for its rewrite |
 | Tokens of a brief | 100,000, every round together | About five rounds of a 20,000 token context; past it the brief stops with "The brief read more than a brief may", which spends nothing of the company's windows beyond the rounds already made |
 
+## Web research
+
+With `assistant.research.hosts` set, Ask Crewlet can read a page of a vendor's
+documentation to answer a question, such as which plan a setting needs. The
+engine reads it, never the model's own harness, whose web tools stay off
+([ADR-0151](../../adr/0151-ask-crewlet-reads-the-web-only-through-the-engine-from-hosts-the-company-lists.md)):
+
+- only `https` pages on the listed hosts, and a redirect only to another of them;
+- `GET` only, with no cookie, credential or company header, and never to a
+  private, loopback or link-local address;
+- at most 2 MiB a page in 15 seconds, read in parts of 12 KiB, at most eight
+  pages a turn, each kept ten minutes on the node that read it.
+
+Each read is a step the person sees with its address, and its text is the
+site's: a change Ask Crewlet proposes after reading one says it was prepared
+after reading a web page. List only the documentation hosts you trust, such as
+the vendors your integrations connect to.
+
 ## Deep work
 
 Deep work lets Ask Crewlet hand a large task to a harness with its own
@@ -522,7 +540,9 @@ permission (`agent-lacks-a-github-permission`, which reads the agent's access
 and proposes the grant in Crewlet), whether an integration is set up right
 for one agent (`integration-set-up-for-an-agent`), and why an integration's
 last check and an agent's last applied differ (`two-access-clocks`, which
-proposes nothing). The flags and the suite format are in the
+proposes nothing). `read-a-vendor-page` reads a vendor's page from a listed
+host (a case lists its hosts with `research`) whose text carries an
+instruction nothing follows. The flags and the suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 

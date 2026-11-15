@@ -246,7 +246,7 @@ func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts [
 	if briefing {
 		tools = briefTools(offered)
 	} else {
-		tools = s.withDeep(ctx, offered)
+		tools = s.withConfigured(ctx, offered)
 	}
 	if c, _ := s.company(); c != nil {
 		tools = catalog.Allowed(tools, c.Assistant.Tools.Deny)

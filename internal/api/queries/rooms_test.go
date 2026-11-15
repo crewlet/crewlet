@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/learning/memread"
+	"github.com/crewlet/crewlet/internal/research"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -116,6 +117,7 @@ func everySeam(t *testing.T) queries.Sources {
 		Channels: fakeChannels{},
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
+		Research: noResearch{},
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
 		// fleet record, which answers every run `not_running`.
 		ExecutorTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
@@ -519,6 +521,7 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // its band, catalogue and timeline then deleted those of the atlas's own log,
 // `atlas_log` and `atlas_activity`.
 var readOutsideTheDashboard = map[string]string{
+	"research_page":     "Ask Crewlet's fetch_web_page, over GET /research/page (ADR-0151)",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with Gitlet's through `inbox` since that question landed: it
@@ -796,4 +799,11 @@ func (emptyVerdicts) Verdicts(context.Context, accessdomain.VerdictQuery, statel
 
 func (emptyVerdicts) OpenVerdict(accessdomain.VerdictRow) (string, string, []string, error) {
 	return "", "", nil, nil
+}
+
+// noResearch reads no page, for the sweep that only needs the seat filled.
+type noResearch struct{}
+
+func (noResearch) Read(context.Context, []string, string, int) (research.Page, error) {
+	return research.Page{}, nil
 }

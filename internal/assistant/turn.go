@@ -94,7 +94,9 @@ type turn struct {
 	// outside is the source of the last answer this turn read that somebody
 	// the company cannot vouch for wrote, named on any proposal it makes
 	// after (D25).
-	outside  provenance.Source
+	outside provenance.Source
+	// calls counts this segment's calls of each tool a turn bounds (Tool.PerTurn).
+	calls    map[string]int
 	model    string
 	provider string
 	// deep is the turn's deep work (ADR-0054): what this segment hands a
@@ -131,6 +133,23 @@ func (t *turn) firstOutput() {
 	if !shown {
 		t.svc.metrics.Observe(metrics.AssistantFirstOutputLatency, t.svc.now().Sub(t.started), nil)
 	}
+}
+
+// spend counts one call of tool, and reports whether the turn may still make it.
+func (t *turn) spend(tool catalog.Tool) bool {
+	if tool.PerTurn == 0 {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.calls == nil {
+		t.calls = map[string]int{}
+	}
+	if t.calls[tool.Name] >= tool.PerTurn {
+		return false
+	}
+	t.calls[tool.Name]++
+	return true
 }
 
 // tainted notes a read whose answer, at the trust it was fenced under,

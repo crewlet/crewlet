@@ -548,9 +548,12 @@ func (s *Service) ReadsImages() bool {
 	return err == nil
 }
 
-// withDeep is tools with the escalation tool, where this node can run deep work
-// for the company now.
-func (s *Service) withDeep(ctx context.Context, tools []catalog.Tool) []catalog.Tool {
+// withConfigured is tools with the escalation tool, where this node can run deep work
+// for the company now, and the web read where the company lists research hosts.
+func (s *Service) withConfigured(ctx context.Context, tools []catalog.Tool) []catalog.Tool {
+	if c, _ := s.company(); c != nil && len(c.Assistant.ResearchHosts()) > 0 {
+		tools = append(slices.Clone(tools), catalog.FetchWebPageTool())
+	}
 	if s.deepAvailable(ctx) != nil {
 		return tools
 	}

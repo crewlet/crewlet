@@ -34,8 +34,10 @@ type Case struct {
 	// needs the page.
 	Mode    wire.TurnMode `yaml:"mode"`
 	Answers []CaseAnswer  `yaml:"answers"`
-	Script  []CaseRound   `yaml:"script"`
-	Expect  Expect        `yaml:"expect"`
+	// Research are the hosts the company lists for web research; none is off.
+	Research []string    `yaml:"research"`
+	Script   []CaseRound `yaml:"script"`
+	Expect   Expect      `yaml:"expect"`
 
 	page *wire.PageContext
 }
@@ -238,13 +240,14 @@ func (c Case) Validate() error {
 		switch {
 		case (r.Call == "") == (r.Say == ""):
 			fail("script[%d]: give exactly one of call and say", i)
-		case r.Call != "" && !known(r.Call):
+		case r.Call != "" && !known(r.Call) &&
+			(len(c.Research) == 0 || r.Call != catalog.FetchWebPageToolName):
 			fail("script[%d].call: %q is not a catalogue tool", i, r.Call)
 		}
 	}
 	for field, tools := range map[string][]string{"calls": c.Expect.Calls, "never": c.Expect.Never} {
 		for _, tool := range tools {
-			if !known(tool) {
+			if !known(tool) && tool != catalog.FetchWebPageToolName {
 				fail("expect.%s: %q is not a catalogue tool", field, tool)
 			}
 		}

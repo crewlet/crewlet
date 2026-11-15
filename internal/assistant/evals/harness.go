@@ -134,6 +134,13 @@ func DenyingCompany(deny []string, seats ...string) (assistant.Company, error) {
 	return company(doc, true, seats)
 }
 
+// ResearchCompany is [Company] with web research on, from the hosts named.
+func ResearchCompany(hosts []string, seats ...string) (assistant.Company, error) {
+	doc := strings.Replace(companyDoc, "  llm: [assistant]\n",
+		"  llm: [assistant]\n  research:\n    hosts: ["+strings.Join(hosts, ", ")+"]\n", 1)
+	return company(doc, true, seats)
+}
+
 func company(doc string, on bool, seats []string) (assistant.Company, error) {
 	var roles string
 	for _, seat := range seats {
