@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1123,5 +1124,58 @@ func TestTheSlowestListIsTheLongestFirst(t *testing.T) {
 	}
 	if got := slowest(nil, 25); got != "" {
 		t.Errorf("slowest of nothing = %q, want nothing printed", got)
+	}
+}
+
+// A TEST IS TIMED BY ITS ACTIVE SPAN, NOT BY ITS OWN ELAPSED.
+//
+// The testing package stops a test's clock when its body returns, before its
+// parallel subtests run, so a suite of parallel cases under one test reported
+// its setup alone (internal/coord/kv's TestContract: 0.25 s). Its stamps say
+// what it held: from `run` to its result, less the stretch t.Parallel held it
+// paused. A `=== CONT` cmd/go prints only because the output switched back to
+// a running test is not a resume, and must not restart its clock.
+func TestATestIsTimedByItsActiveSpan(t *testing.T) {
+	t.Parallel()
+
+	const pkg = "github.com/crewlet/crewlet/internal/a"
+	at := func(seconds int) string {
+		return time.Date(2026, 11, 15, 12, 0, seconds, 0, time.UTC).Format(time.RFC3339Nano)
+	}
+	ev := func(action, test string, seconds int, elapsed float64) string {
+		return `{"Time":"` + at(seconds) + `","Action":"` + action + `","Package":"` + pkg +
+			`","Test":"` + test + `","Elapsed":` + strconv.FormatFloat(elapsed, 'f', -1, 64) + `}`
+	}
+	stream := strings.Join([]string{
+		// A suite: its body returns at once, its parallel cases run a minute.
+		ev("run", "TestSuite", 0, 0),
+		ev("run", "TestSuite/case", 0, 0),
+		ev("pause", "TestSuite/case", 0, 0),
+		ev("cont", "TestSuite/case", 0, 0),
+		ev("pass", "TestSuite/case", 60, 60),
+		ev("pass", "TestSuite", 60, 0.25),
+		// A parallel test held thirty seconds for a slot, then ten running,
+		// with a CONT in the middle that only marks switched output.
+		ev("run", "TestWaited", 0, 0),
+		ev("pause", "TestWaited", 1, 0),
+		ev("cont", "TestWaited", 31, 0),
+		ev("cont", "TestWaited", 35, 0),
+		ev("pass", "TestWaited", 41, 11),
+		`{"Time":"` + at(61) + `","Action":"pass","Package":"` + pkg + `","Elapsed":61}`,
+	}, "\n")
+
+	r := read(bufio.NewScanner(strings.NewReader(stream)), devNull(t))
+	var got strings.Builder
+	if err := writeTimings(&got, r); err != nil {
+		t.Fatal(err)
+	}
+	want := pkg + "\t61.000\n" +
+		pkg + "\tTestSuite\t60.000\n" +
+		pkg + "\tTestWaited\t11.000\n"
+	if got.String() != want {
+		t.Errorf("timings =\n%s\nwant\n%s", got.String(), want)
+	}
+	if list := slowest(r.timed, 3); !strings.Contains(list, "60.000s  internal/a TestSuite/case") {
+		t.Errorf("the slowest list does not time the parallel case by its span:\n%s", list)
 	}
 }

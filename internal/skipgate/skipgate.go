@@ -93,13 +93,16 @@
 // stopped it, so it is not a measurement of the package — and ci.yml keeps
 // only a passing run's file anyway.
 //
-// A test's seconds are its own record's: the wall time it ran, without the
-// time t.Parallel held it paused for a slot (the testing package stops its
-// clock there), but with the time its own parallel subtests waited for one.
-// So a package's tests sum to MORE than the package took whenever they
-// overlap, and a test's seconds grow with what ran beside it: the package
-// line is the binary's wall time, a test line is that test's span within it.
-// Subtests are inside their parent's seconds and get no line of their own.
+// A test's seconds are its ACTIVE span, read from the stamps test2json puts
+// on its events ([span]): from its `run` to its result, its parallel
+// subtests included, less the time t.Parallel held it paused for a slot. Not
+// the test's own Elapsed, which stops when its body returns and so leaves out
+// every parallel subtest; a record with no stamp, which test2json never
+// writes, falls back to it. So a package's tests sum to MORE than the package
+// took whenever they overlap, and a test's seconds grow with what ran beside
+// it: the package line is the binary's wall time, a test line is that test's
+// span within it. Subtests are inside their parent's seconds and get no line
+// of their own.
 //
 // The file is CREATED before the test command starts, so a path that cannot
 // be written fails in a second rather than after the whole suite, and a
@@ -149,6 +152,45 @@ type event struct {
 	// Elapsed is the seconds a package's test binary ran, on its
 	// package-level pass, fail or skip record (and a test's, on its own).
 	Elapsed float64
+	// Time is when test2json saw the event, which it stamps on every one.
+	Time time.Time
+}
+
+// span is one test's time ACTIVE, from its event stamps: from `run` to its
+// result, less every stretch between a `pause` and the `cont` that resumed
+// it. Not the test's own Elapsed, which the testing package stops when the
+// test's body returns, BEFORE its parallel subtests run: a test whose
+// subtests call t.Parallel reports its own setup alone (internal/coord/kv's
+// TestContract reported 0.25 s over a suite of ninety-nine cases), so a
+// weight read from it would put a suite's whole cost at nothing.
+type span struct {
+	started time.Time
+	active  time.Duration
+	paused  bool
+}
+
+// at reads a span's events. A `cont` for a test that is not paused is not a
+// resume: in verbose mode cmd/go prints `=== CONT` whenever the output
+// switches back to a test, which says nothing about its clock.
+func (s *span) at(action string, now time.Time) {
+	switch action {
+	case "run":
+		s.started = now
+	case "pause":
+		if !s.paused {
+			s.active += now.Sub(s.started)
+			s.paused = true
+		}
+	case "cont":
+		if s.paused {
+			s.started = now
+			s.paused = false
+		}
+	case "pass", "fail", "skip":
+		if !s.paused {
+			s.active += now.Sub(s.started)
+		}
+	}
 }
 
 // finish is how one package's test binary ended.
@@ -276,6 +318,7 @@ func read(in *bufio.Scanner, out *os.File) report {
 		measuredSeen: map[string]bool{}, finished: map[string]finish{},
 		topLevel: map[string]map[string]float64{}}
 	buffered := map[string][]string{}
+	spans := map[string]*span{}
 
 	for in.Scan() {
 		line := in.Bytes()
@@ -331,6 +374,21 @@ func read(in *bufio.Scanner, out *os.File) report {
 		}
 
 		key := e.Package + "\x00" + e.Test
+		elapsed := e.Elapsed
+		if !e.Time.IsZero() {
+			switch e.Action {
+			case "run", "pause", "cont", "pass", "fail", "skip":
+				sp := spans[key]
+				if sp == nil {
+					sp = &span{}
+					spans[key] = sp
+				}
+				sp.at(e.Action, e.Time)
+				if !sp.started.IsZero() {
+					elapsed = sp.active.Seconds()
+				}
+			}
+		}
 		switch e.Action {
 		case "output":
 			buffered[key] = append(buffered[key], e.Output)
@@ -341,13 +399,13 @@ func read(in *bufio.Scanner, out *os.File) report {
 				r.measuredSeen[m.Package+"\x00"+m.Test] = true
 			}
 			if e.Action != "fail" {
-				r.timed = append(r.timed, timedTest{pkg: short(e.Package), test: e.Test, elapsed: e.Elapsed})
+				r.timed = append(r.timed, timedTest{pkg: short(e.Package), test: e.Test, elapsed: elapsed})
 			}
 			if e.Action != "fail" && !strings.Contains(e.Test, "/") {
 				if r.topLevel[e.Package] == nil {
 					r.topLevel[e.Package] = map[string]float64{}
 				}
-				r.topLevel[e.Package][e.Test] = e.Elapsed
+				r.topLevel[e.Package][e.Test] = elapsed
 			}
 		}
 		switch e.Action {
