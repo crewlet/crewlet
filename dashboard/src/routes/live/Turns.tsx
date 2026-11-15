@@ -630,10 +630,13 @@ function TurnState({
           {UNSETTLED.word}
         </Tag>
       )}
-      {/* A FAILURE IS THE DANGER TONE, the one every failure mark wears. */}
+      {/* A FAILURE IS THE DANGER TONE, the one every failure mark wears, and
+          its word is the one the seat's page and the executors say of a
+          failed turn: "failure" here beside "failed" there read as two
+          states. */}
       {t.failed && (
         <Tag variant="danger" title="at least one event of this turn was a failure">
-          failure
+          failed
         </Tag>
       )}
     </span>

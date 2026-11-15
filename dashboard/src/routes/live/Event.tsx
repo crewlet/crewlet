@@ -307,13 +307,16 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 // Same treatment as the Turn record: this screen's whole
                 // point is one JSON record, so the record owns select-all
                 // rather than the page taking it. `plain` is THEIR word for
-                // no header; ours was "no wrap", which is `wrap={false}`. The
-                // copy control is the panel's own, so the block's is off, as
-                // two of them over one record is a reader choosing between
-                // identical buttons.
+                // no header. The copy control is the panel's own, so the
+                // block's is off, as two of them over one record is a reader
+                // choosing between identical buttons.
+                //
+                // AND IT WRAPS, the kit's default: drawn unwrapped, a long
+                // value (an id, a time, a summary) ran past the card's edge,
+                // cut there at a phone's width and on a long line at any, its
+                // sideways scroll a bar nobody saw.
                 <CodeBlock
                   plain
-                  wrap={false}
                   copyable={false}
                   selectable
                   label="The event payload, as JSON"
@@ -457,7 +460,6 @@ export function EventPeek({ eventId }: { eventId: string }) {
                 >
                   <CodeBlock
                     plain
-                    wrap={false}
                     copyable={false}
                     selectable
                     label="The event payload, as JSON"
