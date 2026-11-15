@@ -62,6 +62,7 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 		"atlas.refresh_interval_seconds":              "1800",
 		"code.scratch.idle_days":                      "14",
 		"code.scratch.max_per_seat":                   "20",
+		"chat.chatlet.message_retention_days":         "90",
 	}
 	doc := "name: Acme\n" + nest(withContext(written))
 	c, err := config.ParseCompany([]byte(doc))
@@ -211,6 +212,36 @@ func TestADocumentThatSaysNothingIsHeldToTheDefaults(t *testing.T) {
 	}
 }
 
+// A MESSAGE HORIZON OF ZERO KEEPS MESSAGES FOR EVER, and the row says so: the
+// value is 0 and Off, against a default of a year that bounds them. Read as a
+// plain number, 0 days would be a horizon that prunes everything.
+//
+// Mutation: drop zeroIsOff from the row, or read the horizon's duration
+// without its second return, and this fails.
+func TestAMessageHorizonOfZeroIsReportedAsKeepingForEver(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte("name: Acme\nchat:\n  chatlet: {message_retention_days: 0}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := askLimits(t, c, iam.GrantAdmin)
+	if err != nil {
+		t.Fatalf("limits: %v", err)
+	}
+	for _, row := range got.Limits {
+		if row.Key != "chat.chatlet.message_retention_days" {
+			continue
+		}
+		if row.Value != 0 || !row.Off || row.Default != config.DefaultMessageRetentionDays ||
+			row.DefaultOff {
+			t.Errorf("the horizon answers %+v, want 0 and off against a default of %d days",
+				row, config.DefaultMessageRetentionDays)
+		}
+		return
+	}
+	t.Fatal("the answer has no row for chat.chatlet.message_retention_days")
+}
+
 // THE LIMITS ARE AN ADMINISTRATOR'S, as the company document they are read
 // from is, and a node running no company answers none: no turn runs there.
 func TestTheLimitsAreAnAdministratorsAndNeedACompany(t *testing.T) {
@@ -277,6 +308,11 @@ func TestEverySettableLimitReportsTheRangeTheValidatorHolds(t *testing.T) {
 		if r.Max != nil {
 			outside = append(outside, *r.Max+1)
 		}
+		// THE HOLE between zero and the least horizon: 1 is refused while
+		// 0 is admitted, which a check of Min-1 alone never reaches.
+		if r.OrZero && r.Min > 1 {
+			outside = append(outside, 1)
+		}
 		for _, v := range outside {
 			doc := "name: Acme\n" + nest(withContext(map[string]string{row.Key: fmt.Sprint(v)}))
 			_, err := config.ParseCompany([]byte(doc))
@@ -309,6 +345,13 @@ func TestEverySettableLimitReportsTheRangeTheValidatorHolds(t *testing.T) {
 					row.Key, inside, r, err)
 			}
 		}
+		if r.OrZero {
+			doc := "name: Acme\n" + nest(withContext(map[string]string{row.Key: "0"}))
+			if _, err := config.ParseCompany([]byte(doc)); err != nil {
+				t.Errorf("%s reports 0 admitted beside its range, and the validator refuses it: %v",
+					row.Key, err)
+			}
+		}
 		checked++
 	}
 	if checked == 0 {
@@ -327,7 +370,8 @@ func problemAt(problems []config.Problem, key string) (config.Problem, bool) {
 }
 
 func sameRange(a, b config.Range) bool {
-	if a.Min != b.Min || a.MinExclusive != b.MinExclusive || (a.Max == nil) != (b.Max == nil) {
+	if a.Min != b.Min || a.MinExclusive != b.MinExclusive || a.OrZero != b.OrZero ||
+		(a.Max == nil) != (b.Max == nil) {
 		return false
 	}
 	return a.Max == nil || *a.Max == *b.Max

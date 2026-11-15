@@ -1386,3 +1386,51 @@ test("an unclaimed deployment with an open invitation says to open its link", as
   expect(within(callout).queryByRole("link", { name: "Open Structure" })).toBeNull();
   expect(screen.queryByText(/Nobody has been invited/)).toBeNull();
 });
+
+// A NAME IS CHANGED IN THE EDIT, sent trimmed and alone, for a person and a
+// service account alike; emptied, it clears the name, which the engine keeps
+// as no name. Mutation: drop the field, or send the name untouched beside
+// every save, and this fails.
+test("an edit changes the name, sending it trimmed and alone", async () => {
+  const eng = engine({
+    "PATCH /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })],
+    "PATCH /iam/people/p-ci": [json(200, { id: "p-ci", outcome: "applied", op_id: "k" })],
+  });
+  location.hash = "#/settings/people?peek=person:p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
+  const name = within(edit).getByLabelText(/^Name/) as HTMLInputElement;
+  expect(name.value).toBe("Bo Lang");
+  fireEvent.change(name, { target: { value: "  Bo Lange " } });
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ name: "Bo Lange" }]);
+});
+
+// A NAME THIS NODE CANNOT OPEN IS NOT OFFERED FOR CHANGE: the field would open
+// empty, and a Save would write over a name nobody read. It is held, saying
+// why, and the rest of the edit still saves without it. Mutation: open the
+// field on a sealed row and the save sends a name.
+test("a sealed name is held in the edit with the reason, and never sent", async () => {
+  const eng = engine(
+    { "PATCH /iam/people/p-bo": [json(200, { id: "p-bo", outcome: "applied", op_id: "k" })] },
+    () => ({
+      ...PEOPLE,
+      people: PEOPLE.people.map((p) =>
+        p.id === "p-bo" ? { ...p, name: undefined, sealed: true } : p,
+      ),
+    }),
+  );
+  location.hash = "#/settings/people?peek=person:p-bo";
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  const edit = await screen.findByRole("dialog", { name: /^Edit / });
+  const name = within(edit).getByLabelText(/^Name/) as HTMLInputElement;
+  expect(name.disabled).toBe(true);
+  expect(within(edit).getByText(/can’t open the name it holds/)).toBeTruthy();
+  fireEvent.click(within(edit).getByRole("checkbox", { name: "Worklet" }));
+  fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(eng.writes().map((w) => w.body)).toEqual([{ add_grants: ["worklet"] }]);
+});

@@ -328,15 +328,6 @@ export const CODE_MAX_BLAME_LINES = 500;
 export const CHANGE_PART_PAGE = 200;
 
 /**
- * What an unset `code.identity_domain` reads as, the engine's own default
- * (`config.DefaultCodeIdentityDomain`), which Settings › Gitlet says beside an
- * unset field so the page states the policy in force. The scratch policy's
- * defaults come on the engine's own rows (`limits`, group `code`). Held by
- * `internal/gitlet.TestTheDashboardStatesTheCodePolicysDefaults`.
- */
-export const CODE_IDENTITY_DOMAIN = "seats.invalid";
-
-/**
  * `code_search` (`GET /gitlet/search`): the lines that match a search, the
  * commit each repository with a hit was searched at, and what was not
  * searched (`codesearch.Answer`). HELD BOTH WAYS, with the rows it composes,

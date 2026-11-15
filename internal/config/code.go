@@ -1407,7 +1407,8 @@ func (c Code) validate(path Path, o *org.Organization) error {
 					"code.deleted_retention_days")
 		}
 		if c.IdentityDomain != "" {
-			p.add(at(path, "identity_domain"), ErrConflict,
+			p.addSaying(at(path, "identity_domain"), ErrConflict,
+				"Turn Gitlet on first: no commit is built for this domain to name while nothing hosts code.",
 				"nothing hosts code on this company, so no commit is built to name it: set "+
 					"code.backend: gitlet, or remove code.identity_domain")
 		}
@@ -1447,7 +1448,9 @@ func (c Code) validate(path Path, o *org.Organization) error {
 			CodeMaxDeletedRetentionDays, DefaultCodeDeletedRetentionDays, d)
 	}
 	if d := c.IdentityDomain; d != "" && !validDomainName(d) {
-		p.add(at(path, "identity_domain"), ErrShape,
+		p.addSaying(at(path, "identity_domain"), ErrShape,
+			fmt.Sprintf("%q is not a domain name. Use lowercase letters, digits and hyphens, in "+
+				"parts joined by dots, like example.com, at most %d characters.", d, CodeMaxIdentityDomainBytes),
 			"%q is not a lowercase DNS name of at most %d bytes: labels of letters, digits and hyphens, "+
 				"none starting or ending with a hyphen, joined by dots (example.com), or unset for %s",
 			d, CodeMaxIdentityDomainBytes, DefaultCodeIdentityDomain)

@@ -80,17 +80,27 @@ func (c *Company) validateContainerKeys() error {
 	// The reserved containers, and what each is reserved FOR — the message
 	// has to say, because "HOME is reserved" tells an operator nothing about
 	// which of their two settings to change.
-	reserved := map[string]string{}
+	// What each reserved key holds, in a person's words: the same sentence
+	// whichever side of the clash was just changed, a unit's space or the
+	// knowledge setting.
+	type reservation struct{ why, holds string }
+	reserved := map[string]reservation{}
 	if skills != "" {
-		reserved[skills] = "holds this company's tool-skill pages, which are " +
-			"excluded from knowledge search and from routing, so a unit writing " +
-			"there would have its pages silently unreadable. Pick another key, " +
-			"or move the skills container with knowledge.skills_container"
+		reserved[skills] = reservation{
+			why: "holds this company's tool-skill pages, which are " +
+				"excluded from knowledge search and from routing, so a unit writing " +
+				"there would have its pages silently unreadable. Pick another key, " +
+				"or move the skills container with knowledge.skills_container",
+			holds: "the tool skills",
+		}
 	}
 	if root != "" && root != skills {
-		reserved[root] = "holds the organisation's own pages, starting with the " +
-			"root Onboarding page every seat reads first. Pick another key, or " +
-			"move it with knowledge.root_space"
+		reserved[root] = reservation{
+			why: "holds the organisation's own pages, starting with the " +
+				"root Onboarding page every seat reads first. Pick another key, or " +
+				"move it with knowledge.root_space",
+			holds: "the company pages",
+		}
 	}
 
 	shape := func(path Path, kind, key string) {
@@ -99,15 +109,18 @@ func (c *Company) validateContainerKeys() error {
 			return
 		}
 		if !ValidContainerKey(key) {
-			p.add(path, ErrUnknownValue, "%q is not a %s key: want %s",
-				key, kind, ContainerKeyRule)
+			p.addSaying(path, ErrUnknownValue, ContainerKeySaid(kind, key),
+				"%q is not a %s key: want %s", key, kind, ContainerKeyRule)
 		}
 	}
 	space := func(path Path, key string) {
 		key = strings.TrimSpace(key)
 		shape(path, "container", key)
-		if why, taken := reserved[key]; taken {
-			p.add(path, ErrConflict, "%q is reserved: it %s", key, why)
+		if r, taken := reserved[key]; taken {
+			p.addSaying(path, ErrConflict,
+				fmt.Sprintf("%s is both a unit's space and the space of %s, and each "+
+					"needs a space of its own. Pick another key.", key, r.holds),
+				"%q is reserved: it %s", key, r.why)
 		}
 	}
 
@@ -146,6 +159,17 @@ func (c *Company) validateContainerKeys() error {
 		walk(idx(field("units"), i), &c.Units[i])
 	}
 	return p.err()
+}
+
+// ContainerKeySaid is a key the grammar refuses, in a person's words: kind is
+// "project" or "container", which a person knows as a space.
+func ContainerKeySaid(kind, key string) string {
+	noun := kind
+	if kind == "container" {
+		noun = "space"
+	}
+	return fmt.Sprintf("%q is not a %s key. Use an upper-case letter followed by 1 to 9 "+
+		"upper-case letters or digits, like ENG, PROD or TS2.", key, noun)
 }
 
 // ErrContainerKey names a key the grammar refuses, for a caller outside the

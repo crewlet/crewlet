@@ -278,7 +278,7 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a repository's details, its new name and its mirrors, in their dialogs",
   "routes/settings/integrations/SshServers.tsx":
     "modal: an SSH server's fields and host keys, in its Add a server and Edit dialog",
-  "components/LimitSetting.tsx":
+  "components/SettingEditor.tsx":
     "saved per change: one setting's value, in the panel its pencil opens, written by that " +
     "panel's own Save",
   "components/TitleField.tsx":

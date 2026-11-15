@@ -18,9 +18,11 @@
  *    names each with its counts: an Overview tab that listed them again here
  *    was a second copy of that page. No delivery count, because a built-in
  *    service has no inbound edge to count.
- *  - THE SETTINGS. The company document's `tracker` and `knowledge` blocks,
- *    and its top-level `inbox` horizon, with the engine's own defaults where a
- *    key is unset, read only by an Admin, as the `config` question is.
+ *  - THE SETTINGS. The engine's own rows of what the company document sets
+ *    for each service, read only by an Admin: Worklet's inbox horizon
+ *    (`limits`), Doclet's `knowledge` block (`settings`) and Chatlet's message
+ *    horizon (`limits`), each beside its default and changed in place on the
+ *    one write path (`components/SettingEditor.tsx`).
  *  - CHATLET COUNTS NOTHING: the rooms it answers for are the reader's own
  *    seat's, never the company's, so its page names no count and no roster,
  *    only what it gives and the way in, which is offered to a holder of Chatlet
@@ -43,7 +45,6 @@ import { useMemo, useState, type ReactNode } from "react";
 import {
   ButtonLink,
   Callout,
-  DescriptionList,
   EmptyValue,
   List,
   SettingsTable,
@@ -58,6 +59,8 @@ import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PROJECT_PAGE } from "~/contract/work.ts";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
+import { TextSetting } from "~/components/TextSetting.tsx";
+import type { SettingRow } from "~/contract/settings.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { documentUnits, handleLabel, indexOrg, seatPath, type Seat } from "~/lib/seats.ts";
@@ -71,9 +74,6 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import { FeedRow, ServiceMark, ServiceState } from "./parts.tsx";
 import type { BuiltInService, Model, ReplacingApp } from "./model.ts";
-
-/** What a settings row says for a key the company document leaves unset. */
-const DEFAULT = "The engine's default";
 
 /** What a service gives the company: what running it here would give, or what Chatlet gives. */
 const GIVES: Record<BuiltInService["key"], string[]> = {
@@ -121,18 +121,6 @@ function homeOf(
     }
   }
   return {};
-}
-
-function block(
-  doc: CompanyDocument | null | undefined,
-  key: "tracker" | "knowledge" | "inbox",
-): Record<string, unknown> {
-  return asRecord((doc as Record<string, unknown> | null | undefined)?.[key]);
-}
-
-/** A value of the company document as an object, or an empty one where it is none. */
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 /** What each service holds, as the off state's sentences name it. */
@@ -625,6 +613,43 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
   );
 }
 
+/**
+ * Doclet's four settings, each the engine's row (`settings`) changed in place:
+ * what each is called here, the line under its field, and how a value reads
+ * where the plain words would mislead (an empty reach is every space).
+ */
+const DOCLET_SETTINGS: readonly {
+  key: string;
+  label: string;
+  helper: string;
+  words?: (value: SettingRow["value"]) => string;
+}[] = [
+  {
+    key: "knowledge.root_space",
+    label: "Company pages",
+    helper:
+      "The space that holds the company's own pages, starting with the Onboarding page every agent reads first.",
+  },
+  {
+    key: "knowledge.skills_container",
+    label: "Tool skills",
+    helper:
+      "The space that holds tool-skill pages, which search and routing leave out. Off turns tool skills off.",
+  },
+  {
+    key: "knowledge.scope",
+    label: "Search reaches",
+    helper: "The spaces a knowledge search reads. Empty reaches every space.",
+    words: (value) => (Array.isArray(value) && value.length > 0 ? value.join(", ") : "Every space"),
+  },
+  {
+    key: "knowledge.vectors",
+    label: "Search by meaning",
+    helper:
+      "Adds search by meaning to knowledge and work search. Off also stops embedding pages. The default follows whether an embeddings provider is set.",
+  },
+];
+
 function DocletPane({ service, head }: { service: BuiltInService; head: Head }) {
   const viewer = useViewer();
   const ask = useServicesAsk();
@@ -640,18 +665,20 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
   const containers = useQuery("containers", undefined, { enabled, pollMs: 60_000 });
   const feed = useQuery("page_activity", { limit: 20 }, { enabled, pollMs: 60_000 });
   const config = useQuery("config", undefined, { enabled: viewer.admin });
+  // THE ENGINE'S OWN ROWS of the `knowledge` block, each the value in force
+  // beside its default (`settings`, group `knowledge`), changed in place.
+  const settings = useQuery("settings", undefined, { enabled: viewer.admin });
   const [tab, setTab] = useTab();
 
   const spaces = containers.data?.containers ?? [];
   const pages = containers.data ? spaces.reduce((n, c) => n + c.pages, 0) : null;
   const changes = feed.data?.changes ?? [];
   const latest = changes[0]?.at;
-  const knowledge = block(config.data, "knowledge");
   const nameOf = (handle: string | undefined) =>
     index.byHandle.get(handle ?? "")?.name ?? handle ?? "Someone";
-  const skills =
-    typeof knowledge.skills_container === "string" ? knowledge.skills_container : undefined;
-  const scope = Array.isArray(knowledge.scope) ? (knowledge.scope as string[]) : [];
+  const knowledge = new Map(
+    (settings.data?.settings ?? []).filter((r) => r.group === "knowledge").map((r) => [r.key, r]),
+  );
 
   if (!enabled) {
     return (
@@ -761,30 +788,31 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
         )}
         {tab === "settings" && (
           <div className="int-tab">
-            <DescriptionList
-              dense
-              items={[
-                ["Knowledge base", "Doclet"],
-                ...(viewer.admin
-                  ? ([
-                      [
-                        "Company pages",
-                        typeof knowledge.root_space === "string" ? knowledge.root_space : DEFAULT,
-                      ],
-                      ["Tool skills", skills === "" ? "Off" : (skills ?? DEFAULT)],
-                      ["Search reaches", scope.length > 0 ? scope.join(", ") : "Every space"],
-                      [
-                        "Search by meaning",
-                        knowledge.vectors === false
-                          ? "Off"
-                          : knowledge.vectors === true
-                            ? "On"
-                            : "When an embeddings provider is set",
-                      ],
-                    ] as [string, string][])
-                  : ([["Everything else", "Admins see this"]] as [string, string][])),
-              ]}
-            />
+            <SettingsTable aria-label="Doclet settings">
+              <SettingsTable.Row label="Knowledge base" settingKey="knowledge.backend">
+                Doclet
+              </SettingsTable.Row>
+              {DOCLET_SETTINGS.map((d) => {
+                const row = knowledge.get(d.key);
+                return row ? (
+                  <TextSetting
+                    key={d.key}
+                    row={row}
+                    label={d.label}
+                    area="Doclet"
+                    reread="Reload to see the Doclet settings as they are now."
+                    onApplied={settings.refetch}
+                    helper={d.helper}
+                    {...(d.words ? { words: d.words } : {})}
+                    {...(d.key === "knowledge.scope" ? { choices: spaces.map((c) => c.key) } : {})}
+                  />
+                ) : (
+                  <SettingsTable.Row key={d.key} label={d.label} settingKey={d.key}>
+                    {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
+                  </SettingsTable.Row>
+                );
+              })}
+            </SettingsTable>
             <p className="t-caption">These live in the company document, under knowledge.</p>
           </div>
         )}
@@ -799,6 +827,11 @@ function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
   // without it is told what would open it rather than offered a link to a
   // screen that refuses them.
   const viewer = useViewer();
+  // THE COMPANY'S MESSAGE HORIZON, the engine's own row (`limits`, group
+  // `chat`): its value in force beside the default, changed in place. A room
+  // with no horizon of its own keeps its messages this long.
+  const limits = useQuery("limits", undefined, { enabled: viewer.admin });
+  const horizon = limits.data?.limits.find((r) => r.key === "chat.chatlet.message_retention_days");
   return (
     <div className="int-detail">
       {head(
@@ -815,6 +848,33 @@ function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
         </Callout>
       )}
       <Gives service={service} would={false} />
+      <section aria-label={`${service.name} settings`}>
+        <h3 className="t-label">Settings</h3>
+        <SettingsTable aria-label={`${service.name} settings`}>
+          {horizon ? (
+            <LimitSetting
+              cap={horizon}
+              label="Messages are kept for"
+              area="Chatlet"
+              reread="Reload to see the Chatlet settings as they are now."
+              onApplied={limits.refetch}
+              off="For ever"
+              zero="0 to keep them for ever"
+            />
+          ) : (
+            <SettingsTable.Row
+              label="Messages are kept for"
+              settingKey="chat.chatlet.message_retention_days"
+            >
+              {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
+            </SettingsTable.Row>
+          )}
+        </SettingsTable>
+        <p className="t-caption">
+          A room with no horizon of its own keeps its messages this long. A room’s own horizon is
+          set in the room.
+        </p>
+      </section>
     </div>
   );
 }

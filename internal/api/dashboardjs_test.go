@@ -2617,6 +2617,11 @@ const (
 	// schedule cap and audit window said from the engine) added 19,037 bytes
 	// over main's 6256.4 KiB and took it to 6275.0 KiB (6,425,609 bytes):
 	// 6276 KiB.
+	// Settings changed in place (the shared limit editor and the rows it
+	// draws on Delegated decisions, Gitlet, Worklet and Atlas, then one
+	// editor for the settings that are not numbers: Doclet's four, Gitlet's
+	// identity domain, Chatlet's message horizon and the company clock, and
+	// a person's name) take it to 6227.3 KiB (6,376,767 bytes): 6228 KiB.
 	treeBudget = 5<<20 + 1160<<10
 )
 

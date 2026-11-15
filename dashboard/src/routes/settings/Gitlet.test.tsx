@@ -21,7 +21,6 @@ import {
   LiveSocket,
   Store,
   type CodeRepoSummary,
-  type CompanyDocument,
   type FleetAnswer,
   type FleetNode,
   type OrgProjection,
@@ -34,7 +33,6 @@ import {
   RepoProtection,
   codeAlarmsOf,
   quietWords,
-  codePolicyOf,
   protectionLines,
 } from "./Gitlet.tsx";
 
@@ -91,19 +89,6 @@ test("the alarms are Gitlet's kinds, oldest first, and a node that said nothing 
 test("nothing firing is said of the nodes it is true of", () => {
   expect(quietWords([])).toBe("No code alarm is firing on any node.");
   expect(quietWords(["booting"])).toBe("No code alarm is firing on the nodes that have reported.");
-});
-
-// AN UNSET IDENTITY DOMAIN READS AS THE ENGINE'S DEFAULT, and says it is one;
-// a set one is the document's value. Mutation: draw an unset field as empty,
-// or mark a set one as the default, and this fails.
-test("an unset identity domain reads as the engine's default, marked as the default", () => {
-  const unset = codePolicyOf({ code: { backend: "gitlet" } } as unknown as CompanyDocument);
-  expect(unset.identityDomain).toEqual({ value: "seats.invalid", set: false });
-  const set = codePolicyOf({
-    code: { backend: "gitlet", identity_domain: "acme.example" },
-  } as unknown as CompanyDocument);
-  expect(set.identityDomain).toEqual({ value: "acme.example", set: true });
-  expect(codePolicyOf(null).identityDomain).toEqual({ value: "seats.invalid", set: false });
 });
 
 // THE GATE PER PATTERN: each rule says what a merge into it must meet, read

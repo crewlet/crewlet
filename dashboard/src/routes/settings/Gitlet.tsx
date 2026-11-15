@@ -17,8 +17,8 @@
  *   `code.scratch.idle_days` and `code.scratch.max_per_seat`, each value
  *   beside the engine's default and changed in place by the field Settings ›
  *   Limits changes a cap with, and the identity domain
- *   (`code.identity_domain`) read off the company DOCUMENT beside its
- *   default;
+ *   (`code.identity_domain`) as the engine's row of it (`settings`, group
+ *   `code`), beside its default and changed in place by its text field;
  * - and every repository's BRANCH PROTECTION — the engine's listing of the
  *   protected repositories, a page at a time, with the push rules it carries
  *   and, as a repository's fold is first opened, the merge gate of each rule
@@ -29,8 +29,8 @@
  *
  * ADMIN'S, as the rest of the Engine group: the document is read by an admin
  * alone, and the log and the fleet are the engine's. Hidden where the company
- * hosts no code. The scratch policy is changed where it is read; the
- * identity domain is changed in the configuration.
+ * hosts no code. The scratch policy and the identity domain are changed
+ * where they are read.
  */
 
 import { useState } from "react";
@@ -39,8 +39,9 @@ import { BellGlyph, CodeGlyph, SettingsGlyph, ShieldGlyph } from "@crewlethq/ico
 import { href } from "~/app/router.tsx";
 import { alarmKindTitle } from "~/lib/alarms.ts";
 import { PageFailed, QueryState } from "~/components/common.tsx";
-import { CODE_ALARM_KINDS, CODE_IDENTITY_DOMAIN } from "~/contract/code.ts";
+import { CODE_ALARM_KINDS } from "~/contract/code.ts";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
+import { TextSetting } from "~/components/TextSetting.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { gateLine, pushRuleLine, ruleSourceLine } from "~/lib/protection.ts";
@@ -53,7 +54,6 @@ import type {
   CodeReposAnswer,
   CodeRuleGate,
   CodeRuleSource,
-  CompanyDocument,
   FleetAnswer,
   RetentionDomain,
 } from "~/protocol/index.ts";
@@ -67,7 +67,6 @@ export const CODE_DOMAIN = "code";
 export function GitletSettings() {
   const retention = useRetentionReport(true);
   const fleet = useQuery("fleet", undefined, { pollMs: FLEET_POLL_MS });
-  const config = useQuery("config");
   const log = retention.data?.domains.find((d) => d.domain === CODE_DOMAIN);
   return (
     <div className="col gap-4">
@@ -77,9 +76,7 @@ export function GitletSettings() {
       <QueryState error={fleet.error} refusal={fleet.refusal} loading={fleet.loading}>
         {fleet.data && <CodeAlarms fleet={fleet.data} />}
       </QueryState>
-      <QueryState error={config.error} refusal={config.refusal} loading={config.loading}>
-        <CodePolicy doc={config.data} />
-      </QueryState>
+      <CodePolicy />
       <BranchProtection />
     </div>
   );
@@ -381,15 +378,6 @@ function CodeAlarms({ fleet }: { fleet: FleetAnswer }) {
   );
 }
 
-/** The identity domain the `code` block sets, or the default an unset one reads as. */
-export function codePolicyOf(doc: CompanyDocument | null) {
-  const code = (doc?.code ?? {}) as Record<string, unknown>;
-  const domain = typeof code.identity_domain === "string" ? code.identity_domain : "";
-  return {
-    identityDomain: { value: domain || CODE_IDENTITY_DOMAIN, set: domain !== "" },
-  };
-}
-
 /** What each scratch setting is called, by its key in the company document. */
 const CODE_POLICY_LABELS: Readonly<Record<string, string>> = {
   "code.scratch.idle_days": "Idle scratch repositories are deleted after",
@@ -397,15 +385,20 @@ const CODE_POLICY_LABELS: Readonly<Record<string, string>> = {
 };
 
 /**
- * The `code` block's scratch policy and identity domain. The two numbers are
- * the engine's rows (`limits`, group `code`), each changed in place by the
- * field Settings › Limits changes a cap with; the identity domain is read off
- * the document beside its default.
+ * The `code` block's scratch policy and identity domain, each the engine's own
+ * row changed in place: the two numbers by the field Settings › Limits changes
+ * a cap with (`limits`, group `code`), and the identity domain by its text
+ * field (`settings`, group `code`), each checked by the engine first.
  */
-export function CodePolicy({ doc }: { doc: CompanyDocument | null }) {
+export function CodePolicy() {
   const limits = useQuery("limits");
+  const settings = useQuery("settings");
   const rows = (limits.data?.limits ?? []).filter((r) => r.group === "code");
-  const domain = codePolicyOf(doc).identityDomain;
+  const domain = settings.data?.settings.find((r) => r.key === "code.identity_domain");
+  const refetch = () => {
+    limits.refetch();
+    settings.refetch();
+  };
   return (
     <Card padding="none">
       <Card.Header
@@ -422,9 +415,9 @@ export function CodePolicy({ doc }: { doc: CompanyDocument | null }) {
         </Card.Title>
       </Card.Header>
       <QueryState
-        error={limits.error}
-        refusal={limits.refusal}
-        loading={limits.loading && !limits.data}
+        error={limits.error ?? settings.error}
+        refusal={limits.refusal ?? settings.refusal}
+        loading={(limits.loading && !limits.data) || (settings.loading && !settings.data)}
       >
         <SettingsTable aria-labelledby="code-policy">
           {rows.map((cap) => (
@@ -434,17 +427,19 @@ export function CodePolicy({ doc }: { doc: CompanyDocument | null }) {
               label={CODE_POLICY_LABELS[cap.key] ?? cap.key}
               area="Gitlet"
               reread="Reload to see the code policy as it is now."
-              onApplied={limits.refetch}
+              onApplied={refetch}
             />
           ))}
-          <SettingsTable.Row
-            label="Identity domain"
-            settingKey="code.identity_domain"
-            source={domain.set ? "Set" : "Default"}
-            changed={domain.set}
-          >
-            <InlineCode>{domain.value}</InlineCode>
-          </SettingsTable.Row>
+          {domain && (
+            <TextSetting
+              row={domain}
+              label="Identity domain"
+              area="Gitlet"
+              reread="Reload to see the code policy as it is now."
+              onApplied={refetch}
+              helper="The domain the engine's own commits are addressed in: engine@ and each seat's handle @ it, for a seat with no email of its own. Empty is the default."
+            />
+          )}
         </SettingsTable>
       </QueryState>
     </Card>

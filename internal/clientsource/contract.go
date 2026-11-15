@@ -514,7 +514,6 @@ var contract = []Entry{
 	{"CODE_ALARM_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryCodeAlarm"},
 	{"CODE_MAX_BLAME_LINES", ReadScalar, "internal/gitlet.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers"},
 	{"CHANGE_PART_PAGE", ReadScalar, "internal/gitlet.TestTheDashboardReadsAChangesConversationAtTheEnginesPage"},
-	{"CODE_IDENTITY_DOMAIN", ReadScalar, "internal/gitlet.TestTheDashboardStatesTheCodePolicysDefaults"},
 	{"CHECK_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"CHECK_ENDED_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"CHECK_PURPOSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
@@ -540,6 +539,12 @@ var contract = []Entry{
 	{"LimitGroup", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"LimitUnit", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"SettingRange", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+
+	// settings.ts
+	{"SettingsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSettingsTheEngineSends"},
+	{"SettingRow", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSettingsTheEngineSends"},
+	{"SettingGroup", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheSettingsTheEngineSends"},
+	{"SettingKind", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheSettingsTheEngineSends"},
 
 	// signin.ts
 	{"SignInPolicyAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},

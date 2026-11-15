@@ -123,10 +123,27 @@ const READER = { login: "", grants: [], handle: "", owner: "", name: "", kind: "
 
 let budgetAsks = 0;
 
+/** The engine's row of the company clock, as the `settings` answer serves it. */
+const CLOCK = {
+  settings: [
+    {
+      key: "timezone",
+      group: "company",
+      kind: "zone",
+      value: "Europe/Berlin",
+      default: "UTC",
+      set: true,
+      off: false,
+      has_off: false,
+    },
+  ],
+};
+
 function mount(
   budgets: BudgetsAnswer,
   viewer: Record<string, unknown> = OPERATOR,
   hash = "#/company/budgets",
+  settings: unknown = CLOCK,
 ) {
   location.hash = hash;
   budgetAsks = 0;
@@ -141,6 +158,7 @@ function mount(
       return Promise.resolve(budgets);
     }
     if (what === "viewer") return Promise.resolve(viewer);
+    if (what === "settings") return Promise.resolve(settings);
     return new Promise(() => {});
   };
   render(
@@ -791,4 +809,28 @@ test("a seat's cell says its spend in tokens beside its ceiling", async () => {
 test("a budget row's sentence is wrapped with no stranded last word", () => {
   const rule = sheetRules().find((r) => r.selector === ".budget-row-scope");
   expect(rule?.body).toMatch(/text-wrap:\s*pretty/);
+});
+
+// THE COMPANY CLOCK IS SHOWN AND CHANGED WHERE ITS WINDOWS ARE: the engine's
+// row of `timezone`, beside its default, with the pencil that changes it (its
+// writes are `components/TextSetting.test.tsx`'s, the clock-move warning
+// included). A reader who may not read the document is shown the zone the
+// windows were cut on, and asked nothing of the setting. Mutation: drop the
+// card, or read the zone off a copy of the default, and this fails.
+test("the company clock is the engine's row, beside its default, changed in place", async () => {
+  mount(answer());
+  await settle();
+  const clock = screen.getByRole("table", { name: "Company clock" });
+  const zone = within(clock).getByRole("row", { name: /Time zone/ });
+  expect(zone.textContent).toContain("Europe/Berlin");
+  expect(within(zone).getByText("Changed from UTC")).toBeTruthy();
+  expect(within(zone).getByRole("button", { name: "Change Time zone" })).toBeTruthy();
+  cleanup();
+  mount(answer(), { login: "dee", owner: "dee", grants: [] }, "#/company/budgets", undefined);
+  await settle();
+  const read = within(screen.getByRole("table", { name: "Company clock" })).getByRole("row", {
+    name: /Time zone/,
+  });
+  expect(read.textContent).toContain("UTC");
+  expect(within(read).queryByRole("button", { name: "Change Time zone" })).toBeNull();
 });

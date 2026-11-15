@@ -66,6 +66,7 @@ import type {
   REPO_STATUSES,
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
+import type { SettingsAnswer } from "../contract/settings.ts";
 import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
 import type {
   AtlasActivityAnswer,
@@ -8088,6 +8089,8 @@ export interface QueryMap {
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;
+  /** The settings that are not numbers, as the engine applies them: an administrator's. */
+  settings: SettingsAnswer;
   /** The rules delegates decide by, and what they decided: an administrator's
    *  and the people a rule escalates to (ADR-0125). */
   delegated_decisions: DelegatedDecisionsAnswer;
