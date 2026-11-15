@@ -198,18 +198,6 @@ func LevelRoles(id, project string) ([]string, bool) {
 	return out, true
 }
 
-// levelHeld is the level whose roles on project are exactly roles, "" where
-// they are no level's.
-func levelHeld(roles []string, project string) string {
-	got := slices.Sorted(slices.Values(roles))
-	for _, l := range levels {
-		if want, _ := LevelRoles(l.id, project); slices.Equal(got, want) {
-			return l.id
-		}
-	}
-	return ""
-}
-
 // levelRole reports a role of some level's list on project.
 func levelRole(role, project string) bool {
 	for _, list := range Lists(project) {
