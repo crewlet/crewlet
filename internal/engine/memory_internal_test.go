@@ -77,6 +77,10 @@ type scriptedMemory struct {
 
 	runOut context.CancelFunc
 
+	// unheld is the seats with no live holding to turn: Releasing answers
+	// false for them, as the syncer does for a seat whose hydration failed.
+	unheld map[string]bool
+
 	// calls, late and completed are the own passes; backlog, backlogLate and
 	// backlogDone the backlogs.
 	calls, late, completed            []string
@@ -98,9 +102,11 @@ func (m *scriptedMemory) FlushBacklog(ctx context.Context, seat string) (memsync
 	return m.PublishBacklog(ctx, seat)
 }
 
-// Releasing records the release turning the seat's holding to releasing.
-func (m *scriptedMemory) Releasing(seat string) {
+// Releasing records the release turning the seat's holding to releasing, and
+// answers whether it had one to turn.
+func (m *scriptedMemory) Releasing(seat string) bool {
 	m.order = append(m.order, "releasing:"+seat)
+	return !m.unheld[seat]
 }
 
 // Forget records the release forgetting the seat.

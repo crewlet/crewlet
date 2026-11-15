@@ -337,11 +337,13 @@ type seatHolding struct {
 // ErrNotHeld is what a publish of a seat answers when this node's holding of
 // the seat does not let that call carry it ([holding]): a cycle's call for a
 // seat still being taken, being released, or released; a flush's call for a
-// seat whose hydration failed. Answered at once when the call begins without
-// such a holding, and at the call's next row when the holding changes under
-// it, after which nothing more of the seat is carried. The caller has nothing
-// of the seat to carry and nothing to report: the seat is not, or no longer,
-// this call's to publish. errors.Is-comparable.
+// seat whose hydration failed or never ran, or whose holding is still live.
+// Answered at once when the call begins without such a holding, and at the
+// call's next row when the holding changes under it, after which nothing more
+// of the seat is carried. To a cycle it is nothing to report: the seat is not,
+// or no longer, the cycle's to publish. A release flushes only a holding
+// [Syncer.Releasing] turned, so to a flush it is a holding that ended under
+// it. errors.Is-comparable.
 var ErrNotHeld = errors.New("memsync: this node's holding of the seat does not let this " +
 	"call publish it")
 
@@ -470,26 +472,39 @@ func (s *Syncer) PublishBacklog(ctx context.Context, handle string) (Carried, er
 	return s.publish(ctx, handle, live, backlogRange, backlogPassOrder)
 }
 
-// Releasing turns the seat's live holding here to releasing: the release of
-// the seat has begun, and from now on its memory is the release's flush's to
-// carry ([Syncer.FlushOwn], [Syncer.FlushBacklog]), never the cycle's. A cycle
-// partway through the seat stops at its next row ([ErrNotHeld]), and one that
-// reaches it later carries nothing of it.
+// Releasing turns the seat's live holding here to releasing, and says whether
+// it had one to turn: the release of the seat has begun, and from now on its
+// memory is the release's flush's to carry ([Syncer.FlushOwn],
+// [Syncer.FlushBacklog]), never the cycle's. A cycle partway through the seat
+// stops at its next row ([ErrNotHeld]), and one that reaches it later carries
+// nothing of it.
 //
-// Called by the engine's release of the seat, before its flush. A seat with no
-// live holding is left as it is: one whose taking here failed has none, so its
-// release flushes nothing, and never puts this node's own copies of its
-// profiles, skills and onboarding marker, which can be older than the
-// changelog's, over them (crewlet/crewlet#511).
-func (s *Syncer) Releasing(handle string) {
+// Called by the engine's release of the seat, before its flush, which it runs
+// only on true. A seat with no live holding is left as it is, and answers
+// false: one whose hydration here failed or never ran has none, so its release
+// flushes nothing, and never puts this node's own copies of its profiles,
+// skills and onboarding marker, which can be older than the changelog's, over
+// them (crewlet/crewlet#511). A taking that fails AFTER its hydration
+// completed has a live holding, and its release flushes what the hydration
+// just wrote, the changelog's own copies of those tables, which puts nothing
+// older over them.
+//
+// THE ANSWER IS WHAT DECIDES THE FLUSH, rather than the flush's own
+// [ErrNotHeld]: a release that forgot to turn the holding would otherwise
+// flush nothing, and a flush that is silent on ErrNotHeld would say nothing of
+// it, so every release would lose the seat's last writes without a line.
+func (s *Syncer) Releasing(handle string) bool {
 	if s == nil {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if held := s.holdings[handle]; held != nil && held.state == live {
-		held.state = releasing
+	held := s.holdings[handle]
+	if held == nil || held.state != live {
+		return false
 	}
+	held.state = releasing
+	return true
 }
 
 // FlushOwn is [Syncer.PublishOwn] for the release's last turn: the same own

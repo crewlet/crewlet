@@ -236,7 +236,9 @@ func TestAPublishThatStartsAfterForgetCarriesNothing(t *testing.T) {
 	}
 
 	// THE RELEASE, as the engine makes it.
-	s.Releasing(seat.Handle)
+	if !s.Releasing(seat.Handle) {
+		t.Fatal("the premise: Releasing found no live holding to turn")
+	}
 	own, ownErr := s.FlushOwn(t.Context(), seat.Handle)
 	backlog, backlogErr := s.FlushBacklog(t.Context(), seat.Handle)
 	if ownErr != nil || backlogErr != nil || own.Marked != wroteRows ||
@@ -386,7 +388,9 @@ func TestACyclePartWayThroughASeatAtItsReleasePublishesNothingAfterTheFlushBegin
 		// THE RELEASE, inside the cycle's publish of its hundredth row: its
 		// holding turned, and its flush run whole.
 		from = n
-		s.Releasing(seat.Handle)
+		if !s.Releasing(seat.Handle) {
+			t.Error("the premise: Releasing found no live holding to turn")
+		}
 		var ownErr, backlogErr error
 		flushOwn, ownErr = s.FlushOwn(t.Context(), seat.Handle)
 		flushBacklog, backlogErr = s.FlushBacklog(t.Context(), seat.Handle)
@@ -439,7 +443,7 @@ func TestACyclePartWayThroughASeatAtItsReleasePublishesNothingAfterTheFlushBegin
 // its own copies of them, older than the changelog's where a peer has held
 // the seat since, and the flush put them over the peer's (#511's second
 // comment). A hydration that fails begins no holding, so the release has none
-// to turn and a flush carries nothing; one that
+// to turn (Releasing answers false) and a flush carries nothing; one that
 // completes does, and its release flushes. Here a peer published the seat, this node holds older
 // copies, and its hydration fails as a replay opens: on a node that never held
 // the seat, and on one whose syncer still held it from before.
@@ -477,7 +481,10 @@ func TestASeatWhoseHydrationFailedFlushesNothingOnItsRelease(t *testing.T) {
 			}
 			js := &roundTripJS{}
 			s.js = js
-			s.Releasing(seat.Handle)
+			if s.Releasing(seat.Handle) {
+				t.Error("Releasing turned a holding of a seat whose hydration failed, want none " +
+					"to turn")
+			}
 			own, ownErr := s.FlushOwn(t.Context(), seat.Handle)
 			backlog, backlogErr := s.FlushBacklog(t.Context(), seat.Handle)
 			if own != (Carried{}) || !errors.Is(ownErr, ErrNotHeld) ||
@@ -500,7 +507,9 @@ func TestASeatWhoseHydrationFailedFlushesNothingOnItsRelease(t *testing.T) {
 				t.Fatalf("the control's hydration: %v", err)
 			}
 			s.js = js
-			s.Releasing(seat.Handle)
+			if !s.Releasing(seat.Handle) {
+				t.Error("the control's Releasing found no live holding to turn")
+			}
 			if carried, err := s.FlushOwn(t.Context(), seat.Handle); err != nil ||
 				carried.Rows == 0 {
 				t.Errorf("the control's flush answered %+v (%v), want the seat's tables sent "+

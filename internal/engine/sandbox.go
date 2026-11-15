@@ -4242,8 +4242,8 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// A LAST TURN, then forget the seat ([releaseSeatMemory]). The seat's
 	// holding turns to releasing first, so the memory sync cycle stops
 	// publishing it at its next row and the flush alone carries it from
-	// here, and a seat whose taking failed has no holding and flushes
-	// nothing (crewlet/crewlet#511). The flush carries what the cycles have
+	// here, and a seat whose hydration failed or never ran has no holding
+	// and flushes nothing (crewlet/crewlet#511). The flush carries what the cycles have
 	// not, from the marks they left, before the successor hydrates: what the
 	// seat wrote while held here first, then its profiles, skills and
 	// onboarding marker, sent whole, then, while the bound has time, the

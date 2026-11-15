@@ -423,7 +423,7 @@ then the value its current owner wrote. So a node publishes a seat only under
 its **holding** of it: live from the moment its hydration of the seat
 completes, when the memory cycles carry it; releasing from the moment its
 release begins, when only the release's flush carries it; and none before the
-hydration completes, after a taking that failed, or once the release has
+hydration completes, after a hydration that failed, or once the release has
 forgotten the seat. Each publish checks the holding before every row it sends,
 so a cycle partway through a seat whose release begins stops at its next row.
 A seat's move is where one publisher can still be two, and an older copy can
@@ -437,8 +437,8 @@ hydration records where the counter stood as it completed: the seat's
 while held here, its own; rows at or below it are what the node held for it
 when it took it, the rows the hydration wrote and those it found already
 present, its backlog. A seat whose hydration here has not completed has no
-boundary, and no holding, so nothing here publishes it. A seat has a mark over each
-range in each of these tables: the stamp of the last row of the range the
+boundary, and no holding, so nothing here publishes it. A seat has a mark over
+each range in each of these tables: the stamp of the last row of the range the
 changelog acknowledged, which moves with each one. The rows of a range above
 its mark are read a mebibyte at a time and published one by one, so a cycle
 that runs out keeps what it carried of these tables, and the seat's next
@@ -512,7 +512,12 @@ cycle had time left warns, with `pass=own`, whatever its backlog then did, and
 so does a backlog that failed with time left, with `pass=backlog`. A seat the
 cycle does not carry because this node's holding does not let it, one still
 being taken or one whose release has begun, says nothing, and neither does the
-release of a seat whose taking failed, which flushes nothing.
+release of a seat whose hydration failed, which flushes nothing. A taking that
+fails after its hydration completed, at a later step of the acquisition, is
+flushed on its release like any other: what it flushes is what its hydration
+just wrote, the changelog's own copies of the seat's profiles, skills and
+marker, so it puts nothing older over them. A flush whose holding ends under
+it, which nothing should do, warns with `seat_memory_not_flushed`.
 
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.
@@ -566,10 +571,10 @@ them for the older rows' turn even when no seat's turn runs a cycle out, so a
 crash loses up to 2k + 3 cycles' writes. While cycles run out, a cycle can
 start part-way through the seats, and the older rows' turn then comes before
 the own rows of the seats after it, which had theirs in the cycle before.
-Among the k are a seat whose own rows
-outlast a cycle and one whose profiles and skills do; a seat still being taken
-is not, since no cycle carries it until its hydration completes. A graceful handoff
-flushes on release what the cycles have not carried, from the marks they left,
+Among the k are a seat whose own rows outlast a cycle and one whose profiles
+and skills do; a seat still being taken is not, since no cycle carries it until
+its hydration completes. A graceful handoff flushes on release what the cycles
+have not carried, from the marks they left,
 in the same order: the seat's own rows, then its profiles, skills and marker,
 then its backlog, for up to five seconds at one broker round trip a row (about
 fifty rows across a slow link, thousands on a local broker), and what that
@@ -593,11 +598,12 @@ while this node holds the seat
 ([#349](https://github.com/crewlet/crewlet/issues/349)). Each node publishes
 the seat only under its holding (above), so neither the releasing node's
 cycle, once the release has begun, nor the next holder while it is still
-taking the seat, nor a node whose taking of the seat failed, in the flush that
-gives it back, publishes it. While a seat moves, an older copy of its
-profiles, skills or onboarding marker can still land after the newer one and
-replace it in two ways: the one row the releasing node's cycle was sending as
-its release began, which can land after the flush's copy of it, and two nodes
+taking the seat, nor a node whose hydration of the seat failed, in the flush
+that gives it back, publishes it. While a seat moves, an older copy of a row
+can still land after the newer one and replace it in two ways: the one row the
+releasing node's cycle was sending as its release began, which can land after
+the flush's copy of it, whether a profile, skill or marker rewritten since the
+cycle read it or a note or episode whose vector was set since, and two nodes
 holding the seat at once, a node whose lease lapsed under it still carrying
 the seat while the next holder writes it
 ([#511](https://github.com/crewlet/crewlet/issues/511)).
