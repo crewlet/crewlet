@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -47,7 +48,7 @@ func TestAMissingLayerTheHeadCannotDecideWaits(t *testing.T) {
 	chain := w.buildChain(t, p)
 	lost := chain[0].Parts[0].Object
 	w.objects.mu.Lock()
-	w.objects.fail = func(k objstore.Key) error {
+	w.objects.fail = func(_ context.Context, k objstore.Key) error {
 		if k == lost {
 			return objstore.ErrNotFound
 		}
@@ -208,7 +209,7 @@ func (w *syncWorld) refuseParts(chain ...gitlet.LayerRef) func() {
 	parts := partsOf(chain...)
 	slowDown := errors.New("SlowDown: please reduce your request rate")
 	w.objects.mu.Lock()
-	w.objects.fail = func(k objstore.Key) error {
+	w.objects.fail = func(_ context.Context, k objstore.Key) error {
 		if slices.Contains(parts, k.String()) {
 			return slowDown
 		}
@@ -807,7 +808,7 @@ func (w *syncWorld) holdFirst(key objstore.Key) func() {
 		}
 		return nil
 	}
-	w.objects.fail = func(k objstore.Key) error {
+	w.objects.fail = func(_ context.Context, k objstore.Key) error {
 		// Asked once a read is past its hold: the held read's ask comes after
 		// that of any read made while it was held.
 		if k == key && fails.Add(1) == 1 && holds.Load() > 1 {

@@ -909,7 +909,7 @@ func TestAMissingLayerIsAskedAboutOnceAtTheHead(t *testing.T) {
 	chain := w.buildChain(t, p)
 	lost := chain[0].Parts[0].Object
 	w.objects.mu.Lock()
-	w.objects.fail = func(k objstore.Key) error {
+	w.objects.fail = func(_ context.Context, k objstore.Key) error {
 		if k == lost {
 			return objstore.ErrNotFound
 		}

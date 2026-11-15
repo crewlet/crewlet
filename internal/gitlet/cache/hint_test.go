@@ -652,7 +652,7 @@ func TestADamagedPackTheStoreRefusesIsAskedForOnceAWindow(t *testing.T) {
 			gittest.DamageInPlace(t, dir, gittest.EntryBytes, tag)
 			refused := errors.New("the object store refuses the tag's pack")
 			w.objects.mu.Lock()
-			w.objects.fail = func(k objstore.Key) error {
+			w.objects.fail = func(_ context.Context, k objstore.Key) error {
 				if k == row.Object {
 					return refused
 				}

@@ -1145,7 +1145,7 @@ func TestARepairTheStoreCannotServeLeavesTheCopyServing(t *testing.T) {
 	s.Release()
 	down := errors.New("the object store is down")
 	w.objects.mu.Lock()
-	w.objects.fail = func(k objstore.Key) error {
+	w.objects.fail = func(_ context.Context, k objstore.Key) error {
 		if k == h.newer.Object {
 			return down
 		}
@@ -1240,7 +1240,7 @@ func TestAScrubAnsweredFromItsFindingsNamesThePacksItFoundWhole(t *testing.T) {
 	gittest.DamageInPlace(t, s.Dir, gittest.RevTrailer, h.commits[3])
 	s.Release()
 	w.objects.mu.Lock()
-	w.objects.fail = func(k objstore.Key) error {
+	w.objects.fail = func(_ context.Context, k objstore.Key) error {
 		if k == h.newer.Object {
 			return errors.New("the object store is down")
 		}
@@ -1366,7 +1366,7 @@ func TestAFindingFoundAgainStaysAsItWasFound(t *testing.T) {
 	refuse := func(objects ...objstore.Key) {
 		w.objects.mu.Lock()
 		defer w.objects.mu.Unlock()
-		w.objects.fail = func(k objstore.Key) error {
+		w.objects.fail = func(_ context.Context, k objstore.Key) error {
 			if slices.Contains(objects, k) {
 				return down
 			}

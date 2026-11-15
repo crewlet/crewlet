@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"syscall"
@@ -52,7 +53,7 @@ func TestASyncFailureSaysWhoseItIs(t *testing.T) {
 		w.push(t, repo, "refs/heads/main", nil)
 		throttled := errors.New("SlowDown: please reduce your request rate")
 		w.objects.mu.Lock()
-		w.objects.fail = func(objstore.Key) error { return throttled }
+		w.objects.fail = func(context.Context, objstore.Key) error { return throttled }
 		w.objects.mu.Unlock()
 		c := w.open(t)
 		_, err := c.Sync(t.Context(), repo, linearizable)
