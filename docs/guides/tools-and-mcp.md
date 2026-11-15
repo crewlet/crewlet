@@ -1150,7 +1150,9 @@ sent write-only. Its steps:
    the registry the company names, marked *Not reviewed*.
 2. **Name**, and what the server is for.
 3. **Connection.** The address, or the command, its arguments and its
-   variables, and the tool prefix.
+   variables, the tool prefix, and the start and call timeouts in seconds
+   (`startup_timeout_seconds`, `request_timeout_seconds`), each left empty
+   for the engine's default of 120 and 300.
 4. **Sign-in.** The vendor's integration where the catalogue names one (each
    agent gets its own instance, signed in as itself, and which agents get it
    is set on that integration's Agents tab); [OAuth](#signing-in-with-oauth),

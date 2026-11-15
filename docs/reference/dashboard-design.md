@@ -11165,7 +11165,10 @@ protocol, and for an admin the instructions it reports, said not to be the
 agents' (a seat's harness is handed the entry's `description`). **Connection**
 is for an admin the address or the command, then the transport, where it
 runs, its instances, the start and call timeouts with which are the default,
-its tool prefix (from the entry as written), with **Edit**; how the engine
+its tool prefix (from the entry as written), with **Edit**, which opens the
+wizard's Connection step, where the timeouts are changed too (an empty one is
+the engine's default, `MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS` and
+`MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS`); how the engine
 signs in (and an integration's link to its Agents tab); and every header or
 variable it is sent, from the engine's `values`: its name and the `${VAR}` it
 reads (*Set in the configuration* for a value written there, *Each agent's

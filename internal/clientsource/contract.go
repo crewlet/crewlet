@@ -484,6 +484,12 @@ var contract = []Entry{
 		"internal/gitlet.TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo"},
 	{"CODE_SEARCH_TRIGRAM_BYTES", ReadScalar, "internal/codeindex.TestTheDashboardSearchesCodeAtTheTrigramsWidth"},
 
+	// mcp.ts
+	{"MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS", ReadScalar,
+		"internal/mcp.TestTheDashboardStatesTheEnginesTimeoutDefaults"},
+	{"MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS", ReadScalar,
+		"internal/mcp.TestTheDashboardStatesTheEnginesTimeoutDefaults"},
+
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryRepositoryState"},
 	{"REPO_SEARCH_MODES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEverySearchModeOfARepository"},
