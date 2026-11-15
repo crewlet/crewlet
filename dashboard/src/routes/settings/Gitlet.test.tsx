@@ -142,7 +142,7 @@ test("each protected rule says its own gate, or that it has none once the detail
   ]);
   const read = protectionLines(rules, [{ pattern: "refs/heads/main", gate }]);
   expect(read[0]?.says).toBe(
-    "nobody pushes to it directly; a merge into it is merged by its maintainers, one approval, 1 check pass, landed by its queue, each change tested merged on the branch before it lands",
+    "nobody pushes to it directly; a merge into it is merged by its maintainers, one approval, 1 check pass, landed by its queue, each change tested merged on the branch before it lands (4 candidates at once, 4 changes each), a change to its checks (.crewlet/**) needs a person",
   );
   expect(read[1]?.says).toBe(
     "only a person pushes to it directly, forced pushes allowed; no merge gate",

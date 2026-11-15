@@ -28,6 +28,28 @@ export const REPO_STATUSES = ["importing", "active", "archived", "deleted", "pur
 export const REPO_SEARCH_MODES = ["indexed", "grep"] as const;
 
 /**
+ * The classes of a path a merge gate exempts a change by (`gitlet.PathClasses`),
+ * narrowest first: what a protection rule's form offers for its approvals'
+ * exemptions and each human path's. HELD BOTH WAYS, in order, by
+ * `internal/gitlet.TestTheDashboardOffersEveryPathClassAGateExempts`: a class
+ * the engine grew is one nobody can choose, and one it dropped is refused.
+ */
+export const CODE_PATH_CLASSES = ["whitespace_only", "comment_only"] as const;
+
+/**
+ * The bounds of a gated branch's queue (`gitlet.MaxQueueDepth`,
+ * `MaxQueueBatch`): the candidates it tests at once and the changes one takes,
+ * each from 1, and what a new gate takes where nobody sets them
+ * (`config.CodeDefaultQueueDepth`, `CodeDefaultQueueBatch`). What a protection
+ * rule's form bounds its two fields by, and starts a new gate's at. Held by
+ * `internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes`.
+ */
+export const CODE_MAX_QUEUE_DEPTH = 8;
+export const CODE_MAX_QUEUE_BATCH = 8;
+export const CODE_DEFAULT_QUEUE_DEPTH = 4;
+export const CODE_DEFAULT_QUEUE_BATCH = 2;
+
+/**
  * What became of one command of a push, in the engine's order
  * (`gitlet.CommandCounts`' fields): a ref made, moved, moved by force or
  * removed; asked for the value it already had; or refused. The words a row

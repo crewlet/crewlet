@@ -5645,7 +5645,10 @@ a tool arrives in it with the control that sends it. The controls
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
 | New repository | Gitlet › Repositories | `code_create_repo{name, owner, description?, default_branch?, visibility?}`: a project a unit owns; an applied create opens its page |
 | Delete repository · Restore repository | A repository's Settings tab; a deleted repository's page | `code_delete_repo{repo, reason?}`, asked once its name is typed · `code_restore_repo{repo}` |
-| Protect a branch · Edit · Remove (a rule) | A repository's Settings tab, and Protect on the row of a branch no rule names | `code_protect_branch{repo, pattern, …}`: only the fields moved; `remove` after a confirmation |
+| Edit details · Rename | A repository's Settings tab, its Repository card | `code_update_repo{repo, description?, default_branch?, owner?, visibility?}`: only the fields moved · `code_update_repo{repo, rename_to}`; an applied rename opens the new name |
+| Archive repository · Unarchive repository | A repository's Settings tab | `code_update_repo{repo, archived: true}` after a confirmation · `code_update_repo{repo, archived: false}` |
+| Add a path owner · Edit · Remove (an owner) | A repository's Settings tab | `code_update_repo{repo, path_owners: {add?, remove?}}`: an owner's globs given and taken by name; Remove takes every glob it holds, after a confirmation |
+| Protect a branch · Edit · Remove (a rule) | A repository's Settings tab, and Protect on the row of a branch no rule names | `code_protect_branch{repo, pattern, …}`: only the fields moved, every list of its gate item by item and its landing a field at a time; `remove` after a confirmation |
 | New branch · Delete (a branch) | A repository's Branches tab | `code_create_branch{repo, branch, at}` · `code_delete_branch{repo, branch, expected_head}` after a confirmation, at the head the row shows |
 | Edit · Delete file · New file · Add a file | A repository's Code tab, on a branch: a file's card and a directory's bar; Add a file on an empty repository | `code_commit_files{repo, branch, expected_head, message, files}`: one commit of one file (`put` or `delete`) at the commit the page read; an empty repository's first file sends no `expected_head`, a root commit that makes its default branch |
 | Revert · Cherry-pick | A commit's page | `code_revert` / `code_cherry_pick{repo, branch, expected_head, commit, message?}`: one new commit on the branch chosen |
@@ -8830,17 +8833,32 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   the default on Settings. **Settings** is a
   card a section, as a code host's settings page is, each titled with what it
   governs and a line saying so, and shows the repository's settings, its
-  protection rules with their merge gates — a gate that requires a check
-  with how its queue lands a change (each change tested merged on the branch
-  before it lands) —
+  protection rules with their merge gates (every field a merge is held to,
+  in one line (`lib/protection.ts`'s `gateLine`): who merges, the approvals
+  and the classes of change that need none, the paths a person approves and
+  the classes that exempt each, the checks, how a gate that requires a check
+  lands a change through its queue (each change tested merged on the branch
+  before it lands, so many candidates at once, so many changes each), whether
+  a change to the checks themselves needs a person, and whether its path
+  owners approve)
   and its path owners, and makes its writes, each through `useAct` and a
   WriteButton, never optimistic — the page is redrawn from the read the
   write's position brings — and each drawn for every reader, held with the
   sentence that says why: **Edit details**, on the Repository card
-  (`code_update_repo`'s `description`, `default_branch` and `owner`, one call
-  carrying only what the person moved, the default branch chosen from the
-  branches the repository holds, which is how a repository whose default
-  branch holds nothing is put right); **Search mode** (`code_update_repo`'s `search`, a
+  (`code_update_repo`'s `description`, `default_branch`, `owner` and
+  `visibility`, one call carrying only what the person moved, the default
+  branch chosen from the branches the repository holds, which is how a
+  repository whose default branch holds nothing is put right); **Rename**,
+  beside it (`rename_to` alone, a record of its own: a project's new name is
+  one label and a scratch repository keeps its seat's `<handle>.`, the old
+  name leads to it for a while, and the page moves to the new name once the
+  engine applied it); **Path owners**, where **Add a path owner** gives a
+  unit or a seat of the chart globs over the tree and each owner's **Edit**
+  and **Remove** change or take them (`code_update_repo`'s `path_owners`,
+  globs given and taken by name, never the list whole, so a glob another
+  request gave meanwhile is kept; Remove takes every glob the page read,
+  after a confirmation; a scratch repository takes none, and taking a glob
+  while a rule makes path owners approve is a person's); **Search mode** (`code_update_repo`'s `search`, a
   button a mode of `REPO_SEARCH_MODES`, held to `gitlet.SearchModes`: the mode
   it has is no change, and a scratch repository is never indexed);
   **Mirrors**, a person's alone (`code_update_repo`'s `mirror_from` and
@@ -8858,22 +8876,34 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   where it has one, since that host already holds whatever was pushed to it
   ([Expunge](../concepts/gitlet.md#expunge), "What still holds a purged
   object") — and only its Purge asks the repository's maintainer; the
-  section says where the last purge stands. A declared
-  repository's search mode and mirrors are the company document's, settled
-  by every activation: they are held with that sentence and the tab leads to
-  Settings › Configuration, while its purge, which changes none of its
-  settings, is offered. **Protection rules** are written on a repository
+  section says where the last purge stands; and **Archive**, where **Archive
+  repository** (`archived: true` alone, after a confirmation saying it turns
+  read-only: still cloned, fetched and read, and taking no push) and an
+  archived repository's **Unarchive repository** (`archived: false`) are each
+  a record of their own; a pull mirror is held from an archive, since an
+  archived repository takes no sync. A declared repository's details, name,
+  archive, path owners, search mode and mirrors are the company document's,
+  settled by every activation: they are held with that sentence and the tab
+  leads to Settings › Configuration, while its purge, which changes none of
+  its settings, is offered. **Protection rules** are written on a repository
   the document does not declare (`code_protect_branch`): **Protect a
   branch** adds a rule for a branch's name or a pattern (`refs/heads/<glob>`,
   `refs/tags/<glob>`), and each rule's **Edit** changes it: who pushes
   directly, whether a push may force or delete, and, behind **Gate merges
-  into it**, who merges, the approvals, the required checks, whether its path
-  owners approve and what becomes of a merged seat's branch. The form sends
-  only the fields the person moved from what the page read, and the required
-  checks item by item (`add`, `remove`), so nothing else of the rule is
-  restated; turning the gate off sends `remove_gate`. A gate's path classes
-  and its queue's depth and batch are shown on the rule's line and left as
-  they stand. **Remove** is confirmed in the page, saying what the refs
+  into it**, every field of the gate: who merges, the approvals and the
+  classes of change (`CODE_PATH_CLASSES`, held to `gitlet.PathClasses`) that
+  merge without one, the paths a person approves and the classes that exempt
+  each, the required checks, and, once a check is required, whether a seat
+  may approve a change to the checks themselves (`agents_edit_checks`) and
+  the queue's depth and batch (bounded by `CODE_MAX_QUEUE_DEPTH` and
+  `CODE_MAX_QUEUE_BATCH`, a new gate's starting at the engine's defaults),
+  whether its path owners approve and what becomes of a merged seat's
+  branch. The form sends only the fields the person moved from what the page
+  read, every list item by item (the checks and the exempting classes by
+  `add` and `remove`, the human paths by glob with `put` and `remove`) and
+  the landing a field at a time, so nothing else of the rule is restated and
+  an item somebody else added meanwhile is kept; turning the gate off sends
+  `remove_gate`. **Remove** is confirmed in the page, saying what the refs
   lose. **Delete repository** (`code_delete_repo`) opens a dialog that says
   what stops and that it is restorable until its purge, takes an optional
   reason, and is held until the repository's name is typed. A deleted
@@ -8881,8 +8911,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   repository** (`code_restore_repo`); its Settings cards show what it holds
   and draw none of the writes above, since a deleted repository takes no
   change but its restore. A declared repository's rules, delete and restore
-  are the company document's, held with that sentence. Its path owners are
-  set by a seat, or by a person's assistant.
+  are the company document's, held with that sentence.
   Content is not polled: a reader reading a file reads
   the revision they opened. A commit of its history, and of a blame, opens
   the commit's page; a branch offers a comparison with the default branch.

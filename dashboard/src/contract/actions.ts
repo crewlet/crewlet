@@ -596,13 +596,27 @@ export const ACTIONS = {
     scope: "person",
   },
   // A REPOSITORY'S LIFE (`routes/gitlet/repo/RepoWrites.tsx`,
-  // `routes/gitlet/ImportRepo.tsx`). Each lands on the code log, whose position
-  // raises this tab's code floor, and the repository's row and the listing
-  // are both in that domain's session set. Settings › its details, search
-  // mode and mirrors, each one settings change of its own; a mirror is a
-  // person's alone, which the deciding data node holds every asker to (U49 a).
+  // `routes/gitlet/repo/PathOwners.tsx`, `routes/gitlet/ImportRepo.tsx`). Each
+  // lands on the code log, whose position raises this tab's code floor, and
+  // the repository's row and the listing are both in that domain's session
+  // set. Settings › its details, path owners, search mode and mirrors, each
+  // one settings change of its own; a mirror is a person's alone, which the
+  // deciding data node holds every asker to (U49 a). An archive and a rename
+  // are each a record of their own, sent alone.
   code_update_repo: {
-    args: ["repo", "description", "default_branch", "search", "owner", "mirror_from", "mirror_to"],
+    args: [
+      "repo",
+      "description",
+      "default_branch",
+      "visibility",
+      "search",
+      "owner",
+      "path_owners",
+      "mirror_from",
+      "mirror_to",
+      "archived",
+      "rename_to",
+    ],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
@@ -655,9 +669,9 @@ export const ACTIONS = {
     scope: "person",
   },
   // A PROTECTION RULE (`routes/gitlet/repo/Protect.tsx`): who pushes to the
-  // refs a pattern names, whether a push may force or delete them, and the
-  // parts of its merge gate a form states; each field sent changes that field
-  // alone. `remove` takes the rule away and `remove_gate` its gate.
+  // refs a pattern names, whether a push may force or delete them, and every
+  // field of its merge gate; each field sent changes that field alone, each
+  // list item by item. `remove` takes the rule away and `remove_gate` its gate.
   code_protect_branch: {
     args: [
       "repo",
@@ -668,9 +682,13 @@ export const ACTIONS = {
       "remove",
       "merge_by",
       "approvals",
+      "approvals_unless",
+      "human_paths",
       "checks",
+      "landing",
       "owners_approve",
       "delete_source",
+      "agents_edit_checks",
       "remove_gate",
     ],
     domain: "code",

@@ -486,6 +486,11 @@ var contract = []Entry{
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryRepositoryState"},
 	{"REPO_SEARCH_MODES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEverySearchModeOfARepository"},
+	{"CODE_PATH_CLASSES", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEveryPathClassAGateExempts"},
+	{"CODE_MAX_QUEUE_DEPTH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
+	{"CODE_MAX_QUEUE_BATCH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
+	{"CODE_DEFAULT_QUEUE_DEPTH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
+	{"CODE_DEFAULT_QUEUE_BATCH", ReadScalar, "internal/gitlet.TestTheDashboardBoundsALandingAsTheEngineDoes"},
 	{"COMMAND_OUTCOMES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryOutcomeOfACommand"},
 	{"REPO_NAME", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/gitlet.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},

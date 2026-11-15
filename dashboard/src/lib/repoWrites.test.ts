@@ -44,6 +44,13 @@ import {
   restoreHeld,
   searchModeHeld,
   deleteHeld,
+  archiveHeld,
+  pathOwnerFormHeld,
+  pathOwnerTakeHeld,
+  pathOwnersArgs,
+  pathOwnersHeld,
+  renameFormHeld,
+  renameHeld,
 } from "./repoWrites.ts";
 
 const PERSON = {
@@ -285,4 +292,61 @@ test("a commit from the browser names a file from the root, a change and a messa
   expect(commitFormHeld("Fix a typo", "docs/", true)).toMatch(/by its path/);
   expect(commitFormHeld("Fix a typo", "docs/a.md", false)).toMatch(/Nothing is changed/);
   expect(commitFormHeld(" ", "docs/a.md", true)).toMatch(/Say what the commit changes/);
+});
+
+// A RENAME KEEPS THE REPOSITORY'S KIND: a project's name is one label, a
+// scratch repository's keeps its seat's handle (`gitlet.renameForm`), and the
+// name it has is no change. Mutation: let a dotted name rename a project, or a
+// scratch repository leave its seat's prefix, and this fails.
+test("a rename keeps a project one label and a scratch repository its seat's", () => {
+  expect(renameFormHeld(repo(), "web")).toBe("Type its new name.");
+  expect(renameFormHeld(repo(), "storefront")).toBeUndefined();
+  expect(renameFormHeld(repo(), "cto.web")).toMatch(/Name the project/);
+  const scratch = repo({ kind: "scratch", name: "cto.try", owner: { kind: "seat", ref: "cto" } });
+  expect(renameFormHeld(scratch, "cto.again")).toBeUndefined();
+  expect(renameFormHeld(scratch, "pm.again")).toMatch(/cto\.<name>/);
+  expect(renameFormHeld(scratch, "again")).toMatch(/cto\.<name>/);
+  expect(renameHeld(repo({ managed_by: "config" }), PERSON)).toBe(DECLARED);
+  expect(renameHeld(repo(), MACHINE)).toBe(UNBOUND);
+});
+
+// A PULL MIRROR IS NEVER ARCHIVED (`gitlet.archiveRefusal`): an archived
+// repository takes no sync. Mutation: let a pull mirror's archive through, and
+// this fails.
+test("a pull mirror is held from an archive, with why", () => {
+  expect(archiveHeld(repo(), PERSON)).toBeUndefined();
+  expect(archiveHeld(repo({ mirrored: true }), PERSON)).toMatch(/is a pull mirror/);
+  expect(archiveHeld(repo({ status: "importing" }), PERSON)).toMatch(/being imported/);
+  expect(archiveHeld(repo({ managed_by: "config" }), PERSON)).toBe(DECLARED);
+});
+
+// AN OWNER'S GLOBS MOVE BY NAME (`gitlet.PathOwnersChange`): given and taken,
+// never the list whole. Mutation: send the wanted list as `add`, or a glob both
+// ways, and this fails.
+test("a path owner's globs are given and taken by name", () => {
+  const unit = { kind: "unit", ref: "engineering" };
+  expect(pathOwnersArgs(unit, ["src/**", "app/**", " app/** "], ["src/**", "docs/**"])).toEqual({
+    add: [{ owner: unit, paths: ["app/**"] }],
+    remove: [{ owner: unit, paths: ["docs/**"] }],
+  });
+  expect(pathOwnersArgs(unit, ["src/**"], ["src/**"])).toBeNull();
+  expect(pathOwnersArgs(unit, [], ["src/**"])).toEqual({
+    remove: [{ owner: unit, paths: ["src/**"] }],
+  });
+});
+
+// A PATH OWNER FORM NAMES ITS OWNER AND A GLOB, FROM THE ROOT; a scratch
+// repository takes none; and taking a glob while a rule gates on path owners
+// is a person's. Mutation: let any of them through, and this fails.
+test("a path owner form is held until it names an owner and a path, and taking one may be a person's", () => {
+  expect(pathOwnerFormHeld("", ["src/**"], [])).toMatch(/Choose the unit or seat/);
+  expect(pathOwnerFormHeld("unit:eng", [], [])).toBe("Name a path at least.");
+  expect(pathOwnerFormHeld("unit:eng", [], ["src/**"])).toMatch(/or remove the owner/);
+  expect(pathOwnerFormHeld("unit:eng", ["/src/**"], [])).toMatch(/from the repository's root/);
+  expect(pathOwnerFormHeld("unit:eng", ["src/**"], ["src/**"])).toBe("Nothing is changed yet.");
+  expect(pathOwnerFormHeld("unit:eng", ["src/**"], [])).toBeUndefined();
+  expect(pathOwnersHeld(repo({ kind: "scratch" }), PERSON)).toMatch(/takes no path owners/);
+  expect(pathOwnerTakeHeld(repo(), AGENT, true)).toMatch(/Only a person/);
+  expect(pathOwnerTakeHeld(repo(), AGENT, false)).toBeUndefined();
+  expect(pathOwnerTakeHeld(repo(), PERSON, true)).toBeUndefined();
 });

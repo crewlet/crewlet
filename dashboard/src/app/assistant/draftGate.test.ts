@@ -267,10 +267,11 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/repo/BranchWrites.tsx": "modal: a new branch's name, in its dialog",
   "routes/gitlet/repo/FileWrites.tsx":
     "modal: a file's path, content and commit message, or a delete's message, in their dialogs",
+  "routes/gitlet/repo/PathOwners.tsx": "modal: a path owner and its globs, in its dialog",
   "routes/gitlet/repo/Protect.tsx": "modal: a branch protection rule, in its dialog",
   "routes/gitlet/repo/RepoLife.tsx": "modal: a repository delete's reason, in its dialog",
   "routes/gitlet/repo/RepoWrites.tsx":
-    "modal: a repository's details and its mirrors, in their dialogs",
+    "modal: a repository's details, its new name and its mirrors, in their dialogs",
   "routes/settings/Limits.tsx":
     "saved per change: one limit's value, in the panel its pencil opens, written by that " +
     "panel's own Save",

@@ -76,6 +76,68 @@ func TestTheDashboardOffersEverySearchModeOfARepository(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD OFFERS EVERY PATH CLASS A GATE EXEMPTS, in the engine's
+// order, and no other.
+//
+// A protection rule's form offers its approvals' exemptions and each human
+// path's from `CODE_PATH_CLASSES` (`contract/code.ts`), one checkbox a class:
+// a class the engine grew is one nobody can choose, and one the list keeps
+// that the engine dropped is a press every protect call refuses.
+//
+// Mutation: drop a class from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardOffersEveryPathClassAGateExempts(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "CODE_PATH_CLASSES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := clientsource.Strings(body)
+	if len(got) == 0 {
+		t.Fatal("CODE_PATH_CLASSES reads as empty, so this gate certifies nothing")
+	}
+	want := make([]string, 0, len(gitlet.PathClasses()))
+	for _, c := range gitlet.PathClasses() {
+		want = append(want, string(c))
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CODE_PATH_CLASSES is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
+// THE DASHBOARD BOUNDS A LANDING AS THE ENGINE DOES, and starts a new one at
+// the engine's defaults.
+//
+// A protection rule's form bounds its queue's depth and batch by
+// `CODE_MAX_QUEUE_DEPTH` and `CODE_MAX_QUEUE_BATCH` (`contract/code.ts`): a
+// bound above the engine's offers a value every protect call refuses, and one
+// below it hides values a rule may hold. A new gate's fields start at
+// `CODE_DEFAULT_QUEUE_DEPTH` and `CODE_DEFAULT_QUEUE_BATCH`, and the form sends
+// only a value moved from them: a default copied wrong would send a landing
+// nobody chose.
+//
+// Mutation: change any of the four on either side, and this fails.
+func TestTheDashboardBoundsALandingAsTheEngineDoes(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		want int
+	}{
+		{"CODE_MAX_QUEUE_DEPTH", gitlet.MaxQueueDepth},
+		{"CODE_MAX_QUEUE_BATCH", gitlet.MaxQueueBatch},
+		{"CODE_DEFAULT_QUEUE_DEPTH", config.CodeDefaultQueueDepth},
+		{"CODE_DEFAULT_QUEUE_BATCH", config.CodeDefaultQueueBatch},
+	} {
+		got, err := clientsource.Scalar(clientsource.Tree(t), c.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := strconv.Itoa(c.want); got != want {
+			t.Errorf("the dashboard's %s is %s, want the engine's %s", c.name, got, want)
+		}
+	}
+}
+
 // THE DASHBOARD KNOWS EVERY OUTCOME OF A COMMAND, in the engine's order, and
 // no other.
 //
