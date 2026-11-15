@@ -258,10 +258,13 @@ func TestACallIsHeldOnlyThroughAWholeResultLine(t *testing.T) {
 // been: it is no notification, its subagent's leg is unanswered, and the
 // reading stands.
 //
-// Mutation: pass a line that is no record by, or read a counted record whose
-// message does not decode as one with no calls, and the reading stands; or
-// take an origin that does not decode for a line that is no record, and the
-// notification's session is unread.
+// A reply listing a batch's calls in no shape Claude Code writes is no reading
+// either: its request throws on one ([holdingsWalk.idsFold]).
+//
+// Mutation: pass a line that is no record by, read a counted record whose
+// message does not decode as one with no calls, or read past a batch's list
+// in no shape, and the reading stands; or take an origin that does not decode
+// for a line that is no record, and the notification's session is unread.
 func TestAMainThreadLineThatIsNoRecordLeavesTheSessionUnread(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_record", "record done"
@@ -279,6 +282,9 @@ func TestAMainThreadLineThatIsNoRecordLeavesTheSessionUnread(t *testing.T) {
 		"a counted record's bad content": {ctResult(ctUUID(3), ctUUID(9), `42`, `42`), false},
 		"a counted call naming no call": {ctAssistant(ctUUID(3), ctUUID(9),
 			`[{"type":"tool_use","id":"","name":"Bash","input":{}}]`), false},
+		"a batch's list in no shape Claude Code writes": {ctReplace(t, ctAssistant(ctUUID(3), ctUUID(9),
+			`[{"type":"text","text":"done."}]`), `"type":"assistant",`, `"type":"assistant","batchToolUses":[7],`),
+			false},
 		"a message no reader reads, on an attachment": {`{"parentUuid":"` + ctUUID(3) + `","isSidechain":false,` +
 			`"type":"attachment","message":42,"uuid":"` + ctUUID(9) + `"}`, true},
 	} {
@@ -744,7 +750,10 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // In a subagent's thread the rule reads each order the subagent's own load
 // hands (newThreadChain(agent)), its subagent reported: another reply inside
 // the use's reply is told, and the result written before its use and handed
-// after it is held, as the control is.
+// after it is held, as the control is; and C1 folds there as in the main
+// thread, so a batch naming the call, a result split from its id and its id
+// split from another call's are each told. A call whose id is one Claude
+// Code writes of its own is told by C4 (its results record is no plain one).
 //
 // Mutation: pair a subagent's call by its records' lines in the file, and the
 // subagent's use inside a reply split by another is held, and the result
@@ -757,13 +766,15 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // with C5, which holds it too, and the result the fallback places before the
 // reply is held; drop C5 alone, and the early result is held; drop C6, and the
 // boundary after the use is held; drop C7, and the second Poll is held; drop
-// the batch's or the split ids' fold, and each is held; read a reply's record
+// the batch's or the split ids' fold, in the main thread or a subagent's, and
+// each is held; read a reply's record
 // as plain though it is virtual, marked an API error, of the model
 // "<synthetic>" or listing a batch, and each case of that mark on the use is
 // held; read a results record as plain though it is virtual, stamped by a
 // shutdown, a summary, delivering a task, of an origin of a kind, of an origin
 // or a meta mark that does not decode, or answering an id Claude Code writes
-// of its own, and each case of that mark is held; drop C2 and the
+// of its own, and each case of that mark is held, the last the poll_ call's
+// too; drop C2 and the
 // order's own test of the use, and the retracted use is held; read on past a
 // main thread the model cannot place at its end, and each no-reading case is
 // read; take a system record for a turn record in the leaf set's pick, and
@@ -989,6 +1000,10 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 		"a results record answering an id Claude Code writes between the reply's records": {lines: []string{
 			brief, reply(1, 2, "msg_m", rcCalls(x)), results(2, 3, "projectread_1"), reply(3, 4, "msg_m", said),
 			results(2, 5, x), reply(4, 6, "msg_after", said)}},
+		// [1, 2, 3, 4]: the call under an id Claude Code writes of its own.
+		"its id one Claude Code writes of its own": {id: "poll_pair", lines: []string{brief,
+			reply(1, 2, "msg_m", rcCalls("poll_pair")), results(2, 3, "poll_pair"),
+			reply(3, 4, "msg_after", said)}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1157,10 +1172,19 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 	// IN A SUBAGENT'S THREAD, by the same rule over each order its own load
 	// hands, its subagent reported in each: another reply between the first
 	// record of the use's reply and the use, told; and held, the result
-	// written before its use but handed after it, and the control.
+	// written before its use but handed after it, and the control. And C1's
+	// folds there as in the main thread: a batch naming the call on a reply
+	// after its result, a result of an id split from the call's, and the
+	// call's id split from another call's, each told; id is the call asked in
+	// hsSubCall's place, answered "ok", where it is not "".
+	batching := func(line string) string {
+		return ctReplace(t, line, `"type":"assistant",`,
+			`"type":"assistant","batchToolUses":[{"id":"`+hsSubCall+`","name":"Bash"}],`)
+	}
 	for name, tc := range map[string]struct {
 		lines []string
 		held  bool
+		id    string
 	}{
 		"in a subagent's thread, as written": {lines: []string{prompt(0, 1), reply(1, 2, "msg_u", rcCalls(hsSubCall)),
 			hsSubResult(t, 2, 3, 300), reply(3, 4, "msg_f", said)}, held: true},
@@ -1173,14 +1197,32 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 		"in a subagent's thread, its result written first and chained after its use": {lines: []string{
 			prompt(0, 1), hsSubResult(t, 3, 2, 300), reply(1, 3, "msg_u", rcCalls(hsSubCall)),
 			reply(2, 4, "msg_f", said)}, held: true},
+		// [1, 2, 3, 4]: the batch on the reply that finished, past the stretch.
+		"in a subagent's thread, a batch naming the call": {lines: []string{prompt(0, 1),
+			reply(1, 2, "msg_u", rcCalls(hsSubCall)), hsSubResult(t, 2, 3, 300),
+			batching(reply(3, 4, "msg_f", said))}},
+		// [1, 2, 3, 4, 5]
+		"in a subagent's thread, a result split from its id": {lines: []string{prompt(0, 1),
+			reply(1, 2, "msg_u", rcCalls(hsSubCall)), hsSubResult(t, 2, 3, 300),
+			results(3, 4, hsSubCall+"_1"), reply(4, 5, "msg_f", said)}},
+		// [1, 2, 3, 4, 5, 6]
+		"in a subagent's thread, its id split from another call's": {id: hsSubCall + "_1", lines: []string{
+			prompt(0, 1), reply(1, 2, "msg_q", rcCalls(hsSubCall)), results(2, 3, hsSubCall),
+			reply(3, 4, "msg_u", rcCalls(hsSubCall+"_1")), results(4, 5, hsSubCall+"_1"),
+			reply(5, 6, "msg_f", said)}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			s := hsForeground(t)
 			s.thread = hsOwn(t, tc.lines...)
-			got := hsSubagentRead(t, s)
-			held, under := got.Holds(hsLogged(hsSubCall, hsSubOut))
-			if records := got.Calls[hsSubCall]; held != tc.held || under != "" || !got.Subagents[ctAgent].Reported {
+			call := hsLogged(hsSubCall, hsSubOut)
+			if tc.id != "" {
+				call = hsLogged(tc.id, "ok")
+			}
+			got, err := hsRead(t, tarOfMembers(t, s.members()), ctSession, hsAsk(call))
+			hsReadWhole(t, got, err)
+			held, under := got.Holds(call)
+			if records := got.Calls[call.ID]; held != tc.held || under != "" || !got.Subagents[ctAgent].Reported {
 				t.Errorf("Holds = %t under %q, its records %+v, the subagent %+v; want it held %t, its subagent "+
 					"reported", held, under, records, got.Subagents[ctAgent], tc.held)
 			}
@@ -2420,21 +2462,22 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // otherwise reportable: a subagent whose metadata is missing, names a call of
 // another tool, or names an id a second Agent call carries; whose thread
 // restarts, holds a record of another agent's or a progress record, which
-// Claude Code's load drops and links past, marks an API error or names the
-// model of a reply in no shape Claude Code writes, opens on a record that
-// roots no chain, ends on an empty reply, on the text of a reply cut before
-// its call, on a reply its harness wrote itself (a failed request's error,
-// which ends the subagent and answers its call completed, or a resume's "No
-// response requested."), on one marked an API error though it ended its turn,
-// on one of the model "<synthetic>" though it ended its turn, or on one cut
-// at its token bound, or holds a skill's text, a leg the main thread holds
-// no call of (d4's record); whose thread starts a second leg it finished, the
-// main thread holding no call of it (condition 4 alone); whose Agent call's
-// answer names another agent, is a background subagent's, is a failure, comes
-// twice, precedes a restart of the main thread, lies on the main thread's
-// chain beside its call's record off it, or lies off it under a record of no
-// reply; whose notification names another agent, or a subagent that did not
-// complete (one before a restart of the main thread is
+// Claude Code's load drops and links past, lists a batch's calls in no shape
+// Claude Code writes, which its request throws on, marks an API error or
+// names the model of a reply in no shape Claude Code writes, opens on a
+// record that roots no chain, ends on an empty reply, on the text of a reply
+// cut before its call, on a reply its harness wrote itself (a failed
+// request's error, which ends the subagent and answers its call completed, or
+// a resume's "No response requested."), on one marked an API error though it
+// ended its turn, on one of the model "<synthetic>" though it ended its turn,
+// or on one cut at its token bound, or holds a skill's text, a leg the main
+// thread holds no call of (d4's record); whose thread starts a second leg it
+// finished, the main thread holding no call of it (condition 4 alone); whose
+// Agent call's answer names another agent, is a background subagent's, is a
+// failure, comes twice, precedes a restart of the main thread, lies on the
+// main thread's chain beside its call's record off it, or lies off it under a
+// record of no reply; whose notification names another agent, or a subagent
+// that did not complete (one before a restart of the main thread is
 // [TestANoticeBeforeTheLastRestartAnswersNoLeg]'s); or that was sent a
 // message whose result refused it with null, or left none, and no
 // notification answered. A message its own result
@@ -2477,10 +2520,10 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // unfinished rather than not whole; or drop any other part of a condition
 // (the answer's liveness, its failure, its count, the metadata's one call, a
 // Task call as a start, a notification's status or agent, a record of another
-// agent's, a progress record, an answer handed only beside its call's record
-// handed), and the subagent its case built is reported; or read a prompt's
-// parentUuid that is empty or absent as naming no record, and the subagent
-// whose prompt carries it is not whole. Drop the strict rule, and the reply
+// agent's, a progress record, a batch's list in no shape, an answer handed
+// only beside its call's record handed), and the subagent its case built is
+// reported; or read a prompt's parentUuid that is empty or absent as naming
+// no record, and the subagent whose prompt carries it is not whole. Drop the strict rule, and the reply
 // that finished on another branch is reported, and so is each shape built
 // against rule 2 not whole; apply it to every own leaf,
 // the leaf aside or not, and the two calls at once are not whole; read
@@ -2560,6 +2603,10 @@ func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryL
 		}), hsNotWhole},
 		"a progress record in its thread": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.thread = append(s.thread, hsSide(t, hsProgress(ctUUID(104), ctUUID(105))))
+		}), hsNotWhole},
+		"a batch's list in no shape in its thread": {with(hsForeground, func(t *testing.T, s *hsSession) {
+			s.thread[3] = ctReplace(t, s.thread[3], `"type":"assistant",`,
+				`"type":"assistant","batchToolUses":[7],`)
 		}), hsNotWhole},
 		"its prompt's parentUuid the empty string": {with(hsForeground, func(t *testing.T, s *hsSession) {
 			s.thread[0] = ctReplace(t, s.thread[0], `"parentUuid":null`, `"parentUuid":""`)

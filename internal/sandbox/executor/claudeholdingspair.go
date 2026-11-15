@@ -87,8 +87,8 @@ const claudeToolPoll = "Poll"
 // rounds of its own: a poll's (2.1.322's NKe @288139238, 2.1.310's iLe
 // @243029149), a project's read documents' (Lvo @298554259, KZn @251746803),
 // a voice call's record (2.1.322's K1e @293381964) and a delivered task's
-// (ke @291414785, bEt @246850119). A call under such an id, or a results
-// record answering one, is no plain record of a pair.
+// (ke @291414785, bEt @246850119). A results record answering such an id is
+// no plain record of a pair, so a call under one is never paired (C4).
 var claudeHarnessIDPrefixes = [...]string{"poll_", "projectread_", "voicecallrecord_", "gettask_"}
 
 // harnessID reports whether id is one Claude Code's request writes of its own

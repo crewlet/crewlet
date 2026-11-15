@@ -113,8 +113,9 @@ import (
 //     use of its id and one result are counted over every user and assistant
 //     record of its thread's file, chained or not, the thread's own or not, no
 //     batch's list or split id folds it into another call, and its id is none
-//     Claude Code's request writes of its own (C1, [holdingsWalk.mainRecord],
-//     [holdingsWalk.idsFold]); the resume hands both records under every
+//     Claude Code's request writes of its own, whose results record is no
+//     plain one (C1, [holdingsWalk.mainRecord], [holdingsWalk.idsFold], held
+//     by C4 for such an id); the resume hands both records under every
 //     variant (C2); and on EVERY order it hands ([threadChain.EachOrder]), the
 //     result comes after the first record of the use's reply, every record
 //     from that one to the later of the use and the result is a plain record
@@ -886,18 +887,22 @@ func (w *holdingsWalk) foldsOf(line threadLine, message threadMessage) (batch, s
 	return batch, split, nil
 }
 
-// folded reports whether the request may fold id's call into another, or
-// another into it, by what the whole thread holds, chain's once End decided
-// it: an id a batch's split call or result reads as split from another
-// call's carried by a block of the thread ([splitBase]), and one Claude Code
-// writes of its own ([harnessID]).
+// folded reports whether the request may fold id's call into another, by
+// what the whole thread holds, chain's once End decided it: an id a batch's
+// split call or result reads as split from another call's carried by a block
+// of the thread ([splitBase]).
+//
+// AN ID CLAUDE CODE WRITES OF ITS OWN is C1's too, and needs no test here:
+// the result of a call under one is a results record answering such an id,
+// which is no plain one ([pairPlainResults]), and C4 pairs no call whose
+// result is not plain, so the call is told on every order.
 func folded(chain *threadChain, id string) bool {
-	if base, split := splitBase(id); split {
-		if _, carried := chain.CallKey(base); carried {
-			return true
-		}
+	base, split := splitBase(id)
+	if !split {
+		return false
 	}
-	return harnessID(id)
+	_, carried := chain.CallKey(base)
+	return carried
 }
 
 // mainEnd decides, once the main thread is read whole into chain and pairing,
