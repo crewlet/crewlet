@@ -114,6 +114,12 @@ export interface MessageRules {
    * follows it, which is the chart's.
    */
   following: string;
+  /**
+   * `set_channel_members`, to take somebody out: the same rule as `members`,
+   * said for removing. A unit's room is the chart's, and a direct
+   * conversation is the people in it.
+   */
+  removing: string;
 }
 
 /** Why a unit's room takes no members by hand. */
@@ -132,6 +138,9 @@ export const ORG_FOLLOWING =
 
 /** Why a room takes no change to who follows it from somebody outside it. */
 export const OUTSIDE_FOLLOWING = "Join the room to change which agents get every message.";
+
+/** Why a room takes nobody out at the hands of somebody outside it. */
+export const OUTSIDE_REMOVING = "Join the room to take people out of it.";
 
 /**
  * The room's rules for each change, read off its detail.
@@ -156,6 +165,7 @@ export function roomRules(
       settings: waiting,
       members: waiting,
       following: waiting,
+      removing: waiting,
     };
   }
   const archived = !!channel.archived_at;
@@ -173,11 +183,13 @@ export function roomRules(
     settings: unknown ? NEWER_ROOM : outsider ? OUTSIDER : "",
     members: membership(ORG_MEMBERS, OUTSIDE_MEMBERS),
     following: membership(ORG_FOLLOWING, OUTSIDE_FOLLOWING),
+    removing: membership(ORG_MEMBERS, OUTSIDE_REMOVING),
   };
 
   // ONE RULE FOR A ROOM'S MEMBERSHIP, said for the change it holds: adding
-  // people and moving who follows the room are both writes of the membership,
-  // refused for the same rooms, and only the sentences differ.
+  // people, taking them out and moving who follows the room are all writes
+  // of the membership, refused for the same rooms, and only the sentences
+  // differ.
   function membership(org: string, outside: string): string {
     if (unknown) return NEWER_ROOM;
     if (channel?.kind === "unit") return org;
@@ -298,6 +310,7 @@ function OwnScope({
     settings: held(room.settings, settingsAccess),
     members: held(room.members, membersAccess),
     following: held(room.following, followingAccess),
+    removing: held(room.removing, followingAccess),
   };
 
   const react = useAct("react_to_message");

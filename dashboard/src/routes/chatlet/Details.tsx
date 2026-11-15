@@ -32,6 +32,16 @@
  * offers to add nobody there; a direct conversation IS its people, so adding
  * somebody would name a different conversation, and it offers nothing either.
  *
+ * # Taking somebody out
+ *
+ * Every other member's row ends with Remove, which asks first and then states
+ * the membership without them through `set_channel_members`, against the
+ * membership the pane read, so a change somebody made meanwhile is refused
+ * rather than written back over. It is held, with the room's sentence, where
+ * the room takes no change (a team's room, an archived one, or from somebody
+ * outside it), and a direct conversation draws none. The reader's own row has
+ * none either: leaving is About's Leave.
+ *
  * # Which agents get every message
  *
  * An agent member either gets every message in the room (`follow_all`) or
@@ -57,6 +67,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import {
   Button,
   EmptyState,
+  IconButton,
   Input,
   Skeleton,
   Switch,
@@ -76,10 +87,12 @@ import {
   SearchGlyph,
   TrashGlyph,
   UserPlusGlyph,
+  XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
 import { QueryState } from "~/components/common.tsx";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { fmtDate } from "~/lib/format.ts";
 import { stateWord } from "~/lib/seats.ts";
@@ -93,7 +106,7 @@ import { NotifyLevels } from "./notify.tsx";
 import { ChatSidePanel } from "./PanePanel.tsx";
 import { useChatPeople, type ChatPerson } from "./people.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
-import { knownKind, roomKindLabel, roomMark, roomTitle, roomWhere } from "./rooms.ts";
+import { knownKind, membersOnly, roomKindLabel, roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { useRoomGestures } from "./RoomAdmin.tsx";
 import { keptFor } from "./roomLifecycle.ts";
@@ -450,6 +463,22 @@ export function withFollowing(
   };
 }
 
+/**
+ * The membership a Remove states: the room's members as the pane read them,
+ * every one's following said, without `handle`. The read itself is the
+ * expectation it is stated against.
+ */
+export function withoutMember(
+  members: readonly Pick<ChatMember, "handle" | "follow_all">[],
+  handle: string,
+): {
+  members: { handle: string; follow_all: boolean }[];
+  expected_members: { handle: string; follow_all: boolean }[];
+} {
+  const read = members.map((m) => ({ handle: m.handle, follow_all: m.follow_all === true }));
+  return { members: read.filter((m) => m.handle !== handle), expected_members: read };
+}
+
 function Members({ answer }: { answer: ChatChannelDetail }) {
   const nav = useChatNav();
   const frame = useChatFrame();
@@ -458,6 +487,7 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
   const follow = useAct("set_channel_members");
   const [filter, setFilter] = useState("");
   const [report, setReport] = useState<StartReport | null>(null);
+  const [removing, setRemoving] = useState<ChatPerson | null>(null);
   const channel = answer.channel;
   const direct = isDirect(channel.kind);
   const where = roomWhere(channel.kind, channel.name ?? channel.id);
@@ -513,6 +543,9 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
           )}
           {rows.map(({ member, person }) => {
             const follows = !direct && person.kind === "agent";
+            // EVERY OTHER MEMBER, outside a direct conversation: leaving is
+            // About's Leave, and a conversation is the people in it.
+            const removable = !direct && person.handle !== frame.viewer;
             const on = member.follow_all === true;
             const who = person.team || (person.kind === "agent" ? "Agent" : "Person");
             return (
@@ -534,14 +567,29 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
                   }
                   onSelect={() => nav.openPane({ kind: "profile", handle: person.handle })}
                   action={
-                    follows ? (
-                      <FollowSwitch
-                        name={person.name}
-                        on={on}
-                        rule={scope.rules.following}
-                        busy={follow.busy}
-                        onChange={(next) => void setFollowing(member, person, next)}
-                      />
+                    follows || removable ? (
+                      <span className="row gap-1">
+                        {follows && (
+                          <FollowSwitch
+                            name={person.name}
+                            on={on}
+                            rule={scope.rules.following}
+                            busy={follow.busy}
+                            onChange={(next) => void setFollowing(member, person, next)}
+                          />
+                        )}
+                        {removable && (
+                          <IconButton
+                            variant="ghost-danger"
+                            size="sm"
+                            icon={<XGlyph />}
+                            label={`Remove ${person.name} from ${where}`}
+                            tooltip
+                            disabledReason={scope.rules.removing || undefined}
+                            onClick={() => setRemoving(person)}
+                          />
+                        )}
+                      </span>
                     ) : undefined
                   }
                 />
@@ -551,6 +599,9 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
         </ul>
       )}
       <StartNote report={report} />
+      {removing && (
+        <RemoveMemberDialog answer={answer} person={removing} onClose={() => setRemoving(null)} />
+      )}
       {rows.length === 0 && q !== "" && (
         <EmptyState
           size="compact"
@@ -563,6 +614,93 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
       )}
     </div>
   );
+}
+
+/**
+ * Take one member out of the room, asked first: what it costs them is said
+ * before it is done, and the membership is stated against the pane's read.
+ * While the write is out the dialog stays, so a refusal (somebody changed the
+ * members meanwhile) is read where it was pressed.
+ */
+function RemoveMemberDialog({
+  answer,
+  person,
+  onClose,
+}: {
+  answer: ChatChannelDetail;
+  person: ChatPerson;
+  onClose: () => void;
+}) {
+  const remove = useAct("set_channel_members");
+  const scope = useRoomScope();
+  const toast = useToast();
+  const [report, setReport] = useState<StartReport | null>(null);
+  const channel = answer.channel;
+  const where = roomWhere(channel.kind, channel.name ?? channel.id);
+
+  async function press() {
+    if (!pressable(remove, scope.rules.removing || undefined)) return;
+    setReport(null);
+    const result = await remove.run(
+      { channel: channel.id, ...withoutMember(answer.members ?? [], person.handle) },
+      { done: `Removed ${person.name} from ${where}`, quiet: true },
+    );
+    if (result === null) return;
+    const answered = reportFor("remove", result);
+    if (answered.tone === "success" || answered.tone === "pending") {
+      toast.show({
+        variant: answered.tone === "success" ? "success" : "info",
+        message: answered.tone === "success" ? `${person.name} is out of ${where}` : answered.note,
+      });
+      onClose();
+      return;
+    }
+    setReport(answered);
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      role="alertdialog"
+      size="sm"
+      icon={<XGlyph size="md" />}
+      title={`Remove ${person.name} from ${where}?`}
+      dismissable={!remove.busy}
+      closeDisabledReason="Waiting for the engine to answer."
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={remove.busy}>
+            Cancel
+          </Button>
+          <WriteButton
+            variant="danger"
+            write={remove}
+            blocked={scope.rules.removing || undefined}
+            showRefusal={false}
+            onPress={() => void press()}
+          >
+            {remove.busy ? "Removing" : "Remove"}
+          </WriteButton>
+        </>
+      }
+    >
+      <p className="chat-dialog-note">{removalWords(channel.kind, person)}</p>
+      <StartNote report={report} />
+    </Modal>
+  );
+}
+
+/** What taking somebody out of a room costs them, by the room's kind. */
+export function removalWords(
+  kind: ChatChannelDetail["channel"]["kind"],
+  person: ChatPerson,
+): string {
+  const who = person.kind === "agent" ? "It" : "They";
+  if (membersOnly(kind)) {
+    return `${who} can no longer read this room or post in it. Somebody in the room can add ${person.kind === "agent" ? "it" : "them"} back.`;
+  }
+  return `${who} stop getting its messages and it leaves ${person.kind === "agent" ? "its" : "their"} room list. Anybody can still find it under Browse rooms and join again.`;
 }
 
 /**

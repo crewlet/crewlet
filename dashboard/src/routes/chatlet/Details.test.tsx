@@ -17,7 +17,7 @@ import { ADA, ADA_SESSION, actEngine, applied, type Pressed } from "~/test/chat.
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
-import { DetailsPane, withFollowing } from "./Details.tsx";
+import { DetailsPane, removalWords, withFollowing, withoutMember } from "./Details.tsx";
 import { ChatDialogHost } from "./Dialogs.tsx";
 import { mountInFrame } from "./frameKit.tsx";
 import { useChatNav, type DetailsTab } from "./nav.tsx";
@@ -143,15 +143,17 @@ describe("Members", () => {
   test("people come before agents, the reader is marked, and a member opens their profile", async () => {
     open("members");
     const list = await screen.findByRole("list");
+    // EACH ROW'S OWN BUTTON, never the Remove beside it.
     const names = within(list)
       .getAllByRole("button")
+      .filter((row) => !/^Remove /.test(row.getAttribute("aria-label") ?? ""))
       .map((row) => row.textContent ?? "");
     expect(names[0]).toMatch(/Add people/);
     expect(names[1]).toMatch(/Ada/);
     expect(names[2]).toMatch(/Bo Chen/);
     expect(names[3]).toMatch(/Ops Agent/);
     expect(within(list).getByText("(you)")).toBeTruthy();
-    fireEvent.click(within(list).getByRole("button", { name: /Bo Chen/ }));
+    fireEvent.click(within(list).getByRole("button", { name: /^Bo Chen/ }));
     await waitFor(() => expect(decodeURIComponent(location.hash)).toContain("pane=profile:bo"));
   });
 
@@ -244,6 +246,64 @@ describe("Members", () => {
         { handle: "qa", follow_all: false },
       ],
     });
+  });
+
+  test("another member's row offers Remove, which asks first and states the membership without them", async () => {
+    open("members");
+    // THE READER'S OWN ROW HAS NONE: leaving is About's Leave.
+    await screen.findByText("Bo Chen");
+    expect(screen.queryByRole("button", { name: /^Remove Ada/ })).toBeNull();
+    const remove = await screen.findByRole("button", { name: "Remove Bo Chen from #launch" });
+    // HELD UNTIL THE ROOM'S OWN ANSWER SAYS IT TAKES THE CHANGE.
+    await waitFor(() => expect(remove.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(remove);
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove Bo Chen from #launch?" });
+    expect(within(dialog).getByText(/stop getting its messages/)).toBeTruthy();
+    expect(presses.map((p) => p.tool)).not.toContain("set_channel_members");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(presses.map((p) => p.tool)).toContain("set_channel_members"));
+    const read = [
+      { handle: "ops", follow_all: false },
+      { handle: "bo", follow_all: false },
+      { handle: "ada", follow_all: false },
+    ];
+    expect(presses.find((p) => p.tool === "set_channel_members")!.args).toEqual({
+      channel: ROOM,
+      members: [read[0], read[2]],
+      expected_members: read,
+    });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  test("a team room's Remove is drawn and held, with why; a direct conversation draws none", async () => {
+    open("members", { room: detail({ kind: "unit", unit: "Platform" }) });
+    const remove = await screen.findByRole("button", { name: /^Remove Bo Chen from / });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    cleanup();
+    open("members", { room: detail({ kind: "dm", name: undefined }) });
+    await screen.findByText("Bo Chen");
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+  });
+
+  test.each(WRITE_READERS)("Remove is drawn for $who, held with why", async (reader) => {
+    open("members", { viewer: reader.viewer });
+    const remove = await screen.findByRole("button", { name: /^Remove Bo Chen/ });
+    await waitFor(() => expect(remove.getAttribute("aria-disabled")).toBe("true"));
+  });
+
+  test("a removal restates every other member as read, and says what it costs by the room's kind", () => {
+    expect(withoutMember([{ handle: "pm", follow_all: true }, { handle: "qa" }], "qa")).toEqual({
+      members: [{ handle: "pm", follow_all: true }],
+      expected_members: [
+        { handle: "pm", follow_all: true },
+        { handle: "qa", follow_all: false },
+      ],
+    });
+    const bo = { kind: "human", name: "Bo Chen" } as Parameters<typeof removalWords>[1];
+    expect(removalWords("private", bo)).toMatch(/^They can no longer read this room/);
+    expect(removalWords("public", bo)).toMatch(/^They stop getting its messages/);
   });
 
   test("finding a member narrows the list, and says so when nobody matches", async () => {
