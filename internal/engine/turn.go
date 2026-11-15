@@ -1708,6 +1708,15 @@ func storeUnheard(err error) bool {
 	return errors.Is(err, sandbox.ErrStoreSilent) || errors.Is(err, sandbox.ErrUnannounced)
 }
 
+// operatorsCondition is [sandbox.CoordinatorOptions.OperatorsCondition]: the
+// kind of err where it is a condition only an operator clears
+// ([builtin.OperatorKind]), by the one classification of conditions
+// ([builtin.ConditionKind]) every failure is told by.
+func operatorsCondition(err error) (string, bool) {
+	kind, ok := builtin.ConditionKind(err)
+	return kind, ok && builtin.OperatorKind(kind)
+}
+
 // infrastructureFailure reports whether err is a condition of the
 // infrastructure the engine runs on, by the one classification of conditions
 // ([builtin.ConditionKind], [builtin.InfrastructureKind]).

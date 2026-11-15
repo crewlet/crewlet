@@ -61,6 +61,11 @@ import (
 // job that finished, for a condition the next resume after the operator's fix
 // gets past. What the operator sees, condition by condition:
 //
+//   - every one: the `executor_resume_blocked` alarm, raised by the node
+//     holding the seat while one of its runs waits so
+//     ([Coordinator.ResumesBlocked], [CoordinatorOptions.OperatorsCondition]),
+//     naming the seat waiting longest, the condition's kind and for how long,
+//     and cleared once a resume gets past it;
 //   - every one: each attempt's `sandbox_resume_failed` line, at error, its
 //     `error` naming the condition (its `attempt` does not rise for these:
 //     it numbers only the run's own failures): the system's or the store
@@ -268,4 +273,98 @@ func (c *Coordinator) runsOwnFailure(ctx context.Context, run PendingRun, err er
 		return false
 	}
 	return !elsewhere
+}
+
+// blockedResume is a completion whose last resume on this node failed on a
+// condition only an operator clears ([CoordinatorOptions.OperatorsCondition]):
+// the seat it holds, the condition's kind, and when the first such failure in
+// a row was met.
+type blockedResume struct {
+	agent string
+	kind  string
+	since time.Time
+}
+
+// ResumesBlocked is what the executor_resume_blocked alarm reads of this node
+// ([Coordinator.ResumesBlocked]): how many runs of seats it holds wait for an
+// operator, and the one waiting longest.
+type ResumesBlocked struct {
+	// Runs is how many runs of seats this node holds finished their job and
+	// failed their last resume here on a condition only an operator clears.
+	Runs int
+	// Seat is the seat of the run waiting longest, Kind the condition its
+	// last resume failed on, and For how long since the first such failure
+	// in a row. Zero where Runs is.
+	Seat string
+	Kind string
+	For  time.Duration
+}
+
+// ResumesBlocked reports the runs of seats this node holds whose job finished
+// and whose last resume here failed on a condition only an operator clears,
+// as of now.
+//
+// THE GIVE-UP NEVER ENDS SUCH A RUN ([Coordinator.resumeGivenUp]): the failure
+// is the node's, so the run and its seat wait for the operator, the job's
+// completion coming round on each announcement and failing again until the
+// condition is cleared. Each attempt's `sandbox_resume_failed` line says why,
+// but a line repeated on every announcement is no signal anyone is paged by,
+// so the wait is raised as an alarm while it lasts. FROM THIS NODE'S OWN
+// MEMORY of its attempts, which is exact for the seats it holds: a resume of
+// the run that gets past the condition, or fails for anything else, takes it
+// out; so does the run's settling ([Coordinator.runSettled]) and the seat's
+// release, whose next holder raises it from its own attempts. A restart
+// forgets it until the run's next attempt fails again.
+func (c *Coordinator) ResumesBlocked(now time.Time) ResumesBlocked {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out ResumesBlocked
+	var oldest blockedResume
+	for _, b := range c.blocked {
+		out.Runs++
+		if out.Runs == 1 || b.since.Before(oldest.since) ||
+			(b.since.Equal(oldest.since) && b.agent < oldest.agent) {
+			oldest = b
+		}
+	}
+	if out.Runs > 0 {
+		out.Seat, out.Kind, out.For = oldest.agent, oldest.kind, now.Sub(oldest.since)
+	}
+	return out
+}
+
+// blockedBy is the kind of run's resume failure err where only an operator
+// clears it and the run is a completion's, whose give-up never ends it;
+// "" otherwise. An answer's resume is bounded by its own series
+// ([MaxAnswerAttempts]) and is not counted.
+func (c *Coordinator) blockedBy(run PendingRun, err error) string {
+	if c.operatorsCondition == nil || claimedAnswer(run) {
+		return ""
+	}
+	if kind, ok := c.operatorsCondition(err); ok {
+		return kind
+	}
+	return ""
+}
+
+// noteBlocked records what run's latest resume says of a wait for the
+// operator: kind, the condition only an operator clears that it failed on, or
+// "" for any other answer, which takes the run out of
+// [Coordinator.ResumesBlocked]. A run already counted keeps the instant of its
+// first such failure in a row.
+func (c *Coordinator) noteBlocked(run PendingRun, kind string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if kind == "" {
+		delete(c.blocked, run.TurnID)
+		return
+	}
+	since := c.now()
+	if was, ok := c.blocked[run.TurnID]; ok {
+		since = was.since
+	}
+	if c.blocked == nil {
+		c.blocked = map[string]blockedResume{}
+	}
+	c.blocked[run.TurnID] = blockedResume{agent: run.AgentHandle, kind: kind, since: since}
 }

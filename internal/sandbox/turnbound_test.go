@@ -361,6 +361,107 @@ func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) 
 	}
 }
 
+// A RESUME FAILING ON A CONDITION ONLY AN OPERATOR CLEARS IS RAISED FOR THE
+// OPERATOR while the run waits. The give-up never ends such a run (the failure
+// is the node's), so its seat waits for as long as the condition lasts, and
+// each attempt's error line, repeated on every announcement, was the only
+// sign of it. The coordinator counts the run with its seat, the condition's
+// kind and how long since the first such failure in a row, an attempt that
+// meets the condition again keeping that instant; and takes it out once a
+// resume gets past the condition, once one fails for anything else, once the
+// run settles, and once the seat is let go of. A failure of the node's that a
+// wait clears (a coordination store that did not answer) is never counted.
+//
+// Mutation: record no failure, keep the latest instant rather than the first,
+// or drop the record on any one of the four ways out, and a row goes red.
+func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
+	t.Parallel()
+	full := errors.New("write: no space left on device")
+	outage := errors.New("nats: timeout")
+	rigFor := func(t *testing.T) *coordRig {
+		rig := newCoordRigWith(t, func(opts *CoordinatorOptions) {
+			opts.NodesFailure = func(_ context.Context, err error) bool {
+				return errors.Is(err, full) || errors.Is(err, outage)
+			}
+			opts.OperatorsCondition = func(err error) (string, bool) {
+				return "disk_full", errors.Is(err, full)
+			}
+		})
+		rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(Result{Success: true, Text: "done"})
+		return rig
+	}
+	attempt := func(t *testing.T, rig *coordRig) error {
+		t.Helper()
+		payload, ev := rig.completion("t1")
+		return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	}
+	blockedFor := func(t *testing.T, rig *coordRig, want ResumesBlocked) {
+		t.Helper()
+		if got := rig.coordinator.ResumesBlocked(rig.now); got != want {
+			t.Fatalf("resumes waiting for an operator = %+v, want %+v", got, want)
+		}
+	}
+	waiting := func(t *testing.T, rig *coordRig) {
+		t.Helper()
+		rig.resumer.failWith(fmt.Errorf("resuming t1: %w", full))
+		for i, after := range []time.Duration{0, 20 * time.Minute, 20 * time.Minute} {
+			rig.now = rig.now.Add(after)
+			if err := attempt(t, rig); err == nil {
+				t.Fatalf("the premise: attempt %d on a full disk is handed back", i+1)
+			}
+		}
+		if rig.gone("t1") || rig.get("t1").Launch.ResumeFailures != 0 {
+			t.Fatal("the premise: a resume only the operator can unblock is never counted or ended")
+		}
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", For: 40 * time.Minute})
+	}
+	t.Run("a resume that gets past it", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.resumer.failWith(nil)
+		if err := attempt(t, rig); err != nil {
+			t.Fatalf("the resume after the operator's fix: %v", err)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("a resume that fails for anything else", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.resumer.failWith(errors.New("the turn could not be re-entered"))
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the run's own failure is handed back")
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("the seat let go of", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.coordinator.ReleaseSeat("swe")
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("the run settled", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.coordinator.runSettled("t1")
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("a failure of the node's a wait clears", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		rig.resumer.failWith(fmt.Errorf("resuming t1: %w", outage))
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the outage's failure is handed back")
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+}
+
 // WHAT THE GIVE-UP COUNTS OF A RESUME THIS NODE CANNOT MAKE, by the fleet's
 // answer: one another node or build can make counts nothing while a live node
 // may, nor while the fleet cannot be read, and counts once none may; one no

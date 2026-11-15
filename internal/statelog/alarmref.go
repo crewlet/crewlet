@@ -306,6 +306,19 @@ var alarmMeaning = map[Kind]string{
 		"asks it for each mirror. A mirror whose attempt waits behind " +
 		"others for one of the node's two slots, or is still running, is " +
 		"not level either, and is counted all the same.",
+	KindExecutorResumeBlocked: "A seat's executor finished its job, but the " +
+		"resume of the turn it belongs to keeps failing on a condition only " +
+		"an operator clears: this node's disk full, mounted read-only or " +
+		"failing, its limit of open files reached, or the fleet's nodes " +
+		"holding different keys or running different builds. The resume " +
+		"give-up never ends such a run, since the failure is the node's, so " +
+		"the run and its seat wait for the operator, the job's completion " +
+		"coming round on each announcement. Raised by the node holding the " +
+		"seat, from its own memory of the run's resumes: it clears once a " +
+		"resume of the run gets past the condition or fails for anything " +
+		"else, once the run ends, and once the seat moves, whose next holder " +
+		"raises it again from its own attempts. A node that restarts raises it " +
+		"again at the run's next failed attempt.",
 	KindMCPServerFailing: "No instance of an MCP server is serving, and one has been down " +
 		"for longer than the restart schedule's ceiling plus a heartbeat. No agent is " +
 		"offered the server's tools.",

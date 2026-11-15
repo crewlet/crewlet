@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1077,6 +1078,46 @@ func TestTheEnginesCoordinatorCountsOnlyTheRunsOwnFailures(t *testing.T) {
 			if got := opts.NodesFailure(ctx, tc.err); got != tc.nodes || got != nodesFailure(ctx, tc.err) {
 				t.Errorf("the coordinator reads %v as the node's = %v, want %v, as nodesFailure does",
 					tc.err, got, tc.nodes)
+			}
+		})
+	}
+}
+
+// THE ENGINE'S COORDINATOR IS TOLD WHICH RESUME FAILURES ONLY AN OPERATOR
+// CLEARS, by the one classification of conditions every failure is told by: a
+// disk full, read-only or failing and a process at its limit of open files are
+// raised as executor_resume_blocked while the run waits, under the kind its
+// failure records; a coordination store that did not answer, which clears by
+// itself, and the run's own failure are not. Unwired, a run the give-up never
+// ends waited for the operator with nothing raised but a line per attempt.
+//
+// Mutation: leave OperatorsCondition off the coordinator's options, or answer
+// every condition of the node's as the operator's, and a row goes red.
+func TestTheEnginesCoordinatorRaisesAResumeOnlyAnOperatorClears(t *testing.T) {
+	t.Parallel()
+	e := &Engine{backends: &Backends{Queue: queuememory.New()}, answers: testAnswers()}
+	opts := e.coordinatorOptions(nil, nil)
+	if opts.OperatorsCondition == nil {
+		t.Fatal("the coordinator is built with no answer to which failures only an operator clears")
+	}
+	for name, tc := range map[string]struct {
+		err  error
+		kind string
+	}{
+		"a full disk":             {err: fmt.Errorf("resume: write wal: %w", syscall.ENOSPC), kind: "disk_full"},
+		"a read-only disk":        {err: fmt.Errorf("resume: open: %w", syscall.EROFS), kind: "disk_read_only"},
+		"a failing disk":          {err: fmt.Errorf("resume: read: %w", syscall.EIO), kind: "disk_failed"},
+		"open files at the limit": {err: fmt.Errorf("resume: open: %w", syscall.EMFILE), kind: "open_files_exhausted"},
+		"a coordination store that did not answer": {err: fmt.Errorf("engine: read the rebase: %w: "+
+			"nats: timeout", coord.ErrUnavailable)},
+		"the run's own": {err: errors.New("the turn could not be re-entered")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			kind, ok := opts.OperatorsCondition(tc.err)
+			if ok != (tc.kind != "") || (ok && kind != tc.kind) {
+				t.Errorf("the coordinator reads %v as the operator's = %v (%q), want %q", tc.err, ok, kind,
+					tc.kind)
 			}
 		})
 	}

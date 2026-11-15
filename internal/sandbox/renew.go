@@ -640,8 +640,9 @@ func (c *Coordinator) dropRepublishLocked(turnID string) {
 
 // runSettled drops what this node keeps of turnID's run only until the run
 // settles: the clock on the store of its box's host ([hostUnsettled], which
-// says where a run settles) and a re-fire's announcement it still owes
-// ([refirePublish]).
+// says where a run settles), a re-fire's announcement it still owes
+// ([refirePublish]) and a resume of it waiting for the operator
+// ([Coordinator.ResumesBlocked]).
 func (c *Coordinator) runSettled(turnID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -652,4 +653,5 @@ func (c *Coordinator) runSettled(turnID string) {
 func (c *Coordinator) runSettledLocked(turnID string) {
 	delete(c.unsettled, turnID)
 	c.dropRepublishLocked(turnID)
+	delete(c.blocked, turnID)
 }

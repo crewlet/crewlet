@@ -853,8 +853,11 @@ full, read-only or failing, its open files at their limit, the fleet's nodes
 holding different keys or running different builds) is the node's too, so the
 give-up never ends a run held by one: the run and its seat wait for the
 operator, and a turn with a wall-clock cap still ends at it. What the operator
-sees is each attempt's `sandbox_resume_failed` line, at error, its `error`
-naming the condition, and for a full volume holding the node's databases the
+sees is the [`executor_resume_blocked`](../reference/alarms.md) alarm, raised
+by the node holding the seat while such a run waits, naming the seat waiting
+longest, the condition and for how long, and cleared once a resume gets past
+it; each attempt's `sandbox_resume_failed` line, at error, its `error` naming
+the condition; and for a full volume holding the node's databases the
 [`volume_low`](../reference/alarms.md) alarm besides.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:

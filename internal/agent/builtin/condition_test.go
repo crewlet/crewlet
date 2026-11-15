@@ -373,6 +373,47 @@ func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
 	}
 }
 
+// ONLY A CONDITION AN OPERATOR MUST CLEAR IS ONE A FINISHED JOB'S RESUME WAITS
+// FOR THE OPERATOR ON: a disk full, read-only or failing, a process at its
+// limit of open files, and nodes holding different keys or running different
+// builds, each of them the node's too; and nothing a store, a log or a broker
+// answering again clears, nothing of the work's, and no kind at all. Raised as
+// executor_resume_blocked, a kind put on the wrong side either pages an
+// operator for an outage that ends by itself or leaves a run waiting on one
+// unsaid.
+//
+// Mutation: drop a kind from builtin.OperatorKind, or add one a wait clears
+// (coordination_unavailable), and its row goes red.
+func TestOnlyAConditionAnOperatorClearsWaitsForTheOperator(t *testing.T) {
+	t.Parallel()
+	operators := map[string]bool{
+		builtin.KindDiskFull: true, builtin.KindDiskReadOnly: true, builtin.KindDiskFailed: true,
+		builtin.KindOpenFilesExhausted: true, builtin.KindFleetKeysDiffer: true,
+		builtin.KindFleetBuildsDiffer: true,
+	}
+	seen := map[string]bool{}
+	for name, err := range everyCondition() {
+		kind, _ := builtin.ConditionKind(err)
+		seen[kind] = true
+		if got := builtin.OperatorKind(kind); got != operators[kind] {
+			t.Errorf("%s (kind %q): waits for an operator = %v, want %v", name, kind, got, operators[kind])
+		}
+	}
+	for kind := range operators {
+		if !seen[kind] {
+			t.Errorf("the operator's kind %q is recorded for no condition", kind)
+		}
+		if !builtin.InfrastructureKind(kind) {
+			t.Errorf("the operator's kind %q is not the node's", kind)
+		}
+	}
+	for _, kind := range []string{"", types.ErrorKindUnclassified, builtin.KindCoordinationUnavailable} {
+		if builtin.OperatorKind(kind) {
+			t.Errorf("%q waits for an operator", kind)
+		}
+	}
+}
+
 // sandboxClassSides is every coding sandbox class's side, true for the node's:
 // a provider that did not answer, at its account's limit, wanting it paid for
 // or refusing its credentials, a setup download failing on the far side and a

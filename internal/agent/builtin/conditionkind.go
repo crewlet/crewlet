@@ -94,6 +94,30 @@ func InfrastructureKind(kind string) bool {
 	return false
 }
 
+// OperatorKind reports whether kind ([ConditionKind]) is a condition of the
+// infrastructure that only an operator clears: this node's disk full, mounted
+// read-only or failing to read or write, its limit of open files reached, or
+// the fleet's nodes holding different keys or running different builds. Each
+// is [InfrastructureKind] besides, and no wait clears one: somebody has to act
+// on the host, on the keys or on the upgrade.
+//
+// A FINISHED JOB WHOSE RESUME FAILS ON ONE WAITS FOR THE OPERATOR: the resume
+// give-up counts no failure of the node's (internal/sandbox's resumeGivenUp),
+// so the run and its seat wait for as long as the condition lasts, and
+// nothing ends it but a turn's deadline. So it is said: the node holding the
+// seat raises executor_resume_blocked while one such run waits
+// (internal/sandbox's Coordinator.ResumesBlocked). False for every other kind,
+// one that clears when a store, a log or a broker answers again included,
+// and for anything that is no kind of a condition.
+func OperatorKind(kind string) bool {
+	switch kind {
+	case KindDiskFull, KindDiskReadOnly, KindDiskFailed, KindOpenFilesExhausted,
+		KindFleetKeysDiffer, KindFleetBuildsDiffer:
+		return true
+	}
+	return false
+}
+
 // sandboxClassIsTheNodes reports whether a coding sandbox's class is a
 // condition of the infrastructure rather than something a mail can cause.
 // Every class a turn or a resume fails on is met where the engine starts a

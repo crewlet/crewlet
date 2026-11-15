@@ -488,6 +488,17 @@ type CoordinatorOptions struct {
 	// resumableElsewhere); nil counts every such failure as the run's.
 	ResumableElsewhere func(ctx context.Context, run PendingRun) (bool, error)
 
+	// OperatorsCondition reports the kind of a resume's failure that only an
+	// operator clears (a disk full, read-only or failing, a process at its
+	// limit of open files, nodes holding different keys or running different
+	// builds), and false for any other. The give-up counts no such failure,
+	// the node's, so a completion's run waits for the operator for as long as
+	// the condition lasts, and this is how that wait is said: the run is
+	// counted in [Coordinator.ResumesBlocked], which raises the
+	// executor_resume_blocked alarm. The classification sits above this
+	// package (internal/agent/builtin's OperatorKind); nil says none.
+	OperatorsCondition func(error) (string, bool)
+
 	// Resume re-enters a suspended turn. Required: every node that builds a
 	// coordinator runs the engine whose seats a completion resumes into,
 	// and [NewCoordinator] refuses one without it.
@@ -1042,6 +1053,8 @@ type Coordinator struct {
 	nodesFailure func(context.Context, error) bool
 	// resumableElsewhere is [CoordinatorOptions.ResumableElsewhere].
 	resumableElsewhere func(ctx context.Context, run PendingRun) (bool, error)
+	// operatorsCondition is [CoordinatorOptions.OperatorsCondition].
+	operatorsCondition func(error) (string, bool)
 
 	queue   Publisher
 	pending PendingStore
@@ -1192,7 +1205,11 @@ type Coordinator struct {
 	// refused are the completions the node's gate refused on a condition,
 	// by turn id, kept so the condition's clearing re-fires each at once
 	// ([Coordinator.Readmit]) rather than a poll later. Under mu.
-	refused   map[string]refusedCompletion
+	refused map[string]refusedCompletion
+	// blocked are the completions whose last resume here failed on a
+	// condition only an operator clears, by turn id ([blockedResume]).
+	// Under mu.
+	blocked   map[string]blockedResume
 	owed      map[string]map[string]struct{}
 	held      map[string]bool
 	inboxes   map[string]queue.Attachment
@@ -1327,6 +1344,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
 		nodesFailure:       opts.NodesFailure,
 		resumableElsewhere: opts.ResumableElsewhere,
+		operatorsCondition: opts.OperatorsCondition,
 		answers:            opts.Answers,
 		leads:              opts.Leads,
 		condense:           opts.Condense,
@@ -1369,6 +1387,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		unsettled:    map[string]hostUnsettled{},
 		republish:    map[string]*refirePublish{},
 		refused:      map[string]refusedCompletion{},
+		blocked:      map[string]blockedResume{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
 		inboxes:      map[string]queue.Attachment{},
@@ -4168,6 +4187,12 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// UNDER THE ADMISSION, which is the only way here: the turn this
 	// re-enters is one the node admitted ([admitted]).
 	ctx := adm.ctx
+	// WHAT THIS ATTEMPT SAYS OF A WAIT FOR THE OPERATOR, whichever way it
+	// returns: a failure only an operator clears keeps the run counted in
+	// [Coordinator.ResumesBlocked], and every other answer, a resume that got
+	// past it included, takes it out.
+	blockedOn := ""
+	defer func() { c.noteBlocked(run, blockedOn) }()
 	if len(run.ExecuteState) == 0 {
 		// No parked turn to resume, and the run cannot be judged without
 		// one.
@@ -4468,6 +4493,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			log.ErrorContext(ctx, "sandbox_resume_failed",
 				"turn_id", run.TurnID, "revert_to", claimedFrom(run),
 				"attempt", run.Launch.ResumeFailures+1, "error", err.Error())
+			blockedOn = c.blockedBy(run, err)
 		}
 		// A FAILURE IS COUNTED AND BOUNDED, a wait is not, and nor is a
 		// failure of the node's own, or one another node can get past while
@@ -7386,6 +7412,10 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 			c.dropKeptLocked(turnID)
 		}
 	}
+	// AND EVERY RESUME OF ITS RUNS WAITING HERE FOR THE OPERATOR: the
+	// successor's own attempts say whether one still does
+	// ([Coordinator.ResumesBlocked]).
+	maps.DeleteFunc(c.blocked, func(_ string, b blockedResume) bool { return b.agent == handle })
 	// AND THE CLOCK ON ANY HOST WHOSE STORE ALONE WAS SILENT: the
 	// successor's collections start one of their own.
 	//

@@ -522,6 +522,9 @@ const (
 	KindLLMLimitWaiting          Kind = "llm_limit_waiting"
 	KindCodeMirrorFailing        Kind = "code_mirror_failing"
 
+	// The executor's: a seat's run whose finished job waits for an operator.
+	KindExecutorResumeBlocked Kind = "executor_resume_blocked"
+
 	// The MCP kinds, each about ONE configured MCP server ([PerEntryKinds]).
 	KindMCPServerFailing     Kind = "mcp_server_failing"
 	KindMCPServerPartial     Kind = "mcp_server_partial"
@@ -1076,6 +1079,27 @@ type Reading struct {
 	CodeMirrorFailing     int
 	CodeMirrorFailingRepo string
 	CodeMirrorFailingFor  time.Duration
+
+	// ExecutorResumesBlocked is how many runs of seats this node holds
+	// finished their executor's job and failed their last resume here on a
+	// condition only an operator clears: this node's disk full, read-only or
+	// failing, its limit of open files reached, or the fleet's nodes holding
+	// different keys or running different builds (internal/sandbox's
+	// Coordinator.ResumesBlocked). ExecutorResumeBlockedSeat is the seat of
+	// the run waiting longest, ExecutorResumeBlockedKind the condition its
+	// last resume failed on, and ExecutorResumeBlockedFor how long since the
+	// first such failure in a row.
+	//
+	// THE GIVE-UP NEVER ENDS SUCH A RUN, so this is the wait's one signal: the
+	// failure is the node's, the run and its seat wait for the operator, and
+	// the sandbox judged each failure at the classification the give-up
+	// itself reads, so the rule fires at any count (ADR-0015). Raised by the
+	// node holding the seat alone, from its own memory of its attempts. All
+	// zero on a node holding no such run.
+	ExecutorResumesBlocked    int
+	ExecutorResumeBlockedSeat string
+	ExecutorResumeBlockedKind string
+	ExecutorResumeBlockedFor  time.Duration
 
 	// Models is each configured model entry's condition across the fleet,
 	// and ModelsAt the instant it was gathered, which the expiry and the
@@ -2606,6 +2630,34 @@ var table = []rule{
 			"falls behind, and more Gitlet nodes spread the repositories' homes. " +
 			"See docs/concepts/gitlet.md, " +
 			"\"Mirrors and imports\".",
+	},
+	{
+		// A run of a seat this node holds whose finished job cannot be
+		// resumed until an operator clears a condition: the give-up never
+		// ends it, so its seat waits as long as the condition lasts. The
+		// sandbox judged each failure at the classification the give-up
+		// reads, so the rule fires at any count (ADR-0015). A node's
+		// condition, raised by the node holding the seat.
+		kind: KindExecutorResumeBlocked,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d run(s) of seats this node holds finished their executor's job but "+
+					"cannot be resumed until an operator clears a condition (the longest: %s's, on %s, for %s)",
+					r.ExecutorResumesBlocked, r.ExecutorResumeBlockedSeat, r.ExecutorResumeBlockedKind,
+					spoken(r.ExecutorResumeBlockedFor)),
+				r.ExecutorResumesBlocked > 0
+		},
+		remedy: "Read the node's `sandbox_resume_failed` lines for the seat: each " +
+			"names the condition in its `error`. A disk that is full " +
+			"(`disk_full`), mounted read-only (`disk_read_only`) or failing to " +
+			"read or write (`disk_failed`) is the host's: make room on it, " +
+			"remount it read-write or replace it. A process at its limit of " +
+			"open files (`open_files_exhausted`) needs the limit raised. Nodes " +
+			"holding different keys (`fleet_keys_differ`) need the same " +
+			"`secrets.keys` on every node, and nodes running different builds " +
+			"(`fleet_builds_differ`) need the upgrade finished. The run waits " +
+			"rather than ends, so the review of its finished job is not thrown " +
+			"away: the next attempt after the fix resumes it, and the alarm " +
+			"clears. A turn with a wall-clock cap still ends at its cap.",
 	},
 	{
 		// NO INSTANCE SERVING, past the restart schedule's ceiling: the
