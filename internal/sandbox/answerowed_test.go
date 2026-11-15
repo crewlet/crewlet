@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -505,5 +506,105 @@ func TestAReplyToARunWhoseEndingIsDecidedIsAnOrdinaryMessage(t *testing.T) {
 		if told := rig.answeredRecords(); len(told) != 0 {
 			t.Errorf("%s: recorded %+v, want no record of a reply to a run that is ending", name, told)
 		}
+	}
+}
+
+// holdStep is a [holdSpy] that runs at with each hold before it takes it.
+type holdStep struct {
+	holdSpy
+	at func(handle string)
+}
+
+func (h *holdStep) Hold(ctx context.Context, handle string) error {
+	h.at(handle)
+	return h.holdSpy.Hold(ctx, handle)
+}
+
+// AN OWED RUN HOLDS ITS SEAT'S MAIL ONLY BEHIND A SERIES RECORDED AND ARMED TO
+// DRIVE IT. Each way this node keeps a run's series for its retry records the
+// series, owes the seat's run and arms the series' attempt in one step of the
+// coordinator's lock: an answer by turn or a recovered seat's owed answer
+// ([Coordinator.queueOwed]), an ending that did not finish
+// ([Coordinator.oweEndingAfter]), a dead claim's revival that did not land
+// ([Coordinator.oweRevival]) and an answer left to its job's owed release
+// ([Coordinator.leaveToRelease]). A seat's release ([Coordinator.ReleaseSeat])
+// drops the series, its attempt and the seat's owed runs, and a run owed in a
+// step of its own after the one that recorded its series was owed again with
+// nothing to drive it: the seat's mail held on this node until a settle of that
+// run or the seat's next release. The hold is taken once the step is over, so
+// it reads the series as the step left it.
+//
+// Mutation: in queueOwed, oweEndingAfter or oweRevival, owe the seat's run and
+// arm the series in steps after the one that records it; the hold is taken
+// behind a series nothing has armed. (leaveToRelease armed its series in the
+// recording step and owed after it:
+// [TestASeatReleasedAsAnAnswerIsLeftToItsReleaseOwesItNothing] releases the
+// seat between the two.)
+func TestAnOwedRunIsHeldBehindOnlyASeriesRecordedAndArmed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// keep keeps run's series as the case names.
+		keep func(t *testing.T, rig *coordRig, run PendingRun)
+		// records is what the series must hold for the run it keeps.
+		records func(r *answerRetry) bool
+	}{
+		{name: "an owed answer queued",
+			keep: func(t *testing.T, rig *coordRig, run PendingRun) {
+				rig.coordinator.queueOwed(t.Context(), run)
+			},
+			records: func(*answerRetry) bool { return true }},
+		{name: "an ending kept",
+			keep: func(t *testing.T, rig *coordRig, run PendingRun) {
+				rig.coordinator.oweEndingAfter(t.Context(), run, ending{launch: run.LaunchID}, answerRetryCeiling)
+			},
+			records: func(r *answerRetry) bool { return r.ending != nil }},
+		{name: "a revival kept",
+			keep: func(t *testing.T, rig *coordRig, run PendingRun) {
+				rig.coordinator.oweRevival(t.Context(), run, fenceOf(run),
+					errStoreUnavailable("revive the claim", run.TurnID))
+			},
+			records: func(r *answerRetry) bool { return r.revive != nil }},
+		{name: "an answer left to its job's owed release",
+			keep: func(t *testing.T, rig *coordRig, run PendingRun) {
+				claimed := run
+				claimed.Status = StatusResumed
+				rig.coordinator.mu.Lock()
+				_, _ = rig.coordinator.handingBackLocked(claimed, "", failure{}, nil)
+				rig.coordinator.mu.Unlock()
+				if !rig.coordinator.leaveToRelease(t.Context(), run) {
+					t.Error("the premise: the answer was not left to its job's owed release")
+				}
+			},
+			records: func(*answerRetry) bool { return true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			run := rig.launch("t1")
+			var mu sync.Mutex
+			var holds []string
+			hold := &holdStep{at: func(handle string) {
+				rig.coordinator.mu.Lock()
+				r := rig.coordinator.retries["t1"]
+				_, owed := rig.coordinator.owed[handle]["t1"]
+				recorded := r != nil && tc.records(r)
+				armed := r != nil && r.stop != nil
+				rig.coordinator.mu.Unlock()
+				mu.Lock()
+				defer mu.Unlock()
+				holds = append(holds, fmt.Sprintf("%s: owed %v, series recorded %v, armed %v",
+					handle, owed, recorded, armed))
+			}}
+			rig.coordinator.hold = hold
+			tc.keep(t, rig, run)
+
+			mu.Lock()
+			defer mu.Unlock()
+			want := []string{"swe: owed true, series recorded true, armed true"}
+			if !slices.Equal(holds, want) {
+				t.Fatalf("the seat's mail held as %q; want %q", holds, want)
+			}
+		})
 	}
 }

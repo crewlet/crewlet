@@ -105,7 +105,9 @@ import (
 //     it back to running under the turn it had resumed, the answer with it.
 //     And settled once its release landed, as the series of a completion's
 //     release still is, the series left the answer on its run with nothing on
-//     this node to resume it.
+//     this node to resume it. The answer's run is owed in the step that finds
+//     the release out and records the series, so a seat's release falls before
+//     both, the release then no longer out, or after both, dropping them.
 //
 // A CLAIM ALREADY ON ITS WAY when the release went out is not refused, and
 // cannot be. The node's admission orders two claims of a job only where both
@@ -329,6 +331,14 @@ func (c *Coordinator) releasingLocked(turnID, launch string) bool {
 // answer. Armed at once, a series that came back here while the release was
 // still on its way would have read the row and come back again, as fast as the
 // store answered.
+//
+// OWED IN THE STEP THAT FINDS THE RELEASE OUT AND RECORDS THE SERIES, as
+// [Coordinator.oweRelease] owes one: a seat's release ([Coordinator.releaseOwed])
+// drops the series, its attempt and the seat's owed runs, and owed in a step of
+// its own after that, the run was owed again with no series and nothing armed to
+// drive it, holding the seat's mail on this node until a settle of that run or
+// the seat's next release. In the one step, the seat's release falls before it,
+// and the release is found no longer out, or after it, and drops all of it.
 func (c *Coordinator) leaveToRelease(ctx context.Context, run PendingRun) bool {
 	c.mu.Lock()
 	if !c.releasingLocked(run.TurnID, run.LaunchID) {
@@ -341,16 +351,17 @@ func (c *Coordinator) leaveToRelease(ctx context.Context, run PendingRun) bool {
 			window: answerWindow(run)}
 		c.retries[run.TurnID] = r
 	}
+	c.oweLocked(run.AgentHandle, run.TurnID)
 	if r.stop == nil {
 		c.scheduleOwedLocked(run.TurnID, answerRetryCeiling)
 	}
 	c.mu.Unlock()
+	c.reconcileHold(ctx, run.AgentHandle)
 	log.InfoContext(ctx, "sandbox_answer_release_owed",
 		"turn_id", run.TurnID, "agent", run.AgentHandle, "launch_id", run.LaunchID,
 		"detail", "the answer is recorded on a run whose last claim this node is still giving back, or owes "+
 			"the release of; the series that makes that release claims the answer once the release is no "+
 			"longer out")
-	c.owe(ctx, run.AgentHandle, run.TurnID)
 	return true
 }
 

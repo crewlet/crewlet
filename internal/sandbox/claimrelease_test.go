@@ -729,6 +729,71 @@ func TestOnlyAReleaseStillOutIsOwed(t *testing.T) {
 	}
 }
 
+// A SEAT RELEASED AS AN ANSWER IS LEFT TO ITS JOB'S RELEASE OWES THE ANSWER
+// NOTHING ON THIS NODE. An answer's attempt that finds its job's last release
+// out leaves its claim to the series that owes that release
+// ([Coordinator.leaveToRelease]), and recorded that series in one step of the
+// lock and owed the seat's run in a second. A seat's release between the two
+// ([Coordinator.ReleaseSeat]) dropped the series, its attempt and the seat's
+// owed runs, and the second step then owed the run again with nothing armed to
+// drive it: the seat's inbox held on this node, behind a run of a seat it no
+// longer holds, until a settle of that run or the seat's next release. The
+// seat is released here where the node logs that the answer is left to the
+// release, which it did between the two steps and now does after the one.
+//
+// Mutation: owe the seat's run in a step after the one that records the
+// series; t1 stays owed on the released seat with no series, and the seat's
+// hold is taken again after its release.
+// ([TestAnOwedRunIsHeldBehindOnlyASeriesRecordedAndArmed] holds the other
+// ways a series is kept.)
+//
+// Not parallel: it hooks the process's logger ([onLogLine]).
+func TestASeatReleasedAsAnAnswerIsLeftToItsReleaseOwesItNothing(t *testing.T) {
+	rig := newCoordRig(t)
+	holds := rig.withHold()
+	run := rig.launch("t1")
+	run.Status = StatusResumed
+	rig.coordinator.mu.Lock()
+	_, _ = rig.coordinator.handingBackLocked(run, "", failure{}, nil)
+	rig.coordinator.mu.Unlock()
+	if !rig.coordinator.releasing("t1", run.LaunchID) {
+		t.Fatal("the premise: the release of t1's claim is not out")
+	}
+
+	released, holdsBefore := false, 0
+	onLogLine(t, slog.LevelInfo, "sandbox_answer_release_owed", func() {
+		rig.coordinator.ReleaseSeat("swe")
+		released = true
+		holds.mu.Lock()
+		holdsBefore = len(holds.log)
+		holds.mu.Unlock()
+	})
+	run.Status = StatusAnswered
+	if !rig.coordinator.leaveToRelease(t.Context(), run) {
+		t.Fatal("the premise: the answer was not left to the release its job owes")
+	}
+	if !released {
+		t.Fatal("the premise: the node never logged that it left the answer to the release")
+	}
+
+	rig.coordinator.mu.Lock()
+	series, owed := rig.coordinator.retries["t1"], len(rig.coordinator.owed["swe"])
+	rig.coordinator.mu.Unlock()
+	if series != nil || owed != 0 {
+		t.Errorf("t1's series %v and %d owed on the seat once the seat is released; want neither",
+			series != nil, owed)
+	}
+	if waiting := rig.retries.delays(); len(waiting) != 0 {
+		t.Errorf("retries waiting %v once the seat is released; want none", waiting)
+	}
+	holds.mu.Lock()
+	after := slices.Clone(holds.log[holdsBefore:])
+	holds.mu.Unlock()
+	if len(after) != 0 {
+		t.Errorf("the seat's inbox was %v after the seat's release; want nothing done to it here", after)
+	}
+}
+
 // A CLAIM AT THE TURN'S DEADLINE WAITS FOR AN OWED RELEASE TOO. A completion
 // the node will not resume once its turn's deadline has passed is claimed with
 // no admission asked ([Coordinator.completeAtDeadline]), and is a claim of the

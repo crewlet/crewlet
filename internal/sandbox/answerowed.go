@@ -68,6 +68,16 @@ import (
 // count intact, where a park would republish it in a loop for the whole
 // backoff.
 //
+// AN OWED RUN HOLDS THE SEAT ONLY BEHIND A SERIES ARMED TO DRIVE IT: every way
+// this node keeps a run's series for its retry records the series, owes the
+// seat's run and arms its attempt in one step of the lock
+// ([Coordinator.keepSeriesLocked], [Coordinator.oweRelease],
+// [Coordinator.leaveToRelease]), since a seat's release drops all three
+// together ([Coordinator.releaseOwed]). Owed in a step after the series, a run
+// whose seat was released between the two was owed again with nothing to
+// drive it, and held the seat's mail on this node until a settle of that run
+// or the seat's next release.
+//
 // # What ends an answer that cannot be resumed
 //
 // The attempt bounds. A run nothing on this node can resume (no runner, a
@@ -1692,6 +1702,8 @@ func (c *Coordinator) oweEnding(ctx context.Context, run PendingRun, e ending) {
 // oweEndingAfter is [Coordinator.oweEnding] with the first retry after delay:
 // the hand-back's spacing for an ending a step of which did not land, and none
 // for one decided on a frame that may not finish it ([errAskAway]).
+//
+// KEPT, OWED AND ARMED IN ONE STEP ([Coordinator.keepSeriesLocked]).
 func (c *Coordinator) oweEndingAfter(ctx context.Context, run PendingRun, e ending, delay time.Duration) {
 	if run.AgentHandle == "" {
 		return
@@ -1705,9 +1717,9 @@ func (c *Coordinator) oweEndingAfter(ctx context.Context, run PendingRun, e endi
 		c.retries[run.TurnID] = r
 	}
 	r.ending = &e
+	c.keepSeriesLocked(run, delay)
 	c.mu.Unlock()
-	c.owe(ctx, run.AgentHandle, run.TurnID)
-	c.scheduleOwed(run.TurnID, delay)
+	c.reconcileHold(ctx, run.AgentHandle)
 }
 
 // oweRevival keeps a dead claim's revival that did not land
@@ -1731,6 +1743,7 @@ func (c *Coordinator) oweRevival(ctx context.Context, run PendingRun, fence Fenc
 	if run.AgentHandle == "" {
 		return
 	}
+	// KEPT, OWED AND ARMED IN ONE STEP ([Coordinator.keepSeriesLocked]).
 	c.mu.Lock()
 	r := c.retries[run.TurnID]
 	if r == nil {
@@ -1739,9 +1752,9 @@ func (c *Coordinator) oweRevival(ctx context.Context, run PendingRun, fence Fenc
 		c.retries[run.TurnID] = r
 	}
 	r.revive = &revival{fence: fence, lost: true}
+	c.keepSeriesLocked(run, answerRetryCeiling)
 	c.mu.Unlock()
-	c.owe(ctx, run.AgentHandle, run.TurnID)
-	c.scheduleOwed(run.TurnID, answerRetryCeiling)
+	c.reconcileHold(ctx, run.AgentHandle)
 }
 
 // suspectClaim marks an owed answer's series whose claim reported a failure:
@@ -2358,15 +2371,37 @@ func (c *Coordinator) publishCopies(ctx context.Context, run PendingRun, copies 
 // seat's control topic, at any moment of the seat's day: while another of its
 // runs holds it, in the middle of one of its turns, or while a person has it
 // paused ([Coordinator.AnswerByTurn]).
+//
+// KEPT, OWED AND ARMED IN ONE STEP ([Coordinator.keepSeriesLocked]).
 func (c *Coordinator) queueOwed(ctx context.Context, run PendingRun) {
 	c.mu.Lock()
 	if _, ok := c.retries[run.TurnID]; !ok {
 		c.retries[run.TurnID] = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID,
 			first: c.now(), window: answerWindow(run)}
 	}
+	c.keepSeriesLocked(run, 0)
 	c.mu.Unlock()
-	c.owe(ctx, run.AgentHandle, run.TurnID)
-	c.scheduleOwed(run.TurnID, 0)
+	c.reconcileHold(ctx, run.AgentHandle)
+}
+
+// keepSeriesLocked owes the seat run ([Coordinator.oweLocked]) and arms the next
+// attempt of run's series after delay ([Coordinator.scheduleOwedLocked]), in the
+// step of the lock that recorded the series and what it keeps; the caller
+// brings the seat's inbox hold into line ([Coordinator.reconcileHold]) once it
+// lets go of c.mu.
+//
+// IN THE ONE STEP, because a seat's release ([Coordinator.releaseOwed]) drops
+// the seat's series, their attempts and its owed runs together. A run owed in a
+// step after the one that recorded its series, with the seat released between
+// them, was owed again with no series and nothing armed to drive it, and nothing
+// cleared it but a settle of that run or the seat's next release: the seat's
+// mail stayed held on this node, behind a run of a seat it no longer held (a
+// recovery of the seat resets nothing it owes). In the one step, the seat's
+// release falls before it, and the attempt it arms finds the seat not held and
+// drops the series ([Coordinator.retryOwed]), or after it, and drops all of it.
+func (c *Coordinator) keepSeriesLocked(run PendingRun, delay time.Duration) {
+	c.oweLocked(run.AgentHandle, run.TurnID)
+	c.scheduleOwedLocked(run.TurnID, delay)
 }
 
 // owe records that a seat owes one of its runs an answer's resume, and takes
