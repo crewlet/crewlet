@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -194,7 +195,12 @@ func (e *Engine) pauseForFailure(ctx context.Context, seat uuid.UUID, handle str
 	if e.backends == nil || e.backends.Fleet == nil {
 		return "", false, nil
 	}
-	reason := "Paused by the engine: " + failureRules[failureKind(failure.Kind)].says + "."
+	// THE CAUSE ALONE, as a sentence: who paused the seat is the record's own
+	// `by` and `by_kind`, which every screen that shows a pause names beside
+	// its reason ("Paused by the engine"), so a reason that said it again read
+	// "Paused by the engine: Paused by the engine: ...".
+	says := failureRules[failureKind(failure.Kind)].says
+	reason := strings.ToUpper(says[:1]) + says[1:] + "."
 	p, created, err := e.backends.Fleet.CreateSeatPause(ctx, coord.SeatPause{
 		Seat: seat, By: engineActor, ByKind: iam.ActorSystem, Reason: reason, At: time.Now().UTC(),
 		Failure: &failure,

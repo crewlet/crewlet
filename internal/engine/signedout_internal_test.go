@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -102,8 +103,8 @@ func TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits(t *testing.T) 
 		return paused && p.Failure != nil && p.Failure.Kind == string(failureModelsRefused)
 	})
 	p, _, err := e.backends.Fleet.SeatPause(t.Context(), seat)
-	if err != nil || p.By != engineActor || p.Reason == "" {
-		t.Fatalf("the pause is %+v (%v), want the engine's, saying why", p, err)
+	if err != nil || p.By != engineActor || !strings.HasPrefix(p.Reason, "Every model it can use refused its credential") {
+		t.Fatalf("the pause is %+v (%v), want the engine's, saying why in a sentence of its own", p, err)
 	}
 	eventually(t, "the refused resume to give its claim back", func() bool {
 		return r.run(t, e, "t1").Status == sandbox.StatusRunning
