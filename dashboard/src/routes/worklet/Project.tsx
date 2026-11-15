@@ -81,7 +81,8 @@ import {
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { projectEditHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { fmtDateTime, relTime, fmtCount } from "~/lib/format.ts";
@@ -164,6 +165,11 @@ export function Project({ projectKey }: { projectKey: string }) {
   // cannot make the change.
   const [editing, setEditing] = useState(false);
   const editAccess = useWriteAccess("write_project");
+  const viewer = useViewer();
+  // AND THE PROJECT'S OWN RULE, as the inline button holds it: its lead or an admin.
+  const editHeld = editAccess.can
+    ? projectEditHold(viewer, detail?.lead.handle)
+    : editAccess.reason;
   usePageMenu(
     detail
       ? [
@@ -172,8 +178,8 @@ export function Project({ projectKey }: { projectKey: string }) {
             label: "Edit project",
             icon: <PencilGlyph size="sm" />,
             onSelect: () => setEditing(true),
-            disabled: !editAccess.can,
-            description: editAccess.can ? undefined : editAccess.reason,
+            disabled: editHeld !== undefined,
+            description: editHeld,
           },
         ]
       : [],
@@ -233,6 +239,7 @@ export function Project({ projectKey }: { projectKey: string }) {
               project={projectKey}
               name={detail.name}
               target={detail.target_date}
+              lead={detail.lead.handle}
               open={editing}
               onOpenChange={setEditing}
             />

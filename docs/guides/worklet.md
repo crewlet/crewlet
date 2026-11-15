@@ -1794,8 +1794,10 @@ drawn for everybody and held with that reason for anybody without it.
   unit has none, so the line says which unit owns it instead. A project nothing
   has been filed into says so and offers **New task**, rather than showing an
   empty list. **Edit project** sets or clears the target date
-  (`write_project{target_date}`) — the project's lead may, and so may a person
-  acting as themselves; a seat that does not lead the project is refused.
+  (`write_project{target_date}`). The project's lead may, and so may an
+  admin. Anybody else sees **Edit project** held with "Editing this project
+  needs Admin access, or leading it." before a date is chosen, and the engine
+  refuses the change all the same.
 - **Search** (`#/worklet/search`) ranks the company's work against a phrase:
   **Hybrid** (the default: words and meaning, each ranked and then fused),
   **Keyword** (the words, BM25) or **Meaning** (`semantic`: what the text is

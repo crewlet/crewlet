@@ -60,7 +60,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArtifactMakeRow, ButtonLink, LivePreviewBudgetProvider, Section } from "@crewlethq/ui";
+import {
+  ArtifactMakeRow,
+  ButtonLink,
+  Callout,
+  LivePreviewBudgetProvider,
+  Section,
+} from "@crewlethq/ui";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import {
@@ -74,6 +80,7 @@ import { useNow } from "~/lib/clock.ts";
 import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { offeredKinds, settingsSectionOpen } from "~/app/nav.ts";
 import { useServicesRun } from "~/lib/services.ts";
+import { needsWords } from "~/lib/access.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { KIND_WORDS, TRASH_KEPT, isArtifactKind, type MakeKind } from "~/lib/artifacts/words.ts";
@@ -318,6 +325,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
         />
       </GalleryBar>
       {newFolder && <NewTopFolder onClose={() => setNewFolder(false)} />}
+      {!author.can && author.block === "no_access" && <MakeHeld />}
       {showMake && <MakeRow />}
       <GalleryToolbar
         kind={kind}
@@ -422,6 +430,23 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
 function NewTopFolder({ onClose }: { onClose: () => void }) {
   const tree = useFolderTree();
   return <NewFolderDialog parent={null} index={tree.index} onClose={onClose} open />;
+}
+
+/**
+ * WHAT THE MISSING ACCESS HOLDS BACK, said on the page: making an artifact.
+ * The gallery stays open to a reader without Artifacts access, since a share
+ * alone admits them to what was shared, so neither the sidebar nor the page
+ * is locked; but New held with only a pointer's title was the one sign, where
+ * Doclet and Gitlet say "You need … access" in words on the page. One quiet
+ * line, in the same words every held control uses.
+ */
+function MakeHeld() {
+  return (
+    <Callout variant="info" appearance="quiet">
+      {needsWords("Making an artifact", ["artifacts"])} What is shared with you opens here all the
+      same.
+    </Callout>
+  );
 }
 
 function MakeRow() {

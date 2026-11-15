@@ -806,7 +806,7 @@ them.
 | **Gitlet** | `#/gitlet` | none; locked, naming Gitlet, for a reader without the Gitlet access, as Worklet's row is without Worklet's, since every section reads a code question the engine refuses them (ADR-0110), and for a holder the engine holds each answer to their own grant. Still hidden where the company hosts no code in the engine (`code.backend` is not `gitlet`). See [The Gitlet workspace](#the-gitlet-workspace) |
 | **Chatlet** | `#/chatlet/activity` (and `#/chatlet`) | the accent **badge**: what waits on you in Chatlet, the unread messages that name you (or the whole room) in a named room and every unread message in a direct conversation, in the rooms you have not muted; a floor ("100+") where a room counted to the engine's bound or the list was cut short, and none where the counts were not measured. Counted from the frame's ONE reading of your rooms (`lib/chatRooms.ts`), which the Chatlet screen draws too, so the badge and the list beside it cannot name two numbers; re-read on every live chat frame, at the room's rate while a surface draws the rooms and every two seconds at most while only the badge reads it. Locked, like Worklet, for a reader without Chatlet access; a reader who holds it but whose credential acts as no seat is answered by the screen itself, since every chat page is read as a seat |
 | **Doclet** | `#/doclet` | none |
-| **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
+| **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and making an artifact is the one thing in it the Artifacts access gates, which the gallery says in words to a reader without it ("Making an artifact needs Artifacts access. An admin can give it to you. What is shared with you opens here all the same.") beside its held New |
 | **Live** | `#/live` | the agents working now, beside the working mark, the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on Structure's row it sent a reader looking for a running turn to the chart |
 | *Foot* | | |
 | **Settings** | `#/settings/models` | none, and never a lock: Spend's readings are every reader's, and a section closed to the reader is locked in Settings' own column |
@@ -7946,7 +7946,9 @@ is one of the rules on this page applied to a tracker.
   **About** lens; a finding on the project's own record (a unit the chart lost)
   is drawn over every lens, because it is a fact about the work below. The
   page bar ends with **Edit project** — the lead's target date, a company write
-  (`write_project{target_date}`) whose authority the engine decides, titled
+  (`write_project{target_date}`) whose authority the engine decides (the
+  project's lead or an admin), held with that rule's sentence for anybody else
+  before a date is chosen (`projectEditHold`), titled
   with the project's NAME and confirmed with the day as the Target fact writes
   it ("Set Core's target to 30 Oct 2026", never the wire's ISO form) — and
   **New task**, filed into this project. A project that declares no purpose

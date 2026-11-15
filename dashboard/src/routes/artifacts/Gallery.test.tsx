@@ -45,7 +45,14 @@ vi.mock("~/lib/artifacts/access.ts", async () => {
   );
   return {
     ...actual,
-    useArtifactAccess: () => ({ can: authoring, as: "token:review", acts: [], reason: "" }),
+    useArtifactAccess: () =>
+      authoring
+        ? { can: true, as: "token:review", acts: [] }
+        : {
+            can: false,
+            block: "no_access",
+            reason: "This change needs Artifacts access. An admin can give it to you.",
+          },
   };
 });
 vi.mock("~/lib/artifacts/pinToggle.ts", () => ({
@@ -233,6 +240,24 @@ test("the trash says when each went in and when it goes for good, and offers a r
   expect(screen.queryByRole("menuitem", { name: "Pin to your sidebar" })).toBeNull();
   expect(screen.getByRole("menuitem", { name: "Restore" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeTruthy();
+});
+
+// WHAT A MISSING ACCESS HOLDS BACK IS SAID ON THE PAGE, as Doclet and Gitlet
+// say theirs: the gallery stays open to a reader without Artifacts access (a
+// share alone admits them), and New held with a pointer's title alone was the
+// only sign that making one needs access.
+test("a reader without Artifacts access is told on the page that making one needs it", () => {
+  authoring = false;
+  mount("all");
+  expect(
+    screen.getByText(
+      /^Making an artifact needs Artifacts access\. An admin can give it to you\. What is shared with you opens here all the same\.$/,
+    ),
+  ).toBeTruthy();
+  cleanup();
+  authoring = true;
+  mount("all");
+  expect(screen.queryByText(/^Making an artifact needs/)).toBeNull();
 });
 
 // SAID ONCE: the line over the trash says who sees it and how long an

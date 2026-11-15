@@ -387,6 +387,30 @@ export function useAnswerHold(handle: string): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
+// A project's own settings
+// ---------------------------------------------------------------------------
+
+/** The sentence a project's own settings are held with for a reader neither its lead nor an admin. */
+export const PROJECT_EDIT_HELD = "Editing this project needs Admin access, or leading it.";
+
+/**
+ * Why `viewer` may not change a project's own settings (its target date, in
+ * Edit project), or undefined where it may: an admin, or the seat that leads
+ * the team the project is filed under (`lead`, the project's own record), as
+ * the engine decides a project's policy (`authz.ClassContainer`) and nobody
+ * else. Checked before the dialog opens: held only by the act's Worklet
+ * access, the control let any Worklet reader fill in a date the engine then
+ * refused at Save.
+ */
+export function projectEditHold(
+  viewer: Pick<ViewerState, "admin" | "handle">,
+  lead: string | undefined,
+): string | undefined {
+  if (viewer.admin) return undefined;
+  return lead && viewer.handle === lead ? undefined : PROJECT_EDIT_HELD;
+}
+
+// ---------------------------------------------------------------------------
 // A change to the company's configuration
 // ---------------------------------------------------------------------------
 
