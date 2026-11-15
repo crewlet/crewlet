@@ -380,7 +380,8 @@ func (t keptTellings) led(ctx context.Context, r *Runner, lead string,
 			log.InfoContext(ctx, "executor_session_holdings_unused", "agent_id", r.cfg.Turn.AgentID,
 				"turn_id", r.cfg.Turn.RunID,
 				"detail", "its harness may compact the session before it reads the brief told by the reading",
-				"outcome", "the relaunch is handed the telling without the reading")
+				"outcome", "the launch is offered the session told without the reading; "+
+					"executor_session_not_continued says so where the session itself is not continued")
 		}
 	}
 	picked, holds := t.held.led(lead, own), t.holds

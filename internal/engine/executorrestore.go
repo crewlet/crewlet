@@ -270,8 +270,7 @@ func (l *agentLauncher) SessionHoldings(ctx context.Context, basis runner.Sessio
 	}
 	log.InfoContext(ctx, "executor_session_holdings_read", "seat", l.seat.Handle(), "turn_id", l.turn.RunID,
 		"asked", asked, "held", held, "told", asked-held, "unreported", len(unreported), "writer", ask.Resumer,
-		"outcome", "the launch hands the brief told by it where its box's harness answers writer and its "+
-			"first request sends the session whole; otherwise executor_session_holdings_unused says why not")
+		"outcome", readOutcome(held, len(unreported)))
 	// ONE LINE PER SUBAGENT, never per call: its calls are told under one
 	// heading, and the line says why the session does not hold its report.
 	for _, agent := range unreported {
@@ -279,6 +278,27 @@ func (l *agentLauncher) SessionHoldings(ctx context.Context, basis runner.Sessio
 			"turn_id", l.turn.RunID, "agent", agent, "detail", holdings.Subagents[agent].Why)
 	}
 	return holdings
+}
+
+// readOutcome is what follows a reading that held held of the asked calls and
+// told some under unreported subagents, as `executor_session_holdings_read`
+// says it.
+//
+// BY WHAT FOLLOWS, NEVER ONE PROMISE FOR EVERY READING: one that holds no
+// asked call and moves none under a subagent tells what the telling with no
+// reading tells, so the runner builds no brief told by it (its heldReading),
+// and no line says it was not handed. Every other reading is followed by the
+// brief told by it, by `executor_session_holdings_unused` saying why that brief
+// was not handed, or by `executor_session_not_continued` where the launch does
+// not continue the session at all, the brief told by the reading with it.
+func readOutcome(held, unreported int) string {
+	if held == 0 && unreported == 0 {
+		return "the reading holds no asked call and moves none, so the relaunch is told every call after its " +
+			"save point"
+	}
+	return "the launch hands the brief told by it where its box's harness answers writer and its first request " +
+		"sends the session whole; otherwise executor_session_holdings_unused says why not, or " +
+		"executor_session_not_continued where the session itself is not continued"
 }
 
 // sessionHoldings is [agentLauncher.SessionHoldings] before it logs: the

@@ -190,13 +190,18 @@ func (r *readRefused) Error() string { return r.why }
 // the session holds, how many the telling tells (the rest of the asked), how
 // many distinct subagents a told call is under, and the release the reading
 // was read for; and beside it one line per such subagent, never one per call,
-// saying why the session does not hold its report.
+// saying why the session does not hold its report. Its outcome says what
+// follows: the brief told by the reading, or a line saying why not, where the
+// reading holds or moves a call; and that the relaunch is told every call
+// after its save point where it does neither, since no brief is then told by
+// it and no line follows.
 //
 // NOT PARALLEL: it swaps the process-wide logger.
 //
 // Mutation: count told as asked, count a call nobody asked about, say a line
-// per call under a subagent, or name the subagents by anything but what a told
-// call is under, and this goes red.
+// per call under a subagent, name the subagents by anything but what a told
+// call is under, or promise the brief told by a reading that holds and moves
+// nothing, and this goes red.
 func TestAReadingIsLoggedWithWhatItHeldAndTold(t *testing.T) {
 	logs := captureLogs(t)
 	k := newKeptLaunch(t, 40000, 0, 0)
@@ -239,6 +244,10 @@ func TestAReadingIsLoggedWithWhatItHeldAndTold(t *testing.T) {
 	if writer, _ := read[0]["writer"].(string); writer != "2.1.310" {
 		t.Errorf("the line says writer=%q, want the release the reading was read for", writer)
 	}
+	if outcome, _ := read[0]["outcome"].(string); !strings.Contains(outcome, "executor_session_holdings_unused") ||
+		!strings.Contains(outcome, "executor_session_not_continued") {
+		t.Errorf("the line's outcome is %q, want the brief handed or the line that says why not", outcome)
+	}
 	subagents := readingLines(t, logs, from, "executor_session_subagent_unreported", k.l.turn.RunID)
 	got := map[string]string{}
 	for _, line := range subagents {
@@ -253,6 +262,26 @@ func TestAReadingIsLoggedWithWhatItHeldAndTold(t *testing.T) {
 	}
 	if unread := readingLines(t, logs, from, "executor_session_holdings_unread", k.l.turn.RunID); len(unread) != 0 {
 		t.Errorf("a reading read also said it read none: %v", unread)
+	}
+	// A READING THAT HOLDS AND MOVES NOTHING: no brief is told by it, so its
+	// line promises none.
+	from = len(logs.records(t))
+	none := readingAsk(sandbox.LoggedCall{ID: "toolu_unnamed", Asked: true, Output: "four"})
+	if got := k.l.SessionHoldings(k.ctx, k.l.ProbeSession(k.ctx), none); !got.Read {
+		t.Fatalf("the relaunch got %+v, want the reading", got)
+	}
+	read = readingLines(t, logs, from, "executor_session_holdings_read", k.l.turn.RunID)
+	if len(read) != 1 {
+		t.Fatalf("the reading that holds nothing said %d executor_session_holdings_read lines, want 1", len(read))
+	}
+	if held, _ := read[0]["held"].(float64); held != 0 {
+		t.Fatalf("the reading that holds nothing says held=%v", read[0]["held"])
+	}
+	outcome, _ := read[0]["outcome"].(string)
+	if !strings.Contains(outcome, "told every call after its save point") ||
+		strings.Contains(outcome, "executor_session_holdings_unused") {
+		t.Errorf("the line of a reading that holds and moves nothing says %q, want the relaunch told every call "+
+			"after its save point and no line to follow", outcome)
 	}
 }
 
@@ -397,9 +426,9 @@ func TestABriefToldByAReadingTheFloorCannotCarryIsDroppedAlone(t *testing.T) {
 				if detail, _ := unused[0]["detail"].(string); !strings.Contains(detail, "past") {
 					t.Errorf("the line's detail is %q, want the floor's why", detail)
 				}
-				if outcome, _ := unused[0]["outcome"].(string); !strings.Contains(outcome, "without the reading") {
-					t.Errorf("the line's outcome is %q, want the relaunch handed the telling without the reading",
-						outcome)
+				if outcome, _ := unused[0]["outcome"].(string); outcome != floorUnusedOutcome {
+					t.Errorf("the line's outcome is %q, want the session offered without the reading: %q",
+						outcome, floorUnusedOutcome)
 				}
 			}
 			dropped := readingLines(t, logs, from, "executor_session_not_continued", l.turn.RunID)

@@ -3558,12 +3558,18 @@ each `executor_session_holdings_unused` with its own site's keys. No path
 refuses a launch the reading would not have refused.
 
 **The log lines.** `executor_session_holdings_read` (`seat`, `turn_id`,
-`asked`, `held`, `told`, `unreported`, `writer`), `executor_session_holdings_unread`
+`asked`, `held`, `told`, `unreported`, `writer`, `outcome`), `executor_session_holdings_unread`
 (`seat`, `turn_id`, `detail`, `outcome`), `executor_session_holdings_unused`
 (`turn_id`, `detail`, `outcome`, and the site's `agent_id`, `seat` or `agent`)
 and one `executor_session_subagent_unreported` per subagent a told call is
 under (`seat`, `turn_id`, `agent`, `detail`). Every value an int or a string;
-a description never enters a line.
+a description never enters a line. The read line's outcome says what follows
+it: where the reading holds no asked call and moves none, that the relaunch is
+told every call after its save point, since no third telling is built and no
+line follows; otherwise the brief told by it, or `_unused` saying why not, or
+`executor_session_not_continued` where the session itself is not continued.
+The floor's `_unused` offers the session told without the reading, since the
+box that decides whether the session is continued is acquired after it.
 
 **Mid-upgrade.** Nothing is written to the wire, the run's record, the turn's
 row, the state log or the coordination store, and no stamp or

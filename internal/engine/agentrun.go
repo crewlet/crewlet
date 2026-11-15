@@ -626,6 +626,16 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	return runner.Launched{LaunchID: result.LaunchID, BridgeFrom: bridgeFrom}, nil
 }
 
+// floorUnusedOutcome is what a launch whose floor drops the briefs told by a
+// reading alone offers instead ([agentLauncher.continuedFloor]).
+//
+// AN OFFER, NEVER A HAND: the floor is judged before the box is acquired, and
+// the session itself may still not be continued (another member's harness, a
+// carry its box refuses, a fetch that fails), which
+// `executor_session_not_continued` then says.
+const floorUnusedOutcome = "the launch offers the session told without the reading; " +
+	"executor_session_not_continued says so where the session itself is not continued"
+
 // continuedFloor is req as the seat's budget lets it be launched on member (the
 // member the launch picked, nil where it could pick none) and the floor it is
 // held to ([launchFloor]): the largest floor of every brief the launch may hand
@@ -763,8 +773,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 			without.Exact = nil
 			if told := keptFloor(static, &without); carried(told) == "" {
 				log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
-					"turn_id", l.turn.RunID, "detail", keptWhy,
-					"outcome", "the relaunch is handed the telling without the reading")
+					"turn_id", l.turn.RunID, "detail", keptWhy, "outcome", floorUnusedOutcome)
 				req.Session, kept, keptWhy = &without, told, ""
 			}
 		}
