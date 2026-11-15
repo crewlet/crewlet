@@ -496,19 +496,12 @@ func seatAccessRead() Tool {
 	}
 }
 
-// grantCatalogueTool is the lookup of a permission in an integration's
-// catalogue of single permissions, for one agent.
+// grantCatalogueTool looks a permission up in a lane's catalogue for one agent.
 const grantCatalogueTool = "search_grant_catalogue"
 
-// grantCatalogueSearch is search_grant_catalogue: the seat read's own route
-// with a lookup, carded as a table of what matched ([seataccess.LookupEntry]),
-// so an answer about a permission nobody has asked for yet (should the agent
-// be raised a level, or ask for a grant?) reads which level holds it and what
-// the company's connection lacks, without the whole catalogue.
-//
-// A TABLE OF ITS OWN, NOT AN ARGUMENT OF get_seat_access: the drawer keeps one
-// card per record, so two lookups on the agent's record would leave the
-// person only the second; a table is titled by what it looked up.
+// grantCatalogueSearch is search_grant_catalogue: the seat read with a lookup, as
+// a table. Its own tool, since the drawer keeps one card per record and two
+// lookups on one agent would leave only the second.
 func grantCatalogueSearch() Tool {
 	lanes := make([]string, 0, len(seataccess.Lanes()))
 	for _, lane := range seataccess.Lanes() {
@@ -534,8 +527,7 @@ func grantCatalogueSearch() Tool {
 		}),
 		Names:  map[string]Directory{"handle": DirSeat},
 		Routes: []string{accessSeatRoute}, Apps: adminOnly,
-		// THE VENDOR'S WORDS REACH THE MODEL: a permission's name and why the
-		// connection cannot grant it are the vendor's.
+		// The vendor's words (names, why the connection cannot grant) reach the model.
 		Fence: true, Trust: provenance.TrustExternal,
 		Build: func(a map[string]any) (exec.Request, error) {
 			args := Args(a)
@@ -560,8 +552,7 @@ func grantCatalogueSearch() Tool {
 				col("write", "Changes things", "write", tText),
 				col("id", "Vendor name", "id", tText)},
 			Open: &cards.Open{Screen: "integrations"}}}),
-		// WHAT, FOR WHOM AND WHERE: one lookup for two agents, or at two
-		// integrations, is two reads.
+		// One lookup for two agents, or at two integrations, is two reads.
 		Scope: func(a Args) string {
 			return scopeOf(quoted(a), labelled(a, "handle", "for"),
 				laneTitle(seataccess.Lane(a.String("integration"))))

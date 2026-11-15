@@ -157,10 +157,8 @@ func (c *CoordRequests) Request(ctx context.Context, id string) (GrantRequest, e
 	return r, nil
 }
 
-// Open is every request still open at now, oldest first: each the store holds
-// that this build reads and that has not lapsed ([RequestTTL]). One it cannot
-// read is left for [CoordRequests.Sweep] rather than failing the read of the
-// rest.
+// Open is every readable request not past [RequestTTL], oldest first; one it
+// cannot read is left for [CoordRequests.Sweep].
 func (c *CoordRequests) Open(ctx context.Context, now time.Time) ([]GrantRequest, error) {
 	all, err := c.store.GrantRequests(ctx)
 	if err != nil {
