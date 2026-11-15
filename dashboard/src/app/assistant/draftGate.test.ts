@@ -246,6 +246,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/worklet/NewTask.tsx": "modal: the one sheet every New task opens",
   "routes/worklet/ProjectSettings.tsx":
     "modal: a project label's name, or a field's declaration, each in its dialog until its write",
+  "routes/worklet/TaskTypes.tsx":
+    "modal: a task type's new name, or a new type's name and description, in the task types dialog until its write",
   "routes/worklet/taskMenu.tsx":
     "modal: a permanent delete's reason and typed key, a person's own confirmation and never a draft, a move's project, and a merge's surviving task, in their dialogs",
   "routes/settings/SecretDialog.tsx":
