@@ -266,7 +266,12 @@ func (p *Provider) runDeviceLogin(
 	// The child holds its own copy; this one would keep the pipe open past
 	// the child, and the read below would never end.
 	_ = w.Close()
-	pgid := cmd.Process.Pid
+	group, idErr := recordGroup(cmd)
+	if idErr != nil {
+		_ = r.Close()
+		return fmt.Errorf("harness: %s started, but its process identity could not be read, "+
+			"so it was ended at once (no later signal to its group could be checked): %w", command, idErr)
+	}
 
 	lines := make(chan string)
 	go func() {
@@ -324,11 +329,10 @@ func (p *Provider) runDeviceLogin(
 	if runCtx.Err() != nil {
 		// Stopped: Cancel signalled the group and WaitDelay killed the harness
 		// if it would not go; whatever it started that survived goes now, so
-		// nothing holding the pipe outlives the sign-in.
-		if err := procgroup.Kill(pgid); err != nil && !errors.Is(err, errors.ErrUnsupported) {
-			log.WarnContext(ctx, "harness_group_kill_failed", "pgid", pgid,
-				"reason", "device sign-in stopped", "error", err)
-		}
+		// nothing holding the pipe outlives the sign-in. After the harness
+		// was reaped, so only while the group is still the one recorded
+		// ([harnessGroup.signal]).
+		group.signal(ctx, "device sign-in stopped", "SIGKILL", procgroup.Kill)
 	}
 	// What the harness printed before it exited is still in the pipe: read to its
 	// end, bounded by the grace in case something it left behind holds it.

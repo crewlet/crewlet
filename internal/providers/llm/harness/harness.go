@@ -506,7 +506,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		if err != nil {
 			return nil, err
 		}
-		defer tools.close()
+		defer tools.close(ctx)
 	}
 	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
 	// have something to put in it — see [harnessprofile.SystemPromptFile]. A

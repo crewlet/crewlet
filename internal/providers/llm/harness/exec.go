@@ -258,7 +258,9 @@ func (r *rawResult) unfinished() string {
 // leaves those holding the seat's memory and its network sockets.
 //
 // AN ERROR MEANS NO CHILD RAN: an invocation refused before the fork, a pipe
-// the host would not give, a binary exec could not start. Everything that
+// the host would not give, a binary exec could not start, or a child whose
+// process identity could not be read, ended as it started ([recordGroup]),
+// with nothing of its run read. Everything that
 // happened to a child that did start — its exit, the deadline, a stream
 // something it left behind still held, a wait that failed — is in the result,
 // because only the caller can say what each means, and a caller that read
@@ -345,7 +347,16 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		errPipe.abandon()
 		return nil, fmt.Errorf("harness: starting %q: %w", in.binary, err)
 	}
-	pgid := cmd.Process.Pid
+	group, idErr := recordGroup(cmd)
+	if idErr != nil {
+		// Killed and reaped already: no harness ran that anything could
+		// later signal safely.
+		outPipe.abandon()
+		errPipe.abandon()
+		return nil, fmt.Errorf("harness: %q started, but its process identity could not be "+
+			"read, so it was ended at once (no later signal to its group could be "+
+			"checked): %w", in.binary, idErr)
+	}
 	outPipe.drainInto(sink)
 	errPipe.drainInto(errSink)
 	clock.start()
@@ -394,11 +405,11 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	//
 	// res.timedOut keeps its narrower meaning — harness.go classifies a
 	// deadline as KindTimeout and a cancellation is not one.
+	//
+	// AFTER WAIT HAS REAPED THE HARNESS, so the group is killed only while it
+	// is still the one recorded at the start: see [harnessGroup.signal].
 	reap := func(reason error) {
-		if killErr := procgroup.Kill(pgid); killErr != nil && !errors.Is(killErr, errors.ErrUnsupported) {
-			log.WarnContext(ctx, "harness_group_kill_failed",
-				"pgid", pgid, "reason", reason, "error", killErr)
-		}
+		group.signal(ctx, reason.Error(), "SIGKILL", procgroup.Kill)
 	}
 	if err := callCtx.Err(); err != nil {
 		// The group was signalled by Cancel and given WaitDelay to go;

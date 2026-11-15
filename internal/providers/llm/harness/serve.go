@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -41,9 +43,12 @@ var (
 // password it minted there, and its log lines name what it runs. Its stderr is
 // kept, capped, for a failure's detail, as a harness's is.
 type harnessServer struct {
-	pgid  int
-	grace time.Duration
-	want  []harnessprofile.ReadyValue
+	group harnessGroup
+	// leader is the server's own process: what stop signals where its group
+	// cannot be shown to be the one recorded.
+	leader *os.Process
+	grace  time.Duration
+	want   []harnessprofile.ReadyValue
 
 	mu     sync.Mutex
 	ready  map[string]string
@@ -123,7 +128,13 @@ func startServer(
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("harness: starting %q's server: %w", binary, err)
 	}
-	s.pgid = cmd.Process.Pid
+	group, err := recordGroup(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("harness: %q's server started, but its process identity could "+
+			"not be read, so it was ended at once (no later signal to its group could be "+
+			"checked): %w", binary, err)
+	}
+	s.group, s.leader = group, cmd.Process
 	if len(want) == 0 {
 		s.upOnce.Do(func() { close(s.up) })
 	}
@@ -160,20 +171,38 @@ func (s *harnessServer) values() map[string]string {
 // stop ends the server — its group signalled, a grace, then killed — and waits
 // for it. The group is killed whatever the server did, because what it started
 // (the relay among them) is in it. Safe to call more than once.
-func (s *harnessServer) stop() {
+//
+// EVERY SIGNAL IS CHECKED against the group recorded at the start
+// ([harnessGroup.signal]): the kill comes after the server may have been
+// reaped, and the first signal may too, since the server can exit between the
+// look at exited and the signal. ctx carries what the log lines are told; a
+// teardown, so never its cancellation, which is often what ended the run.
+//
+// A SIGNAL THE GROUP DID NOT GET GOES TO THE LEADER, through os/exec's own
+// handle on it, which never reaches another process: on linux it signals
+// through the process's pidfd, and once Wait has reaped the server it sends
+// nothing. A server never exits on its own, so a stop whose group signals
+// were withheld (the kernel's record of the group could not be read) and
+// sent nowhere else would wait on exited for ever, and the run's teardown
+// with it, holding the seat's slot. The leader's end bounds the wait: its
+// Wait returns within the grace, whatever its group still holds.
+func (s *harnessServer) stop(ctx context.Context) {
 	s.stopOnce.Do(func() {
 		s.stopping.Store(true)
+		teardown := context.WithoutCancel(ctx)
 		select {
 		case <-s.exited:
 		default:
-			_ = procgroup.Terminate(s.pgid)
+			if !s.group.signal(teardown, "the run it served ended", "SIGTERM", procgroup.Terminate) {
+				_ = s.leader.Signal(syscall.SIGTERM)
+			}
 			select {
 			case <-s.exited:
 			case <-time.After(s.grace):
 			}
 		}
-		if err := procgroup.Kill(s.pgid); err != nil && !errors.Is(err, errors.ErrUnsupported) {
-			log.Warn("harness_server_kill_failed", "pgid", s.pgid, "error", err)
+		if !s.group.signal(teardown, "the run it served ended", "SIGKILL", procgroup.Kill) {
+			_ = s.leader.Kill()
 		}
 		<-s.exited
 	})
@@ -230,8 +259,10 @@ func (t *toolRun) up(ctx context.Context, p *Provider, in *invocation) (context.
 	srv, err := startServer(p.profile.Binary, args, in.dir, slices.Clone(in.env), in.grace,
 		m.Serve.Ready, in.failOn)
 	if err != nil {
-		// No server ran: the binary is missing or the host would give it no
-		// process — the one exec failure the next member is no answer to.
+		// No server ran: the binary is missing, the host would give it no
+		// process, or it started with an identity the kernel would not give
+		// and was ended at once — the one exec failure the next member is no
+		// answer to.
 		return nil, false, p.fail(llm.KindFatal, err)
 	}
 	t.server = srv
@@ -316,11 +347,11 @@ func (t *toolRun) up(ctx context.Context, p *Provider, in *invocation) (context.
 			t.abort(errServerExited)
 		case <-srv.marker:
 			t.abort(&failureMarkerError{line: srv.markerSeen()})
-			srv.stop()
+			srv.stop(ctx)
 		case <-t.host.Done():
-			srv.stop()
+			srv.stop(ctx)
 		case <-t.clock.expired():
-			srv.stop()
+			srv.stop(ctx)
 		case <-t.watchStop:
 		}
 	}()
@@ -333,7 +364,7 @@ func (t *toolRun) up(ctx context.Context, p *Provider, in *invocation) (context.
 func (t *toolRun) notUp(
 	ctx, waitCtx context.Context, p *Provider, last string,
 ) (context.Context, bool, error) {
-	t.server.stop()
+	t.server.stop(ctx)
 	cause := context.Cause(waitCtx)
 	detail := failureDetail(t.server.stderr.String(), "")
 	var marker *failureMarkerError
@@ -393,7 +424,7 @@ func (t *toolRun) ran(ctx context.Context, res *rawResult) {
 	}
 	t.lost = srv.lost()
 	if res.timedOut || res.stopped || res.failureMarker != "" || ctx.Err() != nil || t.lost {
-		srv.stop()
+		srv.stop(ctx)
 	}
 	if line := srv.markerSeen(); line != "" && res.failureMarker == "" {
 		res.failureMarker = line

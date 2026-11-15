@@ -113,7 +113,7 @@ func (p *Provider) serveTools(
 	}
 	for _, f := range m.Seed {
 		if err := writeSeed(checkout.Work, f.Path, m.Render(f.Content, t.values)); err != nil {
-			t.close()
+			t.close(ctx)
 			return nil, p.fail(llm.KindFatal, err)
 		}
 	}
@@ -258,8 +258,9 @@ func (t *toolRun) release() bool {
 // close is the run's teardown on every way out: the tail stopped, the host's
 // server released, a serve lifecycle's own server stopped, the carry stopped
 // and waited for — before the checkout is released, which the carry works in
-// and the harness's server runs in.
-func (t *toolRun) close() {
+// and the harness's server runs in. ctx is the run's, for what its teardown
+// logs.
+func (t *toolRun) close(ctx context.Context) {
 	if t.waitTail != nil {
 		close(t.stopTail)
 		t.waitTail()
@@ -271,7 +272,7 @@ func (t *toolRun) close() {
 		t.watchStop = nil
 	}
 	if t.server != nil {
-		t.server.stop()
+		t.server.stop(ctx)
 	}
 	if t.abort != nil {
 		t.abort(nil)

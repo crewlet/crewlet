@@ -674,9 +674,11 @@ vendor's and gets the same treatment. Only a
 `fatal` failure stops it, and that is a call the engine itself cannot make: a
 prompt it cannot render, a file of the call's it cannot write, a harness it cannot
 start on this host — the binary missing or not executable there, or no pipe or
-process for it, refused before any harness exists. Those are yours to fix, and
-walking past one would only carry every call to the next entry, and its bill,
-until somebody read why. A harness that started is never `fatal`, however it ended.
+process for it, refused before any harness exists, or a process whose identity
+the engine could not read as it started, ended at once. Those are yours to fix,
+and walking past one would only carry every call to the next entry, and its bill,
+until somebody read why. Apart from that last one, a harness that started is
+never `fatal`, however it ended.
 
 A call its caller **cancelled** (`canceled`) stops the walk too: a person
 pressed Stop, a seat's turn was stopped, a node began to drain. The harness was
@@ -2694,6 +2696,16 @@ A harness whose wait fails another way after it started is `server` too. A helpe
 that holds standard input with the prompt unread is one such case, and it is
 ended the same way. A harness that exits 0 when its deadline's signal arrives is a
 `timeout`.
+
+The harness's process group is signalled after the harness itself has exited
+only while it is still the group recorded when the harness started: the engine
+reads the group's leader and its start time from the kernel then, and asks
+again before each such signal, because once every member is gone the kernel may
+hand the group's id to another program's processes. When the kernel's record
+cannot be read (a `/proc` mounted with `hidepid`, for example), the signal is
+withheld and `harness_group_signal_withheld` is logged. A harness whose identity
+cannot be read as it starts is ended at once and the call fails as `fatal`, since
+no later signal to its group could be checked.
 
 ### Token accounting
 
