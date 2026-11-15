@@ -5031,11 +5031,14 @@ span.list-position-step {
   max-width: 760px;
   min-width: 0;
 }
+/* THE RAIL STARTS ON THE COLUMN'S OWN TOP LINE, the main column's 30px, so
+   its first property stands level with the task's title rather than above
+   it: at 18px the rail's first row sat higher than the title it describes. */
 .task-rail {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 18px 20px 28px;
+  padding: 30px 20px 28px;
   border-left: 1px solid var(--color-border-default);
 }
 .task-flags {
@@ -5375,16 +5378,42 @@ span.list-position-step {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
-  padding: 10px 14px;
+  padding: 10px 16px;
 }
 .task-turn-head {
   border-bottom: 1px solid var(--color-border-default);
 }
+/* THE COMMENT'S WORDS, and under a long one the Show more that folds it
+   (the kit's Clamp): one inset for both, so the press stands on the words'
+   own edge. */
+.task-comment-fold {
+  padding: 2px 16px 14px;
+}
+/* A READING MEASURE FOR ITS PROSE, about seventy characters, and the card's
+   whole width for what is laid out rather than read line by line: a table or
+   a block of code kept to the measure wrapped its columns for no reason. */
 .task-comment-body {
-  padding: 0 14px 12px;
+  max-width: none;
+}
+.task-comment-body > :is(p, ul, ol, blockquote, h2, h3, h4, h5, h6, .md-heading) {
+  max-width: 70ch;
+}
+/* A REPORT'S OWN HEADINGS GIVE IT A SHAPE TO SCAN: its title at the body's
+   size and weight read as one more paragraph, so a section heading takes the
+   primary ink and the step above the body, and its sub-headings the quiet
+   ink, closer to what they head. */
+.task-comment-body > h2 {
+  font-size: var(--font-size-sm);
+}
+.task-comment-body > :is(h3, h4, h5, h6) {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+.task-comment-body > * + :is(h3, h4, h5, h6) {
+  margin-top: var(--spacing-4);
 }
 .task-comment-decision {
-  margin: 0 14px 12px;
+  margin: 0 16px 14px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   background: var(--color-surface-elevated);
@@ -5657,19 +5686,18 @@ span.list-position-step {
   gap: 4px;
   color: var(--color-feedback-warning-ink);
 }
-.task-watching {
-  flex-direction: row;
-  flex-wrap: wrap;
+/* WHO WATCHES AND THE READER'S OWN PRESS, on one row under the section's
+   label as every rail section sets its content: the kit's stack at the start,
+   Watch or Unwatch flush at the end, both centred on the row. The stack was
+   drawn face by face in inline spans beside a label that took the row, so a
+   person's initials sat lower than the agents beside them and the faces stood
+   wherever the label's width left them. */
+.task-watching-row {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--spacing-2);
-}
-.task-watching .task-lbl {
-  flex: 1 1 auto;
-  margin: 0;
-}
-.task-watchers {
-  display: inline-flex;
-  gap: 2px;
+  min-height: var(--size-control-sm);
 }
 .task-peek .task-rail-body {
   padding-bottom: var(--spacing-2);
@@ -5971,6 +5999,8 @@ a.work-cal-chip {
   padding: var(--spacing-1) var(--spacing-2);
   border-bottom: 1px solid var(--color-border-default);
   vertical-align: top;
+  /* A column of figures lines up digit under digit. */
+  font-variant-numeric: tabular-nums;
 }
 .prose.md .md-table th {
   font-weight: 600;
