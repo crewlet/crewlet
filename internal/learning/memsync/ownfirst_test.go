@@ -523,20 +523,21 @@ func TestTheRowAtTheBoundaryIsTheBacklogsAndIsCarriedOnce(t *testing.T) {
 
 // TWO PUBLISHES OF A SEAT AT ONCE KEEP EACH RANGE'S MARKS SOUND.
 //
-// A cycle publishes from a snapshot of the seats it holds and takes no seat's
-// lock, so a release's flush runs beside it: the same range twice, or the
-// flush's own pass beside the cycle's backlog. Each range's mark claims only
-// rows its calls had acknowledged, so at every publish, before its row is
-// counted, every row of either range stamped at or below that range's mark has
-// been acknowledged, and neither mark has moved back. A call reading a page
+// A cycle takes no seat's lock, so a call of it and a release's flush can
+// overlap, by the row the cycle was sending as the release began: the same
+// range twice, or the flush's own pass beside the cycle's backlog. Each
+// range's mark claims only rows its calls had acknowledged, so at every
+// publish, before its row is counted, every row of either range stamped at or
+// below that range's mark has been acknowledged, and neither mark has moved
+// back. A call reading a page
 // after the other had rows acknowledged starts above them, and two calls of
 // different ranges neither read nor move each other's marks. The second call
 // runs whole inside the first's publish of its first row, over 300 notes held
 // when the boundary was taken and 300 the seat wrote after.
 //
 // Mutation: move a mark before its row is acknowledged, share one mark between
-// the ranges, or read each page from the call's own cursor alone, and this
-// goes red.
+// the ranges, or read the mark once per table rather than at each page, and
+// this goes red.
 func TestTwoPublishesOfASeatAtOnceKeepEachRangesMarksSound(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -653,25 +654,26 @@ func TestTwoPublishesOfASeatAtOnceKeepEachRangesMarksSound(t *testing.T) {
 	}
 }
 
-// A FORGOTTEN SEAT CARRIES EVERY ROW AS ITS OWN UNTIL ITS NEXT HYDRATION.
+// A FORGOTTEN SEAT CARRIES NOTHING UNTIL ITS NEXT HYDRATION.
 //
-// A release forgets the seat: both of its ranges' marks and its boundary. A
-// publish of it before its next hydration here completes, a cycle that took
-// its snapshot before the release, has no boundary, and carries every row as
-// its own, as a publish did before boundaries. The next hydration takes a new
-// boundary above every row the node holds, and its backlog carries all of
-// them again from the first. Here a holding drained 200 notes held when it took
-// the seat and 100 it wrote, and was forgotten; a publish then, and a turn of
-// the next holding, follow.
+// A release forgets the seat: its holding, both of its ranges' marks and its
+// boundary with the holding. A publish of it before its next hydration here
+// completes, a cycle that took its snapshot before the release, carried every
+// row as its own, as a publish did before boundaries, over what the next
+// holder had written since (#511); it now carries nothing. The next hydration
+// begins a new holding above every row the node holds, and its backlog
+// carries all of them again from the first. Here a holding drained 200 notes
+// held when it took the seat and 100 it wrote, and was forgotten; a turn then,
+// and a turn of the next holding, follow.
 //
-// Mutation: leave the boundary, the marks, or the backlog's marks alone in
-// Forget, and this goes red.
-func TestAForgottenSeatCarriesEveryRowAsItsOwnUntilItsNextHydration(t *testing.T) {
+// Mutation: leave the holding, the marks, or the backlog's marks alone in
+// Forget, or publish a seat with no holding, and this goes red.
+func TestAForgottenSeatCarriesNothingUntilItsNextHydration(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	held := writeNotesUnder(t, db, "b", 200, 0)
 	js := &roundTripJS{}
-	s := syncerOver(db, js)
+	s := New(db, js, func(string) string { return seat.AgentID })
 	if err := s.recordBoundary(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("record the boundary: %v", err)
 	}
@@ -688,19 +690,14 @@ func TestAForgottenSeatCarriesEveryRowAsItsOwnUntilItsNextHydration(t *testing.T
 	if b := s.boundary(seat.Handle); b != 0 {
 		t.Errorf("after Forget the seat's boundary is %d, want none", b)
 	}
-	for _, spec := range backlogPassOrder {
-		for _, of := range []markRange{ownRange, backlogRange} {
-			if mark := s.mark(seat.Handle, spec.name, of); mark != 0 {
-				t.Errorf("after Forget %s's %s mark is %d, want 0", spec.name, of, mark)
-			}
-		}
-	}
+	noMarksOf(t, s)
 	forgotten := turnOf(t, s, js)
-	if !slices.Equal(forgotten.own, every) || len(forgotten.backlog) > 0 {
-		t.Errorf("a turn after Forget had %s and then %s acknowledged, want every one of the 300 "+
-			"notes as the seat's own, in the order they were stamped, and no backlog: the seat "+
-			"has no boundary until its next hydration", name.said(forgotten.own),
-			name.said(forgotten.backlog))
+	if len(forgotten.own) > 0 || len(forgotten.backlog) > 0 ||
+		!errors.Is(forgotten.ownErr, ErrNotHeld) || !errors.Is(forgotten.backlogErr, ErrNotHeld) {
+		t.Errorf("a turn after Forget had %s and then %s acknowledged, answering (%v, %v), want "+
+			"nothing and ErrNotHeld from each: the seat has no holding until its next "+
+			"hydration", name.said(forgotten.own), name.said(forgotten.backlog),
+			forgotten.ownErr, forgotten.backlogErr)
 	}
 
 	// THE NEXT HYDRATION HERE COMPLETES, above every row the node holds.
@@ -773,37 +770,52 @@ func TestARestartMidDrainCarriesTheBacklogAgainBehindWhatTheSeatWrites(t *testin
 	}
 }
 
-// A PUBLISH BEGUN WITH NO BOUNDARY KEEPS NONE TO ITS END.
+// A SEAT WITH NO HOLDING HERE IS CARRIED BY NO CALL.
 //
-// A seat whose hydration here has not completed has no boundary: every row is
-// its own, and it has no backlog. A publish takes the boundary once, as it
-// begins, so one begun before the hydration completed carries as a publish did
-// before boundaries, to its end, and a hydration that fails records none.
+// A seat whose hydration here has not completed has no holding, and so no
+// boundary. It carried every row as its own, a publish begun before the
+// hydration completed going on as one to its end, and that was #511's body: a
+// seat still being taken put this node's copies over the newer ones its
+// hydration had yet to read. No call of either caller carries it now, and none
+// reads a page of it; a hydration that fails begins no holding and records no
+// boundary.
 //
-// Mutation: read a backlog at a boundary of 0, record the boundary before the
-// replays, or read the boundary again at each page, and this goes red.
-func TestAPublishBegunWithNoBoundaryKeepsNoneToItsEnd(t *testing.T) {
+// Mutation: read a page of a seat with no holding, publish one, or begin the
+// holding on a hydration that fails, and this goes red.
+func TestASeatWithNoHoldingHereIsCarriedByNoCall(t *testing.T) {
 	t.Parallel()
-	t.Run("a seat that never hydrated has no backlog to read", func(t *testing.T) {
+	t.Run("a seat that never hydrated", func(t *testing.T) {
 		t.Parallel()
 		db := openStore(t)
+		seedMemory(t, db)
 		writeNotes(t, db, 3, 0)
 		js := &roundTripJS{}
-		s := syncerOver(db, js)
+		s := New(db, js, func(string) string { return seat.AgentID })
 		var read []string
 		s.beforePage = func(of markRange, table string) {
-			if of == backlogRange {
-				read = append(read, table)
+			read = append(read, string(of)+" "+table)
+		}
+		for _, call := range []struct {
+			name    string
+			publish func(context.Context, string) (Carried, error)
+		}{
+			{"the cycle's own pass", s.PublishOwn},
+			{"the cycle's backlog", s.PublishBacklog},
+			{"a flush's own pass", s.FlushOwn},
+			{"a flush's backlog", s.FlushBacklog},
+		} {
+			carried, err := call.publish(t.Context(), seat.Handle)
+			if carried != (Carried{}) || !errors.Is(err, ErrNotHeld) {
+				t.Errorf("%s of a seat with no holding answered %+v (%v), want nothing "+
+					"carried and ErrNotHeld", call.name, carried, err)
 			}
 		}
-		carried, err := s.PublishBacklog(t.Context(), seat.Handle)
-		if carried != (Carried{}) || err != nil || len(js.acked) > 0 || len(read) > 0 {
-			t.Errorf("a backlog of a seat with no boundary answered %+v (%v), had %d rows "+
-				"acknowledged and read a page of %s, want nothing and no read", carried, err,
-				len(js.acked), words.And(read))
+		if len(js.acked) > 0 || len(read) > 0 {
+			t.Errorf("the calls had %d rows acknowledged and read a page of %s, want nothing "+
+				"and no read", len(js.acked), words.And(read))
 		}
 	})
-	t.Run("a hydration that fails records no boundary", func(t *testing.T) {
+	t.Run("a hydration that fails begins no holding", func(t *testing.T) {
 		t.Parallel()
 		conn := broker(t)
 		holder := openStore(t)
@@ -815,87 +827,22 @@ func TestAPublishBegunWithNoBoundaryKeepsNoneToItsEnd(t *testing.T) {
 		// A ROW OF ITS OWN ALREADY, so the store's change sequence is past 0
 		// and a boundary read here would say so.
 		writeNotes(t, fresh, 1, 0)
-		s := syncerOn(t, fresh, conn)
-		s.js = openFailsJS{s.js}
+		s := New(fresh, openFailsJS{jsOn(t, conn)}, func(string) string { return seat.AgentID })
 		if _, err := s.Hydrate(t.Context(), seat.Handle); err == nil {
 			t.Fatal("a hydration whose replay could not open reported success")
 		}
 		if b := s.boundary(seat.Handle); b != 0 {
 			t.Errorf("a hydration that failed recorded the boundary %d, want none", b)
 		}
-	})
-	t.Run("a publish begun with none carries as one to its end", func(t *testing.T) {
-		t.Parallel()
-		db := openStore(t)
-		ids := writeNotes(t, db, 300, noteWidth)
 		js := &roundTripJS{}
-		s := syncerOver(db, js)
-		pages := 0
-		s.beforePage = func(of markRange, table string) {
-			if of != ownRange || table != "agent_diary" {
-				return
-			}
-			// THE HYDRATION COMPLETES between the call's first page and its
-			// second.
-			if pages++; pages == 2 {
-				if err := s.recordBoundary(t.Context(), seat.Handle); err != nil {
-					t.Errorf("record the boundary: %v", err)
-				}
-			}
-		}
-		if _, err := s.PublishOwn(t.Context(), seat.Handle); err != nil {
-			t.Fatalf("publish: %v", err)
-		}
-		if pages < 3 {
-			t.Fatalf("the %d notes were read in %d pages; this case needs a boundary taken "+
-				"between two pages and a page after it", len(ids), pages)
-		}
-		if got := numbersOf(t, js.acked, noteNumbers(t, ids)); !slices.Equal(got, span(1, len(ids))) {
-			t.Errorf("a publish begun with no boundary, which a hydration completed under, had notes "+
-				"%s acknowledged, want each of the %d once, in order", runsOf(got), len(ids))
+		s.js = js
+		if carried, err := s.PublishOwn(t.Context(), seat.Handle); carried != (Carried{}) ||
+			!errors.Is(err, ErrNotHeld) || len(js.acked) > 0 {
+			t.Errorf("after a hydration that failed the seat's own pass answered %+v (%v) and "+
+				"had %d rows acknowledged, want nothing and ErrNotHeld", carried, err,
+				len(js.acked))
 		}
 	})
-}
-
-// A BACKLOG PUBLISH THAT OUTLIVES A FORGET DOES NOT START ITS TABLE AGAIN.
-//
-// P1's case for the own range (TestAPublishThatOutlivesAForgetDoesNotStartItsTableAgain),
-// for the backlog: a release's Forget between two pages of a backlog in flight
-// zeroes its mark and drops the seat's boundary, and the call goes on, under
-// the boundary it began with, from its own cursor.
-//
-// Mutation: read each page from the mark alone, or read the boundary again at
-// each page, and this goes red.
-func TestABacklogPublishThatOutlivesAForgetDoesNotStartItsTableAgain(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	ids := writeNotes(t, db, 300, noteWidth)
-	js := &roundTripJS{}
-	s := syncerOver(db, js)
-	if err := s.recordBoundary(t.Context(), seat.Handle); err != nil {
-		t.Fatalf("record the boundary: %v", err)
-	}
-	pages := 0
-	s.beforePage = func(of markRange, table string) {
-		if of != backlogRange || table != "agent_diary" {
-			return
-		}
-		// BETWEEN THE FIRST PAGE AND THE SECOND.
-		if pages++; pages == 2 {
-			s.Forget(seat.Handle)
-		}
-	}
-	if _, err := s.PublishBacklog(t.Context(), seat.Handle); err != nil {
-		t.Fatalf("publish the backlog: %v", err)
-	}
-	if pages < 3 {
-		t.Fatalf("the %d notes were read in %d pages; this case needs a Forget between two pages "+
-			"and a page after it", len(ids), pages)
-	}
-	if got := numbersOf(t, js.acked, noteNumbers(t, ids)); !slices.Equal(got, span(1, len(ids))) {
-		t.Errorf("a backlog a Forget overtook between its first two pages had notes %s "+
-			"acknowledged, want each of the %d once, in order", runsOf(got), len(ids))
-	}
 }
 
 // budgetSpentInTheCountJS is a changelog whose count of a retired table's rows

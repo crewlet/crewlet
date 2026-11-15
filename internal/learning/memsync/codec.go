@@ -77,16 +77,25 @@
 // stamped above the boundary, what the holding writes, its OWN, and one over
 // those at or below it, its BACKLOG. A publish is two calls: [Syncer.PublishOwn]
 // carries the seat's own rows and then the tables sent whole, and
-// [Syncer.PublishBacklog] the backlog, after it: a release's flush while its
-// bound has time, and the engine's memory sync cycle in a turn the held seats'
-// backlogs share, after their own passes, so while those leave that turn the
-// time to move a mark what a seat writes waits for no seat's backlog. The
-// backlog is the republish node migration 0041 keeps: it puts this node's rows
-// back on a changelog restored or recreated while the node ran, and carries
-// what an earlier holding's flush did not reach. A seat with no boundary, one
-// whose hydration here has not completed or that a release has forgotten, has
-// every row as its own, which is how a publish carried a seat before
-// boundaries.
+// [Syncer.PublishBacklog] the backlog, after it, in the engine's memory sync
+// cycle's turn the held seats' backlogs share, after their own passes, so
+// while those leave that turn the time to move a mark what a seat writes waits
+// for no seat's backlog; a release's flush makes the same two calls as
+// [Syncer.FlushOwn] and [Syncer.FlushBacklog], the backlog while its bound has
+// time. The backlog is the republish node migration 0041 keeps: it puts this
+// node's rows back on a changelog restored or recreated while the node ran,
+// and carries what an earlier holding's flush did not reach.
+//
+// ONE PUBLISHER OF A SEAT AT A TIME, ON THIS NODE. The changelog keeps the
+// last message on each row's subject, so a node that publishes a seat it does
+// not hold puts its own, possibly older, copies over the holder's. So a seat
+// is published only under its HOLDING here: live from the moment its
+// hydration completes, when the memory sync cycle carries it; releasing from
+// the moment its release begins, when only the release's flush does; and
+// none before the hydration completes, after a taking that failed, and once
+// the release has forgotten it. Every call checks the holding before each row
+// it sends, so a cycle partway through a seat as its release begins stops at
+// its next row (crewlet/crewlet#511).
 //
 // # What is deliberately not replicated
 //
@@ -422,10 +431,14 @@ func barrierSubject(seat string) string {
 // Last writer wins is safe rather than merely convenient while ONE node at a
 // time publishes the seat, which is what holding it means: the changelog's
 // latest value for a subject is then the value its current owner wrote. A
-// seat's move is where that does not hold: a cycle the releasing node began
-// before the release, and a successor still taking the seat, can each publish
-// an older copy after the newer one, and the older one wins
-// (crewlet/crewlet#511).
+// node publishes a seat only under its holding there ([Syncer.PublishOwn],
+// [Syncer.Releasing]), so neither a cycle the releasing node began before the
+// release, nor a successor still taking the seat, nor the release of a taking
+// that failed publishes an older copy after the newer one. Two things still
+// can: the one row a cycle was sending as the release began, which can land
+// after the flush's copy of it, and two nodes holding the seat at once, a
+// node whose lease lapsed under it still carrying the seat while the next
+// holder writes it (crewlet/crewlet#511).
 func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 	columns := make([]string, 0, len(t.columns))
 	values := make([]any, 0, len(t.columns))
