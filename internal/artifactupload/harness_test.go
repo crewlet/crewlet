@@ -620,6 +620,8 @@ func (n *domainNode) drain() {
 			n.t.Errorf("decode record %d: %v", seq, err)
 			return
 		}
+		// AS THE FRAMEWORK'S LOOP HANDS IT ([statelog.AppliedInstant]).
+		storedAt = statelog.AppliedInstant(storedAt)
 		record := statelog.Record{Envelope: envelope,
 			Position: statelog.Position{Stream: spec.Name, Generation: envelope.Gen, Seq: seq},
 			Payload:  body, StoredAt: storedAt}

@@ -175,9 +175,17 @@ func StreamCreatedAt(info *jetstream.StreamInfo) (time.Time, error) {
 // hydrate any seat, for ever, over a difference nothing can see.
 const identityResolution = time.Microsecond
 
-// brokerInstant is the broker's instant for a record as every applier is handed
-// it ([Record.StoredAt], [ApplyOptions.StoredAt]): the store's own encoding of
-// it, UTC at a microsecond, read back through the store's own decode.
+// AppliedInstant is the broker's instant for a record as every applier is
+// handed it ([Record.StoredAt], [ApplyOptions.StoredAt]): the store's own
+// encoding of it, UTC at a microsecond, read back through the store's own
+// decode.
+//
+// EXPORTED FOR A HARNESS THAT PLAYS THE LOOP BY HAND — reads a log, opens each
+// frame and calls a domain's applier itself — which hands the applier this of
+// the instant the log reports, as the loop does. Handed the broker's own, it
+// applies what no node is ever handed, and a domain that relies on the one
+// value (a column and a document read as the same instant) fails there while it
+// holds on every node.
 //
 // ONE VALUE ON EVERY NODE AND ON EVERY PATH, which the broker's own is not. A
 // record applied as it arrives carries what the broker client reported —
@@ -192,7 +200,7 @@ const identityResolution = time.Microsecond
 // THE STORE'S HELPERS, NEVER A COPY, because the deferred table is written and
 // read through them: a second rule spelled here would drift from the one the
 // held-back path already follows, and the two paths would part again.
-func brokerInstant(t time.Time) time.Time { return store.DecodeTime(store.EncodeTime(t)) }
+func AppliedInstant(t time.Time) time.Time { return store.DecodeTime(store.EncodeTime(t)) }
 
 // IdentityOf compares a stream's current creation instant against the one this
 // node recorded.

@@ -37,7 +37,7 @@ type Message struct {
 	// StoredAt is the broker's own timestamp, which every node reads as
 	// one instant — unlike a clock each node would read for itself. As one
 	// INSTANT, not one value: the broker client reports it at nanoseconds in
-	// the node's local zone, so the loop hands an applier [brokerInstant] of
+	// the node's local zone, so the loop hands an applier [AppliedInstant] of
 	// it rather than this.
 	StoredAt time.Time
 
@@ -2851,11 +2851,13 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				Position: at,
 				Payload:  body,
 				framed:   row.payload,
-				// ALREADY THE STORE'S ENCODING: the deferred table
-				// keeps the instant as [brokerInstant] makes it, and
-				// [tables.deferredAfter] reads it back through the
-				// store's own decode.
-				StoredAt: row.storedAt,
+				// THROUGH [AppliedInstant] ON THIS PATH TOO, though the
+				// deferred table already keeps the store's encoding and
+				// [tables.deferredAfter] reads it back through the store's
+				// own decode: normalized where statelog builds every
+				// Record, the two paths hand an applier one value by
+				// construction rather than by what a table's reader does.
+				StoredAt: AppliedInstant(row.storedAt),
 			}
 			landed, result, err := r.reprocessOne(ctx, w, rec)
 			switch {
@@ -3188,10 +3190,10 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 			// rather than trusted because an earlier build looked.
 			Payload: body,
 			framed:  m.Payload,
-			// THE INSTANT AS THE STORE KEEPS IT ([brokerInstant]): the
+			// THE INSTANT AS THE STORE KEEPS IT ([AppliedInstant]): the
 			// broker's own, in the node's zone at nanoseconds, is a value
 			// no record held back and applied later carries.
-			StoredAt: brokerInstant(m.StoredAt),
+			StoredAt: AppliedInstant(m.StoredAt),
 			verdict:  verdict,
 			ack:      m.Ack,
 			release:  m.Release,
