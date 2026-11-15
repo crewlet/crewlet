@@ -969,6 +969,38 @@ jobs:
       - *gobuild-prune
       - *gobuild-save
 
+  # THE HARNESS'S OUTPUT CAPTURE ON macOS, on every pull request. A harness
+  # child's stdout and stderr are files of its own on the engine host
+  # (internal/providers/llm/harness/capture.go), and darwin's half of that
+  # rests on calls no Linux job makes: flock's pin on a description a child
+  # inherits, F_PREALLOCATE for the room a capture is given, F_PUNCHHOLE
+  # (declared and called by capture_darwin.go itself, since x/sys wraps it
+  # not), the reopen by path and its identity check, ftruncate through the
+  # engine's read-write description, and procgroup's sysctl read of a group.
+  # `make test-capture` runs internal/flock's pin cases, the capture's unit
+  # cases (one of which punches what was read past the bound and reserves
+  # the room ahead through those very calls), one run whose record passes
+  # the bound and is given back as it is read, and one call through a
+  # harness whose group outlives it, under -race. A failure here is a darwin engine host losing or holding a call's
+  # output: it is fixed, never skipped. Whether the job is a REQUIRED check
+  # is a repository setting.
+  #
+  # Its caches are gitrecipe-macos's, the build cache under this job's own
+  # key; it needs no pinned git, since none of these cases runs one.
+  capture-macos:
+    name: harness capture (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - *go-caches
+      - *gobuild-restore
+      - *gobuild-age
+      - name: the capture's cases on darwin
+        run: make test-capture
+      - *gobuild-prune
+      - *gobuild-save
+
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
   # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because
   # mainline SQLite was a certified fallback driver and the matrix was what
@@ -1169,7 +1201,7 @@ jobs:
   # nothing, and keeping each kind's newest entry leaves theirs as it was.
   caches:
     name: keep main's newest caches
-    needs: [build, dashboard, plan, test, weights, gates, gitrecipe-macos, lint]
+    needs: [build, dashboard, plan, test, weights, gates, gitrecipe-macos, capture-macos, lint]
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: *linux
     permissions:

@@ -89,11 +89,15 @@ func (p *Provider) toolCompletion(
 		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s harness's server exited %d during the run%s",
 			p.harness, t.server.exitCode, failureDetail(res.stderr, events)))
 	}
-	if res.droppedStdout > 0 && !read {
-		return nil, p.fail(llm.KindServer, fmt.Errorf(
-			"the harness wrote more than %d bytes to stdout and %d were dropped, so the answer is "+
-				"incomplete: run `crewlet llm doctor %s` to see what it printed",
-			maxOutput, res.droppedStdout, p.key))
+	// A RUN THE ENGINE ENDED OVER ITS OUTPUT is refused whether or not its
+	// record was read: an answer past its bound, a stream that ran maxOutput
+	// ahead of the engine's reading, a volume that would not keep the room
+	// ahead. Before the cap and the markers, which would read the engine's
+	// kill as the harness's own exit.
+	if res.cut != nil {
+		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s harness's run was cut short: %w: run "+
+			"`crewlet llm doctor %s` to see what it printed%s",
+			p.harness, res.cut, p.key, failureDetail(res.stderr, events)))
 	}
 	if p.capped(res, t.reader) {
 		return completion(llm.StopCap), nil

@@ -10,17 +10,31 @@ import (
 
 // importLogin implements [loginStore]: the profile's import command, in home,
 // with the document on stdin.
+//
+// A CREDENTIAL CHILD: it is handed every credential the login holds, and its
+// stderr may quote them, so its output is captured in memory on linux and
+// reaches no disk ([childSpec.credential]).
 func (p *Provider) importLogin(ctx context.Context, home, cache string, document []byte) error {
-	_, err := p.runAuxiliary(ctx, p.profile.CredentialStore.ImportArgs,
-		home, p.homeEnv(home, cache), string(document))
+	captures, err := p.ws.capturesDir()
+	if err != nil {
+		return err
+	}
+	_, err = p.runAuxiliary(ctx, auxiliary{args: p.profile.CredentialStore.ImportArgs,
+		dir: home, outDir: captures, env: p.homeEnv(home, cache), stdin: string(document),
+		credential: true})
 	return err
 }
 
 // exportLogin implements [loginStore]: the profile's export command, in home,
-// and what it printed.
+// and what it printed — every credential the harness holds, so captured in
+// memory on linux, as the import is.
 func (p *Provider) exportLogin(ctx context.Context, home, cache string) ([]byte, error) {
-	out, err := p.runAuxiliary(ctx, p.profile.CredentialStore.ExportArgs,
-		home, p.homeEnv(home, cache), "")
+	captures, err := p.ws.capturesDir()
+	if err != nil {
+		return nil, err
+	}
+	out, err := p.runAuxiliary(ctx, auxiliary{args: p.profile.CredentialStore.ExportArgs,
+		dir: home, outDir: captures, env: p.homeEnv(home, cache), credential: true})
 	if err != nil {
 		return nil, err
 	}
@@ -52,11 +66,19 @@ func (p *Provider) homeEnv(home, cache string) []string {
 // TMPDIR stays this process's own, because a call's points inside the home it
 // is given, and a runtime that unpacks itself into TMPDIR would leave a
 // directory of native libraries in somebody's home directory.
+//
+// A person's whole login passes through its stdout, which the doctor's
+// host-login check reads and discards: captured in memory on linux, it
+// reaches no disk ([childSpec.credential]).
 func (p *Provider) exportHostLogin(ctx context.Context, home string) ([]byte, error) {
 	env := childEnv(p.profile, &Checkout{Home: home, Cache: filepath.Join(home, ".cache")}, p.env, p.auth)
 	env["TMPDIR"] = os.TempDir()
-	out, err := p.runAuxiliary(ctx, p.profile.CredentialStore.ExportArgs,
-		home, hostbox.Environ(env), "")
+	captures, err := p.ws.capturesDir()
+	if err != nil {
+		return nil, err
+	}
+	out, err := p.runAuxiliary(ctx, auxiliary{args: p.profile.CredentialStore.ExportArgs,
+		dir: home, outDir: captures, env: hostbox.Environ(env), credential: true})
 	if err != nil {
 		return nil, err
 	}

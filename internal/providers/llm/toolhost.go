@@ -174,6 +174,17 @@ type Turn struct {
 	// request; nil where it does not. Reported through [ToolHost.Spent] as
 	// well — this is the record's copy, for the round.
 	Usage *Usage
+
+	// Seen is when the record last showed the request: the instant the
+	// backend read its latest event, on the backend's clock. Zero where the
+	// backend cannot say.
+	//
+	// It dates the request's answer. A record may close a request only when
+	// the run ends (a harness that shows calls late, whose last request no
+	// later event follows), so the host is told of it after everything the
+	// run's end waited for; dated by when it was told, the round would count
+	// that wait as the model's time.
+	Seen time.Time
 }
 
 // TurnCall is one call a model request asked for.

@@ -1,10 +1,16 @@
-// Package flock is the one exclusive cross-process lock this engine takes on a
-// file: the node database's ([github.com/crewlet/crewlet/internal/store]), the
-// embedded broker's stream directory
+// Package flock is the engine's one implementation of flock(2), for two uses.
+//
+// The first is the one exclusive cross-process lock this engine takes on a
+// file ([Try]): the node database's ([github.com/crewlet/crewlet/internal/store]),
+// the embedded broker's stream directory
 // ([github.com/crewlet/crewlet/internal/queue/jetstream]), a harness's
 // shared login ([github.com/crewlet/crewlet/internal/hostbox]) and a Gitlet node's
 // cache directory ([github.com/crewlet/crewlet/internal/gitlet/cache]), whose
 // boot empties directories only the process that filled them may be using.
+//
+// The second is a PIN ([Pin], [Pinned]): a lock on an open file description
+// the engine hands to a child, so that the kernel counts the description's
+// holders for it. See "A pin on a description a child inherits" below.
 //
 // # One implementation, because the subtleties are not obvious
 //
@@ -18,6 +24,8 @@
 //     lock would take a lock on an unlinked inode while a third process created
 //     a fresh file and locked that, and both would believe they held it. An
 //     empty file left behind costs nothing; a lock that excludes nobody does.
+//     That hazard is a peer opening the file BY NAME, so it belongs to [Try]'s
+//     lock files alone: a pinned file is opened by nobody by name, and may go.
 //   - Stamp the holder after the lock is held, never before, so a refused
 //     taker always reads a live holder's line rather than a racing one's.
 //
@@ -36,6 +44,32 @@
 // processes do. A caller that wants handles in one process to SHARE a claim —
 // the node database, where two pools on one file are one pool with more
 // connections — keeps one [Lock] and counts its own sharers on top of it.
+//
+// # A pin on a description a child inherits
+//
+// An flock belongs to the open file description, and fork and exec share the
+// description rather than copy it. So an exclusive lock taken on a
+// description before a child is handed it is held by every process that holds
+// that description (the child, and whatever the child starts that inherits
+// it), and the kernel drops it when the LAST of them closes it: the instant a
+// pipe's reader would have seen its end. [Pin] takes that lock. [Pinned]
+// asks whether anybody still holds it, by trying a shared lock on a SECOND
+// description of the same file, which a description holding the pin refuses.
+//
+// The probe must be another description. On the pinned one flock does not
+// refuse: it converts the pin to the shared lock asked for, and the probe's
+// release would then drop the pin for every holder. A second open of the
+// file, or of /proc/self/fd/<n> on Linux, is another description; a dup of the
+// descriptor is the same one.
+//
+// What a pin cannot see is a holder that steps outside it: a process that
+// flocks and unlocks the description it inherited drops the pin while it
+// still holds the description, and one that opens the file again writes
+// through a description the pin does not count. A pin counts the holders of
+// the description it was taken on, and nothing else.
+//
+// A pinned file may be unlinked once it is pinned: the lock lives on the
+// inode, which stays while any description of it is open.
 //
 // # Advisory, and honest about it
 //
@@ -146,6 +180,51 @@ func (l *Lock) Release() {
 	}
 	_ = unlock(file)
 	_ = file.Close()
+}
+
+// Pin takes an exclusive lock on f's open file description, for a child to
+// inherit with it: see the package doc. Pin before the child is started, so
+// that every process that ever holds the description holds the pin.
+//
+// A refusal is an error wrapping [ErrHeld], not an answer: f is a description
+// the caller has just opened, and another description of the file already
+// holding a lock means the file is not the caller's alone.
+func Pin(f *os.File) error {
+	held, err := lockExclusive(f)
+	switch {
+	case err != nil:
+		return fmt.Errorf("flock: pinning %s: %w", f.Name(), err)
+	case !held:
+		return fmt.Errorf("flock: pinning %s: another open description of the file "+
+			"holds a lock on it: %w", f.Name(), ErrHeld)
+	}
+	return nil
+}
+
+// Pinned reports whether a description of probe's file still holds a pin:
+// whether anything still holds the description [Pin] was taken on.
+//
+// probe MUST be another open file description of the file than the pinned
+// one. On the pinned description itself this would convert the pin and then
+// drop it (the package doc says why), and answer false.
+//
+// Three answers, as every such question here has: true (a holder remains),
+// false (none does), or an error, which says the kernel could not be asked
+// and is neither. A probe that found the file free lets go of its own shared
+// lock before it answers, so that it leaves nothing behind for a later [Pin]
+// to be refused by; if that release fails, the answer is the error.
+func Pinned(probe *os.File) (bool, error) {
+	free, err := lockShared(probe)
+	if err != nil {
+		return false, fmt.Errorf("flock: asking whether %s is pinned: %w", probe.Name(), err)
+	}
+	if !free {
+		return true, nil
+	}
+	if err := unlock(probe); err != nil {
+		return false, fmt.Errorf("flock: releasing the probe of %s's pin: %w", probe.Name(), err)
+	}
+	return false, nil
 }
 
 // stamp records who holds the lock, best effort.

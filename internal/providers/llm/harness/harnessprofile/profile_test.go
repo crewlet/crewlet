@@ -709,7 +709,7 @@ func TestAPlatformSectionIsResolvedBeforeOverrides(t *testing.T) {
 		t.Errorf("a section for a platform no release runs on: err = %v", err)
 	}
 	raw = []byte("demo:\n  binary: demo\n  complete_args: [\"-p\"]\n  platforms:\n    linux:\n      binary: demo-linux\n")
-	for goos, want := range map[string]string{"linux": "demo-linux", "darwin": "demo"} {
+	for goos, want := range map[string]Binary{"linux": "demo-linux", "darwin": "demo"} {
 		table, err := decodeTable(raw, goos)
 		if err != nil {
 			t.Fatalf("%s: %v", goos, err)

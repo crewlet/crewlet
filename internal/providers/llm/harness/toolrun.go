@@ -80,7 +80,7 @@ func (p *Provider) serveTools(
 		host: req.Tools,
 		// AS A RUN WITH TOOLS PRINTS: its output may be the route's own
 		// ([harnessprofile.MCP.Output]).
-		reader: newRecordReader(p.profile.Routed(), req, sent),
+		reader: newRecordReader(p.profile.Routed(), req, sent, p.now),
 		clock:  newStretch(p.timeout),
 		carry:  startCarrier(ctx, p, checkout),
 	}
@@ -149,7 +149,13 @@ func (p *Provider) serveTools(
 	}
 	in.clock = t.clock
 	in.stop = req.Tools.Done()
-	in.onLine, in.everyLine = t.reader.stdoutLine, true
+	// THE RECORD IS READ AS IT GOES, every line of it past maxOutput too,
+	// where the route prints its record on stdout as JSONL: such a run's
+	// stdout is read to its end, keeping its first maxOutput. Any other
+	// stdout (one JSON document, a text answer) is one answer.
+	in.onLine = t.reader.stdoutLine
+	in.lineStream = p.profile.RouteOutput() == harnessprofile.OutputJSONL
+	in.readToEnd = in.lineStream
 	if r := p.profile.Requests; r != nil && r.Source == harnessprofile.SourceFile {
 		root := checkout.Work
 		if r.In == harnessprofile.SeedHome {
@@ -272,6 +278,7 @@ func (t *toolRun) close() {
 	}
 	if t.server != nil {
 		t.server.stop()
+		t.server.close()
 	}
 	if t.abort != nil {
 		t.abort(nil)

@@ -166,6 +166,20 @@ func (w *Workspace) StateDir() string { return w.stateDir }
 // directory every file the workspace keeps lives under.
 func (w *Workspace) Root() string { return w.root }
 
+// capturesDir is where the output files of a child no call owns are made —
+// the version probe, the login status, the device sign-in, the token-minting
+// command, and on darwin the credential store's commands — made 0700 on first
+// use: <root>/captures. Each file is unlinked before its child starts
+// ([startChild]), so the directory holds nothing between them, and nothing a
+// crash could leave.
+func (w *Workspace) capturesDir() (string, error) {
+	dir := filepath.Join(w.root, "captures")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("harness: preparing %q for a child's output: %w", dir, err)
+	}
+	return dir, nil
+}
+
 // CredentialsDir is where the shared login lives — ONE per workspace.
 func (w *Workspace) CredentialsDir() string { return filepath.Join(w.root, "credentials") }
 

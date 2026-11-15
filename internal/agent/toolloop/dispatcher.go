@@ -498,9 +498,10 @@ func (d *dispatcher) Observe(t llm.Turn) {
 		}
 	} else {
 		d.rounds++
+		start := d.modelStartLocked(now)
 		turn = &observedTurn{
 			id: t.ID, round: d.rounds, text: t.Text, calls: t.Calls, model: t.Model,
-			stop: t.Stop, usage: t.Usage, at: now, start: d.modelStartLocked(now),
+			stop: t.Stop, usage: t.Usage, at: answeredAt(t.Seen, start, now), start: start,
 		}
 		d.expectLocked(turn)
 		d.turns = append(d.turns, turn)
@@ -516,6 +517,26 @@ func (d *dispatcher) Observe(t llm.Turn) {
 	d.cond.Broadcast()
 	d.mu.Unlock()
 	d.frame()
+}
+
+// answeredAt is when a request the host has just been told of was answered:
+// when its record last showed it ([llm.Turn.Seen]), where the backend says;
+// otherwise now, the moment the host heard of it.
+//
+// HELD BETWEEN THE MODEL'S START AND NOW. Seen is read on the backend's
+// clock and start and now on the loop's ([Config.Now]), which a caller may
+// hand it, so the two need not agree; a round is never dated before its model
+// began nor after the host heard of it.
+func answeredAt(seen, start, now time.Time) time.Time {
+	switch {
+	case seen.IsZero():
+		return now
+	case seen.Before(start):
+		return start
+	case seen.After(now):
+		return now
+	}
+	return seen
 }
 
 // expectLocked marks which of a response's calls the harness will make to the host.
