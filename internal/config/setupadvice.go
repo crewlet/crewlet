@@ -30,10 +30,15 @@ const (
 	// ClassScheduleFrequent is a schedule that fires
 	// [FrequentScheduleFires] or more times in a day.
 	ClassScheduleFrequent AdvisoryClass = "schedule.frequent"
+	// ClassDirectBox is a company hosting code that runs a seat's box in the
+	// `direct` cell, where it acts as the engine's own user
+	// ([Company.directBoxWarnings]).
+	ClassDirectBox AdvisoryClass = "sandbox.direct_box"
 )
 
 // AdvisoryClasses is every class, in the order the advisor lists them.
-var AdvisoryClasses = []AdvisoryClass{ClassHealthUnheld, ClassAuxiliaryModel, ClassScheduleFrequent}
+var AdvisoryClasses = []AdvisoryClass{ClassHealthUnheld, ClassAuxiliaryModel, ClassScheduleFrequent,
+	ClassDirectBox}
 
 // Valid reports whether c is one of [AdvisoryClasses].
 func (c AdvisoryClass) Valid() bool { return slices.Contains(AdvisoryClasses, c) }
@@ -48,10 +53,12 @@ const FrequentScheduleFires = 12
 // seven days, so every day-of-week restriction is seen. It is a Monday.
 var referenceWeek = time.Date(2030, time.January, 7, 0, 0, 0, 0, time.UTC)
 
-// classed is advisory with its class.
-func classed(class AdvisoryClass, path Path, message string) Warning {
+// classed is advisory with its class and its words for the person who owns
+// the company ([Warning.Person]): message is the operator's, as `crewlet
+// validate` prints it, and person says the same without a document key.
+func classed(class AdvisoryClass, path Path, message, person string) Warning {
 	w := advisory(path, message)
-	w.Class = class
+	w.Class, w.Person = class, person
 	return w
 }
 
@@ -81,7 +88,10 @@ func (c *Company) healthWarnings() []Warning {
 	return []Warning{classed(ClassHealthUnheld, first,
 		"no agent seat holds health_tools, so an alarm that fires on a node wakes no "+
 			"agent and nobody hears it until a person opens the dashboard. Set "+
-			"health_tools on the seat that looks after operations")}
+			"health_tools on the seat that looks after operations",
+		"No agent watches the engine's own alarms, so an alarm reaches nobody until a "+
+			"person opens the dashboard. Let the agent that looks after operations read "+
+			"the engine's health.")}
 }
 
 // auxiliaryWarnings advises every agent seat whose auxiliary chain starts on
@@ -114,12 +124,18 @@ func (c *Company) auxiliaryWarnings() []Warning {
 			"%s's reflection and summaries run on providers.llm.%s, the model its "+
 				"executor runs on, so learning costs a share of the seat's own spend "+
 				"at that model's price. Point llm_auxiliary at an entry with a smaller model",
-			handle, aux[0]))
+			handle, aux[0]), auxiliaryPerson)
 		w.Seat = handle
 		out = append(out, w)
 	}
 	return out
 }
+
+// auxiliaryPerson is [ClassAuxiliaryModel] in a person's words: the same for
+// every seat, which the warning names apart (Warning.Seat), so a screen says
+// it once for all of them.
+const auxiliaryPerson = "Reflection and summaries run on the same model as the agent's own work, " +
+	"so learning costs a share of its spend at that model's price. Choose a smaller model for its routines."
 
 // SameModel reports whether two providers.llm entries run one model: the
 // same entry, or two driving one harness with one model id.
@@ -154,7 +170,11 @@ func (c *Company) scheduleWarnings() []Warning {
 				"schedule %q fires %d times a day, and each fire starts a turn whether or "+
 					"not anything changed. If it checks for something that happens "+
 					"(a deploy, a merge), file a work item dated for when to look "+
-					"instead; otherwise run it less often", s.Name, fires))
+					"instead; otherwise run it less often", s.Name, fires), fmt.Sprintf(
+				"The schedule %s runs %d times a day, and each run starts a turn whether or "+
+					"not anything changed. A check that waits for something to happen, such "+
+					"as a deploy, is better as a task dated for when to look. Otherwise run "+
+					"it less often.", s.Name, fires))
 			w.Seat, w.Unit = seat, unit
 			out = append(out, w)
 		}

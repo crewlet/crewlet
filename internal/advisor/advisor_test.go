@@ -204,7 +204,14 @@ func TestEveryOptionOfEveryChangeClearsItsFindingAndBreaksNoRule(t *testing.T) {
 
 func TestEveryClassHasWordsAndAFix(t *testing.T) {
 	t.Parallel()
-	c := liveShape(t)
+	// THE LIVE SHAPE HOSTING CODE, its boxes in the `direct` cell by default,
+	// so the one class it does not raise by itself is read too.
+	doc, err := os.ReadFile("testdata/live-shape.company.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := company(t, strings.Replace(string(doc), "providers:\n",
+		"providers:\n  sandbox:\n    local: {}\n    default_run_in: direct\n", 1)+"code:\n  backend: gitlet\n")
 	c.Roles[0].Manages = []string{"ghost"}
 	seen := map[advisor.Class]bool{}
 	for _, f := range read(c, "r1").Findings {

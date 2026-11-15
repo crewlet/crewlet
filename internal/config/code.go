@@ -2392,6 +2392,12 @@ func (c *Company) directBoxWarnings() []Warning {
 		"ANY live executor run and push as that run's seat, and a repository's `visibility: unit` and a " +
 		"run's grants do not bind "
 	const remedy = "; run it in `container` or `e2b` to hold it to them"
+	// ONE SENTENCE FOR BOTH PLACES, the entry's own cell and the default: a
+	// person is told what the cell lets an agent do and what to choose, and
+	// the setting the warning is at is where they choose it.
+	const person = "Agents run their work directly on the engine's own server, where an agent can " +
+		"read every code repository and act as any other agent, whatever a repository's " +
+		"visibility. Run them in a container or a cloud sandbox to hold each agent to its own access."
 	var out []Warning
 	inherited := false
 	entries := map[string]bool{}
@@ -2410,12 +2416,12 @@ func (c *Company) directBoxWarnings() []Warning {
 			continue
 		}
 		entries[box.Executor] = true
-		out = append(out, advisory(at(entryPath(box.Executor), "run_in"),
-			reads+"the executors of the seats this entry launches on"+remedy))
+		out = append(out, classed(ClassDirectBox, at(entryPath(box.Executor), "run_in"),
+			reads+"the executors of the seats this entry launches on"+remedy, person))
 	}
 	if inherited {
-		out = append(out, advisory(field("providers.sandbox.default_run_in"),
-			reads+"the executors of the seats that take this default"+remedy))
+		out = append(out, classed(ClassDirectBox, field("providers.sandbox.default_run_in"),
+			reads+"the executors of the seats that take this default"+remedy, person))
 	}
 	return out
 }
