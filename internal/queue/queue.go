@@ -452,10 +452,10 @@ func NakNode(err error) Result { return Result{Outcome: OutcomeNak, Err: err, No
 // ended, a stop, a drain or a seat moving on cancelling the handler. A handler
 // answers such a failure with [NakNode]. ONE TEST FOR EVERY HANDLER THAT ASKS
 // IT (internal/notify's wakes, internal/engine's seat control topic and seat
-// mailbox), so a failure one of them keeps out of its group's poison is one
-// the others keep out too; a handler adds the faults of its own node that only
-// it can tell (a rate valve's refusal, a coordination store's silence) beside
-// it.
+// mailbox, internal/observe's custody keeper), so a failure one of them keeps
+// out of its group's poison is one the others keep out too; a handler adds the
+// faults of its own node that only it can tell (a rate valve's refusal, a
+// coordination store's silence) beside it.
 func NodeFault(ctx context.Context, err error) bool {
 	return err != nil && (ctx.Err() != nil || errors.Is(err, ErrUnavailable) || errors.Is(err, ErrNotLive))
 }
