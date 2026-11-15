@@ -499,7 +499,9 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 // WHETHER A RELAUNCH CONTINUES IS UNDECIDED WHERE A RELAUNCH WOULD NOT DECIDE
 // NOW EITHER, never a no. The job a relaunch would follow still working, or
 // being collected — its session is taken by the read that collects it — the
-// capture of that job still being kept, which a relaunch waits for; what a
+// capture of that job still being kept, which a relaunch waits for, or its
+// record sent and never answered, which a relaunch asks the log for again
+// before it decides and continues where it landed; what a
 // relaunch is launched on not to be said now — every member of the seat's
 // chain sitting out its plan, where which of them takes the relaunch decides
 // it, or the node holding the seat not answering; a round lost a second time,
@@ -510,7 +512,8 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 // saying why.
 //
 // Mutation: read a job still working as one that left no capture, a capture
-// still being kept as one not kept, a target that cannot be said as one with no
+// still being kept, or one whose record awaits its answer, as one not kept, a
+// target that cannot be said as one with no
 // runner, a second loss as a round continued from its capture, or a collected
 // job's resume as one that carries nothing on in its box, and a case goes red.
 func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(t *testing.T) {
@@ -537,6 +540,14 @@ func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(
 				begun := *r.Kept
 				begun.CaptureSeq, begun.State, begun.At = 2, sandbox.CaptureBegun, now.Add(-time.Second)
 				r.Capture = &begun
+			}},
+		"a lost job's capture whose record awaits its answer": {target: claudeTarget(),
+			why: "asks the executor log", run: func(r *sandbox.PendingRun, now time.Time) {
+				unanswered := *r.Kept
+				unanswered.CaptureSeq, unanswered.State = 2, sandbox.CaptureUnresolved
+				unanswered.Object, unanswered.At = objstore.KeyAt(now.Add(-time.Minute)).String(), now
+				r.Status, r.Launch.Collected = sandbox.StatusRunning, true
+				r.Lost, r.Capture = &sandbox.JobLoss{Cause: sandbox.LossBoxGone}, &unanswered
 			}},
 		"every member sitting out": {target: sittingOut, why: "sitting out its plan"},
 		"the holder not answering": {target: silent, why: "did not say"},

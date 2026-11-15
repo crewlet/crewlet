@@ -10889,7 +10889,11 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   once it has ended or is ending. `null` where it cannot be said now — the turn's run record, or its row read as a relaunch reads it, could not
   be read; the job a relaunch would follow is still working, or a claim on it
   has neither taken its final capture nor begun its turn; its capture is still
-  being kept; what the launch is launched on cannot be said (every member of
+  being kept, or its record was sent and never answered, which a relaunch asks
+  the executor log for again before it decides, continuing the capture where it
+  landed (until the capture's object is past the twelve hours a record may name
+  it in, when the ask refuses it unasked); what the launch is launched on
+  cannot be said (every member of
   the seat's chain sitting out its plan, no node holding the seat, the node
   holding it not answering); only the resume of a collected job decides the
   relaunch, and its turn has not begun (a round lost a second time, or carried
