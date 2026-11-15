@@ -1478,12 +1478,12 @@ a.prof-row:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* TWO LINES BEFORE THE CUT (`.clamp`), with the whole title on its hover: on
+   one line two tasks that begin alike read as one task listed twice. */
 .prof-row-title {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  padding-block: var(--spacing-1);
   font-size: var(--font-size-sm);
 }
 .prof-day {

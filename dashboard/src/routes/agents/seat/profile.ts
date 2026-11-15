@@ -273,12 +273,13 @@ export function companyCeilings(budget: TokenBudget | undefined): string {
 /**
  * The company's ceiling in a tile's one line: its FIRST window — the day's
  * where one is set, the tightest a founder writes — as "company cap
- * 60M/day", with a "+n" for the others. The whole sentence ([companyCeilings],
- * and that the seat has no cap of its own) is the tile's title: at 1440 "no
- * seat cap · the company's 60M/day and 900M/month apply" wrapped to three
- * lines and stood the whole KPI row 150px tall against the artboard's
- * one-line "of 3M budget", and even "no seat cap · company 60M/day +1" took
- * two in a quarter of the Overview's main column.
+ * 60M/day", with "and n more" for the others. The whole sentence
+ * ([companyCeilings], and that the seat has no cap of its own) is the tile's
+ * title: at 1440 "no seat cap · the company's 60M/day and 900M/month apply"
+ * wrapped to three lines and stood the whole KPI row 150px tall against the
+ * artboard's one-line "of 3M budget", and even "no seat cap · company 60M/day
+ * +1" took two in a quarter of the Overview's main column. The others are
+ * COUNTED IN WORDS: a bare "+1" beside a cap read as an unexplained number.
  */
 export function companyCeilingShort(budget: TokenBudget | undefined): string {
   const caps = BUDGET_WINDOWS.flatMap(({ period }) => {
@@ -286,7 +287,7 @@ export function companyCeilingShort(budget: TokenBudget | undefined): string {
     return typeof limit === "number" ? [`${fmtCount(limit)}${PER_PERIOD[period]}`] : [];
   });
   if (caps.length === 0) return "";
-  return `company cap ${caps[0]!}${caps.length > 1 ? ` +${caps.length - 1}` : ""}`;
+  return `company cap ${caps[0]!}${caps.length > 1 ? ` and ${caps.length - 1} more` : ""}`;
 }
 
 /** A signed change for a delta: "+9", "−3", "±0". */

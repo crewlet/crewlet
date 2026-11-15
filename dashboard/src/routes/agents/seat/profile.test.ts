@@ -399,7 +399,7 @@ describe("the company's ceilings", () => {
   // A TILE'S LINE HOLDS ONE: the first window, and how many more there are.
   test("a tile's line names the first window and counts the rest", () => {
     expect(companyCeilingShort({ month: 900_000_000, day: 60_000_000 })).toBe(
-      "company cap 60M/day +1",
+      "company cap 60M/day and 1 more",
     );
     expect(companyCeilingShort({ week: 5_000_000 })).toBe("company cap 5M/week");
     expect(companyCeilingShort({})).toBe("");
