@@ -290,9 +290,10 @@ func (r *renewRig) resumedOnTheBroker(t *testing.T) {
 // store answers or the bound gives the job up, and past the bound until the
 // job's round is carried on: a recorded loss settles nothing while its carry
 // can still fail, and its host's waiter announces nothing either. A re-fire,
-// which has no delivery in hand, renews at once; and a hand-back this node's
-// own store made is NAK'd and nothing more, since the waiter announces that
-// job again.
+// which has no delivery in hand, renews at once, unless its own attempt
+// settled the run it started the clock on; and a hand-back this node's own
+// store made is NAK'd and nothing more, since the waiter announces that job
+// again.
 //
 // The memory twin hands a NAK'd message back at once, so time moves on the
 // host's own answers, a minute each, on the bubble's clock.
@@ -304,7 +305,10 @@ func (r *renewRig) resumedOnTheBroker(t *testing.T) {
 // under the delivery's own id, and no fresh announcement is delivered; ack a
 // delivery whose renewal the broker refused, and the job is left with none;
 // leave a re-fire unrenewed, or a loss this node's store did not take, and
-// nothing carries the completion on; drop the clock at the recorded loss, and
+// nothing carries the completion on; renew a re-fire whose own attempt
+// started the clock and then ended the run, and a settled run's completion is
+// announced, its refusal made again on this node's timer with nothing left to
+// drop it; drop the clock at the recorded loss, and
 // a carry that fails after it runs a budget out with nothing renewing it;
 // renew a hand-back this node's own store made, and its delivery is never
 // spent.
@@ -510,6 +514,37 @@ func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 		}
 		if got := rig.get("t1"); got.Status != StatusRunning {
 			t.Fatalf("the re-fire left the run %s; want it handed back to running", got.Status)
+		}
+	})
+
+	t.Run("a re-fire whose run its own hand-back ended announces nothing", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		gate := gated(rig)
+		gate.refuse(true)
+		unsettledHost(t, rig)
+		payload, kept := rig.completion("t1")
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, kept); !errors.Is(err, errLeaving) {
+			t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
+		}
+		// THE RE-FIRE'S OWN COLLECTION STARTS THE CLOCK, and the store then
+		// refuses its hand-back, a definite answer no retry changes: the run
+		// is ended there, settled within the re-fire's own attempt, and the
+		// clock goes with it.
+		rig.coordinator.pending = &unansweredRelease{silentStore: &silentStore{PendingStore: rig.coordinator.pending,
+			silent: []string{"ReleaseClaim"}}, refused: true}
+		gate.refuse(false)
+		rig.coordinator.Readmit(conditionDrain, "swe")
+		rig.coordinator.inflight.Wait()
+		failed := rig.failures()
+		if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureClaimStranded || clocked(rig) {
+			t.Fatalf("the premise: announced %+v, clocked %v; want the run ended once its hand-back was "+
+				"refused, and the clock gone with it", failed, clocked(rig))
+		}
+		rig.fireRetries()
+		if renewed := renewedOn(rig); len(renewed) != 0 {
+			t.Fatalf("a re-fire whose run its own hand-back ended announced the completion %d times; want "+
+				"none, the run settled", len(renewed))
 		}
 	})
 }

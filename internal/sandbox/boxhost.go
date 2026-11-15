@@ -573,8 +573,9 @@ type clockStartKey struct{}
 
 // startingClock is ctx carrying started, which [Coordinator.noteHostStore]
 // sets where a collection made under it starts the clock on the store of its
-// box's host, rather than finding one another attempt started: the one fact a
-// re-fire renews on at once ([Coordinator.refire]).
+// box's host, rather than finding one another attempt started: what a re-fire
+// renews on at once, where that clock still runs once its attempt is done, the
+// run not settled by it ([Coordinator.refire]).
 func startingClock(ctx context.Context, started *atomic.Bool) context.Context {
 	return context.WithValue(ctx, clockStartKey{}, started)
 }

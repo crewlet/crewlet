@@ -395,7 +395,13 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 // attempt's release was out, or winning after it to find the clock running:
 // that attempt was a delivery's, handed back and in flight, which carries the
 // completion. Renewed wherever the clock ran once the attempt was done, such a
-// re-fire put a second announcement beside it.
+// re-fire put a second announcement beside it. NOR WHERE ITS OWN ATTEMPT
+// SETTLED THE RUN after starting the clock, its hand-back refused and the run
+// ended, which drops the clock ([Coordinator.runSettled]): the clock it
+// started must still run once the attempt is done. Renewed on the start
+// alone, such a re-fire announced the completion of a run already ended, and
+// a refusal of that announcement was made again on this node's timer with no
+// settle left to drop it.
 func (c *Coordinator) refire(kept refusedCompletion) {
 	ctx := c.life
 	if ctx.Err() != nil {
@@ -405,7 +411,7 @@ func (c *Coordinator) refire(kept refusedCompletion) {
 	started := new(atomic.Bool)
 	err := c.OnCompleted(startingClock(ctx, started), kept.ev, kept.trigger)
 	switch {
-	case !before && started.Load():
+	case !before && started.Load() && c.hostClocked(kept.ev.TurnID, kept.ev.LaunchID):
 		// RENEWED BELOW: nothing else carries it.
 	case err == nil:
 		return
