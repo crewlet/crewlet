@@ -360,7 +360,7 @@ export function OnYourself({
 }
 
 /**
- * Change somebody's name, login, seat or access — one `PATCH`, carrying only
+ * Change somebody's name, login, seat or access: one `PATCH`, carrying only
  * what changed. The engine moves the login and the seat in one record before
  * the name and the access, and a refusal part way names what had already
  * landed.
