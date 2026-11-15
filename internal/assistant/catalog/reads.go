@@ -465,7 +465,8 @@ func readTools() []Tool {
 				"on tasks, and executors parked on a question for them. Each question carries " +
 				"its options by id, the one its asker recommends and why, and what it cites; " +
 				"a task's question its comment id (answer_decision's answers), an executor's " +
-				"its turn and launch ids (answer_executor's). With list_agents' stopped seats, " +
+				"its turn and launch ids (" + answerExecutorTool + "'s). With list_agents' " +
+				"stopped seats, " +
 				"this is the Inbox screen's Needs you.",
 			schema: object(nil, map[string]*schema{
 				"limit": positive("How many, at most. Default 10.", decisionsPage),
@@ -690,7 +691,7 @@ func readTools() []Tool {
 			Name: "list_executors", Phrase: "list executors",
 			Description: "Seats' executors in flight and recent, including any parked on a " +
 				"question: its options by id, the one recommended and why, and the turn and " +
-				"launch ids answer_executor takes.",
+				"launch ids " + answerExecutorTool + " takes.",
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /executors"}, Fence: true,
 			// AN EXECUTOR'S QUESTION IS THE HARNESS'S, a third party's model
