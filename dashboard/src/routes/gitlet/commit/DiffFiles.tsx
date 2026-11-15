@@ -22,6 +22,7 @@ import { usePatchPages } from "~/lib/patchPages.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type { CodeDiffFile, CodeGitAnswer } from "~/protocol/index.ts";
+import { DiffHead, FileTree } from "../FileTree.tsx";
 import { PatchPager } from "../PatchPager.tsx";
 import { repoHref } from "../paths.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
@@ -52,21 +53,6 @@ function placeOf(hunks: readonly DiffHunk[], line: number): { drawn: boolean; re
   return { drawn: line > 0 && drawn, reached };
 }
 
-/** What git's status letter says of a file. */
-function statusWord(f: CodeDiffFile): string {
-  switch (f.status) {
-    case "A":
-      return "added";
-    case "D":
-      return "deleted";
-    case "R":
-      return f.old_path ? `renamed from ${f.old_path}` : "renamed";
-    case "T":
-      return "its type changed";
-  }
-  return "modified";
-}
-
 export function DiffFiles({ repo, base, head }: { repo: string; base: string; head: string }) {
   const nav = useNavigator();
   const [file] = useParam("file", "", "filter");
@@ -90,11 +76,6 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
   return (
     <Stack gap={3}>
       <PageToolbar>
-        {totals && (
-          <span className="t-caption">
-            {`${plural(totals.total, "file")} changed, +${fmtCount(totals.added)} −${fmtCount(totals.deleted)}`}
-          </span>
-        )}
         <Select
           size="sm"
           width="auto"
@@ -123,30 +104,19 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
       >
         <div className="code-files">
           <Stack gap={2}>
-            <ul className="code-files__list" aria-label="Files changed">
-              {files.map((f) => (
-                <li key={f.path_b64 ?? f.path}>
-                  <button
-                    type="button"
-                    className="code-files__file"
-                    aria-current={f.path === shown || undefined}
-                    // A PATH GIT CANNOT SPELL AS TEXT names no file an
-                    // address can carry: listed, and not opened.
-                    disabled={Boolean(f.path_b64)}
-                    title={statusWord(f)}
-                    // A LINE IS THE FILE'S IT WAS NAMED IN: opening another
-                    // file drops it, rather than marking that file's line
-                    // of the same number.
-                    onClick={() => nav.filter({ file: f.path, line: null })}
-                  >
-                    <span className="mono">{f.path}</span>{" "}
-                    <span className="muted">
-                      {f.status} +{f.added} −{f.deleted}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {totals && (
+              <p className="code-files__totals">
+                {`${plural(totals.total, "file")} changed, +${fmtCount(totals.added)} −${fmtCount(totals.deleted)}`}
+              </p>
+            )}
+            <FileTree
+              files={files}
+              current={shown}
+              // A LINE IS THE FILE'S IT WAS NAMED IN: opening another file
+              // drops it, rather than marking that file's line of the same
+              // number.
+              onOpen={(f) => nav.filter({ file: f.path, line: null })}
+            />
             {paged.more && (
               <span>
                 <Button
@@ -255,6 +225,7 @@ function FilePatch({
     (!short || !paged.more);
   return (
     <section aria-label={`Changes to ${path}`} className="code-file">
+      <DiffHead path={path} file={entry} viewHref={repoHref(repo, { ref: head, path })} />
       {entry?.binary ? (
         <p className="muted">A binary file: git draws no lines of it.</p>
       ) : read.loading && !read.data ? (
