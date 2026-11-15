@@ -126,6 +126,12 @@ export function useSettingWrite({
         });
         return;
       }
+      if (outcome.kind === "unchanged") {
+        // THE ENGINE ALREADY HOLDS IT: the write left the document as it
+        // was, and stored nothing to apply.
+        setState({ kind: "unchanged" });
+        return;
+      }
       if (outcome.kind === "valid") {
         // A 200 to a write is a check the engine took for one: nothing stored.
         setState({

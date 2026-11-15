@@ -1683,6 +1683,20 @@ export interface DryRunResult {
   valid: true;
   /** The revision the draft was validated against. */
   base_revision_id: string;
+  /** Whether the write would change the document at all. */
+  changed: boolean;
+  warnings: ConfigWarning[] | null;
+  derived: Derived;
+}
+
+/**
+ * `200` from `PATCH /config` or `PUT /config/{kind}/{id}` that left the
+ * document exactly as it was: nothing was stored or activated, and
+ * `revision_id` is the revision that already says it.
+ */
+export interface UnchangedResult {
+  changed: false;
+  revision_id: string;
   warnings: ConfigWarning[] | null;
   derived: Derived;
 }

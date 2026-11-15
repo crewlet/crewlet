@@ -212,6 +212,7 @@ function refusalWords(
   switch (refusal.kind) {
     case "valid":
     case "saved":
+    case "unchanged":
       return "";
     case "guarded":
       return configGuardedReason(refusal.code);

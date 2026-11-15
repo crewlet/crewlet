@@ -213,7 +213,9 @@ function ReportsSwitch({
             on ? "Turned on bug reports to Crewlet" : "Turned off bug reports to Crewlet",
             signal,
           );
-          if (outcome.kind !== "saved") {
+          // ALREADY SO is what was asked for: the engine stored nothing because
+          // the document already says it.
+          if (outcome.kind !== "saved" && outcome.kind !== "unchanged") {
             setRefused(
               outcome.kind === "valid"
                 ? "The engine checked the change but didn't save it. Please try again."

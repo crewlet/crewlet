@@ -11540,6 +11540,17 @@ names its writers, a conflict offers a reload, and a write whose activation
 went unanswered (`503` with `outcome: "unknown"`) names the revision it
 stored and the node holding it, and says not to send it again.
 
+**A write of part of the document that changes nothing is already so.** The
+engine answers a `PATCH /config` or an entity's `PUT` that leaves the document
+as it stands with `200` and `changed: false`, storing no revision
+([A write that changes nothing](api-endpoints.md#a-write-that-changes-nothing)),
+and every screen that writes part of it (a setting, a ceiling, a schedule, an
+advisor's fix, an MCP server switched on or off or edited in its wizard)
+reads that as the change
+holding, drawn as the state it draws when it finds nothing to send ("Already
+the limit."), never as "the engine checked the change but stored nothing",
+which is a check's answer (`protocol/configWrite.ts`, `outcomeOf`).
+
 ## How it is built
 
 ```
