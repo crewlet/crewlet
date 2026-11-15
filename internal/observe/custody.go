@@ -685,23 +685,39 @@ func (k *Keeper) Handle(ctx context.Context, ev *events.Event) queue.Result {
 // broker that did not answer, a queue no longer live, a delivery whose context
 // ended, which the keeper's leaving the group does to a batch in hand), the
 // test internal/notify's wakes and internal/engine's seat mailbox and control
-// topic ask too; and, beside it, a claim the coordination store did not answer
-// ([coord.ErrUnavailable], the unknown answer of [coord.Custody]), which the
-// keeper alone can tell. A batch no node can write, one naming no origin or
-// holding a record that cannot be stored, stays the batch's own failure.
+// topic ask too; and, beside it, a claim that named no keeper ([errNoKeeper]:
+// the coordination store's unknown answer), which the keeper alone can tell. A
+// batch no node can write, one naming no origin or holding a record that
+// cannot be stored, stays the batch's own failure.
 func sendBack(ctx context.Context, err error) queue.Result {
-	if queue.NodeFault(ctx, err) || errors.Is(err, coord.ErrUnavailable) {
+	if queue.NodeFault(ctx, err) || errors.Is(err, errNoKeeper) {
 		return queue.NakNode(err)
 	}
 	return queue.Nak(err)
 }
+
+// errNoKeeper marks a settle that stopped at its claim: the fleet's custody
+// record answered the claim with an error rather than a keeper
+// ([coord.Custody]).
+//
+// NEVER THE BATCH'S OWN FAILURE, whatever error it carries. A claim names
+// nothing of a batch but its id, so nothing a batch carries makes one fail:
+// every error a claim answers is UNKNOWN by its contract, the store could not
+// say, save one wrapping [coord.ErrCustodyUndecidable], the store's definite
+// answer that the record cannot be read, which [Keeper.Handle] acknowledges
+// before anything is sent back. The contract names no sentinel for the unknown
+// answer, so it is told by the step that met it and never by what a backend
+// wrapped it in: [coord.ErrUnavailable] is the KV backend's wrapping, and an
+// error a backend left unwrapped is no less unknown, coord's own rule for
+// every caller.
+var errNoKeeper = errors.New("no keeper was named")
 
 // settle claims a batch this node wrote and keeps or deletes its copy on the
 // answer.
 func (k *Keeper) settle(ctx context.Context, id string) error {
 	keeper, err := k.claims.ClaimCustody(ctx, id, k.node)
 	if err != nil {
-		return fmt.Errorf("observe: claim custody batch %s: %w", id, err)
+		return fmt.Errorf("observe: claim custody batch %s: %w: %w", id, errNoKeeper, err)
 	}
 	if err := k.log.SettleCustody(ctx, id, keeper == k.node); err != nil {
 		return fmt.Errorf("observe: settle custody batch %s (kept by %s): %w", id, keeper, err)

@@ -2,6 +2,7 @@ package observe_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -41,13 +42,17 @@ func (c *claimedThen) ClaimCustody(ctx context.Context, batch, node string) (str
 // whose budget it spends is kept with the custody group's unhandled
 // deliveries, never with its poison. This node's are what the queue tells as
 // its node's (queue.NodeFault: here a context this node's leaving the group
-// ended, at the write, the claim or the settle) and a claim the coordination
-// store did not answer (coord.ErrUnavailable). A batch no node can write, one
-// that names no origin, stays the batch's own failure.
+// ended, at the write, the claim or the settle) and a claim that named no
+// keeper: the coordination store's unknown answer, every error of a claim but
+// the undecidable record's (which the delivery acknowledges), whether or not
+// its backend wrapped it in coord.ErrUnavailable. A batch no node can write,
+// one that names no origin, stays the batch's own failure.
 //
 // Mutation: send back the write's failure, or the settle's, with queue.Nak,
-// and its rows count the failure against the batch; drop the coordination
-// store's silence from the settle's test and its row does.
+// and its rows count the failure against the batch; drop the claim's mark from
+// sendBack's test and both rows of a claim the store answered do; read the
+// claim by coord.ErrUnavailable instead of its mark and the row its store left
+// unmarked does.
 func TestAFailureOfThisNodesIsNeverTheBatchsOwn(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -62,6 +67,13 @@ func TestAFailureOfThisNodesIsNeverTheBatchsOwn(t *testing.T) {
 		"a claim the coordination store did not answer": {
 			claim: func(context.Context) error {
 				return fmt.Errorf("%w: claim custody of the batch: nats: timeout", coord.ErrUnavailable)
+			},
+			origin: "seats-1", nodes: true},
+		// The contract's unknown answer is every error but the
+		// undecidable record's, whatever a backend wraps it in.
+		"a claim answered with an error its store left unmarked": {
+			claim: func(context.Context) error {
+				return errors.New("the coordination store is unreachable")
 			},
 			origin: "seats-1", nodes: true},
 		"a claim this node's leaving cut short": {
