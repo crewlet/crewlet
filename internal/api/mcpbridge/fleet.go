@@ -162,6 +162,16 @@ const (
 // holder answers it, here or relayed, or the call waits for one that can. A
 // seat's holder is the one its lease names, and a pinned session's the
 // incarnation its token names ([route]).
+//
+// A STOPPING NODE WAITS FOR NO HOLDER ([Bridge.Shutdown]). While the call
+// waits, no node has taken it, so nothing of it runs anywhere, and a node that
+// went on waiting held its listener busy for the whole grace of a graceful
+// stop — up to [FleetOptions.HolderWait], two seat-lease lifetimes, where the
+// listener is closed without one — and was then cut, which a box's client
+// reads as a broken connection rather than an answer to retry. So the wait
+// ends at the shutdown, answered that this node is draining and when to try
+// again, and the box's retry lands on a node that stays. A call already
+// handed to its holder is left to finish, as [Bridge.forwardPoll] leaves one.
 func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f *fleet) {
 	if sub.route.pinned() && sub.route.owner == "" {
 		b.refuse(w, r, sub.run, "the run's session was opened by a node that had joined "+
@@ -242,6 +252,10 @@ func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f 
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
+			return
+		case <-b.shutdown:
+			timer.Stop()
+			httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(holderRetryCeiling))
 			return
 		}
 	}
