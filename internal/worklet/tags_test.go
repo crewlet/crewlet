@@ -176,6 +176,54 @@ func TestUndeclaredTagIsRefused(t *testing.T) {
 	}
 }
 
+// A LABEL THE PROJECT LACKS IS REFUSED IN A PERSON'S WORDS (ADR-0060): the
+// person filing work on the dashboard is told which label the project lacks,
+// the one they may have meant and the labels it has, by the names the project
+// shows, and never the arguments a model would send next. An archived label
+// is said the same way.
+//
+// Mutation: drop the phrasing from declaredTags and the person is told
+// nothing but the code's "check what was entered".
+func TestALabelTheProjectLacksIsRefusedInAPersonsWords(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteTags(t.Context(), "op-seed-labelled", "ENG",
+		worklet.TagEdit{Add: []worklet.Tag{{Slug: "regression", Label: "Regression"},
+			{Slug: "perf", Label: "Performance"}, {Slug: "legacy", Label: "Legacy"}}},
+		worklet.TagAuthority{}); err != nil {
+		t.Fatalf("seed the labels: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.WriteTags(t.Context(), "op-archive-legacy", "ENG",
+		worklet.TagEdit{Archive: []string{"legacy"}}, worklet.TagAuthority{Policy: true}); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	r.drain()
+
+	task := newTask("t-person-typo")
+	task.Key = ""
+	task.Tags = []string{"regresion"}
+	_, err := r.writer.CreateTask(t.Context(), "op-person-typo", task, nil)
+	said := caveat.RefusalOf(err).Person()
+	for _, want := range []string{`ENG has no label "regresion"`, `Did you mean "Regression"?`,
+		`Its labels are "Performance" and "Regression".`} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the person is told %q, want it to say %q", said, want)
+		}
+	}
+	if strings.Contains(said, "`") || strings.Contains(said, "labels_create_missing") {
+		t.Errorf("the person's words %q name an argument", said)
+	}
+
+	archived := newTask("t-person-archived")
+	archived.Key = ""
+	archived.Tags = []string{"legacy"}
+	_, err = r.writer.CreateTask(t.Context(), "op-person-archived", archived, nil)
+	if said := caveat.RefusalOf(err).Person(); !strings.Contains(said, `The label "Legacy" is archived in ENG`) {
+		t.Errorf("the person is told %q of an archived label", said)
+	}
+}
+
 // TestDeclaredTagIsFiled is the control: the same write with the tag declared
 // has to land, or the case above is passing for the wrong reason.
 func TestDeclaredTagIsFiled(t *testing.T) {

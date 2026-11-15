@@ -1,6 +1,7 @@
 package worklet
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -627,11 +628,11 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 		return err
 	}
 	live := map[string]bool{}
-	archived := map[string]bool{}
+	archived := map[string]string{}
 	if held {
 		for _, tag := range set.Tags {
 			if tag.Archived {
-				archived[tag.Slug] = true
+				archived[tag.Slug] = cmp.Or(tag.Label, tag.Slug)
 				continue
 			}
 			live[tag.Slug] = true
@@ -641,8 +642,8 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 	for _, slug := range tags {
 		switch {
 		case live[slug]:
-		case archived[slug]:
-			return invalid("the tag %s is archived in %s, so no "+
+		case archived[slug] != "":
+			return invalidSaying(caveat.LabelArchived(project, archived[slug]), "the tag %s is archived in %s, so no "+
 				"new work is filed under it. The tasks already under it keep "+
 				"it", slug, project)
 		default:
@@ -678,8 +679,24 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 	if len(declared) == 0 {
 		its = " It has no tags yet."
 	}
-	return invalid("%s doesn't have %s.%s%s Add %s to %s's tags first (`tags_add`), "+
-		"or set `labels_create_missing` to add %s as this work is filed",
+	// A PERSON READS LABELS, the names the project's tags show under, where
+	// the sentence above names the slugs a write sends.
+	labelOf := map[string]string{}
+	if held {
+		for _, tag := range set.Tags {
+			labelOf[tag.Slug] = cmp.Or(tag.Label, tag.Slug)
+		}
+	}
+	labels := func(slugs []string) []string {
+		out := make([]string, len(slugs))
+		for i, slug := range slugs {
+			out[i] = cmp.Or(labelOf[slug], slug)
+		}
+		return out
+	}
+	return invalidSaying(caveat.LabelsNotDeclared(project, unknown, labels(declared), labels(near)),
+		"%s doesn't have %s.%s%s Add %s to %s's tags first (`tags_add`), "+
+			"or set `labels_create_missing` to add %s as this work is filed",
 		project, named, its, hint, it, project, it)
 }
 
