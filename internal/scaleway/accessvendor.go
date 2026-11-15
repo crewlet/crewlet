@@ -47,7 +47,7 @@ func (accessVendor) Catalog() seataccess.Catalog {
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneScaleway, Levels: true, Scoped: true, ScopeRequired: true,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
-			Rotatable: true,
+			Rotatable: true, Grants: true,
 			BoxEnv: []seataccess.BoxVar{
 				{Field: SecretKeyField, Env: SecretKeyEnv},
 				{Field: AccessKeyField, Env: AccessKeyEnv},
@@ -86,11 +86,17 @@ func defaultProject(scope []string) string {
 }
 
 // Steps is each op as Scaleway takes it, in the order Apply takes it. Pure.
-func (accessVendor) Steps(
-	seat seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
+func (v accessVendor) Steps(
+	seat seataccess.SeatRef, lane seataccess.Lane, op seataccess.Op,
 	want seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	out := scalewaySteps(seat, op, want, have)
+	return v.StepsFor(seataccess.StepsInput{Seat: seat, Lane: lane, Op: op, Want: want, Have: have})
+}
+
+// StepsFor is [accessVendor.Steps] naming a grant's projects from the lane's
+// offer where the caller read it ([seataccess.NamedSteps]).
+func (accessVendor) StepsFor(in seataccess.StepsInput) []seataccess.Step {
+	out := scalewaySteps(in.Seat, in.Op, in.Want, in.Have, in.Options)
 	for i := range out {
 		out[i].Index = i
 	}
@@ -104,6 +110,7 @@ const rotateAfterAdminister = "Administer could leave access behind in what it r
 
 func scalewaySteps(
 	seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
+	opts seataccess.Options,
 ) []seataccess.Step {
 	secret := seataccess.SinkName(integration.KindScaleway, SecretKeyField, seat.Handle)
 	access := seataccess.SinkName(integration.KindScaleway, AccessKeyField, seat.Handle)
@@ -138,6 +145,8 @@ func scalewaySteps(
 		return []seataccess.Step{s}
 	case seataccess.OpScope:
 		return []seataccess.Step{step(seataccess.VerbScope, scopeText(have.Scope, want.Scope, want.Level))}
+	case seataccess.OpGrants:
+		return grantSteps(op, want, have, opts)
 	case seataccess.OpMint:
 		return []seataccess.Step{mint, retire}
 	case seataccess.OpRotate:
@@ -251,20 +260,21 @@ type accessSession struct {
 	// The organization's catalogue and projects, each read once per pass and
 	// only where a step or an offer needs it.
 	mu       sync.Mutex
+	sets     *[]PermissionSet
 	gaps     *[]seataccess.LevelGap
 	projects *[]Project
 }
 
 // levelGaps reads, once per pass, the levels the catalogue cannot grant yet.
 func (s *accessSession) levelGaps(ctx context.Context) ([]seataccess.LevelGap, error) {
+	catalogue, err := s.permissionSets(ctx)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.gaps != nil {
 		return *s.gaps, nil
-	}
-	catalogue, err := s.client.PermissionSets(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("scaleway: read the Organization's permission sets: %w", reject(err))
 	}
 	gaps := levelGaps(catalogue)
 	s.gaps = &gaps
@@ -444,7 +454,17 @@ func (s *accessSession) observe(
 		if err != nil {
 			return seataccess.Observed{}, err
 		}
-		out.Level, out.Scope = heldBy(rules)
+		sets, err := s.permissionSets(ctx)
+		if err != nil {
+			return seataccess.Observed{}, err
+		}
+		// IN THE TERMS THE LAST CONVERGED SYNC APPLIED, where the policy holds
+		// exactly that, so a grant overlapping a higher level never flaps.
+		var applied *seataccess.Desired
+		if lr, ok := rec.Lanes[seataccess.LaneScaleway]; ok {
+			applied = lr.Applied
+		}
+		out.Level, out.Scope, out.Grants = accessOf(rules, applied, scopeTypes(sets))
 	}
 	out.CredentialGone = credentialGone(a, handle, now)
 	return out, nil
@@ -486,6 +506,13 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 		}
 	case seataccess.OpLevel, seataccess.OpScope:
 		return s.grant(ctx, in)
+	case seataccess.OpGrants:
+		// THE WHOLE POLICY AT ONCE: the op's first step writes the level and
+		// every live grant, and the rest have nothing left to write.
+		if len(in.Prior) > 0 {
+			return seataccess.StepResult{}, nil
+		}
+		return s.grant(ctx, in)
 	case seataccess.OpDisable:
 		if in.Step.Verb == seataccess.VerbDisable {
 			return s.disable(ctx, in)
@@ -498,14 +525,25 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 	}
 }
 
-// rulesFor is the policy's rules at the seat's level on its projects, or the
-// refusal saying why they cannot be written.
+// rulesFor is the policy's rules at the seat's level on its projects with its
+// live grants, or the refusal saying why they cannot be written.
 func (s *accessSession) rulesFor(ctx context.Context, in seataccess.ApplyInput) ([]RuleSpec, error) {
-	rules, err := rulesFor(in.Want.Level, s.client.OrganizationID(), in.Want.Scope)
+	sets, err := s.permissionSets(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := rulesFor(in.Want.Level, s.client.OrganizationID(), in.Want.Scope); err != nil {
 		return nil, &seataccess.Refusal{
 			Said:   "Scaleway: " + err.Error(),
 			Remedy: "Choose a level and at least one project for this agent on the Agents tab",
+			Actor:  seataccess.ByYou,
+		}
+	}
+	rules, err := rulesWith(in.Want.Level, s.client.OrganizationID(), in.Want.Scope, in.Want.Grants, scopeTypes(sets))
+	if err != nil {
+		return nil, &seataccess.Refusal{
+			Said:   "Scaleway: " + err.Error(),
+			Remedy: "Remove the grant on the Agents tab",
 			Actor:  seataccess.ByYou,
 		}
 	}
