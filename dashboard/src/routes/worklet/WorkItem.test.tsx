@@ -2665,6 +2665,85 @@ test("linking a task under a shared key links the one chosen", async () => {
   ]);
 });
 
+// A LINK IS THE KIND CHOSEN. "Link a task" drew only a plain link, so a task
+// could never be said to block or wait on another from the dashboard, though
+// the engine serves both as deltas of update_work_item.
+test("linking a task as blocking it sends the dependency with its reason", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_search: { hits: collidingHits(), available: true } },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Link a task" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "ENG-42 is" }));
+  fireEvent.mouseDown(await screen.findByRole("option", { name: "Blocking" }));
+  await settle();
+  fireEvent.change(within(dialog).getByLabelText("Find a task"), { target: { value: "ENG-7" } });
+  await settle();
+  fireEvent.click(within(dialog).getAllByRole("radio")[0]!);
+  fireEvent.change(within(dialog).getByLabelText(/^Why/), {
+    target: { value: "the release waits on the fix" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Link" }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: {
+        item: "ENG-42",
+        blocking: { add: [SHARED_KEY] },
+        dependency_note: "the release waits on the fix",
+      },
+    },
+  ]);
+});
+
+// EVERY RELATION COMES OFF THE RAIL, on the end that holds it: a dependency
+// from either end through the argument naming that end, a related link drawn
+// from the other task on that task, a duplicate cleared. Nothing removed one
+// before, so a link made by mistake stayed for good.
+test("each relation in the rail is taken off on the end that holds it", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({
+        links: [
+          { kind: "waiting_on", other: "t-3", key: "ENG-3", title: "the dependent", derived: true },
+          { kind: "linked", other: "t-5", key: "ENG-5", title: "drawn there", derived: true },
+          { kind: "duplicates", other: "t-6", key: "ENG-6", title: "the original" },
+        ],
+      }),
+    },
+  });
+  await settle();
+  const relations = screen.getByRole("region", { name: "Relations" });
+  fireEvent.click(within(relations).getByRole("button", { name: "Unlink ENG-3" }));
+  await settle();
+  fireEvent.click(within(relations).getByRole("button", { name: "Unlink ENG-5" }));
+  await settle();
+  fireEvent.click(within(relations).getByRole("button", { name: "Unlink ENG-6" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "update_work_item", args: { item: "ENG-42", blocking: { remove: ["t-3"] } } },
+    { tool: "update_work_item", args: { item: "ENG-5", linked: { remove: ["t-1"] } } },
+    { tool: "update_work_item", args: { item: "ENG-42", duplicate_of: null } },
+  ]);
+  expect(await screen.findAllByText("ENG-42 no longer blocks ENG-3")).not.toHaveLength(0);
+});
+
+test("a reader who may not change the task is offered no unlink", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    viewer: { ...JANE, acts: [] },
+    answers: {
+      work_item: detail({
+        links: [{ kind: "waiting_on", other: "t-2", key: "ENG-2", title: "the blocker" }],
+      }),
+    },
+  });
+  await settle();
+  expect(screen.getByText("Waiting on")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Unlink ENG-2" })).toBeNull();
+});
+
 // A MISSING TASK IS AN EMPTY STATE WITH A WAY BACK, as a missing project and a
 // missing artifact are: it was a full-width grey callout, the one object page
 // that said so in a different shape. Mutation: leave not_found to the generic

@@ -48,6 +48,7 @@ import {
   PencilGlyph,
   PlusGlyph,
   TriangleAlertGlyph,
+  XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { LayerBoundary } from "~/app/boundaries.tsx";
 import { lazyScreen } from "~/app/lazyScreen.ts";
@@ -69,6 +70,7 @@ import { useNow } from "~/lib/clock.ts";
 import { companyDayOf, dayLabelIn, fmtCompanyDay, useCompanyZone } from "~/lib/companyDay.ts";
 import { daysBetween } from "~/lib/timeline.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
+import { unlinkChange, unlinkedSentence } from "~/lib/taskRelations.ts";
 import type { AtlasNamed, AtlasSummary } from "~/contract/atlas.ts";
 import { ListedArtifactCard } from "~/routes/artifacts/parts.tsx";
 import { KindGlyph } from "~/routes/atlas/glyph.tsx";
@@ -966,10 +968,29 @@ function unitProperty(label: string, unit: WorkUnitRef | undefined, stored: stri
 /**
  * What the task is attached to, by what each relation MEANS from this end —
  * the task it is filed under first, then its dependencies and relations.
+ *
+ * EACH RELATION COMES OFF FROM HERE, for a reader who may change the task: on
+ * the end that holds the edge (`lib/taskRelations.ts`), which for a related
+ * link or a duplicate drawn from the other task is a change to that task.
  */
 export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: RowChrome }) {
+  const edits = useItemEdits();
   const links = (detail.links ?? []).filter(namesTask);
   const parent = detail.parent;
+  const self = { id: detail.task.id, address: itemAddress(detailItem(detail)) };
+  const unlink = (link: WorkLink) => {
+    if (!edits?.can) return undefined;
+    const other = itemAddress(linkedItem(link));
+    const change = unlinkChange(link, self, other);
+    if (!change) return undefined;
+    const said = unlinkedSentence(link, detail.task.key, link.key || link.other);
+    // A GESTURE THE ENGINE RESOLVES AS IT LANDS, so it carries no version: a
+    // link taken off composes with whatever else moved on the task.
+    return () =>
+      void (change.item === self.address
+        ? edits.edit(change.args, said, false)
+        : edits.write.run({ item: change.item, ...change.args }, { done: said }));
+  };
   if (links.length === 0 && !parent && !detail.task.parent) return null;
   return (
     <section className="task-rail-section" aria-label="Relations">
@@ -1015,6 +1036,20 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
               one-sided
             </Tag>
           )}
+          {(() => {
+            const remove = unlink(link);
+            return remove ? (
+              <IconButton
+                size="sm"
+                variant="ghost"
+                className="task-edit"
+                label={`Unlink ${link.key || link.other}`}
+                icon={<XGlyph size="xs" />}
+                disabled={edits?.busy}
+                onClick={remove}
+              />
+            ) : null;
+          })()}
         </div>
       ))}
     </section>
