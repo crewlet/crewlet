@@ -69,7 +69,7 @@ function open(assistantWebDenied: boolean) {
     ],
     doc: modelsDoc(assistantWebDenied ? { big: { overrides: { web_tools: "denied" } } } : {}),
     seats: [seat("backend-engineer", "Backend Engineer"), seat("qa", "QA")],
-    assistant: { enabled: true, key: "sonnet" },
+    assistant: { enabled: true, key: "sonnet", fallbacks: [] },
   });
   const onDone = vi.fn();
   view = render(

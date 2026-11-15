@@ -18,6 +18,7 @@ import {
   CATEGORY_ORDER,
   SEAT_JOBS,
   noUses,
+  usesForIntent,
   usesOf,
   type Uses,
 } from "~/lib/modelUses.ts";
@@ -40,7 +41,7 @@ const data = modelsData({
       used_by: [...runs("backend-engineer", ...EVERY_JOB), ...runs("pm", ...EVERY_JOB)],
     }),
   ],
-  assistant: { enabled: true, key: "default" },
+  assistant: { enabled: true, key: "default", fallbacks: [] },
 });
 
 let latest: Draft;
@@ -168,6 +169,24 @@ test("the changes list names each seat that moves, where from and where to, and 
     "Quality Lead, routines and evaluations: no longer on default",
     "Product Manager, coding: default-host → default",
   ]);
+});
+
+test("the changes list keeps Ask Crewlet's fallbacks and names them", () => {
+  const chained = {
+    ...data,
+    assistant: { enabled: true, key: "default", fallbacks: ["spare", "haiku"] },
+  };
+  const ask = usesForIntent("assistant", [], true);
+  // The model it answers with first changes; the fallbacks behind it stay.
+  expect(seatChangesOf(chained, "big", noUses(), ask)).toEqual([
+    "Ask Crewlet: default → big, still falling back to spare and haiku",
+  ]);
+  // A fallback chosen to answer first is not named as its own fallback.
+  expect(seatChangesOf(chained, "haiku", noUses(), ask)).toEqual([
+    "Ask Crewlet: default → haiku, still falling back to spare",
+  ]);
+  // A chain of one model says nothing of fallbacks.
+  expect(seatChangesOf(data, "big", noUses(), ask)).toEqual(["Ask Crewlet: default → big"]);
 });
 
 test("a category the document split by hand reads back half-checked", () => {
