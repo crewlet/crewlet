@@ -93,11 +93,9 @@ type Limits struct {
 
 // ReissueAfter is how stale a cookie may be before a request gets a fresh one.
 //
-// FIVE MINUTES, or a tenth of the idle limit where that is shorter
-// ([reissueAfter]), and what it trades is precision in the idle deadline
-// against a Set-Cookie header on every response: a session may end that much
-// before its idle limit, and a page making twenty requests re-issues once. It
-// costs no store write at all, since the deadline is in the signature.
+// FIVE MINUTES, or a tenth of a shorter idle limit ([reissueAfter]): a session
+// may end that much early, and a page making twenty requests re-issues once.
+// A re-issue writes nothing; the deadline is in the signature.
 //
 // EVERY RE-ISSUE MOVES THE COOKIE'S BYTES, so nothing keys a cache on them:
 // what a browser keeps is keyed on who it was answered for, and a re-issue

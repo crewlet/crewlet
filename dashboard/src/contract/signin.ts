@@ -39,11 +39,9 @@ interface SignInLimits {
 }
 
 /**
- * The `sign_in_policy` answer, an administrator's: `queries.SignInPolicyAnswer`
- * in Go. `settings` and `second_factor_setting` are the company document's
- * values a screen changes in place, each range narrowed to this node's
- * `limits`; `policy` is what the node named by `node` enforces, which is lower
- * only where its operator holds a value there.
+ * The `sign_in_policy` answer: `queries.SignInPolicyAnswer` in Go. The settings
+ * are the company's, ranges narrowed to `limits`; `policy` is what `node`
+ * enforces, lower only where its operator holds a value there.
  */
 export interface SignInPolicyAnswer {
   node: string;

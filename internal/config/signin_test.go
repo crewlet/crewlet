@@ -16,12 +16,9 @@ func signInCompany(t *testing.T, key, value string) (*config.Company, error) {
 	return config.ParseCompany([]byte("name: Acme\nsign_in:\n  " + key + ": " + value + "\n"))
 }
 
-// THE SIGN-IN POLICY IS THE COMPANY'S, with the engine's defaults where it says
-// nothing, and each value is refused outside the engine's range at its own path
-// with the range on the fault.
-//
-// Mutation: drop a bound from settingRanges' sign-in rows and its refusal
-// validates; read Policy past a written value and its row fails.
+// THE SIGN-IN POLICY IS THE COMPANY'S, defaults where it says nothing, and each
+// value is refused outside the engine's range at its path, with the range.
+// Mutation: drop a sign-in row from settingRanges and its refusal validates.
 func TestTheSignInPolicyIsTheCompanysAndHeldToTheEnginesRange(t *testing.T) {
 	t.Parallel()
 	unset, err := config.ParseCompany([]byte("name: Acme\n"))
@@ -68,13 +65,9 @@ func TestTheSignInPolicyIsTheCompanysAndHeldToTheEnginesRange(t *testing.T) {
 	}
 }
 
-// A NODE HOLDS THE COMPANY WITHIN ITS OPERATOR'S LIMITS, so a value set before
-// an operator lowered a limit is enforced at the limit, and an unset limit
+// A NODE HOLDS THE COMPANY WITHIN ITS OPERATOR'S LIMITS, and an unset limit
 // holds nothing back.
-//
-// Mutation: return the company's policy from APIAuth.SignInPolicy unheld and
-// the held rows fail; default a limit to anything narrower than the engine's
-// range and the unheld row fails.
+// Mutation: return the company's policy unheld and the strict row fails.
 func TestANodeHoldsTheCompanysSignInPolicyWithinItsLimits(t *testing.T) {
 	t.Parallel()
 	loose, err := config.ParseCompany([]byte("name: Acme\nsign_in:\n" +
@@ -105,12 +98,9 @@ func TestANodeHoldsTheCompanysSignInPolicyWithinItsLimits(t *testing.T) {
 	}
 }
 
-// A WRITE PAST THIS NODE'S LIMIT IS REFUSED AT ITS PATH, in a person's words
-// and with the narrowed range, and a value the write did not change is left
-// alone: an operator lowering a limit refuses no unrelated write.
-//
-// Mutation: drop the changed check and the unrelated write is refused; drop
-// the narrowing and the lifetime past the limit is admitted.
+// A WRITE PAST THIS NODE'S LIMIT IS REFUSED AT ITS PATH, and a value the write
+// did not change is left alone.
+// Mutation: drop the changed check and the unrelated write is refused.
 func TestAWritePastThisNodesSignInLimitIsRefused(t *testing.T) {
 	t.Parallel()
 	limits := config.SignInLimits{MaxSessionLifetimeRaw: "168h", MinPasswordLength: 14}
@@ -147,10 +137,8 @@ func TestAWritePastThisNodesSignInLimitIsRefused(t *testing.T) {
 	}
 }
 
-// A CHANGE THAT WEAKENS THE SIGN-IN POLICY WARNS, saying what it allows, and a
-// change that strengthens it warns of nothing: the warning is what a screen
-// asks a person to confirm.
-//
+// A WEAKENING SIGN-IN CHANGE WARNS, saying what it allows; a strengthening one
+// warns of nothing.
 // Mutation: compare the wrong direction and both halves flip.
 func TestAWeakeningSignInChangeWarnsAndAStrengtheningOneDoesNot(t *testing.T) {
 	t.Parallel()

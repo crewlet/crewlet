@@ -10,10 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// A SIGN-IN VALUE PAST THIS NODE'S LIMIT IS REFUSED AT ITS DOOR, in a person's
-// words at the setting's path, on the check and the save alike, and nothing is
-// stored; a value inside the limit saves (ADR-0152).
-//
+// A SIGN-IN VALUE PAST THIS NODE'S LIMIT IS REFUSED AT ITS DOOR, check and save
+// alike, in a person's words; a value inside it saves (ADR-0152).
 // Mutation: drop the limits from the write path and the month is stored.
 func TestASignInValuePastThisNodesLimitIsRefusedAtItsDoor(t *testing.T) {
 	t.Parallel()
@@ -47,12 +45,9 @@ func TestASignInValuePastThisNodesLimitIsRefusedAtItsDoor(t *testing.T) {
 	}
 }
 
-// A CHANGE THAT WEAKENS THE SIGN-IN POLICY IS CHECKED WITH A WARNING IT
-// INTRODUCES, which a screen asks a person to confirm before it saves; the
-// company checked as it stands raises none.
-//
-// Mutation: drop config.SignInWeakens from the write path and no warning is
-// answered.
+// A WEAKENING SIGN-IN CHANGE IS CHECKED WITH A WARNING IT INTRODUCES, which a
+// screen asks a person to confirm; the company as it stands raises none.
+// Mutation: drop config.SignInWeakens from the write path and none is answered.
 func TestAWeakeningSignInChangeIsWarnedOfIt(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)

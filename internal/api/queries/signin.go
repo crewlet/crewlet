@@ -43,12 +43,9 @@ type SignInLimits struct {
 	MaxStepUpSeconds          int64 `json:"max_step_up_seconds"`
 }
 
-// SignInPolicyAnswer is what `sign_in_policy` answers (ADR-0152).
-//
-// THE COMPANY'S CHOICE AND THIS NODE'S ENFORCEMENT, side by side: Settings and
-// SecondFactorSetting are the company document's values a screen changes in
-// place, each range narrowed to this node's limits; Policy is what this node
-// enforces, which is lower only where its operator's Limits hold it there.
+// SignInPolicyAnswer is what `sign_in_policy` answers (ADR-0152): the company's
+// settings, each range narrowed to this node's Limits, and the Policy the node
+// enforces, lower only where a limit holds it there.
 type SignInPolicyAnswer struct {
 	// Node is the node whose limits and enforcement these are.
 	Node   string       `json:"node"`

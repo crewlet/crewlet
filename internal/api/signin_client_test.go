@@ -39,17 +39,8 @@ func TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends(t *testing.T) {
 }
 
 // THE SIGN-IN POLICY IS THE COMPANY'S, WITHIN THIS NODE'S LIMITS, AND AN
-// ADMINISTRATOR'S (ADR-0152).
-//
-// The settings are the company document's values a screen changes, each range
-// narrowed to this node's limits; the policy is what this node enforces, held
-// at a limit the company's value lies past. A reader without admin is refused:
-// the posture is no secret, but it is the company's own machinery.
-//
-// Mutation: answer the company's policy unheld and the strict case enforces the
-// company's month; read the ranges off config.RangeOf and the strict case's
-// lifetime row admits a month; register the question for everybody and the
-// reader is answered.
+// ADMINISTRATOR'S (ADR-0152). Mutation: answer the policy unheld, or read the
+// ranges off config.RangeOf, and the strict case admits a month.
 func TestTheSignInPolicyIsTheCompanysWithinThisNodesLimits(t *testing.T) {
 	t.Parallel()
 	month := 30 * 24 * time.Hour

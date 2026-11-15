@@ -68,12 +68,9 @@ func (r *limitsRig) request() session.Validation {
 	return v
 }
 
-// A LOWERED LIFETIME ENDS A LIVE SESSION AT ITS NEXT REQUEST, measured from its
-// sign-in, and a raised one never stretches a session signed in before it
-// (ADR-0152).
-//
-// Mutation: check the signed deadline alone and the lowered row is served;
-// measure from the sign-in alone and the raised row is.
+// A LOWERED LIFETIME ENDS A LIVE SESSION AT ITS NEXT REQUEST; A RAISED ONE
+// STRETCHES NO SESSION SIGNED IN BEFORE IT (ADR-0152).
+// Mutation: check the signed deadline alone and the lowered row is served.
 func TestALoweredLifetimeEndsALiveSessionAndARaisedOneStretchesNone(t *testing.T) {
 	t.Parallel()
 	week, day := 7*24*time.Hour, 24*time.Hour
@@ -97,13 +94,9 @@ func TestALoweredLifetimeEndsALiveSessionAndARaisedOneStretchesNone(t *testing.T
 	}
 }
 
-// A LOWERED IDLE LIMIT ENDS A LIVE SESSION AT ITS NEXT REQUEST, measured from its
-// last issue, and a raised one never stretches the window a live session was
-// issued with, however often it is re-issued.
-//
-// Mutation: check the signed idle deadline alone and the lowered row is served;
-// re-issue at the limit in force rather than the shorter window and the raised
-// row is.
+// A LOWERED IDLE LIMIT ENDS A LIVE SESSION AT ITS NEXT REQUEST; A RAISED ONE
+// NEVER STRETCHES ITS WINDOW, however often it is re-issued.
+// Mutation: re-issue at the limit in force and the raised row is served.
 func TestALoweredIdleLimitEndsALiveSessionAndARaisedOneStretchesNone(t *testing.T) {
 	t.Parallel()
 	week := 7 * 24 * time.Hour
@@ -129,12 +122,9 @@ func TestALoweredIdleLimitEndsALiveSessionAndARaisedOneStretchesNone(t *testing.
 	}
 }
 
-// A SHORT IDLE LIMIT IS RE-ISSUED WITHIN A TENTH OF ITSELF, so a person working
-// under a fifteen-minute limit is not signed out early by the re-issue
-// throttle, while the default limit keeps the five-minute throttle.
-//
-// Mutation: throttle every re-issue at five minutes and the short row is not
-// re-issued.
+// A SHORT IDLE LIMIT IS RE-ISSUED WITHIN A TENTH OF ITSELF, and the default
+// keeps the five-minute throttle.
+// Mutation: throttle every re-issue at five minutes and the short row fails.
 func TestAShortIdleLimitIsReissuedWithinATenthOfItself(t *testing.T) {
 	t.Parallel()
 	short := newLimitsRig(t, session.Limits{Lifetime: time.Hour, Idle: 15 * time.Minute})

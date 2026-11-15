@@ -10,13 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// EACH SIGN-IN READS THE COMPANY'S POLICY AS IT STANDS THEN, so a change an
-// administrator saves applies to the next sign-in with no restart (ADR-0152):
-// a second factor required since the last sign-in restricts the next one, and
-// the session it opens lives the lifetime in force.
-//
-// Mutation: read the policy once when the surface is built and the second
-// sign-in is whole and lives a week.
+// EACH SIGN-IN READS THE COMPANY'S POLICY AS IT STANDS THEN (ADR-0152), so a
+// change applies at the next sign-in with no restart.
+// Mutation: read the policy once at build and the second sign-in is whole.
 func TestASignInReadsTheCompanysPolicyAsItStandsThen(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex

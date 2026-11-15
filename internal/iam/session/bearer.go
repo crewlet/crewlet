@@ -58,10 +58,8 @@ import (
 //
 // # Why the instants ride beside the deadlines (v4)
 //
-// The deadlines are the limits a session was signed under, and the instants
-// let a node hold it to SHORTER limits set since ([Bearer.EndsUnder]): a
-// lowered lifetime or idle limit ends a live session at its next request,
-// while a raised one reaches only sessions signed in after it (ADR-0152).
+// So a node can hold a session to SHORTER limits set since it was signed
+// ([Bearer.EndsUnder], ADR-0152); a raised limit never stretches it.
 //
 // # There is no rotation index, and v2 had one
 //

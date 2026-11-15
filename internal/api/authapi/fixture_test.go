@@ -34,10 +34,8 @@ func bootstrapFor(t *testing.T) config.Bootstrap {
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: "a-token-long-enough-for-the-floor", Grants: iam.AllGrants},
 	}
-	// A SECOND FACTOR OFFERED, NOT REQUIRED: the operator allows it and
-	// [passwordCompany] chooses it, since a required one would make every
-	// password sign-in here an enrolment-only session. The cases about a
-	// required factor state it (`requiring`).
+	// A SECOND FACTOR OFFERED, NOT REQUIRED (allowed here, chosen by
+	// [passwordCompany]); the cases about a required one say so (`requiring`).
 	b.API.Auth.Limits.SecondFactor = iam.SecondFactorOptional
 	return b
 }
