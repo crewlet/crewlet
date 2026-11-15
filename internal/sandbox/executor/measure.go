@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -265,94 +266,202 @@ func assistantInput(line []byte) int64 {
 
 // lastExportInput is the input of the last request an OpenCode export records:
 // its last assistant message that measured a prompt.
+//
+// READ ON THE SCANNER, holding only what it reads (internal/jsonscan): the
+// export's names a few bytes at a time, and of each message the four small
+// values the measure reads ([exportMessageInput]); everything else, a message
+// part of 27 MiB among it, is passed over, its every byte checked and none
+// held. What the scrub keeps of a session holds every string as long as its
+// harness wrote it, so a reader that held a token whole would hold the
+// longest of them.
 func lastExportInput(r io.Reader) (int64, error) {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
 		return 0, err
 	}
-	dec := json.NewDecoder(zr)
-	if err = expectDelim(dec, '{'); err != nil {
+	sc := jsonscan.New(zr)
+	if err = expectKind(sc, jsonscan.ObjectStart); err != nil {
 		return 0, err
 	}
-	var last int64
-	for dec.More() {
-		key, err := dec.Token()
+	var (
+		last int64
+		name [exportNameBytes]byte
+	)
+	for {
+		k, err := sc.Next()
+		switch {
+		case err != nil:
+			return 0, err
+		case k == jsonscan.ObjectEnd:
+			return last, nil
+		}
+		key, err := shortName(sc, name[:])
 		if err != nil {
 			return 0, err
 		}
 		if key != "messages" {
-			if err = skipValue(dec); err != nil {
+			if err = skipNext(sc); err != nil {
 				return 0, err
 			}
 			continue
 		}
-		if err = expectDelim(dec, '['); err != nil {
+		if err = expectKind(sc, jsonscan.ArrayStart); err != nil {
 			return 0, err
 		}
-		for dec.More() {
-			n, measured, msgErr := exportMessageInput(dec)
-			if msgErr != nil {
-				return 0, msgErr
+		for {
+			k, err := sc.Next()
+			switch {
+			case err != nil:
+				return 0, err
+			case k == jsonscan.ArrayEnd:
+			default:
+				n, measured, msgErr := exportMessageInput(sc, k)
+				if msgErr != nil {
+					return 0, msgErr
+				}
+				if measured {
+					last = n
+				}
+				continue
 			}
-			if measured {
-				last = n
-			}
-		}
-		if err = expectDelim(dec, ']'); err != nil {
-			return 0, err
+			break
 		}
 	}
-	return last, nil
 }
 
-// exportMessageInput reads one message of an export and answers the input its
-// request measured, and whether it measured one by [measuredPrompt]'s rule.
+// exportNameBytes is the most of a name the meter reads: one byte past the
+// longest it looks for (`messages`), so a longer name reads as none of them,
+// and at least a rune's bytes, the least the scanner reads a text into.
+const exportNameBytes = len("messages") + 1
+
+// exportValueMaxBytes is the most of one of a message's measured values the
+// meter holds ([exportMessageInput]): the scanner's own read buffer, 64 KiB,
+// so a value within it is captured from the buffer it is already in. A
+// message's kind is a word, its time and its tokens a few numbers each, under
+// a few hundred bytes; and its error, which the measure reads only for whether
+// it is there, is never read past it.
+const exportValueMaxBytes = 64 << 10
+
+// errorPastBound stands for a message's error past [exportValueMaxBytes]: no
+// null, so the step ended on an error, which is all the measure reads of one.
+var errorPastBound = json.RawMessage("true")
+
+// shortName is the current name's decoded text where it fits in buf less a
+// byte, and "" where it is longer, its rest passed over by the next Next.
+func shortName(sc *jsonscan.Scanner, buf []byte) (string, error) {
+	read := 0
+	for read < len(buf) {
+		n, err := sc.Read(buf[read:])
+		read += n
+		if errors.Is(err, io.EOF) {
+			return string(buf[:read]), nil
+		}
+		if errors.Is(err, io.ErrShortBuffer) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
+// expectKind reads the next token, an error where it is not of kind want.
+func expectKind(sc *jsonscan.Scanner, want jsonscan.Kind) error {
+	k, err := sc.Next()
+	if err != nil {
+		return err
+	}
+	if k != want {
+		return fmt.Errorf("%w: it holds %s where %s belongs", errNotExport, k, want)
+	}
+	return nil
+}
+
+// skipNext passes over the value after a name.
+func skipNext(sc *jsonscan.Scanner) error {
+	if _, err := sc.Next(); err != nil {
+		return err
+	}
+	return sc.Skip()
+}
+
+// exportMessageInput reads one message of an export, its first token of kind
+// first, and answers the input its request measured, and whether it measured
+// one by [measuredPrompt]'s rule.
 //
 // THE MESSAGE IS THE ONE EVERY READER OF AN EXPORT TAKES ([openCodeMessage]),
 // so this and a session's transcript never disagree about what a message is,
 // its kind or its failure. A KEY AT A TIME, the export streamed: each of the
 // small values the measure reads, its type, its time, its tokens and its error,
 // is taken raw by its exact name and decoded on its own, by its keys exactly as
-// written ([openCodeMeasuredWire]), and every other field is passed over a
-// token at a time, so a message's content is never held whole. Decoded by
-// encoding/json into the message's fields, the tokens were read with a key that
-// differs from one they declare only in case taken for that one, the last of
-// the two written winning.
-func exportMessageInput(dec *json.Decoder) (int64, bool, error) {
-	if err := expectDelim(dec, '{'); err != nil {
-		return 0, false, err
+// written ([openCodeMeasuredWire]), and every other field is passed over, so a
+// message's content is never held at all. Decoded by encoding/json into the
+// message's fields, the tokens were read with a key that differs from one they
+// declare only in case taken for that one, the last of the two written
+// winning.
+//
+// HELD TO [exportValueMaxBytes]: an error past it is one (it is no null), and
+// a type, a time or tokens past it is no message OpenCode writes, which the
+// meter reads as an export it cannot read and so measures nothing of, rather
+// than hold whatever a box wrote there.
+func exportMessageInput(sc *jsonscan.Scanner, first jsonscan.Kind) (int64, bool, error) {
+	if first != jsonscan.ObjectStart {
+		return 0, false, fmt.Errorf("%w: it holds %s where a message belongs", errNotExport, first)
 	}
-	var w openCodeMeasuredWire
-	for dec.More() {
-		key, err := dec.Token()
+	var (
+		w    openCodeMeasuredWire
+		name [exportNameBytes]byte
+	)
+	for {
+		k, err := sc.Next()
+		switch {
+		case err != nil:
+			return 0, false, err
+		case k == jsonscan.ObjectEnd:
+			m, _, msgErr := w.message()
+			if msgErr != nil {
+				return 0, false, msgErr
+			}
+			n, measured := measuredPrompt(m)
+			return n, measured, nil
+		}
+		key, err := shortName(sc, name[:])
 		if err != nil {
 			return 0, false, err
 		}
+		var to *json.RawMessage
 		switch key {
 		case "type":
-			err = dec.Decode(&w.Type)
+			to = &w.Type
 		case "time":
-			err = dec.Decode(&w.Time)
+			to = &w.Time
 		case "tokens":
-			err = dec.Decode(&w.Tokens)
+			to = &w.Tokens
 		case "error":
-			err = dec.Decode(&w.Error)
+			to = &w.Error
 		default:
-			err = skipValue(dec)
+			if err = skipNext(sc); err != nil {
+				return 0, false, err
+			}
+			continue
 		}
-		if err != nil {
+		if _, err = sc.Next(); err != nil {
 			return 0, false, err
 		}
+		raw, whole, err := sc.Capture(exportValueMaxBytes)
+		switch {
+		case err != nil:
+			return 0, false, err
+		case whole:
+			*to = append(json.RawMessage(nil), raw...)
+		case key == "error":
+			*to = errorPastBound
+		default:
+			return 0, false, fmt.Errorf("%w: a message's %s runs past %d bytes", errNotExport, key,
+				exportValueMaxBytes)
+		}
 	}
-	if err := expectDelim(dec, '}'); err != nil {
-		return 0, false, err
-	}
-	m, _, err := w.message()
-	if err != nil {
-		return 0, false, err
-	}
-	n, measured := measuredPrompt(m)
-	return n, measured, nil
 }
 
 // openCodeMeasuredWire is the part of one message of an OpenCode session the
@@ -430,26 +539,4 @@ func measuredPrompt(m openCodeMessage) (int64, bool) {
 	}
 	n := max(m.Tokens.Input, 0) + max(m.Tokens.Cache.Read, 0) + max(m.Tokens.Cache.Write, 0)
 	return n, n > 0
-}
-
-// skipValue passes over the next value whole, a token at a time.
-func skipValue(dec *json.Decoder) error {
-	depth := 0
-	for {
-		t, err := dec.Token()
-		if err != nil {
-			return err
-		}
-		if d, ok := t.(json.Delim); ok {
-			switch d {
-			case '{', '[':
-				depth++
-			case '}', ']':
-				depth--
-			}
-		}
-		if depth == 0 {
-			return nil
-		}
-	}
 }
