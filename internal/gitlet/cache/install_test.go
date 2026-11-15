@@ -1720,51 +1720,65 @@ func sections(b gittest.Bundled) ([]byte, []byte, []byte) {
 	return b.Bytes[:b.PackBytes], b.Bytes[b.PackBytes : b.PackBytes+b.IndexBytes], b.Bytes[b.PackBytes+b.IndexBytes:]
 }
 
-// failFrom fails a round's downloads from its n'th on, until disarmed —
-// the n'th only once the n-1 packs before it are placed (before, closed by
-// the install hook), saying first that it has been reached. So which packs a
-// failed round installed is the round's ORDER, never the scheduler's: the
-// fault point is the top of a download, before its turn and its GET, so the
-// n'th could otherwise fire while the pack before it is still on the wire,
-// and its failure end that GET too. Every hit after the n'th fails as well,
-// so no later pack is installed whatever runs first.
+// failFrom fails a round's downloads from its n'th on, until disarmed — the
+// n'th BY THE PACK, in the round's own order: staged numbers each bundle as
+// the round makes its files, which it does in that order as it hands the pack
+// out, and the failure is the object store's answer to that pack's open. It
+// was the n'th hit of the fault point at the top of a download (#856), which
+// numbers the workers in the order they REACH it — the scheduler's, which runs
+// a newly started worker first — so the third pack's worker could take hit 2
+// and the second pack's hit 3: the failing download was then one of the n-1
+// it waited to see placed, and it waited on itself, at first for 30 s and,
+// once that bound went, until the package's timeout. A pack's open comes after
+// its turn and its share, with one GET at a time after the GETs of every pack
+// before it, whose placing needs nothing the open holds; the n'th fails only
+// once those n-1 are placed (before, closed by the install hook), so which
+// packs a failed round installed is the round's ORDER, never the scheduler's
+// — nor whether a pack fetched before its round failed is placed after it.
+// Every pack after the n'th fails as well, so no later pack is installed
+// whatever runs first.
 type failFrom struct {
-	point           gitletfault.Point
-	n               int
-	before, reached chan struct{}
+	n      int
+	before chan struct{}
 
-	mu   sync.Mutex
-	hits int
-	off  bool
+	mu     sync.Mutex
+	staged map[objstore.Key]int
+	off    bool
 }
 
 var errFailedDownload = errors.New("a download that failed")
 
-func (f *failFrom) Hit(ctx context.Context, p gitletfault.Point, _ int64) error {
-	if p != f.point {
+// stage numbers object in the round's order: the first bundle it made is 1.
+func (f *failFrom) stage(object objstore.Key) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.staged[object]; !ok {
+		f.staged[object] = len(f.staged) + 1
+	}
+}
+
+// open is the store's answer to an open of object: nil to open it.
+func (f *failFrom) open(object objstore.Key) error {
+	f.mu.Lock()
+	at, ok := f.staged[object]
+	off := f.off
+	f.mu.Unlock()
+	if off || !ok || at < f.n {
 		return nil
 	}
-	f.mu.Lock()
-	f.hits++
-	hit, off := f.hits, f.off
-	f.mu.Unlock()
-	switch {
-	case off || hit < f.n:
-		return nil
-	case hit == f.n:
-		// ON THE SIGNAL ALONE: placing the packs before it is real work a loaded
-		// runner can take long over, and a true hang is the test binary's timeout.
-		close(f.reached)
-		select {
-		case <-f.before:
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		}
+	select {
+	case <-f.before:
+	case <-time.After(hangDetector): //fixedwait:liveness
+		// Placing the packs before it needs nothing this open holds, so a
+		// bound that runs out is a hang, said here rather than by the
+		// package's timeout.
+		return fmt.Errorf("the %d packs before the round's pack %d were not placed in %v", f.n-1, at,
+			hangDetector)
 	}
 	return errFailedDownload
 }
 
-// disarm lets every later hit through.
+// disarm lets every later open through.
 func (f *failFrom) disarm() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1774,10 +1788,15 @@ func (f *failFrom) disarm() {
 // A FAILED ROUND LEAVES NO TEMPORARY FILES — and keeps what it installed:
 // the packs before the failure are named by rows, so the next round skips
 // them and downloads only the rest. One GET at a time, the round's third
-// download failing once the two before it are placed — and the second's GET
-// held until the third has reached its failure, the schedule in which a
-// failure at the top of the third download ended the second's GET and the
-// case read one pack installed where the round's order put two.
+// download — the third pack in the round's order, whichever worker the
+// scheduler ran first — failing once the two before it are placed.
+//
+// Mutations: a failed download leaves its staged files (download's fail
+// does not abandon them) — tmp/ is not empty; the next round downloads a
+// pack it holds whole (install's skip of an installed pack taken out) — it
+// downloads all six; the case fails the second pack in the round's order
+// rather than the third — the failing download waits on itself, #856's
+// deadlock, and the bound names it.
 func TestAFailedRoundLeavesNoTemporaryFiles(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1785,16 +1804,9 @@ func TestAFailedRoundLeavesNoTemporaryFiles(t *testing.T) {
 	for range 6 {
 		w.push(t, repo, "refs/heads/main", nil)
 	}
-	faults := &failFrom{point: gitletfault.SyncDownload, n: 3, before: make(chan struct{}),
-		reached: make(chan struct{})}
-	var opens atomic.Int32
-	w.objects.hold = func(objstore.Key) <-chan struct{} {
-		if opens.Add(1) == 2 {
-			return faults.reached
-		}
-		return nil
-	}
-	c := w.open(t, func(o *cache.Options) { o.Faults = faults })
+	faults := &failFrom{n: 3, before: make(chan struct{}), staged: map[objstore.Key]int{}}
+	w.objects.fail = faults.open
+	c := w.open(t, cache.StagedWith(faults.stage))
 	cache.SetFetchConcurrency(c, 1)
 	var placed atomic.Int32
 	closeBefore := sync.OnceFunc(func() { close(faults.before) })
