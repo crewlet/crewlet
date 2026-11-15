@@ -34,7 +34,7 @@ export function NotFound({
       description={
         <>
           {hint ? <>{sentence(hint)} </> : null}
-          The address was <InlineCode>{route.hash}</InlineCode>.
+          The address was <InlineCode close=".">{route.hash}</InlineCode>
         </>
       }
       action={

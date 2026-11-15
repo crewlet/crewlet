@@ -40,7 +40,6 @@ import {
   Button,
   Callout,
   Card,
-  ConfirmModal,
   FilePickButton,
   FormField,
   InlineCode,
@@ -52,7 +51,7 @@ import {
   type SourceEditorHandle,
   type SourceMark,
 } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import {
   FileCodeGlyph,
   RefreshCwGlyph,

@@ -1732,9 +1732,13 @@ flexible column among five sized to their content, so a run gives up its Scope
 first (a role schedule's scope is the seat it woke), then the tick it was for,
 then whom it woke. People is a column of the sheet beside a person's
 peek, and every flexible column it keeps has a floor (Seat and Access `8rem`):
-at zero the seat drew its avatar alone and the access stacked a row tall
-while Kind and Login stayed, so it gives up Access, then Kind, then Login,
-and keeps the name, the stage and the seat. Access in ANY cell (the People
+at zero the seat drew its avatar alone and the access stacked a row tall.
+Beside the peek it keeps what people are compared by: the name with the login
+as its second line, the stage and the access, which never gives way. It gives
+up Kind first (a row that is not a person wears a key beside its name), then
+the seat, which the peek names; it gave up Access first once, so the Access
+page's own list hid access whenever a person was open. Service accounts give
+up Acts as and keep their access the same way. Access in ANY cell (the People
 list, the invitations, a person's or the Account's tokens) is the one line the
 dashboard says it in (`AccessTags` over `accessLine`, `lib/access.ts`): one
 **Admin** tag for anybody holding it, never Admin beside the apps it includes;
@@ -7452,8 +7456,9 @@ which on its title.
 
 And **a chip must not repeat the sentence beside it.** The trigger's summary
 is built by the vendor's own summariser and already opens with who wrote it
-("Message from founder: …"), so a `founder` chip next to that line was the
-same fact twice — and two chips plus a link after one line of prose is a
+("Message from Ana: …", the sender by the name the company knows them
+by, where the notification service resolved one, and by the id it arrived
+with otherwise), so a sender chip next to that line was the same fact twice — and two chips plus a link after one line of prose is a
 hedge, not a header. Only the integration stays: it is the one thing the
 sentence does not reliably carry.
 
@@ -9403,7 +9408,8 @@ palette and the trail.
   never ending on a heading with nothing
   under it. That costs ONE `page` read, of the featured page alone, and the
   `page_revision` before the save; a change to a page since purged never
-  leads. **Recent activity** runs down the right with the rest of the same
+  leads, nor one to a page in the trash, which keeps its title and is told by
+  the `status` each change carries. **Recent activity** runs down the right with the rest of the same
   `page_activity` read (forty changes), ONE ROW PER PAGE with its newest
   change, eleven pages at most, and never the featured page again, under the
   COMPANY's days, Today and Yesterday cut at the company's midnight. By page
@@ -10650,7 +10656,7 @@ administrator **Publish this version**.
 **Access** is the identity directory, over the routes `/iam` serves to an
 admin, split over three pages so that no row is drawn twice: People, Service
 accounts and API tokens. **People** (`#/settings/people`)
-is every principal in the directory but its service accounts (`/iam/people`), their login, stage,
+is every principal in the directory but its service accounts (`/iam/people`), their name with the login under it, kind, stage,
 **Access** column and the seat the directory binds them to — the Access column
 saying the set in the one line the dashboard says it everywhere (`accessLine`
 in `lib/access.ts`): **Admin** for anybody holding it, since every app is
@@ -11645,7 +11651,10 @@ name on the chart, a Tier A token as "founder (API token)", never the
 recorded key (`token:founder`). **The credential is its kind in words**
 ("Personal access token", "Signed-in session"), its id one press away on a
 copy control, and a credential beside an author's name reads "jane.doe
-(through a personal access token)". **Across the fleet** counts the nodes that
+(through a personal access token)" in a sentence; in a table (the history's
+By, Secrets' Set by) it is a caption line under the name (`AuthorCell`,
+`authorParts` in `lib/attribution.ts`), where one line cut it to "jane.doe
+(through s…". **Across the fleet** counts the nodes that
 run the revision in a sentence whose verb agrees with the count ("1 of 3 nodes
 runs this revision", "The fleet's only node runs this revision"). In the history (and the Diff
 lens's list of revisions) **Summary is the one flexible column**: the revision id and its *active* pill are exactly

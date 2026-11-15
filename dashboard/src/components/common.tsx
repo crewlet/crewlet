@@ -486,7 +486,7 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
     >
       {authorityWords("This answer", refusal)}{" "}
       <span className="t-caption">
-        Refused as <InlineCode>{refusal.reason}</InlineCode>.
+        Refused as <InlineCode close=".">{refusal.reason}</InlineCode>
       </span>
     </Callout>
   );

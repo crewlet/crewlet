@@ -76,7 +76,13 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, openSentence, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { authorLabel, credentialOf, credentialWords, throughOf } from "~/lib/attribution.ts";
+import {
+  authorLabel,
+  authorParts,
+  credentialOf,
+  credentialWords,
+  throughOf,
+} from "~/lib/attribution.ts";
 import { nameOfIn, useOrgIndex, type NameOf } from "~/lib/seats.ts";
 import type { FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { reveal } from "~/lib/scroller.ts";
@@ -126,7 +132,7 @@ const NO_REVISION = {
   // prose here would read as words rather than as something to type.
   hint: (
     <>
-      Import one with <InlineCode>crewlet config import</InlineCode>.
+      Import one with <InlineCode close=".">crewlet config import</InlineCode>
     </>
   ),
 };
@@ -167,15 +173,24 @@ export function RevisionAuthor({
       : revision.created_by;
   const kind = revision.created_by_kind;
   const label = authorLabel(revision.created_by, revision.operator_id, name);
+  const parts = authorParts(revision.created_by, revision.operator_id, name);
   return (
     // THE NAME OUTRANKS ITS KIND. In a narrow By column the name was cut to
     // "n…" beside a whole `operator` chip, which is the half of the fact a
     // reader can least do without. In a revisions table (`.crewlet-data-grid__cell >
     // .revision-author`) the chip wraps onto a line the cell does not draw
-    // before the name gives up a character; the title keeps both.
-    <span className="row gap-1 revision-author" title={name ? `${label} · ${kind}` : undefined}>
-      {name ? <TableTextCell>{label}</TableTextCell> : <EmptyValue label="No name recorded" />}
-      <Tag appearance="outline">{kind}</Tag>
+    // before the name gives up a character; the title keeps both. The
+    // credential is a line of its own under them, never cut into the name.
+    <span className="revision-author" title={name ? `${label} · ${kind}` : undefined}>
+      <span className="row gap-1 revision-author__who">
+        {name ? (
+          <TableTextCell>{parts.name}</TableTextCell>
+        ) : (
+          <EmptyValue label="No name recorded" />
+        )}
+        <Tag appearance="outline">{kind}</Tag>
+      </span>
+      {parts.through && <span className="revision-author__through">{parts.through}</span>}
     </span>
   );
 }

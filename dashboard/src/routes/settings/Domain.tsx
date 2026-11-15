@@ -289,7 +289,7 @@ export function DomainScreen({ name }: { name: string }) {
                 <Card.Title>No such log</Card.Title>
               </Card.Header>
               <p className="t-body">
-                This node reports no log <InlineCode>{name}</InlineCode>.
+                This node reports no log <InlineCode close=".">{name}</InlineCode>
                 {(data.domains ?? []).length > 0 && (
                   <>
                     {" "}

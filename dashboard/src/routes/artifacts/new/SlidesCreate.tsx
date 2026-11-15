@@ -26,7 +26,6 @@ import { useMemo, useRef, useState } from "react";
 import {
   Button,
   Callout,
-  ConfirmModal,
   DocumentTitleField,
   FormField,
   Input,
@@ -41,6 +40,7 @@ import {
   useMediaMatch,
   useToast,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { FileTextGlyph, PaletteGlyph, PlusGlyph, PresentationGlyph } from "@crewlethq/icons/glyphs";
 import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";

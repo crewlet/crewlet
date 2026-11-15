@@ -894,7 +894,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
       <span className="col" style={{ gap: 6 }}>
         <span>
           <strong>Maintenance on {op.stream}</strong>: no node starts in service until it closes.
-          Phase <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since{" "}
+          Phase <InlineCode close=",">{op.phase}</InlineCode> attempt {op.attempt}, since{" "}
           {relTime(op.since, now)}
           {/* NOT IN PARENTHESES: the author's credential is in its own. */}
           {op.by && <>, run by {authorLabel(op.by, op.operator_id)}</>}. Resizing{" "}
@@ -1533,7 +1533,7 @@ export function DomainRefusals({ domain: d }: { domain: RetentionDomain }) {
         <Callout variant="warning" role="alert">
           <span>
             <strong>Writes refused on this node:</strong>{" "}
-            <InlineCode>{d.writes_refused.code}</InlineCode>: {d.writes_refused.detail}
+            <InlineCode close=":">{d.writes_refused.code}</InlineCode> {d.writes_refused.detail}
           </span>
         </Callout>
       )}

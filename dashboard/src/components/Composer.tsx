@@ -424,7 +424,6 @@ function AskDialog({
       icon={<CircleQuestionMarkGlyph />}
       onClose={() => onClose(false)}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={() => onClose(false)} disabled={write.busy}>
@@ -619,7 +618,6 @@ function LinkTaskDialog({
       icon={<HashGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -757,7 +755,6 @@ function AttachPageDialog({
       title={`Attach a page to ${named}`}
       icon={<PaperclipGlyph />}
       onClose={onClose}
-      closeDisabledReason={busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>

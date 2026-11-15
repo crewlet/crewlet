@@ -953,7 +953,6 @@ function MergeDialog({
       onClose={onClose}
       title={`Merge ${target.key} into another task`}
       placement="top"
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button size="small" variant="ghost" onClick={onClose} disabled={write.busy}>

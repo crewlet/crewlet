@@ -334,7 +334,7 @@ function words(
   const variable = models.length > 1 ? first?.admin?.sign_in.variable : null;
   const shared = variable ? (
     <>
-      They share <InlineCode>{variable}</InlineCode>.{" "}
+      They share <InlineCode close=".">{variable}</InlineCode>{" "}
     </>
   ) : null;
   const many = keys.length > 1;

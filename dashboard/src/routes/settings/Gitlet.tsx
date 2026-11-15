@@ -222,7 +222,10 @@ export function RepoProtection({ repo }: { repo: CodeRepoSummary }) {
           </>
         ) : (
           <>
-            the code tools’ lifecycle requests (<InlineCode>code_protect_branch</InlineCode>)
+            the code tools’ lifecycle requests{" "}
+            <InlineCode open="(" close=")">
+              code_protect_branch
+            </InlineCode>
           </>
         )}
         .

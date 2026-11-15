@@ -16,6 +16,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { useSeated } from "./access.tsx";
 import { Cited, FactValue, sourceSetBy } from "./parts.tsx";
 import type { Decision, DecisionTool } from "./writes.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 
 /** A claim as a list of claims draws it: the one shown, or another beside it. */
 export interface ShownClaim extends Pick<AtlasFactView, "source" | "word" | "observed_at"> {
@@ -104,6 +105,7 @@ export function DecisionButtons({ decisions }: { decisions: readonly Decision[] 
   const [pressed, setPressed] = useState<string | null>(null);
   const tools = [...new Set(decisions.map((decision) => decision.tool))];
   const busy = tools.some((tool) => writes[tool].busy);
+  const waiting = useWaiting();
   if (decisions.length === 0) return null;
   return (
     <div className="atlas-decide">
@@ -116,7 +118,7 @@ export function DecisionButtons({ decisions }: { decisions: readonly Decision[] 
             variant={decision.accepts ? "primary" : "secondary"}
             showRefusal={false}
             pressing={busy && pressed === decision.key}
-            blocked={busy ? "Waiting for the engine to answer" : undefined}
+            blocked={busy ? waiting.reason : undefined}
             onPress={() => {
               setPressed(decision.key);
               void decide(writes, decision);

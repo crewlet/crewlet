@@ -785,12 +785,13 @@ test("an author's name comes before its kind, on a line the kind leaves first", 
     ".crewlet-data-grid__cell > .revision-author",
   )!;
   expect(author).not.toBeNull();
-  expect(author.firstElementChild?.textContent).toBe("founder");
-  expect(author.lastElementChild?.classList.contains("crewlet-tag")).toBe(true);
+  const who = author.querySelector<HTMLElement>(".revision-author__who")!;
+  expect(who.firstElementChild?.textContent).toBe("founder");
+  expect(who.lastElementChild?.classList.contains("crewlet-tag")).toBe(true);
   expect(author.getAttribute("title")).toBe("founder · operator");
 
   const css = readFileSync(join(process.cwd(), "src/styles/screens.css"), "utf8");
-  const at = css.indexOf(".crewlet-data-grid__cell > .revision-author {");
+  const at = css.indexOf(".crewlet-data-grid__cell > .revision-author > .revision-author__who {");
   expect(at, "the one-line author rule is declared").toBeGreaterThan(-1);
   const rule = css.slice(at, css.indexOf("}", at));
   expect(rule).toMatch(/flex-wrap:\s*wrap/);
@@ -1004,7 +1005,14 @@ test("a revision's author and credential are said in words, the id copied", asyn
   };
   const { container } = mount("#/config?lens=audit", diff, undefined, [byToken, byPat]);
   expect(await screen.findByText("founder (API token)")).toBeDefined();
-  expect(screen.getByText("jane.doe (through a personal access token)")).toBeDefined();
+  // THE CREDENTIAL IS THE AUTHOR'S SECOND LINE, never cut into the name: one
+  // line read "jane.doe (through s…" in a narrow By column.
+  const through = screen.getByText("through a personal access token");
+  const author = through.closest<HTMLElement>(".revision-author")!;
+  expect(through.classList.contains("revision-author__through")).toBe(true);
+  expect(author.querySelector(".revision-author__who")?.firstElementChild?.textContent).toBe(
+    "jane.doe",
+  );
   expect(container.textContent).not.toContain("token:founder");
   expect(container.textContent).not.toContain("pat:");
   cleanup();

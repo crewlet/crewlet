@@ -12,8 +12,8 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, ConfirmModal, FormField, Input, Select, Stack } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName } from "~/lib/code.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
@@ -126,7 +126,6 @@ function DetailsDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () =>
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -335,7 +334,6 @@ function MirrorDialog({
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -428,7 +426,6 @@ export function PurgeControl({ repo }: { repo: CodeRepoDetail }) {
         // since the WriteButton draws the refusal beside itself, where the
         // person pressed, and a purge refused is never one asked.
         submitting={write.busy}
-        busyReason="Waiting for the engine to answer"
         onConfirm={async () => {
           await write.run({ repo: repo.name }, { done: `Asked for a purge of ${repo.name}` });
           setConfirming(false);

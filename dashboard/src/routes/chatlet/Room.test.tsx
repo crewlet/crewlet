@@ -729,7 +729,7 @@ test("a room this build cannot classify is read-only rather than guessed at", as
     members: [],
   };
   mount();
-  await waitFor(() => expect(callout(/newer version of the engine/i)).not.toBeNull());
+  await waitFor(() => expect(callout(/newer version of Crewlet/i)).not.toBeNull());
   expect(screen.queryByLabelText("Message #general")).toBeNull();
 });
 
@@ -1210,8 +1210,8 @@ test("a room this build cannot classify draws every change to a message, held wi
   await waitFor(() => expect(chip.getAttribute("aria-disabled")).toBe("true"));
   const edit = itemsNamed(/^edit message/i)[0]!;
   const remove = itemsNamed(/^delete message/i)[0]!;
-  expect(holdOf(edit)).toMatch(/newer version of the engine/);
-  expect(holdOf(remove)).toMatch(/newer version of the engine/);
+  expect(holdOf(edit)).toMatch(/newer version of Crewlet/);
+  expect(holdOf(remove)).toMatch(/newer version of Crewlet/);
   fireEvent.click(chip);
   await new Promise((r) => setTimeout(r, 20));
   expect(presses).toHaveLength(0);

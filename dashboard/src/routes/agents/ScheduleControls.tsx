@@ -20,7 +20,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   Button,
   Callout,
-  ConfirmModal,
   FormField,
   FormRow,
   Input,
@@ -33,7 +32,7 @@ import {
   useToast,
   type SelectOption,
 } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import {
   PauseGlyph,
   PencilGlyph,
@@ -609,7 +608,6 @@ export function ScheduleDialog({
           : "Recurring work for a seat or a team, on a cron."
       }
       onSubmit={save}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

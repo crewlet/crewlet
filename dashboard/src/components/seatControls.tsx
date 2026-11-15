@@ -231,7 +231,6 @@ export function SeatControlDialog({
       }
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>

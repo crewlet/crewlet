@@ -266,8 +266,8 @@ function ReportsSwitch({
           <div className="col gap-2">
             <Text as="p">
               Every report is a short, fixed form with no free text. It goes to{" "}
-              <InlineCode>{answer.relay}</InlineCode>, which opens the GitHub issue, so your engine
-              never needs a GitHub login.
+              <InlineCode close=",">{answer.relay}</InlineCode> which opens the GitHub issue, so
+              your engine never needs a GitHub login.
             </Text>
             <Text as="h3" variant="label">
               What&rsquo;s sent

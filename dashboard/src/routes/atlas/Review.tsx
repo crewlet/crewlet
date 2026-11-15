@@ -45,7 +45,6 @@ import { useClient } from "~/lib/store-hooks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { andList } from "~/lib/words.ts";
-import { WAITING } from "./AddEntry.tsx";
 import { ClaimList, DecisionButtons, decide, useDecisionWrites } from "./Decisions.tsx";
 import { entryPath } from "./entry.tsx";
 import { ATLAS_POLL_MS, knownIn } from "./filters.ts";
@@ -382,7 +381,6 @@ function BulkDialog({
       }
       onClose={onClose}
       dismissable={!busy}
-      closeDisabledReason={busy ? WAITING : undefined}
       onSubmit={() => void submit()}
       footer={
         <>

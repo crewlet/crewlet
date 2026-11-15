@@ -45,7 +45,6 @@ import {
   Button,
   Callout,
   Card,
-  ConfirmModal,
   EmptyState,
   EmptyValue,
   FilePickButton,
@@ -54,6 +53,7 @@ import {
   useToast,
   type PickedFile,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { FileTextGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useQuery } from "~/lib/useQuery.ts";

@@ -55,11 +55,12 @@ export function runPhrase(run: Run): string {
 /**
  * The row the landing opens on: the newest whose page is still there. A
  * purged page's changes keep no title and lead nowhere, so they stay in the
- * feed as the record that the page existed and never take the big tile.
+ * feed as the record that the page existed and never take the big tile. A
+ * page in the trash keeps its title, so its status says it is not there.
  * -1 when no row has a page to open.
  */
 export function leadOf(runs: readonly Run[]): number {
-  return runs.findIndex((run) => Boolean(run[0].title));
+  return runs.findIndex((run) => Boolean(run[0].title) && run[0].status !== "trashed");
 }
 
 /**

@@ -144,6 +144,18 @@ describe("the row the landing leads with", () => {
     expect(leadOf(runs)).toBe(1);
   });
 
+  // A PAGE IN THE TRASH KEEPS ITS TITLE, so the title alone led with it.
+  test("is never a page in the trash, whose title is still there", () => {
+    const runs = foldRuns(
+      [
+        change("c-3", "2026-10-11T06:52:00Z", { page_id: "binned", status: "trashed" }),
+        change("c-2", "2026-10-11T06:10:00Z", { page_id: "p-2", status: "published" }),
+      ],
+      TOKYO,
+    );
+    expect(leadOf(runs)).toBe(1);
+  });
+
   test("is none when no row has a page to open", () => {
     expect(leadOf([])).toBe(-1);
     expect(leadOf(foldRuns([change("c", "2026-10-11T06:10:00Z", { title: "" })], TOKYO))).toBe(-1);

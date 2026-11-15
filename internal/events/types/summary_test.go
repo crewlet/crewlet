@@ -127,6 +127,22 @@ func TestSummaries(t *testing.T) {
 		payload: ExternalNotification{NotificationSource: "slack", Sender: "alice", Subject: "Need a hand"},
 		want:    "Message from alice: Need a hand",
 	}, {
+		// A first-party sender is a seat's handle; the name the company knows
+		// it by is what a turn's title says.
+		name: "an inbound message leads with its sender's name where it has one",
+		payload: ExternalNotification{
+			NotificationSource: "tracker", Sender: "riley-ops", SenderName: "Riley Chen",
+			Subject: "ENG-1 created",
+		},
+		want: "Message from Riley Chen: ENG-1 created",
+	}, {
+		name: "a coalesced digest leads with its latest sender's name",
+		payload: ExternalNotification{
+			NotificationSource: "chat", Sender: "riley-ops", SenderName: "Riley Chen",
+			Messages: []CoalescedMessage{{Sender: "max-k"}, {Sender: "riley-ops"}},
+		},
+		want: "2 messages from Riley Chen",
+	}, {
 		name:    "a senderless notification still renders",
 		payload: ExternalNotification{NotificationSource: "jira"},
 		want:    "Notification",

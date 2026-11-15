@@ -163,7 +163,8 @@ export function SignIn() {
             </Button>
           }
         >
-          Signed in as <InlineCode>{current.login}</InlineCode>. Signing in here switches accounts.
+          Signed in as <InlineCode close=".">{current.login}</InlineCode> Signing in here switches
+          accounts.
         </Callout>
       )}
       {unclaimed ? (

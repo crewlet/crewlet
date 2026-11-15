@@ -58,7 +58,7 @@ describe("what the screen may offer about membership", () => {
     expect(canJoin({ kind: "broadcast", member: false })).toBe(false);
     expect(canLeave({ kind: "broadcast", member: true })).toBe(false);
     expect(membershipNote({ kind: "broadcast", member: false })).toMatch(
-      /newer version of the engine/i,
+      /newer version of Crewlet/i,
     );
   });
 

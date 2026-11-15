@@ -538,8 +538,10 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
           {state.revision !== null && state.revision !== savedRevision && (
             <Callout variant="warning">
               Showing active revision{" "}
-              <InlineCode tone="inherit">{shortRevision(state.revision)}</InlineCode>, not the one
-              you saved.
+              <InlineCode close="," tone="inherit">
+                {shortRevision(state.revision)}
+              </InlineCode>{" "}
+              not the one you saved.
             </Callout>
           )}
           <p className="t-caption">Credentials are hidden.</p>

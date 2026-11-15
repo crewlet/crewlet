@@ -344,6 +344,46 @@ func TestAFirstPartyWakeSaysWhoWroteItsChange(t *testing.T) {
 	}
 }
 
+// A WAKE NAMES ITS SENDER AS THE COMPANY KNOWS THEM. A first-party sender is a
+// seat's handle, and a turn is titled by its wake's summary, so a turn a
+// colleague's change woke read "Message from backend-engineer". A sender
+// nobody in the company is keeps the id it arrived with, and no name.
+func TestAWakeCarriesItsSendersName(t *testing.T) {
+	h := newService(t, func(_ *notify.Options, h *harness) {
+		o := company()
+		o.Normalize()
+		h.reg = notify.NewRegistry(o, nil, "tracker")
+	})
+	colleague := to(notify.Recipient{Handle: "engineering-lead"}, "please look")
+	colleague.Sender = "backend-engineer"
+	stranger := to(notify.Recipient{Handle: "backend-engineer"}, "please look")
+	h.parser.out = []notify.Routed{colleague, stranger}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	wakeOf := func(handle string) *types.ExternalNotification {
+		t.Helper()
+		woken := h.inbox(t, handle)
+		if len(woken) != 1 {
+			t.Fatalf("%s was woken %d times", handle, len(woken))
+		}
+		n, ok := events.DataAs[*types.ExternalNotification](woken[0])
+		if !ok {
+			t.Fatalf("%s's wake carries %T", handle, woken[0].Data)
+		}
+		return n
+	}
+	if n := wakeOf("engineering-lead"); n.SenderName != "Backend Engineer" ||
+		n.Summary() != "Message from Backend Engineer: ENG-42" {
+		t.Errorf("a colleague's wake carries name %q and reads %q", n.SenderName, n.Summary())
+	}
+	if n := wakeOf("backend-engineer"); n.SenderName != "" || n.Sender != "ana" {
+		t.Errorf("a stranger's wake carries name %q for sender %q, want none for ana",
+			n.SenderName, n.Sender)
+	}
+}
+
 // THE KIND DECIDES WHO A FIRST-PARTY WRITER IS, NEVER THE SPELLING. A seat's
 // handle is one segment, and so can be a node's name: a writer read off its
 // actor alone would turn the engine's own repair into a colleague's ask

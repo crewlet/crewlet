@@ -1,6 +1,7 @@
 /**
  * The dialog every screen opens: the kit's `Modal`, with a place for what its
- * write controls were refused.
+ * write controls were refused, and the one sentence for why it cannot be
+ * closed while its write is out ([useWaiting]).
  *
  * A DIALOG'S HEAD AND FOOT ARE ROWS OF CONTROLS. A write control there drew
  * its refusal beside itself (`WriteButton`), in the foot's own wrapping row,
@@ -16,13 +17,27 @@
  */
 
 import type { ReactNode } from "react";
-import { Modal as KitModal, type ModalProps } from "@crewlethq/ui";
+import {
+  ConfirmModal as KitConfirmModal,
+  Modal as KitModal,
+  type ConfirmModalProps,
+  type ModalProps,
+} from "@crewlethq/ui";
+import { useWaiting } from "~/lib/waiting.ts";
 import { RefusalsTo, useRefusalPlace } from "./WriteButton.tsx";
 
-export type { ModalProps };
+export type { ConfirmModalProps, ModalProps };
 
-export function Modal({ children, footer, footerStart, headerActions, ...rest }: ModalProps) {
+export function Modal({
+  children,
+  footer,
+  footerStart,
+  headerActions,
+  closeDisabledReason,
+  ...rest
+}: ModalProps) {
   const refusals = useRefusalPlace();
+  const waiting = useWaiting();
   // A SLOT LEFT EMPTY STAYS EMPTY: the kit draws no band for a slot it was
   // not handed, and a wrapper around nothing would be handed one.
   const routed = (controls: ReactNode) =>
@@ -34,6 +49,9 @@ export function Modal({ children, footer, footerStart, headerActions, ...rest }:
   return (
     <KitModal
       {...rest}
+      // ONE SENTENCE FOR WHY IT CANNOT CLOSE, from where every dialog's
+      // waiting words live; a dialog states its own only for a wait of its own.
+      closeDisabledReason={closeDisabledReason ?? waiting.reason}
       footer={routed(footer)}
       footerStart={routed(footerStart)}
       headerActions={routed(headerActions)}
@@ -42,4 +60,10 @@ export function Modal({ children, footer, footerStart, headerActions, ...rest }:
       {refusals.place}
     </KitModal>
   );
+}
+
+/** The kit's confirmation, saying why it cannot close in the same words. */
+export function ConfirmModal({ busyReason, ...rest }: ConfirmModalProps) {
+  const waiting = useWaiting();
+  return <KitConfirmModal {...rest} busyReason={busyReason ?? waiting.reason} />;
 }

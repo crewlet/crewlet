@@ -15,7 +15,6 @@ import {
   Button,
   Checkbox,
   ConfirmField,
-  ConfirmModal,
   FormField,
   Input,
   Menu,
@@ -28,6 +27,7 @@ import {
   type MenuEntry,
   type SelectOption,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { usePeek } from "~/app/frame/peekAddress.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
@@ -48,7 +48,7 @@ import { useHeldGrants } from "~/lib/viewer.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { SEATLESS, SeatlessNote, useSeatedAccess, useSeated } from "./access.tsx";
-import { LABEL_MAX, WAITING, WriteDialog } from "./AddEntry.tsx";
+import { LABEL_MAX, WriteDialog } from "./AddEntry.tsx";
 import { ClaimList } from "./Decisions.tsx";
 import { EntryPicker, OwnerField, PageField, type OwnerChoice } from "./pickers.tsx";
 import { FactValue } from "./parts.tsx";
@@ -868,7 +868,6 @@ function RetireDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => vo
       cancelLabel="Keep it"
       onClose={onClose}
       submitting={write.busy}
-      busyReason={WAITING}
       confirmDisabled={!write.access.can}
       confirmDisabledReason={write.access.can ? undefined : write.access.reason}
       onConfirm={async () => {

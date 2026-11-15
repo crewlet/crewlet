@@ -34,7 +34,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
-  ConfirmModal,
   DocumentTitleField,
   EmptyState,
   FormField,
@@ -44,6 +43,7 @@ import {
   TagsInput,
   markdownWords,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { BookOpenGlyph, FileTextGlyph, FolderGlyph } from "@crewlethq/icons/glyphs";
 import { href, useLeaveGuard, useNavigator, useParam } from "~/app/router.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";

@@ -124,8 +124,10 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  TableTwoLineCell,
   PageNote,
   peekRowActivation,
+  type DataGridColumn,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import {
@@ -925,68 +927,7 @@ export function People() {
                       hint: "A person is listed once they accept their invitation, or are created on their seat.",
                     }
               }
-              columns={[
-                {
-                  key: "person",
-                  header: "Name",
-                  floor: "12rem",
-                  sortValue: (p) => p.name || p.login || p.id,
-                  cell: (p) => <PersonName row={p} />,
-                },
-                {
-                  key: "login",
-                  header: "Login",
-                  shrink: true,
-                  // LAST TO GO, and it does go: the name column draws the
-                  // login of anybody with no name, and the peek beside the
-                  // list leads with it.
-                  drop: 3,
-                  sortValue: (p) => p.login ?? "",
-                  cell: (p) =>
-                    p.login ? <TableKeyCell value={p.login} /> : <EmptyValue label="No login" />,
-                },
-                {
-                  key: "kind",
-                  header: "Kind",
-                  shrink: true,
-                  drop: 2,
-                  sortValue: (p) => p.kind,
-                  cell: (p) => <TableTextCell>{KIND_WORDS[p.kind] ?? p.kind}</TableTextCell>,
-                },
-                {
-                  key: "stage",
-                  header: "Stage",
-                  shrink: true,
-                  sortValue: (p) => p.stage,
-                  cell: (p) => (
-                    <StateCell
-                      words={STAGE_WORDS[p.stage]}
-                      fallback={p.stage}
-                      resting={p.stage === "active"}
-                    />
-                  ),
-                },
-                {
-                  key: "seat",
-                  header: "Seat",
-                  // A FLOOR, AS EVERY COLUMN THIS LIST KEEPS HAS ONE: beside
-                  // the person peek the list is a column of the sheet, and a
-                  // flexible track at zero gave way to every content-sized
-                  // one. With floors the tracks overrun instead, and the grid
-                  // drops by `drop`.
-                  floor: "8rem",
-                  sortValue: (p) => p.seat ?? "",
-                  cell: (p) => <SeatHandle seat={p.seat} index={index} />,
-                },
-                {
-                  key: "grants",
-                  header: "Access",
-                  floor: "8rem",
-                  drop: 1,
-                  sortValue: (p) => accessLine(p.grants ?? []),
-                  cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
-                },
-              ]}
+              columns={peopleColumns(index)}
             />
           </Card>
 
@@ -1169,15 +1110,6 @@ export function ServiceAccounts() {
                   cell: (p) => <PersonName row={p} />,
                 },
                 {
-                  key: "login",
-                  header: "Login",
-                  shrink: true,
-                  drop: 2,
-                  sortValue: (p) => p.login ?? "",
-                  cell: (p) =>
-                    p.login ? <TableKeyCell value={p.login} /> : <EmptyValue label="No login" />,
-                },
-                {
                   key: "stage",
                   header: "Stage",
                   shrink: true,
@@ -1197,6 +1129,9 @@ export function ServiceAccounts() {
                   key: "seat",
                   header: "Acts as",
                   shrink: true,
+                  // The peek beside the list names the seat it is open on;
+                  // Access, what this page is for, never goes.
+                  drop: 1,
                   sortValue: (p) => p.seat ?? "",
                   cell: (p) => <SeatHandle seat={p.seat} index={index} />,
                 },
@@ -1204,7 +1139,6 @@ export function ServiceAccounts() {
                   key: "grants",
                   header: "Access",
                   shrink: true,
-                  drop: 1,
                   sortValue: (p) => accessLine(p.grants ?? []),
                   cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
                 },
@@ -1363,6 +1297,68 @@ function contactsByHandle(
 }
 
 /**
+ * The People list's columns, and the order they give way in beside the person
+ * peek (`drop`): what the list is read for there stays.
+ */
+export function peopleColumns(index: ReturnType<typeof indexOrg>): DataGridColumn<DirectoryRow>[] {
+  return [
+    // THE LOGIN IS THE NAME'S SECOND LINE ([PersonName]), so a
+    // list narrowed beside the person peek keeps it: as a column
+    // of its own it gave way with Kind and Access.
+    {
+      key: "person",
+      header: "Name",
+      floor: "12rem",
+      sortValue: (p) => p.name || p.login || p.id,
+      cell: (p) => <PersonName row={p} />,
+    },
+    {
+      key: "kind",
+      header: "Kind",
+      shrink: true,
+      // FIRST TO GO: nearly every row is a person, and a row that
+      // is not wears a key in place of initials beside its name.
+      drop: 1,
+      sortValue: (p) => p.kind,
+      cell: (p) => <TableTextCell>{KIND_WORDS[p.kind] ?? p.kind}</TableTextCell>,
+    },
+    {
+      key: "stage",
+      header: "Stage",
+      shrink: true,
+      sortValue: (p) => p.stage,
+      cell: (p) => (
+        <StateCell words={STAGE_WORDS[p.stage]} fallback={p.stage} resting={p.stage === "active"} />
+      ),
+    },
+    {
+      key: "seat",
+      header: "Seat",
+      // A FLOOR, AS EVERY COLUMN THIS LIST KEEPS HAS ONE: beside
+      // the person peek the list is a column of the sheet, and a
+      // flexible track at zero gave way to every content-sized
+      // one. With floors the tracks overrun instead, and the grid
+      // drops by `drop`. It goes before Access: the peek beside
+      // the list names the seat it is open on.
+      floor: "8rem",
+      drop: 2,
+      sortValue: (p) => p.seat ?? "",
+      cell: (p) => <SeatHandle seat={p.seat} index={index} />,
+    },
+    {
+      key: "grants",
+      header: "Access",
+      // NEVER GOES: what each person may reach is what this page
+      // is for, and the list beside the peek is where they are
+      // compared.
+      floor: "8rem",
+      sortValue: (p) => accessLine(p.grants ?? []),
+      cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
+    },
+  ];
+}
+
+/**
  * A principal's name. A SEALED value is a state the operator can end by
  * putting a key back, never a blank — a blank reads as somebody who never
  * gave a name.
@@ -1373,17 +1369,22 @@ function PersonName({ row }: { row: DirectoryRow }) {
   // THE BADGE IS THE PERSON'S, beside their name: in the Seat column it
   // repeated the name a cell over ("Lee Park  LP Lee Park"). A service account
   // wears a key, since the initials of a credential's label mean nothing.
+  // THE LOGIN IS THE SECOND LINE, where the name is not the login already.
   return (
-    <Inline gap={2}>
-      <SeatAvatar
-        name={name}
-        size="xs"
-        kind="human"
-        icon={row.kind === "person" ? undefined : <KeyGlyph size="sm" />}
-        decorative
-      />
-      <TableTextCell>{name}</TableTextCell>
-    </Inline>
+    <TableTwoLineCell
+      value={name}
+      detail={row.name && row.login ? row.login : undefined}
+      mono="detail"
+      mark={
+        <SeatAvatar
+          name={name}
+          size="xs"
+          kind="human"
+          icon={row.kind === "person" ? undefined : <KeyGlyph size="sm" />}
+          decorative
+        />
+      }
+    />
   );
 }
 

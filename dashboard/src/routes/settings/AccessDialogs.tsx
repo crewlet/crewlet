@@ -349,8 +349,11 @@ export function OnYourself({
       {alone && (
         <>
           {what && " "}
-          You’re the only admin; after this, only an API token (
-          <InlineCode>api.auth.tokens</InlineCode>) can manage people.
+          You’re the only admin; after this, only an API token{" "}
+          <InlineCode open="(" close=")">
+            api.auth.tokens
+          </InlineCode>{" "}
+          can manage people.
         </>
       )}
     </Callout>
