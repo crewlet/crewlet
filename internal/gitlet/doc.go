@@ -853,7 +853,7 @@
 // read at one moment.
 //
 // A refs listing is also read by when each branch moved (code_refs_moved_idx,
-// replicated 0171), narrowed by a bounded find ([MaxRefsScanned]), and in detail
+// replicated 0170), narrowed by a bounded find ([MaxRefsScanned]), and in detail
 // ([RefListing]): its mover, protection, change and the asker's deletion verdict.
 //
 // A repository's PUSHES are read in LOG ORDER: code_pushes_repo_idx is keyed
