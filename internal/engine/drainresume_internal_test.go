@@ -512,18 +512,18 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 	}
 }
 
-// A RESUME ANOTHER NODE OR BUILD CAN MAKE IS THIS NODE'S FAILURE ON THE
-// CONTROL TOPIC, CAUSE BY CAUSE, and one no node gets past stays the
-// message's. Each failure is the one the engine's own resumer answers: a
-// parked state a newer build wrote, a reply kind this build does not know, a
-// node with no applied company and a seat not in this node's company are each
-// the node's (queue.NakNode), so a delivery a roll spends while the
-// completion waits for a node that can resume it is kept with the unhandled
-// deliveries; a refusal that names nothing to wait on, a parked state that is
-// no state, a run with no reply kind and one with no parked state at all are
-// the message's (queue.Nak), as controlOutcome's doc keeps them. (A seat this
-// node does not hold reaches the control topic deferred as one let go of,
-// sandbox.SeatLost, which TestARefusedCompletionIsHandedBackByItsCondition
+// A RESUME ANOTHER NODE OR BUILD CAN MAKE IS THIS NODE'S FAILURE ON THE CONTROL
+// TOPIC, CAUSE BY CAUSE, and one no node gets past stays the message's. Each
+// failure is the one the engine's own resumer answers: a parked state a newer
+// build wrote, a retired one an older node still live reads, a reply kind this
+// build does not know, a node with no applied company and a seat not in this
+// node's company are each the node's (queue.NakNode), so a delivery a roll
+// spends while the completion waits for a node that can resume it is kept with
+// the unhandled deliveries; a refusal that names nothing to wait on, a parked
+// state that is no state, a run with no reply kind and one with no parked state
+// at all are the message's (queue.Nak), as controlOutcome's doc keeps them. (A
+// seat this node does not hold reaches the control topic deferred as one let go
+// of, sandbox.SeatLost, which TestARefusedCompletionIsHandedBackByItsCondition
 // holds.)
 //
 // Mutation: drop sandbox.ErrResumeElsewhere from controlOutcome and the
@@ -539,6 +539,10 @@ func TestAResumeAnotherNodeCanMakeIsTheNodesOnTheControlTopic(t *testing.T) {
 			ExecuteState: json.RawMessage(blob)}
 	}
 	alone := &resumer{engine: &Engine{backends: &Backends{Coord: coordmem.New()}}}
+	// AN OLDER NODE STILL LIVE, which reads the version this build retired.
+	older := coordmem.New()
+	present(ctx, t, older, "node-older", execstate.Version-1)
+	besideOlder := &resumer{engine: &Engine{backends: &Backends{Coord: older}, testNode: "node-self"}}
 	acme := &org.Organization{Name: "Acme"}
 	acme.Normalize()
 	elsewhere := &Engine{backends: &Backends{Coord: coordmem.New()}}
@@ -553,6 +557,8 @@ func TestAResumeAnotherNodeCanMakeIsTheNodesOnTheControlTopic(t *testing.T) {
 	}{
 		"a parked state a newer build wrote": {
 			err: resume(alone, runParkedAtVersion(t, execstate.Version+1)), nodes: true},
+		"a retired state an older node still reads": {
+			err: resume(besideOlder, runParkedAtVersion(t, execstate.Version-1)), nodes: true},
 		"a reply kind this build does not know": {
 			err: replyErr(sandbox.PendingRun{TurnID: "t1", Reply: "later"}), nodes: true},
 		"a node with no applied company":    {err: resume(alone, current), nodes: true},

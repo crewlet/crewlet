@@ -248,13 +248,17 @@ func (s *owedRefusals) OweRefusal(ctx context.Context, turnID, launch string, ow
 // comes back; so is one this node's own ended context cut, which is handed back
 // as the node's, never with the refusal that would have it acknowledged. A row
 // a newer lease owns refuses the record, and the delivery is not acknowledged
-// by the node that lost the seat.
+// by the node that lost the seat. Nor is it by a node whose lease went before
+// the record: nothing is written, and the refusal goes on to the seat's holder
+// as a resume another node can make (ErrResumeElsewhere), which the engine
+// hands back as the node's while its lease reads held again.
 //
 // Mutation: acknowledge a refusal without recording it, and its record is
 // missing and a record the store did not take is acknowledged; carry the
 // refusal behind a record its context cut, and that refusal is acknowledged
-// unrecorded; write it on every refusal, and the first refusal's instant is
-// lost.
+// unrecorded; record it under a lease gone, or route it on as one no node
+// gets past, and that row goes red; write it on every refusal, and the first
+// refusal's instant is lost.
 func TestAnAcknowledgedRefusalIsRecordedOnItsJob(t *testing.T) {
 	t.Parallel()
 	// owing builds a rig whose node-b refuses t1's completion on
@@ -369,6 +373,29 @@ func TestAnAcknowledgedRefusalIsRecordedOnItsJob(t *testing.T) {
 		}
 		if got := rig.get("t1"); got.Launch.RefusalOwed != "" || store.written.Load() != 0 {
 			t.Fatalf("the job's record owes %q; want nothing written under the lost lease", got.Launch.RefusalOwed)
+		}
+	})
+
+	t.Run("a lease gone before the record", func(t *testing.T) {
+		t.Parallel()
+		rig, store, _ := owing(t)
+		payload, _ := rig.completion("t1")
+		// THE GATE REFUSED, and this node let the seat go before the record.
+		refused := fmt.Errorf("%w: %w", ErrResumeUnavailable, &TurnRefused{
+			Refusal: Refusal{Condition: conditionLimit, Reason: "the account is at its limit"}})
+		rig.coordinator.lease = notLeased
+		err := rig.coordinator.oweRefused(t.Context(), payload, refused)
+		if !errors.Is(err, ErrResumeElsewhere) || !errors.Is(err, ErrSeatNotHeld) {
+			t.Fatalf("the refusal under a lease gone = %v; want it routed on as a seat this node "+
+				"does not hold, which its holder can resume", err)
+		}
+		if got := rig.get("t1"); got.Launch.RefusalOwed != "" || store.written.Load() != 0 {
+			t.Fatalf("the job's record owes %q after %d writes; want nothing written under a lease gone",
+				got.Launch.RefusalOwed, store.written.Load())
+		}
+		if got := controlResult(rig.coordinator.lost(payload.AgentHandle, err)); got.Outcome != queue.OutcomeDefer {
+			t.Fatalf("the refusal under a lease gone left %s; want it handed on to the seat's holder",
+				got.Outcome)
 		}
 	})
 }
