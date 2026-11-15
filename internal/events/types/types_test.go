@@ -386,7 +386,7 @@ var wireTags = map[string][]string{
 	"delegated_review":              {"agent_handle", "agent_id", "at", "held_launch", "held_turn", "kind", "panel", "request", "requester", "rule"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"requested_by", "schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
-	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},
+	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "sender_name", "source_event_type", "subject", "subject_is_label", "writer"},
 	"turn_trigger_skipped":          {"agent_handle", "agent_id", "disposition", "reason", "trigger_id", "trigger_type", "wake"},
 	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},

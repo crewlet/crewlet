@@ -1,6 +1,7 @@
 package types
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"time"
@@ -162,7 +163,12 @@ type ExternalNotification struct {
 	RecipientEmail     string `json:"recipient_email"`
 	Agent              string `json:"agent_id"`
 	Sender             string `json:"sender"`
-	Subject            string `json:"subject"`
+	// SenderName is the name the company knows Sender by (a seat's name on
+	// the chart), resolved where the wake is built, and empty for a sender
+	// nobody in the company is. A first-party Sender is a seat's handle,
+	// which is no name to title a turn with.
+	SenderName string `json:"sender_name,omitempty"`
+	Subject    string `json:"subject"`
 	// Body is the ENRICHED trigger prompt: the notification builder front-loads
 	// its own scaffolding (for chat, the triage guidance and the seat's
 	// identity) before the actual message.
@@ -304,16 +310,20 @@ func (e ExternalNotification) Brief() string { return e.Body }
 // Summary leads with the sender and subject. The integration is surfaced by the
 // dashboard as a badge built from NotificationSource, so repeating the source
 // name here would say it twice.
+//
+// The sender by the name the company knows them by, where the wake carries one
+// ([ExternalNotification.SenderName]): a first-party Sender is a handle.
 func (e ExternalNotification) Summary() string {
+	sender := cmp.Or(e.SenderName, e.Sender)
 	head := "Notification"
 	switch {
 	case len(e.Messages) > 0:
 		head = fmt.Sprintf("%d messages", len(e.Messages))
-		if e.Sender != "" {
-			head += " from " + e.Sender
+		if sender != "" {
+			head += " from " + sender
 		}
-	case e.Sender != "":
-		head = "Message from " + e.Sender
+	case sender != "":
+		head = "Message from " + sender
 	}
 	if e.Subject != "" {
 		return head + ": " + e.Subject

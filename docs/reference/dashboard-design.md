@@ -7452,8 +7452,9 @@ which on its title.
 
 And **a chip must not repeat the sentence beside it.** The trigger's summary
 is built by the vendor's own summariser and already opens with who wrote it
-("Message from founder: …"), so a `founder` chip next to that line was the
-same fact twice — and two chips plus a link after one line of prose is a
+("Message from Ana: …", the sender by the name the company knows them
+by, where the notification service resolved one, and by the id it arrived
+with otherwise), so a sender chip next to that line was the same fact twice — and two chips plus a link after one line of prose is a
 hedge, not a header. Only the integration stays: it is the one thing the
 sentence does not reliably carry.
 
