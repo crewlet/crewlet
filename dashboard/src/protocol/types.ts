@@ -4001,6 +4001,9 @@ export interface PageChange {
    *  entries are the record it ever existed. */
   title?: string;
   container?: string;
+  /** The page's CURRENT status, read with its title: a page in the trash keeps
+   *  its title, and this is how a reader tells it from a live one. */
+  status?: PageStatus;
   kind: string;
   actor?: string;
   actor_kind?: string;

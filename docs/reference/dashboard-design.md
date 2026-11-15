@@ -9403,7 +9403,8 @@ palette and the trail.
   never ending on a heading with nothing
   under it. That costs ONE `page` read, of the featured page alone, and the
   `page_revision` before the save; a change to a page since purged never
-  leads. **Recent activity** runs down the right with the rest of the same
+  leads, nor one to a page in the trash, which keeps its title and is told by
+  the `status` each change carries. **Recent activity** runs down the right with the rest of the same
   `page_activity` read (forty changes), ONE ROW PER PAGE with its newest
   change, eleven pages at most, and never the featured page again, under the
   COMPANY's days, Today and Yesterday cut at the company's midnight. By page
