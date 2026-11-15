@@ -2649,6 +2649,17 @@ stays in view however far the artifact is read; a kind's view measures the
 body (`--artifact-view`) rather than reserving room for a header that is not
 there.
 
+**An empty sheet names its columns in place.** A sheet is one table, so a
+sheet with no columns yet (one an agent made bare) asks its editor for the
+names of its columns right in the sheet: a field per column, Add a column,
+and Save columns, which writes the sheet's one collection with every column
+as text and the first as the one a row is named by, as one confirmed schema
+change. The collection, its identifier and its policy are the datastore's
+words and are never asked of a person: this control used to open Data's
+schema editor, which wanted a lowercase collection name before a single
+column. Data keeps every other change a column can take. A reader who cannot
+edit the sheet is told who sets its columns up.
+
 **On a page of its own.** Open in new tab opens the artifact at
 `#/artifacts/{id}/standalone` in a new browser tab: the same page in the
 frame with no sidebar (`Shell`'s `standalone`, decided on the resolved route

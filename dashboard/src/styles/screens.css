@@ -9465,6 +9465,36 @@ a.live-row:hover {
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
 }
+/* AN EMPTY SHEET NAMES ITS COLUMNS IN PLACE (`NoColumns` in SheetView.tsx):
+   one field per column under the empty state's words, a column wide enough
+   for a name, its actions at its end. */
+.artifact-sheet-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  width: min(100%, 24rem);
+  text-align: start;
+}
+.artifact-sheet-setup-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-sheet-setup-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.artifact-sheet-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
 /* Export closes the data bar, on the bar's own line. */
 .artifact-data-bar-end {
   margin-inline-start: auto;

@@ -23,6 +23,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import {
   Button,
   EmptyState,
+  IconButton,
+  Input,
   LinkInterstitial,
   Modal,
   Select,
@@ -39,25 +41,27 @@ import {
   type SheetSort,
   type SheetSyncState,
 } from "@crewlethq/ui";
-import { PlusGlyph, TableGlyph } from "@crewlethq/icons/glyphs";
-import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
+import { PlusGlyph, TableGlyph, XGlyph } from "@crewlethq/icons/glyphs";
+import { useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { ledgerColumns } from "~/components/ledgerGrid.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { openSentence } from "~/lib/format.ts";
+import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { STATE_COLLECTION } from "~/contract/artifactsworkspace.ts";
+import { DATA_COLUMNS_MAX, STATE_COLLECTION } from "~/contract/artifactsworkspace.ts";
 import type { ArtifactDetail, DataCollection } from "~/protocol/index.ts";
+import { configureSchema } from "~/lib/artifacts/api.ts";
 import { stepRefusal, type ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import { cellPresence, useArtifactPeople } from "~/lib/artifacts/people.ts";
+import { sheetColumnsProblem, sheetSchemaOf } from "~/lib/artifacts/schema.ts";
 import { inferredColumns, sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import { useStoreVersion } from "~/lib/artifacts/useDataStore.ts";
 import { actorName, cellChangeWords, draftRowsWords, roleIncludes } from "~/lib/artifacts/words.ts";
 import { useRowDelete } from "./RowDelete.tsx";
-import { withPanel } from "./panels.ts";
 import type { PresenceReport } from "./presence.ts";
 
 /** The collections a reader is offered as sheets: every one but the engine's per-viewer state. */
@@ -238,7 +242,9 @@ export function SheetView({
       <Skeleton variant="table" rows={6} label={`Loading ${detail.title}`} />
     );
   }
-  if (!collection) return <NoColumns canEdit={roleIncludes(role, "editor")} />;
+  if (!collection) {
+    return <NoColumns detail={detail} store={store} canEdit={roleIncludes(role, "editor")} />;
+  }
   return (
     <div className="artifact-sheet" ref={sheetBox}>
       {collections.length > 1 && (
@@ -357,36 +363,110 @@ export function SheetView({
 }
 
 /**
- * A sheet with nothing to draw yet: what it needs, and for an editor the one
- * control that opens the place it is set up (Data, Schema).
+ * A sheet with nothing to draw yet: for an editor, its columns named right
+ * here, and for everybody else who sets them up.
+ *
+ * A SHEET IS ONE TABLE, so setting one up is naming its columns, in the
+ * sheet, in words: the one collection behind it, its identifier and its
+ * policy are the datastore's ([sheetSchemaOf]). This control opened the
+ * Data panel's schema editor, which asked for a lowercase collection name
+ * before a single column, in database words. Every column starts as text,
+ * the first is the one a row is named by, and Data keeps every other change
+ * a column can take. Saved as one schema change, confirmed, like the editor's.
  */
-function NoColumns({ canEdit }: { canEdit: boolean }) {
-  const route = useRoute();
-  const nav = useNavigator();
-  const setUp = () => {
-    const query = withPanel(route.query, "data");
-    query.set("data", "schema");
-    nav.to(route.path, query);
+function NoColumns({
+  detail,
+  store,
+  canEdit,
+}: {
+  detail: ArtifactDetail;
+  store: ArtifactDataStore;
+  canEdit: boolean;
+}) {
+  const [names, setNames] = useState<string[]>([""]);
+  const gesture = useKeyedGesture();
+  const problem = sheetColumnsProblem(names);
+  const save = async () => {
+    if (problem || gesture.busy) return;
+    const answer = await gesture.run(configureSchema(detail.id, sheetSchemaOf(names)));
+    if (answer?.kind === "done") void store.loadSchema();
   };
+  const rename = (at: number, value: string) =>
+    setNames((was) => was.map((n, i) => (i === at ? value : n)));
   return (
     <EmptyState
       icon={<TableGlyph size="xl" />}
       title="No columns yet"
       description={
         canEdit
-          ? "Set up the columns this sheet keeps, and rows can be added under them."
+          ? "Name the columns this sheet keeps. Each starts as text, and rows can be added under them once they are saved."
           : "The people who can edit this sheet set up its columns."
       }
       action={
         canEdit ? (
-          <Button
-            size="small"
-            variant="primary"
-            leadingIcon={<PlusGlyph size="sm" />}
-            onClick={setUp}
+          <form
+            className="artifact-sheet-setup"
+            aria-label="Columns"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save();
+            }}
           >
-            Set up columns
-          </Button>
+            <ol className="artifact-sheet-setup-list">
+              {names.map((name, i) => (
+                <li key={i} className="artifact-sheet-setup-row">
+                  <Input
+                    aria-label={`Column ${i + 1}`}
+                    inputSize="sm"
+                    width="full"
+                    value={name}
+                    placeholder={i === 0 ? "What each row is, such as Name" : "Column name"}
+                    autoComplete="off"
+                    onChange={(e) => rename(i, e.target.value)}
+                  />
+                  {i > 0 && (
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      label={`Remove column ${i + 1}`}
+                      icon={<XGlyph size="sm" />}
+                      onClick={() => setNames((was) => was.filter((_, j) => j !== i))}
+                    />
+                  )}
+                </li>
+              ))}
+            </ol>
+            <div className="artifact-sheet-setup-actions">
+              <Button
+                type="button"
+                size="small"
+                variant="ghost"
+                leadingIcon={<PlusGlyph size="sm" />}
+                disabledReason={
+                  names.length >= DATA_COLUMNS_MAX
+                    ? `A sheet keeps at most ${DATA_COLUMNS_MAX} columns.`
+                    : undefined
+                }
+                onClick={() => setNames((was) => [...was, ""])}
+              >
+                Add a column
+              </Button>
+              <Button
+                type="submit"
+                size="small"
+                variant="primary"
+                loading={gesture.busy}
+                disabledReason={problem ?? undefined}
+              >
+                Save columns
+              </Button>
+            </div>
+            {gesture.answer && gesture.answer.kind !== "done" && (
+              <p className="artifact-refusal" role="alert">
+                {gesture.answer.text}
+              </p>
+            )}
+          </form>
         ) : undefined
       }
     />

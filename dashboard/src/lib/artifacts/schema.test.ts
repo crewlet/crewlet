@@ -14,6 +14,8 @@ import {
   schemaProblem,
   SHEET_TEMPLATES,
   withPreset,
+  sheetColumnsProblem,
+  sheetSchemaOf,
 } from "./schema.ts";
 
 describe("a collection's name", () => {
@@ -144,5 +146,36 @@ describe("a schema draft's change count", () => {
     };
     expect(schemaChangeCount(before, [...before, added])).toBe(1);
     expect(schemaChangeCount(before, rest)).toBe(1);
+  });
+});
+
+describe("a sheet's columns from their names", () => {
+  test("one table, every column text, the first the one a row is named by, blanks left out", () => {
+    expect(sheetSchemaOf(["Team", "  ", " Due date "])).toEqual([
+      {
+        name: "rows",
+        title: "Sheet",
+        preset: "shared",
+        read: "all",
+        create: "editor",
+        delete: "editor",
+        columns: [
+          { key: "team", type: "text", label: "Team", primary: true },
+          { key: "due_date", type: "text", label: "Due date" },
+        ],
+      },
+    ]);
+  });
+
+  test("is held until a column is named, and while two names are one column", () => {
+    expect(sheetColumnsProblem(["", " "])).toBe("Name a column first.");
+    expect(sheetColumnsProblem(["Owner", "Owner"])).toBe(
+      "Two columns are called “Owner”. Rename one.",
+    );
+    expect(sheetColumnsProblem(["Due date", "due-date"])).toBe(
+      "“Due date” and “due-date” would be the same column. Rename one.",
+    );
+    expect(sheetColumnsProblem(["x".repeat(121)])).toMatch(/longer than a column's name can be/);
+    expect(sheetColumnsProblem(["Team", "Due date"])).toBeNull();
   });
 });
