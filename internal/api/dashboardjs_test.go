@@ -2627,7 +2627,11 @@ const (
 	// are not numbers changed in place, merged on kit 0.131.0, measures
 	// 6313.1 KiB (6,464,594 bytes), 46,487 bytes over the 6267.7 KiB of main
 	// it was built on: 6314 KiB.
-	treeBudget = 5<<20 + 1194<<10
+	// A proposal saying what it was prepared after, that it asks for a
+	// step-up and when it expires (each outside surface in words, and kit
+	// 0.132.0's caution and terms on the card) adds 2,832 bytes over main's
+	// 6313.4 KiB and takes it to 6316.2 KiB (6,467,757 bytes): 6317 KiB.
+	treeBudget = 5<<20 + 1197<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
