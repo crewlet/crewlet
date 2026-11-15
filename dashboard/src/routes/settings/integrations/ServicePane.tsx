@@ -551,10 +551,14 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
               )}
               <SettingsTable.Row label="Projects the chart declares">
                 {viewer.admin ? (
-                  documentUnits(config.data)
-                    .map((u) => u.project)
-                    .filter(Boolean)
-                    .join(", ") || <EmptyValue label="None" />
+                  // ONE PROJECT ONCE, however many units file under it.
+                  [
+                    ...new Set(
+                      documentUnits(config.data)
+                        .map((u) => u.project)
+                        .filter(Boolean),
+                    ),
+                  ].join(", ") || <EmptyValue label="None" />
                 ) : (
                   <EmptyValue label="Admins see this" />
                 )}

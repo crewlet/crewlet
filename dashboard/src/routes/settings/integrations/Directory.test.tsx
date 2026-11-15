@@ -908,30 +908,33 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
 // it under `tracker` again, and a company keeping ninety days is told the
 // engine's default.
 test("Worklet's settings say how long the company's inbox keeps a notice, and change it", async () => {
-  mount(
-    ADMIN,
-    "worklet",
-    BUILT_IN,
-    undefined,
-    { name: "Acme", inbox: { retention_days: 90 } },
-    {
-      limits: {
-        limits: [
-          {
-            key: "inbox.retention_days",
-            group: "inbox",
-            unit: "days",
-            value: 90,
-            default: 365,
-            off: false,
-            default_off: false,
-            settable: true,
-            range: { min: 30, max: 3650 },
-          },
-        ],
-      },
+  // TWO UNITS FILING UNDER ONE PROJECT name it once.
+  const doc = {
+    name: "Acme",
+    inbox: { retention_days: 90 },
+    units: [
+      { id: "web", name: "Web", project: "PROD" },
+      { id: "api", name: "API", project: "PROD" },
+      { id: "eng", name: "Engineering", project: "ENG" },
+    ],
+  };
+  mount(ADMIN, "worklet", BUILT_IN, undefined, doc, {
+    limits: {
+      limits: [
+        {
+          key: "inbox.retention_days",
+          group: "inbox",
+          unit: "days",
+          value: 90,
+          default: 365,
+          off: false,
+          default_off: false,
+          settable: true,
+          range: { min: 30, max: 3650 },
+        },
+      ],
     },
-  );
+  });
   fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
   const row = await screen.findByRole("row", { name: /Inbox keeps a notice for/ });
   await waitFor(() => expect(row.textContent).toContain("90 days"));
@@ -939,6 +942,9 @@ test("Worklet's settings say how long the company's inbox keeps a notice, and ch
   expect(within(row).getByRole("button", { name: "Change Inbox keeps a notice for" })).toBeTruthy();
   // WHERE EACH LIVES, said truly: the inbox is not under tracker.
   expect(screen.getByText(/the inbox under inbox/)).toBeTruthy();
+  const projects = screen.getByRole("row", { name: /Projects the chart declares/ });
+  await waitFor(() => expect(projects.textContent).toContain("ENG"));
+  expect(projects.textContent).not.toContain("PROD, PROD");
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {
