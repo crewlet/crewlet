@@ -980,10 +980,16 @@ func (r *Runner) checkoutName() string {
 // among them said not to stand under it, in words of their own that claim
 // nothing of the session; its name is the reading's, the box's words, every
 // run of whitespace one space, cut to [ledger.ValueLimit] runes and defused,
-// and its agent id defused too. The calls after the point are headed by words
-// true of a list a reading thinned ([prompts.AfterSave.Read]). A late call, an
-// abandoned one, one in flight, a skipped meta-tool's and the call a person
-// approved are decided before any reading, as ever.
+// and its agent id defused too. NO CAP OF THEIR OWN, deliberately: their calls
+// are the round's listed calls, each told once wherever it lands, their reads
+// under the one read cap, a heading per subagent the reader names (at most
+// 1,024, each description at most 1 KiB, cut here), and a brief told by the
+// reading that its first request or the launch's floor cannot carry is
+// dropped alone, the telling without it handed instead. The calls after the
+// point are headed by words true of a list a reading thinned
+// ([prompts.AfterSave.Read]). A late call, an abandoned one, one in flight, a
+// skipped meta-tool's and the call a person approved are decided before any
+// reading, as ever.
 //
 // AND, BESIDE WORDS THAT SAY A TOLD CALL MAY BE SHOWN TWICE, WHAT THE SESSION
 // MAY SHOW THAT NO LIST NAMES ([Runner.otherCalls], [prompts.AfterSave.Other]):
@@ -1123,6 +1129,10 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		// marked, or marks another.
 		at := ledger.ShownIndices(groups, opts)
 		opts.Notes = r.notes(toldGroups, at, againAt, closedN, r.partnersOf(round.of, as), opts)
+		// NEVER A SUBAGENT'S: its section's words claim nothing of a call
+		// the session may show, saying only that the session holds no report
+		// of that subagent, so no call it tells could be lost to one the
+		// session shows, and its tools name no part of the other calls.
 		told = shownNames(told, late, at[0])
 		if as.mayShow {
 			told = shownNames(told, after, at[afterAt])

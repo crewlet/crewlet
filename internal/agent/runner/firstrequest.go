@@ -81,7 +81,9 @@ type firstRequestVerdict int
 
 const (
 	// byBrief: the brief decides; both tellings are built, and the verdict is
-	// asked of the held one ([firstRequest.compacts]).
+	// asked of the held one ([firstRequest.compacts]); and, of a cut-off
+	// capture a reading thins, a third, told by that reading, judged on its
+	// own brief ([keptTellings.led]).
 	byBrief firstRequestVerdict = iota
 	// heldWhatever: no rule of Claude Code's compacts the session (another
 	// harness's): the held telling, whatever the brief.
