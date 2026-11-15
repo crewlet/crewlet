@@ -2,6 +2,9 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -504,29 +507,28 @@ func commentPreview(t Tool) proposal.Previewer {
 	}
 }
 
+// answerPreview previews an answer to a question asked on a task: the
+// question it answers, read whole from the task's thread and held to one put
+// to the person and still open, and the option chosen. The approval is bound
+// to the question as the card showed it ([proposal.RevisionAsk]), and the
+// request names the task and the question by their ids, so the answer the
+// person approves goes to the question the card shows.
 func answerPreview(t Tool) proposal.Previewer {
 	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
-		req, err := built(t, args)
-		if err != nil {
+		if _, err := built(t, args); err != nil {
 			return proposal.Preview{}, err
 		}
 		a := Args(args)
-		doc, err := readGet(ctx, read, "GET /worklet/comments", nil,
-			query(a).str("item", "item").fixed("limit", "50").values())
+		q, err := questionAnswered(ctx, read, a.String("item"), a.String("answers"))
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		question, options := askOf(doc, a.String("answers"))
-		if question == nil {
-			return proposal.Preview{}, fmt.Errorf("%w: %s holds no open question to answer; name "+
-				"it with answers", ErrInvalidArguments, value(doc, "key"))
-		}
 		var c changes
-		c.fact("task", "Task", value(doc, "key")+" "+value(doc, "title"))
-		c.fact("question", "Question", orDefault(value(question, "decision.question"),
-			value(question, "body")))
+		c.fact("task", "Task", q.key+" "+q.title)
+		c.fact("question", "Question", orDefault(value(q.comment, "decision.question"),
+			value(q.comment, "body")))
 		if choice := a.String("choice"); choice != "" {
-			label, ok := options[choice]
+			label, ok := q.options()[choice]
 			if !ok {
 				return proposal.Preview{}, fmt.Errorf("%w: the question offers no option %q",
 					ErrInvalidArguments, choice)
@@ -534,32 +536,227 @@ func answerPreview(t Tool) proposal.Previewer {
 			c.add("choice", "Answer", label)
 		}
 		c.move("body", "Comment", "", a.String("body"))
-		return proposal.Preview{Title: "Answer question", Target: value(doc, "key"),
+		pinned := maps.Clone(args)
+		pinned["item"], pinned["answers"] = q.task, q.id()
+		req, err := built(t, pinned)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
+		return proposal.Preview{Title: "Answer question", Target: q.key,
 			Note:         "Whoever asked is woken with the answer and goes on from it.",
-			ApproveLabel: "Approve and answer", Changes: c.rows(), Request: req}, nil
+			ApproveLabel: "Approve and answer", Changes: c.rows(),
+			SourceRevision: q.bound(), Request: req}, nil
 	}
 }
 
-// askOf is the question an answer answers, by its comment id or, unnamed, the
-// one open question on the thread, and its options by id.
-func askOf(thread any, id string) (any, map[string]string) {
-	comments, _ := cards.Lookup(thread, "comments").([]any)
-	var found any
-	for _, cm := range comments {
-		open := value(cm, "ask") != "" && value(cm, "resolved") != "true"
-		if (id != "" && value(cm, "id") == id) || (id == "" && open) {
-			if found != nil && id == "" {
-				return nil, nil
+// threadPages is the most pages of a task's thread a preview walks to find
+// the question an answer answers: ten pages of at most fifty comments and
+// sixteen kibibytes each (worklet.MaxCommentPage, worklet.CommentPageBytes),
+// which holds every conversation a question gathers and the threads of all
+// but the longest-running tasks. Past it the question is named by its comment
+// id, which list_decisions gives, and read narrowed to its own conversation.
+const threadPages = 10
+
+// question is a question asked on a task, as the task's thread answered it.
+type question struct {
+	// task, key and title are the task's id, key and title.
+	task, key, title string
+	// comment is the comment that asks it.
+	comment any
+}
+
+// id is the question's comment id.
+func (q question) id() string { return value(q.comment, "id") }
+
+// options are the question's options, label by id.
+func (q question) options() map[string]string {
+	out := map[string]string{}
+	list, _ := cards.Lookup(q.comment, "decision.options").([]any)
+	for _, o := range list {
+		out[value(o, "id")] = value(o, "label")
+	}
+	return out
+}
+
+// bound is the revision an answer binds: the question as its card shows it,
+// whom it asks, its words and decision and whether it is still open, as a
+// digest ([proposal.RevisionAsk]). A question is asked once and its decision
+// never changes (ADR-0023), so what moves it is an answer closing it, its
+// words edited or removed: each a question the card no longer shows.
+func (q question) bound() string {
+	shown := struct {
+		Ask       string `json:"ask"`
+		Body      string `json:"body"`
+		Decision  any    `json:"decision"`
+		Resolved  string `json:"resolved"`
+		Removed   string `json:"removed"`
+		UpdatedAt string `json:"updated_at"`
+	}{Ask: value(q.comment, "ask"), Body: value(q.comment, "body"),
+		Decision: cards.Lookup(q.comment, "decision"), Resolved: value(q.comment, "resolved"),
+		Removed: value(q.comment, "removed"), UpdatedAt: value(q.comment, "updated_at")}
+	// A decoded answer's values, which always encode, in one key order.
+	encoded, _ := json.Marshal(shown)
+	sum := sha256.Sum256(encoded)
+	return proposal.Revision{Kind: proposal.RevisionAsk,
+		ID:      url.PathEscape(q.task) + "/" + url.PathEscape(q.id()),
+		Version: hex.EncodeToString(sum[:16])}.String()
+}
+
+// questionAnswered is the question an answer on item answers: the one its
+// comment id names, or, named by none, the one open question on the task
+// asked of the person, as the act infers it. THE PERSON'S OWN, and open: an
+// answer the assistant prepares answers nothing put to somebody else and
+// nothing already answered, whatever text it read asked it to.
+func questionAnswered(ctx context.Context, read proposal.Read, item, id string) (question, error) {
+	// THE PERSON'S RECORD, the name a question put to them is asked of, as
+	// the decisions read answers it for its caller (a page of one, since
+	// only its name is wanted).
+	mine, err := readGet(ctx, read, "GET /worklet/decisions", nil, url.Values{"limit": {"1"}})
+	if err != nil {
+		return question{}, err
+	}
+	person := value(mine, "handle")
+	var q question
+	if id != "" {
+		q, err = readQuestion(ctx, read, item, id)
+	} else {
+		q, err = openQuestionOf(ctx, read, item, person)
+	}
+	if err != nil {
+		return question{}, err
+	}
+	asked := value(q.comment, "ask")
+	switch {
+	case asked == "":
+		return question{}, fmt.Errorf("%w: comment %s on %s asks no question; answers names "+
+			"the comment that asks it", ErrInvalidArguments, q.id(), q.key)
+	case asked != person:
+		return question{}, fmt.Errorf("%w: the question %s on %s is asked of %s, not of the "+
+			"person; Ask Crewlet answers only questions put to them", ErrInvalidArguments,
+			q.id(), q.key, asked)
+	case value(q.comment, "removed") == "true":
+		return question{}, fmt.Errorf("%w: the question %s on %s was removed", ErrInvalidArguments,
+			q.id(), q.key)
+	case value(q.comment, "resolved") == "true":
+		return question{}, fmt.Errorf("%w: the question %s on %s is already answered or closed",
+			ErrInvalidArguments, q.id(), q.key)
+	}
+	return q, nil
+}
+
+// readQuestion reads the comment id on item from its own conversation (the
+// thread narrowed to it, with it), walking back page by page to it: it is the
+// conversation's first comment, so on its oldest page.
+func readQuestion(ctx context.Context, read proposal.Read, item, id string) (question, error) {
+	var found question
+	err := walkThread(ctx, read, item, url.Values{"thread": {id}, "with_root": {"true"}},
+		func(task question, comments []any) bool {
+			for _, c := range comments {
+				if value(c, "id") == id {
+					task.comment = c
+					found = task
+					return true
+				}
 			}
-			found = cm
+			return false
+		})
+	switch {
+	case err != nil:
+		return question{}, err
+	case found.comment == nil:
+		return question{}, fmt.Errorf("%w: %s holds no comment %s; answers names the comment "+
+			"that asks the question, as list_decisions or the task's thread gives it",
+			ErrInvalidArguments, item, id)
+	}
+	return found, nil
+}
+
+// openQuestionOf is the one open question on item asked of person, read from
+// the task's whole thread: the question the act infers an answer naming none
+// answers. None, or several, is refused naming what to do.
+func openQuestionOf(ctx context.Context, read proposal.Read, item, person string) (question, error) {
+	var open []question
+	err := walkThread(ctx, read, item, nil, func(task question, comments []any) bool {
+		for _, c := range comments {
+			if value(c, "ask") == person && value(c, "resolved") != "true" &&
+				value(c, "removed") != "true" {
+				task.comment = c
+				open = append(open, task)
+			}
+		}
+		return false
+	})
+	if err != nil {
+		return question{}, err
+	}
+	switch len(open) {
+	case 0:
+		return question{}, fmt.Errorf("%w: no open question on %s is asked of the person",
+			ErrInvalidArguments, item)
+	case 1:
+		return open[0], nil
+	}
+	ids := make([]string, 0, len(open))
+	for _, q := range open {
+		ids = append(ids, q.id())
+	}
+	return question{}, fmt.Errorf("%w: %s holds %d open questions asked of the person (%s); "+
+		"name the one this answers with answers", ErrInvalidArguments, open[0].key, len(open),
+		strings.Join(ids, ", "))
+}
+
+// walkThread reads item's thread page by page, newest first, as narrowed by
+// narrow, handing each page's comments to page until it answers true or the
+// thread ends. A thread longer than [threadPages] is refused, naming what
+// reads it narrowed.
+func walkThread(ctx context.Context, read proposal.Read, item string, narrow url.Values,
+	page func(task question, comments []any) bool) error {
+	cursor := ""
+	for range threadPages {
+		q := url.Values{"item": {item}, "limit": {"50"}}
+		maps.Copy(q, narrow)
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+		doc, err := readGet(ctx, read, "GET /worklet/comments", nil, q)
+		if err != nil {
+			return err
+		}
+		comments, _ := cards.Lookup(doc, "comments").([]any)
+		task := question{task: value(doc, "item"), key: value(doc, "key"),
+			title: value(doc, "title")}
+		if page(task, comments) {
+			return nil
+		}
+		if cursor = value(doc, "next_cursor"); cursor == "" {
+			return nil
 		}
 	}
-	options := map[string]string{}
-	list, _ := cards.Lookup(found, "decision.options").([]any)
-	for _, o := range list {
-		options[value(o, "id")] = value(o, "label")
+	return fmt.Errorf("%w: %s's thread is longer than a preview reads; name the question "+
+		"with answers, its comment id as list_decisions gives it", ErrInvalidArguments, item)
+}
+
+// askRevision re-reads the question r names, as an answer's card showed it,
+// through the turn's grant: [proposal.ErrGone] where the task or the comment
+// is no longer there to read.
+func askRevision(ctx context.Context, read proposal.Read, r proposal.Revision) (string, error) {
+	taskPart, commentPart, _ := strings.Cut(r.ID, "/")
+	task, taskErr := url.PathUnescape(taskPart)
+	comment, commentErr := url.PathUnescape(commentPart)
+	if taskErr != nil || commentErr != nil || task == "" || comment == "" {
+		return "", fmt.Errorf("%w: revision %s names no question", proposal.ErrInvalid,
+			r.String())
 	}
-	return found, options
+	q, err := readQuestion(ctx, read, task, comment)
+	var refused *PreviewRefusal
+	switch {
+	case errors.As(err, &refused) && refused.Status == http.StatusNotFound,
+		errors.Is(err, ErrInvalidArguments):
+		return "", proposal.ErrGone
+	case err != nil:
+		return "", err
+	}
+	return q.bound(), nil
 }
 
 func prioritiesPreview(t Tool) proposal.Previewer {
@@ -985,7 +1182,8 @@ func orDefault(v, fallback string) string {
 // Revision re-reads, through the turn's grant, the revision a preview recorded
 // for the object it read: a task's version, a page's, an artifact's head, a
 // person's tracker record's, a chat room's settings and members, a chat
-// message's position and the principles' entity tag. An approval compares what
+// message's position, a question on a task as its answer showed it and the
+// principles' entity tag. An approval compares what
 // it answers with the recorded revision, and an answer that differs is a stale
 // proposal.
 var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, source string) (string, error) {
@@ -1006,6 +1204,9 @@ var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, 
 	case proposal.RevisionAtlasEntry:
 		// AN ATLAS ENTRY, re-read as the card showed it.
 		return atlasEntryRevision(ctx, read, r)
+	case proposal.RevisionAsk:
+		// A QUESTION ON A TASK, re-read from its own conversation.
+		return askRevision(ctx, read, r)
 	}
 	var req exec.Request
 	path, versionAt, idAt := "", "", ""

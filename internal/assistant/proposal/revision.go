@@ -60,6 +60,13 @@ const (
 	// holding it, which a change moves and a new sighting of the same value
 	// does not.
 	RevisionAtlasEntry RevisionKind = "atlas_entry"
+	// RevisionAsk is a question asked on a task, by `<task id>/<comment id>`,
+	// each part path-escaped, at a digest of the question as its answer's
+	// card shows it: whom it asks, its words and its decision, and whether
+	// it is still open. An answer given meanwhile, by anybody, closes it and
+	// moves the digest, so an approval never answers a question twice or
+	// answers one that changed under the card.
+	RevisionAsk RevisionKind = "ask"
 )
 
 // The two versions a [RevisionCreate] is at.
@@ -72,10 +79,10 @@ const (
 	VersionPresent = "present"
 )
 
-// RevisionKinds are the eleven, in declaration order.
+// RevisionKinds are the twelve, in declaration order.
 var RevisionKinds = []RevisionKind{RevisionTask, RevisionPage, RevisionArtifact, RevisionPerson,
 	RevisionRoom, RevisionMessage, RevisionCharter, RevisionEntity, RevisionResource,
-	RevisionCreate, RevisionAtlasEntry}
+	RevisionCreate, RevisionAtlasEntry, RevisionAsk}
 
 // CharterID is the one charter's id in a revision: a company has one.
 const CharterID = "company"

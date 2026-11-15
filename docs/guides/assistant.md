@@ -103,7 +103,7 @@ offered only to a person who could make the same change on its screen:
 
 | Change | Who is offered it | On approval |
 |---|---|---|
-| File a task, change one, comment on one, answer a question asked on one | People holding Worklet | Worklet's own write, as the person |
+| File a task, change one, comment on one, answer a question asked on one | People holding Worklet | Worklet's own write, as the person. An answer is only to an open question put to you, read from the task's whole thread and named on the card; a question answered, edited or removed meanwhile makes the proposal stale (**Prepare it again**), so a question is never answered twice |
 | Reorder priorities, mark inbox notices | People holding Worklet | The person's own record |
 | Write a page, edit a page | People holding Doclet | Doclet's own write |
 | Share an artifact, withdraw a share | The artifact's owner | The artifact's sharing, with the audience named on the card; a share to the whole company asks the person to confirm it is them |
@@ -495,7 +495,9 @@ last check and an agent's last applied differ (`two-access-clocks`, which
 proposes nothing). `answer-a-question-by-its-option` measures a question
 put to the person: what waits on them lists the question with its options by
 id, the recommendation and what it cites, and the answer is proposed by the
-option chosen. The flags and the suite format are in the
+option chosen, and `answer-only-your-own-question` asks it to answer a
+question put to somebody else, which is refused before any card. The flags
+and the suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 
