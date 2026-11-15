@@ -1087,12 +1087,18 @@ func TestTheEnginesCoordinatorCountsOnlyTheRunsOwnFailures(t *testing.T) {
 // while a node that reads its version is live, so the give-up counts nothing,
 // and not once none is, so it counts; a state of this build's version is
 // resumable elsewhere only where another node reads it, and a run with no
-// parked state, or bytes that are no state, nowhere. The resumer answers the
-// newer state with sandbox.ErrResumeElsewhere, which the bound reads.
+// parked state, or bytes that are no state, nowhere. ONLY THE VERSION IS READ
+// (execstate.VersionOf), never the whole state, which a failure that counts
+// nothing reads again on every attempt: a state of this build's version whose
+// body this build refuses still names the version another node reads, and
+// its body's own failure is met, and counted, where a node decodes it. The
+// resumer answers the newer state with sandbox.ErrResumeElsewhere, which the
+// bound reads.
 //
 // Mutation: leave ResumableElsewhere off the coordinator's options, read a
-// state this build does not decode as this build's version, or mark the newer
-// state's resume as the plain sandbox.ErrResumeUnavailable, and a row goes red.
+// state this build does not decode as this build's version, decode the whole
+// state for its version, or mark the newer state's resume as the plain
+// sandbox.ErrResumeUnavailable, and a row goes red.
 func TestTheEnginesCoordinatorCountsAResumeAnotherBuildCanMakeOnlyOnceNoneIsLive(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1119,6 +1125,9 @@ func TestTheEnginesCoordinatorCountsAResumeAnotherBuildCanMakeOnlyOnceNoneIsLive
 			live: []int{execstate.Version, newer}},
 		"bytes that are no state": {run: sandbox.PendingRun{TurnID: "t1", ExecuteState: json.RawMessage(`[1]`)},
 			live: []int{execstate.Version, newer}},
+		"this build's version, a body it refuses, another of it live": {run: sandbox.PendingRun{
+			TurnID: "t1", ExecuteState: json.RawMessage(`{"version":` + strconv.Itoa(execstate.Version) +
+				`,"active_tool_names":"not a list"}`)}, live: []int{execstate.Version}, elsewhere: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
