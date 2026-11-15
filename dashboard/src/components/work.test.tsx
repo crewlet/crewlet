@@ -308,3 +308,17 @@ test("a blocked row names the pull request nobody is reviewing", () => {
   ).toBe("Nobody is reviewing PR #42 +1");
   expect(blockedBy(row({ waiting_on: [{ id: pull, open: true }] }))).toBe("Blocked");
 });
+
+// A BLOCKER IN ANOTHER PROJECT IS NAMED: the edge carries its key, so a list
+// that holds no row for it (a project's own list) says which task holds this
+// one up, as All tasks, which held the row, already did.
+test("a blocked row names a blocker the page holds no row for, by the edge's own key", () => {
+  expect(blockedBy(row({ waiting_on: [{ id: "t-9", key: "PROD-9", open: true }] }))).toBe(
+    "Blocked · PROD-9",
+  );
+  expect(
+    blockedBy(row({ waiting_on: [{ id: "t-9", key: "PROD-9", open: true }] }), (id) =>
+      id === "t-9" ? "PROD-9" : undefined,
+    ),
+  ).toBe("Blocked · PROD-9");
+});

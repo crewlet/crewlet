@@ -2074,7 +2074,9 @@ was until a pass can read it
 one statement, so `blocked` is exactly "some entry in `waiting_on` is open" and
 a screen can never show a blocked badge beside no dependencies. A blocker your
 own filter excluded is an id you hold no row for — the honest answer, since the
-edge exists and that page cannot draw it. Cleared edges stay on the row rather
+edge exists and that page cannot draw it, though the edge still names it by
+its `key` (with `key_collision` where another task claimed that key first), so
+a project's list says which task in another project holds a row up. Cleared edges stay on the row rather
 than disappearing when the blocker finishes: what a plan looked like once it
 was executed is the thing a timeline is for.
 

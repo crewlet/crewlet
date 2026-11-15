@@ -2996,6 +2996,11 @@ export interface WorkBlocker {
   /** The blocking task's ID, never its key: an edge is drawn between two rows
    *  on one page and `WorkSummary.id` is what they are matched on. */
   id: string;
+  /** The blocking task's key, so a page that holds no row for the blocker
+   *  can still name it; absent for an edge to something that is not a task. */
+  key?: string;
+  /** The blocker's key is one another task claimed first. */
+  key_collision?: boolean;
   /** Whether the blocker is still holding this task up. `false` is a settled
    *  fact rather than a missing one — the blocker has finished. */
   open?: boolean;
