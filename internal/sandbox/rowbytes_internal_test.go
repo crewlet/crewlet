@@ -576,7 +576,7 @@ func worstRow(t *testing.T) PendingRun {
 		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), Omitted: omitted,
 		BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt,
 		ContextTokens: math.MaxInt64, At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
-		SessionID: plain(128), ArchiveFormat: 99,
+		SessionID: plain(128), ArchiveFormat: 99, RunAfter: plain(MaxMessageIDBytes),
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
 		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
@@ -1048,6 +1048,13 @@ var zeroInTheWorstRow = func() map[string]string {
 		"Steer.Notes[0].Read.Retold.Retold": "a brief that tells a note again keeps the marked take's read " +
 			"beside its own (openNotes), and that read is never one a brief told: only a read marked unanswered " +
 			"is told again, a settle marks only a read naming its take, and a read a brief told names none",
+	}
+	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
+	// session names no message it began after, and the worst capture names one at
+	// its bound, the wider of the two (RunAfter).
+	for _, capture := range []string{"Capture", "Kept"} {
+		zero[capture+".RunBegan"] = "a run that began its session names no message it began after, which the " +
+			"worst capture names at its bound, the wider of the two (RunStart, keptRunStart)"
 	}
 	// THE CALL A PERSON APPROVED, on the held call and owed to the log
 	// ([OwedCall]), as approvedCall keeps it from a call with every field set

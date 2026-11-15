@@ -1148,7 +1148,16 @@ func (j *jsonRewrite) value(s string) string {
 	if s != "" && j.credential() {
 		return credentialMarker
 	}
-	return redact.Secrets(j.scrub.apply(s))
+	return keptString(j.scrub, s)
+}
+
+// keptString is a string value under a key that is no credential's, as a kept
+// document holds it: every value the take names taken out, then every shape of
+// a secret redacted. The ONE rule for it, so what the take keeps beside an
+// archive of a document — where its run began in it ([keptRunStart]) — is
+// spelled as the document spells the same text.
+func keptString(scrub scrubber, s string) string {
+	return redact.Secrets(scrub.apply(s))
 }
 
 // credential reports whether the value being written is a member of an object
