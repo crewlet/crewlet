@@ -28,6 +28,12 @@ type sessionView struct {
 	// EnrolmentOnly is a session opened on a password alone where a second
 	// factor is required, which may do nothing but enrol one.
 	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
+
+	// UserAgent is the browser that opened the session and Remote the
+	// address it opened from, so a person can tell which session to end;
+	// absent where the session's start named none.
+	UserAgent string `json:"user_agent,omitempty"`
+	Remote    string `json:"remote,omitempty"`
 }
 
 // GetSessions is `GET /iam/people/{id}/sessions`.
@@ -45,6 +51,7 @@ func (s *Service) GetSessions(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 			EndedAt: row.EndedAt, EndedWhy: row.EndedWhy,
 			Live: row.Live(now), EnrolmentOnly: row.EnrolmentOnly,
+			UserAgent: row.UserAgent, Remote: row.Remote,
 		})
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{"sessions": out})
