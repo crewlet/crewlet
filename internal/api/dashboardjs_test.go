@@ -2598,7 +2598,13 @@ const (
 	// Artifacts and Chatlet polish, merged with main's Gitlet listing on kit
 	// 0.131.0, measures 6260.4 KiB (6,410,635 bytes), 33,344 bytes over the
 	// 6227.8 KiB of main it was built on: 6261 KiB.
-	treeBudget = 5<<20 + 1141<<10
+	// Editing work and seats in place (a chat member removed, the company's
+	// task types, a seat's per-phase models, learning, workers, placement
+	// and box, the diagnostics switches on the one setting write, and the
+	// schedule cap and audit window said from the engine) added 19,037 bytes
+	// over main's 6256.4 KiB and took it to 6275.0 KiB (6,425,609 bytes):
+	// 6276 KiB.
+	treeBudget = 5<<20 + 1156<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
