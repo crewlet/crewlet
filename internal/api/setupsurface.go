@@ -107,9 +107,7 @@ func NewSetupSurface(boot *config.Bootstrap, e *engine.Engine, configSurface *co
 	if err != nil {
 		return nil, err
 	}
-	// CHOOSING AN AGENT'S REQUEST'S GRANT OPTION SAVES IT (ADR-0118), through
-	// this surface's own rules for a grant: installed on the engine, whose
-	// desk the answer's route is handed before this surface exists.
+	// Choosing a request's grant option saves it through this surface (ADR-0118).
 	e.UseGrantSaver(surface.SaveRequestedGrant)
 	return surface, nil
 }

@@ -31,16 +31,14 @@ type fakeGrantDesk struct {
 	declined  []string
 	granted   bool
 
-	// raise is whether a grant the desk saves raises, saveErr what its save
-	// answers, and asked every save it was asked for, saved those it made.
+	// raise, saveErr: what a save answers; asked, saved: what it was asked and made.
 	raise   bool
 	saveErr error
 	asked   []string
 	saved   []string
 }
 
-// Grant saves the request's grant once admit admits it, as the engine's desk
-// does, and holds it from then on.
+// Grant saves once admit admits, as the engine's desk does.
 func (d *fakeGrantDesk) Grant(_ context.Context, asker, id string, permanent bool,
 	admit func(raise bool) error) error {
 
@@ -264,9 +262,8 @@ func TestAPermissionIsAnsweredOnlyOnceItsAgentHoldsIt(t *testing.T) {
 	}
 }
 
-// grantAdmin is a person holding admin who signed in through a browser
-// session, proved who they are within the step-up window where fresh, and
-// through a machine token where via names one.
+// grantAdmin is an administrator, within the step-up window where fresh, through
+// a machine token where via names one.
 func grantAdmin(fresh bool, via string) context.Context {
 	reauth := time.Now().Add(-time.Minute)
 	if fresh {
@@ -282,8 +279,7 @@ func grantAdmin(fresh bool, via string) context.Context {
 	})
 }
 
-// answerGrant answers the CTO agent's grant request on ENG-1 with choice, as
-// caller: a person through the operator's surface, or the seat itself.
+// answerGrant answers the CTO agent's grant request on ENG-1 with choice, as caller.
 func answerGrant(caller context.Context, t *testing.T, desk *fakeGrantDesk, choice string) (
 	tools.Result, *fakeTracker) {
 
@@ -313,13 +309,8 @@ func answerGrant(caller context.Context, t *testing.T, desk *fakeGrantDesk, choi
 	return got, trk
 }
 
-// CHOOSING A REQUEST'S GRANT OPTION IS THE APPROVAL (ADR-0118): an
-// administrator's choice saves the grant the stored request asks for, for its
-// hours or for good as the option says, and only then posts the answer; an
-// answer whose grant is held already saves nothing twice; and a save that
-// fails (a request lapsed or settled, a grant the catalogue no longer gives)
-// posts nothing, saying why. Mutation: post before the save, or save again a
-// grant already held, and this fails.
+// CHOOSING A REQUEST'S GRANT OPTION SAVES IT BEFORE THE ANSWER, once, and a
+// failed save posts nothing. Mutation: post before the save and this fails.
 func TestChoosingARequestsGrantSavesItBeforeTheAnswer(t *testing.T) {
 	t.Parallel()
 	const id = "abcdefghij"
@@ -370,14 +361,8 @@ func TestChoosingARequestsGrantSavesItBeforeTheAnswer(t *testing.T) {
 	}
 }
 
-// A REQUEST'S GRANT IS CHOSEN ONLY AT THE ACCESS WRITE'S OWN PROOF, NEVER BY AN
-// AGENT. The comment asks no step-up, so the choice is decided as
-// setup.access.write: an administrator past the step-up window is asked to
-// prove it is them, and a grant that raises (a permission that changes things)
-// is also decided as setup.access.raise, which a machine token is refused. A
-// seat holding every grant is refused whatever it read. In every refused case
-// nothing is saved and nothing is posted. Mutation: decide the choice on the
-// comment's own verb, or skip the raise, and this fails.
+// A REQUEST'S GRANT IS CHOSEN ONLY AT THE ACCESS WRITE'S PROOF, NEVER BY AN
+// AGENT. Mutation: skip the raise check and the machine-token case fails.
 func TestARequestsGrantIsChosenOnlyAtTheAccessWritesProof(t *testing.T) {
 	t.Parallel()
 	choice := seataccess.GrantOptionTemporary("abcdefghij")

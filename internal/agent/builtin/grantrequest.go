@@ -48,15 +48,9 @@ type GrantDesk interface {
 	// already gone is the outcome asked for.
 	Declined(ctx context.Context, id, by string) error
 
-	// Grant saves the grant request id asks for, for the seat asker, as the
-	// person ctx resolves to: built from the request as stored, for good
-	// where permanent and for the request's hours otherwise, checked
-	// against the live catalogue, one revision, recorded, its request
-	// settled and its sync started (ADR-0118). Before anything is written it
-	// asks admit, handed whether the grant raises ([seataccess.NeedsStepUp]),
-	// and returns admit's refusal as it is. A request that lapsed or was
-	// settled is [seataccess.ErrNoRequest]; one it cannot save as asked is a
-	// [*seataccess.GrantRefused].
+	// Grant saves request id's grant for asker from the stored request (ADR-0118),
+	// after admit(raise) admits it. A lapsed request is [seataccess.ErrNoRequest];
+	// one it cannot save is a [*seataccess.GrantRefused].
 	Grant(ctx context.Context, asker, id string, permanent bool, admit func(raise bool) error) error
 }
 
@@ -273,19 +267,8 @@ func nearest(opts seataccess.Options, asked string) string {
 }
 
 // grantRequestChosen makes choosing a request's grant option the approval
-// (ADR-0118): the choice is decided at the access write's own proof, the grant
-// is saved from the stored request, and only then is the answer posted. An
-// answer whose grant is already held (one sent again after its grant landed)
-// saves nothing twice. Nil where the choice is no request's grant, or once
-// its grant is held; the refusal to return otherwise, and nothing is posted.
-//
-// THE PROOF IS THE ACCESS WRITE'S, NEVER THE COMMENT'S. A comment asks no
-// step-up, so the choice is decided as [authz.ActionSetupAccessWrite] (an
-// administrator within the step-up window) and, where the grant raises, as
-// [authz.ActionSetupAccessRaise] too (a person present), through the same
-// seam every check a tool takes after a read goes through. A seat is refused
-// both, whatever it holds and whatever the words it read said, so no agent
-// ever approves a grant.
+// (ADR-0118): decided as setup.access.write (and .raise for a raise), never a
+// seat's, then saved, then answered. Nil once the grant is held.
 func (d WorkDeps) grantRequestChosen(ctx context.Context, choice string,
 	thread worklet.ResolvedThread) *tools.Result {
 
@@ -307,9 +290,7 @@ func (d WorkDeps) grantRequestChosen(ctx context.Context, choice string,
 	case held:
 		return nil
 	}
-	// THE WRITE FIRST, before anything is read for the save, so a caller who
-	// may not save one learns that and nothing else; the raise once the save
-	// has judged the grant against the live catalogue.
+	// The write first, before the save reads anything; the raise once it is judged.
 	if err = d.authorizeGrant(ctx, authz.ActionSetupAccessWrite); err != nil {
 		refusal := authorityRefusal(string(authz.ActionSetupAccessWrite), err)
 		return &refusal
@@ -340,9 +321,7 @@ func (d WorkDeps) grantRequestChosen(ctx context.Context, choice string,
 			"posted. Try again in a moment.", CommentOnWorkTool, err))
 		return &refused
 	}
-	// THE ANSWER WAITS ON THE ACTIVE REVISION, as every answer choosing a
-	// grant does: one this node does not serve yet is answered again once it
-	// does, and the grant is not saved twice.
+	// The answer waits until this node serves the revision that holds the grant.
 	if held, err = d.Grants.Granted(ctx, thread.AnsweredAuthor, id, permanent); err != nil || !held {
 		refused := failed(fmt.Sprintf("%s: the grant was saved, and this node does not serve its "+
 			"revision yet, so the answer was not posted. Send the same answer again in a moment; "+
@@ -352,8 +331,7 @@ func (d WorkDeps) grantRequestChosen(ctx context.Context, choice string,
 	return nil
 }
 
-// authorizeGrant decides one access verb of the caller: an administrator's,
-// within the verb's proof window.
+// authorizeGrant decides one access verb of the caller.
 func (d WorkDeps) authorizeGrant(ctx context.Context, action authz.Action) error {
 	if d.Authorize == nil {
 		return ErrNoAuthorizer

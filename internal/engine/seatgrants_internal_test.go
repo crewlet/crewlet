@@ -7,11 +7,7 @@ import (
 	"testing"
 )
 
-// A REQUEST'S GRANT IS SAVED THROUGH WHAT THE SETUP SURFACE INSTALLED, and
-// refused naming that before it is: the desk the answer's route is handed
-// exists before the setup surface does, and an answer choosing a grant then
-// must not be posted over a grant nobody saved. Mutation: answer nil from a
-// desk with no saver, or call it with other arguments, and this fails.
+// A REQUEST'S GRANT IS SAVED THROUGH THE INSTALLED SAVER, and refused before it is.
 func TestARequestsGrantIsSavedThroughTheInstalledSaver(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
