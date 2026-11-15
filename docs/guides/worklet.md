@@ -1026,7 +1026,7 @@ view's own, so a seat can open somebody's board and narrow it without editing
 it.
 
 Views are read at `GET /worklet/views?container=project:ENG`, and written through
-the operator MCP surface with `save_work_view` — **not** by a seat. A view is
+the operator MCP surface with `save_work_view` and `delete_work_view`, **not** by a seat. A view is
 furniture, and a seat's job is the work rather than the furniture around it.
 
 **Who may save one follows what the view is**, never who is asking — the
@@ -1054,6 +1054,19 @@ that decision was taken.
 save answered — and a save naming an id no view holds is refused `not_found`
 rather than creating a view under whatever was typed. A new view is saved with
 no `id`: its id is minted from the call and answered back.
+
+**A view is deleted with `delete_work_view`**, naming its `id` (or `DELETE
+/worklet/views/{id}`, or **Delete** on the view's page and in the Saved views
+list). Who may delete a view is who may replace it, decided on the view as it
+is stored now: the table above, by its owner and its container, and a
+protected view only its owner. A deleted view leaves every strip, the Saved
+views list and every pin, its `default` goes with it, and running it by `view`
+is refused rather than answered as an unfiltered list. A pin of a deleted view
+is dropped the next time its person's pins change. The views every container
+has without anybody saving one have no `id` and are never deleted. The view's
+row stays, stamped with who deleted it and when, so a save delivered late
+cannot bring it back, and a save decided on it before the delete is refused as
+a conflict.
 
 `default: true` takes the container's landing tab from whichever view held it,
 which is why a shared view is its container's decision rather than whoever
@@ -1808,13 +1821,13 @@ drawn for everybody and held with that reason for anybody without it.
   served Keyword — …").
 - **Saved views** (`#/worklet/views`) is the inventory of what somebody saved,
   in every project and team as well as company-wide — each row says where the
-  view lives, and each has a **Pin**. A view you **pinned** is in your
+  view lives, and each has a **Pin** and a **Delete**, which asks first. A view you **pinned** is in your
   sidebar, and that row **runs** it; the view running on a board can be pinned
   or unpinned from its own strip too.
 
 **Your own AI assistant** can reach Worklet over MCP too, at
-`/operator/mcp`. It serves the same work tools above, eleven more no seat is
-given — `list_work_views`, `save_work_view`,
+`/operator/mcp`. It serves the same work tools above, twelve more no seat is
+given — `list_work_views`, `save_work_view`, `delete_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`, `mark_inbox`, `set_pins`,
 `set_priorities`, `remove_work_item`, `restore_work_item` and
 `place_work_item`

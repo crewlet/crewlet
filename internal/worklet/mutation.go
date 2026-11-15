@@ -71,7 +71,9 @@ import (
 // Version 16 is a task naming an atlas entry ([RelationEntry], ADR-0140): a
 // build reading 15 would keep the edge and leave it out of the history row's
 // deltas, which are derived from the kinds it knows.
-const RecordVersion = 16
+// Version 17 is a saved view somebody deleted ([View.DeletedAt]): a build
+// reading 16 would apply the record as a save and keep the view listed.
+const RecordVersion = 17
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -152,6 +154,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "TaskPatch.DeadWaitEnded", Since: 15, Op: string(OpPatch), Path: []string{"mutation", "dead_wait_ended"}},
 	{Name: "Relation.Kind atlas_entry", Since: 16, Path: []string{"mutation", "relations", "kind"},
 		Equals: string(RelationEntry)},
+	{Name: "View.DeletedAt", Since: 17, Op: string(OpPatch), Path: []string{"mutation", "deleted_at"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -1195,8 +1198,12 @@ const (
 	ChangeProjectUpdated  ChangeKind = "project_updated"
 	ChangePolicyChanged   ChangeKind = "policy_changed"
 	ChangeViewSaved       ChangeKind = "view_saved"
-	ChangeCatalogue       ChangeKind = "catalogue_updated"
-	ChangePrioritised     ChangeKind = "prioritised"
+	// ChangeViewDeleted is a saved view taken out of its strip: a kind of
+	// its own for [ChangeFileRemoved]'s reason, since "a view was saved"
+	// and "a view is gone" are two lines in the company's account of itself.
+	ChangeViewDeleted ChangeKind = "view_deleted"
+	ChangeCatalogue   ChangeKind = "catalogue_updated"
+	ChangePrioritised ChangeKind = "prioritised"
 
 	// ChangePersonUpdated is every OTHER write to a person's own record —
 	// a pin, an inbox mark, a snooze.
@@ -1245,7 +1252,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 	ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
-	ChangePolicyChanged, ChangeViewSaved, ChangeCatalogue,
+	ChangePolicyChanged, ChangeViewSaved, ChangeViewDeleted, ChangeCatalogue,
 	ChangePrioritised, ChangePersonUpdated, ChangeFileWritten, ChangeFileRemoved,
 	ChangeLinkSettled, ChangeDeadWait, ChangeDeadWaitEnded,
 }

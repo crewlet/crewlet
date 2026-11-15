@@ -148,6 +148,7 @@ export const CHANGES = [
   { kind: "project_updated", mark: "folder", phrase: "changed the project" },
   { kind: "policy_changed", mark: "shield", phrase: "changed the project's policy" },
   { kind: "view_saved", mark: "save", phrase: "saved a view" },
+  { kind: "view_deleted", mark: "trash", phrase: "deleted a view" },
   { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
   { kind: "prioritised", mark: "arrow-up", phrase: "reordered somebody's priorities" },
   // A PERSON'S OWN PINS, INBOX MARKS AND SNOOZES: left out of the company's

@@ -176,7 +176,7 @@ func toolsWithArguments() []tools.Callable {
 	return []tools.Callable{
 		&getWorkItem{}, &commentOnWorkItem{},
 		&getPerson{}, &workInbox{}, &setPriorities{}, &myWork{},
-		&markInbox{}, &codeMarkInbox{}, &setPins{}, &saveWorkView{},
+		&markInbox{}, &codeMarkInbox{}, &setPins{}, &saveWorkView{}, &deleteWorkView{},
 		&removeWorkItem{}, &restoreWorkItem{}, &moveWorkItem{},
 		&pauseSeat{}, &resumeSeat{}, &steerTurn{}, &runSchedule{},
 		&answerExecutor{}, &removeProjectFile{},

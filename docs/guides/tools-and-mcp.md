@@ -130,7 +130,7 @@ another node whose ledger reaches back that far.
 
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-and eleven more beside them that no seat is given: the saved views, the
+and twelve more beside them that no seat is given: the saved views, the
 catalogue write, a person's own queue, inbox and pins, the trash, and the board
 drag. Each call is decided by the same authority table a seat's is, and each
 write is attributed to who the request is, never to a name the caller chooses:
