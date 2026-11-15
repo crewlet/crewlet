@@ -91,10 +91,8 @@ import (
 // acknowledged, each leaving the job with nothing to announce it until that
 // host's store answered.
 //
-// A WAITER'S ANNOUNCEMENT FROM A READ SINCE ENDS BOTH. Every renewal is marked
-// as one ([renewalField]), so a delivery says whether it is the waiter's own
-// announcement of the job or a renewal, and that waiter's announcement says
-// when it asked its store for the run's row it was made from
+// A WAITER'S ANNOUNCEMENT FROM A READ SINCE ENDS BOTH. That waiter's
+// announcement says when it asked its store for the run's row it was made from
 // ([rowAskedField]): it announces the job only having read the row through the
 // store the clock times, so one whose read was asked after the clock started,
 // or after the instant the job's record holds, says that store answered since
@@ -106,21 +104,21 @@ import (
 // polls the box between its read and its announcement, which can take a
 // minute ([pollBound]) after a slot's wait, so a silence that began in between
 // and was found meanwhile was, by the announcement's stamp, read as over while
-// it lasted. Nor does a renewal, which reads no row. Unmarked, the two were one, and the
-// clock and its record stood through every announcement that waiter made once
-// its store answered again: while a refusal that settles nothing lasted, each
-// was handed back and renewed beside the chain already in flight, one more for
-// every announcement, about twelve an hour. The chain in flight is renewed on
-// its own budget until a release clears the record, one chain, as before. A
-// fleet mixed with a build from before renewals existed is unchanged by
-// either mark, which ride the envelope's bag every backend carries verbatim
-// and every republish keeps: that build's host never answers that its store
-// did not answer its read ([BoxReadReply.Unsettled] is this build's), so no
-// node keeps a clock or a record on a job whose box it hosts, and its waiter's
+// it lasted. Nor does a renewal, which reads no row and so says no read
+// ([Coordinator.renew]). Ended by nothing, the clock and its record stood
+// through every announcement that waiter made once its store answered again:
+// while a refusal that settles nothing lasted, each was handed back and
+// renewed beside the chain already in flight, one more for every
+// announcement, about twelve an hour. The chain in flight is renewed on its own
+// budget until a release clears the record, one chain, as before. A fleet
+// mixed with a build from before renewals existed is unchanged by the read's
+// instant, which rides the envelope's bag every backend carries verbatim and
+// every republish keeps: that build's host never answers that its store did
+// not answer its read ([BoxReadReply.Unsettled] is this build's), so no node
+// keeps a clock or a record on a job whose box it hosts, and its waiter's
 // announcements, which say no read, end nothing; and holding the seat, that
-// build neither renews nor reads either mark, takes a renewal for an
-// announcement, and acknowledges a refusal and NAKs a failure as it always
-// did.
+// build neither renews nor reads the instant, and acknowledges a refusal and
+// NAKs a failure as it always did.
 //
 // AND A REFUSAL ACKNOWLEDGED BEFORE ANY NODE HEARD OF THE SILENCE IS OWED ON
 // THE ROW. A refusal of a job no collection has read since its host's store
@@ -320,21 +318,6 @@ func unannouncedOnRow(run PendingRun, launch string, trigger *events.Event) bool
 	return !since.IsZero() && !announcedAfter(trigger, since)
 }
 
-// renewalField is the envelope bag key that marks a completion this node
-// announced afresh ([Coordinator.renew]), which every backend carries verbatim
-// and every republish keeps, as [queue.PriorityField] is.
-//
-// SO A DELIVERY SAYS WHETHER IT IS A WAITER'S ANNOUNCEMENT OR A RENEWAL. A
-// waiter announces a job only having read the run's row through its store, so
-// its announcement made from a read asked after the clock on that store
-// started says that store answered since ([announcedAfter], [rowAskedField]),
-// while a renewal, made because it did not, reads no row and says nothing of
-// it. Unmarked, the two were one: the clock and its record stood through every
-// announcement that waiter made once its store answered again, and each was
-// handed back and renewed beside the chain already in flight, one more for
-// each, for as long as a refusal that settles nothing lasted.
-const renewalField = "completion_renewal"
-
 // rowAskedField is the envelope bag key under which a waiter's announcement
 // of a job's completion says when that waiter asked its coordination store
 // for the run's row it announced the job from ([askedRow]): an instant in RFC
@@ -378,21 +361,11 @@ func rowAsked(ev *events.Event) time.Time {
 	return asked
 }
 
-// renewal reports whether ev is a completion a node announced afresh
-// ([renewalField]).
-func renewal(ev *events.Event) bool {
-	if ev == nil {
-		return false
-	}
-	marked, _ := ev.Payload[renewalField].(bool)
-	return marked
-}
-
 // announcedAfter reports whether trigger, a delivery of a job's completion, is
 // a waiter's announcement of it made from a read of the run's row asked after
 // since, the start of a clock on the store of the host of its box or its
-// record of it: no renewal ([renewalField]), and the read it says it was made
-// from ([rowAskedField]) asked after that instant. That waiter read the row
+// record of it: the read it says it was made from ([rowAskedField]) asked
+// after that instant, which a renewal, reading no row, never says. That waiter read the row
 // through the store the clock times, so the store answered since.
 //
 // STRICTLY AFTER, BY THE READ'S OWN INSTANT, never the announcement's stamp
@@ -409,7 +382,7 @@ func renewal(ev *events.Event) bool {
 // that its store did not answer, which that host's own read, its bound and the
 // answer's carry are part of.
 func announcedAfter(trigger *events.Event, since time.Time) bool {
-	return trigger != nil && !renewal(trigger) && rowAsked(trigger).After(since)
+	return trigger != nil && rowAsked(trigger).After(since)
 }
 
 // deliveredKey is the context key under which a delivery's attempt carries
@@ -492,7 +465,10 @@ func (c *Coordinator) hearAnnouncement(ctx context.Context, ev types.ExecutorFin
 //
 // TRIGGER'S TRACE AND SOURCE, so the resume it leads to nests under the turn
 // that launched the job, as the waiter's own announcement does; trigger may be
-// nil, which carries neither.
+// nil, which carries neither. NEVER THE READ TRIGGER SAYS ([rowAskedField]): a
+// renewal is made because no waiter can read the run's row, and reads none
+// itself, so it says no read and no node takes it for that waiter's
+// announcement made since a silence began ([announcedAfter]).
 func (c *Coordinator) renew(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event) error {
 	control := controlSubject(ev.Agent)
 	if control == "" {
@@ -507,9 +483,6 @@ func (c *Coordinator) renew(ctx context.Context, ev types.ExecutorFinished, trig
 	if trigger != nil {
 		renewed.Source = trigger.Source
 	}
-	// MARKED A RENEWAL, so no node reads it as the waiter's announcement
-	// ([renewalField]).
-	renewed.Payload = map[string]any{renewalField: true}
 	if err := c.queue.Publish(ctx, control, renewed); err != nil {
 		return fmt.Errorf("sandbox: announcing the completion of %s afresh: %w", ev.TurnID, err)
 	}

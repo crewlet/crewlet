@@ -4062,8 +4062,8 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // is acknowledged on its refusal as above: that waiter read the run's record
 // through the store they say is silent, and announces the job again from
 // there. One whose read was asked before ends nothing, however late it was
-// made. The coordinator's renewals are marked as such and read no record, so
-// it never takes one for that announcement (internal/sandbox's renew.go).
+// made. The coordinator's renewals read no record and say no read, so it
+// never takes one for that announcement (internal/sandbox's renew.go).
 //
 // # Everything else NAKs
 //

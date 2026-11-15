@@ -89,9 +89,9 @@ coordinator marks it `sandbox.ErrUnannounced`, the control topic NAKs it
 whatever its condition (a drain's and a seat let go of still defer it), and the
 coordinator renews it before its last delivery. A duplicate is harmless, since
 the claim is made once, and a re-fire announces nothing afresh while that
-delivery is in flight. The renewals are marked as such, and that waiter's own
-announcement says when it asked its store for the row it was made from, so a
-delivery that is that announcement, made from a read asked after the clock or
+delivery is in flight. That waiter's own announcement says when it asked its
+store for the row it was made from, which a renewal, reading no row, never
+says, so a delivery that is that announcement, made from a read asked after the clock or
 the record began, ends the clock, a claim of it clears the record, and a
 refusal of it is acknowledged as above: the waiter read the row through the
 store they say is silent, and announces the job again from there. One whose

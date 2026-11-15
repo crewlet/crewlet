@@ -1440,13 +1440,13 @@ func (r *renewRig) waiterAnnounces(t *testing.T) uuid.UUID {
 // clock on that store started says the store answered since: it ends this
 // node's clock and, on the release a claim of it makes, the job's record of the
 // silence, and a refusal of it is acknowledged as any is where a waiter stands
-// behind it. A renewal is marked as one ([renewalField]) and says nothing of
-// that store. Unmarked and unheard, the clock and its record stood through
-// every announcement the waiter made once its store answered again, and while
-// a refusal that settles nothing lasted, each was handed back and renewed
-// beside the chain already in flight: one more chain for every announcement.
+// behind it. A renewal reads no row and says no read, so it says nothing of
+// that store. Unheard, the clock and its record stood through every
+// announcement the waiter made once its store answered again, and while a
+// refusal that settles nothing lasted, each was handed back and renewed beside
+// the chain already in flight: one more chain for every announcement.
 //
-// Mutation: read a renewal as the waiter's announcement, and the chain the
+// Mutation: stamp a renewal with a read of its own, and the chain the
 // renewals carry is acknowledged at its first refusal with nothing left to
 // resume the turn; never end the clock at the waiter's announcement, and the
 // chains in flight grow by one for each; leave the job's record standing at the
