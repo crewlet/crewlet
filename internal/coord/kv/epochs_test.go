@@ -76,6 +76,7 @@ func TestAnInProcessLeaseTableMintsFromTheCounterThatOutlivesIt(t *testing.T) {
 // in-process count: the claim that mints outside the lock is a protocol of its
 // own, and this is where the suite's stampedes and lapses reach it.
 func TestContractInProcessLeasesOnThePersistentCounter(t *testing.T) {
+	t.Parallel()
 	nc := embeddedNATS(t)
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
 		counter, err := OpenEpochs(t.Context(), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1)), Reach: InProcess})
