@@ -2502,7 +2502,12 @@ const (
 	// file, revisions as cards, the commit page's cards and the listing's
 	// richer row) added 24,073 bytes, script and sheet, and took it to
 	// 6172.3 KiB (6,320,394 bytes): 6173 KiB.
-	treeBudget = 5<<20 + 1053<<10
+	// Gitlet's listings drawn as a code host lists them (a repository's row
+	// with its glyph, marks and description, a push's refs with their glyphs
+	// and the comparison each moved ref opens, and a search's file cards)
+	// added 2,313 bytes, script and sheet, and took it to 6174.5 KiB
+	// (6,322,707 bytes): 6175 KiB.
+	treeBudget = 5<<20 + 1055<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
