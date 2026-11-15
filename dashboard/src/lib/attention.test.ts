@@ -992,7 +992,10 @@ test("an advisor that could not read everything says so, once", () => {
   const queue = attentionQueue(input({ setupUnread: ["alarms", "work"] }));
   const rows = queue.filter((a) => a.id === "setup-unread");
   expect(rows).toHaveLength(1);
-  expect(rows[0]?.title).toBe("The advisor couldn't read everything");
+  // NAMED, never "couldn't read everything", which said nothing to check.
+  expect(rows[0]?.title).toBe(
+    "The advisor couldn't read the engine's alarms and the last 7 days of work",
+  );
   expect(rows[0]?.detail).toMatch(/whether a backup is missing can't be said yet/);
   expect(rows[0]?.detail).toMatch(/last 7 days of work couldn't be read/);
   const paused = attentionQueue(input({ setupUnread: ["pauses"] })).find(
