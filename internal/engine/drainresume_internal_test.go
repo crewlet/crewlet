@@ -444,14 +444,20 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 // the seat's mailbox NAKs by too (nodesFailure): a resumed turn that could not
 // read where its writes are minted from a coordination store that did not
 // answer, and a relaunch whose sandbox provider did not answer or refused the
-// company's key. A failure of the completion itself stays the message's, a
-// resume that ran past its deadline among them.
+// company's key. AND SO IS A ROW A NEWER LEASE OWNS while this node's own lease
+// still reads held (sandbox.ErrSeatNotHeld that the coordinator did not name
+// sandbox.SeatLost, the refusal's record among them): where the run goes is
+// what failed, which the heartbeat settles within a beat, and nothing of the
+// message. A failure of the completion itself stays the message's, a resume
+// that ran past its deadline among them.
 //
 // Mutation: hand a store's silence, a broker's refusal or a cancelled handler
 // back with queue.Nak, and a delivery spent during an outage or a stop is kept
 // as poison; ask queue.NodeFault alone after a refusal that waits, and the
 // resume the coordination store failed is counted against the message; read
-// every condition as the node's, and the deadline's row is not.
+// every condition as the node's, and the deadline's row is not; drop
+// sandbox.ErrSeatNotHeld from controlOutcome, and the newer lease's row counts
+// against the message.
 func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 	t.Parallel()
 	live := t.Context()
@@ -493,6 +499,8 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 			sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("e2b: 503"))), nodes: true},
 		"a relaunch a sandbox provider refused the key of": {err: fmt.Errorf("sandbox: resuming t1: %w",
 			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401"))), nodes: true},
+		"a refusal's record a newer lease's row refused": {err: fmt.Errorf("sandbox: the refusal of t1's "+
+			"completion (refused) is not recorded: %w", sandbox.ErrSeatNotHeld), nodes: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

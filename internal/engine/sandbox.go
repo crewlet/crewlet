@@ -4224,6 +4224,15 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // the seat's next owner. Acked, it would wait for the waiter's next
 // announcement instead, up to five minutes away.
 //
+// A ROW A NEWER LEASE OWNS IS A ROUTING FAILURE, never the message's
+// ([sandbox.ErrSeatNotHeld] the coordinator did not name [sandbox.SeatLost],
+// because this node's own lease still reads held: the record of a refusal this
+// would acknowledge, [sandbox.PendingStore.OweRefusal]'s, among them). Where the
+// completion goes is what failed, and the heartbeat settles which node is
+// right; NAK'd as the message's, each such delivery marked it failed as
+// itself, and a budget spent so sent a healthy completion to the poison. It
+// is the node's ([queue.NakNode]), below.
+//
 // A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S. A completion
 // handed back because the coordination store did not answer a step
 // ([sandbox.ErrStoreSilent]: a collection's, the record of a park's question,
@@ -4305,7 +4314,8 @@ func controlOutcome(ctx context.Context, err error) queue.Result {
 		return queue.Defer(queue.DeferSeatMoved, err.Error())
 	case waits && !storeUnheard(err):
 		return queue.Ack()
-	case nodesFailure(ctx, err), errors.Is(err, sandbox.ErrResumeElsewhere):
+	case nodesFailure(ctx, err), errors.Is(err, sandbox.ErrResumeElsewhere),
+		errors.Is(err, sandbox.ErrSeatNotHeld):
 		return queue.NakNode(err)
 	}
 	return queue.Nak(err)
