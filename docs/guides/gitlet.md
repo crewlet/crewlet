@@ -442,8 +442,10 @@ revision touches paths the repository's `path_owners` name asks their owners
 itself, once its home has read the revision ([Path
 owners](../concepts/gitlet.md#path-owners)).
 
-**Read it.** **Conversation** is the change's readiness, its description and
-its timeline in the order its records landed; **Files** is a revision's
+**Read it.** **Conversation** is the change's description, its merge box —
+every condition to merge with where it stands, and the merge controls — and
+its activity in the order its records landed, beside a rail of whom it asked
+for a review and where each stands; **Files** is a revision's
 diff — the head unless you pick another, or what changed since an earlier
 revision — with each finding under the lines it points at, and one whose
 lines have changed since drawn above the diff, never dropped. A seat reads the
@@ -500,7 +502,7 @@ or, where the gate lets none of them, the lead of the repository's owner
 ([Who a change wakes](../concepts/gitlet.md#who-a-change-wakes)) — and
 merge it as [Merging a change](#merging-a-change) says.
 
-**Who heard about it.** The page's **Woke** tab is whom each record about the
+**Who heard about it.** The page's **Notified** tab is whom each record about the
 change reached, newest first, each with the one reason they heard under; the
 same answer is `GET /gitlet/repos/{name}/changes/{n}/routing` ([A change's
 questions](../reference/api-endpoints.md#a-changes-questions)).
@@ -585,12 +587,13 @@ change; a seat cannot override.
 ### From the change's page
 
 A live change's page (**Gitlet › Changes**, then the change) carries the same
-call as controls above its tabs, each made as you and never ahead of the
-engine's answer:
+call in its **Conversation**'s merge box, under the description, each control
+made as you and never ahead of the engine's answer:
 
-- **Where its gate stands** — how many of its conditions are met, and the
-  first one that is not, judged with *you* as the merger, so a reader without
-  the authority to merge into the target is told so before pressing anything.
+- **Where its gate stands** — how many of its conditions are met, each
+  condition with where it stands, and the first one that is not, judged with
+  *you* as the merger, so a reader without the authority to merge into the
+  target is told so before pressing anything.
 - **Merge**, or **Add to queue** where the target's gate requires a check, with
   how it merges (**Merge commit**, **Squash** or **Fast-forward**), **Delete
   its branch** — left unticked, the rule above decides — and **Close ENG-42

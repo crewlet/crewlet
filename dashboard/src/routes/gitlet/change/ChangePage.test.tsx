@@ -934,10 +934,11 @@ test("a draft is marked ready for review from the page bar, and offers no merge"
   );
   mount();
   const ready = await screen.findByRole("button", { name: "Ready for review" });
+  // THE MERGE BOX SAYS SO across its head: what a draft is, and its step.
+  const box = await screen.findByRole("region", { name: "Merge" });
+  expect(within(box).getByText("A draft merges nowhere")).toBeTruthy();
   expect(
-    await screen.findByText(
-      "0 of 1 condition to merge met. A draft merges nowhere. Mark it ready for review first.",
-    ),
+    within(box).getByText("A draft merges nowhere. Mark it ready for review first."),
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
   expect(screen.queryByRole("radio", { name: "Squash" })).toBeNull();

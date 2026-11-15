@@ -2502,7 +2502,13 @@ const (
 	// Changes tab and an empty repository's card), on a sheet of its own,
 	// added 16,451 bytes, script and sheet, and took it to 6152.4 KiB
 	// (6,300,030 bytes): 6153 KiB.
-	treeBudget = 5<<20 + 1033<<10
+	// A Gitlet change reviewed as a code host lays one out (its byline, the
+	// merge box and its checklist, the activity rail of cards with faces, the
+	// rail of reviewers, a file tree beside the diff with a head on each
+	// file, revisions as cards, the commit page's cards and the listing's
+	// richer row) added 24,076 bytes, script and sheet, and took it to
+	// 6175.9 KiB (6,324,106 bytes): 6176 KiB.
+	treeBudget = 5<<20 + 1056<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
