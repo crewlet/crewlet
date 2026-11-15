@@ -154,12 +154,17 @@ type Domain interface {
 	// "the Replicated tables of a domain that claims identity" rather
 	// than "Replicated minus the tables somebody remembered".
 	//
-	// THE FRAMEWORK'S HALF of the claim is that every value it hands an
-	// applier is one value on every node, however the record reached it:
-	// the broker's instant above all ([Record.StoredAt]), which arrives in
-	// the node's own zone at nanoseconds on one path and in the store's
-	// encoding on the other, and is handed on in the store's encoding on
-	// both. The domain's half is that its apply reads nothing else.
+	// THE FRAMEWORK'S HALF of the claim is that what it hands an applier
+	// OF THE RECORD is one value on every node, however the record reached
+	// it: the payload, the position, and the broker's instant
+	// ([Record.StoredAt]), which arrives in the node's own zone at
+	// nanoseconds on one path and in the store's encoding on the other,
+	// and is handed on in the store's encoding on both. The rest of
+	// [ApplyOptions] is not: Now is this node's clock and Epoch this
+	// node's epoch, each read per batch, and they may decide only a
+	// [Divergent] row. The domain's half is that no Replicated byte
+	// depends on anything but the record, its rows and the static
+	// declarations.
 	ClaimsIdentity() bool
 
 	// FeedGroup is the fleet-wide consumer this domain's WAKE FEED runs as
@@ -631,7 +636,7 @@ type Record struct {
 	// StoredAt is the broker's own timestamp for this record, which is
 	// what makes it byte-identical on every node rather than a clock each
 	// one reads for itself — in the store's encoding, UTC at a microsecond
-	// ([brokerInstant]), whether the record was applied as it arrived or
+	// ([AppliedInstant]), whether the record was applied as it arrived or
 	// held back and applied later, so it is ONE VALUE on every node and
 	// not only one instant.
 	StoredAt time.Time
@@ -758,11 +763,12 @@ type RetentionHook interface {
 // ApplyOptions carries every value an applier would otherwise read from the
 // world.
 //
-// Filled ONCE per apply-loop generation by the framework, EXCEPT StoredAt,
-// which is per record and comes from the broker — which is what makes it
-// byte-identical on every node rather than a clock each node reads for
-// itself, once the framework has put it in the store's encoding
-// ([Record.StoredAt]).
+// Filled by the framework PER BATCH ([Runner.batchOptions]: the batch's Now,
+// the epoch as it stands, the store's bind limit, beside the stream's static
+// declarations), EXCEPT StoredAt, which is per record and comes from the
+// broker — which is what makes it byte-identical on every node rather than a
+// clock each node reads for itself, once the framework has put it in the
+// store's encoding ([Record.StoredAt]).
 type ApplyOptions struct {
 	// Now is the batch's instant. NOT for durations: it is the same
 	// value for every record in a batch, so a difference between two

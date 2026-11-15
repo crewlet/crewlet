@@ -266,10 +266,13 @@
 // microsecond. A document encodes the precision and the zone it is handed, so
 // the loop hands every applier the second shape on both paths
 // ([Record.StoredAt]): two nodes in two zones, or one record applied live on
-// one node and reprocessed on another, then write the same bytes. statelogtest
-// holds every domain to it by applying one set of records live in two zones
-// and held back, through the domain's own applier, and comparing the
-// Replicated tables.
+// one node and reprocessed on another, then write the same bytes. What holds
+// the framework to it is this package's own test, which hands a probe applier
+// records by both paths, the live ones in two zones. statelogtest's broker-instant case runs
+// each domain's own applier the same way and compares the Replicated tables: it
+// goes red for a domain whose suite records reach a document the instant is
+// written into, and cannot see a domain that reads the instant in the
+// process's own zone, since its three nodes share one.
 //
 // NO RECORD VERSION AND NO [Readers] GATE ride on it, because no record
 // changed: a writer publishes the same bytes, and what changed is the value the
@@ -278,11 +281,14 @@
 // a timestamp it reads perfectly well, which is an outage bought to make a
 // difference in bytes arrive later. So a roll that crosses the change has each
 // node write what its own build derives: a document a node of the earlier build
-// writes during the roll keeps the nanoseconds and the zone it was handed, its
-// peers on this build write the store's encoding, and neither is rewritten
-// until a later record about that object is applied over it. No re-derivation
-// recovers it either: the instant lives in the document alone, and a [Deriver]
-// recomputes what rows imply, not what a record carried.
+// writes from a record it applied as it arrived keeps the nanoseconds and the
+// zone it was handed (one it reprocessed was already in the store's encoding),
+// and its peers on this build write the store's encoding. A later record about
+// the object rewrites only the fields it sets: a field it carries forward from
+// the stored document — a message's or a page's creation instant — keeps the
+// earlier shape for the life of the object. Nothing converts it, because no
+// `v*` tag has shipped this package, so no released build wrote a document a
+// later one owes a migration.
 //
 // # THE FLOOR THEOREM
 //

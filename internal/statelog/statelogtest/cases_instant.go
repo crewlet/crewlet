@@ -41,8 +41,11 @@ func runInstant(t *testing.T, new Factory) {
 // instant into a document hold different bytes for one record on two nodes —
 // chat's messages and the knowledge base's pages among them — under a claim
 // that two nodes at one checkpoint hold the same. The framework hands every
-// applier one value; this case holds both halves to it, the framework's and
-// any domain that reaches past it for an instant of its own.
+// applier one value, and statelog's own test is what holds the framework to
+// it. This case holds the domain to it as far as the suite's records reach: it
+// goes red where they reach a document the instant is written into, and it
+// cannot see a domain that reads the instant in the process's own zone, since
+// the three nodes share one.
 //
 // # How a record is held back here
 //
