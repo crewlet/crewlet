@@ -3380,6 +3380,14 @@ test("the settings tab names a seat's credentials and prints none of their value
   expect(screen.getByRole("link", { name: "Edit in org" }).getAttribute("href")).toBe(
     "#/company/org?seat=swe&editor=open",
   );
+  // THE AUXILIARY MODEL AND LEARNING ARE EDITED IN STRUCTURE, and each link
+  // opens the editor on the tab that edits it.
+  expect(screen.getByRole("link", { name: "Edit models" }).getAttribute("href")).toBe(
+    "#/company/org?seat=swe&editor=model",
+  );
+  expect(screen.getByRole("link", { name: /^Change .*learning$/ }).getAttribute("href")).toBe(
+    "#/company/org?seat=swe&editor=advanced",
+  );
 });
 
 // THE GUARDED DOCUMENT IS READ ONCE FOR THE WHOLE PROFILE. The shell reads it

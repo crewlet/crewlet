@@ -92,6 +92,9 @@ import {
   tokenBudgetErrors,
   unitForm,
   unitParts,
+  placementLabelsError,
+  wholeNumberError,
+  type PhaseModelField,
   type BudgetForm,
   type BudgetWindow,
   type CompanyForm,
@@ -146,7 +149,6 @@ import {
   isConnected,
   mattermostBotUsername,
   nameOfHandle,
-  placementSummary,
   providerOrder,
   readsCodeAccess,
   seatLabels,
@@ -1204,6 +1206,8 @@ function SeatEditor({
     : null;
 
   const budgetErrors = human ? {} : tokenBudgetErrors(form.tokenBudget);
+  const labelsError = placementLabelsError(form.placementLabels);
+  const boxError = wholeNumberError(form.pauseTTL) ?? wholeNumberError(form.maxTurns);
   const blocked =
     form.name.trim() === ""
       ? "A seat needs a name."
@@ -1211,7 +1215,11 @@ function SeatEditor({
         ? handleProblem
         : Object.keys(budgetErrors).length > 0
           ? "Correct the token budget first."
-          : null;
+          : labelsError !== undefined
+            ? "Correct the placement labels first."
+            : boxError !== undefined
+              ? "Correct the executor box’s numbers first."
+              : null;
 
   const parts = seatParts(key, data, initial, form, { editableHandle: minted });
   const shownHandle = minted ? form.handle.trim() || handle : handle;
@@ -1496,6 +1504,11 @@ function SeatEditor({
               data={data}
               chain={form.llm}
               onChain={(llm) => set({ llm })}
+              phases={form.phaseModels}
+              onPhase={(field, next) =>
+                set({ phaseModels: { ...form.phaseModels, [field]: next } })
+              }
+              phaseError={(field) => errorFor([field])}
               budget={form.tokenBudget}
               onBudget={(window, typed) =>
                 set({ tokenBudget: { ...form.tokenBudget, [window]: typed } })
@@ -1554,6 +1567,13 @@ function SeatEditor({
           paths: [["sandbox"], ["workers"], ["placement"], ["learning_enabled"], ["mcp_env"]],
           content: (
             <>
+              <RuntimeSection
+                form={form}
+                set={set}
+                errorFor={errorFor}
+                labelsError={labelsError}
+                disabled={disabled}
+              />
               <DocumentFacts data={data} handle={handle} />
               {remove}
             </>
@@ -1592,7 +1612,13 @@ function SeatEditor({
       placed={placedOn(api, key)}
       changed={changedPaths(parts)}
       tabs={tabs}
-      initialTab={section === "reports" || section === "project" ? "work" : undefined}
+      initialTab={
+        section === "reports" || section === "project"
+          ? "work"
+          : section === "model" || section === "advanced"
+            ? section
+            : undefined
+      }
       onApply={() => apply(parts)}
       onClose={onClose}
     />
@@ -1845,10 +1871,27 @@ function Reports({
   );
 }
 
+/** Each per-phase chain, as the editor names it and what it runs. */
+const PHASE_WORDS: Readonly<Record<PhaseModelField, { label: string; runs: string }>> = {
+  llm_review: { label: "Reviewer", runs: "Checks the executor’s work before the turn ends." },
+  llm_subagent: { label: "Sub-agents", runs: "Runs the sub-agents this seat starts." },
+  llm_auxiliary: {
+    label: "Auxiliary",
+    runs: "Runs learning’s summaries and reflection. A fast model keeps them cheap.",
+  },
+  llm_judge: {
+    label: "Round-cap judge",
+    runs: "Decides whether a phase that ran out of tool rounds is still making progress.",
+  },
+};
+
 function ModelSection({
   data,
   chain,
   onChain,
+  phases,
+  onPhase,
+  phaseError,
   budget,
   onBudget,
   budgetError,
@@ -1858,6 +1901,9 @@ function ModelSection({
   data: ConfigRole;
   chain: readonly string[] | null;
   onChain: (next: string[]) => void;
+  phases: Readonly<Record<PhaseModelField, readonly string[] | null>>;
+  onPhase: (field: PhaseModelField, next: string[]) => void;
+  phaseError: (field: PhaseModelField) => string | undefined;
   budget: BudgetForm;
   onBudget: (window: BudgetWindow, typed: string) => void;
   budgetError: (window: BudgetWindow) => string | undefined;
@@ -1920,6 +1966,58 @@ function ModelSection({
             )}
           </FormField>
         )}
+      </EditorSection>
+      {/* THE CHAINS BESIDE `llm`, one per phase, each falling back to the
+          model above when empty. One written as a per-phase mapping is shown
+          and left to the configuration document. */}
+      <EditorSection title="Models per phase">
+        {PHASE_MODEL_FIELDS.map((field) => {
+          const words = PHASE_WORDS[field];
+          const value = phases[field];
+          if (value === null) {
+            return (
+              <ReadOnlyFact
+                key={field}
+                label={words.label}
+                reason="Written per phase in the configuration document."
+                link={{ to: "config", label: "Edit in the configuration document" }}
+              >
+                {formatPhaseLLM(data[field])
+                  .map((row) => row.chain)
+                  .join("; ")}
+              </ReadOnlyFact>
+            );
+          }
+          return (
+            <FormField
+              key={field}
+              label={words.label}
+              optional
+              helperOnFocus
+              helper={
+                value.length > 0
+                  ? `${words.runs} Tried in this order: ${value.join(", then ")}.`
+                  : `${words.runs} Empty uses the model above.`
+              }
+              error={withProblems(phaseError(field))}
+            >
+              {(input) => (
+                <TagsInput
+                  id={input.id}
+                  label={`${words.label} model providers`}
+                  value={[...value]}
+                  onChange={(next) => onPhase(field, next)}
+                  options={providers.map((key) => ({ value: key, label: key }))}
+                  allowCustom={false}
+                  ordered
+                  disabled={disabled}
+                  aria-describedby={input.describedBy}
+                  aria-invalid={input.invalid}
+                />
+              )}
+            </FormField>
+          );
+        })}
       </EditorSection>
       {/* ONE BOX PER WINDOW, each optional, on one line: a seat may cap its
         day, its week and its month independently, and a turn runs only while
@@ -2235,6 +2333,139 @@ const CONTACT_VENDOR: Readonly<Record<HumanContactKey, Vendor>> = {
   gitlab_username: "gitlab",
 };
 
+/** The learning choices, the company's default first: unset follows it. */
+const LEARNING_CHOICES: FieldChoice[] = [
+  { value: "", label: "The company’s default" },
+  { value: "on", label: "On" },
+  { value: "off", label: "Off" },
+];
+
+/** The executor box's own keys this section edits; the rest stay the document's. */
+const BOX_KEYS = new Set(["pause_ttl_seconds", "max_turns"]);
+
+/**
+ * How an agent seat runs, beyond its model: whether it learns, which delegate
+ * templates it may hand work to, which nodes may run it, and the two numbers
+ * of its executor box. Each is the seat's own key, written through Apply like
+ * every other field.
+ */
+function RuntimeSection({
+  form,
+  set,
+  errorFor,
+  labelsError,
+  disabled,
+}: {
+  form: SeatForm;
+  set: (patch: Partial<SeatForm>) => void;
+  errorFor: (path: Segment[]) => string | undefined;
+  labelsError: string | undefined;
+  disabled: boolean;
+}) {
+  const { state } = useBuilder();
+  const company = state.draft.company as CompanyDocument & { workers?: unknown };
+  const templates = isRecord(company.workers) ? Object.keys(company.workers) : [];
+  return (
+    <>
+      <EditorSection title="Learning and delegation">
+        <ConfigField
+          label="Learning"
+          kind="choice"
+          choices={LEARNING_CHOICES}
+          value={form.learning}
+          onChange={(learning) => set({ learning: learning as SeatForm["learning"] })}
+          disabled={disabled}
+          help="Off skips reflection after this seat's turns; its episodes are still written."
+          error={errorFor(["learning_enabled"])}
+        />
+        <FormField
+          label="Workers it may delegate to"
+          optional
+          helperOnFocus
+          helper={
+            templates.length === 0
+              ? "The company publishes no delegate templates yet."
+              : form.workers.length === 0
+                ? "Empty is every template the company publishes."
+                : `Only ${form.workers.join(", ")}.`
+          }
+          error={withProblems(errorFor(["workers"]))}
+        >
+          {(input) => (
+            <TagsInput
+              id={input.id}
+              label="Delegate templates"
+              value={[...form.workers]}
+              onChange={(workers) => set({ workers })}
+              options={templates.map((name) => ({ value: name, label: name }))}
+              allowCustom={false}
+              disabled={disabled || templates.length === 0}
+              aria-describedby={input.describedBy}
+              aria-invalid={input.invalid}
+            />
+          )}
+        </FormField>
+      </EditorSection>
+      <EditorSection title="Placement">
+        <ConfigField
+          label="Pinned to node"
+          kind="id"
+          value={form.placementNode}
+          onChange={(placementNode) => set({ placementNode })}
+          required={false}
+          disabled={disabled}
+          help="A node id. Empty lets any node that runs seats take it."
+          error={errorFor(["placement", "node"])}
+        />
+        <FormField
+          label="Node labels it needs"
+          optional
+          helperOnFocus
+          helper="Each as key=value. A node must carry every one to run this seat."
+          error={withProblems(labelsError ?? errorFor(["placement", "labels"]))}
+        >
+          {(input) => (
+            <TagsInput
+              id={input.id}
+              label="Node labels"
+              value={[...form.placementLabels]}
+              onChange={(placementLabels) => set({ placementLabels })}
+              allowCustom
+              disabled={disabled}
+              aria-describedby={input.describedBy}
+              aria-invalid={input.invalid}
+            />
+          )}
+        </FormField>
+      </EditorSection>
+      <EditorSection title="Executor box">
+        <div className="builder-pair">
+          <ConfigField
+            label="Paused for, in seconds"
+            kind="id"
+            value={form.pauseTTL}
+            onChange={(pauseTTL) => set({ pauseTTL })}
+            required={false}
+            disabled={disabled}
+            help="How long a box waiting on a person stays paused. Empty is the default, 0 never pauses."
+            error={wholeNumberError(form.pauseTTL) ?? errorFor(["sandbox", "pause_ttl_seconds"])}
+          />
+          <ConfigField
+            label="Rounds per run"
+            kind="id"
+            value={form.maxTurns}
+            onChange={(maxTurns) => set({ maxTurns })}
+            required={false}
+            disabled={disabled}
+            help="The most agentic rounds one run may take. Empty is the default, 0 is uncapped."
+            error={wholeNumberError(form.maxTurns) ?? errorFor(["sandbox", "max_turns"])}
+          />
+        </div>
+      </EditorSection>
+    </>
+  );
+}
+
 /**
  * The seat's settings the builder shows and does not edit: one row each in one
  * list, the reason on hover, and one link to where they are edited.
@@ -2244,55 +2475,15 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
   const company = state.draft.company;
   const facts: FactListItem[] = [];
 
-  const phases = PHASE_MODEL_FIELDS.filter((field) => data[field] !== undefined);
-  if (phases.length > 0) {
-    facts.push({
-      key: "phases",
-      label: "Models per phase",
-      value: phases
-        .map(
-          (field) =>
-            `${field.replace("llm_", "")}: ${formatPhaseLLM(data[field])
-              .map((r) => r.chain)
-              .join("; ")}`,
-        )
-        .join(", "),
-      reason: "Set in the configuration document.",
-    });
-  }
-  if (isRecord(data.sandbox)) {
+  if (isRecord(data.sandbox) && Object.keys(data.sandbox).some((key) => !BOX_KEYS.has(key))) {
     // THE SEAT PAGE'S WORDS: what the seat's own block sets for the box its
-    // executor runs in. Where that box is belongs to the model entry that
-    // launches the run, not to this block.
+    // executor runs in beyond the two numbers above. Where that box is
+    // belongs to the model entry that launches the run, not to this block.
     facts.push({
       key: "sandbox",
-      label: "Executor box",
+      label: "Executor box setup",
       value: sandboxWords(data),
-      reason: "Edit in the configuration file.",
-    });
-  }
-  if (Array.isArray(data.workers) && data.workers.length > 0) {
-    facts.push({
-      key: "workers",
-      label: "Workers",
-      value: data.workers.join(", "),
-      reason: "Edit in the configuration file.",
-    });
-  }
-  if (isRecord(data.placement)) {
-    facts.push({
-      key: "placement",
-      label: "Placement",
-      value: placementSummary(data.placement),
-      reason: "Edit in the configuration file.",
-    });
-  }
-  if (typeof data.learning_enabled === "boolean") {
-    facts.push({
-      key: "learning",
-      label: "Learning",
-      value: data.learning_enabled ? "On" : "Off",
-      reason: "Set in the configuration document.",
+      reason: "Its setup, environment and tool servers are edited in the configuration file.",
     });
   }
   const credentials = toolCredentialNames(data);

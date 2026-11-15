@@ -939,46 +939,79 @@ describe("seat fields", () => {
     expect(view.spies.openDelete).toHaveBeenCalledWith("seat:dev");
   });
 
-  // The field coverage's read-only row: each setting the builder shows and
-  // does not edit, with the reason and where it is edited instead.
-  test("the settings the builder does not edit are shown, each with where it is edited", () => {
+  // THE ADVANCED FACTS ARE FIELDS NOW: the per-phase models on Model, and
+  // learning, workers, placement and the executor box's two numbers on
+  // Advanced. What the builder still does not edit (the box's setup and
+  // environment, the tool credentials, the Datadog fallback) is shown with
+  // where it is edited instead.
+  test("the advanced settings are fields, and what stays the document's says where it is edited", () => {
     const doc = fixtureCompany();
+    Object.assign(doc, { workers: { researcher: {}, writer: {}, auditor: {} } });
     Object.assign(doc.units![0]!.roles![1]!, {
       llm_review: ["smart", "fast"],
       llm_judge: "fast",
       sandbox: { env: { KEY: "__redacted__" }, max_turns: 40 },
       workers: ["researcher", "writer"],
       learning_enabled: false,
+      placement: { labels: { region: "eu" } },
     });
     edit(keyedState(doc), "seat:dev");
+    tab("Model");
+    const reviewer = screen.getByRole("list", { name: "Chosen: Reviewer model providers" });
+    expect(reviewer.textContent).toContain("smart");
+    expect(reviewer.textContent).toContain("fast");
+    expect(
+      screen.getByRole("list", { name: "Chosen: Round-cap judge model providers" }).textContent,
+    ).toContain("fast");
     tab("Advanced");
+    expect(field("Learning").textContent).toContain("Off");
+    expect(screen.getByRole("list", { name: "Chosen: Delegate templates" }).textContent).toContain(
+      "researcher",
+    );
+    expect(screen.getByRole("list", { name: "Chosen: Node labels" }).textContent).toContain(
+      "region=eu",
+    );
+    expect((field("Rounds per run") as HTMLInputElement).value).toBe("40");
     const section = screen
       .getByRole("heading", { name: "From the configuration document" })
       .closest("section") as HTMLElement;
     const fact = (label: string) =>
       within(section).getByText(label).closest(".crewlet-fact-list__row") as HTMLElement;
-    expect(fact("Models per phase").textContent).toContain("review: smart, then fast");
-    expect(fact("Models per phase").textContent).toContain("judge: fast");
-    expect(fact("Executor box").textContent).toContain("1 variable · up to 40 turns");
-    expect(fact("Workers").textContent).toContain("researcher, writer");
-    expect(fact("Learning").textContent).toContain("Off");
+    expect(fact("Executor box setup").textContent).toContain("1 variable · up to 40 turns");
+    expect(fact("Executor box setup").textContent).toContain("edited in the configuration file");
     expect(fact("Datadog fallback").textContent).toContain("Another seat");
-    // Each says why it is not edited here, and the section links to where it is.
-    expect(fact("Executor box").textContent).toContain("Edit in the configuration file.");
-    expect(
-      within(section).getByRole("link", { name: "Open the document" }).getAttribute("href"),
-    ).toBe("#/settings/config");
+    expect(within(section).queryByText("Workers")).toBeNull();
+    expect(within(section).queryByText("Learning")).toBeNull();
     expect(section.innerHTML).not.toContain("__redacted__");
   });
 
-  test("a seat's placement is shown as the node and labels it names", () => {
+  test("the advanced fields apply as one edit, each key the seat's own", () => {
     const doc = fixtureCompany();
-    doc.units![0]!.roles![1]!.placement = { labels: { region: "eu" } };
-    edit(keyedState(doc), "seat:dev");
+    Object.assign(doc.units![0]!.roles![1]!, {
+      sandbox: { env: { KEY: "v" }, max_turns: 40 },
+      placement: { labels: { region: "eu" } },
+    });
+    const view = edit(keyedState(doc), "seat:dev");
     tab("Advanced");
-    const fact = screen.getByText("Placement").closest(".crewlet-fact-list__row") as HTMLElement;
-    expect(fact.textContent).toContain("Nodes labelled region=eu");
-    expect(fact.textContent).not.toContain("[object Object]");
+    choose("Learning", "On");
+    type("Pinned to node", "node-a");
+    type("Rounds per run", "25");
+    type("Paused for, in seconds", "0");
+    apply();
+    expect(view.state().log.ops).toHaveLength(1);
+    const data = seatData(view.state(), "seat:dev");
+    expect(data.learning_enabled).toBe(true);
+    expect(data.placement).toEqual({ node: "node-a", labels: { region: "eu" } });
+    // THE BOX KEEPS WHAT IT DOES NOT EDIT, and 0 is a setting, never "unset".
+    expect(data.sandbox).toEqual({ env: { KEY: "v" }, max_turns: 25, pause_ttl_seconds: 0 });
+  });
+
+  test("a number the executor box cannot take holds Apply, with why", () => {
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    tab("Advanced");
+    type("Rounds per run", "lots");
+    expect(applyRefuses()).toBe(true);
+    expect(errorOf(field("Rounds per run"))?.textContent).toContain("Write a whole number");
   });
 
   test("a human seat shows contact and availability, and no agent-only field", () => {
