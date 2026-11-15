@@ -89,6 +89,7 @@ import {
 import { authorLabel } from "~/lib/attribution.ts";
 import { TAKE_BACKUP } from "~/lib/backups.ts";
 import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
+import { SNAPSHOT_DONORS_REQUIRED } from "~/contract/retention.ts";
 import { andList } from "~/lib/words.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
@@ -125,10 +126,6 @@ export const RETENTION_POLL_MS = 60_000;
 export function useRetentionReport(enabled: boolean): QueryResult<RetentionReport> {
   return useQuery("retention", undefined, { pollMs: RETENTION_POLL_MS, enabled });
 }
-
-/** The trim's sixth term (D72), and the number an operator has to fix when the
- *  banner names `snapshot_floor`. */
-const SNAPSHOT_DONORS_REQUIRED = 2;
 
 /** The alarm list's element, which `at=alarms` brings into view. */
 const ALARMS_ID = "retention-alarms";
