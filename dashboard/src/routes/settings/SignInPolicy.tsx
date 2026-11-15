@@ -41,7 +41,7 @@ export function SignInPolicy() {
         {data ? (
           <>
             {" "}
-            (shown here for node <InlineCode>{data.node}</InlineCode>)
+            (shown here for node <InlineCode close=")">{data.node}</InlineCode>
           </>
         ) : null}
         .
