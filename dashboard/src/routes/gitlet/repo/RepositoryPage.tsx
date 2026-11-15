@@ -26,12 +26,14 @@
  * A declared repository's settings are the company document's (`code.repos`),
  * settled by every activation, so Settings shows them and leads to Settings ›
  * Configuration, where they are changed. One a tool or a person made is
- * changed here: its search mode and its mirrors (`RepoWrites.tsx`,
- * `code_update_repo`), its protection rules (`Protect.tsx`,
- * `code_protect_branch`) and its delete (`RepoLife.tsx`, `code_delete_repo`,
- * asked once its name is typed). Any repository's unreachable history is
- * purged here, after a confirmation naming who keeps copies. A deleted repository says so above its tabs and
- * offers its restore (`code_restore_repo`). Every write is confirmed, never
+ * changed here: its details (description, default branch and owner), its
+ * search mode and its mirrors (`RepoWrites.tsx`, `code_update_repo`), its
+ * protection rules (`Protect.tsx`, `code_protect_branch`) and its delete
+ * (`RepoLife.tsx`, `code_delete_repo`, asked once its name is typed). Any
+ * repository's unreachable history is purged here, after a confirmation naming
+ * who keeps copies. A deleted repository says so above its tabs and offers its
+ * restore (`code_restore_repo`), and its Settings draw what it holds and none
+ * of those writes: it takes no change but its restore. Every write is confirmed, never
  * optimistic: the page is redrawn from the read the write's floor brings.
  * The header's state pill says `importing` while an import runs, and the
  * About rail how far it went and where its mirrors stand.
@@ -93,7 +95,7 @@ import { Files } from "./Files.tsx";
 import { Branches, Commits } from "./History.tsx";
 import { ProtectButton, RuleControls } from "./Protect.tsx";
 import { DeleteRepoControl, DeletedNotice } from "./RepoLife.tsx";
-import { MirrorControls, PurgeControl, SearchModeControl } from "./RepoWrites.tsx";
+import { DetailsControl, MirrorControls, PurgeControl, SearchModeControl } from "./RepoWrites.tsx";
 import { useRevisions } from "./refs.tsx";
 import "~/styles/gitlet.css";
 
@@ -426,9 +428,18 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
       </QueryState>
     );
   const rules = repo.protections ?? [];
+  // A DELETED REPOSITORY TAKES NO CHANGE BUT ITS RESTORE, which the notice
+  // above the tabs offers: its cards show what it holds, and no write is
+  // drawn on them. Drawn disabled, a column of writes read as something the
+  // reader lacked rather than something the repository is waiting for.
+  const gone = repo.status === "deleted" || repo.status === "purging";
   return (
     <Stack gap={4}>
-      {repo.managed_by === "config" ? (
+      {gone ? (
+        <Callout variant="neutral">
+          While it is deleted nothing of it changes: restore it to change its settings.
+        </Callout>
+      ) : repo.managed_by === "config" ? (
         <Callout variant="neutral">
           <Stack gap={2}>
             <span>
@@ -446,13 +457,16 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
         </Callout>
       ) : (
         <Callout variant="neutral">
-          This repository was made here or by a tool, so it is changed here: its search mode, its
-          mirrors, its protection rules and its delete are below. Its description, owner, default
-          branch and path owners are changed by the code tools (
-          <span className="mono">code_update_repo</span>), which a seat or your assistant calls.
+          This repository was made here or by a tool, so it is changed here: its details, its search
+          mode, its mirrors, its protection rules and its delete are below. Its path owners are set
+          by a seat, or by your assistant.
         </Callout>
       )}
-      <SettingsCard title="Repository" description="What it is and who reads it.">
+      <SettingsCard
+        title="Repository"
+        description="What it is and who reads it."
+        actions={gone ? undefined : <DetailsControl repo={repo} />}
+      >
         <PropertiesRail
           headings="sentence"
           groups={[
@@ -478,7 +492,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
       <SettingsCard
         title="Protection rules"
         description="Who pushes to a branch directly, whether a push may force or delete it, and what a merge into it needs."
-        actions={<ProtectButton repo={repo} />}
+        actions={gone ? undefined : <ProtectButton repo={repo} />}
       >
         {rules.length === 0 ? (
           <p className="muted">No rule protects a ref: anybody who may write may push to any.</p>
@@ -501,7 +515,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
                     </span>
                     {source && <span className="t-caption">{ruleSourceLine(source)}</span>}
                   </span>
-                  <RuleControls repo={repo} held={{ rule, gate }} />
+                  {!gone && <RuleControls repo={repo} held={{ rule, gate }} />}
                 </li>
               );
             })}
@@ -529,36 +543,40 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
           </ul>
         )}
       </SettingsCard>
-      <SettingsCard
-        title="Search mode"
-        description="How code search reads the repository: from an index of its default branch, or with git grep when a search names it."
-      >
-        <SearchModeControl repo={repo} />
-      </SettingsCard>
-      <SettingsCard
-        title="Mirrors"
-        description="Another host this repository follows, or pushes to."
-      >
-        <p className="muted">
-          {[pullMirrorStanding(repo), pushMirrorStanding(repo)].filter(Boolean).join(" ") ||
-            "No mirror: it follows no other host and pushes to none."}
-        </p>
-        <MirrorControls repo={repo} />
-      </SettingsCard>
-      <SettingsCard
-        title="Unreachable history"
-        description="Objects no ref, change or queue reaches any longer, dropped for good."
-      >
-        {purgeStanding(repo) && <p className="muted">{purgeStanding(repo)}</p>}
-        <PurgeControl repo={repo} />
-      </SettingsCard>
-      {/* LAST, as the one write that takes the repository away. */}
-      <SettingsCard
-        title="Delete repository"
-        description="A deleted repository takes no clone and no push, and is restored as it was until it is purged."
-      >
-        <DeleteRepoControl repo={repo} />
-      </SettingsCard>
+      {!gone && (
+        <>
+          <SettingsCard
+            title="Search mode"
+            description="How code search reads the repository: from an index of its default branch, or with git grep when a search names it."
+          >
+            <SearchModeControl repo={repo} />
+          </SettingsCard>
+          <SettingsCard
+            title="Mirrors"
+            description="Another host this repository follows, or pushes to."
+          >
+            <p className="muted">
+              {[pullMirrorStanding(repo), pushMirrorStanding(repo)].filter(Boolean).join(" ") ||
+                "No mirror: it follows no other host and pushes to none."}
+            </p>
+            <MirrorControls repo={repo} />
+          </SettingsCard>
+          <SettingsCard
+            title="Unreachable history"
+            description="Objects no ref, change or queue reaches any longer, dropped for good."
+          >
+            {purgeStanding(repo) && <p className="muted">{purgeStanding(repo)}</p>}
+            <PurgeControl repo={repo} />
+          </SettingsCard>
+          {/* LAST, as the one write that takes the repository away. */}
+          <SettingsCard
+            title="Delete repository"
+            description="A deleted repository takes no clone and no push, and is restored as it was until it is purged."
+          >
+            <DeleteRepoControl repo={repo} />
+          </SettingsCard>
+        </>
+      )}
     </Stack>
   );
 }

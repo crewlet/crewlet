@@ -8670,12 +8670,16 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   (`code_delete_branch`), confirmed in the page and sent with the head the
   row shows as `expected_head`, so a branch pushed to since is refused
   rather than deleted unseen; the confirmation says its commits stay in the
-  history, that a change proposing it loses its source, and names the
-  default branch as one. Its **Tags** follow under it, the same listing under
+  history and that a change proposing it loses its source. The default
+  branch's row has no Delete: the engine refuses its deletion whoever asks
+  (`default_branch`), and it is let go by making another branch the default
+  on Settings first. Its **Tags** follow under it, the same listing under
   `refs/tags/`, each opening its code at its whole ref. A new branch takes
   write and a delete maintain, and
   a repository that is archived, deleted, importing or a pull mirror takes
-  neither, each held with that sentence. **Code** commits from the browser
+  neither, each held with that sentence; New branch is held only for a
+  repository that holds no branch at all, and one whose default branch holds
+  nothing names where it starts. **Code** commits from the browser
   (`code_commit_files`) on the branch the page's read resolved (never the
   address's spelling of it, which may name a branch bare, a tag, or nothing
   for the default branch), at the commit it stood at (`expected_head`), from
@@ -8691,7 +8695,11 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   commit that makes its default branch, sent with no `expected_head` since
   nothing was read, so a repository made with New repository is filled
   without a clone — its clone address with its copy, and the two commands
-  that push a repository the reader already has into it. **Settings** is a
+  that push a repository the reader already has into it. A repository whose
+  default branch holds nothing while other branches are live is not empty:
+  its Code and Commits tabs draw the revision picker that reaches them, and
+  say the default branch holds no commit and that another branch can be made
+  the default on Settings. **Settings** is a
   card a section, as a code host's settings page is, each titled with what it
   governs and a line saying so, and shows the repository's settings, its
   protection rules with their merge gates — a gate that requires a check
@@ -8700,7 +8708,11 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   and its path owners, and makes its writes, each through `useAct` and a
   WriteButton, never optimistic — the page is redrawn from the read the
   write's position brings — and each drawn for every reader, held with the
-  sentence that says why: **Search mode** (`code_update_repo`'s `search`, a
+  sentence that says why: **Edit details**, on the Repository card
+  (`code_update_repo`'s `description`, `default_branch` and `owner`, one call
+  carrying only what the person moved, the default branch chosen from the
+  branches the repository holds, which is how a repository whose default
+  branch holds nothing is put right); **Search mode** (`code_update_repo`'s `search`, a
   button a mode of `REPO_SEARCH_MODES`, held to `gitlet.SearchModes`: the mode
   it has is no change, and a scratch repository is never indexed);
   **Mirrors**, a person's alone (`code_update_repo`'s `mirror_from` and
@@ -8738,10 +8750,11 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   what stops and that it is restorable until its purge, takes an optional
   reason, and is held until the repository's name is typed. A deleted
   repository's page says so above its tabs, with when, and offers **Restore
-  repository** (`code_restore_repo`). A declared repository's rules, delete
-  and restore are the company document's, held with that sentence. Its
-  description, owner, default branch and path owners are changed by the code
-  tools (`code_update_repo`), which a seat or a person's assistant calls.
+  repository** (`code_restore_repo`); its Settings cards show what it holds
+  and draw none of the writes above, since a deleted repository takes no
+  change but its restore. A declared repository's rules, delete and restore
+  are the company document's, held with that sentence. Its path owners are
+  set by a seat, or by a person's assistant.
   Content is not polled: a reader reading a file reads
   the revision they opened. A commit of its history, and of a blame, opens
   the commit's page; a branch offers a comparison with the default branch.

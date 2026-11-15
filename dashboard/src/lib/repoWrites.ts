@@ -96,6 +96,47 @@ export function searchModeHeld(
   return undefined;
 }
 
+/**
+ * Why the repository's details (its description, default branch and owner)
+ * cannot be changed here, or undefined: a declared repository's are the
+ * document's, and the rest is what holds any change to its life.
+ */
+export function detailsHeld(repo: CodeRepoDetail, viewer: Reader): string | undefined {
+  if (repo.managed_by === "config") return DECLARED;
+  const held = lifeHeld(repo);
+  if (held) return held;
+  if (!isBound(viewer)) return UNBOUND;
+  return undefined;
+}
+
+/**
+ * Why a details form cannot be sent yet, or undefined: something changed, and
+ * a default branch the repository holds (`branches`, its live branches by
+ * name). The default branch it has already is kept even where it holds no
+ * commit, since that is no change.
+ */
+export function detailsFormHeld(
+  repo: CodeRepoDetail,
+  next: { description: string; defaultBranch: string; owner: string },
+  branches: readonly string[],
+): string | undefined {
+  const changed =
+    next.description.trim() !== (repo.description ?? "") ||
+    next.defaultBranch !== repo.default_branch ||
+    next.owner !== ownerKey(repo.owner);
+  if (!changed) return "Nothing is changed yet.";
+  if (next.defaultBranch !== repo.default_branch && !branches.includes(next.defaultBranch)) {
+    return `${repo.name} holds no branch ${next.defaultBranch}: choose one of its branches.`;
+  }
+  if (next.owner === "") return "Choose the unit that owns it.";
+  return undefined;
+}
+
+/** An owner as a picker's value: its kind and its key or handle, `unit:eng`. */
+export function ownerKey(owner: { kind: string; ref: string }): string {
+  return `${owner.kind}:${owner.ref}`;
+}
+
 /** Why the repository's mirrors cannot be set or removed here, or undefined. */
 export function mirrorsHeld(repo: CodeRepoDetail, viewer: Reader): string | undefined {
   if (repo.managed_by === "config") return DECLARED;
