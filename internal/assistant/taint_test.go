@@ -39,22 +39,29 @@ func TestAProposalAfterOutsideTextIsTainted(t *testing.T) {
 			if tc.read != catalog.FetchWebPageToolName {
 				read = assistanttest.Tool(t, tc.read)
 			}
-			create := assistanttest.Tool(t, "create_task")
+			// A turn that read a web page proposes only on what it was asked
+			// about (ADR-0151), so its write is a comment on the task named.
+			write, writeArgs := assistanttest.Tool(t, "create_task"), map[string]any{"title": "Follow it up"}
+			if tc.read == catalog.FetchWebPageToolName {
+				write, writeArgs = assistanttest.Tool(t, "comment_on_task"),
+					map[string]any{"item": "ENG-42", "body": "Noted."}
+			}
 			req, err := read.Request(tc.args)
 			if err != nil {
 				t.Fatal(err)
 			}
 			f := assistanttest.NewRig(t, evals.RigOptions{
-				Tools: []catalog.Tool{read, create},
-				Acts:  []string{create.Act},
+				Tools: []catalog.Tool{read, write},
+				Acts:  []string{write.Act},
 				Handler: assistanttest.Routes(map[string]exec.Response{
-					req.Method + " " + req.Path: tc.answer}),
+					req.Method + " " + req.Path: tc.answer,
+					"GET /worklet/ENG-42":       assistanttest.Task("ENG-42", "Ship it", "Details.")}),
 				Rounds: []evals.Round{
 					evals.Call("c1", tc.read, tc.args),
-					evals.Call("c2", "create_task", map[string]any{"title": "Follow it up"}),
+					evals.Call("c2", write.Name, writeArgs),
 					evals.Say("Proposed.")}})
 			f.Person = evals.Person("grace", "grace", iam.GrantAdmin)
-			accepted, err := f.Ask("k-"+tc.read, "Look and file a task", nil)
+			accepted, err := f.Ask("k-"+tc.read, "Look at ENG-42 and follow it up", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

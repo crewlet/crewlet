@@ -13,13 +13,15 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// page answers GET /research/page with one page of a vendor's documentation.
-var page = assistanttest.Routes(map[string]exec.Response{
-	"GET /research/page": evals.JSON(map[string]any{"url": "https://docs.example.com/rules",
+// pageAnswer is one page of a vendor's documentation as GET /research/page
+// answers it, and page a handler answering it.
+var (
+	pageAnswer = evals.JSON(map[string]any{"url": "https://docs.example.com/rules",
 		"host": "docs.example.com", "title": "Origin rules", "from": 0, "length": 40,
 		"text":    "Host header overrides need the Enterprise plan.",
-		"read_at": "2026-10-24T09:41:00Z"}),
-})
+		"read_at": "2026-10-24T09:41:00Z"})
+	page = assistanttest.Routes(map[string]exec.Response{"GET /research/page": pageAnswer})
+)
 
 func researchCompany(t *testing.T) assistant.Company {
 	t.Helper()
@@ -88,5 +90,48 @@ func TestATurnReadsAFewPagesFencedAsTheSites(t *testing.T) {
 	if read != 8 || refused != 1 {
 		t.Errorf("the turn read %d pages fenced as the site's and refused %d, want 8 and 1",
 			read, refused)
+	}
+}
+
+// After a web page, a comment on the task the question names is proposed and
+// one on another task refused; with no page read, both are proposed.
+func TestAWebTaintedTurnProposesOnlyOnItsSubject(t *testing.T) {
+	t.Parallel()
+	comment := assistanttest.Tool(t, "comment_on_task")
+	routes := map[string]exec.Response{
+		"GET /worklet/ENG-41": assistanttest.Task("ENG-41", "Route the docs", "Which way?"),
+		"GET /worklet/ENG-99": assistanttest.Task("ENG-99", "Payroll", "Pay day."),
+	}
+	routes["GET /research/page"] = pageAnswer
+	for name, tc := range map[string]struct {
+		web     bool
+		target  string
+		propose bool
+	}{
+		"the task asked about, after a page": {true, "ENG-41", true},
+		"another task, after a page":         {true, "ENG-99", false},
+		"another task, with no page read":    {false, "ENG-99", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var rounds []evals.Round
+			if tc.web {
+				rounds = append(rounds, evals.Call("f", catalog.FetchWebPageToolName,
+					map[string]any{"url": "https://docs.example.com/rules"}))
+			}
+			rounds = append(rounds, evals.Call("c", "comment_on_task",
+				map[string]any{"item": tc.target, "body": "Noted."}), evals.Say("Done."))
+			f := assistanttest.NewRig(t, evals.RigOptions{Company: researchCompany(t),
+				Tools: []catalog.Tool{comment}, Acts: []string{comment.Act},
+				Handler: assistanttest.Routes(routes), Rounds: rounds})
+			accepted, err := f.Ask("subject", "What should ENG-41 do about the plan?", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Follow(accepted.TurnID, 0)
+			if got := len(f.Store.Proposals()) == 1; got != tc.propose {
+				t.Errorf("proposed %v, want %v", got, tc.propose)
+			}
+		})
 	}
 }

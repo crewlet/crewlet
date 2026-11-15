@@ -440,6 +440,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		}
 	}
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
+	t.subjects = subjectsOf(ts.Input, ts.Page)
 	t.brief.on = briefing
 	var chip *wire.PageChip
 	if ts.Page != nil {
