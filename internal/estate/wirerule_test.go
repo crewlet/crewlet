@@ -745,6 +745,10 @@ func TestEveryZeroAMethodDecidesDropsNothingAReaderMisses(t *testing.T) {
 // TWO-SIDED, like [zeroByMethod]: a field found and not listed fails, and one
 // listed that nothing carries fails too.
 var zeroThroughPointer = map[string]string{
+	"worklet.View.DeletedAt": "never set in a save: tracker.write_view's writer refuses a view " +
+		"carrying it (worklet.checkView), and the one write that stamps it is the writer's own " +
+		"DeleteView, from its own clock inside its decide, so the applier and every view read " +
+		"meet nil or a real instant",
 	"worklet.TaskPatch.StartAt": "a date a patch sets, never the zero instant: tracker.update_task " +
 		"refuses one before it is asked (worklet.TaskPatch.CheckDates) and the writer's UpdateTask " +
 		"where it runs, so the applier (applyPatch), its one reader, meets nil or a real instant; " +
@@ -982,7 +986,8 @@ var answeredWholeBy = map[string]string{
 		"and a publish carries a file of a version it names, each as the entry it read here " +
 		"(internal/artifactupload)",
 	"tracker.view_prior": "tracker.write_view: a save hands back the prior it read, which its " +
-		"decide judges the stored view against (internal/agent/builtin's save_work_view)",
+		"decide judges the stored view against, and tracker.delete_view a delete alike " +
+		"(internal/agent/builtin's save_work_view and delete_work_view)",
 	"tracker.views_carried": "tracker.write_view: save_work_view replaces a view whole, by an id " +
 		"list_work_views lists, with what its call re-sends of what the listing showed " +
 		"(internal/agent/builtin)",

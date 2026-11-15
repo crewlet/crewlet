@@ -6864,7 +6864,7 @@ argument is offered by the tracker's writes — `create_work_item`,
 `update_work_item`, `comment_on_work_item`, `merge_work_item`,
 `move_work_item`, `place_work_item`, `remove_work_item`, `restore_work_item`,
 `set_priorities`, `set_pins`, `mark_inbox`, `save_work_view`,
-`write_project_file` and `remove_project_file` — and by the artifacts' and the
+`delete_work_view`, `write_project_file` and `remove_project_file` — and by the artifacts' and the
 datastore's — `create_artifact`, `publish_artifact`, `update_artifact`,
 `share_artifact`, `unshare_artifact`, `upload_artifact_asset`,
 `create_artifact_folder`, `move_artifact`, `write_artifact_data` and
@@ -6922,8 +6922,8 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-eight no seat is given**: `list_work_views`, `save_work_view`,
-`write_work_catalogue`, `get_person`, `work_inbox`,
+Plus **twenty-nine no seat is given**: `list_work_views`, `save_work_view`,
+`delete_work_view`, `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
 [`place_work_item`](#moving-a-card-on-a-board),
@@ -7999,6 +7999,7 @@ route.
 | `PUT` | `/worklet/projects/{key}` | `write_project`'s policy: `fields`, `default_assignee`, `archived` | the project's lead or `admin`, with `worklet`; archiving never a seat |
 | `POST` | `/worklet/projects/{key}/tags` | `write_project`'s `tags_add`, `tags_rename`, `tags_archive` | declaring: `worklet`; renaming and archiving: the project's lead, with `worklet` |
 | `POST` | `/worklet/views` | `save_work_view` | `{"personal": true}` makes it the CALLER's own view (its owner is always the caller's [own record](#whose-record-a-personal-question-answers-for), and there is no naming somebody else's; a shared one is its container's lead's), and a save naming a stored view's `id` also needs that authority over the view it replaces. An `id` must name a stored view — one no view holds is `404 not_found` — and a new view is saved with none, its id minted and answered. With `worklet`. Only a shared view can be `default` |
+| `DELETE` | `/worklet/views/{id}` | `delete_work_view`: the view leaves every strip, the views list and every pin, and running it is refused from then on; the row stays, stamped with who deleted it. An `id` no live view holds is `404 not_found` | whoever may replace the view, decided on the stored view's owner and container as a save's replacement is, and a protected view only its owner. With `worklet` |
 | `PUT` | `/worklet/catalogue` | `write_work_catalogue` | `admin` |
 | `PUT` | `/worklet/people/{handle}/inbox` | `mark_inbox`; see [below](#somebody-elses-inbox) | the person, or `admin`, with `worklet` |
 | `PUT` | `/worklet/people/{handle}/pins` | `set_pins` | the person, or `admin`, with `worklet` |

@@ -136,7 +136,7 @@ async function settle() {
 
 /** Open one cell's picker and choose an option by its label. */
 function choose(cell: string, option: string) {
-  fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${cell} of ENG-1`) }));
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`${cell} of ENG-1$`) }));
   fireEvent.click(screen.getByRole("menuitemradio", { name: option }));
 }
 
@@ -157,6 +157,29 @@ describe("a writer", () => {
       { tool: "update_work_item", args: { item: "ENG-1", if_match: 12, priority: "high" } },
       { tool: "update_work_item", args: { item: "ENG-1", if_match: 12, assignee: "maya" } },
     ]);
+  });
+
+  // A CELL'S PICKER IS NAMED BY THE VALUE IT SHOWS, then by its field and
+  // row: named "Status of ENG-1" while it showed the status, a person who
+  // says what they see reached nothing (axe label-content-name-mismatch).
+  test("each picker's name starts with the value it shows", async () => {
+    mount();
+    await settle();
+    for (const field of ["Status", "Priority", "Assignee"]) {
+      const picker = screen.getByRole("button", { name: new RegExp(`, ${field} of ENG-1$`) });
+      expect(picker.hasAttribute("aria-label"), field).toBe(false);
+      const seen = picker.cloneNode(true) as HTMLElement;
+      seen
+        .querySelectorAll(".crewlet-visually-hidden, .sr-only, [aria-hidden='true']")
+        .forEach((n) => n.remove());
+      const shown = (seen.textContent ?? "").trim();
+      // A VALUE DRAWN AS A MARK ALONE (an empty value's dash) shows no words
+      // for its name to start with, and is named by what the mark means.
+      if (!shown) continue;
+      expect(screen.getByRole("button", { name: `${shown}, ${field} of ENG-1` }), field).toBe(
+        picker,
+      );
+    }
   });
 
   // AND "NOBODY" IS A VALUE: the empty handle is the tool's own unassignment.

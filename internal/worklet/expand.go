@@ -343,9 +343,15 @@ func (r *Reader) expandView(ctx context.Context, id string) (MapParams, error) {
 			return err
 		}
 		if !held {
-			return fmt.Errorf("worklet: view %s is not on this node; it was "+
-				"deleted, or this copy has not caught up: %w",
+			return fmt.Errorf("worklet: view %s is not on this node; this "+
+				"copy has not caught up with it: %w",
 				id, statelog.ErrUnavailable)
+		}
+		// A DELETED VIEW IS A FACT, not a copy behind: running it is
+		// refused for good rather than as a read to try again.
+		if view.Deleted() {
+			return invalid("view %s was deleted, so there is no saved query "+
+				"to run: list the views there are with %s", id, ListWorkViewsTool)
 		}
 		out = savedDefaults(view.Params)
 		return nil

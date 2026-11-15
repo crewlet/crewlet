@@ -962,6 +962,7 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		"DELETE /doclet/pages/{id}/comments/{cid}",
 		"DELETE /worklet/files/{project}/{path...}",
 		"DELETE /worklet/items/{key}",
+		"DELETE /worklet/views/{id}",
 		"GET /worklet/files/{project}/{path...}",
 		"PATCH /doclet/pages/{id}/comments/{cid}",
 		"PATCH /worklet/items/{key}",

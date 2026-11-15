@@ -75,6 +75,12 @@
 // offsets of the code it restates, and a thread holding a shape no model holds
 // is cannot tell whole.
 //
+// The reading that tells a relaunch which of its round's calls a kept session
+// holds (claudeholdings.go) reads a kept archive's main thread, and each
+// depth-one subagent's thread and metadata, through the layer, metering the
+// archive at [threadPlainMax] with the scrub's own meter and handing each
+// member it reads what is left of that budget.
+//
 // # A run's harness session, carried between boxes
 //
 // Every run names the harness session it works in before the harness starts

@@ -157,6 +157,13 @@ func (s *viewSpy) WriteView(_ context.Context, opID string, view worklet.View,
 	return worklet.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
+func (s *viewSpy) DeleteView(_ context.Context, opID, _ string,
+	_ worklet.ViewPrior) (worklet.WriteResult, error) {
+
+	s.ops = append(s.ops, opID)
+	return worklet.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
 // ViewPrior answers that no view is stored under the id, which is what every
 // case using this spy saves: a new view, or the same one again.
 func (s *viewSpy) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {

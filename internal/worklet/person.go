@@ -313,10 +313,13 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 				named, favorite.Kind, favorite.ID)
 		}
 	}
-	return w.writePerson(ctx, opID, handle, func(_ *sql.Tx, post *Person,
+	return w.writePerson(ctx, opID, handle, func(tx *sql.Tx, post *Person,
 		_ time.Time) error {
 
-		views := gesture.Views.apply(post.PinnedViews)
+		views, err := withoutDeletedViews(ctx, tx, gesture.Views.apply(post.PinnedViews))
+		if err != nil {
+			return err
+		}
 		favorites := gesture.Favorites.apply(post.Favorites)
 		// THE RECORD'S STATE: the gesture fits, and the set it would
 		// leave does not until something is unpinned.
@@ -333,6 +336,49 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 		post.PinnedViews, post.Favorites = views, favorites
 		return nil
 	})
+}
+
+// withoutDeletedViews is a pin list less the views somebody deleted.
+//
+// A DELETE CANNOT UNPIN, because a pin is on its person's own record and a
+// view is pinned by any number of people: one record per pinner is no part of
+// one view's write. So a pinned view that was deleted stays in the list,
+// drawn nowhere (no read lists a deleted view), until its person's pins next
+// change, and that write drops it here, in its own snapshot, before the cap is
+// counted: left in, a pin nobody can see or unpin would hold one of the
+// [MaxPinnedViews] places for good. A pin naming a view this node holds no row
+// for at all is kept, since that view may be one this copy has not caught up
+// with.
+func withoutDeletedViews(ctx context.Context, tx *sql.Tx, views []string) ([]string, error) {
+	if len(views) == 0 {
+		return views, nil
+	}
+	ids := make([]any, len(views))
+	for i, id := range views {
+		ids[i] = id
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id FROM tracker_views
+		WHERE id IN (`+placeholders(len(ids))+`) AND deleted_at IS NOT NULL`, ids...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read which pinned views were deleted: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	deleted := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("worklet: read which pinned views were deleted: %w", err)
+		}
+		deleted[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("worklet: read which pinned views were deleted: %w", err)
+	}
+	if len(deleted) == 0 {
+		return views, nil
+	}
+	return slices.DeleteFunc(slices.Clone(views), func(id string) bool { return deleted[id] }), nil
 }
 
 // WritePriorities replaces a person's ordered list of what to do next.

@@ -4,6 +4,7 @@
  * primitive.
  */
 
+import type { ReactNode } from "react";
 import { Button, Card, Divider, ErrorBoundary, Link, Note, Skeleton, Text } from "@crewlethq/ui";
 import { LinkGlyph } from "@crewlethq/icons/glyphs";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -58,15 +59,20 @@ export function LeafView({ widget }: { widget: Leaf }) {
 
 /**
  * The card a contributed widget is drawn in when it cannot draw itself, under
- * the widget's own name, so the reader knows which one it stands for.
+ * the widget's own name, so the reader knows which one it stands for: a
+ * sentence on why it is not drawn, or the read it waited on that failed.
+ *
+ * EVERY SUCH CARD KEEPS THE NAME. The failed viewer read used to draw a bare
+ * card holding only the failure, so with every read failing Home was eight
+ * identical red boxes and nobody could tell which widget each one was.
  */
-function Unavailable({ name, children }: { name: string; children: string }) {
+function Unavailable({ name, children }: { name: string; children: ReactNode }) {
   return (
     <Card padding="none" className="home-card">
       <Card.Header>
         <Card.Title as="h3">{name}</Card.Title>
       </Card.Header>
-      <WidgetNote>{children}</WidgetNote>
+      {typeof children === "string" ? <WidgetNote>{children}</WidgetNote> : children}
     </Card>
   );
 }
@@ -125,9 +131,11 @@ function Contributed({ widget }: { widget: ContribWidget }) {
   // left Home a greeting over an empty board.
   if (viewer.failed !== null) {
     return (
-      <Card padding="none" className="home-card">
-        <QueryState error={viewer.failed} refusal={viewer.failedRefusal} loading={false} />
-      </Card>
+      <Unavailable name={name}>
+        <Card.Body padding="md">
+          <QueryState error={viewer.failed} refusal={viewer.failedRefusal} loading={false} />
+        </Card.Body>
+      </Unavailable>
     );
   }
   if (viewer.loading) return <WidgetSkeleton />;
@@ -143,14 +151,14 @@ function Contributed({ widget }: { widget: ContribWidget }) {
     <ErrorBoundary
       resetKey={JSON.stringify(widget.params)}
       fallback={(_error, reset) => (
-        <Card padding="none" className="home-card">
+        <Unavailable name={name}>
           <p className="home-card-note" role="alert">
             {`${def.label} could not be drawn. `}
             <Button variant="ghost" size="small" onClick={reset}>
               Try again
             </Button>
           </p>
-        </Card>
+        </Unavailable>
       )}
     >
       <Component params={widget.params} />

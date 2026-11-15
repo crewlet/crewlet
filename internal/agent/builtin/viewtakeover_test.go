@@ -18,10 +18,11 @@ import (
 // answers the prior a save is decided on and records every save it is asked
 // for, so a case can tell a refusal from a write that landed.
 type viewStore struct {
-	mu     sync.Mutex
-	stored map[string]worklet.View
-	saved  []worklet.View
-	priors []worklet.ViewPrior
+	mu      sync.Mutex
+	stored  map[string]worklet.View
+	saved   []worklet.View
+	deleted []string
+	priors  []worklet.ViewPrior
 }
 
 func (s *viewStore) ViewPrior(_ context.Context, id string) (worklet.ViewPrior, error) {
@@ -40,6 +41,18 @@ func (s *viewStore) WriteView(_ context.Context, _ string, view worklet.View,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.saved = append(s.saved, view)
+	s.priors = append(s.priors, prior)
+	return worklet.WriteResult{Result: statelog.Result{
+		Outcome: statelog.OutcomeApplied,
+	}}, nil
+}
+
+func (s *viewStore) DeleteView(_ context.Context, _, id string,
+	prior worklet.ViewPrior) (worklet.WriteResult, error) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleted = append(s.deleted, id)
 	s.priors = append(s.priors, prior)
 	return worklet.WriteResult{Result: statelog.Result{
 		Outcome: statelog.OutcomeApplied,
@@ -177,5 +190,75 @@ func TestASaveNamingNoViewIsRefused(t *testing.T) {
 			t.Errorf("a save naming the missing view %q was refused as %v, want "+
 				"not found: %s", id, class, got.Output)
 		}
+	}
+}
+
+// A DELETE IS DECIDED ON THE STORED VIEW, as the save that would replace it is.
+//
+// `delete_work_view` names only an id, so the view it takes away is a row the
+// gate cannot form an object from. The tool reads it and asks the delete's
+// action of its owner and container: a non-lead is refused a project's shared
+// tab and a colleague somebody's personal view, the project's lead deletes the
+// shared tab, and an id no view holds is not found, never a write.
+func TestADeleteIsDecidedOnTheViewItTakesAway(t *testing.T) {
+	t.Parallel()
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+	stored := map[string]worklet.View{
+		"v-shared": {ID: "v-shared", Container: eng, Name: "Board"},
+		"v-bob":    {ID: "v-bob", Container: eng, Name: "Mine", Owner: "bob"},
+	}
+	for _, c := range []struct {
+		name    string
+		id      string
+		chart   authz.Chart
+		allowed bool
+		refusal tools.Refusal
+	}{
+		{"a non-lead deleting a project's shared tab", "v-shared", chartRefuses, false, ""},
+		{"a colleague deleting somebody's personal view", "v-bob", chartLeads, false, ""},
+		{"the project's lead deleting its shared tab", "v-shared", chartLeads, true, ""},
+		{"an id no view holds", "v-made-up", chartLeads, false, tools.RefusalNotFound},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			views := &viewStore{stored: stored}
+			var tool tools.Callable
+			for _, candidate := range builtin.OperatorTools(builtin.OperatorDeps{
+				Work: builtin.WorkDeps{
+					Reader: newFakeTracker(), Writer: newFakeTracker().as,
+					ViewWriter: func(builtin.Actor) builtin.ViewWriter { return views },
+					Actor:      builtin.PrincipalActor,
+				},
+				Authorize: builtin.Decide(c.chart),
+			}) {
+				if candidate.Name() == worklet.DeleteWorkViewTool {
+					tool = candidate
+				}
+			}
+			if tool == nil {
+				t.Fatal("delete_work_view is not on the operator surface")
+			}
+			got, err := tool.Call(personHolding(iam.GrantWorklet), map[string]any{"id": c.id})
+			if err != nil {
+				t.Fatalf("delete_work_view: %v", err)
+			}
+			switch {
+			case c.allowed && (got.Failed || len(views.deleted) != 1):
+				t.Fatalf("refused: %s", got.Output)
+			case !c.allowed && (!got.Failed || len(views.deleted) != 0):
+				t.Fatalf("the delete landed on a view the caller may not delete: %s", got.Output)
+			case c.refusal != "" && tools.RefusalOf(got) != c.refusal:
+				t.Fatalf("refused as %v, want %v: %s", tools.RefusalOf(got), c.refusal, got.Output)
+			case !c.allowed && c.refusal == "" && !errors.Is(got.Cause, builtin.ErrRefused):
+				t.Fatalf("the refusal carries %v, not the authority's own answer", got.Cause)
+			}
+			if c.allowed {
+				want := stored[c.id]
+				if prior := views.priors[0]; !prior.Held || prior.Owner != want.Owner ||
+					prior.Container != want.Container {
+					t.Errorf("the delete was handed the prior %+v, want the stored view", prior)
+				}
+			}
+		})
 	}
 }

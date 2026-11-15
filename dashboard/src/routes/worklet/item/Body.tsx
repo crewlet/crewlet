@@ -157,6 +157,13 @@ export function ItemDescription({ item, flush }: { item: WorkItem; flush?: boole
   }
   return (
     <div className="task-body">
+      {/* THE DESCRIPTION IS A SECTION OF THE PAGE, named for a reader who moves
+          by headings: its own headings render a level below the page's
+          sections ("## Context" is an h3), and with no h2 above them they
+          stood straight under the title's h1, a skipped level, before the
+          Activity section's h2. Drawn for that reader alone; the artboard
+          labels the description by where it sits. */}
+      <h2 className="sr-only">Description</h2>
       {item.body ? (
         <div className={flush ? "prose md" : "prose md task-prose"}>
           {renderMarkdown(item.body)}

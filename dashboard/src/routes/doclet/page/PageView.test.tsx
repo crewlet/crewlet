@@ -551,6 +551,22 @@ test("the eye watches and unwatches as the person, and a mute is not a watch", a
   expect(followersOf({ watchers: ["jane", "swe"], muted: ["jane"] })).toEqual(["swe"]);
 });
 
+// THE COUNT IS NAMED BY THE NUMBER IT SHOWS, then by who it counts. An
+// aria-label of "Watching: you, …" over a button showing "2" was a name that
+// did not contain what is on screen (axe label-content-name-mismatch), so a
+// person who says "click 2" reached nothing.
+test("the watchers count is named by the number it shows, then by who watches", async () => {
+  mount(<PageView id={ID} />, {
+    page: detail({}, { watchers: ["jane", "swe"] }),
+    page_reads: reads(),
+  });
+  await settle();
+  const count = screen.getByRole("button", { name: /^2 watching/ });
+  expect(count.hasAttribute("aria-label")).toBe(false);
+  expect(count.textContent?.startsWith("2")).toBe(true);
+  expect(count.textContent).toContain("you");
+});
+
 // A DRAFT HAS A WAY OUT: the page says it is one, above its body, with Publish
 // beside it, and the press is `save_page` with the status alone against the
 // version on screen. A page saved as a draft used to stay one for good: the
@@ -747,6 +763,10 @@ test("a page in the trash offers Restore, and an admin Delete permanently with t
 
 // A MOVE OFFERS EVERY PAGE OF THE SPACE BUT THE PAGE AND WHAT IS UNDER IT,
 // which the engine refuses as a parent, and saves the parent with save_page.
+// THE LIST IS THE DIALOG'S BODY, on screen in the dialog under its field, so
+// nothing it draws covers the dialog's own Cancel and Move: a popup picker's
+// panel opened down over the foot. Mutation: put the popup Select back, and
+// no option is in the dialog until a trigger is pressed.
 test("Move files the page under another page of its space, never under itself", async () => {
   const pages = [
     {
@@ -769,13 +789,27 @@ test("Move files the page under another page of its space, never under itself", 
   await settle();
   await openMore(/^Move(?! back| to)/);
   const dialog = screen.getByRole("dialog", { name: "Move “Provisioner runbook”" });
-  // THE PICKER BY ITS NAME, whatever role its searchable trigger takes.
-  fireEvent.click(dialog.querySelector('[aria-label="The page it goes under"]') as HTMLElement);
   await settle();
-  const offered = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+  const list = within(dialog).getByRole("listbox", { name: "The page it goes under" });
+  const offered = within(list)
+    .getAllByRole("option")
+    .map((o) => o.textContent ?? "");
   expect(offered.some((o) => o.includes("Under it"))).toBe(false);
-  // A SEARCHABLE PICKER TAKES THE PRESS ON mousedown, as a combobox does.
-  fireEvent.mouseDown(screen.getByRole("option", { name: /Onboarding/ }));
+  expect(offered.some((o) => o.includes("Top of the space"))).toBe(true);
+  // WHERE IT IS NOW IS MARKED, and is what Move is held on.
+  expect(within(list).getByRole("option", { name: /Runbooks/ }).textContent).toContain("Current");
+  expect(within(dialog).getByRole("button", { name: "Move" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+  // THE FIELD FILTERS THE LIST by words from a title.
+  fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "onboard" } });
+  await settle();
+  expect(
+    within(list)
+      .getAllByRole("option")
+      .map((o) => o.textContent ?? ""),
+  ).toEqual(["Onboarding"]);
+  fireEvent.click(within(list).getByRole("option", { name: /Onboarding/ }));
   await settle();
   fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
   await settle();

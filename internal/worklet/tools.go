@@ -118,8 +118,9 @@ const (
 // furniture around it: a seat that could rearrange a shared board would be one
 // more thing a founder has to supervise, for no delivery.
 const (
-	ListWorkViewsTool = "list_work_views"
-	SaveWorkViewTool  = "save_work_view"
+	ListWorkViewsTool  = "list_work_views"
+	SaveWorkViewTool   = "save_work_view"
+	DeleteWorkViewTool = "delete_work_view"
 
 	// WriteWorkCatalogueTool is the company's own VOCABULARY — what a
 	// task may be and what it may carry. A seat adding a type to make its
@@ -183,7 +184,7 @@ const GetWorkCatalogueTool = "get_work_catalogue"
 // OperatorOnlyTools are the ones the operator surface adds to [Tools].
 func OperatorOnlyTools() []string {
 	return []string{
-		ListWorkViewsTool, SaveWorkViewTool,
+		ListWorkViewsTool, SaveWorkViewTool, DeleteWorkViewTool,
 		WriteWorkCatalogueTool,
 		GetPersonTool, SetPrioritiesTool, SetPinsTool, MarkInboxTool,
 		WorkInboxTool,

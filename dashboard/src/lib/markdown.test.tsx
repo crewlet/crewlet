@@ -802,12 +802,38 @@ describe("a search's words, marked", () => {
 });
 
 describe("a wide table", () => {
-  it("scrolls in a region a keyboard can reach, named by its columns", () => {
+  it("scrolls in a group a keyboard can reach, named by its columns", () => {
     const root = draw("| Step | Owner |\n|---|---|\n| Drain | SRE |");
-    const region = root.querySelector(".md-table");
-    expect(region?.getAttribute("role")).toBe("region");
-    expect(region?.getAttribute("tabindex")).toBe("0");
-    expect(region?.getAttribute("aria-label")).toBe("Table: Step, Owner");
+    const scroller = root.querySelector(".md-table");
+    expect(scroller?.getAttribute("role")).toBe("group");
+    expect(scroller?.getAttribute("tabindex")).toBe("0");
+    expect(scroller?.getAttribute("aria-label")).toBe("Table: Step, Owner");
+  });
+
+  // TWO TABLES OF THE SAME COLUMNS ARE NO PAIR OF LANDMARKS. A region is a
+  // landmark, so a page with two "Element, Text" tables drew two landmarks of
+  // one name, which a landmark list cannot tell apart. Mutation: make the
+  // scroller a region again, and the page holds landmarks.
+  it("draws no landmark, so two tables of the same columns never collide", () => {
+    const table = "| Element | Text |\n|---|---|\n| Title | Ship it |";
+    const root = draw(`${table}\n\nBetween them.\n\n${table}`);
+    expect(root.querySelectorAll(".md-table")).toHaveLength(2);
+    expect(root.querySelectorAll("[role=region], section, aside, nav, main")).toHaveLength(0);
+  });
+});
+
+describe("a task list", () => {
+  // A BOX IS NAMED BY ITS ITEM'S OWN LINE, never by the sublist under it, so
+  // a screen reader says which item is ticked. Mutation: drop the name, and
+  // every box is "checkbox" alone.
+  it("names each box by its item's own words", () => {
+    const root = draw(
+      "- [x] Write the **acceptance** criteria\n- [ ] Land the change\n  - [ ] behind a flag",
+    );
+    const names = [...root.querySelectorAll<HTMLInputElement>("input[type=checkbox]")].map((b) =>
+      b.getAttribute("aria-label"),
+    );
+    expect(names).toEqual(["Write the acceptance criteria", "Land the change", "behind a flag"]);
   });
 });
 

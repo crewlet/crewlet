@@ -32,6 +32,13 @@
  * the engine's own expansion: the saved params are merged UNDER whatever the
  * reader types, so opening a view and changing one filter gives them the view
  * with that one key changed rather than a locked query.
+ *
+ * # Deleting one is asked first
+ *
+ * Delete is on the view's page and on each row of the list, and both ask
+ * before they send `delete_work_view`: the view leaves every strip and pin it
+ * is in, and nothing brings it back. The engine decides who may on the view's
+ * own owner and container, as it decides a save that would replace it.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -57,7 +64,12 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
 
-import { EditViewButton, PinButton } from "~/components/writes.tsx";
+import {
+  DeleteViewButton,
+  EditViewButton,
+  PinButton,
+  type DeletableView,
+} from "~/components/writes.tsx";
 import type { WorkView } from "~/protocol/index.ts";
 import { viewRun } from "~/lib/work.ts";
 import { viewSettingWords } from "./viewSettings.ts";
@@ -218,11 +230,16 @@ export function SavedViews({ id }: { id?: string }) {
         {/* A SAVED VIEW IS AN OBJECT, and this screen never printed its name:
             the only place it appeared was the breadcrumb `usePageLabels`
             feeds, so the page for one view was a paragraph, some badges and a
-            button about something it never named. */}
+            button about something it never named.
+
+            AND ITS NAME IS ITS IDENTITY: no identifier beside it. A view's
+            key is the id its save minted, a UUID nobody types or reads, so
+            the eyebrow printed "Saved view 1f0c…" over a name the reader
+            gave it. An identifier is a key a person uses (a task's ENG-12),
+            and a view has none; its address carries the id. */}
         <ObjectHeader
           kind="Saved view"
           icon="columns-3"
-          identifier={one.key}
           title={one.name}
           facts={viewFacts(one, index, who, project.data?.name)}
         />
@@ -258,6 +275,9 @@ export function SavedViews({ id }: { id?: string }) {
               personal: Boolean(one.owner),
             }}
           />
+          {/* AND TAKEN AWAY HERE, asked first. Once the engine has it the
+              page leaves for the list, where the view is gone. */}
+          <DeleteViewButton view={deletable(one)} onDeleted={() => nav.to(["worklet", "views"])} />
         </div>
       </>
     );
@@ -374,12 +394,32 @@ export function SavedViews({ id }: { id?: string }) {
                 />
               ),
             },
+            {
+              key: "delete",
+              header: "Delete",
+              shrink: true,
+              // DELETE ON EVERY ROW, asked first, as on the view's page: the
+              // list is where a person meets every view they might take away.
+              cell: (v) => (
+                <DeleteViewButton
+                  key={v.id as string}
+                  view={deletable(v)}
+                  compact
+                  onDeleted={() => undefined}
+                />
+              ),
+            },
           ]}
           loadedNote={`${saved.length} saved`}
         />
       </QueryState>
     </>
   );
+}
+
+/** A view as its delete names it ([DeletableView]). */
+function deletable(view: WorkView): DeletableView {
+  return { id: view.id as string, name: view.name, personal: Boolean(view.owner) };
 }
 
 /**

@@ -498,10 +498,15 @@ export function Projects() {
             rows under them rather than the point of the page — and the counts
             are over WHAT IS SHOWN, which is why the switch beside them changes
             them and why a short page says so. */}
-        <span className="work-summary" style={{ marginLeft: 0 }}>
-          {counted} {noun} · {totals.todo} to do · {totals.active} active · {totals.done} done ·{" "}
-          {totals.closed} closed
-        </span>
+        {/* ONLY OVER AN ANSWER: the totals are sums over the rows, and with no
+            answer yet (or a failed one) there are no rows, so the sentence read
+            "0 projects · 0 to do" over a blank page and beside the error. */}
+        {state.data && (
+          <span className="work-summary" style={{ marginLeft: 0 }}>
+            {counted} {noun} · {totals.todo} to do · {totals.active} active · {totals.done} done ·{" "}
+            {totals.closed} closed
+          </span>
+        )}
         {short && (
           <span className="t-caption">
             Counts cover the {listed} listed of {answerTotal}.

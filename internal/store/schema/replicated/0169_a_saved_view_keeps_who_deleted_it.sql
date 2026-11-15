@@ -1,0 +1,14 @@
+-- A saved view keeps who deleted it, and when.
+--
+-- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
+-- CREWLET_TRACKER_LOG stream by its one applier, as the rest of these tables.
+--
+-- `deleted_at` is the instant a view's delete stamped it ([worklet.View]'s
+-- `deleted_at`, tracker record version 17), and NULL on every live view and
+-- on every row applied before this migration ran, none of which can be a
+-- deleted view: no record before version 17 deletes one. The row stays after
+-- a delete because every view upsert is guarded by its record's version, and a
+-- guard needs a row to compare against; every read of the views leaves a row
+-- with a `deleted_at` out, which is why it is a column the reads filter on
+-- rather than a key inside `document`.
+ALTER TABLE tracker_views ADD COLUMN deleted_at INTEGER;

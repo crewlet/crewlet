@@ -94,6 +94,16 @@ function blockText(block: MarkdownBlock): string {
 }
 
 /**
+ * A task item's own words, which its checkbox is named by: the item's first
+ * block (the line it was written on), never a sublist under it, whose items
+ * are named by their own words. Whitespace collapses as [plainText]'s does.
+ */
+export function taskItemText(blocks: readonly MarkdownBlock[]): string {
+  const first = blocks[0];
+  return first ? blockText(first).replace(/\s+/g, " ").trim() : "";
+}
+
+/**
  * A markdown document as ONE LINE of the prose it renders to.
  *
  * WHY IT EXISTS: a comment body and a task description are markdown by contract

@@ -49,6 +49,7 @@ var everyWriteCall = map[string]map[string]any{
 	worklet.CommentOnWorkTool:      {"asks": false, "item": "ENG-1", "body": "on it"},
 	worklet.MergeWorkItemTool:      {"item": "ENG-2", "into": "ENG-1"},
 	worklet.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
+	worklet.DeleteWorkViewTool:     {"id": "v-1"},
 	worklet.WriteWorkCatalogueTool: {"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}, "fields": []any{}},
 	worklet.SetPrioritiesTool:      {"items": []any{"ENG-1"}},
 	worklet.SetPinsTool:            {"views": map[string]any{"add": []any{"v-1"}}},
@@ -653,6 +654,11 @@ func (f *ledgerFake) MoveTaskToProject(_ context.Context, opID, _, target string
 }
 
 func (f *ledgerFake) WriteView(_ context.Context, opID string, _ worklet.View,
+	_ worklet.ViewPrior) (worklet.WriteResult, error) {
+	return f.written(opID)
+}
+
+func (f *ledgerFake) DeleteView(_ context.Context, opID, _ string,
 	_ worklet.ViewPrior) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
