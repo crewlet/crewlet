@@ -723,7 +723,8 @@ func (r *Runner) checkoutName() string {
 // message counted them, and never a list under words that say its calls are
 // not in the session, where no call is shown twice. Fitted, capped and defused
 // with the other lists, each rendered only where it is not empty, since an
-// empty list renders as "(none)".
+// empty list renders as "(none)"; the calls listed again only where the cap
+// leaves them a call to list, never as a count of reads alone.
 func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, owed []int, mayShow bool,
 	leadHeld []string, surface *tools.Surface, b provenance.Boundary) (prompts.AfterSave, []int) {
 
@@ -815,10 +816,15 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		if len(owe) > 0 {
 			out.Owed = provenance.Neutralise(b, rendered[2])
 		}
-		if len(again) > 0 {
+		shown := ledger.ShownCallGroups(groups, opts)
+		// RENDERED ONLY WHERE THE CAP LEFT IT A CALL TO LIST: a section of
+		// calls listed again that lists none, its reads all counted as
+		// omitted, names no call a told one could be taken for, and the words
+		// over it would head a count. Nothing is lost by it: each is a read
+		// the session holds.
+		if len(shown[3]) > 0 {
 			out.Shown = provenance.Neutralise(b, rendered[3])
 		}
-		shown := ledger.ShownCallGroups(groups, opts)
 		for i, group := range [][]BridgedCall{after, owe} {
 			for _, call := range leftOut(group, shown[i+1]) {
 				if call.Appended != 0 {

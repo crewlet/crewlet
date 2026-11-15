@@ -342,17 +342,20 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 }
 
 // THE CALLS LISTED AGAIN TAKE THE READ CAP LAST, AND ARE NEVER OWED. A cut-off
-// capture holds its round's first four reads, and the brief tells twelve reads
-// after its save as calls it may already show, the first four alike the held
-// ones. The four held reads are listed again, under the same one cap as every
-// list: spent after the calls the session may lack, which take all twelve
-// lines, so the listing counts its four reads without listing one. And they
-// are no reads the brief owes the session: it holds them, so the launch
-// records nothing left out.
+// capture holds its round's first four reads, and the brief tells reads after
+// its save as calls it may already show, the first four alike the held ones.
+// The four held reads are listed again, under the same one cap as every list:
+// spent after the calls the session may lack, so where those leave the cap two
+// reads the listing lists two and counts two, and where they take the whole
+// cap the listing lists none and is not rendered at all, since a section that
+// heads a count of reads alone names no call a told one could be taken for.
+// And they are no reads the brief owes the session: it holds them, so the
+// launch records nothing left out.
 //
-// Mutation: spend the cap on the calls listed again first, and four of the
-// calls after the save are counted rather than listed; record the reads the
-// listing left out as owed, and the launch records four.
+// Mutation: spend the cap on the calls listed again first, and calls after the
+// save are counted rather than listed; record the reads the listing left out
+// as owed, and the launch records them; render the listing where it lists no
+// call, and the second case carries a section of a count alone.
 func TestTheCallsListedAgainTakeTheReadCapLastAndAreNeverOwed(t *testing.T) {
 	t.Parallel()
 	read := func(channel string, seq int) runner.BridgedCall {
@@ -360,36 +363,48 @@ func TestTheCallsListedAgainTakeTheReadCapLastAndAreNeverOwed(t *testing.T) {
 		call.Digest = turnctx.ArgsDigest(call.Args)
 		return call
 	}
-	var bridged []runner.BridgedCall
-	for n := 1; n <= 4; n++ {
-		bridged = append(bridged, read(fmt.Sprintf("C%d", n), n))
-	}
-	for n := 1; n <= ledger.MaxReadCalls; n++ {
-		bridged = append(bridged, read(fmt.Sprintf("C%d", n), 4+n))
-	}
 	basis := keptBasis
 	basis.Through, basis.Interrupted = 4, true
-	s := lostRelaunch(t, basis, runner.Resume{Bridged: bridged}).Session
+	for _, tc := range []struct {
+		// after is how many reads the brief tells after the save; listed and
+		// counted, how many of the four held reads it lists again and counts.
+		after, listed, counted int
+	}{
+		{after: ledger.MaxReadCalls - 2, listed: 2, counted: 2},
+		{after: ledger.MaxReadCalls, listed: 0, counted: 4},
+	} {
+		var bridged []runner.BridgedCall
+		for n := 1; n <= 4; n++ {
+			bridged = append(bridged, read(fmt.Sprintf("C%d", n), n))
+		}
+		for n := 1; n <= tc.after; n++ {
+			bridged = append(bridged, read(fmt.Sprintf("C%d", n), 4+n))
+		}
+		s := lostRelaunch(t, basis, runner.Resume{Bridged: bridged}).Session
 
-	at := strings.Index(s.Brief, cutOffHeader)
-	if at < 0 {
-		t.Fatalf("the reads after the save are not told as calls the session may already show:\n%s", s.Brief)
-	}
-	since, again, listed := strings.Cut(s.Brief[at:], listedAgainHeading)
-	if !listed {
-		t.Fatalf("the held reads are not listed again:\n%s", s.Brief)
-	}
-	if reads := strings.Count(since, "- slack_history("); reads != ledger.MaxReadCalls ||
-		strings.Contains(since, "omitted") {
-		t.Errorf("the calls after the save list %d reads, want all %d and none omitted:\n%s", reads,
-			ledger.MaxReadCalls, s.Brief)
-	}
-	if strings.Contains(again, "- slack_history(") || !strings.Contains(again, "(+4 further read call(s) omitted)") {
-		t.Errorf("the calls listed again are not the cap's last, counted rather than listed:\n%s", s.Brief)
-	}
-	if len(s.Told.Omitted) != 0 {
-		t.Errorf("the launch records %v left out, want none: the session holds the reads listed again",
-			s.Told.Omitted)
+		at := strings.Index(s.Brief, cutOffHeader)
+		if at < 0 {
+			t.Fatalf("%d after: the reads after the save are not told as calls the session may already show:\n%s",
+				tc.after, s.Brief)
+		}
+		since, again, listed := strings.Cut(s.Brief[at:], listedAgainHeading)
+		if reads := strings.Count(since, "- slack_history("); reads != tc.after || strings.Contains(since, "omitted") {
+			t.Errorf("%d after: the calls after the save list %d reads, want all %d and none omitted:\n%s",
+				tc.after, reads, tc.after, s.Brief)
+		}
+		if listed != (tc.listed > 0) {
+			t.Fatalf("%d after: the held reads are listed again %v, want %v:\n%s", tc.after, listed,
+				tc.listed > 0, s.Brief)
+		}
+		if listed && (strings.Count(again, "- slack_history(") != tc.listed ||
+			!strings.Contains(again, fmt.Sprintf("(+%d further read call(s) omitted)", tc.counted))) {
+			t.Errorf("%d after: the calls listed again are not the cap's last, %d listed and %d counted:\n%s",
+				tc.after, tc.listed, tc.counted, s.Brief)
+		}
+		if len(s.Told.Omitted) != 0 {
+			t.Errorf("%d after: the launch records %v left out, want none: the session holds the reads listed "+
+				"again", tc.after, s.Told.Omitted)
+		}
 	}
 }
 

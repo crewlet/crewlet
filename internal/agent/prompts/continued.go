@@ -414,19 +414,19 @@ type AfterSave struct {
 	// never as calls it lacks, and the dropped ones counted since that point.
 	Interrupted bool
 
-	// Shown are calls of the round the session holds that a call told in Calls
-	// or Late could be taken for: the same tool, with arguments that read alike
-	// in the told call's line (internal/agent/runner's readAlike), as the
-	// prior-work ledger renders them within its budgets, under one read cap with
-	// the other lists', spent on these after every other
-	// (ledger.FormatCallGroups), "" for none. Told after Calls and before Late,
-	// in a section of their own ([shownAgainHeader]), whose words say the
-	// session shows each and that the told one is a call of its own: the words
-	// above Calls (where the session may already show them) and above Late say a
-	// call shown both in the session and in the list is ONE call, so a told call
-	// whose like the session shows could be read as that call and lost. Never
-	// set for a run that starts a session of its own ([CalledBefore]), which
-	// holds no call of the round.
+	// Shown are calls of the round the session holds that a call told in Calls or
+	// Late could be taken for: the same tool, with arguments that read alike in
+	// the told call's line (internal/agent/runner's readAlike), as the prior-work
+	// ledger renders them within its budgets, under one read cap with the other
+	// lists', spent on these after every other (ledger.FormatCallGroups), "" for
+	// none, and "" too where the cap left it no call to list, never a count of
+	// reads alone. Told after Calls and before Late, in a section of their own
+	// ([shownAgainHeader]), whose words say the session shows each and that the
+	// told one is a call of its own: the words above Calls (where the session may
+	// already show them) and above Late say a call shown both in the session and
+	// in the list is ONE call, so a told call whose like the session shows could
+	// be read as that call and lost. Never set for a run that starts a session of
+	// its own ([CalledBefore]), which holds no call of the round.
 	Shown string
 
 	// Late are the calls of the round that finished only after the run that
