@@ -959,3 +959,20 @@
   flex: none;
   padding: var(--spacing-4) 0;
 }
+
+/* A ROOM'S NAME IN A GRID CELL (Browse rooms) ON A PHONE'S CARD wraps its
+   tags under it. The card's
+   value owns the width there, so the name wraps rather than cutting (the
+   frame's `.truncate` rule on a phone), and beside Joined and Open a long
+   name was left a few letters wide and broke at every hyphen. The name keeps
+   the line beside its mark and takes what is left of it. */
+@media (width < 640px) {
+  .chat-room-name {
+    flex-wrap: wrap;
+  }
+
+  .chat-room-name > .truncate {
+    flex: 1 1 0;
+    min-width: 6rem;
+  }
+}

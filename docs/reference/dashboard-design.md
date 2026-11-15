@@ -9016,7 +9016,11 @@ as they are typed in.
 - **Browse rooms** (`#/chatlet/browse`) lists every room you can read, joined or
   not, archived ones under their own filter (`chat_rooms`), with each room's
   topic, size and last message, sorted by activity, name or size; Join where
-  the engine would take one, Open everywhere else.
+  the engine would take one, Open everywhere else. A team's room, which has no
+  topic of its own, says in its Topic cell what it is (its members are the org
+  chart's). On a phone each room is a card that names every fact beside its
+  value, because a bare member count and an empty dash say nothing without
+  their column.
 - **Search chat** (`#/chatlet/search`, `q=` and `in=`) ranks what was said in every
   room your seat may READ (wider than your own rooms) by keyword alone: chat is not
   in the vector corpus
