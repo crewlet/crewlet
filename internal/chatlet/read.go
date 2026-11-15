@@ -2438,14 +2438,14 @@ func attachRoomThreads(ctx context.Context, tx *sql.Tx, room string, ids []strin
 	for seq := range newest {
 		seqArgs = append(seqArgs, seq)
 	}
-	// THE NEWEST REPLY'S INSTANT IS THE ONE ITS OWN MESSAGE CARRIES, read off
-	// its document as every view of it is: the created_at column holds the
-	// store's microseconds, and a summary that read it named the reply at
-	// another instant than the reply says, wherever the broker's clock keeps
-	// nanoseconds. A reply this build cannot read is still the newest, and
-	// its column is the most this build can say of when.
+	// THE NEWEST REPLY'S INSTANT IS ITS created_at COLUMN, which holds the
+	// instant its own document carries: the apply writes both from the
+	// record's broker instant, which the state log hands it in the store's
+	// encoding on every path ([statelog.Record.StoredAt]), so the column
+	// names the reply at the instant the reply says without decoding a
+	// document per thread — and of a reply this build cannot read as well.
 	last, err := tx.QueryContext(ctx, `
-		SELECT channel_seq, created_at, document, log_stream, log_generation, log_seq
+		SELECT channel_seq, created_at, log_stream, log_generation, log_seq
 		  FROM chat_messages
 		 WHERE channel_id = ? AND channel_seq IN (`+placeholders(len(newest))+`)`,
 		seqArgs...)
@@ -2455,10 +2455,9 @@ func attachRoomThreads(ctx context.Context, tx *sql.Tx, room string, ids []strin
 	for last.Next() {
 		var (
 			seq, created, generation, position int64
-			document                           []byte
 			stream                             string
 		)
-		if err = last.Scan(&seq, &created, &document, &stream, &generation,
+		if err = last.Scan(&seq, &created, &stream, &generation,
 			&position); err != nil {
 
 			_ = last.Close()
@@ -2466,9 +2465,6 @@ func attachRoomThreads(ctx context.Context, tx *sql.Tx, room string, ids []strin
 		}
 		summary := views[at[newest[seq]]].Thread
 		summary.LastReplyAt = store.DecodeTime(created)
-		if reply, decodeErr := DecodeMessage(document); decodeErr == nil {
-			summary.LastReplyAt = reply.CreatedAt
-		}
 		summary.LastReplyPosition = statelog.Position{
 			Stream: stream, Generation: uint32(generation), Seq: uint64(position),
 		}
