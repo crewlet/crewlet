@@ -1766,7 +1766,16 @@ read the one key: sorting the lower one would silently re-sort the upper, and a
 link to a sorted screen would mean something different depending on which table
 the reader had touched. A name rather than an index, because an index is a fact
 about the source order and inserting a grid above would move every link's
-meaning by one.
+meaning by one. **And it is held, not remembered:** the address is the
+document's, so a page's grid in the peek rail reads the same keys as the screen
+under it, and every mounted grid registers the keys it reads and reports a
+second grid on one of them to `console.error`, which fails every dashboard case
+that mounts the pair (`app/frame/DataGrid.tsx`). Four screens had shipped the
+collision: Account's sessions and tokens (sorting the tokens by Created
+re-sorted the sessions), Settings › People's people, invitations and human
+seats, a person's credentials and sessions, and an integration's provisioning
+passes and deliveries; and an agent's Access tab drew one grid per integration
+under one name, so each integration's grid is named for it.
 
 **A `shrink` column is capped, because `max-content` is not "shrink to
 content" — it is *grow* to content, with no ceiling.** Grid resolves an
@@ -6493,9 +6502,12 @@ be read at a glance:
   caution and failure tones — and never while the turn is parked, because an
   executor in its box is silent on purpose. What waits behind the turn in the
   seat's inbox is on the row too, as the node holding the seat counts it with
-  the turn's own mail left out: "1 person waiting" (or "2 people waiting") for
-  the priority lane, then "4 waiting" for the rest, and nothing when the inbox
-  holds nothing else.
+  the turn's own mail left out: one count of what is queued ("88 queued"),
+  whose tooltip, read out with the row, says what it is ("Queued in its inbox:
+  79 messages from people · 9 other notices"), and nothing when the inbox
+  holds nothing else. The counts are MESSAGES, never people: the priority lane
+  holds what a person wrote that the seat owes an answer to, and it read
+  "79 people waiting" in a company of four.
 - **Waiting on a person** — every executor parked on a question: whose, the
   question, who it asks (the chart's names for the seats the engine resolved),
   how long it has waited and how long its box is still held, and **Answer**,
@@ -10145,7 +10157,15 @@ into swapping for somebody else's.
 - **Security** — a line each, with its gesture beside it, in the order a
   person comes to check them: **Two-step verification** first, then — beside
   an app — **Recovery codes**, then **Password**, whose **Change password…**
-  opens the form in a dialog, as the authenticator's setup does. The form
+  opens the form in a dialog, as the authenticator's setup does. Each line
+  says what is true now, the Password's when it was last set (its
+  credential's own instant: a change replaces it with a new one); what a change
+  does, signing out everywhere else and stopping the tokens, is said in the
+  dialog, where the change is made. The line said the consequence where every
+  other line says a state. Each line is two tracks, the words wrapping beside
+  the gesture: a wrapping row sized the words to their one line, so at 390 the
+  longer sentence dropped its button under it while a shorter one kept its
+  button beside it. The form
   drawn in place stood four fields tall above the second factor and pushed
   it below the fold at 1280×720 and on a phone. **Change password** takes
   the current one, a **Code** — for
@@ -10168,8 +10188,13 @@ into swapping for somebody else's.
   step-up dialog reads it ("That password or code was not accepted"), the
   code cleared. **Two-step verification** sets up or
   replaces the authenticator app — the seed drawn as `#/enrol` draws it, a QR
-  code with the key and the link beside it — a first one issuing a first set of recovery
-  codes, shown once, as `#/enrol` does, and a replacement keeping the set held
+  code with the key and the link beside it, and **Confirm** beside **Cancel**
+  in the dialog's footer, as every dialog's gestures are (the setup drew its
+  own Confirm into the body, alone on the left, while Cancel stood alone in
+  the footer; `#/enrol`'s page keeps Confirm under its steps, the page being
+  the form) — a first one issuing a first set of recovery
+  codes, shown once, as `#/enrol` does, with **I've saved them** in the footer
+  too, and a replacement keeping the set held
   — and **Create new codes** issues a set —
   offered only beside an app, because recovery codes held alone are a second
   factor of their own, which the engine refuses to issue.

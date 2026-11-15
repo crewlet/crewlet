@@ -9029,6 +9029,20 @@ a.live-row:hover {
   list-style: none;
 }
 
+/* ---- Account ------------------------------------------------------------- */
+
+/* ONE OF THE SECURITY CARD'S LINES (`routes/account/Account.tsx`): its name and
+   what is true of it now, the gesture beside it. TWO TRACKS, THE WORDS
+   WRAPPING: a wrapping row sized the words to their one line, so at 390 the
+   longer sentence dropped its button under it while a shorter one kept its
+   button beside it. */
+.account-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
 /* ---- Artifacts ------------------------------------------------------- */
 
 /* THE GALLERY'S FIELD is a search box in the page bar, as Agents' finder. */

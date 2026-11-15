@@ -29,8 +29,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { Account } from "./Account.tsx";
-import { fmtDateTime } from "~/lib/format.ts";
+import { Account, passwordState } from "./Account.tsx";
+import { fmtDate, fmtDateTime } from "~/lib/format.ts";
 import { Router } from "~/app/router.tsx";
 import { page } from "~/lib/session.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -99,7 +99,13 @@ const SESSIONS = {
   ],
 };
 
-const PASSWORD = { id: "c-pw", person: "p-1", method: "password", revoked: false };
+const PASSWORD = {
+  id: "c-pw",
+  person: "p-1",
+  method: "password",
+  created_at: "2026-09-01T10:00:00Z",
+  revoked: false,
+};
 const APP = { id: "c-totp", person: "p-1", method: "totp", revoked: false };
 const CODES = { id: "c-codes", person: "p-1", method: "recovery", revoked: false };
 const TOKEN = {
@@ -777,6 +783,57 @@ describe("what a person comes for is where they look", () => {
     expect(everywhere.parentElement!.textContent).toMatch(
       /Signs you out on every device and stops your tokens/,
     );
+  });
+
+  // THE PASSWORD'S LINE SAYS WHAT IS TRUE OF IT NOW, as every other line
+  // does: when it was last set. It said what a change DOES ("Signs you out
+  // elsewhere and stops your tokens."), which is now said in the dialog, where
+  // the change is made. Mutation: put the consequence back on the line.
+  test("the password's line says when it was last set, and its dialog what a change does", async () => {
+    engine({ credentials: [PASSWORD, APP] });
+    mount();
+    const line = await screen.findByRole("region", { name: "Password" });
+    await waitFor(() =>
+      expect(line.textContent).toContain(`Last set ${fmtDate("2026-09-01T10:00:00Z")}.`),
+    );
+    expect(line.textContent).not.toMatch(/signs you out|stops your tokens/i);
+    const dialog = await openPasswordDialog();
+    expect(dialog.textContent).toContain(
+      "Changing it signs you out everywhere else and stops your tokens.",
+    );
+  });
+
+  test("a password the list does not hold is said, and an unread list says nothing", () => {
+    expect(passwordState([APP as never])).toBe("Not set.");
+    expect(passwordState(null)).toBe("");
+    expect(passwordState([{ ...PASSWORD, created_at: undefined } as never])).toBe("Set.");
+  });
+
+  // EVERY LINE IS THE SAME TWO TRACKS, the gesture beside the words, so the
+  // layout does not turn on how long a line's sentence is (its measurement is
+  // `Account.layout.test.tsx`'s). Mutation: draw a line as a wrapping row.
+  test("each security line holds its words and its gesture in the two-track line", async () => {
+    engine({ credentials: [PASSWORD, APP] });
+    mount();
+    await screen.findByRole("button", { name: "Replace app…" });
+    for (const name of ["Two-step verification", "Recovery codes", "Password"]) {
+      const line = screen.getByRole("region", { name });
+      expect(line.classList.contains("account-line")).toBe(true);
+      expect(line.lastElementChild?.tagName).toBe("BUTTON");
+    }
+  });
+
+  // EACH GRID KEEPS ITS OWN SORT. Both read the bare `sort=` once, so sorting
+  // the tokens by Created re-sorted the sessions too. Mutation: drop either
+  // grid's `name` and the page reports two grids on one key.
+  test("sorting the tokens writes the tokens' own key and leaves the sessions' alone", async () => {
+    engine({ credentials: [PASSWORD, TOKEN] });
+    mount();
+    await screen.findByText("This browser");
+    fireEvent.click(screen.getByRole("button", { name: "Created" }));
+    expect(location.hash).toMatch(/[?&]sort\.tokens=/);
+    expect(location.hash).not.toMatch(/[?&]sort=/);
+    expect(location.hash).not.toMatch(/[?&]sort\.sessions=/);
   });
 
   // A BUTTON IS ITS OWN NAME on a phone's card, where a labelled column drew
