@@ -111,7 +111,7 @@ func (s *Service) saveRequestedGrant(ctx context.Context, req seataccess.GrantRe
 	if refusal := grantRefusal(offer, before, stamped); refusal != nil {
 		return &seataccess.GrantRefused{Reason: refusal.Detail}
 	}
-	if err := admit(seataccess.NeedsStepUp(offer, before, stamped)); err != nil {
+	if err = admit(seataccess.NeedsStepUp(offer, before, stamped)); err != nil {
 		return err
 	}
 	seats := map[string]map[seataccess.Lane]seataccess.Desired{req.Handle: {req.Lane: stamped}}
