@@ -414,7 +414,16 @@ export function ServerWizard({
 
   const go = (id: Step) => {
     // REVIEW LISTS EVERYTHING, so reaching it is acting on every step.
-    if (id === "review") setAttempted(new Set(steps));
+    if (id === "review") {
+      setAttempted(new Set(steps));
+      // A step left short is said on its field rather than sent for the engine to refuse.
+      const short = steps.find((s) => s !== "review" && !isComplete(missingIn(draft, s)));
+      if (short) {
+        setStep(short);
+        focusWhenShown(() => firstInvalid(root.current));
+        return;
+      }
+    }
     setStep(id);
     if (steps.indexOf(id) > steps.indexOf(reached)) setReached(id);
   };
@@ -439,13 +448,6 @@ export function ServerWizard({
   /** On to the next step when this one has what it needs; otherwise say what, and focus it. */
   function advance() {
     if (step === "review") {
-      // A step left short (reached through the stepper) is said on its field first.
-      const short = steps.find((s) => s !== "review" && !isComplete(missingIn(draft, s)));
-      if (short) {
-        go(short);
-        focusWhenShown(() => firstInvalid(root.current));
-        return;
-      }
       if (check.kind === "accepted") void save();
       else if (check.kind === "idle") void runCheck();
       return;

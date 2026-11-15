@@ -362,6 +362,28 @@ test("a negative call timeout stops Connection with the reason under its field",
   expect(dryRunCreate).not.toHaveBeenCalled();
 });
 
+// Review changes, on an edit, stops at a step left short rather than asking the engine.
+test("Review changes on an edit stops at a negative timeout under its field", async () => {
+  const entity = { name: "linear", transport: "http", url: "https://mcp.linear.app/mcp" };
+  mount(
+    {
+      server: mcpData("admin").server("linear")!,
+      entity,
+      values: [],
+      entry: LINEAR,
+      signIn: "none",
+    },
+    "connection",
+  );
+  await settle();
+  fireEvent.change(screen.getByLabelText(/Call timeout, in seconds/), { target: { value: "-5" } });
+  await press("Review changes");
+  expect(screen.getByLabelText(/Call timeout, in seconds/).getAttribute("aria-invalid")).toBe(
+    "true",
+  );
+  expect(dryRunEntity).not.toHaveBeenCalled();
+});
+
 // The engine's words for a person are said in place of its line for an operator.
 test("an engine problem with a person's words says those, not the document path", async () => {
   vi.mocked(dryRunCreate).mockResolvedValue({
