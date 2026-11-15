@@ -10171,7 +10171,9 @@ into swapping for somebody else's.
   — and **Create new codes** issues a set —
   offered only beside an app, because recovery codes held alone are a second
   factor of their own, which the engine refuses to issue.
-- **Where you are signed in** — the live sessions, with **This browser**
+- **Where you are signed in**: the live sessions, each led by its device
+  ("Firefox on macOS", read from the session's `user_agent`) over the address it
+  signed in from (`remote`), with **This browser**
   marked by the lineage `/auth/session` names; any other is signed out by name
   (`POST /auth/logout/{lineage}`), and **Sign out everywhere** asks first —
   here and in the user menu, which closes to ask — saying it ends every
