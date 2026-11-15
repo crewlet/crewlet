@@ -1030,6 +1030,10 @@ func inParkedBox(run PendingRun, row executorkeep.TurnRow, target RelaunchTarget
 // kept none, the session its conversation's last turn left, as its first
 // launch froze it (Base).
 type ContinuedSession struct {
+	// Capture is the kept capture continued, as the run's record stamps it:
+	// its own ContextTokens is what a launch that restores it sends first,
+	// which the floor of that launch is made of, never
+	// [ContinuedSession.CopyContext].
 	Capture SessionCapture
 	Row     executorkeep.TurnRow
 
@@ -1038,13 +1042,14 @@ type ContinuedSession struct {
 	// where it continues none, or a kept capture.
 	Base *BaseSession
 
-	// Context is what the last request of the session of the job the
+	// CopyContext is what the last request of the session of the job the
 	// relaunch follows carried, as that job's newest capture measured it,
-	// KEPT OR NOT: what a launch that continues that session sends again
-	// before its brief, restored from the capture or as the job's own box
-	// holds it ([LaunchRequest.Continue]). Set whether or not the capture is
-	// continued; zero where no capture of the job measured any.
-	Context int64
+	// KEPT OR NOT: what a launch that continues that job's own copy in its
+	// box sends again before its brief ([LaunchRequest.Continue]), the copy
+	// having gone as far as that capture. Set whether or not a capture is
+	// continued; zero where no capture of the job measured any. A kept
+	// capture continued is held to its own measure (Capture.ContextTokens).
+	CopyContext int64
 
 	// KeptTurn is the turn whose kept session the relaunch's read found,
 	// continued or not: the turn's own where its run's record says a capture of
@@ -1087,7 +1092,7 @@ const relaunchCaptureWait = 15 * time.Second
 // as [BaseContinuityOf] decides of the turn's own row ([ContinuedSession.Base],
 // [Coordinator.continuedWithout]) — or why there is none, in words for the
 // log; and either way what that job's session's last request carried
-// ([ContinuedSession.Context]).
+// ([ContinuedSession.CopyContext]).
 //
 // WHAT IS UNSETTLED IS SETTLED FIRST, within that same wait — see the file
 // comment: a capture whose taker is gone, from the turn's row on the log, as
@@ -1125,7 +1130,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 		return ContinuedSession{}, "the turn's run record was gone before the capture of the job " +
 			"the relaunch follows settled"
 	}
-	answer := ContinuedSession{Context: followedContext(run)}
+	answer := ContinuedSession{CopyContext: copyContext(run)}
 	if err != nil {
 		// NO ANSWER IS NO KEPT CAPTURE: the row the wait could not read again
 		// may hold a capture since kept, or refused, and a relaunch never
@@ -1294,10 +1299,12 @@ const NoKeptSession = "the company keeps no executor session (turn_engine.conver
 	"is false), so a relaunch continues at most the session its own box holds, and a conversation's next " +
 	"turn, or a schedule's next fire, continues none"
 
-// followedContext is what the last request of the session of run's current
-// job carried, as that job's newest capture measured it, kept or not; zero
-// where it left none, or none that measured any.
-func followedContext(run PendingRun) int64 {
+// copyContext is what the last request of the session of run's current job
+// carried, as that job's newest capture measured it, kept or not: the measure
+// of that job's own copy in its box, which went at least as far
+// ([ContinuedSession.CopyContext]); zero where it left none, or none that
+// measured any.
+func copyContext(run PendingRun) int64 {
 	if newest := run.Capture; newest != nil && newest.LaunchSeq == run.LaunchSeq {
 		return newest.ContextTokens
 	}

@@ -126,6 +126,15 @@ func storedSession(row executorkeep.TurnRow) executordomain.Session {
 // turn, which had nothing to continue; and either way what the job before's
 // session's last request carried, which the in-place floor is made of.
 //
+// EACH SESSION'S CONTEXT IS ITS OWN: a kept capture's is what that capture
+// measured ([runner.SessionBasis.ContextTokens]), which the floor of the
+// session continued in any box is made of, and the job before's copy in its
+// box is its job's newest capture's, kept or not
+// ([runner.SessionBasis.CopyContext]), which the in-place floor is made of
+// beside its job's record's. One figure for both would hold a kept capture
+// that is not its job's newest to what its job's copy went on to carry past
+// it: the floor of a session the launch does not send.
+//
 // ANY MEMBER OF THE CHAIN, never one picked here: the launch picks its member
 // once, as it launches ([agentLauncher.member]), and a member's plan can be
 // spent or come back between this and that pick. Asked for one member, the
@@ -175,7 +184,7 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 	if base := continued.Base; base != nil {
 		// A TURN THAT HAS KEPT NOTHING, relaunched: the base its first launch
 		// froze, which its row still holds.
-		basis := baseBasis(*base, continued.Context)
+		basis := baseBasis(*base, continued.CopyContext)
 		basis.KeptTurn = continued.KeptTurn
 		return basis
 	}
@@ -183,7 +192,7 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// THE SESSION THE TURN KEEPS, or else the base it froze, where the
 		// relaunch continues neither: a run that starts a session of its own
 		// beside it is told it may read it.
-		return runner.SessionBasis{Why: why, ContextTokens: continued.Context, KeptTurn: continued.KeptTurn}
+		return runner.SessionBasis{Why: why, CopyContext: continued.CopyContext, KeptTurn: continued.KeptTurn}
 	}
 	captured := continued.Capture
 	// ITS SAVE POINT, which every capture a relaunch continues states: one
@@ -194,7 +203,10 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 	return runner.SessionBasis{
 		LaunchSeq: captured.LaunchSeq, CaptureSeq: captured.CaptureSeq, SessionID: continued.Row.SessionID,
 		Harness: continued.Row.Harness, Through: through, NoteCursor: captured.NoteCursor,
-		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
+		Interrupted: captured.Interrupted, Home: captured.Home,
+		// WHAT THE CAPTURE ITSELF CARRIED, the kept path's floor, and what
+		// the job's copy in its box carried, the in-place path's.
+		ContextTokens: captured.ContextTokens, CopyContext: continued.CopyContext,
 		KeptTurn: continued.KeptTurn,
 		// AND WHAT CLAUDE CODE COUNTS THE CAPTURE'S SESSION AT, as its take
 		// read its archive whole: what the kept path's first request is judged

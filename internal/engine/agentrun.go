@@ -663,7 +663,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 //
 // EACH SESSION HELD TO ITS OWN FLOOR, never to the other's. A relaunch may be
 // offered both the session it was asked to continue in any box and the job
-// before's own copy in its box, each with a brief of its own, and its box
+// before's own copy in its box, each with a brief of its own and each with a
+// context of its own (the kept capture's own measure, [keptFloor]; the copy's,
+// the larger of its job's newest capture's and its record's,
+// [runner.Continuation.ContextTokens]), and its box
 // decides which it takes up as the run starts: the first where it can, and the
 // copy only where it cannot (internal/sandbox's continueSession). So a session
 // whose own floor no window or model can carry is dropped alone, and the launch
@@ -844,6 +847,9 @@ func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
 	switch {
 	case s.Basis.Continues():
+		// THE KEPT CAPTURE'S OWN CONTEXT, as it measured it, never its job's
+		// copy's ([runner.SessionBasis.CopyContext]): that one sizes the
+		// in-place floor, and a restored capture sends what it holds.
 		return static.continuing(s.Basis.ContextTokens,
 			max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced)))
 	case s.Basis.ContinuesBase():

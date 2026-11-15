@@ -648,7 +648,7 @@ func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 		inBubble(t, func(t *testing.T) {
 			rig, begun, continued, why := relaunchAfterTaker(t, true, true, 2*time.Second)
 			if why != "" || !continued.Capture.samePlace(begun) || continued.Capture.State != CaptureLanded ||
-				continued.Context != 42_000 {
+				continued.CopyContext != 42_000 {
 				t.Fatalf("the relaunch continues %+v (%q), want the capture the stopped process landed, of "+
 					"42000 tokens", continued, why)
 			}

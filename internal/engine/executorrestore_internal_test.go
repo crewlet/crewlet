@@ -211,7 +211,8 @@ func (k keptLaunch) relaunch(t *testing.T, basis runner.SessionBasis, inPlace *r
 // round's calls the log had taken when its capture read it, and the reads at
 // or below it that its job's brief counted without listing them — the notes it
 // had read, whether its harness was cut off, where it was last worked, what its
-// last request carried, which the launch's floor is made of, the harness that
+// last request carried, which the kept path's floor is made of, what its job's
+// newest capture measured, which the in-place floor is made of, the harness that
 // wrote it, which the member the launch picks must run, and the turn whose
 // session it is, which a run that starts one of its own instead is told it may
 // read.
@@ -226,12 +227,69 @@ func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 	got := k.l.ProbeSession(k.ctx)
 	want := runner.SessionBasis{LaunchSeq: k.kept.LaunchSeq, CaptureSeq: 1, SessionID: "s-1",
 		Harness: "claude-code", Through: 2, Owed: []int{1}, NoteCursor: 4, Interrupted: true,
-		Home: "/boxes/4f2a/home", ContextTokens: 40000, KeptTurn: "t1",
+		Home: "/boxes/4f2a/home", ContextTokens: 40000, CopyContext: 40000, KeptTurn: "t1",
 		// THE WINDOW OF A CHAIN WHOSE ONE MEMBER'S MODEL THIS BUILD DOES NOT KNOW.
 		Window: sandbox.ExecutorWindow{Tokens: sandbox.FallbackExecutorWindow, Standard: sandbox.FallbackExecutorWindow}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the probe answered %+v, want %+v", got, want)
 	}
+}
+
+// A RELAUNCH THAT CONTINUES NO KEPT CAPTURE OF ITS JOB STILL ANSWERS WHAT ITS
+// JOB'S COPY CARRIED, AND AS THE COPY'S. A job whose newest capture was refused
+// left its own copy in its box, which went as far as that capture, and a
+// person's answer may carry the round on in it: the in-place floor is made of
+// that capture's measure (runner.SessionBasis.CopyContext), whether the probe
+// answers why it continues no kept capture (a turn that kept one before) or the
+// base the turn's first launch froze (a turn that kept none). Neither answer
+// continues a capture of the turn's, so neither carries a kept capture's own
+// measure (runner.SessionBasis.ContextTokens), which only the kept floor reads.
+//
+// Mutation: answer the copy's measure as the kept capture's own on either
+// basis, and its case goes red.
+func TestAProbeThatContinuesNoKeptCaptureAnswersItsJobsCopysMeasure(t *testing.T) {
+	t.Parallel()
+	refuse := func(t *testing.T, ctx context.Context, pending sandbox.PendingStore, turn string,
+		after sandbox.SessionCapture) {
+		t.Helper()
+		row, _, err := pending.Get(ctx, turn)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		refused := sandbox.SessionCapture{LaunchSeq: row.LaunchSeq, CaptureSeq: after.CaptureSeq + 1,
+			Launch: row.LaunchID, State: sandbox.CaptureRefused, Reason: "past the seat's budget",
+			Harness: "claude-code", SessionID: "s-refused", ContextTokens: 61000}
+		if _, err := pending.StampCapture(ctx, turn, refused); err != nil {
+			t.Fatalf("StampCapture: %v", err)
+		}
+	}
+	t.Run("beside a capture the turn kept before", func(t *testing.T) {
+		t.Parallel()
+		k := newKeptLaunch(t, 40000, 0, 0)
+		refuse(t, k.ctx, k.e.sandbox.Load().pending, "t1", k.kept)
+		got := k.l.ProbeSession(k.ctx)
+		if got.Continues() || got.Why == "" || got.CopyContext != 61000 || got.ContextTokens != 0 {
+			t.Fatalf("the probe answered %+v, want no kept capture continued, said, with the 61000 its job's "+
+				"refused capture measured as the copy's and no kept capture's own", got)
+		}
+	})
+	t.Run("where the turn kept none, continuing the base it froze", func(t *testing.T) {
+		t.Parallel()
+		c := newConversingLaunch(t, 0, 0)
+		c.log.endedTurn("b1", "s-b1", "B1's transcript", 42000)
+		read := c.read("t2")
+		first := c.launcher("t2", read)
+		if _, err := c.launch(t, first, first.ProbeSession(c.ctx), read.endingsBlock()); err != nil {
+			t.Fatalf("the first launch: %v", err)
+		}
+		refuse(t, c.ctx, c.e.sandbox.Load().pending, "t2", sandbox.SessionCapture{})
+		got := c.launcher("t2", nil).ProbeSession(c.ctx)
+		if !got.ContinuesBase() || got.Base.ContextTokens != 42000 || got.CopyContext != 61000 ||
+			got.ContextTokens != 0 {
+			t.Fatalf("the probe answered %+v, want the base b1 at its own 42000, with the 61000 its job's "+
+				"refused capture measured as the copy's and no kept capture's own", got)
+		}
+	})
 }
 
 // A RELAUNCH CONTINUES ITS SESSION IN THE BOX IT GETS, WITH THE BRIEF FOR THAT
@@ -285,7 +343,7 @@ func TestAContinuedLaunchIsHeldToItsSessionsFloor(t *testing.T) {
 			basis := k.l.ProbeSession(k.ctx)
 			var continued *runner.Continuation
 			if inPlace {
-				basis = runner.SessionBasis{Why: "the newest capture was not kept", ContextTokens: 40000}
+				basis = runner.SessionBasis{Why: "the newest capture was not kept", CopyContext: 40000}
 				continued = &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000}
 				k.claimed(t)
 			}
@@ -768,7 +826,7 @@ func TestALaunchHoldsItsSessionsFloorToTheMemberItPicks(t *testing.T) {
 	member.RunIn = config.Placement(sandbox.Container)
 	inBox.l.company.Config.Providers.LLM["api"] = member
 	decided, err = inBox.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept",
-		ContextTokens: 40000}, &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
+		CopyContext: 40000}, &runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
 	if err != nil {
 		t.Fatalf("a launch whose member cannot continue in the job's box: %v, want it launched on its fresh "+
 			"brief's floor", err)
@@ -809,7 +867,7 @@ func TestABoxOnAnotherNodesHostAddsNothingToALaunchsFloor(t *testing.T) {
 	t.Cleanup(moved.Stop)
 	k.e.useSandbox(rt.pending, moved)
 	k.e.id = "node-b"
-	decided, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", ContextTokens: 40000},
+	decided, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", CopyContext: 40000},
 		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
 	if err != nil {
 		t.Fatalf("a relaunch on another node than its job's box's: %v, want it launched on its fresh brief's "+
@@ -847,7 +905,7 @@ func TestAJobsBoxWhoseRecordCannotBeReadHoldsTheLaunchToItsSession(t *testing.T)
 	k.claimed(t)
 	rt := k.e.sandbox.Load()
 	k.e.useSandbox(unreadRuns{PendingStore: rt.pending}, rt.coordinator)
-	_, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", ContextTokens: 40000},
+	_, err := k.relaunch(t, runner.SessionBasis{Why: "the newest capture was not kept", CopyContext: 40000},
 		&runner.Continuation{SessionID: "s-1", Brief: "carry on", ContextTokens: 40000})
 	var refused *floorRefusal
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) || !errors.As(err, &refused) ||

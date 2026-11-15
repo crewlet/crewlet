@@ -593,9 +593,9 @@ func TestAnUnkeptNewestCaptureStartsFreshAndSaysWhy(t *testing.T) {
 		if why == "" || !strings.Contains(why, "not kept") || continued.Capture.CaptureSeq != 0 {
 			t.Fatalf("a turn whose newest capture was refused continues %+v (%q), want none, said", continued, why)
 		}
-		if continued.Context != 61000 {
+		if continued.CopyContext != 61000 {
 			t.Errorf("the answer says the job's session carried %d tokens, want the 61000 its newest capture "+
-				"measured, for the floor of a launch that continues it in its box", continued.Context)
+				"measured, for the floor of a launch that continues it in its box", continued.CopyContext)
 		}
 
 		bare := newCoordRig(t)
