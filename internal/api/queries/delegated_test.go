@@ -3,6 +3,7 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -71,7 +72,8 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 		"sample_one_in: 5}\n" +
 		"    - {kinds: [pr_merge, deploy], delegates: [release-reviewer], escalate_to: [ops-lead], " +
 		"always_escalate_paths: [billing/**], required_checks: [{repo: acme/api, branch: main, " +
-		"checks: [test, lint]}]}\n"
+		"checks: [test, lint]}]}\n" +
+		"  deadline_seconds: 1200\n  allows_per_hour: 12\n"
 	company, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatal(err)
@@ -117,11 +119,26 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 		t.Fatalf("the merge rule's required checks read %v", rules)
 	}
 	holdShape(t, "DelegatedRequiredChecks", rowsOf(t, rules[1]["required_checks"]), false)
-	limits, ok := body["limits"].(map[string]any)
-	if !ok {
-		t.Fatalf("the answer's limits are %v", body["limits"])
+	// THE LIMITS ARE SETTINGS ROWS, as Settings › Limits reads a cap: each
+	// the document's value or the default, settable, with its range.
+	limits := rowsOf(t, body["limits"])
+	holdShape(t, "LimitRow", limits, false)
+	want := map[string][2]float64{
+		"delegated_decisions.deadline_seconds":       {1200, 900},
+		"delegated_decisions.allows_per_hour":        {12, 30},
+		"delegated_decisions.server_allows_per_hour": {10, 10},
 	}
-	holdShape(t, "DelegatedLimits", []map[string]any{limits}, false)
+	if len(limits) != len(want) {
+		t.Fatalf("the answer's limits are %v, want a row for each of %v", limits, want)
+	}
+	for _, row := range limits {
+		w, ok := want[fmt.Sprint(row["key"])]
+		if !ok || row["value"] != w[0] || row["default"] != w[1] || row["settable"] != true ||
+			row["group"] != "delegated" || row["range"] == nil {
+			t.Errorf("the limit %v, want value and default %v, settable, in the delegated group, with a range",
+				row, w)
+		}
+	}
 	var verdicts []map[string]any
 	for _, list := range []string{"decided", "spot_checks", "flagged"} {
 		rows := rowsOf(t, body[list])

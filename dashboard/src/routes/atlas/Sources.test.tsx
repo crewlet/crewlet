@@ -9,6 +9,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { grownCompany, sourceStanding, sourcesAnswer } from "~/test/atlas.ts";
 import { mountAtlas } from "~/test/atlasMount.tsx";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { Atlas } from "./Atlas.tsx";
 import { SourcesPage, readLine, refreshBlocked, span } from "./Sources.tsx";
 
@@ -267,5 +268,42 @@ describe("the band", () => {
     mountAtlas("#/company/atlas", <Atlas />, grownCompany(), { answers: { viewer: ADA } });
     const link = await screen.findByRole("link", { name: "Sources" });
     expect(link.getAttribute("href")).toBe("#/company/atlas/sources");
+  });
+});
+
+// THE READ INTERVAL IS THE COMPANY'S, changed where it is read: for an
+// administrator, the engine's own row with the field that changes it; for
+// anyone else, the sentence alone, and the limits are never asked.
+describe("the read interval", () => {
+  const ROW = {
+    key: "atlas.refresh_interval_seconds",
+    group: "atlas",
+    unit: "seconds",
+    value: 1800,
+    default: 3600,
+    off: false,
+    default_off: false,
+    settable: true,
+    range: { min: 300 },
+  };
+
+  test("is the engine's row with a pencil for an administrator", async () => {
+    mountAtlas("#/company/atlas/sources", <SourcesPage />, grownCompany(), {
+      answers: { viewer: ADMIN_VIEWER, atlas_sources: sourcesAnswer(), limits: { limits: [ROW] } },
+    });
+    const row = await screen.findByRole("row", { name: /Each source is read every/ });
+    expect(within(row).getByText("30 minutes")).toBeTruthy();
+    expect(within(row).getByText("Changed from 1 hour")).toBeTruthy();
+    expect(
+      within(row).getByRole("button", { name: "Change Each source is read every" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/Refresh now reads one sooner/)).toBeTruthy();
+  });
+
+  test("is a sentence for a reader the limits are not an answer for", async () => {
+    const { asked } = mountSources();
+    expect(await screen.findByText(/Each source is read every hour\./)).toBeTruthy();
+    expect(screen.queryByRole("row", { name: /Each source is read every/ })).toBeNull();
+    expect(asked.map((a) => a.what)).not.toContain("limits");
   });
 });

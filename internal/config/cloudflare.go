@@ -59,6 +59,10 @@ type RoleCloudflare struct {
 
 	// Level is what the token may do; empty is read.
 	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=read|operate|configure|secure" desc:"read (the default): zone, DNS, cache, firewall and WAF rule, IP list, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included. secure: configure plus WAF rule and IP list edits."`
+
+	// Grants are permission groups the token holds beside the level, each
+	// on some zones or the account, for a while or for good.
+	Grants []SeatGrant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"Cloudflare permission groups this agent's token holds beside its level, each added on the Agents tab or by approving the agent's request."`
 }
 
 // LevelOrDefault is the seat's level, read where it names none.
@@ -153,7 +157,8 @@ func (c *Cloudflare) validate(path Path) error {
 	return p.err()
 }
 
-// checkCloudflare holds a seat's level to the closed set.
+// checkCloudflare holds a seat's level to the closed set and its grants to
+// their shape.
 func (c *Company) checkCloudflare(p *problems, path Path, b *RoleCloudflare) {
 	if b == nil {
 		return
@@ -163,4 +168,5 @@ func (c *Company) checkCloudflare(p *problems, path Path, b *RoleCloudflare) {
 			"%q is not a Cloudflare level this engine offers; give %s",
 			b.Level, words.Or(CloudflareLevels()))
 	}
+	checkSeatGrants(p, at(path, "grants"), b.Grants)
 }

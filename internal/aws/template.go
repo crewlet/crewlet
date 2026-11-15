@@ -17,7 +17,7 @@ const (
 	// StackVersion is the version of the stack this engine renders, tagged on
 	// every resource so the Test can name an outdated stack. Raise it with any
 	// change to what the stack creates.
-	StackVersion = "2"
+	StackVersion = "3"
 	versionTag   = "crewlet:stack-version"
 	// CloudFormation's TemplateBody cap; above it, deploy needs an S3 bucket.
 	templateBodyLimit = 51200

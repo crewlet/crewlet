@@ -174,13 +174,17 @@ func TestTheCodeScratchIsBounded(t *testing.T) {
 		"both at their upper bounds": {scratch: "    idle_days: 365\n    max_per_seat: 1000\n"},
 		"an idle time of a day":      {scratch: "    idle_days: 1\n"},
 		"an idle time below a day": {scratch: "    idle_days: -1\n",
-			path: "code.scratch.idle_days", kind: "out_of_range", says: []string{"1..365", "7"}},
+			path: "code.scratch.idle_days", kind: "out_of_range", says: []string{"between 1 and 365", "7"}},
+		// A WRITTEN ZERO IS A VALUE, refused by the range; only absence is the
+		// default.
+		"an idle time of nothing": {scratch: "    idle_days: 0\n",
+			path: "code.scratch.idle_days", kind: "out_of_range", says: []string{"between 1 and 365"}},
 		"an idle time past a year": {scratch: "    idle_days: 366\n",
-			path: "code.scratch.idle_days", kind: "out_of_range", says: []string{"366", "1..365"}},
+			path: "code.scratch.idle_days", kind: "out_of_range", says: []string{"366", "between 1 and 365"}},
 		"a negative cap": {scratch: "    max_per_seat: -1\n",
-			path: "code.scratch.max_per_seat", kind: "out_of_range", says: []string{"0..1000", "50"}},
+			path: "code.scratch.max_per_seat", kind: "out_of_range", says: []string{"between 0 and 1000", "50"}},
 		"a cap past its ceiling": {scratch: "    max_per_seat: 1001\n",
-			path: "code.scratch.max_per_seat", kind: "out_of_range", says: []string{"1001", "0..1000"}},
+			path: "code.scratch.max_per_seat", kind: "out_of_range", says: []string{"1001", "between 0 and 1000"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

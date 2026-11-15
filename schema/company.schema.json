@@ -1208,7 +1208,7 @@
       "additionalProperties": false,
       "properties": {
         "idle_days": {
-          "description": "How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7.",
+          "description": "How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7, and a written 0 is refused.",
           "maximum": 365,
           "minimum": 1,
           "type": [
@@ -1498,6 +1498,20 @@
     "DelegatedDecisions": {
       "additionalProperties": false,
       "properties": {
+        "allows_per_hour": {
+          "description": "How many requests of one kind one delegate may allow in one clock hour (UTC), counted across the fleet; past it, requests go to people: 1 to 60. Empty is 30.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "deadline_seconds": {
+          "description": "How long a request waits on its delegates before it goes to people: 300 to 1800 seconds. Empty is 900 (15 minutes).",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "enabled": {
           "description": "Turn delegated decisions on. Off puts every request to people at once, and keeps the rules.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -1514,6 +1528,13 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "server_allows_per_hour": {
+          "description": "How many commands delegates may allow on one server in one clock hour (UTC), counted across the fleet; past it, commands go to people: 1 to 60. Empty is 10.",
+          "type": [
+            "integer",
             "null"
           ]
         }
@@ -4220,6 +4241,16 @@
             "null"
           ]
         },
+        "grants": {
+          "description": "AWS managed policies, by ARN, this agent's role holds beside its level, each still held to the seat boundary, added on the Agents tab or by approving the agent's request.",
+          "items": {
+            "$ref": "#/$defs/SeatGrant"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "level": {
           "description": "read (the default): describe and list compute, networking, containers, functions, databases, DNS and CDN, read metrics and CloudWatch Logs, and list object names, with no object, parameter or secret contents. operate: read plus starting, stopping, rebooting and scaling, invoking functions, invalidating the CDN, editing alarms and reading and writing S3 objects. administer: operate plus managing those services whole, which can leave access behind such as key pairs, user data and bucket policies.",
           "enum": [
@@ -4304,6 +4335,16 @@
           "type": [
             "boolean",
             "string",
+            "null"
+          ]
+        },
+        "grants": {
+          "description": "Cloudflare permission groups this agent's token holds beside its level, each added on the Agents tab or by approving the agent's request.",
+          "items": {
+            "$ref": "#/$defs/SeatGrant"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -4631,6 +4672,16 @@
           "type": [
             "boolean",
             "string",
+            "null"
+          ]
+        },
+        "grants": {
+          "description": "Google Cloud roles this agent's account holds beside its level, each on some projects (its own projects where it names none) whose grants list names the role, added on the Agents tab or by approving the agent's request.",
+          "items": {
+            "$ref": "#/$defs/SeatGrant"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -5035,6 +5086,16 @@
           "type": [
             "boolean",
             "string",
+            "null"
+          ]
+        },
+        "grants": {
+          "description": "Scaleway permission sets this agent's policy holds beside its level, each on some projects (its own projects where it names none) or the Organization, added on the Agents tab or by approving the agent's request.",
+          "items": {
+            "$ref": "#/$defs/SeatGrant"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -5804,6 +5865,114 @@
         "kind",
         "key"
       ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SeatGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_at": {
+          "description": "When the grant lapses, in UTC. Absent is permanent.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "granted_at": {
+          "description": "When it was granted, in UTC.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "granted_by": {
+          "description": "Who granted it, as the engine recorded them.",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "id": {
+          "anyOf": [
+            {
+              "pattern": "^g[a-z0-9]{10}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The grant's identifier, which the engine writes: g and ten lowercase letters or digits.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "permission": {
+          "description": "The permission granted, as the integration's catalogue names it (a Cloudflare permission group, such as Origin Write).",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why it was granted: the agent's request, or the note of the person who added it.",
+          "maxLength": 1500,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]{10}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The agent's request the grant answered, which the engine writes; absent for one a person added.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "scope": {
+          "description": "What the permission applies to, such as Cloudflare zone names. Empty is its whole reach: every zone the company's agents reach for a zone permission, the account for an account one.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
       "type": [
         "object",
         "null"

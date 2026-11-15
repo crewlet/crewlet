@@ -25,8 +25,9 @@
 // Scaleway checks no grant against what its granter holds, and no condition
 // can tell one application's keys from another's. So the provisioner key can
 // mint a key for, and grant anything to, any application in the organization.
-// What bounds an agent is this package's fixed level table and its
-// never-granted list, both held by tests.
+// What bounds an agent is this package's fixed level table, the grants a person
+// approved beside it (grants.go), and its never-granted list, which no level
+// holds and no grant is offered, all held by tests.
 //
 // # The key reaches the agent's box by reference
 //

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,6 +58,16 @@ func (r delegatedRules) Rule(kind delegated.Kind) ([]string, int, int, bool) {
 	return slices.Clone(rule.Delegates), n, rule.SampleRate(), true
 }
 
+// Limits are the limits the running document holds every delegate to, the
+// engine's defaults on a node running no company.
+func (r delegatedRules) Limits() delegated.Limits {
+	c := r.engine.Company()
+	if c == nil || c.Config == nil {
+		return delegated.DefaultLimits()
+	}
+	return c.Config.DelegatedDecisions.Limits()
+}
+
 // DelegatedToolDeps are the verdict tool's dependencies on this node, the
 // zero value (which omits the tool) without a fleet store or a queue.
 func DelegatedToolDeps(e *Engine) builtin.DelegatedDeps {
@@ -87,6 +96,11 @@ func (d delegatedDesk) SSHPatterns() []string {
 		return slices.Clone(s.AlwaysEscalate)
 	}
 	return nil
+}
+
+// Limits are the limits the running document holds every delegate to.
+func (d delegatedDesk) Limits() delegated.Limits {
+	return delegatedRules(d).Limits()
 }
 
 // Release is what the rule naming kind adds to a merge's or a deploy's
@@ -442,8 +456,8 @@ const (
 )
 
 // delegatedSweep puts to people every held call that waited on its delegates
-// past [delegated.Deadline], or whose kind no live rule delegates to those
-// delegates any more.
+// past the company's deadline ([delegated.Limits]), or whose kind no live rule
+// delegates to those delegates any more.
 type delegatedSweep struct {
 	engine *Engine
 	claim  schedule.DutyFunc
@@ -508,7 +522,8 @@ func (s *delegatedSweep) holds(ctx context.Context) (bool, error) {
 
 // pass escalates every request due, and logs what it could not.
 func (s *delegatedSweep) pass(ctx context.Context) {
-	sweepDelegated(ctx, sandbox.NewCoordStore(s.engine.backends.Fleet), delegatedRules{engine: s.engine},
+	rules := delegatedRules{engine: s.engine}
+	sweepDelegated(ctx, sandbox.NewCoordStore(s.engine.backends.Fleet), rules, rules.Limits().Deadline,
 		sshServers{engine: s.engine}, delegatedDesk{engine: s.engine}.Arguments, s.now())
 }
 
@@ -518,11 +533,12 @@ type delegatedRecorder interface {
 }
 
 // sweepDelegated puts to people every active held call that waited on its
-// delegates past its deadline, or whose delegation the live rules no longer
+// delegates past deadline, or whose delegation the live rules no longer
 // hold, recording each escalation once it is written, naming what it decided
 // from the call's arguments as open opens them.
 func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules builtin.DelegatedRules,
-	audit delegatedRecorder, open func(sandbox.PendingRun) (map[string]any, error), now time.Time) {
+	deadline time.Duration, audit delegatedRecorder, open func(sandbox.PendingRun) (map[string]any, error),
+	now time.Time) {
 
 	runs, err := store.ListActive(ctx)
 	if err != nil {
@@ -538,7 +554,7 @@ func sweepDelegated(ctx context.Context, store sandbox.PendingStore, rules built
 		word, said := ownRequest(run)
 		if word == "" {
 			delegates, _, _, live := rules.Rule(delegated.Kind(held.Act))
-			word, said = dueEscalation(*held, delegates, live, now)
+			word, said = dueEscalation(*held, delegates, live, deadline, now)
 		}
 		if word == "" {
 			continue
@@ -604,8 +620,9 @@ func escalateHeld(ctx context.Context, store sandbox.PendingStore, audit delegat
 // dueEscalation is why a call waiting on its delegates goes to people now, as
 // the closed word and the sentence people read, "" for one that still waits:
 // its kind no longer delegated (live false), a delegate it was put to no
-// longer the rule's, or its deadline passed.
-func dueEscalation(held sandbox.HeldCall, delegates []string, live bool, now time.Time) (string, string) {
+// longer the rule's, or the company's deadline passed since it was held.
+func dueEscalation(held sandbox.HeldCall, delegates []string, live bool, deadline time.Duration,
+	now time.Time) (string, string) {
 	if !live {
 		return delegated.OverruledOff, "Delegated decisions for " + held.Act + " were turned off, so the " +
 			"request came to people."
@@ -616,9 +633,9 @@ func dueEscalation(held sandbox.HeldCall, delegates []string, live bool, now tim
 				"came to people."
 		}
 	}
-	if !now.Before(held.HeldAt.Add(delegated.Deadline)) {
+	if !now.Before(held.HeldAt.Add(deadline)) {
 		return delegated.OverruledDeadline, "No delegate answered within " +
-			strconv.Itoa(int(delegated.Deadline/time.Minute)) + " minutes, so the request came to people."
+			delegated.Limits{Deadline: deadline}.DeadlineWords() + ", so the request came to people."
 	}
 	return "", ""
 }

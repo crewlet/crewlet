@@ -18,25 +18,35 @@
 //
 //   - On or off is a stored setting (`roles[].integrations.<lane>.enabled`),
 //     never inferred from a variable's presence ([Desired]).
+//
 //   - Access is stored in the vendor's own terms, and any grouping the engine
 //     needs (is this a raise to an administration role) is derived from the
 //     vendor's own order and never stored ([NeedsStepUp]).
+//
 //   - A seat's credential is sealed only under the name the engine derives for
 //     it ([SinkName]), never one the document names, and never one a company
 //     block references ([CompanyVariables]).
+//
 //   - Every pass computes the same plan from the document (desired), the
 //     account ledger, and what the vendor shows now (observed), and the
 //     preview route runs the same function ([Plan]), so a preview cannot
 //     promise what a sync will not do.
+//
 //   - Off disables and keeps the account (D1); remove is a separate,
 //     confirmed action allowed only when off. Drift in level or scope is
 //     restored and reported (D2). An account somebody disabled at the vendor
 //     is never re-enabled without being asked (D3).
+//
 //   - A credential minted and then not sealed is revoked, for every vendor
 //     ([Minted.Revoke]).
+//
 //   - A seat's own credential reaches its box from the integration, never a
 //     line a person copies, while the seat is on (ADR-0102): its lanes'
 //     [LaneSpec.BoxEnv] and its vendor's [BoxSet] ([BoxDefaults]).
+//
+//   - A seat's access is its level plus its live grants (ADR-0150): one
+//     vendor permission each beside the level, stored in the seat's block
+//     and saved as the level is, never applied past its expiry ([Grant]).
 //
 // What is NOT the same for every vendor is each step's call, and that is the
 // [Vendor] interface each vendor package implements and registers ([Register]).
@@ -238,20 +248,28 @@ type Desired struct {
 	// narrowed to. Empty means the vendor's default reach for the lane, which
 	// [LaneSpec.ScopeEmpty] says in words.
 	Scope []string `json:"scope,omitempty"`
+
+	// Grants are the seat's grants beside its level on a lane that takes
+	// them ([LaneSpec.Grants]), as the document stores them. A plan reads
+	// only the live ones ([LiveGrants]): the sync filters at its clock.
+	Grants []Grant `json:"grants,omitempty"`
 }
 
-// SameAccess reports whether two settings grant the same level, permissions
-// and scope, ignoring on or off and the order of the scope list.
+// SameAccess reports whether two settings grant the same level, permissions,
+// scope and grants, ignoring on or off and the order of the lists.
 func (d Desired) SameAccess(other Desired) bool {
-	return d.Level == other.Level && d.Permissions.Equal(other.Permissions) &&
-		sameSet(d.Scope, other.Scope)
+	return d.SameLevel(other) && sameSet(d.Scope, other.Scope) && d.SameGrants(other)
 }
 
 // SameLevel reports whether two settings grant the same level and
-// permissions, ignoring scope.
+// permissions, ignoring scope and grants.
 func (d Desired) SameLevel(other Desired) bool {
 	return d.Level == other.Level && d.Permissions.Equal(other.Permissions)
 }
+
+// SameGrants reports whether two settings hold the same grants by what each
+// gives ([GrantKey]), ignoring ids, authors and expiries.
+func (d Desired) SameGrants(other Desired) bool { return SameGrants(d.Grants, other.Grants) }
 
 // SameScope reports whether two settings narrow to the same scope.
 func (d Desired) SameScope(other Desired) bool { return sameSet(d.Scope, other.Scope) }
@@ -262,6 +280,7 @@ func (d Desired) Normalized() Desired {
 	out := d
 	out.Level = strings.TrimSpace(d.Level)
 	out.Scope = normalSet(d.Scope)
+	out.Grants = NormalGrants(d.Grants)
 	if len(d.Permissions) > 0 {
 		out.Permissions = maps.Clone(d.Permissions)
 	}
@@ -373,11 +392,12 @@ type Observed struct {
 	Account   string `json:"account,omitempty"`
 	AccountID string `json:"account_id,omitempty"`
 
-	// Level, Permissions and Scope are what the vendor holds now, in the
-	// same terms as [Desired].
+	// Level, Permissions, Scope and Grants are what the vendor holds now, in
+	// the same terms as [Desired].
 	Level       string      `json:"level,omitempty"`
 	Permissions Permissions `json:"permissions,omitempty"`
 	Scope       []string    `json:"scope,omitempty"`
+	Grants      []Grant     `json:"grants,omitempty"`
 
 	// Ceiling is GitHub's only: the permissions the app is registered with,
 	// which every token is narrowed from. A raise past it needs an owner to
@@ -426,7 +446,7 @@ type Retired struct {
 func (o Observed) Access() Desired {
 	return Desired{
 		Enabled: o.Exists && o.Enabled, Level: o.Level,
-		Permissions: o.Permissions, Scope: o.Scope,
+		Permissions: o.Permissions, Scope: o.Scope, Grants: o.Grants,
 	}
 }
 

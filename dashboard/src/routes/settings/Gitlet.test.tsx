@@ -93,27 +93,17 @@ test("nothing firing is said of the nodes it is true of", () => {
   expect(quietWords(["booting"])).toBe("No code alarm is firing on the nodes that have reported.");
 });
 
-// AN UNSET FIELD READS AS THE ENGINE'S DEFAULT, and says it is one; a set one
-// is the document's value. Mutation: draw an unset field as zero or empty, or
-// mark a set one as the default, and this fails.
-test("an unset scratch policy and identity domain read as the engine's defaults, marked as defaults", () => {
+// AN UNSET IDENTITY DOMAIN READS AS THE ENGINE'S DEFAULT, and says it is one;
+// a set one is the document's value. Mutation: draw an unset field as empty,
+// or mark a set one as the default, and this fails.
+test("an unset identity domain reads as the engine's default, marked as the default", () => {
   const unset = codePolicyOf({ code: { backend: "gitlet" } } as unknown as CompanyDocument);
-  expect(unset.idleDays).toEqual({ value: 7, set: false });
-  expect(unset.maxPerSeat).toEqual({ value: 50, set: false });
   expect(unset.identityDomain).toEqual({ value: "seats.invalid", set: false });
-
   const set = codePolicyOf({
-    code: {
-      backend: "gitlet",
-      scratch: { idle_days: 3, max_per_seat: 0 },
-      identity_domain: "acme.example",
-    },
+    code: { backend: "gitlet", identity_domain: "acme.example" },
   } as unknown as CompanyDocument);
-  expect(set.idleDays).toEqual({ value: 3, set: true });
-  expect(set.maxPerSeat).toEqual({ value: 0, set: true });
   expect(set.identityDomain).toEqual({ value: "acme.example", set: true });
-
-  expect(codePolicyOf(null).idleDays).toEqual({ value: 7, set: false });
+  expect(codePolicyOf(null).identityDomain).toEqual({ value: "seats.invalid", set: false });
 });
 
 // THE GATE PER PATTERN: each rule says what a merge into it must meet, read

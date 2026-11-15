@@ -48,6 +48,8 @@ type fakeDesk struct {
 	full       map[string]bool // buckets whose hour is spent
 	allowErr   error
 	buckets    []string
+	caps       []int // the limit each count was asked to hold
+	limits     *delegated.Limits
 	recordErr  error
 
 	verdicts  []builtin.DelegatedVerdict
@@ -58,6 +60,13 @@ type fakeDesk struct {
 func (d *fakeDesk) Rule(delegated.Kind) ([]string, int, int, bool) { return d.delegates, 1, 10, d.live }
 func (d *fakeDesk) SSHPatterns() []string                          { return d.patterns }
 func (d *fakeDesk) Release(delegated.Kind) delegated.Release       { return d.release }
+
+func (d *fakeDesk) Limits() delegated.Limits {
+	if d.limits == nil {
+		return delegated.DefaultLimits()
+	}
+	return *d.limits
+}
 
 func (d *fakeDesk) Held(_ context.Context, id string) (sandbox.PendingRun, bool, error) {
 	d.mu.Lock()
@@ -84,10 +93,11 @@ func (d *fakeDesk) Labels(_ context.Context, item *types.WorkItem) ([]string, er
 	return d.labels, d.labelsErr
 }
 
-func (d *fakeDesk) Allow(_ context.Context, bucket string, _ int, _ time.Time) (bool, error) {
+func (d *fakeDesk) Allow(_ context.Context, bucket string, limit int, _ time.Time) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.buckets = append(d.buckets, bucket)
+	d.caps = append(d.caps, limit)
 	return !d.full[bucket], d.allowErr
 }
 
@@ -293,6 +303,36 @@ func TestADelegatesAllowsStopAtTheirHourlyCaps(t *testing.T) {
 		!strings.Contains(desk.answers[0].words, "Decided under delegation, rule 1") {
 		t.Fatalf("a routine allow counted %v and carried out %+v, want both hours counted and the call "+
 			"allowed once under rule 1", desk.buckets, desk.answers)
+	}
+	if want := []int{delegated.DefaultAllowsPerHour, delegated.DefaultServerAllowsPerHour}; !slices.Equal(desk.caps, want) {
+		t.Fatalf("a company that sets no caps counted against %v, want the defaults %v", desk.caps, want)
+	}
+}
+
+// The hourly caps are the ones the company document sets: each hour is
+// counted against the document's number, and the delegate is told it.
+//
+// Mutation: count against the defaults, and a company that tightened its caps
+// has its delegates allow past them.
+func TestADelegatesHourlyCapsAreTheCompanys(t *testing.T) {
+	t.Parallel()
+	_, o, _ := sshFixture(t)
+	set := delegated.Limits{Deadline: delegated.DefaultDeadline, AllowsPerHour: 4, ServerAllowsPerHour: 2}
+	desk := delegatedDesk(t, "sudo systemctl restart api", "", "routine", "dev")
+	desk.limits = &set
+	review(t, o, desk, "dev", verdict(desk, delegated.Allow, delegated.High))
+	if !slices.Equal(desk.caps, []int{4, 2}) {
+		t.Fatalf("the hours were counted against %v, want the document's 4 and 2", desk.caps)
+	}
+	serverBucket := "delegated:" + string(delegated.KindSSHOperate) + ":server:api-1"
+	full := delegatedDesk(t, "sudo systemctl restart api", "", "routine", "dev")
+	full.limits = &set
+	full.full[serverBucket] = true
+	review(t, o, full, "dev", verdict(full, delegated.Allow, delegated.High))
+	if !putToPeople(full, delegated.OverruledServerRateLimit) || len(full.escalated) != 1 ||
+		!strings.Contains(strings.Join(full.escalated[0].Engine, " "), "allowed 2 commands on api-1") {
+		t.Fatalf("a spent server hour escalated %+v, want it put to people naming the document's cap of 2",
+			full.escalated)
 	}
 }
 

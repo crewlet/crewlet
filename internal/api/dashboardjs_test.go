@@ -2598,7 +2598,15 @@ const (
 	// Artifacts and Chatlet polish, merged with main's Gitlet listing on kit
 	// 0.131.0, measures 6260.4 KiB (6,410,635 bytes), 33,344 bytes over the
 	// 6227.8 KiB of main it was built on: 6261 KiB.
-	treeBudget = 5<<20 + 1141<<10
+	// An agent's grants beside its level (the Agents tab's grants column and
+	// Add grant dialog, and the Inbox's grant of an agent's request) added
+	// 8,852 bytes, script and sheet, and took it to 6226.6 KiB (6,376,009
+	// bytes): 6227 KiB.
+	// The release train of an agent's grants (Cloudflare, then Scaleway, AWS
+	// and Google Cloud) and the settings changed in place, merged with main's
+	// audit follow-ups on kit 0.131.0, measures 6267.7 KiB (6,418,107 bytes),
+	// 11,535 bytes over the 6256.4 KiB of main it was built on: 6268 KiB.
+	treeBudget = 5<<20 + 1148<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

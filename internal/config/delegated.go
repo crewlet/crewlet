@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/crewlet/crewlet/internal/delegated"
@@ -24,6 +25,32 @@ type DelegatedDecisions struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn delegated decisions on. Off puts every request to people at once, and keeps the rules."`
 
 	Rules []DelegatedRule `yaml:"rules,omitempty" json:"rules,omitempty" desc:"Which kinds of request which agent seats decide, and who an escalation is put to. A kind is in at most one rule. At most 16."`
+
+	// THE LIMITS every delegate is held to (delegated.Limits): each moves
+	// within its range (settingRanges) and none switches off. POINTERS, so a
+	// written zero is refused by the range rather than read as the default.
+
+	DeadlineSeconds *float64 `yaml:"deadline_seconds,omitempty" json:"deadline_seconds,omitempty" desc:"How long a request waits on its delegates before it goes to people: 300 to 1800 seconds. Empty is 900 (15 minutes)."`
+
+	AllowsPerHour *int `yaml:"allows_per_hour,omitempty" json:"allows_per_hour,omitempty" desc:"How many requests of one kind one delegate may allow in one clock hour (UTC), counted across the fleet; past it, requests go to people: 1 to 60. Empty is 30."`
+
+	ServerAllowsPerHour *int `yaml:"server_allows_per_hour,omitempty" json:"server_allows_per_hour,omitempty" desc:"How many commands delegates may allow on one server in one clock hour (UTC), counted across the fleet; past it, commands go to people: 1 to 60. Empty is 10."`
+}
+
+// Limits are the limits the engine holds every delegate to: each the
+// document's value, or the engine's default where it sets none.
+func (d DelegatedDecisions) Limits() delegated.Limits {
+	l := delegated.DefaultLimits()
+	if d.DeadlineSeconds != nil {
+		l.Deadline = time.Duration(*d.DeadlineSeconds * float64(time.Second))
+	}
+	if d.AllowsPerHour != nil {
+		l.AllowsPerHour = *d.AllowsPerHour
+	}
+	if d.ServerAllowsPerHour != nil {
+		l.ServerAllowsPerHour = *d.ServerAllowsPerHour
+	}
+	return l
 }
 
 // DelegatedRule delegates some kinds of request to one agent seat, or to a
@@ -236,8 +263,26 @@ func (c *Company) validateDelegatedDecisions(o *org.Organization) error {
 		checkRulePaths(&p, at(here, "always_escalate_paths"), r)
 		checkRequiredChecks(&p, at(here, "required_checks"), r)
 	}
+	// ABSENT IS THE DEFAULT; anything written is held to its range.
+	if v := d.DeadlineSeconds; v != nil {
+		p.within(at(path, "deadline_seconds"), *v, delegatedDeadlineWhy)
+	}
+	if v := d.AllowsPerHour; v != nil {
+		p.within(at(path, "allows_per_hour"), float64(*v), delegatedAllowsWhy)
+	}
+	if v := d.ServerAllowsPerHour; v != nil {
+		p.within(at(path, "server_allows_per_hour"), float64(*v), delegatedAllowsWhy)
+	}
 	return p.err()
 }
+
+// Why each limit has the range it has, for the operator reading a refusal.
+const (
+	delegatedDeadlineWhy = "a delegate needs a few minutes to answer, and a request with its delegates " +
+		"longer than a paused box is kept reaches people after the box was let go"
+	delegatedAllowsWhy = "a delegate decides one request a turn, so more than one allow a minute " +
+		"bounds nothing"
+)
 
 // checkDelegates holds a rule's delegates to one agent seat or a panel of two
 // on different models, none of which can request a kind the rule delegates.

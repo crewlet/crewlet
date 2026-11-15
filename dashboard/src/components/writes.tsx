@@ -50,7 +50,8 @@ import {
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
-import { isAccessOption } from "~/lib/grants.ts";
+import { isAccessOption, requestOption } from "~/lib/grants.ts";
+import { RequestGrantDialog } from "./requestGrant.tsx";
 import { AccessGrantDialog } from "~/components/advisorFix.tsx";
 import { AnswerChoices } from "./AnswerChoices.tsx";
 import { Recommendation } from "./Recommendation.tsx";
@@ -1086,7 +1087,7 @@ function AskAnswer({
   // person who chose it never leaves the agent told yes with nothing changed.
   const [granting, setGranting] = useState<string | null>(null);
   const send = async (choice: string) => {
-    if (isAccessOption(choice) && options.some((o) => o.id === choice)) {
+    if ((isAccessOption(choice) || requestOption(choice)) && options.some((o) => o.id === choice)) {
       setGranting(choice);
       return;
     }
@@ -1295,18 +1296,30 @@ function AskAnswer({
     );
   };
 
-  const grant = granting && (
-    <AccessGrantDialog
-      seat={askedBy}
-      access={granting}
-      question={question ?? "Allow this access?"}
-      onClose={() => setGranting(null)}
-      onApplied={() => {
-        setGranting(null);
-        void answer(granting);
-      }}
-    />
-  );
+  const requested = granting ? requestOption(granting) : null;
+  const applied = () => {
+    if (!granting) return;
+    setGranting(null);
+    void answer(granting);
+  };
+  const grant =
+    granting &&
+    (requested ? (
+      <RequestGrantDialog
+        option={requested}
+        question={question ?? "Grant this permission?"}
+        onClose={() => setGranting(null)}
+        onApplied={applied}
+      />
+    ) : (
+      <AccessGrantDialog
+        seat={askedBy}
+        access={granting}
+        question={question ?? "Allow this access?"}
+        onClose={() => setGranting(null)}
+        onApplied={applied}
+      />
+    ));
   return (
     <>
       {view()}

@@ -113,6 +113,29 @@ type Reconciler interface {
 	Reconcile(ctx context.Context) ([]Finding, error)
 }
 
+// Paced is a [Reconciler] whose surface holds something that lapses on a
+// clock, such as an agent's grant with an expiry: it names when the next pass
+// is due at the latest, so the lapse is taken then rather than on the settled
+// interval. Zero is nothing due.
+type Paced interface {
+	DueBy(now time.Time) time.Time
+}
+
+// nextAttempt is when a surface is due again: its cadence's wait, or sooner
+// where its reconciler names a lapse before that ([Paced]), never in the past.
+func nextAttempt(r Reconciler, now time.Time, wait time.Duration) time.Time {
+	next := now.Add(wait)
+	if paced, ok := r.(Paced); ok {
+		if due := paced.DueBy(now); !due.IsZero() && due.Before(next) {
+			next = due
+			if next.Before(now) {
+				next = now
+			}
+		}
+	}
+	return next
+}
+
 // ErrNotConfigured reports a surface whose block has left the company.
 //
 // # Why a sentinel rather than a registration the apply rebuilds
@@ -1214,7 +1237,7 @@ func (w *Worker) reconcile(
 			"integration", kind.String(), "attempts", state.Attempts, "error", err)
 	}
 
-	state.NextAttemptAt = now.Add(w.spread(w.scheduleNow().Next(state.Report, state.Attempts)))
+	state.NextAttemptAt = nextAttempt(reg.Reconciler, now, w.spread(w.scheduleNow().Next(state.Report, state.Attempts)))
 
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The pass still happened, and its work at the third-party app is durable.

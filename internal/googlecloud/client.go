@@ -754,6 +754,7 @@ func (c *Client) SearchProjects(ctx context.Context) ([]Project, error) {
 type Role struct {
 	Name        string   `json:"name"`
 	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
 	Stage       string   `json:"stage"`
 	Permissions []string `json:"includedPermissions"`
 	Deleted     bool     `json:"deleted"`

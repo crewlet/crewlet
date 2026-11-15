@@ -97,6 +97,16 @@ type Access interface {
 	// refuses the value, and [ErrAccessSyncInFlight] while a sync runs.
 	HandIn(ctx context.Context, q AccessQuery, handle string, lane seataccess.Lane,
 		value string, by iam.Actor) (seataccess.HandedIn, error)
+
+	// GrantRequest is one agent's stored request for a grant, or
+	// [seataccess.ErrNoRequest] where it lapsed or was settled.
+	GrantRequest(ctx context.Context, id string) (seataccess.GrantRequest, error)
+
+	// RecordGrants records what a saved revision did to seats' grants: an
+	// audit event per grant added or removed, as the person who saved it,
+	// and every request a grant answered settled. Never a failure: the
+	// revision is the company's already.
+	RecordGrants(ctx context.Context, kind integration.Kind, by iam.Actor, changes []seataccess.GrantChange)
 }
 
 // ErrNotAwaitingInstall refuses an install link for an agent whose Slack app is
@@ -334,7 +344,7 @@ func (s *Service) accessPlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !checkDraft(w, kind, q.Company, current, draft) {
+	if !s.settleGrants(w, r, current, &draft) || !checkDraft(w, kind, q.Company, current, draft) {
 		return
 	}
 	plan, err := s.access.Plan(r.Context(), q, seataccess.Draft{Seats: draft.Seats})
@@ -381,7 +391,7 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !checkDraft(w, kind, q.Company, current, draft) {
+	if !s.settleGrants(w, r, current, &draft) || !checkDraft(w, kind, q.Company, current, draft) {
 		return
 	}
 	edits, changed := draftEdits(current, draft)
@@ -441,6 +451,9 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 		"kind", kind, "revision", applied.RevisionID, "epoch", applied.Epoch,
 		"seats", strings.Join(changedHandles(changed), ","), "step_up", plan.StepUp,
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+	if grants := grantChanges(changed); len(grants) > 0 {
+		s.access.RecordGrants(r.Context(), kind, attributionOf(r), grants)
+	}
 	s.startSync(r, AccessSync{Kind: kind, Revision: applied.RevisionID, By: attributionOf(r),
 		Handles: changedHandles(changed), AfterSave: true})
 	s.writeSaved(w, r, current, changed, applied.RevisionID)
@@ -1008,8 +1021,11 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Co
 					})
 				return false
 			}
-			if refusal := notOffered(kind, lane, offers[lane], within(company, lane),
-				draft.Seats[handle][lane]); refusal != nil {
+			refusal := notOffered(kind, lane, offers[lane], within(company, lane), draft.Seats[handle][lane])
+			if refusal == nil {
+				refusal = grantRefusal(offers[lane], seat.Lanes[lane].Desired, draft.Seats[handle][lane])
+			}
+			if refusal != nil {
 				refusal.Seat, refusal.Lane = handle, lane
 				httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeAccessNotOffered,
 					refusalFields(*refusal))
@@ -1222,7 +1238,8 @@ func seatEdits(current seataccess.Answer,
 		for _, lane := range sortedLanes(seats[handle]) {
 			before := seat.Lanes[lane].Desired
 			after := seats[handle][lane].Normalized()
-			if before.Enabled == after.Enabled && before.SameAccess(after) {
+			if before.Enabled == after.Enabled && before.SameAccess(after) &&
+				seataccess.SameStoredGrants(before.Grants, after.Grants) {
 				continue
 			}
 			lanes = append(lanes, lane)

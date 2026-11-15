@@ -15,7 +15,10 @@
  * it after asking. Every change is a merge patch the engine checks against
  * the whole company before it is stored (`lib/delegatedRules.ts`), drawn for
  * every reader and disabled with the reason for one who cannot write the
- * document. The limits are the engine's own and no document changes them.
+ * document. The limits every delegate is held to (the deadline and the two
+ * hourly caps) are the document's too, within ranges that cannot switch one
+ * off: each row is the field Settings › Limits changes a cap with
+ * (`components/LimitSetting.tsx`), its value beside the engine's default.
  *
  * # What was decided, in three lists
  *
@@ -64,6 +67,7 @@ import {
   ShieldCheckGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
+import { LimitSetting } from "~/components/LimitSetting.tsx";
 import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
 import { enabledPlan, removeRulePlan } from "~/lib/delegatedRules.ts";
 import { useSettingWrite, type SettingWrite } from "~/lib/useSettingWrite.ts";
@@ -78,7 +82,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { companyDateLabel, fmtCount, plural, tsKey } from "~/lib/format.ts";
+import { companyDateLabel, fmtCount, tsKey } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
 import {
   confidenceWords,
@@ -190,7 +194,7 @@ export function DelegatedDecisions() {
         {data && (
           <>
             <RulesCard answer={data} nameOf={nameOf} onApplied={refetch} />
-            <LimitsCard answer={data} />
+            <LimitsCard answer={data} onApplied={refetch} />
             <PageToolbar>
               <Input
                 inputSize="sm"
@@ -632,9 +636,28 @@ function ruleColumns(
   ];
 }
 
-/** The limits the engine holds every delegate to: its own, never the document's. */
-function LimitsCard({ answer }: { answer: DelegatedDecisionsAnswer }) {
-  const { limits } = answer;
+/**
+ * What each limit is called, by its key in the company document. A key this
+ * build has no words for is drawn by the key itself.
+ */
+const DELEGATED_LIMIT_LABELS: Readonly<Record<string, string>> = {
+  "delegated_decisions.deadline_seconds": "A request no delegate answered goes to people after",
+  "delegated_decisions.allows_per_hour": "Allows per kind and delegate, each clock hour",
+  "delegated_decisions.server_allows_per_hour": "Commands allowed per server, each clock hour",
+};
+
+/**
+ * The limits the engine holds every delegate to: the document's, within
+ * ranges that cannot switch one off, each changed where it is read by the
+ * field Settings › Limits changes a cap with.
+ */
+function LimitsCard({
+  answer,
+  onApplied,
+}: {
+  answer: DelegatedDecisionsAnswer;
+  onApplied: () => void;
+}) {
   return (
     <Card padding="none">
       <Card.Header
@@ -644,15 +667,16 @@ function LimitsCard({ answer }: { answer: DelegatedDecisionsAnswer }) {
         <Card.Title id="delegated-limits">What Crewlet enforces</Card.Title>
       </Card.Header>
       <SettingsTable aria-labelledby="delegated-limits">
-        <SettingsTable.Row label="A request no delegate answered goes to people after">
-          {plural(limits.deadline_minutes, "minute")}
-        </SettingsTable.Row>
-        <SettingsTable.Row label="Allows per kind and delegate, each clock hour">
-          {fmtCount(limits.decisions_per_hour)}
-        </SettingsTable.Row>
-        <SettingsTable.Row label="Commands allowed per server, each clock hour">
-          {fmtCount(limits.server_allows_per_hour)}
-        </SettingsTable.Row>
+        {answer.limits.map((cap) => (
+          <LimitSetting
+            key={cap.key}
+            cap={cap}
+            label={DELEGATED_LIMIT_LABELS[cap.key] ?? cap.key}
+            area="Delegated decisions"
+            reread="Reload to see the limits as they are now."
+            onApplied={onApplied}
+          />
+        ))}
       </SettingsTable>
     </Card>
   );

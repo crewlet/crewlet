@@ -1682,3 +1682,32 @@ func TestAnUnconfiguredSurfaceIsAskedAgainAfterAnApply(t *testing.T) {
 			"process otherwise", got)
 	}
 }
+
+// pacedReconciler is a surface holding something that lapses at due.
+type pacedReconciler struct {
+	fakeReconciler
+	due time.Time
+}
+
+func (p *pacedReconciler) DueBy(time.Time) time.Time { return p.due }
+
+// A SURFACE HOLDING A LAPSE IS DUE AT IT, not on the settled interval: an
+// agent's grant that lapses in four minutes is taken off its credential then,
+// rather than up to ten minutes later; one past the interval leaves it alone.
+// Mutation: ignore Paced and the row is due at the settled interval.
+func TestASurfaceHoldingALapseIsDueAtIt(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	for name, c := range map[string]struct{ due, want time.Time }{
+		"sooner":   {now.Add(4 * time.Minute), now.Add(4 * time.Minute)},
+		"later":    {now.Add(time.Hour), now.Add(DefaultSchedule.Settled)},
+		"past":     {now.Add(-time.Minute), now},
+		"no lapse": {time.Time{}, now.Add(DefaultSchedule.Settled)},
+	} {
+		r := &pacedReconciler{fakeReconciler: fakeReconciler{kind: KindCloudflare}, due: c.due}
+		store := newStore()
+		at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+		if row := store.get(t, KindCloudflare); !row.NextAttemptAt.Equal(c.want) {
+			t.Errorf("%s: the next attempt is %s, want %s", name, row.NextAttemptAt, c.want)
+		}
+	}
+}

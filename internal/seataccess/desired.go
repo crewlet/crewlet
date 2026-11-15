@@ -111,7 +111,7 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 		if b == nil {
 			return Desired{}, false
 		}
-		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
+		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault(), Grants: b.Grants}
 	case LaneExpo:
 		b := in.Expo
 		if b == nil {
@@ -129,19 +129,19 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 		if b == nil {
 			return Desired{}, false
 		}
-		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
+		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault(), Grants: b.Grants}
 	case LaneAWS:
 		b := in.AWS
 		if b == nil {
 			return Desired{}, false
 		}
-		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
+		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault(), Grants: b.Grants}
 	case LaneGoogleCloud:
 		b := in.GoogleCloud
 		if b == nil {
 			return Desired{}, false
 		}
-		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault(), Scope: b.Projects}
+		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault(), Scope: b.Projects, Grants: b.Grants}
 	case LaneSSH:
 		b := in.SSH
 		if b == nil {
@@ -221,7 +221,7 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 		if in.Cloudflare == nil {
 			in.Cloudflare = &config.RoleCloudflare{}
 		}
-		in.Cloudflare.Enabled, in.Cloudflare.Level = &on, d.Level
+		in.Cloudflare.Enabled, in.Cloudflare.Level, in.Cloudflare.Grants = &on, d.Level, d.Grants
 	case LaneExpo:
 		if in.Expo == nil {
 			in.Expo = &config.RoleExpo{}
@@ -237,16 +237,18 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 			in.Scaleway = &config.RoleScaleway{}
 		}
 		in.Scaleway.Enabled, in.Scaleway.Level, in.Scaleway.Projects = &on, d.Level, d.Scope
+		in.Scaleway.Grants = d.Grants
 	case LaneAWS:
 		if in.AWS == nil {
 			in.AWS = &config.RoleAWS{}
 		}
-		in.AWS.Enabled, in.AWS.Level = &on, d.Level
+		in.AWS.Enabled, in.AWS.Level, in.AWS.Grants = &on, d.Level, d.Grants
 	case LaneGoogleCloud:
 		if in.GoogleCloud == nil {
 			in.GoogleCloud = &config.RoleGoogleCloud{}
 		}
 		in.GoogleCloud.Enabled, in.GoogleCloud.Level, in.GoogleCloud.Projects = &on, d.Level, d.Scope
+		in.GoogleCloud.Grants = d.Grants
 	case LaneSSH:
 		if in.SSH == nil {
 			in.SSH = &config.RoleSSH{}

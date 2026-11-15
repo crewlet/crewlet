@@ -281,6 +281,9 @@ func onAccount(want Desired, have Observed, applied *Desired, ask Ask, lane Lane
 	if !want.SameScope(now) {
 		ops = append(ops, planned{op: OpScope, drift: unchanged(applied, want, Desired.SameScope)})
 	}
+	if !SameGrants(want.Grants, now.Grants) {
+		ops = append(ops, planned{op: OpGrants, drift: unchanged(applied, want, Desired.SameGrants)})
+	}
 	return ops
 }
 
