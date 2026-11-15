@@ -19,13 +19,15 @@ import (
 // every note it read. What it is told is what it lacks
 // — what changed since its last message, and of a session cut off, that it was
 // or may have been and what it may not show ([InterruptedSession],
-// [InterruptedCopy], [MayBeInterruptedCopy]), with the messages that carried
-// its work on, the calls and the notes it may lack ([LeadsToldAgain],
-// [CalledAfter], [NotesReadAgain]) — and, where the box it runs in is
-// not the one it was last worked in, what that changes. The fresh brief a run
-// that starts a session of its own is handed is [BuildPhaseUserMessage]'s, and,
-// for one carrying a round on, what became of the run before it and every call
-// of the round so far ([CalledBefore]), which its session holds none of.
+// [InterruptedCopy], [MayBeInterruptedCopy]) or, of one saved while its run
+// still worked, when, and that the run went on after it ([SavedSession]), with
+// the messages that carried its work on, the calls and the notes it may lack
+// ([LeadsToldAgain], [CalledAfter], [NotesReadAgain]) — and, where the box it
+// runs in is not the one it was last worked in, what that changes. The fresh
+// brief a run that starts a session of its own is handed is
+// [BuildPhaseUserMessage]'s, and, for one carrying a round on, what became of
+// the run before it and every call of the round so far ([CalledBefore]), which
+// its session holds none of.
 //
 // A CONVERSATION'S NEXT TURN continues the session its last turn left, in a box
 // of its own, and that session holds another turn: none of what this turn was
@@ -147,11 +149,49 @@ func BuildContinuedRound(m ContinuedRound) Prompt {
 // harness still worked — a job its box would not end, packed as it stood — and
 // one taken as or after its harness was stopped, by a stop, a loss, its turn's
 // cap or its own death. Said as only the second, it told a run continuing the
-// first that its harness had been stopped when it never was.
+// first that its harness had been stopped when it never was. A capture its job
+// went on past, never that job's final one, is told [SavedSession] in its
+// place, which says this and that the job went on.
 const InterruptedSession = "## The session above was cut off" +
 	"\nIt was saved while its harness was still working, or as or after it was stopped, so it may" +
 	" end in the middle of a call — a tool call with no result, which may or may not have run." +
 	" Check what such a call was meant to do before doing it again."
+
+// SavedSession tells a run that continues a session saved while the run that
+// worked in it still worked (internal/agent/runner's SessionBasis.WentOn) that
+// it was saved then, and when (at), and that the run went on after it: the
+// session above ends where it was saved, not where its run stopped. A save is
+// cut off, so what [InterruptedSession] says is said here too, in its place:
+// the session may end mid-call.
+//
+// SAID OF THE SAVE, NOT OF A STOP. [InterruptedSession] is true of such a
+// session as well, but tells it only that it may end mid-call: the run reading
+// it then takes the session's end for the place its work stopped, while the job
+// went on in its box past it, running commands and reading and changing files
+// that no record keeps, beside the calls through the seat's tools that the
+// brief tells after it. So it is told the work went on, that only the calls
+// are told, and to read the working tree before doing any of it again.
+//
+// "ANY CALL ... IS TOLD BELOW", never "what it did is told below": a run that
+// made no call through the seat's tools after the save is told no list
+// ([CalledAfter] renders nothing for none), and the words stay true of it.
+// With at zero, as an older build's capture may state none, the instant is
+// left out rather than said as the zero time, as [BuildNextTurn] leaves out a
+// session's CapturedAt.
+func SavedSession(at time.Time) string {
+	var w strings.Builder
+	w.WriteString("## The session above was saved while its run still worked\nIt was saved")
+	if !at.IsZero() {
+		w.WriteString(" at " + at.UTC().Format(time.RFC3339) + ",")
+	}
+	w.WriteString(" while the run that worked in it was still working, and that run went on after it: the" +
+		" session above ends where it was saved, not where the run stopped. So it may end in the middle of a" +
+		" call: a tool call with no result, which may or may not have run. Any call the run made through your" +
+		" tools after it is told below. What else it did after it, the commands it ran and the files it read" +
+		" or changed, is in no record: check the working tree, and what any such call was meant to do, before" +
+		" doing any of it again.")
+	return w.String()
+}
 
 // InterruptedCopy is [InterruptedSession] for the copy of a session its job's
 // own box holds, continued in place where the job's record says its harness
@@ -190,7 +230,7 @@ const MayBeInterruptedCopy = "## The session above may have been cut off" +
 // it, so each told again is said to be one message, call or note, not two.
 // Where the job's record also says it was cut off, the cut-off words are told
 // in its place ([InterruptedCopy], [MayBeInterruptedCopy],
-// [InterruptedSession]), which say so and more.
+// [InterruptedSession], [SavedSession]), which say so and more.
 const MayCompactSession = "## The session above may reach you as a summary" +
 	"\nIts harness may have compacted it as this work went on, or may compact it before going on: a" +
 	" session near its window's size is compacted, which replaces everything before its last reply" +

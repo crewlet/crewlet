@@ -204,6 +204,11 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		LaunchSeq: captured.LaunchSeq, CaptureSeq: captured.CaptureSeq, SessionID: continued.Row.SessionID,
 		Harness: continued.Row.Harness, Through: through, NoteCursor: captured.NoteCursor,
 		Interrupted: captured.Interrupted, Home: captured.Home,
+		// AND WHETHER ITS JOB WENT ON PAST IT, and when it was taken: a
+		// capture that is not final was taken while its job still worked, so
+		// the run continuing it is told the session ends where it was saved,
+		// not where its job stopped.
+		WentOn: !captured.Final, CapturedAt: captured.At,
 		// WHAT THE CAPTURE ITSELF CARRIED, the kept path's floor, and what
 		// the job's copy in its box carried, the in-place path's.
 		ContextTokens: captured.ContextTokens, CopyContext: continued.CopyContext,

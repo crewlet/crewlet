@@ -118,8 +118,12 @@ const (
 	keptWorking
 )
 
+// keptAt is when every fixture's kept capture was taken ([newKeptLaunchOn]): a
+// literal instant, so a probe's answer of it is read whole.
+var keptAt = time.Date(2026, 11, 8, 9, 20, 0, 0, time.UTC)
+
 // newKeptLaunchOn is [newKeptLaunchCounted] on c's seat, whose kept capture was
-// taken as as says.
+// taken as as says, at keptAt.
 func newKeptLaunchOn(t *testing.T, c *Company, seat *org.Role, contextTokens int64, ceiling, spent int,
 	count *sandbox.ResumedCount, as keptAs) keptLaunch {
 	t.Helper()
@@ -146,7 +150,7 @@ func newKeptLaunchOn(t *testing.T, c *Company, seat *org.Role, contextTokens int
 	}
 	key := objstore.KeyAt(time.Now())
 	kept := sandbox.SessionCapture{LaunchSeq: row.LaunchSeq, CaptureSeq: 1, Launch: row.LaunchID,
-		State: sandbox.CaptureLanded, Final: as != keptWorking, Interrupted: as != keptEnded,
+		State: sandbox.CaptureLanded, Final: as != keptWorking, Interrupted: as != keptEnded, At: keptAt,
 		Through: new(2), Omitted: []int{1}, NoteCursor: 4, ContextTokens: contextTokens,
 		Harness: "claude-code", HarnessVersion: "2.1.310", SessionID: "s-1",
 		ArchiveFormat: sandbox.FakeArchiveFormat, Object: key.String(),
@@ -223,7 +227,9 @@ func (k keptLaunch) relaunch(t *testing.T, basis runner.SessionBasis, inPlace *r
 // place, the calls it had been answered — its save point, how many of the
 // round's calls the log had taken when its capture read it, and the reads at
 // or below it that its job's brief counted without listing them — the notes it
-// had read, whether its harness was cut off, where it was last worked, what its
+// had read, whether its harness was cut off, whether its job went on past it
+// (not here: the fixture's capture is its job's final one) and when it was
+// taken, where it was last worked, what its
 // last request carried, which the kept path's floor is made of, what its job's
 // newest capture measured, which the in-place floor is made of, the harness that
 // wrote it, which the member the launch picks must run, and the turn whose
@@ -240,7 +246,7 @@ func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 	got := k.l.ProbeSession(k.ctx)
 	want := runner.SessionBasis{LaunchSeq: k.kept.LaunchSeq, CaptureSeq: 1, SessionID: "s-1",
 		Harness: "claude-code", Through: 2, Owed: []int{1}, NoteCursor: 4, Interrupted: true,
-		Home: "/boxes/4f2a/home", ContextTokens: 40000, CopyContext: 40000, KeptTurn: "t1",
+		CapturedAt: keptAt, Home: "/boxes/4f2a/home", ContextTokens: 40000, CopyContext: 40000, KeptTurn: "t1",
 		// THE WINDOW OF A CHAIN WHOSE ONE MEMBER'S MODEL THIS BUILD DOES NOT KNOW.
 		Window: sandbox.ExecutorWindow{Tokens: sandbox.FallbackExecutorWindow, Standard: sandbox.FallbackExecutorWindow}}
 	if !reflect.DeepEqual(got, want) {
@@ -352,10 +358,13 @@ func TestARelaunchIsHeldToTheContextOfTheCaptureItContinues(t *testing.T) {
 // went with its host: nothing of the job is left but what it kept. The
 // relaunch that carries its round on continues that capture, at the capture's
 // own context, handed its archive to restore, rather than start a session of
-// its own and lose everything the job did.
+// its own and lose everything the job did; and it is answered that the job
+// went on past the capture, and when the capture was taken, which its run is
+// told (runner.SessionBasis.WentOn, CapturedAt).
 //
 // Mutation: continue only the job's newest capture, and the relaunch starts a
-// session of its own.
+// session of its own; answer the capture as final, or leave out when it was
+// taken, and the probe's answer goes red.
 func TestALostJobWithItsBoxGoneContinuesItsNewestKeptCapture(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)
@@ -381,8 +390,10 @@ func TestALostJobWithItsBoxGoneContinuesItsNewestKeptCapture(t *testing.T) {
 		t.Fatalf("MarkLost = %v, %v", marked, err)
 	}
 	basis := k.l.ProbeSession(k.ctx)
-	if !basis.Continues() || basis.CaptureSeq != k.kept.CaptureSeq || basis.ContextTokens != 40000 {
-		t.Fatalf("the probe answered %+v, want the capture the lost job kept, at its own 40000", basis)
+	if !basis.Continues() || basis.CaptureSeq != k.kept.CaptureSeq || basis.ContextTokens != 40000 ||
+		!basis.WentOn || !basis.CapturedAt.Equal(keptAt) {
+		t.Fatalf("the probe answered %+v, want the capture the lost job kept, at its own 40000, taken at %v "+
+			"while its job went on", basis, keptAt)
 	}
 	decided, err := k.relaunch(t, basis, nil)
 	if err != nil {

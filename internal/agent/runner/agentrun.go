@@ -374,6 +374,21 @@ type SessionBasis struct {
 	// was handed and the notes its job read.
 	Interrupted bool
 
+	// WentOn says the kept capture the basis continues was taken while its
+	// job still worked (sandbox.SessionCapture.Final unset): its job's harness
+	// went on in its box past it, so the session ends where it was saved, not
+	// where its run stopped, and CapturedAt is when it was saved
+	// (sandbox.SessionCapture.At), zero where the capture states none. Told so
+	// in place of the cut-off words ([prompts.SavedSession], [Runner.keptSession]):
+	// told only that it was cut off, the run takes the session's end for where
+	// its work stopped. Such a capture is always cut off as well (Interrupted),
+	// so how its calls, leads and notes are told does not move. The names and
+	// shape of [BaseBasis.WentOn] and CapturedAt, so both bases say "the run
+	// went on past the session above" alike; false and zero, which say
+	// nothing, on a basis that continues no kept capture of the turn's.
+	WentOn     bool
+	CapturedAt time.Time
+
 	// Home is where the session was last worked: absolute paths in its
 	// transcript are under it.
 	Home string
