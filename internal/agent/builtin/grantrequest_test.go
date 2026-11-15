@@ -284,7 +284,7 @@ func grantAdmin(fresh bool, via string) context.Context {
 
 // answerGrant answers the CTO agent's grant request on ENG-1 with choice, as
 // caller: a person through the operator's surface, or the seat itself.
-func answerGrant(t *testing.T, desk *fakeGrantDesk, caller context.Context, choice string) (
+func answerGrant(caller context.Context, t *testing.T, desk *fakeGrantDesk, choice string) (
 	tools.Result, *fakeTracker) {
 
 	t.Helper()
@@ -334,7 +334,7 @@ func TestChoosingARequestsGrantSavesItBeforeTheAnswer(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			desk := newGrantDesk()
-			got, trk := answerGrant(t, desk, grantAdmin(true, ""), c.choice)
+			got, trk := answerGrant(grantAdmin(true, ""), t, desk, c.choice)
 			if got.Failed || len(trk.patched) != 1 || trk.patched[0].Comment.Choice != c.choice {
 				t.Fatalf("answer = %+v with %d writes, want the answer posted", got, len(trk.patched))
 			}
@@ -347,7 +347,7 @@ func TestChoosingARequestsGrantSavesItBeforeTheAnswer(t *testing.T) {
 
 	held := newGrantDesk()
 	held.granted = true
-	if got, trk := answerGrant(t, held, grantAdmin(true, ""), seataccess.GrantOptionTemporary(id)); got.Failed ||
+	if got, trk := answerGrant(grantAdmin(true, ""), t, held, seataccess.GrantOptionTemporary(id)); got.Failed ||
 		len(trk.patched) != 1 || len(held.asked) != 0 {
 		t.Errorf("an answer whose grant is held = %+v, %d writes, saves asked %v; want it posted "+
 			"and nothing saved again", got, len(trk.patched), held.asked)
@@ -362,7 +362,7 @@ func TestChoosingARequestsGrantSavesItBeforeTheAnswer(t *testing.T) {
 	} {
 		desk := newGrantDesk()
 		desk.saveErr = c.err
-		got, trk := answerGrant(t, desk, grantAdmin(true, ""), seataccess.GrantOptionTemporary(id))
+		got, trk := answerGrant(grantAdmin(true, ""), t, desk, seataccess.GrantOptionTemporary(id))
 		if !got.Failed || len(trk.patched) != 0 || !strings.Contains(got.Output, c.says) {
 			t.Errorf("%s: answer = %+v with %d writes, want it refused saying %q", name, got,
 				len(trk.patched), c.says)
@@ -398,7 +398,7 @@ func TestARequestsGrantIsChosenOnlyAtTheAccessWritesProof(t *testing.T) {
 			t.Parallel()
 			desk := newGrantDesk()
 			desk.raise = c.raise
-			got, trk := answerGrant(t, desk, c.caller, choice)
+			got, trk := answerGrant(c.caller, t, desk, choice)
 			if c.says == string(authz.ActionSetupAccessWrite) && len(desk.asked) != 0 {
 				t.Errorf("a caller who may not save a grant had the save asked for: %v", desk.asked)
 			}
