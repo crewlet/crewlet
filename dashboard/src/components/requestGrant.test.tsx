@@ -1,18 +1,21 @@
 /**
  * An agent's request for one integration permission, answered from its
  * question (ADR-0118). The invariants: choosing a grant option shows the grant
- * built from the stored request and sends nothing; Grant saves it on the
- * integration's Agents tab, with the request's id, and only then answers the
- * question; declining answers at once and saves nothing.
+ * built from the stored request and sends nothing; Grant sends one write, the
+ * answer choosing that option, which the engine saves the grant for before it
+ * posts the answer, and the dashboard saves nothing itself; a refused answer
+ * keeps the grant open with the refusal under it; declining answers at once.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { AnswerAsk } from "./writes.tsx";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { withDerived } from "~/test/org.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
   useConnection: vi.fn(),
@@ -169,7 +172,7 @@ test("choosing a grant shows the grant built from the request and answers nothin
   expect(put).not.toHaveBeenCalled();
 });
 
-test("Grant saves the grant with the request's id, and only then answers the question", async () => {
+test("Grant answers the question with the option chosen, in one write, and saves nothing itself", async () => {
   mount();
   fireEvent.click(screen.getByRole("button", { name: /Add to this agent permanently/ }));
   await screen.findByText("Origin Rules: Edit (Origin Write)");
@@ -177,19 +180,33 @@ test("Grant saves the grant with the request's id, and only then answers the que
     fireEvent.click(screen.getByRole("button", { name: "Grant" }));
   });
   await waitFor(() => expect(sent).toHaveLength(1));
-  expect(put).toHaveBeenCalledOnce();
-  const [path, body, headers] = put.mock.calls[0]!;
-  expect(path).toBe("/setup/integrations/cloudflare/access");
-  expect(headers).toEqual({ "If-Match": '"rev-3"' });
-  const grant = (body as { seats: { sre: { cloudflare: { grants: Record<string, unknown>[] } } } })
-    .seats.sre.cloudflare.grants[0]!;
-  expect(grant).toMatchObject({
-    permission: "Origin Write",
-    scope: ["example.com"],
-    request: "abcdefghij",
+  expect(sent[0]).toEqual({ item: "NIM-7", answers: "c-1", choice: "grant-rabcdefghij-p" });
+  expect(put).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Grant" })).toBeNull());
+});
+
+test("a refused answer keeps the grant open with the refusal under it", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init: RequestInit) => {
+      sent.push((JSON.parse(init.body as string) as { args: Record<string, unknown> }).args);
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 403,
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+      });
+    }),
+  );
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: /Grant for this change/ }));
+  await screen.findByText("Origin Rules: Edit (Origin Write)");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Grant" }));
   });
-  expect(grant.expires_at).toBeUndefined();
-  expect(sent[0]).toMatchObject({ item: "NIM-7", answers: "c-1", choice: "grant-rabcdefghij-p" });
+  const dialog = screen.getByRole("dialog");
+  await waitFor(() => expect(within(dialog).getByText(ACT_ERRORS.unauthorized!)).toBeTruthy());
+  expect(sent).toHaveLength(1);
+  expect(within(dialog).getByRole("button", { name: "Grant" })).toBeTruthy();
+  expect(put).not.toHaveBeenCalled();
 });
 
 test("declining answers at once and saves nothing", async () => {

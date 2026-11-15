@@ -1083,8 +1083,12 @@ function AskAnswer({
     onOpenChange(false);
   };
 
-  // A GRANT IS PREVIEWED AND SAVED BEFORE IT IS ANSWERED (ADR-0118), so a
-  // person who chose it never leaves the agent told yes with nothing changed.
+  // A GRANT IS PREVIEWED BEFORE IT IS ANSWERED (ADR-0118), so a person sees
+  // exactly what they grant. An access key's grant is applied by its dialog
+  // and only then answered; an agent's request's grant is answered alone,
+  // since choosing its option is the approval and the engine saves the grant
+  // before it posts the answer. Either way the agent is never told yes with
+  // nothing changed.
   const [granting, setGranting] = useState<string | null>(null);
   const send = async (choice: string) => {
     if ((isAccessOption(choice) || requestOption(choice)) && options.some((o) => o.id === choice)) {
@@ -1094,7 +1098,7 @@ function AskAnswer({
     await answer(choice);
   };
 
-  const answer = async (choice: string) => {
+  const answer = async (choice: string): Promise<boolean> => {
     const option = options.find((o) => o.id === choice);
     const body = text.trim();
     const result = option
@@ -1106,7 +1110,7 @@ function AskAnswer({
           { item, answers: comment, body },
           { done: `Replied to ${asker} on ${named}` },
         );
-    if (!result || (result.kind !== "applied" && result.kind !== "pending")) return;
+    if (!result || (result.kind !== "applied" && result.kind !== "pending")) return false;
     onAnswered(
       option
         ? {
@@ -1117,6 +1121,7 @@ function AskAnswer({
           }
         : { kind: "reply", text: body },
     );
+    return true;
   };
 
   const other = chosen === OTHER;
@@ -1302,14 +1307,24 @@ function AskAnswer({
     setGranting(null);
     void answer(granting);
   };
+  // ONE WRITE, THE ANSWER: the dialog stays open on a refusal, which it draws
+  // under the grant, and closes once the question is answered.
+  const grantRequested = async () => {
+    if (granting && (await answer(granting))) setGranting(null);
+  };
   const grant =
     granting &&
     (requested ? (
       <RequestGrantDialog
         option={requested}
         question={question ?? "Grant this permission?"}
-        onClose={() => setGranting(null)}
-        onApplied={applied}
+        onClose={() => {
+          write.dismiss();
+          setGranting(null);
+        }}
+        onGrant={() => void grantRequested()}
+        granting={write.busy}
+        refusal={<RefusalNote write={write} />}
       />
     ) : (
       <AccessGrantDialog
