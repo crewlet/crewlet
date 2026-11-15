@@ -4,11 +4,19 @@
  * `internal/api`'s `TestTheDashboardReadsExactlyTheLimitsTheEngineSends`.
  * Settings › Limits draws the first four; `delegated` is what every delegate
  * is held to, answered on `delegated_decisions` beside its rules; `inbox`,
- * `atlas` and `code` are the settings Worklet, Atlas and Gitlet change in
- * place.
+ * `atlas`, `code` and `chat` are the settings Worklet, Atlas, Gitlet and
+ * Chatlet change in place.
  */
 type LimitGroup =
-  "turn" | "delegation" | "notifications" | "schedules" | "delegated" | "inbox" | "atlas" | "code";
+  | "turn"
+  | "delegation"
+  | "notifications"
+  | "schedules"
+  | "delegated"
+  | "inbox"
+  | "atlas"
+  | "code"
+  | "chat";
 
 /** What a limit's number counts. COPIES of `queries.LimitUnits`. */
 type LimitUnit = "count" | "seconds" | "fraction" | "per_second" | "days";
@@ -25,6 +33,12 @@ export interface SettingRange {
   min_exclusive?: boolean;
   /** The greatest value admitted; absent where nothing bounds the cap from above. */
   max?: number;
+  /**
+   * 0 is admitted beside `min` to `max`: a setting whose zero is a choice of
+   * its own (a message horizon of 0 keeps messages for ever, while 1 to 29
+   * days is refused).
+   */
+  or_zero?: boolean;
 }
 
 /**

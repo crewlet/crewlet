@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
@@ -421,7 +422,52 @@ func TestTheMessageHorizonTellsAbsentFromZeroFromANumber(t *testing.T) {
 			if !strings.Contains(err.Error(), "for ever") {
 				t.Errorf("refusal = %q, want it to offer 0", err)
 			}
+			// THE RANGE ON THE FAULT IS THE DECLARED ONE, hole included,
+			// so a screen words the refusal as its own check, and the rule
+			// says it in a person's words too.
+			for _, p := range Problems(err) {
+				if p.Path != "chat.chatlet.message_retention_days" {
+					continue
+				}
+				if p.Range == nil || !p.Range.OrZero || p.Range.Min != MinMessageRetentionDays ||
+					p.Range.Max == nil || *p.Range.Max != MaxMessageRetentionDays {
+					t.Errorf("the refusal carries the range %+v, want 0 or %d..%d",
+						p.Range, MinMessageRetentionDays, MaxMessageRetentionDays)
+				}
+				if !strings.Contains(p.Said, "for ever") {
+					t.Errorf("said = %q, want a person's words offering for ever", p.Said)
+				}
+			}
 		})
+	}
+}
+
+// THE MESSAGE HORIZON'S RANGE HAS A HOLE, and the one declaration says it:
+// 0 is admitted (for ever) while 1 to 29 days is not, so the validator and
+// the screen that checks a typed value read one rule, never a copy.
+//
+// Mutation: drop OrZero from the declaration and 0 is refused; drop the
+// carve-out from Admits and 0 is refused too.
+func TestTheMessageHorizonAdmitsZeroAndNothingElseBelowAMonth(t *testing.T) {
+	t.Parallel()
+	r, ok := RangeOf("chat.chatlet.message_retention_days")
+	if !ok {
+		t.Fatal("chat.chatlet.message_retention_days declares no range")
+	}
+	for v, want := range map[float64]bool{
+		-1: false, 0: true, 1: false, 29: false, 30: true, 365: true, 3650: true, 3651: false,
+	} {
+		if got := r.Admits(v); got != want {
+			t.Errorf("Admits(%v) = %v, want %v", v, got, want)
+		}
+		doc := fmt.Sprintf("name: Acme\nchat:\n  chatlet: {message_retention_days: %v}\n", v)
+		_, err := ParseCompany([]byte(doc))
+		if (err == nil) != want {
+			t.Errorf("%v days: the validator says %v, and the range admits it: %v", v, err, want)
+		}
+	}
+	if got := r.refusal(12); got != "must be 0 or between 30 and 3650, got 12" {
+		t.Errorf("refusal = %q", got)
 	}
 }
 
