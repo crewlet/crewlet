@@ -454,7 +454,7 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 	if grants := grantChanges(changed); len(grants) > 0 {
 		s.access.RecordGrants(r.Context(), kind, attributionOf(r), grants)
 	}
-	s.startSync(r, AccessSync{Kind: kind, Revision: applied.RevisionID, By: attributionOf(r),
+	s.startSync(r.Context(), AccessSync{Kind: kind, Revision: applied.RevisionID, By: attributionOf(r),
 		Handles: changedHandles(changed), AfterSave: true})
 	s.writeSaved(w, r, current, changed, applied.RevisionID)
 }
@@ -900,7 +900,7 @@ func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q Ac
 	// A KEEP IS A SAVE, and ends as one does: the sync on the revision it
 	// wrote (which finds the vendor already matching) and then the check, so
 	// the tab and the integration's status read the kept setting.
-	s.startSync(r, AccessSync{Kind: q.Kind, Revision: applied.RevisionID, By: attributionOf(r),
+	s.startSync(r.Context(), AccessSync{Kind: q.Kind, Revision: applied.RevisionID, By: attributionOf(r),
 		Handles: []string{seat.Handle}, AfterSave: true})
 	s.writeSaved(w, r, current, []accessChange{change}, applied.RevisionID)
 }
@@ -920,10 +920,10 @@ func offerOf(answer seataccess.Answer, lane seataccess.Lane) seataccess.Options 
 // when it cannot: the revision is the company's either way, and the reconcile
 // loop takes it on its next pass. The sync ends in the check, as every access
 // sync does ([AccessSync.Then]).
-func (s *Service) startSync(r *http.Request, req AccessSync) {
+func (s *Service) startSync(ctx context.Context, req AccessSync) {
 	req.Then = s.recheckAfter(req.Kind)
-	if err := s.access.Sync(context.WithoutCancel(r.Context()), req); err != nil {
-		log.WarnContext(r.Context(), "setup_access_sync_deferred",
+	if err := s.access.Sync(context.WithoutCancel(ctx), req); err != nil {
+		log.WarnContext(ctx, "setup_access_sync_deferred",
 			"kind", req.Kind, "revision", req.Revision, "error", err.Error(),
 			"detail", "the save landed; the reconcile loop syncs it on its next pass")
 	}
