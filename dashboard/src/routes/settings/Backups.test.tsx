@@ -209,7 +209,7 @@ test("the newest counted point is the engine's, and the others say why they are 
   ).toBeTruthy();
   // The tile names the same point.
   expect(
-    screen.getByText("Oldest backup a trim reads").closest(".crewlet-statcard")?.textContent,
+    screen.getByText("Oldest backup in use").closest(".crewlet-statcard")?.textContent,
   ).toMatch(/node-a/);
 });
 
@@ -243,7 +243,7 @@ test("two logs acknowledged in turn are two rows, both read, the older on the ti
   expect(within(points).getAllByText("Operator acknowledgement")).toHaveLength(2);
   expect(within(points).getAllByText("counted · newest")).toHaveLength(2);
   const tile =
-    screen.getByText("Oldest backup a trim reads").closest(".crewlet-statcard")?.textContent ?? "";
+    screen.getByText("Oldest backup in use").closest(".crewlet-statcard")?.textContent ?? "";
   expect(tile).toMatch(/2d ago/);
   expect(tile).toMatch(/oldest of 2/);
 });
@@ -526,12 +526,21 @@ test("the alarms lead the page, and the backup they ask for is the page bar's on
   mount({}, { retention: report });
   await settle();
   const alarms = document.getElementById("retention-alarms") as HTMLElement;
-  const record = screen.getByText("Oldest backup a trim reads");
+  const record = screen.getByText("Oldest backup in use");
   expect(alarms.compareDocumentPosition(record) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   // THE OWNER IS A FIGURE OF THE RECORD, named once.
   expect(screen.getByText("platform-oncall")).toBeTruthy();
   // ONE TAKE A BACKUP ON THE SCREEN: the bar's, never a second beside the alarm.
   expect(within(alarms).queryByRole("button", { name: "Take a backup" })).toBeNull();
+  // THE ALARM POINTS AT IT, and its command-line remedy is folded under it:
+  // read whole, the alarm was a manual for the terminal beside the button that
+  // does the same thing. Mutation: print the engine's remedy as before and the
+  // command is on the page and no disclosure holds it.
+  expect(
+    within(alarms).getByText("Take one with Take a backup, at the top of this page."),
+  ).toBeTruthy();
+  const cli = within(alarms).getByRole("button", { name: "From the command line" });
+  expect(cli.getAttribute("aria-expanded")).toBe("false");
   const take = screen.getAllByRole("button", { name: "Take a backup" });
   expect(take).toHaveLength(1);
   fireEvent.click(take[0]!);

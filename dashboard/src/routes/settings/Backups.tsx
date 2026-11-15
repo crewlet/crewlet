@@ -60,10 +60,12 @@ import { ADMIN, needsWords } from "~/lib/access.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import { useSeatOf, writerOf, WriterCell } from "./Audit.tsx";
 import {
+  TAKE_BACKUP,
   coverWords,
   oldestRead,
   OUTCOME_WORDS,
   OWNER_KIND_WORDS,
+  POLICY_LABELS,
   POLICY_WORDS,
   suggestDir,
 } from "~/lib/backups.ts";
@@ -76,10 +78,6 @@ import { TakeBackupDialog } from "./TakeBackupDialog.tsx";
 /** A minute, the retention document's own cadence: a backup is a daily event,
  *  and a copy this page took re-reads the answer the moment it lands. */
 const BACKUPS_POLL_MS = 60_000;
-
-/** The value of `take` that opens the Take a backup dialog on arrival: what a
- *  notice that a backup is missing links to (`lib/attention.ts`). */
-export const TAKE_BACKUP = "backup";
 
 export function Backups({ domain }: { domain?: string }) {
   const health = useEngineHealth();
@@ -211,7 +209,7 @@ export function BackupRecord({
             // that matters is the stalest — it is the log the backup-age alarm
             // names first. The freshest hid a log days past its
             // acknowledgement behind another acknowledged a minute ago.
-            label="Oldest backup a trim reads"
+            label="Oldest backup in use"
             value={read ? relTime(read.point.taken_at, now) : EMPTY_VALUE}
             sub={
               read
@@ -223,11 +221,11 @@ export function BackupRecord({
           />
           <StatCard
             icon={<ShieldGlyph size="xs" />}
-            // THE CONFIG FIELD'S OWN NAME AND VALUE (`backup_floor`), which is
-            // what an operator greps for to change it; the sentence says what
-            // it means.
-            label="Backup floor"
-            value={answer.policy}
+            // WHICH BACKUPS COUNT, in words: the field's own name and value
+            // (`backup_floor`, `engine`) read as the configuration file rather
+            // than as an answer, and the sentence under them was what said it.
+            label="Backups that count"
+            value={POLICY_LABELS[answer.policy] ?? answer.policy}
             sub={POLICY_WORDS[answer.policy]}
           />
           <StatCard
@@ -245,10 +243,15 @@ export function BackupRecord({
             <StatCard
               icon={<UserGlyph size="xs" />}
               label="Backup owner"
-              value={owner || "Not set"}
-              // THE FIELD THAT NAMES THEM, which is what an operator types to
-              // change it, and what the backup term's remedy points at.
-              sub={owner ? "retention.backup_owner" : "set retention.backup_owner"}
+              value={owner || "Nobody named"}
+              // WHERE THEY ARE NAMED, in words: the dashboard cannot name them
+              // (it is the node's own file), and "set retention.backup_owner"
+              // under "Not set" read as an instruction with nowhere to act.
+              sub={
+                owner
+                  ? "named in the node configuration file"
+                  : "name whose job backups are in the node configuration file"
+              }
             />
           )}
         </StatGroup>

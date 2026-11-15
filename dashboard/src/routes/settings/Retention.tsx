@@ -45,7 +45,7 @@
  * be said about twenty times on this page.
  */
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { uiletTone } from "~/ui/primitives.tsx";
 import {
   Button,
@@ -87,6 +87,7 @@ import {
   type AlarmLogLine,
 } from "~/lib/alarms.ts";
 import { authorLabel } from "~/lib/attribution.ts";
+import { TAKE_BACKUP } from "~/lib/backups.ts";
 import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
 import { andList } from "~/lib/words.ts";
 import { reveal } from "~/lib/scroller.ts";
@@ -274,11 +275,76 @@ export function AlarmItem({ alarm, now }: { alarm: RetentionAlarm; now: number }
             ))}
           </ul>
         )}
-        <p className="t-caption muted">{marked(alarm.remedy)}</p>
+        <AlarmRemedy alarm={alarm} />
       </div>
     </li>
   );
 }
+
+/**
+ * What this page offers for an alarm, by its kind, in words: the gesture in
+ * the page's own bar that clears it. A kind with none is left out, and its
+ * remedy is the engine's sentence as before.
+ *
+ * WORDS, NOT A SECOND BUTTON: the bar's Take a backup is the one on the
+ * screen, and the alarm points at it rather than drawing its twin.
+ */
+export const ALARM_GESTURES: Readonly<Record<string, string>> = {
+  backup_age: "Take one with Take a backup, at the top of this page.",
+};
+
+/**
+ * How to clear an alarm: the dashboard's own gesture first where it has one,
+ * and the engine's remedy, which is written for the command line it shares
+ * with `crewlet retention status`, folded under it ([RemedyFold]).
+ */
+function AlarmRemedy({ alarm }: { alarm: RetentionAlarm }) {
+  return <RemedyFold gesture={ALARM_GESTURES[alarm.kind]} remedy={alarm.remedy} />;
+}
+
+/**
+ * An engine remedy with the dashboard's own gesture before it.
+ *
+ * THE GESTURE LEADS. The backup alarm and the backup check read as a manual
+ * for the command line ("Run `crewlet backup` against any node … `crewlet
+ * retention ack -stream`") beside a page that takes a backup in one press, so
+ * a person was taught the terminal for what the dashboard does. Where the
+ * dashboard has the gesture it is said first, and the engine's words stay,
+ * whole and folded, for the operator who scripts it. Where it has none the
+ * remedy is the engine's sentence, as before.
+ */
+function RemedyFold({ gesture, remedy }: { gesture: ReactNode; remedy: string | undefined }) {
+  if (gesture === undefined) {
+    return remedy ? <p className="t-caption muted">{marked(remedy)}</p> : null;
+  }
+  return (
+    <span className="col gap-1">
+      <span className="t-caption">{gesture}</span>
+      {remedy && (
+        <Disclosure title="From the command line" size="compact" variant="aside">
+          <p className="t-caption muted">{marked(remedy)}</p>
+        </Disclosure>
+      )}
+    </span>
+  );
+}
+
+/**
+ * What a trim check's remedy is in the dashboard, by the check: the backup
+ * check's is a backup, which the Take a backup dialog takes (`take=backup`
+ * opens it, on whichever page links there).
+ */
+const TERM_GESTURES: Partial<Record<RetentionTerm["name"], ReactNode>> = {
+  backup_floor: (
+    <>
+      Take one with{" "}
+      <a className="prose-link" href={href(["settings", "backups"], { take: TAKE_BACKUP })}>
+        Take a backup
+      </a>
+      .
+    </>
+  ),
+};
 
 /**
  * One line of the logs an alarm stands on, in words: a held trim's term with
@@ -531,10 +597,18 @@ export function RetentionPanels({
               shrink: true,
               cell: (n) => {
                 const action = gateAction(n, gestures);
+                // A FRESH EVICTION ONLY: one already sent is finished or
+                // reopened as itself, wherever it was started.
+                const held =
+                  action.evict && action.fresh
+                    ? evictionHeld(n, nodes.length, thisNode)
+                    : undefined;
                 return (
                   <Button
                     variant="ghost"
                     size="small"
+                    disabledReason={held}
+                    title={held}
                     onClick={() => setGate({ node: n.node_id, evict: action.evict })}
                   >
                     {action.label}
@@ -979,17 +1053,47 @@ export function heldGestures(
 export function gateAction(
   n: RetentionNode,
   gestures: Record<string, GateGesture>,
-): { evict: boolean; label: string } {
+): { evict: boolean; label: string; fresh: boolean } {
   const readmit = gestures[gestureKey(n.node_id, false)];
-  if (readmit && finishable(readmit)) return { evict: false, label: "Finish readmission…" };
+  if (readmit && finishable(readmit)) {
+    return { evict: false, label: "Finish readmission…", fresh: false };
+  }
   const evict = gestures[gestureKey(n.node_id, true)];
-  if (evict && finishable(evict)) return { evict: true, label: "Finish eviction…" };
+  if (evict && finishable(evict)) return { evict: true, label: "Finish eviction…", fresh: false };
   // A COMPLETE GESTURE THE REPORT DOES NOT SHOW YET reopens as itself — its
   // answer, and nothing to press — rather than as a fresh gesture with a new
   // id over the logs it already holds.
-  if (evict?.answer?.complete && !n.evicted) return { evict: true, label: "Eviction sent…" };
-  if (readmit?.answer?.complete && n.evicted) return { evict: false, label: "Readmission sent…" };
-  return n.evicted ? { evict: false, label: "Readmit…" } : { evict: true, label: "Evict…" };
+  if (evict?.answer?.complete && !n.evicted) {
+    return { evict: true, label: "Eviction sent…", fresh: false };
+  }
+  if (readmit?.answer?.complete && n.evicted) {
+    return { evict: false, label: "Readmission sent…", fresh: false };
+  }
+  return n.evicted
+    ? { evict: false, label: "Readmit…", fresh: true }
+    : { evict: true, label: "Evict…", fresh: true };
+}
+
+/**
+ * Why a node cannot be evicted from this page, or undefined where it can.
+ *
+ * NOT THE NODE ANSWERING YOU, AND NOT THE ONLY ONE. The single node of a
+ * fleet, marked "this one" and "live", offered Evict… and a dialog that then
+ * said a running node is refused: an eviction stops the trim waiting for a
+ * node that has gone, and the node serving this page has not gone. It stays
+ * a control, held with its reason, rather than vanishing from the row.
+ */
+export function evictionHeld(
+  n: RetentionNode,
+  nodes: number,
+  thisNode: string | undefined,
+): string | undefined {
+  if (n.evicted) return undefined;
+  if (nodes <= 1) return "There is no other node: the fleet's only node can't be evicted.";
+  if (n.node_id === thisNode) {
+    return "This is the node answering you. Evict it from another node once it has stopped.";
+  }
+  return undefined;
 }
 
 /** firstDomain is any one of a node's domains, for a sort key. */
@@ -1505,10 +1609,9 @@ export function Checks({ domain: d }: { domain: RetentionDomain }) {
     <DescriptionList
       dense
       items={d.terms.map((t): DescriptionListEntry => [
-        <span className="check-name">
-          <span>{TERM_WORDS[t.name].name}</span>
-          <span className="mono t-caption muted">{t.name}</span>
-        </span>,
+        // THE CHECK BY ITS NAME ALONE: the engine's term (`min_hold`,
+        // `backup_floor`) under it read as the configuration file.
+        <span className="check-name">{TERM_WORDS[t.name].name}</span>,
         <CheckValue term={t} deciding={t.name === deciding} holding={holding} />,
       ])}
     />
@@ -1541,7 +1644,7 @@ function CheckValue({
           ))}
       </span>
       {t.detail && <span className="t-caption muted">{marked(t.detail)}</span>}
-      {deciding && t.remedy && <span className="t-caption">{marked(t.remedy)}</span>}
+      {deciding && t.remedy && <RemedyFold gesture={TERM_GESTURES[t.name]} remedy={t.remedy} />}
     </span>
   );
 }

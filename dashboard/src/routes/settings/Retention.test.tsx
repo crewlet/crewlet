@@ -20,6 +20,7 @@ import {
   DomainSize,
   donorsCounted,
   gateAction,
+  evictionHeld,
   LogRetention,
   LogRow,
   sharedTrimStatus,
@@ -147,10 +148,13 @@ test("a term's third value is rendered rather than collapsed to a number", () =>
 
 // A CHECK IS ITS WORDS AND ITS NAME. The name is what the CLI prints and the
 // guide is indexed by, so a reader who meets it there finds it here.
-test("each check is named in words beside the term's own name", () => {
+// EACH CHECK BY ITS NAME IN WORDS, never the engine's term under it: a
+// monospace `feed_ack_floor` under "Wake feed" read as the configuration file.
+// Mutation: draw `t.name` beside the words again.
+test("each check is named in words, and the engine's term is not drawn", () => {
   render(<Checks domain={domain({ terms: [term({ name: "feed_ack_floor" })] })} />);
   expect(screen.getByText("Wake feed")).toBeTruthy();
-  expect(screen.getByText("feed_ack_floor")).toBeTruthy();
+  expect(screen.queryByText("feed_ack_floor")).toBeNull();
 });
 
 // ONLY THE CHECK THAT DECIDES THE TRIM CARRIES ITS REMEDY. Six remedies side
@@ -177,8 +181,19 @@ test("only the check that decides the trim carries its remedy", () => {
       ],
     });
   render(<Checks domain={six("backup_floor")} />);
-  expect(screen.getByText("Take a backup.")).toBeTruthy();
+  // THE BACKUP CHECK'S REMEDY LEADS WITH THE DASHBOARD'S GESTURE, and the
+  // engine's command-line words are folded under it: read whole they taught
+  // the terminal for a backup the page takes in one press.
+  expect(screen.getByRole("link", { name: "Take a backup" }).getAttribute("href")).toBe(
+    "#/settings/backups?take=backup",
+  );
+  expect(
+    screen.getByRole("button", { name: "From the command line" }).getAttribute("aria-expanded"),
+  ).toBe("false");
   expect(screen.getByText("holding the trim")).toBeTruthy();
+  // EACH CHECK BY ITS NAME, never the engine's term under it.
+  expect(screen.queryByText("min_hold")).toBeNull();
+  expect(screen.queryByText("backup_floor")).toBeNull();
   for (const other of ["Bring the node back.", "The feed lags.", "Nothing is wrong."]) {
     expect(screen.queryByText(other)).toBeNull();
   }
@@ -708,15 +723,17 @@ test("a node with an unfinished gesture offers to finish it rather than start af
   expect(gateAction(node(), { "node-a:evict": held })).toEqual({
     evict: true,
     label: "Finish eviction…",
+    fresh: false,
   });
   // A PARTIAL READMISSION LEAVES THE NODE NOT EVICTED EVERYWHERE, and the
   // row would otherwise offer the eviction.
   expect(gateAction(node(), { "node-a:readmit": held })).toEqual({
     evict: false,
     label: "Finish readmission…",
+    fresh: false,
   });
   // THE CONTROL: nothing held is the ordinary gesture for the node's state.
-  expect(gateAction(node(), {})).toEqual({ evict: true, label: "Evict…" });
+  expect(gateAction(node(), {})).toEqual({ evict: true, label: "Evict…", fresh: true });
   expect(
     gateAction(
       node({
@@ -724,7 +741,29 @@ test("a node with an unfinished gesture offers to finish it rather than start af
       }),
       {},
     ),
-  ).toEqual({ evict: false, label: "Readmit…" });
+  ).toEqual({ evict: false, label: "Readmit…", fresh: true });
+});
+
+// NOT THE NODE ANSWERING YOU, AND NOT THE ONLY ONE. A fleet of one offered
+// Evict… on its only node, marked "this one" and "live", and the dialog then
+// said a running node is refused. Held with its reason, never hidden.
+// Mutation: return undefined from `evictionHeld` and both cases are offered.
+test("eviction is held on the fleet's only node and on the node answering", () => {
+  expect(evictionHeld(node(), 1, "node-a")).toBe(
+    "There is no other node: the fleet's only node can't be evicted.",
+  );
+  expect(evictionHeld(node(), 3, "node-a")).toBe(
+    "This is the node answering you. Evict it from another node once it has stopped.",
+  );
+  expect(evictionHeld(node(), 3, "node-b")).toBeUndefined();
+  // An evicted node is readmitted, never held.
+  expect(
+    evictionHeld(
+      node({ evicted: { by: "o", at: "", effective_at: "", effective: true } }),
+      1,
+      "node-a",
+    ),
+  ).toBeUndefined();
 });
 
 // A DOMAIN THE TRIM HAS CONCLUDED NOTHING ABOUT SAYS SO — AND DRAWS AT ALL.
@@ -788,7 +827,9 @@ test("a blocked domain reads blocked rather than a conclusion of zero", () => {
   // WHAT HOLDS IT, in words on the row and by its own name in the checks.
   expect(screen.getByText("held by the backup")).toBeTruthy();
   openRow("tracker");
-  const checks = screen.getByText("backup_floor").closest("dl") as HTMLElement;
+  const checks = screen
+    .getByText("Backup", { selector: ".check-name" })
+    .closest("dl") as HTMLElement;
   expect(within(checks).getByText("holding the trim")).toBeTruthy();
 });
 
