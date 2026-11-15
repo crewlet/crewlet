@@ -107,16 +107,18 @@
    portaled to the document — a block states its own ceiling. */
 .app .crewlet-app-shell__main,
 .app .crewlet-peek-rail__body {
-  --record-ceiling: min(
-    var(--record-max),
-    max(
-      calc(var(--size-row-md) * 4),
-      calc(
-        100cqb - var(--sticky-top) - var(--font-size-2xs) * var(--font-line-height-normal) -
-          var(--spacing-1)
-      )
+  /* THE VIEW'S SHARE ALONE, before the cap: a record that is a lens's whole
+     content (Configuration's active document) takes this, so it fills the
+     view it was scrolled to rather than a 460px box over an empty page, and
+     still fits in it. Every other record takes the capped ceiling. */
+  --record-view: max(
+    calc(var(--size-row-md) * 4),
+    calc(
+      100cqb - var(--sticky-top) - var(--font-size-2xs) * var(--font-line-height-normal) -
+        var(--spacing-1)
     )
   );
+  --record-ceiling: min(var(--record-max), var(--record-view));
   --crewlet-codeblock-max-height: var(--record-ceiling);
   /* A GRID'S HEAD STICKS UNDER THE TOOLBAR's band, on the scroller the band
      is measured on (see `--sticky-top` below). */

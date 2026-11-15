@@ -1042,13 +1042,13 @@ test("the lenses are drawn in the page bar's lens slot", async () => {
   }
 });
 
-// THE ACTIVE DOCUMENT IS THE LENS'S WHOLE CONTENT, so the page scrolls it. It
-// sat under the ceiling every record block takes, a box of some 460px with a
-// scrollbar of its own over an empty page. Mutation: drop `maxHeight="none"`
-// and the block takes the ceiling again.
-test("the active document is unbounded, scrolled by the page", async () => {
+// THE ACTIVE DOCUMENT IS THE LENS'S WHOLE CONTENT, so it takes the whole view.
+// It sat under the ceiling every record block takes, a box of some 460px with
+// a scrollbar of its own over an empty page. Mutation: drop the prop and the
+// block takes the capped ceiling again.
+test("the active document takes the view, not the record cap", async () => {
   const { container } = mount("#/config?lens=active");
   await waitFor(() => expect(container.querySelector(".crewlet-codeblock")).not.toBeNull());
   const block = container.querySelector<HTMLElement>(".crewlet-codeblock")!;
-  expect(block.style.getPropertyValue("--crewlet-codeblock-max-height")).toBe("none");
+  expect(block.style.getPropertyValue("--crewlet-codeblock-max-height")).toBe("var(--record-view)");
 });

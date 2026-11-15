@@ -960,16 +960,17 @@ export function ConfigScreen({
                 >
                   <Card.Title>Active revision</Card.Title>
                 </Card.Header>
-                {/* THE LENS'S WHOLE CONTENT, SO UNBOUNDED: the page scrolls
-                    it. Under the ceiling every record block takes
-                    (`--record-ceiling`, frame.css) it was a ~460px box with a
-                    scrollbar of its own over an empty page. The ceiling was
-                    for a block with something under it, which the entity lens
-                    once was; it is a lens of its own now. */}
+                {/* THE LENS'S WHOLE CONTENT, SO THE WHOLE VIEW: under the
+                    ceiling every record block takes (`--record-ceiling`,
+                    frame.css) it was a ~460px box with a scrollbar of its own
+                    over an empty page. The cap was for a block with something
+                    under it, which the entity lens once was. It takes the
+                    view's share before the cap (`--record-view`), so it fills
+                    the view it is scrolled to and still fits in it. */}
                 <CodeBlock
                   plain
                   selectable
-                  maxHeight="none"
+                  maxHeight="var(--record-view)"
                   label="The active company configuration, as JSON"
                   code={pretty}
                 />
