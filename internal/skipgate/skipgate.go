@@ -76,6 +76,19 @@
 // `go test -run X ./internal/store` with every test that ran green, because a
 // package that ran was taken to have run every entry declared in it.
 //
+// # What a failed package prints
+//
+// A passing package prints its result line and nothing more, a declared
+// measurement's output aside: `-json` implies verbose, and the log stays the
+// length plain `go test` gives it. A failed package prints what plain `go
+// test` would have: each failing test's output; as ORPHANED, each test its
+// binary stopped under, which never reported a result; and as AFTER, what
+// the binary wrote once a test had reported its own — which test2json files
+// under that test, and which is where a `-timeout` panic and its goroutine
+// dump arrive. Dropped with that test's output, the dump of a hung
+// internal/sandbox test reached no CI log (crewlet/crewlet#1021); [held] has
+// how it gets there.
+//
 // # The timings a run leaves behind
 //
 //	go run ./internal/skipgate -timings FILE -- go test -json <packages>
@@ -118,6 +131,10 @@ type event struct {
 	Package string
 	Test    string
 	Output  string
+	// OutputType is "frame" on an output record carrying one of the lines
+	// test2json frames a test's output with (`=== RUN`, `--- PASS: X` and the
+	// rest), and empty, or an error's marking, on output a test wrote.
+	OutputType string
 	// Elapsed is the seconds a package's test binary ran, on its
 	// package-level pass, fail or skip record (and a test's, on its own).
 	Elapsed float64
@@ -153,6 +170,10 @@ type report struct {
 	// verdict can say whether a package that failed with no failing test said
 	// anything at all.
 	orphaned int
+	// trailers is how many blocks of a failed or unfinished package's binary
+	// output, written after a test had reported ([held]), were printed: a
+	// -timeout panic and its goroutine dump among them.
+	trailers int
 
 	// tests is how many NAMED tests reported a result — passed, failed or
 	// skipped.
@@ -221,7 +242,9 @@ func (r report) passed() map[string]bool {
 // a gate somebody takes back out, and then the skips are invisible again. So
 // per-test output is BUFFERED and flushed only when that test fails, which is
 // what `go test` without -v does; package-level records are printed as they
-// come, and those carry the `ok  pkg  1.234s` lines.
+// come, and those carry the `ok  pkg  1.234s` lines. What a test's binary
+// wrote AFTER that test's own result line is not the test's, and is held for
+// its package instead ([held]).
 //
 // A line that is not JSON is passed through rather than rejected: `go test`
 // writes build errors and toolchain chatter around the stream, and a gate that
@@ -229,7 +252,11 @@ func (r report) passed() map[string]bool {
 func read(in *bufio.Scanner, out *os.File) report {
 	r := report{ran: map[string]bool{}, reported: map[string]bool{},
 		measuredSeen: map[string]bool{}, finished: map[string]finish{}}
-	buffered := map[string][]string{}
+	buffered := map[string]*held{}
+	// after is, per package by its full import path, what its tests' buffers
+	// held past their result lines once those tests reported, in the order
+	// they reported: printed if the package fails, dropped if it passes.
+	after := map[string][]trailer{}
 
 	for in.Scan() {
 		line := in.Bytes()
@@ -259,7 +286,8 @@ func read(in *bufio.Scanner, out *os.File) report {
 			case "pass", "fail", "skip":
 				r.finished[e.Package] = finish{action: e.Action, elapsed: e.Elapsed}
 			}
-			if e.Action == "fail" {
+			switch e.Action {
+			case "fail":
 				r.failedPkgs = append(r.failedPkgs, short(e.Package))
 				// AND WHATEVER ITS TESTS WERE SAYING WHEN IT DIED.
 				//
@@ -280,38 +308,65 @@ func read(in *bufio.Scanner, out *os.File) report {
 				// one failure nobody can debug without them"), and this is
 				// the same sentence for a crash.
 				r.orphaned += flush(out, buffered, e.Package)
+				// AND WHAT THE BINARY SAID AFTER ITS TESTS HAD REPORTED, which
+				// is where a -timeout panic and its goroutine dump are
+				// (crewlet/crewlet#1021): see [held].
+				r.trailers += flushAfter(out, after, e.Package)
+			case "pass", "skip":
+				// A green package's binary output stays unprinted, as plain
+				// `go test` leaves a passing package's in package list mode.
+				delete(after, e.Package)
 			}
 			continue
 		}
 
 		key := e.Package + "\x00" + e.Test
+		h := buffered[key]
 		switch e.Action {
 		case "output":
-			buffered[key] = append(buffered[key], e.Output)
+			if h == nil {
+				h = &held{}
+				buffered[key] = h
+			}
+			h.add(e)
+			continue
 		case "pass", "fail", "skip":
 			r.tests++
 			r.reported[short(e.Package)+"\x00"+e.Test] = true
 			if m := measurement(short(e.Package), e.Test); m != nil {
 				r.measuredSeen[m.Package+"\x00"+m.Test] = true
 			}
+			if h == nil {
+				// It wrote nothing, or nothing this program kept.
+				h = &held{}
+			}
 		}
 		switch e.Action {
 		case "skip":
 			r.skipped = append(r.skipped, Skip{Package: short(e.Package), Test: e.Test})
+			after[e.Package] = h.keepAfter(after[e.Package], e.Test)
 			delete(buffered, key)
 		case "pass":
 			// A DECLARED MEASUREMENT PRINTS ON A GREEN RUN. Every other
 			// passing test's output is dropped, which is what keeps this
 			// gate's log the length `go test` would have produced.
 			if measurement(short(e.Package), e.Test) != nil {
-				for _, o := range buffered[key] {
+				for _, o := range h.own {
 					fmt.Fprint(out, o)
 				}
 			}
+			after[e.Package] = h.keepAfter(after[e.Package], e.Test)
 			delete(buffered, key)
 		case "fail":
 			r.failed = append(r.failed, short(e.Package)+" "+e.Test)
-			for _, o := range buffered[key] {
+			// ALL OF IT, what came after its result line included: the
+			// package fails with it anyway, and a test that PANICKED reports
+			// `--- FAIL: X` first and then prints the panic, which reads
+			// where plain `go test` puts it, under that line.
+			for _, o := range h.own {
+				fmt.Fprint(out, o)
+			}
+			for _, o := range h.after {
 				fmt.Fprint(out, o)
 			}
 			delete(buffered, key)
@@ -322,14 +377,103 @@ func read(in *bufio.Scanner, out *os.File) report {
 	// The package branch above covers a package that reported `fail`. A
 	// TRUNCATED stream has no package record at all — a producer killed by an
 	// OOM or a signal, which the verdict's first branch exists for — and its
-	// last test's output is the only evidence of where it got to. On a run
-	// where every test reported there is nothing left here, so this costs a
-	// green log nothing.
+	// last test's output, or what its binary wrote after a test reported, is
+	// the only evidence of where it got to. On a run where every test
+	// reported, and every package with them, there is nothing left here, so
+	// this costs a green log nothing.
 	for pkg := range r.ran {
 		r.orphaned += flush(out, buffered, "github.com/crewlet/crewlet/"+pkg)
 	}
 	r.orphaned += flush(out, buffered, "")
+	for pkg := range after {
+		r.trailers += flushAfter(out, after, pkg)
+	}
 	return r
+}
+
+// held is one test's buffered output, split at the test's own result line.
+//
+// # Why output after that line is not the test's (crewlet/crewlet#1021)
+//
+// test2json files every line the binary writes that carries no framing marker
+// under the test the last framing line named, and it holds a test's pass,
+// fail or skip record back until the NEXT framing line. Both are fine while
+// tests keep running. They are not when the binary dies with one test still
+// running and another already finished: the `-timeout` alarm's panic — the
+// `panic: test timed out` line, the running tests and every goroutine's
+// stack, the one piece of evidence that names what blocked — carries no
+// marker, and the last framing line was the finished test's `--- PASS: X`.
+// So the dump arrives as X's output, and X's held `pass` follows it, flushed
+// by the `FAIL` line `go test` writes when the binary exits. Buffered under X
+// and dropped with X's output on that pass, it reached no CI log: run
+// 42977298492 failed internal/sandbox after 30 minutes with an ORPHANED block
+// holding only the hung test's `=== RUN`, `=== PAUSE` and `=== CONT`.
+//
+// A test's own output always comes before its result line: under test2json
+// the testing package streams a test's log as it is written, and a line
+// written for a test that is not the last one named comes with a framing line
+// naming it first. So whatever arrives tagged to X after X's own `--- PASS:
+// X` is the binary's: that dump, a panic in a goroutine that outlived its
+// test, TestMain's output after m.Run, or a running test's writes to stdout
+// or stderr that test2json filed under X. It goes to its package's [trailer]s
+// when X reports, and is printed when the package fails — as plain `go test`
+// prints a failed package's whole output in package list mode, and drops a
+// passing one's.
+//
+// Told by the frame, never by the text: a line matching `panic:` or `test
+// timed out` stops at the shapes somebody thought of, and the frame is
+// test2json's own statement of where the test ended.
+type held struct {
+	// own is the test's output up to and including its result line.
+	own []string
+	// reported is whether its result line has arrived.
+	reported bool
+	// after is what arrived tagged to it once it had.
+	after []string
+}
+
+// add takes one output record of the test's.
+func (h *held) add(e event) {
+	if h.reported {
+		h.after = append(h.after, e.Output)
+		return
+	}
+	h.own = append(h.own, e.Output)
+	h.reported = resultFrame(e)
+}
+
+// keepAfter hands what arrived after the test's result line to its package's
+// trailers, as the binary's own output following test.
+func (h *held) keepAfter(trailers []trailer, test string) []trailer {
+	if len(h.after) == 0 {
+		return trailers
+	}
+	return append(trailers, trailer{test: test, lines: h.after})
+}
+
+// resultFrame reports whether a record is a test's own result line — `---
+// PASS: X`, `--- FAIL: X` or `--- SKIP: X`, four spaces deeper per level of
+// subtest — rather than one of the framing lines that start or resume a test
+// (`=== RUN`, `=== PAUSE`, `=== CONT`), after which its output still comes.
+// The three are test2json's report lines for the three results this program
+// reads; `--- BENCH:` is followed by the benchmark's own log, and is left out.
+func resultFrame(e event) bool {
+	if e.OutputType != "frame" {
+		return false
+	}
+	line := strings.TrimLeft(e.Output, " ")
+	for _, result := range []string{"--- PASS: ", "--- FAIL: ", "--- SKIP: "} {
+		if strings.HasPrefix(line, result) {
+			return true
+		}
+	}
+	return false
+}
+
+// trailer is output a package's binary wrote after test had reported.
+type trailer struct {
+	test  string
+	lines []string
 }
 
 // flush prints, and discards, every buffer left under a package whose tests
@@ -340,7 +484,7 @@ func read(in *bufio.Scanner, out *os.File) report {
 // the lines arrive bare. The sentence on the header is the fact the reader
 // needs first, because it is the one thing `go test`'s own output never has to
 // say: this test was RUNNING when the binary stopped.
-func flush(out *os.File, buffered map[string][]string, pkg string) int {
+func flush(out *os.File, buffered map[string]*held, pkg string) int {
 	prefix := pkg + "\x00"
 	names := make([]string, 0, len(buffered))
 	for key := range buffered {
@@ -353,12 +497,32 @@ func flush(out *os.File, buffered map[string][]string, pkg string) int {
 		fmt.Fprintf(out, "=== ORPHANED %s %s (no pass, fail or skip was ever "+
 			"reported for it — the binary stopped here)\n",
 			short(pkg), strings.TrimPrefix(key, prefix))
-		for _, o := range buffered[key] {
+		for _, o := range buffered[key].own {
+			fmt.Fprint(out, o)
+		}
+		for _, o := range buffered[key].after {
 			fmt.Fprint(out, o)
 		}
 		delete(buffered, key)
 	}
 	return len(names)
+}
+
+// flushAfter prints, and discards, a package's trailers — what its binary
+// wrote after a test had reported ([held]) — each under the name of the test
+// test2json filed it under, saying it is not that test's.
+func flushAfter(out *os.File, after map[string][]trailer, pkg string) int {
+	trailers := after[pkg]
+	for _, t := range trailers {
+		fmt.Fprintf(out, "=== AFTER %s %s (written once that test had reported, "+
+			"so the binary's own output and not the test's — where a -timeout "+
+			"panic and its goroutine dump land)\n", short(pkg), t.test)
+		for _, o := range t.lines {
+			fmt.Fprint(out, o)
+		}
+	}
+	delete(after, pkg)
+	return len(trailers)
 }
 
 // writeTimings writes the -timings file's body; see the package doc.
@@ -549,16 +713,25 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 			// different things and the reader has to be told which to look
 			// for: it does not compile, its binary died under a test (a
 			// panic, the race detector, a TestMain that exited), or it
-			// failed after its last test finished. The orphaned count is
-			// what separates the first from the rest — a build error prints
-			// its own output at package level and leaves nothing buffered.
+			// failed after its last test finished. The orphaned and trailer
+			// counts are what separate the first from the rest — a build
+			// error prints its own output at package level and leaves nothing
+			// buffered, while a binary that dies leaves the test it died under
+			// (ORPHANED), what it printed after a test's result line (AFTER:
+			// the -timeout dump, TestMain's own words), or both.
 			note += "\nNo test in it reported a failure, so this is a package that " +
 				"did not build, a binary that stopped under a test, or a\nTestMain " +
 				"that exited non-zero."
 			if r.orphaned > 0 {
 				note += fmt.Sprintf(" %d test(s) had output and never reported "+
 					"a result;\ntheir output is above, under ORPHANED.", r.orphaned)
-			} else {
+			}
+			if r.trailers > 0 {
+				note += fmt.Sprintf(" %d block(s) of the binary's own output came "+
+					"after a test had reported\n(a -timeout panic and its goroutine "+
+					"dump are one); they are above, under AFTER.", r.trailers)
+			}
+			if r.orphaned == 0 && r.trailers == 0 {
 				note += " Nothing was buffered under a test, so the output above is " +
 					"all there is."
 			}

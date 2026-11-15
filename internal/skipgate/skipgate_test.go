@@ -994,6 +994,8 @@ func TestTheVerdictNamesAPackageThatFailedWithNoFailingTest(t *testing.T) {
 	for name, tc := range map[string]struct {
 		r    report
 		want []string
+		// absent is what the note must not say.
+		absent []string
 	}{
 		"a binary that stopped under a test": {
 			r: report{
@@ -1011,6 +1013,33 @@ func TestTheVerdictNamesAPackageThatFailedWithNoFailingTest(t *testing.T) {
 				ran:        ran("internal/x"),
 			},
 			want: []string{"internal/x", "did not build", "all there is"},
+		},
+		// A TIMED-OUT BINARY, crewlet/crewlet#1021: the test it stopped under,
+		// and the dump it wrote after another test had reported. Saying
+		// "all there is" over a log holding the dump would send the reader
+		// away from it.
+		"a binary that timed out": {
+			r: report{
+				failedPkgs: []string{"internal/sandbox"},
+				tests:      812,
+				orphaned:   1,
+				trailers:   1,
+				ran:        ran("internal/sandbox"),
+			},
+			want:   []string{"internal/sandbox", "ORPHANED", "1 block(s)", "under AFTER"},
+			absent: []string{"all there is"},
+		},
+		// A TestMain that exits non-zero after its tests passed leaves no
+		// test running, only what it printed after the last one reported.
+		"a binary that wrote after its last test reported": {
+			r: report{
+				failedPkgs: []string{"internal/x"},
+				tests:      812,
+				trailers:   1,
+				ran:        ran("internal/x"),
+			},
+			want:   []string{"internal/x", "under AFTER"},
+			absent: []string{"all there is", "ORPHANED"},
 		},
 		// A NAMED FAILURE STILL READS AS ONE. The extra sentence is for the
 		// case with no failing test, and adding it to every red run would
@@ -1036,10 +1065,300 @@ func TestTheVerdictNamesAPackageThatFailedWithNoFailingTest(t *testing.T) {
 					t.Errorf("the verdict does not say %q:\n%s", want, note)
 				}
 			}
+			for _, wrong := range tc.absent {
+				if strings.Contains(note, wrong) {
+					t.Errorf("the verdict says %q:\n%s", wrong, note)
+				}
+			}
 			if len(tc.r.failed) > 0 && strings.Contains(note, "did not build") {
 				t.Errorf("a named failing test got the no-failing-test "+
 					"explanation, which buries the name that is the answer:\n%s", note)
 			}
 		})
+	}
+}
+
+// render reads events as one test2json stream, and returns what it amounted
+// to and what it printed.
+func render(t *testing.T, events ...event) (report, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "out")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := read(bufio.NewScanner(strings.NewReader(strings.Join(encode(t, events...), "\n"))), f)
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, string(raw)
+}
+
+// encode writes events as test2json's lines.
+func encode(t *testing.T, events ...event) []string {
+	t.Helper()
+	lines := make([]string, 0, len(events))
+	for _, e := range events {
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, string(b))
+	}
+	return lines
+}
+
+// output is one output record of test's in pkg, outputType "frame" for a
+// framing line and "" for what the binary wrote.
+func output(pkg, test, text, outputType string) event {
+	return event{Action: "output", Package: pkg, Test: test, Output: text, OutputType: outputType}
+}
+
+// timedOut is the stream a binary leaves when its -timeout alarm fires with
+// TestHangs running and TestFinishes already reported, as Go 1.27.2's
+// test2json writes it (the fix for crewlet/crewlet#1021 recorded one from a
+// real binary): the panic and the goroutine dump carry no framing marker, so
+// test2json files them under TestFinishes, whose `--- PASS` frame was the
+// last framing line, and TestFinishes' held-back pass follows them, flushed
+// by the line `go test` writes when the binary exits.
+func timedOut(pkg string) []event {
+	return []event{
+		{Action: "run", Package: pkg, Test: "TestHangs"},
+		output(pkg, "TestHangs", "=== RUN   TestHangs\n", "frame"),
+		output(pkg, "TestHangs", "=== PAUSE TestHangs\n", "frame"),
+		{Action: "pause", Package: pkg, Test: "TestHangs"},
+		{Action: "run", Package: pkg, Test: "TestFinishes"},
+		output(pkg, "TestFinishes", "=== RUN   TestFinishes\n", "frame"),
+		output(pkg, "TestFinishes", "=== PAUSE TestFinishes\n", "frame"),
+		{Action: "pause", Package: pkg, Test: "TestFinishes"},
+		{Action: "cont", Package: pkg, Test: "TestHangs"},
+		output(pkg, "TestHangs", "=== CONT  TestHangs\n", "frame"),
+		{Action: "cont", Package: pkg, Test: "TestFinishes"},
+		output(pkg, "TestFinishes", "=== CONT  TestFinishes\n", "frame"),
+		output(pkg, "TestFinishes", "    x_test.go:16: a passing test's own log\n", ""),
+		output(pkg, "TestFinishes", "--- PASS: TestFinishes (0.00s)\n", "frame"),
+		output(pkg, "TestFinishes", "panic: test timed out after 30m0s\n", ""),
+		output(pkg, "TestFinishes", "\trunning tests:\n", ""),
+		output(pkg, "TestFinishes", "\t\tTestHangs (30m0s)\n", ""),
+		output(pkg, "TestFinishes", "\n", ""),
+		output(pkg, "TestFinishes", "goroutine 6 [chan receive]:\n", ""),
+		output(pkg, "TestFinishes", "example.com/x.TestHangs(0x10042727e248)\n", ""),
+		{Action: "pass", Package: pkg, Test: "TestFinishes"},
+		{Action: "output", Package: pkg, Output: "FAIL\t" + pkg + "\t1800.176s\n", OutputType: "frame"},
+		{Action: "fail", Package: pkg, Elapsed: 1800.176},
+	}
+}
+
+// A TIMED-OUT BINARY'S PANIC AND GOROUTINE DUMP REACH THE LOG.
+//
+// # What was wrong (crewlet/crewlet#1021)
+//
+// internal/sandbox hit `go test -timeout 30m` in CI run 42977298492, and the
+// log said `FAIL … 1800.176s` and an ORPHANED block holding only the hung
+// test's `=== RUN`, `=== PAUSE` and `=== CONT`. The `panic: test timed out`
+// line, the running tests and the goroutine dump — the one piece of evidence
+// naming what blocked — were in none of the job's lines: test2json files them
+// under the last test to report, and this program dropped them with that
+// test's output on its pass. The hang had to be diagnosed from the code.
+//
+// # What is asserted
+//
+// The dump is printed, under a header naming the test test2json filed it
+// under and saying it is not that test's; beside its own package's FAIL line
+// rather than at the end of the stream; and the test that passed stays quiet.
+func TestATimedOutBinarysPanicAndGoroutineDumpArePrinted(t *testing.T) {
+	t.Parallel()
+
+	const pkg = "github.com/crewlet/crewlet/internal/x"
+	const later = "github.com/crewlet/crewlet/internal/z"
+	r, rendered := render(t, append(timedOut(pkg),
+		event{Action: "output", Package: later, Output: "ok  \tinternal/z\t1.0s\n"},
+		event{Action: "pass", Package: later},
+	)...)
+
+	for _, want := range []string{
+		"panic: test timed out after 30m0s",
+		"\t\tTestHangs (30m0s)",
+		"goroutine 6 [chan receive]:",
+		"example.com/x.TestHangs(",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the timed-out binary's %q was dropped with the passing test's "+
+				"output, so nothing names what blocked:\n%s", want, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "=== AFTER internal/x TestFinishes (") {
+		t.Errorf("the dump was printed without the header saying what it is:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "a passing test's own log") {
+		t.Errorf("the passing test's own output was printed with the dump:\n%s", rendered)
+	}
+	panicAt := strings.Index(rendered, "panic: test timed out")
+	nextPkg := strings.Index(rendered, "ok  \tinternal/z")
+	if panicAt < 0 || nextPkg < 0 || panicAt > nextPkg {
+		t.Errorf("the dump was not printed beside its own package's FAIL line:\n%s", rendered)
+	}
+	if r.trailers != 1 || r.orphaned != 1 {
+		t.Errorf("trailers = %d and orphaned = %d, want 1 and 1: the dump and the "+
+			"hung test", r.trailers, r.orphaned)
+	}
+}
+
+// AND THE PROGRAM SAYS SO, end to end: the dump in its output and a verdict
+// pointing at it.
+func TestTheGatePrintsATimedOutBinarysDump(t *testing.T) {
+	t.Parallel()
+
+	out, err := gateOver(t, encode(t, timedOut("github.com/crewlet/crewlet/internal/x")...)...)()
+	if err == nil {
+		t.Fatalf("a run whose package timed out passed:\n%s", out)
+	}
+	for _, want := range []string{"panic: test timed out after 30m0s", "goroutine 6", "under AFTER"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the gate's output does not say %q:\n%s", want, out)
+		}
+	}
+}
+
+// A GREEN PACKAGE PRINTS NOTHING ITS BINARY WROTE AFTER A TEST.
+//
+// What follows a test's result line is printed only when its package fails,
+// as plain `go test` prints a failed package's whole output and only a
+// passing one's result line. A green log stays the length it was — and the
+// output is not carried into the next package that fails, nor to the end.
+func TestAGreenPackagePrintsNothingItsBinaryWroteAfterATest(t *testing.T) {
+	t.Parallel()
+
+	const pkg = "github.com/crewlet/crewlet/internal/a"
+	const red = "github.com/crewlet/crewlet/internal/b"
+	green := []event{
+		{Action: "run", Package: pkg, Test: "TestA"},
+		output(pkg, "TestA", "=== RUN   TestA\n", "frame"),
+		output(pkg, "TestA", "--- PASS: TestA (0.00s)\n", "frame"),
+		output(pkg, "TestA", "chatter a goroutine wrote after TestA\n", ""),
+		{Action: "pass", Package: pkg, Test: "TestA"},
+		{Action: "output", Package: pkg, Output: "ok  \tinternal/a\t0.1s\n", OutputType: "frame"},
+		{Action: "pass", Package: pkg},
+	}
+
+	r, rendered := render(t, green...)
+	if rendered != "ok  \tinternal/a\t0.1s\n" {
+		t.Errorf("a green package printed more than its result line:\n%s", rendered)
+	}
+	if r.trailers != 0 {
+		t.Errorf("trailers = %d for a green run, want 0", r.trailers)
+	}
+
+	r, rendered = render(t, append(green,
+		event{Action: "run", Package: red, Test: "TestB"},
+		output(red, "TestB", "--- FAIL: TestB (0.00s)\n", "frame"),
+		event{Action: "fail", Package: red, Test: "TestB"},
+		event{Action: "output", Package: red, Output: "FAIL\tinternal/b\t0.1s\n", OutputType: "frame"},
+		event{Action: "fail", Package: red},
+	)...)
+	if strings.Contains(rendered, "chatter a goroutine wrote after TestA") {
+		t.Errorf("a green package's binary output was printed with the next "+
+			"package that failed:\n%s", rendered)
+	}
+	if r.trailers != 0 {
+		t.Errorf("trailers = %d, want 0: the package that wrote it passed", r.trailers)
+	}
+}
+
+// A TEST THAT PANICS PRINTS ITS PANIC UNDER ITS OWN FAIL LINE.
+//
+// The testing package reports `--- FAIL: X` and then prints the panic, so the
+// panic, too, comes after X's result line. X's failure prints all of X's
+// output where plain `go test` puts it — under that line, once — rather than
+// moving the panic away from the test that raised it.
+func TestAPanickingTestsPanicPrintsUnderItsFailLine(t *testing.T) {
+	t.Parallel()
+
+	const pkg = "github.com/crewlet/crewlet/internal/x"
+	r, rendered := render(t,
+		event{Action: "run", Package: pkg, Test: "TestPanics"},
+		output(pkg, "TestPanics", "=== RUN   TestPanics\n", "frame"),
+		output(pkg, "TestPanics", "--- FAIL: TestPanics (0.00s)\n", "frame"),
+		output(pkg, "TestPanics", "panic: boom [recovered]\n", ""),
+		output(pkg, "TestPanics", "goroutine 7 [running]:\n", ""),
+		event{Action: "fail", Package: pkg, Test: "TestPanics"},
+		event{Action: "output", Package: pkg, Output: "FAIL\tinternal/x\t0.1s\n", OutputType: "frame"},
+		event{Action: "fail", Package: pkg},
+	)
+
+	if n := strings.Count(rendered, "panic: boom"); n != 1 {
+		t.Fatalf("the panic was printed %d times, want once:\n%s", n, rendered)
+	}
+	frame := strings.Index(rendered, "--- FAIL: TestPanics")
+	panicAt := strings.Index(rendered, "panic: boom")
+	pkgFail := strings.Index(rendered, "FAIL\tinternal/x")
+	if frame < 0 || frame > panicAt || panicAt > pkgFail {
+		t.Errorf("the panic was not printed under its test's FAIL line:\n%s", rendered)
+	}
+	if r.trailers != 0 {
+		t.Errorf("trailers = %d, want 0: the panic is the failing test's", r.trailers)
+	}
+}
+
+// AND A STREAM THAT STOPS STILL PRINTS WHAT FOLLOWED A TEST'S RESULT LINE.
+//
+// A producer killed after a test reported leaves no package record to hang
+// the output on, and what its binary wrote last is where it got to.
+func TestATruncatedStreamStillPrintsWhatFollowedATestsResult(t *testing.T) {
+	t.Parallel()
+
+	const pkg = "github.com/crewlet/crewlet/internal/x"
+	r, rendered := render(t,
+		event{Action: "run", Package: pkg, Test: "TestA"},
+		output(pkg, "TestA", "--- PASS: TestA (0.00s)\n", "frame"),
+		output(pkg, "TestA", "fatal error: concurrent map writes\n", ""),
+		event{Action: "pass", Package: pkg, Test: "TestA"},
+	)
+
+	if !strings.Contains(rendered, "fatal error: concurrent map writes") {
+		t.Errorf("a truncated stream's last output was dropped:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "=== AFTER internal/x TestA (") {
+		t.Errorf("the output was printed without its header:\n%s", rendered)
+	}
+	if r.trailers != 1 {
+		t.Errorf("trailers = %d, want 1", r.trailers)
+	}
+}
+
+// ONLY A TEST'S OWN RESULT FRAME ENDS ITS OUTPUT.
+//
+// The frame is test2json's statement of where a test ended, so the line
+// is read as a frame and never as text: a test that prints `--- PASS:` itself
+// has not reported, and `=== RUN`, `=== PAUSE` and `=== CONT` start or resume
+// a test whose output is still to come. A subtest's result line is indented.
+func TestOnlyATestsOwnResultFrameEndsItsOutput(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		line, outputType string
+		want             bool
+	}{
+		{"--- PASS: TestX (0.00s)\n", "frame", true},
+		{"--- FAIL: TestX (0.00s)\n", "frame", true},
+		{"--- SKIP: TestX (0.00s)\n", "frame", true},
+		{"    --- PASS: TestX/sub (0.00s)\n", "frame", true},
+		{"        --- FAIL: TestX/sub/deeper (0.00s)\n", "frame", true},
+		{"=== RUN   TestX\n", "frame", false},
+		{"=== PAUSE TestX\n", "frame", false},
+		{"=== CONT  TestX\n", "frame", false},
+		{"--- BENCH: BenchmarkX\n", "frame", false},
+		{"--- PASS: TestX (0.00s)\n", "", false},
+		{"--- FAIL: TestX (0.00s)\n", "error", false},
+	} {
+		e := output("github.com/crewlet/crewlet/internal/x", "TestX", tc.line, tc.outputType)
+		if got := resultFrame(e); got != tc.want {
+			t.Errorf("resultFrame(%q, OutputType %q) = %v, want %v",
+				tc.line, tc.outputType, got, tc.want)
+		}
 	}
 }
