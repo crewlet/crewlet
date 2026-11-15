@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // WHAT A RUN THAT CONTINUES A SESSION IS TOLD.
@@ -294,6 +295,115 @@ func EarlierRoundNote(fire bool) string {
 // itself carries none: its render is shared with the reviewer.
 const ToldApartNote = "(a call of its own: another call this message tells could be taken for it)"
 
+// otherCallsHeader heads the calls the session above may show that no list of
+// the brief below names ([AfterSave.Other]), and otherCallsOpening opens them.
+// otherCallsClosing follows their parts: whatever such a call reads like, it is
+// a call of its own.
+//
+// WHY A SECTION OF ITS OWN, AND WORDS RATHER THAN LINES. The words over the
+// late calls, and over the calls the session may already show, say a call
+// shown both above and in the list is ONE call, made once; a call the session
+// shows that the engine holds is listed again where a told call could be taken
+// for it ([shownAgainHeader]), and one the same message tells is marked
+// ([ToldApartNote]). But the session may also show calls the engine cannot
+// list: an earlier turn's, of which it keeps no call; an earlier round's where
+// the session may hold them only in a summary's words, which no value of a
+// line can be compared with; one the record no longer lists one by one, of
+// which it keeps a tool and a count; and a worker's under a delegation, which
+// reaches the session only as the worker's report. Each could be taken for a
+// told call and lose it, so the section says they may be shown, by the tools
+// the told calls name, and that none of them is a listed call.
+//
+// TRUE OF EVERY PART IT PRINTS: "may" of each (internal/agent/runner's
+// otherCalls decides each part only where its calls may be in the session),
+// and "no list below names" and the closing of all: the record lists a call or
+// counts it, never both; an earlier turn's call is never this turn's; a
+// worker's call is never one of the run's own, which are the only calls a list
+// below holds; and an earlier round's call alike a told one is listed again,
+// so the part names only the tools of the ones that are not.
+const (
+	otherCallsHeader  = "## Other calls the session above may show"
+	otherCallsOpening = "The session above may also show calls no list below names:"
+	otherCallsClosing = "However alike one of them reads to a call listed below, it is a call of its own, never that" +
+		" one shown twice."
+)
+
+// OtherCalls is what the session above may show that no list of a brief below
+// names ([AfterSave.Other]), each part told only where it holds: its calls by
+// the tools the told calls name, never by a count, since the count the record
+// keeps is no figure of what the session shows.
+type OtherCalls struct {
+	// EarlierTurns says the session may hold the conversation's earlier turns:
+	// the turn continued the session its conversation's last turn left. Fire
+	// says the conversation is a schedule's, whose turns are its fires
+	// ([NextTurn.Fire]), so every part names a fire where it would a turn.
+	EarlierTurns, Fire bool
+	// EarlierRounds is the told tools of the turn's earlier rounds where the
+	// session may hold those rounds only in a summary's words, less the calls
+	// listed again; Unlisted the told tools of the calls the record no longer
+	// lists one by one; Workers the told tools of the calls workers made under
+	// a delegation.
+	EarlierRounds, Unlisted, Workers ToolsNamed
+}
+
+// ToolsNamed is the tools a part of [OtherCalls] names, defused by the
+// caller, in the order the told calls name them, and whether a count it speaks
+// of names no tool. A part is told where either holds.
+type ToolsNamed struct {
+	Tools   []string
+	Unnamed bool
+}
+
+// told reports whether the part is told.
+func (n ToolsNamed) told() bool { return len(n.Tools) > 0 || n.Unnamed }
+
+// madeTo is the part's tools as its bullet ends with them: ", made to " and
+// the tools, each in backticks, then "and to tools <namer> does not name"
+// where a count names no tool, or that alone. namer is "the record", or "it"
+// where the bullet has named the record already.
+func (n ToolsNamed) madeTo(namer string) string {
+	quoted := make([]words.Said, len(n.Tools))
+	for i, tool := range n.Tools {
+		quoted[i] = words.Said("`" + tool + "`")
+	}
+	switch {
+	case !n.Unnamed:
+		return ", made to " + words.And(quoted)
+	case len(quoted) == 0:
+		return ", made to tools " + namer + " does not name"
+	}
+	return ", made to " + words.And(quoted) + " and to tools " + namer + " does not name"
+}
+
+// otherCalls is the section [OtherCalls] is told in, "" where no part is:
+// the header, the opening, a bullet per part in the order the session would
+// hold them (the earlier turns, the earlier rounds, the calls the record no
+// longer lists, the workers'), and the closing.
+func otherCalls(o OtherCalls) string {
+	words := nextTurnWordsFor(NextTurn{Fire: o.Fire})
+	var parts []string
+	if o.EarlierTurns {
+		parts = append(parts, "- calls of this "+words.whole+"'s earlier "+words.turn+"s, made before this "+
+			words.turn+" began")
+	}
+	if o.EarlierRounds.told() {
+		parts = append(parts, "- calls of this "+words.turn+"'s earlier rounds, in full or only in a summary's words"+
+			o.EarlierRounds.madeTo("the record"))
+	}
+	if o.Unlisted.told() {
+		parts = append(parts, "- calls of this "+words.turn+" the record no longer lists one by one"+
+			o.Unlisted.madeTo("it"))
+	}
+	if o.Workers.told() {
+		parts = append(parts, "- calls of workers this "+words.turn+" delegated to, in their reports' words"+
+			o.Workers.madeTo("the record"))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return otherCallsHeader + "\n" + otherCallsOpening + "\n" + strings.Join(parts, "\n") + "\n" + otherCallsClosing
+}
+
 // lateCallsHeader introduces the calls of the round that finished only after
 // the run that made them stopped waiting for them, and the ones still in flight
 // as the round was read ([AfterSave.Late]): calls an earlier run of the work
@@ -485,6 +595,13 @@ type AfterSave struct {
 	// ([CalledBefore]), which holds no call of the round.
 	Shown string
 
+	// Other is what the session may show that no list of the brief names
+	// ([OtherCalls]): told first, after the held submission and before the
+	// owed reads, so "below" is every list, in a section of its own
+	// ([otherCallsHeader]). The zero value tells nothing. Never set for a run
+	// that starts a session of its own ([CalledBefore]), which has none above.
+	Other OtherCalls
+
 	// Late are the calls of the round that finished only after the run that
 	// made them stopped waiting for them — its record took them after that run
 	// was replaced by a relaunch that carried the work on
@@ -546,11 +663,13 @@ type AfterSave struct {
 //
 // THE CALLS THE SESSION SHOWS THAT A TOLD CALL COULD BE TAKEN FOR COME AFTER
 // THE CALLS SINCE THE SAVE AND BEFORE THE LATE ONES ([AfterSave.Shown]), in a
-// section of their own: so the order is the held submission, the owed reads,
-// the calls since the save, the calls listed again, then the late calls. They
-// follow the list most of their likes are in, and the late section, whose
-// words also say a call shown twice is one, stays last, as it is on every
-// path.
+// section of their own: so the order is the held submission, the other calls
+// the session may show ([AfterSave.Other]), the owed reads, the calls since
+// the save, the calls listed again, then the late calls. They follow the list
+// most of their likes are in, and the late section, whose words also say a
+// call shown twice is one, stays last, as it is on every path. THE OTHER CALLS
+// COME BEFORE EVERY LIST, since their words speak of the lists below them, and
+// list no call, so every list's words stay true after them.
 //
 // A SUCCESSFUL SUBMISSION AMONG EITHER LIST is said to be none of the work's,
 // right after the list it is in and in words true of that list: the calls
@@ -571,6 +690,9 @@ func CalledAfter(after AfterSave) string {
 	var sections []string
 	if after.HeldSubmission {
 		sections = append(sections, heldSubmission)
+	}
+	if other := otherCalls(after.Other); other != "" {
+		sections = append(sections, other)
 	}
 	tally := tallyBesideLast(after.Tally, after.OwedDropped, after.Dropped, after.LateDropped)
 	if owed := toldList(owedHeader, after.Owed, "", owedDropped(after.OwedDropped), tally[0]); owed != "" {

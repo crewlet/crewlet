@@ -51,18 +51,27 @@ func lostRelaunchOver(t *testing.T, basis runner.SessionBasis, history []ledger.
 	round runner.Resume) runner.AgentRunRequest {
 
 	t.Helper()
+	return lostRelaunchIn(t, "", basis, history, round)
+}
+
+// lostRelaunchIn is [lostRelaunchOver] in the conversation conversation names
+// ([runner.Turn.ConversationKey]), "" for the fixture's own.
+func lostRelaunchIn(t *testing.T, conversation string, basis runner.SessionBasis, history []ledger.Iteration,
+	round runner.Resume) runner.AgentRunRequest {
+
+	t.Helper()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
 	notes := ""
 	if len(history) > 0 {
 		notes = history[len(history)-1].ReviewNotes
 	}
-	launched, req := launch(t, entries, buildOpts{}, len(history)+1, notes, history)
+	launched, req := launch(t, entries, buildOpts{conversation: conversation}, len(history)+1, notes, history)
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 	relauncher := &probingLauncher{basis: basis}
 	round.State, round.Lost = parked.State, &runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
-		resume: &round})
+		resume: &round, conversation: conversation})
 	if _, _, err := collector.Resume(t.Context(), history); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}

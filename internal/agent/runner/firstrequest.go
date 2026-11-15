@@ -35,6 +35,15 @@ import (
 // cut-off one (every call of its round, every note the turn has read, the leads
 // its brief told, all of them where it may be a summary), and its guard arms no
 // skill a summary may hold only in words.
+//
+// AND WHETHER ITS THREAD RESTARTED AT ALL, BEFORE ITS JOB OR IN IT
+// ([sessionHolds.restarted]): a session that restarted in an earlier job holds
+// what came before that restart only in the restart's summary, and the telling
+// that followed it told that job's round again from its start, never the
+// turn's closed rounds before it. So such a session may hold the closed rounds
+// only in a summary's words ([sessionHolds.closedSummarized]), which no value
+// of a listed call can be compared with: its brief says so of the tools its
+// told calls name ([Runner.otherCalls]).
 
 // firstRequest is how a relaunch judges whether the session a path continues
 // holds, at its run's first request, what a telling that counts it as held says
@@ -111,6 +120,16 @@ type sessionHolds struct {
 	// compacts says its harness may compact it before its first request
 	// ([firstRequest.compacts]).
 	compacts bool
+	// restarted says the session's thread restarted somewhere, before its job
+	// or in it, or whether it did cannot be read ([restartedAnywhere]): what
+	// it holds from before its newest restart is that restart's summary, or
+	// nothing. A Claude Code session's alone, whose thread a count reads;
+	// false for another harness's, which no count describes yet. It decides
+	// only how the turn's closed rounds are told ([sessionHolds.closedSummarized]),
+	// never the round's own calls: a restart in an earlier job of the round
+	// was followed by a telling of the round from its start, and one in a
+	// closed round is before every call of this one.
+	restarted bool
 }
 
 // lacksBrief reports whether the session may lack its job's brief: the
@@ -128,6 +147,22 @@ func (h sessionHolds) lacks() bool { return h.lacksBrief() || h.compacts }
 // every call of the round from its start, every lead its record keeps, and its
 // guard arms nothing.
 func (h sessionHolds) summarized() bool { return h.restartedInJob || h.compacts }
+
+// closedSummarized reports whether the session may hold the turn's closed
+// rounds only in a summary's words: it may be a summary now (summarized), or
+// its thread restarted at some point. The telling that followed a restart in
+// an earlier job told that job's round again from its start ([sessionHolds.keptCalls]),
+// never the closed rounds before it, which survive only in the restart's
+// summary. A restart in an earlier turn's session counts too: an over-telling,
+// the safe side.
+func (h sessionHolds) closedSummarized() bool { return h.summarized() || h.restarted }
+
+// restartedAnywhere reports whether count finds the session's thread restarted
+// at some point, or cannot read whether it did (sandbox.ResumedCount.Restarted).
+func restartedAnywhere(count *sandbox.ResumedCount) bool {
+	newest, read := count.Restarted()
+	return !read || newest != ""
+}
 
 // keptCalls is how a kept session of basis is told the calls of its round, as h
 // decides, in ONE EXPRESSION: from where the round's calls are told, the reads
@@ -227,7 +262,8 @@ func (r *Runner) keptTellings(ctx context.Context, basis SessionBasis, round rou
 
 	t := keptTellings{f: firstRequest{harness: basis.Harness, window: basis.Window, count: keptCount(basis, r.cfg.Resume)},
 		holds: sessionHolds{cutOff: basis.MayLackBrief(),
-			restartedInJob: basis.Harness == sandbox.ClaudeCodeHarness && keptRestarted(basis, r.cfg.Resume)}}
+			restartedInJob: basis.Harness == sandbox.ClaudeCodeHarness && keptRestarted(basis, r.cfg.Resume),
+			restarted:      basis.Harness == sandbox.ClaudeCodeHarness && restartedAnywhere(basis.Count)}}
 	if !basis.Continues() {
 		return t
 	}
@@ -310,6 +346,7 @@ func (r *Runner) inPlaceTellings(ctx context.Context, carry carried, basis Sessi
 	if r.cfg.Resume != nil {
 		t.f = firstRequest{harness: r.cfg.Resume.Run.Harness, window: basis.Window, count: r.cfg.Resume.Count}
 		t.holds.restartedInJob = t.f.harness == sandbox.ClaudeCodeHarness && inPlaceRestarted(r.cfg.Resume)
+		t.holds.restarted = t.f.harness == sandbox.ClaudeCodeHarness && restartedAnywhere(r.cfg.Resume.Count)
 	}
 	build := func(holds sessionHolds) *inPlaceTelling {
 		after, omitted, told := r.inPlaceAfter(ctx, carry, round, current, history, surface, holds)

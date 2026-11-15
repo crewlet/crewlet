@@ -212,6 +212,9 @@ func (r *Runner) sessionBasis(ctx context.Context) SessionBasis {
 // AND THE CALLS OF THE TURN'S CLOSED ROUNDS, history, that a told call could be
 // taken for, listed again where the brief tells them nowhere else
 // ([Runner.closedShown]): the session may show them as well as the round's.
+// And where holds says it may hold those rounds only in a summary's words
+// ([sessionHolds.closedSummarized]), that it may show calls of theirs no list
+// names, by the tools its told calls name ([Runner.otherCalls]).
 //
 // AND WHAT CARRIED ITS JOB ON, of a session that may lack its job's brief
 // ([SessionBasis.MayLackBrief]): a session cut off is no more known to hold its
@@ -284,7 +287,8 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// calls listed again: it tells them there.
 	from, owed, mayShow := holds.keptCalls(basis)
 	called, omitted := r.calledAfter(ctx, round, from, owed, history, toldAs{mayShow: mayShow,
-		leads: withHeld(leadHeld, again), rendered: history[:again.rendered]}, surface, b)
+		leads: withHeld(leadHeld, again), rendered: history[:again.rendered], summed: holds.closedSummarized()},
+		surface, b)
 	after = append(after, prompts.CalledAfter(called))
 	// THEN THE NOTES IT HAS NOT READ, past its cursor, and the ones fresh holds,
 	// a note the run's bridge served a harness among either told as one it may
@@ -407,8 +411,8 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 	end, leadHeld := r.cfg.Resume.HarnessEnd, leadsHeld(carry, current)
 	var called prompts.AfterSave
 	if !holds.lacks() {
-		called, omitted = r.calledAfter(ctx, round, nil, r.cfg.Resume.Owed, history, toldAs{leads: leadHeld},
-			surface, b)
+		called, omitted = r.calledAfter(ctx, round, nil, r.cfg.Resume.Owed, history, toldAs{leads: leadHeld,
+			summed: holds.closedSummarized()}, surface, b)
 		if calls := prompts.CalledAfter(called); calls != "" {
 			after = []string{calls}
 		}
@@ -428,7 +432,7 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 	if again.section != "" {
 		after = append(after, again.section)
 	}
-	called, omitted = r.calledInPlace(ctx, round, leadHeld, history, again, surface, b)
+	called, omitted = r.calledInPlace(ctx, round, leadHeld, history, again, holds, surface, b)
 	if calls := prompts.CalledAfter(called); calls != "" {
 		after = append(after, calls)
 	}
@@ -773,6 +777,19 @@ func (r *Runner) checkoutName() string {
 // brief renders every closed round as work already done. Never on two calls of
 // one list, never on or against the owed reads, never against a call the cap
 // leaves out, and never on a call listed again.
+//
+// AND, BESIDE WORDS THAT SAY A TOLD CALL MAY BE SHOWN TWICE, WHAT THE SESSION
+// MAY SHOW THAT NO LIST NAMES ([Runner.otherCalls], [prompts.AfterSave.Other]):
+// calls of the conversation's earlier turns, of the turn's earlier rounds where
+// the session may hold them only in a summary's words (as.summed), of this
+// turn that the record no longer lists one by one, and of workers under a
+// delegation, each by the tools the told calls name, in a section before every
+// list that says none of them is a listed call. The engine holds none of them
+// as a line to list again, so it says they may be shown and that a told call
+// alike one of them is a call of its own. Told only where the late section
+// prints, or the calls after the point are told as calls the session may
+// already show, and never on a run of its own: no other words say a call may
+// be shown twice, and a run of its own has no session above.
 func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, owed []int,
 	history []ledger.Iteration, as toldAs, surface *tools.Surface, b provenance.Boundary) (prompts.AfterSave, []int) {
 
@@ -838,7 +855,15 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		}
 	}
 	out.OwedDropped = owedGone(round, owed)
-	var omitted []int
+	var (
+		omitted []int
+		// told is the names of the told calls the render shows, and listed
+		// the closed rounds' calls the section of calls listed again shows:
+		// what the other calls the session may show are named by and kept
+		// apart from ([Runner.otherCalls]).
+		told   []string
+		listed []ledger.Call
+	)
 	if len(late)+len(after)+len(owe) > 0 {
 		opts := ledger.Format(r.cfg.SkipNames, surface.Universe().KnownReads())
 		// THE CALLS THE SESSION MAY SHOW THAT A TOLD CALL COULD BE TAKEN FOR,
@@ -847,11 +872,11 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		// after the point only where they are told as calls it may already
 		// show. The closed rounds' first, each line saying it was made in an
 		// earlier round.
-		told := late
+		toldCalls := late
 		if as.mayShow {
-			told = slices.Concat(late, after)
+			toldCalls = slices.Concat(late, after)
 		}
-		again, closedN := listedAgain(r.closedShown(history, round.of, as), held, told, opts)
+		again, closedN := listedAgain(r.closedShown(history, round.of, as), held, toldCalls, opts)
 		// LATE FIRST, OWED AND THE CALLS LISTED AGAIN LAST: the order the one
 		// cap is spent in.
 		groups := [][]ledger.Call{bridgedLedger(late), bridgedLedger(after), bridgedLedger(owe), again}
@@ -860,8 +885,17 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		// places the render shows ([ledger.ShownIndices]), so a note lands on
 		// the line of the call it names, and no call the cap leaves out is
 		// marked, or marks another.
-		opts.Notes = r.notes([2][]BridgedCall{late, after}, ledger.ShownIndices(groups, opts), closedN,
-			r.partnersOf(round.of, as), opts)
+		at := ledger.ShownIndices(groups, opts)
+		opts.Notes = r.notes([2][]BridgedCall{late, after}, at, closedN, r.partnersOf(round.of, as), opts)
+		told = shownNames(told, late, at[0])
+		if as.mayShow {
+			told = shownNames(told, after, at[1])
+		}
+		for _, i := range at[3] {
+			if i < closedN {
+				listed = append(listed, again[i])
+			}
+		}
 		rendered := ledger.FormatCallGroups(groups, opts)
 		if len(late) > 0 {
 			out.Late = provenance.Neutralise(b, rendered[0])
@@ -892,7 +926,160 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 	if out.Dropped > 0 || out.LateDropped > 0 || out.OwedDropped > 0 {
 		out.Tally = provenance.Neutralise(b, ledger.FormatElided(round.elided, r.cfg.SkipNames))
 	}
+	// THE CALLS THE SESSION MAY SHOW THAT NO LIST NAMES, only beside a section
+	// whose words say a told call may be shown twice (claims): the late
+	// section, listed or holding only a count of dropped calls, whose words
+	// say so whatever it lists, and the calls after the point where they are
+	// told as calls the session may already show. Never on a run of its own,
+	// which has no session above. Outside the lists' guard, so a late section
+	// of dropped calls alone carries it too.
+	claims := len(late) > 0 || out.LateDropped > 0 || (as.mayShow && (len(after) > 0 || out.Dropped > 0))
+	if claims && !as.fresh {
+		out.Other = r.otherCalls(round, through, history, as, out, told, listed, b)
+	}
 	return out, omitted
+}
+
+// shownNames is names with the tool of each call of group at places at, the
+// calls of it a render shows ([ledger.ShownIndices]), that names does not yet
+// hold: the told calls' tools in the order they are first told.
+func shownNames(names []string, group []BridgedCall, at []int) []string {
+	for _, i := range at {
+		if !slices.Contains(names, group[i].Name) {
+			names = append(names, group[i].Name)
+		}
+	}
+	return names
+}
+
+// otherCalls is what the session above may show that no list of a brief
+// names ([prompts.OtherCalls]), as [Runner.calledAfter] tells round's calls as
+// as says, beside a section whose words say a told call may be shown twice.
+// told is the tools of the told calls the render shows, in the order first
+// told, and listed the closed rounds' calls listed again that it shows. A
+// part names only told tools, defused under b, and speaks of a count that
+// names no tool only where told is not empty: a call of a tool no told call
+// names is no call a told one could be taken for.
+//
+//   - THE CONVERSATION'S EARLIER TURNS, where the turn continued the session
+//     its conversation's last turn left ([Resume.Base]), written by the turn's
+//     first launch and kept by every relaunch: the session may hold those
+//     turns' calls, and the engine keeps none of them, an earlier turn's end
+//     carrying its outcome, never its calls. Nil Base means no session of the
+//     turn descends from an earlier turn's. By words alone, so whatever the
+//     told calls' tools.
+//   - THE TURN'S EARLIER ROUNDS, IN A SUMMARY'S WORDS, where the session may
+//     hold them only so (as.summed, [sessionHolds.closedSummarized]): the told
+//     tools of every closed round's calls that the section of calls listed
+//     again does not show, the rounds a task told again renders included,
+//     whose lines are above this section, and of every closed tally. A value
+//     of a line cannot be compared with a summary's words, so a call listed
+//     again where alike is no reason to leave the rest unsaid.
+//   - THE CALLS THE RECORD NO LONGER LISTS ONE BY ONE: the told tools of the
+//     round's dropped calls where some of them may be in the session
+//     ([droppedMayShow]), and, where the closed rounds are not said to be held
+//     only in a summary's words, of every closed tally; a tally keeps a tool
+//     and a count and no arguments, so any of its calls reads alike a told call
+//     of its tool.
+//   - THE CALLS WORKERS MADE UNDER A DELEGATION, the round's and every closed
+//     round's (roundCalls.absorbed, [ledger.Iteration.Absorbed]): the session
+//     holds them only in a worker's report, which is prose as a summary is,
+//     and none is ever in a told list.
+//
+// The entry of history standing for round.of is the round's own, its calls
+// and tallies the round's (a send-back's closed rounds hold it last), so it
+// is read nowhere here.
+func (r *Runner) otherCalls(round roundCalls, through *int, history []ledger.Iteration, as toldAs,
+	out prompts.AfterSave, told []string, listed []ledger.Call, b provenance.Boundary) prompts.OtherCalls {
+
+	named := func(tools []string, unnamed bool) prompts.ToolsNamed {
+		var n prompts.ToolsNamed
+		for _, tool := range told {
+			if slices.Contains(tools, tool) {
+				n.Tools = append(n.Tools, provenance.Neutralise(b, tool))
+			}
+		}
+		n.Unnamed = unnamed && len(told) > 0
+		return n
+	}
+	var closed, tallied, absorbed, dropped []string
+	var tallyUnnamed, absorbedUnnamed, droppedUnnamed bool
+	// A CLOSED CALL LISTED AGAIN IS NAMED BY NOTHING ELSE: by tool, a closed
+	// call stands for one listed where it is matched to one, so a tool is
+	// named exactly where more of its closed calls are listed nowhere than
+	// listed again.
+	listedOf := map[string]int{}
+	for _, call := range listed {
+		listedOf[call.Name]++
+	}
+	for _, entry := range history {
+		if standsFor(entry, round.of) {
+			continue
+		}
+		for _, call := range entry.Calls {
+			if listedOf[call.Name] > 0 {
+				listedOf[call.Name]--
+				continue
+			}
+			closed = append(closed, call.Name)
+		}
+		tallied, tallyUnnamed = talliedNames(tallied, tallyUnnamed, entry.Elided)
+		absorbed, absorbedUnnamed = talliedNames(absorbed, absorbedUnnamed, entry.Absorbed)
+	}
+	absorbed, absorbedUnnamed = talliedNames(absorbed, absorbedUnnamed, round.absorbed)
+	if droppedMayShow(round, through, as, out) {
+		dropped, droppedUnnamed = talliedNames(dropped, droppedUnnamed, round.elided)
+	}
+	other := prompts.OtherCalls{EarlierTurns: r.cfg.Resume != nil && r.cfg.Resume.Base != nil,
+		Fire: notify.Scheduled(r.cfg.Turn.ConversationKey), Workers: named(absorbed, absorbedUnnamed)}
+	if as.summed {
+		other.EarlierRounds = named(slices.Concat(closed, tallied), tallyUnnamed)
+		other.Unlisted = named(dropped, droppedUnnamed)
+	} else {
+		other.Unlisted = named(slices.Concat(dropped, tallied), droppedUnnamed || tallyUnnamed)
+	}
+	return other
+}
+
+// talliedNames is names with the tool of each count of elided that counts a
+// call, and unnamed set where one names no tool.
+func talliedNames(names []string, unnamed bool, elided []ledger.Elided) ([]string, bool) {
+	for _, e := range elided {
+		switch {
+		case e.Calls <= 0:
+		case e.Name == "":
+			unnamed = true
+		default:
+			names = append(names, e.Name)
+		}
+	}
+	return names, unnamed
+}
+
+// droppedMayShow reports whether the session may show some of the calls
+// round's log dropped from its middle, as [Runner.calledAfter] tells round's
+// calls from through as as says, out being what it told: never where it
+// dropped none; and else wherever the point is not known to hold them apart.
+// A NIL through is the copy that holds every call of the round but the late
+// ones, dropped or not; calls told as ones the session may already show
+// (as.mayShow) are past a point it may have passed; a dropped late call
+// (out.LateDropped) may be shown as any late call may; and where the log
+// dropped more than it dropped past the point, or lists a call with no number,
+// an older build's append that makes that count an over-count, some dropped
+// call may be at or below it. ONLY WHERE NONE OF THAT HOLDS are they all past
+// a point the session ends at: the log this build numbers puts every dropped
+// call past it ([droppedAfterSave] exact), and the list's words say its calls
+// are not in the session, so the dropped ones are not either.
+func droppedMayShow(round roundCalls, through *int, as toldAs, out prompts.AfterSave) bool {
+	dropped := ledger.Count(round.elided)
+	return dropped > 0 && (through == nil || as.mayShow || out.LateDropped > 0 || dropped > out.Dropped ||
+		slices.ContainsFunc(round.bridged, func(call BridgedCall) bool { return call.Appended == 0 }))
+}
+
+// standsFor reports whether entry, one of the turn's closed rounds, stands for
+// round of: is that round, or a span holding it ([doneFor]'s reading).
+func standsFor(entry ledger.Iteration, of int) bool {
+	return entry.Iteration <= of && of <= max(entry.Iteration, entry.Through)
 }
 
 // notes is the words each line of [Runner.calledAfter]'s groups ends with
@@ -969,7 +1156,7 @@ type partners struct {
 func (r *Runner) partnersOf(of int, as toldAs) partners {
 	p := partners{leads: as.leads, of: of}
 	for _, entry := range as.rendered {
-		if entry.Iteration <= of && of <= max(entry.Iteration, entry.Through) {
+		if standsFor(entry, of) {
 			continue
 		}
 		if entry.Through == 0 {
@@ -1087,7 +1274,7 @@ func (r *Runner) closedShown(history []ledger.Iteration, of int, as toldAs) []le
 	}
 	var out []ledger.Call
 	for i, entry := range history {
-		if i < len(as.rendered) || (entry.Iteration <= of && of <= max(entry.Iteration, entry.Through)) {
+		if i < len(as.rendered) || standsFor(entry, of) {
 			continue
 		}
 		for _, call := range entry.Calls {
@@ -1131,6 +1318,11 @@ type toldAs struct {
 	// prefix of the turn's closed rounds: a fresh brief's prior work, or the
 	// rounds a task told again renders ([toldAgain.rendered]).
 	rendered []ledger.Iteration
+	// summed says the session may hold the closed rounds only in a summary's
+	// words ([sessionHolds.closedSummarized]): their calls are still listed
+	// again where a told call could be taken for one, and the rest are named
+	// by tool as calls it may show that no list names ([Runner.otherCalls]).
+	summed bool
 }
 
 // leftOut is the calls of group a render left out, shown being the calls of it
@@ -1193,18 +1385,21 @@ func owedGone(round roundCalls, owed []int) int {
 // tells, and for each held lead again tells, the leads told again
 // ([Runner.calledAfter]). AND THE CALLS OF THE TURN'S CLOSED ROUNDS, history,
 // that a told call could be taken for, listed again, but those of the rounds a
-// task told again renders as work already done ([Runner.closedShown]).
+// task told again renders as work already done ([Runner.closedShown]); and,
+// where holds says the copy may hold those rounds only in a summary's words
+// ([sessionHolds.closedSummarized]), that it may show calls of theirs no list
+// names ([Runner.otherCalls]).
 //
 // IT TELLS THE ROUND FROM ITS START, so it starts the account of what its brief
 // left out afresh: it owes no read an earlier brief counted, since it tells
 // every read of the round itself, and answers the reads it leaves out
 // ([Runner.calledAfter]).
 func (r *Runner) calledInPlace(ctx context.Context, round roundCalls, leadHeld []toldHeld,
-	history []ledger.Iteration, again toldAgain, surface *tools.Surface, b provenance.Boundary) (prompts.AfterSave,
-	[]int) {
+	history []ledger.Iteration, again toldAgain, holds sessionHolds, surface *tools.Surface,
+	b provenance.Boundary) (prompts.AfterSave, []int) {
 
 	return r.calledAfter(ctx, round, new(0), nil, history, toldAs{mayShow: true, leads: withHeld(leadHeld, again),
-		rendered: history[:again.rendered]}, surface, b)
+		rendered: history[:again.rendered], summed: holds.closedSummarized()}, surface, b)
 }
 
 // heldAt reports whether a session saved at through holds call: one the round's
