@@ -81,6 +81,57 @@
 // value; and a quoted key's name running back that far is the key's own
 // string, its value redacted.
 //
+// # A text that arrives in pieces
+//
+// [Stream] redacts a text written to it in pieces and writes, put together,
+// exactly what [Secrets] returns for the whole, without holding it: a whole
+// PDF's base64 on one line of a transcript is redacted in what a few hundred
+// KiB a pass hold. It runs the passes Secrets makes, the keys' blocks and then
+// each rule in order, as STAGES, each reading what the one before it wrote,
+// and each deciding with the code Secrets decides with, so the two answer
+// alike: every stage steps by its own input alone, deciding a window once it
+// holds a step past where it resumes or the text has ended, and by exactly
+// that window however much more it holds, so how the text is cut into writes
+// changes nothing. Secrets itself reads its text whole at any length: its
+// caller holds the text already, and read by the stages, a text that needs
+// none of their windows paid for them.
+//
+// A stage decides with the whole-text code over its window ([rule.decide],
+// [keyReading]) and trusts a decision only where the window holds all it read.
+// Every rule reads no further than MaxReach and the bytes around it from where
+// it decides, so a window holding that much past a decision and behind it
+// decides it as the whole text does. What no window holds is carried from one
+// to the next instead: the SEQUENCE, where the rule looks next and the values
+// it replaced within reach, which the password's rule reads its next value
+// beside; and an open RUN, a match or a value decided where it begins whose
+// rest runs on (a token's body, a JSON Web Token's signature, a password's
+// value), written as its marker, or a marker a piece, and read on with the
+// run's own test rather than held, the dots a Google token may end before and
+// the backslashes a value may end before counted rather than held, and
+// written out a piece at a time once the run ends. Each stage reads its own
+// input, since a marker stands for a run of any length.
+//
+// The keys' blocks read what the rules claim in the text as written
+// ([claims]), so the rules run twice: as a second instance of the same stages
+// over the text as written, running ahead of the keys' stage and keeping where
+// each place of what they write stands in that text, and over what the keys'
+// stage writes. The keys' stage reads an armour's block once the claims
+// through its window are decided.
+//
+// A STREAM'S MEMORY IS ITS STAGES' WINDOWS. A rule's stage holds MaxReach
+// behind where it resumes and a step past it, about 290 KiB, and the keys'
+// stage four blocks' reach behind where it reads and a step past it; with
+// every rule run twice, and the readers of the claims, that is at most about
+// 21 MiB of text, and at most about as much again of the edits, values and
+// claims the stages keep beside it, where a text is markers end to end (a JSON
+// Web Token every fifteen bytes). A test holds both. Two texts hold more: a
+// key's armour within a window of a run a claims stage is reading on, whose
+// marker the stages after it cannot decide what lies within reach before
+// until the run ends, so the keys' stage waits on those claims and the stream
+// holds the run; and an AWS secret's key quoted and followed by spaces past a
+// window, whose claim waits on where they end. Neither is a credential's
+// format, and what the stream holds there is what the whole text is.
+//
 // # What a password's rule still publishes
 //
 // A password's value is read on its key's line, or on a later one where the
@@ -205,6 +256,19 @@ type rule struct {
 	// at a thousand), so the matches taken are that pattern's own, leftmost
 	// first. Nil for a rule whose pattern bounds what it reads by itself.
 	bound func(text string, start, end int) (within bool, resume int)
+
+	// run is how a token's match runs on past where it is decided, and
+	// valueIn the bytes a value is written in where a run of them is all it
+	// is ([awsSecretByte]): what a text that arrives in pieces reads a match
+	// or a value on with once its window has decided where it begins
+	// ([Stream]). Nil for a token its pattern bounds, and for the password's
+	// value, which is read on as [valueEnd] reads it.
+	run     *tokenRun
+	valueIn func(byte) bool
+	// pending is, for an AWS secret's rule, its key and the spaces after it
+	// up to the end of a text: where the pattern's match, or whether there is
+	// one, waits on where the spaces end ([ruleStage.pendingSeparator]).
+	pending *regexp.Regexp
 }
 
 // bounded is r held to bound ([rule.bound]).
@@ -296,8 +360,8 @@ func writeValue(b *strings.Builder, with, replaced string) {
 }
 
 // valueWriter writes a value as [writeValue] does, handed to it a stretch at a
-// time: what a reader of a text that arrives in pieces writes of a value whose
-// end it has not read yet, where the whole text writes it at once. writeValue is
+// time: what a text that arrives in pieces ([Stream]) writes of a value whose
+// end is not read yet, where the whole text writes it at once. writeValue is
 // one handed the whole value, so the two are one implementation.
 type valueWriter struct {
 	with string
@@ -406,9 +470,9 @@ func (r rule) next(text string, from int, prior [][2]int) (int, int, bool) {
 // value the value the key names, empty where it names none: [rule.next] goes
 // on past that key, and [claimed] records it as named.
 //
-// ONE DECISION AT A TIME, so a reader of a text that arrives in pieces can
-// decide with the same code as the whole text, and trust each decision only
-// where its window holds all it read.
+// ONE DECISION AT A TIME, so a reader of a text that arrives in pieces
+// ([Stream]) decides with the same code as the whole text, and trusts each
+// decision only where its window holds all it read.
 func (r rule) decide(text string, from int, prior [][2]int) (key, replaced [2]int, found bool) {
 	for from <= len(text) {
 		start, end, found := r.find(text, from)
@@ -699,7 +763,7 @@ func sshCertificateWithin(text string, start, end int) (bool, int) {
 // token is the rule that replaces each match of pattern with the marker for
 // what it is.
 func token(pattern, what string) rule {
-	return rule{pattern: regexp.MustCompile(pattern), with: Marker + what + "]"}
+	return rule{pattern: regexp.MustCompile(pattern), with: Marker + what + "]", run: tokenRunOf(pattern)}
 }
 
 // awsSecretKeys are the keys an AWS session's secret access key and session
@@ -751,7 +815,13 @@ const awsSecretSeparator = `(?:` + passwordClose + `[ \t]*` + passwordSeparator 
 // ([awsSecretKeys]): the value alone ([awsSecretValue]), the key and its
 // separator left as they are, as a password's are.
 func awsSecret(key, what string) rule {
-	return rule{pattern: regexp.MustCompile(key + awsSecretSeparator), with: Marker + what + "]", value: awsSecretValue}
+	return rule{
+		pattern: regexp.MustCompile(key + awsSecretSeparator),
+		with:    Marker + what + "]",
+		value:   awsSecretValue,
+		valueIn: awsSecretByte,
+		pending: regexp.MustCompile(`(?:` + key + `)` + passwordClose + `[ \t]*\z`),
+	}
 }
 
 // AN AWS SECRET'S VALUE is a run of what [awsSecretByte] admits at least
@@ -964,7 +1034,7 @@ func keyName(b byte) bool {
 // and a second pass read a key across them that the first had read apart.
 //
 // Its separator begins within [MaxReach] of the key ([separatorWithin]).
-var passwordRule = separated(keyedOn(passwordKeys, passwordClose+`\s*`+passwordSeparator+`(?:\s|\\[nr])*`))
+var passwordRule = separated(keyedOn(passwordKeys, passwordClose+`\s*`+passwordSeparator+passwordTrail))
 
 // pendingKey is a password key at the very END of a text with nothing but
 // what closes it and whitespace after it: a [passwordRule] match whose
@@ -1072,12 +1142,12 @@ func readValue(whole string, start, end int, prior [][2]int) aValue {
 		word := wordEnd(text, r.from)
 		switch {
 		case word > r.from && isValue(text[r.from:word]):
-			return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end}
+			return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
 		case word > r.from:
 			lineEnd, named := lineEndUnnamed(text, word)
 			if named {
 				// Another key on the line: a suffix holds none.
-				return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end}
+				return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
 			}
 			r.setSuffix(trimLine(text[r.from:lineEnd]))
 		case r.from > end && !strings.HasPrefix(text[r.from:], `\n`):
@@ -1094,7 +1164,7 @@ func readValue(whole string, start, end int, prior [][2]int) aValue {
 		var named bool
 		if next, escaped, named = r.restOfLine(next); named {
 			// Another key on the rest of the line: a suffix holds none.
-			return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end}
+			return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
 		}
 	}
 	return r.lines(next, escaped)
@@ -1239,9 +1309,13 @@ func labelStart(text string, floor, start int) int {
 // ([valueRead.unread]). A read no line written yet decides is PENDING: every
 // line after the match is one the value may still come after, so a line
 // written next can still be the value, and decided is len(text).
+//
+// ran is whether to is where [valueEnd] ends the value, read on to its end,
+// rather than where a wrapping's suffix cuts it: what a text that arrives in
+// pieces reads on with where the value runs past its window ([Stream]).
 type aValue struct {
 	from, to, decided int
-	unread            bool
+	unread, ran       bool
 }
 
 // valueRead is a [readValue] in progress.
@@ -1443,12 +1517,12 @@ func (r *valueRead) lines(pos int, escaped bool) aValue {
 			rest := strings.TrimLeft(content[r.gutterEnd(content, crossed):], " \t")
 			blank := strings.TrimSpace(rest) == ""
 			from := at + len(content) - len(rest)
-			to := from
+			to, ran := from, false
 			if !blank {
-				to = valueEnd(r.whole, from)
+				to, ran = valueEnd(r.whole, from), true
 			}
-			if suffixed {
-				to = min(to, at+len(content))
+			if suffixed && to >= at+len(content) {
+				to, ran = at+len(content), false
 			}
 			if key >= 0 && pos+key < to {
 				// The key on the line is where the value would be: in
@@ -1462,7 +1536,9 @@ func (r *valueRead) lines(pos int, escaped bool) aValue {
 			}
 			// A marker or an armour where the value would begin ends it
 			// there ([valueEnd]), and the value is none.
-			return r.decided(from, to, pos, false)
+			v := r.decided(from, to, pos, false)
+			v.ran = ran
+			return v
 		}
 		escaped = escapedOnly(lineEnd, next)
 		crossed = crossed || !escaped
@@ -1728,7 +1804,8 @@ func (r *valueRead) decided(from, to, pos int, unread bool) aValue {
 		from, to = unreadFrom, unreadTo
 	}
 	return aValue{from: from, to: to, decided: pos,
-		unread: from == to && unreadFrom == unreadTo || from == unreadFrom && to == unreadTo}
+		unread: from == to && unreadFrom == unreadTo || from == unreadFrom && to == unreadTo,
+		ran:    unread && unreadTo > unreadFrom}
 }
 
 // unread is the value where no line after the key's holds one: the suffix's
@@ -2711,6 +2788,17 @@ const maxKeyLine = 76 + 1
 // The one exception is the last the package doc lists as still published: a
 // key's piece on the line of a value read below a password's key that a key's
 // END line goes on to, which a second pass can redact.
+//
+// THE TEXT IS READ WHOLE, the keys' blocks and then each rule over what the
+// one before it wrote, however long it is: its caller holds it whole already,
+// and read whole, clean text costs a scan per rule and no copy. [Stream] runs
+// the same passes as stages over a text it does not hold, each deciding with
+// this code over its window ([rule.decide], [keyReading]); they write what
+// this does, which the stream's tests hold over texts of every shape a stage
+// carries across its window, each window's edge at every byte around the
+// shapes there. Read by the stages too, a text past a window paid for
+// windows it did not need, the redaction 3.4 to 4.4 times as slow, and about
+// 75 bytes allocated a byte of it, where clean text here allocates none.
 func Secrets(text string) string {
 	if text == "" {
 		return text
@@ -2969,11 +3057,11 @@ func readKeys(text string) ([][2]int, int, *claims) {
 // BEGIN's block reached read back ([keyReading.ends]), the claims taken
 // between the two ([claims.take]).
 //
-// ONE ARMOUR AT A TIME, so a reader of a text that arrives in pieces can read
-// each armour's block with the same code as the whole text, in a window that
-// holds all the block reads, and carry from one window to the next what a
-// later armour's reading asks of the earlier ones: the blocks read forward,
-// and the ENDs they reached.
+// ONE ARMOUR AT A TIME, so a reader of a text that arrives in pieces
+// ([Stream]) reads each armour's block with the same code as the whole text,
+// in a window that holds all the block reads, and carries from one window to
+// the next what a later armour's reading asks of the earlier ones: the blocks
+// read forward, and the ENDs they reached.
 type keyReading struct {
 	// forward is every block read forward from a BEGIN, in order, and
 	// closed where each END such a block reached begins, in order.
