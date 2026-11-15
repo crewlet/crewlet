@@ -489,7 +489,7 @@ func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, crossing 
 	// THE PULL WAITS FOR AS LONG AS THE READ DOES, which ctx always bounds
 	// ([copyRead.bounded]).
 	deadline, _ := ctx.Deadline()
-	if err = ask(p, deadline, maxBytes); err != nil {
+	if err = c.ask(p, deadline, maxBytes); err != nil {
 		return nil, err
 	}
 	got, err := within(ctx, p, letterQuiet)
@@ -515,7 +515,7 @@ func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, crossing 
 		case says == jsapi.Unpulled:
 			// THE REMAKES ARE SPENT: asked once more, on the same inbox,
 			// and waited for whole.
-			if err = ask(p, deadline, maxBytes); err != nil {
+			if err = c.ask(p, deadline, maxBytes); err != nil {
 				return nil, err
 			}
 		}
@@ -523,8 +523,7 @@ func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, crossing 
 	}
 	switch {
 	case errors.Is(err, errExpired), errors.Is(err, context.DeadlineExceeded):
-		return nil, fmt.Errorf("the consumer of %s delivered nothing that arrived before the "+
-			"read's deadline: %w", c.stream, err)
+		return nil, c.undelivered(err)
 	case err != nil:
 		return nil, err
 	}
@@ -533,13 +532,21 @@ func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, crossing 
 
 // ask asks p for the one delivery a copy read takes, no larger than maxBytes
 // where that is not zero, held by the broker until deadline — the read's own —
-// and answers the deadline's passing where it has.
-func ask(p *jsapi.Pulls, deadline time.Time, maxBytes int) error {
+// and fails the read as [copyRead.undelivered] where the deadline has passed,
+// since a pull asked to wait no time at all would stand nowhere.
+func (c *copyRead) ask(p *jsapi.Pulls, deadline time.Time, maxBytes int) error {
 	expires := time.Until(deadline)
 	if expires <= 0 {
-		return context.DeadlineExceeded
+		return c.undelivered(context.DeadlineExceeded)
 	}
 	return p.Ask(1, maxBytes, expires, 0)
+}
+
+// undelivered is err, the read's deadline passing before its delivery
+// arrived, as the read's failure.
+func (c *copyRead) undelivered(err error) error {
+	return fmt.Errorf("the consumer of %s delivered nothing that arrived before the read's "+
+		"deadline: %w", c.stream, err)
 }
 
 // placementPause is how long a read waits before each consumer it makes past
