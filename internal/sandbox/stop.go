@@ -242,7 +242,7 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 	if !ok {
 		return false
 	}
-	delete(c.refused, run.TurnID)
+	c.dropKeptLocked(run.TurnID)
 	if kept.ev.LaunchID != run.LaunchID || c.closed {
 		return false
 	}

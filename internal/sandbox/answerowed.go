@@ -290,6 +290,12 @@ type Admission func(ctx context.Context, handle string) (refusal Refusal, refuse
 // signal does not also cost the run its paused box. The old answer was to
 // re-check every 30 seconds, which is a poll of conditions that change only on
 // events.
+//
+// AND A KEPT COMPLETION'S, on the same reasoning ([Coordinator.keepLocked]):
+// one ask of this node's gate per kept completion per five minutes, the
+// ceiling the waiter's own repeat reaches at the default cadence
+// ([reannounceCeilingPolls]), so a completion no waiter announces, its host's
+// store silent, is re-fired no later than one the waiter does.
 const answerWaitBackstop = 5 * time.Minute
 
 // Reply is a delivery offered to a parked run as the answer to its question.

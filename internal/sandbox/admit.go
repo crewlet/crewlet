@@ -171,6 +171,85 @@ type refusedCompletion struct {
 	// its claim, on a condition the gate could not see ([Coordinator.keepRefused]).
 	heldUntil time.Time
 	reason    string
+
+	// until is the instant the refusal named for its lifting on the clock
+	// ([Refusal.Until]), held or not, and zero where it named none: what the
+	// kept completion's own re-fire is armed for ([Coordinator.keepLocked]).
+	until time.Time
+
+	// backstop is that re-fire, armed while the completion is kept and
+	// cancelled when it goes ([Coordinator.dropKeptLocked]). Under mu.
+	backstop *keptRefire
+}
+
+// keptRefire is a kept completion's own re-fire ([Coordinator.keepLocked]),
+// one per keep: the timer's callback re-fires only the keep it was armed for.
+type keptRefire struct {
+	// stop cancels the armed re-fire, reporting whether it had not started,
+	// [CoordinatorOptions.After]'s contract.
+	stop func() bool
+}
+
+// keepLocked keeps kept for its condition, in place of anything kept for its
+// run before, and arms its own re-fire: at the instant its refusal named for
+// the clock to lift it, no later than [answerWaitBackstop], and at that
+// backstop where it named none or one already past. The caller holds c.mu
+// and has checked the coordinator is not closed.
+//
+// # Why a kept completion has a timer of its own
+//
+// Its condition's signal re-fires it ([Coordinator.Readmit]), and the waiter
+// that drives its box announces it again on its schedule. But a condition can
+// lift on the clock with no edge anything signals (a seat's lease merely stale
+// from a late renew, a provider's limit whose instant came with no park to
+// release), and while the coordination store does not answer the host of the
+// job's box that waiter announces nothing. Kept for the signal and the waiter
+// alone, such a completion waited on this node, with no restart and no seat
+// move to re-arm it from its record, for as long as that store's silence
+// lasted: never lost, but with no bound. So every keep arms a re-fire of its
+// own, as an answer's wait does ([Coordinator.waitOwed]), on the same rule:
+// the refusal's instant where it names one, and no wait longer than the
+// backstop, which bounds a signal that never came at the cost of one ask of
+// this node's gate per kept completion per five minutes. Re-fired, it is
+// offered to [Coordinator.OnCompleted] as a signal's re-fire is: admitted, it
+// is carried; refused, it is kept again with a timer of its own.
+//
+// NOT COUNTED AS WORK IN FLIGHT ([Coordinator.inflight]): an armed re-fire
+// is no work yet, and [Coordinator.Stop] cancels it rather than wait out a
+// backstop. Its callback re-fires under c.mu only while the coordinator is
+// open, and that re-fire is counted from there ([Coordinator.refireLocked]).
+func (c *Coordinator) keepLocked(kept refusedCompletion) {
+	turnID := kept.ev.TurnID
+	c.dropKeptLocked(turnID)
+	wait := answerWaitBackstop
+	if until := kept.until.Sub(c.now()); !kept.until.IsZero() && until > 0 {
+		wait = min(wait, until)
+	}
+	armed := &keptRefire{}
+	kept.backstop = armed
+	c.refused[turnID] = kept
+	armed.stop = c.after(wait, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.closed || c.refused[turnID].backstop != armed {
+			return
+		}
+		delete(c.refused, turnID)
+		c.refireLocked(kept)
+	})
+}
+
+// dropKeptLocked drops what is kept for turnID's run, if anything, its own
+// re-fire cancelled. The caller holds c.mu.
+func (c *Coordinator) dropKeptLocked(turnID string) {
+	kept, ok := c.refused[turnID]
+	if !ok {
+		return
+	}
+	if kept.backstop != nil && kept.backstop.stop != nil {
+		kept.backstop.stop()
+	}
+	delete(c.refused, turnID)
 }
 
 // keepRefused keeps a completion refused on refusal's condition, for
@@ -187,8 +266,11 @@ type refusedCompletion struct {
 // away, and the end of a condition is an event the
 // engine already observes (a seat's turn ending, a renew proving ownership
 // again, a provider's limit lifting). So the clearing re-fires the completion
-// itself, and the poll is the backstop for a clearing nothing signals. Both
-// may arrive: the claim is at-most-once, so the run resumes once.
+// itself, and the poll is the backstop for a clearing nothing signals, beside
+// the keep's own re-fire at the refusal's instant or [answerWaitBackstop],
+// which bounds the wait where no waiter announces the job
+// ([Coordinator.keepLocked]). Any of them may arrive together: the claim is
+// at-most-once, so the run resumes once.
 //
 // # Unless no waiter can announce it
 //
@@ -272,8 +354,9 @@ type refusedCompletion struct {
 // waiter that drives its box announces it to the seat's next holder, or, while
 // no waiter can, the delivery handed back for it does; and an acknowledged one
 // is on the job's record, which that holder's recovery re-arms
-// ([Coordinator.rearmOwed]). A drain's is kept and never re-fired, since
-// nothing signals a drain's end, until that release drops it.
+// ([Coordinator.rearmOwed]). A drain's is kept, re-fired by nothing but its
+// own backstop, which the draining gate refuses again, until that release
+// drops it: nothing signals a drain's end.
 //
 // NOR ONE THAT LANDS AFTER THAT RELEASE. The release waits for no resume, and a
 // resume refused after its claim returns once its review has run, minutes on:
@@ -295,7 +378,7 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 		c.mu.Unlock()
 		return
 	}
-	kept := refusedCompletion{cond: refusal.Condition, ev: ev, trigger: trigger}
+	kept := refusedCompletion{cond: refusal.Condition, ev: ev, trigger: trigger, until: refusal.Until}
 	if held {
 		kept.heldUntil, kept.reason = refusal.Until, refusal.Reason
 	}
@@ -305,7 +388,7 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 		c.mu.Unlock()
 		return
 	}
-	c.refused[ev.TurnID] = kept
+	c.keepLocked(kept)
 	c.mu.Unlock()
 	if _, leased := c.leaseOf(ev.AgentHandle); !leased {
 		c.forgetRefused(ev.TurnID)
@@ -415,6 +498,25 @@ func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished,
 	return answer
 }
 
+// keepAgain keeps kept once more, its own re-fire armed afresh
+// ([Coordinator.keepLocked]), after a re-fire of it that neither settled it
+// nor was kept again by a refusal: unless something is kept for its run
+// already (a refusal's keep, or a recovery's re-arm still standing), which
+// owns the re-fire, and unless this node no longer holds the seat, whose
+// next holder owes the completion from the job's record.
+func (c *Coordinator) keepAgain(kept refusedCompletion) {
+	c.mu.Lock()
+	if _, already := c.refused[kept.ev.TurnID]; already || c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.keepLocked(kept)
+	c.mu.Unlock()
+	if _, leased := c.leaseOf(kept.ev.AgentHandle); !leased {
+		c.forgetRefused(kept.ev.TurnID)
+	}
+}
+
 // stopLanded is what a person's stop of a seat is signalled as
 // ([Coordinator.StopSeat]): no condition a refusal waits on, but one a
 // completion refused while the stop landed is re-fired for rather than kept
@@ -437,7 +539,7 @@ func (c *Coordinator) stillRefused(ev types.ExecutorFinished) (Refusal, bool) {
 	case !ok || kept.heldUntil.IsZero():
 		return Refusal{}, false
 	case kept.ev.LaunchID != ev.LaunchID:
-		delete(c.refused, ev.TurnID)
+		c.dropKeptLocked(ev.TurnID)
 		return Refusal{}, false
 	case !c.now().Before(kept.heldUntil):
 		return Refusal{}, false
@@ -451,7 +553,7 @@ func (c *Coordinator) stillRefused(ev types.ExecutorFinished) (Refusal, bool) {
 func (c *Coordinator) forgetRefused(turnID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.refused, turnID)
+	c.dropKeptLocked(turnID)
 }
 
 // refireRefusedLocked re-fires every kept completion refused on cond, for the
@@ -465,7 +567,7 @@ func (c *Coordinator) refireRefusedLocked(cond Condition, handles []string) {
 		if kept.cond != cond || (len(handles) > 0 && !slices.Contains(handles, kept.ev.AgentHandle)) {
 			continue
 		}
-		delete(c.refused, turnID)
+		c.dropKeptLocked(turnID)
 		c.refireLocked(kept)
 	}
 }
@@ -483,7 +585,11 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 
 // refire offers a kept completion to [Coordinator.OnCompleted] again, under
 // the coordinator's own lifetime, as the waiter's next announcement would. A
-// refusal keeps it again; any other failure is left to that announcement.
+// refusal keeps it again. ANY OTHER FAILURE KEEPS IT TOO, for its own re-fire
+// at the backstop ([Coordinator.keepAgain]): the store not answering its
+// claim, or this node's gate failing to ask the seat's lease, settles nothing,
+// and left to the waiter's next announcement the completion waited with no
+// bound wherever that waiter's store was silent and nothing had found so.
 //
 // BUT NO WAITER ANNOUNCES A JOB WHOSE BOX'S HOST FINDS ITS STORE SILENT, and a
 // re-fire has no delivery in hand for the broker to bring back. Where its own
@@ -546,7 +652,8 @@ func (c *Coordinator) refire(kept refusedCompletion) {
 			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
 			"error", err.Error(),
 			"detail", "the completion re-fired when its condition cleared was not settled; "+
-				"the waiter announces it again on its schedule")
+				"the waiter announces it again on its schedule, and this node re-fires it at its backstop")
+		c.keepAgain(kept)
 		return
 	}
 	err = unannounced(kept.ev, err)

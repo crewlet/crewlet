@@ -1403,6 +1403,12 @@ func (c *Coordinator) Stop() {
 	for turnID := range c.republish {
 		c.dropRepublishLocked(turnID)
 	}
+	// AND EVERY KEPT COMPLETION'S OWN RE-FIRE, which nothing waits for
+	// ([Coordinator.keepLocked]): the run is announced to this seat's next
+	// holder, and its record owes it there.
+	for turnID := range c.refused {
+		c.dropKeptLocked(turnID)
+	}
 	c.mu.Unlock()
 	c.end()
 	grace := time.AfterFunc(discardGrace, func() { c.endLastCalls(errStopGrace) })
@@ -6402,7 +6408,11 @@ type recovery struct {
 // the re-arm ([Coordinator.keepRefused]), and whose signal carries it, the
 // seat's admission above all, which every acquisition signals once its
 // recovery is done. A re-fire that fails otherwise, a store that did not
-// answer it, leaves the re-arm standing.
+// answer it, leaves the re-arm standing, and THE RE-ARM HAS A RE-FIRE OF ITS
+// OWN at the backstop ([Coordinator.keepLocked]): kept on the recorded
+// condition alone, whose signal this holder may never see, the completion
+// waited for the waiter's next announcement, which a silent store keeps from
+// coming, and for nothing else while this holder kept the seat.
 //
 // A completion this node already keeps for the job, a delivery's refusal since
 // the seat was taken, is left as it is, and nothing is re-fired for it.
@@ -6419,7 +6429,7 @@ func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
 			}
 			ev, trigger := announcementOf(run)
 			kept := refusedCompletion{cond: run.Launch.RefusalOwed, ev: ev, trigger: trigger}
-			c.refused[run.TurnID] = kept
+			c.keepLocked(kept)
 			c.refireLocked(kept)
 			rearmed = append(rearmed, run)
 		}
@@ -7221,7 +7231,7 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	// announces while that store is silent.
 	for turnID, kept := range c.refused {
 		if kept.ev.AgentHandle == handle {
-			delete(c.refused, turnID)
+			c.dropKeptLocked(turnID)
 		}
 	}
 	// AND THE CLOCK ON ANY HOST WHOSE STORE ALONE WAS SILENT: the
