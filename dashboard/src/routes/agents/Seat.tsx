@@ -734,7 +734,9 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
           {seat.manager ? (
             <>
               {" · reports to "}
-              <a className="prof-line-link" href={href(seatPath(seat.manager))}>
+              {/* A WORD IN THE LINE, so it carries the underline register:
+                  its ink alone was 1.49:1 against the line around it. */}
+              <a className="prof-line-link prose-link" href={href(seatPath(seat.manager))}>
                 {seat.manager.name}
               </a>
             </>
