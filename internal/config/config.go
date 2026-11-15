@@ -58,6 +58,12 @@
 // integration lane, and through nothing else: [MCPServer.Reach]. A seat's
 // `mcp_env` block holds values for a server it already gets. That is ADR-0076.
 //
+// # The company's sign-in policy, within each node's limits
+//
+// How people sign in is the company's ([SignIn], Tier B), held by each node
+// within its operator's [SignInLimits] (Tier A): [APIAuth.SignInPolicy] is the
+// one reading every enforcer takes. That is ADR-0152.
+//
 // # No validation framework
 //
 // A schema library would carry the constraints on the field types, raise from

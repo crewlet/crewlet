@@ -2130,7 +2130,7 @@ iam token -login` mints one — bound to the human seat you hold: a purge drops
 what nothing brings back, so a token bound to nobody is refused, naming why,
 and so is a seat's tool call. Your grant on the repository must be
 `maintain`, which every person holds. The fresh proof of who you are a purge
-asks of a dashboard session (`api.auth.session.step_up`) is not asked of a
+asks of a dashboard session (`sign_in.step_up_seconds`) is not asked of a
 token, which is stepped up by construction as every machine token is — so a
 token that can purge is one to keep as carefully as your password.
 

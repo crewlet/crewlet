@@ -5978,6 +5978,52 @@
         "null"
       ]
     },
+    "SignIn": {
+      "additionalProperties": false,
+      "properties": {
+        "idle_timeout_seconds": {
+          "description": "How long a session lives unused before its person signs in again: 900 to 2592000 seconds (15 minutes to 30 days). Empty is 43200 (12 hours).",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min_password_length": {
+          "description": "Shortest password a person may set: 12 to 256 characters. Empty is 12.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "require_second_factor": {
+          "description": "Whether a person signing in with a password must also give a second factor. Empty is true. false needs api.auth.limits.second_factor: optional on the node.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "session_lifetime_seconds": {
+          "description": "Longest a session lives from sign-in, however it is used: 3600 to 2592000 seconds (1 hour to 30 days). Empty is 604800 (7 days).",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "step_up_seconds": {
+          "description": "How long a proof of identity authorises a sensitive change before it is asked again: 300 to 86400 seconds (5 minutes to 1 day). Empty is 3600 (1 hour).",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "SkillCurator": {
       "additionalProperties": false,
       "properties": {
@@ -6858,6 +6904,9 @@
         "array",
         "null"
       ]
+    },
+    "sign_in": {
+      "$ref": "#/$defs/SignIn"
     },
     "skill_variables": {
       "additionalProperties": {

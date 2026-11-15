@@ -21,9 +21,10 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// requiring is a Tier A stating `totp`.
+// requiring is a node whose operator states `limits.second_factor`: required
+// holds the company to a second factor, optional leaves it the company's.
 func requiring(o *authapi.Options, factor iam.SecondFactor) {
-	o.Bootstrap.API.Auth.TOTP = factor
+	o.Bootstrap.API.Auth.Limits.SecondFactor = factor
 }
 
 // passwordOnly strips a rig's person down to the password: freshly invited,
@@ -146,7 +147,7 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 
 // A REQUIRED SECOND FACTOR IS ENROLLED BEFORE ANYTHING ELSE.
 //
-// `api.auth.totp: required` promised that nobody acts on a password
+// A required second factor promised that nobody acts on a password
 // alone, and nothing read it: a person holding only a password signed in and
 // reached every route. Now their sign-in succeeds into a session that says so
 // (`status: second_factor_enrolment_required`), which the guard refuses /iam
@@ -160,11 +161,11 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 // not who holds it, so dating the replacement at the enrolment handed whoever
 // held the restricted cookie a fresh step-up window.
 //
-// And an UNSET `api.auth.totp` is required HERE, where a sign-in enforces it —
+// And an UNSET second factor is required HERE, where a sign-in enforces it —
 // not only in what `/auth/config` reports — since that default is the one a
 // deployment that says nothing runs on.
 //
-// The CONTROL is the same person under `totp: optional`, whose sign-in is a
+// The CONTROL is the same person under an optional second factor, whose sign-in is a
 // whole session from the start. Mutation: drop the mark at the sign-in, or the
 // guard's check, and the restricted cookie reaches /iam; replace nothing at
 // the enrolment and the old cookie still works; date the replacement at the
@@ -380,7 +381,7 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 // `signed_in`. The sign-in mints the restriction into the bearer now, and both
 // the guard and the session route read it there.
 //
-// The CONTROL is the same sign-in under `totp: optional`, whose session is
+// The CONTROL is the same sign-in under an optional second factor, whose session is
 // whole on the same node. Mutation: mint the bearer without the mark and the
 // restricted row reaches /iam and reports itself signed in.
 func TestARestrictedSessionIsRestrictedBeforeAnyNodeHasAppliedIt(t *testing.T) {

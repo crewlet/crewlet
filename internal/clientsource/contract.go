@@ -549,6 +549,7 @@ var contract = []Entry{
 	// signin.ts
 	{"SignInPolicyAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 	{"SignInPolicy", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
+	{"SignInLimits", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 	{"SecondFactorRule", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 
 	// health.ts

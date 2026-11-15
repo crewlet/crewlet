@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -154,9 +155,9 @@ func everySeam(t *testing.T) queries.Sources {
 		// node is wired with them only where the feature is deployed.
 		Artifacts:    &queries.ArtifactsSource{},
 		ArtifactData: &queries.ArtifactDataSource{},
-		// THIS NODE'S SIGN-IN POSTURE, which internal/api fills from the
+		// THIS NODE'S SIGN-IN LIMITS, which internal/api fills from the
 		// Bootstrap on every node that serves the API.
-		SignIn: &queries.SignInPolicy{},
+		SignIn: &config.APIAuth{},
 		// GITLET'S ROWS, which internal/api fills from the code
 		// surface on every node that serves the API.
 		Code: &stubCode{},

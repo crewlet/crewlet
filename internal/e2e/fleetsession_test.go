@@ -120,7 +120,7 @@ const deploymentURL = "https://crewlet.example.com"
 // configuration `crewlet validate` would accept with a port set.
 func withSignIn(boot *config.Bootstrap) {
 	boot.API.ExternalURL = deploymentURL
-	boot.API.Auth.TOTP = iam.SecondFactorOptional
+	boot.API.Auth.Limits.SecondFactor = iam.SecondFactorOptional
 	boot.API.Auth.AcceptInsecure = true
 }
 

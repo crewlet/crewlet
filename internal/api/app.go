@@ -798,6 +798,7 @@ func New(opts Options) (*App, error) {
 
 	a := &App{
 		guard: auth.New(opts.Bootstrap).BindSeats(opts.SeatBindings).
+			WithSignIn(signInPolicyOf(opts.Bootstrap, companyOf(opts.Sources.Company))).
 			WithDevPrincipal(opts.DevPrincipal).WithSessions(opts.Sessions).
 			WithTokens(opts.Tokens).
 			WithAudit(opts.AuthEvents),
@@ -1047,12 +1048,10 @@ func New(opts Options) (*App, error) {
 	if opts.Bootstrap != nil && opts.Bootstrap.API.Artifacts.ExternalBase() != "" {
 		sources.ArtifactPages = true
 	}
-	// HOW A PERSON SIGNS IN HERE, from this node's own Tier A, through the
-	// accessors the sign-in path enforces it by. A caller that supplied its
-	// own keeps it.
+	// HOW A PERSON SIGNS IN HERE: the company's policy within this node's
+	// limits. A caller that supplied its own keeps it.
 	if sources.SignIn == nil && opts.Bootstrap != nil {
-		policy := queries.SignInPolicyOf(opts.Bootstrap.API.Auth)
-		sources.SignIn = &policy
+		sources.SignIn = &opts.Bootstrap.API.Auth
 	}
 	// GITLET'S ROWS, AS QUESTIONS, read from the one code surface
 	// this app is handed and asked on every question, with why this node
@@ -1498,7 +1497,7 @@ func (o Options) missing() error {
 //
 // The two verbs ask the same permission and differ in the step-up alone: every
 // write here changes what the deployment does for everybody on it, so it asks
-// for a proof inside `api.auth.session.step_up`, while the three reads — the
+// for a proof inside the step-up window, while the three reads — the
 // maintenance window's status, the value a reanchor must echo and the dead
 // letters' listing — change nothing, and a status an operator cannot see
 // without re-proving who they are is one they stop checking. The METHOD picks

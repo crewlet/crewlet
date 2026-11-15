@@ -85,7 +85,7 @@ func TestEveryTierAAdvisoryIsLoggedOnceInOrder(t *testing.T) {
 	t.Parallel()
 	boot, err := parseTierA([]byte("api:\n  port: 8080\n"+
 		"  external_url: http://crewlet.internal.example\n"+
-		"  auth:\n    admin: serve\n    totp: optional\n    accept_insecure: true\n"+
+		"  auth:\n    admin: serve\n    limits:\n      second_factor: optional\n    accept_insecure: true\n"+
 		"    tokens:\n      - {id: founder, token: "+cliFixtureToken+", grants: [admin]}\n"),
 		config.EnvOnly())
 	if err != nil {

@@ -61,13 +61,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Version prefixes every bearer, so a later format is told from this one
 // rather than failing as a bad signature.
-const Version = "v3"
+const Version = "v4"
 
 // SigningDomain separates a session bearer from every other thing this fleet's
 // keyring signs.
@@ -80,36 +81,32 @@ const Version = "v3"
 // another.
 const SigningDomain = "crewlet/iam/session/v2"
 
-// Idle is how long a session survives with nothing happening on it.
-//
-// A CONSTANT AND NOT A CONFIGURED FIELD, unlike the absolute lifetime, because
-// it RIDES IN EVERY BEARER: a node moves the deadline
-// out by this much on a re-issue, and two nodes disagreeing about it would
-// hand one browser two different expiries depending on which node it reached.
-// A configured value would also mean a deployment that lowered it did not
-// shorten a single outstanding cookie, because the deadline in the signature
-// was already written.
-//
-// TWELVE HOURS, which is one working day plus the evening: long enough that
-// nobody is signed out mid-task or over lunch, short enough that a laptop left
-// open overnight is signed out by morning. The absolute deadline is what
-// bounds a session that IS being used, and it is configured, because how long
-// a company lets one sign-in last is a policy rather than a mechanism.
-const Idle = 12 * time.Hour
+// Limits are what a session is held to on the request that decides it: the
+// company's sign-in policy, held within this node's limits, read per request
+// so a change applies without a restart (ADR-0152).
+type Limits struct {
+	// Lifetime is the longest a session lives from its sign-in.
+	Lifetime time.Duration
+	// Idle is how long a session lives unused.
+	Idle time.Duration
+}
 
 // ReissueAfter is how stale a cookie may be before a request gets a fresh one.
 //
-// FIVE MINUTES, and what it trades is precision in the idle deadline against
-// a Set-Cookie header on every single response. At five minutes a session's
-// real idle window is [Idle, Idle+5m] rather than exactly Idle, which nobody
-// can perceive, and a page making twenty requests re-issues once rather than
-// twenty times. It costs no store write at all — the deadline is in the
-// signature — so the only cost being managed here is the header.
+// FIVE MINUTES, or a tenth of the idle limit where that is shorter
+// ([reissueAfter]), and what it trades is precision in the idle deadline
+// against a Set-Cookie header on every response: a session may end that much
+// before its idle limit, and a page making twenty requests re-issues once. It
+// costs no store write at all, since the deadline is in the signature.
 //
 // EVERY RE-ISSUE MOVES THE COOKIE'S BYTES, so nothing keys a cache on them:
 // what a browser keeps is keyed on who it was answered for, and a re-issue
 // ([Issue]) leaves it alone.
 const ReissueAfter = 5 * time.Minute
+
+// reissueAfter is how stale a cookie whose idle window is idle may be before
+// it is re-issued, so a short idle limit loses at most a tenth of itself.
+func reissueAfter(idle time.Duration) time.Duration { return min(ReissueAfter, idle/10) }
 
 // CookieBaseName is the bearer's name without the `__Host-` prefix.
 const CookieBaseName = "crewlet_session"
@@ -364,6 +361,11 @@ type Options struct {
 	// on a node whose clock is off by the difference, and no more: nothing
 	// here turns a disagreement between two clocks into a revocation.
 	Now func() time.Time
+
+	// Limits are the company's lifetime and idle limits as this node holds
+	// them, read on every mint, re-issue and validation. Nil is the engine's
+	// defaults, what a node with no company and no limits enforces.
+	Limits func() Limits
 }
 
 // Signer mints and validates bearers.
@@ -375,6 +377,7 @@ type Signer struct {
 	activeTag string
 	keys      map[string][]byte
 	now       func() time.Time
+	limits    func() Limits
 }
 
 // New builds a signer, or refuses the deployment.
@@ -385,7 +388,13 @@ func New(opts Options) (*Signer, error) {
 			"`secrets.active_key_id` to it: %w",
 			ErrNoKeyring, errNoActiveKey(opts.Material))
 	}
-	s := &Signer{keys: map[string][]byte{}, now: opts.Now}
+	s := &Signer{keys: map[string][]byte{}, now: opts.Now, limits: opts.Limits}
+	if s.limits == nil {
+		s.limits = func() Limits {
+			p := config.DefaultSignInPolicy()
+			return Limits{Lifetime: p.SessionLifetime, Idle: p.IdleTimeout}
+		}
+	}
 	if s.now == nil {
 		s.now = time.Now
 	}
