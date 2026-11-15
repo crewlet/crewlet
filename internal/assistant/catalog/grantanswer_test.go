@@ -15,9 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// grantQuestion is ENG-58's thread, holding the SRE's request for a grant as
-// the engine asks it: the question's three options, two of which carry the
-// request's id.
+// grantQuestion is ENG-58's thread with the SRE's grant request question.
 func grantQuestion() map[string]any {
 	return map[string]any{"key": "ENG-58", "title": "Route the deck library", "comments": []any{
 		map[string]any{"id": "c-ask", "ask": "founder", "body": "Origin rule for the library route.",
@@ -31,9 +29,8 @@ func grantQuestion() map[string]any {
 				}}}}}
 }
 
-// grantRoutes answers a grant answer's preview reads: the thread, the stored
-// request, and the SRE's Cloudflare lane with Origin Rules: Edit looked up,
-// grantable where grantable and lacking at the connection otherwise.
+// grantRoutes answers the preview's reads; grantable says whether the connection
+// holds Origin Rules: Edit.
 func grantRoutes(grantable bool) proposal.Read {
 	entry := seataccess.LookupEntry{ID: "Origin Write", Name: "Origin Rules: Edit", Group: "Zone",
 		Write: true, Level: "No level", Grantable: "Yes"}
@@ -78,16 +75,8 @@ func rowsSaid(p proposal.Preview) string {
 	return b.String()
 }
 
-// A GRANT REQUEST'S ANSWER IS DRAWN IN THE ENGINE'S WORDS, AND APPROVING IT ASKS
-// THE PERSON TO CONFIRM IT IS THEM (ADR-0118). Choosing the grant draws the
-// permission by the catalogue's name, where the stored request applies it, how
-// long it lasts and that it changes things, never the option's label, and the
-// proposal asks a step-up, since its approval saves the grant at the access
-// write's own proof; the request it sends is the answer itself. Declining is
-// drawn as a decline of that grant and asks nothing more. A grant the company's
-// connection cannot give yet is refused, saying what a person adds at the
-// vendor and where. Mutation: draw the option's label, drop the step-up, or
-// prepare a grant the connection lacks, and this fails.
+// A GRANT REQUEST'S ANSWER IS DRAWN IN THE ENGINE'S WORDS AND ASKS A STEP-UP.
+// Mutation: draw the option's label or drop the step-up and this fails.
 func TestAGrantRequestsAnswerIsDrawnInTheEnginesWords(t *testing.T) {
 	t.Parallel()
 	answer := mustTool(t, "answer_decision")
