@@ -3196,7 +3196,10 @@ company did.** That is Home until its reader arranges it (see
   (`CHANGES_FILL_PAGES`), and says it found none only of a listing that
   ended: a half that stops at that bound first draws what it found, or, with
   nothing found, says none was among the newest read and links to the rest
-  in Gitlet.
+  in Gitlet. A half that found none says so on one line; when both halves
+  were asked and both ended with nothing, the card says it once, one empty
+  state ("Nothing waits on a person") in place of the two halves, rather than
+  a line under one half beside a full empty state under the other.
 - **Tasks completed** per company day over the last fourteen (today in the
   accent), **Tokens by team** over the window (tokens, never money), each
   team's bar split by the seats that spent in it and keyed under the bar (the
