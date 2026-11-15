@@ -34,7 +34,7 @@ export interface SettingRange {
  * whether a value was written, so there is no "set" flag: what is true to
  * say is whether `value` differs from `default`.
  */
-export interface LimitRow {
+interface LimitRow {
   /** The setting's path in the company document, e.g. `turn_engine.max_iterations`. */
   key: string;
   group: LimitGroup;

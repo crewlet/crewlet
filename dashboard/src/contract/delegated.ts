@@ -9,7 +9,7 @@
  * and is drawn as plain text, never as Markdown.
  */
 
-import type { LimitRow } from "./limits.ts";
+import type { LimitsAnswer } from "./limits.ts";
 
 /**
  * What a request is for: its act, set by the engine from the structured data
@@ -155,7 +155,7 @@ export interface DelegatedDecisionsAnswer {
    * `limits` shape (group `delegated`), the document's value or the default,
    * with the range a change is held to.
    */
-  limits: LimitRow[];
+  limits: LimitsAnswer["limits"];
   /** The company day the digest covers, `2026-11-09`. */
   day: string;
   since: string;
