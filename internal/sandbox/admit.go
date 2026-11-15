@@ -344,21 +344,32 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 // store's silence; and not [SeatLost], which is deferred to the seat's holder.
 // A drain's refusal is recorded as well: the engine defers it rather than
 // acknowledge it, a condition of the engine's this package does not name, and
-// the record costs nothing there, since the seat's next holder claims the
-// completion once whichever of the deferred delivery and the record's re-fire
-// reaches it first.
+// the record costs its write and nothing more there, since the seat's next
+// holder claims the completion once whichever of the deferred delivery and the
+// record's re-fire reaches it first, and one the store does not take is still
+// deferred (below).
 //
 // # Where the record does not land
 //
 // The refusal is NOT acknowledged. The answer is then the store's silence
 // ([ErrStoreSilent], the node's failure, as every step the store does not
-// answer is), never the refusal, so the delivery is handed back and comes back
-// to be recorded; the completion is still kept here for its signal. A row a
-// newer lease owns refuses the write ([ErrSeatNotHeld]), which the caller
-// names [SeatLost] where this node no longer holds the seat ([Coordinator.lost]),
-// so the delivery goes on to the holder; and a seat this node let go of before
-// the write is deferred the same way, never acknowledged by a node that owes
-// nothing any more.
+// answer is) with the refusal behind it, as a hand-back marked [ErrUnannounced]
+// carries one: the caller reads the silence before the refusal could
+// acknowledge it, so the delivery is handed back and comes back to be
+// recorded, while a condition it hands on rather than waits on (a drain) is
+// still handed on. Answered as the silence alone, a drain's delivery whose
+// record the store did not take was handed back to the node that is leaving,
+// delivery after delivery, rather than on to the seat's next holder. Where this
+// node's own context ended, that is the cause ([storeSilent]) and the refusal
+// is not carried: nothing ahead of it would then keep the caller from
+// acknowledging it. The completion is still kept here for its signal either
+// way. A row a newer lease owns refuses the write ([ErrSeatNotHeld]), which
+// the caller names [SeatLost] where this node no longer holds the seat
+// ([Coordinator.lost]), so the delivery goes on to the holder, and hands back,
+// a drain's too, while this node's own lease still says it holds the seat,
+// for the heartbeat that settles which is right ([SeatLost]); and a seat this
+// node let go of before the write is deferred the same way, never acknowledged
+// by a node that owes nothing any more.
 func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished, answer error) error {
 	var refused *TurnRefused
 	if !errors.As(answer, &refused) || refused.Condition == "" || refused.Condition == SeatLost ||
@@ -382,9 +393,18 @@ func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished,
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID, "agent", ev.AgentHandle,
 			"condition", string(refused.Condition), "error", err.Error(),
 			"detail", "the refused completion could not be recorded as owed on the run's record, so its "+
-				"delivery is handed back rather than acknowledged, and recorded when it comes back")
-		return storeSilent(ctx, fmt.Errorf("sandbox: recording the refusal of %s's completion (%s): %w",
-			ev.TurnID, answer.Error(), err))
+				"delivery is not acknowledged: handed back, or on to the seat's next holder where its "+
+				"condition is handed on, and recorded when it comes back")
+		unrecorded := storeSilent(ctx, fmt.Errorf("sandbox: recording the refusal of %s's completion: %w",
+			ev.TurnID, err))
+		if !errors.Is(unrecorded, ErrStoreSilent) {
+			// THIS NODE'S OWN CONTEXT ENDED, which is the cause: nothing ahead
+			// of the refusal would keep the caller from acknowledging it.
+			return unrecorded
+		}
+		// THE REFUSAL BEHIND THE STORE'S SILENCE, which hands the delivery
+		// back, and a condition the caller hands on is still handed on.
+		return fmt.Errorf("%w; %w", unrecorded, answer)
 	case wrote:
 		log.InfoContext(ctx, "sandbox_completion_refusal_owed",
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID, "agent", ev.AgentHandle,

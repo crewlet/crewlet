@@ -4025,8 +4025,9 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //     written on the run's row that it owes the completion
 //     ([sandbox.Coordinator.OnEvent]), which a restart or the seat's next
 //     holder re-fires at its recovery; a record the store did not take
-//     reaches this as the store's silence instead (below), never as the
-//     refusal.
+//     reaches this as the store's silence with the refusal behind it, which
+//     is handed back as the node's (below) before the refusal could
+//     acknowledge it, while a drain's behind it is still deferred (next).
 //   - A DRAINING NODE ([waitDrain]) DEFERS: the condition does not clear on this
 //     node, which is leaving, so the attachment is quiesced for the rest of the
 //     drain, as a mailbox's is, and the completion goes back to the head of the
@@ -4078,9 +4079,10 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // handed back because the coordination store did not answer a step
 // ([sandbox.ErrStoreSilent]: a collection's, the record of a park's question,
 // or the claim itself, or a claim refused while the store has yet to take the
-// release of the last one), and every delivery handed back while no waiter can
-// announce the job ([sandbox.ErrUnannounced], above: a renewal's NAK and a
-// refusal's among them), is NAKED AS THE NODE'S ([queue.NakNode]): returned on
+// release of the last one, or the record of a refusal this would acknowledge),
+// and every delivery handed back while no waiter can announce the job
+// ([sandbox.ErrUnannounced], above: a renewal's NAK and a refusal's among
+// them), is NAKED AS THE NODE'S ([queue.NakNode]): returned on
 // the same backoff and spending the same budget, so the spacing and the budget
 // the dead-letter inequality below holds are unchanged, but a delivery whose
 // budget it spends is kept with the group's unhandled deliveries, never with

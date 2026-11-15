@@ -359,13 +359,18 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 // (sandbox.ErrUnannounced: the clock on its box's host runs, and that host's
 // waiter reads the run through a store that does not answer it) is never
 // acknowledged, whatever its refusal waits on: it is a Nak, but where a drain or
-// a seat let go of hands it on, which still defers it.
+// a seat let go of hands it on, which still defers it. So is a refusal whose
+// record the store did not take (sandbox.ErrStoreSilent, the refusal behind
+// it): the coordinator acknowledges no refusal it has not written on the job's
+// record as owed, and a drain's behind it is still handed on.
 //
 // Mutation: key the hand-back on node.ErrDraining again and the provider limit
 // is a Nak, walking a healthy completion to the dead-letter boundary one
 // delivery at a time; defer every refusal and a seat whose ownership merely
 // blipped quiesces its control topic for as long as this node holds it;
-// acknowledge a refusal no waiter announces again, and nothing does.
+// acknowledge a refusal no waiter announces again, and nothing does; read the
+// store's silence before a drain, and a drain whose record the store did not
+// take is handed back to the node that is leaving.
 func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	t.Parallel()
 	refusal := func(cond sandbox.Condition, cause error) error {
@@ -375,6 +380,12 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	// unannounced is err as the coordinator hands back a delivery while the
 	// clock on its box's host runs.
 	unannounced := func(err error) error { return fmt.Errorf("%w: %w", sandbox.ErrUnannounced, err) }
+	// unrecorded is err, a refusal the coordinator could not write on the
+	// job's record as owed, as it hands it back: behind the store's silence.
+	unrecorded := func(err error) error {
+		return fmt.Errorf("%w: sandbox: recording the refusal of t1's completion: nats: timeout; %w",
+			sandbox.ErrStoreSilent, err)
+	}
 	for name, tc := range map[string]struct {
 		err  error
 		want queue.Outcome
@@ -398,6 +409,10 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 			unannounced(sandbox.ErrSeatNotHeld)), want: queue.OutcomeDefer},
 		"nothing settled while no waiter announces again": {err: fmt.Errorf("%w: its run is not settled",
 			sandbox.ErrUnannounced), want: queue.OutcomeNak},
+		"a wait whose record the store did not take": {err: unrecorded(refusal(waitOwnership,
+			node.ErrSeatNotOwned)), want: queue.OutcomeNak},
+		"a drain whose record the store did not take": {err: unrecorded(refusal(waitDrain, node.ErrDraining)),
+			want: queue.OutcomeDefer},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

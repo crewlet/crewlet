@@ -351,6 +351,71 @@ func TestAnAcknowledgedRefusalIsRecordedOnItsJob(t *testing.T) {
 	})
 }
 
+// A REFUSAL WHOSE RECORD THE STORE DID NOT TAKE STILL SAYS ITS CONDITION, BEHIND
+// THE STORE'S SILENCE. Unrecorded, a refusal is no acknowledgement: the store's
+// silence is ahead of it, so the control topic hands the delivery back as this
+// node's failure. But the caller hands some conditions on rather than
+// acknowledging them, a draining node's above all, and a drain's refusal is
+// recorded too, since this package does not name the drain: answered as the
+// store's silence alone, it was handed back to the node that is leaving,
+// delivery after delivery, rather than on to the seat's next holder. Where this
+// node's own context ended, the cause is that, and the refusal is not carried:
+// nothing ahead of it would keep it from being acknowledged.
+//
+// Mutation: answer a record the store did not take with the store's silence
+// alone, and a drain's refusal is handed back rather than on; carry the
+// refusal whatever ended the write, and one whose context ended is
+// acknowledged unrecorded.
+func TestAnUnrecordedRefusalStillSaysItsCondition(t *testing.T) {
+	t.Parallel()
+
+	t.Run("behind the store's silence", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		store := &owedRefusals{PendingStore: rig.coordinator.pending}
+		store.silent.Store(true)
+		rig.coordinator.pending = store
+		gate := &conditionGate{}
+		gate.refuse(conditionDrain)
+		rig.coordinator.gate = gate.admit
+		_, ev := rig.completion("t1")
+		err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev)
+		var refused *TurnRefused
+		if !errors.Is(err, ErrStoreSilent) || !errors.As(err, &refused) || refused.Condition != conditionDrain {
+			t.Fatalf("the drain's refusal whose record the store did not take = %v; want the store's silence "+
+				"with the refusal on %q behind it", err, conditionDrain)
+		}
+		if got := rig.get("t1"); got.Launch.RefusalOwed != "" {
+			t.Fatalf("the job's record owes %q; want nothing recorded", got.Launch.RefusalOwed)
+		}
+	})
+
+	t.Run("never where this node's context ended", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		unsettledHost(t, rig)
+		store := &owedRefusals{PendingStore: rig.coordinator.pending}
+		store.silent.Store(true)
+		rig.coordinator.pending = store
+		gate := &conditionGate{}
+		gate.refuse(conditionLimit)
+		rig.coordinator.gate = gate.admit
+		_, ev := rig.completion("t1")
+		ended, end := context.WithCancel(t.Context())
+		end()
+		err := rig.coordinator.OnEvent(delivery(ended, ev), ev)
+		var refused *TurnRefused
+		if got := controlResult(err); errors.As(err, &refused) || got.Outcome == queue.OutcomeAck {
+			t.Fatalf("the refusal whose record this node's ended context cut = %v, left %s; want it handed "+
+				"back, its refusal not carried", err, got.Outcome)
+		}
+		if got := rig.get("t1"); got.Launch.RefusalOwed != "" {
+			t.Fatalf("the job's record owes %q; want nothing recorded", got.Launch.RefusalOwed)
+		}
+	})
+}
+
 // A SETTLED COMPLETION OWES NO REFUSAL. The record says a holder acknowledged a
 // refused delivery of the job's completion and owes it its re-fire; the write
 // that settles the completion clears it: the park on the job's question here,
