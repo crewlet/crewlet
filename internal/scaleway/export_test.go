@@ -53,3 +53,10 @@ func LevelAdds() (ids []string, adds [][]string) {
 	}
 	return ids, adds
 }
+
+// RulesWith is a seat's policy at a level on its projects with its grants,
+// each set's scope type read from types.
+func RulesWith(level, org string, projects []string, grants []seataccess.Grant,
+	types map[string]string) ([]RuleSpec, error) {
+	return rulesWith(level, org, projects, grants, types)
+}

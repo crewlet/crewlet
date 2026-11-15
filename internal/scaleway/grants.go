@@ -105,7 +105,7 @@ func rulesWith(levelID, org string, projects []string, grants []seataccess.Grant
 		case slices.Contains(neverGranted, g.Permission):
 			return nil, fmt.Errorf("%s is never granted to an agent", g.Permission)
 		case !ok:
-			return nil, fmt.Errorf("Scaleway lists no permission set a policy can grant named %s", g.Permission)
+			return nil, fmt.Errorf("no permission set a policy can grant at Scaleway is named %s", g.Permission)
 		case kind == seataccess.GrantScopeAccount:
 			rules[1].PermissionSetNames = append(rules[1].PermissionSetNames, g.Permission)
 		case len(g.Scope) == 0:

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
@@ -135,6 +136,25 @@ func TestASetAddedAtScalewayIsTakenOff(t *testing.T) {
 	}
 	if len(w.drift) == 0 {
 		t.Error("the set added at Scaleway was taken off without being reported")
+	}
+}
+
+// A SET SCALEWAY DOES NOT LIST IS REFUSED IN A CLAUSE the vendor's refusal
+// reads after "Scaleway: ", naming the set, so the agent's row says Scaleway
+// once. The Agents tab's catalogue check refuses such a grant first; this is
+// the policy's own word when the sets moved between that read and the write.
+// Mutation: word it as a sentence of its own ("Scaleway lists no ...") and the
+// refusal reads "Scaleway: Scaleway lists".
+func TestAnUnlistedSetIsRefusedInTheRefusalsClause(t *testing.T) {
+	t.Parallel()
+	_, err := scaleway.RulesWith(config.ScalewayLevelRead, "org", []string{projectWeb},
+		[]seataccess.Grant{{Permission: "NoSuchSetAccess"}}, map[string]string{"InstancesReadOnly": "projects"})
+	if err == nil {
+		t.Fatal("a grant of a set Scaleway does not list was written into the policy")
+	}
+	said := "Scaleway: " + err.Error()
+	if want := "Scaleway: no permission set a policy can grant at Scaleway is named NoSuchSetAccess"; said != want {
+		t.Errorf("the refusal reads %q, want %q", said, want)
 	}
 }
 
