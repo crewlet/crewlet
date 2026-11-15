@@ -544,6 +544,29 @@ func TestCreateAndDeleteBranchBuildNothing(t *testing.T) {
 	}
 }
 
+// NO WRITE DELETES THE DEFAULT BRANCH: code_delete_branch, a person's from the
+// dashboard included, is judged by the push decide's own rule before anything
+// lands (gitlet.DefaultBranchRefusal): refused default_branch with its
+// sentence, the branch still a row, on a repository whose default branch no
+// protection rule names, where nothing else would refuse it.
+//
+// Mutation: drop the rule from the write's judge and the deletion lands, red.
+func TestNoWriteDeletesTheDefaultBranch(t *testing.T) {
+	t.Parallel()
+	settings := gitlettest.Settings()
+	settings.Protections = nil
+	c := seedWriteCase(newCase(t, gitlettest.SoloOptions{}, settings), map[string]string{"README.md": "one\n"})
+	res, err := c.write(gitlet.EngineWrite{Kind: gitlet.WriteDeleteBranch, RepoID: c.repo, Principal: pat(),
+		WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: "refs/heads/main", ExpectedHead: c.head})
+	if err != nil || res.Command.Result != gitlet.ResultNG || res.Command.Reason != gitlet.RefusalDefaultBranch ||
+		!strings.Contains(res.Command.Detail, "make another branch the default first") {
+		t.Fatalf("deleting the default branch answered %+v %v, want ng default_branch", res, err)
+	}
+	if got := c.Rows().Refs["refs/heads/main"]; got != c.head {
+		t.Errorf("main is at %q after its deletion was refused, want %s", got, c.head)
+	}
+}
+
 // A WRITE'S BUILD HOLDS ONE UNIT OF THE SEAT SHARE, AND ITS LANDING NONE: while
 // its git runs the node's seat git work holds its unit; given back before the
 // upload, the proposal and the wait for its row, none of which is git.

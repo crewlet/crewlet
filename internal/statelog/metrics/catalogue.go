@@ -1074,7 +1074,7 @@ func Catalogue() []Instrument {
 				"already said, and nothing was appended; `pending` and " +
 				"`unknown`, its record was appended and is not yet known here " +
 				"to have applied; a refusal's own code — `not_permitted`, " +
-				"`no_reviewer`, `too_many_reviewers`, `unknown_revision`, " +
+				"`own_change`, `no_reviewer`, `too_many_reviewers`, `unknown_revision`, " +
 				"`change_closed`, `change_merged`, `thread_gone`, " +
 				"`not_author`, `not_raiser`, `finding_gone`, " +
 				"`too_many_findings`, `change_not_found`, `repo_archived`, " +

@@ -2519,7 +2519,12 @@ const (
 	// task's address, a New task draft kept for the tab, saved views deleted
 	// where they are read, one Inbox row per engine pause) added 4,934 bytes,
 	// script and sheet, and took it to 6183.0 KiB (6,331,353 bytes): 6183 KiB.
-	treeBudget = 5<<20 + 1063<<10
+	// Gitlet's audit fixes (Edit details on a repository's settings, a
+	// reviewer picker, the change bar drawn by its state and its reader, and
+	// a repository whose default branch holds nothing read from its other
+	// branches) added 5,828 bytes, nearly all script, and took it to
+	// 6188.7 KiB (6,337,181 bytes): 6189 KiB.
+	treeBudget = 5<<20 + 1069<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

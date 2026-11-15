@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -211,6 +212,7 @@ func TestEveryConversationRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
 	want := map[gitlet.ConversationRefusal]tools.Refusal{
 		gitlet.ConversationRefusalNotPermitted:    tools.RefusalForbidden,
+		gitlet.ConversationRefusalOwnChange:       tools.RefusalForbidden,
 		gitlet.ConversationRefusalNotRaiser:       tools.RefusalForbidden,
 		gitlet.ConversationRefusalNotAuthor:       tools.RefusalForbidden,
 		gitlet.ConversationRefusalUnknownRevision: tools.RefusalStaleVersion,
@@ -238,6 +240,34 @@ func TestEveryConversationRefusalIsInAnExistingClass(t *testing.T) {
 			t.Errorf("a write refused %s is answered %s, want %s", refusal, class, want[refusal])
 		case !strings.Contains(got.Output, "the "+string(refusal)+" sentence"):
 			t.Errorf("a write refused %s answered %q without its sentence", refusal, got.Output)
+		}
+	}
+}
+
+// AN AUTHOR'S REVIEW IS REFUSED IN A PERSON'S WORDS: the act route answers a
+// person the refusal's own words ([caveat.ReviewOfYourOwnChange]) rather than
+// the forbidden class's sentence, which told the author the change was not
+// theirs to make; every other conversation refusal carries none, and its
+// code's own sentence is what a person reads (ADR-0060).
+//
+// Mutation: drop own_change from conversationRefusalWords and the review
+// answers no person's words, red.
+func TestAnAuthorsReviewIsRefusedInAPersonsWords(t *testing.T) {
+	t.Parallel()
+	for _, refusal := range []gitlet.ConversationRefusal{gitlet.ConversationRefusalOwnChange,
+		gitlet.ConversationRefusalNotPermitted} {
+		writer := &codeWrites{converse: func(gitlet.ConversationWrite) (gitlet.ConversationResult, error) {
+			return gitlet.ConversationResult{Refusal: refusal, Detail: "the " + string(refusal) + " sentence"}, nil
+		}}
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
+			writerTurn(t), builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Hm."})
+		want := caveat.Refusal{}
+		if refusal == gitlet.ConversationRefusalOwnChange {
+			want = caveat.ReviewOfYourOwnChange()
+		}
+		if got.PersonRefusal != want {
+			t.Errorf("a write refused %s carries the person's words %q, want %q", refusal,
+				got.PersonRefusal.Person(), want.Person())
 		}
 	}
 }

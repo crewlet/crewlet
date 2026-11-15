@@ -912,6 +912,8 @@ const MAINTAINER = {
     "code_create_branch",
     "code_delete_branch",
     "code_commit_files",
+    "code_update_repo",
+    "code_purge_unreachable",
   ],
 };
 
@@ -990,6 +992,120 @@ test("a branch is deleted at the head its row showed, after a confirmation", asy
     tool: "code_delete_branch",
     args: { repo: "web", branch: "feature", expected_head: OTHER },
   });
+});
+
+// THE DEFAULT BRANCH HAS NO DELETE: the engine refuses its deletion whoever
+// asks (default_branch), since every clone checks it out, and it is let go by
+// making another branch the default first. Mutation: draw Delete on every row,
+// and main offers a delete the engine refuses.
+test("the default branch offers no delete, and every other branch does", async () => {
+  stubEngine(detail({ managed_by: "tools" }), []);
+  mount("#/gitlet/repos/web?tab=branches", "web", MAINTAINER);
+
+  const grid = await screen.findByRole("table", { name: "Branches of web" });
+  expect(await within(grid).findByRole("button", { name: "Delete feature" })).toBeTruthy();
+  expect(within(grid).queryByRole("button", { name: "Delete main" })).toBeNull();
+});
+
+// A REPOSITORY WHOSE DEFAULT BRANCH HOLDS NOTHING IS NOT EMPTY while it holds
+// other branches: its Files and Commits tabs offer the picker that reaches
+// them and say what is so, never "nobody has pushed"; New branch is offered,
+// naming where it starts; and Settings changes its default branch to one it
+// holds. Mutation: read emptiness off the default branch's head alone, and
+// the tabs say nothing was pushed with no way to the branches that were.
+test("a repository whose default branch holds nothing reads its other branches", async () => {
+  stubEngine(detail({ managed_by: "tools", head: undefined, branches: 1 }), []);
+  mount("#/gitlet/repos/web", "web", MAINTAINER);
+
+  expect(
+    await screen.findByText(
+      "Its default branch, main, holds no commit, though it holds another branch: read one of them, or make one the default on the Settings tab.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Nobody has pushed/)).toBeNull();
+  expect(screen.queryByText("This repository is empty")).toBeNull();
+  expect(screen.getByLabelText("Revision")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Add a file" })).toBeNull();
+});
+
+test("a new branch of a repository whose default branch holds nothing names where it starts", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools", head: undefined, branches: 1 }), acted);
+  mount("#/gitlet/repos/web?tab=branches", "web", MAINTAINER);
+
+  const create = await screen.findByRole("button", { name: "New branch" });
+  await waitFor(() => expect(create.getAttribute("title")).toBeNull());
+  fireEvent.click(create);
+  const dialog = await screen.findByRole("dialog", { name: "New branch of web" });
+  fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "fix/login" } });
+  const send = within(dialog).getByRole("button", { name: "Create branch" });
+  await waitFor(() => expect(send.getAttribute("title")).toMatch(/Name where it starts/));
+  fireEvent.change(within(dialog).getByLabelText(/Starts at/), { target: { value: "feature" } });
+  await waitFor(() => expect(send.getAttribute("title")).toBeNull());
+  fireEvent.click(send);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_create_branch",
+    args: { repo: "web", branch: "fix/login", at: "feature" },
+  });
+});
+
+// A REPOSITORY'S DETAILS ARE A PERSON'S TO CHANGE HERE: its description,
+// default branch and owner, one code_update_repo carrying only what moved, the
+// default branch chosen from the branches it holds. Mutation: send every
+// field, or offer no form, and this fails.
+test("a repository's details are one settings change naming only what moved", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  expect(screen.queryByText(/code_update_repo/)).toBeNull();
+  const edit = await screen.findByRole("button", { name: "Edit details" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(edit);
+  const dialog = await screen.findByRole("dialog", { name: "web's details" });
+  const save = within(dialog).getByRole("button", { name: "Save details" });
+  await waitFor(() => expect(save.getAttribute("title")).toBe("Nothing is changed yet."));
+  fireEvent.change(within(dialog).getByLabelText(/^Description/), {
+    target: { value: "The storefront and its checkout" },
+  });
+  await waitFor(() => expect(save.getAttribute("title")).toBeNull());
+  fireEvent.click(save);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_update_repo",
+    args: { repo: "web", description: "The storefront and its checkout" },
+  });
+});
+
+// A DELETED REPOSITORY TAKES NO CHANGE BUT ITS RESTORE: its Settings tab draws
+// what it holds and none of the writes a live repository offers, each of which
+// the engine would refuse it. Mutation: draw the live tab for a deleted
+// repository, and a column of disabled controls stands under Restore again.
+test("a deleted repository's settings offer no write but its restore", async () => {
+  stubEngine(
+    detail({ managed_by: "tools", status: "deleted", deleted_at: "2026-10-30T10:00:00Z" }),
+    [],
+  );
+  mount("#/gitlet/repos/web?tab=settings", "web", MAINTAINER);
+
+  expect(await screen.findByRole("button", { name: "Restore repository" })).toBeTruthy();
+  expect(await screen.findByText("refs/heads/main")).toBeTruthy();
+  for (const name of [
+    "Edit details",
+    "Index it",
+    "Search it with grep",
+    "Make it a pull mirror",
+    "Add a push mirror",
+    "Purge unreachable history",
+    "Protect a branch",
+    "Edit the rule on refs/heads/main",
+    "Remove the rule on refs/heads/main",
+    "Delete repository",
+  ]) {
+    expect(screen.queryByRole("button", { name }), name).toBeNull();
+  }
+  expect(screen.getByText(/restore it to change its settings/)).toBeTruthy();
 });
 
 // A BRANCH A RULE NAMES ALREADY IS EDITED WHERE ITS RULE IS DRAWN WHOLE: its
