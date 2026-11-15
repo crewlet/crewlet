@@ -915,16 +915,18 @@ const chainPrefixBytes = 10
 //     29 ms or less;
 //   - THE COINCIDENT WORST, the reading's worst line (one at [threadLineMax]
 //     of the smallest results a message holds) decoded by See beside the
-//     chain at both bounds, before it passes them: 101 MiB held at most. By
-//     sum, exact telling's reading measured 88 MiB for that line, its own
-//     decode of it among them, which beside the 35 MiB the chain holds while
-//     it files is 123 MiB; End's 43 MiB comes after the last line, beside
-//     only what a reading keeps of the thread. Each is within the about
-//     133 MiB a seat's read for words holds at its worst in the one slot
-//     both take ([SeatTranscriptReadsAtOnce]), so against that slot both
-//     bounds stay at 2^17.
+//     chain at both bounds, before it passes them: 101 MiB held at most.
+//     Exact telling's reading, which reads that line after that thread in
+//     its own pass, holds 102 MiB at most there, measured the same way
+//     (BenchmarkAReadingAtItsBounds), its own decode of the line and what
+//     the chain filed both among it; End's 43 MiB comes after the last line,
+//     beside only what a reading keeps of the thread. Each is within the
+//     about 133 MiB a seat's read for words holds at its worst in the one
+//     slot both take ([SeatTranscriptReadsAtOnce]), so against that slot
+//     both bounds stay at 2^17.
 //     The heap peaks over what is held by the collector's headroom: at its
-//     default, 157 MiB for that line and 63 MiB at both bounds.
+//     default, 157 MiB for that line and 63 MiB at both bounds, and 181 MiB
+//     for the reading's.
 //
 // THE COLLECTION'S PASS: a node's collection reads its job's main thread
 // once, in one walk of its whole lines ([walkThread]), for every reading it
