@@ -2116,6 +2116,12 @@ describe("the pane", () => {
         args: { read_through: "CREWLET_CODE_LOG@1:5", seen: "CREWLET_CODE_LOG@1:5" },
       },
     ]);
+    // ONE PRESS, ONE TOAST: each source's write raised its own "Marked all
+    // read", two identical toasts for one gesture.
+    const toasts = [...document.querySelectorAll(".crewlet-toast")].filter((t) =>
+      t.textContent?.includes("Marked all read"),
+    );
+    expect(toasts).toHaveLength(1);
   });
 
   // A READER WITHOUT GITLET MARKS ONLY WORKLET'S HALF (ADR-0110): the engine
