@@ -42,15 +42,48 @@ func afterSaveBrief(t *testing.T, through int, bridged []runner.BridgedCall, eli
 // its parked state and its loss the case's own.
 func lostRelaunch(t *testing.T, basis runner.SessionBasis, round runner.Resume) runner.AgentRunRequest {
 	t.Helper()
+	return lostRelaunchOver(t, basis, nil, round)
+}
+
+// lostRelaunchOver is [lostRelaunch] of round len(history)+1, its run launched
+// over the turn's closed rounds history, as [freshRelaunchOver]'s is.
+func lostRelaunchOver(t *testing.T, basis runner.SessionBasis, history []ledger.Iteration,
+	round runner.Resume) runner.AgentRunRequest {
+
+	t.Helper()
+	return lostRelaunchIn(t, "", basis, history, round)
+}
+
+// lostRelaunchIn is [lostRelaunchOver] in the conversation conversation names
+// ([runner.Turn.ConversationKey]), "" for the fixture's own.
+func lostRelaunchIn(t *testing.T, conversation string, basis runner.SessionBasis, history []ledger.Iteration,
+	round runner.Resume) runner.AgentRunRequest {
+
+	t.Helper()
+	return lostRelaunchWith(t, buildOpts{conversation: conversation}, basis, history, round)
+}
+
+// lostRelaunchWith is [lostRelaunchOver] in the conversation opts names, its
+// relaunch's fences of the turn context under the token opts pins
+// ([buildOpts.boundary]), "" for one each fence mints.
+func lostRelaunchWith(t *testing.T, opts buildOpts, basis runner.SessionBasis, history []ledger.Iteration,
+	round runner.Resume) runner.AgentRunRequest {
+
+	t.Helper()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
-	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	notes := ""
+	if len(history) > 0 {
+		notes = history[len(history)-1].ReviewNotes
+	}
+	launched, req := launch(t, entries, buildOpts{conversation: opts.conversation}, len(history)+1, notes,
+		history)
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 	relauncher := &probingLauncher{basis: basis}
 	round.State, round.Lost = parked.State, &runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
-		resume: &round})
-	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+		resume: &round, conversation: opts.conversation, boundary: opts.boundary})
+	if _, _, err := collector.Resume(t.Context(), history); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 	again := relauncher.last(t)
@@ -338,6 +371,73 @@ func TestAContinuationsToldCallsShareOneReadCap(t *testing.T) {
 	}
 	if rewrites != 1 {
 		t.Errorf("%d rewrites, want the late write's body alone: the read past the cap is never shown", rewrites)
+	}
+}
+
+// THE CALLS LISTED AGAIN TAKE THE READ CAP LAST, AND ARE NEVER OWED. A cut-off
+// capture holds its round's first four reads, and the brief tells reads after
+// its save as calls it may already show, the first four alike the held ones.
+// The four held reads are listed again, under the same one cap as every list:
+// spent after the calls the session may lack, so where those leave the cap two
+// reads the listing lists two and counts two, and where they take the whole
+// cap the listing lists none and is not rendered at all, since a section that
+// heads a count of reads alone names no call a told one could be taken for.
+// And they are no reads the brief owes the session: it holds them, so the
+// launch records nothing left out.
+//
+// Mutation: spend the cap on the calls listed again first, and calls after the
+// save are counted rather than listed; record the reads the listing left out
+// as owed, and the launch records them; render the listing where it lists no
+// call, and the second case carries a section of a count alone.
+func TestTheCallsListedAgainTakeTheReadCapLastAndAreNeverOwed(t *testing.T) {
+	t.Parallel()
+	read := func(channel string, seq int) runner.BridgedCall {
+		call := numbered("slack_history", map[string]any{"channel": channel}, seq, seq)
+		call.Digest = turnctx.ArgsDigest(call.Args)
+		return call
+	}
+	basis := keptBasis
+	basis.Through, basis.Interrupted = 4, true
+	for _, tc := range []struct {
+		// after is how many reads the brief tells after the save; listed and
+		// counted, how many of the four held reads it lists again and counts.
+		after, listed, counted int
+	}{
+		{after: ledger.MaxReadCalls - 2, listed: 2, counted: 2},
+		{after: ledger.MaxReadCalls, listed: 0, counted: 4},
+	} {
+		var bridged []runner.BridgedCall
+		for n := 1; n <= 4; n++ {
+			bridged = append(bridged, read(fmt.Sprintf("C%d", n), n))
+		}
+		for n := 1; n <= tc.after; n++ {
+			bridged = append(bridged, read(fmt.Sprintf("C%d", n), 4+n))
+		}
+		s := lostRelaunch(t, basis, runner.Resume{Bridged: bridged}).Session
+
+		at := strings.Index(s.Brief, cutOffHeader)
+		if at < 0 {
+			t.Fatalf("%d after: the reads after the save are not told as calls the session may already show:\n%s",
+				tc.after, s.Brief)
+		}
+		since, again, listed := strings.Cut(s.Brief[at:], listedAgainHeading)
+		if reads := strings.Count(since, "- slack_history("); reads != tc.after || strings.Contains(since, "omitted") {
+			t.Errorf("%d after: the calls after the save list %d reads, want all %d and none omitted:\n%s",
+				tc.after, reads, tc.after, s.Brief)
+		}
+		if listed != (tc.listed > 0) {
+			t.Fatalf("%d after: the held reads are listed again %v, want %v:\n%s", tc.after, listed,
+				tc.listed > 0, s.Brief)
+		}
+		if listed && (strings.Count(again, "- slack_history(") != tc.listed ||
+			!strings.Contains(again, fmt.Sprintf("(+%d further read call(s) omitted)", tc.counted))) {
+			t.Errorf("%d after: the calls listed again are not the cap's last, %d listed and %d counted:\n%s",
+				tc.after, tc.listed, tc.counted, s.Brief)
+		}
+		if len(s.Told.Omitted) != 0 {
+			t.Errorf("%d after: the launch records %v left out, want none: the session holds the reads listed "+
+				"again", tc.after, s.Told.Omitted)
+		}
 	}
 }
 

@@ -151,6 +151,60 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the row is %+v, want %+v", got, want)
 	}
+
+	// A CALL WHOSE ARGUMENTS DID NOT PARSE is recorded with none, and says
+	// so, or it reads as the tool called with none.
+	if err := l.Record(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "list_issues",
+		Output: "not run", Failed: true}, Seq: 5, ArgsUnparsed: true}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if got := store.appends[len(store.appends)-1].Call; got.Args != "" || !got.ArgsUnparsed {
+		t.Errorf("the unparsed call's row is %+v, want no arguments, marked unparsed", got)
+	}
+}
+
+// A CALL WHOSE RECORDED ARGUMENTS DO NOT READ BACK IS MARKED SO, as is one
+// whose arguments did not parse, and one the log recorded with no arguments is
+// not. The log spells a call made with none as no text at all, and so a call
+// the bridge refused unrun because what the model wrote did not parse, marked
+// unparsed; text that does not read back (cut, spliced, or not an argument
+// document) is a record something damaged, of a call made with some: all
+// decode to no arguments, and only the marks tell them apart, so the call
+// made with none is drawn as the tool called with none and the others say
+// their arguments could not be read, never as a call made with none.
+//
+// Mutation: mark no call, and the damaged records draw `jira_create()`; mark
+// every call whose arguments decode to none, and the call made with none says
+// its arguments could not be read; ignore the unparsed mark, and the refused
+// call draws `jira_create()`.
+func TestACallWhoseRecordedArgumentsDoNotReadBackIsMarkedSo(t *testing.T) {
+	t.Parallel()
+	got := bridgedCalls([]sandbox.BridgeCall{
+		{Name: "jira_create", Args: "not json", Output: "created", Digest: "d1"},
+		{Name: "jira_create", Args: `{"summary":"a"}{"summary":"b"}`, Output: "created", Digest: "d2"},
+		{Name: "jira_create", Output: "created", Digest: "d3"},
+		{Name: "jira_create", Args: `{"summary":"a"}`, Output: "created", Digest: "d4"},
+		{Name: "jira_create", Output: "not run: its arguments did not parse", Failed: true, ArgsUnparsed: true},
+	})
+	calls := make([]ledger.Call, 0, len(got))
+	for _, call := range got {
+		calls = append(calls, call.Call)
+	}
+	want := strings.Join([]string{
+		"- jira_create(arguments in text that could not be read) → success",
+		"- jira_create(arguments in text that could not be read) → success",
+		"- jira_create() → success",
+		`- jira_create({"summary":"a"}) → success`,
+		"- jira_create(arguments in text that could not be read) → error: not run: its arguments did not parse",
+	}, "\n")
+	if lines := ledger.FormatCalls(calls, ledger.Format(nil, nil)); lines != want {
+		t.Errorf("the resumed turn draws the calls\n%s\nwant\n%s", lines, want)
+	}
+	for i, unread := range []bool{true, true, false, false, true} {
+		if got[i].ArgsUnread != unread || got[i].Args != nil && unread {
+			t.Errorf("call %d reads %+v, want marked as not read back: %v", i, got[i].Call, unread)
+		}
+	}
 }
 
 // WHAT THE LOG KEPT OF A CALL IS WHAT THE RESUMED TURN READS: its identity on

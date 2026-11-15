@@ -38,6 +38,11 @@
 // and internal/textcut were written to remove: a value is left out whole or
 // kept whole, and an opening is always followed by its marker.
 //
+// A reader that COMPARES two calls' arguments, rather than reading them,
+// recognises the marker ([IsLeftOut], [IsNotKept]) and reads a value left out
+// as one that may have been anything: compared as the text it is, the marker
+// would read two calls apart whose left-out values may have been one.
+//
 // # A leaf
 //
 // The writer (internal/sandbox, a run's row and its log) and the condensation
@@ -56,6 +61,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -158,7 +164,127 @@ func SizeUp(n int) string {
 // bytes of that text's SHA-256, so two left-out values are told apart.
 func (r Record) LeftOut(raw []byte) string {
 	sum := sha256.Sum256(raw)
-	return fmt.Sprintf("(%s not kept on %s, digest %s)", Size(len(raw)), r, hex.EncodeToString(sum[:4]))
+	return fmt.Sprintf("(%s not kept on %s%s%s)", Size(len(raw)), r, markerDigestAt,
+		hex.EncodeToString(sum[:markerDigestBytes]))
+}
+
+// markerDigestBytes is how much of a left-out value's SHA-256 its marker
+// names ([Record.LeftOut]): four bytes, eight hex digits, enough to tell apart
+// the few values one call's arguments leave out.
+const markerDigestBytes = 4
+
+// markerDigestAt is what a marker writes before its digest ([Record.LeftOut]).
+const markerDigestAt = ", digest "
+
+// IsLeftOut reports whether v is the marker a record leaves in place of a
+// value it did not keep ([Record.LeftOut]), whatever the record: a string that
+// is exactly "(", a size as [Size] states it, " not kept on ", a record's
+// name, ", digest ", eight lowercase hex digits and ")". A reader comparing
+// two calls' arguments reads such a value as one that may have been anything,
+// since the marker names a value it does not show; a value a model wrote in
+// that shape reads so too, which only ever reads two calls alike, the safe
+// side for such a reader.
+//
+// ANY RECORD'S NAME, never a list of the names this tree writes: a name is its
+// caller's, and a marker under a name the list missed would be compared as the
+// text it is, which reads apart two calls whose left-out values may have been
+// one. The size is held to what [Size] writes and the digest to what LeftOut
+// writes, so a parenthesis a model wrote is not taken for a marker by its
+// shape alone. One format, unchanged since the package was written, so every
+// marker any build of this tree wrote is recognised.
+func IsLeftOut(v any) bool {
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	inner, ok := strings.CutPrefix(s, "(")
+	if !ok {
+		return false
+	}
+	inner, ok = strings.CutSuffix(inner, ")")
+	if !ok {
+		return false
+	}
+	// THE LAST SEPARATOR, since a record's name may hold one.
+	at := strings.LastIndex(inner, markerDigestAt)
+	if at < 0 || !isMarkerDigest(inner[at+len(markerDigestAt):]) {
+		return false
+	}
+	size, _, ok := strings.Cut(inner[:at], " not kept on ")
+	return ok && isSize(size)
+}
+
+// IsNotKept reports whether args are what [Record.Args] makes of arguments it
+// kept nothing of but what they were: one key, [NotKeptKey], holding a string
+// (the whole's marker, or the one notKept spells by hand). A reader comparing
+// two calls' arguments reads such a call's as ones that may have been
+// anything, as it reads a value [IsLeftOut].
+func IsNotKept(args map[string]any) bool {
+	if len(args) != 1 {
+		return false
+	}
+	_, ok := args[NotKeptKey].(string)
+	return ok
+}
+
+// isMarkerDigest reports whether s is the digest a marker names: eight
+// lowercase hex digits, as hex.EncodeToString writes [markerDigestBytes].
+func isMarkerDigest(s string) bool {
+	if len(s) != 2*markerDigestBytes {
+		return false
+	}
+	for i := range len(s) {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// isSize reports whether s is a size as [Size] states one: a whole number of
+// bytes under a KiB, a whole number of KiB from one to under a MiB, or MiB to
+// one place from one up, each figure with no leading zero.
+func isSize(s string) bool {
+	figure, unit, ok := strings.Cut(s, " ")
+	if !ok {
+		return false
+	}
+	switch unit {
+	case "bytes":
+		n, ok := smallWhole(figure)
+		return ok && n < 1<<10
+	case "KiB":
+		n, ok := smallWhole(figure)
+		return ok && n >= 1 && n < 1<<10
+	case "MiB":
+		whole, tenth, ok := strings.Cut(figure, ".")
+		return ok && whole != "0" && isWhole(whole) && len(tenth) == 1 && isWhole(tenth)
+	}
+	return false
+}
+
+// smallWhole is figure as a whole number where it is one of at most four
+// digits with no leading zero: every figure [Size] writes in bytes or KiB.
+func smallWhole(figure string) (int, bool) {
+	if len(figure) > 4 || !isWhole(figure) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(figure)
+	return n, err == nil
+}
+
+// isWhole reports whether figure is a whole number as %d writes one: digits,
+// at least one, with no leading zero unless it is "0".
+func isWhole(figure string) bool {
+	if figure == "" || (len(figure) > 1 && figure[0] == '0') {
+		return false
+	}
+	for i := range len(figure) {
+		if figure[i] < '0' || figure[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // NotKeptKey is the one key of what a call's arguments become when not even

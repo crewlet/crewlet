@@ -273,6 +273,113 @@ func TestManySmallValuesGiveWayAsAContainerAndAShapeAsAWhole(t *testing.T) {
 	}
 }
 
+// A VALUE A RECORD LEFT OUT IS KNOWN AS LEFT OUT, WHATEVER THE RECORD. A
+// reader comparing two calls' arguments reads a marker as a value that may
+// have been anything (internal/agent/runner's readAlike), so every marker
+// LeftOut writes, under each record's name the tree writes and at every unit
+// Size states, and every marker Args leaves in a tree, a leaf's and a
+// container's, is recognised; and so are arguments kept as nothing but their
+// marker, in Args' form and in the one notKept spells by hand. Text that is no
+// marker is not: a marker with text around it, a digest of another length or
+// case, a size Size never writes, a parenthesis with neither, a number, nil;
+// nor is an object holding the marker beside another key.
+//
+// Mutation: accept any parenthesised text, accept one record's name only, or
+// read an object holding not_kept beside another key as not kept, and a case
+// goes red.
+func TestAValueARecordLeftOutIsKnownAsLeftOut(t *testing.T) {
+	t.Parallel()
+	for _, record := range []kept.Record{run, "the turn's record", "this record"} {
+		for _, n := range []int{0, 1, 1023, 1 << 10, 1<<20 - 1, 1 << 20, 3<<20 + 12345} {
+			if marker := record.LeftOut([]byte(strings.Repeat("x", n))); !kept.IsLeftOut(marker) {
+				t.Errorf("the marker %q is not known as left out", marker)
+			}
+		}
+	}
+
+	ids := make([]any, 2000)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("id-%05d", i)
+	}
+	text, err := plainjson.Marshal(map[string]any{"repo": "acme/api", "ids": ids,
+		"files": []any{map[string]any{"path": "internal/a.go", "content": strings.Repeat("y", 64<<10)}}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := run.Args(string(text), 8<<10)
+	var tree map[string]any
+	if err := json.Unmarshal([]byte(got), &tree); err != nil {
+		t.Fatalf("what is kept is not the call's arguments: %v: %q", err, got)
+	}
+	files, _ := tree["files"].([]any)
+	file, _ := firstOf(files).(map[string]any)
+	for name, value := range map[string]any{"a leaf left out": file["content"], "a container left out": tree["ids"]} {
+		if !kept.IsLeftOut(value) {
+			t.Errorf("%s is not known as left out: %q", name, got)
+		}
+	}
+	for name, value := range map[string]any{"the repository": tree["repo"], "the path": file["path"]} {
+		if kept.IsLeftOut(value) {
+			t.Errorf("%s, kept whole, is known as left out: %q", name, got)
+		}
+	}
+
+	whole, _ := run.Args("[1"+strings.Repeat(",1", 10_000)+"]", 8<<10)
+	for name, text := range map[string]string{"Args' form": whole, "the hand-spelled form": `{"not_kept":"(not kept)"}`} {
+		var args map[string]any
+		if err := json.Unmarshal([]byte(text), &args); err != nil {
+			t.Fatal(err)
+		}
+		if !kept.IsNotKept(args) {
+			t.Errorf("%s of arguments kept as nothing but their marker is not known so: %q", name, text)
+		}
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(whole), &args); err != nil || !kept.IsLeftOut(args[kept.NotKeptKey]) {
+		t.Errorf("the marker of arguments not kept is not known as left out: %v: %q", err, whole)
+	}
+
+	marker := func(size, record, digest string) string {
+		return "(" + size + " not kept on " + record + ", digest " + digest + ")"
+	}
+	if m := marker("12 KiB", "a record, digest 0a1b2c3d, named oddly", "0a1b2c3d"); !kept.IsLeftOut(m) {
+		t.Errorf("a marker whose record's name holds the separator is not known as left out: %q", m)
+	}
+	m := marker("1 bytes", string(run), "0a1b2c3d")
+	if !kept.IsLeftOut(m) {
+		t.Fatalf("the case's own marker %q is not known as left out", m)
+	}
+	notMarkers := []any{
+		"see " + m, m + ".", " " + m, m + "\n",
+		marker("1 bytes", string(run), "0a1b2c3"), marker("1 bytes", string(run), "0a1b2c3d4"),
+		marker("1 bytes", string(run), "0A1B2C3D"), marker("1 bytes", string(run), "0a1b2c3g"),
+		marker("1024 bytes", string(run), "0a1b2c3d"), marker("01 bytes", string(run), "0a1b2c3d"),
+		marker("-1 bytes", string(run), "0a1b2c3d"), marker("12345 bytes", string(run), "0a1b2c3d"),
+		marker("1 byte", string(run), "0a1b2c3d"), marker("0 KiB", string(run), "0a1b2c3d"),
+		marker("1024 KiB", string(run), "0a1b2c3d"), marker("1 MiB", string(run), "0a1b2c3d"),
+		marker("0.5 MiB", string(run), "0a1b2c3d"), marker("1.25 MiB", string(run), "0a1b2c3d"),
+		marker("01.0 MiB", string(run), "0a1b2c3d"), marker("1.0 GiB", string(run), "0a1b2c3d"),
+		marker("", string(run), "0a1b2c3d"),
+		"(1 bytes kept on the run's record, digest 0a1b2c3d)", "(1 bytes not kept on the run's record)",
+		"(not kept)", "(1 bytes)", "()", "", json.Number("7"), 7, true, nil, map[string]any{"a": m},
+	}
+	for _, v := range notMarkers {
+		if kept.IsLeftOut(v) {
+			t.Errorf("%#v is known as left out", v)
+		}
+	}
+	for name, args := range map[string]map[string]any{
+		"the marker beside another key": {kept.NotKeptKey: m, "channel": "C1"},
+		"a number under the key":        {kept.NotKeptKey: json.Number("7")},
+		"no key at all":                 {},
+		"no arguments":                  nil,
+	} {
+		if kept.IsNotKept(args) {
+			t.Errorf("%s is known as arguments not kept", name)
+		}
+	}
+}
+
 // A SIZE PAST A BOUND READS PAST IT, AND A SIZE WITHIN ONE NEVER DOES. A
 // refusal states what was refused in SizeUp beside the bound in Size, and Size
 // rounds whole KiB down: stated in Size, a reply one byte past an answer's

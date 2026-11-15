@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // WHAT A RUN THAT CONTINUES A SESSION IS TOLD.
@@ -222,6 +223,192 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 	" happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
 	" write among them again; one marked `→ error` did not take effect."
 
+// shownAgainHeader introduces the calls the session above may show that a
+// brief lists again ([AfterSave.Shown]): each is one a call in another list of
+// the brief could be taken for. That list's words, and the late calls', say a
+// call shown both above and in it is ONE call, made once; so a model that saw
+// the told call's like in the session could take the told call for it and
+// lose it, re-issuing nothing or reading it as a call that never ran.
+//
+// WHAT IT CLAIMS, OF THE CALLS IT HEADS: that the session MAY show each, never
+// that it shows each, and never that it lacks one. Each is one the save point
+// holds (internal/agent/runner's heldAt), never the call a person approved that
+// the brief's lead tells, which the engine made on the host and which runner
+// keeps off that side, or a call of one of the turn's earlier rounds that the
+// brief tells nowhere else (runner's closedShown), which the session holds as
+// it continued through that round, as a fresh brief's line of it, in a
+// summary's words, or not at all; and a point's claim is not what the session
+// reads back either: the calls a Claude Code subagent made through the bridge
+// are held where its session was saved past them, while the main thread a
+// resumed session reads shows only the subagent's report of them. "May" is
+// true of every one. And it says the call in the other list is one of its own,
+// made as well, so the two are never read as one call shown twice.
+//
+// WHY IT NAMES NO REASON BUT "COULD BE TAKEN FOR": runner lists a held call
+// again wherever it cannot rule out that a model takes the told call for it
+// (internal/agent/runner's readAlike), and that is the one reason true on every
+// path. Two calls' arguments reading alike in the told call's line is one
+// reason among several: a told call in flight, a call sealed for a person's
+// approval, one the record kept less than whole, with no digest or in text that
+// did not read back all read alike whatever their arguments, so words that
+// said the arguments read alike would be false of them. It names neither list,
+// which differ by path (the calls since a save point the session may already
+// show, the late calls), and needs neither: "another list of this message" is
+// true of both.
+const shownAgainHeader = "## Calls the session above may show, listed again" +
+	"\nThe session above may show each of these calls. Each is listed again because a call in another list" +
+	" of this message names the same tool and could be taken for it: that one is a call of its own, made as" +
+	" well as this one, never this one shown twice."
+
+// EarlierRoundNote is the note a call listed again under [shownAgainHeader]
+// ends its line with where it is a call of one of the turn's earlier rounds,
+// closed before the round whose calls the brief tells (internal/agent/runner's
+// closedShown): it says where in the session above the call may be, which
+// anchors it to the rounds the session holds before this one. fire says the
+// conversation is a schedule's, whose turns are its fires ([NextTurn.Fire]),
+// so the words name a fire where they would name a turn.
+//
+// NEVER ON A CALL OF THE ROUND ITSELF, which a brief lists again as well: on a
+// send-back that round is the one just sent back, so "this round" would be
+// false of it, and "an earlier round" is true of none of its calls.
+func EarlierRoundNote(fire bool) string {
+	return "(made in an earlier round of this " + nextTurnWordsFor(NextTurn{Fire: fire}).turn + ")"
+}
+
+// ToldApartNote is the note a told call's line ends with where another call
+// the same message tells could be taken for it (internal/agent/runner's
+// notes): a line of another list of the message, a line or a tally of the
+// work already done that it renders, or a held call one of its leads tells
+// what became of, or the call a person approved for it. Without it, the words
+// over the late calls and over the calls the session may already show, which
+// say a call shown twice is ONE call, would let a model read the two as one
+// and lose one: take its outcome for the other's, or leave undone what it
+// did not do.
+//
+// TRUE WHEREVER IT IS PRINTED: every partner is a call this message tells,
+// never the marked call itself (two lists of one message hold no call twice,
+// a rendered round is not the round whose calls are told, and a lead's own
+// held call is spared), and the engine could not rule out that one is taken
+// for the other. So it says "could be taken for", the one reason true on every
+// path, as [shownAgainHeader] does, and never which call: the partner may be
+// a tally's count or a lead's words, which no line names. The prior-work line
+// itself carries none: its render is shared with the reviewer.
+const ToldApartNote = "(a call of its own: another call this message tells could be taken for it)"
+
+// otherCallsHeader heads the calls the session above may show that no list of
+// the brief below names ([AfterSave.Other]), and otherCallsOpening opens them.
+// otherCallsClosing follows their parts: whatever such a call reads like, it is
+// a call of its own.
+//
+// WHY A SECTION OF ITS OWN, AND WORDS RATHER THAN LINES. The words over the
+// late calls, and over the calls the session may already show, say a call
+// shown both above and in the list is ONE call, made once; a call the session
+// shows that the engine holds is listed again where a told call could be taken
+// for it ([shownAgainHeader]), and one the same message tells is marked
+// ([ToldApartNote]). But the session may also show calls the engine cannot
+// list: an earlier turn's, of which it keeps no call; an earlier round's where
+// the session may hold them only in a summary's words, which no value of a
+// line can be compared with; one the record no longer lists one by one, of
+// which it keeps a tool and a count; and a worker's under a delegation, which
+// reaches the session only as the worker's report. Each could be taken for a
+// told call and lose it, so the section says they may be shown, by the tools
+// the told calls name, and that none of them is a listed call.
+//
+// TRUE OF EVERY PART IT PRINTS: "may" of each (internal/agent/runner's
+// otherCalls decides each part only where its calls may be in the session),
+// and "no list below holds one by one" and the closing of all: the record
+// lists a call or counts it, never both; an earlier turn's call is never this
+// turn's; a worker's call is never one of the run's own, which are the only
+// calls a list below holds; and an earlier round's call alike a told one is
+// listed again, so the part names only the tools of the ones that are not.
+// NEVER "NO LIST BELOW NAMES": the record's tally of the calls it no longer
+// lists prints below (AfterSave.Tally), and it names the same calls by tool
+// that a part names, so a model trusting such words would read the part's
+// calls as others than the tallied ones and count them twice. A tally counts
+// calls and holds none of them one by one, so the words stay true beside it.
+const (
+	otherCallsHeader  = "## Other calls the session above may show"
+	otherCallsOpening = "The session above may also show calls no list below holds one by one:"
+	otherCallsClosing = "However alike one of them reads to a call listed below, it is a call of its own, never that" +
+		" one shown twice."
+)
+
+// OtherCalls is what the session above may show that no list of a brief below
+// names ([AfterSave.Other]), each part told only where it holds: its calls by
+// the tools the told calls name, never by a count, since the count the record
+// keeps is no figure of what the session shows.
+type OtherCalls struct {
+	// EarlierTurns says the session may hold the conversation's earlier turns:
+	// the turn continued the session its conversation's last turn left. Fire
+	// says the conversation is a schedule's, whose turns are its fires
+	// ([NextTurn.Fire]), so every part names a fire where it would a turn.
+	EarlierTurns, Fire bool
+	// EarlierRounds is the told tools of the turn's earlier rounds where the
+	// session may hold those rounds only in a summary's words, less the calls
+	// listed again; Unlisted the told tools of the calls the record no longer
+	// lists one by one; Workers the told tools of the calls workers made under
+	// a delegation.
+	EarlierRounds, Unlisted, Workers ToolsNamed
+}
+
+// ToolsNamed is the tools a part of [OtherCalls] names, defused by the
+// caller, in the order the told calls name them, and whether a count it speaks
+// of names no tool. A part is told where either holds.
+type ToolsNamed struct {
+	Tools   []string
+	Unnamed bool
+}
+
+// told reports whether the part is told.
+func (n ToolsNamed) told() bool { return len(n.Tools) > 0 || n.Unnamed }
+
+// madeTo is the part's tools as its bullet ends with them: ", made to " and
+// the tools, each in backticks, then "and to tools <namer> does not name"
+// where a count names no tool, or that alone. namer is "the record", or "it"
+// where the bullet has named the record already.
+func (n ToolsNamed) madeTo(namer string) string {
+	quoted := make([]words.Said, len(n.Tools))
+	for i, tool := range n.Tools {
+		quoted[i] = words.Said("`" + tool + "`")
+	}
+	switch {
+	case !n.Unnamed:
+		return ", made to " + words.And(quoted)
+	case len(quoted) == 0:
+		return ", made to tools " + namer + " does not name"
+	}
+	return ", made to " + words.And(quoted) + " and to tools " + namer + " does not name"
+}
+
+// otherCalls is the section [OtherCalls] is told in, "" where no part is:
+// the header, the opening, a bullet per part in the order the session would
+// hold them (the earlier turns, the earlier rounds, the calls the record no
+// longer lists, the workers'), and the closing.
+func otherCalls(o OtherCalls) string {
+	said := nextTurnWordsFor(NextTurn{Fire: o.Fire})
+	var parts []string
+	if o.EarlierTurns {
+		parts = append(parts, "- calls of this "+said.whole+"'s earlier "+said.turn+"s, made before this "+
+			said.turn+" began")
+	}
+	if o.EarlierRounds.told() {
+		parts = append(parts, "- calls of this "+said.turn+"'s earlier rounds, in full or only in a summary's words"+
+			o.EarlierRounds.madeTo("the record"))
+	}
+	if o.Unlisted.told() {
+		parts = append(parts, "- calls of this "+said.turn+" the record no longer lists one by one"+
+			o.Unlisted.madeTo("it"))
+	}
+	if o.Workers.told() {
+		parts = append(parts, "- calls of workers this "+said.turn+" delegated to, in their reports' words"+
+			o.Workers.madeTo("the record"))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return otherCallsHeader + "\n" + otherCallsOpening + "\n" + strings.Join(parts, "\n") + "\n" + otherCallsClosing
+}
+
 // lateCallsHeader introduces the calls of the round that finished only after
 // the run that made them stopped waiting for them, and the ones still in flight
 // as the round was read ([AfterSave.Late]): calls an earlier run of the work
@@ -335,8 +522,9 @@ type AfterSave struct {
 	// counted without listing them, its read cap spent, which the session holds
 	// only as that count (internal/agent/runner's heldAt, Resume.Owed and
 	// SessionBasis.Owed): the reads its job's brief left out, as the prior-work
-	// ledger renders them within its budgets, under one read cap with Calls'
-	// and Late's, spent on these LAST (ledger.FormatCallGroups), "" for none.
+	// ledger renders them within its budgets, under one read cap with Calls',
+	// Late's and Shown's, spent on these after Late and Calls and before Shown,
+	// whose calls the session holds (ledger.FormatCallGroups), "" for none.
 	// Told first, in a section of their own ([owedHeader]): they are the
 	// oldest calls the brief tells. Reads only, since only a read is ever
 	// counted rather than listed, and settled before that message was built,
@@ -351,8 +539,8 @@ type AfterSave struct {
 
 	// Calls are the calls its round's record still lists that came after the
 	// save, as the prior-work ledger renders them within its budgets, under
-	// one read cap with Late's and Owed's, spent on Late first and on Owed
-	// last (ledger.FormatCallGroups), "" for none. For a run that starts a
+	// one read cap with Late's, Owed's and Shown's, spent on Late first, then
+	// on these, then on Owed and Shown (ledger.FormatCallGroups), "" for none. For a run that starts a
 	// session of its own ([CalledBefore]), every call of the round but Late's.
 	Calls string
 
@@ -394,14 +582,39 @@ type AfterSave struct {
 	// never as calls it lacks, and the dropped ones counted since that point.
 	Interrupted bool
 
+	// Shown are calls the session may show that a call told in Calls or Late
+	// could be taken for (internal/agent/runner's readAlike: the same tool, and
+	// arguments neither call's line tells apart, or not comparable): first the
+	// calls of the turn's earlier rounds that the brief tells nowhere else, each
+	// line ending with [EarlierRoundNote], then the round's own calls the session
+	// holds, as the prior-work ledger renders them within its budgets, under one
+	// read cap with the other lists', spent on these after every other
+	// (ledger.FormatCallGroups), "" for none, and "" too where the cap left it no
+	// call to list, never a count of reads alone. Told after Calls and before
+	// Late, in a section of their own ([shownAgainHeader]), whose words say the
+	// session may show each and that the told one could be taken for it and is a
+	// call of its own: the words above Calls (where the session may already show
+	// them) and above Late say a call shown both in the session and in the list
+	// is ONE call, so a told call whose like the session shows could be read as
+	// that call and lost. Never set for a run that starts a session of its own
+	// ([CalledBefore]), which holds no call of the round.
+	Shown string
+
+	// Other is what the session may show that no list of the brief names
+	// ([OtherCalls]): told first, after the held submission and before the
+	// owed reads, so "below" is every list, in a section of its own
+	// ([otherCallsHeader]). The zero value tells nothing. Never set for a run
+	// that starts a session of its own ([CalledBefore]), which has none above.
+	Other OtherCalls
+
 	// Late are the calls of the round that finished only after the run that
 	// made them stopped waiting for them — its record took them after that run
 	// was replaced by a relaunch that carried the work on
 	// (sandbox.BridgeCall.Late), or the run gave up on them, or its session
 	// ended, before they returned (sandbox.BridgeCall.Abandoned) — as the
 	// prior-work ledger renders them within its budgets, under one read cap
-	// with Calls' and Owed's, spent on these first, "" for none: none of them
-	// is among Calls. Told in a section of their own, under
+	// with Calls', Owed's and Shown's, spent on these first, "" for none: none
+	// of them is among Calls. Told in a section of their own, under
 	// [lateCallsHeader], whatever Interrupted says ([lateBeforeHeader] for a
 	// run that starts a session of its own).
 	//
@@ -453,17 +666,38 @@ type AfterSave struct {
 // then the calls dropped after the save, then the late calls dropped), since
 // every count says the tally is below it ([tallyBesideLast]).
 //
+// THE CALLS THE SESSION SHOWS THAT A TOLD CALL COULD BE TAKEN FOR COME AFTER
+// THE CALLS SINCE THE SAVE AND BEFORE THE LATE ONES ([AfterSave.Shown]), in a
+// section of their own: so the order is the held submission, the other calls
+// the session may show ([AfterSave.Other]), the owed reads, the calls since
+// the save, the calls listed again, then the late calls. They follow the list
+// most of their likes are in, and the late section, whose words also say a
+// call shown twice is one, stays last, as it is on every path. THE OTHER CALLS
+// COME BEFORE EVERY LIST, since their words speak of the lists below them, and
+// list no call, so every list's words stay true after them.
+//
 // A SUCCESSFUL SUBMISSION AMONG EITHER LIST is said to be none of the work's,
 // right after the list it is in and in words true of that list: the calls
 // after the save ([AfterSave.EarlierSubmission]) and the late ones
 // ([AfterSave.LateSubmission]). AND ONE THE SESSION HOLDS IS SAID FIRST
 // ([AfterSave.HeldSubmission]), before every section and where none lists a
 // call: it is in no list, and the session that shows it is the one the brief
-// continues.
+// continues. A submission listed again is one of those, so its section says
+// nothing of it.
+//
+// A LINE OF CALLS OR OF LATE MAY END WITH [ToldApartNote], where another call
+// the message tells could be taken for it (internal/agent/runner's notes): the
+// caller's words, already in the lines it hands, as each line of Shown that
+// ends with [EarlierRoundNote] is. Nothing here reads them, and no header
+// needs them: each header stays true of a marked line, which only says the
+// call is one of its own.
 func CalledAfter(after AfterSave) string {
 	var sections []string
 	if after.HeldSubmission {
 		sections = append(sections, heldSubmission)
+	}
+	if other := otherCalls(after.Other); other != "" {
+		sections = append(sections, other)
 	}
 	tally := tallyBesideLast(after.Tally, after.OwedDropped, after.Dropped, after.LateDropped)
 	if owed := toldList(owedHeader, after.Owed, "", owedDropped(after.OwedDropped), tally[0]); owed != "" {
@@ -471,6 +705,9 @@ func CalledAfter(after AfterSave) string {
 	}
 	if since := calledSince(after, tally[1]); since != "" {
 		sections = append(sections, since)
+	}
+	if shown := toldList(shownAgainHeader, after.Shown, "", "", ""); shown != "" {
+		sections = append(sections, shown)
 	}
 	if late := lateSection(lateCallsHeader, after, tally[2]); late != "" {
 		sections = append(sections, late)
@@ -659,6 +896,14 @@ const lateBeforeHeader = "## Calls the runs before you stopped waiting for, or w
 // them in a transcript it does not have. Told nothing of them, the reseed
 // alone saying only that the run before it did things through the seat's
 // tools, it could make them again: a second post, a second delegation.
+//
+// A LINE MAY END WITH [ToldApartNote], where another call the message tells
+// could be taken for it: a line of the other list, a line or a tally of the
+// prior work the fresh brief renders, or a held call a lead of it tells
+// (internal/agent/runner's notes). [lateBeforeHeader] says each late call is
+// ONE call, made once, and a model holding both that and an alike line of
+// work already done could read them as one. The caller's words, already in
+// the lines it hands; nothing here reads them.
 func CalledBefore(told AfterSave) string {
 	var sections []string
 	dropped := ""
@@ -874,10 +1119,10 @@ const KeyKeptSession = "kept_session"
 // what the run can do about it is the same whatever the reason — read what
 // that session did.
 func KeptSession(turn string, thisTurn, fire bool) string {
-	words := nextTurnWordsFor(NextTurn{Fire: fire})
-	whose, what := "This "+words.whole+"'s last "+words.turn, "it did"
+	said := nextTurnWordsFor(NextTurn{Fire: fire})
+	whose, what := "This "+said.whole+"'s last "+said.turn, "it did"
 	if thisTurn {
-		whose, what = "This "+words.turn+"'s earlier launches", "they did"
+		whose, what = "This "+said.turn+"'s earlier launches", "they did"
 	}
 	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue. Read what " +
 		what + " with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
@@ -970,18 +1215,18 @@ func (w nextTurnWords) named(turn string) string {
 // and that the session may not hold the last of what it did: no frame of that
 // turn saw it end.
 func BuildNextTurn(m NextTurn) string {
-	words := nextTurnWordsFor(m)
+	said := nextTurnWordsFor(m)
 	var w strings.Builder
-	w.WriteString("## A new " + words.turn + " of this " + words.whole + " begins here" +
-		"\nEverything above is this " + words.whole + " as your " + words.turn + "s left it")
-	span, ended := nextTurnSpan(m, words)
+	w.WriteString("## A new " + said.turn + " of this " + said.whole + " begins here" +
+		"\nEverything above is this " + said.whole + " as your " + said.turn + "s left it")
+	span, ended := nextTurnSpan(m, said)
 	w.WriteString(span)
 	w.WriteString(". " + ended + " " +
-		words.woke + ", and the task below is this " + words.turn + "'s." +
+		said.woke + ", and the task below is this " + said.turn + "'s." +
 		"\n- **What you read above may be stale:** read it again before relying on it." +
-		"\n- **Tools you activated and skills you loaded above were set up anew for this " + words.turn +
+		"\n- **Tools you activated and skills you loaded above were set up anew for this " + said.turn +
 		":** activate or load them again before relying on them.")
-	w.WriteString("\n\n## This " + words.turn + " is in a new box\nYou are in a new box")
+	w.WriteString("\n\n## This " + said.turn + " is in a new box\nYou are in a new box")
 	if m.Checkout == "" {
 		w.WriteString(", on a FRESH checkout of the repository")
 	}
@@ -1003,32 +1248,32 @@ func BuildNextTurn(m NextTurn) string {
 // ended is told: [BuildNextTurn]'s span, and both builders' ending.
 // [NextTurnAgain] names the turn in [turnAgainSpan]'s words instead, which say
 // nothing of the session.
-func nextTurnSpan(m NextTurn, words nextTurnWords) (span, ended string) {
+func nextTurnSpan(m NextTurn, said nextTurnWords) (span, ended string) {
 	var w strings.Builder
-	ended = "How the " + words.whole + "'s earlier " + words.turn + "s ended is told below."
+	ended = "How the " + said.whole + "'s earlier " + said.turn + "s ended is told below."
 	switch {
 	case m.WentOn:
-		w.WriteString(", up to a session kept while " + words.named(m.BaseTurn) + " still worked")
+		w.WriteString(", up to a session kept while " + said.named(m.BaseTurn) + " still worked")
 		if !m.CapturedAt.IsZero() {
 			w.WriteString(", at " + m.CapturedAt.UTC().Format(time.RFC3339))
 		}
-		w.WriteString(": what that " + words.turn + " did after it is not above")
+		w.WriteString(": what that " + said.turn + " did after it is not above")
 		if m.Lost {
-			w.WriteString(", and that " + words.turn + " was lost")
+			w.WriteString(", and that " + said.turn + " was lost")
 		}
-		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
-			words.turn + "s, is told below."
+		ended = "How " + said.named(m.BaseTurn) + " ended, among the " + said.whole + "'s earlier " +
+			said.turn + "s, is told below."
 	case m.Lost:
-		w.WriteString(", through " + words.named(m.BaseTurn) + ", which was lost")
+		w.WriteString(", through " + said.named(m.BaseTurn) + ", which was lost")
 		if !m.EndedAt.IsZero() {
 			w.WriteString(" and ended at " + m.EndedAt.UTC().Format(time.RFC3339))
 		}
-		w.WriteString(": the session above may not hold the last of what that " + words.turn + " did")
-		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
-			words.turn + "s, is told below."
+		w.WriteString(": the session above may not hold the last of what that " + said.turn + " did")
+		ended = "How " + said.named(m.BaseTurn) + " ended, among the " + said.whole + "'s earlier " +
+			said.turn + "s, is told below."
 	default:
 		if m.BaseTurn != "" {
-			w.WriteString(", through " + words.named(m.BaseTurn))
+			w.WriteString(", through " + said.named(m.BaseTurn))
 		}
 		if !m.EndedAt.IsZero() {
 			w.WriteString(", which ended at " + m.EndedAt.UTC().Format(time.RFC3339))
@@ -1074,31 +1319,31 @@ func nextTurnSpan(m NextTurn, words nextTurnWords) (span, ended string) {
 // after the boundary, where its harness wrote any of it, so the boundary is
 // told as where the turn began rather than where the session ends.
 func NextTurnAgain(m NextTurn) string {
-	words := nextTurnWordsFor(m)
-	_, ended := nextTurnSpan(m, words)
+	said := nextTurnWordsFor(m)
+	_, ended := nextTurnSpan(m, said)
 	var w strings.Builder
-	w.WriteString("### A new " + words.turn + " of this " + words.whole + " began here" +
-		"\nThis " + words.turn + " began after your earlier " + words.turn + "s of this " + words.whole +
-		turnAgainSpan(m, words) + ", and the task below is this " + words.turn + "'s. " + ended +
-		"\n- **What was read before this " + words.turn + " began may be stale:** read it again before " +
+	w.WriteString("### A new " + said.turn + " of this " + said.whole + " began here" +
+		"\nThis " + said.turn + " began after your earlier " + said.turn + "s of this " + said.whole +
+		turnAgainSpan(m, said) + ", and the task below is this " + said.turn + "'s. " + ended +
+		"\n- **What was read before this " + said.turn + " began may be stale:** read it again before " +
 		"relying on it." +
-		"\n- **Tools activated and skills loaded before this " + words.turn + " began were set up anew for " +
+		"\n- **Tools activated and skills loaded before this " + said.turn + " began were set up anew for " +
 		"it:** activate or load them again before relying on them." +
-		"\n\nWhere the session above began as the one your earlier " + words.turn + "s left, in full or in a " +
+		"\n\nWhere the session above began as the one your earlier " + said.turn + "s left, in full or in a " +
 		"summary:")
 	switch {
 	case m.WentOn:
-		w.WriteString("\n- **It was kept while " + words.named(m.BaseTurn) + " still worked")
+		w.WriteString("\n- **It was kept while " + said.named(m.BaseTurn) + " still worked")
 		if !m.CapturedAt.IsZero() {
 			w.WriteString(", at " + m.CapturedAt.UTC().Format(time.RFC3339))
 		}
-		w.WriteString(":** what that " + words.turn + " did after it is not in it.")
+		w.WriteString(":** what that " + said.turn + " did after it is not in it.")
 	case m.Lost:
-		w.WriteString("\n- **It may not hold the last of what " + words.named(m.BaseTurn) + " did,** which was " +
+		w.WriteString("\n- **It may not hold the last of what " + said.named(m.BaseTurn) + " did,** which was " +
 			"lost.")
 	}
-	w.WriteString("\n- **What it says about files on disk from before this " + words.turn + " began** is what " +
-		"the box of the " + words.turn + " it came from held.")
+	w.WriteString("\n- **What it says about files on disk from before this " + said.turn + " began** is what " +
+		"the box of the " + said.turn + " it came from held.")
 	if m.Interrupted {
 		w.WriteString("\n- " + baseCutOffAgain)
 	}
@@ -1110,14 +1355,14 @@ func NextTurnAgain(m NextTurn) string {
 // conversation": that turn, and of how it ended only what is the turn's own,
 // when it ended and that it was lost. Nothing of the session it left, which
 // [NextTurnAgain] says only of a session that began as that one.
-func turnAgainSpan(m NextTurn, words nextTurnWords) string {
+func turnAgainSpan(m NextTurn, said nextTurnWords) string {
 	if m.BaseTurn == "" && !m.WentOn && !m.Lost {
 		if m.EndedAt.IsZero() {
 			return ""
 		}
 		return ", which ended at " + m.EndedAt.UTC().Format(time.RFC3339)
 	}
-	span := ", through " + words.named(m.BaseTurn)
+	span := ", through " + said.named(m.BaseTurn)
 	switch {
 	case m.Lost && !m.WentOn && !m.EndedAt.IsZero():
 		return span + ", which was lost and ended at " + m.EndedAt.UTC().Format(time.RFC3339)

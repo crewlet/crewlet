@@ -645,6 +645,15 @@ type BridgeCall struct {
 	ArgsBytes   int `json:"args_bytes,omitempty"`
 	OutputBytes int `json:"output_bytes,omitempty"`
 
+	// ArgsUnparsed marks a call whose arguments DID NOT PARSE: the bridge
+	// answered it unrun, holding no object of what the model wrote, so Args is
+	// empty as it is for a call made with none. A reader tells the two apart
+	// by this alone, and reads such a call as one whose arguments are not
+	// known (internal/agent/ledger's Call.ArgsUnread), never as the tool
+	// called with none, a different call. ADDITIVE: a build before it drops
+	// the key and reads the call as it always did, as one made with none.
+	ArgsUnparsed bool `json:"args_unparsed,omitempty"`
+
 	// Digest is the call's IDENTITY: the digest its run's call log admitted
 	// it under (internal/agent/turnctx's ArgsDigest of its whole canonical
 	// arguments), taken by the bridge as it admitted the call, before
