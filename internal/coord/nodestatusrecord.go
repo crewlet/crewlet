@@ -117,10 +117,19 @@ type NodeStatusRecords interface {
 	// [LiveNodeStatuses].
 	NodeStatusRecords(ctx context.Context) ([]NodeStatusRecord, error)
 
-	// DeleteNodeStatus removes a node's record: a node that stops cleanly
-	// says so rather than leaving its rows for the age to remove. Removing
-	// a record that is not there is no error.
-	DeleteNodeStatus(ctx context.Context, node string) error
+	// DeleteNodeStatus removes a node's record where it was written at an
+	// epoch no later than through: a node that stops cleanly says so rather
+	// than leaving its rows for the age to remove. A record that is not there
+	// is no error, and neither is one written at a LATER epoch, which is left
+	// as it stands.
+	//
+	// UP TO AN EPOCH, never whatever the key holds: presence epochs only
+	// grow, so a record past through is a later incarnation's of the same
+	// node id — one started before this one finished stopping — and removing
+	// it would read that live node as not saying until its writer next
+	// wrote. Through rather than at, so a stopping node also removes a record
+	// whose write it saw fail that landed after all.
+	DeleteNodeStatus(ctx context.Context, node string, through int64) error
 }
 
 // ErrNoNodeStatus is a status record a store cannot file: one naming no node,

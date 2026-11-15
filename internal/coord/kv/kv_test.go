@@ -539,6 +539,31 @@ func TestANodesStatusRecordAgesOutAtTheStatusFreshness(t *testing.T) {
 	}
 }
 
+// ONE NODE'S UNREADABLE RECORD IS THAT NODE NOT SAYING, never every node's rows
+// failed: a record this build cannot decode — a body that is not an object —
+// is skipped, and the listing answers every other node's. (The memory twin
+// keeps only what Encode wrote, so it cannot hold one; it skips the same way.)
+//
+// Mutation: raise the decode error from the listing, and the fleet's rows go
+// with one node's.
+func TestAnUndecodableStatusRecordIsSkippedNotRaised(t *testing.T) {
+	t.Parallel()
+	store := openFleet(t, embeddedNATS(t))
+	if err := store.PutNodeStatus(t.Context(), coord.NodeStatusRecord{Node: "n2", Epoch: 3}); err != nil {
+		t.Fatalf("PutNodeStatus: %v", err)
+	}
+	if _, err := store.nodeStatus.Put(t.Context(), encodeKey("n1"), []byte("not an object")); err != nil {
+		t.Fatalf("write an undecodable record: %v", err)
+	}
+	got, err := store.NodeStatusRecords(t.Context())
+	if err != nil {
+		t.Fatalf("NodeStatusRecords over one undecodable record: %v", err)
+	}
+	if len(got) != 1 || got[0].Node != "n2" || got[0].Epoch != 3 {
+		t.Errorf("the listing answered %+v, want n2's record alone", got)
+	}
+}
+
 // THE BODY RIDES THE POINTER AS THE JSON IT IS.
 //
 // Carried as bytes, encoding/json spells it as a base64 string — over an

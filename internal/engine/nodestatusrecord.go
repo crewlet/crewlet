@@ -83,14 +83,19 @@ type statusRecordWriter struct {
 	// drives never interleave, and guards what the last one wrote.
 	mu sync.Mutex
 
-	// What this node last wrote: its epoch, its fingerprint (everything but
-	// each model's last answer and the instant), and when. written is false
-	// until the first write lands, and after a write fails nothing here
-	// moves, so the next pass writes again.
+	// What this node last wrote: its fingerprint (everything but each
+	// model's last answer and the instant, its epoch included), and when.
+	// written is false until the first write lands, and after a write fails
+	// nothing here moves, so the next pass writes again.
 	written     bool
 	writtenAt   time.Time
-	epochOf     int64
 	fingerprint []byte
+
+	// through is the latest epoch this node has ASKED to write a record at,
+	// landed or not: what its removal at a stop removes up to, so a write
+	// whose answer was lost is removed too, and a later incarnation's record
+	// under the same node id is not ([coord.NodeStatusRecords]).
+	through int64
 }
 
 // startStatusRecords starts this node's writer, kept until stopStatusRecords.
@@ -221,9 +226,10 @@ func (w *statusRecordWriter) pass(ctx context.Context) bool {
 	cancel()
 	r.Node, r.Epoch, r.At = w.node, epoch, w.now()
 	moved := recordFingerprint(r)
-	if w.written && epoch == w.epochOf && bytes.Equal(moved, w.fingerprint) && !w.due(r.At) {
+	if w.written && bytes.Equal(moved, w.fingerprint) && !w.due(r.At) {
 		return true
 	}
+	w.through = max(w.through, epoch)
 	// NO DEADLINE OF THE PASS'S: the write waits as long as the coordination
 	// store's rule gives its bytes (internal/coord/kv's settled writes),
 	// which across a link at the floor is the record's crossing, and only
@@ -237,15 +243,23 @@ func (w *statusRecordWriter) pass(ctx context.Context) bool {
 		}
 		return false
 	}
-	w.written, w.writtenAt, w.epochOf, w.fingerprint = true, r.At, epoch, moved
+	w.written, w.writtenAt, w.fingerprint = true, r.At, moved
 	return true
 }
 
-// remove removes this node's record, bounded by [statusRecordRemoveBound].
+// remove removes this node's record, up to the latest epoch it asked to write
+// one at, bounded by [statusRecordRemoveBound]. A writer that never asked has
+// nothing of its own to remove.
 func (w *statusRecordWriter) remove(ctx context.Context) {
+	w.mu.Lock()
+	through := w.through
+	w.mu.Unlock()
+	if through == 0 {
+		return
+	}
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statusRecordRemoveBound)
 	defer cancel()
-	if err := w.store.DeleteNodeStatus(removeCtx, w.node); err != nil {
+	if err := w.store.DeleteNodeStatus(removeCtx, w.node, through); err != nil {
 		log.WarnContext(removeCtx, "node_status_record_not_removed", "node", w.node, "error", err,
 			"detail", "readers stopped counting it with this node's presence; the bucket's age removes it")
 	}
@@ -253,7 +267,9 @@ func (w *statusRecordWriter) remove(ctx context.Context) {
 
 // recordFingerprint is what decides whether a record moved: its wire form with each
 // model's last answer and the record's own instant left out, since the first
-// moves on every call a model answers and the second on every pass.
+// moves on every call a model answers and the second on every pass. Its epoch
+// is in it, so a pass that finds the presence epoch moved writes whatever else
+// did not.
 func recordFingerprint(r coord.NodeStatusRecord) []byte {
 	r.At = time.Time{}
 	if len(r.Models) > 0 {

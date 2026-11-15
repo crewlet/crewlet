@@ -63,17 +63,39 @@ func (f *FleetStore) NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusR
 	return out, nil
 }
 
-// DeleteNodeStatus removes a node's record; one that is not there is no error.
+// DeleteNodeStatus removes a node's record where it was written at an epoch no
+// later than through; one that is not there, or is a later epoch's, is no
+// error.
 //
-// Purge, as a released claim is: the marker it leaves ages out with the
-// bucket, and the node's next incarnation writes over it.
-func (f *FleetStore) DeleteNodeStatus(ctx context.Context, node string) error {
+// A READ, THEN A PURGE AT THE REVISION READ: the purge refuses where the key
+// moved since, which is a later write — this node's writer has stopped, so a
+// later incarnation's — and that record stays. Purge rather than delete, as a
+// released claim is: the marker it leaves ages out with the bucket, and the
+// node's next incarnation writes over it.
+func (f *FleetStore) DeleteNodeStatus(ctx context.Context, node string, through int64) error {
 	if node == "" {
 		return fmt.Errorf("%w (removing one)", coord.ErrNoNodeStatus)
 	}
-	if err := f.nodeStatus.Purge(ctx, encodeKey(node)); err != nil &&
-		!errors.Is(err, jetstream.ErrKeyNotFound) {
+	key := encodeKey(node)
+	kve, err := f.nodeStatus.Get(ctx, key)
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return nil
+	case err != nil:
+		return unavailable(fmt.Sprintf("read %s's status record to remove it", node), err)
+	}
+	if r, decodeErr := coord.DecodeNodeStatusRecord(node, kve.Value()); decodeErr == nil && r.Epoch > through {
+		return nil
+	}
+	// A record that does not decode is removed with the rest: no reader
+	// counts it, and nothing later than this node wrote it that could.
+	err = f.nodeStatus.Purge(ctx, key, jetstream.LastRevision(kve.Revision()))
+	switch {
+	case err == nil:
+		return nil
+	case lostUpdateRace(err):
+		return nil
+	default:
 		return unavailable(fmt.Sprintf("remove %s's status record", node), err)
 	}
-	return nil
 }

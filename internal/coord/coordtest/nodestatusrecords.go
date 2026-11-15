@@ -155,14 +155,36 @@ var nodeStatusRecordCases = []recordCase{
 		// and that is not a failure.
 		h.put(coord.NodeStatusRecord{Node: "n1", Epoch: 1})
 		h.put(coord.NodeStatusRecord{Node: "n2", Epoch: 1})
-		if err := h.r.DeleteNodeStatus(h.ctx, "n1"); err != nil {
+		if err := h.r.DeleteNodeStatus(h.ctx, "n1", 1); err != nil {
 			h.t.Fatalf("DeleteNodeStatus: %v", err)
 		}
 		if got := h.all(); len(got) != 1 || got[0].Node != "n2" {
 			h.t.Errorf("after removing n1, the store holds %+v", got)
 		}
-		if err := h.r.DeleteNodeStatus(h.ctx, "n1"); err != nil {
+		if err := h.r.DeleteNodeStatus(h.ctx, "n1", 1); err != nil {
 			h.t.Errorf("removing a record that is not there: %v", err)
+		}
+	}},
+
+	{"a_node_status_record_is_removed_only_up_to_the_epoch_its_remover_wrote", func(h *recordHarness) {
+		// A STOPPING INCARNATION NEVER REMOVES A LATER ONE'S RECORD: the
+		// same node id started again before the old process finished
+		// stopping writes at a later epoch, and the old one's removal leaves
+		// it standing. Through, not at: a record at an epoch below the one
+		// named is removed, as a write the remover saw fail may have landed.
+		h.put(coord.NodeStatusRecord{Node: "n1", Epoch: 5,
+			Models: []coord.ModelStatus{{Key: "default", SignIn: "token"}}})
+		if err := h.r.DeleteNodeStatus(h.ctx, "n1", 4); err != nil {
+			h.t.Fatalf("DeleteNodeStatus through an earlier epoch: %v", err)
+		}
+		if got := h.all(); len(got) != 1 || got[0].Epoch != 5 || len(got[0].Models) != 1 {
+			h.t.Fatalf("an earlier incarnation's removal left %+v, want the epoch-5 record whole", got)
+		}
+		if err := h.r.DeleteNodeStatus(h.ctx, "n1", 7); err != nil {
+			h.t.Fatalf("DeleteNodeStatus through a later epoch: %v", err)
+		}
+		if got := h.all(); len(got) != 0 {
+			h.t.Errorf("a removal through epoch 7 left %+v, want the epoch-5 record gone", got)
 		}
 	}},
 
@@ -176,7 +198,7 @@ var nodeStatusRecordCases = []recordCase{
 				h.t.Errorf("%s: PutNodeStatus = %v, want ErrNoNodeStatus", name, err)
 			}
 		}
-		if err := h.r.DeleteNodeStatus(h.ctx, ""); !errors.Is(err, coord.ErrNoNodeStatus) {
+		if err := h.r.DeleteNodeStatus(h.ctx, "", 1); !errors.Is(err, coord.ErrNoNodeStatus) {
 			h.t.Errorf("DeleteNodeStatus(\"\") = %v, want ErrNoNodeStatus", err)
 		}
 		if got := h.all(); len(got) != 0 {
