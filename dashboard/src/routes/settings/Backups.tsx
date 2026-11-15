@@ -58,6 +58,7 @@ import { eventHistorySpan, fmtBytes, fmtDateTime, plural, relTime } from "~/lib/
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN, needsWords } from "~/lib/access.ts";
 import { throughOf } from "~/lib/attribution.ts";
+import { Credential } from "~/components/Credential.tsx";
 import { useSeatOf, writerOf, WriterCell } from "./Audit.tsx";
 import {
   TAKE_BACKUP,
@@ -430,7 +431,7 @@ export function BackupRecord({
                   cell: (r) => {
                     const through = throughOf(r.actor, r.operator_id);
                     return through ? (
-                      <TableKeyCell value={through} />
+                      <Credential through={through} />
                     ) : (
                       <EmptyValue label="Their own" />
                     );

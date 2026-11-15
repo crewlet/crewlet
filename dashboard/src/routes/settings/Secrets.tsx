@@ -65,6 +65,7 @@ import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
+import { Credential } from "~/components/Credential.tsx";
 import { authorityWords } from "~/lib/refusal.ts";
 import { isAbort, rest, RestError } from "~/protocol/index.ts";
 import { restErrorCode, useRest } from "~/lib/useRest.ts";
@@ -367,7 +368,7 @@ function CredentialBody({
                   // incident asks of this row.
                   label: "Through",
                   value: throughOf(row.updated_by, row.operator_id) ? (
-                    <span className="mono">{throughOf(row.updated_by, row.operator_id)}</span>
+                    <Credential through={throughOf(row.updated_by, row.operator_id)} />
                   ) : undefined,
                 },
                 { label: "Updated", value: fmtDateTime(row.updated_at) },

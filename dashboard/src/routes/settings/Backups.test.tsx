@@ -265,7 +265,13 @@ test("the history lists each backup with its node, its person and its outcome", 
     .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(landed).getByText("Written")).toBeTruthy();
   expect(within(landed).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
-  expect(within(landed).getByText("session:s-1")).toBeTruthy();
+  // THE CREDENTIAL IN WORDS, its id behind the copy control, never the
+  // engine's `session:s-1`. Mutation: draw the id as a key cell again.
+  expect(within(landed).getByText("Signed-in session")).toBeTruthy();
+  expect(
+    within(landed).getByRole("button", { name: "Copy the signed-in session's id, s-1" }),
+  ).toBeTruthy();
+  expect(within(landed).queryByText("session:s-1")).toBeNull();
   expect(screen.getByText("Requested").closest(".crewlet-statcard")?.textContent).toMatch(
     /1 failed/,
   );

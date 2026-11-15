@@ -11,34 +11,26 @@
  */
 
 import { Copyable } from "@crewlethq/ui";
+import { credentialOf } from "~/lib/attribution.ts";
 
-/** The credential prefixes the engine writes in `operator_id` (`iam.ActorFor`). */
-const KINDS: Readonly<Record<string, string>> = {
-  pat: "Personal access token",
-  session: "Signed-in session",
-};
-
-/** What a credential is called, and the id behind it where it has one. */
-export function credentialOf(through: string): { words: string; id?: string } {
-  const colon = through.indexOf(":");
-  const kind = colon > 0 ? KINDS[through.slice(0, colon)] : undefined;
-  if (!kind) return { words: through };
-  return { words: kind, id: through.slice(colon + 1) };
-}
-
-/** A credential as a cell or a fact: its kind in words, its id copied. */
+/**
+ * A credential as a cell or a fact: its kind in words, its id copied. One
+ * reading of the engine's spelling (`credentialOf`), shared with the
+ * sentences that name a credential, so a cell and a line cannot disagree.
+ */
 export function Credential({ through }: { through: string }) {
-  const { words, id } = credentialOf(through);
-  if (!id) return <span className="truncate">{words}</span>;
+  const credential = credentialOf(through);
+  if (!credential) return <span className="truncate">{through}</span>;
+  const words = credential.kind.charAt(0).toUpperCase() + credential.kind.slice(1);
   // THE KIND DRAWN, THE ID ON ITS TITLE AND THE CLIPBOARD: the kit's
   // identifier with a copy control, drawing the words in the id's place.
   return (
     <Copyable
-      value={id}
+      value={credential.id}
       display={words}
       variant="inline"
-      ariaLabel={`Copy the ${words.toLowerCase()}'s id, ${id}`}
-      title={`Copy ${id}`}
+      ariaLabel={`Copy the ${credential.kind}'s id, ${credential.id}`}
+      title={`Copy ${credential.id}`}
     />
   );
 }
