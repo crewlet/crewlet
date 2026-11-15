@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -31,19 +32,31 @@ func rhSession(version string) sandbox.SessionArchive {
 		Format: executor.ClaudeArchiveFormat, Version: version}
 }
 
+// rhBridged is a tool of the bridge's, named as Claude Code names a tool of
+// an MCP server, `mcp__<server>__<tool>`, the server the one the engine
+// serves a box its tools as.
+const rhBridged = "mcp__" + config.ToolServerName + "__slow"
+
 // rhArchive is the session's archive: a main thread whose brief is followed
 // by a call to id answered with output, the call's reply carrying its id and
 // each record its time, as Claude Code writes them (the resume walks from a
 // leaf of a time, and pairs a call by its reply's id), tarred and gzipped as
-// the take's scrub writes one.
+// the take's scrub writes one. The call is one of a tool of the bridge's
+// ([rhBridged]).
 func rhArchive(t *testing.T, id, output string) []byte {
+	t.Helper()
+	return rhArchiveOf(t, id, rhBridged, output)
+}
+
+// rhArchiveOf is [rhArchive]'s archive, its call one of tool.
+func rhArchiveOf(t *testing.T, id, tool, output string) []byte {
 	t.Helper()
 	uuid := func(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
 	thread := `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":` +
 		`"the brief"},"uuid":"` + uuid(1) + `","timestamp":"2026-01-02T03:04:05.000Z","sessionId":"` + rhSessionID +
 		`","version":"2.1.310"}` + "\n" +
 		`{"parentUuid":"` + uuid(1) + `","isSidechain":false,"message":{"id":"msg_rh","role":"assistant","content":` +
-		`[{"type":"tool_use","id":"` + id + `","name":"mcp__crewlet__slow","input":{}}],` +
+		`[{"type":"tool_use","id":"` + id + `","name":"` + tool + `","input":{}}],` +
 		`"stop_reason":"tool_use"},"type":"assistant","uuid":"` + uuid(2) + `","timestamp":"2026-01-02T03:04:06.000Z",` +
 		`"sessionId":"` + rhSessionID +
 		`","version":"2.1.310"}` + "\n" +
@@ -412,6 +425,47 @@ func TestAReadingAnswersOnlyAnAskWhoseAskedIDsNameOneCallEach(t *testing.T) {
 			if got.Read || err == nil || opened {
 				t.Errorf("a reading = %+v, %v, the archive opened %t; want no reading, nothing opened",
 					got, err, opened)
+			}
+		})
+	}
+}
+
+// A CALL IS HELD ONLY WHERE ITS USE NAMES A TOOL OF THE BRIDGE'S, as Claude
+// Code names a tool of the server the engine serves a box its tools as
+// (config.ToolServerName): every call the log keeps is a call of the
+// bridge's, and Claude Code's request clears or withholds the results of
+// other tools by their names, its own on a context hint and its memory
+// server's (`mcp__memory__memory_*`). Held: a call of the bridge's tool. Told:
+// one of Claude Code's own Bash, one of its memory server's, and one of a
+// server whose name only begins with the bridge's.
+//
+// Mutation: hold a call whatever its use names, and each told call is held;
+// or spell the bridge's server otherwise than config does, and the bridge's
+// call is told.
+func TestACallIsHeldOnlyWhereItsUseNamesAToolOfTheBridges(t *testing.T) {
+	t.Parallel()
+	call := sandbox.LoggedCall{ID: "toolu_named", Asked: true, Output: "named done"}
+	for name, tc := range map[string]struct {
+		tool string
+		held bool
+	}{
+		"a tool of the bridge's":                     {rhBridged, true},
+		"Claude Code's own tool":                     {"Bash", false},
+		"a tool of Claude Code's memory server":      {"mcp__memory__memory_view", false},
+		"a tool of a server named past the bridge's": {"mcp__" + config.ToolServerName + "x__slow", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			archive := rhArchiveOf(t, call.ID, tc.tool, call.Output)
+			got, err := executor.NewClaudeCode().ReadHoldings(t.Context(), rhSession("2.1.310"),
+				func(context.Context) (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(archive)), nil
+				}, rhAsk(call))
+			if err != nil || !got.Read {
+				t.Fatalf("a reading = %+v, %v; want a reading", got, err)
+			}
+			if held, _ := got.Holds(call); held != tc.held {
+				t.Errorf("Holds = %t, its records %+v; want %t", held, got.Calls[call.ID], tc.held)
 			}
 		})
 	}

@@ -38,8 +38,9 @@ import (
 //     it carries a requestId and stands alone where it carries none, neither a
 //     shape the rule can place;
 //   - C1 is its caller's: exactly one use of x and one result in the thread,
-//     no batch naming x, and x neither split from nor split into another id
-//     ([holdingsWalk.idsFold]);
+//     the use naming a tool of the bridge's own MCP server
+//     ([claudeBridgedToolPrefix]), no batch naming x, and x neither split
+//     from nor split into another id ([holdingsWalk.idsFold]);
 //   - C2: the resume hands U and R under every variant ([handedYes]);
 //
 // and on EVERY order the resume may hand the thread in ([threadChain.EachOrder]):
@@ -56,10 +57,16 @@ import (
 //   - C5: no user record before F holds a result of any call U's reply made,
 //     which 2.1.322's regroup of a split reply would move after it;
 //   - C6: no compaction's boundary lies at or after F, where the relaunch's
-//     first request would cut the conversation;
-//   - C7: where x calls the Poll tool, its reply holds no other Poll call,
-//     which 2.1.322's code mode folds (KFt @293413848, `H.name===wi`, wi
-//     "Poll" @288129013).
+//     first request would cut the conversation.
+//
+// NO RULE OF A TOOL'S NAME but C1's, which leaves nothing the request treats
+// by name: it clears on a context hint only the results of Claude Code's own
+// tools (2.1.322's IAi @294945524, over gAe @294943436), withholds only its
+// memory server's (dvs @289057540, `mcp__${IL}__memory_` @284883475, IL
+// "memory"), and its code mode folds only its own Poll calls (KFt
+// @293413848, `H.name===wi`, wi "Poll" @288129013), none of them a bridged
+// call. So no rule of the Poll calls a reply holds is needed, as the design
+// once had one (C7): no bridged call is a Poll.
 //
 // MEASURED: of the calls the probes kept with one use and one result, both
 // handed, (C) holds all 951 of the main threads' and all 109 of the
@@ -77,10 +84,6 @@ import (
 // and the next, the first user record holding a result of each asked reply's
 // calls, and the last boundary's place. Linear in the thread, with no cap of
 // its own.
-
-// The tool whose calls 2.1.322's code mode folds where a reply holds more
-// than one ([holdingsPairing], C7).
-const claudeToolPoll = "Poll"
 
 // claudeHarnessIDPrefixes are the prefixes of the ids of the calls and results
 // Claude Code's request writes of its own, which it places as it builds
@@ -135,10 +138,6 @@ const (
 	pairPlainResults
 	// pairBoundary is a compaction's boundary.
 	pairBoundary
-	// pairPoll is a record holding one Poll call, and pairPolls one holding
-	// more than one.
-	pairPoll
-	pairPolls
 	// pairAssistant is an assistant record, plain or not, and pairUser a user
 	// record.
 	pairAssistant
@@ -175,18 +174,6 @@ func (p *holdingsPairing) see(h chainHandle, line threadLine, m threadMessage) {
 		mark |= pairAssistant
 		if plainReply(line) {
 			mark |= pairPlainReply
-		}
-		polls := 0
-		for _, call := range m.Calls() {
-			if call.Kind == blockToolUse && call.Name == claudeToolPoll {
-				polls++
-			}
-		}
-		switch {
-		case polls == 1:
-			mark |= pairPoll
-		case polls > 1:
-			mark |= pairPolls
 		}
 	case recordUser:
 		mark |= pairUser
@@ -270,21 +257,19 @@ func (p *holdingsPairing) mark(h chainHandle) pairMark {
 }
 
 // pairAsk is one pair asked of a thread: the record of a call's use and the
-// record of its result, whether the call is a Poll, and, once
-// [holdingsPairing.pairs] answered, whether the request pairs them.
+// record of its result, and, once [holdingsPairing.pairs] answered, whether
+// the request pairs them.
 type pairAsk struct {
 	use, result chainHandle
-	poll        bool
 	paired      bool
 	// reply is the use's reply, the pass's own.
 	reply chainReplyID
 }
 
-// pairReply is what the pass gathers of one asked reply: how many Poll calls
-// its records make, and, in one order, its first record's place and the
-// first place of a user record holding a result of a call it made.
+// pairReply is what the pass gathers of one asked reply, in one order: its
+// first record's place and the first place of a user record holding a result
+// of a call it made.
 type pairReply struct {
-	polls          int
 	first, results int
 }
 
@@ -311,28 +296,17 @@ func (p *holdingsPairing) pairs(chain *threadChain, asks []*pairAsk) {
 		return
 	}
 	// WHAT EACH ASKED REPLY'S RECORDS CALL, over every record of the thread
-	// that carries its id, handed or not: C5's results and C7's Poll calls.
+	// that carries its id, handed or not: C5's results.
 	answering := map[chainCallID][]chainReplyID{}
 	for h := chainHandle(1); int(h) <= len(p.marks); h++ {
 		reply, ok := chain.Reply(h)
 		if !ok || replies[reply] == nil {
 			continue
 		}
-		switch mark := p.mark(h); {
-		case mark&pairPolls != 0:
-			replies[reply].polls += 2
-		case mark&pairPoll != 0:
-			replies[reply].polls++
-		}
 		for _, key := range chain.Uses(h) {
 			if !slices.Contains(answering[key], reply) {
 				answering[key] = append(answering[key], reply)
 			}
-		}
-	}
-	for _, a := range asks {
-		if a.paired && a.poll && replies[a.reply].polls != 1 { // C7
-			a.paired = false
 		}
 	}
 	var bad, changes []int32

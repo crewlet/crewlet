@@ -112,17 +112,17 @@ import (
 //     is held only where the record of its use carries a reply id (C0); one
 //     use of its id and one result are counted over every user and assistant
 //     record of its thread's file, chained or not, the thread's own or not, no
-//     batch's list or split id folds it into another call, and its id is none
-//     Claude Code's request writes of its own, whose results record is no
-//     plain one (C1, [holdingsWalk.mainRecord], [holdingsWalk.idsFold], held
-//     by C4 for such an id); the resume hands both records under every
+//     batch's list or split id folds it into another call, its use names a
+//     tool of the bridge's own MCP server ([claudeBridgedToolPrefix]), and its
+//     id is none Claude Code's request writes of its own, whose results record
+//     is no plain one (C1, [holdingsWalk.mainRecord], [holdingsWalk.idsFold],
+//     held by C4 for such an id); the resume hands both records under every
 //     variant (C2); and on EVERY order it hands ([threadChain.EachOrder]), the
 //     result comes after the first record of the use's reply, every record
 //     from that one to the later of the use and the result is a plain record
 //     of that reply or a plain results record (C3, C4), no record before that
-//     first one holds a result of a call the reply made (C5), no compaction's
-//     boundary lies at or after it (C6), and where the call is the Poll
-//     tool's, the reply holds no other Poll call (C7). Never by where a record
+//     first one holds a result of a call the reply made (C5), and no
+//     compaction's boundary lies at or after it (C6). Never by where a record
 //     lies in the file: an attempt the harness withdrew can lie past every
 //     restart and be handed to no model, and a result handed after another
 //     reply is handed with no call. The rule TELLS, knowingly, shapes the
@@ -436,6 +436,19 @@ const (
 	// ended its turn ([threadLine.StopReason]), the one stop that finishes a
 	// subagent's leg ([finishedReply]).
 	claudeEndedTurn = "end_turn"
+	// claudeBridgedToolPrefix opens the name Claude Code gives each tool of
+	// the bridge's MCP server, the only tool a logged call is a call of: it
+	// names an MCP server's tool `mcp__<server>__<tool>` (2.1.322's kk
+	// @283568191 and `mcp__${bn(n)}__` @283570915, its bn @282974138 keeping
+	// a name of letters, digits, `_` and `-` as it is; 2.1.310's IH
+	// @237581955 and `mcp__${En(n)}__` @237584365), and the bridge serves the
+	// box as config.ToolServerName, which config reserves against every
+	// server a company declares. Spelled out here because config imports this
+	// package; a test holds the two to each other. Every asked call's use
+	// names such a tool unless a box rewrote its transcript, and a call whose
+	// use does not is told (C1, [holdingsPairing]): Claude Code's request
+	// clears or withholds the results of other tools by their names.
+	claudeBridgedToolPrefix = "mcp__crewlet__"
 	// claudeSyntheticModel is the model of a reply Claude Code writes itself
 	// in place of a model's ([threadLine.Model]), which finishes no
 	// subagent's leg whatever it says of its stop ([finishedReply]).
@@ -592,10 +605,11 @@ type callFacts struct {
 	textBytes    int
 	opening      [32]byte
 	whole        [32]byte
-	// poll is whether its first use calls the Poll tool, and folds whether a
-	// record of a thread read names it where the request may fold it into
-	// another call, or another into it ([holdingsWalk.foldsOf]).
-	poll, folds bool
+	// bridged is whether its first use names a tool of the bridge's
+	// ([claudeBridgedToolPrefix]), and folds whether a record of a thread
+	// read names it where the request may fold it into another call, or
+	// another into it ([holdingsWalk.foldsOf]).
+	bridged, folds bool
 	// answered is whether the request a resumed session sends pairs the first
 	// use with the first result, both of one thread, by the pairing rule
 	// ([holdingsPairing]) on every order the main thread's resume, or the
@@ -934,7 +948,7 @@ func (w *holdingsWalk) mainEnd(ctx context.Context, chain *threadChain, pairing 
 	)
 	for id, f := range w.calls {
 		if f.uses > 0 && f.results > 0 && f.useThread == "" && f.resultThread == "" {
-			asks = append(asks, &pairAsk{use: chainHandle(f.useRec), result: chainHandle(f.resultRec), poll: f.poll})
+			asks = append(asks, &pairAsk{use: chainHandle(f.useRec), result: chainHandle(f.resultRec)})
 			calls = append(calls, f)
 			ids = append(ids, id)
 		}
@@ -965,7 +979,7 @@ func (w *holdingsWalk) mainEnd(ctx context.Context, chain *threadChain, pairing 
 	})
 	pairing.pairs(chain, asks)
 	for i, f := range calls {
-		f.answered = asks[i].paired && !f.folds && !folded(chain, ids[i])
+		f.answered = asks[i].paired && f.bridged && !f.folds && !folded(chain, ids[i])
 	}
 	for i, leg := range legs {
 		key, _ := chain.CallKey(legIDs[i])
@@ -1042,7 +1056,8 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int, record int32
 	case blockToolUse:
 		facts.uses++
 		if facts.uses == 1 {
-			facts.useThread, facts.useRec, facts.poll = thread, record, call.Name == claudeToolPoll
+			facts.useThread, facts.useRec = thread, record
+			facts.bridged = strings.HasPrefix(call.Name, claudeBridgedToolPrefix)
 		}
 	case blockToolResult:
 		facts.results++
@@ -1361,13 +1376,13 @@ func (w *holdingsWalk) subagentEnd(ctx context.Context, agent string, a *subagen
 	)
 	for id, f := range w.calls {
 		if f.uses > 0 && f.results > 0 && f.useThread == agent && f.resultThread == agent {
-			asks = append(asks, &pairAsk{use: chainHandle(f.useRec), result: chainHandle(f.resultRec), poll: f.poll})
+			asks = append(asks, &pairAsk{use: chainHandle(f.useRec), result: chainHandle(f.resultRec)})
 			calls, ids = append(calls, f), append(ids, id)
 		}
 	}
 	pairing.pairs(chain, asks)
 	for i, f := range calls {
-		f.answered = asks[i].paired && !f.folds && !folded(chain, ids[i])
+		f.answered = asks[i].paired && f.bridged && !f.folds && !folded(chain, ids[i])
 	}
 	return nil
 }

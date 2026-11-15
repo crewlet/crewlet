@@ -617,7 +617,8 @@ func TestAResultItsHarnessReplacedIsNotLive(t *testing.T) {
 // a record of a reply on the chain, its own call's. T1's, T2's and T4's
 // siblings, T5's Agent answer beside its sibling, and T4's linear calls past
 // the 5 MiB load path are each live, and each call the bridge answered is
-// held; T3's answered call, its record a sibling the chain skips, is held, and
+// held, T5's subagent's among them, which its Agent answer, off the chain,
+// answers; T3's answered call, its record a sibling the chain skips, is held, and
 // its open call, whose result the file never held, holds its use alone and is
 // told.
 //
@@ -631,16 +632,12 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 			"T1": {done("T1_a"), done("T1_b")},
 			"T2": {done("T2_a"), done("T2_b")},
 			"T4": {done("T4_a"), done("T4_b"), done("T4_f1"), done("T4_f2"), done("T4_f3")},
-			"T5": {done("T5_m")},
+			"T5": {done("T5_m"), done("T5_s1")},
 		} {
 			t.Run(release+"/"+name, func(t *testing.T) {
 				t.Parallel()
 				archive, session := hsFixture(t, release, name)
-				ask := append([]sandbox.LoggedCall{}, calls...)
-				if name == "T5" {
-					ask = append(ask, sandbox.LoggedCall{ID: "toolu_T5_agent", Asked: true})
-				}
-				got, err := hsRead(t, archive, session, hsAsk(ask...))
+				got, err := hsRead(t, archive, session, hsAsk(calls...))
 				hsReadWhole(t, got, err)
 				for _, call := range calls {
 					if held, _ := got.Holds(call); !held {
@@ -649,10 +646,10 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 				}
 				if name == "T5" {
 					// The Agent answer is no call the bridge logs: what is held
-					// to the rule is that its result, off the chain, is live.
-					if records := got.Calls["toolu_T5_agent"]; records.Uses != 1 || records.Results != 1 ||
-						!records.Live || records.TextBytes <= 0 {
-						t.Errorf("the Agent answer's records %+v; want its use and one live text result", records)
+					// to the rule is that its result, off the chain, answers
+					// the subagent's leg, whose call is held above.
+					if report := got.Subagents["a0000000000000001"]; !report.Reported {
+						t.Errorf("the subagent %+v; want it reported, its Agent answer live", report)
 					}
 				}
 			})
@@ -681,11 +678,11 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // and its result under every variant, and on every order, from the first
 // record of the use's reply to the later of the two, every record is a plain
 // record of that reply or a plain results record, the result after that first
-// record, no result of the reply's calls before it, no compaction's boundary
-// at or after it, and no second Poll call in its reply; and its id names no
-// other call the request may fold it with; a use whose reply carries no id
-// is its own test's ([TestACallWhoseUseCarriesNoReplyIDIsTold]). Each case is
-// a thread of the facility's records ([rcReply]), every reply of its own id
+// record, no result of the reply's calls before it, and no compaction's
+// boundary at or after it; and its use names a tool of the bridge's, and its
+// id no other call the request may fold it with; a use whose reply carries no
+// id is its own test's ([TestACallWhoseUseCarriesNoReplyIDIsTold]). Each case
+// is a thread of the facility's records ([rcReply]), every reply of its own id
 // and every record of its own time, whose order the resume hands is stated
 // beside it. Where the request does pair a call the rule tells, the case is
 // named an over-tell: the rule is conservative there, knowingly.
@@ -699,8 +696,12 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // together; a microcompaction's boundary and another reply; the result placed
 // before the use's reply by the walk's fallback past a parent naming no
 // record; a result of another of the reply's calls the walk's fallback places
-// before it; a compaction's boundary handed after it; a second Poll call in
-// its reply; a batch naming the call; its id one split from another call's,
+// before it; a compaction's boundary handed after it; a use naming no tool of
+// the bridge's: Claude Code's own (Bash), whose result a context hint clears
+// (IAi @294945524, gAe @294943436), its memory server's, whose result it
+// withholds (dvs @289057540), its Poll, which its code mode folds (KFt
+// @293413848), or a server's whose name only begins with the bridge's; a
+// batch naming the call; its id one split from another call's,
 // or another split from it; a withdrawn attempt the walk does not hand, and a
 // use the retraction filter takes beside its reply's handed first record. And
 // each mark that keeps a record from being a plain one, on the use's record or
@@ -729,8 +730,8 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // written there; a record of the reply after the result, a results record of
 // another call between the reply's records, a microcompaction's boundary
 // before the reply, a result marked not meta, two calls of one reply each with
-// its own result, one Poll call alone, an id of a split one's form where no
-// call carries the id it reads as split from, and a result whose origin names
+// its own result, an id of a split one's form where no call carries the id it
+// reads as split from, and a result whose origin names
 // no kind, which the request reads only by its kind. No reading, so told: a
 // result hung under a reply between it and its use (ADJ1, R1a, R1c), which
 // tengu_foamy_spring may hang under its call's record (whyResultByCall).
@@ -765,9 +766,10 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // microcompaction's boundary before the use is held; drop the result after F
 // with C5, which holds it too, and the result the fallback places before the
 // reply is held; drop C5 alone, and the early result is held; drop C6, and the
-// boundary after the use is held; drop C7, and the second Poll is held; drop
-// the batch's or the split ids' fold, in the main thread or a subagent's, and
-// each is held; read a reply's record
+// boundary after the use is held; hold a call whatever tool its use names,
+// and each use naming no tool of the bridge's is held; drop the batch's or
+// the split ids' fold, in the main thread or a subagent's, and each is held;
+// read a reply's record
 // as plain though it is virtual, marked an API error, of the model
 // "<synthetic>" or listing a batch, and each case of that mark on the use is
 // held; read a results record as plain though it is virtual, stamped by a
@@ -790,13 +792,6 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 	results := func(parent, n int, ids ...string) string { return rcResults(parent, n, n*100, ids...) }
 	prompt := func(parent, n int) string { return rcPrompt(parent, n, n*100) }
 	micro := func(parent, n int) string { return rcSystem(parent, n, n*100, subtypeMicrocompactBoundary, "") }
-	polls := func(ids ...string) string {
-		blocks := make([]string, len(ids))
-		for i, id := range ids {
-			blocks[i] = `{"type":"tool_use","id":"` + id + `","name":"Poll","input":{}}`
-		}
-		return "[" + strings.Join(blocks, ",") + "]"
-	}
 	brief := rcPrompt(0, 1, 0)
 	// use, result and after are the plain case's records ("the use, then its
 	// result"); marked is a record carrying key, and synthetic a reply of the
@@ -807,6 +802,10 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 	}
 	synthetic := func(line string) string {
 		return ctReplace(t, line, `"model":"claude-sonnet-4-5"`, `"model":"`+claudeSyntheticModel+`"`)
+	}
+	// calling is use, its call one of tool.
+	calling := func(tool string) string {
+		return ctReplace(t, use, `"name":"mcp__crewlet__slow"`, `"name":"`+tool+`"`)
 	}
 	for name, tc := range map[string]struct {
 		lines []string
@@ -935,11 +934,16 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 		// beside it; the relaunch's first request cuts there.
 		"a compaction's boundary after the use": {lines: []string{brief, reply(1, 2, "msg_m", rcCalls(x)),
 			rcSystem(2, 3, 300, subtypeCompactBoundary, ""), results(2, 4, x), reply(3, 5, "msg_after", said)}},
-		// [1, 2, 3, 4]
-		"a second Poll call in its reply": {lines: []string{brief, reply(1, 2, "msg_m", polls(x, y)),
-			results(2, 3, x, y), reply(3, 4, "msg_after", said)}},
-		"one Poll call alone": {lines: []string{brief, reply(1, 2, "msg_m", polls(x)), results(2, 3, x),
-			reply(3, 4, "msg_after", said)}, held: true},
+		// [1, 2, 3, 4], each a call of no tool of the bridge's: Claude Code's
+		// own, which a context hint clears; its memory server's, which it
+		// withholds; its Poll, which its code mode folds; and a server's whose
+		// name only begins with the bridge's.
+		"its use a call of Claude Code's own tool": {lines: []string{brief, calling("Bash"), result, after}},
+		"its use a call of Claude Code's memory server": {lines: []string{brief,
+			calling("mcp__memory__memory_view"), result, after}},
+		"its use a Poll call": {lines: []string{brief, calling("Poll"), result, after}},
+		"its use a call of a server named past the bridge's": {lines: []string{brief,
+			calling("mcp__crewletx__slow"), result, after}},
 		"a batch naming the call": {lines: []string{brief, reply(1, 2, "msg_m", rcCalls(x)), results(2, 3, x),
 			ctReplace(t, reply(3, 4, "msg_after", said), `"type":"assistant",`,
 				`"type":"assistant","batchToolUses":[{"id":"`+x+`","name":"Bash"}],`)}},
@@ -1724,7 +1728,9 @@ func TestAWholeLoggedOutputIsHeldToEveryByteOfItsResult(t *testing.T) {
 // its text, never its mark: told with the mark stripped, and told with its text
 // reworded to the log's very output while it still says it failed; held only
 // where the result is the log's, a success of the log's text, whatever mark it
-// carries.
+// carries. Its call, a shell call as the probe made it, is renamed a call of a
+// tool of the bridge's, as every call the log keeps is
+// ([claudeBridgedToolPrefix]).
 //
 // Mutation: read a result's is_error as absent, and the reworded result holds
 // its call.
@@ -1747,7 +1753,8 @@ func TestTheResumesMarkDecidesNothing(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			archive, session := hsFixture(t, "2.1.310", "EK", tc.edits...)
+			bridged := [2]string{`"id":"toolu_e1","name":"Bash"`, `"id":"toolu_e1","name":"mcp__crewlet__slow"`}
+			archive, session := hsFixture(t, "2.1.310", "EK", append([][2]string{bridged}, tc.edits...)...)
 			got, err := hsRead(t, archive, session, hsAsk(call))
 			hsReadWhole(t, got, err)
 			if held, _ := got.Holds(call); held != tc.held {
@@ -1759,13 +1766,14 @@ func TestTheResumesMarkDecidesNothing(t *testing.T) {
 
 // A STOPPED OR GIVEN-UP HARNESS'S OWN RESULT DOES NOT HOLD ITS CALL. Measured: a
 // harness stopped in a shell call records its exit code as the call's failed
-// result (ET0), and one that gave up on a slow call records its own timeout
-// text as a failure (pB, a) while the bridge logged the call's success and its
-// output; each is told. The timeout text is as long as that output, so it is
-// told for its text as well as its failure: told still as a success. A call
-// the bridge answered in time (pB, c) is held: its result is the log's,
-// beside a request's blob that repeats it with a reminder appended, which is
-// no record of the thread.
+// result (ET0, its shell call renamed a call of a tool of the bridge's, as
+// every call the log keeps is), and one that gave up on a slow call records
+// its own timeout text as a failure (pB, a) while the bridge logged the
+// call's success and its output; each is told. The timeout text is as long as
+// that output, so it is told for its text as well as its failure: told still
+// as a success. A call the bridge answered in time (pB, c) is held: its
+// result is the log's, beside a request's blob that repeats it with a
+// reminder appended, which is no record of the thread.
 //
 // Mutation: compare a result's text with the log's output by its length
 // alone, and the timeout text read as a success holds its call.
@@ -1778,7 +1786,8 @@ func TestAStoppedOrGivenUpHarnesssOwnResultDoesNotHoldItsCall(t *testing.T) {
 		call    sandbox.LoggedCall
 		held    bool
 	}{
-		"a harness stopped in its call": {"ET0", nil, hsLogged("toolu_et1", "et1-done\n"), false},
+		"a harness stopped in its call": {"ET0", [][2]string{{`"id":"toolu_et1","name":"Bash"`,
+			`"id":"toolu_et1","name":"mcp__crewlet__slow"`}}, hsLogged("toolu_et1", "et1-done\n"), false},
 		"a call its harness gave up on": {"pBa", nil, gaveUp, false},
 		"its timeout text, as a success": {"pBa", [][2]string{{`"is_error":true,"tool_use_id":"toolu_pb_a"`,
 			`"is_error":false,"tool_use_id":"toolu_pb_a"`}}, gaveUp, false},
@@ -2454,8 +2463,11 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // result and one by its task notification, P2(h)'s with a tree of two calls
 // at once in each thread, P2(c)'s, P2(dc)'s, T5's on both releases and T10's
 // on both, the last on 2.1.322 past the turnCompanion record before its
-// notification, are reported; P2(dc)'s box copy, its subagent's thread cut
-// back before its last reply (condition 5), and P2(d)'s, are not: its Agent
+// notification, are reported, each call of a tool of the bridge's held and
+// each other told in the main list (P2(c)'s and P2(dc)'s shell calls, and
+// P2(h)'s calls of a server it named seat); P2(dc)'s box copy, its
+// subagent's thread cut back before its last reply (condition 5), and
+// P2(d)'s, are not: its Agent
 // call answered by the resume's own result (condition 3), and before that its
 // thread not whole, the call it was cut off in a record of its own that its
 // resumed conversation, chained past it, never hands (the strict rule). Built, each
@@ -2523,9 +2535,9 @@ type hsMeasured map[string][]sandbox.LoggedCall
 // agent's, a progress record, a batch's list in no shape, an answer handed
 // only beside its call's record handed), and the subagent its case built is
 // reported; or read a prompt's parentUuid that is empty or absent as naming
-// no record, and the subagent whose prompt carries it is not whole. Drop the strict rule, and the reply
-// that finished on another branch is reported, and so is each shape built
-// against rule 2 not whole; apply it to every own leaf,
+// no record, and the subagent whose prompt carries it is not whole. Drop the
+// strict rule, and the reply that finished on another branch is reported, and
+// so is each shape built against rule 2 not whole; apply it to every own leaf,
 // the leaf aside or not, and the two calls at once are not whole; read
 // condition 5 in the file's order, and the reply handed before its call
 // reports its subagent while the one written before its result does not; or
@@ -2839,6 +2851,11 @@ func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryL
 		})
 	}
 	done := func(id, output string) sandbox.LoggedCall { return hsLogged(id, output) }
+	// unbridged are the measured calls of no tool of the bridge's: P2(c)'s
+	// and P2(dc)'s shell calls, and P2(h)'s calls of a server it named seat.
+	// Each is told, in the main list where its subagent is reported.
+	unbridged := map[string]bool{"toolu_c1a": true, "toolu_c1b": true, "toolu_d2a": true, "toolu_d2b": true,
+		"toolu_h_bg_echo": true, "toolu_h_fg_echo": true}
 	for name, tc := range map[string]struct {
 		calls hsMeasured
 		why   string
@@ -2879,10 +2896,14 @@ func TestASubagentIsReportedOnlyWhereItsOneConversationAnsweredAndFinishedEveryL
 				}
 				for _, call := range calls {
 					held, under := got.Holds(call)
-					if records := got.Calls[call.ID]; held != (tc.why == "") || records.Thread != agent ||
-						(!held && under != agent) {
+					want, heading := tc.why == "" && !unbridged[call.ID], agent
+					if tc.why == "" {
+						heading = ""
+					}
+					if records := got.Calls[call.ID]; held != want || records.Thread != agent ||
+						(!held && under != heading) {
 						t.Errorf("%s: Holds = %t under %q, its records %+v; want it held %t, in %s's thread",
-							call.ID, held, under, records, tc.why == "", agent)
+							call.ID, held, under, records, want, agent)
 					}
 				}
 			}
