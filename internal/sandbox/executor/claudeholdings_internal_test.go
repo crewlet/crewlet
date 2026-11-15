@@ -697,18 +697,35 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // its reply; a batch naming the call; its id one split from another call's,
 // or another split from it; a withdrawn attempt the walk does not hand, and a
 // use the retraction filter takes beside its reply's handed first record. And
-// the over-tells: another reply, or a prompt, between the reply's first record
-// and the use with the result before it; a prompt with another call's result
-// between the reply's records; a microcompaction's boundary before the use;
-// and a result marked meta. Held: each case's control, a use of the reply's
+// each mark that keeps a record from being a plain one, on the use's record or
+// the result's: a virtual record, which the request drops (2.1.322's Nh skips
+// nS @283080327); a use that is the harness's own reply to a failed request,
+// an API error of the model "<synthetic>", which it drops too (A8, there); a
+// result a shutdown stamped, which the resume rewrites (@295255175), one that
+// is a compaction's summary, one delivering a task, which the request may drop
+// (@298573770), and one whose origin is a voice call's or a task
+// notification's, each of which it renders anew (@298573820, @298574409); and
+// a results record between the reply's records answering an id Claude Code
+// writes of its own, a project's read, which ends the fold's merge (Aje, in
+// the scan @298577650). And the over-tells: another reply, or a prompt,
+// between the reply's first record and the use with the result before it; a
+// prompt with another call's result between the reply's records; a
+// microcompaction's boundary before the use; a result marked meta; an API
+// error's mark alone on the use, or the model "<synthetic>" alone, neither of
+// which A8 is; a batch's list on the use's record naming another call, whose
+// split calls alone the request folds (GWi @291388775); and a result whose
+// origin, or whose meta mark, does not decode, which the request reads as no
+// origin (`origin?.kind`) and as not meta (`isMeta===!0`), the rule as a mark
+// it cannot read. Held: each case's control, a use of the reply's
 // second record, a result recovered before the use but after the reply's
 // first record, and one written before the reply, which the resume recovers
 // after its first record all the same, as it does another call's result
 // written there; a record of the reply after the result, a results record of
 // another call between the reply's records, a microcompaction's boundary
 // before the reply, a result marked not meta, two calls of one reply each with
-// its own result, one Poll call alone, and an id of a split one's form where
-// no call carries the id it reads as split from. No reading, so told: a
+// its own result, one Poll call alone, an id of a split one's form where no
+// call carries the id it reads as split from, and a result whose origin names
+// no kind, which the request reads only by its kind. No reading, so told: a
 // result hung under a reply between it and its use (ADJ1, R1a, R1c), which
 // tengu_foamy_spring may hang under its call's record (whyResultByCall).
 //
@@ -740,7 +757,13 @@ func TestParallelResultsAfterTheLastRestartAreLive(t *testing.T) {
 // with C5, which holds it too, and the result the fallback places before the
 // reply is held; drop C5 alone, and the early result is held; drop C6, and the
 // boundary after the use is held; drop C7, and the second Poll is held; drop
-// the batch's or the split ids' fold, and each is held; drop C2 and the
+// the batch's or the split ids' fold, and each is held; read a reply's record
+// as plain though it is virtual, marked an API error, of the model
+// "<synthetic>" or listing a batch, and each case of that mark on the use is
+// held; read a results record as plain though it is virtual, stamped by a
+// shutdown, a summary, delivering a task, of an origin of a kind, of an origin
+// or a meta mark that does not decode, or answering an id Claude Code writes
+// of its own, and each case of that mark is held; drop C2 and the
 // order's own test of the use, and the retracted use is held; read on past a
 // main thread the model cannot place at its end, and each no-reading case is
 // read; take a system record for a turn record in the leaf set's pick, and
@@ -764,6 +787,16 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 		return "[" + strings.Join(blocks, ",") + "]"
 	}
 	brief := rcPrompt(0, 1, 0)
+	// use, result and after are the plain case's records ("the use, then its
+	// result"); marked is a record carrying key, and synthetic a reply of the
+	// model Claude Code writes its own replies under.
+	use, result, after := reply(1, 2, "msg_m", rcCalls(x)), results(2, 3, x), reply(3, 4, "msg_after", said)
+	marked := func(line, key string) string {
+		return ctReplace(t, line, `"isSidechain":false,`, `"isSidechain":false,`+key+`,`)
+	}
+	synthetic := func(line string) string {
+		return ctReplace(t, line, `"model":"claude-sonnet-4-5"`, `"model":"`+claudeSyntheticModel+`"`)
+	}
 	for name, tc := range map[string]struct {
 		lines []string
 		// held is whether x is held, and y where pair; id is the call asked in
@@ -919,6 +952,43 @@ func TestACallIsHeldOnlyWhereItsResumedRequestPairsItsUseWithItsResult(t *testin
 		"two calls of one reply, each with its own result": {lines: []string{brief,
 			reply(1, 2, "msg_m", rcCalls(x, y)), results(2, 3, x), results(2, 4, y),
 			reply(4, 5, "msg_after", said)}, held: true, pair: true},
+		// [1, 2, 3, 4], each mark on the use's record U or the result's R.
+		"its use's record virtual": {lines: []string{brief, marked(use, `"isVirtual":true`), result,
+			after}},
+		"its use the harness's own reply to a failed request": {lines: []string{brief,
+			marked(synthetic(use), `"isApiErrorMessage":true`), result, after}},
+		// OVER-TELL: A8 skips an API error of the model "<synthetic>" alone.
+		"its use marked an API error alone": {lines: []string{brief, marked(use, `"isApiErrorMessage":true`),
+			result, after}},
+		// OVER-TELL, as the case before.
+		"its use of the model \"<synthetic>\" alone": {lines: []string{brief, synthetic(use), result, after}},
+		// OVER-TELL: GWi folds only the batch's split ids, and x is none.
+		"its use's record listing a batch of another call": {lines: []string{brief,
+			marked(use, `"batchToolUses":[{"id":"toolu_pair_other","name":"Bash"}]`), result, after}},
+		"its result's record virtual": {lines: []string{brief, use, marked(result, `"isVirtual":true`),
+			after}},
+		"its result's record stamped by a shutdown": {lines: []string{brief, use,
+			marked(result, `"interruptedByShutdown":true`), after}},
+		"its result's record a compaction's summary": {lines: []string{brief, use,
+			marked(result, `"isCompactSummary":true`), after}},
+		"its result's record delivering a task": {lines: []string{brief, use,
+			marked(result, `"taskDelivery":{}`), after}},
+		"its result's record of a voice call's origin": {lines: []string{brief, use,
+			marked(result, `"origin":{"kind":"voice-call"}`), after}},
+		"its result's record of a task notification's origin": {lines: []string{brief, use,
+			marked(result, `"origin":{"kind":"task-notification"}`), after}},
+		"its result's record of an origin of no kind": {lines: []string{brief, use,
+			marked(result, `"origin":{"producer":"session-task"}`), after}, held: true},
+		// OVER-TELL: the request reads `origin?.kind`, and a string has none.
+		"its result's record of an origin that does not decode": {lines: []string{brief, use,
+			marked(result, `"origin":"voice-call"`), after}},
+		// OVER-TELL: the request reads `isMeta===!0`.
+		"its result's record of a meta mark that does not decode": {lines: []string{brief, use,
+			marked(result, `"isMeta":"true"`), after}},
+		// [1, 2, 3, 4, 5, 6]: the record between answers a project's read.
+		"a results record answering an id Claude Code writes between the reply's records": {lines: []string{
+			brief, reply(1, 2, "msg_m", rcCalls(x)), results(2, 3, "projectread_1"), reply(3, 4, "msg_m", said),
+			results(2, 5, x), reply(4, 6, "msg_after", said)}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
