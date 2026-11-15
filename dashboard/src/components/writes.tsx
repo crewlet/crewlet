@@ -207,7 +207,6 @@ function AssignDialog({
       icon={<UserPlusGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -510,7 +509,6 @@ function EditProjectDialog({
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -800,7 +798,6 @@ function DeleteViewDialog({
       icon={<TrashGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -883,7 +880,6 @@ function SaveViewDialog({
       icon={editing ? <PencilGlyph /> : <PinGlyph />}
       onClose={() => onClose()}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={() => onClose()} disabled={write.busy}>
@@ -1459,7 +1455,6 @@ function AnswerRunDialog({
       icon={<CornerDownLeftGlyph />}
       onClose={onClose}
       onSubmit={inWords ? submit : undefined}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -1775,7 +1770,6 @@ function AssignToSeatDialog({
       icon={<PlusGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footerStart={
         <Button
           variant="ghost"
@@ -2007,7 +2001,6 @@ export function SteerTurnDialog({
       icon={<CompassGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

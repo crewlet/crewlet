@@ -189,8 +189,8 @@ export function BrowseView() {
         )}
         {(answer.data?.unreadable ?? 0) > 0 && (
           <Callout variant="neutral">
-            {plural(answer.data?.unreadable ?? 0, "room")} came from a newer version of the engine
-            and {answer.data?.unreadable === 1 ? "isn’t" : "aren’t"} listed.
+            {plural(answer.data?.unreadable ?? 0, "room")} came from a newer version of Crewlet and{" "}
+            {answer.data?.unreadable === 1 ? "isn’t" : "aren’t"} listed.
           </Callout>
         )}
         <QueryState

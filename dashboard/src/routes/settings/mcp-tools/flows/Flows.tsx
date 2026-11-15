@@ -9,8 +9,8 @@
  */
 
 import { useState } from "react";
-import { Button, ConfirmModal, Text, useToast } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { Button, Text, useToast } from "@crewlethq/ui";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import type { McpMemberServerStatus } from "~/contract/mcp.ts";
 import { setEnabled, restartServer } from "../api.ts";
 import { useServerDetail, type McpData } from "../data.ts";

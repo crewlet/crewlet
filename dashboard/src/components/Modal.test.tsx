@@ -4,10 +4,12 @@
  * its buttons and nothing else.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Button } from "@crewlethq/ui";
-import { Modal } from "./Modal.tsx";
+import { confirmStepUp, setStepUpConfirmer } from "~/protocol/signin.ts";
+import { STILL_WORKING } from "~/lib/waiting.ts";
+import { ConfirmModal, Modal } from "./Modal.tsx";
 import { WriteButton } from "./WriteButton.tsx";
 import type { Act } from "~/lib/useAct.ts";
 
@@ -99,4 +101,59 @@ test("a dialog with no foot draws no foot band", () => {
     </Modal>,
   );
   expect(document.querySelector(".crewlet-modal__footer")).toBeNull();
+});
+
+/** Why the dialog's close control is unavailable, as it is read out with it. */
+function closeReason(): string {
+  const close = screen
+    .getAllByRole("button")
+    .find((b) => b.getAttribute("aria-disabled") === "true");
+  const id = close?.getAttribute("aria-describedby") ?? "";
+  return document.getElementById(id)?.textContent ?? "";
+}
+
+// ONE SENTENCE FOR A DIALOG WHOSE WRITE IS OUT, from `lib/waiting.ts`. Forty
+// dialogs spelled their own, each "Waiting for the engine to answer", which
+// names a part of the product nobody sees and is wrong while a step-up is
+// asking the person rather than the engine.
+//
+// Mutation: drop the default in `Modal`, and the kit's own sentence is read.
+test("a dialog that cannot close says it is still working, or what it waits for", async () => {
+  render(
+    <>
+      <Modal open title="New room" onClose={() => {}} dismissable={false}>
+        <p>Creating.</p>
+      </Modal>
+    </>,
+  );
+  expect(closeReason()).toBe(STILL_WORKING);
+
+  let confirm: (ok: boolean) => void = () => {};
+  const uninstall = setStepUpConfirmer(() => new Promise<boolean>((r) => (confirm = r)));
+  let asked: Promise<boolean> = Promise.resolve(false);
+  act(() => {
+    asked = confirmStepUp();
+  });
+  expect(closeReason()).toBe("Waiting for you to confirm who you are.");
+  await act(async () => {
+    confirm(true);
+    await asked;
+  });
+  uninstall();
+  expect(closeReason()).toBe(STILL_WORKING);
+});
+
+// AND A CONFIRMATION IN FLIGHT SAYS THE SAME, rather than the kit's own words.
+test("a confirmation in flight says it is still working", () => {
+  render(
+    <ConfirmModal
+      open
+      title="Delete this branch?"
+      message="It cannot be undone."
+      onClose={() => {}}
+      onConfirm={() => {}}
+      submitting
+    />,
+  );
+  expect(closeReason()).toBe(STILL_WORKING);
 });

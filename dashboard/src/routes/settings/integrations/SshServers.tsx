@@ -12,17 +12,8 @@
  */
 
 import { useState } from "react";
-import {
-  Callout,
-  CodeBlock,
-  ConfirmModal,
-  Link,
-  List,
-  ListItem,
-  Section,
-  Switch,
-  Text,
-} from "@crewlethq/ui";
+import { Callout, CodeBlock, Link, List, ListItem, Section, Switch, Text } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useRest } from "~/lib/useRest.ts";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";

@@ -1289,7 +1289,7 @@ function kitModalImports(path: string, text: string, lang: Lang): string[] {
       if (spec.type !== "ImportSpecifier") continue;
       const imported = spec.imported as Node;
       const name = String(imported.type === "Identifier" ? imported.name : imported.value);
-      if (name === "Modal") found.push(`${path}:${line(spec.start)}`);
+      if (name === "Modal" || name === "ConfirmModal") found.push(`${path}:${line(spec.start)}`);
     }
   }
   return found;
@@ -1305,6 +1305,6 @@ test("every dialog opens through the dashboard's Modal, never the kit's", () => 
     offenders,
     'import Modal from "~/components/Modal.tsx": it keeps the place where a write control in the dialog\'s foot draws its refusal',
   ).toEqual([]);
-  // AND THE RULE READS THE TREE: the dashboard's Modal itself opens the kit's.
-  expect(kitModalImports("components/Modal.tsx", MODAL_SOURCE, "tsx")).toHaveLength(1);
+  // AND THE RULE READS THE TREE: the dashboard's Modal itself opens the kit's two.
+  expect(kitModalImports("components/Modal.tsx", MODAL_SOURCE, "tsx")).toHaveLength(2);
 });

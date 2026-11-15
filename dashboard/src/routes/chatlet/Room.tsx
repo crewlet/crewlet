@@ -342,8 +342,8 @@ function Conversation({ channelID }: { channelID: string }) {
       {tail.unreadable > 0 && (
         <Callout variant="warning">
           {tail.unreadable} message{tail.unreadable === 1 ? "" : "s"} on this page came from a newer
-          version of the engine, so {tail.unreadable === 1 ? "it isn’t" : "they aren’t"} shown yet.
-          Upgrading this node shows {tail.unreadable === 1 ? "it" : "them"}.
+          version of Crewlet, so {tail.unreadable === 1 ? "it isn’t" : "they aren’t"} shown yet.
+          Upgrading Crewlet here shows {tail.unreadable === 1 ? "it" : "them"}.
         </Callout>
       )}
       {/* THE TRANSCRIPT IS DRAWN FROM A TAIL THAT HAS BEEN READ, never from

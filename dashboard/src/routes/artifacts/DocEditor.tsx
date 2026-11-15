@@ -32,7 +32,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
-  ConfirmModal,
   ConflictNote,
   DocTabsEditor,
   Input,
@@ -41,6 +40,7 @@ import {
   markdownWords,
   useToast,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { CheckGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
 import { newActOpID } from "~/protocol/index.ts";

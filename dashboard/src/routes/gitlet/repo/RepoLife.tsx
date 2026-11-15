@@ -71,7 +71,6 @@ function DeleteDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () => 
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

@@ -304,7 +304,6 @@ export function DisconnectDialog({
       // sitting out a busy vendor for up to forty-five seconds. Dismissing
       // part-way is how a tool ends up half disconnected with nobody told.
       dismissable={!busy}
-      closeDisabledReason="Waiting for the engine to finish disconnecting."
       size="md"
       stackBody
       footer={

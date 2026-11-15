@@ -45,7 +45,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ConfirmModal, useToast } from "@crewlethq/ui";
+import { useToast } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { useLeaveGuard, useNavigator, useRoute, useUnloadGuard } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
 import type { EngineHealth } from "~/contract/health.ts";

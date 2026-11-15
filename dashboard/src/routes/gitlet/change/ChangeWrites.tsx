@@ -15,7 +15,8 @@
  */
 
 import { useState } from "react";
-import { Checkbox, ConfirmModal, Stack } from "@crewlethq/ui";
+import { Checkbox, Stack } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { changeLive, refName, shortOID } from "~/lib/code.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -49,7 +50,6 @@ export function RebaseButton({ change }: { change: CodeChangeDetail }) {
         confirmLabel="Rebase"
         onClose={() => setConfirming(false)}
         submitting={write.busy}
-        busyReason="Waiting for the engine to answer"
         onConfirm={async () => {
           await write.run(
             { change: change.ref, expected_head: change.head },
@@ -102,7 +102,6 @@ export function DequeueButton({
         confirmLabel="Take out of the queue"
         onClose={() => setConfirming(false)}
         submitting={write.busy}
-        busyReason="Waiting for the engine to answer"
         onConfirm={async () => {
           await write.run({ change: changeRef }, { done: `Took ${changeRef} out of the queue` });
           setConfirming(false);
@@ -144,7 +143,6 @@ export function RevertChangePanel({ change }: { change: CodeChangeDetail }) {
         confirmLabel={merge ? "Revert and merge" : "Open the revert"}
         onClose={() => setConfirming(false)}
         submitting={write.busy}
-        busyReason="Waiting for the engine to answer"
         onConfirm={async () => {
           await write.run(
             { change: change.ref, ...(merge ? { merge: true } : {}) },

@@ -30,13 +30,13 @@ import { useMemo, useState } from "react";
 import {
   Button,
   Callout,
-  ConfirmModal,
   FileList,
   FilePickButton,
   useToast,
   type FileListItem,
   type PickedFile,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { TrashGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState, Section } from "~/components/common.tsx";
 import { fmtBytes } from "~/lib/format.ts";

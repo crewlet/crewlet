@@ -41,7 +41,6 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import {
   Callout,
-  ConfirmModal,
   DocumentTitleField,
   FilterChip,
   FilterChipGroup,
@@ -50,6 +49,7 @@ import {
   markdownWords,
   type RichEditorHandle,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { CheckGlyph, FileTextGlyph, ListOrderedGlyph, LockGlyph } from "@crewlethq/icons/glyphs";
 import { useLeaveGuard, useNavigator, useParam } from "~/app/router.tsx";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";

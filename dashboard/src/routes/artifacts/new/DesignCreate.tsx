@@ -48,7 +48,6 @@ import {
   Callout,
   CanvasBoard,
   CanvasSchematic,
-  ConfirmModal,
   FormField,
   IconButton,
   Input,
@@ -64,6 +63,7 @@ import {
   type CanvasHandle,
   type MenuEntry,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import {
   ChevronDownGlyph,
   ChevronUpGlyph,
