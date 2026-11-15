@@ -27,20 +27,27 @@ import {
   Audit,
   artifactDetail,
   auditCsv,
+  pastEventHistory,
   runtimeDetail,
   runtimeWhere,
   writerOf,
 } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { ACT_ERRORS } from "~/contract/errors.ts";
-import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
+import { useClient, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { QueryError, type QueryName } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
+  return {
+    ...actual,
+    useClient: vi.fn(),
+    useConnection: vi.fn(),
+    useOrg: vi.fn(),
+    useEngineHealth: vi.fn(() => null),
+  };
 });
 
 const json = (body: unknown, status = 200) =>
@@ -1168,4 +1175,31 @@ test("seconds passing redraw nothing on a quiet screen", async () => {
   expect(
     seen.map((r) => `${r.type} ${(r.target as Element).className ?? ""} ${r.attributeName ?? ""}`),
   ).toEqual([]);
+});
+
+// A WINDOW WIDER THAN THE EVENT LOG KEEPS SAYS SO. Tool calls are read from the
+// event log, which keeps the span the engine reports; a 90-day window drew 30
+// days of them as though that were all there was.
+test("a window past the event log's span says tool calls reach back only that far", async () => {
+  const thirtyDays = 30 * 86_400;
+  const now = Date.parse("2026-06-15T12:00:00Z");
+  expect(pastEventHistory(new Date(now - 90 * 86_400_000).toISOString(), now, thirtyDays)).toBe(
+    "Tool calls reach back only the last 30 days: the event log keeps none older, so this window shows none before that. The other sources are not affected.",
+  );
+  expect(
+    pastEventHistory(new Date(now - 7 * 86_400_000).toISOString(), now, thirtyDays),
+  ).toBeNull();
+  // NOT KNOWN YET: nothing is claimed about a span the engine has not said.
+  expect(pastEventHistory(new Date(now - 90 * 86_400_000).toISOString(), now, null)).toBeNull();
+
+  vi.mocked(useEngineHealth).mockReturnValue({ event_history_seconds: thirtyDays } as never);
+  serving({});
+  location.hash = "#/settings/audit?window=90d";
+  mount();
+  expect(await screen.findByText(/Tool calls reach back only the last 30 days/)).toBeTruthy();
+  cleanup();
+  location.hash = "#/settings/audit?window=7d";
+  mount();
+  await act(async () => {});
+  expect(screen.queryByText(/Tool calls reach back only/)).toBeNull();
 });

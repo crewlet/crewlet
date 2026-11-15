@@ -11599,8 +11599,11 @@ keeps the engine's id. A refused or failed call is marked as a
 failure. Worklet's feed and the runtime audit are windowed by the engine,
 the other three are narrowed here, and a page that filled before it reached
 the window's start is named in a notice above the card — windowed or not — as
-long as the Where filter shows its rows. On a phone Export CSV folds into the
-bar's More menu. A
+long as the Where filter shows its rows. A window that starts before the
+event log's span (`event_history_seconds` on the health push, 30 days) says
+in a notice that tool calls reach back only that far, since the runtime audit
+is read from the event log and the other sources are not bounded by it. On a
+phone Export CSV folds into the bar's More menu. A
 long value in the To column is cut with an ellipsis and carries the whole of
 itself on its title (on a phone card it wraps), and an empty one says why in
 the row's own terms: a tool call's arguments are "Not recorded", a backup row

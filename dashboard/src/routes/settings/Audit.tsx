@@ -135,7 +135,7 @@ import { QueryState } from "~/components/common.tsx";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdownText.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
 import { useClock } from "~/lib/clock.ts";
@@ -148,7 +148,7 @@ import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { authorityWords } from "~/lib/refusal.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import { Credential } from "~/components/Credential.tsx";
-import { sentence } from "~/lib/format.ts";
+import { eventHistorySpan, sentence } from "~/lib/format.ts";
 import { andList, withoutActor } from "~/lib/words.ts";
 import { ACTIONS } from "~/contract/actions.ts";
 import type {
@@ -733,6 +733,7 @@ export function Audit() {
   const edge = useClock((now) => Math.ceil(now / POLL_MS) * POLL_MS);
   const range = useTimeRange(edge, AUDIT_OFFER, false);
   const { since, until } = range;
+  const history = useEngineHealth()?.event_history_seconds;
   const [actor, setActor] = useParam("actor", "");
   const [kind, setKind] = useParam("kind", "");
 
@@ -1004,6 +1005,10 @@ export function Audit() {
     return short.filter((source) => !kind || reaches(source, kind)).map((s) => SOURCE_LABEL[s]);
   }, [workData, identity.page, runtimeData, knowledgeData, configData, artifactsData, since, kind]);
 
+  // A WINDOW WIDER THAN THE EVENT LOG KEEPS, said where tool calls are shown.
+  const pastHistory =
+    !kind || reaches("runtime", kind) ? pastEventHistory(since, edge, history) : null;
+
   const anyDetail = rows.some((row) => row.detail);
   const columns = useMemo<DataGridColumn<AuditEntry>[]>(
     () => [
@@ -1257,6 +1262,7 @@ export function Audit() {
       {truncated.length > 0 && (
         <Callout variant="warning">Only the newest rows of {andList(truncated)} are shown.</Callout>
       )}
+      {pastHistory && <Callout variant="info">{pastHistory}</Callout>}
       {withheld.length > 0 && (
         <Callout variant="warning">
           {withheld.map((sentence) => (
@@ -1436,6 +1442,25 @@ function whereOf(row: AuditEntry): Where {
  * Whether a trail's rows can be shown under a Where: its own, or for the
  * runtime audit every place a call is said to be made ([runtimeWhere]).
  */
+/**
+ * What a window that starts before the event log's floor costs: tool calls
+ * are read from the event log, which keeps the span the engine reports
+ * (`event_history_seconds`), so a wider window holds none older. Null while
+ * the window fits, or before the engine said its span.
+ */
+export function pastEventHistory(
+  since: string,
+  now: number,
+  historySeconds: number | null | undefined,
+): string | null {
+  if (historySeconds == null || !Number.isFinite(historySeconds) || historySeconds <= 0) {
+    return null;
+  }
+  const from = Date.parse(since);
+  if (!Number.isFinite(from) || from >= now - historySeconds * 1000) return null;
+  return `Tool calls reach back only ${eventHistorySpan(historySeconds)}: the event log keeps none older, so this window shows none before that. The other sources are not affected.`;
+}
+
 function reaches(source: Source, where: string): boolean {
   if (source === where) return true;
   return source === "runtime" && RUNTIME_WHERES.has(where);
