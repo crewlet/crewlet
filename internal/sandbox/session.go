@@ -3132,13 +3132,19 @@ func (c *Coordinator) standDownGone(ctx context.Context, by time.Time, run Pendi
 // of now, which the turn's end waits for ([Coordinator.awaitCapture]): see
 // [stampInFlight].
 func captureInFlight(run PendingRun, now time.Time) bool {
-	return stampInFlight(run, now) != nil
+	return stampInFlight(run, now, anyStamp) != nil
 }
 
-// stampInFlight is the stamp of run's turn still in flight as of now, nil for
-// none: its newest capture, being kept ([SessionCapture.keeping]) or stood by
-// for ([SessionCapture.standing]), else its save under way being kept
-// ([PendingRun.saving]). The keep's age is the stamp's alone, and an older one
+// anyStamp admits every stamp of a turn: the turn's end waits for each
+// ([captureInFlight]).
+func anyStamp(SessionCapture) bool { return true }
+
+// stampInFlight is the stamp of run's turn still in flight as of now that
+// admits takes, nil for none: its newest capture, being kept
+// ([SessionCapture.keeping]) or stood by for ([SessionCapture.standing]),
+// else its save under way being kept ([PendingRun.saving]). The turn's end
+// admits every stamp ([anyStamp]); a relaunch only the stamps its decision
+// depends on ([relaunchWaitsOn]). The keep's age is the stamp's alone, and an older one
 // is one whose node stopped, or whose budget ran out, before it could say what
 // came of it: a wait for it asks besides whether its taker is gone
 // ([Coordinator.settleGone]).
@@ -3157,11 +3163,11 @@ func captureInFlight(run PendingRun, now time.Time) bool {
 // ([stampOnto]) and the log refuses a capture no newer than its row's. A save
 // whose record went unanswered is no keep in flight, as an unanswered newest is
 // not: the end asks it again ([Coordinator.settleUnresolved]) rather than wait.
-func stampInFlight(run PendingRun, now time.Time) *SessionCapture {
-	if newest := run.Capture; newest != nil && (newest.keeping(now) || newest.standing(now)) {
+func stampInFlight(run PendingRun, now time.Time, admits func(SessionCapture) bool) *SessionCapture {
+	if newest := run.Capture; newest != nil && (newest.keeping(now) || newest.standing(now)) && admits(*newest) {
 		return newest
 	}
-	if save := run.saving(now); save != nil && save.keeping(now) {
+	if save := run.saving(now); save != nil && save.keeping(now) && admits(*save) {
 		return save
 	}
 	return nil

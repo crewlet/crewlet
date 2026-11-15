@@ -10937,8 +10937,12 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   being kept, or its record was sent and never answered, which a relaunch asks
   the executor log for again before it decides, continuing the capture where it
   landed (until the capture's object is past the twelve hours a record may name
-  it in, when the ask refuses it unasked); what the launch is launched on
-  cannot be said (every member of
+  it in, when the ask refuses it unasked); a capture of an earlier job of the
+  turn is still being kept while the turn has kept none of its own, since once
+  one lands a relaunch no longer continues the session the turn's first launch
+  was handed (beside a capture the turn kept, an earlier job's keep changes
+  nothing a relaunch decides, and the row is decided); what the launch is
+  launched on cannot be said (every member of
   the seat's chain sitting out its plan, no node holding the seat, the node
   holding it not answering); only the resume of a collected job decides the
   relaunch, and its turn has not begun (a round lost a second time, or carried

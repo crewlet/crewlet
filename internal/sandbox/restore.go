@@ -120,6 +120,14 @@ import (
 // relaunch waits for it as for the newest capture ([relaunchWaitsOn]), settles
 // and asks it as the newest, and names it by its own place.
 //
+// ONLY FOR WHAT ITS DECISION DEPENDS ON ([relaunchDependsOn]): a capture or a
+// save of the job it follows, and an earlier job's only while the turn has
+// kept nothing, whose landing ends the base the relaunch would otherwise
+// continue. An earlier job's keep beside a capture the turn kept changes
+// nothing a relaunch decides, so it decides at once rather than hold the
+// seat's frame for it; the turn's end, whose tombstone would refuse it, still
+// waits for every keep in flight.
+//
 // WITHIN THE SAME WAIT, WHAT IS UNSETTLED IS SETTLED BEFORE THE DECISION: a
 // capture whose taker is gone — its taker lease lapsed or held at another
 // epoch ([Coordinator.settleGone], session.go) — is settled from the
@@ -607,7 +615,10 @@ type ReadContinuity struct {
 // taken by the read that collects it, and kept off that read; the capture of
 // that job, or a save under way beside it, still being kept, which a relaunch
 // waits for ([relaunchCaptureWait]), or its record sent and never answered,
-// which a relaunch asks the log for again ([captureAwaitsAnswer]);
+// which a relaunch asks the log for again ([captureAwaitsAnswer]); a capture
+// of an earlier job still being kept while the turn has kept none, whose
+// landing ends the session the turn's first launch was handed as the one a
+// relaunch continues ([relaunchDependsOn]);
 // what the launch would be launched on not to be said now
 // ([RelaunchTarget.Undecided]); a relaunch that only the resume of the job's
 // collection decides, as it reads how the job ended, until its turn begins and
@@ -744,6 +755,11 @@ func relaunchContinuity(row executorkeep.TurnRow, run PendingRun, target Relaunc
 			run.LaunchSeq)}
 	}
 	if waits := relaunchWaitsOn(run, now); waits != nil {
+		if waits.LaunchSeq != run.LaunchSeq {
+			return ReadContinuity{Why: fmt.Sprintf("a capture of an earlier job of the turn (launch %d, "+
+				"capture %d) is still being kept, and the turn has kept none: once one lands, a relaunch "+
+				"continues no session the turn's first launch was handed", waits.LaunchSeq, waits.CaptureSeq)}
+		}
 		return ReadContinuity{Why: fmt.Sprintf("the capture of the job a relaunch would follow (launch %d, "+
 			"capture %d) is still being kept", waits.LaunchSeq, waits.CaptureSeq)}
 	}
@@ -869,8 +885,9 @@ func TargetAsk(row executorkeep.TurnRow, head string, run *PendingRun) (Relaunch
 // RereadsRow reports whether a reader that read row below the level a relaunch
 // reads it (executordomain.RelaunchRead) must read it again there before deciding its
 // continuity: only where the decision reaches the row (the turn live and not
-// ending, its job neither working nor a capture or save of it still being kept,
-// [relaunchWaitsOn], nor awaiting its record's answer, [captureAwaitsAnswer])
+// ending, its job neither working nor a capture or save the relaunch waits
+// for still being kept, [relaunchWaitsOn], nor awaiting its record's answer,
+// [captureAwaitsAnswer])
 // and the
 // row names another capture than the one run's record keeps, or the record
 // keeps none: whether a relaunch of a turn that has kept nothing continues the
@@ -950,13 +967,32 @@ func captureAwaitsAnswer(run PendingRun, now time.Time) *SessionCapture {
 // relaunchWaitsOn is the stamp a relaunch of run's turn waits for before it
 // decides which session it continues ([Coordinator.ContinuedCapture]), and a
 // reader waits on rather than decide ([relaunchContinuity], [RereadsRow]); nil
-// where there is none. It is every stamp the turn's end waits for
+// where there is none. It is a stamp the turn's end waits for
 // ([stampInFlight]), the newest capture being kept or stood by for, else a
 // save under way being kept, answered as the stamp itself so that the reason a
 // relaunch or a reader gives names the one it waited on by its own place,
 // never the newest place a final take that overtook a save holds.
+//
+// ONLY A STAMP THE RELAUNCH'S DECISION DEPENDS ON ([relaunchDependsOn]),
+// where the end waits on every one: the frame that waits holds the seat and a
+// slot of the node's admission, and a keep whose landing could change nothing
+// the relaunch decides is a wait that buys nothing, as a reader undecided for
+// it says nothing a relaunch would not already say.
 func relaunchWaitsOn(run PendingRun, now time.Time) *SessionCapture {
-	return stampInFlight(run, now)
+	return stampInFlight(run, now, func(stamp SessionCapture) bool { return relaunchDependsOn(run, stamp) })
+}
+
+// relaunchDependsOn reports whether what a relaunch of run's turn continues
+// can turn on whether stamp lands: a stamp of the job the relaunch follows
+// (run.LaunchSeq), whose capture is the one it continues; or a stamp of any
+// job while the turn has kept nothing, since once a capture of the turn is
+// kept a relaunch no longer continues the session the turn's first launch was
+// handed ([frozenBase]). An earlier job's stamp beside a capture the turn kept
+// is neither: a relaunch continues only a capture of the job it follows
+// ([followedCapture]), and the turn has already kept one, so its landing
+// changes no relaunch's decision.
+func relaunchDependsOn(run PendingRun, stamp SessionCapture) bool {
+	return stamp.LaunchSeq == run.LaunchSeq || run.Kept == nil
 }
 
 // relaunchWaits is [relaunchWaitsOn] as the rule a relaunch's wait reads
@@ -1110,8 +1146,9 @@ type ContinuedSession struct {
 }
 
 // relaunchCaptureWait bounds how long a relaunch waits for the capture of the
-// job it follows to be kept, or a save under way beside it
-// ([relaunchWaitsOn]), on the frame that relaunches: see the file comment.
+// job it follows to be kept, or a save under way beside it, or an earlier
+// job's while the turn has kept nothing ([relaunchWaitsOn]), on the frame that
+// relaunches: see the file comment.
 //
 // FIFTEEN SECONDS, from what an ordinary keep is: the turn's operations minted
 // and the seat's live sessions listed (reads of the coordination store), an
@@ -1144,7 +1181,9 @@ const relaunchCaptureWait = 15 * time.Second
 // answered, and starting a session of its own beside it. A SAVE UNDER WAY of
 // the turn is waited for, settled and asked the same way as its newest
 // capture ([relaunchWaitsOn], [captureAwaitsAnswer]), and a reason the wait
-// leaves names the stamp it waited on.
+// leaves names the stamp it waited on. It waits for an earlier job's keep
+// only while the turn has kept nothing, the one case its landing changes what
+// the relaunch continues ([relaunchDependsOn]).
 //
 // ASKED BY THE LAUNCH'S CALLER before it builds the run's surface and briefs,
 // so what the run is offered and told is the session's; the launch takes up
@@ -1186,11 +1225,20 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 			"could not be read: %v", err)
 	}
 	var why string
-	if waits := relaunchWaitsOn(run, c.now()); waits != nil {
+	switch waits := relaunchWaitsOn(run, c.now()); {
+	case waits != nil && waits.LaunchSeq != run.LaunchSeq:
+		// AN EARLIER JOB'S, waited on only while the turn has kept nothing:
+		// the job the relaunch follows kept nothing either, and what it
+		// continues instead turns on that capture's landing.
+		_, why = followedCapture(run, run.LaunchSeq)
+		why += fmt.Sprintf("; a capture of an earlier job of the turn (launch %d, capture %d) was still "+
+			"being kept %s after the relaunch asked for it, which the relaunch does not wait out",
+			waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
+	case waits != nil:
 		why = fmt.Sprintf("the capture of the job the relaunch follows (launch %d, capture %d) "+
 			"was still being kept %s after the relaunch asked for it, which the relaunch does not wait out",
 			waits.LaunchSeq, waits.CaptureSeq, c.relaunchWait)
-	} else {
+	default:
 		// THE FOLLOWED JOB'S UNANSWERED RECORDS, its newest capture's and a
 		// save's beside it: one past the window a record may name it in is
 		// refused unasked, and stamped so.

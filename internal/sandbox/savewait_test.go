@@ -400,3 +400,146 @@ func TestARelaunchWaitsBrieflyForASaveOfTheJobItFollows(t *testing.T) {
 		})
 	})
 }
+
+// A RELAUNCH WAITS ONLY FOR A CAPTURE ITS DECISION DEPENDS ON. Its wait holds
+// the seat's frame and a slot of the node's admission, so it waits for a keep
+// only where the keep's landing can change what it continues: a capture or a
+// save of the job it follows, and an earlier job's while the turn has kept
+// nothing. Beside a capture the turn kept, an earlier job's capture or save
+// still being kept changes nothing (a relaunch continues only a capture of
+// the job it follows, and the turn has already kept one), so the relaunch
+// decides at once, naming the job it follows, which left no capture. Where
+// the turn has kept nothing, an earlier job's save still being kept decides
+// whether the relaunch continues the session the turn's first launch was
+// handed: it waits, and continues that base once the save is refused, and no
+// base once the save lands, the turn then having kept a session of its own;
+// still being kept when the wait runs out, it is named as the earlier job's
+// keep it is, beside the job the relaunch follows having left no capture.
+//
+// Mutation: wait on every stamp in flight whatever its job, and the relaunch
+// beside a capture the turn kept waits its whole wait for a keep that changes
+// nothing, naming that keep as the followed job's; wait only on the stamps of
+// the job the relaunch follows, and the relaunch of a turn that kept nothing
+// continues the base at once, beside a save about to end it; or name an
+// earlier job's keep as the followed job's, and the relaunch says the job it
+// follows is still being kept.
+func TestARelaunchWaitsOnlyForACaptureItsDecisionDependsOn(t *testing.T) {
+	t.Parallel()
+	for name, keeping := range map[string]func(t *testing.T, rig *coordRig) SessionCapture{
+		"an earlier job's capture beside a capture the turn kept": func(t *testing.T, rig *coordRig) SessionCapture {
+			rig.launchKept(t, "t1")
+			kept := keptSave(t, rig, "t1")
+			begun := kept
+			begun.CaptureSeq, begun.State, begun.At = kept.CaptureSeq+1, CaptureBegun, rig.coordinator.now()
+			begun.Object, begun.ObjectHash, begun.ObjectSize, begun.ContentKey = "", "", 0, ""
+			if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
+				t.Fatalf("stamping the earlier job's capture begun = %v, %v", took, err)
+			}
+			return begun
+		},
+		"an earlier job's save beside a capture the turn kept": func(t *testing.T, rig *coordRig) SessionCapture {
+			rig.launchKept(t, "t1")
+			keptSave(t, rig, "t1")
+			save, _ := overtakenSave(t, rig, "t1", "", 0, CaptureRefused)
+			return save
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, _, _ := keepingRig(t)
+				rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
+				rig.coordinator.relaunchWait = 10 * time.Second
+				stamp := keeping(t, rig)
+				// THE JOB AFTER IT, which left no capture: the relaunch follows that one.
+				if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentHandle: "swe",
+					AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
+					t.Fatalf("the second job: %v", err)
+				}
+				if waits := stampInFlight(rig.get("t1"), rig.coordinator.now(), anyStamp); waits == nil ||
+					!waits.sameTake(stamp) {
+					t.Fatalf("the premise: the turn's end would wait on %+v, want the earlier job's keep", waits)
+				}
+				asked := time.Now()
+				_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				if waited := time.Since(asked); waited >= captureWaitTick {
+					t.Errorf("the relaunch waited %s on an earlier job's keep beside a capture the turn kept", waited)
+				}
+				if !strings.Contains(why, "(launch 2) has left no capture") || strings.Contains(why, "still being kept") {
+					t.Errorf("the relaunch says %q, want the job it follows having left no capture, and no keep "+
+						"waited on", why)
+				}
+			})
+		})
+	}
+	for name, lands := range map[string]bool{
+		"an earlier job's save refused while the relaunch waits, the turn having kept none": false,
+		"an earlier job's save kept while the relaunch waits, the turn having kept none":    true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				rig, logbook, _ := conversingRig(t)
+				rig.coordinator.relaunchWait = 10 * time.Second
+				read := frozenReadOf(logbook, logbook.endedTurn(t, "b1", "s-base", "the base's transcript"))
+				ctx := t.Context()
+				if _, err := rig.coordinator.Launch(ctx, rig.manager, continuingBase("t2", read)); err != nil {
+					t.Fatalf("the first launch: %v", err)
+				}
+				rig.suspend("t2")
+				save, _ := overtakenSave(t, rig, "t2", "", 0, CaptureRefused)
+				if _, err := rig.pending.BeginLaunch(ctx, PendingRun{TurnID: "t2", AgentHandle: "swe",
+					AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
+					t.Fatalf("the second job: %v", err)
+				}
+				outcome := CaptureRefused
+				if lands {
+					outcome = CaptureLanded
+				}
+				settled := make(chan struct{})
+				go func() {
+					defer close(settled)
+					time.Sleep(20 * time.Millisecond)
+					_, _ = rig.pending.StampCapture(context.Background(), "t2", comeOut(save, outcome))
+				}()
+				asked := time.Now()
+				continued, why := rig.coordinator.ContinuedCapture(ctx, "t2", rig.runner)
+				waited := time.Since(asked)
+				<-settled
+				if waited < 20*time.Millisecond {
+					t.Fatalf("the relaunch decided after %s (%q), before the earlier job's save it depends on "+
+						"was %s", waited, why, outcome)
+				}
+				switch {
+				case !lands && (why != "" || continued.Base == nil || continued.Base.Turn != "b1"):
+					t.Errorf("the relaunch continues base %+v (%q), want the base the turn's row still holds, the "+
+						"save refused", continued.Base, why)
+				case lands && (continued.Base != nil || !strings.Contains(why, "kept a session of its own")):
+					t.Errorf("the relaunch continues base %+v (%q), want none, the turn having kept the save",
+						continued.Base, why)
+				}
+			})
+		})
+	}
+	t.Run("an earlier job's save still being kept past the wait, the turn having kept none", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRig(t)
+			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{}}
+			rig.coordinator.relaunchWait = 50 * time.Millisecond
+			rig.launchKept(t, "t1")
+			save, _ := overtakenSave(t, rig, "t1", "", 0, CaptureRefused)
+			if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentHandle: "swe",
+				AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
+				t.Fatalf("the second job: %v", err)
+			}
+			_, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+			earlier := fmt.Sprintf("a capture of an earlier job of the turn (launch %d, capture %d) was still "+
+				"being kept", save.LaunchSeq, save.CaptureSeq)
+			if !strings.Contains(why, "(launch 2) has left no capture") || !strings.Contains(why, earlier) {
+				t.Errorf("the relaunch says %q, want the job it follows having left no capture, and the earlier "+
+					"job's keep it waited on named as that: %q", why, earlier)
+			}
+		})
+	})
+}
