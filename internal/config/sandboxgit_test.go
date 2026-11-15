@@ -195,11 +195,12 @@ units:
 	return doc
 }
 
-// directWarnings is c's advisories about a `direct` box.
+// directWarnings is c's advisories about a `direct` box, read by their class:
+// the stable code a screen reads them by, never their sentence.
 func directWarnings(c *Company) []Warning {
 	var out []Warning
 	for _, w := range c.AdvisoryWarnings() {
-		if strings.Contains(w.Message, "a `direct` box runs as the engine's own user") {
+		if w.Class == ClassDirectBox {
 			out = append(out, w)
 		}
 	}
@@ -242,6 +243,14 @@ func TestADirectSeatInACompanyThatHostsCodeIsWarned(t *testing.T) {
 					"run it in `container` or `e2b`"} {
 					if !strings.Contains(got[0].Message, says) {
 						t.Errorf("the warning does not say %q: %q", says, got[0].Message)
+					}
+				}
+				// AND THE OWNER IS TOLD THE SAME in their own words: what the
+				// cell lets an agent do and what to run it in instead.
+				for _, says := range []string{"every code repository", "act as any other agent",
+					"a container or a cloud sandbox"} {
+					if !strings.Contains(got[0].Person, says) {
+						t.Errorf("the warning does not tell a person %q: %q", says, got[0].Person)
 					}
 				}
 			}

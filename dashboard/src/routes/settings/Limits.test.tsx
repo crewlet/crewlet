@@ -53,8 +53,14 @@ function row(over: Partial<Row> & Pick<Row, "key" | "group">): Row {
 
 const LIMITS: LimitsAnswer = {
   limits: [
-    row({ key: "turn_engine.max_iterations", group: "turn" }),
-    row({ key: "turn_engine.onboarding_max_tool_rounds", group: "turn", value: 7, default: 10 }),
+    row({ key: "turn_engine.max_iterations", group: "turn", range: { min: 1 } }),
+    row({
+      key: "turn_engine.onboarding_max_tool_rounds",
+      group: "turn",
+      value: 7,
+      default: 10,
+      range: { min: 0 },
+    }),
     row({
       key: "notification_rate_limit",
       group: "notifications",
@@ -63,6 +69,14 @@ const LIMITS: LimitsAnswer = {
       default: 0,
       off: true,
       default_off: true,
+      range: { min: 0 },
+    }),
+    row({
+      key: "notification_coalesce_max_batch",
+      group: "notifications",
+      value: 20,
+      default: 20,
+      range: { min: 1, max: 100 },
     }),
     row({
       key: "schedules.timeout_seconds",
@@ -90,7 +104,12 @@ test("each cap carries its name, its key, its value and its source", async () =>
   await show(LIMITS);
   const turn = screen.getByRole("table", { name: "Guardrails on every turn" });
   const changed = within(turn).getByRole("row", { name: /Tool rounds on a first turn/ });
-  expect(within(changed).getByText("turn_engine.onboarding_max_tool_rounds")).toBeDefined();
+  // THE KEY BEHIND ITS COPY CONTROL, the kit's way of carrying it.
+  expect(
+    within(changed).getByRole("button", {
+      name: "Copy the setting's key, turn_engine.onboarding_max_tool_rounds",
+    }),
+  ).toBeDefined();
   expect(
     within(changed)
       .getAllByRole("cell")
@@ -203,7 +222,7 @@ test("a cap is checked by the engine, then saved as a patch of its one key", asy
   // this node applied, which is still the value before.
   const row = screen.getByRole("row", { name: /Review rounds per turn/ });
   expect(within(row).getByText("5")).toBeTruthy();
-  expect(within(row).getByRole("status").textContent).toBe("applying…");
+  expect(within(row).getByText("applying…").closest('[role="status"]')).not.toBeNull();
   expect(screen.queryByRole("textbox")).toBeNull();
 });
 
@@ -236,7 +255,7 @@ test("the applying mark goes once this node applied the revision", async () => {
   expect(asked.filter((q) => q === "limits").length).toBeGreaterThan(before);
   const row = screen.getByRole("row", { name: /Review rounds per turn/ });
   expect(within(row).getByText("5")).toBeTruthy();
-  expect(within(row).queryByRole("status")).toBeNull();
+  expect(within(row).queryByText("applying…")).toBeNull();
   expect(within(row).getByText("Changed from 3")).toBeTruthy();
 });
 
@@ -257,32 +276,78 @@ test("an emptied field removes the key, which is the default", async () => {
   });
 });
 
-test("a value the document already holds is not saved again", async () => {
+/** The Save button of the open field. */
+const saveButton = () => screen.getByRole("button", { name: "Save" });
+
+/** The sentence a held button is described by. */
+function heldReason(button: HTMLElement): string {
+  return (button.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
+// SAVE IS HELD WHILE NOTHING CHANGED: a press that could only be told the
+// value is the limit already was a press offered for nothing.
+test("Save is held while the value typed is the one in force", async () => {
   const calls = stubEngine(() => engineAnswer(DOC, 200, { ETag: '"r1"' }));
   await show(LIMITS);
   await change(/Change Tool rounds on a first turn/, "7");
-  expect(sent(calls)).toEqual(["GET /config"]);
-  expect(screen.getByText("Already the limit.")).toBeTruthy();
+  expect(calls).toEqual([]);
+  expect(saveButton().getAttribute("aria-disabled")).toBe("true");
+  expect(heldReason(saveButton())).toContain("This is the limit already.");
+  // The default typed for a cap at its default is no change either.
+  cleanup();
+  await show(LIMITS);
+  await change(/Change Review rounds per turn/, "3");
+  expect(saveButton().getAttribute("aria-disabled")).toBe("true");
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "4" } });
+  expect(saveButton().getAttribute("aria-disabled")).not.toBe("true");
 });
 
-// THE ENGINE'S OWN WORDS. Whether a number is one the company can run is the
-// engine's rule: the check refuses it, the refusal is drawn as written, and
-// no save is sent.
-test("a value the engine refuses is said in its words, and nothing is saved", async () => {
-  const refusal =
-    "turn_engine.onboarding_max_tool_rounds_ceiling: must be at least onboarding_max_tool_rounds (40), got 20";
+// THE ENGINE'S RANGE, SAID BEFORE THE SAVE. 0, -2 and 999999 went to the
+// engine with Save enabled and came back as the document's raw line; the
+// row carries the range the engine's validator holds the cap to, and the
+// field says a value outside it as it is typed, in the cap's own words.
+test.each([
+  [/Change Review rounds per turn/, "0", "At least 1."],
+  [/Change Review rounds per turn/, "-2", "At least 1."],
+  [/Change Notices gathered into one wake-up/, "999999", "From 1 to 100."],
+])("%s typed as %s is refused beside the field, and nothing is sent", async (name, typed, said) => {
+  const calls = stubEngine(() => engineAnswer(DOC, 200, { ETag: '"r1"' }));
+  await show(LIMITS);
+  await change(name, typed);
+  expect(calls).toEqual([]);
+  expect(screen.getByRole("textbox").getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getAllByText(said).length).toBeGreaterThan(0);
+  expect(saveButton().getAttribute("aria-disabled")).toBe("true");
+});
+
+// A PERSON'S WORDS, NEVER THE DOCUMENT'S. Whether a number fits the whole
+// company is the engine's rule, and its refusal was drawn as its line for an
+// operator: the key, "value out of range", a note for an operator, and the
+// API's advice in capitals. A rule the engine words for a person is said in
+// those words, a range is said as the field says it, and anything else as a
+// value the rest of the configuration cannot take.
+test("a value the engine refuses is said in a person's words, and nothing is saved", async () => {
+  const line =
+    "turn_engine.onboarding_max_tool_rounds_ceiling: value out of range: must be at least onboarding_max_tool_rounds (40), got 20";
+  const said =
+    "Tool rounds on a first turn can be at most 20, the most an extension may grant a first turn.";
   const calls = stubEngine((call) => {
     if (call.method === "GET") return engineAnswer(DOC, 200, { ETag: '"r1"' });
     return engineAnswer(
       {
         error: "validation_error",
-        detail: refusal,
+        detail: line,
+        hint: "The whole company is checked on every change.",
         problems: [
           {
             path: "turn_engine.onboarding_max_tool_rounds_ceiling",
             segments: ["turn_engine", "onboarding_max_tool_rounds_ceiling"],
             kind: "out_of_range",
-            message: refusal,
+            message: line,
+            said,
           },
         ],
       },
@@ -291,10 +356,48 @@ test("a value the engine refuses is said in its words, and nothing is saved", as
   });
   await show(LIMITS);
   await change(/Change Tool rounds on a first turn/, "40");
-  expect(screen.getByText(refusal)).toBeTruthy();
+  const refused = screen.getByText(said).closest('[role="status"]')!;
+  expect(refused.textContent).not.toContain("turn_engine.");
+  expect(refused.textContent).not.toContain("The whole company is checked");
   expect(calls.filter((c) => c.method === "PATCH" && !c.path.includes("dry_run"))).toEqual([]);
   // The field stays open on what was typed.
   expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("40");
+});
+
+test("the engine's range refusal is said as the field says it, and an unworded rule plainly", async () => {
+  const line = "turn_engine.max_iterations: value out of range: must be at least 5, got 4";
+  stubEngine((call) => {
+    if (call.method === "GET") return engineAnswer(DOC, 200, { ETag: '"r1"' });
+    return engineAnswer(
+      {
+        error: "validation_error",
+        detail: line,
+        problems: [
+          {
+            path: "turn_engine.max_iterations",
+            segments: ["turn_engine", "max_iterations"],
+            kind: "out_of_range",
+            message: line,
+            range: { min: 5 },
+          },
+          {
+            path: "mcp_servers[0].name",
+            segments: ["mcp_servers", 0, "name"],
+            kind: "conflict",
+            message: "mcp_servers[0].name: conflict: duplicate MCP server name",
+          },
+        ],
+      },
+      400,
+    );
+  });
+  await show(LIMITS);
+  await change(/Change Review rounds per turn/, "4");
+  const refused = screen
+    .getByText("At least 5. This value does not fit the rest of the company’s configuration.")
+    .closest('[role="status"]')!;
+  expect(refused.textContent).not.toContain("turn_engine.");
+  expect(refused.textContent).not.toContain("mcp_servers");
 });
 
 // A COLLEAGUE'S SAVE IN BETWEEN is a conflict to re-read, never an overwrite.
@@ -314,9 +417,12 @@ test("what is typed is held to the cap's unit before any request", async () => {
   await show(LIMITS);
   await change(/Change Review rounds per turn/, "2.5");
   expect(calls).toEqual([]);
-  // THE FIELD IS REFUSED, in its own line under it, before anything is sent.
+  // THE FIELD IS REFUSED, in its own line under it, before anything is sent,
+  // saying what the value is not: the line under the field already says what
+  // it takes, and the two said the same thing.
   expect(screen.getByRole("textbox").getAttribute("aria-invalid")).toBe("true");
-  expect(screen.getAllByText(/A whole number\./).length).toBeGreaterThan(1);
+  expect(screen.getAllByText("“2.5” is not a whole number.").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/A whole number\./)).toHaveLength(1);
 });
 
 // A CAP NO DOCUMENT CARRIES IS NOT OFFERED A CHANGE: the engine says which
@@ -325,7 +431,7 @@ test("what is typed is held to the cap's unit before any request", async () => {
 test("the engine's constant has no pencil", async () => {
   await show(LIMITS);
   const row = screen.getByRole("row", { name: /A scheduled turn's time limit/ });
-  expect(within(row).queryByRole("button")).toBeNull();
+  expect(within(row).queryByRole("button", { name: /^Change / })).toBeNull();
 });
 
 // NEVER HIDDEN: a reader who cannot write the document sees every pencil,

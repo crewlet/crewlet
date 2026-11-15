@@ -70,7 +70,6 @@ import {
   FormField,
   Input,
   Link,
-  Modal,
   Skeleton,
   Tag,
   Text,
@@ -84,6 +83,7 @@ import {
   TableTextCell,
   PageNote,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { KeyGlyph, MonitorGlyph, ShieldUserGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import {
@@ -101,6 +101,8 @@ import { peekHref } from "~/app/frame/peekAddress.ts";
 import { ADMIN, holds } from "~/lib/access.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
+import { SessionDevice } from "~/components/SessionDevice.tsx";
+import { deviceOf } from "~/lib/userAgent.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
@@ -840,6 +842,15 @@ function Sessions({
           defaultSort="started"
           empty={{ title: "Signed in nowhere" }}
           columns={[
+            {
+              // WHICH DEVICE, FIRST: the column a person reads to choose the
+              // session to sign out. With only the two times, "Sign out"
+              // could not be aimed at the laptop they lost.
+              key: "device",
+              header: "Device",
+              sortValue: (s) => deviceOf(s.user_agent),
+              cell: (s) => <SessionDevice row={s} />,
+            },
             {
               key: "started",
               align: "right",

@@ -16,6 +16,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { installWindow } from "~/testing.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -185,4 +186,33 @@ test("a looping parent chain still draws every event", async () => {
   const events = [ev("e-1", "00", "a", "b", "first"), ev("e-2", "01", "b", "a", "second")];
   await mount({ trace_id: TRACE, events, truncated: false });
   expect(document.querySelectorAll('[role="row"][data-tree-id]')).toHaveLength(2);
+});
+
+// A PHONE'S ROW HAS NO LANE. The grid draws a row as two lines of words there,
+// and the lane, squeezed between the actor and the time on the second, kept
+// its mark and lost its rail: a stray bar that placed nothing. At a desk's
+// width the lane stays.
+//
+// Mutation: draw the lane whatever the width.
+test("a trace's lane is drawn at a desk's width and left out on a phone", async () => {
+  const events = [
+    ev("e-1", "00", "root", "", "Scheduled sweep fired"),
+    ev("e-2", "05", "turn", "root", "Agent PM completed turn"),
+  ];
+  const desk = installWindow(1440);
+  try {
+    await mount({ trace_id: TRACE, events, truncated: false });
+    expect(document.querySelectorAll(".trace-lane")).toHaveLength(events.length);
+  } finally {
+    cleanup();
+    desk.restore();
+  }
+  const phone = installWindow(390);
+  try {
+    await mount({ trace_id: TRACE, events, truncated: false });
+    expect(screen.getByText("Agent PM completed turn")).toBeTruthy();
+    expect(document.querySelectorAll(".trace-lane")).toHaveLength(0);
+  } finally {
+    phone.restore();
+  }
 });

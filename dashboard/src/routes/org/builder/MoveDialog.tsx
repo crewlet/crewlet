@@ -49,7 +49,8 @@ import { movePreview, type MovePreview } from "./movePreview.ts";
 import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { FolderInputGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Checkbox, Modal } from "@crewlethq/ui";
+import { Button, Checkbox } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 
 export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();

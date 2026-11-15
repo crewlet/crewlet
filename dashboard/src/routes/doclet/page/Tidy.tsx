@@ -31,13 +31,13 @@ import {
   ConfirmField,
   FormField,
   Input,
-  Modal,
   TagsInput,
   Text,
   confirmMatches,
   useToast,
   type ComboboxOption,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   FolderInputGlyph,
   HashGlyph,

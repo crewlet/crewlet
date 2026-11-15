@@ -715,8 +715,8 @@ func (s *Service) refuseRemovalApply(w http.ResponseWriter, r *http.Request, kin
 	case errors.As(err, &invalid):
 		fields := RefusalFields(err)
 		fields["detail"] = invalid.Err.Error()
-		fields["hint"] = "the WHOLE document the removal produces is validated, so " +
-			"a change it makes that the company cannot run is refused at its field"
+		fields["hint"] = "The whole company is checked on every removal, so a " +
+			"change it makes that the company cannot run is refused at its field."
 		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
 	case errors.As(err, &entityErr):
 		s.refuseEntity(w, r, kind, id, err)

@@ -733,7 +733,7 @@ describe("checking the draft", () => {
     mountBuilder({ engine });
     await screen.findByText("Configuration OK");
     const banner = await screen.findByRole("group", {
-      name: "Warnings about the whole configuration",
+      name: "Warnings about the configuration",
     });
     expect(
       screen.queryByRole("group", { name: "Problems with the whole configuration" }),
@@ -746,6 +746,84 @@ describe("checking the draft", () => {
     expect(within(banner).getByRole("link", { name: "Open Models" }).getAttribute("href")).toBe(
       href(["settings", "models"]),
     );
+  });
+
+  /*
+   * ONE LIST, COUNTED ONCE, IN A PERSON'S WORDS. The banner counted only the
+   * warnings on no node and the review every warning of the same check, so
+   * the chart said "1 warning to know about" over a review of nine, seven of
+   * them one sentence per agent naming `providers.llm.default`. Both draw one
+   * list now: a class the engine raises per seat is one line naming how many
+   * agents, in the words the engine wrote for a person, with the link to
+   * where it is changed. Mutation: count the banner off the warnings on no
+   * node, or draw `message` where `person` is set, and this goes red.
+   */
+  test("the banner and the review say the same warnings, each class once, in a person's words", async () => {
+    const engine = new Engine(company());
+    const learning = (seat: string, at: number) => ({
+      kind: "advisory",
+      ref: "",
+      path: `roles[${at}].llm_auxiliary`,
+      segments: ["roles", at, "llm_auxiliary"],
+      seat,
+      unit: "",
+      from: "",
+      to: "",
+      message: `${seat}'s reflection and summaries run on providers.llm.default, the model its executor runs on`,
+      class: "learning.auxiliary_model",
+      person: "Reflection and summaries run on the same model as the agent's own work.",
+    });
+    const advise = (answer: Record<string, unknown>) =>
+      json({
+        ...answer,
+        warnings: [
+          {
+            kind: "advisory",
+            ref: "",
+            path: "providers.sandbox.default_run_in",
+            segments: ["providers", "sandbox", "default_run_in"],
+            seat: "",
+            unit: "",
+            from: "",
+            to: "",
+            message: "a `direct` box runs as the engine's own user; run it in `container` or `e2b`",
+            class: "sandbox.direct_box",
+            person: "Agents run their work directly on the engine's own server.",
+          },
+          learning("ceo", 0),
+          learning("designer", 1),
+        ],
+      });
+    engine.script = (r, e) =>
+      r.query.get("dry_run") === "true"
+        ? e
+            .answer(r)
+            .json()
+            .then((answer) => advise(answer as Record<string, unknown>))
+        : null;
+    const { checkChange } = mountBuilder({ engine });
+    await screen.findByText("Configuration OK");
+    const lines = (list: HTMLElement) =>
+      within(list)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent);
+    const said = [
+      "Agents run their work directly on the engine's own server. Open Models",
+      "2 agents: Reflection and summaries run on the same model as the agent's own work. Open Models",
+    ];
+    const banner = await screen.findByRole("group", { name: "Warnings about the configuration" });
+    expect(within(banner).getByText(/The engine runs this company, with 2 warnings/)).toBeDefined();
+    expect(lines(banner)).toEqual(said);
+    expect(banner.textContent).not.toMatch(/providers|llm_|direct`|container`/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checkChange();
+    await screen.findByText("Configuration OK");
+    fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review and save" });
+    const warnings = within(dialog).getByRole("region", { name: "Warnings" });
+    expect(warnings.textContent).toContain("The engine will run this, with 2 warnings");
+    expect(lines(warnings)).toEqual(said);
   });
 
   test("the live region says what an edit did, and undo from the keyboard reverts it", async () => {

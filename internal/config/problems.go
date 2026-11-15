@@ -53,6 +53,15 @@ type Problem struct {
 	// Line is the 1-based line in the submitted text, for a failure the
 	// parser found.
 	Line int `json:"line,omitempty"`
+	// Range is the bound the value broke, for a value outside its setting's
+	// declared range ([Range]): what a screen says to a person in its own
+	// words and the setting's unit ("At least 1."), where Message is this
+	// package's line for an operator. Absent for every other problem.
+	Range *Range `json:"range,omitempty"`
+	// Said is the problem in a person's words, where its rule wrote them
+	// ([Fault.Said]): what a screen shows a person in place of Message, which
+	// names the document's keys. Absent where the rule wrote none.
+	Said string `json:"said,omitempty"`
 }
 
 // Problems flattens a validation error into its located, classified
@@ -158,7 +167,7 @@ func holdsProblems(err error) bool {
 func (f *Fault) problem() Problem {
 	return Problem{
 		Path: f.Path.String(), Segments: segmentsOf(f.Path),
-		Kind: kindName(f.Kind), Message: f.Error(), Line: f.Line,
+		Kind: kindName(f.Kind), Message: f.Error(), Line: f.Line, Range: f.Range, Said: f.Said,
 	}
 }
 
@@ -478,6 +487,26 @@ type Warning struct {
 	// Class is what an advisory is about, for a reader that acts on it
 	// ([AdvisoryClass]); empty on every other kind and on most advisories.
 	Class AdvisoryClass `json:"class,omitempty"`
+	// Person is the warning in the words of the person who owns the company,
+	// beside Message, which is the operator's: what it risks and what to do,
+	// naming no document key, no field and no cell. Every classed advisory
+	// carries it ([classed]) and no other warning does, so a screen drawing a
+	// warning for that person draws Person where it is set and Message where
+	// it is not.
+	//
+	// THE SAME WORDS FOR EVERY WARNING OF ONE CLASS ABOUT ANOTHER SUBJECT
+	// where the subject is a seat or a unit named apart (Seat, Unit): seven
+	// agents learning on their own model are one thing to know about seven
+	// agents, and a screen that groups by Person says it once with a count.
+	// A warning whose words must name their subject (a schedule's name and how
+	// often it runs) says it in Person itself.
+	//
+	// TWO PHRASINGS ON ONE VALUE, written together where the warning is
+	// raised, for the reason a caveat carries two (ADR-0060): a code a client
+	// words by itself puts every sentence in two languages with nothing
+	// holding them together, and a class the client has not learned is drawn
+	// as nothing at all.
+	Person string `json:"person,omitempty"`
 }
 
 // WarningDanglingReference is the kind of a [Warning] about a reference that

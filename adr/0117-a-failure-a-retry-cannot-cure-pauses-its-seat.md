@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/agent/builtin.TestAPersonsPauseSupersedesTheEnginesFailurePause`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestARemovedSeatLeavesNoConversationHeld`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`, `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`, `internal/engine.TestTheSecondRunKilledForMemoryHoldsTheConversation`, `internal/engine.TestAChangedSandboxLiftsAMemoryHold`, `internal/sandbox/executor.TestAHarnessKilledForMemoryEndedAtItsCeiling`, `internal/sandbox.TestACollectedRecordNamesARunKilledForMemory`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestTheSecondRequestItsProviderRefusesHoldsTheConversation`, `internal/engine.TestARunWhoseContinuedSessionWasRefusedIsRelaunchedFreshOnce`, `internal/agent/turn.TestARoundItsProviderRefusedEndsTheTurnWithItsMessage`, `internal/sandbox.TestAJobItsProviderRefusedIsRecordedAndRetiresItsSession`
+- **Enforced-by:** `internal/engine.TestTheSecondIdenticalFailurePausesTheSeat`, `internal/agent/builtin.TestAPersonsPauseSupersedesTheEnginesFailurePause`, `internal/engine.TestTheSecondContextThatDoesNotFitHoldsTheConversation`, `internal/engine.TestAHeldConversationStartsNoTurnUntilAPersonWritesOnIt`, `internal/engine.TestNewModelsLiftAConversationHold`, `internal/engine.TestARemovedSeatLeavesNoConversationHeld`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestOnlyARunOfOneFailurePausesTheSeat`, `internal/engine.TestAChangedSettingLiftsTheFailurePause`, `internal/engine.TestEveryFailureKindIsClassified`, `internal/engine.TestAChainThatRefusedEveryCredentialIsAFailureThatWillRepeat`, `internal/queue/jetstream.TestARedeliveryIsSpreadAroundItsSpacing`, `internal/sandbox.TestAContainerThatWouldNotStartIsClassedByWhetherItsImageIsHere`, `internal/engine.TestTheSecondRunKilledForMemoryHoldsTheConversation`, `internal/engine.TestAChangedSandboxLiftsAMemoryHold`, `internal/sandbox/executor.TestAHarnessKilledForMemoryEndedAtItsCeiling`, `internal/sandbox.TestACollectedRecordNamesARunKilledForMemory`, `internal/notice.TestAHeldConversationIsANotice`, `internal/engine.TestTheSecondRequestItsProviderRefusesHoldsTheConversation`, `internal/engine.TestARunWhoseContinuedSessionWasRefusedIsRelaunchedFreshOnce`, `internal/agent/turn.TestARoundItsProviderRefusedEndsTheTurnWithItsMessage`, `internal/sandbox.TestAJobItsProviderRefusedIsRecordedAndRetiresItsSession`, `internal/engine.TestAResumeWhoseModelsRefuseTheirSignInPausesTheSeatAndWaits`
 - **Cost-when-tried:** not tried here. Before this record such a failure was NAKed like any other, so a seat whose sandbox image could not start, or whose models all refused their credential, ran the same failing turn on every redelivery until the delivery's budget ran out, rebuilding the turn's whole context each time, and its agents then asked a person about the failure as if it were a business decision.
 - **Tag-status:** unreleased
 
@@ -31,6 +31,19 @@ person who pauses a seat the engine paused makes the pause theirs: it loses its
 failure, takes their stop if they ask for one, and ends only when somebody
 resumes it, since a person's pause is never lifted by an apply. A
 failure that still holds after either pauses the seat again on its second time.
+
+**A resumed turn counts the same as a dispatched one.** A seat's turn launches
+its executor's run and parks, and the review of the finished job is the turn's
+next model call, made by the resume rather than by a delivery. So the resume
+path asks the same table, sharing the seat's run of failures with the dispatch
+path, and the second identical failure on either pauses the seat. The resume
+that paused it hands its completion back as a wait on the pause rather than as
+a failure, and while the engine's failure pause stands, the turn gate refuses
+the finished job's completion before its claim, so its review waits on its
+row for the pause's lift instead of running into the same failure on every
+announcement. A resumed attempt that is handed back, held or refused to wait
+publishes its completion as one that did not end the turn, so a retried review
+is never counted or shown as a turn that ended.
 
 **A conversation whose context does not fit is held, not its seat.** A run
 that ran out of context after the conversation's previous run did, the second

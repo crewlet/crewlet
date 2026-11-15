@@ -4,7 +4,8 @@
  */
 
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Callout, IconButton, InlineCode, List, Modal } from "@crewlethq/ui";
+import { Button, Callout, IconButton, InlineCode, List } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { ListOrderedGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { SetupStep } from "~/protocol/index.ts";
 import { withLink, type FieldLink } from "./setupWords.tsx";

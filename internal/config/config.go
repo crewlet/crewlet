@@ -156,6 +156,15 @@ type Fault struct {
 	// type. Zero for every rule checked after decoding, which is located by
 	// Path alone, and for a parse failure yaml gives no line for.
 	Line int
+	// Range is the bound a value outside its setting's declared range broke
+	// ([problems.within]), for a screen to say in its own words and units;
+	// nil for every other failure.
+	Range *Range
+	// Said is the failure in a person's words, for a rule a screen offers a
+	// person the change that breaks: no path, no key, no note meant for an
+	// operator ([problems.addSaying]). Empty where the rule wrote none, and
+	// Detail is then the only wording there is.
+	Said string
 
 	// pos is where a parser failure sits while it is still being moved out
 	// of a decoder's buffer; see position.go. Resolved into Path and Line
@@ -300,6 +309,15 @@ type problems []error
 // add records one failure.
 func (p *problems) add(path Path, kind error, detail string, args ...any) {
 	*p = append(*p, fault(path, kind, detail, args...))
+}
+
+// addSaying records a fault, as [problems.add] does, with the words a person
+// is shown for it beside the operator's ([Fault.Said]).
+func (p *problems) addSaying(path Path, kind error, said, detail string, args ...any) {
+	if len(args) > 0 {
+		detail = fmt.Sprintf(detail, args...)
+	}
+	*p = append(*p, &Fault{Path: path, Kind: kind, Detail: detail, Said: said})
 }
 
 // wrap records an error produced further down, already carrying its own

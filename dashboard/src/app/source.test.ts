@@ -1267,3 +1267,44 @@ test("the formatter reading sees every way to build one, and nothing that builds
     "x.ts:7 localeCompare(…)",
   ]);
 });
+
+/**
+ * EVERY DIALOG OPENS THROUGH THE DASHBOARD'S `Modal` (`components/Modal.tsx`).
+ *
+ * A dialog's head and foot are rows of controls, and the dashboard's `Modal`
+ * keeps the place above the foot where a write control there draws what it
+ * was refused. A dialog opened on the kit's `Modal` itself has no such place,
+ * and the first refusal of a control in its foot breaks the foot: the primary
+ * action and the refusal dropped onto lines of their own, Cancel left alone.
+ *
+ * Mutation: import `Modal` from "@crewlethq/ui" in any screen.
+ */
+function kitModalImports(path: string, text: string, lang: Lang): string[] {
+  const line = lineOf(text);
+  const found: string[] = [];
+  for (const statement of parse(text, lang).body as Node[]) {
+    if (statement.type !== "ImportDeclaration") continue;
+    if ((statement.source as Node).value !== "@crewlethq/ui") continue;
+    for (const spec of statement.specifiers as Node[]) {
+      if (spec.type !== "ImportSpecifier") continue;
+      const imported = spec.imported as Node;
+      const name = String(imported.type === "Identifier" ? imported.name : imported.value);
+      if (name === "Modal") found.push(`${path}:${line(spec.start)}`);
+    }
+  }
+  return found;
+}
+
+const MODAL_SOURCE = modules().find(({ path }) => path === "components/Modal.tsx")?.text ?? "";
+
+test("every dialog opens through the dashboard's Modal, never the kit's", () => {
+  const offenders = modules()
+    .filter(({ path }) => path !== "components/Modal.tsx")
+    .flatMap(({ path, text, lang }) => kitModalImports(path, text, lang));
+  expect(
+    offenders,
+    'import Modal from "~/components/Modal.tsx": it keeps the place where a write control in the dialog\'s foot draws its refusal',
+  ).toEqual([]);
+  // AND THE RULE READS THE TREE: the dashboard's Modal itself opens the kit's.
+  expect(kitModalImports("components/Modal.tsx", MODAL_SOURCE, "tsx")).toHaveLength(1);
+});

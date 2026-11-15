@@ -74,7 +74,9 @@ describe("file storage", () => {
     ).toBeTruthy();
     expect(screen.getByText("1,828 named, none missing")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
+    // NO REFUSAL BESIDE THE COLLECTION: the only status regions are the copy
+    // controls' of the setting keys, which say nothing until a key is copied.
+    expect(screen.queryAllByRole("status").filter((s) => s.textContent)).toEqual([]);
   });
 
   test("files that cannot be read are an alert naming each file and what was found of it", () => {
@@ -113,10 +115,10 @@ describe("file storage", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/deleted nothing/)).toBeNull();
     // A REFUSED SWEEP is said beside the collection, with what the identity lacks.
-    expect(screen.getByRole("status").textContent).toContain(
-      "Unfinished uploads couldn’t be cleared",
-    );
-    expect(screen.getByRole("status").textContent).toContain("s3:ListBucketMultipartUploads");
+    const refused = screen
+      .getAllByRole("status")
+      .find((s) => s.textContent?.includes("Unfinished uploads couldn’t be cleared"));
+    expect(refused?.textContent).toContain("s3:ListBucketMultipartUploads");
     // No audit has ended: the row says so rather than drawing a zero.
     expect(screen.getByText("Not run yet")).toBeTruthy();
   });
@@ -145,7 +147,9 @@ describe("file storage", () => {
     // one in, with its key; the node that ran the passes heads their card.
     const store = screen.getByRole("table", { name: "Where files are kept" });
     const row = within(store).getByRole("row", { name: /Store/ });
-    expect(within(row).getByText("store.objects.backend")).toBeTruthy();
+    expect(
+      within(row).getByRole("button", { name: "Copy the setting's key, store.objects.backend" }),
+    ).toBeTruthy();
     expect(
       within(row)
         .getAllByRole("cell")

@@ -34,8 +34,9 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Card, Modal, SegmentedControl, Textarea } from "@crewlethq/ui";
+import { Button, Callout, Card, SegmentedControl, Textarea } from "@crewlethq/ui";
 import { CircleCheckGlyph, CircleDashedGlyph, CircleStopGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "~/components/Modal.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { MERGE_CONFLICT, MERGE_METHODS, MERGE_REFUSALS } from "~/contract/merge.ts";
 import { changeLive, refName } from "~/lib/code.ts";

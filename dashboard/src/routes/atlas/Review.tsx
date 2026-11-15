@@ -18,7 +18,6 @@ import {
   Checkbox,
   EmptyState,
   Link,
-  Modal,
   PageNote,
   SelectionBar,
   Skeleton,
@@ -27,6 +26,7 @@ import {
   Text,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { SetByLine } from "~/app/frame/ObjectHeader.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { href, useParam } from "~/app/router.tsx";

@@ -21,13 +21,17 @@ import {
   Menu,
   SegmentedControl,
   Select,
+  Link,
   Skeleton,
+  Text,
   confirmMatches,
   type MenuEntry,
   type SelectOption,
 } from "@crewlethq/ui";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
+import { href } from "~/app/router.tsx";
 import type {
+  AtlasEdge,
   AtlasEntry,
   AtlasEntryAnswer,
   AtlasFact,
@@ -47,7 +51,16 @@ import { ClaimList } from "./Decisions.tsx";
 import { EntryPicker, OwnerField, PageField, type OwnerChoice } from "./pickers.tsx";
 import { FactValue } from "./parts.tsx";
 import { KINDS, RELATIONS, entries, factLabel, valueWord } from "./words.ts";
-import { entryArg, factSpec, factsOf, relationsFrom } from "./writes.ts";
+import {
+  declaredBy,
+  declaredClaim,
+  declarer,
+  entryArg,
+  factSpec,
+  factsOf,
+  relationsFrom,
+  type Declared,
+} from "./writes.ts";
 
 /** Why a purge is held for anybody but an administrator. */
 export const PURGE_HELD = "Purging takes Admin access.";
@@ -76,9 +89,28 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
   const retired = entry.state === "retired";
   const drawn = removable(entry);
   const draws = relationsFrom(entry.ref.kind).length > 0;
+  /*
+   * WHAT THE SETTINGS OR THE ENGINE'S RECORDS DECLARE IS CHANGED THERE. The
+   * engine computes it again on every read and refuses to retire or purge it,
+   * to change a declared owner or to take back a declared relation
+   * (`builtin.declaredRefusal`), so those are held here with where it is
+   * changed, rather than offered and refused. What a person adds beside it (a
+   * relation, a page, an owner the settings do not name, a merge or a split)
+   * the engine records, and stays offered.
+   */
+  const declared = declaredBy(entry);
+  const ownedBy = declaredOn(entry, (edge) => edge.relation === "owned_by");
+  const relatedBy = declaredOn(entry, removableEdge);
   const close = () => setDialog(null);
   const items: MenuEntry[] = [
-    { key: "owner", label: "Set owner", onSelect: () => setDialog("owner"), ...menuHold(owner) },
+    {
+      key: "owner",
+      label: "Set owner",
+      onSelect: () => setDialog("owner"),
+      ...(ownedBy
+        ? { disabled: true, description: `${ownedBy.by} name its owner. Change it there.` }
+        : menuHold(owner)),
+    },
     {
       key: "relate",
       label: "Add relation",
@@ -96,7 +128,12 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
       onSelect: () => setDialog("unrelate"),
       ...(drawn.length > 0
         ? menuHold(unrelate)
-        : { disabled: true, description: "It draws no relation to remove." }),
+        : relatedBy
+          ? {
+              disabled: true,
+              description: `${relatedBy.by} ${relatedBy.verb} its relations. Change them there.`,
+            }
+          : { disabled: true, description: "It draws no relation to remove." }),
     },
     { key: "page", label: "Link a page", onSelect: () => setDialog("page"), ...menuHold(relate) },
     { kind: "separator", key: "identity" },
@@ -115,17 +152,31 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
           key: "retire",
           label: "Retire",
           onSelect: () => setDialog("retire"),
-          ...menuHold(retire),
+          ...(declared
+            ? {
+                disabled: true,
+                description: `${declared.by} ${declared.verb} it. Remove it there to retire it.`,
+              }
+            : menuHold(retire)),
         },
     {
       key: "purge",
       label: "Purge",
       danger: true,
       onSelect: () => setDialog("purge"),
-      // ADMIN'S FIRST, then the write's own hold: an administrator the
-      // engine would refuse (offline, a sign-in with no seat) is not offered
-      // an enabled Purge that can only be refused.
-      ...(admin ? menuHold(purge) : { disabled: true, description: PURGE_HELD }),
+      // WHAT IS DECLARED FIRST, for every reader: the next read brings it
+      // back, so there is nothing for anybody to purge. Then ADMIN'S, then
+      // the write's own hold: an administrator the engine would refuse
+      // (offline, a sign-in with no seat) is not offered an enabled Purge
+      // that can only be refused.
+      ...(declared
+        ? {
+            disabled: true,
+            description: `${declared.by} ${declared.verb} it, so the next read brings it back. Remove it there.`,
+          }
+        : admin
+          ? menuHold(purge)
+          : { disabled: true, description: PURGE_HELD }),
     },
   ];
   return (
@@ -161,6 +212,7 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
         <Menu label={`More to do with ${entry.name}`} trigger="More" align="end" items={items} />
       </div>
       <SeatlessNote access={correct} />
+      {declared && <DeclaredNote declared={declared} linked={admin} />}
       <RefusalNote write={confirm} />
       <RefusalNote write={restore} />
       {dialog === "correct" && <CorrectDialog entry={entry} onClose={close} />}
@@ -180,8 +232,49 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
 
 /** The relations of an entry a person may remove by name: to an entry, or to a page. */
 function removable(entry: AtlasEntry) {
-  return entry.relations.filter(
-    (edge) => edge.relation !== "owned_by" && (edge.to || (edge.external === "page" && edge.name)),
+  return entry.relations.filter((edge) => removableEdge(edge) && !declaredClaim(edge, edge.others));
+}
+
+/** A relation Remove relation takes back: to another entry or a page, never the owner. */
+function removableEdge(edge: AtlasEdge): boolean {
+  return (
+    edge.relation !== "owned_by" && Boolean(edge.to || (edge.external === "page" && edge.name))
+  );
+}
+
+/**
+ * Who declares a relation of the entry that `which` picks, where one is
+ * declared by the settings or the engine's records: the engine refuses to
+ * change it here.
+ */
+function declaredOn(entry: AtlasEntry, which: (edge: AtlasEdge) => boolean): Declared | null {
+  for (const edge of entry.relations) {
+    if (!which(edge)) continue;
+    const claim = declaredClaim(edge, edge.others);
+    if (claim) return declarer(claim.source, entry.ref.kind);
+  }
+  return null;
+}
+
+/**
+ * The one note beside the controls of an entry the settings or the engine's
+ * records declare: who declares it, that it is changed there and the atlas
+ * follows, and, for a reader who may change it there, the page.
+ */
+function DeclaredNote({ declared, linked }: { declared: Declared; linked: boolean }) {
+  return (
+    <Text as="p" variant="caption" tone="secondary" className="atlas-actions__note">
+      {declared.by} {declared.verb} this entry, and the atlas reads it again from there on every
+      visit: change or remove it there.
+      {linked && declared.place && (
+        <>
+          {" "}
+          <Link href={href(declared.place.path)} size="inherit">
+            {declared.place.label}
+          </Link>
+        </>
+      )}
+    </Text>
   );
 }
 

@@ -66,9 +66,9 @@ import {
   CopyButton,
   IconButton,
   InlineCode,
-  Modal,
   Skeleton,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 
 /**
  * How often the fleet is read while the apply is still moving. This node's own

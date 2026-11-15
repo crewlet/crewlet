@@ -13,7 +13,8 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Modal, Text } from "@crewlethq/ui";
+import { Button, Callout, Text } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { signOutEverywhere } from "~/lib/session.ts";
 import { useClient } from "~/lib/store-hooks.ts";

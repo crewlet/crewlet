@@ -1444,7 +1444,14 @@ const (
 	// 1,631 bytes over the 409.8 KiB it was built on: nearly all of it the kit
 	// and the frame's first-dial chip and landing rule, as they measured
 	// alone. So it moved to 412 KiB, 2.25 seconds.
-	initialBudget = 412 << 10
+	// Kit 0.129.1 (a setting's key behind a copy control, a canvas's held
+	// zoom controls, a chart kept in view after an add) with the operations
+	// fixes (a refused control's refusal drawn outside the row of controls in
+	// the frame's page bar, object header and dialogs, a config warning and a
+	// config refusal in their owner's words, a limit's range, an engine pause
+	// drawn as a pause) took it to 414.1 KiB, most of it the refusal words and
+	// places the frame now reads. So it moved to 415 KiB, 2.27 seconds.
+	initialBudget = 415 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2524,7 +2531,12 @@ const (
 	// a repository whose default branch holds nothing read from its other
 	// branches) added 5,828 bytes, nearly all script, and took it to
 	// 6188.7 KiB (6,337,181 bytes): 6189 KiB.
-	treeBudget = 5<<20 + 1069<<10
+	// Kit 0.129.1 with the operations fixes (the event log drawn a page at a
+	// time, a refused control's refusal placed outside its row on every page
+	// bar, header and dialog, a schedule's controls following its saved switch
+	// and its cron fields named, a limit's range, the org chart's warnings and
+	// counts, a session's device, Live's words) took it to 6196.4 KiB: 6197 KiB.
+	treeBudget = 5<<20 + 1077<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

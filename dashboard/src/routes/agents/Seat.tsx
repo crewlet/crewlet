@@ -138,6 +138,7 @@ import {
   seatResolvers,
   seatWord,
   shownStateOf,
+  pauserOf,
   stoppedLine,
   failureWords,
   toneOf,
@@ -840,12 +841,15 @@ function Notices({
     <div className="prof-notices">
       {/* THE STATE'S OWN TONE, the pill's and the badge's: a stopped seat is
           the one red state in the seat vocabulary, and a warning callout
-          under a danger pill named one fact in two colours. */}
+          under a danger pill named one fact in two colours. A PAUSE IS
+          NEUTRAL, with the pause mark the pausing note wears: somebody (or
+          the engine, with its reason) chose it, and in red it read as an
+          error stacked over the seat's real failure. */}
       {state === "paused" && (
-        <Callout variant={toneOf(state)}>
+        <Callout variant={toneOf(state)} icon={<PauseGlyph size="md" />}>
           {paused ? (
             <>
-              <strong>Paused by {nameOf(paused.by)}</strong> {relTime(paused.at, now)}
+              <strong>Paused by {pauserOf(paused, nameOf)}</strong> {relTime(paused.at, now)}
               {paused.reason ? `: “${sentence(paused.reason)}”` : "."}
             </>
           ) : (
@@ -861,7 +865,7 @@ function Notices({
         >
           {paused ? (
             <>
-              Paused by {nameOf(paused.by)} {relTime(paused.at, now)}
+              Paused by {pauserOf(paused, nameOf)} {relTime(paused.at, now)}
               {/* THE QUOTE ENDS THE SENTENCE: `sentence` has already stopped it. */}
               {paused.reason ? `: “${sentence(paused.reason)}” ` : ". "}
             </>

@@ -40,12 +40,12 @@ import {
   FormField,
   IconButton,
   Input,
-  Modal,
   Popover,
   returnFocus,
   Text,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import { PencilGlyph, SlidersVerticalGlyph } from "@crewlethq/icons/glyphs";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, PERIOD_WORDS, readCeiling, waitedOn, windowOf } from "~/lib/budget.ts";
@@ -64,6 +64,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
+import { warningWords } from "~/protocol/configAnswer.ts";
 import { refuse, useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { remedyOffer, scopeRemedy } from "~/lib/remedy.ts";
 
@@ -133,7 +134,7 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
         <Callout variant="warning">
           <ul className="ceiling-warnings">
             {state.warnings.map((w) => (
-              <li key={`${w.path}:${w.message}`}>{w.message}</li>
+              <li key={`${w.path}:${w.message}`}>{warningWords(w)}</li>
             ))}
           </ul>
         </Callout>

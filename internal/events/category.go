@@ -181,7 +181,11 @@ var categories = map[string]placement{
 	"config_revision_activated": {"lifecycle", RateAuthenticated},
 	"config_revision_applied":   {"lifecycle", RateAuthenticated},
 	"operator_acted":            {"lifecycle", RateAuthenticated},
-	"backup_requested":          {"lifecycle", RateAuthenticated},
+	// The runtime audit's record of a call that kept the caller's OWN
+	// bookkeeping (a read cursor, an inbox's marks, their pins): persisted
+	// beside every other audit record and NOT FED, see [unfed].
+	"own_record_marked": {"lifecycle", RateAuthenticated},
+	"backup_requested":  {"lifecycle", RateAuthenticated},
 	// A person's gesture on a model (Settings › Models): a check, a retry,
 	// a credential test or write, a device sign-in, a host login read.
 	"model_acted": {"lifecycle", RateAuthenticated},
@@ -613,6 +617,14 @@ var unfed = map[string]string{
 		"company's last few hundred events. A seat's held wakes are read " +
 		"where they are asked, from the turn ledger these rows are counted " +
 		"into",
+	"own_record_marked": "BOOKKEEPING, NOT ACTIVITY: the runtime audit's record " +
+		"of a call that kept the caller's own bookkeeping, a room's read " +
+		"cursor, an inbox's read and snooze marks, their pins, which nobody " +
+		"else's work reads. A person reading their rooms writes one a room, " +
+		"and in the feed they pushed the turns, failures and deliveries a " +
+		"reader watches out of a ring that holds the whole company's last few " +
+		"hundred events, each worded as the tool that wrote it. The audit " +
+		"keeps every one, read with every other runtime audit record",
 	"code_check_finished": "COUNTED, NOT WATCHED: one record per attempt of a " +
 		"check that ended (a second only as the correction of an ending its " +
 		"row replaced, naming that ending), and every push of every change " +

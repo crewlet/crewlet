@@ -111,7 +111,6 @@ import {
   EmptyValue,
   InlineCode,
   Menu,
-  Modal,
   Skeleton,
   StatCard,
   StatGroup,
@@ -128,6 +127,7 @@ import {
   PageNote,
   peekRowActivation,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   EllipsisGlyph,
   KeyGlyph,
@@ -175,7 +175,9 @@ import { useIamGesture } from "~/lib/iamWrite.ts";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
+import { SessionDevice } from "~/components/SessionDevice.tsx";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
+import { deviceOf } from "~/lib/userAgent.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { pathSegment, rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
@@ -246,6 +248,10 @@ export interface SessionRow {
   ended_reason?: string;
   live: boolean;
   enrolment_only?: boolean;
+  /** The browser that opened the session, as its User-Agent named it. */
+  user_agent?: string;
+  /** The address it opened from, through the deployment's trusted proxies. */
+  remote?: string;
 }
 
 /**
@@ -2304,6 +2310,17 @@ function Principal({
                   // the rest. ITS OWN WIDTH, EXACTLY, rather than capped: a
                   // relative time is short, and the cap — a fifth of the
                   // peek's column — cut its own header to "SESS…".
+                  // WHICH DEVICE: what tells an administrator one of a
+                  // person's sessions from another ([SessionDevice]).
+                  key: "device",
+                  header: "Device",
+                  // A FLOOR, as every flexible column in the peek keeps one:
+                  // "Firefox on macOS" over its address reads whole at it.
+                  floor: "8rem",
+                  sortValue: (s) => deviceOf(s.user_agent),
+                  cell: (s) => <SessionDevice row={s} />,
+                },
+                {
                   key: "started",
                   header: "Session",
                   // A TIME: right-aligned, as the same session start is on the

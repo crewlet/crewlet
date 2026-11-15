@@ -142,7 +142,8 @@ import { runningTarget } from "~/lib/turns.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
 import { FillRequest, type FillShape } from "./fill.tsx";
-import { OwnHeaderRequest, OwnHeaderSlot } from "./frame/OwnHeader.tsx";
+import { OwnHeaderRequest, OwnHeaderSlot, PageRefusals } from "./frame/OwnHeader.tsx";
+import { useRefusalPlace } from "~/components/WriteButton.tsx";
 import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 
 /**
@@ -622,6 +623,9 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
   // slot it lands in instead of its bar. See `frame/OwnHeader.tsx`.
   const [ownHeader, setOwnHeader] = useState(false);
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  // WHAT THE BAR'S CONTROLS WERE REFUSED, on a line of the head under the
+  // bar (`PageActions`), so a refusal never breaks the bar itself.
+  const pageRefusals = useRefusalPlace("page-refusals");
 
   // WATCH THE VIEWER'S OWN RECORD, which is what asks the engine for its
   // `inbox_changed` frames. The shell owns it because the shell outlives every
@@ -868,18 +872,20 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
       <PeekWidthRequest.Provider value={setRestingPeek}>
         <OwnHeaderRequest.Provider value={setOwnHeader}>
           <OwnHeaderSlot.Provider value={ownHeader ? headerSlot : null}>
-            <PageContextValue.Provider value={page}>
-              <PageCover
-                over={assistantOver}
-                coverEnd={
-                  assistantOpen
-                    ? assistantCoverEnd(assistantShape, assistantDrawn, viewport, scale)
-                    : 0
-                }
-              >
-                {children}
-              </PageCover>
-            </PageContextValue.Provider>
+            <PageRefusals.Provider value={pageRefusals.element}>
+              <PageContextValue.Provider value={page}>
+                <PageCover
+                  over={assistantOver}
+                  coverEnd={
+                    assistantOpen
+                      ? assistantCoverEnd(assistantShape, assistantDrawn, viewport, scale)
+                      : 0
+                  }
+                >
+                  {children}
+                </PageCover>
+              </PageContextValue.Provider>
+            </PageRefusals.Provider>
           </OwnHeaderSlot.Provider>
         </OwnHeaderRequest.Provider>
       </PeekWidthRequest.Provider>
@@ -964,6 +970,7 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
               ownHeader ? (
                 <div className="page-head">
                   <div ref={setHeaderSlot} />
+                  {pageRefusals.place}
                   <StateBar degraded={degraded} coverage={coverage} />
                 </div>
               ) : (
@@ -980,6 +987,7 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
                   runs={runs}
                   grants={held}
                 >
+                  {pageRefusals.place}
                   {/* THE FIRST DIAL IS THE BAR'S, said above as a chip. */}
                   <StateBar degraded={degraded?.firstDial ? null : degraded} coverage={coverage} />
                 </PageHeader>

@@ -16,7 +16,7 @@
  * (`lib/useWriteAccess.ts`), never hidden.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -24,7 +24,6 @@ import {
   FormField,
   FormRow,
   Input,
-  Modal,
   ReadOnlyField,
   SegmentedControl,
   Select,
@@ -34,6 +33,7 @@ import {
   useToast,
   type SelectOption,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   PauseGlyph,
   PencilGlyph,
@@ -45,6 +45,8 @@ import {
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { describe as describeCron } from "~/lib/cron.ts";
 import { useAct } from "~/lib/useAct.ts";
+import { useLastHealth } from "~/lib/useLastHealth.ts";
+import { nodeStanding, type ActivatedRevision, type Standing } from "~/lib/nodeStanding.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -57,6 +59,7 @@ import {
 } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { getEntity } from "~/protocol/configWrite.ts";
+import { warningWords } from "~/protocol/configAnswer.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import {
@@ -104,14 +107,109 @@ export function runHold(
   return undefined;
 }
 
+/** A saved change followed until this node applies it, and the switch it set, if it set one. */
+interface Followed {
+  readonly activated: ActivatedRevision;
+  /** What a pause (false) or a resume (true) saved; absent for any other change. */
+  readonly enabled?: boolean;
+}
+
+/**
+ * Following a saved schedule change until THIS node applies it, and asking for
+ * the schedules to be read again then.
+ *
+ * WHAT THE SCREEN DRAWS IS THIS NODE'S APPLIED COMPANY, read every thirty
+ * seconds, and a change saved here lands in it only once the node applies the
+ * revision. A save that stopped at "saved" left the page drawing the schedule
+ * as it was for up to half a minute: a pause just saved still offered Run now
+ * (which the engine then refused, the schedule being switched off) and Pause,
+ * and still listed the runs ahead. The standing is this node's own word on the
+ * revision (`lib/nodeStanding.ts`), by its last health push, as every other
+ * follower of a configuration write reads it.
+ */
+function useFollowedSave(onApplied?: () => void): {
+  readonly followed: Followed | null;
+  readonly standing: Standing["kind"] | null;
+  readonly follow: (next: Followed | null) => void;
+} {
+  const [followed, follow] = useState<Followed | null>(null);
+  const health = useLastHealth();
+  const standing =
+    followed && health !== null ? nodeStanding(health, followed.activated).kind : null;
+  const told = useRef<ActivatedRevision | null>(null);
+  const appliedRef = useRef(onApplied);
+  appliedRef.current = onApplied;
+  useEffect(() => {
+    if (!followed || (standing !== "applied" && standing !== "passed")) return;
+    // ONCE PER SAVE: the re-read is asked for when the node applies it.
+    if (told.current === followed.activated) return;
+    told.current = followed.activated;
+    appliedRef.current?.();
+  }, [followed, standing]);
+  return { followed, standing, follow };
+}
+
+/**
+ * Whether the schedule is switched on, as its controls decide it: the switch a
+ * pause or resume just saved, until the schedule as read agrees with it or is
+ * read again after this node applied it; the row's own otherwise. A node that
+ * REFUSED the revision runs the schedule as it was, so the row is the truth
+ * there.
+ */
+function useDrawnSwitch(
+  row: ScheduleRow,
+  { followed, standing, follow }: ReturnType<typeof useFollowedSave>,
+): boolean {
+  const asked = followed?.enabled;
+  // The row this node's apply found on screen; a newer one is the re-read.
+  const seen = useRef<ScheduleRow | null>(null);
+  useEffect(() => {
+    if (asked === undefined) {
+      seen.current = null;
+      return;
+    }
+    if (row.enabled === asked || standing === "refused") {
+      seen.current = null;
+      follow(null);
+      return;
+    }
+    if (standing !== "applied" && standing !== "passed") return;
+    if (seen.current === null) seen.current = row;
+    else if (row !== seen.current) {
+      seen.current = null;
+      follow(null);
+    }
+  }, [row, asked, standing, follow]);
+  return asked !== undefined && standing !== "refused" ? asked : row.enabled;
+}
+
 /** The controls for one schedule, for its page's bar and its peek's header. */
-export function ScheduleActions({ row, compact = false }: { row: ScheduleRow; compact?: boolean }) {
+export function ScheduleActions({
+  row,
+  compact = false,
+  onApplied,
+}: {
+  row: ScheduleRow;
+  compact?: boolean;
+  /** Read the schedules again: called once this node applies a change saved here. */
+  onApplied?: () => void;
+}) {
   const owner = useMemo(() => ownerOf(row), [row]);
   const access = useOrgWriteAccess(targetOf(owner));
   const toast = useToast();
+  const saves = useFollowedSave(onApplied);
+  const { follow } = saves;
+  // THE SWITCH ASKED FOR, kept beside the write: the save's answer says what
+  // was stored, and the switch is what the controls draw until it lands.
+  const asking = useRef<boolean | null>(null);
   const write = useScheduleWrite(owner, {
-    onSaved: (done) => toast.show({ variant: "success", title: done, message: SAVED_MESSAGE }),
+    onSaved: (done, activated) => {
+      toast.show({ variant: "success", title: done, message: SAVED_MESSAGE });
+      follow({ activated, ...(asking.current === null ? {} : { enabled: asking.current }) });
+    },
   });
+  const followed = useCallback((activated: ActivatedRevision) => follow({ activated }), [follow]);
+  const enabled = useDrawnSwitch(row, saves);
   const run = useAct("run_schedule");
   const viewer = useViewer();
   const org = useOrg();
@@ -119,8 +217,11 @@ export function ScheduleActions({ row, compact = false }: { row: ScheduleRow; co
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
   const held = access.can ? undefined : access.reason;
+  // HELD ON THE SWITCH AS SAVED: a pause just saved switched the schedule off
+  // for the engine, which refuses a run of it by hand, whatever this node's
+  // last read still says.
   const runBlocked = run.access.can
-    ? runHold(row, (handle) => mayActOnSeat(viewer, index, handle))
+    ? runHold({ ...row, enabled }, (handle) => mayActOnSeat(viewer, index, handle))
     : undefined;
   const size = "small";
 
@@ -161,17 +262,20 @@ export function ScheduleActions({ row, compact = false }: { row: ScheduleRow; co
         <Button
           size={size}
           variant="secondary"
-          leadingIcon={row.enabled ? <PauseGlyph size="sm" /> : <RotateCwGlyph size="sm" />}
+          leadingIcon={enabled ? <PauseGlyph size="sm" /> : <RotateCwGlyph size="sm" />}
           loading={write.busy && !editing && !removing}
           disabledReason={held}
           title={
-            row.enabled
+            enabled
               ? "Stops it firing until it is resumed. It stays in the configuration."
               : "Fires it on its schedule again."
           }
-          onClick={() => write.submit({ kind: "enable", name: row.name, enabled: !row.enabled })}
+          onClick={() => {
+            asking.current = !enabled;
+            write.submit({ kind: "enable", name: row.name, enabled: !enabled });
+          }}
         >
-          {row.enabled ? "Pause" : "Resume"}
+          {enabled ? "Pause" : "Resume"}
         </Button>
       </span>
       <span className={compact ? undefined : "page-action-folds"}>
@@ -186,9 +290,21 @@ export function ScheduleActions({ row, compact = false }: { row: ScheduleRow; co
         </Button>
       </span>
       {!editing && !removing && <WriteOutcome write={write} />}
-      {editing && <ScheduleDialog mode={{ kind: "edit", row }} onClose={() => setEditing(false)} />}
+      {editing && (
+        <ScheduleDialog
+          mode={{ kind: "edit", row }}
+          onClose={() => setEditing(false)}
+          onSaved={followed}
+        />
+      )}
       {removing && (
-        <RemoveDialog row={row} owner={owner} access={access} onClose={() => setRemoving(false)} />
+        <RemoveDialog
+          row={row}
+          owner={owner}
+          access={access}
+          onClose={() => setRemoving(false)}
+          onSaved={followed}
+        />
       )}
     </>
   );
@@ -248,7 +364,7 @@ function WriteOutcome({ write }: { write: ScheduleWrite }) {
           </Button>
         }
       >
-        {state.warnings.map((w) => w.message).join(" ")}
+        {state.warnings.map(warningWords).join(" ")}
       </Callout>
     );
   }
@@ -261,16 +377,20 @@ function RemoveDialog({
   owner,
   access,
   onClose,
+  onSaved,
 }: {
   row: ScheduleRow;
   owner: ScheduleOwner;
   access: ConfigWriteAccess;
   onClose: () => void;
+  /** Told the revision the removal activated, for the screen to follow it. */
+  onSaved: (activated: ActivatedRevision) => void;
 }) {
   const toast = useToast();
   const write = useScheduleWrite(owner, {
-    onSaved: (done) => {
+    onSaved: (done, activated) => {
       toast.show({ variant: "success", title: done, message: SAVED_MESSAGE });
+      onSaved(activated);
       onClose();
     },
   });
@@ -292,9 +412,18 @@ function RemoveDialog({
 }
 
 /** The New schedule button, for the list's bar and its empty state. */
-export function NewScheduleButton({ variant = "primary" }: { variant?: "primary" | "secondary" }) {
+export function NewScheduleButton({
+  variant = "primary",
+  onApplied,
+}: {
+  variant?: "primary" | "secondary";
+  /** Read the schedules again: called once this node applies the schedule added here. */
+  onApplied?: () => void;
+}) {
   const access = useOrgWriteAccess("anywhere");
   const [open, setOpen] = useState(false);
+  const { follow } = useFollowedSave(onApplied);
+  const followed = useCallback((activated: ActivatedRevision) => follow({ activated }), [follow]);
   return (
     <>
       <Button
@@ -306,7 +435,13 @@ export function NewScheduleButton({ variant = "primary" }: { variant?: "primary"
       >
         New schedule
       </Button>
-      {open && <ScheduleDialog mode={{ kind: "create" }} onClose={() => setOpen(false)} />}
+      {open && (
+        <ScheduleDialog
+          mode={{ kind: "create" }}
+          onClose={() => setOpen(false)}
+          onSaved={followed}
+        />
+      )}
     </>
   );
 }
@@ -337,7 +472,16 @@ function zoneOptions(companyZone: string, current: string): SelectOption[] {
  * A new schedule, or an existing one's edit, checked by the engine before it
  * is saved.
  */
-export function ScheduleDialog({ mode, onClose }: { mode: DialogMode; onClose: () => void }) {
+export function ScheduleDialog({
+  mode,
+  onClose,
+  onSaved,
+}: {
+  mode: DialogMode;
+  onClose: () => void;
+  /** Told the revision the save activated, for the screen behind the dialog to follow it. */
+  onSaved?: (activated: ActivatedRevision) => void;
+}) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const companyZone = org?.timezone ?? "";
@@ -396,8 +540,9 @@ export function ScheduleDialog({ mode, onClose }: { mode: DialogMode; onClose: (
     // throw away what the person has typed.
   }, [editKey]);
   const write = useScheduleWrite(owner, {
-    onSaved: (done) => {
+    onSaved: (done, activated) => {
       toast.show({ variant: "success", title: done, message: SAVED_MESSAGE });
+      onSaved?.(activated);
       onClose();
     },
   });
@@ -664,7 +809,7 @@ function DialogOutcome({ write }: { write: ScheduleWrite }): ReactNode {
   if (state.kind === "warned") {
     return (
       <Callout variant="warning" title="The engine would also say">
-        {state.warnings.map((w) => w.message).join(" ")}
+        {state.warnings.map(warningWords).join(" ")}
       </Callout>
     );
   }

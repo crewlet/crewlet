@@ -2269,11 +2269,20 @@ asking about the caller and nobody else:
 | **Profile** | Their login, name, address and seat, and **Access** — Admin, the apps, or the overview only — read-only: an administrator changes them |
 | **Two-step verification** | First under Security, because it is what a person comes to check: sets up or replaces the authenticator app, and issues new [recovery codes](#a-code-is-spent-when-it-is-used) — only beside an app |
 | **Change password…** | A dialog: [the current password, a code where a second factor is held, and the new one](#changing-your-own-password-ends-everything-else), typed twice. Ends every other session and every personal token; this browser stays signed in |
-| **Where you are signed in** | Their live sessions, this browser marked (`GET /auth/session`'s `lineage`); any other signed out by name with `POST /auth/logout/{lineage}`, or all of them — and every personal token — with **Sign out everywhere**, which asks first |
+| **Where you are signed in** | Their live sessions, each named by its device ("Firefox on macOS") and the address it signed in from, this browser marked (`GET /auth/session`'s `lineage`); any other signed out by name with `POST /auth/logout/{lineage}`, or all of them, and every personal token, with **Sign out everywhere**, which asks first |
 | **Personal access tokens** | [Their machine tokens](#machine-tokens-a-persons-own-and-a-service-accounts): minted with no `?person=`, starting with nothing ticked and offering their own permissions, the value shown once, and revoked |
 
 A session exchanged from a Tier A token is no person's, so its Account page
 names the token and offers none of this.
+
+A session's start record keeps the browser that opened it, its `User-Agent`
+clipped to 512 bytes, and the address it signed in from, resolved through
+`api.trusted_proxies` as the sign-in's own `iam_session_started` row names it.
+`GET /iam/people/{id}/sessions` answers both as `user_agent` and `remote`, and
+the Account page and an administrator's view of somebody's sessions name each
+session by them, so the one on a lost laptop is the one signed out. Both are
+written once, when the session opens, and a session an earlier build opened, or
+a Tier A token's exchange from no browser, has neither.
 
 ### People join on their seat, and are managed from Settings › People
 

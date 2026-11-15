@@ -184,8 +184,9 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	opened, err := s.behalf(principal).OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: subject,
 		AbsoluteExpiresAt: expires,
-		OpID:              opID,
-		NoWait:            true,
+		UserAgent:         r.UserAgent(), Remote: s.sourceOf(r),
+		OpID:   opID,
+		NoWait: true,
 	})
 	if err != nil {
 		// A COLLAPSED START ([iamdomain.ErrCollapsed]) arrives here too:

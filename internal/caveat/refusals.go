@@ -452,3 +452,73 @@ func atHandles(handles []string) []string {
 	}
 	return out
 }
+
+// LabelsNotDeclared is a work item filed or edited with labels its project has
+// not declared: project is the project's key, labels the ones it lacks,
+// declared its own labels and near the ones closest to the first missing
+// label, which a person may have meant. A label is declared on its project
+// before work is filed under it, so a misspelling never becomes a label of its
+// own.
+func LabelsNotDeclared(project string, labels, declared, near []string) Refusal {
+	missing := fmt.Sprintf("%s has no label %s", project, words.And(labels))
+	if len(labels) > 1 {
+		missing = fmt.Sprintf("%s has no labels %s", project, words.And(labels))
+	}
+	said := missing + ", so nothing was saved."
+	if len(near) > 0 {
+		said += fmt.Sprintf(" Did you mean %s?", words.Or(near))
+	}
+	if len(declared) == 0 {
+		return Refusal{person: said + " The project has no labels yet. Save it without one."}
+	}
+	return Refusal{person: said + fmt.Sprintf(" Its labels are %s. Choose one of them.",
+		words.And(declared))}
+}
+
+// LabelArchived is new work filed under a label its project archived: the
+// work already under it keeps it, and no new work takes it.
+func LabelArchived(project, label string) Refusal {
+	return Refusal{person: fmt.Sprintf("The label %s is archived in %s, so no new work is "+
+		"filed under it and nothing was saved. Choose another label.", words.And([]string{label}), project)}
+}
+
+// ViewUnnamed is a saved view with no name, which no tab could show.
+func ViewUnnamed() Refusal {
+	return Refusal{person: "A saved view needs a name to show on its tab. Name it, then " +
+		"save it again."}
+}
+
+// ViewNameTooLong is a saved view whose name is longer than a tab holds.
+func ViewNameTooLong() Refusal {
+	return Refusal{person: "The view's name is too long for its tab. Shorten it, then save " +
+		"it again."}
+}
+
+// ViewShapeUnknown is a saved view whose shape is none of shapes, the ways a
+// view shows its work.
+func ViewShapeUnknown(shapes []string) Refusal {
+	return Refusal{person: fmt.Sprintf("A view shows its work as one of %s, so nothing was "+
+		"saved. Choose one of them.", words.Or(shapes))}
+}
+
+// ViewPersonalDefault is a view only its owner sees, saved as its place's
+// default tab, which is everybody's landing tab.
+func ViewPersonalDefault() Refusal {
+	return Refusal{person: "A view only you see cannot be everybody's default tab, so " +
+		"nothing was saved. Share it to make it the default, or pin it to put it first " +
+		"for you."}
+}
+
+// ViewFiltersTooLarge is a saved view carrying more filters, or longer ones,
+// than a saved view holds.
+func ViewFiltersTooLarge() Refusal {
+	return Refusal{person: "This view has more filters than a saved view holds, so nothing " +
+		"was saved. Remove some, then save it again."}
+}
+
+// ViewFilterUnreadable is a saved view one of whose filters could not be read,
+// which would be a view nobody could open.
+func ViewFilterUnreadable() Refusal {
+	return Refusal{person: "One of this view's filters could not be read, so nothing was " +
+		"saved. Change or remove it, then save it again."}
+}

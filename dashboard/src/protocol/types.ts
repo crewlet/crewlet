@@ -41,6 +41,7 @@ import type { LogPosition } from "./session.ts";
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
+import type { SettingRange } from "../contract/limits.ts";
 import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
@@ -1647,6 +1648,18 @@ export interface ConfigProblem {
   unit?: string;
   /** 1-based line in the submitted text, for parse failures only. */
   line?: number;
+  /**
+   * The bound a value outside its setting's declared range broke
+   * (`config.Range`), for a screen to say in its own words and the setting's
+   * unit: `message` is the engine's line for an operator, path and all.
+   */
+  range?: SettingRange;
+  /**
+   * The problem in a person's words, where the engine's rule wrote them: no
+   * key, no path. Absent where it wrote none, and `message` is then the only
+   * wording there is.
+   */
+  said?: string;
 }
 
 /**
@@ -1669,6 +1682,15 @@ export interface ConfigWarning {
   message: string;
   /** What an advisory is about, for the setup advisor; absent on most warnings. */
   class?: string;
+  /**
+   * The warning in the words of the person who owns the company, beside
+   * `message`, which is the operator's: what it risks and what to do, naming
+   * no document key. Every classed advisory carries it and no other warning
+   * does; it is the same for every warning of one class about another seat
+   * (`seat` names which), so a screen says it once. Read through
+   * `warningWords`.
+   */
+  person?: string;
   /**
    * On a dry run's answer only: whether THIS write brings the warning, rather
    * than the active revision already carrying it (`configapi.checkedWarning`).

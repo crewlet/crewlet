@@ -27,16 +27,8 @@
  */
 
 import { useState } from "react";
-import {
-  Button,
-  Checkbox,
-  ConfirmModal,
-  FormField,
-  Input,
-  Modal,
-  Select,
-  Stack,
-} from "@crewlethq/ui";
+import { Button, Checkbox, ConfirmModal, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { protectFormHeld, protectHeld, protectionPattern } from "~/lib/repoWrites.ts";
 import { useAct } from "~/lib/useAct.ts";

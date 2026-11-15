@@ -21,7 +21,6 @@ import {
   Card,
   EmptyState,
   EmptyValue,
-  Modal,
   Tag,
   TableKeyCell,
   TableNumberCell,
@@ -29,6 +28,7 @@ import {
   TableTextCell,
   type DataGridColumn,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import { BookOpenGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref } from "~/app/frame/peekAddress.ts";

@@ -26,8 +26,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { dryRunPatch, getConfig, savePatch } from "~/protocol/configWrite.ts";
 import { introducedWarnings } from "~/protocol/configAnswer.ts";
 import { isAbort } from "~/protocol/rest.ts";
-import type { CompanyDocument, ConfigWarning } from "~/protocol/types.ts";
-import { configRefusalWords } from "./configRefusal.ts";
+import type { ConfigRefusal } from "~/protocol/configAnswer.ts";
+import type { CompanyDocument, ConfigProblem, ConfigWarning } from "~/protocol/types.ts";
+import { configRefusalWords, type RefusalWords } from "./configRefusal.ts";
 import { nodeStanding, type Standing } from "./nodeStanding.ts";
 import { useLastHealth } from "./useLastHealth.ts";
 
@@ -65,8 +66,6 @@ export type SettingWriteState =
   | {
       readonly kind: "refused";
       readonly message: string;
-      /** The engine's own advice beside the refusal, "" where it gave none. */
-      readonly hint: string;
       readonly reload: boolean;
     };
 
@@ -89,11 +88,18 @@ interface Prepared extends SettingChange {
 export function useSettingWrite({
   reread,
   onApplied,
+  problemWords,
 }: {
   /** How a conflict ends, in the page's words: "Reload to see the limits as they are now." */
   reread: string;
   /** Called once this node applies the saved revision, or a later one passes it. */
   onApplied?: () => void;
+  /**
+   * The engine's refusal of the document, in the page's words for the one
+   * setting it changes, in place of each problem's line for an operator: the
+   * page knows which setting a problem is about, and what it is called.
+   */
+  problemWords?: (problems: readonly ConfigProblem[]) => string;
 }): SettingWrite {
   const [state, setState] = useState<SettingWriteState>({ kind: "idle" });
   const prepared = useRef<Prepared | null>(null);
@@ -101,6 +107,18 @@ export function useSettingWrite({
   const health = useLastHealth();
   const appliedRef = useRef(onApplied);
   appliedRef.current = onApplied;
+  const wordsRef = useRef(problemWords);
+  wordsRef.current = problemWords;
+  const refusalWords = useCallback(
+    (refusal: ConfigRefusal | { readonly kind: "none" }): RefusalWords => {
+      const words = wordsRef.current;
+      if (refusal.kind === "problems" && words) {
+        return { message: words(refusal.problems), reload: false };
+      }
+      return configRefusalWords(refusal, reread);
+    },
+    [reread],
+  );
 
   // A NEW PRESS SUPERSEDES THE OLD, and leaving the page abandons both.
   const begin = useCallback(() => {
@@ -131,14 +149,13 @@ export function useSettingWrite({
         setState({
           kind: "refused",
           message: "The engine checked the change but stored nothing. Try again.",
-          hint: "",
           reload: false,
         });
         return;
       }
-      setState({ kind: "refused", ...configRefusalWords(outcome, reread) });
+      setState({ kind: "refused", ...refusalWords(outcome) });
     },
-    [reread],
+    [refusalWords],
   );
 
   const submit = useCallback(
@@ -150,7 +167,7 @@ export function useSettingWrite({
         try {
           const read = await getConfig(signal);
           if (read.kind !== "document") {
-            setState({ kind: "refused", ...configRefusalWords(read, reread) });
+            setState({ kind: "refused", ...refusalWords(read) });
             return;
           }
           const change = plan(read.document);
@@ -189,7 +206,7 @@ export function useSettingWrite({
             return;
           }
           if (after.kind !== "valid") {
-            setState({ kind: "refused", ...configRefusalWords(after, reread) });
+            setState({ kind: "refused", ...refusalWords(after) });
             return;
           }
           const warnings = introducedWarnings(
@@ -207,7 +224,7 @@ export function useSettingWrite({
         }
       })();
     },
-    [begin, reread, store],
+    [begin, reread, refusalWords, store],
   );
 
   const confirm = useCallback(() => {
@@ -247,7 +264,6 @@ function failed(err: unknown): SettingWriteState {
   return {
     kind: "refused",
     message: `The change could not be sent: ${err instanceof Error ? err.message : String(err)}. Reload before trying again.`,
-    hint: "",
     reload: true,
   };
 }

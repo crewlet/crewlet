@@ -58,7 +58,8 @@
  * Four subsystems keep a record of the CHANGE a write made. None keeps one of
  * the CALL: a tool call that was refused, one whose answer never came back, and
  * a verb that changes no tracker or wiki record at all — a backup — left
- * nothing anywhere. The runtime audit is that record (`operator_acted`,
+ * nothing anywhere. The runtime audit is that record (`operator_acted`, and
+ * `own_record_marked` for a call that kept the caller's own bookkeeping,
  * `backup_requested`, `model_acted`, `mcp_server_acted`, and the Dashboard Assistant's `assistant_turn_completed`
  * and `assistant_conversation_read`, each with the envelope source
  * `operator`), and it is read
@@ -242,6 +243,14 @@ const RUNTIME_ROW: Record<
     kind: row.tags?.tool ?? "tool call",
     subject: row.tags?.repo ?? "",
     noSubject: "Not recorded",
+  }),
+  // A PERSON'S OWN BOOKKEEPING (a read cursor, an inbox's marks, their pins)
+  // is a tool call like any other here, kept out of the company's activity
+  // feed by its type and named by its tool in the audit.
+  own_record_marked: (row) => ({
+    kind: row.tags?.tool ?? "own bookkeeping",
+    subject: "",
+    noSubject: "Their own record",
   }),
   // A BACKUP'S SUBJECT IS WHERE IT WENT — a directory on the row's own node.
   // A row with no directory tag is a fact about the row, not a policy about

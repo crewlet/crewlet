@@ -116,6 +116,17 @@ var refusalSamples = map[string]caveat.Refusal{
 	"ScheduleSeatsPaused":            caveat.ScheduleSeatsPaused([]string{"qa-dev"}),
 	"ScheduleSeatsPaused (several)":  caveat.ScheduleSeatsPaused([]string{"qa-dev", "qa-lead"}),
 	"ScheduleSeatsNotReady":          caveat.ScheduleSeatsNotReady([]string{"qa-dev"}),
+	"LabelsNotDeclared": caveat.LabelsNotDeclared("ENG", []string{"regresion"},
+		[]string{"Performance", "Regression"}, []string{"Regression"}),
+	"LabelsNotDeclared (several, none declared)": caveat.LabelsNotDeclared("ENG",
+		[]string{"perf", "regresion"}, nil, nil),
+	"LabelArchived":        caveat.LabelArchived("ENG", "Legacy"),
+	"ViewUnnamed":          caveat.ViewUnnamed(),
+	"ViewNameTooLong":      caveat.ViewNameTooLong(),
+	"ViewShapeUnknown":     caveat.ViewShapeUnknown([]string{"list", "board", "table"}),
+	"ViewPersonalDefault":  caveat.ViewPersonalDefault(),
+	"ViewFiltersTooLarge":  caveat.ViewFiltersTooLarge(),
+	"ViewFilterUnreadable": caveat.ViewFilterUnreadable(),
 }
 
 // EVERY CAVEAT A PERSON CAN BE SHOWN IS WORDED FOR A PERSON.

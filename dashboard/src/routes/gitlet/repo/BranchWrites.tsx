@@ -24,7 +24,8 @@
  */
 
 import { useState } from "react";
-import { Button, ConfirmModal, FormField, Input, Modal, Stack } from "@crewlethq/ui";
+import { Button, ConfirmModal, FormField, Input, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName, shortOID } from "~/lib/code.ts";
 import { branchDeleteHeld, branchFormHeld, branchWriteHeld } from "~/lib/repoWrites.ts";

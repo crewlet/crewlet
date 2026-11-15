@@ -603,7 +603,9 @@ func DefaultDelegation() Delegation {
 func (d Delegation) validate(path Path) error {
 	var p problems
 
-	positive := []struct {
+	// EACH CAP'S BOUND IS DECLARED ONCE, in settingRanges, which a screen
+	// reads too ([Range]).
+	for _, f := range []struct {
 		name  string
 		value int
 	}{
@@ -611,49 +613,41 @@ func (d Delegation) validate(path Path) error {
 		{"max_tasks_per_call", d.MaxTasksPerCall},
 		{"max_turns", d.MaxTurns},
 		{"max_turns_ceiling", d.MaxTurnsCeiling},
+	} {
+		p.within(at(path, f.name), float64(f.value), "a cap of zero refuses every delegate call")
 	}
-	for _, f := range positive {
-		if f.value < 1 {
-			p.add(at(path, f.name), ErrOutOfRange,
-				"must be at least 1, got %d: a cap of zero refuses every "+
-					"delegate call", f.value)
-		}
-	}
-	if floor := d.PerTaskFloor(); floor < 0 {
-		p.add(at(path, "min_tokens_per_task"), ErrOutOfRange,
-			"must not be negative, got %d", floor)
-	}
-	timeouts := []struct {
+	p.within(at(path, "min_tokens_per_task"), float64(d.PerTaskFloor()), "")
+	for _, f := range []struct {
 		name  string
 		value float64
 	}{
 		{"task_timeout_seconds", d.TaskTimeoutSeconds},
 		{"call_timeout_seconds", d.CallTimeoutSeconds},
+	} {
+		p.within(at(path, f.name), f.value, "a non-positive timeout expires before the work starts")
 	}
-	for _, f := range timeouts {
-		if f.value <= 0 {
-			p.add(at(path, f.name), ErrOutOfRange,
-				"must be positive, got %v: a non-positive timeout expires "+
-					"before the work starts", f.value)
-		}
-	}
-	if f := d.BudgetFraction; f <= 0 || f > 1 {
-		p.add(at(path, "budget_fraction"), ErrOutOfRange,
-			"must be a fraction in (0, 1], got %v: it is a SHARE of the "+
-				"parent's remaining budget, not a token count", f)
-	}
+	p.within(at(path, "budget_fraction"), d.BudgetFraction,
+		"it is a SHARE of the parent's remaining budget, not a token count")
 	// A ceiling below the cap it bounds is a contradiction rather than a
 	// tighter bound: every template that asked for the ordinary cap would
 	// be refused at load, naming a ceiling the operator cannot satisfy
 	// without going below the default.
+	//
+	// Both rules are said in a person's words too: Settings › Limits changes
+	// a worker's turns and both time limits.
 	if d.MaxTurnsCeiling > 0 && d.MaxTurns > 0 && d.MaxTurnsCeiling < d.MaxTurns {
-		p.add(at(path, "max_turns_ceiling"), ErrConflict,
+		p.addSaying(at(path, "max_turns_ceiling"), ErrConflict,
+			fmt.Sprintf("Turns per worker can be at most %d, the most a delegated "+
+				"task may ask for.", d.MaxTurnsCeiling),
 			"is %d, below max_turns (%d): a template asking for the ordinary "+
 				"round cap would then be refused at load",
 			d.MaxTurnsCeiling, d.MaxTurns)
 	}
 	if d.CallTimeoutSeconds > 0 && d.TaskTimeoutSeconds > d.CallTimeoutSeconds {
-		p.add(at(path, "task_timeout_seconds"), ErrConflict,
+		p.addSaying(at(path, "task_timeout_seconds"), ErrConflict,
+			fmt.Sprintf("One task’s time limit (%s) can’t be longer than one call’s "+
+				"(%s): a worker would outlive the call waiting for it.",
+				secondsWords(d.TaskTimeoutSeconds), secondsWords(d.CallTimeoutSeconds)),
 			"is %v, above call_timeout_seconds (%v): one worker could then "+
 				"outlive the call that is waiting for it",
 			d.TaskTimeoutSeconds, d.CallTimeoutSeconds)

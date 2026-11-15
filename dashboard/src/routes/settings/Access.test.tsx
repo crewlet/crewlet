@@ -565,6 +565,7 @@ test("no grid beside or inside the person peek floors a flexible column at zero"
   expect(tracks(credentials).get("Credential")).toBe("minmax(8rem, 1fr)");
   expect(tracks(credentials).get("State")).toBe("max-content");
   expect(tracks(sessions).get("Session")).toBe("max-content");
+  expect(tracks(sessions).get("Device")).toBe("minmax(8rem, 1fr)");
 });
 
 /** A track list split at its top-level spaces, a `minmax(a, b)` kept whole. */

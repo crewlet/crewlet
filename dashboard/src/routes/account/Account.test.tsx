@@ -93,8 +93,24 @@ const ROW = {
 
 const SESSIONS = {
   sessions: [
-    { lineage: HERE, person: "p-1", created_at: "2026-10-06T00:00:00Z", live: true },
-    { lineage: LAPTOP, person: "p-1", created_at: "2026-10-05T09:00:00Z", live: true },
+    {
+      lineage: HERE,
+      person: "p-1",
+      created_at: "2026-10-06T00:00:00Z",
+      live: true,
+      user_agent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6; rv:132.0) Gecko/20100101 Firefox/132.0",
+      remote: "203.0.113.4",
+    },
+    {
+      lineage: LAPTOP,
+      person: "p-1",
+      created_at: "2026-10-05T09:00:00Z",
+      live: true,
+      user_agent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      remote: "198.51.100.7",
+    },
     { lineage: ENDED, person: "p-1", created_at: "2026-10-01T09:00:00Z", live: false },
   ],
 };
@@ -794,6 +810,32 @@ describe("what a person comes for is where they look", () => {
     expect(labels).toContain("Signed in");
     expect(labels).not.toContain("Sign out");
     expect(mark.closest(".crewlet-data-grid__cell")!.hasAttribute("data-label")).toBe(false);
+  });
+});
+
+describe("which session is which", () => {
+  // EACH SESSION NAMES ITS DEVICE AND WHERE IT SIGNED IN FROM, in the column
+  // a person reads first: with only when each began and ends, "Sign out"
+  // could not be aimed at the laptop they lost. Mutation: drop the Device
+  // column and no row says which browser it is.
+  test("each signed-in session names its browser, its system and its address", async () => {
+    engine();
+    mount();
+    const mark = await screen.findByText("This browser");
+    const grid = mark.closest<HTMLElement>(".crewlet-data-grid")!;
+    const rows = [...grid.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")];
+    const here = rows.find((r) => within(r).queryByText("This browser"))!;
+    expect(here.textContent).toMatch(/Firefox on macOS/);
+    expect(here.textContent).toMatch(/203\.0\.113\.4/);
+    const laptop = rows.find((r) =>
+      within(r).queryByRole("button", { name: /Sign out the session/ }),
+    )!;
+    expect(laptop.textContent).toMatch(/Chrome on Windows/);
+    expect(laptop.textContent).toMatch(/198\.51\.100\.7/);
+    const heads = [
+      ...grid.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell"),
+    ].map((c) => c.getAttribute("data-label"));
+    expect(heads).toContain("Device");
   });
 });
 

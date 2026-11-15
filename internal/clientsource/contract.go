@@ -517,11 +517,15 @@ var contract = []Entry{
 	{"MERGE_REFUSALS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
 	{"MERGE_CONFLICT", ReadScalar, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
 
+	// cron.ts
+	{"CRON_FIELDS", ReadLiteral, "internal/cron.TestTheDashboardReadsTheFieldsTheGrammarHas"},
+
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"LimitRow", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"LimitGroup", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"LimitUnit", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+	{"SettingRange", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 
 	// signin.ts
 	{"SignInPolicyAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},

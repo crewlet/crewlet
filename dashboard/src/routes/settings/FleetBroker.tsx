@@ -50,12 +50,12 @@ import {
   EmptyValue,
   InlineCode,
   Input,
-  Modal,
   Tag,
   TableKeyCell,
   TableTagsCell,
   type DataGridColumn,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { NetworkGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 

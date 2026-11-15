@@ -105,37 +105,55 @@ var daysOfWeek = map[string]int{
 // cronFields is the number of whitespace-separated fields in the grammar.
 const cronFields = 5
 
+// field is one field of the grammar: the name a refusal gives it, the values
+// it admits, and the names it reads as values.
+type field struct {
+	name     string
+	min, max int
+	aliases  map[string]int
+}
+
+// fields is the grammar's five fields, in the order an expression writes
+// them.
+//
+// ONE TABLE, which [Parse] reads and the dashboard's schedule form copies
+// (`dashboard/src/contract/cron.ts`, CRON_FIELDS) so it names the field a
+// mistake is in while it is typed. TestTheDashboardReadsTheFieldsTheGrammarHas
+// holds the copy to this. The form's own grammar had drifted from this one
+// while nothing compared them: it read a month's name as a weekday and refused
+// `6-7`.
+//
+// Day-of-week takes 0-7, both ends Sunday: [Parse] folds 7 onto 0 after the
+// field is read.
+var fields = [cronFields]field{
+	{name: "minute", min: 0, max: 59},
+	{name: "hour", min: 0, max: 23},
+	{name: "day-of-month", min: 1, max: 31},
+	{name: "month", min: 1, max: 12, aliases: months},
+	{name: "day-of-week", min: 0, max: 7, aliases: daysOfWeek},
+}
+
 // Parse compiles a 5-field cron expression.
 func Parse(expr string) (Expr, error) {
-	fields := strings.Fields(expr)
-	if len(fields) != cronFields {
+	specs := strings.Fields(expr)
+	if len(specs) != cronFields {
 		return Expr{}, fmt.Errorf("%w %q: expected %d fields (minute hour day-of-month month day-of-week), got %d",
-			ErrInvalid, expr, cronFields, len(fields))
+			ErrInvalid, expr, cronFields, len(specs))
 	}
 
-	minutes, _, err := parseField(expr, "minute", fields[0], 0, 59, nil)
-	if err != nil {
-		return Expr{}, err
+	var masks [cronFields]uint64
+	var restricted [cronFields]bool
+	for i, f := range fields {
+		var err error
+		if masks[i], restricted[i], err = parseField(expr, f, specs[i]); err != nil {
+			return Expr{}, err
+		}
 	}
-	hours, _, err := parseField(expr, "hour", fields[1], 0, 23, nil)
-	if err != nil {
-		return Expr{}, err
-	}
-	doms, domRestricted, err := parseField(expr, "day-of-month", fields[2], 1, 31, nil)
-	if err != nil {
-		return Expr{}, err
-	}
-	mons, _, err := parseField(expr, "month", fields[3], 1, 12, months)
-	if err != nil {
-		return Expr{}, err
-	}
+	minutes, hours, doms, mons, rawDows := masks[0], masks[1], masks[2], masks[3], masks[4]
+	domRestricted, dowRestricted := restricted[2], restricted[4]
 	// Day-of-week accepts 0-7 and both ends are Sunday, so 7 folds onto 0
 	// before the mask is stored. Folding at parse time is what makes
 	// `* * * * 7` and `* * * * 0` compare equal.
-	rawDows, dowRestricted, err := parseField(expr, "day-of-week", fields[4], 0, 7, daysOfWeek)
-	if err != nil {
-		return Expr{}, err
-	}
 	dows := rawDows
 	if dows&(1<<7) != 0 {
 		dows = (dows &^ (1 << 7)) | 1
@@ -162,7 +180,8 @@ func Validate(expr string) error {
 
 // parseField compiles one field into a bitmask plus whether it was restricted
 // — anything other than a bare `*`.
-func parseField(expr, name, spec string, lo, hi int, aliases map[string]int) (uint64, bool, error) {
+func parseField(expr string, f field, spec string) (uint64, bool, error) {
+	name, lo, hi, aliases := f.name, f.min, f.max, f.aliases
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return 0, false, fmt.Errorf("%w %q: empty %s field", ErrInvalid, expr, name)

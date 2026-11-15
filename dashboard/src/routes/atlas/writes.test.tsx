@@ -9,12 +9,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import {
   disputedServer,
+  entryAnswer,
   fact,
   grownCompany,
   reviewAnswer,
   summary,
   waitingItems,
 } from "~/test/atlas.ts";
+import type { AtlasEdge, AtlasEntryAnswer } from "~/contract/atlas.ts";
 import { mountAtlas } from "~/test/atlasMount.tsx";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { Atlas } from "./Atlas.tsx";
@@ -92,18 +94,44 @@ function reasonOf(button: HTMLElement): string {
     .join(" ");
 }
 
-function mountEntry(viewer: unknown, tab = "") {
+/**
+ * The disputed server's page, for `viewer`. The settings declare it (an SSH
+ * server); `{ declared: false }` draws it as only people, agents and an
+ * integration said it, for a case about the reader rather than the entry.
+ */
+function mountEntry(viewer: unknown, tab = "", { declared = true } = {}) {
   const company = grownCompany();
   const mounted = mountAtlas(
     `#/company/atlas/${company.web1.id}${tab ? `?tab=${tab}` : ""}`,
     <EntryPage id={company.web1.id} />,
     company,
     {
-      entry: (id) => (id === company.web1.id ? disputedServer(company) : undefined),
+      entry: (id) =>
+        id !== company.web1.id
+          ? undefined
+          : declared
+            ? disputedServer(company)
+            : undeclared(disputedServer(company)),
       answers: { viewer },
     },
   );
   return { company, ...mounted };
+}
+
+/** An entry's answer with every claim the settings or the engine's records made said by a person. */
+function undeclared(answer: AtlasEntryAnswer): AtlasEntryAnswer {
+  const person = { kind: "person" as const, name: "ada" };
+  const computed = (kind: string) => kind === "settings" || kind === "records";
+  return {
+    ...answer,
+    entry: {
+      ...answer.entry,
+      sources: answer.entry.sources.filter((s) => !computed(s.kind)),
+      relations: answer.entry.relations.map((edge) =>
+        computed(edge.source.kind) ? { ...edge, source: person } : edge,
+      ),
+    },
+  };
 }
 
 describe("what the write controls send", () => {
@@ -215,7 +243,7 @@ describe("a reader who may not write", () => {
   // from here", with neither the cause nor anywhere to go.
   test("a sign-in with no seat is told that is why, once, with where a person takes a seat", async () => {
     const token = { ...ADA, grants: ["admin", "atlas"], handle: "", owner: "token:ci", acts: [] };
-    mountEntry(token);
+    mountEntry(token, "", { declared: false });
     const confirm = await screen.findByRole("button", { name: "Confirm" });
     await waitFor(() => expect(reasonOf(confirm)).toContain(SEATLESS));
     expect(reasonOf(screen.getByRole("button", { name: "Correct" }))).toContain(SEATLESS);
@@ -236,18 +264,88 @@ describe("a reader who may not write", () => {
   });
 
   test("a reader who holds a seat is never told they hold none", async () => {
-    mountEntry({ ...ADA, acts: [] });
+    mountEntry({ ...ADA, acts: [] }, "", { declared: false });
     const confirm = await screen.findByRole("button", { name: "Confirm" });
     await waitFor(() => expect(reasonOf(confirm)).toContain(WRITE_REASONS.not_served));
     expect(document.querySelector(".atlas-actions__note")).toBeNull();
   });
 
   test("a purge is held for anybody but an administrator, in words", async () => {
-    mountEntry(ADA);
+    mountEntry(ADA, "", { declared: false });
     fireEvent.click(await screen.findByRole("button", { name: /More to do with web-1/ }));
     const purge = await screen.findByRole("menuitem", { name: /Purge/ });
     expect(purge.getAttribute("aria-disabled")).toBe("true");
     expect(purge.textContent).toContain(PURGE_HELD);
+  });
+});
+
+/*
+ * WHAT THE COMPANY SETTINGS DECLARE IS CHANGED THERE. The engine reads a
+ * settings entry (a model, a tool server, an SSH server) again on every read
+ * and refuses to retire or purge it, to change an owner they name, or to take
+ * back a relation they declare: a retired or purged model came straight back.
+ * The More menu offered all of it, enabled, and nothing said the settings
+ * re-create the entry. Now those are held with who declares it and where it is
+ * changed, a note beside the controls says so with the page, and what the
+ * engine records beside a declared entry (a page, an owner they name none
+ * for, a merge, a split) stays offered. Mutation: build the menu without
+ * `declaredBy` and Retire and Purge are enabled again.
+ */
+describe("an entry the company settings declare", () => {
+  /** An administrator who holds Atlas and may purge. */
+  const ADMIN = { ...ADA, grants: ["admin", "atlas"], acts: [...ATLAS_ACTS, "atlas_purge"] };
+  const SETTINGS = { kind: "settings" as const, revision: "r7" };
+
+  async function mountModel(relations: AtlasEdge[] = []) {
+    const model = summary("model_provider", "default", { key: "llm/default", vendor: "anthropic" });
+    mountAtlas(`#/company/atlas/${model.id}`, <EntryPage id={model.id} />, grownCompany(), {
+      entry: (id) => (id === model.id ? entryAnswer(model, { relations }) : undefined),
+      answers: { viewer: ADMIN },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /More to do with default/ }));
+  }
+  const item = (name: RegExp) => screen.findByRole("menuitem", { name });
+
+  test("holds what the engine refuses, with where it is changed, and offers what it records", async () => {
+    await mountModel();
+    for (const [name, says] of [
+      [/Retire/, "The company settings declare it. Remove it there to retire it."],
+      [/Purge/, "The company settings declare it, so the next read brings it back."],
+    ] as const) {
+      const held = await item(name);
+      expect(held.getAttribute("aria-disabled"), String(name)).toBe("true");
+      expect(held.textContent, String(name)).toContain(says);
+    }
+    for (const name of [/Set owner/, /Link a page/, /Merge with/, /Split/]) {
+      await waitFor(async () =>
+        expect((await item(name)).getAttribute("aria-disabled"), String(name)).not.toBe("true"),
+      );
+    }
+    const note = document.querySelector<HTMLElement>(".atlas-actions__note")!;
+    expect(note.textContent).toContain("The company settings declare this entry");
+    expect(within(note).getByRole("link", { name: "Open Models" }).getAttribute("href")).toBe(
+      "#/settings/models",
+    );
+  });
+
+  test("an owner or a relation the settings declare is changed there", async () => {
+    const declared = {
+      source: SETTINGS,
+      confidence: "declared" as const,
+      word: "confirmed" as const,
+      observed_at: "2026-11-11T08:00:00Z",
+      standing: "settled" as const,
+    };
+    await mountModel([
+      { relation: "owned_by", external: "unit", name: "platform", ...declared },
+      { relation: "documented_in", external: "page", name: "page-1", ...declared },
+    ]);
+    const owner = await item(/Set owner/);
+    expect(owner.getAttribute("aria-disabled")).toBe("true");
+    expect(owner.textContent).toContain("The company settings name its owner. Change it there.");
+    const unrelate = await item(/Remove relation/);
+    expect(unrelate.getAttribute("aria-disabled")).toBe("true");
+    expect(unrelate.textContent).toContain("The company settings declare its relations.");
   });
 });
 

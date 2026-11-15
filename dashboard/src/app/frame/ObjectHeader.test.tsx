@@ -9,7 +9,8 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { WriteButton } from "~/components/WriteButton.tsx";
 import { ArtifactIcon } from "@crewlethq/ui";
 
 import { href } from "../router.tsx";
@@ -98,4 +99,46 @@ test("draws the object's description under its title and a glyph it chose", () =
   );
   expect(screen.getByText("The gates every launch passes, and who signs each off.")).toBeTruthy();
   expect(container.querySelector("svg")).not.toBeNull();
+});
+
+// A WRITE CONTROL AMONG THE HEADER'S ACTIONS keeps the header: what it was
+// refused is drawn on a line under the header, not in the actions, where it
+// widened them and pushed the title aside.
+//
+// Mutation: hand the kit the actions as they come (no place).
+test("a refused action draws its refusal under the header, not among the actions", () => {
+  const { container } = render(
+    <ObjectHeader
+      kind="Schedule"
+      title="daily-standup"
+      actions={
+        <WriteButton
+          write={{
+            access: { can: true, as: "jane", acts: ["run_schedule"] },
+            busy: false,
+            refusal: {
+              sentence: "This schedule is switched off, so nothing was run.",
+              hint: "",
+              hostRefusal: "",
+              retryable: false,
+              grants: [],
+              reason: "",
+              remedy: null,
+            },
+            run: vi.fn(async () => null),
+            retry: vi.fn(async () => null),
+            dismiss: vi.fn(),
+          }}
+          onPress={() => {}}
+        >
+          Run now
+        </WriteButton>
+      }
+    />,
+  );
+  const alert = screen.getByRole("alert");
+  const header = container.querySelector(".crewlet-object-header")!;
+  expect(header.contains(alert)).toBe(false);
+  expect(alert.closest(".refusal-place")).not.toBeNull();
+  expect(header.contains(screen.getByRole("button", { name: "Run now" }))).toBe(true);
 });

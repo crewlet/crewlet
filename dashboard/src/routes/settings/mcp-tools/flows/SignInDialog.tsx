@@ -26,11 +26,11 @@ import {
   ConfirmModal,
   Copyable,
   FormField,
-  Modal,
   Spinner,
   Text,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import type { McpMemberServerStatus, McpOAuthView, McpSignIn } from "~/contract/mcp.ts";
 import { useLatestHandlers } from "~/lib/useLatestHandlers.ts";
 import { readSignIn, signOut, startSignIn } from "../api.ts";

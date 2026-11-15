@@ -11,7 +11,8 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, Callout, Disclosure, Modal, StatusDot, Text, VisuallyHidden } from "@crewlethq/ui";
+import { Button, Callout, Disclosure, StatusDot, Text, VisuallyHidden } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import type { ModelCheckName, ModelSignInRoute } from "~/contract/models.ts";
 import type { CheckAnswer, CheckLine } from "~/protocol/models.ts";
 import type { ModelAnswer } from "../api.ts";

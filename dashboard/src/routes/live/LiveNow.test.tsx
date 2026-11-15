@@ -836,3 +836,23 @@ test("every card's title is a heading one under the page's title", async () => {
     expect(screen.getByRole("heading", { name: title }).tagName, title).toBe("H2");
   }
 });
+
+// THE PHASE PICKER SAYS A PHASE IN THE RUNNING CARDS' WORDS, Context first. It
+// listed the engine's ids ("execute", "review", "subagent") beside cards that
+// name the same phases "Context", "Execute" and "Review", and had no Context
+// at all. The picker and Ask Crewlet's filter read the one option list.
+//
+// Mutation: label the options with the ids again, or drop "context".
+test("the phase picker names each phase in the running cards' words, Context first", () => {
+  const phase = liveFilterKeys([], () => 0).phase!;
+  const values = phase.values ?? [];
+  expect(values).toEqual(["context", "execute", "review", "onboarding", "subagent", "judge"]);
+  expect(values.map((v) => phase.words!(v))).toEqual([
+    "Context",
+    "Execute",
+    "Review",
+    "Onboarding",
+    "Subagent",
+    "Judge",
+  ]);
+});

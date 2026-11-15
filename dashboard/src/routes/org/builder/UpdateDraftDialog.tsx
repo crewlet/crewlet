@@ -30,7 +30,8 @@ import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { type Conflict, type Operation } from "./model/operations.ts";
 import type { PendingUpdate } from "./model/reducer.ts";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal, SegmentedControl, Table } from "@crewlethq/ui";
+import { Button, SegmentedControl, Table } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 
 /** A node's name for its key, or `null` when no draft at hand holds it. */
 export type NameOf = (key: NodeKey) => string | null;

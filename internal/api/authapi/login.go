@@ -1069,7 +1069,10 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		// A PASSWORD ALONE WHERE A SECOND FACTOR IS REQUIRED opens a
 		// session that may only enrol one — see [Service.enrolmentOnly].
 		EnrolmentOnly: restricted,
-		OpID:          sessionOpID(lineage),
+		// THE BROWSER AND WHERE IT SIGNED IN FROM, so the person's list of
+		// sessions can tell this one from the rest ([iamdomain.Session.UserAgent]).
+		UserAgent: r.UserAgent(), Remote: s.sourceOf(r),
+		OpID: sessionOpID(lineage),
 		// A SIGN-IN IS THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT,
 		// because nothing in this answer reads the row: the bearer carries
 		// the position and every node validates against its own applier.

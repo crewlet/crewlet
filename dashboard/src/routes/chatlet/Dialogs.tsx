@@ -34,13 +34,13 @@ import {
   FormField,
   Input,
   Kbd,
-  Modal,
   PersonRow,
   Switch,
   Tag,
   Textarea,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   AtSignGlyph,
   CalendarClockGlyph,

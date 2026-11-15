@@ -62,18 +62,29 @@ const FOREST = [
 
 // A CHART OPENS ON THE DEEPEST RANK IT CAN BE READ AT. Its whole fit scales by
 // how much narrower the ranks it shows are than its widest, and a chart whose
-// whole fit can be read opens whole. Rank 0 is the floor. Mutation: start the
-// walk at rank 0, or ignore the ratio.
+// whole fit can be read opens whole. Mutation: ignore the ratio.
 test("the opening is the deepest rank that can be read", () => {
   expect(rankWidths(FOREST)).toEqual([1, 3, 5, 1]);
   expect(openingDepth([1, 3, 5, 1], 0.5, 0.5)).toBeNull();
   // 5 wide at 0.4: 3 wide is 0.67, and 1 wide would be 2.
   expect(openingDepth([1, 3, 5, 1], 0.4, 0.5)).toBe(1);
-  // 14 wide at 0.27 and at 0.08: three cards read at 1.26, and not at 0.37.
+  // 14 wide at 0.27: three cards read at 1.26.
   expect(openingDepth([1, 3, 14], 0.27, 0.5)).toBe(1);
-  expect(openingDepth([1, 3, 14], 0.08, 0.5)).toBe(0);
   // A narrow deep chain keeps every rank it can: the widest is the third.
   expect(openingDepth([1, 2, 8, 8, 3], 0.2, 0.5)).toBe(1);
+});
+
+// THE ROOT ALONE IS NEVER THE OPENING. Seven cards at the top of a desktop
+// canvas, or three on a phone, are too many to read at the fit, and the chart
+// opened as the company's one card in an empty canvas: nothing of the company
+// to read, and nothing saying it opens. The root's own seats and units open,
+// fitted, however small; a chart of two ranks opens whole. Mutation: floor the
+// opening at rank 0, and a company whose top rank cannot be read opens as
+// one card.
+test("a chart whose top rank cannot be read opens on it, never on the root alone", () => {
+  expect(openingDepth([1, 7, 5, 7], 0.41, 0.5)).toBe(1);
+  expect(openingDepth([1, 3, 14], 0.08, 0.5)).toBe(1);
+  expect(openingDepth([1, 9], 0.3, 0.5)).toBeNull();
 });
 
 // THE BRANCHES CLOSED ARE THOSE AT THE LAST RANK DRAWN AND BELOW, but for the
