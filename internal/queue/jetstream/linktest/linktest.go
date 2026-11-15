@@ -100,6 +100,12 @@ func SlowEachWay(t testing.TB, target string, rate int64) *Link {
 // build a backlog that grows. Set once the node has linked, since a link's
 // own handshake keeps deadlines a lag of hundreds of milliseconds each way
 // already misses, and what a lagging link is for is the traffic after it.
+//
+// AND SIZE EVERY WINDOW THE NODE WAITS IN FOR AN ANSWER TO THE ROUND TRIP: a
+// window that ends before its answer crosses back does not wait for it, it
+// loses it, so a case whose windows suit a loopback that answers at once
+// shows answers lost, not answers late (jetstream's lagging leaf says which
+// windows, and what it measured when they were not).
 func Lagging(t testing.TB, target string) *Link {
 	t.Helper()
 	l := listen(t, target)

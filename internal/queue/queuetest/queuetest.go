@@ -896,7 +896,8 @@ const (
 	// link held 500ms each way and nothing else changed, the redelivery
 	// case came round in 6.1 to 10.2 s where three seconds had cut it every
 	// time, and one of its healthy redeliveries came 6.1 s after the
-	// attempt before it (jetstream's TestCasesThroughALaggingLeaf runs it so).
+	// attempt before it (jetstream's TestCasesThroughALaggingLeaf runs it
+	// through such a link, at windows sized to the lag).
 	//
 	// THIRTY SECONDS, against that 6.59 s, the slowest single pause a
 	// healthy process was measured to take: 4.5x it, as the Makefile's
