@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -84,21 +85,26 @@ type contextMeter struct {
 // [sandbox.SessionArchive.Version]), read within ctx, the take's own: a take
 // cut short ends the walk, whose count is then unread.
 func newContextMeter(ctx context.Context, layout archiveLayout, session, release string) *contextMeter {
+	return startMeter(ctx, func(r io.Reader) (int64, *sandbox.ResumedCount, error) {
+		switch layout {
+		case archiveTar:
+			return meterArchive(ctx, r, session, release)
+		case archiveDocument:
+			n, err := lastExportInput(r)
+			return n, nil, err
+		}
+		return 0, nil, nil
+	})
+}
+
+// startMeter starts a meter that reads what is written to it with measure, on
+// a goroutine of its own ([meterContained]).
+func startMeter(ctx context.Context, measure func(io.Reader) (int64, *sandbox.ResumedCount, error)) *contextMeter {
 	pr, pw := io.Pipe()
 	m := &contextMeter{pw: pw, done: make(chan struct{})}
 	go func() {
 		defer close(m.done)
-		var (
-			n     int64
-			count *sandbox.ResumedCount
-			err   error
-		)
-		switch layout {
-		case archiveTar:
-			n, count, err = meterArchive(ctx, pr, session, release)
-		case archiveDocument:
-			n, err = lastExportInput(pr)
-		}
+		n, count, err := meterContained(ctx, pr, measure)
 		if err == nil {
 			m.tokens = n
 		}
@@ -108,6 +114,30 @@ func newContextMeter(ctx context.Context, layout archiveLayout, session, release
 		_, _ = io.Copy(io.Discard, pr)
 	}()
 	return m
+}
+
+// meterContained runs measure over r, a panic in it the meter's measuring
+// nothing rather than the end of the engine.
+//
+// THE METER READS WHAT A BOX WROTE on a goroutine of its own, beside the take's
+// scrub, which nothing above it can recover: a defect the box's text reaches in
+// the transcript's walk or the export's scan would end the engine's process,
+// every seat the node holds with it, as one in the scrub would
+// (scrubContained). So its panic is contained here, told to whoever observes
+// contained panics under the take's scope, its stack logged
+// (session_meter_panicked), and the meter measures nothing, as one that cannot
+// read its archive does; it never fails the take, and is drained as ever.
+func meterContained(ctx context.Context, r io.Reader,
+	measure func(io.Reader) (int64, *sandbox.ResumedCount, error)) (n int64, count *sandbox.ResumedCount, err error) {
+
+	defer func() {
+		if p := recover(); p != nil {
+			contained := panics.Recovered(panics.ScopeSessionTake, p)
+			log.ErrorContext(ctx, "session_meter_panicked", "panic", fmt.Sprint(p), "stack", contained.Stack)
+			n, count, err = 0, nil, contained.Err()
+		}
+	}()
+	return measure(r)
 }
 
 // Write hands the meter what the take wrote. It never fails the take: a meter

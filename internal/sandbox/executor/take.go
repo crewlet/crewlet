@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -138,7 +139,9 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			}
 			return again, nil
 		}
-		scrubErr := scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
+		scrubErr := scrubContained(ctx, func() error {
+			return scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
+		})
 		out.finished(scrubErr, sum.String())
 		// THE METER ENDS BEFORE THE READER DOES, so a caller that has read the
 		// take to its end and asks what it measured waits on nothing but the
@@ -160,6 +163,29 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	}
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
 		Count: meter.count}, nil
+}
+
+// scrubContained runs scrub, the take's scrub of a box's archive, a panic in it
+// the take's error rather than the end of the engine.
+//
+// THE SCRUB RUNS ON A GOROUTINE OF THE TAKE'S OWN, which nothing above it can
+// recover: a defect a box's text reaches in a redaction or a rewrite would end
+// the engine's process, every seat the node holds with it, for one session the
+// box's code wrote. So the panic is contained here, told to whoever observes
+// contained panics (panics.Recovered) under the take's scope, its stack logged,
+// and the take refused with the panic's message, which the capture's stamp
+// carries as the reason the session was not kept. The pipe the take writes to
+// ends on that error, so no reader takes the archive for whole.
+func scrubContained(ctx context.Context, scrub func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeSessionTake, r)
+			log.ErrorContext(ctx, "session_scrub_panicked", "panic", fmt.Sprint(r), "stack", contained.Stack)
+			err = fmt.Errorf("executor: the session's scrub failed, and the session was not kept: %w",
+				contained.Err())
+		}
+	}()
+	return scrub()
 }
 
 // keptRunStart is where an archive's run began in its session as the take

@@ -11,7 +11,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -1009,6 +1008,15 @@ func (c *counted) Write(p []byte) (int, error) {
 // A `.json` FILE IS READ BOTH WAYS AT ONCE, its bytes handed to a rewrite as a
 // document and to one as text: which it takes is known only once it has been
 // read through, and a tar member is read once in each reading.
+//
+// ON ONE GOROUTINE, THE SCRUB'S OWN: the document's rewrite reads the file
+// through a reader that hands every byte it reads to the text's scrub as well
+// ([teeRead]), as a transcript's line is read ([lineReader]), so every byte of
+// the file is rewritten and redacted where the take's containment of a panic
+// sees it (scrubContained). A goroutine for each reading, fed through pipes,
+// as the two were read until then, put the rewrite and the redaction of every
+// `.json` file a box wrote outside it, and a panic there ended the engine; and
+// a panic in the copy beside them left both blocked on their pipes for good.
 func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size int64, text bool, err error) {
 	switch path.Ext(name) {
 	case ".jsonl":
@@ -1020,28 +1028,58 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 		err = rewriteText(n, body, s)
 		return n.n, false, err
 	}
-	asDocument := func(r io.Reader) (int64, error) {
-		n := &counted{}
-		err := rewriteDocument(n, r, s)
-		return n.n, err
+	asText := &counted{}
+	textual := s.text(asText)
+	tee := &teeRead{r: body, w: textual}
+	asDocument := &counted{}
+	documentErr := rewriteDocument(asDocument, tee, s)
+	// THE REST IS THE TEXT'S ALONE: a document the rewrite stopped reading
+	// is read on to its end, for its text.
+	if _, err = io.Copy(io.Discard, tee); err == nil {
+		err = tee.readErr
 	}
-	asText := func(r io.Reader) (int64, error) {
-		n := &counted{}
-		err := rewriteText(n, r, s)
-		return n.n, err
+	if err != nil {
+		return 0, false, err
+	}
+	textErr := tee.writeErr
+	if closeErr := textual.Close(); textErr == nil {
+		textErr = closeErr
 	}
 	// A DOCUMENT THE REWRITE CANNOT READ, FOR WHATEVER REASON, IS TEXT: torn,
 	// more than one value, nested past the scanner's depth, or holding text
 	// its redaction could not redact; kept as text only where its text's own
-	// redaction did not fail.
-	document, documentErr, asTextN, textErr := both(body, asDocument, asText)
+	// redaction did not fail. The archive's own failure is neither's, and
+	// refuses the session above.
 	switch {
 	case documentErr == nil:
-		return document, false, nil
+		return asDocument.n, false, nil
 	case textErr != nil:
 		return 0, false, textErr
 	}
-	return asTextN, true, nil
+	return asText.n, true, nil
+}
+
+// teeRead reads r and hands every byte it reads to w as well: a `.json`
+// file's text scrub, fed what the document's rewrite reads of the file
+// ([measureFile]).
+type teeRead struct {
+	r io.Reader
+	w io.Writer
+	// readErr is r's failure, other than its end, which no reading of the
+	// file survives; writeErr is w's first, after which w is handed nothing
+	// more and the document is read on.
+	readErr, writeErr error
+}
+
+func (t *teeRead) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 && t.writeErr == nil {
+		_, t.writeErr = t.w.Write(p[:n])
+	}
+	if err != nil && !errors.Is(err, io.EOF) && t.readErr == nil {
+		t.readErr = err
+	}
+	return n, err
 }
 
 // rewriteMember writes one file of an archive as the first reading planned it:
@@ -1067,66 +1105,6 @@ func rewriteFile(name string, plan *tarPlan, end int, dst io.Writer, src io.Read
 		return rewriteDocument(dst, src, s)
 	}
 	return rewriteText(dst, src, s)
-}
-
-// both reads src once into two rewrites at once, each counting what it would
-// write, and answers both counts and both errors. A rewrite that stops early —
-// it failed — is fed no further, and the other is fed to the end.
-func both(src io.Reader, first, second func(io.Reader) (int64, error)) (int64, error, int64, error) {
-	r1, w1 := io.Pipe()
-	r2, w2 := io.Pipe()
-	var (
-		wg         sync.WaitGroup
-		n1, n2     int64
-		err1, err2 error
-	)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		n1, err1 = first(r1)
-		_ = r1.CloseWithError(errRewriteDone)
-	}()
-	go func() {
-		defer wg.Done()
-		n2, err2 = second(r2)
-		_ = r2.CloseWithError(errRewriteDone)
-	}()
-	_, copyErr := io.Copy(&fanOut{to: []*io.PipeWriter{w1, w2}, open: []bool{true, true}}, src)
-	_ = w1.CloseWithError(copyErr)
-	_ = w2.CloseWithError(copyErr)
-	wg.Wait()
-	if copyErr != nil && !errors.Is(copyErr, errRewriteDone) {
-		return 0, copyErr, 0, copyErr
-	}
-	return n1, err1, n2, err2
-}
-
-// errRewriteDone is a rewrite that stopped reading: what [both] closes its pipe
-// with, so writes to it fail and it is fed no further.
-var errRewriteDone = errors.New("executor: the rewrite stopped reading")
-
-// fanOut writes to every pipe still read, and fails only once none is.
-type fanOut struct {
-	to   []*io.PipeWriter
-	open []bool
-}
-
-func (f *fanOut) Write(p []byte) (int, error) {
-	fed := false
-	for i, w := range f.to {
-		if !f.open[i] {
-			continue
-		}
-		if _, err := w.Write(p); err != nil {
-			f.open[i] = false
-			continue
-		}
-		fed = true
-	}
-	if !fed {
-		return 0, errRewriteDone
-	}
-	return len(p), nil
 }
 
 // tarPlan is how the first reading of a tar decided to write it, which the
