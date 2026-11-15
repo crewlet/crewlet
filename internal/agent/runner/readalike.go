@@ -62,10 +62,12 @@ func readAlike(h, t BridgedCall, opts ledger.FormatOptions) bool {
 // withheld nor in flight, kept whole by the run's record and read back from
 // it, and digested where they were admitted ([readAlike]).
 //
-// WITHHELD IS ITS OWN TEST, not left to the digest a withheld call's record
-// clears (sandbox's keptCall): a withheld call keeps no arguments, so were a
-// record ever to keep its digest, its empty arguments would read apart from
-// every told call with any, the one direction that loses a call.
+// WITHHELD IS ITS OWN TEST, never left to the arguments and digest a withheld
+// call's record clears (sandbox's keptCall): its line draws its arguments as
+// sealed whatever the call carries ([ledger.Call.Withheld]), so a reader
+// compares none of them, and were a record ever to keep some, comparing them
+// would read apart two calls whose lines read alike, the one direction that
+// loses a call.
 func argsKnownWhole(call BridgedCall) bool {
 	return !call.Withheld && !call.Unfinished && call.ArgsBytes == 0 && call.Digest != "" && call.Args != nil
 }

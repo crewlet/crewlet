@@ -539,7 +539,8 @@ func TestAKeptCaptureCutOffSaysWhetherItsJobRestarted(t *testing.T) {
 		// names its tool, and neither call's arguments carry the digest that
 		// would let their lines read apart. Told from the round's start where
 		// its job restarted, so held nowhere and listed again nowhere.
-		told, again, _ := strings.Cut(brief, listedAgainHeading)
+		told, _, _ := strings.Cut(brief, listedAgainHeading)
+		again, _ := sectionOf(brief, listedAgainHeading)
 		if got := strings.Contains(told, "an earlier issue"); got != tc.fromAll {
 			t.Errorf("%s: the call before the save is told %v, want %v:\n%s", name, got, tc.fromAll, brief)
 		}
