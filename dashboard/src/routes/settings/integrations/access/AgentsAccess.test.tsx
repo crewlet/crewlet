@@ -41,6 +41,7 @@ import {
 import {
   awsAnswer,
   cloudflareAnswer,
+  cloudflareGrantsAnswer,
   confluenceAnswer,
   datadogAnswer,
   digitaloceanAnswer,
@@ -2133,4 +2134,66 @@ test("an agent's own page tells Ask Crewlet every tab's draft as one", () => {
   expect(
     within(screen.getByRole("table", { name: "Access on Cloudflare" })).getByText("Not saved"),
   ).toBeTruthy();
+});
+
+// AN AGENT'S GRANTS SHOW BESIDE ITS LEVEL, each in the vendor's words with
+// where it applies, how long and who granted it, and each removable into the
+// draft, which the review saves. Mutation: drop the grants column and no tag
+// is drawn.
+test("an agent's grants show beside its level, and removing one is a change the review saves", async () => {
+  draw(cloudflareGrantsAnswer());
+  const tag = screen.getByText("Origin Rules: Edit · example.com · Permanent");
+  expect(tag.closest("[title]")?.getAttribute("title")).toContain(
+    "Granted by Ada: an origin rule for the new backend",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Remove SRE's grant of Origin Rules: Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByRole("dialog", { name: "Review changes to Cloudflare" });
+  expect(calls.plan).toEqual([
+    {
+      kind: "cloudflare",
+      seats: { sre: { cloudflare: { enabled: true, level: "operate", grants: [] } } },
+    },
+  ]);
+});
+
+// ADD GRANT PICKS ONE PERMISSION FROM THE LIVE CATALOGUE, a write marked as
+// asking a fresh sign-in and an unavailable one offered disabled with why,
+// and drafts it with its zones, how long and why, leaving the id and author
+// for the engine to write. Mutation: offer an unavailable entry enabled and
+// the case picks a permission the provisioner cannot mint.
+test("Add grant drafts one permission from the live catalogue with its zones, length and reason", async () => {
+  draw(cloudflareGrantsAnswer());
+  fireEvent.click(screen.getByRole("button", { name: "Add grant" }));
+  const dialog = screen.getByRole("dialog", { name: "Add a grant for SRE" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "SRE's new Cloudflare permission" }));
+  const dns = screen.getAllByRole("option").find((o) => o.textContent?.startsWith("DNS Write"))!;
+  expect(dns.getAttribute("aria-disabled")).toBe("true");
+  expect(dns.textContent).toContain("The provisioner token does not hold DNS Write");
+  fireEvent.mouseDown(
+    screen.getAllByRole("option").find((o) => o.textContent?.startsWith("Origin Rules: Edit"))!,
+  );
+  expect(within(dialog).getByText(/asks you to sign in again/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "example.com" }));
+  fireEvent.click(within(dialog).getByRole("radio", { name: "1 day" }));
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Why SRE needs it" }), {
+    target: { value: "a second origin rule" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add grant" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByRole("dialog", { name: "Review changes to Cloudflare" });
+  const seats = calls.plan[0] as {
+    seats: { sre: { cloudflare: { grants: Record<string, unknown>[] } } };
+  };
+  const added = seats.seats.sre.cloudflare.grants[1]!;
+  expect(added).toMatchObject({
+    permission: "Origin Write",
+    scope: ["example.com"],
+    reason: "a second origin rule",
+  });
+  expect(added.id).toBeUndefined();
+  expect(added.granted_by).toBeUndefined();
+  const hours = (Date.parse(String(added.expires_at)) - Date.now()) / 3_600_000;
+  expect(hours).toBeGreaterThan(23);
+  expect(hours).toBeLessThanOrEqual(24);
 });

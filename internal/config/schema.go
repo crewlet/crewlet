@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -325,6 +326,9 @@ func (g *schemaGen) overrides() map[reflect.Type]map[string]any {
 	}
 
 	return map[reflect.Type]map[string]any{
+		// AN INSTANT IS ONE RFC 3339 TIMESTAMP, which is what the decoder
+		// reads into it: never the struct's unexported fields.
+		reflect.TypeOf(time.Time{}):  {"type": textTypes, "format": "date-time"},
 		reflect.TypeOf(org.Toggle{}): toggle,
 		reflect.TypeOf(org.ProviderKeys(nil)): {
 			"anyOf":       []any{text, textList},

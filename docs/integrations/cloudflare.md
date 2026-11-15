@@ -19,6 +19,8 @@ Cloudflare grants every zone setting as one permission group, so an agent on `co
 
 Every agent's token is its own, so Cloudflare's audit log names the agent behind each change, and turning one agent off never touches another.
 
+A level is the safe default. When one agent needs one permission no level holds (origin rules, DNS edits, Workers), give it that permission group alone as a **grant** beside its level, for a few hours or for good; see [Giving one agent one more permission](#giving-one-agent-one-more-permission). The agent can ask for one itself when Cloudflare refuses it.
+
 ## Setting it up from the dashboard
 
 Company › Integrations › Cloudflare asks two things and checks them before it saves:
@@ -105,6 +107,7 @@ Each agent seat is turned on or off, and given its level, on the integration's *
 |---|---|
 | `enabled` | Whether the agent has a Cloudflare token at all. Required in every block. A seat with no block is off, and a new agent seat is off until somebody turns it on. |
 | `level` | `read`, `operate`, `configure` or `secure`. Unset is `read`. |
+| `grants` | The permission groups the token holds beside its level, each `{id, permission, scope, expires_at, granted_by, granted_at, reason, request}`. Written by the Agents tab and by approving an agent's request, never typed: the engine writes `id`, `granted_by` and `granted_at`. See [Giving one agent one more permission](#giving-one-agent-one-more-permission). |
 
 ```yaml
 roles:
@@ -138,12 +141,36 @@ Crewlet looks each group up by its exact name in the account's own list (`GET /a
 
 DNS Write and SSL and Certificates Write are deliberately in no level.
 
+### Giving one agent one more permission
+
+A grant is one Cloudflare permission group on one agent's token beside its level: the SRE on `secure` that has to create an origin rule (ruleset phase `http_request_origin`) gets **Origin Rules: Edit** on `example.com` for four hours, and nobody else's token changes.
+
+On the **Agents** tab, each agent's row lists its grants: the permission as the token builder names it, where it applies, how long it has left (or Permanent), and, on hover, who granted it and why. **Add grant** opens a picker over the account's own permission groups, read live from Cloudflare, with the zones it applies to (none chosen is every zone the company's agents reach), how long (4 hours, 1 day, 7 days or Permanent) and why, which the grant keeps. The remove on a grant's tag takes it off. Both change the tab's draft, so the review shows the steps and **Save and sync** writes one revision of the company document, under the seat's `grants`, and narrows the token on the next sync, in place, keeping its value.
+
+- **Only what can be minted is offered.** The picker lists every permission group a token can be granted at the account or its zones, by its name in the token builder where Cloudflare renames it (Origin Write is **Origin Rules: Edit**), marked **Edit** unless the group is read-only. A group the provisioner token does not hold is offered disabled, saying what to add at Cloudflare, since Crewlet grants nothing the token does not hold itself.
+- **Never granted:** a group that manages API tokens, the account's members (Cloudflare files them under Account Settings Write) or billing, or Access's organization, identity providers, groups or service tokens. Each would outlive the agent's token or let it give itself more.
+- **A write asks what `secure` asks.** Adding a grant of any group that is not read-only asks the person saving for a fresh sign-in, and a machine token cannot save one. Removing or shortening a grant never does.
+- **A grant never outlives its expiry.** It leaves the token on the pass a minute before it lapses, and the reconcile loop runs that pass at the lapse rather than on its ten-minute settled interval. Once no token holds it, it is removed from the company document in a revision of its own.
+- **A grant the provisioner cannot give** (it lost the group at Cloudflare, say) is reported as `grant_short`, naming the group to add, and left off the token; the rest of the token still matches its level and its other grants.
+- **Grants a level already holds add nothing**: the picker says which level holds each, and an agent asking for one is told it already has it.
+
+A grant is also a seat's own access for the turn: its "Your access" section lists each grant its token holds, with where and until when, and the next turn after a change is told it.
+
+#### An agent asks for one itself
+
+When Cloudflare refuses an agent's call for a permission its token lacks (`403`, "request is not authorized"), the agent asks for that permission with `request_access`, naming the permission group as Cloudflare's API names it, its zones and how many hours the change needs (1 to 168, 4 by default), on the work item that needs it and of an administrator. It never asks a person to edit its token at Cloudflare: the next pass would undo that as drift.
+
+The engine checks the request against the account's live catalogue, stores it and puts it in that person's Inbox as a decision: **Grant for this change (expires in N hours)**, recommended, **Add to this agent permanently**, or **Not now**, with the agent's reason. A group the provisioner does not hold yet is still asked, saying what to add at Cloudflare first. Choosing a grant shows the grant built from the stored request; **Grant** saves it on the Agents tab (asking for a fresh sign-in for a write) and only then answers, so the agent is told yes only once its token holds the permission. **Not now** answers at once. A request nobody answers is dropped after 30 days.
+
+Every grant asked for, granted, declined, removed, lapsed or refused is a `seat_grant_changed` event, naming the agent, the permission and its zones, and the person or the engine behind it.
+
 ### What each change does at Cloudflare
 
 | You do | Crewlet does at Cloudflare |
 |---|---|
 | Turn a seat on | Creates an account API token named `crewlet-<company>-<handle>` (the company name in lowercase, with anything that is not a letter or digit turned into `-`) with the level's permission groups on the company's zones and an expiry 90 days out (`POST /accounts/{account_id}/tokens`), then seals its value. |
 | Change its level | Rewrites the token's policies to the new level's groups (`PUT /accounts/{account_id}/tokens/{token_id}`). The value does not change, so the agent's tool keeps working. |
+| Add or remove a grant, or one lapses | Rewrites the token's policies to its level's groups and its live grants, each grant on its own zones or the account, the same way. |
 | Change the zones | Rewrites every agent's token to the new zones on the next pass, the same way. |
 | Turn it off | Disables the token, so the agent stops at once, then deletes it (`DELETE /accounts/{account_id}/tokens/{token_id}`) and clears the sealed value. If the delete fails, the token stays disabled and the next pass deletes it. |
 | Turn it back on | Mints a new token. No person is needed. |
@@ -186,7 +213,7 @@ The Agents tab reports per seat whether the tool is live, waiting for its token,
 
 Each pass reads every token this engine manages, including the token of a seat that has since left the document.
 
-- **A token's permissions or zones changed at Cloudflare** by somebody else are restored to the seat's level and recorded as a `drift_restored` event, with the before and after.
+- **A token's permissions or zones changed at Cloudflare** by somebody else are restored to the seat's level and grants and recorded as a `drift_restored` event, with the before and after.
 - **A token deleted at Cloudflare** is dropped from the engine's records, and the same pass mints a fresh one if the seat is on.
 - **A token somebody disabled** at Cloudflare is never turned back on by a pass, in case it was incident response. The tab offers **Turn back on** or **Keep off**.
 - **A seat that leaves the document** is treated as off: its token is disabled, then deleted.
@@ -264,7 +291,7 @@ A `429` from Cloudflare carries `retry-after`. The engine's own calls honour it,
 
 - **Inbound alerts.** Cloudflare Notifications cannot wake an agent yet: there is no webhook route for them, so an alert reaches nobody. Note that Cloudflare offers several alert types only on paid plans (Health Checks need Pro, and the Origin Error Rate alert needs Enterprise).
 - **A CLI command.** The integration is set up from the dashboard or the company document; there is no `crewlet cloudflare` command.
-- **Write access to DNS records or certificates.** No level grants it; see [Each agent's access is a level](#each-agents-access-is-a-level).
+- **Write access to DNS records or certificates at a level.** No level grants it; give the one agent that needs it DNS Write or SSL and Certificates Write as a grant ([Giving one agent one more permission](#giving-one-agent-one-more-permission)).
 
 ## Troubleshooting
 
@@ -275,7 +302,7 @@ The card's findings, and what clears each:
 | `credential_missing` | The `provisioning` block is missing, `integrations.cloudflare.provisioning.api_token` resolved to nothing, or `integrations.cloudflare.provisioning.account_id` does not resolve to an account ID | Add the block, seal the provisioner token as `CLOUDFLARE_API_TOKEN` (or point `api_token` at the variable that holds it), or correct the account ID |
 | `credential_rejected` | Cloudflare refused the provisioner token: it is wrong, disabled or expired, belongs to another account, or lacks Account API Tokens Write, Account Settings Read or Zone Read | Create a new token with the [permissions above](#creating-the-provisioner-token) and replace it with **Replace key** |
 | `credential_expiring` | The provisioner token expires within 14 days | Create a new token and replace it before the date the finding names |
-| `grant_short` | The provisioner token lacks a permission group it needs itself (subject `integrations.cloudflare.provisioning.api_token`), or one the level an agent is on grants (subject `cloudflare level read`, `cloudflare level operate`, `cloudflare level configure` or `cloudflare level secure`), so that agent's token is not minted or narrowed | Add the group the finding names to the provisioner token, at Cloudflare, or move the agents at that level to one it holds |
+| `grant_short` | The provisioner token lacks a permission group it needs itself (subject `integrations.cloudflare.provisioning.api_token`), or one the level an agent is on grants (subject `cloudflare level read`, `cloudflare level operate`, `cloudflare level configure` or `cloudflare level secure`), so that agent's token is not minted or narrowed; or one an agent's grant names (subject the agent's handle), so that grant is left off its token | Add the group the finding names to the provisioner token, at Cloudflare, or move the agents at that level to one it holds, or remove the grant |
 | `unknown_tier` | A zone in `provisioning.zones` is not in the account (subject `integrations.cloudflare.provisioning.zones`), or a permission group the level an agent is on names is not offered to the account (subject `cloudflare level read`, `cloudflare level operate`, `cloudflare level configure` or `cloudflare level secure`) | Correct the zone name, or remove it from the list. For a permission group, check the account can use that product |
 | `level_unavailable` | A note, not a fault: the provisioner token lacks a permission group that a level no agent is on grants, or the account is not offered one. The integration stays ready, and the Agents tab offers that level disabled with this reason | Add the groups the note names to the provisioner token at Cloudflare to offer the level, or leave it unavailable |
 | `coverage_partial` | A note, not a fault (subject `cloudflare atlas permissions`): the provisioner token does not hold one or more of the optional read permissions the atlas would [see more](#see-more-in-atlas) with. The integration is ready, and nothing else waits on them | Add the permissions the note names to the provisioner token, or leave it as it is |
@@ -288,5 +315,7 @@ An agent's own failures are also reported on that agent's row on the **Agents** 
 If an agent says its tool refuses every call, check the token has no IP address filter (the MCP server refuses one) and that Account Settings Read is on the provisioner, so every level can grant it.
 
 If an agent is refused reading a WAF custom rule (`403`, "request is not authorized"), its token was minted without Zone WAF Read. Add Zone WAF: Read and Account Filter Lists: Read to the provisioner token at Cloudflare (its value does not change), and the next pass brings every agent's token up to its level. An agent that has to change the rule needs `secure`.
+
+If an agent is refused creating or changing an origin rule (`403`, "request is not authorized", on the `http_request_origin` phase), no level grants origin rules: give that agent **Origin Rules: Edit** as a grant on the zone, or approve the request it makes with `request_access`. The provisioner token has to hold Origin Rules: Edit (under Zone) first.
 
 If an agent is refused reading or changing a transform rule, such as a response header rule, its token predates the Crewlet version that added Zone Transform Rules to the levels, or the provisioner token does not hold them yet. Add Transform Rules: Read and Transform Rules: Edit (under Zone) to the provisioner token at Cloudflare, and the next pass brings every agent's token up to its level, keeping its value. Changing a transform rule needs `configure` or `secure`.

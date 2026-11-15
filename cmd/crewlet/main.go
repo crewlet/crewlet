@@ -1635,6 +1635,9 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	if configSurface != nil {
 		go keepMigratingSeatAccess(ctx, e, configSurface,
 			fleetsecrets.New(e.Backends().Fleet, cipher), log)
+		// AND THE AGENTS' LAPSED GRANTS leave the document once no
+		// credential holds them, with the requests nobody answered.
+		go keepSweepingGrants(ctx, e, configSurface, log)
 	}
 
 	// A NODE STOPS FOR ONE OF TWO REASONS, and both take the one shutdown

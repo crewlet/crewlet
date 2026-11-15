@@ -442,7 +442,14 @@ func seatInput(c *config.Company, ref seataccess.SeatRef, want map[seataccess.La
 	rec seataccess.Record, held bool,
 	offers map[seataccess.Lane]seataccess.Options) seataccess.SeatInput {
 
-	in := seataccess.SeatInput{Seat: ref, Want: want, Have: map[seataccess.Lane]seataccess.Observed{},
+	// A PLAN READS ONLY LIVE GRANTS, as the sync does ([seataccess.DesiredAt]).
+	now := time.Now().UTC()
+	live := make(map[seataccess.Lane]seataccess.Desired, len(want))
+	for lane, d := range want {
+		d.Grants = seataccess.LiveGrants(d.Grants, now)
+		live[lane] = d
+	}
+	in := seataccess.SeatInput{Seat: ref, Want: live, Have: map[seataccess.Lane]seataccess.Observed{},
 		Options: offers, Company: c}
 	for lane, lr := range rec.Lanes {
 		in.Have[lane] = lr.Observed
@@ -516,7 +523,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 			}
 		}
 		if session != nil {
-			if live, err := session.Options(openCtx, lane); err == nil {
+			if live, err := seataccess.ReadOptions(openCtx, session, lane); err == nil {
 				o = liveOffer(o, live)
 			} else {
 				whole = false

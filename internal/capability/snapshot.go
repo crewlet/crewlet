@@ -10,6 +10,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -23,8 +24,12 @@ import (
 // seat's boxes, so a baseline below it never told them ([Snapshot.Boxes]).
 // Version 3 added the GitHub permissions the seat's app holds outside its
 // grant, at the level it holds each ([Integration.AppHolds]), which "Your
-// access" says and no change does.
-const Version = 3
+// access" says and no change does. Version 4 added the grants a seat's
+// credential holds beside its level ([Integration.Grants]).
+const Version = 4
+
+// grantsFrom is the first version whose snapshots hold the seat's grants.
+const grantsFrom = 4
 
 // boxesFrom is the first version whose snapshots hold the seat's boxes.
 const boxesFrom = 2
@@ -191,6 +196,12 @@ type Integration struct {
 	// Commands is, for SSH, the read commands each host in Scope admits, as
 	// the seat types them ([sshint.ReadCommands]).
 	Commands []HostCommands `json:"commands,omitempty"`
+
+	// Grants is each permission the seat's credential holds beside its
+	// level, as the last sync read it back, in the vendor's own name with
+	// where it applies and when it lapses: `Origin Write on example.com
+	// until 2026-11-15 18:00 UTC`. Sorted.
+	Grants []string `json:"grants,omitempty"`
 }
 
 // HostCommands is the read commands one SSH host's allowlist admits, in its
@@ -342,6 +353,7 @@ func integrationOf(c *config.Company, handle string, lane seataccess.Lane, want 
 	if lane == seataccess.LaneSSH {
 		out.Commands = hostCommands(c, want.Scope)
 	}
+	out.Grants = grantLines(want.Grants, have.Grants)
 	for _, entry := range want.Scope {
 		if name := strings.TrimSpace(words.ScopeNames[entry]); name != "" && name != entry {
 			if out.ScopeLabels == nil {
@@ -349,6 +361,35 @@ func integrationOf(c *config.Company, handle string, lane seataccess.Lane, want 
 			}
 			out.ScopeLabels[entry] = name
 		}
+	}
+	return out
+}
+
+// grantLines is each grant the credential holds (have), with when the stored
+// grant giving it (want) lapses: what the seat can use now, never what is
+// stored and not applied yet.
+func grantLines(want, have []seataccess.Grant) []string {
+	var out []string
+	for _, g := range seataccess.NormalGrants(have) {
+		line := g.Permission
+		if len(g.Scope) > 0 {
+			line += " on " + strings.Join(g.Scope, ", ")
+		}
+		lapse, permanent := time.Time{}, false
+		for _, w := range want {
+			if seataccess.GrantKey(w) != seataccess.GrantKey(g) {
+				continue
+			}
+			if w.ExpiresAt.IsZero() {
+				permanent = true
+			} else if w.ExpiresAt.After(lapse) {
+				lapse = w.ExpiresAt
+			}
+		}
+		if !permanent && !lapse.IsZero() {
+			line += " until " + lapse.UTC().Format("2006-01-02 15:04 UTC")
+		}
+		out = append(out, line)
 	}
 	return out
 }
@@ -468,6 +509,7 @@ func (s Snapshot) normal() Snapshot {
 		if len(s.Integrations[i].AppHolds) == 0 {
 			s.Integrations[i].AppHolds = nil
 		}
+		s.Integrations[i].Grants = sortedSet(s.Integrations[i].Grants)
 		s.Integrations[i].Commands = slices.Clone(s.Integrations[i].Commands)
 		slices.SortFunc(s.Integrations[i].Commands, func(a, b HostCommands) int { return strings.Compare(a.Host, b.Host) })
 	}

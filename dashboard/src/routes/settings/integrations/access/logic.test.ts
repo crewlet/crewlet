@@ -26,6 +26,7 @@ import {
   offLane,
   onLane,
   scalewayAnswer,
+  cloudflareGrantsAnswer,
 } from "./fixtures.ts";
 import {
   accessHold,
@@ -58,10 +59,15 @@ import {
   statusOf,
   takesAccessAway,
   toolWords,
+  grantExpiry,
+  lanesOf,
+  withGrant,
+  withoutGrant,
   type Lane,
 } from "./logic.ts";
 import type { AccessLaneStatus, AccessSeatLane, AccessStep } from "~/contract/access.ts";
 import { laneWords } from "./words.ts";
+import { grantReach, newGrant } from "~/lib/grants.ts";
 
 const sre = () => datadogAnswer().seats.find((s) => s.handle === "sre")!.lanes.datadog!;
 
@@ -881,4 +887,31 @@ describe("reviewWords", () => {
       "At least 10,000 open items from Site Reliability Engineer were raised under its current access; it will review them after you save.",
     );
   });
+});
+
+// A GRANT IS PART OF WHAT A SEAT ASKS FOR: a draft that adds or drops one is a
+// change, the grant Add grant drafts carries no id or author, and its expiry
+// is its length from now; its words say how long it has left, Permanent or
+// Expired. Mutation: leave grants out of sameDesired and a removal is no change.
+test("a grant is part of a seat's draft, with its length from now and its words", () => {
+  const lane = lanesOf(cloudflareGrantsAnswer())[0]!;
+  const seat = cloudflareGrantsAnswer().seats.find((s) => s.handle === "sre")!;
+  const saved = seat.lanes.cloudflare!.desired;
+  expect(sameDesired(lane, saved, { ...saved, grants: [] })).toBe(false);
+  const now = Date.parse("2026-11-15T09:00:00Z");
+  const g = newGrant("Origin Read", ["example.com"], 4, " read the rules ", now);
+  expect(g).toEqual({
+    permission: "Origin Read",
+    scope: ["example.com"],
+    expires_at: "2026-11-15T13:00:00.000Z",
+    reason: "read the rules",
+  });
+  expect(newGrant("Origin Read", [], 0, "x", now).expires_at).toBeUndefined();
+  const drafted = withGrant({}, seat, lane, g);
+  expect(drafted.sre?.cloudflare?.grants).toHaveLength(2);
+  expect(withoutGrant(drafted, seat, lane, 1)).toEqual({});
+  expect(grantExpiry(g, now)).toBe("Expires in 4h");
+  expect(grantExpiry(g, now + 5 * 3_600_000)).toBe("Expired");
+  expect(grantExpiry({ ...g, expires_at: undefined }, now)).toBe("Permanent");
+  expect(grantReach(lane, { ...g, scope: undefined })).toBe("Every zone");
 });

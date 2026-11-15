@@ -282,12 +282,13 @@ const (
 	FieldLevel       RefusalField = "level"
 	FieldPermissions RefusalField = "permissions"
 	FieldScope       RefusalField = "scope"
+	FieldGrants      RefusalField = "grants"
 )
 
 // Valid reports whether f is a part this build names.
 func (f RefusalField) Valid() bool {
 	switch f {
-	case FieldLevel, FieldPermissions, FieldScope:
+	case FieldLevel, FieldPermissions, FieldScope, FieldGrants:
 		return true
 	}
 	return false

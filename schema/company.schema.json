@@ -4307,6 +4307,16 @@
             "null"
           ]
         },
+        "grants": {
+          "description": "Cloudflare permission groups this agent's token holds beside its level, each added on the Agents tab or by approving the agent's request.",
+          "items": {
+            "$ref": "#/$defs/SeatGrant"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "level": {
           "description": "read (the default): zone, DNS, cache, firewall and WAF rule, IP list, SSL and analytics reads. operate: read plus cache purge and cache rule edits. configure: operate plus compression rule edits and every zone setting, the SSL mode and security level included. secure: configure plus WAF rule and IP list edits.",
           "enum": [
@@ -5804,6 +5814,114 @@
         "kind",
         "key"
       ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "SeatGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_at": {
+          "description": "When the grant lapses, in UTC. Absent is permanent.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "granted_at": {
+          "description": "When it was granted, in UTC.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "granted_by": {
+          "description": "Who granted it, as the engine recorded them.",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "id": {
+          "anyOf": [
+            {
+              "pattern": "^g[a-z0-9]{10}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The grant's identifier, which the engine writes: g and ten lowercase letters or digits.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "permission": {
+          "description": "The permission granted, as the integration's catalogue names it (a Cloudflare permission group, such as Origin Write).",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why it was granted: the agent's request, or the note of the person who added it.",
+          "maxLength": 1500,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]{10}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The agent's request the grant answered, which the engine writes; absent for one a person added.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "scope": {
+          "description": "What the permission applies to, such as Cloudflare zone names. Empty is its whole reach: every zone the company's agents reach for a zone permission, the account for an account one.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
       "type": [
         "object",
         "null"
