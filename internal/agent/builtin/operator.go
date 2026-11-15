@@ -173,6 +173,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// workviews.go for why a seat is not given them.
 		{&listWorkViews{deps: work}, work.Reader != nil},
 		{&saveWorkView{deps: work}, work.ViewWriter != nil},
+		{&deleteWorkView{deps: work}, work.ViewWriter != nil},
 		{&getWorkCatalogue{deps: work}, work.Reader != nil},
 		{&writeWorkCatalogue{deps: work}, work.CatalogueWriter != nil},
 		{&listProjects{deps: work}, projectReads(work)},

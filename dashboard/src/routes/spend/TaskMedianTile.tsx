@@ -16,12 +16,15 @@
  */
 
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
-import { Skeleton } from "@crewlethq/ui";
+import { EmptyValue, Skeleton } from "@crewlethq/ui";
 import { medianTaskParams } from "./model.ts";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WORKLET, accessNames } from "~/lib/access.ts";
+
+/** Why the median is absent: no task finished in the window with any spend. */
+const NO_FINISHED_TASK = "No task finished in this window spent tokens";
 
 export function TaskMedianTile({
   since,
@@ -61,7 +64,12 @@ export function TaskMedianTile({
       ) : !answer.data ? (
         <Skeleton variant="box" width="3rem" height="1.25rem" marginTop={0} borderRadius={4} />
       ) : median === undefined ? (
-        <span className="spend-tile-figure spend-muted">No tasks</span>
+        // AN ABSENT FIGURE IS A MARKED ABSENCE (rule 12), never words in
+        // the figure's place: "No tasks" over "median tokens per finished
+        // task" read as one phrase. The line under it says why it is absent.
+        <span className="spend-tile-figure">
+          <EmptyValue label={NO_FINISHED_TASK} />
+        </span>
       ) : (
         <span
           className="spend-tile-figure"
@@ -72,7 +80,11 @@ export function TaskMedianTile({
       )}
       <span className="spend-label">
         median tokens per finished task
-        {median !== undefined && count > 0 ? ` · ${plural(count, "task")}` : ""}
+        {median !== undefined && count > 0
+          ? ` · ${plural(count, "task")}`
+          : answer.data && !answer.error && median === undefined
+            ? " · none in this window"
+            : ""}
       </span>
     </div>
   );

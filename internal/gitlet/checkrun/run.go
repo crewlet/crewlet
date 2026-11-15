@@ -216,10 +216,10 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *git
 		env[name] = value
 	}
 	maps.Copy(env, a.checkEnv())
-	token := r.o.Tokens.Mint(a.c.CheckKey, a.c.Repo, a.timeout)
-	if token == "" {
+	token, err := r.o.Tokens.Mint(a.c.CheckKey, a.c.Repo, a.timeout)
+	if err != nil {
 		return sandbox.Spec{}, nil, a.ended(gitlet.CheckStateErrored, gitlet.CheckReasonBoxFailed, nil,
-			"no credential could be minted for the check's box")
+			"no credential could be minted for the check's box: "+err.Error())
 	}
 	git, err := sandbox.BoxGit{Base: r.o.GitBase, User: gitlet.CheckUser, Token: token}.Env(env)
 	if err != nil {

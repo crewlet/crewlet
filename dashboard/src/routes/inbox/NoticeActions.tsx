@@ -16,16 +16,8 @@
  */
 
 import { useState } from "react";
-import {
-  Button,
-  FormField,
-  Inline,
-  Input,
-  Menu,
-  Modal,
-  Stack,
-  type MenuEntry,
-} from "@crewlethq/ui";
+import { Button, FormField, Inline, Input, Menu, Stack, type MenuEntry } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { ClockGlyph } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";

@@ -112,6 +112,27 @@ test("a refusal from before the last stored credential is not shown as the cause
   expect(screen.queryByText(/401 invalid x-api-key/)).toBeNull();
 });
 
+// THE HARNESS'S OWN WORDS ARE A QUOTATION, attributed to it by name: they read
+// "Vendor said: Not logged in · Please run /login" in the mono face, naming
+// nobody a reader knows and setting a sentence as a value to copy. Mutation:
+// draw them in the mono face again and the case fails.
+test("a refusal's own words are quoted and named for the harness that said them", () => {
+  page({
+    key: "default",
+    health: "rejected",
+    last_failure: {
+      kind: "auth",
+      at: "2026-10-29T09:00:00Z",
+      said: "Not logged in · Please run /login",
+      node: "node-1",
+    },
+  });
+  const quoted = screen.getAllByText("Claude Code answered “Not logged in · Please run /login”");
+  expect(quoted.length).toBeGreaterThan(0);
+  for (const el of quoted) expect(el.className).not.toMatch(/mono/);
+  expect(document.body.textContent).not.toContain("Vendor said");
+});
+
 // QA Minor 12: nothing is edited, so a host sign-in stays on the page.
 test("a host sign-in moves to the sign-in card rather than opening the wizard", () => {
   const onFlow = page({
@@ -197,4 +218,20 @@ test("a seat running every job on the model is named once, under Everything", ()
   const list = screen.getByRole("list", { name: "Who runs on sonnet" });
   expect(within(list).getAllByRole("link", { name: /QA/ })).toHaveLength(1);
   expect(list.textContent).toContain("Everything");
+});
+
+// WHICH CALLS ARE COUNTED, where they spent nothing: every call made is
+// counted, a refused or failed one included, as Token spend counts it, and
+// "Calls 945, Tokens 0" with nothing under it read as a fault of the page.
+test("a model's usage says its calls spent nothing where they did", () => {
+  page({ key: "default", usage: { days: 7, calls: 945, total_tokens: 0 } });
+  const usage = screen.getByText("Usage, last 7 days").closest(".crewlet-card") as HTMLElement;
+  expect(usage.textContent).toContain("945");
+  expect(usage.textContent).toContain(
+    "None of them spent tokens. A call that is refused or fails is counted and spends no tokens.",
+  );
+  cleanup();
+  page({ key: "default", usage: { days: 7, calls: 40, total_tokens: 900_000 } });
+  const spent = screen.getByText("Usage, last 7 days").closest(".crewlet-card") as HTMLElement;
+  expect(spent.textContent).not.toContain("None of them spent tokens");
 });

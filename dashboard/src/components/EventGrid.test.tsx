@@ -7,14 +7,27 @@
  * nothing gave way at a narrow width.
  */
 
-import { cleanup, render } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test } from "vitest";
+import { act, cleanup, render } from "@testing-library/react";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 
 import { EventGrid, eventDayBands } from "./EventGrid.tsx";
 import { Router } from "~/app/router.tsx";
+import { useNow } from "~/lib/clock.ts";
+import { fmtTime } from "~/lib/format.ts";
 import type { EventEnvelope, FeedRow } from "~/protocol/index.ts";
 
-afterEach(cleanup);
+// HOW MANY ROWS WERE DRAWN, counted where every row draws: its time cell is
+// the one caller of `fmtTime` in the grid.
+vi.mock("~/lib/format.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/lib/format.ts")>();
+  return { ...real, fmtTime: vi.fn(real.fmtTime) };
+});
+const drawnRows = vi.mocked(fmtTime);
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -113,4 +126,93 @@ test("an answer a delegate gave is marked as decided under delegation", () => {
     r.textContent?.includes("Decided under delegation, rule 3"),
   );
   expect(marks).toEqual([true, false]);
+});
+
+/**
+ * `n` rows a minute apart, newest first, from two days and an hour before
+ * `now`: every one says "2d ago", which no second of a case moves, so a row
+ * drawn again is drawn for something other than its own words changing.
+ */
+function hundred(n: number, now: number): FeedRow[] {
+  return Array.from({ length: n }, (_, i) =>
+    row({
+      id: `e-${i}`,
+      summary: `event ${i}`,
+      timestamp: new Date(now - 2 * 86_400_000 - 3_600_000 - i * 60_000).toISOString(),
+    }),
+  );
+}
+
+// A PUSH DRAWS ITS OWN ROW. The log is fed one event at a time, and each push
+// is a new list holding the same rows and one more: every row of the log was
+// drawn again for each, ten thousand elements per event while events streamed.
+//
+// Mutation: draw a cell inline (no `memo`), or build the columns inside the
+// grid, and every row is drawn again.
+test("a pushed event draws its own row and no other", () => {
+  const now = Date.now();
+  const rows = hundred(100, now);
+  const { rerender } = render(
+    <Router>
+      <EventGrid events={rows} label="Events" />
+    </Router>,
+  );
+  expect(drawnRows).toHaveBeenCalledTimes(100);
+  drawnRows.mockClear();
+  const pushed = row({
+    id: "new",
+    summary: "just arrived",
+    timestamp: new Date(now).toISOString(),
+  });
+  rerender(
+    <Router>
+      <EventGrid events={[pushed, ...rows]} label="Events" />
+    </Router>,
+  );
+  expect(drawnRows).toHaveBeenCalledTimes(1);
+});
+
+// A PASSING SECOND DRAWS NO ROW. The grid read the shared clock for the
+// relative time in every row's title, so a log beside a clock (every screen
+// it is on has one) drew every row once a second for as long as it was open.
+//
+// Mutation: read `useNow` in the grid again, and every row is drawn per tick.
+test("a passing second draws no row again", async () => {
+  vi.useFakeTimers();
+  const rows = hundred(100, Date.now());
+  // THE SCREEN AROUND IT READS THE CLOCK, as the event log does, and hands
+  // the grid the same rows on every tick.
+  function Screen() {
+    useNow();
+    return <EventGrid events={rows} label="Events" />;
+  }
+  render(
+    <Router>
+      <Screen />
+    </Router>,
+  );
+  drawnRows.mockClear();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  expect(drawnRows).not.toHaveBeenCalled();
+});
+
+// AND THE TITLE'S "HOW LONG AGO" STILL MOVES, off the clock the row reads
+// for itself: a row that is never drawn again must not say "just now" an
+// hour later.
+test("a row's relative time moves with the clock", async () => {
+  vi.useFakeTimers();
+  const at = new Date(Date.now()).toISOString();
+  const { container } = render(
+    <Router>
+      <EventGrid events={[row({ timestamp: at })]} label="Events" />
+    </Router>,
+  );
+  const time = () => container.querySelector("time")?.getAttribute("title") ?? "";
+  expect(time()).toContain("just now");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(120_000);
+  });
+  expect(time()).toContain("2m ago");
 });

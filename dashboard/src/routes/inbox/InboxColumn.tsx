@@ -66,6 +66,7 @@ import {
   type AnswerWords,
   type InboxRow,
   type Who,
+  titleBeside,
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
@@ -455,7 +456,10 @@ function whenOf(row: InboxRow, now: number): string {
   if (isNoticeRow(row) && row.notice.snoozed && row.notice.snoozed_until) {
     return `back ${moment(row.notice.snoozed_until, now)}`;
   }
-  if (row.kind === "condition") return row.at ? `since ${moment(row.at, now)}` : "";
+  // ONE FORMAT DOWN THE LIST: a condition's start in the row's own short
+  // form ("11m") like every other row's moment, not "since 22:56" beside
+  // them; the pane says since when in full.
+  if (row.kind === "condition") return row.at ? shortWhen(row.at, now) : "";
   return shortWhen(row.at, now);
 }
 
@@ -555,7 +559,12 @@ const InboxItem = memo(function InboxItem({
       onClick={() => onOpen(row.key)}
       aside={
         item ? (
-          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} glyph />
+          <TaskLink
+            item={item}
+            label={rowKey(row)}
+            title={titleBeside(row, title ?? taskTitleOf(row))}
+            glyph
+          />
         ) : undefined
       }
     >

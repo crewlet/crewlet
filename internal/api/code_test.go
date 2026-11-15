@@ -939,15 +939,18 @@ func TestAnUnservedBoxRouteAnswersOnlyASignedToken(t *testing.T) {
 	}
 	run := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
 	basic := func(user, password string) string { return "Basic " + basicAuth(user, password) }
-	signed := basic(host.BoxUser, boxes.Mint(run))
+	bridged, err := bridge.Mint(run.LaunchID+"~"+run.TurnID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := basic(host.BoxUser, mintedBox(t, boxes, run))
 	unsigned := []struct{ name, authorization string }{
 		{"no credential", ""},
 		{"a person's bearer", "Bearer secret"},
-		{"another user name, with a signed token", basic("crewlet", boxes.Mint(run))},
+		{"another user name, with a signed token", basic("crewlet", mintedBox(t, boxes, run))},
 		{"an operator token as the password", basic(host.BoxUser, "secret")},
-		{"another fleet's token", basic(host.BoxUser, otherFleet.Mint(run))},
-		{"the tool bridge's token, over this keyring", basic(host.BoxUser,
-			bridge.Mint(run.LaunchID+"~"+run.TurnID, time.Hour))},
+		{"another fleet's token", basic(host.BoxUser, mintedBox(t, otherFleet, run))},
+		{"the tool bridge's token, over this keyring", basic(host.BoxUser, bridged)},
 	}
 	verify := func(user, token string) bool { return host.VerifyBox(boxes, checks, user, token) }
 	for _, reason := range unservedReasons {
@@ -1019,6 +1022,27 @@ func boxTokensOf(t *testing.T, keyring runtoken.Material) (*host.BoxTokens, *hos
 	return boxes, checks
 }
 
+// mintedBox is boxes' credential for run, failing t where none is minted.
+func mintedBox(t *testing.T, boxes *host.BoxTokens, run host.BoxRunRef) string {
+	t.Helper()
+	token, err := boxes.Mint(run)
+	if err != nil {
+		t.Fatalf("minting launch %s's credential: %v", run.LaunchID, err)
+	}
+	return token
+}
+
+// mintedCheck is checks' credential for ref, valid for timeout, failing t
+// where none is minted.
+func mintedCheck(t *testing.T, checks *host.CheckTokens, ref host.CheckRunRef, timeout time.Duration) string {
+	t.Helper()
+	token, err := checks.Mint(ref, timeout)
+	if err != nil {
+		t.Fatalf("minting check %s's credential: %v", ref.Attempt.Name, err)
+	}
+	return token
+}
+
 // boxRequest is a box's request of path, carrying authorization where it is
 // set.
 func boxRequest(method, path, authorization string) *http.Request {
@@ -1074,11 +1098,11 @@ func TestAnUnservedBoxRouteAnswersACheckToken(t *testing.T) {
 	ref := aCheckRef()
 	run := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
 	basic := func(user, password string) string { return "Basic " + basicAuth(user, password) }
-	signed := basic(gitlet.CheckUser, checks.Mint(ref, time.Minute))
+	signed := basic(gitlet.CheckUser, mintedCheck(t, checks, ref, time.Minute))
 	unsigned := []struct{ name, authorization string }{
-		{"a check's token as a run's", basic(host.BoxUser, checks.Mint(ref, time.Minute))},
-		{"a run's token as a check's", basic(gitlet.CheckUser, boxes.Mint(run))},
-		{"another fleet's check token", basic(gitlet.CheckUser, otherFleet.Mint(ref, time.Minute))},
+		{"a check's token as a run's", basic(host.BoxUser, mintedCheck(t, checks, ref, time.Minute))},
+		{"a run's token as a check's", basic(gitlet.CheckUser, mintedBox(t, boxes, run))},
+		{"another fleet's check token", basic(gitlet.CheckUser, mintedCheck(t, otherFleet, ref, time.Minute))},
 		{"no credential", ""},
 	}
 	var requests []struct{ method, path string }

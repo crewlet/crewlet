@@ -7,14 +7,19 @@
  * against each other in both directions. There is no `turn`: the series is
  * read from company days, which hold none, and per-turn spend is the turn
  * list sorted by tokens.
+ *
+ * ONE NAME PER DIMENSION. `label` is the control's word and `noun` the chart
+ * title's ("Daily tokens by team"), and both are the names the screen's cards
+ * use: the control said Seat and Unit beside cards titled By agent and By team,
+ * so one split had two names a few hundred pixels apart.
  */
 export const GROUPS = [
-  { value: "phase", label: "Phase" },
-  { value: "model", label: "Model" },
-  { value: "provider", label: "Provider" },
-  { value: "seat", label: "Seat" },
-  { value: "unit", label: "Unit" },
-  { value: "worker", label: "Worker" },
+  { value: "phase", label: "Phase", noun: "phase" },
+  { value: "model", label: "Model", noun: "model" },
+  { value: "provider", label: "Provider", noun: "provider" },
+  { value: "seat", label: "Agent", noun: "agent" },
+  { value: "unit", label: "Team", noun: "team" },
+  { value: "worker", label: "Worker", noun: "worker" },
 ] as const;
 
 /**

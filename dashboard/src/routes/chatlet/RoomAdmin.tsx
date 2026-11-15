@@ -23,11 +23,11 @@ import {
   ConfirmField,
   FormField,
   Input,
-  Modal,
   Textarea,
   confirmMatches,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   CalendarClockGlyph,
   ClockGlyph,

@@ -10,7 +10,8 @@
  */
 
 import { useState, type ReactNode } from "react";
-import { Button, FormField, Input, Modal, Select, type SelectOption } from "@crewlethq/ui";
+import { Button, FormField, Input, Select, type SelectOption } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";

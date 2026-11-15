@@ -101,6 +101,8 @@ import {
 } from "./BuilderContext.tsx";
 import {
   CYCLE_GROUP,
+  seatsUnder,
+  unitCount,
   type NodeView,
   type ReportingItem,
   type SeatView,
@@ -739,8 +741,11 @@ function StructureCard({
       </>
     );
   }
+  // THE SEATS IN IT AND IN EVERY UNIT UNDER IT, as the Table counts them
+  // ([seatsUnder]): a department whose seats sit in its teams is not empty.
+  const seatCount = (seatsUnder(structure).get(id) ?? []).length;
   if (view.type === "company") {
-    const counts = `${plural(view.seats.length, "seat")}, ${plural(view.units.length, "unit")}`;
+    const counts = `${plural(seatCount, "seat")}, ${plural(unitCount(structure), "unit")}`;
     return (
       <>
         <div {...card.item(id)} title={counts}>
@@ -759,7 +764,7 @@ function StructureCard({
       </>
     );
   }
-  const counts = plural(view.seats.length, "seat");
+  const counts = plural(seatCount, "seat");
   return (
     <>
       <div {...card.item(id)} title={`${view.name} · ${counts}`}>

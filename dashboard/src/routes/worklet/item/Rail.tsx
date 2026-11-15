@@ -521,14 +521,11 @@ function Pick({
     <span className="cell-edit">
       <Menu
         // THE TRIGGER IS THE VALUE: flush, in the rail's own size and ink.
+        // NAMED BY THE VALUE IT SHOWS, then by `label` ("In review, Status
+        // of ENG-42"), which the kit's value trigger says after it.
         valueTrigger
         label={label}
-        trigger={
-          <>
-            <span className="sr-only">{label}: </span>
-            {children}
-          </>
-        }
+        trigger={children}
         items={options.map((option) => ({
           key: option.value || "-",
           label: option.label,
@@ -578,12 +575,7 @@ function LabelsValue({
         // THE TRIGGER IS THE VALUE: flush, in the rail's own size and ink.
         valueTrigger
         label={`Labels of ${itemKey}`}
-        trigger={
-          <>
-            <span className="sr-only">{`Labels of ${itemKey}: `}</span>
-            {chips}
-          </>
-        }
+        trigger={chips}
         items={declared.map((tag) => {
           const on = current.includes(tag.slug);
           return {
@@ -746,23 +738,30 @@ function EstimateValue({
           void editor.save(edits.edit({ points: p, estimate_minutes: m }, `Sized ${itemKey}`));
         }}
       >
-        <Input
-          type="number"
-          min={0}
-          aria-label={`Points of ${itemKey}`}
-          placeholder="points"
-          value={draft.points}
-          autoFocus
-          onChange={(event) => editor.set({ ...draft, points: event.target.value })}
-        />
-        <Input
-          type="number"
-          min={0}
-          aria-label={`Estimate of ${itemKey} in minutes`}
-          placeholder="minutes"
-          value={draft.minutes}
-          onChange={(event) => editor.set({ ...draft, minutes: event.target.value })}
-        />
+        {/* LABELLED IN SIGHT, not by a placeholder that goes the moment a
+            number is typed; the name a screen reader hears starts with the
+            same word and says whose. */}
+        <label className="task-rail-edit-field">
+          <span>Points</span>
+          <Input
+            type="number"
+            min={0}
+            aria-label={`Points of ${itemKey}`}
+            value={draft.points}
+            autoFocus
+            onChange={(event) => editor.set({ ...draft, points: event.target.value })}
+          />
+        </label>
+        <label className="task-rail-edit-field">
+          <span>Minutes</span>
+          <Input
+            type="number"
+            min={0}
+            aria-label={`Minutes estimated for ${itemKey}`}
+            value={draft.minutes}
+            onChange={(event) => editor.set({ ...draft, minutes: event.target.value })}
+          />
+        </label>
         <Button
           size="small"
           variant="primary"
@@ -1311,7 +1310,12 @@ export function Cost({ detail }: { detail: WorkItemDetail }) {
           limit is the ENGINE'S, served beside the count, and the warning is
           where the engine starts refusing. */}
       <p className="task-handoffs t-caption">
-        {budget === undefined ? `${handoffs} hand-offs` : `Hand-offs ${handoffs} of ${budget}`}
+        {/* WHAT THE NUMBER IS, in a sentence: "Hand-offs 0 of 8" left a
+            reader to guess that 8 is how many times the engine lets a task
+            change hands before it refuses the next. */}
+        {budget === undefined
+          ? `Handed over ${plural(handoffs, "time")}`
+          : `Handed over ${handoffs} of the ${budget} times the engine allows`}
         {budget !== undefined && handoffs >= budget && (
           <span className="task-handoffs-full">
             <TriangleAlertGlyph size="xs" /> the next hand-off will be refused

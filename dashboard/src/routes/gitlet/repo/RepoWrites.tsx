@@ -1,20 +1,30 @@
 /**
- * The repository page's writes: its search mode, its mirrors, and a purge of
- * its unreachable history — each through `useAct` and a WriteButton, never
- * optimistic (the page is redrawn from the read the write's floor brings),
- * and each drawn for every reader, held with its reason (`lib/repoWrites.ts`).
+ * The repository page's writes: its details (description, default branch and
+ * owner), its search mode, its mirrors, and a purge of its unreachable history,
+ * each through `useAct` and a WriteButton, never optimistic (the page is
+ * redrawn from the read the write's floor brings), and each drawn for every
+ * reader, held with its reason (`lib/repoWrites.ts`).
  *
  * A repository the company document declares is changed in Settings ›
- * Configuration, so its search mode and mirrors are held here with that
- * sentence; a purge changes none of its settings and is offered for it too.
+ * Configuration, so its details, search mode and mirrors are held here with
+ * that sentence; a purge changes none of its settings and is offered for it
+ * too.
  */
 
-import { useState } from "react";
-import { Button, ConfirmModal, Input, Modal, Stack } from "@crewlethq/ui";
-import { WriteButton } from "~/components/WriteButton.tsx";
+import { useMemo, useState } from "react";
+import { Button, ConfirmModal, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
+import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { refName } from "~/lib/code.ts";
+import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import {
   credentialName,
   credentialRef,
+  detailsFormHeld,
+  detailsHeld,
+  ownerKey,
   mirrorFormHeld,
   mirrorsHeld,
   pullMirrorHeld,
@@ -27,6 +37,154 @@ import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeRepoDetail } from "~/protocol/index.ts";
 import { REPO_SEARCH_MODES } from "~/contract/code.ts";
+
+/**
+ * "Edit details": the repository's description, default branch and owner, one
+ * `code_update_repo` carrying only what the person changed. The default branch
+ * is chosen from the branches the repository holds, so a repository whose
+ * default branch holds nothing is repaired here by naming one that does.
+ */
+export function DetailsControl({ repo }: { repo: CodeRepoDetail }) {
+  const write = useAct("code_update_repo");
+  const viewer = useViewer();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant="secondary"
+        blocked={detailsHeld(repo, viewer)}
+        onPress={() => setOpen(true)}
+      >
+        Edit details
+      </WriteButton>
+      {open && <DetailsDialog repo={repo} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function DetailsDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () => void }) {
+  const write = useAct("code_update_repo");
+  const org = useOrg();
+  const seatBadge = useSeatBadgeOf();
+  const units = useMemo(() => indexOrg(org).units, [org]);
+  // ITS BRANCHES, the first page of the engine's listing by name: what a
+  // default branch is chosen from.
+  const refs = useCodeQuery("code_refs", { name: repo.name });
+  const branches = useMemo(
+    () => (refs.data?.refs ?? []).map((r) => refName(r.ref).name),
+    [refs.data],
+  );
+  const [description, setDescription] = useState(repo.description ?? "");
+  const [defaultBranch, setDefaultBranch] = useState(repo.default_branch);
+  const [owner, setOwner] = useState(ownerKey(repo.owner));
+  const blocked =
+    refs.loading && !refs.data
+      ? "Reading its branches…"
+      : detailsFormHeld(repo, { description, defaultBranch, owner }, branches);
+  const ownerOptions = units.map((u) => ({
+    value: ownerKey({ kind: "unit", ref: u.id }),
+    label: u.name,
+  }));
+  if (!ownerOptions.some((o) => o.value === ownerKey(repo.owner))) {
+    // AN OWNER THE PICKER DOES NOT LIST (a seat's repository) stays its own
+    // choice, so the form never moves it unasked.
+    ownerOptions.unshift({
+      value: ownerKey(repo.owner),
+      label: repo.owner.kind === "seat" ? seatBadge(repo.owner.ref).name : repo.owner.ref,
+    });
+  }
+  const branchOptions = branches.map((b) => ({ value: b, label: b }));
+  if (!branches.includes(repo.default_branch)) {
+    branchOptions.unshift({
+      value: repo.default_branch,
+      label: `${repo.default_branch} (holds no commit)`,
+    });
+  }
+  const submit = async () => {
+    if (!pressable(write, blocked)) return;
+    const [kind, ref] = owner.split(/:(.*)/s) as [string, string];
+    const result = await write.run(
+      {
+        repo: repo.name,
+        ...(description.trim() !== (repo.description ?? "")
+          ? { description: description.trim() }
+          : {}),
+        ...(defaultBranch !== repo.default_branch ? { default_branch: defaultBranch } : {}),
+        ...(owner !== ownerKey(repo.owner) ? { owner: { kind, ref } } : {}),
+      },
+      { done: `Changed ${repo.name}'s details` },
+    );
+    if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
+  };
+  return (
+    <Modal
+      open
+      size="sm"
+      title={`${repo.name}'s details`}
+      onClose={onClose}
+      onSubmit={() => void submit()}
+      dismissable={!write.busy}
+      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
+            Cancel
+          </Button>
+          <WriteButton
+            write={write}
+            variant="primary"
+            blocked={blocked}
+            onPress={() => void submit()}
+          >
+            Save details
+          </WriteButton>
+        </>
+      }
+    >
+      <Stack gap={3}>
+        <FormField label="Description" optional>
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              width="full"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          )}
+        </FormField>
+        <FormField
+          label="Default branch"
+          helper="What a clone checks out and a change is proposed into. The branch it replaces stays, and can then be deleted."
+        >
+          {(field) => (
+            <Select
+              id={field.id}
+              ariaLabel="Default branch"
+              searchable
+              value={defaultBranch}
+              onChange={(value) => setDefaultBranch(String(value))}
+              options={branchOptions}
+            />
+          )}
+        </FormField>
+        <FormField label="Owning unit" helper="Its lead and its seats maintain and write it.">
+          {(field) => (
+            <Select
+              id={field.id}
+              ariaLabel="Owning unit"
+              value={owner}
+              onChange={(value) => setOwner(String(value))}
+              options={ownerOptions}
+            />
+          )}
+        </FormField>
+      </Stack>
+    </Modal>
+  );
+}
 
 /** What each search mode is called on its button. */
 const MODE_LABELS: Readonly<Record<(typeof REPO_SEARCH_MODES)[number], string>> = {

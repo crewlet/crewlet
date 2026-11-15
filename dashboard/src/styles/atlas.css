@@ -177,10 +177,20 @@
   height: min(34rem, 70vh);
   min-height: 22rem;
   min-width: 0;
+  /* Brought into view clear of the sticky band (a card in the band shows its entry here). */
+  scroll-margin-top: calc(var(--sticky-top) + var(--spacing-4));
 }
 .atlas-map > * {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* Why every change in an entry's More menu is held, said once above its items. */
+.atlas-actions__held {
+  display: block;
+  max-width: 20rem;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
 }
 
 /* THE DOCK AND THE CARD BESIDE AN ENTRY: the map's own surfaces, laid out here. */

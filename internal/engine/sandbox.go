@@ -1464,11 +1464,37 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// rather than the retry rule above: a resumed turn that suspended AGAIN
 	// keeps it, because the same box is still working.
 	working = res.Suspended
+	// A SEGMENT THAT WORKED ends the seat's run of failures that will
+	// repeat, as a dispatched turn that worked does ([Engine.failureCleared]):
+	// its models answered, so a refused credential before it and one after it
+	// are not the same failure twice in a row.
+	if err == nil {
+		e.failureCleared(in.Turn.Handle())
+	}
+	// HOW A SEGMENT THAT BROKE GOES ON, decided once and BEFORE its completion
+	// is published, because the completion says whether the turn ended: see
+	// [resumeFailure].
+	var fate resumeFailure
+	if err != nil {
+		fate = e.judgeResumeFailure(ctx, company, in, res, err)
+	}
 	// THE SEGMENT'S CHARGE, decided once for the suspension below and the
 	// charge after the completion — see turnspend.go.
 	spend := r.Spend()
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
-	e.endSegment(ctx, tel, spend, res, err, charge)
+	// A SEGMENT THAT BROKE WITHOUT ENDING ITS TURN is published as one that
+	// did not end it ([types.AgentTurnCompleted.Suspended]): its run is
+	// handed back, held or refused to wait, and the same turn id completes
+	// again when its completion comes round. Published as an end, every
+	// retry of one resume was a turn that ended and failed: a seat whose
+	// review could not reach its model read "Not on a turn. Its last turn
+	// failed" while its run still waited, and the Turns axis counted
+	// hundreds of ended turns over a list of two.
+	published := res
+	if err != nil && !fate.endsTurn() {
+		published.Suspended = true
+	}
+	e.endSegment(ctx, tel, spend, published, err, charge)
 	// THE COLLEAGUE WHOSE ASK THE TURN TOOK UP IS ANSWERED BY THE SEGMENT
 	// THAT ENDS IT — this one, wherever it ends the turn below — off the ask
 	// its launch wrote onto the run's record: the dispatch frame that saw
@@ -1506,56 +1532,20 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// takes it off ([Engine.abandonedLaunches]).
 	defer e.abandonedLaunches.Delete(in.Run.TurnID)
 	if err != nil {
-		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
-		// stop after the run's completion was claimed, or while its
-		// collected job waited on this resume, held or retried, both of
-		// which a stop leaves to this turn (the run's own stop ends only a
-		// job still out: [sandbox.Stoppable]) — and the turn ended at its
-		// first round, its charge above the job's only one. It
-		// is settled rather than reverted, for the reason the dispatcher
-		// spends a stopped trigger: a revert brings the completion straight
-		// back, and the resume would be stopped again on every delivery
-		// until the broker dead-lettered it. The run's box is reclaimed
-		// with it; stopping the turn is what was asked.
-		if turn.Stopped(err) {
-			return stopped(err, "a person stopped the resumed turn")
+		// A STOP DECIDES IT FIRST: a person stopped the resumed turn, or the
+		// seat while the segment met a wait ([Engine.judgeResumeFailure]). It
+		// is settled as stopped rather than reverted.
+		if fate.stop != nil {
+			return stopped(fate.stop, fate.stopWhy)
 		}
-		// AND A WAIT THE SEGMENT MET WHILE A PERSON'S STOP LANDED is decided
-		// by the stop: the seat was paused with a stop while one of the
-		// segment's calls was out, and that call came back refused for a
-		// limit its models report or the seat's budget. The turn's fence
-		// would have closed it as stopped at its next round, and there is
-		// none: reverted on the wait, the job was held on its node or its
-		// row until the limit's instant or the window's turn, up to the
-		// hour an entry is benched for, the seat parked and probed
-		// meanwhile, while the stop stood unanswered, since a stop leaves a
-		// claimed run to its turn. Settled here as stopped instead, as the
-		// fence settles it, and nothing is parked.
-		if stop := e.seatStop(in.Turn.Handle()); stop != nil && e.resumeWaits(ctx, company, in.Turn.Handle(), err) {
-			return stopped(stop, fmt.Sprintf("a person stopped the seat while its resumed turn "+
-				"met a wait: %v", err))
-		}
-		// A BUDGET THAT REFUSES THE SEGMENT HOLDS IT, before anything
-		// decides it is lost: the round's relaunch — a reviewer's send-back,
-		// or the run an answer carries on — or a call of its own was refused
-		// because the seat's window is full or too short for a launch. A
-		// window turns over, so this is a wait and not a failure: handed
-		// back for an ordinary retry, every attempt re-collected the job and
-		// ran its review again into the same refusal. Held, the job waits
-		// collected in its paused box, the seat held behind it, until the
-		// window that refuses it turns over — or a revision raises its
-		// ceiling — and is resumed then ([sandbox.ErrResumeHeld]); an
-		// answer's resume is reverted and waits on the same refusal,
-		// uncharged, in its own series, whose every attempt the turn gate
-		// asks it of ([Engine.seatCannotRun]). AHEAD OF THE ABANDON, so a
-		// segment that wrote in its own attempt waits for its window too
-		// rather than lose the run's work to one; the run's own calls, made
-		// before the segment began, are no such write ([turn.Work.Inherited]).
-		if held := e.heldByBudget(ctx, company, in.Turn.Handle(), err); held != nil {
+		// A BUDGET THAT REFUSES THE SEGMENT HOLDS IT, before anything decides
+		// it is lost ([Engine.judgeResumeFailure] says why it comes ahead of
+		// the abandon).
+		if fate.held != nil {
 			working = false
-			return held
+			return fate.held
 		}
-		if reason, abandon := turn.Abandon(res, err); abandon {
+		if fate.abandon != "" {
 			// The same decision the dispatcher makes on the other path
 			// (see (*Dispatcher).abandon), from the same rule, taken here
 			// in this subsystem's own vocabulary: the coordinator reads
@@ -1563,34 +1553,17 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// is not redelivered into a conversation a retry must not
 			// re-enter.
 			//
-			// A RESUMED TURN QUALIFIES BY WHAT ITS OWN ATTEMPT DID, as any
-			// turn does: what its run did over the bridge before this
-			// segment collected it is an earlier attempt's
-			// ([turn.Work.Inherited]), and a retry collects the same run
-			// rather than make any of it again. It qualifies too when it
-			// panicked, and when it was refused for a reason every retry
-			// would meet again ([turn.ErrPermanent]: its round lost with
-			// its host past its limit) — a refusal only a resume meets,
-			// so it reaches [turn.Abandon] through this call alone.
-			//
 			// The indicator comes down with it: the run is settled,
 			// the box reclaimed and the record deleted, so nothing is
 			// coming back for this turn — and the colleague is told it
 			// could not be answered, and the executor log how it ended.
-			e.oweExecutorEnd(ctx, in.Run, abandonedEnding(res, resumedReply, answer(res, err), reason, err))
-			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
+			e.oweExecutorEnd(ctx, in.Run, abandonedEnding(res, resumedReply, answer(res, err), fate.abandon, err))
+			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, fate.abandon, err)
 		}
-		// A RETRY NEEDS THE RUN'S RECORD AS THE CLAIM LEFT IT, and a relaunch
-		// that failed in its launch — no box, no attach, no start — abandoned
-		// the run under it ([sandbox.Coordinator.Launch]): its ending is
-		// decided, and its record waits for this frame to say how the turn
-		// ended before it goes ([sandbox.Coordinator.OweEnd]). Reverted, the
-		// claim would find nothing to hand back, the completion nothing to
-		// claim again, and the turn would end in silence, its colleague
-		// unanswered and its end nowhere. So a segment that broke on a run
-		// whose ending is decided, or whose record is gone, ends the turn
-		// here, as one abandoned, and settles rather than reverts.
-		if e.runEnded(ctx, in.Run.TurnID) {
+		// A RUN WHOSE ENDING IS DECIDED, or whose record is gone, ends the
+		// turn here, as one abandoned, and settles rather than reverts
+		// ([Engine.judgeResumeFailure]).
+		if fate.runEnded {
 			e.oweExecutorEnd(ctx, in.Run, abandonedEnding(res, resumedReply, answer(res, err),
 				"its relaunch failed, and its run was ended with it", err))
 			return fmt.Errorf("%w (the resumed turn's relaunch failed and its run was ended with it): %w",
@@ -1632,6 +1605,31 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// whose release re-fires this resume (providerpark.go).
 			e.parkResumeOnLimit(ctx, in.Turn.Handle(), err)
 			return &sandbox.TurnRefused{Cause: err, Refusal: refusal}
+		}
+		// AND A FAILURE A RETRY CANNOT CURE PAUSES THE SEAT on its second
+		// time in a row, as on the dispatch path (ADR-0117): every model of
+		// the review's chain refused its credential, say. The two paths
+		// share the seat's run of failures, so a dispatched turn and a
+		// resumed one that fail alike are the second time.
+		//
+		// A resume is where such a failure meets a seat most often: a seat's
+		// turn launches its executor's run and parks, and the review of the
+		// run's job is the turn's next model call. Unpaused, that review
+		// was handed back and its completion redelivered on the broker's
+		// backoff, about a second apart, for the half hour of the resume
+		// give-up, each attempt a turn that started and failed, while every
+		// screen drew the seat as working. Paused, the seat says why on
+		// every screen that shows it, and the completion is refused on the
+		// pause, kept for the lift that resumes it, and held at the turn
+		// gate meanwhile ([Engine.failurePauseRefusal]).
+		reason, paused, holdErr := e.failureHold(ctx, in.Turn.Handle(), err)
+		if holdErr != nil {
+			log.WarnContext(ctx, "seat_failure_pause_not_taken", "seat", in.Turn.Handle(),
+				"error", holdErr.Error(), "detail", "the resumed turn met a failure that will "+
+					"repeat and the seat could not be paused on it; the resume is retried")
+		}
+		if paused {
+			return &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{Condition: waitPause, Reason: reason}}
 		}
 		return err
 	}
@@ -3620,6 +3618,12 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 // collected, charged and asleep, and refused here it is not collected again at
 // each probe the limit outlasts.
 //
+// THE ENGINE'S FAILURE PAUSE REFUSES A COMPLETION THE SAME WAY, before the
+// claim ([Engine.failurePauseRefusal]), and for the same reason: the pause was
+// taken by a turn of the seat, a delivery's while no job held the seat, or the
+// resume that collected the job and met the failure, so the job is already
+// collected.
+//
 // A call the turn makes later (a review's send-back to a spent runner, a
 // relaunch below the floor) meets its own refusal mid-turn, and the resume
 // waits on it there ([resumeRefusal], [Engine.heldByBudget]).
@@ -3643,6 +3647,14 @@ func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox
 		return sandbox.Refusal{}, false
 	}
 	c := e.Company()
+	// A COMPLETION ON A SEAT THE ENGINE PAUSED FOR A FAILURE THAT WILL
+	// REPEAT waits for the pause to lift: see [Engine.failurePauseRefusal].
+	// An answer's is refused on any pause already ([Engine.mayResumeAnswer]).
+	if route == sandbox.ResumeCompletion {
+		if refusal, held := e.failurePauseRefusal(handle); held {
+			return refusal, true
+		}
+	}
 	if route == sandbox.ResumeAnswer {
 		// THE STATIC FLOOR: the gate is asked before the claim and names no
 		// run, so it cannot know the brief the answer's relaunch is handed,
@@ -3685,6 +3697,111 @@ func (e *Engine) seatStop(handle string) error {
 		return e.stopFor(seat, handle)
 	}
 	return nil
+}
+
+// resumeFailure is how a resumed segment that broke goes on, decided once by
+// [Engine.judgeResumeFailure] before the segment's completion is published:
+// that record says whether the turn ended, and a segment that is handed back,
+// held or refused to wait did not end it. The zero value is a segment handed
+// back for another attempt, or refused on a wait.
+type resumeFailure struct {
+	// stop is a person's stop that settles the segment as stopped, and
+	// stopWhy the reason its settle names.
+	stop    error
+	stopWhy string
+	// held is the seat's budget holding the segment until its window turns
+	// over: a wait, which the same turn resumes from.
+	held *sandbox.HeldError
+	// abandon is why the turn is abandoned ([turn.Abandon]), empty for none.
+	abandon string
+	// runEnded is a run whose ending is decided or whose record is gone.
+	runEnded bool
+}
+
+// endsTurn reports whether the segment ends its turn: settled as stopped or
+// abandoned. A held segment, and one reverted for another attempt or a wait,
+// is resumed again under the same turn id.
+func (f resumeFailure) endsTurn() bool {
+	return f.stop != nil || f.abandon != "" || f.runEnded
+}
+
+// judgeResumeFailure decides how a resumed segment that failed with err goes
+// on ([resumeFailure]), in the order [Engine.resumeTurn] acts on it.
+func (e *Engine) judgeResumeFailure(ctx context.Context, company *Company, in resumeInput,
+	res turn.Result, err error,
+) resumeFailure {
+	handle := in.Turn.Handle()
+	// A PERSON STOPPED THE RESUMED TURN: its seat was paused with a stop
+	// after the run's completion was claimed, or while its collected job
+	// waited on this resume, held or retried, both of which a stop leaves to
+	// this turn (the run's own stop ends only a job still out:
+	// [sandbox.Stoppable]), and the turn ended at its first round, its
+	// charge above the job's only one. It is settled rather than reverted,
+	// for the reason the dispatcher spends a stopped trigger: a revert brings
+	// the completion straight back, and the resume would be stopped again on
+	// every delivery until the broker dead-lettered it. The run's box is
+	// reclaimed with it; stopping the turn is what was asked.
+	if turn.Stopped(err) {
+		return resumeFailure{stop: err, stopWhy: "a person stopped the resumed turn"}
+	}
+	// AND A WAIT THE SEGMENT MET WHILE A PERSON'S STOP LANDED is decided by
+	// the stop: the seat was paused with a stop while one of the segment's
+	// calls was out, and that call came back refused for a limit its models
+	// report or the seat's budget. The turn's fence would have closed it as
+	// stopped at its next round, and there is none: reverted on the wait, the
+	// job was held on its node or its row until the limit's instant or the
+	// window's turn, up to the hour an entry is benched for, the seat parked
+	// and probed meanwhile, while the stop stood unanswered, since a stop
+	// leaves a claimed run to its turn. Settled here as stopped instead, as
+	// the fence settles it, and nothing is parked.
+	if stop := e.seatStop(handle); stop != nil && e.resumeWaits(ctx, company, handle, err) {
+		return resumeFailure{stop: stop, stopWhy: fmt.Sprintf("a person stopped the seat while "+
+			"its resumed turn met a wait: %v", err)}
+	}
+	// A BUDGET THAT REFUSES THE SEGMENT HOLDS IT, before anything decides it
+	// is lost: the round's relaunch (a reviewer's send-back, or the run an
+	// answer carries on) or a call of its own was refused because the
+	// seat's window is full or too short for a launch. A window turns over,
+	// so this is a wait and not a failure: handed back for an ordinary
+	// retry, every attempt re-collected the job and ran its review again
+	// into the same refusal. Held, the job waits collected in its paused
+	// box, the seat held behind it, until the window that refuses it turns
+	// over, or a revision raises its ceiling, and is resumed then
+	// ([sandbox.ErrResumeHeld]); an answer's resume is reverted and waits on
+	// the same refusal, uncharged, in its own series, whose every attempt
+	// the turn gate asks it of ([Engine.seatCannotRun]). AHEAD OF THE
+	// ABANDON, so a segment that wrote in its own attempt waits for its
+	// window too rather than lose the run's work to one; the run's own
+	// calls, made before the segment began, are no such write
+	// ([turn.Work.Inherited]).
+	if held := e.heldByBudget(ctx, company, handle, err); held != nil {
+		return resumeFailure{held: held}
+	}
+	// A RESUMED TURN QUALIFIES FOR THE ABANDON BY WHAT ITS OWN ATTEMPT DID,
+	// as any turn does: what its run did over the bridge before this segment
+	// collected it is an earlier attempt's ([turn.Work.Inherited]), and a
+	// retry collects the same run rather than make any of it again. It
+	// qualifies too when it panicked, and when it was refused for a reason
+	// every retry would meet again ([turn.ErrPermanent]: its round lost with
+	// its host past its limit): a refusal only a resume meets, so it reaches
+	// [turn.Abandon] through this call alone.
+	if reason, abandon := turn.Abandon(res, err); abandon {
+		return resumeFailure{abandon: reason}
+	}
+	// A RETRY NEEDS THE RUN'S RECORD AS THE CLAIM LEFT IT, and a relaunch
+	// that failed in its launch (no box, no attach, no start) abandoned
+	// the run under it ([sandbox.Coordinator.Launch]): its ending is decided,
+	// and its record waits for the resume's frame to say how the turn ended
+	// before it goes ([sandbox.Coordinator.OweEnd]). Reverted, the claim
+	// would find nothing to hand back, the completion nothing to claim again,
+	// and the turn would end in silence, its colleague unanswered and its end
+	// nowhere. So a segment that broke on a run whose ending is decided, or
+	// whose record is gone, ends the turn, as one abandoned, and settles
+	// rather than reverts.
+	if e.runEnded(ctx, in.Run.TurnID) {
+		return resumeFailure{runEnded: true}
+	}
+	return resumeFailure{}
 }
 
 // resumeWaits reports whether err, a resumed segment's failure, is a WAIT
@@ -4239,45 +4356,32 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// the flush below.
 	e.detachSeatReflection(ctx, seat)
 
-	// A LAST TURN, then forget the seat. The flush carries what the cycles
-	// have not, from the marks they left, before the successor hydrates: what
-	// the seat wrote while held here first, then its profiles, skills and
-	// onboarding marker, sent whole, then, while the bound has time, the rows
-	// this node held for the seat when it took it, which the changelog mostly
-	// holds already ([flushSeatMemory]). It has [memoryFlushTimeout], one
-	// broker round trip a row, and what it does not reach of the first two is
-	// lost to the successor as a crash loses it. That is more than the last
-	// cycle's writes when the seat's profiles and skills, sent whole, outlast
-	// the bound (crewlet/crewlet#1040), behind a burst larger than the bound
-	// carries (crewlet/crewlet#1041), and behind a row larger than the broker
-	// takes, at which every pass of the seat that meets it fails
-	// (crewlet/crewlet#349); and what it does carry of those whole tables can
-	// still be replaced by an older copy published after it, and a release
-	// after a taking of the seat that failed flushes this node's own copies
-	// of the profiles, skills and marker, which can be older than the
-	// changelog's (crewlet/crewlet#511). Forgetting the marks and the
-	// boundary makes the seat's next holding here take a new boundary and
-	// carry back, after what it writes, everything this node holds for it,
-	// as a restart does, which is what puts this node's rows back on a
-	// changelog an operator accepted after a recreation, or one restored
-	// while the node ran.
-	//
-	// Best effort, and it must be: this runs on the release path, where the
-	// seat is already gone. A failure here costs the successor what the
-	// changelog has not acknowledged, as a crash does — and refusing to
-	// release would strand the seat for a full TTL.
+	// A LAST TURN, then forget the seat ([releaseSeatMemory]). The seat's
+	// holding turns to releasing first, so the memory sync cycle stops
+	// publishing it at its next row and the flush alone carries it from
+	// here, and a seat whose hydration failed or never ran has no holding
+	// and flushes nothing (crewlet/crewlet#511). The flush carries what the cycles have
+	// not, from the marks they left, before the successor hydrates: what the
+	// seat wrote while held here first, then its profiles, skills and
+	// onboarding marker, sent whole, then, while the bound has time, the
+	// rows this node held for the seat when it took it, which the changelog
+	// mostly holds already ([flushSeatMemory]). It has [memoryFlushTimeout],
+	// one broker round trip a row, and what it does not reach of the first
+	// two is lost to the successor as a crash loses it. That is more than
+	// the last cycle's writes when the seat's profiles and skills, sent
+	// whole, outlast the bound (crewlet/crewlet#1040), behind a burst larger
+	// than the bound carries (crewlet/crewlet#1041), and behind a row larger
+	// than the broker takes, at which every pass of the seat that meets it
+	// fails (crewlet/crewlet#349); and the row a cycle was sending as the
+	// release began can still land after the flush's copy of it. Forgetting
+	// the seat ends its holding and drops its marks and boundary, which
+	// makes the seat's next holding here take a new boundary and carry
+	// back, after what it writes, everything this node holds for it, as a
+	// restart does, which is what puts this node's rows back on a changelog
+	// an operator accepted after a recreation, or one restored while the
+	// node ran.
 	if e.memory != nil {
-		// BOUNDED, because this runs on the release path — including a
-		// drain, where every seat passes through here at once
-		// (seat.Host.ReleaseAll). A broker that has stopped answering must
-		// cost the drain a few seconds, not the whole shutdown.
-		flushCtx, stopFlush := context.WithTimeout(
-			context.WithoutCancel(ctx), memoryFlushTimeout)
-		for _, line := range flushSeatMemory(flushCtx, e.memory, handle) {
-			log.Log(ctx, line.level, line.msg, line.args...)
-		}
-		stopFlush()
-		e.memory.Forget(handle)
+		releaseSeatMemory(ctx, e.memory, handle)
 	}
 
 	rt := e.sandbox.Load()

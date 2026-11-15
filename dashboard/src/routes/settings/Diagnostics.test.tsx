@@ -122,6 +122,16 @@ test("off by default, it says what is sent and what never is before anybody opts
   expect(screen.getByText(/up to five lines of Crewlet's code that led there/)).toBeTruthy();
 });
 
+// THE GUIDE'S LINK SITS INSIDE THE NOTE'S SENTENCE, so it carries the
+// underline register: the kit's link marks itself by ink alone until hovered,
+// 1.18:1 against the words around it in the dark theme. Mutation: drop
+// `.prose-link` from it.
+test("the link inside the note's sentence is underlined as one", async () => {
+  await mount(reading());
+  const link = screen.getByRole("link", { name: /How it works/ });
+  expect(link.classList.contains("prose-link")).toBe(true);
+});
+
 test("turning it on writes the one setting, on the revision just read, with its summary", async () => {
   await mount(reading());
   await act(async () => {
@@ -258,4 +268,28 @@ test("a preview shows the exact JSON a report of the class would send", async ()
     await settled();
   });
   expect(screen.getByText(/internal\/agent\/turn\.Recovered/)).toBeTruthy();
+});
+
+// A CLASS'S SENTENCE NAMES A FACT OF THE REPORT IN BACKTICKS, as the
+// catalogue writes it ("The `fatal_kind` says what it was"): code, beside
+// the JSON that carries it, never the punctuation it travelled in.
+test("a preview's sentence draws a fact it names as code", async () => {
+  await mount(
+    reading({
+      previews: [
+        {
+          class: "process.crashed",
+          title: "The engine crashed",
+          summary: "The `fatal_kind` says what it was.",
+          payload: { schema: 2, facts: { fatal_kind: "concurrent_map" } },
+        },
+      ],
+    }),
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /the engine crashed/i }));
+    await settled();
+  });
+  expect(screen.getByText("fatal_kind", { selector: "code" })).toBeTruthy();
+  expect(document.body.textContent).not.toContain("`fatal_kind`");
 });

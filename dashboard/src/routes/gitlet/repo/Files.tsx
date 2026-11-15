@@ -87,6 +87,7 @@ import {
   isWholeOID,
   lineToOpenAt,
   linesValue,
+  noDefaultHead,
   openingLine,
   parseLines,
   pathSteps,
@@ -152,7 +153,16 @@ export function Files({ repo, revisions }: { repo: CodeRepoDetail; revisions: Re
   const [path] = useParam("path", "", "filter");
   const [lens, setLens] = useParam("lens", "", "filter");
   const [lines, setLines] = useParam("lines", "", "filter");
-  if (!repo.head && ref === "") return <EmptyRepository repo={repo} />;
+  if (!repo.head && ref === "") {
+    // EMPTY ONLY WITH NO BRANCH AT ALL: `head` is the default branch's tip,
+    // and a repository whose other branches are live while its default
+    // branch holds nothing is read from them.
+    return repo.branches > 0 ? (
+      <NoDefaultBranch repo={repo} revisions={revisions} onRev={setRef} />
+    ) : (
+      <EmptyRepository repo={repo} />
+    );
+  }
   const place = { repo, revisions, rev: ref, path, onRev: setRef };
   return path === "" ? (
     <RootListing {...place} />
@@ -1387,6 +1397,52 @@ function Readme({
         )}
       </Card.Body>
     </Card>
+  );
+}
+
+/**
+ * A repository whose default branch holds nothing while other branches are
+ * live: its first push went to another branch, or its default branch was
+ * deleted before the engine kept it. Not empty, so it is never told nobody
+ * pushed: the picker reaches its branches, and its Settings make one of them
+ * the default.
+ */
+function NoDefaultBranch({
+  repo,
+  revisions,
+  onRev,
+}: {
+  repo: CodeRepoDetail;
+  revisions: Revisions;
+  onRev: (rev: string) => void;
+}) {
+  return (
+    <Stack gap={3}>
+      <PageToolbar>
+        <RefPicker repo={repo} revisions={revisions} value="" onChoose={onRev} />
+        <span className="code-ref-counts">
+          <a className="code-ref-counts__link" href={repoHref(repo.name, { tab: "branches" })}>
+            <GitBranchGlyph size="sm" className="code-glyph" />
+            {plural(repo.branches, "branch", "branches")}
+          </a>
+        </span>
+      </PageToolbar>
+      <Card className="code-setup">
+        <Card.Header divided>
+          <Card.Title as="h2">{`${repo.default_branch} holds no commit`}</Card.Title>
+        </Card.Header>
+        <Card.Body padding="lg">
+          <Stack gap={3}>
+            <p className="muted">{noDefaultHead(repo)}</p>
+            <span>
+              <a className="t-link" href={repoHref(repo.name, { tab: "settings" })}>
+                Change the default branch →
+              </a>
+            </span>
+          </Stack>
+        </Card.Body>
+      </Card>
+    </Stack>
   );
 }
 

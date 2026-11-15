@@ -94,6 +94,16 @@ function blockText(block: MarkdownBlock): string {
 }
 
 /**
+ * A task item's own words, which its checkbox is named by: the item's first
+ * block (the line it was written on), never a sublist under it, whose items
+ * are named by their own words. Whitespace collapses as [plainText]'s does.
+ */
+export function taskItemText(blocks: readonly MarkdownBlock[]): string {
+  const first = blocks[0];
+  return first ? blockText(first).replace(/\s+/g, " ").trim() : "";
+}
+
+/**
  * A markdown document as ONE LINE of the prose it renders to.
  *
  * WHY IT EXISTS: a comment body and a task description are markdown by contract
@@ -123,4 +133,24 @@ export function plainText(source: string): string {
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * The FIRST THING a markdown text says, as one line of the words it renders
+ * to: the title a longer text opens with. An executor's task is the trigger
+ * that woke its seat, a line naming the work and then the work's own body
+ * under headings and lists; drawn as it came, a one-line cell or a title read
+ * "PROD-4 created: Add dark mode ## Context This is task 16. It needs
+ * **care**. - step one", the marks and the whole body run together.
+ *
+ * The first block whose words are not empty, flattened as [plainText]
+ * flattens a block, so a title and the excerpt of the same text never
+ * disagree about what a mark renders to.
+ */
+export function firstBlockText(source: string): string {
+  for (const block of parseMarkdown(source ?? "")) {
+    const said = blockText(block).replace(/\s+/g, " ").trim();
+    if (said) return said;
+  }
+  return "";
 }

@@ -50,6 +50,8 @@
  * — a configuration's paths, the files of a release — is keyed instead: each
  * line names its `path`, and a setting that changed is its old value removed
  * and its new value added, so the underline finds what moved inside it. A
+ * value of several lines is as many lines, each with its own mark, its path
+ * written once on the first of them ([continuesAbove]). A
  * hunk opens with a row saying how many unchanged lines it skipped, because a
  * gap silently closed makes a document edited at both ends look like one
  * rewritten in the middle.
@@ -285,7 +287,8 @@ const ROW_ESTIMATE_PX = 21;
 /** One row of the diff, as it is drawn: what is underlined in it is its lines' [Pair]s'. */
 type Row =
   | { kind: "skip"; count: number }
-  | { kind: "line"; line: DiffLine }
+  /** `continues`: the line goes on the setting the line above it began ([continuesAbove]). */
+  | { kind: "line"; line: DiffLine; continues: boolean }
   | { kind: "pair"; left: DiffLine | null; right: DiffLine | null };
 
 /**
@@ -326,12 +329,15 @@ type Pairs = ReadonlyMap<DiffLine, Pair>;
  * In a text, the kth removed with the kth added, the pairing a reader makes
  * down the two columns of a split diff, and only in a change whose shape lets
  * position still mean one line edited ([alignedByPosition]). In a keyed diff,
- * the removed and the added line of ONE path, since a change can hold one
+ * the removed and the added lines of ONE path, since a change can hold one
  * setting removed and another one edited, and pairing those by position would
- * underline one setting against another; one to one and in order, so a path's
- * lines meet once each, and a line with no path names no setting and pairs
- * with none. A path is the setting's identity rather than a place, so it
- * pairs at any size.
+ * underline one setting against another; a line with no path names no setting
+ * and pairs with none. Within a path the lines pair as a text's do: a value
+ * of several lines (an object, a list) is the lines of a small text, so its
+ * kth removed line meets its kth added line only in a shape where position
+ * still means one line edited ([alignedByPosition]), and an object that
+ * gained a key underlines nothing rather than every line under the new one
+ * against its neighbour.
  *
  * Linear in the diff's lines, keyed or not: a path finds its partner through
  * a map rather than a search of the change, which a change holding a release's
@@ -409,18 +415,20 @@ function pairByPath(
   added: readonly DiffLine[],
   join: (removed: DiffLine, added: DiffLine) => void,
 ) {
-  // Each path's added lines, the last first, so the first is the one popped.
-  const waiting = new Map<string, DiffLine[]>();
-  for (let k = added.length - 1; k >= 0; k--) {
-    const line = added[k]!;
-    if (line.path === undefined) continue;
-    const queue = waiting.get(line.path);
-    if (queue) queue.push(line);
-    else waiting.set(line.path, [line]);
-  }
-  for (const line of removed) {
-    const partner = line.path === undefined ? undefined : waiting.get(line.path)?.pop();
-    if (partner) join(line, partner);
+  // Each path's lines, both sides, in the order the change holds them.
+  const sides = new Map<string, { removed: DiffLine[]; added: DiffLine[] }>();
+  const sideOf = (path: string) => {
+    let side = sides.get(path);
+    if (!side) sides.set(path, (side = { removed: [], added: [] }));
+    return side;
+  };
+  for (const line of removed) if (line.path !== undefined) sideOf(line.path).removed.push(line);
+  for (const line of added) if (line.path !== undefined) sideOf(line.path).added.push(line);
+  for (const side of sides.values()) {
+    if (!alignedByPosition(side.removed.length, side.added.length)) continue;
+    for (let k = 0; k < Math.min(side.removed.length, side.added.length); k++) {
+      join(side.removed[k]!, side.added[k]!);
+    }
   }
 }
 
@@ -436,7 +444,9 @@ function rowsOf(hunks: readonly DiffHunk[], split: boolean): Row[] {
     if (hunk.skipped > 0) rows.push({ kind: "skip", count: hunk.skipped });
     const lines = hunk.lines;
     if (!split) {
-      for (const line of lines) rows.push({ kind: "line", line });
+      lines.forEach((line, i) =>
+        rows.push({ kind: "line", line, continues: continuesAbove(line, lines[i - 1]) }),
+      );
       continue;
     }
     for (let i = 0; i < lines.length;) {
@@ -458,6 +468,22 @@ function rowsOf(hunks: readonly DiffHunk[], split: boolean): Row[] {
     }
   }
   return rows;
+}
+
+/**
+ * Whether a keyed line goes on the setting the line above it in its hunk
+ * began: the same path, on the same side. Its path is not written again: a
+ * value of several lines (an object, a list) is one setting read down, its
+ * path written once on its first line, as a text's lines are numbered rather
+ * than titled. Every line still carries its own glyph and step.
+ */
+function continuesAbove(line: DiffLine, above: DiffLine | undefined): boolean {
+  return (
+    line.path !== undefined &&
+    above !== undefined &&
+    above.path === line.path &&
+    above.kind === line.kind
+  );
 }
 
 /** What a line underlines as it is drawn: its half of its [Pair]'s run, or nothing. */
@@ -787,12 +813,15 @@ function Line({
   tracks,
   side,
   hidden = false,
+  continues = false,
 }: {
   line: DiffLine;
   run: Run | null;
   tracks: Tracks;
   side?: "left" | "right" | undefined;
   hidden?: boolean | undefined;
+  /** The line goes on the setting the line above began, whose path is not written again. */
+  continues?: boolean | undefined;
 }) {
   return (
     <div
@@ -809,7 +838,9 @@ function Line({
         <SlotNumber line={line} slot="after" side={side} tracks={tracks} />
       )}
       <Mark kind={line.kind} />
-      {tracks.keyed && <span className="diff-view__path">{line.path ?? ""}</span>}
+      {/* A CONTINUING LINE DRAWS NO PATH CELL: its value keeps the value's
+          own track (`diff.css`), so it lines up under the line it goes on. */}
+      {tracks.keyed && !continues && <span className="diff-view__path">{line.path ?? ""}</span>}
       <Text text={line.text} run={run} />
     </div>
   );
@@ -822,7 +853,12 @@ function RowView({ row, tracks, pairs }: { row: Row; tracks: Tracks; pairs: Pair
     case "line":
       return (
         <>
-          <Line line={row.line} run={underlineOf(pairs, row.line)} tracks={tracks} />
+          <Line
+            line={row.line}
+            run={underlineOf(pairs, row.line)}
+            tracks={tracks}
+            continues={row.continues}
+          />
           <Notes lines={[row.line]} tracks={tracks} />
         </>
       );

@@ -664,6 +664,80 @@ func TestAProbeTakesADeliveryThatReachesItLate(t *testing.T) {
 	}
 }
 
+// A COPY READ ACROSS A SLOW LINK WAITS OUT ITS MESSAGE BEFORE ITS PROBE GIVES
+// UP.
+//
+// A raw read's pull that hears nothing for a quiet second asks its consumer
+// what it says of itself, and the consumer's answer crosses the link BEHIND
+// what the broker sent first: the message the read is pulling, which arrives
+// whole only once its last byte is in. Asked at the read term under the lookup
+// ceiling alone, every answer of the probe reached the node after the ceiling
+// on a link that carries the message in longer than that, and the read failed
+// at every attempt while its message was still crossing. So the probe is given
+// the message's crossing beside the term and the ceiling, as a leader's read
+// of a large message is given its reply's arrival. Here the ceiling is two
+// seconds, the link's pace makes the message's crossing minutes, and the
+// broker's bytes are held back on the link for five seconds from the moment
+// the read's pull reaches it: the read answers the message.
+//
+// Mutation: ask the probe at the queue's timing alone, and the read fails at
+// the ceiling.
+func TestACopyReadAcrossASlowLinkWaitsOutItsMessageBeforeItsProbeGivesUp(t *testing.T) {
+	t.Parallel()
+	ns, relay, q := relayedLeafLinkedQueue(t)
+	body := incompressible(t, 64<<10)
+	c := copiedOn(t, q, body)
+	at, err := c.at(t.Context(), 1)
+	if err != nil || !at.held || at.subject != "copyread.a" {
+		t.Fatalf("what 1 holds = %+v, %v, want the message on copyread.a", at, err)
+	}
+	// THE CEILING SHORTER THAN THE HOLD, and the message's crossing at the
+	// link's pace longer than both, set while nothing else uses the queue.
+	timing := q.provisioning()
+	timing.Lookup = 2 * time.Second
+	q.timing = timing
+	q.link.pace = time.Hour
+	if crossing := c.crossing(at.bytes); crossing <= 5*time.Second+timing.Lookup {
+		t.Fatalf("the message crosses in %v at the case's pace, want longer than the hold "+
+			"and the ceiling", crossing)
+	}
+	held := jsapitest.Hold(t, ns, jsapitest.ConsumerNext(copiedStream), nats.Token(leaderReadsToken))
+	type answer struct {
+		msg  stored
+		held bool
+		err  error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		msg, held, err := c.message(t.Context(), 1, at)
+		done <- answer{msg, held, err}
+	}()
+	wait, stop := context.WithTimeout(t.Context(), 30*time.Second)
+	defer stop()
+	pull, err := held.Next(wait)
+	if err != nil {
+		t.Fatalf("the read's pull never reached the broker: %v", err)
+	}
+	// PAST THE QUIET SECOND AND THE CEILING after it: every answer of the
+	// probe arrives after the ceiling, behind the message.
+	relay.Delay(5 * time.Second)
+	held.Release()
+	if err := pull.Answer(); err != nil {
+		t.Fatalf("send the read's pull on: %v", err)
+	}
+	liveness := time.NewTimer(time.Minute) //fixedwait:liveness
+	defer liveness.Stop()
+	select {
+	case got := <-done:
+		if got.err != nil || !got.held || !bytes.Equal(got.msg.data, body) {
+			t.Errorf("the read whose message was still crossing = %d bytes, held %t, %v: want "+
+				"the %d-byte body", len(got.msg.data), got.held, got.err, len(body))
+		}
+	case <-liveness.C:
+		t.Fatal("the read answered nothing in a minute")
+	}
+}
+
 // A PAYLOAD READ OF A MESSAGE REMOVED SINCE ITS PROBE CARRIES NO LARGER ONE.
 //
 // A payload read's consumer is filtered to the probed message's subject, so

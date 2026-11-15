@@ -512,9 +512,11 @@ test("a comparison's two pickers share one read of the branches and the tags", a
 
 // OPEN CHANGE IS ONE code_open_change of the branch compared into the base
 // branch, its title head's subject and its work item the one head's push was
-// charged to — and the reader is taken to the change it opened. Mutation:
-// send the commit id as the branch, drop the work item, or open nothing on an
-// applied answer, and this fails.
+// charged to, and the reader is taken to the change it opened. Its fields are
+// labelled kit fields, reviewers a picker of the chart's seats and the draft
+// the kit's checkbox. Mutation: send the commit id as the branch, drop the
+// work item, open nothing on an applied answer, or draw placeholders for
+// labels again, and this fails.
 test("Open change proposes the branch into the base, prefilled with its work item", async () => {
   const { acted } = stubEngine({
     commitAnswer: commit({ revisions: [] }),
@@ -534,9 +536,15 @@ test("Open change proposes the branch into the base, prefilled with its work ite
   expect((within(dialog).getByLabelText("Title") as HTMLInputElement).value).toBe(
     "Retry the flaky upload",
   );
-  expect((within(dialog).getByLabelText("Work item") as HTMLInputElement).value).toBe(
+  expect((within(dialog).getByLabelText(/^Work item/) as HTMLInputElement).value).toBe(
     "native:ENG-42",
   );
+  // LABELLED, NOT PLACEHOLDERS: each field is named by a label the reader sees.
+  for (const label of ["Title", "Description", "Work item", "Reviewers"]) {
+    expect(within(dialog).getByText(label, { selector: "label, label *" }), label).toBeTruthy();
+  }
+  expect(within(dialog).queryByRole("link", { name: /^Read / })).toBeNull();
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Open it as a draft/ }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Open change" }));
 
   await waitFor(() => expect(acted).toHaveLength(1));
@@ -547,6 +555,7 @@ test("Open change proposes the branch into the base, prefilled with its work ite
       branch: "retry",
       target: "main",
       title: "Retry the flaky upload",
+      draft: true,
       work_item: "native:ENG-42",
     },
   });

@@ -797,3 +797,24 @@ func assertRemoved(t *testing.T, err error, key, says string) {
 		t.Errorf("a removed key was reported as a misspelling: %v", err)
 	}
 }
+
+// AN ADDRESS ONLY THIS MACHINE REACHES IS LOOPBACK, by the one rule the
+// insecure postures and the setup listing share: a host name compared as a
+// browser compares it, and any loopback address of either family.
+func TestLoopbackURLNamesOnlyAnAddressThisMachineAloneReaches(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]bool{
+		"http://127.0.0.1:8080":      true,
+		"http://127.1.2.3":           true,
+		"http://[::1]:8000":          true,
+		"http://LOCALHOST:8000":      true,
+		"https://engine.example.com": false,
+		"http://10.0.0.7:8000":       false,
+		"http://localhost.example":   false,
+		"::not a url":                false,
+	} {
+		if got := LoopbackURL(raw); got != want {
+			t.Errorf("LoopbackURL(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}

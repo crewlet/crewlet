@@ -21,7 +21,6 @@ import {
   EmptyValue,
   InlineCode,
   Link,
-  Modal,
   PageNote,
   Switch,
   TableDateCell,
@@ -30,6 +29,7 @@ import {
   Text,
   type DescriptionListEntry,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { BugGlyph, FileTextGlyph, ListChecksGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -45,6 +45,7 @@ import { fmtDateTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { getConfig, savePatch } from "~/protocol/configWrite.ts";
+import { marked } from "~/ui/Problems.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 
 /** The guide this screen sums up. */
@@ -150,7 +151,10 @@ export function Diagnostics() {
         When the engine runs into a bug in its own code, it can let the Crewlet team know so they
         can fix it. It&rsquo;s off until an admin turns it on, and reports are anonymous: nothing
         about your company is ever sent.{" "}
-        <Link href={GUIDE} external size="inherit">
+        {/* A LINK INSIDE THE SENTENCE carries the underline register: the
+            kit's link marks itself by its ink alone until hovered, which in
+            the dark theme is 1.18:1 against the words around it. */}
+        <Link href={GUIDE} external size="inherit" className="prose-link">
           How it works
         </Link>
       </PageNote>
@@ -209,7 +213,9 @@ function ReportsSwitch({
             on ? "Turned on bug reports to Crewlet" : "Turned off bug reports to Crewlet",
             signal,
           );
-          if (outcome.kind !== "saved") {
+          // ALREADY SO is what was asked for: the engine stored nothing because
+          // the document already says it.
+          if (outcome.kind !== "saved" && outcome.kind !== "unchanged") {
             setRefused(
               outcome.kind === "valid"
                 ? "The engine checked the change but didn't save it. Please try again."
@@ -441,7 +447,10 @@ function ReportPreview({ answer }: { answer: IssueReportsAnswer }) {
         {answer.previews.map((preview) => (
           <Disclosure key={preview.class} title={preview.title}>
             <div className="col gap-2">
-              <Text as="p">{preview.summary}</Text>
+              {/* THE CATALOGUE'S SENTENCE, drawn as the engine's sentences
+                  are: it names a fact of the report below in backticks
+                  (`fatal_kind`), which is code, never punctuation. */}
+              <Text as="p">{marked(preview.summary)}</Text>
               <CodeBlock
                 plain
                 selectable

@@ -34,11 +34,11 @@ import {
   Button,
   Callout,
   ErrorBoundary,
-  Modal,
   Skeleton,
   SidebarNav,
   StatusDot,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { ChunkLoadError, ChunkRegion } from "./lazyScreen.ts";
 
 /** Reload the page — the one fix for a chunk from another engine version. */

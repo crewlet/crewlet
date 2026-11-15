@@ -398,6 +398,15 @@ func (w WorkWriter) WriteView(ctx context.Context, opID string, view worklet.Vie
 	return out, err
 }
 
+// DeleteView takes a view away, refused where the stored view is no longer prior.
+func (w WorkWriter) DeleteView(ctx context.Context, opID, id string,
+	prior worklet.ViewPrior) (worklet.WriteResult, error) {
+	out, err := call(ctx, w.r, opDeleteView, &w.actor,
+		deleteViewArgs{OpID: opID, ID: id, Prior: prior})
+	w.settled(out.Result)
+	return out, err
+}
+
 // WriteTypes sets the company's task types.
 func (w WorkWriter) WriteTypes(ctx context.Context, opID string, types []worklet.TaskType) (
 	worklet.WriteResult, error) {

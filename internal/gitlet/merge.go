@@ -628,7 +628,7 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	}
 	grant := GrantOf(p.Asker, repo.grantRef(m.RepoID), seats.Roster)
 	if m.DeleteSource {
-		if refusal, why := sourceDeletion(f.Rules, c.SourceRef, refTip(refs, c.SourceRef), p.Asker, grant); refusal != "" {
+		if refusal, why := sourceDeletion(f.Rules, repo, c.SourceRef, refTip(refs, c.SourceRef), p.Asker, grant); refusal != "" {
 			return d.refuse(MergeRefusalSourceRefused, fmt.Sprintf("this merge of %s deletes its source %s, "+
 				"and a push deleting it is refused %s: %s — merge it keeping its source", named, c.SourceRef,
 				refusal, why))
@@ -691,9 +691,13 @@ func refTip(refs map[string]string, ref string) string {
 // merger's grant on a source OUTSIDE the seats' namespace ([Grant.RefRule]) —
 // a seat's own branch is the merge's to delete whoever merges it (Q4: what
 // carried the change ends with it), and a branch anybody else named is
-// deleted only by whoever may delete it; and every protection matching it
-// ([ProtectionRefusal]), which binds a merge's deletion as it binds a push's.
-func sourceDeletion(rules []Protection, source, tip string, merger Principal, grant Grant) (Refusal, string) {
+// deleted only by whoever may delete it; every protection matching it
+// ([ProtectionRefusal]), which binds a merge's deletion as it binds a push's;
+// and the repository's default branch ([DefaultBranchRefusal]), which no
+// merge deletes, as no push does: a change proposing main into a release
+// branch merges keeping main.
+func sourceDeletion(rules []Protection, repo pushRepo, source, tip string, merger Principal,
+	grant Grant) (Refusal, string) {
 	del := Command{Ref: source, Old: tip, New: ZeroOID}
 	if r := StatelessRefusal(del); r != "" {
 		return r, statelessDetail(del, r)
@@ -711,6 +715,9 @@ func sourceDeletion(rules []Protection, source, tip string, merger Principal, gr
 	}
 	if r, rule := ProtectionRefusal(del, protections, merger.Kind); r != "" {
 		return r, source + " " + ProtectionDetail(rule, r)
+	}
+	if r, why := DefaultBranchRefusal(del, repo.name, repo.defaultBranch); r != "" {
+		return r, why
 	}
 	return "", ""
 }

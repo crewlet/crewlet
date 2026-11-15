@@ -922,19 +922,6 @@ const pullExpiry = 2 * pullHeartbeat
 // skipped one costs that second.
 const quietWait = time.Second
 
-// firstPullRemakes is how many times a read remakes a consumer that never got
-// its first pull, before it waits for the pull like any other.
-//
-// THREE: a cluster dropped a first pull one read in twenty-five at the worst
-// measured, and a pull made again was dropped as often as a first one, so
-// after two remakes one read in fifteen thousand would still wait out its
-// heartbeats, and after three one in four hundred thousand. A consumer still
-// without its pull after three is behind a link slow enough to hold the pull
-// itself back, where remaking it again only adds a consumer for the cluster
-// to create while the pull is on its way — and its heartbeats are still over
-// it.
-const firstPullRemakes = 3
-
 // pulls is what every get and walk asks its consumer for: up to batch
 // messages in hand, under the pull expiry and heartbeat above.
 func pulls(batch int) []jetstream.PullMessagesOpt {
@@ -1022,7 +1009,7 @@ func (b *Backend) consume(ctx context.Context, filter string, cfg jetstream.Orde
 //
 // THE FIRST MESSAGE IS THE ONE A CLUSTER CAN DROP THE PULL FOR ([quietWait]):
 // one that has not come in a second is asked about, and a consumer that never
-// got the pull is dropped and made again, up to [firstPullRemakes] times —
+// got the pull is dropped and made again, up to [jsapi.FirstPullRemakes] times —
 // each with a whole stall of its own, since nothing the read made had begun.
 //
 // A CONSUMER WITH NOTHING TO DELIVER IS ASKED ABOUT TOO ([reading.caughtUp]):
@@ -1059,7 +1046,7 @@ func (r *reading) open(ctx context.Context) (jetstream.Msg, error) {
 		wait, cancel := r.waiting(ctx)
 		msg, err := r.quietly(ctx, wait)
 		if errors.Is(err, errQuiet) {
-			if remade < firstPullRemakes && r.unpulled(wait) {
+			if remade < jsapi.FirstPullRemakes && r.unpulled(wait) {
 				cancel()
 				r.stop(ctx)
 				remade++

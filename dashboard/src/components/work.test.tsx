@@ -108,6 +108,30 @@ test("no kind resolver never draws a person", () => {
   expect(outline(container)).toBe("agent");
 });
 
+// A BADGE DRAWN ALONE IS ITS SEAT'S INITIALS. Every agent that chose no look
+// carries the same one (the original Crewlet, in purple), so a column of
+// badges with no names beside them drew seven agents as one picture and
+// Agent CTO could not be told from Agent SWE without hovering. Alone, the
+// badge is the identity rule's initials; with its name printed beside it, the
+// seat's chosen character is decoration and stays.
+test("agents drawn alone are told apart by their initials, whatever look they share", () => {
+  const look = { character: "crewlet", color: "purple" } as const;
+  const named = (handle: string) =>
+    handle === "cto" ? "Agent CTO" : handle === "swe" ? "Agent SWE" : handle;
+  const props = { seatName: named, seatKind: () => "agent" as const, seatAvatar: () => look };
+  const cto = render(<Assignee handle="cto" {...props} />).container;
+  expect(badge(cto).classList.contains("crewlet-avatar--character")).toBe(false);
+  expect(badge(cto).textContent).toBe("CT");
+  cleanup();
+  const swe = render(<Assignee handle="swe" {...props} />).container;
+  expect(badge(swe).textContent).toBe("SW");
+  cleanup();
+  // NAMED BESIDE IT, the character the seat chose is drawn.
+  const beside = render(<Assignee handle="cto" {...props} name />).container;
+  expect(badge(beside).classList.contains("crewlet-avatar--character")).toBe(true);
+  expect(beside.textContent).toContain("Agent CTO");
+});
+
 // THE BOARD CARD READS THE SAME CHROME. It was the surface with the least
 // excuse for disagreeing — a column of cards is scanned for who holds what —
 // and it drew the badge through the same [Assignee] with the kind dropped.
@@ -283,4 +307,18 @@ test("a blocked row names the pull request nobody is reviewing", () => {
     ),
   ).toBe("Nobody is reviewing PR #42 +1");
   expect(blockedBy(row({ waiting_on: [{ id: pull, open: true }] }))).toBe("Blocked");
+});
+
+// A BLOCKER IN ANOTHER PROJECT IS NAMED: the edge carries its key, so a list
+// that holds no row for it (a project's own list) says which task holds this
+// one up, as All tasks, which held the row, already did.
+test("a blocked row names a blocker the page holds no row for, by the edge's own key", () => {
+  expect(blockedBy(row({ waiting_on: [{ id: "t-9", key: "PROD-9", open: true }] }))).toBe(
+    "Blocked · PROD-9",
+  );
+  expect(
+    blockedBy(row({ waiting_on: [{ id: "t-9", key: "PROD-9", open: true }] }), (id) =>
+      id === "t-9" ? "PROD-9" : undefined,
+    ),
+  ).toBe("Blocked · PROD-9");
 });

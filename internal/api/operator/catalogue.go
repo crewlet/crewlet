@@ -571,7 +571,8 @@ func (s *Server) DispatchRecord(ctx context.Context, c Call, name string,
 	}
 	work.Actor, work.Authorize = workActor, s.authorize
 	result := write(withKey(ctx, c.Key), work, name, c.Args)
-	s.auditCall(ctx, c, result, nil)
+	// BY NAME, so a company record whoever's it is: see [Server.audited].
+	s.audited(ctx, c, result, nil, false)
 	return result, nil
 }
 

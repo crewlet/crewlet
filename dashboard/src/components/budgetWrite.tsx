@@ -40,12 +40,12 @@ import {
   FormField,
   IconButton,
   Input,
-  Modal,
   Popover,
   returnFocus,
   Text,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import { PencilGlyph, SlidersVerticalGlyph } from "@crewlethq/icons/glyphs";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, PERIOD_WORDS, readCeiling, waitedOn, windowOf } from "~/lib/budget.ts";
@@ -64,6 +64,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
+import { warningWords } from "~/protocol/configAnswer.ts";
 import { refuse, useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { remedyOffer, scopeRemedy } from "~/lib/remedy.ts";
 
@@ -133,7 +134,7 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
         <Callout variant="warning">
           <ul className="ceiling-warnings">
             {state.warnings.map((w) => (
-              <li key={`${w.path}:${w.message}`}>{w.message}</li>
+              <li key={`${w.path}:${w.message}`}>{warningWords(w)}</li>
             ))}
           </ul>
         </Callout>
@@ -176,6 +177,7 @@ export function CeilingEditor({
   scope,
   period,
   window: w,
+  spent,
   zone,
   onApplied,
 }: {
@@ -183,6 +185,13 @@ export function CeilingEditor({
   period: Period;
   /** The window as the budgets answer states it; `limit` absent is no ceiling. */
   window: BudgetWindow | undefined;
+  /**
+   * What the window has spent, where the figure is drawn on the ceiling's
+   * own line (a seat's cell): the two are then one phrase in one unit, "2M of
+   * 40M tokens" or "0 tokens · No ceiling", rather than a bare "0" beside "No
+   * ceiling". Left out where the spend is drawn on a line of its own (a tile).
+   */
+  spent?: number | undefined;
   /** The company clock, for when the window resets. */
   zone: string;
   /**
@@ -343,9 +352,23 @@ export function CeilingEditor({
   const fieldId = `${id}-ceiling`;
   return (
     <span className="ceiling">
-      <span className={shown === null ? "ceiling-value muted" : "ceiling-value"}>
-        {shown === null ? "No ceiling" : `of ${fmtCount(shown)}`}
-      </span>
+      {spent === undefined ? (
+        <span className={shown === null ? "ceiling-value muted" : "ceiling-value"}>
+          {shown === null ? "No ceiling" : `of ${fmtCount(shown)}`}
+        </span>
+      ) : (
+        <span className="ceiling-value" title={`${fmtExact(spent)} tokens`}>
+          <span className="ceiling-spent">{fmtCount(spent)}</span>
+          {shown === null ? (
+            <>
+              {" tokens · "}
+              <span className="muted">No ceiling</span>
+            </>
+          ) : (
+            ` of ${fmtCount(shown)} tokens`
+          )}
+        </span>
+      )}
       {saved && saved.standing !== "passed" && (
         <span className="ceiling-applying t-caption" role="status">
           {saved.standing === "applied"

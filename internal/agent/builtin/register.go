@@ -576,6 +576,16 @@ func annotationsFor(name string) tools.Annotations {
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No,
 		}
+	case worklet.DeleteWorkViewTool:
+		// A WRITE EVERYBODY SEES: a shared view leaves the strip and the
+		// pins of everyone who had it, so OpenWorld is Yes and
+		// [mcp.WritesToSharedSurface] reads true. DESTRUCTIVE, because
+		// nothing brings the view back and the flag asks whether a call
+		// can undo somebody else's work. NOT idempotent as a tool: a
+		// second delete as a new operation finds no view and is refused.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
+		}
 	case worklet.SetPrioritiesTool:
 		// THE ONE PERSON WRITE THAT REACHES ACROSS PEOPLE, which is why
 		// it is not in the arm above: a LEAD may set the queue of

@@ -428,6 +428,98 @@ describe("a diff of settings", () => {
     const { container } = render(<DiffView hunks={hunks} layout="split" />);
     expect(container.querySelector(".diff-view__pair")).toBeNull();
   });
+
+  /** One setting's value of several lines, on one side, keyed by `path`. */
+  const valueOf = (kind: "add" | "remove", path: string, text: string) =>
+    text.split("\n").map((line) => ({ kind, text: line, before: null, after: null, path }));
+
+  // A VALUE OF SEVERAL LINES IS MARKED ON EVERY LINE. Drawn as one line, a
+  // removed seat of twelve lines carried its glyph and its step on the first
+  // row alone and the rest hung unmarked under it. Each of its lines is a
+  // line of the diff, its path written once, and its value in the value's
+  // own track whether or not the line writes the path. Mutation: write the
+  // path on every line, or drop the value's track, and this fails.
+  test("marks every line of a value of several lines, and writes its path once", () => {
+    const { container } = render(
+      <DiffView
+        hunks={[
+          {
+            skipped: 0,
+            lines: [
+              ...valueOf("remove", "roles[1]", '{\n  "handle": "ops"\n}'),
+              ...valueOf("add", "roles[1]", '{\n  "handle": "eng"\n}'),
+            ],
+          },
+        ]}
+      />,
+    );
+    const drawn = [...container.querySelectorAll<HTMLElement>(".diff-view__line")];
+    expect(drawn.map((line) => line.querySelector(".diff-view__mark")?.textContent)).toEqual([
+      "−Removed",
+      "−Removed",
+      "−Removed",
+      "+Added",
+      "+Added",
+      "+Added",
+    ]);
+    expect(
+      drawn.map((line) => line.querySelector(".diff-view__path")?.textContent ?? null),
+    ).toEqual(["roles[1]", null, null, "roles[1]", null, null]);
+    const value = sheetRules().find(
+      (rule) => rule.selector === ".diff-view--keyed .diff-view__text",
+    );
+    expect(value?.body).toMatch(/grid-column:\s*3/);
+  });
+
+  // WITHIN ONE PATH THE LINES PAIR AS A TEXT'S DO. An object that kept its
+  // shape is one line edited in place; a list that gained an item at its head
+  // is a change of unequal sides, where every pair after the new line is two
+  // neighbours. Mutation: pair a path's lines one to one whatever their
+  // counts, and the second case underlines "plan" against "budget", two
+  // items that were never one item edited.
+  test("pairs the lines of a value of several lines by the rule a text's are", () => {
+    const edited = render(
+      <DiffView
+        hunks={[
+          {
+            skipped: 0,
+            lines: [
+              ...valueOf("remove", "roles[1]", '{\n  "handle": "ops"\n}'),
+              ...valueOf("add", "roles[1]", '{\n  "handle": "eng"\n}'),
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(runs(edited.container)).toEqual([
+      ["remove", "ops"],
+      ["add", "eng"],
+    ]);
+    edited.unmount();
+
+    const grown = render(
+      <DiffView
+        hunks={[
+          {
+            skipped: 0,
+            lines: [
+              ...valueOf(
+                "remove",
+                "roles[1].responsibilities",
+                '[\n  "Review the budget",\n  "Review the plan"\n]',
+              ),
+              ...valueOf(
+                "add",
+                "roles[1].responsibilities",
+                '[\n  "Approve hires",\n  "Review the budget",\n  "Review the plan"\n]',
+              ),
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(runs(grown.container)).toEqual([]);
+  });
 });
 
 /** The token a sheet's rule for exactly `selector` paints its background with. */

@@ -35,9 +35,14 @@ import (
 // id, so who may make one is a question about the view it OVERWRITES as well
 // as the one it writes, and the write refuses a prior that no longer holds —
 // see [worklet.ViewPrior].
+//
+// DeleteView takes a view away against the same prior: who may delete one is
+// who may replace it, decided on the stored view (see [worklet.Writer.DeleteView]).
 type ViewWriter interface {
 	ViewPrior(ctx context.Context, id string) (worklet.ViewPrior, error)
 	WriteView(ctx context.Context, opID string, view worklet.View,
+		prior worklet.ViewPrior) (worklet.WriteResult, error)
+	DeleteView(ctx context.Context, opID, id string,
 		prior worklet.ViewPrior) (worklet.WriteResult, error)
 }
 
@@ -336,6 +341,97 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				sameCall(actor, worklet.SaveWorkViewTool),
 				fmt.Sprintf("List the views in %s with "+worklet.ListWorkViewsTool, where),
 				"it saves a second view")), nil
+	}
+	t.deps.settle(ctx, result.Position)
+	return jsonResult(withOperation(map[string]any{
+		"id": id, "outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
+	}, actor))
+}
+
+type deleteWorkView struct{ deps WorkDeps }
+
+var _ tools.Callable = (*deleteWorkView)(nil)
+
+func (t *deleteWorkView) Name() string { return worklet.DeleteWorkViewTool }
+
+func (t *deleteWorkView) Description() string {
+	return "Delete a saved view: it leaves every strip, the list of views " +
+		"and every pin, and running it is refused from then on. Name it by " +
+		"the `id` " + worklet.ListWorkViewsTool + " lists. Whoever may change " +
+		"the view may delete it, and a protected view only its owner. The " +
+		"views every container has without anybody saving one (list, board, " +
+		"calendar and the rest) have no id and cannot be deleted."
+}
+
+func (t *deleteWorkView) Parameters() map[string]any {
+	return t.deps.ops.param(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id": map[string]any{
+				"type": "string",
+				"description": "The view to delete: an id " + worklet.ListWorkViewsTool +
+					" lists, or that a save answered.",
+			},
+		},
+		"required": []string{"id"},
+	})
+}
+
+func (t *deleteWorkView) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *deleteWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
+		//nolint:nilerr // A tool failure is a RESULT the caller reads.
+		return unattributed(worklet.DeleteWorkViewTool, err), nil
+	}
+	if t.deps.ViewWriter == nil {
+		return unconfigured(worklet.DeleteWorkViewTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, worklet.DeleteWorkViewTool, args)
+	if denied != "" {
+		return failed(denied), nil
+	}
+	id := strings.TrimSpace(argString(args, "id"))
+	if id == "" {
+		return failed(worklet.DeleteWorkViewTool + ": name the view to delete by " +
+			"its `id`, as " + worklet.ListWorkViewsTool + " lists it."), nil
+	}
+	writer := t.deps.ViewWriter(actor)
+	// THE STORED VIEW IS WHAT IS DECIDED ON, as a save that replaces it
+	// is: the gate has no object to form from an id, so the tool reads
+	// the view and asks the same action of its owner and container, and
+	// the write refuses a view that moved or changed hands since.
+	prior, err := writer.ViewPrior(ctx, id)
+	if err != nil {
+		return readFailure(ctx, worklet.DeleteWorkViewTool, err), nil
+	}
+	if !prior.Held {
+		return refused(tools.RefusalNotFound, fmt.Sprintf(
+			worklet.DeleteWorkViewTool+": there is no view %q to delete. Name a "+
+				"view "+worklet.ListWorkViewsTool+" lists.", clip(id))), nil
+	}
+	if denied := t.deps.mayWrite(ctx, authz.ActionViewDelete,
+		viewObject(prior.Owner, prior.Container)); denied != nil {
+
+		return *denied, nil
+	}
+	opID := opIDFor(actor, t.Name(), "view", id, args)
+	result, err := writer.DeleteView(ctx, opID, id, prior)
+	if err != nil {
+		return writeFailure(ctx, actor, worklet.DeleteWorkViewTool, err), nil
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return unknownWrite(actor, worklet.DeleteWorkViewTool,
+			fmt.Sprintf("the view %s was deleted", clip(id)), opID,
+			result.Unvouched, unknownNext(result.Unvouched,
+				sameCall(actor, worklet.DeleteWorkViewTool),
+				"List the views with "+worklet.ListWorkViewsTool,
+				"it deletes nothing twice")), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(withOperation(map[string]any{

@@ -480,9 +480,12 @@ test("a pasted operation id is the one the gesture is sent under", async () => {
   const earlier = answer("unknown").op_id;
   const sent = engine({ status: 200, body: answer("applied") });
   render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
-  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
-    target: { value: earlier },
-  });
+  fireEvent.change(
+    screen.getByLabelText(/^Operation id of the (eviction|readmission) to finish$/),
+    {
+      target: { value: earlier },
+    },
+  );
   fireEvent.change(screen.getByLabelText("Type node-4 to confirm"), {
     target: { value: "node-4" },
   });
@@ -528,17 +531,23 @@ test("a refused pasted id stays editable, and a corrected one is what is sent", 
     { status: 200, body: answer("applied") },
   );
   render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
-  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
-    target: { value: "not-an-id" },
-  });
+  fireEvent.change(
+    screen.getByLabelText(/^Operation id of the (eviction|readmission) to finish$/),
+    {
+      target: { value: "not-an-id" },
+    },
+  );
   confirmAndPress("node-4", "Evict");
   await waitFor(() => expect(screen.getByText(/not an id this engine minted/)).toBeTruthy());
   expect(sent[0]!.query.get("op_id")).toBe("not-an-id");
 
   // STILL THERE, and the corrected id is the one sent.
-  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
-    target: { value: good },
-  });
+  fireEvent.change(
+    screen.getByLabelText(/^Operation id of the (eviction|readmission) to finish$/),
+    {
+      target: { value: good },
+    },
+  );
   fireEvent.click(screen.getByRole("button", { name: "Evict" }));
   await waitFor(() => expect(sent.length).toBe(2));
   expect(sent[1]!.query.get("op_id")).toBe(good);
@@ -552,14 +561,20 @@ test("a refused pasted id, cleared, is not sent again", async () => {
     { status: 200, body: answer("applied") },
   );
   render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
-  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
-    target: { value: "not-an-id" },
-  });
+  fireEvent.change(
+    screen.getByLabelText(/^Operation id of the (eviction|readmission) to finish$/),
+    {
+      target: { value: "not-an-id" },
+    },
+  );
   confirmAndPress("node-4", "Evict");
   await waitFor(() => expect(screen.getByText(/not an id this engine minted/)).toBeTruthy());
-  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
-    target: { value: "" },
-  });
+  fireEvent.change(
+    screen.getByLabelText(/^Operation id of the (eviction|readmission) to finish$/),
+    {
+      target: { value: "" },
+    },
+  );
   fireEvent.click(screen.getByRole("button", { name: "Evict" }));
   await waitFor(() => expect(sent.length).toBe(2));
   expect(sent[1]!.query.get("op_id")).not.toBe("not-an-id");
@@ -579,9 +594,12 @@ test("after a refused first attempt, an earlier gesture's id can still be pasted
   render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
   confirmAndPress("node-4", "Evict");
   await waitFor(() => expect(screen.getByText(/may not be evicted/)).toBeTruthy());
-  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
-    target: { value: earlier },
-  });
+  fireEvent.change(
+    screen.getByLabelText(/^Operation id of the (eviction|readmission) to finish$/),
+    {
+      target: { value: earlier },
+    },
+  );
   fireEvent.click(screen.getByRole("button", { name: "Evict" }));
   await waitFor(() => expect(sent.length).toBe(2));
   expect(sent[1]!.query.get("op_id")).toBe(earlier);

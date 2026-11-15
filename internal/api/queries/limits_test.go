@@ -210,3 +210,97 @@ func TestTheLimitsAreAnAdministratorsAndNeedACompany(t *testing.T) {
 		t.Errorf("a node running no company answers %+v, want an empty list", got.Limits)
 	}
 }
+
+// EVERY CAP A SCREEN CHANGES REPORTS THE RANGE THE VALIDATOR HOLDS IT TO.
+//
+// Settings › Limits checks a typed value against the row's range before it
+// sends anything, so a range missing from a settable row is a cap whose editor
+// sends 0 or -2 for the engine to refuse, and a range that differs from the
+// validator's is an editor that refuses what the engine runs or sends what it
+// refuses. Each settable row's range is therefore tried against the validator
+// itself: the value just outside each bound is refused at the row's key,
+// carrying that same range for the screen to word, and a value inside it is
+// admitted.
+//
+// Mutation: drop a key from config's settingRanges, or tighten a validator
+// past its declared range, and a row here fails.
+func TestEverySettableLimitReportsTheRangeTheValidatorHolds(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte("name: Acme\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := askLimits(t, c, iam.GrantAdmin)
+	if err != nil {
+		t.Fatalf("limits: %v", err)
+	}
+	checked := 0
+	for _, row := range got.Limits {
+		if !row.Settable {
+			if row.Range != nil {
+				t.Errorf("%s is no setting of the document and reports a range", row.Key)
+			}
+			continue
+		}
+		if row.Range == nil {
+			t.Errorf("%s is settable and reports no range, so its editor checks nothing", row.Key)
+			continue
+		}
+		r := *row.Range
+		outside := []float64{r.Min - 1}
+		if r.MinExclusive {
+			outside = []float64{r.Min}
+		}
+		if r.Max != nil {
+			outside = append(outside, *r.Max+1)
+		}
+		for _, v := range outside {
+			doc := "name: Acme\n" + nest(map[string]string{row.Key: fmt.Sprint(v)})
+			_, err := config.ParseCompany([]byte(doc))
+			problem, ok := problemAt(config.Problems(err), row.Key)
+			if !ok {
+				t.Errorf("%s = %v is outside its reported range %+v, and the validator admits it",
+					row.Key, v, r)
+				continue
+			}
+			if problem.Range == nil || !sameRange(*problem.Range, r) {
+				t.Errorf("%s = %v is refused carrying the range %+v, and the row reports %+v",
+					row.Key, v, problem.Range, r)
+			}
+		}
+		// THE BOUND ITSELF where it is admitted, and the default where it is
+		// not: a value just above an open bound (a call's time limit of one
+		// second) breaks the rule holding it to another cap, which is no
+		// range's to report.
+		inside := r.Min
+		if r.MinExclusive {
+			inside = row.Default
+		}
+		doc := "name: Acme\n" + nest(map[string]string{row.Key: fmt.Sprint(inside)})
+		if _, err := config.ParseCompany([]byte(doc)); err != nil {
+			t.Errorf("%s = %v is inside its reported range %+v, and the validator refuses it: %v",
+				row.Key, inside, r, err)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no settable row was checked, so this case asserts nothing")
+	}
+}
+
+// problemAt is the problem at key, if the refusal carries one.
+func problemAt(problems []config.Problem, key string) (config.Problem, bool) {
+	for _, p := range problems {
+		if p.Path == key {
+			return p, true
+		}
+	}
+	return config.Problem{}, false
+}
+
+func sameRange(a, b config.Range) bool {
+	if a.Min != b.Min || a.MinExclusive != b.MinExclusive || (a.Max == nil) != (b.Max == nil) {
+		return false
+	}
+	return a.Max == nil || *a.Max == *b.Max
+}

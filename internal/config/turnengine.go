@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 // TurnEngine configures the two-stage turn: an executor that decides and acts
 // in one agentic run — the seat's harness's own, in a box — and a reviewer
 // that judges the record it left, in the engine's own tool loop.
@@ -161,37 +163,23 @@ func (t *TurnEngine) ExecutorFloor() int {
 func (t *TurnEngine) validate(path Path) error {
 	var p problems
 
-	positive := []struct {
+	// EACH CAP'S BOUND IS DECLARED ONCE, in settingRanges, which a screen
+	// reads too ([Range]).
+	for _, f := range []struct {
 		name  string
 		value int
 	}{
 		{"max_iterations", t.MaxIterations},
 		{"delegation_depth_limit", t.DelegationDepthLimit},
 		{"extension_round_step", t.ExtensionRoundStep},
+	} {
+		p.within(at(path, f.name), float64(f.value),
+			"a cap of zero fails every turn on its first guard check")
 	}
-	for _, f := range positive {
-		if f.value < 1 {
-			p.add(at(path, f.name), ErrOutOfRange,
-				"must be at least 1, got %d: a cap of zero fails every turn "+
-					"on its first guard check", f.value)
-		}
-	}
-
-	nonNegative := []struct {
-		name  string
-		value int
-	}{
-		// 0 is meaningful here: it turns the launch floor off for a launch
-		// whose context is not known.
-		{"executor_min_budget_tokens", t.ExecutorFloor()},
-		// 0 is meaningful here: it disables the dedicated onboarding pass.
-		{"onboarding_max_tool_rounds", t.OnboardingRounds()},
-	}
-	for _, f := range nonNegative {
-		if f.value < 0 {
-			p.add(at(path, f.name), ErrOutOfRange, "must not be negative, got %d", f.value)
-		}
-	}
+	// 0 is meaningful for both: it turns the launch floor off for a launch
+	// whose context is not known, and disables the dedicated onboarding pass.
+	p.within(at(path, "executor_min_budget_tokens"), float64(t.ExecutorFloor()), "")
+	p.within(at(path, "onboarding_max_tool_rounds"), float64(t.OnboardingRounds()), "")
 
 	p.wrap(t.Delegation.validate(at(path, "delegation")))
 
@@ -199,8 +187,14 @@ func (t *TurnEngine) validate(path Path) error {
 	// contradiction: the pass starts above the ceiling the judge may grant
 	// up to, so the extension path can only ever refuse. Equal is the
 	// documented way to disable extensions.
+	//
+	// IN A PERSON'S WORDS TOO: Settings › Limits changes a first turn's
+	// rounds, and a person raising them past the ceiling is told what the
+	// ceiling is, not a key.
 	if t.OnboardingMaxToolRoundsCeiling < t.OnboardingRounds() {
-		p.add(at(path, "onboarding_max_tool_rounds_ceiling"), ErrOutOfRange,
+		p.addSaying(at(path, "onboarding_max_tool_rounds_ceiling"), ErrOutOfRange,
+			fmt.Sprintf("Tool rounds on a first turn can be at most %d, the most an "+
+				"extension may grant a first turn.", t.OnboardingMaxToolRoundsCeiling),
 			"must be at least onboarding_max_tool_rounds (%d), got %d: set them "+
 				"equal to disable extensions", t.OnboardingRounds(),
 			t.OnboardingMaxToolRoundsCeiling)

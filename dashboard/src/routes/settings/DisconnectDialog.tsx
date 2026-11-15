@@ -25,7 +25,8 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, InlineCode } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { PlugGlyph, ExternalLinkGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";

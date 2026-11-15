@@ -1119,73 +1119,6 @@ func TestAReadCutByItsBudgetHandsOutAPrefixOfTheTranscript(t *testing.T) {
 	}
 }
 
-// tarBlock is one header block of a ustar archive naming name, of typeflag,
-// with size bytes of data after it.
-func tarBlock(name string, typeflag byte, size int) []byte {
-	var b [512]byte
-	copy(b[0:100], name)
-	copy(b[100:108], "0000644\x00")
-	copy(b[108:116], "0000000\x00")
-	copy(b[116:124], "0000000\x00")
-	copy(b[124:136], fmt.Sprintf("%011o\x00", size))
-	copy(b[136:148], fmt.Sprintf("%011o\x00", 0))
-	b[156] = typeflag
-	copy(b[257:263], "ustar\x00")
-	copy(b[263:265], "00")
-	// THE CHECKSUM IS OF THE BLOCK with its own field read as spaces.
-	copy(b[148:156], "        ")
-	sum := 0
-	for _, c := range b {
-		sum += int(c)
-	}
-	copy(b[148:156], fmt.Sprintf("%06o\x00 ", sum))
-	return b[:]
-}
-
-// paxRecord is one record of a PAX extended header: its whole length in
-// decimal, the length's own digits included, then `key=value` and a newline.
-func paxRecord(key, value string) string {
-	body := " " + key + "=" + value + "\n"
-	n := len(body) + 1
-	for len(strconv.Itoa(n))+len(body) != n {
-		n = len(strconv.Itoa(n)) + len(body)
-	}
-	return strconv.Itoa(n) + body
-}
-
-// padded is data and the zeros that fill out its last block.
-func padded(data []byte) []byte {
-	if rem := len(data) % 512; rem != 0 {
-		data = append(data, make([]byte, 512-rem)...)
-	}
-	return data
-}
-
-// sparseBomb is a gzipped tar whose one member is named as a session's
-// transcript and is a GNU sparse file (PAX format 1.0) declaring size bytes,
-// every one of them a hole: a few blocks of archive that hand their reader
-// size bytes the archive does not hold.
-//
-// BUILT BY HAND: no pack makes one — a box's tar archives the files a harness
-// wrote, and sparsely only when asked to — and archive/tar's writer drops the
-// records that make one. It is what a box's own agent could leave in place of
-// what its run packed.
-func sparseBomb(t *testing.T, size int64) []byte {
-	t.Helper()
-	name := "projects/" + executor.ClaudeProjectDir + "/s.jsonl"
-	pax := paxRecord("GNU.sparse.major", "1") + paxRecord("GNU.sparse.minor", "0") +
-		paxRecord("GNU.sparse.name", name) + paxRecord("GNU.sparse.realsize", strconv.FormatInt(size, 10))
-	var raw bytes.Buffer
-	raw.Write(tarBlock("PaxHeaders/s.jsonl", 'x', len(pax)))
-	raw.Write(padded([]byte(pax)))
-	// THE MEMBER'S DATA IS ITS SPARSE MAP, and the map names no data: one
-	// block saying it has no entries, so the whole of its size is a hole.
-	raw.Write(tarBlock("GNUSparseFile.0/s.jsonl", '0', 512))
-	raw.Write(padded([]byte("0\n")))
-	raw.Write(make([]byte, 1024))
-	return gzipped(t, raw.String())
-}
-
 // A MEMBER HANDS OUT NO MORE THAN THE READ BUDGET, WHATEVER IT DECLARES. A
 // sparse member named as the transcript declares an exbibyte its archive does
 // not hold; what it hands the reader is held to the read budget apart from what
@@ -1196,7 +1129,7 @@ func sparseBomb(t *testing.T, size int64) []byte {
 // member's holes for as long as it declares them: it never ends.
 func TestAMemberHandsOutNoMoreThanTheReadBudget(t *testing.T) {
 	t.Parallel()
-	got := readClaude(t, sparseBomb(t, 1<<62), within(func(b *executor.TranscriptBounds) {
+	got := readClaude(t, executor.SparseBomb(t, 1<<62), within(func(b *executor.TranscriptBounds) {
 		b.ReadBytes = 1 << 20
 	}))
 	if got.Cut != executor.CutRead || len(got.Entries) != 0 {

@@ -54,7 +54,12 @@ export function WatchControl({ page }: { page: Page }) {
       ? "A watch is kept under a seat, and this credential is bound to none, so nothing could tell it about a change."
       : undefined;
   const names = followers.map((h) => (h === me ? "you" : who(h).name));
-  const said = names.length > 0 ? `Watching: ${names.join(", ")}` : "Nobody watches this page";
+  // WHO THE COUNT COUNTS, said after the number in words only a screen reader
+  // hears: the button is NAMED BY THE NUMBER IT SHOWS ("2 watching: you,
+  // Ada Okonkwo. Show who watches this page"). An aria-label over the number
+  // was a name that did not contain what is on screen, so a person who says
+  // what they see ("click 2") reached nothing.
+  const counted = `watching${names.length > 0 ? `: ${names.join(", ")}` : ""}. Show who watches this page`;
 
   const press = async () => {
     const result = await save.run(
@@ -91,14 +96,8 @@ export function WatchControl({ page }: { page: Page }) {
         label="Who watches this page"
         align="end"
         trigger={(open, toggle) => (
-          <Button
-            size="small"
-            variant="ghost"
-            aria-expanded={open}
-            aria-label={`${said}. Show who watches this page`}
-            onClick={toggle}
-          >
-            {followers.length.toLocaleString()}
+          <Button size="small" variant="ghost" aria-expanded={open} onClick={toggle}>
+            {followers.length.toLocaleString()} <span className="sr-only">{counted}</span>
           </Button>
         )}
       >

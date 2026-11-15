@@ -26,7 +26,12 @@
  * with a write's answer is what its lifetime gates (`useLifetimeSignal`).
  */
 
-import { answerOf, outcomeOf, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
+import {
+  answerOf,
+  outcomeOf,
+  type ConfigCheckOutcome,
+  type ConfigWriteOutcome,
+} from "~/protocol/configWrite.ts";
 import { isAbort, pathSegment, rest, RestError, type RestResponse } from "~/protocol/rest.ts";
 import { QueryError, queryErrorCode } from "~/protocol/index.ts";
 import type { CompanyDocument } from "~/protocol/types.ts";
@@ -389,7 +394,7 @@ export async function writeDocument(
   doc: CompanyDocument,
   options: { etag: string; summary: string; dryRun: boolean },
   signal?: AbortSignal,
-): Promise<ConfigWriteOutcome> {
+): Promise<ConfigCheckOutcome> {
   return outcomeOf(
     await answerOf(
       rest.request("PUT", "/config", {

@@ -232,6 +232,9 @@ function Band({ band, detailed }: { band: QueueBand; detailed: boolean }) {
         </Card.Header>
         {band.places.length > 0 && (
           <DataGrid<QueuePlace>
+            // A GRID PER BRANCH, each its own key: unnamed, every branch's grid
+            // read one column set, so a column hidden in one hid it in all.
+            name={`queue-${band.repo}:${refName(band.target).name}`}
             rows={band.places}
             rowKey={(p) => p.row.entry_id}
             // QUEUE ORDER IS THE ENGINE'S, the order it lands them.

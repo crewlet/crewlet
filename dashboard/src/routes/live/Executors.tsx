@@ -95,6 +95,7 @@ import { useNow } from "~/lib/clock.ts";
 import { andList } from "~/lib/words.ts";
 import { mergeRuns } from "~/lib/runs.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
+import { firstBlockText, plainText } from "~/lib/markdownText.ts";
 import { droppedWords } from "~/lib/dropped.ts";
 import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
 import type {
@@ -167,8 +168,22 @@ function withDelegate(run: ExecutorRow): HeldDelegation | null {
  * executor's label: see the `usePageLabels` call below.
  */
 export function runTitle(run: ExecutorRow): string {
-  if (run.task_description) return run.task_description;
+  const task = taskTitle(run.task_description);
+  if (task) return task;
   return run.body_withheld ? `Task ${WITHHELD_WORDS.toLowerCase()}` : "No task was recorded";
+}
+
+/**
+ * An executor's task in ONE LINE: the first thing its text says, in plain
+ * words ([firstBlockText]). The task is the trigger that woke the seat, a line
+ * naming the work and then the work's body in markdown, and every one-line
+ * place that drew it whole (the Task column, In a box, a header, the
+ * breadcrumb) ran the line, its headings' hashes, its bold marks and its list
+ * together. The whole text is the turn's to show ("Woken by"), and the Task
+ * column's hover says it in plain words.
+ */
+export function taskTitle(task: string | undefined): string {
+  return task ? firstBlockText(task) : "";
 }
 
 /**
@@ -733,10 +748,13 @@ export function Executors() {
                 header: "Task",
                 floor: "10rem",
                 // AN EXECUTOR WITH NO TASK RECORDED (or one withheld) sorts last.
-                sortValue: (r) => r.task_description || null,
+                sortValue: (r) => taskTitle(r.task_description) || null,
+                // THE WHOLE TASK, in plain words, on hover: the cell says its
+                // first line.
+                title: (r) => (r.task_description ? plainText(r.task_description) : undefined),
                 cell: (r) =>
                   r.task_description ? (
-                    <TableTextCell>{r.task_description}</TableTextCell>
+                    <TableTextCell>{taskTitle(r.task_description)}</TableTextCell>
                   ) : (
                     <EmptyValue label={r.body_withheld ? WITHHELD_WORDS : "No task recorded"} />
                   ),
@@ -883,7 +901,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
   // recorded", which two executors would wear as two identical recents rows.
   // A collected executor's row is gone, and its task is on the
   // `executor_launched` its launch published, which the turn holds.
-  const task = run?.task_description || launchedTask(turn.data?.events);
+  const task = taskTitle(run?.task_description || launchedTask(turn.data?.events));
   usePageLabels(task ? { [turnId]: task } : {});
 
   // WHO IS READING IS PART OF WHAT THE PAGE WAITS FOR: drawn before the

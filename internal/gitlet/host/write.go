@@ -574,8 +574,9 @@ func (wr *writing) resync() *costlimit.Refusal {
 }
 
 // rules judges the write's one command on the synced row, before any git
-// runs: the repository's status, the stateless rules, the principal's grant
-// and the protections — and signs a commit the write will make.
+// runs: the repository's status, the stateless rules, the principal's grant,
+// the protections and the default branch no write deletes; and signs a
+// commit the write will make.
 func (wr *writing) rules() (writeVerdict, error) {
 	s, w := wr.s, wr.w
 	repo := wr.synced.Repo
@@ -613,6 +614,9 @@ func (wr *writing) rules() (writeVerdict, error) {
 	}
 	if reason, rule := gitlet.ProtectionRefusal(judged, rules, w.Principal.Kind); reason != "" {
 		return writeVerdict{reason: reason, detail: gitlet.ProtectionDetail(rule, reason)}, nil
+	}
+	if reason, words := gitlet.DefaultBranchRefusal(judged, repo.Name, repo.DefaultBranch); reason != "" {
+		return writeVerdict{reason: reason, detail: words}, nil
 	}
 	if w.Kind.Commits() && wr.sig == (Signature{}) {
 		sig, err := s.o.Signer.Sign(w.Principal)

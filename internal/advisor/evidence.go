@@ -214,7 +214,7 @@ func EvidenceClasses() []Class {
 	for _, d := range detectors {
 		out = append(out, d.class)
 	}
-	return append(append(out, pausedClasses()...), ClassScheduleUnproductive)
+	return append(append(out, PausedClasses()...), ClassScheduleUnproductive)
 }
 
 // WorkClasses is every class a detector raises from the tracker's patterns.
@@ -443,9 +443,11 @@ func noVerifiedBackup(ev Evidence, _ func(string) SeatKind) []Finding {
 		Why: "No verified backup within the backup policy's age has been recorded, so a lost " +
 			"disk would lose the company's records, and the engine keeps every log until one is.",
 		Evidence: []Fact{{Key: "logs", Value: int64(ev.Backup.Logs)}},
-		Fix: Fix{Kind: FixExternalStep, Options: []Option{},
-			Sentence: "Take a backup now with `crewlet backup` or from the dashboard, then " +
-				"schedule it to a place off this server."},
+		// TAKEN ON THE DASHBOARD, whose Backups & retention takes one with a
+		// press: an external step's sentence sent a person to `crewlet backup`
+		// for it, beside the page that does it.
+		Fix: Fix{Kind: FixOpenPage, Page: PageBackups, Options: []Option{},
+			Sentence: "Take a backup now, then schedule backups that are copied off this server."},
 	}}
 }
 

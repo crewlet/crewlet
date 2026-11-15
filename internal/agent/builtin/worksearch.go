@@ -69,7 +69,9 @@ func (t *searchWorkItems) Parameters() map[string]any {
 			"text": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("What the work is about, in plain words "+
-					"— at most %d bytes. Not a query language and not a key.",
+					"— at most %d bytes. Not a query language. Exactly one task "+
+					"key answers that task first, but "+GetWorkItemTool+" reads a "+
+					"key you already hold whole.",
 					knowledge.MaxQueryBytes),
 			},
 			"limit": map[string]any{

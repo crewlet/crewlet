@@ -67,9 +67,15 @@
   grid-template-columns: calc(var(--diff-digits) * 1ch) 2ch minmax(0, 1fr);
 }
 /* THE PATH IS ITS CONTENT UP TO 40% OF THE LINE, so a short path leaves the
-   value the rest, and a long one wraps rather than running under it. */
+   value the rest, and a long one wraps rather than running under it. The
+   value is placed in its own track rather than after the path, because a
+   line that goes on the setting above it (an object's second line) draws no
+   path and its value would otherwise slide into the path's track. */
 .diff-view--keyed .diff-view__line {
   grid-template-columns: 2ch min(calc(var(--diff-path) * 1ch), 40%) minmax(0, 1fr);
+}
+.diff-view--keyed .diff-view__text {
+  grid-column: 3;
 }
 /* THE TWO STEPS. Raised is the step a card shows (the palette holds it three
    ΔE off the card) and sunk is the sheet beneath the card (held 1.5 ΔE off
@@ -177,7 +183,9 @@
 /* ON A NARROW DIFF A SETTING'S VALUE TAKES THE ROW UNDER ITS PATH: 40% of a
    340px diff is a path broken over three lines beside a value squeezed into
    the rest. The diff's own width decides, as it decides split against
-   unified, because a column beside it narrows it as surely as a phone. */
+   unified, because a column beside it narrows it as surely as a phone. A
+   line that goes on the setting above draws no path, so its value takes the
+   line's one row, under the value above it. */
 @container diff-view (width < 640px) {
   .diff-view--keyed .diff-view__line {
     grid-template-columns: 2ch minmax(0, 1fr);

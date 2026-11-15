@@ -10,7 +10,8 @@
  */
 
 import { useId, type ReactNode } from "react";
-import { Button, Callout, ContrastHelp, Modal, Tag, Text, VisuallyHidden } from "@crewlethq/ui";
+import { Button, Callout, ContrastHelp, Tag, Text, VisuallyHidden } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import type { BrandDocument } from "~/protocol/index.ts";
 import {

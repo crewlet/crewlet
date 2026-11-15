@@ -19,6 +19,8 @@ import {
   StackedBar,
   StackedRing,
   Text,
+  Tooltip,
+  VisuallyHidden,
 } from "@crewlethq/ui";
 import type {
   AtlasActivityAnswer,
@@ -61,9 +63,12 @@ function AttentionLinks({
             health: one,
             ...(unconfirmed ? { unconfirmed: "true" } : {}),
           })}
-          aria-label={`${entries(health[one] ?? 0)}: ${HEALTH[one].label}. Show them in the catalogue`}
         >
+          {/* NAMED BY WHAT IT SHOWS FIRST, so a reader speaking to the page
+              reaches it by the words on it ("Alerting 4"), and the rest of
+              its name says where it goes. */}
           {HEALTH[one].label} {(health[one] ?? 0).toLocaleString()}
+          <VisuallyHidden>: show them in the catalogue</VisuallyHidden>
         </Link>
       ))}
     </span>
@@ -157,32 +162,41 @@ export function Band({
             <div className="atlas-band__attention">
               {attention.slice(0, ATTENTION_SHOWN).map((row) => (
                 // THE CARD IS THE ACTION: pressing it selects the entry on the map.
-                <Card key={row.id} padding="sm" interactive asChild>
-                  <button
-                    type="button"
-                    className="atlas-band__entry"
-                    title={`Show ${row.name} on the map`}
-                    onClick={() => onShow(row.id)}
-                  >
-                    <EntryDisc entry={row} size="md" />
-                    <span className="atlas-band__entry-words">
-                      <Text variant="body" truncate className="atlas-band__name">
-                        {row.name}
-                      </Text>
-                      {/* THE REASON IS WHAT THE CARD IS FOR: two lines of it (the
-                          product's one clamp, `.clamp` in base.css), and the
-                          whole sentence on hover where two do not hold it. */}
-                      <Text
-                        variant="caption"
-                        tone="secondary"
-                        className="clamp"
-                        title={row.reason ?? undefined}
-                      >
-                        {row.reason ?? HEALTH[row.health].label}
-                      </Text>
+                // ITS WHOLE REASON IS REACHABLE, cut to two lines on the card:
+                // the button is named by its own words, the whole reason among
+                // them, and the kit's tooltip shows it on hover and on keyboard
+                // focus. A native title on the clamped words, under the
+                // button's own, reached neither a keyboard nor a finger.
+                <Tooltip
+                  key={row.id}
+                  content={
+                    <span>
+                      {row.reason ?? HEALTH[row.health].label}. Show {row.name} on the map.
                     </span>
-                  </button>
-                </Card>
+                  }
+                >
+                  <Card padding="sm" interactive asChild>
+                    <button
+                      type="button"
+                      className="atlas-band__entry"
+                      onClick={() => onShow(row.id)}
+                    >
+                      <EntryDisc entry={row} size="md" />
+                      <span className="atlas-band__entry-words">
+                        <Text variant="body" truncate className="atlas-band__name">
+                          {row.name}
+                        </Text>
+                        {/* THE REASON IS WHAT THE CARD IS FOR: two lines of it (the
+                          product's one clamp, `.clamp` in base.css), the whole
+                          sentence in the tooltip and in the button's name. */}
+                        <Text variant="caption" tone="secondary" className="clamp">
+                          {row.reason ?? HEALTH[row.health].label}
+                        </Text>
+                        <VisuallyHidden>: show it on the map</VisuallyHidden>
+                      </span>
+                    </button>
+                  </Card>
+                </Tooltip>
               ))}
             </div>
           )}

@@ -265,3 +265,23 @@ test("a token in rendered words keeps its punctuation on its line, at every widt
   }
   expect(stranded).toEqual([]);
 });
+
+// A RAIL SECTION'S ADD ACTION SITS AT ITS START, as "New artifact" does: the
+// section is a column, which stretched "Link an atlas entry" to its whole
+// width with the words centred under a left-aligned neighbour.
+test("the rail's Link an atlas entry sits at its section's start, at its own width", async () => {
+  await page.viewport(1440, 900);
+  const at = await mount(PANES[0]!.render(420), 420, PANES[0]!.ready);
+  const button = await eventually(() => {
+    const found = [...at.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Link an atlas entry"),
+    );
+    if (!found) throw new Error("the rail has not drawn the atlas section");
+    return found;
+  });
+  const section = button.closest(".task-rail-section") as HTMLElement;
+  const b = button.getBoundingClientRect();
+  const s = section.getBoundingClientRect();
+  expect(b.width).toBeLessThan(s.width - 1);
+  expect(Math.abs(b.left - s.left)).toBeLessThanOrEqual(1);
+});

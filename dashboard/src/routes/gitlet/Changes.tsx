@@ -572,5 +572,7 @@ function emptyHint(f: Filters): string {
   ) {
     return "Widen the filters to see more.";
   }
-  return "A change is opened by a seat's code_open_change, or by a push with the change option.";
+  // HOW A PERSON OPENS ONE, where they read this: the tool a seat calls is no
+  // way a person can take.
+  return "Compare two branches of a repository, then press Open change.";
 }

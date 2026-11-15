@@ -10,7 +10,15 @@
 import { describe, expect, test } from "vitest";
 
 import { CHANGE_FIELDS } from "~/contract/attribution.ts";
-import { assisted, attribution, authorLabel, authorWords, throughOf } from "./attribution.ts";
+import {
+  assisted,
+  attribution,
+  authorLabel,
+  authorWords,
+  credentialOf,
+  credentialWords,
+  throughOf,
+} from "./attribution.ts";
 import { changeAuthor } from "~/routes/doclet/parts.tsx";
 import type { WorkChange } from "~/protocol/index.ts";
 
@@ -252,7 +260,7 @@ describe("a write through the assistant", () => {
     expect(assisted(session)).toBe(false);
     expect(assisted(undefined)).toBe(false);
     expect(authorWords("Morgan", session)).toBe("Morgan");
-    expect(authorLabel("morgan.davis", session)).toBe(`morgan.davis (through ${session})`);
+    expect(authorLabel("morgan.davis", session)).toBe("morgan.davis (through a signed-in session)");
     expect(throughOf("token:ops", "token:ops")).toBe("");
     expect(
       changeAuthor(
@@ -263,5 +271,55 @@ describe("a write through the assistant", () => {
           }) as never,
       ),
     ).toBe("Morgan");
+  });
+});
+
+// A CREDENTIAL IS SAID BY ITS KIND, never its id: "Through pat:01a1dc39-…"
+// and "By token:founder" named a credential by a string nobody calls it. The
+// id is the screen's to give behind a copy control. Mutation: return the id
+// as written and every line below reads a `pat:` or `session:` again.
+describe("a credential, as a reader is told it", () => {
+  test("is its kind, or a Tier A token's own name", () => {
+    expect(credentialWords("pat:01a1dc39-0000-4000-8000-000000000000")).toBe(
+      "a personal access token",
+    );
+    expect(credentialWords("session:01a1dc41-0000-4000-8000-000000000000")).toBe(
+      "a signed-in session",
+    );
+    expect(credentialWords("token:founder")).toBe("the API token founder");
+    expect(credentialWords("assist:0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a")).toBe("Ask Crewlet");
+  });
+
+  test("keeps the id apart, for a copy control, only where it has one", () => {
+    expect(credentialOf("pat:01a1dc39")).toEqual({ kind: "personal access token", id: "01a1dc39" });
+    expect(credentialOf("session:01a1dc41")).toEqual({ kind: "signed-in session", id: "01a1dc41" });
+    expect(credentialOf("token:founder")).toBeNull();
+    expect(credentialOf("assist:0b6f5a4e")).toBeNull();
+  });
+
+  test("and an author's line names it so", () => {
+    expect(authorLabel("jane.doe", "pat:01a1dc39-0000-4000-8000-000000000000")).toBe(
+      "jane.doe (through a personal access token)",
+    );
+    for (const id of ["pat:01a1dc39", "session:01a1dc41"]) {
+      expect(authorLabel("Jane Founder", id)).not.toContain(id);
+    }
+  });
+
+  // THE LABEL IS WHAT THE CREDENTIAL IS COMPARED WITH, the name what is said.
+  // A Tier A token writing as itself is recorded under its own login, and
+  // told as "founder (API token)" it is still not "through" itself.
+  // Mutation: compare the credential with the name and the first line reads
+  // "founder (API token) (through the API token founder)".
+  test("is compared with the recorded label, whatever name the reader is told", () => {
+    expect(authorLabel("token:founder", "token:founder", "founder (API token)")).toBe(
+      "founder (API token)",
+    );
+    expect(authorLabel("jane-founder", "pat:01a1dc39", "Jane Founder")).toBe(
+      "Jane Founder (through a personal access token)",
+    );
+    expect(authorLabel("jane-founder", "token:founder", "Jane Founder")).toBe(
+      "Jane Founder (through the API token founder)",
+    );
   });
 });

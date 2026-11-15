@@ -6,6 +6,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
@@ -14,13 +15,13 @@ import (
 const WalkAhead = walkAhead
 
 // ReadAhead, PullHeartbeat, QuietWait and FirstPullRemakes are [readAhead],
-// [pullHeartbeat], [quietWait] and [firstPullRemakes], for the cases that hold
-// a read's waits to the floor and to the pulls it can lose.
+// [pullHeartbeat], [quietWait] and [jsapi.FirstPullRemakes], for the cases
+// that hold a read's waits to the floor and to the pulls it can lose.
 const (
 	ReadAhead        = readAhead
 	PullHeartbeat    = pullHeartbeat
 	QuietWait        = quietWait
-	FirstPullRemakes = firstPullRemakes
+	FirstPullRemakes = jsapi.FirstPullRemakes
 )
 
 // SwapStream puts what wrap makes of b's stream between b and the broker, so

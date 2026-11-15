@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -83,6 +84,10 @@ func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
 			v.Name = strings.Repeat("x", worklet.MaxViewName+1)
 		}, "shorten the name"},
 		{"a fourth shape", func(v *worklet.View) { v.Type = "gantt" }, "not a view shape"},
+		{"a deletion a save carries", func(v *worklet.View) {
+			at := wednesday
+			v.DeletedAt, v.DeletedBy = &at, "ana"
+		}, "delete it with delete_work_view"},
 		{"a container kind that is not one", func(v *worklet.View) {
 			v.Container = worklet.Container{Kind: "team", ID: "eng"}
 		}, "not a container a view can belong to"},
@@ -1131,5 +1136,59 @@ func TestAViewsCreateMadeAgainIsAnsweredByItsView(t *testing.T) {
 	if named != "Renamed" {
 		t.Errorf("the create made again left the view named %q, want its "+
 			"rename to stand", named)
+	}
+}
+
+// A VIEW A PERSON SAVES IS REFUSED IN A PERSON'S WORDS (ADR-0060): what the
+// dashboard's save can send wrong is said without the view's id, a parameter
+// key or a limit in bytes, so the act route answers it rather than its code's
+// bare "check what was entered". Each case's model sentence is unchanged and
+// held by [TestAViewThatCouldNotBeRunIsRefusedAtTheSave].
+//
+// Mutation: drop a phrasing from checkView and its case answers no person's
+// words.
+func TestAViewSaveRefusalIsWordedForAPerson(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	cases := []struct {
+		name   string
+		mutate func(*worklet.View)
+		want   string
+	}{
+		{"no name", func(v *worklet.View) { v.Name = "   " }, "needs a name"},
+		{"a name too long for its tab", func(v *worklet.View) {
+			v.Name = strings.Repeat("x", worklet.MaxViewName+1)
+		}, "name is too long"},
+		{"a shape there is not", func(v *worklet.View) { v.Type = "gantt" }, `"board"`},
+		{"a personal default", func(v *worklet.View) { v.Owner, v.Default = "ana", true }, "default tab"},
+		{"too many filters", func(v *worklet.View) {
+			v.Params = map[string]string{}
+			for i := range worklet.MaxViewParamKeys + 1 {
+				v.Params["f.field"+string(rune('a'+i%26))+string(rune('a'+i/26))] = "x"
+			}
+		}, "more filters than a saved view holds"},
+		{"filters too long", func(v *worklet.View) {
+			v.Params = map[string]string{"q": strings.Repeat("x", worklet.MaxViewParamsBytes+1)}
+		}, "more filters than a saved view holds"},
+		{"a filter nothing reads", func(v *worklet.View) {
+			v.Params = map[string]string{"status": "shipped"}
+		}, "filters could not be read"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := save(t, r.writer, "op-person-"+tc.name, aView("v-person", tc.mutate))
+			if err == nil {
+				t.Fatal("the view was saved")
+			}
+			said := caveat.RefusalOf(err).Person()
+			if !strings.Contains(said, tc.want) {
+				t.Fatalf("the person is told %q, want it to say %q", said, tc.want)
+			}
+			for _, raw := range []string{"v-person", "`", "bytes", "status"} {
+				if strings.Contains(said, raw) {
+					t.Errorf("the person's words %q carry %q", said, raw)
+				}
+			}
+		})
 	}
 }

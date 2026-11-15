@@ -192,6 +192,16 @@ type Blocker struct {
 	// cannot draw it.
 	ID string `json:"id"`
 
+	// Key is the blocking task's key, so a page that holds no row for the
+	// blocker can still name it: a project's list named a blocker in another
+	// project by nothing ("Blocked") while All tasks, which held the row,
+	// said "Blocked · PROD-9". Empty for an edge to something that is not a
+	// task (a pull request's address).
+	Key string `json:"key,omitempty"`
+	// KeyCollision is [TaskRow.KeyCollision] for the blocker: its key is one
+	// another task claimed first, so a link to it goes by [Blocker.ID].
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	// Open is whether the blocker is still holding this task up. FALSE is
 	// a settled fact rather than a missing one: the edge is known and the
 	// blocker has finished.
@@ -2240,10 +2250,12 @@ func taskRowsStatement(set taskSet, terms []sortTerm) (string, []any) {
 // named for the plan test.
 func blockersStatement(n int) string {
 	return `SELECT r.task_id, r.other_id, r.one_sided, r.one_sided_final,
-	                 COALESCE(d.blocker_open, 0), COALESCE(d.dead_head, '') <> ''
+	                 COALESCE(d.blocker_open, 0), COALESCE(d.dead_head, '') <> '',
+	                 COALESCE(b.key, ''), COALESCE(b.key_collision, 0)
 	          FROM tracker_relations r
 	          LEFT JOIN tracker_task_deps d
 	                 ON d.task_id = r.task_id AND d.blocker_id = r.other_id
+	          LEFT JOIN tracker_tasks b ON b.id = r.other_id
 	          WHERE r.kind = ? AND r.task_id IN (` + placeholders(n) + `)
 	          ORDER BY r.task_id, r.other_id`
 }
@@ -2278,9 +2290,9 @@ func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
 	for found.Next() {
 		var task string
 		var edge Blocker
-		var oneSided, oneSidedFinal, open, dead int
+		var oneSided, oneSidedFinal, open, dead, collision int
 		if err := found.Scan(&task, &edge.ID, &oneSided, &oneSidedFinal,
-			&open, &dead); err != nil {
+			&open, &dead, &edge.Key, &collision); err != nil {
 			return fmt.Errorf("worklet: read a dependency edge: %w", err)
 		}
 		i, ok := at[task]
@@ -2291,6 +2303,7 @@ func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
 		edge.OneSided = oneSided == 1
 		edge.OneSidedFinal = oneSidedFinal == 1
 		edge.Dead = open == 1 && dead == 1
+		edge.KeyCollision = collision == 1
 		rows[i].WaitingOn = append(rows[i].WaitingOn, edge)
 	}
 	if err := found.Err(); err != nil {

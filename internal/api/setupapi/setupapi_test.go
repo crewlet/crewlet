@@ -757,15 +757,23 @@ func TestASurfaceHeldByACrewletServiceSaysWhichOne(t *testing.T) {
 func TestTheExternalURLIsAnsweredOnce(t *testing.T) {
 	t.Parallel()
 	const public = "https://hooks.example.com"
+	const loopback = "http://127.0.0.1:8080"
 	for _, tc := range []struct {
 		name      string
 		s         func(*testing.T) *surface
 		value, at string
+		loopback  bool
 	}{
-		{"one listener", newSurface, fixtureWebhookBase, oneListener},
+		{"one listener", newSurface, fixtureWebhookBase, oneListener, false},
 		{"a public listener", func(t *testing.T) *surface {
 			return buildSurface(t, nil, public, "api.public.external_url")
-		}, public, "api.public.external_url"},
+		}, public, "api.public.external_url", false},
+		// AN ADDRESS ONLY THIS MACHINE REACHES SAYS SO, by the config's own
+		// rule: no vendor can deliver to it, and drawn bare it read as the
+		// address every app was set up on.
+		{"a loopback address", func(t *testing.T) *surface {
+			return buildSurface(t, nil, loopback, oneListener)
+		}, loopback, oneListener, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -778,6 +786,9 @@ func TestTheExternalURLIsAnsweredOnce(t *testing.T) {
 			}
 			if base["value"] != tc.value || base["config_path"] != tc.at {
 				t.Errorf("external_url = %v, want %s read from %s", base, tc.value, tc.at)
+			}
+			if base["loopback"] != tc.loopback {
+				t.Errorf("external_url's loopback = %v, want %v", base["loopback"], tc.loopback)
 			}
 		})
 	}

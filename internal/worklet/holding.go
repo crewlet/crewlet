@@ -44,9 +44,12 @@ type HoldingRow struct {
 	// Holders is who holds the waiting work, the person left out, sorted,
 	// at most [MaxHoldingHolders].
 	Holders []string `json:"holders"`
-	// HeldSince is when it last changed hands, whichever change moved its
-	// assignee ([readHandedOver]).
-	HeldSince time.Time `json:"held_since"`
+	// HeldSince is when the person came to hold it: when it last changed
+	// hands, whichever change moved its assignee ([readHandedOver]), or, for
+	// an item held by an open question, when that question was put. ABSENT
+	// where neither is recorded, never the zero instant: a reader that took
+	// year 1 for a time drew "held for 739,933 days".
+	HeldSince time.Time `json:"held_since,omitzero"`
 
 	// Asked is the open question to the person this row is held by, its
 	// comment id, where the person holds the item by being asked rather than
@@ -127,7 +130,7 @@ func heldByAsksWhere(groups int) string {
 // first of an item's is the one its row names.
 func heldByAsksStatement() (string, []any) {
 	open := openGroups()
-	return `SELECT c.task_id, c.id FROM ` + heldByAsksFrom + `
+	return `SELECT c.task_id, c.id, c.created_at FROM ` + heldByAsksFrom + `
 		WHERE ` + heldByAsksWhere(len(open)) + `
 		ORDER BY c.created_at DESC LIMIT ?`, open
 }
@@ -172,7 +175,12 @@ func readHolding(ctx context.Context, tx *sql.Tx, handle string, agents map[stri
 			return nil, ClaimTotal{}, HoldingAgents{}, err
 		}
 		row.Asked = held.Asked
-		if row.HeldSince, _, err = readHandedOver(ctx, tx, held.ID); err != nil {
+		// HELD BY A QUESTION SINCE IT WAS PUT: the person was asked, not
+		// handed the item, so no change of its assignee says when they came
+		// to hold it, and an item nobody was ever assigned has none at all.
+		if held.Asked != "" {
+			row.HeldSince = held.HeldSince
+		} else if row.HeldSince, _, err = readHandedOver(ctx, tx, held.ID); err != nil {
 			return nil, ClaimTotal{}, HoldingAgents{}, err
 		}
 		items := row.countAgents(waiting, agents)
@@ -253,10 +261,12 @@ func readHeldByAsks(ctx context.Context, tx *sql.Tx, handle string,
 	}
 	var ids []any
 	askOf := map[string]string{}
+	askedAt := map[string]time.Time{}
 	read := 0
 	for rows.Next() {
 		var task, ask string
-		if serr := rows.Scan(&task, &ask); serr != nil {
+		var at int64
+		if serr := rows.Scan(&task, &ask, &at); serr != nil {
 			_ = rows.Close()
 			return nil, false, fmt.Errorf("worklet: scan what waits on %s's answers: %w", handle, serr)
 		}
@@ -266,6 +276,7 @@ func readHeldByAsks(ctx context.Context, tx *sql.Tx, handle string,
 		if _, listed := askOf[task]; !listed {
 			ids = append(ids, task)
 			askOf[task] = ask
+			askedAt[task] = store.DecodeTime(at)
 		}
 	}
 	if cerr := closeRows(rows); cerr != nil {
@@ -287,7 +298,7 @@ func readHeldByAsks(ctx context.Context, tx *sql.Tx, handle string,
 	out := make([]HoldingRow, 0, len(ids))
 	for _, id := range ids {
 		if t, held := byID[id.(string)]; held {
-			out = append(out, HoldingRow{TaskRow: t, Asked: askOf[t.ID]})
+			out = append(out, HoldingRow{TaskRow: t, Asked: askOf[t.ID], HeldSince: askedAt[t.ID]})
 		}
 	}
 	return out, more, nil

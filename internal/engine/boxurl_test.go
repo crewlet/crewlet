@@ -115,8 +115,9 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 			if receiver == nil {
 				t.Fatalf("%s=%s built no receiver", sandbox.OtelReceiverURLVar, tc.value)
 			}
-			if got := receiver.EndpointFor("4bf92f3577b34da6a3ce929d0e0e4736", false, time.Minute); !strings.HasPrefix(got, want+"/otlp/") {
-				t.Errorf("a run's OTLP endpoint is %q, want it under %q", got, want+"/otlp/")
+			if got, err := receiver.EndpointFor("4bf92f3577b34da6a3ce929d0e0e4736", false, time.Minute); err != nil ||
+				!strings.HasPrefix(got, want+"/otlp/") {
+				t.Errorf("a run's OTLP endpoint is %q (%v), want it under %q", got, err, want+"/otlp/")
 			}
 
 			bridge := e.Bridge()

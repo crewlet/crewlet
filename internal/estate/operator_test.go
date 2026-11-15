@@ -167,6 +167,14 @@ func (w deskWriter) WriteView(_ context.Context, opID string, _ worklet.View,
 	return w.d.note("write_view", opID, w.a), nil
 }
 
+func (w deskWriter) DeleteView(_ context.Context, opID, _ string,
+	prior worklet.ViewPrior) (worklet.WriteResult, error) {
+	if !prior.Held || prior.Owner != "founder" {
+		return worklet.WriteResult{}, fmt.Errorf("the prior did not cross: %+v", prior)
+	}
+	return w.d.note("delete_view", opID, w.a), nil
+}
+
 func (w deskWriter) WriteTypes(_ context.Context, opID string, _ []worklet.TaskType) (worklet.WriteResult, error) {
 	return w.d.note("write_types", opID, w.a), nil
 }

@@ -76,6 +76,12 @@ import { linkPageCommand } from "./page/LinkPicker.tsx";
 import { DocletBar, PageGlyph, pagePath, placesIn, useSpaces } from "./parts.tsx";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 
+/**
+ * What holds Save as draft and Publish until a space is chosen: the buttons'
+ * reason, and the line beside the space field that says it on the page.
+ */
+const SPACE_FIRST = "Choose a space first. Save as draft and Publish file the page there.";
+
 /** The composer's own entry in the slash menu: a new page links to any page. */
 const COMMANDS = [linkPageCommand()];
 
@@ -174,7 +180,7 @@ export function Composer() {
   // WHAT HOLDS SAVE AND PUBLISH, in the order a writer meets it: one answer
   // for both buttons and the shortcut.
   const blocked: string | undefined = !space
-    ? "Choose the space to file it in."
+    ? SPACE_FIRST
     : !name
       ? "Give the page a title."
       : titleBudget.over
@@ -348,6 +354,7 @@ export function Composer() {
               width="auto"
               ariaLabel="The space to file it in"
               placeholder="Choose a space"
+              aria-describedby={space ? undefined : "knowledge-composer-space-first"}
               value={space || undefined}
               options={spaceOptions}
               onChange={(value) => {
@@ -367,6 +374,16 @@ export function Composer() {
               options={parentOptions}
               onChange={(value) => setParent(String(value))}
             />
+            {/* THE ONE HOLD NOTHING ELSE ON THE PAGE SHOWS, said beside the
+                field that clears it: an empty title and an empty page show
+                themselves, and a title already taken is said under the title,
+                but Save as draft and Publish waiting for a space said so only
+                in the held buttons' tooltip. */}
+            {!space && (
+              <span className="knowledge-note" id="knowledge-composer-space-first">
+                {SPACE_FIRST}
+              </span>
+            )}
           </div>
 
           <div className="knowledge-composer-row">

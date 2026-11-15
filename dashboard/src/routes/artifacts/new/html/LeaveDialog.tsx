@@ -15,7 +15,8 @@
  */
 
 import { useId } from "react";
-import { Button, ConfirmModal, Modal } from "@crewlethq/ui";
+import { Button, ConfirmModal } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { ARTIFACT_TRASH_RETENTION_DAYS } from "~/contract/artifacts.ts";
 
 /** Leaving with something made: a draft kept or discarded, or unsaved text lost. */

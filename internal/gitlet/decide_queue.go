@@ -385,7 +385,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 			continue
 		}
 		merger := entry.enqueuer()
-		if r, _ := sourceDeletion(rules[l.RepoID], row.source, row.head, merger,
+		if r, _ := sourceDeletion(rules[l.RepoID], repo, row.source, row.head, merger,
 			GrantOf(merger, ref, seats.Roster)); r == "" {
 			stamped.Entries[i].DeleteSource = true
 		}

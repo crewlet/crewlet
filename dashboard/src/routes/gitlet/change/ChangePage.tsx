@@ -24,19 +24,30 @@
  * suggestion on the change's branch against the head on screen; a comment, a
  * reply and Resolve go through `code_comment_on_change`; Merge (or Add to
  * queue), Override and Re-run checks are the merge controls in the
- * conversation's merge box (`Merge.tsx`), Merge sending the head on screen. Each goes through
- * `useAct` and a `WriteButton`: drawn for every reader, disabled with the
- * reason where it cannot act, and NEVER OPTIMISTIC — nothing on screen moves
- * until the engine answers, and the answer's position is the floor the page
- * is read at next.
+ * conversation's merge box (`Merge.tsx`), Merge sending the head on screen.
+ * Each goes through `useAct` and a `WriteButton`: drawn for every reader the
+ * change's state leaves it to, disabled with the reason where this reader
+ * cannot act, and NEVER OPTIMISTIC: nothing on screen moves until the engine
+ * answers, and the answer's position is the floor the page is read at next.
+ *
+ * # What the change's state rules out is not drawn
+ *
+ * A merged change takes no review, no ask and no close, from anybody, ever;
+ * a closed one takes only its reopen. Drawn disabled, each read as something
+ * this reader lacks rather than something the change is done with, so the
+ * bar of a finished change offers only what still applies: its Reopen, and a
+ * merged change's Revert (`ChangeWrites.tsx`). What THIS reader cannot do on
+ * a live change stays drawn, held with its sentence: an author's own verdicts
+ * above all, since an author's review counts for nothing and the engine takes
+ * none (`own_change`), where Request review is the author's step and leads the
+ * bar instead.
  */
 
-import { useId, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   EmptyState,
-  Input,
-  Modal,
+  FormField,
   Skeleton,
   Stack,
   Tabs,
@@ -51,6 +62,7 @@ import {
   RotateCcwClockGlyph,
   ScrollTextGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Modal } from "~/components/Modal.tsx";
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
@@ -59,7 +71,7 @@ import { usePageMenu } from "~/app/Shell.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
-import { changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
+import { authoredBy, changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { draftedRevisions, findingOf, forgetDrafts, readDrafts } from "~/lib/reviewDrafts.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
@@ -70,6 +82,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeVerdict } from "~/protocol/index.ts";
 import { ChangeStateTag, ReadinessMeter } from "../Changes.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
+import { ReviewerPicker } from "../ReviewerPicker.tsx";
 import { changesHref, repoHref } from "../paths.ts";
 import { Byline } from "../ui.tsx";
 import { Checks } from "./Checks.tsx";
@@ -316,15 +329,25 @@ function ChangeHeader({ change }: { change: CodeChangeDetail }) {
 }
 
 /**
- * The page bar's writes: a draft's Ready for review, the three verdicts, an
- * ask for review, and the change's close or reopen. A change no longer live
- * is reviewed by nobody and asked of nobody; each button stays drawn, held
- * with that reason.
+ * Why the reader's verdict on a change they wrote is held: an author's review
+ * counts for nothing, so the engine takes none (`own_change`), and the step
+ * that is theirs is asking somebody else.
+ */
+export const OWN_CHANGE_HELD =
+  "You wrote this change, so your review would not count. Ask somebody else to review it.";
+
+/**
+ * The page bar's writes, as the change's state leaves them: on a LIVE change a
+ * draft's Ready for review, the three verdicts, an ask for review and Close;
+ * on a closed one its Reopen alone; on a merged one none, its Revert standing
+ * where the merge controls were. A verdict the reader cannot give is drawn
+ * held with its reason: the change's own author's, above all.
  *
  * ONE PRIMARY ACTION STAYS IN VIEW ON A PHONE: Ready for review on a draft,
- * Approve otherwise. Every other write is marked `page-action-folds`, which
- * the bar hides at a phone's width, and published to its More menu
- * (`usePageMenu`), held in the same words as the inline control.
+ * Request review for the change's author, Approve otherwise. Every other write
+ * is marked `page-action-folds`, which the bar hides at a phone's width, and
+ * published to its More menu (`usePageMenu`), held in the same words as the
+ * inline control.
  */
 function ChangeActions({ change }: { change: CodeChangeDetail }) {
   const [verdict, setVerdict] = useState<CodeVerdict | null>(null);
@@ -334,16 +357,12 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
   const ask = useAct("code_request_review");
   const close = useAct("code_close_change");
   const update = useAct("code_update_change");
+  const viewer = useViewer();
   const live = changeLive(change.state);
   const draft = change.state === "draft";
-  const ended = live ? undefined : `This change is ${change.state}: it takes no more reviews.`;
-  const askHeld = live
-    ? undefined
-    : `This change is ${change.state}: nobody is asked to review it.`;
   const reopenable = change.state === "closed";
-  const closeHeld =
-    live || reopenable ? undefined : "A merged change is final: it is neither closed nor reopened.";
-  const closeWord = reopenable ? "Reopen" : "Close";
+  const own = authoredBy(change, viewer);
+  const verdictHeld = own ? OWN_CHANGE_HELD : undefined;
   const markReady = () =>
     void update.run(
       { change: change.ref, expected_version: change.version, draft: false },
@@ -355,42 +374,98 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
         ? {}
         : { disabled: true, description: blocked }
       : menuHold(access);
-  usePageMenu([
-    ...(draft
+  // WHICH WRITE LEADS THE BAR, the one kept in view on a phone.
+  const lead: "ready" | "ask" | "approve" = draft ? "ready" : own ? "ask" : "approve";
+  // THE LEAD STAYS IN VIEW on a phone; every other write folds into the menu.
+  const FOLDS = "page-action-folds";
+  const askFolds = lead === "ask" ? undefined : FOLDS;
+  const approveFolds = lead === "approve" ? undefined : FOLDS;
+  usePageMenu(
+    live
       ? [
+          ...(lead !== "approve"
+            ? [
+                {
+                  key: "approve",
+                  label: "Approve",
+                  onSelect: () => setVerdict("approve"),
+                  ...held(review.access, verdictHeld),
+                },
+              ]
+            : []),
           {
-            key: "approve",
-            label: "Approve",
-            onSelect: () => setVerdict("approve"),
-            ...held(review.access, ended),
+            key: "request_changes",
+            label: "Request changes",
+            onSelect: () => setVerdict("request_changes"),
+            ...held(review.access, verdictHeld),
+          },
+          {
+            key: "comment",
+            label: "Comment",
+            onSelect: () => setVerdict("comment"),
+            ...held(review.access, verdictHeld),
+          },
+          ...(lead !== "ask"
+            ? [
+                {
+                  key: "ask",
+                  label: "Request review",
+                  onSelect: () => setAsking(true),
+                  ...held(ask.access, undefined),
+                },
+              ]
+            : []),
+          {
+            key: "close",
+            label: "Close",
+            onSelect: () => setClosing(true),
+            ...held(close.access, undefined),
           },
         ]
-      : []),
-    {
-      key: "request_changes",
-      label: "Request changes",
-      onSelect: () => setVerdict("request_changes"),
-      ...held(review.access, ended),
-    },
-    {
-      key: "comment",
-      label: "Comment",
-      onSelect: () => setVerdict("comment"),
-      ...held(review.access, ended),
-    },
-    {
-      key: "ask",
-      label: "Request review",
-      onSelect: () => setAsking(true),
-      ...held(ask.access, askHeld),
-    },
-    {
-      key: "close",
-      label: closeWord,
-      onSelect: () => setClosing(true),
-      ...held(close.access, closeHeld),
-    },
-  ]);
+      : reopenable
+        ? [
+            {
+              key: "close",
+              label: "Reopen",
+              onSelect: () => setClosing(true),
+              ...held(close.access, undefined),
+            },
+          ]
+        : [],
+  );
+  if (!live) {
+    // A FINISHED CHANGE: a closed one is reopened, and a merged one is
+    // reverted from where its merge controls were.
+    return reopenable ? (
+      <>
+        <WriteButton
+          write={close}
+          size="small"
+          variant="secondary"
+          showRefusal={false}
+          onPress={() => setClosing(true)}
+        >
+          Reopen
+        </WriteButton>
+        {closing && <CloseDialog change={change} reopen onClose={() => setClosing(false)} />}
+      </>
+    ) : null;
+  }
+  // REQUEST REVIEW leads an author's bar, and follows the verdicts on anybody
+  // else's.
+  const askButton = (
+    <span className={askFolds}>
+      <WriteButton
+        write={ask}
+        size="small"
+        variant={lead === "ask" ? "primary" : "secondary"}
+        showRefusal={false}
+        onPress={() => setAsking(true)}
+      >
+        Request review
+      </WriteButton>
+    </span>
+  );
   return (
     <>
       {draft && (
@@ -398,14 +473,15 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
           Ready for review
         </WriteButton>
       )}
-      <span className={draft ? "page-action-folds" : undefined}>
+      {lead === "ask" && askButton}
+      <span className={approveFolds}>
         <WriteButton
           write={review}
           size="small"
-          // A DRAFT'S STEP IS BEING MARKED READY: a verdict on it is offered,
-          // never the page's primary action.
-          variant={draft ? "secondary" : "primary"}
-          blocked={ended}
+          // A DRAFT'S STEP IS BEING MARKED READY, AND AN AUTHOR'S IS ASKING:
+          // a verdict there is offered, never the page's primary action.
+          variant={lead === "approve" ? "primary" : "secondary"}
+          blocked={verdictHeld}
           showRefusal={false}
           onPress={() => setVerdict("approve")}
         >
@@ -417,7 +493,7 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
           write={review}
           size="small"
           variant="secondary"
-          blocked={ended}
+          blocked={verdictHeld}
           showRefusal={false}
           onPress={() => setVerdict("request_changes")}
         >
@@ -429,44 +505,30 @@ function ChangeActions({ change }: { change: CodeChangeDetail }) {
           write={review}
           size="small"
           variant="secondary"
-          blocked={ended}
+          blocked={verdictHeld}
           showRefusal={false}
           onPress={() => setVerdict("comment")}
         >
           Comment
         </WriteButton>
       </span>
-      <span className="page-action-folds">
-        <WriteButton
-          write={ask}
-          size="small"
-          variant="secondary"
-          blocked={askHeld}
-          showRefusal={false}
-          onPress={() => setAsking(true)}
-        >
-          Request review
-        </WriteButton>
-      </span>
+      {lead !== "ask" && askButton}
       <span className="page-action-folds">
         <WriteButton
           write={close}
           size="small"
           variant="ghost"
-          blocked={closeHeld}
           showRefusal={false}
           onPress={() => setClosing(true)}
         >
-          {closeWord}
+          Close
         </WriteButton>
       </span>
       {verdict && (
         <ReviewDialog change={change} verdict={verdict} onClose={() => setVerdict(null)} />
       )}
       {asking && <AskDialog change={change} onClose={() => setAsking(false)} />}
-      {closing && (
-        <CloseDialog change={change} reopen={reopenable} onClose={() => setClosing(false)} />
-      )}
+      {closing && <CloseDialog change={change} reopen={false} onClose={() => setClosing(false)} />}
     </>
   );
 }
@@ -618,15 +680,16 @@ function ReviewDialog({
   );
 }
 
-/** Ask reviewers — seats by their handles, or the human seat a person holds — with a note. */
+/**
+ * Ask reviewers, picked from the chart (`ReviewerPicker`), with a note. The
+ * change's authors are never offered: an author's review counts for nothing,
+ * and the engine refuses asking one.
+ */
 function AskDialog({ change, onClose }: { change: CodeChangeDetail; onClose: () => void }) {
   const write = useAct("code_request_review");
-  const [who, setWho] = useState("");
+  const [reviewers, setReviewers] = useState<string[]>([]);
   const [note, setNote] = useState("");
-  const reviewers = who
-    .split(/[\s,]+/)
-    .map((h) => h.trim().replace(/^@/, ""))
-    .filter(Boolean);
+  const authors = useMemo(() => change.authors.map((a) => a.author), [change.authors]);
   const submit = async () => {
     const result = await write.run(
       { change: change.ref, reviewers, ...(note.trim() ? { note } : {}) },
@@ -651,7 +714,7 @@ function AskDialog({ change, onClose }: { change: CodeChangeDetail; onClose: () 
           <WriteButton
             write={write}
             variant="primary"
-            blocked={reviewers.length === 0 ? "Name a reviewer to ask." : undefined}
+            blocked={reviewers.length === 0 ? "Pick a reviewer to ask." : undefined}
             onPress={() => void submit()}
           >
             Ask
@@ -659,19 +722,30 @@ function AskDialog({ change, onClose }: { change: CodeChangeDetail; onClose: () 
         </>
       }
     >
-      <Input
-        aria-label="Reviewers"
-        placeholder="Handles, separated by commas"
-        value={who}
-        onChange={(event) => setWho(event.target.value)}
-      />
-      <Textarea
-        aria-label="Note"
-        placeholder="What to look at (optional)"
-        value={note}
-        rows={3}
-        onChange={(event) => setNote(event.target.value)}
-      />
+      <Stack gap={3}>
+        <FormField label="Reviewers">
+          {(field) => (
+            <ReviewerPicker
+              id={field.id}
+              describedBy={field.describedBy}
+              value={reviewers}
+              onChange={setReviewers}
+              exclude={authors}
+            />
+          )}
+        </FormField>
+        <FormField label="Note" optional helper="What to look at.">
+          {(field) => (
+            <Textarea
+              id={field.id}
+              aria-describedby={field.describedBy}
+              value={note}
+              rows={3}
+              onChange={(event) => setNote(event.target.value)}
+            />
+          )}
+        </FormField>
+      </Stack>
     </Modal>
   );
 }

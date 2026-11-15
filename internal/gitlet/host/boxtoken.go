@@ -1,6 +1,8 @@
 package host
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -82,17 +84,27 @@ func NewBoxTokens(m runtoken.Material, now func() time.Time) (*BoxTokens, error)
 // A ref no run has — a launch id that is not a UUID, a turn id empty, longer
 // than maxBoxTurnBytes or holding `.`, `~` or whitespace — is the caller's bug
 // (every launch id is a UUID the store mints, every turn id a UUIDv7), and is
-// answered "", which no Gitlet node admits and every caller refuses its launch
-// over, rather than a token another run's parse could read. Never a panic in a
-// test binary alone: telling one apart takes the `testing` package, which the
-// binary must not link (cmd/crewlet's TestTheBinaryLinksNoTestScaffolding), and
-// the answer a test reads is then the one production gives.
-func (t *BoxTokens) Mint(ref BoxRunRef) string {
+// refused with an error naming it ([ErrNoBoxRun]), which every caller refuses
+// its launch over, rather than minted into a token another run's parse could
+// read; so is a subject runtoken refuses (runtoken.ErrSubject). Never a panic
+// in a test binary alone: telling one apart takes the `testing` package, which
+// the binary must not link (cmd/crewlet's TestTheBinaryLinksNoTestScaffolding),
+// and the answer a test reads is then the one production gives.
+func (t *BoxTokens) Mint(ref BoxRunRef) (string, error) {
 	if !validRef(ref) {
-		return ""
+		return "", fmt.Errorf("%w: launch %q of run %q", ErrNoBoxRun, ref.LaunchID, ref.TurnID)
 	}
-	return t.signer.Mint(ref.LaunchID+boxSubjectSep+ref.TurnID, RunTokenTTL)
+	token, err := t.signer.Mint(ref.LaunchID+boxSubjectSep+ref.TurnID, RunTokenTTL)
+	if err != nil {
+		return "", fmt.Errorf("gitlet: the box credential of launch %s of run %s: %w", ref.LaunchID, ref.TurnID, err)
+	}
+	return token, nil
 }
+
+// ErrNoBoxRun reports a ref [BoxTokens.Mint] refuses: one no run has, its
+// launch id no UUID, or its turn id empty, longer than maxBoxTurnBytes or
+// holding `.`, `~` or whitespace.
+var ErrNoBoxRun = errors.New("gitlet: no run has this launch and turn, so no box credential names them")
 
 // Verify answers the run a token names, false for one forged, expired,
 // malformed, signed under a key this node's ring does not hold, or naming a

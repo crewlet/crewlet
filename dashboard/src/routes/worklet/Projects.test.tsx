@@ -15,7 +15,7 @@
  * meant to open a panel beside the list rather than leave it.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Projects } from "./Projects.tsx";
@@ -118,6 +118,27 @@ test("the workspace totals are one line over the rows", async () => {
   mount();
   await waitFor(() => expect(screen.getByText(/2 projects/)).toBeTruthy());
   expect(screen.getByText(/5 to do · 0 active · 6 done · 1 closed/)).toBeTruthy();
+});
+
+// NO TOTALS WITHOUT AN ANSWER. The sentence sums the rows, and with no answer
+// yet, or a failed one, there are none: it read "0 projects · 0 to do · 0
+// active" over a blank page while loading, and beside the error after.
+test("the totals wait for an answer, and a failed read draws only its error", async () => {
+  const query = serving({});
+  query.mockImplementation((what: string) =>
+    what === "work_projects" ? new Promise(() => {}) : Promise.resolve({}),
+  );
+  const loading = mount();
+  await act(async () => {});
+  expect(loading.container.textContent).not.toMatch(/\d+ projects?/);
+  expect(loading.container.textContent).not.toContain("to do ·");
+  cleanup();
+
+  serving({}, { work_projects: "internal" });
+  const failed = mount();
+  await waitFor(() => expect(screen.getByText(/didn.t load/)).toBeTruthy());
+  expect(failed.container.textContent).not.toMatch(/\d+ projects?/);
+  expect(failed.container.textContent).not.toContain("to do ·");
 });
 
 // THE COUNT IS THE COMPANY'S, NOT THE PAGE'S. The answer carries `total` and

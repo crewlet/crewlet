@@ -23,7 +23,8 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, InlineCode, Modal, ValueField } from "@crewlethq/ui";
+import { Button, Callout, InlineCode, ValueField } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { isReferenceName, isWholeReference } from "~/lib/references.ts";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";

@@ -280,6 +280,8 @@ A config revision and the *values* its `${VAR}` references resolve to are two di
 
 **A rotation is one write.** A write through a running node's `/secrets` of a name the active revision reads makes the re-activation itself, in the same request, and answers the revision and epoch it produced; a batch of values (`PUT /secrets`) makes one ([Secret Store](secret-store.md#a-write-through-a-node-re-activates-what-reads-it), ADR-0070). `POST /config/reload` is left for a value written any other way, and for a write whose own re-activation answered an error.
 
+**A patch that changes nothing is not a re-activation.** A `PATCH /config` or a per-entity `PUT /config/{kind}/{id}` is a change to some fields, and one that leaves the document as it stands stores no revision and activates nothing: it answers `200` with `changed: false` ([A write that changes nothing](../reference/api-endpoints.md#a-write-that-changes-nothing)). The gestures that publish the document unchanged are the ones above, `POST /config/reload` and a `/secrets` write, and `PUT /config` of the whole document, which a caller that renders the document sends after writing the values it reads.
+
 **Nothing compares the payload.** No step between the operator's gesture and the rebuild looks at a revision's bytes, so there is nothing for a rotation to slip through. The property falls out of the control plane's shape instead:
 
 - The pointer's **KV sequence is the epoch**, and the store assigns a new one on every write. Re-activating a revision therefore mints a new epoch even though the value written is byte-identical.

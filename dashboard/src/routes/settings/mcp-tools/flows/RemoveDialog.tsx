@@ -17,16 +17,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import {
-  Button,
-  Callout,
-  Checkbox,
-  FormField,
-  Modal,
-  Spinner,
-  Text,
-  useToast,
-} from "@crewlethq/ui";
+import { Button, Callout, Checkbox, FormField, Spinner, Text, useToast } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import type { McpDependants, McpMemberServerStatus, McpSecretDeletion } from "~/contract/mcp.ts";
 import { listed, plural } from "~/lib/format.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";

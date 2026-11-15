@@ -249,10 +249,14 @@ function SeatWindow({
   return (
     <div className="budget-cell">
       <div className="budget-cell-line">
-        <span className="t-num budget-cell-used" title={`${fmtExact(w.used)} tokens`}>
-          {fmtCount(w.used)}
-        </span>
-        <CeilingEditor scope={scope} period={period} window={w} zone={zone} onApplied={onApplied} />
+        <CeilingEditor
+          scope={scope}
+          period={period}
+          window={w}
+          spent={w.used}
+          zone={zone}
+          onApplied={onApplied}
+        />
       </div>
       {w.limit !== undefined && (
         <Meter

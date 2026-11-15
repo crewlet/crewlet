@@ -61,10 +61,10 @@ func (e *Engine) boxGitEnv(seat *org.Role, base string, ref host.BoxRunRef,
 	if e.boxTokens == nil {
 		return nil, fmt.Errorf("engine: this node mints no coding box's credential")
 	}
-	token := e.boxTokens.Mint(ref)
-	if token == "" {
-		return nil, fmt.Errorf("engine: no credential can be minted for launch %s of run %s", ref.LaunchID,
-			ref.TurnID)
+	token, err := e.boxTokens.Mint(ref)
+	if err != nil {
+		return nil, fmt.Errorf("engine: no credential can be minted for launch %s of run %s: %w", ref.LaunchID,
+			ref.TurnID, err)
 	}
 	return sandbox.BoxGit{Base: base, User: host.BoxUser, Token: token, Name: sig.AuthorName,
 		Email: sig.AuthorEmail}.Env(run)

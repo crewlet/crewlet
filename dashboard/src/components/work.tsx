@@ -278,7 +278,14 @@ export function Assignee({
         name={label}
         size={size}
         kind={seatKind?.(handle) === "human" ? "human" : "agent"}
-        avatar={seatAvatar?.(handle)}
+        // A BADGE DRAWN ALONE IS ITS SEAT'S INITIALS. Every agent that chose
+        // no look carries the same one (the original Crewlet, in purple), so a
+        // column of badges with no names beside them drew seven agents as one
+        // picture, and Agent CTO could not be told from Agent SWE without
+        // hovering. The identity rule's initials tell them apart; where the
+        // name is printed beside the badge, the character the seat chose is
+        // decoration and is drawn.
+        avatar={showName ? seatAvatar?.(handle) : undefined}
         decorative={showName}
         status={status}
       />
@@ -696,7 +703,10 @@ export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | und
     const nobody = `Nobody is reviewing ${pullName(dead.id)}`;
     return held.length > 1 ? `${nobody} +${held.length - 1}` : nobody;
   }
-  const named = held.map((edge) => keyOf?.(edge.id)).find(Boolean);
+  // THE EDGE NAMES ITS BLOCKER ITSELF (`key`), so a list that holds no row
+  // for a blocker in another project still says which task holds this one
+  // up; a row this page does hold is read first, as it is the newest.
+  const named = held.map((edge) => keyOf?.(edge.id) || edge.key).find(Boolean);
   if (!named) return held.length > 1 ? `Blocked · ${held.length}` : "Blocked";
   return held.length > 1 ? `Blocked · ${named} +${held.length - 1}` : `Blocked · ${named}`;
 }

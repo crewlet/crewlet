@@ -24,11 +24,11 @@ import {
   FormField,
   IconButton,
   Input,
-  Modal,
   Skeleton,
   TagsInput,
   type TagsInputOption,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { PlusGlyph, ShieldCheckGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
 import { configRefusalWords } from "~/lib/configRefusal.ts";

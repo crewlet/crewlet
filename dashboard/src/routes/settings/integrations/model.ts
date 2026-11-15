@@ -338,8 +338,8 @@ export interface Model {
   byKey: Map<string, Tool>;
   /** The `integrations` rows by surface key, for the facts each surface counts. */
   rows: Map<string, IntegrationRow>;
-  /** The address vendors deliver to. */
-  base: string | null;
+  /** The address vendors deliver to, and whether it is one only this machine reaches. */
+  base: { value: string; loopback: boolean } | null;
   /** True when the setup listing was refused: a reader with no Admin. */
   guarded: boolean;
   /** The refusal, when [guarded] — said through `lib/refusal.ts`'s `authorityWords`. */
@@ -827,7 +827,7 @@ export function useIntegrations(): Model {
     tools,
     byKey,
     rows,
-    base: setup.base?.value ?? null,
+    base: setup.base ? { value: setup.base.value, loopback: setup.base.loopback === true } : null,
     guarded: setup.guarded,
     refused: setup.refused,
     managed,

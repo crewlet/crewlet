@@ -18,7 +18,6 @@ import {
   Checkbox,
   EmptyState,
   Link,
-  Modal,
   PageNote,
   SelectionBar,
   Skeleton,
@@ -27,6 +26,7 @@ import {
   Text,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { SetByLine } from "~/app/frame/ObjectHeader.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { href, useParam } from "~/app/router.tsx";
@@ -48,7 +48,7 @@ import { andList } from "~/lib/words.ts";
 import { WAITING } from "./AddEntry.tsx";
 import { ClaimList, DecisionButtons, decide, useDecisionWrites } from "./Decisions.tsx";
 import { entryPath } from "./entry.tsx";
-import { ATLAS_POLL_MS } from "./filters.ts";
+import { ATLAS_POLL_MS, knownIn } from "./filters.ts";
 import { Cited, EntryDisc, sourceSetBy } from "./parts.tsx";
 import { KINDS, RELATIONS, factLabel } from "./words.ts";
 import { reviewDecisions, undecided, type Decision } from "./writes.ts";
@@ -94,7 +94,9 @@ export function Review() {
   const { socket } = useClient();
   const seatBadge = useSeatBadgeOf();
   const seatName = (handle: string) => seatBadge(handle).name;
-  const [kind, setKind] = useParam("kind", ALL);
+  const [named, setKind] = useParam("kind", ALL);
+  // A KIND THIS BUILD DOES NOT KNOW is the whole list, never a question the engine refuses.
+  const kind = named === ALL || knownIn(REVIEW_KINDS, named) ? named : ALL;
   const asked = useMemo(() => (kind === ALL ? {} : { kind }), [kind]);
   const first = useQuery("atlas_review", asked, { pollMs: ATLAS_POLL_MS });
   const paged = usePaged(

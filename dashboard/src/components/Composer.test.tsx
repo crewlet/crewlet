@@ -116,7 +116,7 @@ const mount = (node: React.ReactNode) =>
 
 function reply() {
   mount(<Composer item="NIM-7" mode={{ kind: "reply" }} to="Ada Okonkwo" index={indexOrg(ORG)} />);
-  return screen.getByRole("combobox", { name: "Reply to Ada Okonkwo" }) as HTMLTextAreaElement;
+  return screen.getByRole("textbox", { name: "Reply to Ada Okonkwo" }) as HTMLTextAreaElement;
 }
 
 const type = (field: HTMLTextAreaElement, value: string) => {
@@ -169,6 +169,22 @@ test("with the @ list open, Enter picks the highlighted seat and sends nothing",
   await waitFor(() => expect(field.value).toBe("thanks @ada "));
 });
 
+// THE FIELD STAYS A TEXTBOX while its @ list is open. It was a textarea
+// with role="combobox", which ARIA in HTML does not allow on a textarea (axe
+// aria-allowed-role): a textbox points at the list it owns with
+// aria-autocomplete, aria-controls and aria-activedescendant, as Chatlet's
+// message box does.
+test("the comment box points at its @ list as a textbox, never a combobox", async () => {
+  const field = reply();
+  type(field, "@");
+  const list = await screen.findByRole("listbox", { name: "Mention somebody" });
+  expect(field.hasAttribute("role")).toBe(false);
+  expect(field.hasAttribute("aria-expanded")).toBe(false);
+  expect(field.getAttribute("aria-autocomplete")).toBe("list");
+  expect(field.getAttribute("aria-controls")).toBe(list.id);
+  expect(document.getElementById(field.getAttribute("aria-activedescendant") ?? "")).not.toBeNull();
+});
+
 test("the field's description names the send keys", () => {
   const field = reply();
   const description = document.getElementById(field.getAttribute("aria-describedby")!)!;
@@ -200,7 +216,7 @@ test("an answer in words sends on Enter, and its hint says the keys", async () =
       layout="buttons"
     />,
   );
-  const field = screen.getByRole("textbox", { name: "Reply to Ada Okonkwo" });
+  const field = screen.getByRole("textbox", { name: "Answer Ada Okonkwo" });
   expect(document.querySelector(".crewlet-composer__hint")!.textContent).toMatch(
     /to send, .*for a new line$/,
   );

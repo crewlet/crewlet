@@ -47,7 +47,7 @@ nineteen in full.
 | `request_access` | Ask a person for one more kind of access from a closed list, as a decision on the work item that needs it; the person previews the exact change and applies it, or declines. |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
 | `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's, as a re-route is |
-| `search_work_items` | Find an item by what it says, ranked over titles and descriptions. `mode` picks the ranking as `search_knowledge`'s does — `hybrid` by default, `keyword` or `semantic` — and the answer names the mode it served, with a `degraded` sentence when that is not the one asked for |
+| `search_work_items` | Find an item by what it says, ranked over titles and descriptions; a text that is exactly one task key answers that task first. `mode` picks the ranking as `search_knowledge`'s does — `hybrid` by default, `keyword` or `semantic` — and the answer names the mode it served, with a `degraded` sentence when that is not the one asked for |
 | `list_project_files` | A project's files — reports, specs, notes — in path order, a page at a time |
 | `read_project_file` | One file's text, a page at a time from an offset; bytes as base64 on request |
 | `write_project_file` | Put a file at a path, creating it or replacing it, with an optional `if_version`. Writing exactly what the file already holds, with the same type, stores nothing and answers `outcome: unchanged` |
@@ -130,7 +130,7 @@ another node whose ledger reaches back that far.
 
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-and eleven more beside them that no seat is given: the saved views, the
+and twelve more beside them that no seat is given: the saved views, the
 catalogue write, a person's own queue, inbox and pins, the trash, and the board
 drag. Each call is decided by the same authority table a seat's is, and each
 write is attributed to who the request is, never to a name the caller chooses:

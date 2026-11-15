@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -1546,6 +1547,8 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 			AbsoluteExpiresAt: in.AbsoluteExpiresAt,
 			ProvedAt:          in.ProvedAt,
 			EnrolmentOnly:     in.EnrolmentOnly,
+			UserAgent:         clipUserAgent(in.UserAgent),
+			Remote:            in.Remote,
 		})
 		return err
 	}
@@ -1567,6 +1570,27 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 	}
 	opened.Result = result
 	return opened, err
+}
+
+// MaxSessionUserAgent is the most of a User-Agent header a session keeps:
+// 512 bytes, past the longest a browser sends (a desktop Chrome's is about
+// 130, a phone's with its build tags under 300), so no real browser is cut,
+// while a header anybody can make arbitrarily long does not ride every
+// session row every data node keeps.
+const MaxSessionUserAgent = 512
+
+// clipUserAgent is ua held to [MaxSessionUserAgent] bytes, cut at a rune
+// boundary.
+func clipUserAgent(ua string) string {
+	ua = strings.TrimSpace(ua)
+	if len(ua) <= MaxSessionUserAgent {
+		return ua
+	}
+	cut := MaxSessionUserAgent
+	for cut > 0 && !utf8.RuneStart(ua[cut]) {
+		cut--
+	}
+	return ua[:cut]
 }
 
 // SessionOpened is what a bearer for a session that has just begun carries
@@ -1658,6 +1682,12 @@ type SessionStart struct {
 	// factor — see [Session.EnrolmentOnly]. The SIGN-IN decides it, from
 	// what it proved and the deployment's own `api.auth.totp`.
 	EnrolmentOnly bool
+
+	// UserAgent and Remote are the browser that asked for the session and
+	// the address it asked from ([Session.UserAgent]), empty where nothing
+	// names them.
+	UserAgent string
+	Remote    string
 
 	// NoWait asks for the answer the broker's acknowledgement already
 	// establishes, rather than waiting for this node's applier.

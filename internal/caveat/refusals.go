@@ -219,14 +219,25 @@ func MergeGateUnmet(unmet []GateCondition) Refusal {
 }
 
 // MergeWouldDeleteAKeptBranch is a merge asked to delete its branch where that
-// deletion is refused: a protection rule keeps the branch, or whoever merges
-// may not delete it. ONE PHRASING FOR BOTH, and true of each, for
+// deletion is refused: it is the repository's default branch, a protection
+// rule keeps the branch, or whoever merges may not delete it. ONE PHRASING FOR
+// ALL THREE, and true of each, for
 // [DatastoreQuotaReached]'s reason: which one it was Gitlet names only
 // in its sentence for a model, which is never parsed for a person's words.
 func MergeWouldDeleteAKeptBranch() Refusal {
 	return Refusal{person: "Nothing was merged, because this merge would also delete its " +
-		"branch, and a protection rule keeps that branch or you may not delete it. Merge it " +
-		"keeping its branch."}
+		"branch, and that branch is kept, as the repository's default branch, by a protection " +
+		"rule, or because you may not delete it. Merge it keeping its branch."}
+}
+
+// DefaultBranchKept is a deletion of a repository's default branch, which no
+// push, write or merge makes: every clone checks it out. NO REMEDY beside it:
+// the repository's own Settings tab is where its default branch changes, and
+// the words say so.
+func DefaultBranchKept() Refusal {
+	return Refusal{person: "This is the repository's default branch, which every clone checks " +
+		"out, so it was not deleted. Make another branch the default in the repository's " +
+		"settings first."}
 }
 
 // RepositoryFull is a merge whose commits would take its repository past the
@@ -253,6 +264,15 @@ func MergeAskedForSomebodyWhoMayNot() Refusal {
 func QueueEntryNotYours() Refusal {
 	return Refusal{person: "Only whoever queued it, the change's owner, somebody who " +
 		"maintains its repository or a person may take it off the queue, so it is still queued."}
+}
+
+// ReviewOfYourOwnChange is a review of a change by one of its authors: an
+// author's review of their own change counts for nothing, so none is taken,
+// and somebody else reviews it. NO REMEDY: the change page asks a reviewer
+// from the same bar, and the words say to.
+func ReviewOfYourOwnChange() Refusal {
+	return Refusal{person: "You wrote this change, so your review would not count and none was " +
+		"taken. Ask somebody else to review it."}
 }
 
 // ArtifactTrashed is a change to an artifact that is in the trash.
@@ -431,4 +451,74 @@ func atHandles(handles []string) []string {
 		out[i] = "@" + h
 	}
 	return out
+}
+
+// LabelsNotDeclared is a work item filed or edited with labels its project has
+// not declared: project is the project's key, labels the ones it lacks,
+// declared its own labels and near the ones closest to the first missing
+// label, which a person may have meant. A label is declared on its project
+// before work is filed under it, so a misspelling never becomes a label of its
+// own.
+func LabelsNotDeclared(project string, labels, declared, near []string) Refusal {
+	missing := fmt.Sprintf("%s has no label %s", project, words.And(labels))
+	if len(labels) > 1 {
+		missing = fmt.Sprintf("%s has no labels %s", project, words.And(labels))
+	}
+	said := missing + ", so nothing was saved."
+	if len(near) > 0 {
+		said += fmt.Sprintf(" Did you mean %s?", words.Or(near))
+	}
+	if len(declared) == 0 {
+		return Refusal{person: said + " The project has no labels yet. Save it without one."}
+	}
+	return Refusal{person: said + fmt.Sprintf(" Its labels are %s. Choose one of them.",
+		words.And(declared))}
+}
+
+// LabelArchived is new work filed under a label its project archived: the
+// work already under it keeps it, and no new work takes it.
+func LabelArchived(project, label string) Refusal {
+	return Refusal{person: fmt.Sprintf("The label %s is archived in %s, so no new work is "+
+		"filed under it and nothing was saved. Choose another label.", words.And([]string{label}), project)}
+}
+
+// ViewUnnamed is a saved view with no name, which no tab could show.
+func ViewUnnamed() Refusal {
+	return Refusal{person: "A saved view needs a name to show on its tab. Name it, then " +
+		"save it again."}
+}
+
+// ViewNameTooLong is a saved view whose name is longer than a tab holds.
+func ViewNameTooLong() Refusal {
+	return Refusal{person: "The view's name is too long for its tab. Shorten it, then save " +
+		"it again."}
+}
+
+// ViewShapeUnknown is a saved view whose shape is none of shapes, the ways a
+// view shows its work.
+func ViewShapeUnknown(shapes []string) Refusal {
+	return Refusal{person: fmt.Sprintf("A view shows its work as one of %s, so nothing was "+
+		"saved. Choose one of them.", words.Or(shapes))}
+}
+
+// ViewPersonalDefault is a view only its owner sees, saved as its place's
+// default tab, which is everybody's landing tab.
+func ViewPersonalDefault() Refusal {
+	return Refusal{person: "A view only you see cannot be everybody's default tab, so " +
+		"nothing was saved. Share it to make it the default, or pin it to put it first " +
+		"for you."}
+}
+
+// ViewFiltersTooLarge is a saved view carrying more filters, or longer ones,
+// than a saved view holds.
+func ViewFiltersTooLarge() Refusal {
+	return Refusal{person: "This view has more filters than a saved view holds, so nothing " +
+		"was saved. Remove some, then save it again."}
+}
+
+// ViewFilterUnreadable is a saved view one of whose filters could not be read,
+// which would be a view nobody could open.
+func ViewFilterUnreadable() Refusal {
+	return Refusal{person: "One of this view's filters could not be read, so nothing was " +
+		"saved. Change or remove it, then save it again."}
 }

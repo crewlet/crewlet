@@ -189,15 +189,12 @@ function CellPicker({
         // in the surrounding size and ink, like a reader's plain value, in a
         // grid cell and a properties rail alike (the kit's `valueTrigger`).
         valueTrigger
-        // THE TRIGGER IS NAMED BY ITS FIELD AND ITS ROW, not by the value alone:
-        // a hundred buttons each announced "To do" are a hundred identical
-        // controls to a screen reader listing the page's buttons.
-        trigger={
-          <>
-            <span className="sr-only">{label}: </span>
-            {trigger}
-          </>
-        }
+        // THE TRIGGER IS NAMED BY ITS VALUE, THEN ITS FIELD AND ITS ROW ("To
+        // do, Status of ENG-9"): the kit's value trigger is named by what it
+        // shows with `label` after it, so a person who says what they see
+        // reaches it, and a hundred buttons are not a hundred identical "To
+        // do"s to a screen reader listing the page's buttons.
+        trigger={trigger}
         items={options.map((option) => ({
           key: option.value || "-",
           label: option.label,

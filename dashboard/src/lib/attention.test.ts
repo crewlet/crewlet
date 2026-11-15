@@ -670,6 +670,50 @@ describe("a stopped seat's row", () => {
     );
   });
 
+  // A SEAT THE ENGINE PAUSED IS SAID BY ITS FAILURE'S FINDING, which names it
+  // and the fix: the Inbox listed the one pause twice, the company's
+  // "is paused because the sandbox could not start as configured" and the
+  // seat's own "is paused" offering a resume that fails the same way. A pause
+  // a person took keeps its row, as does an engine pause no finding says.
+  test("is not drawn beside the finding that says the engine paused it", () => {
+    const engineSeat = (id: string) => ({
+      id,
+      agent_id: id,
+      role: `Agent ${id}`,
+      handle: id,
+      activity: "stopped" as const,
+      stopped_reason: "paused" as const,
+      paused: { by_kind: "system", by: "engine", at: "2026-01-01T11:00:00Z", stop_running: true },
+    });
+    const finding = {
+      ...SETUP_BLOCKER,
+      class: "sandbox.image_unstartable",
+      area: "setup",
+      subject: { kind: "seat", seat: "ai" },
+      title: "Agent ai is paused because the sandbox could not start as configured.",
+    };
+    const person = {
+      ...engineSeat("pm"),
+      paused: { by_kind: "human", by: "jane", at: "2026-01-01T11:00:00Z", stop_running: false },
+    };
+    const items = attentionQueue(
+      input({
+        agents: [engineSeat("ai"), engineSeat("swe"), person],
+        notices: [{ class: finding.class, subject: finding.subject }],
+        findings: [finding],
+      }),
+    );
+    const titles = items.map((i) => i.title);
+    expect(titles.filter((t) => t.startsWith("Agent ai "))).toEqual([finding.title]);
+    // ANOTHER SEAT THE ENGINE PAUSED, which this finding does not name, keeps its row…
+    expect(items.some((i) => i.id === "seat-state-swe")).toBe(true);
+    // …and so does a pause a person took.
+    expect(items.some((i) => i.id === "seat-state-pm")).toBe(true);
+    // WITHOUT THE FINDING, the engine's pause is the seat's row.
+    const alone = attentionQueue(input({ agents: [engineSeat("ai")] }));
+    expect(alone.some((i) => i.id === "seat-state-ai")).toBe(true);
+  });
+
   // A PAUSE WAITS ON A PERSON: every condition said "Clears on its own" under
   // a "Go to it" button, a pause an admin must lift included.
   test("says a person lifts a pause or a missing placement, and names its button", () => {
@@ -948,7 +992,10 @@ test("an advisor that could not read everything says so, once", () => {
   const queue = attentionQueue(input({ setupUnread: ["alarms", "work"] }));
   const rows = queue.filter((a) => a.id === "setup-unread");
   expect(rows).toHaveLength(1);
-  expect(rows[0]?.title).toBe("The advisor couldn't read everything");
+  // NAMED, never "couldn't read everything", which said nothing to check.
+  expect(rows[0]?.title).toBe(
+    "The advisor couldn't read the engine's alarms and the last 7 days of work",
+  );
   expect(rows[0]?.detail).toMatch(/whether a backup is missing can't be said yet/);
   expect(rows[0]?.detail).toMatch(/last 7 days of work couldn't be read/);
   const paused = attentionQueue(input({ setupUnread: ["pauses"] })).find(

@@ -11,6 +11,7 @@ import {
   introducedWarnings,
   isUnsealedRefusal,
   unsettledSentence,
+  warningWords,
 } from "./configAnswer.ts";
 import {
   configTransport,
@@ -181,6 +182,35 @@ describe("the helpers every /config writer uses", () => {
     });
   });
 
+  // A WRITE OF PART OF THE DOCUMENT THAT CHANGED NOTHING is answered `200
+  // changed: false` with the revision that already says it: already so, and
+  // never "the engine checked the change but stored nothing", which is what a
+  // 200 to a write meant before. A check's 200 stays a check, and a whole
+  // document's write is never answered so. Mutation: read every 200 to a
+  // write as a check and the first two are "valid".
+  test("a save that changes nothing is already so, never a check", async () => {
+    const unchanged = { changed: false, revision_id: "r7", warnings: null, derived: {} };
+    stub(async () => json(unchanged, 200));
+    expect(await savePatch({ name: "Acme" }, '"r7"', "Rename", never())).toMatchObject({
+      kind: "unchanged",
+      revisionId: "r7",
+    });
+    expect(
+      await putEntity("mcp-servers", "linear", { name: "linear" }, '"t1"', "Edit", never()),
+    ).toMatchObject({ kind: "unchanged", revisionId: "r7" });
+    expect(outcomeOf({ status: 200, body: unchanged, fromEngine: true }).kind).toBe("valid");
+    expect(
+      outcomeOf(
+        {
+          status: 200,
+          body: { valid: true, changed: false, base_revision_id: "r7" },
+          fromEngine: true,
+        },
+        "partial",
+      ).kind,
+    ).toBe("valid");
+  });
+
   test("an entity write addresses the entity and is conditional too", async () => {
     const calls = stub(async () =>
       json({ revision_id: "r8", epoch: 9, warnings: null, derived: {} }, 201),
@@ -225,6 +255,24 @@ describe("the warnings a change introduces", () => {
     const idle = w("roles[0].token_budget.day", "idle");
     expect(introducedWarnings([old], [old, idle])).toEqual([idle]);
     expect(introducedWarnings([old], [old])).toEqual([]);
+  });
+
+  /*
+   * A WARNING IS READ IN ITS OWNER'S WORDS where the engine wrote them, on
+   * every screen that draws one: the operator's sentence named
+   * `providers.llm.default` and a Tier A keyring to somebody who never sees
+   * the document. A warning the engine wrote no such words for keeps its own.
+   * Mutation: read `message` alone, and the first expectation goes red.
+   */
+  test("are read in the words the engine wrote for a person, and in its own where it wrote none", () => {
+    const advisory = {
+      ...w("providers.sandbox.default_run_in", "a `direct` box runs as the engine's own user"),
+      person: "Agents run their work directly on the engine's own server.",
+    };
+    expect(warningWords(advisory)).toBe(
+      "Agents run their work directly on the engine's own server.",
+    );
+    expect(warningWords(w("roles[3].manages[0]", "ceo manages ghost"))).toBe("ceo manages ghost");
   });
 });
 
@@ -406,25 +454,30 @@ describe("one reading of a /config refusal", () => {
       [
         "seat_held",
         "dev",
-        // No login: the id names them, in the sentence and in both commands.
-        `@dev is held by p-1: move them to another human seat (crewlet iam bind p-1 SEAT) or remove them (crewlet iam remove p-1) first${tail}`,
+        // No login: the person is said as one, never by their id.
+        `@dev is held by a person who has not signed in yet: move them to another human seat or remove them in Settings › People first${tail}`,
       ],
       [
         "seat_held",
         "ops",
-        `@ops is held by the service account ci:release: unbind it first (crewlet iam unbind m-1)${tail}`,
+        `@ops is held by the service account ci:release: unbind it in Settings › People first${tail}`,
       ],
       [
         "seat_held",
         "qa",
-        `@qa is held by the open invitation inv-9: cancel it first (crewlet iam cancel-invite inv-9)${tail}`,
+        `@qa is held by an invitation nobody has accepted yet: cancel it under Invitations in Settings › People first${tail}`,
       ],
       [
         "seat_held",
         "sre",
-        `@sre is held by sam.ito: move them to another human seat (crewlet iam bind p-2 SEAT) or remove them (crewlet iam remove p-2) first${tail}`,
+        `@sre is held by sam.ito: move them to another human seat or remove them in Settings › People first${tail}`,
       ],
     ]);
+    // EVERY REMEDY IS THE DASHBOARD'S: the screen that does it, never a
+    // command line or an id the person has no use for.
+    for (const p of refusal.problems) {
+      expect(p.message).not.toMatch(/crewlet |inv-9|p-1|p-2|m-1/);
+    }
     // A PERSON IS NEVER TOLD TO UNBIND: the one remedy the engine refuses.
     expect(refusal.problems.filter((p) => p.seat !== "ops").map((p) => p.message)).not.toEqual(
       expect.arrayContaining([expect.stringContaining("unbind")]),

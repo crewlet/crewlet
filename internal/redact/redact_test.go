@@ -139,6 +139,63 @@ func TestARunTokenIsTakenWholeAndOnce(t *testing.T) {
 	}
 }
 
+// A RUN TOKEN NEVER TAKES AN ESCAPED LINE BREAK: its subject holds no
+// backslash, so a token's shape whose subject runs across the lines of a
+// string is no token, as one across real lines is not. A key's lines are read
+// across an escaped break as across a real one, and what a rule replaces takes
+// no line break of either kind ([redact.Secrets]): a subject that took one put
+// the lines it crossed into the token's marker, which a second pass read as one
+// line where the first had read several. So a token's shape spanning escaped
+// lines between a key's body and its END stopped the first pass's read back
+// from the END, its lines claimed by the token, and the second pass, the token
+// one marker line, read the key's lines back across it and redacted them:
+// redacting twice was not redacting once. Now the first pass reads them back
+// across the lines the token's shape spans, and a second pass changes nothing.
+// Each comes out as given, redacting it again changes nothing, and shown as it
+// settles, a byte at a time or in pieces, it is the same.
+//
+// Mutation: admit a backslash in a run token's subject, as the pattern did,
+// and the subjects holding one are redacted as tokens, the key above the
+// token's shape is published by the first pass and redacted by the second, and
+// the key lines the shape's subject spans are taken as the token's.
+func TestARunTokenNeverTakesAnEscapedLineBreak(t *testing.T) {
+	t.Parallel()
+	sig := strings.Repeat("S", 40) + "a_-"
+	token := func(subject string) string { return "crewlet_rt1.Tq0d_8-x." + subject + ".1792927401." + sig }
+	end := "-----END RSA PRIVATE KEY-----"
+	key := redact.Marker + "private-key]"
+	url := func(subject string) string {
+		return `{"url": "https://engine.example.com/otlp/` + token(subject) + `/v1/traces"}` + "\n"
+	}
+	for name, c := range map[string]struct{ text, want string }{
+		"an escaped break in its subject":                    {token(`sub\nject`), token(`sub\nject`)},
+		"an escaped CRLF in its subject":                     {token(`sub\r\nject`), token(`sub\r\nject`)},
+		"a backslash in its subject":                         {token(`sub\zone`), token(`sub\zone`)},
+		"in a string, its subject across the string's lines": {url(`sub\nject`), url(`sub\nject`)},
+		"its subject across escaped lines between a key's body and its END": {
+			`{"log": "` + keyLine + `\n` + keyLine + `\n` + token(`ab\ncd\nef\ngh`) + `\n` + end + `\n"}` + "\n",
+			`{"log": "` + key + `\n"}` + "\n",
+		},
+		"its subject across a key's escaped lines above their END": {
+			`{"log": "` + token(keyLine+`\n`+keyLine+`\n`+keyLine) + `\n` + end + `\n"}` + "\n",
+			`{"log": "crewlet_rt1.Tq0d_8-x.` + key + `\n"}` + "\n",
+		},
+	} {
+		got := redact.Secrets(c.text)
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
+		if again := redact.Secrets(got); again != got {
+			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
+		}
+		for _, sizes := range [][]int{{1}, {5, 400}} {
+			if shown, _ := settle(c.text, sizes); shown != c.want {
+				t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, c.want)
+			}
+		}
+	}
+}
+
 // A SESSION'S CREDENTIAL IS TAKEN WHOLE AND ONCE, as a run prints it: the key
 // id STS opens an AWS session's with, ASIA, and a Google access token, `ya29.`
 // and its base64url body — a service account's in segments a dot apart, as its

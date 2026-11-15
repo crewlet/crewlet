@@ -1444,7 +1444,14 @@ const (
 	// 1,631 bytes over the 409.8 KiB it was built on: nearly all of it the kit
 	// and the frame's first-dial chip and landing rule, as they measured
 	// alone. So it moved to 412 KiB, 2.25 seconds.
-	initialBudget = 412 << 10
+	// Kit 0.129.1 (a setting's key behind a copy control, a canvas's held
+	// zoom controls, a chart kept in view after an add) with the operations
+	// fixes (a refused control's refusal drawn outside the row of controls in
+	// the frame's page bar, object header and dialogs, a config warning and a
+	// config refusal in their owner's words, a limit's range, an engine pause
+	// drawn as a pause) took it to 414.1 KiB, most of it the refusal words and
+	// places the frame now reads. So it moved to 415 KiB, 2.27 seconds.
+	initialBudget = 415 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2513,7 +2520,46 @@ const (
 	// and the comparison each moved ref opens, and a search's file cards)
 	// added 2,313 bytes, script and sheet, and took it to 6178.1 KiB
 	// (6,326,419 bytes): 6179 KiB.
-	treeBudget = 5<<20 + 1059<<10
+	// Kit 0.128.1 (value pickers, the search field and the make-row tiles
+	// named by the words they show) with the second audit's Worklet, Inbox,
+	// Home and Doclet fixes (an ask's context, a frozen trashed task, a moved
+	// task's address, a New task draft kept for the tab, saved views deleted
+	// where they are read, one Inbox row per engine pause) added 4,934 bytes,
+	// script and sheet, and took it to 6183.0 KiB (6,331,353 bytes): 6183 KiB.
+	// Gitlet's audit fixes (Edit details on a repository's settings, a
+	// reviewer picker, the change bar drawn by its state and its reader, and
+	// a repository whose default branch holds nothing read from its other
+	// branches) added 5,828 bytes, nearly all script, and took it to
+	// 6188.7 KiB (6,337,181 bytes): 6189 KiB.
+	// Kit 0.129.1 with the operations fixes (the event log drawn a page at a
+	// time, a refused control's refusal placed outside its row on every page
+	// bar, header and dialog, a schedule's controls following its saved switch
+	// and its cron fields named, a limit's range, the org chart's warnings and
+	// counts, a session's device, Live's words) took it to 6196.4 KiB: 6197 KiB.
+	// Kit 0.129.0 (each trunk count placed clear of the map's titles, cards
+	// and other counts, the legend's switches tied to what they draw, the
+	// zoom steppers held at their limits) and an Atlas round (an address
+	// read against the closed sets, one grouping of what an entry touches,
+	// the retired filter, a failed source said in a sentence) added 7,464
+	// bytes, script and sheet, and took it to 6185.4 KiB (6,333,883 bytes):
+	// 6186 KiB.
+	// The audit's follow-up fixes on kit 0.128.1 (one toast per Mark all
+	// read, a board card's menu beside its badge, a rail's labelled estimate,
+	// History's single Load older, a blocker named by its edge's key, Home's
+	// figures and bar on a phone) added 981 bytes, script and sheet, and took
+	// it to 6183.9 KiB (6,332,334 bytes): 6184 KiB.
+	// Kit 0.128.2 (a setting's key behind a copy control, a sheet's subtitle in
+	// its body) and the Settings, Account, Spend, Advisor and Configuration
+	// fixes beside it (credentials and duties in words, the audit log's Where,
+	// the grid key registry, empty spend drawn empty, the diff's per-line
+	// marks) added 13,042 bytes and took it to 6195.7 KiB (6,344,395 bytes):
+	// 6196 KiB.
+	// The release train of those four (the operations fixes, the Atlas round,
+	// the Worklet follow-up and the Settings and Account fixes), merged with
+	// main's Gitlet audit fixes on kit 0.129.1, measures 6217.9 KiB
+	// (6,367,157 bytes), 29,976 bytes over the 6188.7 KiB of main it was
+	// built on: 6218 KiB.
+	treeBudget = 5<<20 + 1098<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

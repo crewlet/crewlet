@@ -45,7 +45,7 @@ Placement is deliberately dumb, and lives in `internal/seat`:
 - A node holding **more** than its share of a group hands that group's excess back, at most `seat.ReleaseLimitPerSweep` (2) per pass — even when its total is within capacity, because the surplus is room an eligible peer is waiting for. Claiming alone converges only for a fleet that shrinks: a node that booted alone holds every seat, and a peer joining later computes a share it can never reach. Without the give-back, scaling out does nothing until something dies. It gives back the least constrained groups first, so when the release limit cuts a pass short a pinned seat is the last to go.
 - A pass runs every `seat.SweepInterval` (5 s), which is the cadence for what changes in the fleet, and **at once when a config apply changes the seats themselves**: a role added or removed, a seat's placement moved, or a node's first company. Those would otherwise wait for the next tick, a new seat run by nobody until then. The pass runs at the end of the apply, once everything a seat's acquisition reads is current, and at most one such pass per interval comes early, so a node never runs more than two passes' claims in one interval however many revisions arrive.
 - **And at once when the node's claim gate opens.** A node claims no new seat while it is [behind](#a-copy-that-is-behind-and-a-copy-that-is-wrong), and it learns that it has caught up only by asking, which a pass does — so a node that started behind its logs, the commonest boot, held nothing until the next tick after it caught up, and a node handed its first company waited the same way for the apply's own records to be applied. The engine watches what can open the gate: each log whose health gates admission coming level with its log, and the node's view of the fleet listing for the first time. When one of them happens after a pass the gate refused, or as the refusal is recorded, it asks the gate again and, the moment it admits, asks for one pass. An asked pass the gate refused that gave nothing back either changed nothing, so it does not count against the one early pass an interval allows. A node holding no data is admitted on a data node's word, which it can only learn by asking, so it is asked again on its pass every interval.
-- A **draining** node claims nothing — and that holds for a pass already under way when the drain began. Each claim checks again, under the seat's own lock, whether the drain has begun, and a lease taken while it did is handed straight back before anything is attached to it, so a pass cannot take back the seat the drain has just given up and leave it on a node that is leaving.
+- A **draining** node claims nothing — and that holds for a pass already under way when the drain began. Each claim checks again, under the seat's own lock, whether the drain has begun, and a lease taken while it did is handed straight back before anything is attached to it, so a pass cannot take back the seat the drain has just given up and leave it on a node that is leaving. A seat whose acquire hook is still running when the drain begins is [cut](#establishing-a-seat-and-giving-it-back) rather than waited for, and a drain begun before the seat host starts holds through its first pass: a stop decided while the engine is still starting claims nothing more.
 - A seat whose teardown could not be proven (below) keeps its lease and counts against capacity wherever it sits, even in no group because the node may no longer run its role. It is charged **first**, and what capacity is left is handed to the node's groups most constrained first, each up to its share — one number per group, which claiming and giving back both read. There is no total kept beside it: a node holding an unpinned seat and a stuck one would read "full" against a total while its pinned group had room, claim nothing, and shed nothing because no group was over. Charged first, the stuck seat squeezes the unpinned group instead, the unpinned seat goes to a peer, and the pinned seat is claimed.
 - A node that cannot serve its seats' work at all gives every seat back (`unserviceable`, below) and marks its presence row withdrawn (`seats_withdrawn`) until that clears. Its lease stays live, so without the mark its peers would go on counting it in every share and leave its part of each group free for a node that will never claim it.
 
@@ -74,6 +74,14 @@ The acquire hook (`node.Node.OnAcquire`, preparing the seat through `Engine.prep
 
 **The lease is renewed while the hook runs, the boot's included.** A hook can take longer than a lease TTL — MCP children to spawn, a memory to hydrate, an interrupted executor to recover — so the seat enters the held set before the hook starts and the heartbeat renews its lease throughout, while it admits no turn. That holds on the boot too: `seat.Host.Start` runs the heartbeat before its first placement pass, the one pass where every seat is new. It used to run it only once that pass was over, so a hook that outlasted the TTL let the lease lapse under a seat the node was halfway through building, for a peer to claim, and the [watchdog](#the-wedged-node-and-why-it-leaves) read the whole pass as the heartbeat wedged and, past the TTL, ended the process.
 
+**A lost lease or a drain cuts a seat still being taken.** The hook has no total — how long it takes is how long its children take to start, the seat's memory to cross and its executor to recover — and it runs under the seat's own lock, which every acquisition and release takes. So nothing that has to end a seat while it is being taken waits for that lock: it **cuts** the hook instead, ending the context the hook runs on, and the claim that took the seat gives it back once the hook returns, as never established (`acquire_failed`), whatever the hook returned. Nothing that acts on a seat as held treats a cut seat as one meanwhile (`seat.Host.Held`, `HeldSeats` and `Provable` leave it out, and the heartbeat no longer renews it): its lease is gone or being given back. What counts the leases the node holds in the store still counts it until its give-back, because the lease is still there — the room a placement pass claims against, the count the node advertises to its peers, and the epoch a write made for the seat is fenced with. Three things cut:
+
+- **A lease the heartbeat finds lost** — a renew that answered false, or a store unreachable past the TTL. The heartbeat used to drop the seat as it drops any lost lease, taking the seat's lock, and so waited for the hook: its beat froze, and past one TTL the watchdog ended the process; on the boot's first pass, before the watchdog is armed, every seat that pass had already attached went unrenewed meanwhile. Now it cuts the hook and goes on, and the node backs off the seat for one backoff, as it does after any lost lease.
+- **A drain.** Its release takes each seat's lock, so a stop waited out every acquisition in flight. The drain now cuts each seat still being taken as it begins, and does not back off it, since the node is leaving. It still waits, within its own bound, for each seat it cut to be given back by the claim that was taking it, before it reports `drain_complete`: a cut seat is out of the seats the drain releases, and its give-back — the seat's teardown and its lease — must not run on beside what the stop tears down after the drain. That give-back is a step of the stop's one allowance, as every give-back of the drain is.
+- **A stop during the boot's first pass.** That pass runs inside the engine's start, and a signal used to be acted on only once the start returned, so the pass went on claiming the node's whole share onto a node already stopping. The engine now begins the drain the moment the start's context ends (`engine.Engine.Start`, `node.Node.BeginDrain`): the pass claims nothing more and cuts what it is establishing, and the shutdown follows as before.
+
+A hook that ignores its context is not shortened by a cut, but nothing waits for it either, and what it returns is discarded.
+
 **Establishing is an edge, and it is reported.** The seat admits no turn while its acquire hook runs, and something the hook starts can be refused for exactly that reason: the sandbox recovery retries the resume of an answer the seat's last holder recorded and never resumed with, and that retry is told the seat is not yet established. Nothing used to say when that lifted — an establishment is not a renew's admission edge — so the retry slept until the clock said a heartbeat had passed, 15 s at the default TTL. The host now reports the moment the hook returns and the seat starts admitting turns (`seat.Hooks.OnEstablished`), the node passes it on together with the renew that proves ownership again after a store blip (`node.Config.SeatAdmitted`), and the engine re-checks the answers waiting on ownership at once.
 
 **A seat a person paused is attached already held.** A pause holds the seat's inbox under a named hold, and a release drops every hold with the attachment — so the node that acquires a paused seat (placement moved it, or its holder restarted) takes the pause hold **before** it attaches the inbox (`node.Config.AttachHolds`). A hold taken after the attach would be taken after the first delivery can arrive, and the mail the pause was holding would be the first thing the new holder ran. See [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat).
@@ -83,7 +91,7 @@ Releasing has **two modes**, because losing a lease and choosing to let go are o
 | Mode | When | What happens |
 |---|---|---|
 | **Voluntary** | drain, capacity rebalance, role decommissioned, placement moved, this node unable to route its seats' calls to the estate (`unserviceable`), a held seat that could not be prepared for a code sandbox an apply brought up (`unprepared`) | quiesce → let the in-flight handler finish under a bounded wait → detach → release the lease |
-| **Fenced** | renew returned false, the TTL grace expired, an acquire hook failed, config posture went `shed`/`stuck` | **detach first**, abandon in-flight work, republish nothing |
+| **Fenced** | renew returned false, the TTL grace expired, an acquire hook failed or was [cut](#establishing-a-seat-and-giving-it-back) by a lost lease or a drain, config posture went `shed`/`stuck` | **detach first**, abandon in-flight work, republish nothing |
 
 Fenced release never republishes. A peer may already be running the seat, and a republished event is a **new message**: a second copy of work the successor is already doing, carrying none of the identity the completion ledger's idempotency and the batch layer's aging both key on — so nothing downstream can collapse the two. Handing the delivery back unacked keeps that identity, and the successor gets exactly what this node never finished.
 
@@ -419,8 +427,15 @@ a counterparty profile, a skill's state and use count, an onboarding marker — 
 one whose *update is the content*, so the carried copy wins. That is safe
 rather than merely convenient while one node at a time publishes the seat,
 which is what holding it means: the changelog's latest value for a subject is
-then the value its current owner wrote. A seat's move is where that does not
-hold, and an older copy can win there (below).
+then the value its current owner wrote. So a node publishes a seat only under
+its **holding** of it: live from the moment its hydration of the seat
+completes, when the memory cycles carry it; releasing from the moment its
+release begins, when only the release's flush carries it; and none before the
+hydration completes, after a hydration that failed, or once the release has
+forgotten the seat. Each publish checks the holding before every row it sends,
+so a cycle partway through a seat whose release begins stops at its next row.
+A seat's move is where one publisher can still be two, and an older copy can
+win there (below).
 
 What is new is found by that **change sequence**: one counter per node, which
 every inserted diary note, episode and skill version — and every vector set on
@@ -430,8 +445,8 @@ hydration records where the counter stood as it completed: the seat's
 while held here, its own; rows at or below it are what the node held for it
 when it took it, the rows the hydration wrote and those it found already
 present, its backlog. A seat whose hydration here has not completed has no
-boundary, and every row of it counts as its own. A seat has a mark over each
-range in each of these tables: the stamp of the last row of the range the
+boundary, and no holding, so nothing here publishes it. A seat has a mark over
+each range in each of these tables: the stamp of the last row of the range the
 changelog acknowledged, which moves with each one. The rows of a range above
 its mark are read a mebibyte at a time and published one by one, so a cycle
 that runs out keeps what it carried of these tables, and the seat's next
@@ -474,8 +489,7 @@ turns leave of a cycle then moves while another seat's drains, rather than
 handing every whole cycle its cuts earn to the seat after it. Under overload,
 when the
 seats' turns run cycles out (a burst a seat wrote, profiles and skills that
-outlast a cycle, seats still being taken, every row of each counting as its
-own until its hydration completes), the backlogs' turn still comes once in
+outlast a cycle), the backlogs' turn still comes once in
 every lap of the seats, so the backlogs keep draining, as they would not if
 they went only after every seat's turn in each cycle. That is why the
 backlogs' turn is part of the rotation for good, and not only until the
@@ -503,7 +517,15 @@ carried, or that had the whole cycle and was cut inside one of the tables sent
 whole, is a warning, `seat_memory_not_carried`. A seat's own pass and its
 backlog are each said on their own: a seat whose own pass failed while the
 cycle had time left warns, with `pass=own`, whatever its backlog then did, and
-so does a backlog that failed with time left, with `pass=backlog`.
+so does a backlog that failed with time left, with `pass=backlog`. A seat the
+cycle does not carry because this node's holding does not let it, one still
+being taken or one whose release has begun, says nothing, and neither does the
+release of a seat whose hydration failed, which flushes nothing. A taking that
+fails after its hydration completed, at a later step of the acquisition, is
+flushed on its release like any other: what it flushes is what its hydration
+just wrote, the changelog's own copies of the seat's profiles, skills and
+marker, so it puts nothing older over them. A flush whose holding ends under
+it, which nothing should do, warns with `seat_memory_not_flushed`.
 
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.
@@ -557,11 +579,10 @@ them for the older rows' turn even when no seat's turn runs a cycle out, so a
 crash loses up to 2k + 3 cycles' writes. While cycles run out, a cycle can
 start part-way through the seats, and the older rows' turn then comes before
 the own rows of the seats after it, which had theirs in the cycle before.
-Among the k are a seat whose own rows
-outlast a cycle, one whose profiles and skills do, and one still being taken,
-every row of which counts as its own until its hydration completes; the last
-is what a restart's cycles meet first, once per seat taken. A graceful handoff
-flushes on release what the cycles have not carried, from the marks they left,
+Among the k are a seat whose own rows outlast a cycle and one whose profiles
+and skills do; a seat still being taken is not, since no cycle carries it until
+its hydration completes. A graceful handoff flushes on release what the cycles
+have not carried, from the marks they left,
 in the same order: the seat's own rows, then its profiles, skills and marker,
 then its backlog, for up to five seconds at one broker round trip a row (about
 fifty rows across a slow link, thousands on a local broker), and what that
@@ -582,12 +603,18 @@ the broker takes, eight mebibytes on the embedded one, is refused every time it
 is published, so every pass that meets it stops at it, and nothing after it in
 that pass, in its table or in the tables the pass carries after it, is carried
 while this node holds the seat
-([#349](https://github.com/crewlet/crewlet/issues/349)). And while a seat
-moves, an older copy of its profiles, skills or onboarding marker can land
-after the newer one and replace it: published by the releasing node's own
-sync, from a cycle it began before the release, by the next holder while it
-is still taking the seat, or by a node whose taking of the seat failed, in the
-flush that gives it back ([#511](https://github.com/crewlet/crewlet/issues/511)).
+([#349](https://github.com/crewlet/crewlet/issues/349)). Each node publishes
+the seat only under its holding (above), so neither the releasing node's
+cycle, once the release has begun, nor the next holder while it is still
+taking the seat, nor a node whose hydration of the seat failed, in the flush
+that gives it back, publishes it. While a seat moves, an older copy of a row
+can still land after the newer one and replace it in two ways: the one row the
+releasing node's cycle was sending as its release began, which can land after
+the flush's copy of it, whether a profile, skill or marker rewritten since the
+cycle read it or a note or episode whose vector was set since, and two nodes
+holding the seat at once, a node whose lease lapsed under it still carrying
+the seat while the next holder writes it
+([#511](https://github.com/crewlet/crewlet/issues/511)).
 A publish of the seat landing in that window while the next holder hydrates it
 can also move a row the hydration has not read yet past its barrier, and slip
 by the count its replay ends on, which the broker moves for the replaced row
@@ -799,7 +826,7 @@ Every failure above assumes a node either works or dies. The one that is neither
 - Its seat leases lapse, because nothing is renewing them. Peers take the seats over, correctly.
 - Its **stalled handler is still holding a delivery.** Pull consumers prefetch nothing, so what a stopped loop holds is bounded by the batch already in its hands rather than by the seat's backlog — but those messages are ack-pending for a corpse, and the clock on them is the broker's: JetStream returns a fetched-unacked message when the 30-minute ack window elapses, and closing the connection does not shorten it. The successor serves everything published after it claims the seat; it is that one batch that waits.
 
-Nothing can be scheduled out of that state either: the duty that stalled is the one that would have to run the recovery, so anything queued behind it waits on the very blockage it is reacting to. **What a watcher can do unilaterally is end the process** — and it is worth being exact about what that buys, because it is *not* the held mail back:
+Nothing can be scheduled out of that state either: the duty that stalled is the one that would have to run the recovery, so anything queued behind it waits on the very blockage it is reacting to. The heartbeat is kept out of the longest wait the engine itself would otherwise put it in: it never waits on a seat still being taken, whose acquire hook can run for as long as the seat's memory takes to cross, and [cuts](#establishing-a-seat-and-giving-it-back) such a seat's hook when its lease is lost rather than taking the lock that hook runs under. It still takes the lock of an established seat whose lease it lost, and of a seat whose teardown it retries, and runs that teardown itself: a lease lost while a sandbox apply prepares the seat, or while a voluntary release tears it down, still holds the beat until that work lets the lock go. **What a watcher can do unilaterally is end the process** — and it is worth being exact about what that buys, because it is *not* the held mail back:
 
 - **It removes the actor.** A wedged node that later resumes acts on a seat it no longer owns, with its MCP children still spawned and its credentials still live — and a turn's outbound effects, a chat post or a work-item comment, are not something an epoch fence can reach.
 - **It lets the node come back.** A process that neither works nor dies goes on answering `/health`, so nothing restarts it: the seats it was handed are covered by peers, but its capacity stays lost until a person notices.

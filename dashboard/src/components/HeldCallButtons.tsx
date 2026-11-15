@@ -9,7 +9,8 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, CodeBlock, Modal, Text, useToast } from "@crewlethq/ui";
+import { Button, CodeBlock, Text, useToast } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import type { DelegatedAct } from "~/contract/delegated.ts";
 import type { McpHeldWhole } from "~/contract/mcp.ts";
 import { releaseRequestOf } from "~/lib/delegation.ts";

@@ -33,6 +33,7 @@ import {
   BranchProtection,
   RepoProtection,
   codeAlarmsOf,
+  quietWords,
   codePolicyOf,
   protectionLines,
 } from "./Gitlet.tsx";
@@ -83,6 +84,13 @@ test("the alarms are Gitlet's kinds, oldest first, and a node that said nothing 
     { node: "git-1", kind: "code_commit_busy", since: "2026-10-31T09:00:00Z" },
   ]);
   expect(got.silent).toEqual(["booting"]);
+});
+
+// NOTHING FIRING IS A WHOLE SENTENCE, true of the nodes it covers: "No code
+// alarm is firing on any node that said." left the reader to work out which.
+test("nothing firing is said of the nodes it is true of", () => {
+  expect(quietWords([])).toBe("No code alarm is firing on any node.");
+  expect(quietWords(["booting"])).toBe("No code alarm is firing on the nodes that have reported.");
 });
 
 // AN UNSET FIELD READS AS THE ENGINE'S DEFAULT, and says it is one; a set one

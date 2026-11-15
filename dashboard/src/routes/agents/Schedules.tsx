@@ -58,6 +58,7 @@ import {
   TableEntityCell,
   TableTextCell,
   PageNote,
+  Text,
   type DataGridActivationEvent,
   type DataGridColumn,
   peekClickHandler,
@@ -571,9 +572,27 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
   // cannot read yields no fires at all, which is the same refusal an
   // unparseable expression gets and is what `problem` on the row names.
   const upcoming = useMemo(
-    () => (row.cron ? nextFires(row.cron, new Date(minute * 60_000), row.timezone, count) : []),
-    [row.cron, row.timezone, minute, count],
+    () =>
+      row.cron && row.enabled
+        ? nextFires(row.cron, new Date(minute * 60_000), row.timezone, count)
+        : [],
+    [row.cron, row.enabled, row.timezone, minute, count],
   );
+  // A PAUSED SCHEDULE HAS NO RUNS AHEAD, and the card says so where its runs
+  // would be: it listed five times under a header whose Next said paused, as
+  // if the switch changed nothing.
+  if (!row.enabled) {
+    return (
+      <Card>
+        <Card.Header icon={<CalendarGlyph size="sm" />}>
+          <Card.Title>And after that</Card.Title>
+        </Card.Header>
+        <Text as="p" variant="body" tone="secondary">
+          Nothing while it is paused. It runs on its times again once it is resumed.
+        </Text>
+      </Card>
+    );
+  }
   // ONE FIRE IS NOT A SERIES. The next fire is already a fact in the header,
   // so a panel repeating it alone would be the same value twice.
   if (upcoming.length <= 1) return null;
@@ -779,7 +798,9 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   );
   // Schedules are pushed on a config apply, and the RUNS are not pushed at
   // all — so this polls, slowly, because a cron's next fire moves in minutes.
-  const { data, loading, error, refusal } = useQuery("schedules", undefined, { pollMs: 30_000 });
+  const { data, loading, error, refusal, refetch } = useQuery("schedules", undefined, {
+    pollMs: 30_000,
+  });
 
   const schedules = data?.schedules ?? [];
   const viewer = useViewer();
@@ -862,6 +883,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         error={one.error}
         refusal={one.refusal}
         now={now}
+        onApplied={refetch}
       />
     );
   }
@@ -872,7 +894,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
           schedule is a line of the seat or team that declares it, written
           through the company document (`ScheduleControls.tsx`). */}
       <PageActions>
-        <NewScheduleButton />
+        <NewScheduleButton onApplied={refetch} />
       </PageActions>
       {/* NO COUNT IN THE BAR AND NO INTRODUCTION: the section's tab carries
           the figure ("Schedules 6"), which the bar's "6 schedules defined"
@@ -932,7 +954,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 // for a reader who may open it.
                 action: (
                   <span className="row gap-2">
-                    <NewScheduleButton variant="secondary" />
+                    <NewScheduleButton variant="secondary" onApplied={refetch} />
                     {mayReadConfig && (
                       <ButtonLink variant="secondary" size="small" href={href(CONFIG_PATH)}>
                         Open the configuration
@@ -1172,6 +1194,7 @@ function OneSchedule({
   error,
   refusal,
   now,
+  onApplied,
 }: {
   scopeType: string;
   scopeId: string;
@@ -1187,6 +1210,8 @@ function OneSchedule({
   error: string | null;
   refusal: QueryRefusal | LogRefusal | null;
   now: number;
+  /** Read the company's schedules again, once this node applies a change saved here. */
+  onApplied: () => void;
 }) {
   usePageLabels({ [[scopeType, scopeId, name].join("/")]: name });
   const org = useOrg();
@@ -1209,7 +1234,7 @@ function OneSchedule({
       <PageActions>
         {/* THE SCHEDULE'S OWN CONTROLS, once the company declares it: a
             schedule only its history remembers has nothing to run or edit. */}
-        {row && <ScheduleActions row={row} />}
+        {row && <ScheduleActions row={row} onApplied={onApplied} />}
         <a className="t-link" href={href(["company", "schedules"])}>
           All schedules →
         </a>
@@ -1357,7 +1382,9 @@ export function SchedulePeek({ scope }: { scope: string }) {
         title={name || scope}
         status={answered ? scheduleStatus(row, runs.length > 0) : undefined}
         facts={row ? scheduleFacts(row, now, who) : undefined}
-        actions={row ? <ScheduleActions row={row} compact /> : undefined}
+        actions={
+          row ? <ScheduleActions row={row} compact onApplied={defined.refetch} /> : undefined
+        }
       />
       <div className="col gap-3">
         {loading && !answered && <Skeleton variant="text" rows={6} label="Loading the schedule" />}

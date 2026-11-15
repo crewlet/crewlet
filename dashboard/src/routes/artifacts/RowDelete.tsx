@@ -8,7 +8,8 @@
  */
 
 import { useState } from "react";
-import { Button, Modal } from "@crewlethq/ui";
+import { Button } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 
 /** The row a reader asked to delete, as the dialog names it. */

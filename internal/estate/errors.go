@@ -82,6 +82,7 @@ var sentinels = []sentinel{
 	{"worklet.ErrNoFile", worklet.ErrNoFile},
 	{"worklet.ErrNoProject", worklet.ErrNoProject},
 	{"worklet.ErrNoTask", worklet.ErrNoTask},
+	{"worklet.ErrNoView", worklet.ErrNoView},
 	{"worklet.ErrNoType", worklet.ErrNoType},
 	{"worklet.ErrNotAuthor", worklet.ErrNotAuthor},
 	{"worklet.ErrNothingToRestore", worklet.ErrNothingToRestore},

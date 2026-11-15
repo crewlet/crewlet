@@ -198,24 +198,31 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		if err := decodePayload(c.record.Mutation, &view); err != nil {
 			return 0, fmt.Errorf("worklet: decode the view at %s: %w", c.position, err)
 		}
+		// A DELETED VIEW KEEPS ITS ROW, stamped ([Writer.DeleteView]),
+		// so the version guard below still has something to compare a
+		// redelivered save against.
+		var deletedAt any
+		if view.DeletedAt != nil {
+			deletedAt = store.EncodeTime(*view.DeletedAt)
+		}
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_views
 				(id, container_kind, container_id, name, type, owner, protected,
-				 is_default, rank, icon, params_json, version, document)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+				 is_default, rank, icon, params_json, deleted_at, version, document)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (id) DO UPDATE SET
 				container_kind = excluded.container_kind,
 				container_id = excluded.container_id, name = excluded.name,
 				type = excluded.type, owner = excluded.owner,
 				protected = excluded.protected, is_default = excluded.is_default,
 				rank = excluded.rank, icon = excluded.icon,
-				params_json = excluded.params_json, version = excluded.version,
-				document = excluded.document
+				params_json = excluded.params_json, deleted_at = excluded.deleted_at,
+				version = excluded.version, document = excluded.document
 			WHERE excluded.version > tracker_views.version`,
 			key, view.Container.Kind, view.Container.ID, view.Name,
 			string(view.Type), view.Owner, boolInt(view.Protected),
 			boolInt(view.Default), string(view.Rank), view.Icon,
-			jsonOf(view.Params), c.packed, []byte(c.record.Mutation))
+			jsonOf(view.Params), deletedAt, c.packed, []byte(c.record.Mutation))
 	case "tracker_persons":
 		var person Person
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml

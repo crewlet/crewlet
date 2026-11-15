@@ -15,7 +15,7 @@
  * for somebody else.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { History, HistoryView } from "./History.tsx";
@@ -111,6 +111,25 @@ function cellOf(container: HTMLElement, head: string): HTMLElement[] {
 
 /** The bar's pickers, by the dimension each one narrows. */
 const picker = (name: string) => screen.getByRole("combobox", { name });
+
+// THE CHART MAKES NO CLAIM BEFORE AN ANSWER. "No change came back for this
+// window to chart" was drawn whenever no rows were held, which is also true
+// while the read is out and after it failed, where it read as the answer.
+test("the chart waits for an answer, and a failed read says only its error", async () => {
+  servingWith((what) => (what === "work_activity" ? new Promise(() => {}) : {}));
+  const loading = mount();
+  await act(async () => {});
+  expect(loading.container.textContent).not.toContain("No change came back");
+  cleanup();
+
+  servingWith((what) => {
+    if (what === "work_activity") throw new Error("internal");
+    return {};
+  });
+  const failed = mount();
+  await waitFor(() => expect(screen.getByText(/didn.t load/)).toBeTruthy());
+  expect(failed.container.textContent).not.toContain("No change came back");
+});
 
 // THE WINDOW IS A WALL-CLOCK RANGE, which is what a reader choosing one means:
 // the engine's own `from`/`to` over the AUTHORED instants, never a log
@@ -503,10 +522,12 @@ test("a reader looking at their own queue is still addressed as themselves", asy
   );
 });
 
-// THE BAR SAYS HOW MUCH IS SHOWN IN PLAIN WORDS, with the way to more beside it:
-// "100 changes loaded, and older ones beyond them" described a paging state
-// where a reader wanted a number and a button.
-test("the bar says how many are shown and offers the older ones", async () => {
+// THE BAR SAYS HOW MUCH IS SHOWN IN PLAIN WORDS: "100 changes loaded, and older
+// ones beyond them" described a paging state where a reader wanted a number.
+// The way to more is offered ONCE, at the foot where the rows run out: a
+// "Load older" in the bar beside "Load older changes" under the rows was one
+// press offered twice.
+test("the bar says how many are shown and the foot alone offers the older ones", async () => {
   const query = servingWith((what, params) => {
     if (what !== "work_activity") return {};
     return params?.cursor
@@ -515,7 +536,8 @@ test("the bar says how many are shown and offers the older ones", async () => {
   });
   mount();
   await waitFor(() => expect(screen.getByText(/Showing the latest 1/)).toBeTruthy());
-  fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+  expect(screen.getAllByRole("button", { name: /^Load older/ })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Load older changes" }));
   await waitFor(() => expect(asked(query).cursor).toBe("c1"));
   await waitFor(() => expect(screen.getByText(/Showing the latest 2/)).toBeTruthy());
 });
@@ -555,4 +577,19 @@ test("a run of chart re-applications is one quiet line with no epoch in it", asy
   expect(screen.getByText("Org chart re-applied to ENG")).toBeTruthy();
   expect(container.querySelectorAll(".crewlet-data-grid__row")).toHaveLength(3);
   expect(container.textContent).not.toMatch(/epoch|1790538626/i);
+});
+
+// A TURN COLUMN ONLY WHERE A ROW HAS A TURN: the column was drawn empty on every
+// row of a page of people's changes, width the sentence needed.
+test("the log draws a Turn column only when a row on it has a turn", async () => {
+  serving({ work_activity: { records: [record({ id: "r1" })], complete: true } });
+  const plain = mount();
+  await waitFor(() => expect(cellOf(plain.container, "What changed")).toHaveLength(1));
+  expect(screen.queryByRole("columnheader", { name: "Turn" })).toBeNull();
+  cleanup();
+  serving({
+    work_activity: { records: [record({ id: "r1", turn_id: "turn-1" })], complete: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByRole("columnheader", { name: "Turn" })).toBeTruthy());
 });

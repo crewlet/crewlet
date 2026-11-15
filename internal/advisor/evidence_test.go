@@ -199,7 +199,8 @@ func TestALedgerFindingNamesItsSeat(t *testing.T) {
 }
 
 // THE BACKUP FINDING IS THE OWNER'S AND BLOCKS, while the backup alarm stands
-// and only then; it is a step outside the document, with nothing to send.
+// and only then; it is a step taken on the dashboard's Backups page, with
+// nothing to send, and its sentence names no command.
 func TestTheBackupFindingBlocksWhileTheBackupAlarmStands(t *testing.T) {
 	t.Parallel()
 	if got := advisor.Detect(advisor.Evidence{}, kindOf); len(got) != 0 {
@@ -211,9 +212,12 @@ func TestTheBackupFindingBlocksWhileTheBackupAlarmStands(t *testing.T) {
 	}
 	f := got[0]
 	if f.Class != advisor.ClassNoVerifiedBackup || f.Severity != advisor.SeverityBlocks ||
-		f.Actor != advisor.ActorOwner || f.Fix.Kind != advisor.FixExternalStep ||
-		len(f.Fix.Options) != 0 || f.Fix.Sentence == "" {
-		t.Errorf("the backup finding is %+v, want the owner's, blocking, an external step", f)
+		f.Actor != advisor.ActorOwner || f.Fix.Kind != advisor.FixOpenPage ||
+		f.Fix.Page != advisor.PageBackups || len(f.Fix.Options) != 0 || f.Fix.Sentence == "" {
+		t.Errorf("the backup finding is %+v, want the owner's, blocking, taken on the backups page", f)
+	}
+	if strings.Contains(f.Fix.Sentence, "`") || strings.Contains(f.Fix.Sentence, "crewlet ") {
+		t.Errorf("the backup finding sends a person to a command: %q", f.Fix.Sentence)
 	}
 	if len(f.Evidence) != 1 || f.Evidence[0] != (advisor.Fact{Key: "logs", Value: 12}) {
 		t.Errorf("the backup finding's evidence is %v, want logs=12", f.Evidence)

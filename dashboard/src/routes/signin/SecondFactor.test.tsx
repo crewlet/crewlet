@@ -12,7 +12,7 @@
  * not called harmless: it may have stored a set this page will never see.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import {
@@ -192,4 +192,98 @@ describe("setting up an authenticator", () => {
     expect(screen.queryByRole("img", QR)).toBeNull();
     expect(screen.queryByText(groupedKey(SECRET))).toBeNull();
   });
+});
+
+/**
+ * THE DIALOG'S GESTURES ARE IN ITS FOOTER, beside one another, as every other
+ * dialog's are. The setup drew its own Confirm into the body, left-aligned,
+ * while Cancel stood alone in the footer; and the first recovery codes put
+ * their way on in the body over an empty footer. The page's own form (the
+ * required enrolment) keeps Confirm under its steps.
+ *
+ * Mutation: draw Confirm inside the steps again and the first case goes red.
+ */
+describe("the authenticator dialog's footer", () => {
+  const SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+  const SEED: Answer = {
+    status: 200,
+    body: { secret: SECRET, uri: `otpauth://totp/x?secret=${SECRET}` },
+  };
+  const footOf = (name: string) =>
+    screen.getByRole("button", { name }).closest(".crewlet-modal__footer");
+
+  function open(codes: boolean) {
+    const tree = (shown: boolean) => (
+      <ToastProvider>
+        <LayerHost>{shown && <AuthenticatorDialog codes={codes} onClose={() => {}} />}</LayerHost>
+      </ToastProvider>
+    );
+    const { rerender } = render(tree(false));
+    rerender(tree(true));
+  }
+
+  test("holds Confirm beside Cancel, and the body holds no button of the setup's", async () => {
+    engine({ "POST /auth/totp": SEED });
+    open(true);
+    const dialog = await screen.findByRole("dialog", { name: "Two-step verification" });
+    await within(dialog).findByLabelText(/^code from the app/i);
+    const confirm = within(dialog).getByRole("button", { name: "Confirm" });
+    expect(footOf("Confirm")).not.toBeNull();
+    expect(footOf("Cancel")).toBe(footOf("Confirm"));
+    // NOT READY BEFORE A CODE IS TYPED, as the page's Confirm is not.
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText(/^code from the app/i), {
+      target: { value: "123456" },
+    });
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("Enter in the code field confirms through the footer's form", async () => {
+    const sent = engine({
+      "POST /auth/totp": [SEED, { status: 200, body: { status: "enrolled" } }],
+    });
+    open(true);
+    const dialog = await screen.findByRole("dialog", { name: "Two-step verification" });
+    const field = await within(dialog).findByLabelText(/^code from the app/i);
+    fireEvent.change(field, { target: { value: "123456" } });
+    fireEvent.submit(field.closest("form")!);
+    await within(dialog).findByText(/Authenticator set up\./);
+    expect(sent.filter((s) => s.path === "/auth/totp")).toHaveLength(2);
+    expect(footOf("Done")).not.toBeNull();
+  });
+
+  test("a first authenticator's codes are saved from the footer", async () => {
+    engine({
+      "POST /auth/totp": [SEED, { status: 200, body: { status: "enrolled" } }],
+      "POST /auth/totp/recovery": { status: 200, body: { codes: ["a1b2-c3d4"] } },
+    });
+    open(false);
+    const dialog = await screen.findByRole("dialog", { name: "Two-step verification" });
+    const field = await within(dialog).findByLabelText(/^code from the app/i);
+    fireEvent.change(field, { target: { value: "123456" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
+    await within(dialog).findByText("a1b2-c3d4");
+    expect(footOf("I’ve saved them")).not.toBeNull();
+  });
+});
+
+// THE REQUIRED ENROLMENT'S PAGE IS ITS OWN FORM, its Confirm under the steps.
+test("the page's setup keeps its own Confirm under its steps", async () => {
+  engine({
+    "POST /auth/totp": {
+      status: 200,
+      body: { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP" },
+    },
+  });
+  render(
+    <ToastProvider>
+      <LayerHost>
+        <SecondFactorSetup onEnrolled={() => {}} />
+      </LayerHost>
+    </ToastProvider>,
+  );
+  const field = await screen.findByLabelText(/^code from the app/i);
+  const confirm = screen.getByRole("button", { name: "Confirm" });
+  expect(confirm.closest("form")).toBe(field.closest("form"));
+  expect(confirm.closest(".crewlet-modal__footer")).toBeNull();
 });

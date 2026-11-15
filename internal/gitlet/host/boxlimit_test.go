@@ -63,7 +63,7 @@ func TestABoxPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
 	fetch := func(ref host.BoxRunRef) (barriers int, answer string) {
 		t.Helper()
 		before := rec.linearizable()
-		resp, body := boxDo(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(ref), v2,
+		resp, body := boxDo(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(t, ref), v2,
 			fetchWants([]string{missing}))
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("a box's fetch of %s answered %d %q", missing, resp.StatusCode, short(body))
@@ -136,7 +136,7 @@ func TestASeatsBoxAndItsTurnShareItsTermOnANode(t *testing.T) {
 	missing := randomOID()
 	for i := range gitlet.ResyncBurst {
 		before := rec.linearizable()
-		resp, body := boxDo(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(ref), v2,
+		resp, body := boxDo(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(t, ref), v2,
 			fetchWants([]string{missing}))
 		if resp.StatusCode != http.StatusOK || rec.linearizable() == before || !strings.Contains(body, "not our ref") {
 			t.Fatalf("re-sync %d of the box's %d answered %d %q with %d barriers, want one and git's own not "+
@@ -171,14 +171,14 @@ func TestABoxsBarrierRaisesItsFloor(t *testing.T) {
 	runs := c.Fleet.Runs()
 	ref, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessRead)
 	launched := runs.Floor(ref)
-	_, _ = boxDo(t, c, 1, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(ref), v2, lsRefs())
+	_, _ = boxDo(t, c, 1, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(t, ref), v2, lsRefs())
 	p := gitlettest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Clone(c.URL(0))
 	head := p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
 	c.MustPush(p, work, "main")
 
 	before := rec.linearizable()
-	if resp, body := boxDo(t, c, 1, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(ref), v2,
+	if resp, body := boxDo(t, c, 1, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(t, ref), v2,
 		fetchWants([]string{head})); resp.StatusCode != http.StatusOK || strings.Contains(body, "ERR ") {
 		t.Fatalf("the box's fetch of %s through the node behind answered %d %q", head, resp.StatusCode, short(body))
 	}
@@ -218,7 +218,7 @@ func TestABoxsRefusedRepositoryIsJudgedAgainWhileItsResyncsLast(t *testing.T) {
 	}
 	for i := range gitlet.ResyncBurst + 1 {
 		before := resolves()
-		_, body := boxDo(t, c, 0, gitlettest.RepoName, boxFetchAdvert, host.BoxUser, runs.Token(ref), "", "")
+		_, body := boxDo(t, c, 0, gitlettest.RepoName, boxFetchAdvert, host.BoxUser, runs.Token(t, ref), "", "")
 		if !strings.Contains(body, "deleted") {
 			t.Fatalf("request %d of a run whose repository is deleted answered %q, want it told so", i+1,
 				short(body))
@@ -271,7 +271,7 @@ func TestABoxPastItsInFlightIsBusy(t *testing.T) {
 	client := node.Client()
 	answered := make(chan reply, host.MaxRunRequests)
 	for range host.MaxRunRequests {
-		req := boxRequest(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(busy), v2, lsRefs())
+		req := boxRequest(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(t, busy), v2, lsRefs())
 		go func() { answered <- boxSend(req, client) }()
 	}
 	for i := range host.MaxRunRequests {
@@ -287,7 +287,7 @@ func TestABoxPastItsInFlightIsBusy(t *testing.T) {
 
 	reads := runs.Reads()
 	last := make(chan reply, 1)
-	req := boxRequest(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(busy), v2, lsRefs())
+	req := boxRequest(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(t, busy), v2, lsRefs())
 	go func() { last <- boxSend(req, client) }()
 	select {
 	case a := <-last:
@@ -308,7 +308,7 @@ func TestABoxPastItsInFlightIsBusy(t *testing.T) {
 	if got := counted(node.Metrics(), metrics.CodeBoxInflightRefused, ""); got != 1 {
 		t.Errorf("%s = %d, want 1", metrics.CodeBoxInflightRefused, got)
 	}
-	if resp, body := boxDo(t, c, 0, gitlettest.RepoName, boxFetchAdvert, host.BoxUser, runs.Token(other), v2,
+	if resp, body := boxDo(t, c, 0, gitlettest.RepoName, boxFetchAdvert, host.BoxUser, runs.Token(t, other), v2,
 		""); resp.StatusCode != http.StatusOK {
 		t.Errorf("another run's request answered %d %q while the first held its sixteen", resp.StatusCode,
 			short(body))
@@ -321,7 +321,7 @@ func TestABoxPastItsInFlightIsBusy(t *testing.T) {
 		}
 	}
 	eventually(t, "the run's places given back", func() bool { return host.RunRequests(node.Host(), busy.LaunchID) == 0 })
-	if resp, body := boxDo(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(busy), v2,
+	if resp, body := boxDo(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(t, busy), v2,
 		lsRefs()); resp.StatusCode != http.StatusOK {
 		t.Errorf("the run's request once its sixteen ended answered %d %q", resp.StatusCode, short(body))
 	}

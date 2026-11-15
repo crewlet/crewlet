@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -220,8 +221,8 @@ func (cv conversing) page(ctx context.Context, out codeConversationAnswer) (tool
 // and has none.
 func conversationClass(r gitlet.ConversationRefusal) (tools.Refusal, bool) {
 	switch r {
-	case gitlet.ConversationRefusalNotPermitted, gitlet.ConversationRefusalNotAuthor,
-		gitlet.ConversationRefusalNotRaiser:
+	case gitlet.ConversationRefusalNotPermitted, gitlet.ConversationRefusalOwnChange,
+		gitlet.ConversationRefusalNotAuthor, gitlet.ConversationRefusalNotRaiser:
 		return tools.RefusalForbidden, true
 	case gitlet.ConversationRefusalRepoArchived:
 		return tools.RefusalConflict, true
@@ -265,7 +266,21 @@ func conversationRefused(tool string, res gitlet.ConversationResult) tools.Resul
 	default:
 		said += " The same call is refused again; change what it asks for."
 	}
-	return refusedBy(class, cause, said)
+	return toPerson(refusedBy(class, cause, said), conversationRefusalWords(res.Refusal))
+}
+
+// conversationRefusalWords is a person's words for the conversation refusals
+// a person meets from the change page's own controls: a review of a change
+// they wrote, which the page holds for its authors and which only a change
+// gaining them as an author since the page's read reaches. Every other
+// conversation refusal is answered in its code's own sentence, the floor
+// ADR-0060 sets: not_permitted's rules are four, and its sentence names none of
+// them for a person.
+func conversationRefusalWords(refusal gitlet.ConversationRefusal) caveat.Refusal {
+	if refusal == gitlet.ConversationRefusalOwnChange {
+		return caveat.ReviewOfYourOwnChange()
+	}
+	return caveat.Refusal{}
 }
 
 // ---- anchoring lines --------------------------------------------------------- //

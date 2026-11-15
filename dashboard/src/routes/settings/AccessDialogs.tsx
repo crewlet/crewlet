@@ -26,11 +26,11 @@ import {
   FormField,
   InlineCode,
   Input,
-  Modal,
   Select,
   Skeleton,
   Text,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { PencilGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";

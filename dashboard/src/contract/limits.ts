@@ -9,6 +9,20 @@ type LimitGroup = "turn" | "delegation" | "notifications" | "schedules";
 type LimitUnit = "count" | "seconds" | "fraction" | "per_second";
 
 /**
+ * The values a cap admits, as the engine's validator holds it: `config.Range`
+ * in Go, the ONE declaration of the bound both read. In the cap's own unit (a
+ * share as a fraction of one, a time limit in seconds).
+ */
+export interface SettingRange {
+  /** The least value admitted, or, with `min_exclusive`, the value every one is above. */
+  min: number;
+  /** `min` itself is refused: a time limit of zero expires before the work starts. */
+  min_exclusive?: boolean;
+  /** The greatest value admitted; absent where nothing bounds the cap from above. */
+  max?: number;
+}
+
+/**
  * One cap the engine holds the company's work to: `queries.LimitRow` in Go.
  * `value` is what the engine ENFORCES, defaults applied, so a screen never
  * keeps its own copy of a default. The applied company does not remember
@@ -41,6 +55,12 @@ interface LimitRow {
    * exactly where this is true.
    */
   settable: boolean;
+  /**
+   * What the validator admits for `key`, so the editor says a value outside it
+   * beside the field before anything is sent. On every settable row; absent
+   * on a constant.
+   */
+  range?: SettingRange;
 }
 
 /**

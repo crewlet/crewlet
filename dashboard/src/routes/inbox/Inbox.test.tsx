@@ -1036,7 +1036,73 @@ describe("a question asked before its agent's access changed", () => {
   });
 });
 
+// ONE TIME FORMAT DOWN THE LIST: a condition's row said "since 22:56" beside
+// an ask's "12m", two ways of saying when in one column.
+test("a condition's row says when it began in the list's own short form", async () => {
+  const paused = new Date(Date.now() - 11 * 60_000).toISOString();
+  mount({
+    agents: [
+      {
+        id: "pm",
+        agent_id: "pm",
+        handle: "pm",
+        role: "PM",
+        activity: "stopped",
+        stopped_reason: "paused",
+        paused: { by: "jane", by_kind: "human", at: paused, stop_running: false },
+      },
+    ],
+    answers: { decisions: decisionsOf(askItem()) },
+  });
+  await settle();
+  const needs = screen.getByRole("region", { name: /^Needs you/ });
+  expect(needs.textContent).toContain("11m");
+  expect(needs.textContent).not.toMatch(/since \d{1,2}:\d{2}/);
+});
+
 describe("the pane", () => {
+  // AN ASK FILED WITH ITS TASK (`create_work_item{ask}`) IS THE TASK'S TITLE,
+  // and what the asker wrote beside it is the task's description: the pane
+  // said the title twice (the byline's task, then the heading) and never the
+  // description, so the person answered without the context.
+  test("an ask filed with its task reads the task's description, and its title once", async () => {
+    const question = "Can we move the launch to Thursday?";
+    const own = askItem(undefined as never);
+    Object.assign(own.ask, { title: question, body: question, asked_by: "cto" });
+    delete (own.ask as { decision?: unknown }).decision;
+    mount({
+      answers: {
+        decisions: decisionsOf(own),
+        work_item: {
+          task: {
+            id: "t-12",
+            key: "LEAD-12",
+            project: "LEAD",
+            title: question,
+            version: 1,
+            body: "The venue needs an answer by noon.",
+          },
+          complete: true,
+        },
+      },
+    });
+    await settle();
+    await settle();
+    expect(screen.getByRole("heading", { name: question })).toBeTruthy();
+    expect(byline()).toBe("CTO asks you on LEAD-12");
+    expect(document.querySelector(".crewlet-reading-pane__lead")?.textContent).toContain(
+      "The venue needs an answer by noon.",
+    );
+    // THE ROW NAMES THE TASK BY ITS KEY, its title being the row's question.
+    for (const link of screen.getAllByRole("link", { name: /LEAD-12/ })) {
+      expect(link.textContent).not.toContain(question);
+    }
+    // AND THE FIELD IS AN ANSWER, not an instruction.
+    expect(screen.getByRole("textbox", { name: "Answer CTO" }).getAttribute("placeholder")).toBe(
+      "Answer CTO",
+    );
+  });
+
   test("the byline is one sentence: who, what is asked of you, and the task", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({ answers: { decisions: decisionsOf(askItem()) } });
@@ -1088,7 +1154,7 @@ describe("the pane", () => {
     // ASKED BEFORE EVERY AGENT'S QUESTION CARRIED OPTIONS (ADR-0100), and read
     // as it was stored: nothing to press, so it is answered in words at once.
     expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
-    fireEvent.change(screen.getByRole("textbox", { name: "Reply to CTO" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Answer CTO" }), {
       target: { value: "Merged." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -1422,7 +1488,7 @@ describe("the pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Something else" }));
     await settle();
     expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
-    fireEvent.change(screen.getByRole("textbox", { name: "Reply to CTO" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Answer CTO" }), {
       target: { value: "Hold it a week." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -2074,6 +2140,12 @@ describe("the pane", () => {
         args: { read_through: "CREWLET_CODE_LOG@1:5", seen: "CREWLET_CODE_LOG@1:5" },
       },
     ]);
+    // ONE PRESS, ONE TOAST: each source's write raised its own "Marked all
+    // read", two identical toasts for one gesture.
+    const toasts = [...document.querySelectorAll(".crewlet-toast")].filter((t) =>
+      t.textContent?.includes("Marked all read"),
+    );
+    expect(toasts).toHaveLength(1);
   });
 
   // A READER WITHOUT GITLET MARKS ONLY WORKLET'S HALF (ADR-0110): the engine

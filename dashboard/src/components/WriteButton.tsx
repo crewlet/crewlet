@@ -17,12 +17,36 @@
  * the page beside it (the New task sheet's footer), because neither reaches a
  * touch screen.
  *
- * AND IT SAYS WHAT BECAME OF THE LAST PRESS, beside itself: a refusal stays
- * under the control until the next press, with a Retry where the node, not
- * the request, was the problem (`lib/useAct.ts`).
+ * AND IT SAYS WHAT BECAME OF THE LAST PRESS: a refusal stays until the next
+ * press, with a Retry where the node, not the request, was the problem
+ * (`lib/useAct.ts`).
+ *
+ * # Where the refusal is drawn
+ *
+ * Under the control, where the control stands alone (a form's submit, a
+ * button in a card's body). But a control that is ONE OF A ROW (the page
+ * bar, a header's actions, a dialog's foot) drew its refusal there too, in
+ * its own box: the box took the refusal's width and height, and the row
+ * reflowed around it. The page bar grew a second line with Run now above the
+ * trail and Edit and Delete shoved aside; a dialog's foot left Cancel alone
+ * at its end and dropped the primary action and the refusal onto lines of
+ * their own under it.
+ *
+ * So a row of controls keeps a PLACE for their refusals, outside the row
+ * (under the page's head, under an object's header, above a dialog's foot),
+ * and hands it to the controls in it ([RefusalsTo], [useRefusalPlace]); a
+ * control in such a row draws its refusal there and its row never moves.
  */
 
-import type { ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import { Button, RefusalStrip, type ButtonProps } from "@crewlethq/ui";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
@@ -47,8 +71,9 @@ export interface WriteButtonProps<T extends ActionTool> extends Omit<
    */
   blocked?: string;
   /**
-   * Draw the refusal beside the button. Off where the caller draws it
-   * itself, beside the field it names.
+   * Draw the refusal: under the button, or in the place the row it stands in
+   * keeps for refusals ([RefusalsTo]). Off where the caller draws it itself,
+   * beside the field it names.
    */
   showRefusal?: boolean;
   /**
@@ -77,6 +102,51 @@ export function pressable<T extends ActionTool>(write: Act<T>, blocked?: string)
   return write.access.can && blocked === undefined && !write.busy;
 }
 
+/**
+ * Where the refusals of the write controls under it are drawn: the element a
+ * row of controls keeps for them, `null` while the row has not drawn it yet,
+ * `undefined` where no row keeps one, and a control draws its refusal under
+ * itself.
+ */
+const RefusalPlace = createContext<HTMLElement | null | undefined>(undefined);
+
+/**
+ * Sends the refusals of the write controls in `children` to `place`: what a
+ * row of controls wraps them in. `undefined` sends them nowhere, so a row
+ * that has no place yet to give (a frame that is not there) leaves each
+ * under its control.
+ */
+export function RefusalsTo({
+  place,
+  children,
+}: {
+  place: HTMLElement | null | undefined;
+  children: ReactNode;
+}) {
+  return <RefusalPlace.Provider value={place}>{children}</RefusalPlace.Provider>;
+}
+
+/**
+ * A row's place for its controls' refusals: draw `place` where they belong,
+ * outside the row, and wrap the row in [RefusalsTo] with `element`. Empty, it
+ * takes no room (`.refusal-place:empty`).
+ */
+export function useRefusalPlace(className?: string): {
+  element: HTMLElement | null;
+  place: ReactElement;
+} {
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  return {
+    element,
+    place: (
+      <div
+        ref={setElement}
+        className={className ? `refusal-place ${className}` : "refusal-place"}
+      />
+    ),
+  };
+}
+
 export function WriteButton<T extends ActionTool>({
   write,
   onPress,
@@ -88,6 +158,15 @@ export function WriteButton<T extends ActionTool>({
 }: WriteButtonProps<T>) {
   const { access, busy } = write;
   const reason = access.can ? blocked : access.reason;
+  const place = useContext(RefusalPlace);
+  const refusal = showRefusal ? <RefusalNote write={write} /> : null;
+  // A REFUSAL DRAWN AWAY FROM ITS CONTROL IS BROUGHT INTO VIEW: the place
+  // above a dialog's foot ends a body that may be scrolled away from it, and
+  // a press that seems to do nothing is a press made again.
+  const shown = showRefusal && place ? write.refusal : null;
+  useEffect(() => {
+    if (shown && place) place.scrollIntoView?.({ block: "nearest" });
+  }, [shown, place]);
   return (
     <span className="write-button">
       <Button
@@ -105,7 +184,9 @@ export function WriteButton<T extends ActionTool>({
       >
         {children}
       </Button>
-      {showRefusal && <RefusalNote write={write} />}
+      {/* IN THE ROW'S PLACE where it keeps one (nothing until it is drawn),
+          under the control where it does not. */}
+      {place === undefined ? refusal : place && refusal && createPortal(refusal, place)}
     </span>
   );
 }

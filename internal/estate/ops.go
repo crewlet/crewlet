@@ -133,6 +133,8 @@ type TrackerWriter interface {
 	ViewPrior(ctx context.Context, id string) (worklet.ViewPrior, error)
 	WriteView(ctx context.Context, opID string, view worklet.View,
 		prior worklet.ViewPrior) (worklet.WriteResult, error)
+	DeleteView(ctx context.Context, opID, id string,
+		prior worklet.ViewPrior) (worklet.WriteResult, error)
 	WriteTypes(ctx context.Context, opID string, types []worklet.TaskType) (worklet.WriteResult, error)
 	WriteFields(ctx context.Context, opID string, fields []worklet.FieldDef) (worklet.WriteResult, error)
 	MarkInbox(ctx context.Context, opID, handle string, seen statelog.Position,
@@ -1490,6 +1492,23 @@ var opWriteView = define("tracker.write_view", opIdempotentWrite, trackerDomain,
 			return worklet.WriteResult{}, err
 		}
 		return w.WriteView(ctx, a.OpID, a.View, a.Prior)
+	})
+
+type deleteViewArgs struct {
+	OpID  string
+	ID    string
+	Prior worklet.ViewPrior
+}
+
+// A VIEW TAKEN AWAY, decided on the prior its caller read as a save is, and
+// refused where the stored view moved, changed hands or went away since.
+var opDeleteView = define("tracker.delete_view", opIdempotentWrite, trackerDomain, true,
+	func(ctx context.Context, b Backend, actor *Actor, a deleteViewArgs) (worklet.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return worklet.WriteResult{}, err
+		}
+		return w.DeleteView(ctx, a.OpID, a.ID, a.Prior)
 	})
 
 type writeTypesArgs struct {

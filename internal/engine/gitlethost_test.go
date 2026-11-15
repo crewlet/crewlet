@@ -241,10 +241,18 @@ func TestAGitletNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
 			if tokens == nil {
 				t.Fatal("the node holds no box tokens")
 			}
-			if got, signed := tokens.Verify(peer.Mint(ref)); !signed || got != ref {
+			peerToken, err := peer.Mint(ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			strangerToken, err := stranger.Mint(ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, signed := tokens.Verify(peerToken); !signed || got != ref {
 				t.Errorf("a token the fleet's keyring signed verifies as %+v, %t; want %+v", got, signed, ref)
 			}
-			if _, signed := tokens.Verify(stranger.Mint(ref)); signed {
+			if _, signed := tokens.Verify(strangerToken); signed {
 				t.Error("a token another keyring signed verifies")
 			}
 			checks := e.CheckTokens()
@@ -255,11 +263,19 @@ func TestAGitletNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, signed := checks.Verify(peerChecks.Mint(check, time.Minute)); !signed || got != check {
+			peerCheck, err := peerChecks.Mint(check, time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			strangerCheck, err := strangerChecks.Mint(check, time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, signed := checks.Verify(peerCheck); !signed || got != check {
 				t.Errorf("a check token the fleet's keyring signed verifies as %+v, %t; want %+v", got, signed,
 					check)
 			}
-			if _, signed := checks.Verify(strangerChecks.Mint(check, time.Minute)); signed {
+			if _, signed := checks.Verify(strangerCheck); signed {
 				t.Error("a check token another keyring signed verifies")
 			}
 		})

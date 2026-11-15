@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -103,11 +104,12 @@ func (w *Writer) ViewPrior(ctx context.Context, id string) (ViewPrior, error) {
 			"cannot read what saving view %s would replace", id)
 	}
 	var prior ViewPrior
+	var deleted sql.NullInt64
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		row := tx.QueryRowContext(ctx, `
-			SELECT owner, container_kind, container_id FROM tracker_views
+			SELECT owner, container_kind, container_id, deleted_at FROM tracker_views
 			WHERE id = ?`, id)
-		return row.Scan(&prior.Owner, &prior.Container.Kind, &prior.Container.ID)
+		return row.Scan(&prior.Owner, &prior.Container.Kind, &prior.Container.ID, &deleted)
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -115,6 +117,11 @@ func (w *Writer) ViewPrior(ctx context.Context, id string) (ViewPrior, error) {
 	case err != nil:
 		return ViewPrior{}, fmt.Errorf("worklet: read what saving view %s would "+
 			"replace: %w", id, err)
+	}
+	// A DELETED VIEW IS NO VIEW to replace or to delete again: its row
+	// stays only to guard its version ([Writer.DeleteView]).
+	if deleted.Valid {
+		return ViewPrior{}, nil
 	}
 	prior.Held = true
 	return prior, nil
@@ -216,9 +223,15 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 			}
 			if held && !prior.Held {
 				// THE CREATE, MADE BEFORE — see [ViewPrior], "A zero
-				// prior is a create" — answered from its row.
+				// prior is a create" — answered from its row, deleted
+				// since or not: a re-run of a create brings back no
+				// view somebody deleted.
 				return statelog.Decision{Version: int64(current.Version)}, nil
 			}
+			// A VIEW DELETED SINCE THE PRIOR WAS READ IS GONE to a save,
+			// which [ViewPrior.matches] refuses as a view that went away:
+			// replaced here, the save would bring it back.
+			held = held && !current.Deleted()
 			// THE VIEW THE AUTHORITY WAS DECIDED ON IS STILL THE ONE
 			// BEING REPLACED — and, because the scope was formed from the
 			// same prior, the scope still names the strip it leaves. A
@@ -276,6 +289,82 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 	})
 }
 
+// ErrNoView reports a view this node holds no live row for: never saved, or
+// deleted. Its own sentinel for [ErrNoFile]'s reason, so a tool says "no such
+// view" and an API answers 404.
+var ErrNoView = errors.New("worklet: no such view")
+
+// DeleteView takes a saved view out of every strip, listing and run.
+//
+// # A delete is a stamp, and the row stays
+//
+// For a removed file's reason (files.go, "A removal is a stamp"): every view
+// upsert is guarded by its record's version and SKIPS an older one, and a
+// guard needs a row to compare against. Deleted outright, the row would let a
+// redelivered save bring the view back. So the record is the view's whole
+// post-state with [View.DeletedAt] and [View.DeletedBy] set and its default
+// flag cleared, and every read of the views leaves such a row out: the strip
+// ([savedViews]), the inventory ([everySavedView]), a run by `view=` and the
+// prior a save or another delete is decided on ([Writer.ViewPrior]).
+//
+// # Decided like the save that would replace it
+//
+// prior is what the caller read with [Writer.ViewPrior] and decided its
+// authority on (the same action a save of the view asks, on the stored owner
+// and container), and the decide refuses a view that moved, changed hands or
+// went away since, exactly as [Writer.WriteView] does. A protected view is its
+// owner's to delete, as it is theirs to change.
+//
+// A VIEW DELETED BY THE TIME THE DECIDE READS IT is answered from its row with
+// nothing published: what the caller asked for holds, and the one way to reach
+// it with a live prior is this delete made before (a rebased re-run, new to
+// the ledger) or somebody else's in the same instant.
+func (w *Writer) DeleteView(ctx context.Context, opID, id string,
+	prior ViewPrior) (WriteResult, error) {
+
+	if !prior.Held {
+		return WriteResult{}, fmt.Errorf("%w: %s", ErrNoView, id)
+	}
+	subject := ViewSubject(id)
+	// ONE ROW, IN THE STRIP IT IS IN. The default flag it clears is its
+	// own, so no sibling is written ([settleDefaultView] clears others
+	// only for a view that sets the flag), and the container is the
+	// prior's, which the decide verifies.
+	scope := ScopeSet{Subject: true, Container: containerScope(prior.Container)}
+	at := w.Now()
+	return w.published(ctx, statelog.Request{
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			current, held, err := readView(ctx, tx, id)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if held && current.Deleted() {
+				return statelog.Decision{Version: int64(current.Version)}, nil
+			}
+			if err := prior.matches(id, current, held); err != nil {
+				return statelog.Decision{}, err
+			}
+			// A PROTECTED VIEW IS ITS OWNER'S, to delete as to change:
+			// [Writer.WriteView]'s rule, against the same actor.
+			if current.Protected && current.Owner != "" && current.Owner != w.Actor {
+				return statelog.Decision{}, forbidden("view %s is protected and "+
+					"belongs to %s: ask them to delete it", id, current.Owner)
+			}
+			post := current
+			post.V, post.Version = DocumentVersion, 0
+			post.Default = false
+			post.UpdatedAt = at
+			post.DeletedAt, post.DeletedBy = &at, w.Actor
+			return w.decide(ctx, tx, stamp, subject, OpPatch, ChangeViewDeleted, scope, opID,
+				post, nil, at)
+		},
+	})
+}
+
 // checkView refuses a view that could not be rendered or could not be run.
 func checkView(view *View) error {
 	view.Name = strings.TrimSpace(view.Name)
@@ -283,14 +372,14 @@ func checkView(view *View) error {
 	case view.ID == "":
 		return invalid("a view write names no view id")
 	case view.Name == "":
-		return invalid("view %s has no name, and a tab with no "+
+		return invalidSaying(caveat.ViewUnnamed(), "view %s has no name, and a tab with no "+
 			"label is one nobody can pick", view.ID)
 	case len(view.Name) > MaxViewName:
-		return invalid("view %s's name is %d bytes and the "+
+		return invalidSaying(caveat.ViewNameTooLong(), "view %s's name is %d bytes and the "+
 			"maximum is %d — shorten the name rather than having it cut",
 			view.ID, len(view.Name), MaxViewName)
 	case !view.Type.Valid():
-		return invalid("%q is not a view shape — the shapes are "+
+		return invalidSaying(caveat.ViewShapeUnknown(ViewTypeNames()), "%q is not a view shape: the shapes are "+
 			"%s", view.Type, strings.Join(ViewTypeNames(), ", "))
 	case !ValidContainerKind(view.Container.Kind):
 		return invalid("%q is not a container a view can belong "+
@@ -316,23 +405,29 @@ func checkView(view *View) error {
 		// the authority of a caller who needed no more than their own
 		// record to save it. Where a person wants their own view first,
 		// that is a PIN, which is theirs alone.
-		return invalid("view %s is personal (%s's) and cannot be "+
+		return invalidSaying(caveat.ViewPersonalDefault(), "view %s is personal (%s's) and cannot be "+
 			"its container's default: the default is the landing tab for "+
 			"everybody, and nobody else sees a personal view. Share it to "+
 			"make it the default, or pin it to put it first for its owner",
 			view.ID, view.Owner)
+	case view.DeletedAt != nil || view.DeletedBy != "":
+		// A SAVE NEVER DELETES: the stamp is [Writer.DeleteView]'s own,
+		// from its clock in its decide, and a save carrying one would
+		// hide a view under an instant and a name its caller chose.
+		return invalid("view %s carries a deletion, which a save cannot: "+
+			"delete it with %s", view.ID, DeleteWorkViewTool)
 	case len(view.Params) > MaxViewParamKeys:
 		// A GUARD ON THE MAP'S SIZE. What refuses a key that is not a
 		// filter is [ParseQuery] below, which rejects an unknown
 		// parameter rather than ignoring it.
-		return invalid("view %s carries %d query parameters and "+
+		return invalidSaying(caveat.ViewFiltersTooLarge(), "view %s carries %d query parameters and "+
 			"the maximum is %d", view.ID, len(view.Params), MaxViewParamKeys)
 	case paramsBytes(view.Params) > MaxViewParamsBytes:
 		// AND ONE ON ITS WEIGHT, because thirty-two keys say nothing
 		// about the size of a `q` or an `any` branch: one record with a
 		// megabyte of saved query is a record every data node stores,
 		// ships in every snapshot and re-reads on every replay.
-		return invalid("view %s's query is %d bytes and the "+
+		return invalidSaying(caveat.ViewFiltersTooLarge(), "view %s's query is %d bytes and the "+
 			"maximum is %d — a saved view is a filter, not a document",
 			view.ID, paramsBytes(view.Params), MaxViewParamsBytes)
 	}
@@ -356,7 +451,7 @@ func checkView(view *View) error {
 		params[key] = value
 	}
 	if _, err := ParseQuery(params, time.Now().UTC(), time.UTC); err != nil {
-		return invalid("view %s's query does not parse, so saving "+
+		return invalidSaying(caveat.ViewFilterUnreadable(), "view %s's query does not parse, so saving "+
 			"it would store a view nobody can open: %w", view.ID, err)
 	}
 	return nil

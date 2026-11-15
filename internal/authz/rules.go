@@ -277,6 +277,7 @@ const (
 	ActionInbox         Action = "inbox.read"
 	ActionPinsSet       Action = "set_pins"
 	ActionViewSave      Action = "save_work_view"
+	ActionViewDelete    Action = "delete_work_view"
 	ActionPrioritiesSet Action = "set_priorities"
 
 	// --- a field inside a write, decided against what was read ------ //
@@ -1519,6 +1520,11 @@ var rules = map[Action]rule{
 	// all: omitting the owner SHARES it, which is a tab on somebody's
 	// project, unit or person page. See [ClassSavedView].
 	ActionViewSave: {class: ClassSavedView, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// A DELETE IS DECIDED AS THE SAVE THAT WOULD REPLACE THE VIEW: on the
+	// stored owner and container, by the same class, since who may rewrite
+	// a view whole may as well take it away.
+	ActionViewDelete: {class: ClassSavedView, app: iam.GrantWorklet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 
 	// --- somebody's own record, on the tracker ------------------------ //

@@ -106,3 +106,27 @@ test("the key is the crumb until the project has answered", async () => {
 
   expect(parts()).toEqual(["Worklet", "ENG", "ENG-1"]);
 });
+
+// A MOVED TASK IS ADDRESSED BY ITS KEY NOW: opened at the key a move left it
+// (`former_keys`), the page answered as LEAD-43 and kept ENG-1 in the address,
+// so the trail named the project it left.
+test("a task opened by a key a move left it stands at its key now, and the trail follows", async () => {
+  mount({
+    work_item: {
+      task: {
+        id: "t-1",
+        key: "LEAD-43",
+        former_keys: ["ENG-1"],
+        project: "LEAD",
+        title: "Fix the login race",
+        version: 2,
+      },
+      complete: true,
+    },
+  });
+  await settle();
+  await settle();
+
+  expect(location.hash).toBe("#/worklet/LEAD-43");
+  expect(parts()).toEqual(["Worklet", "LEAD", "LEAD-43"]);
+});

@@ -135,6 +135,8 @@ func (r *Reader) EveryView(ctx context.Context, q EveryViewQuery) (ViewListing, 
 // everySavedView reads every view shared with the company or owned by the
 // viewer, in every container, pinned-for-the-viewer first.
 //
+// A DELETED VIEW IS LEFT OUT, as [savedViews] leaves it out.
+//
 // THE ORDER IS THE CONTAINERS' AND THEN THE STRIP'S: the workspace first, then
 // projects, units and people, each by its id, and inside one container by
 // rank — so a container's views read in the order its own strip draws them.
@@ -154,7 +156,7 @@ func everySavedView(ctx context.Context, tx *sql.Tx, viewer string,
 		SELECT id, name, type, owner, protected, is_default, rank, icon,
 		       params_json, container_kind, container_id
 		FROM tracker_views
-		WHERE (owner = ''`+own+`)
+		WHERE (owner = ''`+own+`) AND deleted_at IS NULL
 		ORDER BY CASE container_kind
 		           WHEN '`+ContainerWorkspace+`' THEN 0
 		           WHEN '`+ContainerProject+`' THEN 1

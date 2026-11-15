@@ -18,17 +18,8 @@
  */
 
 import { useState, type ReactNode } from "react";
-import {
-  Button,
-  Card,
-  EmptyState,
-  IconTile,
-  Input,
-  Modal,
-  Tabs,
-  Tag,
-  type NodeHue,
-} from "@crewlethq/ui";
+import { Button, Card, EmptyState, IconTile, Input, Tabs, Tag, type NodeHue } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useViewer } from "~/lib/viewer.ts";
 import { plural } from "~/lib/format.ts";

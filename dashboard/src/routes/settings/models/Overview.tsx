@@ -12,7 +12,7 @@
  * tested", never "Not used".
  */
 
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -37,6 +37,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, listed, plural } from "~/lib/format.ts";
+import { UNSPENT_CALLS, callsWords } from "~/lib/spend.ts";
 import { CATEGORY_JOBS, CATEGORY_ORDER, SEAT_JOBS, everythingSeats } from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { Alarms } from "./Alarms.tsx";
@@ -100,6 +101,7 @@ const inUse = (m: ModelView) =>
  * tooltip and the link's name, and the model's page holds it for good.
  */
 function UsedBy({ model, name }: { model: ModelView; name: (handle: string) => string }) {
+  const describedBy = useId();
   const lines = linesOf(model, name);
   if (lines.length === 0) {
     return (
@@ -134,23 +136,37 @@ function UsedBy({ model, name }: { model: ModelView; name: (handle: string) => s
       }
       placement="top"
     >
+      {/* NAMED BY WHAT IT SHOWS, the lead use first ("Everything, and 1
+          more use, 2 seats"), with the whole breakdown as its description.
+          An aria-label of "Used for …" over "Everything +1" was a name that
+          did not contain what is on screen, so a person who says what they
+          see reached nothing. The "+1" is drawn for the eye and said in
+          words; the commas are the pauses the eye gets from the layout. */}
       <a
         className="models-uses"
         href={href(["settings", "models", model.key])}
-        aria-label={`Used for ${said}`}
+        aria-describedby={describedBy}
       >
         <span className="models-uses__line">
           <span className="models-uses__lead models-job">
             <JobGlyph job={lead!.job} size="xs" />
             <span className="models-uses__label">{lead!.label}</span>
           </span>
-          {rest.length > 0 ? <span className="models-uses__more">+{rest.length}</span> : null}
+          {rest.length > 0 ? (
+            <span className="models-uses__more">
+              <span aria-hidden="true">+{rest.length}</span>
+              <span className="sr-only">{`, and ${plural(rest.length, "more use")}`}</span>
+            </span>
+          ) : null}
         </span>
         {seats > 0 ? (
           <Text as="span" variant="caption" tone="tertiary">
-            {plural(seats, "seat")}
+            <span className="sr-only">,</span> {plural(seats, "seat")}
           </Text>
         ) : null}
+        <span id={describedBy} hidden>
+          {`Used for ${said}`}
+        </span>
       </a>
     </Tooltip>
   );
@@ -317,9 +333,16 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                 icon={<CoinsGlyph size="xs" />}
                 label="Tokens, 7 days"
                 value={fmtCount(usage.tokens)}
+                // WHICH CALLS: every call made, refused and failed ones included,
+                // as Token spend counts them; said where they spent nothing.
                 sub={
-                  usage.calls === 0 ? "no calls in 7 days" : `over ${plural(usage.calls, "call")}`
+                  usage.calls === 0
+                    ? "no calls in 7 days"
+                    : usage.tokens > 0
+                      ? `over ${plural(usage.calls, "call")}`
+                      : callsWords(usage.calls, usage.tokens)
                 }
+                title={usage.calls > 0 && usage.tokens <= 0 ? UNSPENT_CALLS : undefined}
               />
             ) : null}
           </StatGroup>

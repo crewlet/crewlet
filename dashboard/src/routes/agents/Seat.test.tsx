@@ -558,6 +558,17 @@ test("a person's profile has three tabs and asks nothing a runtime answers", asy
   expect(screen.queryByRole("button", { name: /^Pause/ })).toBeNull();
 });
 
+// "REPORTS TO" IS A WORD IN THE HEAD'S LINE, so it carries the underline
+// register: its ink alone was 1.49:1 against the line around it, which colour
+// alone cannot carry (WCAG 1.4.1). Mutation: drop `.prose-link` from it.
+test("the head's reports-to link is underlined as a link in a sentence", async () => {
+  mount("#/company/org/seats/swe", { answers: { viewer: OPERATOR, config: DOCUMENT } });
+  await settle();
+  const link = screen.getByRole("link", { name: "CTO" });
+  expect(link.closest(".prof-line")).not.toBeNull();
+  expect(link.classList.contains("prose-link")).toBe(true);
+});
+
 // FOUR TABS, EACH A GROUP OF SECTIONS: Work holds Code, Activity its Turns
 // then Memory, Settings its setup then Schedules and Access.
 test("an agent's profile has four tabs, and Work counts the engine's total rather than a page", async () => {
@@ -587,6 +598,32 @@ test("an agent's profile has four tabs, and Work counts the engine's total rathe
   expect(screen.getByRole("link", { name: "All 7" }).getAttribute("href")).toBe(
     "#/worklet/tasks?assignee=swe",
   );
+});
+
+// TWO TASKS THAT BEGIN ALIKE ARE TOLD APART. Cut to one line, "Spike: compare
+// Cilium and Calico" and "Spike: compare Cilium and Cillium alternatives"
+// both read "Spike: compare Cilium and C…". A row's title runs to two lines
+// and carries the whole title on its hover. Mutation: truncate the title to
+// one line with no title of its own.
+test("an assigned task's row keeps its whole title, on two lines and on hover", async () => {
+  const long = (end: string) => `Spike: compare Cilium and ${end} for the control plane's network`;
+  mount("#/company/org/seats/swe", {
+    answers: {
+      work_items: {
+        items: [
+          { id: "t-19", key: "LEAD-19", title: long("Calico"), status: "todo" },
+          { id: "t-1", key: "LEAD-1", title: long("Cillium alternatives"), status: "todo" },
+        ],
+        total_hint: 2,
+      },
+    },
+  });
+  await settle();
+  for (const end of ["Calico", "Cillium alternatives"]) {
+    const title = await screen.findByTitle(long(end));
+    expect(title.className).toContain("clamp");
+    expect(title.className).not.toMatch(/truncate/);
+  }
 });
 
 // A SECTION'S WORD IS AN ADDRESS: `tab=memory`, pasted from before the tabs
@@ -945,6 +982,37 @@ test("a paused seat says who paused it and why, and offers Resume", async () => 
   await waitFor(() => expect(posted).toEqual([{ tool: "resume_seat", args: { handle: "swe" } }]));
 });
 
+// THE ENGINE'S OWN PAUSE (a seat whose models all refused their sign-in) is
+// said as the engine's, with its reason, in the same neutral tone. Mutation:
+// name the pauser by `paused.by` whatever its kind.
+test("the engine's own pause is said as the engine's, with its reason", async () => {
+  mount("#/company/org/seats/swe", {
+    answers: { viewer: { ...OPERATOR, acts: EVERY_ACT } },
+    agents: [
+      {
+        id: "swe",
+        agent_id: "swe",
+        role: "SWE",
+        handle: "swe",
+        activity: "stopped",
+        stopped_reason: "paused",
+        paused: {
+          by_kind: "system",
+          by: "engine",
+          at: "2026-09-21T09:00:00Z",
+          reason: "every model it can use refused its credential, twice in a row",
+          stop_running: false,
+        },
+      },
+    ],
+  });
+  await settle();
+  const pause = document.querySelector(".prof-notices .crewlet-callout") as HTMLElement;
+  expect(pause.className).toContain("crewlet-callout--neutral");
+  expect(pause.textContent).toContain("Paused by the engine");
+  expect(pause.textContent).toContain("refused its credential");
+});
+
 // A PAUSE THE RUNNING TURN HAS NOT REACHED YET: the seat is still working, so
 // its page says the pause waits for the turn, offers Resume, and offers Pause
 // and stop, which a second pause makes of the first. Mutation: read the
@@ -1007,13 +1075,16 @@ const PAUSED_SWE: Partial<AgentRow> = {
   },
 };
 
-// ONE FACT, ONE TONE: a stopped seat is the red state in the seat vocabulary,
-// and its notice was amber under a red pill.
-test("a pause is said in the stopped state's own tone", async () => {
+// ONE FACT, ONE TONE, AND A PAUSE IS NO ERROR: its notice was amber under a
+// red pill, then red, stacked above the seat's real failure in the tone of the
+// failure it is not. A pause somebody chose is neutral, notice and pill alike.
+// Mutation: give a paused seat the danger tone.
+test("a pause is said in the neutral tone, notice and pill alike", async () => {
   mount("#/company/org/seats/swe", { agents: [PAUSED_SWE] });
   await settle();
   const notice = document.querySelector(".prof-notices .crewlet-callout") as HTMLElement;
-  expect(notice.className).toContain("crewlet-callout--danger");
+  expect(notice.className).toContain("crewlet-callout--neutral");
+  expect(notice.className).not.toContain("danger");
 });
 
 // ONE BANNER PER CAUSE, IN PLAIN WORDS. A provider stop and the failed turn
@@ -1380,7 +1451,8 @@ test("a seat with no budget of its own under a capped company says the company's
   // ONE LINE IN THE TILE — the whole sentence three lines tall stretched the
   // KPI row — and the whole sentence on its title.
   const sub = within(tile("Tokens · 7 days")).getByText(/company cap/);
-  expect(sub.textContent).toBe("company cap 60M/day +1");
+  // THE OTHER CAPS IN WORDS: a bare "+1" beside a cap read as a stray number.
+  expect(sub.textContent).toBe("company cap 60M/day and 1 more");
   expect(sub.getAttribute("title")).toBe("No seat cap; the company's 60M/day and 900M/month apply");
   expect(tile("Tokens · 7 days").textContent).not.toContain("no budget caps it");
 });

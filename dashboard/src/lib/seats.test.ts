@@ -675,9 +675,10 @@ describe("what a seat is doing", () => {
     // A GROUP keyed on the engine's `stopped` holds both, and says so.
     expect(stateGroupWord("stopped")).toBe("Paused or stopped");
     expect(stateGroupWord("needs")).toBe(stateWord("needs"));
-    // A paused seat wears the stop's badge and tone: the words tell them apart.
+    // A paused seat wears the stop's badge, and the words tell them apart; its
+    // tone is neutral, since a pause somebody chose is no fault.
     expect(statusOf(shownStateOf(paused))).toBe("stopped");
-    expect(toneOf(shownStateOf(paused))).toBe(toneOf("stopped"));
+    expect(toneOf(shownStateOf(paused))).toBe("neutral");
   });
 
   // A CREDENTIAL'S SPELLING IS NOT A NAME. `paused.by` is `token:review` for a

@@ -17,11 +17,11 @@ import {
   DescriptionList,
   Disclosure,
   InlineCode,
-  Modal,
   TableStatusCell,
   Text,
   type DescriptionListEntry,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { FileTextGlyph, ListChecksGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -161,7 +161,9 @@ function useInsightsWrite(onSaved: () => void) {
           return false;
         }
         const outcome = await savePatch({ diagnostics: { insights } }, read.etag, summary, signal);
-        if (outcome.kind !== "saved") {
+        // ALREADY SO is what was asked for: the engine stored nothing because
+        // the document already says it.
+        if (outcome.kind !== "saved" && outcome.kind !== "unchanged") {
           setRefused(
             outcome.kind === "valid"
               ? "The engine checked the change but didn't save it. Please try again."

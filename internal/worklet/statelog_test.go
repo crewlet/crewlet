@@ -241,6 +241,19 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
 		record.Mutation = patch
+	case "View.DeletedAt":
+		// A VIEW SOMEBODY DELETED: its whole post-state, stamped.
+		deleted := time.Date(2026, 3, 6, 9, 0, 0, 0, time.UTC)
+		view, err := json.Marshal(worklet.View{
+			V: worklet.DocumentVersion, ID: "carrying", Name: "Suite carrying",
+			Type: worklet.ViewList, Container: worklet.Container{Kind: "workspace"},
+			CreatedAt: at, UpdatedAt: deleted, DeletedAt: &deleted, DeletedBy: "ada",
+		})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindView, ID: "carrying"}
+		record.Kind, record.Mutation = worklet.ChangeViewDeleted, view
 	case "Relation.Kind atlas_entry":
 		// A PATCH WHOSE RELATION SET NAMES AN ATLAS ENTRY, by its id.
 		relations := []worklet.Relation{{Kind: worklet.RelationEntry,
