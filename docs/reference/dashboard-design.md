@@ -9706,9 +9706,12 @@ filters do not narrow it. *The company runs on* is a `StackedRing` round the cou
 filters leave, split Quiet, Needs a look and Alerting (`atlas_facets`), beside
 its `Legend`. *Needs attention now* names the two most urgent entries
 (`atlas_entries` in the health order), each with
-its disc, its name and the engine's one sentence of reason on two lines (the
-card is a button that selects the entry on the map; a name or a reason cut on
-a narrow card carries the whole of it as its title), and how many need
+its disc, its name and the engine's one sentence of reason on two lines, a
+second signal named and more counted (the card is a button that selects the
+entry on the map and brings the map into view, under the sticky band where it
+is below the fold; it is named by its own words, the whole reason among them,
+and the kit's tooltip shows the whole reason on hover and focus, never a
+native title), and how many need
 attention as links, one per health (*Alerting 2*, *Needs a look 4*), each to
 the catalogue and the map narrowed to it (`health=`), so the entries past the
 two cards are one press away. The count and the cards are two reads: the cards
@@ -9761,7 +9764,12 @@ the legend switches each family and keys the notch, Quiet and Unconfirmed, and
 Being worked on for a reader whose work is read.
 Past 150 entries drawn (`ATLAS_OPEN_MAX`) the entries stand in groups by
 vendor inside their lane and the groups open closed, each one card saying what
-it holds; under it every entry is its own card. A map past what the engine
+it holds, its vendor's mark in its cell where the kit has one and the card's
+own glyph where not; under it every entry is its own card. A service on a call
+chain stands one column right of the deepest service calling it; a service on
+none names no column and flows across the lane like any other lane's entries.
+A narrowed map draws only the lanes holding what matched (every lane while
+nothing does), so a few matches open at a size their names read. A map past what the engine
 draws at once arrives with groups the engine closed (`collapsed`), named in a
 banner above the map with a link to read each in the catalogue, so a partial
 map is never taken for the whole.

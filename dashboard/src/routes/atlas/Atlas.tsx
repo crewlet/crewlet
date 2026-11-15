@@ -15,7 +15,7 @@
  * Worklet's answer, asked once for the page and only of a reader who uses it.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button, PageNote, Skeleton } from "@crewlethq/ui";
 import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { usePeek, usePeekControls } from "~/app/frame/peekAddress.ts";
@@ -23,6 +23,7 @@ import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { QueryState } from "~/components/common.tsx";
 import type { AtlasFacetsAnswer } from "~/contract/atlas.ts";
 import { WORKLET, holds } from "~/lib/access.ts";
+import { reveal } from "~/lib/scroller.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -62,6 +63,14 @@ export function Atlas() {
   // THE ENTRY EITHER SURFACE POINTS AT, lit on the other: a pointer's rest,
   // not a place, so it lives here and never in the address.
   const [pointedId, setPointedId] = useState<string | null>(null);
+  // A CARD IN THE BAND SHOWS ITS ENTRY ON THE MAP, and the map is brought into
+  // view to show it: under a narrow window the map starts below the fold, and
+  // the selection and its dock were drawn where nobody could see them.
+  const screen = useRef<HTMLDivElement>(null);
+  const showOnMap = (id: string) => {
+    select(id);
+    reveal(screen.current?.querySelector<HTMLElement>(".atlas-map") ?? null);
+  };
   const [adding, setAdding] = useState(false);
   const add = useSeatedAccess(useWriteAccess("atlas_add_entry"));
   // WHAT WAITS FOR A PERSON, counted by the engine on the read: one item is
@@ -106,7 +115,7 @@ export function Atlas() {
   );
 
   return (
-    <div className="atlas-screen">
+    <div className="atlas-screen" ref={screen}>
       {company.data && !empty && (
         <Band
           facets={company.data}
@@ -114,7 +123,7 @@ export function Atlas() {
           unconfirmed={filters.unconfirmed}
           activity={activity}
           waiting={waiting.data ? waiting.data.counts : null}
-          onShow={select}
+          onShow={showOnMap}
           beside={sheet}
         />
       )}

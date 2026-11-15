@@ -146,6 +146,17 @@ describe("the map's cards and lines", () => {
     expect(columns.get(orders.id)).toBe(1);
   });
 
+  // A SERVICE ON NO CALL CHAIN NAMES NO COLUMN, so the map flows it across the
+  // lane as it flows every lane. Mutation: give every service its depth again
+  // (0 for one nothing calls) and every lone service stands in column 0.
+  test("a service that calls no service and that none calls names no column", () => {
+    const company = grownCompany();
+    const lone = summary("service", "lone-svc");
+    const columns = serviceColumns(mapAnswer({ ...company, nodes: [...company.nodes, lone] }));
+    expect(columns.has(lone.id)).toBe(false);
+    expect(columns.has(company.checkout.id)).toBe(true);
+  });
+
   // AN ENTRY AMONG ITS NEIGHBOURS: each stands in the cluster that says how it
   // relates, read from one step along every relation in both directions.
   test("a neighbourhood stands each neighbour in the cluster of its relation", () => {
@@ -394,11 +405,15 @@ describe("the page", () => {
     mount("#/company/atlas", <Atlas />, company);
     expect(await screen.findByText("The company runs on")).toBeTruthy();
     expect(screen.getAllByText(`${company.nodes.length} entries`).length).toBeGreaterThan(0);
-    const show = await screen.findByTitle("Show orders-db on the map");
+    const show = await screen.findByRole("button", {
+      name: /^orders-db(?! cpu).*: show it on the map$/,
+    });
     expect(show.textContent).toContain("A standing alarm is raised");
-    // THE WHOLE SENTENCE IS REACHABLE where two lines do not hold it.
+    // THE WHOLE SENTENCE IS REACHABLE where two lines do not hold it: in the
+    // button's own name (and the kit's tooltip), never a native title.
     const reason = show.querySelector(".clamp")!;
-    expect(reason.getAttribute("title")).toBe(reason.textContent);
+    expect(reason.hasAttribute("title")).toBe(false);
+    expect(show.textContent).toContain(reason.textContent ?? "");
     expect(await screen.findByText("Recorded this week")).toBeTruthy();
     expect(screen.getByText("Where it comes from")).toBeTruthy();
   });
@@ -522,11 +537,29 @@ describe("the selection", () => {
   test("the band's pointer selects an entry on the map", async () => {
     const company = grownCompany();
     mount("#/company/atlas", <Atlas />, company);
-    const show = await screen.findByTitle("Show orders-db on the map");
+    const show = await screen.findByRole("button", {
+      name: /^orders-db(?! cpu).*: show it on the map$/,
+    });
     await act(async () => {
       fireEvent.click(show);
     });
     expect(location.hash).toContain(`sel=${company.ordersDb.id}`);
+  });
+
+  // THE WHOLE REASON IS REACHABLE: the card is named by its own words, the
+  // reason whole among them, never kept in a native title a keyboard or a
+  // finger cannot reach. Mutation: put the reason back in a title.
+  test("a Needs attention card says its whole reason in its name, with no native title", async () => {
+    const company = grownCompany();
+    mount("#/company/atlas", <Atlas />, company);
+    const show = await screen.findByRole("button", {
+      name: /^orders-db(?! cpu).*: show it on the map$/,
+    });
+    const reason = company.ordersDb.reason ?? "";
+    expect(reason).not.toBe("");
+    expect(show.textContent).toContain(reason);
+    expect(show.hasAttribute("title")).toBe(false);
+    expect(show.querySelector("[title]")).toBeNull();
   });
 });
 

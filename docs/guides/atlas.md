@@ -73,8 +73,10 @@ and one selection.
   into Quiet, Needs a look and Alerting, each with its count.
 - **Needs attention now**: the two most urgent entries, each with the reason in
   one sentence ("A standing alarm is raised", "Two sources disagree, and nobody
-  has settled it") on up to two lines, the whole of it on hover where it is
-  longer. Pressing a card selects that entry on the map. Beside the title,
+  has settled it"; a second signal is named, more are counted) on up to two
+  lines, the whole of it in a tooltip on hover and on keyboard focus. Pressing
+  a card selects that entry on the map and brings the map into view, which on
+  a phone is below the band. Beside the title,
   how many are **Alerting** and how many **Need a look**, each a link that
   narrows the map and the catalogue to them, so the entries past the two cards
   are one press away. The tile shows a placeholder until its list has been
