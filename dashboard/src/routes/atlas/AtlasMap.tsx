@@ -11,7 +11,7 @@
  * selection, the pointed-at entry and the search with it.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { XGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
@@ -24,7 +24,6 @@ import {
   Text,
   graphReach,
   type GraphBand,
-  type GraphCanvasHandle,
   type GraphEdge,
   type GraphGroup,
   type GraphNode,
@@ -142,10 +141,10 @@ export function AtlasMap({
   narrowed: boolean;
   /** The reader's grants, for the links an empty lane offers. */
   held: readonly string[];
+  /** What `answer` was read with: the map fits again when it moves. */
   fitKey: string;
 }) {
   const now = useNow();
-  const canvas = useRef<GraphCanvasHandle>(null);
   const box = useRef<HTMLDivElement>(null);
   // THE CARD BESIDE AN ENTRY ANSWERS THE READER'S OWN GESTURE on the map: a
   // selection a link arrived with is brought into view and opens none. A
@@ -191,15 +190,11 @@ export function AtlasMap({
     [answer, narrowed, held],
   );
 
-  // A SELECTION THE ADDRESS ARRIVED WITH IS BROUGHT INTO VIEW, once: a link to
-  // an entry on the map lands on it, where the map would open on its start.
-  const arrived = useRef(selectedId);
-  useEffect(() => {
-    const id = arrived.current;
-    if (id === null || !byId.has(id)) return;
-    arrived.current = null;
-    canvas.current?.focusNode(id);
-  }, [byId]);
+  // THE MAP OPENS ON THE SELECTION THE ADDRESS ARRIVED WITH, in the middle at
+  // a size its card reads, where it otherwise opens fitted: a link to an entry
+  // (its sheet, or "Show it on the map") lands on it. Read once, when the map
+  // is first placed, so a later selection never moves the reader's view.
+  const [arrived] = useState(selectedId);
 
   const selected = selectedId === null ? undefined : byId.get(selectedId);
   const impact = useMemo(() => {
@@ -215,7 +210,6 @@ export function AtlasMap({
       {answer.collapsed.length > 0 && <Collapsed answer={answer} />}
       <div className="atlas-map" ref={box} onPointerMove={engage} onKeyDown={engage}>
         <GraphCanvas
-          ref={canvas}
           label="Atlas map: everything the company runs on and how it relates"
           bands={bands}
           nodes={nodes}
@@ -272,6 +266,7 @@ export function AtlasMap({
             ) : undefined
           }
           fitKey={fitKey}
+          initialNode={arrived}
         />
       </div>
     </>

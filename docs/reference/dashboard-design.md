@@ -9698,6 +9698,22 @@ draws at once arrives with groups the engine closed (`collapsed`), named in a
 banner above the map with a link to read each in the catalogue, so a partial
 map is never taken for the whole.
 
+**The map opens fitted to its view** (kit 0.127.0): all of it, centred, at the
+zoom that fits the map's box and the level of detail that zoom draws (a large
+company as tiles or marks, never blank boxes), with no other view painted
+first. The kit fits it again when its first entries arrive and when its box is
+resized while nobody has moved the view; a poll keeps the reader's view. Under
+half size an empty lane is its dashed outline, its words coming back with the
+cards. It fits again when the answer it draws is for other filters, keyed on
+what the answer on screen was read with (`fitKey`) rather than on the question
+being asked, since a changed filter keeps the last answer on screen until the
+new one lands. A selection the address arrives with (`sel=`, or
+`peek=atlas:{id}`, which is what **Show it on the map** and a sheet's link
+carry) opens the map on that entry instead (the kit's `initialNode`): in the
+middle of the room the bars leave, at up to three quarters, or on the fit
+where that already draws it as large. It is read once, when the map is first
+placed, so a selection made later never moves the reader's view.
+
 **One selection** (`sel={id}`, or the entry the sheet is open on) is lit on the
 map along its whole path both ways, with the rest receding to a fifth and the
 lit lines under a glow with faster dashes, and is marked in the catalogue. The
