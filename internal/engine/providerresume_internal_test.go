@@ -3,7 +3,10 @@ package engine
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,11 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -873,6 +878,51 @@ func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
 			t.Fatalf("the seat's inbox is held %v by a park on a seat this node no longer holds", holds)
 		}
 	})
+}
+
+// A RESUME'S PARK ON A SEAT THIS NODE HAS LET GO OF IS NO WARNING. A resume
+// runs in no delivery, its review minutes long, so its seat can be released
+// under it, and the park its limit then asks for names the attachment that
+// release ended, which the queue refuses. That is the ordinary answer for a
+// seat that moved, not a park that failed: said as a warning, every seat a
+// drain hands on under a resume reads as a fault in the node's log.
+//
+// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns,
+// and Go resumes every parallel test only after the sequential ones end.
+//
+// Mutation: say every park a resume could not take as a warning, and this
+// fails.
+func TestAResumesParkOnASeatLetGoOfIsNoWarning(t *testing.T) {
+	ctx := t.Context()
+	logs := &syncBuffer{}
+	logging.Configure(slog.LevelDebug, logging.FormatText, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+
+	e, q := engineOn(t)
+	id := seatIn(t, e, "ceo")
+	// THE RELEASE: the inbox detached, then the engine told.
+	if _, err := q.Detach(ctx, topics.AgentInbox(id), topics.AgentInboxGroup(id)); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	e.detachInbox(id)
+
+	refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: time.Now().Add(time.Hour),
+		Err: errors.New("You've hit your 5-hour limit")}
+	limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+		Failures: []error{refusal}, Err: refusal})
+	if !limited {
+		t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+	}
+	e.parkOnLimit(ctx, "ceo", limit)
+
+	if n := countLogLines(logs, "seat_provider_park_attachment_ended"); n != 1 {
+		t.Errorf("%d lines say the park met the attachment its seat's release ended, want 1", n)
+	}
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, "msg=seat_provider_park_") && !strings.Contains(line, "level=DEBUG") {
+			t.Errorf("a park refused for a seat this node let go of was said above debug: %s", line)
+		}
+	}
 }
 
 // drainedEngine is a drain rig's engine once its drain has handed every seat

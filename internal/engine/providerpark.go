@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -379,8 +381,22 @@ func (e *Engine) parkResumeOnLimit(ctx context.Context, handle string, err error
 // THE PARK IS NO DELIVERY'S, so a hold it could not take is said and
 // otherwise left: the resume is reverted and waits on its refusal either way,
 // as it did before it parked anything.
+//
+// A SEAT THIS NODE HAS LET GO OF is refused its park, and that is said at debug
+// rather than as a park that failed. The resume runs in no delivery and its
+// review is minutes long, so the seat can be released under it, and the park's
+// hold then names the attachment the release ended, which the queue refuses
+// (seatinbox.go): the seat is no longer this node's to park, and the node that
+// takes it asks its own models on its first delivery.
 func (e *Engine) parkOnLimit(ctx context.Context, handle string, limit chain.Limit) {
-	if _, _, err := e.providerPark(ctx, handle, limit); err != nil {
+	_, _, err := e.providerPark(ctx, handle, limit)
+	switch {
+	case errors.Is(err, queue.ErrAttachmentGone):
+		log.DebugContext(ctx, "seat_provider_park_attachment_ended", "seat", handle,
+			"providers", strings.Join(limit.Keys, ","),
+			"detail", "the seat was let go of here under its resume; the node that takes "+
+				"it asks its own models on its first delivery")
+	case err != nil:
 		log.WarnContext(ctx, "seat_provider_park_not_taken", "seat", handle,
 			"providers", strings.Join(limit.Keys, ","), "error", err.Error(),
 			"detail", "the resume met its models' limit and the seat could not be parked "+
