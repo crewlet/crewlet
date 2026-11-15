@@ -9,10 +9,8 @@ import (
 // words, say everything before a proposal's card, never describe what was not
 // read, never give a page as the total, say times on the company's clock, and
 // write for the person, never naming tools, routes or config keys and never
-// quoting a refusal (the plain-language rules from the cards track). And what
-// v8 adds: a question put to the person is answered from what it rests on, by
-// its option's id or in their own words, and only theirs; and words the turn
-// read never become a change. Mutation: drop any of them and this names it.
+// quoting a refusal (the plain-language rules from the cards track), and v8's
+// decision and untrusted-words rules. Mutation: drop any of them and this names it.
 func TestTheStandingRulesCarryTheQualityRules(t *testing.T) {
 	t.Parallel()
 	for _, want := range []string{
