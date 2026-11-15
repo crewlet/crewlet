@@ -170,7 +170,7 @@ func TestARunTokenNeverTakesAnEscapedLineBreak(t *testing.T) {
 	for name, c := range map[string]struct{ text, want string }{
 		"an escaped break in its subject":                    {token(`sub\nject`), token(`sub\nject`)},
 		"an escaped CRLF in its subject":                     {token(`sub\r\nject`), token(`sub\r\nject`)},
-		"a backslash in its subject":                         {token(`sub\ject`), token(`sub\ject`)},
+		"a backslash in its subject":                         {token(`sub\zone`), token(`sub\zone`)},
 		"in a string, its subject across the string's lines": {url(`sub\nject`), url(`sub\nject`)},
 		"its subject across escaped lines between a key's body and its END": {
 			`{"log": "` + keyLine + `\n` + keyLine + `\n` + token(`ab\ncd\nef\ngh`) + `\n` + end + `\n"}` + "\n",

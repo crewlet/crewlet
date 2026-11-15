@@ -815,7 +815,7 @@ func awaiting(k *keyed) *keyed {
 // separator came; and the value of one whose separator is that far from it
 // lies past what its key reads anyway ([readValue]).
 func separatorWithin(text string, at int) bool {
-	return strings.IndexAny(text[at:min(len(text), at+MaxReach)], ":=") >= 0
+	return strings.ContainsAny(text[at:min(len(text), at+MaxReach)], ":=")
 }
 
 // quotedElsewhere reports whether the password's key at at is closed by a
