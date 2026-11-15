@@ -85,12 +85,13 @@
 //     and keeps renewing it rather than handing the seat on. A lease held a
 //     little too long costs latency; a lease released too early costs
 //     correctness.
-//   - A seat still being taken is CUT, never waited for. Its acquire hook has
-//     no total and runs under the seat's own lock, so a lease lost and a drain
-//     end the hook's context rather than taking that lock, and the seat is
-//     never established once cut. Waiting froze the heartbeat until the
-//     [Watchdog] ended the process, and held a drain for every acquisition in
-//     flight.
+//   - A seat still being taken is CUT, never waited for under its lock. Its
+//     acquire hook has no total and runs under the seat's own lock, so a lease
+//     lost and a drain end the hook's context rather than taking that lock,
+//     and the seat is never established once cut. Waiting froze the heartbeat
+//     until the [Watchdog] ended the process, and held a drain for every
+//     acquisition in flight; a drain now waits only for the give-back of what
+//     it cut ([Host.AwaitCut]).
 //
 // # The node that neither works nor dies
 //
@@ -378,10 +379,11 @@ type Hooks interface {
 	//
 	// ctx is CUT — ended — when the seat's lease is lost or this node begins
 	// its drain while the hook runs, so a hook that has no total of its own
-	// should stop on it. Nothing waits for one that does not, and whatever it
-	// returns after a cut, the seat is given back as never established
-	// (ReasonAcquireFailed), backed off after a lost lease and not after a
-	// drain. ctx also ends once the hook has returned: what outlives the
+	// should stop on it. The heartbeat never waits for one that does not,
+	// and a drain waits for it only within its own bound ([Host.AwaitCut]).
+	// Whatever it returns after a cut, the seat is given back as never
+	// established (ReasonAcquireFailed), backed off after a lost lease and
+	// not after a drain. ctx also ends once the hook has returned: what outlives the
 	// hook detaches from it.
 	OnAcquire(ctx context.Context, seat placement.Seat, lease coord.Lease) error
 

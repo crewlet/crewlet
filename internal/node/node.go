@@ -439,7 +439,7 @@ func (n *Node) BeginDrain(ctx context.Context) {
 const drainLogInterval = 10 * time.Second
 
 // Drain performs this node's graceful departure and returns once its seats
-// are handed back.
+// are handed back, the ones it cut while they were being taken among them.
 //
 // The three steps are one operation because no layer below can do them alone:
 // the seat host knows about leases but not about consumers, and the queue
@@ -452,7 +452,12 @@ const drainLogInterval = 10 * time.Second
 //     renewing so the turns already running can finish.
 //  3. Once no handler and no turn is running ([Node.waitInFlight]), release
 //     the seats: mailbox intact, lease given back, so a peer can take over
-//     immediately rather than waiting out a TTL.
+//     immediately rather than waiting out a TTL. Then wait for every seat
+//     step 1 cut to be given back by the claim that was taking it
+//     ([seat.Host.AwaitCut]), which no release here reaches: a cut seat is
+//     out of the held set, and its give-back — the seat's teardown and its
+//     lease — must not run on beside what the stop tears down after the
+//     drain.
 //
 // Step 3 waits INDEFINITELY, bounded only by ctx. That is deliberate: a turn
 // parked mid-LLM-round is making progress a timer cannot see, and cutting it
@@ -582,7 +587,19 @@ func (n *Node) Drain(ctx context.Context) {
 	}
 
 	n.host.ReleaseAll(stop, seat.ReasonDrain)
-	n.log.Info("drain_complete", "still_held", len(n.host.Held()))
+	// BOUNDED BY ctx, as the wait for turns is: a cut hook that reads its
+	// context returns at once, and its give-back is a step of the stop's
+	// allowance, so only a hook that ignores its cut is waited for here, and
+	// only for as long as the caller lets the drain run.
+	giving := n.host.AwaitCut(ctx)
+	if giving > 0 {
+		n.log.Warn("drain_cut_seats_unsettled", "seats", giving, "error", ctx.Err(),
+			"detail", "a seat cut while it was being taken is still being given "+
+				"back by the claim that took it, whose acquire hook has not "+
+				"returned since its cut; it is given back once that hook "+
+				"returns, before this node's seat host stops")
+	}
+	n.log.Info("drain_complete", "still_held", len(n.host.Held())+giving)
 }
 
 // waitInFlight waits up to one [drainLogInterval] for this node's work to end,

@@ -246,6 +246,295 @@ func TestADrainBegunBeforeStartHoldsThroughTheFirstPass(t *testing.T) {
 	wantHeld(t, h, "ceo")
 }
 
+// TestACutSeatIsNotRenewed holds the heartbeat off a seat cut while it was
+// being taken. Its lease is lost or being given back by the claim that took
+// it, so a renew could only answer for a lease nobody here is keeping — and a
+// renew that answered yes would resume the admission of a seat that is never
+// to be established.
+//
+// The hook ignores its cut, so the seat stays in the held set, cut, for as long
+// as the case reads it.
+//
+// Mutation: renew cut seats in heartbeatTargets, and this fails.
+func TestACutSeatIsNotRenewed(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFleet(t)
+		hook := newCutHook(t)
+		hook.ignoreCut = true
+		renews := &renewLog{Backend: f.store}
+		h := f.newHost("node-a", Config{Backend: renews, Seats: seatsNamed("ceo"), Hooks: hook})
+		h.renewNodePresence(f.ctx)
+
+		swept := make(chan SweepResult, 1)
+		go func() { swept <- h.Sweep(f.ctx) }()
+		t.Cleanup(func() { close(hook.finish); <-swept })
+		<-hook.entered
+
+		h.BeginDrain(f.ctx)
+		synctest.Wait()
+		h.Heartbeat(f.ctx)
+
+		if n := renews.of(seatResource("ceo")); n != 0 {
+			t.Errorf("the heartbeat renewed a seat the drain cut %d time(s): it keeps a "+
+				"lease the claim that took it is giving back", n)
+		}
+	})
+}
+
+// TestASeatADrainCutIsGivenBackOnTheDrainsAllowance holds the give-back of a
+// seat a drain cut to the stop the drain is part of. The claim that took the
+// seat gives it back, on the pass's context, which carries no stop: on its own
+// it began an allowance of its own beside the stop's, so a stop against an
+// unreachable store spent one allowance more for every seat it cut — a third
+// of the lease at the shipped TTL, and none of it counted where the stop's
+// grace is reckoned.
+//
+// The store answers no release until the context it was asked on ends: the
+// presence the drain gives back and the seat it cut must both end inside the
+// drain's one allowance, read in the bubble's clock.
+//
+// Mutation: give a drain-cut seat back on an allowance of its own, and the
+// pass ends a whole allowance of the lease later.
+func TestASeatADrainCutIsGivenBackOnTheDrainsAllowance(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFleet(t)
+		stuck := &stuckReleases{Backend: f.store}
+		hook := newCutHook(t)
+		h := f.newHost("node-a", Config{Backend: stuck, Seats: seatsNamed("ceo"), Hooks: hook})
+		h.renewNodePresence(f.ctx)
+
+		swept := make(chan SweepResult, 1)
+		go func() { swept <- h.Sweep(f.ctx) }()
+		<-hook.entered
+
+		const allowance = 2 * time.Second
+		stuck.block()
+		began := time.Now()
+		h.BeginDrain(WithStopBudget(f.ctx, NewStopBudget(allowance)))
+		<-swept
+
+		if took := time.Since(began); took > allowance {
+			t.Errorf("giving back the presence and the seat the drain cut took %v against "+
+				"the drain's allowance of %v: the cut seat's give-back began an "+
+				"allowance of its own", took, allowance)
+		}
+		if got := stuck.releases(); got != 2 {
+			t.Errorf("%d release(s) asked for, want the presence and the seat the drain cut", got)
+		}
+		wantStrings(t, hook.released(), []string{"ceo:" + ReasonAcquireFailed.String()},
+			"releases: the seat the drain cut is given back as never established")
+	})
+}
+
+// TestALeaseTakenAsADrainBeganIsGivenBackOnTheDrainsAllowance is the same rule
+// for the lease a claim took while the drain began: the claim hands it straight
+// back, with nothing attached to it, on the pass's context, which carries no
+// stop — so on its own it began an allowance beside the stop's.
+//
+// The claim is held at the store until the drain has begun, so the lease it
+// is granted is one a draining host never enters; the store then answers no
+// release until the context it was asked on ends.
+//
+// Mutation: give the lease back on an allowance of its own, and the pass ends
+// a whole allowance of the lease later.
+func TestALeaseTakenAsADrainBeganIsGivenBackOnTheDrainsAllowance(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFleet(t)
+		stuck := &stuckReleases{Backend: f.store}
+		claims := &heldClaim{Backend: stuck, at: make(chan struct{}), proceed: make(chan struct{})}
+		hooks := &hookLog{}
+		h := f.newHost("node-a", Config{Backend: claims, Seats: seatsNamed("ceo"), Hooks: hooks})
+		h.renewNodePresence(f.ctx)
+
+		swept := make(chan SweepResult, 1)
+		go func() { swept <- h.Sweep(f.ctx) }()
+		<-claims.at
+
+		const allowance = 2 * time.Second
+		stuck.block()
+		began := time.Now()
+		drained := make(chan struct{})
+		go func() {
+			defer close(drained)
+			h.BeginDrain(WithStopBudget(f.ctx, NewStopBudget(allowance)))
+		}()
+		synctest.Wait()
+		close(claims.proceed)
+		<-swept
+		<-drained
+
+		if took := time.Since(began); took > allowance {
+			t.Errorf("giving back the presence and the lease taken as the drain began took "+
+				"%v against the drain's allowance of %v: the lease's give-back began an "+
+				"allowance of its own", took, allowance)
+		}
+		if got := stuck.releases(); got != 2 {
+			t.Errorf("%d release(s) asked for, want the presence and the lease taken as the "+
+				"drain began", got)
+		}
+		wantStrings(t, hooks.acquired(), nil, "acquire hooks run for a lease taken as the drain began")
+	})
+}
+
+// heldClaim is the lease store with the first seat claim held until proceed,
+// at closed once that claim has been asked.
+type heldClaim struct {
+	coord.Backend
+	at      chan struct{}
+	proceed chan struct{}
+	once    sync.Once
+}
+
+func (c *heldClaim) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	if coord.IsSeatResource(resource) {
+		held := false
+		c.once.Do(func() { held = true })
+		if held {
+			close(c.at)
+			<-c.proceed
+		}
+	}
+	return c.Backend.TryAcquire(ctx, resource, opts)
+}
+
+// TestAwaitCutWaitsForTheSeatsADrainCut is the drain's wait for what it cut.
+// A cut seat leaves the held set at once, so the drain's ReleaseAll never
+// reaches it, and the claim that took it gives it back only once its hook
+// returns: AwaitCut is what the drain waits on so it does not report done
+// beside that give-back. It answers how many are still being given back when
+// its bound ends, and none once each has been.
+//
+// Mutation: answer AwaitCut at once, and the bounded wait reports nothing left.
+func TestAwaitCutWaitsForTheSeatsADrainCut(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFleet(t)
+		hook := newCutHook(t)
+		hook.ignoreCut = true
+		h := f.newHost("node-a", Config{Seats: seatsNamed("ceo"), Hooks: hook})
+		h.renewNodePresence(f.ctx)
+		if left := h.AwaitCut(f.ctx); left != 0 {
+			t.Fatalf("AwaitCut reports %d seat(s) cut before anything was", left)
+		}
+
+		swept := make(chan SweepResult, 1)
+		go func() { swept <- h.Sweep(f.ctx) }()
+		<-hook.entered
+		h.BeginDrain(f.ctx)
+		synctest.Wait()
+
+		bounded, cancel := context.WithTimeout(f.ctx, time.Minute)
+		defer cancel()
+		if left := h.AwaitCut(bounded); left != 1 {
+			t.Errorf("AwaitCut reports %d seat(s) still being given back once its bound "+
+				"ended, want the one whose hook has not returned", left)
+		}
+		if bounded.Err() == nil {
+			t.Error("AwaitCut returned before its bound while the seat the drain cut was " +
+				"still being given back")
+		}
+		wantStrings(t, hook.released(), nil, "releases while the cut hook still runs")
+
+		close(hook.finish)
+		if left := h.AwaitCut(f.ctx); left != 0 {
+			t.Errorf("AwaitCut reports %d seat(s) left once the cut hook returned", left)
+		}
+		wantStrings(t, hook.released(), []string{"ceo:" + ReasonAcquireFailed.String()},
+			"releases: AwaitCut returned before the cut seat was given back")
+		<-swept
+	})
+}
+
+// TestACutIsRecordedWhateverItsCancel holds the rule that a cut seat is never
+// established to every establishing entry, one that carries no cancel among
+// them: the cut is the cause, and the cancel is only how a hook hears of it.
+//
+// Mutation: record no cause for an entry without a cancel, and this fails.
+func TestACutIsRecordedWhateverItsCancel(t *testing.T) {
+	t.Parallel()
+	entry := &heldSeat{establishing: true}
+	if cancel := entry.cutLocked(cutLeaseLost); cancel != nil {
+		t.Error("an entry with no cancel handed one back")
+	}
+	if !entry.isCut() || entry.cutBy != cutLeaseLost {
+		t.Errorf("an establishing entry with no cancel was cut as %q, want %q",
+			entry.cutBy, cutLeaseLost)
+	}
+	if entry.cutLocked(cutDrained); entry.cutBy != cutLeaseLost {
+		t.Errorf("a second cut replaced the first's cause with %q", entry.cutBy)
+	}
+}
+
+// TestEveryCutCauseIsValid holds the cause type to the causes the host makes.
+func TestEveryCutCauseIsValid(t *testing.T) {
+	t.Parallel()
+	for _, c := range []cutCause{cutDrained, cutLeaseLost} {
+		if !c.Valid() {
+			t.Errorf("%q is a cause the host cuts for and is not valid", c)
+		}
+	}
+	for _, c := range []cutCause{"", "stopped"} {
+		if c.Valid() {
+			t.Errorf("%q is valid and the host never cuts for it", c)
+		}
+	}
+}
+
+// renewLog counts the renews asked of the store, by resource.
+type renewLog struct {
+	coord.Backend
+	mu    sync.Mutex
+	asked map[string]int
+}
+
+func (r *renewLog) Renew(ctx context.Context, resource, owner string, epoch int64,
+	ttl time.Duration) (bool, error) {
+
+	r.mu.Lock()
+	if r.asked == nil {
+		r.asked = map[string]int{}
+	}
+	r.asked[resource]++
+	r.mu.Unlock()
+	return r.Backend.Renew(ctx, resource, owner, epoch, ttl)
+}
+
+func (r *renewLog) of(resource string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.asked[resource]
+}
+
+// TestAHostStoppedBeforeItRanStartsUndrained holds Stop to ending a drain on a
+// host that never ran too: Start leaves a drain as it finds it, so a drain begun
+// and stopped before the host started would otherwise keep a later Start from
+// claiming anything, with nothing left to end it.
+//
+// Mutation: return from Stop on a host that is not running with the drain
+// still set, and this fails.
+func TestAHostStoppedBeforeItRanStartsUndrained(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo"), Hooks: &hookLog{},
+		SweepInterval: time.Hour, HeartbeatInterval: time.Hour,
+	})
+
+	h.BeginDrain(f.ctx)
+	h.Stop(f.ctx)
+	h.Start(f.ctx)
+	defer h.Stop(f.ctx)
+	if h.Draining() {
+		t.Error("a host stopped before it ran started still draining")
+	}
+	wantHeld(t, h, "ceo")
+}
+
 // cutHook is an acquire hook that waits for its context to end — or, when
 // ignoreCut is set, for finish whatever its context does — and records what the
 // host asked of it.

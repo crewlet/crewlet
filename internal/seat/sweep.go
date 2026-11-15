@@ -619,21 +619,28 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took bool, re
 	// before the flag is one the drain's release reads in the held set and
 	// gives back, and once the flag is set nothing is entered — so no claim
 	// can slip between the drain's decision and its release. The lease
-	// just taken goes straight back, with nothing attached to it.
+	// just taken goes straight back, with nothing attached to it, as a step
+	// of the drain's stop ([Host.drainStop]).
 	h.mu.Lock()
 	if h.draining {
+		drainStop := h.drainStop
 		h.mu.Unlock()
-		h.giveBackUnattached(ctx, handle, *lease)
+		h.giveBackUnattached(WithStopBudget(ctx, drainStop), handle, *lease)
 		return false, "", true
 	}
-	//
+
 	// ON A CONTEXT OF ITS OWN, which the heartbeat and a drain can end without
 	// this seat's lock ([heldSeat.cut]): a lease lost or a drain begun while
 	// the hook runs CUTS it, where they used to wait on the lock for a hook
-	// with no total.
+	// with no total. SETTLED once this claim has established the seat or
+	// given it back, which is what a drain that cut it waits for
+	// ([Host.AwaitCut]).
 	hookCtx, cut := context.WithCancel(ctx)
 	defer cut()
-	entry := &heldSeat{seat: seat, lease: *lease, renewedAt: asked, establishing: true, cut: cut}
+	settled := make(chan struct{})
+	defer close(settled)
+	entry := &heldSeat{seat: seat, lease: *lease, renewedAt: asked, establishing: true,
+		cut: cut, settled: settled}
 	h.held[handle] = entry
 	h.mu.Unlock()
 	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
@@ -645,7 +652,7 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took bool, re
 	// ignored its context and finished is building on a lease that is lost or
 	// being given back.
 	h.mu.Lock()
-	cutBy := entry.cutBy
+	cutBy, drainStop := entry.cutBy, h.drainStop
 	if cutBy == "" && err == nil {
 		entry.establishing = false
 		entry.cut = nil
@@ -693,8 +700,17 @@ func (h *Host) tryClaim(ctx context.Context, seat placement.Seat) (took bool, re
 		// cancels the pass, and a give-back that inherits that releases
 		// nothing — the seat then lapses on its TTL, outside the held set
 		// the stop gives back.
-		h.releaseLocked(WithinStop(context.WithoutCancel(ctx), h.ttl),
-			handle, ReasonAcquireFailed)
+		//
+		// A SEAT A DRAIN CUT is given back as a step of the drain's stop
+		// ([Host.drainStop]), as the drain gives back every seat it holds:
+		// on an allowance of its own, a stop against an unreachable store
+		// would spend one more for every seat it cut. Any other give-back
+		// here is outside a stop, and bounded as one that begins one.
+		stop := context.WithoutCancel(ctx)
+		if cutBy == cutDrained {
+			stop = WithStopBudget(stop, drainStop)
+		}
+		h.releaseLocked(WithinStop(stop, h.ttl), handle, ReasonAcquireFailed)
 		return false, "", false
 	}
 
