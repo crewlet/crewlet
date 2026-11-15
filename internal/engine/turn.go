@@ -382,13 +382,15 @@ func (r Request) Ask() []*events.Event {
 //     with `err != nil` alone replayed a turn's external writes up to
 //     twenty-five times.
 //
-// A FAILURE OF THIS NODE'S IS NEVER THE MAIL'S OWN. Every NAK this frame
-// makes of a delivery that failed (a partition's tail it could not requeue,
-// a park's requeue, a turn's failure) asks [queue.NodeFault] through
-// [nakFailure], so an outage, a queue no longer live or a stop or drain that
-// ended the delivery's context is NAK'd as the node's ([queue.NakNode]) and a
-// delivery whose budget it spends is kept with its group's unhandled
-// deliveries, never with its poison.
+// A FAILURE OF THIS NODE'S IS NEVER THE MAIL'S OWN. Where the requeue of a
+// partition's tail or of a park's delivery fails, or the turn does, the NAK
+// asks [queue.NodeFault] through [nakFailure], so an outage, a queue no longer
+// live or a stop or drain that ended the delivery's context is NAK'd as the
+// node's ([queue.NakNode]) and a delivery whose budget it spends is kept with
+// its group's unhandled deliveries, never with its poison. A dispatcher built
+// with no requeue path NAKs that tail and that park as the mail's, for a
+// wiring defect rather than a requeue that failed, and the engine builds none:
+// it fills in [Dispatcher.Park] where its caller left it nil.
 //
 // NO PANIC LEAVES THIS FRAME. A phase that panics is recovered inside the turn
 // loop and comes back as an ordinary broken turn; anything else that panics
