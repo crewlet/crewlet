@@ -440,8 +440,14 @@ func (r *Runner) inPlaceAfter(ctx context.Context, carry carried, round roundCal
 // tells ([Runner.calledAfter]): none for a carry whose lead tells none. Held in
 // round, the round the carry carries on, which is the round its lead's call
 // was held in.
+//
+// BY ITS TOOL, WHATEVER ITS ID: a lead whose held call names no id (a record
+// that kept none) still tells a call of its tool, which a told call of that
+// tool could be taken for ([partners.couldBeTakenFor]); and an empty id picks
+// out no call to leave out of the lists, since only a call approved for a held
+// one carries an id ([BridgedCall.HeldID]).
 func leadsHeld(carry carried, round int) []toldHeld {
-	if id, tool := carry.tellsHeld(); id != "" {
+	if id, tool := carry.tellsHeld(); tool != "" {
 		return []toldHeld{{id: id, tool: tool, round: round}}
 	}
 	return nil
@@ -749,6 +755,24 @@ func (r *Runner) checkoutName() string {
 // rendered only where it is not empty, since an empty list renders as
 // "(none)"; the calls listed again only where the cap leaves them a call to
 // list, never as a count of reads alone.
+//
+// AND A TOLD CALL ANOTHER CALL OF THE BRIEF COULD BE TAKEN FOR IS MARKED AS A
+// CALL OF ITS OWN ([Runner.notes], [prompts.ToldApartNote]), its line ending
+// with a note that says so. Listing again answers a call the session may
+// show; a call the same message tells is in front of the model already, and
+// listed again it would be told twice. Its partners: a shown call of the other
+// told list that reads alike it (both are marked); a held call a lead of the
+// brief tells what became of, of its tool, since that call and the one a
+// person approved for it read alike every call of their tool, but never a
+// held call of the lead's own round and tool, whose fate the lead tells
+// ([partners.couldBeTakenFor]); and the work already done the brief renders
+// (as.rendered: a fresh brief's prior work, a task told again's rounds), each
+// shown line that reads alike it and each tally that names its tool or no
+// tool ([Runner.partnersOf]). The marks are computed on every path, the run of
+// its own included, whose late calls' words say each is ONE call and whose
+// brief renders every closed round as work already done. Never on two calls of
+// one list, never on or against the owed reads, never against a call the cap
+// leaves out, and never on a call listed again.
 func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, owed []int,
 	history []ledger.Iteration, as toldAs, surface *tools.Surface, b provenance.Boundary) (prompts.AfterSave, []int) {
 
@@ -832,13 +856,12 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		// cap is spent in.
 		groups := [][]ledger.Call{bridgedLedger(late), bridgedLedger(after), bridgedLedger(owe), again}
 		opts.Fitted = ledgerfit.Fit(ctx, r.cfg.Compact, ledger.CallPieces(slices.Concat(groups...), opts))
-		if closedN > 0 {
-			earlier := make([]string, closedN)
-			for i := range earlier {
-				earlier[i] = prompts.EarlierRoundNote(notify.Scheduled(r.cfg.Turn.ConversationKey))
-			}
-			opts.Notes = [][]string{3: earlier}
-		}
+		// THE NOTES AFTER THE FIT AND THE WALK, BEFORE THE RENDER: by the
+		// places the render shows ([ledger.ShownIndices]), so a note lands on
+		// the line of the call it names, and no call the cap leaves out is
+		// marked, or marks another.
+		opts.Notes = r.notes([2][]BridgedCall{late, after}, ledger.ShownIndices(groups, opts), closedN,
+			r.partnersOf(round.of, as), opts)
 		rendered := ledger.FormatCallGroups(groups, opts)
 		if len(late) > 0 {
 			out.Late = provenance.Neutralise(b, rendered[0])
@@ -870,6 +893,130 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		out.Tally = provenance.Neutralise(b, ledger.FormatElided(round.elided, r.cfg.SkipNames))
 	}
 	return out, omitted
+}
+
+// notes is the words each line of [Runner.calledAfter]'s groups ends with
+// ([ledger.FormatOptions.Notes]), at, the places of each group its render
+// shows ([ledger.ShownIndices]), in the order late, after, owe, listed again:
+//
+//   - A SHOWN CALL OF A TOLD GROUP (told: the late calls, then the calls after
+//     the point) ANOTHER CALL OF THE BRIEF COULD BE TAKEN FOR ends with
+//     [prompts.ToldApartNote]: where a shown call of the other told group
+//     reads alike it ([readAlike]; symmetric, so both are marked), or a
+//     partner could be taken for it ([partners.couldBeTakenFor]). Never two
+//     calls of one group, which are two lines of one list and so two calls;
+//     never the owed reads, on either side, which are reads a run may run
+//     again; never against a call the cap left out, whose line no reader
+//     sees; and never a call listed again, whose section says it already.
+//   - THE FIRST closedN CALLS OF THE CALLS LISTED AGAIN, the closed rounds'
+//     ([listedAgain]), each end with [prompts.EarlierRoundNote], which says
+//     where in the session above it may be: by place, so a closed read the
+//     cap leaves out carries its note nowhere.
+func (r *Runner) notes(told [2][]BridgedCall, at [][]int, closedN int, p partners,
+	opts ledger.FormatOptions) [][]string {
+
+	notes := make([][]string, len(at))
+	for g, group := range told {
+		other := told[1-g]
+		for _, j := range at[g] {
+			t := group[j]
+			if !p.couldBeTakenFor(t, opts) && !slices.ContainsFunc(at[1-g], func(k int) bool {
+				return readAlike(other[k].Call, t.Call, opts)
+			}) {
+				continue
+			}
+			if notes[g] == nil {
+				notes[g] = make([]string, len(group))
+			}
+			notes[g][j] = prompts.ToldApartNote
+		}
+	}
+	if closedN > 0 {
+		earlier := make([]string, closedN)
+		for i := range earlier {
+			earlier[i] = prompts.EarlierRoundNote(notify.Scheduled(r.cfg.Turn.ConversationKey))
+		}
+		notes[3] = earlier
+	}
+	return notes
+}
+
+// partners is every call of a brief, besides its told groups, that a told call
+// could be taken for: the shown calls and the tallies of the closed rounds it
+// renders as work already done, and the held calls its leads tell.
+type partners struct {
+	// calls is the shown calls of the rendered rounds, each round's as the
+	// prior-work ledger draws them ([ledger.RenderIterations]).
+	calls []ledger.Call
+	// tools is the tools their tallies name, and anyTool says a tally of
+	// theirs counts calls of no tool it names.
+	tools   []string
+	anyTool bool
+	// leads is every held call a lead of the brief tells what became of
+	// ([toldAs.leads]), and of is the round whose calls the brief tells
+	// ([roundCalls.of]), whose held calls a lead of it never marks.
+	leads []toldHeld
+	of    int
+}
+
+// partnersOf is the partners of a brief that tells round of's calls as as
+// says: the closed rounds as.rendered holds, but never the entry standing for
+// of, whose calls are the round's, told by their own rules and rendered
+// nowhere else; each round's shown calls by the walk [ledger.RenderIterations]
+// draws them by, under its own reads, and none of a span's, which it draws as a
+// tally alone; every tally's tools, by name, or as no tool it names where a
+// count names none; and as.leads.
+func (r *Runner) partnersOf(of int, as toldAs) partners {
+	p := partners{leads: as.leads, of: of}
+	for _, entry := range as.rendered {
+		if entry.Iteration <= of && of <= max(entry.Iteration, entry.Through) {
+			continue
+		}
+		if entry.Through == 0 {
+			p.calls = append(p.calls,
+				ledger.ShownCallGroups([][]ledger.Call{entry.Calls}, ledger.Format(r.cfg.SkipNames, entry.Reads))[0]...)
+		}
+		for _, e := range entry.Elided {
+			switch {
+			case e.Calls <= 0:
+			case e.Name == "":
+				p.anyTool = true
+			default:
+				p.tools = append(p.tools, e.Name)
+			}
+		}
+	}
+	return p
+}
+
+// couldBeTakenFor reports whether a partner of the brief could be taken for t,
+// a told call: rules in the order they are cheapest to ask.
+//
+//   - A HELD CALL A LEAD TELLS, OF t's TOOL: the lead tells what became of it,
+//     or of the call a person approved for it, and either is a call of the
+//     tool whose arguments no line shows (withheld, or in no list), so it reads
+//     alike every call of that tool. Never where t is itself a held call of
+//     the lead's round (BridgedCall.Held, of the round the brief tells): a
+//     lead of that round tells t's own fate, and a held call carries no id to
+//     tell it from another held call of its tool (sandbox's BridgeCall.HeldID
+//     names only the call approved for one), so every held call of that round
+//     and tool is spared. Marked, the note would say another call could be
+//     taken for it, false where nothing was approved: a denial, a withdrawal,
+//     a call not made. Another rule can still mark it.
+//   - A TALLY OF THE RENDERED ROUNDS that names t's tool, or that counts calls
+//     of no tool it names: the tally's line shows no arguments, so any of
+//     those calls reads alike t.
+//   - A SHOWN CALL OF THE RENDERED ROUNDS that reads alike t ([readAlike]).
+func (p partners) couldBeTakenFor(t BridgedCall, opts ledger.FormatOptions) bool {
+	if slices.ContainsFunc(p.leads, func(l toldHeld) bool {
+		return l.tool == t.Name && !(t.Held && l.round == p.of)
+	}) {
+		return true
+	}
+	if p.anyTool || slices.Contains(p.tools, t.Name) {
+		return true
+	}
+	return slices.ContainsFunc(p.calls, func(c ledger.Call) bool { return readAlike(c, t.Call, opts) })
 }
 
 // listedAgain is the calls a brief lists again: every call of closed, the

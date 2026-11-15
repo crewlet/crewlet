@@ -274,6 +274,26 @@ func EarlierRoundNote(fire bool) string {
 	return "(made in an earlier round of this " + nextTurnWordsFor(NextTurn{Fire: fire}).turn + ")"
 }
 
+// ToldApartNote is the note a told call's line ends with where another call
+// the same message tells could be taken for it (internal/agent/runner's
+// notes): a line of another list of the message, a line or a tally of the
+// work already done that it renders, or a held call one of its leads tells
+// what became of, or the call a person approved for it. Without it, the words
+// over the late calls and over the calls the session may already show, which
+// say a call shown twice is ONE call, would let a model read the two as one
+// and lose one: take its outcome for the other's, or leave undone what it
+// did not do.
+//
+// TRUE WHEREVER IT IS PRINTED: every partner is a call this message tells,
+// never the marked call itself (two lists of one message hold no call twice,
+// a rendered round is not the round whose calls are told, and a lead's own
+// held call is spared), and the engine could not rule out that one is taken
+// for the other. So it says "could be taken for", the one reason true on every
+// path, as [shownAgainHeader] does, and never which call: the partner may be
+// a tally's count or a lead's words, which no line names. The prior-work line
+// itself carries none: its render is shared with the reviewer.
+const ToldApartNote = "(a call of its own: another call this message tells could be taken for it)"
+
 // lateCallsHeader introduces the calls of the round that finished only after
 // the run that made them stopped waiting for them, and the ones still in flight
 // as the round was read ([AfterSave.Late]): calls an earlier run of the work
@@ -540,6 +560,13 @@ type AfterSave struct {
 // call: it is in no list, and the session that shows it is the one the brief
 // continues. A submission listed again is one of those, so its section says
 // nothing of it.
+//
+// A LINE OF CALLS OR OF LATE MAY END WITH [ToldApartNote], where another call
+// the message tells could be taken for it (internal/agent/runner's notes): the
+// caller's words, already in the lines it hands, as each line of Shown that
+// ends with [EarlierRoundNote] is. Nothing here reads them, and no header
+// needs them: each header stays true of a marked line, which only says the
+// call is one of its own.
 func CalledAfter(after AfterSave) string {
 	var sections []string
 	if after.HeldSubmission {
@@ -742,6 +769,14 @@ const lateBeforeHeader = "## Calls the runs before you stopped waiting for, or w
 // them in a transcript it does not have. Told nothing of them, the reseed
 // alone saying only that the run before it did things through the seat's
 // tools, it could make them again: a second post, a second delegation.
+//
+// A LINE MAY END WITH [ToldApartNote], where another call the message tells
+// could be taken for it: a line of the other list, a line or a tally of the
+// prior work the fresh brief renders, or a held call a lead of it tells
+// (internal/agent/runner's notes). [lateBeforeHeader] says each late call is
+// ONE call, made once, and a model holding both that and an alike line of
+// work already done could read them as one. The caller's words, already in
+// the lines it hands; nothing here reads them.
 func CalledBefore(told AfterSave) string {
 	var sections []string
 	dropped := ""
