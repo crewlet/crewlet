@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -43,7 +45,7 @@ func (accessVendor) Catalog() seataccess.Catalog {
 		Kind: integration.KindAWS,
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneAWS, Levels: true, Issued: CredentialsField,
-			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
+			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, Grants: true,
 		}},
 	}
 }
@@ -101,6 +103,9 @@ const leftBehind = "Administer could leave access behind on what it reached: ins
 func (accessVendor) Steps(
 	_ seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
+	if op == seataccess.OpGrants {
+		return grantSteps(want, have)
+	}
 	step := func(verb seataccess.StepVerb, text string) seataccess.Step {
 		return seataccess.Step{Op: op, Verb: verb, By: seataccess.ByCrewlet, Text: text}
 	}
@@ -201,6 +206,11 @@ type accessSession struct {
 	// await bounds the wait for a role IAM has just made to accept writes;
 	// tests shorten it.
 	await time.Duration
+
+	// policies is AWS's managed policies a seat may be granted, read once
+	// per session where a grant is offered.
+	mu       sync.Mutex
+	policies *[]ManagedPolicy
 }
 
 // Options is AWS's three levels, least access first. Administer is the one
@@ -276,6 +286,9 @@ func (s *accessSession) observe(ctx context.Context, rec seataccess.Record, name
 	if len(foreign) == 0 && len(role.Inline) == 0 && role.TrustProblem == "" && access.IAMRead == s.iamRead {
 		out.Level = access.Level
 	}
+	for _, arn := range access.Grants {
+		out.Grants = append(out.Grants, seataccess.Grant{Permission: arn})
+	}
 	return out, nil
 }
 
@@ -288,6 +301,13 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 		}
 		return s.granted(s.converge(ctx, in, s.want(in.Want), true))
 	case seataccess.OpEnable, seataccess.OpLevel:
+		return s.granted(s.converge(ctx, in, s.want(in.Want), false))
+	case seataccess.OpGrants:
+		// EVERY GRANT AT ONCE: the op's first step attaches and detaches them
+		// all, and the rest have nothing left to change.
+		if len(in.Prior) > 0 {
+			return seataccess.StepResult{}, nil
+		}
 		return s.granted(s.converge(ctx, in, s.want(in.Want), false))
 	case seataccess.OpDisable:
 		if in.Step.Index == 0 {
@@ -314,10 +334,15 @@ func (s *accessSession) granted(err error) (seataccess.StepResult, error) {
 	return seataccess.StepResult{Settling: settling()}, nil
 }
 
-// want is what a seat that is on holds: its level and the company's IAM read
-// option.
+// want is what a seat that is on holds: its level, the company's IAM read
+// option and its live grants, each an AWS managed policy by ARN.
 func (s *accessSession) want(d seataccess.Desired) Access {
-	return Access{Level: d.Level, IAMRead: s.iamRead}
+	var grants []string
+	for _, g := range d.Grants {
+		grants = append(grants, strings.TrimSpace(g.Permission))
+	}
+	slices.Sort(grants)
+	return Access{Level: d.Level, IAMRead: s.iamRead, Grants: slices.Compact(grants)}
 }
 
 // create makes the seat's role. A role of its name the ledger records is
@@ -350,6 +375,9 @@ func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (s
 func (s *accessSession) converge(ctx context.Context, in seataccess.ApplyInput, want Access, fresh bool) error {
 	name, err := s.roleOf(in)
 	if err != nil {
+		return err
+	}
+	if err := s.grantable(want.Grants); err != nil {
 		return err
 	}
 	var have []string

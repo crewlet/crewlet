@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // A seat's extra grant is one AWS managed policy attached to its role beside
@@ -91,4 +94,113 @@ func Refused(p ManagedPolicy) string {
 		}
 	}
 	return ""
+}
+
+// managedPolicyOf is an AWS managed policy's name and path, read off its ARN.
+func managedPolicyOf(arn string) ManagedPolicy {
+	_, rest, _ := strings.Cut(arn, ":policy")
+	i := strings.LastIndex(rest, "/")
+	if i < 0 {
+		return ManagedPolicy{ARN: arn, Name: rest, Path: "/"}
+	}
+	return ManagedPolicy{ARN: arn, Name: rest[i+1:], Path: rest[:i+1]}
+}
+
+// jobFunctions is the picker's heading for the policies AWS writes per job.
+const jobFunctions = "Job functions"
+
+// GrantCatalogue is every AWS managed policy a seat may be granted beside its
+// level ([seataccess.Granter]), read once per session. Each grant applies to
+// the whole account the role works in, so a grant names no scope. A stack
+// older than version 3 lets the provisioner list none, which offers nothing:
+// the outdated stack is the integration's own finding.
+func (s *accessSession) GrantCatalogue(ctx context.Context, _ seataccess.Lane) (
+	[]seataccess.GrantEntry, []string, error) {
+
+	policies, err := s.grantablePolicies(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]seataccess.GrantEntry, 0, len(policies))
+	for _, p := range policies {
+		e := seataccess.GrantEntry{ID: p.ARN, Name: p.Name, ScopeKind: seataccess.GrantScopeAccount, Write: p.Write()}
+		if p.Job() {
+			e.Group = jobFunctions
+		}
+		out = append(out, e)
+	}
+	return out, nil, nil
+}
+
+// grantablePolicies reads AWS's catalogue once per session.
+func (s *accessSession) grantablePolicies(ctx context.Context) ([]ManagedPolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.policies != nil {
+		return *s.policies, nil
+	}
+	policies, err := s.client.GrantablePolicies(ctx)
+	switch {
+	case hasCode(err, "AccessDenied"):
+		policies = []ManagedPolicy{}
+	case err != nil:
+		return nil, s.refused(err)
+	}
+	s.policies = &policies
+	return policies, nil
+}
+
+// grantable refuses a grant no seat may hold: anything but an AWS managed
+// policy in the role's partition, or one [Refused] names, which the save
+// already refuses and a document written around it reaches here.
+func (s *accessSession) grantable(arns []string) error {
+	for _, arn := range arns {
+		p := managedPolicyOf(arn)
+		why := Refused(p)
+		if !s.client.conn.awsManaged(arn) {
+			why = "is not an AWS managed policy in this account's partition"
+		}
+		if why != "" {
+			return &seataccess.Refusal{
+				Said:   "AWS: " + p.Name + " " + why + ", so no agent is granted it",
+				Remedy: "Remove the grant on the Agents tab", Actor: seataccess.ByYou,
+			}
+		}
+	}
+	return nil
+}
+
+// grantSteps is an [seataccess.OpGrants] op as steps: one attach per grant
+// added and one detach per grant taken off, each naming the policy.
+func grantSteps(want seataccess.Desired, have seataccess.Observed) []seataccess.Step {
+	step := func(verb seataccess.StepVerb, text string) seataccess.Step {
+		return seataccess.Step{Op: seataccess.OpGrants, Verb: verb, By: seataccess.ByCrewlet, Text: text}
+	}
+	holds := func(list []seataccess.Grant, g seataccess.Grant) bool {
+		return slices.ContainsFunc(list, func(h seataccess.Grant) bool { return h.Permission == g.Permission })
+	}
+	var out []seataccess.Step
+	for _, g := range seataccess.NormalGrants(want.Grants) {
+		if holds(have.Grants, g) {
+			continue
+		}
+		until := "permanently"
+		if !g.ExpiresAt.IsZero() {
+			until = "until " + g.ExpiresAt.UTC().Format(time.DateOnly+" 15:04 UTC")
+		}
+		out = append(out, step(seataccess.VerbGrant, fmt.Sprintf("Attach %s to its role, %s, held to the boundary",
+			managedPolicyOf(g.Permission).Name, until)))
+	}
+	for _, g := range seataccess.NormalGrants(have.Grants) {
+		if !holds(want.Grants, g) {
+			out = append(out, step(seataccess.VerbUngrant, "Detach "+managedPolicyOf(g.Permission).Name+" from its role"))
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, step(seataccess.VerbGrant, "Attach and detach its policies so it holds its level and grants"))
+	}
+	for i := range out {
+		out[i].Index = i
+	}
+	return out
 }
