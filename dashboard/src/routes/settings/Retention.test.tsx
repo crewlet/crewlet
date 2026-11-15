@@ -451,9 +451,9 @@ test("a blocked window says why in words and who abandoned it", () => {
   );
   const text = container.textContent ?? "";
   expect(text).toContain("This window was abandoned");
-  expect(text).toContain("Abandoned by ana.admin (through pat:0192).");
+  expect(text).toContain("Abandoned by ana.admin (through a personal access token).");
   expect(text.split("ana.admin").length - 1).toBe(1);
-  expect(text).toContain(", run by sre@example.com (through pat:0191). Resizing");
+  expect(text).toContain(", run by sre@example.com (through a personal access token). Resizing");
   expect(text).not.toContain("((");
   expect(text).not.toContain("abandoned_by_operator");
 });

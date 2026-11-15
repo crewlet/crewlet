@@ -234,7 +234,9 @@ A line's kind is said three ways, each enough alone:
   which makes a small edit prettier and a rewritten paragraph unreadable.
   Which two lines are one line edited is read off the change, never guessed
   from their words, because an underline says they are one: a setting's old
-  and new value under one path; in a text, the lines in the same place of a
+  and new value under one path (a value of several lines, an object or a
+  list, is a small text of its own, its lines paired by the text's rule
+  below); in a text, the lines in the same place of a
   change that removes as many lines as it adds (the one shape git's own
   `contrib/diff-highlight` pairs), or one line against several, the first
   of each. Any other change of a text underlines nothing: one of two lines
@@ -11472,7 +11474,12 @@ export carries the node and the failure beside the eight columns on screen.
 active revision, its entities (the kinds declared once, `ENTITY_KINDS`, and
 held against the engine's by `entities_client_test.go`, drawn as a list of
 handles read down its left edge beside the one it opened), the revision history
-and a diff. **The Diff lens draws the changes first** and the revisions they
+and a diff. The lenses are the frame's **lens chips** beside the page's name
+(`PageLenses`, as Models' and MCP & tools' are), which on a phone take a row of
+their own under the bar and scroll sideways rather than wrapping a lens onto a
+second line. **The active document is the Active lens's whole content**, so it
+is unbounded and the page scrolls it, rather than a box of its own under the
+record ceiling over an empty page. **The Diff lens draws the changes first** and the revisions they
 are picked from under them — beneath fifteen rows of history the changes began
 off the screen, so **See its changes** landed on a list — and a revision
 pressed further down brings the changes back on screen (only when they are off
@@ -11484,10 +11491,26 @@ its mark (`+` or `−`, said as a word to a screen reader), its path wrapping
 rather than cut, and its value as JSON — an object or a list in the document's
 own indented shape — in tracks every line shares, so the values start at one
 edge; on a diff narrower than a phone's 640px the value takes the line under
-its path. A revision's peek and its page say
-each property once: the header carries its id, summary and state, and **Where
-it came from** its full id and parent (both in the mono face), Source, who
-created it, when, and when it was activated. In the history (and the Diff
+its path. **A value of several lines is that many lines of the diff**, each
+with its own mark and surface step, its path written once on the first of
+them, and paired with the other side's lines of that path by the rule a text's
+lines are ([Diffs carry no hue](#diffs-carry-no-hue)): drawn as one line, a
+removed seat was marked on its first row alone and the rest of it hung
+unmarked in the value track. **An empty diff names the side it was read
+against**, from the one function the card's subtitle reads ("Identical to
+revision 01JCFGBBBB."), and the active revision read against itself says that
+it is the active revision rather than "No differences". A revision's peek and
+its page say each property once: the header carries its id, summary and
+state, and **Where it came from** its full id and parent (both in the mono
+face), Source, who created it, through which credential, when, and when it
+was activated. **The author is the reader's name for them**: a seat by its
+name on the chart, a Tier A token as "founder (API token)", never the
+recorded key (`token:founder`). **The credential is its kind in words**
+("Personal access token", "Signed-in session"), its id one press away on a
+copy control, and a credential beside an author's name reads "jane.doe
+(through a personal access token)". **Across the fleet** counts the nodes that
+run the revision in a sentence whose verb agrees with the count ("1 of 3 nodes
+runs this revision", "The fleet's only node runs this revision"). In the history (and the Diff
 lens's list of revisions) **Summary is the one flexible column**: the revision id and its *active* pill are exactly
 their own width, and When and By size to theirs, so the id is never cut and the
 summary takes what is left — never less than 12rem: **beside a peek, When
@@ -11509,7 +11532,10 @@ empty). **It changes the document whole**, as its page note says on every
 lens, where every other screen changes a part:
 
 - **Revert to this revision**, on a revision's page and its peek (disabled on
-  the active revision, whose re-publication is a reload), opens a
+  the active revision, whose re-publication is a reload, and that revision's
+  header says so in words under its title, the same sentence the button holds
+  as its reason: "This is the active revision. Reload it from the Active view
+  to publish it again."), opens a
   confirmation drawing what the revert changes in the active revision
   (`config_diff` against `active`, the cut said where the answer is a page of
   it) and a summary field, and sends `POST /config/revisions/{id}/revert`.

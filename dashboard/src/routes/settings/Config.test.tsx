@@ -17,10 +17,18 @@ import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { configHunks } from "~/lib/configHunks.ts";
-import { ConfigScreen, nodeOnRevision, RevisionPeek } from "./Config.tsx";
+import {
+  ACTIVE_REVISION_HELD,
+  ConfigScreen,
+  diffSides,
+  fleetRunsWords,
+  nodeOnRevision,
+  RevisionPeek,
+} from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
+import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "~/app/frame/PageActions.tsx";
 import { LiveSocket, Store, type ConfigChange } from "~/protocol/index.ts";
 import type { FleetNode } from "~/protocol/types.ts";
 
@@ -88,7 +96,12 @@ class InertWebSocket {
 /** Every question the screen asked, with its parameters. */
 let asked: { what: string; params: Record<string, unknown> | undefined }[] = [];
 
-function mount(hash: string, answer: unknown = diff, entities?: unknown) {
+function mount(
+  hash: string,
+  answer: unknown = diff,
+  entities?: unknown,
+  audit: readonly unknown[] = revisions,
+) {
   location.hash = hash;
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -103,7 +116,7 @@ function mount(hash: string, answer: unknown = diff, entities?: unknown) {
     asked.push({ what, params });
     return Promise.resolve(
       what === "config_audit"
-        ? revisions
+        ? audit
         : what === "config_diff"
           ? answer
           : what === "config_entities"
@@ -262,15 +275,26 @@ test("a diff's path and value are drawn whole, in the diff's own tracks", async 
       expect(getComputedStyle(cell).textOverflow).not.toBe("ellipsis");
       expect(getComputedStyle(cell).overflowWrap).toBe("anywhere");
     }
-    // THE VALUE KEEPS THE DOCUMENT'S SHAPE: an object indented, line by line.
+    // THE VALUE KEEPS THE DOCUMENT'S SHAPE, an object indented, AND EVERY
+    // LINE OF IT IS MARKED: one diff line per line of the value, each with
+    // its glyph, the path written on the first.
+    // Drawn as one line, the Revert dialog marked a removed seat on its first
+    // row alone and hung the rest of it unmarked under the path.
     expect(getComputedStyle(value).whiteSpace).toBe("pre-wrap");
-    expect(value.textContent).toBe(
+    const lines = [...diffView.querySelectorAll<HTMLElement>(".diff-view__line")];
+    expect(lines.map((l) => l.querySelector(".diff-view__text")?.textContent).join("\n")).toBe(
       JSON.stringify(
         { name: "docs", command: "uvx", args: ["mcp-server-docs", "--port", "0"] },
         null,
         2,
       ),
     );
+    expect(lines.length).toBeGreaterThan(1);
+    for (const l of lines) {
+      expect(l.dataset.kind).toBe("remove");
+      expect(l.querySelector(".diff-view__mark")?.textContent).toBe("−Removed");
+    }
+    expect(diffView.querySelectorAll(".diff-view__path")).toHaveLength(1);
   } finally {
     style.remove();
   }
@@ -310,9 +334,25 @@ describe("a change as the diff draws it", () => {
     ]);
   });
 
-  test("keeps an object in the document's own indented shape", () => {
+  // ONE DIFF LINE PER LINE OF THE VALUE, each of its kind and its path, so
+  // the diff marks every line of an object rather than its first row alone.
+  // Mutation: hand the value over as one line and this reads one line.
+  test("keeps an object in the document's own indented shape, one line of the diff a line", () => {
     expect(linesOf({ path: "a", kind: "removed", from: { n: 1 } })).toEqual([
-      ["remove", '{\n  "n": 1\n}'],
+      ["remove", "{"],
+      ["remove", '  "n": 1'],
+      ["remove", "}"],
+    ]);
+    expect(
+      configHunks([{ path: "a", kind: "changed", from: [1], to: 2 }])[0]!.lines.map((line) => [
+        line.kind,
+        line.path,
+      ]),
+    ).toEqual([
+      ["remove", "a"],
+      ["remove", "a"],
+      ["remove", "a"],
+      ["add", "a"],
     ]);
   });
 });
@@ -471,6 +511,40 @@ test("a revision picked from the history is compared with the active one again",
   expect(location.hash).toContain("revision=01JCFGBBBB0000000000000002");
   await waitFor(() => expect(againstAsked().at(-1)).toBe("active"));
   expect(screen.getByText("against the active revision")).toBeDefined();
+});
+
+// AN EMPTY DIFF NAMES THE SIDE IT WAS READ AGAINST, from the one function
+// the subtitle reads too. The empty state was hard-coded "Identical to the
+// active revision" under a subtitle naming another revision, so every "See its
+// changes" whose save changed nothing named a side it never read; and the
+// active revision read against itself is no comparison at all. Mutation:
+// hard-code the empty state's hint again and the first case says "the active
+// revision".
+describe("an empty diff", () => {
+  const nothing = { ...diff, changes: [], changes_total: 0 };
+
+  test("says it is identical to the revision it was read against", async () => {
+    mount(
+      "#/settings/config?lens=diff&revision=01JCFGAAAA0000000000000001&against=01JCFGBBBB0000000000000002",
+      nothing,
+    );
+    expect(await screen.findByText("Identical to revision 01JCFGBBBB.")).toBeDefined();
+    expect(screen.getByText("against revision 01JCFGBBBB")).toBeDefined();
+    expect(screen.queryByText(/Identical to the active revision/)).toBeNull();
+  });
+
+  test("of the active revision against itself says that is what it is", async () => {
+    mount("#/settings/config?lens=diff&revision=01JCFGAAAA0000000000000001", nothing);
+    expect(await screen.findByText("This is the active revision")).toBeDefined();
+    expect(screen.queryByText("No differences")).toBeNull();
+  });
+
+  test("of another revision against the active one says so", () => {
+    expect(diffSides("01JCFGBBBB0000000000000002", "", "01JCFGAAAA0000000000000001")).toEqual({
+      subtitle: "against the active revision",
+      empty: { title: "No differences", hint: "Identical to the active revision." },
+    });
+  });
 });
 
 // AND THE ORDINARY CASE NAMES NO SIDE, so every link that wants the plain
@@ -791,6 +865,21 @@ describe("which nodes run a revision", () => {
     );
   }
 
+  // THE VERB AGREES WITH WHAT IT COUNTS. The sentence was "{n} of {plural}
+  // run this revision.", which read "1 of 1 node run this revision." and
+  // "0 of 1 node run this revision.". Mutation: go back to it and every line
+  // but "2 of 3" fails.
+  test.each([
+    [1, 1, "The fleet's only node runs this revision."],
+    [0, 1, "The fleet's only node does not run this revision."],
+    [3, 3, "All 3 nodes run this revision."],
+    [0, 3, "None of the 3 nodes runs this revision."],
+    [1, 3, "1 of 3 nodes runs this revision."],
+    [2, 3, "2 of 3 nodes run this revision."],
+  ])("says %i of %i nodes in a sentence that agrees", (running, total, words) => {
+    expect(fleetRunsWords(running, total)).toBe(words);
+  });
+
   test("each node is running it, refused it, running another, or silent", () => {
     expect(nodeOnRevision(node("n"), id)).toBe("here");
     expect(nodeOnRevision(refused, id)).toBe("refused");
@@ -827,7 +916,7 @@ describe("which nodes run a revision", () => {
   // "runs it" with no reason, and the count reads 2 of 2.
   test("the peek says a refused re-activation of the revision a node runs as a refusal", async () => {
     mountPeek([node("current-0"), rotated]);
-    expect(await screen.findByText("1 of 2 nodes run this revision.")).toBeDefined();
+    expect(await screen.findByText("1 of 2 nodes runs this revision.")).toBeDefined();
     const line = (name: string) => screen.getByText(name).closest<HTMLElement>(".row")!;
     const tag = within(line("rotated-0")).getByText(`refused, runs ${id.slice(0, 10)}`);
     expect(tag.closest(".crewlet-tag")!.className).toContain("crewlet-tag--danger");
@@ -841,7 +930,7 @@ describe("which nodes run a revision", () => {
       refused,
       node("other-0", { config_revision_id: before, config_serving_revision_id: before }),
     ]);
-    expect(await screen.findByText("1 of 3 nodes run this revision.")).toBeDefined();
+    expect(await screen.findByText("1 of 3 nodes runs this revision.")).toBeDefined();
     const line = (name: string) => screen.getByText(name).closest<HTMLElement>(".row")!;
     expect(within(line("current-0")).getByText("runs it")).toBeDefined();
     const tag = within(line("refused-0")).getByText(`refused, runs ${before.slice(0, 10)}`);
@@ -850,4 +939,116 @@ describe("which nodes run a revision", () => {
     expect(within(line("other-0")).getByText(`on ${before.slice(0, 10)}`)).toBeDefined();
     expect(within(line("other-0")).queryByText(/could not apply/)).toBeNull();
   });
+});
+
+// ---------------------------------------------------------------------------
+// A revision's header and provenance, in the reader's words
+// ---------------------------------------------------------------------------
+
+/** One revision's peek over `audit`, the fleet empty. */
+function mountRevision(id: string, audit: readonly unknown[]) {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(what === "config_audit" ? audit : {});
+  return render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <RevisionPeek id={id} />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+}
+
+// WHY REVERT IS HELD ON THE ACTIVE REVISION IS DRAWN, the same sentence the
+// button holds as its reason. It was the button's title and its description
+// to a screen reader alone, neither of which a touch screen reaches, so the
+// one greyed-out control on the header said nothing. Mutation: drop the
+// header's line and the first case finds the words only on the button.
+test("the active revision says on the page why it cannot be reverted to", async () => {
+  mountRevision(revisions[0]!.revision_id, revisions);
+  const said = await screen.findByText(ACTIVE_REVISION_HELD);
+  expect(said.closest("button")).toBeNull();
+  expect(ACTIVE_REVISION_HELD.startsWith("This is the active revision.")).toBe(true);
+  expect(screen.getByRole("button", { name: /Revert to this revision/ })).toBeDefined();
+});
+
+test("a revision that is not active draws no such line", async () => {
+  mountRevision(revisions[1]!.revision_id, revisions);
+  expect(await screen.findByText("Where it came from")).toBeDefined();
+  expect(screen.queryByText(ACTIVE_REVISION_HELD)).toBeNull();
+});
+
+// THE AUTHOR AND THE CREDENTIAL IN THE READER'S WORDS. "By token:founder" and
+// "Through pat:01a1dc39-…" named both by strings nobody calls them. A Tier A
+// token writing as itself is its own name and is not "through" itself; a
+// person's credential is its kind in words, its id behind a copy control.
+// Mutation: print `created_by` as recorded, or the credential as written, and
+// the raw strings are back on the page.
+test("a revision's author and credential are said in words, the id copied", async () => {
+  const byToken = {
+    ...revisions[0]!,
+    revision_id: "01JCFGCCCC0000000000000003",
+    created_by: "token:founder",
+    operator_id: "token:founder",
+    is_active: false,
+  };
+  const byPat = {
+    ...revisions[1]!,
+    revision_id: "01JCFGDDDD0000000000000004",
+    created_by: "jane.doe",
+    created_by_kind: "operator",
+    operator_id: "pat:01a1dc39-0000-4000-8000-000000000000",
+  };
+  const { container } = mount("#/config?lens=audit", diff, undefined, [byToken, byPat]);
+  expect(await screen.findByText("founder (API token)")).toBeDefined();
+  expect(screen.getByText("jane.doe (through a personal access token)")).toBeDefined();
+  expect(container.textContent).not.toContain("token:founder");
+  expect(container.textContent).not.toContain("pat:");
+  cleanup();
+
+  mountRevision(byPat.revision_id, [byPat]);
+  expect(await screen.findByText("Personal access token")).toBeDefined();
+  expect(
+    screen.getByRole("button", {
+      name: "Copy the personal access token's id, 01a1dc39-0000-4000-8000-000000000000",
+    }),
+  ).toBeDefined();
+  expect(document.body.textContent).not.toContain("pat:");
+});
+
+// THE LENSES ARE THE FRAME'S, in the bar's lens slot, as Models' and MCP &
+// tools' are: a segmented control among the page's controls wrapped "Diff" to
+// a second row on a phone. Mutation: draw them in `PageActions` again and they
+// land in the controls' slot.
+test("the lenses are drawn in the page bar's lens slot", async () => {
+  const lenses = document.createElement("div");
+  lenses.id = PAGE_LENSES_SLOT;
+  const actions = document.createElement("div");
+  actions.id = PAGE_ACTIONS_SLOT;
+  document.body.append(lenses, actions);
+  try {
+    mount("#/config?lens=audit");
+    await screen.findByText("connect datadog");
+    const tabs = within(lenses).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Active", "Entities", "History", "Diff"]);
+    expect(within(actions).queryByText("History")).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Configuration view" })).toBeNull();
+  } finally {
+    lenses.remove();
+    actions.remove();
+  }
+});
+
+// THE ACTIVE DOCUMENT IS THE LENS'S WHOLE CONTENT, so the page scrolls it. It
+// sat under the ceiling every record block takes, a box of some 460px with a
+// scrollbar of its own over an empty page. Mutation: drop `maxHeight="none"`
+// and the block takes the ceiling again.
+test("the active document is unbounded, scrolled by the page", async () => {
+  const { container } = mount("#/config?lens=active");
+  await waitFor(() => expect(container.querySelector(".crewlet-codeblock")).not.toBeNull());
+  const block = container.querySelector<HTMLElement>(".crewlet-codeblock")!;
+  expect(block.style.getPropertyValue("--crewlet-codeblock-max-height")).toBe("none");
 });
