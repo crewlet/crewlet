@@ -476,9 +476,9 @@ func (ClaudeCode) checkHoldings(archive sandbox.SessionArchive, ask sandbox.Hold
 	}
 	if !claudeResumeRead(ask.Resumer) {
 		return &holdingsError{why: fmt.Sprintf("Claude Code %.64q continues the session, and a reading "+
-			"reads only for the releases whose resume the line layer models: a release joins them once its "+
-			"shipped resume is re-read against that model and a census of archives it wrote and resumed "+
-			"holds to it (claudeResumeRead, internal/sandbox/executor)", ask.Resumer)}
+			"reads only for the releases whose resume its model of the resume was read from (threadChain): a "+
+			"release joins them once its shipped resume is re-read against that model and a census of archives "+
+			"it wrote and resumed holds to it (claudeResumeRead, internal/sandbox/executor)", ask.Resumer)}
 	}
 	if len(ask.Calls) == 0 || len(ask.Calls) > sandbox.MaxBridgeCalls {
 		return &holdingsError{why: fmt.Sprintf("the ask names %d calls, and a reading answers 1 to %d: "+

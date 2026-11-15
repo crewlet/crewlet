@@ -139,7 +139,7 @@ func hsLogged(id, output string) sandbox.LoggedCall {
 }
 
 // hsResumer is the release that continues every session here: one whose
-// resume the line layer models ([claudeResumeRead]).
+// resume [threadChain] models ([claudeResumeRead]).
 const hsResumer = "2.1.322"
 
 // hsAsk asks about calls, for a session [hsResumer] continues.

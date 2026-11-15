@@ -71,7 +71,7 @@ func rhArchive(t *testing.T, id, output string) []byte {
 }
 
 // rhResumer is the release that continues every session here: one whose
-// resume the line layer models.
+// resume the model of Claude Code's resume was read from.
 const rhResumer = "2.1.322"
 
 // rhAsk asks about calls, for a session [rhResumer] continues.
@@ -306,7 +306,7 @@ func TestAReadingIsOnlyOfAWriterItsRulesWereMeasuredOn(t *testing.T) {
 // resumer to the range 2.1.310 to 2.1.322, and 2.1.311 is read; to 2.1.310
 // and later, and 2.1.323 is read; compare its numbers rather than the release
 // whole, and 02.1.310 is read.
-func TestAReadingIsOnlyForAResumerWhoseResumeTheLineLayerModels(t *testing.T) {
+func TestAReadingIsOnlyForAResumerWhoseResumeTheModelWasReadFrom(t *testing.T) {
 	t.Parallel()
 	call := sandbox.LoggedCall{ID: "toolu_resumer", Asked: true, Output: "resumer done"}
 	archive := rhArchive(t, call.ID, call.Output)
