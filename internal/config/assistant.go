@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Assistant is the Tier B `assistant:` block: whether the Dashboard Assistant
@@ -76,7 +77,41 @@ type Assistant struct {
 	// harness for a task that needs research, scripts, files or many steps
 	// (ADR-0054). Absent: the assistant answers in quick mode only.
 	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."`
+
+	// Tools narrows which tools Ask Crewlet offers anybody; it never widens a person's.
+	Tools AssistantTools `yaml:"tools,omitempty" json:"tools,omitzero" desc:"Which of Ask Crewlet's tools the company turns off for everybody. It only narrows what a person's own permissions already offer."`
 }
+
+// AssistantTools is the `assistant.tools` block.
+type AssistantTools struct {
+	Deny []AssistantToolFamily `yaml:"deny,omitempty" json:"deny,omitempty" js:"enum=writes|generic_changes|generic_reads|chat_writes|atlas_writes|agent_controls|page_changes|deep_work" desc:"Tool families Ask Crewlet never offers, each once: writes (every change it could propose, so it only reads), generic_changes (a change to any API route), generic_reads (a read of any API route), chat_writes, atlas_writes, agent_controls (pausing, resuming, steering and answering an agent's run), page_changes (a change to the screen the person has open), deep_work."`
+}
+
+// AssistantToolFamily is a family of Ask Crewlet's tools an administrator can turn off.
+type AssistantToolFamily string
+
+// The families, each a set of tools internal/assistant/catalog's FamiliesOf names.
+const (
+	FamilyWrites         AssistantToolFamily = "writes"
+	FamilyGenericChanges AssistantToolFamily = "generic_changes"
+	FamilyGenericReads   AssistantToolFamily = "generic_reads"
+	FamilyChatWrites     AssistantToolFamily = "chat_writes"
+	FamilyAtlasWrites    AssistantToolFamily = "atlas_writes"
+	FamilyAgentControls  AssistantToolFamily = "agent_controls"
+	FamilyPageChanges    AssistantToolFamily = "page_changes"
+	FamilyDeepWork       AssistantToolFamily = "deep_work"
+)
+
+// AssistantToolFamilies are the families, in declaration order.
+var AssistantToolFamilies = []AssistantToolFamily{FamilyWrites, FamilyGenericChanges,
+	FamilyGenericReads, FamilyChatWrites, FamilyAtlasWrites, FamilyAgentControls,
+	FamilyPageChanges, FamilyDeepWork}
+
+// Valid reports whether f is a family this build knows.
+func (f AssistantToolFamily) Valid() bool { return slices.Contains(AssistantToolFamilies, f) }
+
+// Denies reports whether the company turned family f off.
+func (t AssistantTools) Denies(f AssistantToolFamily) bool { return slices.Contains(t.Deny, f) }
 
 // AssistantDeepWork is the `assistant.deep_work` block.
 //
@@ -377,6 +412,18 @@ func (c *Company) validateAssistant() error {
 		p.wrap(c.assistantChainProblems(path))
 	}
 	p.wrap(c.deepWorkProblems(at(path, "deep_work")))
+	deny := at(path, "tools.deny")
+	seen := map[AssistantToolFamily]int{}
+	for i, f := range a.Tools.Deny {
+		switch was, dup := seen[f]; {
+		case !f.Valid():
+			p.add(idx(deny, i), ErrUnknownValue, "%q (want %s)", f, words.Or(AssistantToolFamilies))
+		case dup:
+			p.add(idx(deny, i), ErrConflict, "%q is listed twice (first at tools.deny[%d])", f, was)
+		default:
+			seen[f] = i
+		}
+	}
 	return p.err()
 }
 

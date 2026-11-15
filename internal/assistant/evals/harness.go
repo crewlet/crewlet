@@ -2,6 +2,7 @@ package evals
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,6 +92,13 @@ func Company(on bool, seats ...string) (assistant.Company, error) {
 // a hundred thousand tokens a task.
 func DeepCompany(seats ...string) (assistant.Company, error) {
 	return company(deepDoc, true, seats)
+}
+
+// DenyingCompany is [DeepCompany] with `assistant.tools.deny` set to deny.
+func DenyingCompany(deny []string, seats ...string) (assistant.Company, error) {
+	doc := strings.Replace(deepDoc, "  llm: [assistant]\n",
+		"  llm: [assistant]\n  tools:\n    deny: ["+strings.Join(deny, ", ")+"]\n", 1)
+	return company(doc, true, seats)
 }
 
 func company(doc string, on bool, seats []string) (assistant.Company, error) {

@@ -203,6 +203,25 @@ const maxProposalTTLSeconds = 3600
 // turnRateScope is the costlimit scope every turn start is taken from.
 const turnRateScope = "assistant.turn"
 
+// offeredTools is what a turn of person may call: the catalogue's offer (a
+// brief's reads, or every tool with deep work where it runs), less each family
+// `assistant.tools.deny` turns off.
+func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts []string,
+	briefing bool) []catalog.Tool {
+
+	offered := s.catalogue.Offered(person, acts)
+	var tools []catalog.Tool
+	if briefing {
+		tools = briefTools(offered)
+	} else {
+		tools = s.withDeep(ctx, offered)
+	}
+	if c, _ := s.company(); c != nil {
+		tools = catalog.Allowed(tools, c.Assistant.Tools.Deny)
+	}
+	return tools
+}
+
 // Eligible says whether p may use the assistant on this node now, and the
 // first reason not, in the order `/viewer` reports them: the company has not
 // turned it on, it has no usable model chain, or p is not a person signed in
@@ -492,12 +511,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 
 	c, organization := s.company()
-	var tools []catalog.Tool
-	if briefing {
-		tools = briefTools(s.catalogue.Offered(ts.Person, acts))
-	} else {
-		tools = s.withDeep(ctx, s.catalogue.Offered(ts.Person, acts))
-	}
+	tools := s.offeredTools(ctx, ts.Person, acts, briefing)
 	earlier := historyEntries(history, ts.Person)
 	t.used(historyApps(earlier))
 	t.deep.attachments = attached

@@ -190,6 +190,10 @@
           "$ref": "#/$defs/TokenBudget",
           "description": "Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
         },
+        "tools": {
+          "$ref": "#/$defs/AssistantTools",
+          "description": "Which of Ask Crewlet's tools the company turns off for everybody. It only narrows what a person's own permissions already offer."
+        },
         "turn_timeout_seconds": {
           "description": "Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900.",
           "maximum": 1200,
@@ -241,6 +245,36 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantTools": {
+      "additionalProperties": false,
+      "properties": {
+        "deny": {
+          "description": "Tool families Ask Crewlet never offers, each once: writes (every change it could propose, so it only reads), generic_changes (a change to any API route), generic_reads (a read of any API route), chat_writes, atlas_writes, agent_controls (pausing, resuming, steering and answering an agent's run), page_changes (a change to the screen the person has open), deep_work.",
+          "items": {
+            "enum": [
+              "writes",
+              "generic_changes",
+              "generic_reads",
+              "chat_writes",
+              "atlas_writes",
+              "agent_controls",
+              "page_changes",
+              "deep_work",
+              "",
+              null
+            ]
+          },
+          "type": [
+            "array",
             "null"
           ]
         }
