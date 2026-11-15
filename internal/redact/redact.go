@@ -64,14 +64,18 @@
 //     line after an escaped break in another value, which that value then
 //     runs on over.
 //
-// Four reads take another answer at the bound. An END line that goes on past
+// Five reads take another answer at the bound. An END line that goes on past
 // it has no suffix a line above it ends in, so a key under a wrapping whose
 // END line then runs on is read as under none, and one holding a marker only
 // past the bound is read back as one holding none. A line under a wrapping's
 // suffix that the bound cuts names no value where a marker stands where its
 // value would begin, and a table's row holding a marker of a value closes no
 // key's row, so a second pass, the marker shorter or longer than the value,
-// does not read further than the first.
+// does not read further than the first. And a password key's line that
+// begins further back than the bound, as written or with every value before
+// the key on it written as its marker, has no gutter, so the value under the
+// key is read from the start of its line, the wrapping's gutter taken with
+// it.
 // And two redact more: the punctuation after an escaped break in a password's
 // value, read that far with no letter, digit or space in it, runs on as the
 // value; and a quoted key's name running back that far is the key's own
@@ -1195,8 +1199,11 @@ type valueRead struct {
 	markupOnly bool
 	closer     [2]int
 	// gutters are what the key's line has before the key ([valueRead.gutter]),
-	// read once each: from its piece's start and from its real line's.
+	// read once each: from its piece's start and from its real line's; and
+	// none whether that line has none, beginning past the bound
+	// ([gutterFrom]).
 	gutters [2]string
+	none    [2]bool
 	read    [2]bool
 }
 
@@ -1355,7 +1362,7 @@ func (r *valueRead) lines(pos int, escaped bool) aValue {
 				}
 				content = ended
 			}
-			rest := strings.TrimLeft(content[gutterLen(content, r.gutter(crossed)):], " \t")
+			rest := strings.TrimLeft(content[r.gutterEnd(content, crossed):], " \t")
 			blank := strings.TrimSpace(rest) == ""
 			from := at + len(content) - len(rest)
 			to := from
@@ -1467,7 +1474,45 @@ func (r *valueRead) cutAt(end int) bool {
 // the key would begin, content being the line, trimmed: past the wrapping's
 // gutter ([gutterLen]) and the spaces after it.
 func (r *valueRead) taken(content string, crossed bool) bool {
-	return strings.HasPrefix(strings.TrimLeft(content[gutterLen(content, r.gutter(crossed)):], " \t"), Marker)
+	return strings.HasPrefix(strings.TrimLeft(content[r.gutterEnd(content, crossed):], " \t"), Marker)
+}
+
+// gutterEnd is where the gutter a line read below the key opens with ends, the
+// line's content being content: past the key's line's gutter ([gutterLen]),
+// or, where that line has none ([gutterFrom]), past the markers the line
+// opens with but a password's ([leadingMarkers]).
+func (r *valueRead) gutterEnd(content string, crossed bool) int {
+	g := r.gutter(crossed)
+	if r.none[gutterIndex(crossed)] {
+		return leadingMarkers(content)
+	}
+	return gutterLen(content, g)
+}
+
+// gutterIndex is which of a read's gutters a line takes ([valueRead.gutter]).
+func gutterIndex(crossed bool) int {
+	if crossed {
+		return 1
+	}
+	return 0
+}
+
+// leadingMarkers is where the markers content opens with end, and the spaces
+// between them, a password's marker excepted, which ends them: 0 where it
+// opens with none.
+func leadingMarkers(content string) int {
+	n := 0
+	for i := 0; ; {
+		for i < len(content) && isSpace(content[i]) {
+			i++
+		}
+		m := markerLen(content[i:])
+		if m == 0 || strings.HasPrefix(content[i:], passwordMarker) {
+			return n
+		}
+		i += m
+		n = i
+	}
 }
 
 // gutter is what the key's line has before the key ([keyPrefix]) that a line
@@ -1477,26 +1522,83 @@ func (r *valueRead) taken(content string, crossed bool) bool {
 // last escaped break, where the read goes on in the same string. Read from the
 // piece alone, the key in `"user: bob\npassword:\n"` had nothing before it, so
 // on the next real line under a reader's line numbers the number was the
-// value, and under a concatenation's lines the `"` that opens the string.
+// value, and under a concatenation's lines the `"` that opens the string. A
+// line or a piece that begins past [MaxReach] has none ([gutterFrom]).
 func (r *valueRead) gutter(crossed bool) string {
-	k := 0
-	if crossed {
-		k = 1
-	}
+	k := gutterIndex(crossed)
 	if !r.read[k] {
 		lo := segmentStart(r.text, r.start)
+		found := lo == 0 || r.text[lo-1] == '\n' || lo >= 2 && r.text[lo-2:lo] == `\n`
 		if crossed {
 			lo = lineStartAbove(r.text, r.start)
+			found = lo == 0 || r.text[lo-1] == '\n'
 		}
-		r.gutters[k], r.read[k] = keyPrefix(r.text, lo, r.start, r.prior), true
+		r.gutters[k], r.none[k] = gutterFrom(r.text, lo, found, r.start, r.prior)
+		r.read[k] = true
 	}
 	return r.gutters[k]
+}
+
+// gutterFrom is what a key's line has before the key at start, lo being where
+// the read back found the line's start, or the bound ([MaxReach]) where found
+// is false: [keyPrefix] from lo where the line's start is within the bound as
+// written and as the rule leaves it, and otherwise nothing.
+//
+// A LINE THAT BEGINS PAST THE BOUND HAS NO GUTTER, as a gutter longer than a
+// key's block is none ([segmentStart]), and the bound is read on the line as
+// written AND as the rule leaves it, every value it replaced before the key
+// written as its marker ([keyPrefix]), since that is the line a second pass
+// reads. Read from the bound, the gutter began wherever the bound fell, and a
+// marker shorter or longer than the value it replaced moved where that was:
+// `echo "Password:" >> f`, almost 64 KiB of spaces and a second `password:`
+// on one line read the second key's value in `echo "hunter2x9" >> f` below,
+// past the gutter `echo "` both lines open with; once the first key's value,
+// the one-byte quote after it, was its nineteen-byte marker, the line ran
+// past the bound, a second pass read the gutter from inside the first key and
+// took the `echo` too. A value a line long before the key, its marker
+// nineteen bytes, did the same the other way round, the line past the bound
+// on the first pass and within it on the second. So redacting twice was not
+// redacting once.
+//
+// NOTHING, RATHER THAN THE LINE FROM PAST ITS VALUES, because no read within
+// the bound can say what the line holds before a value longer than the bound,
+// and a second pass, that value now its marker, reads the line whole: a
+// gutter a second pass could read differently has to be one the first reads
+// as none. With no gutter, the value is read from the first word of the
+// first line below that is not blank, past the markers the line opens with
+// but a password's ([leadingMarkers]), so where the first pass reads one
+// there, it replaces that word, and past those markers the line then holds a
+// password's marker, which ends every gutter ([gutterLen]): whatever a second
+// pass reads the key's line as, it reads no value there. PAST THE MARKERS,
+// since a token a wrapping writes on every line is a marker on each by the
+// time the rule reads them, and a second pass, the key's line within the
+// bound, matches it whole as its gutter's: read as where the value begins,
+// it named no value, and the value after it, which the second pass took, was
+// published (a token and a value 64 KiB long before `pwd:`, over the same
+// token and `hunter2x9`).
+//
+// What it costs is the value under a key whose line runs past the bound, or
+// would once the values the rule replaced on it before the key are their
+// markers: it is read with the gutter its line opens with, so under a
+// wrapping whose gutter is a word (an `echo "` or a log's timestamp) that
+// word is the value and the value after it is published, and under one that
+// is punctuation alone (a diff's `+`) the punctuation is redacted with the
+// value.
+func gutterFrom(text string, lo int, found bool, start int, prior [][2]int) (string, bool) {
+	if !found {
+		return "", true
+	}
+	if g, n := keyPrefix(text, lo, start, prior); n <= MaxReach {
+		return g, false
+	}
+	return "", true
 }
 
 // keyPrefix is text from lo to start — what a key's line has before the key at
 // start — AS THE RULE LEAVES IT, every value it replaced there before the key
 // (prior) written as the marker it becomes, and with its leading space
-// trimmed. Its trailing space stays: whether the key's line has a space
+// trimmed; and how long it is so written, its leading space included
+// ([gutterFrom]). Its trailing space stays: whether the key's line has a space
 // between its gutter and its key is what says where a word of it ends
 // ([gutterLen]).
 //
@@ -1510,7 +1612,7 @@ func (r *valueRead) gutter(crossed bool) string {
 // under `Password:` on a line that goes on to `Retype password:` was given up
 // on, since its first pass changed the gutter `Retype password:` read the
 // line below by, and was published.
-func keyPrefix(text string, lo, start int, prior [][2]int) string {
+func keyPrefix(text string, lo, start int, prior [][2]int) (string, int) {
 	i, _ := slices.BinarySearchFunc(prior, lo, func(v [2]int, at int) int {
 		if v[1] <= at {
 			return -1
@@ -1518,7 +1620,7 @@ func keyPrefix(text string, lo, start int, prior [][2]int) string {
 		return 1
 	})
 	if i == len(prior) || prior[i][0] >= start {
-		return strings.TrimLeft(text[lo:start], " \t")
+		return strings.TrimLeft(text[lo:start], " \t"), start - lo
 	}
 	var b strings.Builder
 	at := lo
@@ -1529,7 +1631,7 @@ func keyPrefix(text string, lo, start int, prior [][2]int) string {
 		at = to
 	}
 	b.WriteString(text[at:start])
-	return strings.TrimLeft(b.String(), " \t")
+	return strings.TrimLeft(b.String(), " \t"), b.Len()
 }
 
 // lineStartAbove is where the real line holding i starts, looking back no
@@ -2451,7 +2553,7 @@ const MaxKeyBlockBytes = 64 << 10
 //
 // AT ITS BOUND A READ DECIDES AS THOUGH THE TEXT ENDED THERE, or began there
 // for a read back, so the whole text is read under the bound a reader of a
-// window of it can hold, and the two answer alike. Four reads answer
+// window of it can hold, and the two answer alike. Five reads answer
 // otherwise. Two redact more, where the text's end would publish what the
 // read past the bound redacts: the punctuation after an escaped break in a
 // password's value is read as a letter following, so the value runs on
@@ -2462,6 +2564,8 @@ const MaxKeyBlockBytes = 64 << 10
 // suffix that the bound cuts, a marker where its value would begin, names no
 // value, and a row holding a marker of a value closes no key's row whose
 // markup alone ends it, so redacting twice is redacting once ([readValue]).
+// And a password key's line that begins past the bound, as written or as the
+// rule leaves it, has no gutter ([gutterFrom]).
 //
 // WHAT A RULE REPLACES IS NOT BOUNDED BY IT: a token's run, a JSON Web
 // Token's signature and a password's value run as far as they go, decided
