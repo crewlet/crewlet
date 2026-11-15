@@ -40,6 +40,43 @@ type LaneView struct {
 	Account string    `json:"account,omitempty"`
 	Tool    ToolState `json:"tool"`
 
+	// Grants is each grant the seat holds at the lane beside its level, one
+	// sentence each ([grantWords]): what it gives by the catalogue's name,
+	// where, until when, who granted it and for which of the agent's
+	// requests, and whether its credential holds it. Empty where it holds
+	// none or the lane takes none.
+	Grants string `json:"grants,omitempty"`
+
+	// Requests is each request the agent has open for a grant at the lane
+	// (ADR-0118), one sentence each with the two options of its question
+	// that grant it ([requestWords]).
+	Requests string `json:"requests,omitempty"`
+
+	// Grantable is how many permissions the lane's catalogue offers the seat
+	// beside what its level holds, and how many of them the company's own
+	// connection cannot grant yet; empty on a lane that takes no grants.
+	// CatalogueReadAt is when that catalogue was read from the vendor, zero
+	// where it could not be.
+	Grantable       string    `json:"grantable,omitempty"`
+	CatalogueReadAt time.Time `json:"catalogue_read_at,omitzero"`
+
+	// Permissions is each catalogue entry the seat's grants and requests
+	// name, one sentence each ([entryWords]): whether the seat's level holds
+	// it, whether it changes things, and, where the company's connection
+	// cannot grant it, what a person adds to that connection at the vendor
+	// and where. So an answer says what to add at the vendor from the
+	// engine's own reading, never from a guess.
+	Permissions string `json:"permissions,omitempty"`
+
+	// Lookup is each catalogue entry [ViewQuery.Lookup] matched, at most
+	// [MaxLookup], judged for the seat, and LookupMore that it matched more;
+	// absent without a lookup. LookupNote says why a lookup found nothing:
+	// no entry matched, the lane takes no grants, or its catalogue could
+	// not be read.
+	Lookup     []LookupEntry `json:"lookup,omitempty"`
+	LookupMore bool          `json:"lookup_more,omitempty"`
+	LookupNote string        `json:"lookup_note,omitempty"`
+
 	// CheckedAt is when a pass last read the vendor for this lane, a dry run
 	// included; AppliedAt when a sync last wrote it, Outcome how that ended
 	// and Refusal the vendor's reason with its remedy where it failed.
@@ -52,9 +89,23 @@ type LaneView struct {
 	Plan []Step `json:"plan"`
 }
 
+// ViewQuery is what [ViewOf] words beside the answer.
+type ViewQuery struct {
+	// Requests are the open grant requests the store holds; the view keeps
+	// the seat's own on the lane.
+	Requests []GrantRequest
+
+	// Lookup is part of a permission's name or identifier to find in the
+	// lane's catalogue ("Origin Rules"), empty for none.
+	Lookup string
+
+	// Now is the clock a grant is read as live or lapsed at.
+	Now time.Time
+}
+
 // ViewOf is the lane of the agent seat with handle in answer, worded, or false
 // where the answer lists no such seat or the seat has left the document.
-func ViewOf(answer Answer, handle string, lane Lane) (LaneView, bool) {
+func ViewOf(answer Answer, handle string, lane Lane, q ViewQuery) (LaneView, bool) {
 	var seat *SeatAnswer
 	for i := range answer.Seats {
 		if s := &answer.Seats[i]; s.Handle == handle && !s.Departed {
@@ -103,6 +154,7 @@ func ViewOf(answer Answer, handle string, lane Lane) (LaneView, bool) {
 	if want.Enabled && (offer.Scoped || len(want.Scope) > 0) {
 		out.Scope = scopeWords(offer, want.Scope)
 	}
+	wordGrants(&out, offer, la, q)
 	if s := la.Sync; s != nil {
 		out.AppliedAt, out.Outcome = s.At, outcomeWords(s.Outcome)
 		if s.Error != nil {

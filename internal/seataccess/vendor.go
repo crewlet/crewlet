@@ -449,6 +449,7 @@ func ReadOptions(ctx context.Context, sess Session, lane Lane) (Options, error) 
 	if err != nil {
 		return Options{}, err
 	}
+	opts.ReadAt = time.Now().UTC()
 	if g, ok := sess.(Granter); ok {
 		entries, scope, err := g.GrantCatalogue(ctx, lane)
 		if err != nil {
@@ -661,6 +662,13 @@ type Options struct {
 	// words ([GrantTerms]), for a picker's labels; empty with no grants.
 	GrantWhole   string `json:"grant_whole,omitempty"`
 	GrantAccount string `json:"grant_account,omitempty"`
+
+	// ReadAt is when [ReadOptions] read the offer from the vendor, kept as
+	// it was while the read is reused; zero for the offer drawn without one
+	// (a vendor that did not answer, a lane the engine does not provision).
+	// It says how fresh a grant catalogue is: one a person changed at the
+	// vendor a minute ago is offered once the offer is read again.
+	ReadAt time.Time `json:"read_at,omitzero"`
 
 	// RequiredLevel is, on a [Options.Multiple] lane, the level every other
 	// level in a set needs, so a set naming any level holds this one too:

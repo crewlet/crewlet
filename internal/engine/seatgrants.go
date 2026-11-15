@@ -93,6 +93,21 @@ func (a *SeatAccessAPI) GrantRequest(ctx context.Context, id string) (seataccess
 	return requests.Request(ctx, id)
 }
 
+// GrantRequests implements setupapi.Access.
+func (a *SeatAccessAPI) GrantRequests(ctx context.Context, kind integration.Kind) (
+	[]seataccess.GrantRequest, error) {
+
+	requests, err := a.engine.GrantRequests()
+	if err != nil {
+		return nil, err
+	}
+	open, err := requests.Open(ctx, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(open, func(r seataccess.GrantRequest) bool { return r.Kind != kind }), nil
+}
+
 // RecordGrants implements setupapi.Access: one event per grant a save added or
 // removed, as the person who saved it, and each request a grant answered
 // dropped, since the grant now carries it.
