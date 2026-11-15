@@ -2631,6 +2631,8 @@ const (
 	// 6316.2 KiB (6,467,757 bytes): 6317 KiB.
 	// Think harder and Settings › Ask Crewlet take it to 6324.8 KiB (6,476,618
 	// bytes), 11,693 over main's 6313.4 KiB: 6325 KiB.
+	// Held reasons for every reader, field errors and kit 0.133.0: 6317.9 KiB
+	// (6,469,591 bytes), 4,666 bytes over main's 6313.4 KiB: 6318 KiB.
 	treeBudget = 5<<20 + 1205<<10
 )
 

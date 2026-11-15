@@ -101,11 +101,8 @@ export function TextSetting({
         const off = row.has_off && value === "";
         return {
           value: drawValue(value, off),
-          source: !set
-            ? "Default"
-            : sameValue(value, row.default)
-              ? "Set"
-              : `Changed from ${defaultWords}`,
+          // Provenance only: a text default can be long; the editor names it.
+          source: !set ? "Default" : sameValue(value, row.default) ? "Set" : "Changed",
           changed: set,
         };
       }}

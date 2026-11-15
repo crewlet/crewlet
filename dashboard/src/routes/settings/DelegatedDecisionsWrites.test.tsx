@@ -305,5 +305,8 @@ test("a reader who may not change the document sees each limit's pencil held wit
   expect(
     pencil.getAttribute("aria-disabled") ?? String((pencil as HTMLButtonElement).disabled),
   ).toBe("true");
-  expect(pencil.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.no_grant);
+  const described = (pencil.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent);
+  expect(described).toContain(CONFIG_WRITE_REASONS.no_grant);
 });

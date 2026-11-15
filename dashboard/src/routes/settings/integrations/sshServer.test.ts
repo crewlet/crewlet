@@ -10,6 +10,7 @@
  */
 
 import { expect, test } from "vitest";
+import { holdReason } from "~/lib/formHold.ts";
 import type { SetupSSHServer } from "~/contract/setup.ts";
 import { formOf, lastTestLine, removeHeld, serverBody, serverFormHeld } from "./sshServer.ts";
 
@@ -54,18 +55,28 @@ test("an edit sends what it does not draw back as it was, built on the revision 
 // them through, and this fails.
 test("a server form is held until it is one the engine takes and its keys were compared", () => {
   const ok = { ...formOf(null), id: "db-1", address: "db-1.example.com", keys: "ssh-ed25519 AAAA" };
-  expect(serverFormHeld(ok, ["api-1"], false, false)).toBeUndefined();
-  expect(serverFormHeld({ ...ok, id: "api-1" }, ["api-1"], false, false)).toMatch(
+  expect(holdReason(serverFormHeld(ok, ["api-1"], false, false))).toBeUndefined();
+  expect(holdReason(serverFormHeld({ ...ok, id: "api-1" }, ["api-1"], false, false))).toMatch(
     /registered already/,
   );
-  expect(serverFormHeld({ ...ok, id: "DB_1" }, [], false, false)).toMatch(/lowercase letters/);
-  expect(serverFormHeld({ ...ok, address: "ssh://db-1" }, [], false, false)).toMatch(/no scheme/);
-  expect(serverFormHeld({ ...ok, port: "70000" }, [], false, false)).toMatch(/1 to 65535/);
-  expect(serverFormHeld({ ...ok, read: " " }, [], false, false)).toMatch(/read user/);
-  expect(serverFormHeld({ ...ok, keys: "\n" }, [], false, false)).toMatch(/host keys/);
-  expect(serverFormHeld(ok, [], false, true)).toMatch(/Compare each fingerprint/);
+  expect(holdReason(serverFormHeld({ ...ok, id: "DB_1" }, [], false, false))).toMatch(
+    /lowercase letters/,
+  );
+  expect(holdReason(serverFormHeld({ ...ok, address: "ssh://db-1" }, [], false, false))).toMatch(
+    /no scheme/,
+  );
+  expect(holdReason(serverFormHeld({ ...ok, port: "70000" }, [], false, false))).toMatch(
+    /1 to 65535/,
+  );
+  expect(holdReason(serverFormHeld({ ...ok, read: " " }, [], false, false))).toMatch(/read user/);
+  expect(holdReason(serverFormHeld({ ...ok, keys: "\n" }, [], false, false))).toMatch(/host keys/);
+  expect(holdReason(serverFormHeld(ok, [], false, true))).toMatch(/Compare each fingerprint/);
+  // A value in the wrong shape is its field's; one not typed yet is the form's.
+  expect(serverFormHeld({ ...ok, port: "70000" }, [], false, false)?.field).toBe("port");
+  expect(serverFormHeld({ ...ok, address: "ssh://db-1" }, [], false, false)?.field).toBe("address");
+  expect(serverFormHeld({ ...ok, id: "" }, [], false, false)?.field).toBeUndefined();
   // AN EDIT KEEPS ITS NAME, which is its own.
-  expect(serverFormHeld({ ...formOf(HOST) }, ["api-1"], true, false)).toBeUndefined();
+  expect(holdReason(serverFormHeld({ ...formOf(HOST) }, ["api-1"], true, false))).toBeUndefined();
 });
 
 // A SERVER AN AGENT IS GRANTED IS NOT REMOVED, as the engine refuses it.

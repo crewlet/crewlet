@@ -69,13 +69,26 @@ type Set = (patch: Partial<Draft>) => void;
 
 /** A field the step needs before it can go on, said on the field once Continue is pressed. */
 export type Missing = Partial<
-  Record<"name" | "url" | "command" | "rows" | "clientId" | "clientSecret", string>
+  Record<
+    | "name"
+    | "url"
+    | "command"
+    | "rows"
+    | "clientId"
+    | "clientSecret"
+    | "startupTimeout"
+    | "requestTimeout",
+    string
+  >
 > & {
   /** Per row, by its id. */
   row?: Record<string, string>;
 };
 
-/** What each step needs before it goes on: present fields, never a judgement of them. */
+/**
+ * What each step needs before it goes on: present fields, and a typed timeout
+ * that is a number of seconds, 0 or more (empty is the engine's default).
+ */
 export function missingIn(d: Draft, step: string): Missing {
   const out: Missing = {};
   if (step === "name" && !d.name.trim()) out.name = "Give the server a name.";
@@ -83,6 +96,18 @@ export function missingIn(d: Draft, step: string): Missing {
     out.url = "Give the server's address.";
   if (step === "connection" && d.transport === "stdio" && !d.command.trim())
     out.command = "Give the command that starts the server.";
+  if (step === "connection") {
+    for (const [key, typed, named] of [
+      ["startupTimeout", d.startupTimeout, "start timeout"],
+      ["requestTimeout", d.requestTimeout, "call timeout"],
+    ] as const) {
+      const t = typed.trim();
+      if (t !== "" && !(Number.isFinite(Number(t)) && Number(t) >= 0)) {
+        out[key] =
+          `The ${named} is a number of seconds, 0 or more. Leave it empty for the default.`;
+      }
+    }
+  }
   const rowsStep = d.transport === "stdio" ? "connection" : "signin";
   if (step === rowsStep && (d.transport === "stdio" || d.signIn === "headers")) {
     const row: Record<string, string> = {};
@@ -107,7 +132,16 @@ export function missingIn(d: Draft, step: string): Missing {
 
 /** Whether a step's needs are met. */
 export function isComplete(m: Missing): boolean {
-  return !m.name && !m.url && !m.command && !m.row && !m.clientId && !m.clientSecret;
+  return (
+    !m.name &&
+    !m.url &&
+    !m.command &&
+    !m.row &&
+    !m.clientId &&
+    !m.clientSecret &&
+    !m.startupTimeout &&
+    !m.requestTimeout
+  );
 }
 
 // ---- name ----------------------------------------------------------------------
@@ -357,7 +391,7 @@ export function ConnectionStep({
         label="Start timeout, in seconds"
         optional
         helper={`How long starting it and its handshake may take, and again its first tool listing, before it is given up on. Empty means ${MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS}.`}
-        error={problemAt(problems, "startup_timeout_seconds")}
+        error={missing.startupTimeout ?? problemAt(problems, "startup_timeout_seconds")}
       >
         {(field) => (
           <Input
@@ -379,7 +413,7 @@ export function ConnectionStep({
         label="Call timeout, in seconds"
         optional
         helper={`How long one tool call may take before it fails back to the agent. Empty means ${MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS}.`}
-        error={problemAt(problems, "request_timeout_seconds")}
+        error={missing.requestTimeout ?? problemAt(problems, "request_timeout_seconds")}
       >
         {(field) => (
           <Input
@@ -1134,7 +1168,7 @@ export function ReviewStep({
         <Callout variant="danger" title="The engine refused this">
           <ul className="mcp-list">
             {problems.map((p) => (
-              <li key={`${p.path}:${p.message}`}>{p.message}</li>
+              <li key={`${p.path}:${p.message}`}>{p.said || p.message}</li>
             ))}
           </ul>
         </Callout>

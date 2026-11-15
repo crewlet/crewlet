@@ -4339,6 +4339,27 @@ a.knowledge-reader-how:hover {
   padding: 0;
   list-style: none;
 }
+/* A type's words wrap as one block beside its actions, so a narrow dialog cuts neither. */
+.task-type-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.task-type-words {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+}
+.task-type-slug {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.task-type-actions {
+  flex: none;
+}
 
 .work-col-head {
   display: flex;

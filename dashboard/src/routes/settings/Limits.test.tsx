@@ -451,7 +451,10 @@ test("a reader without the grant sees the pencils disabled with the reason", asy
   expect(
     pencil.getAttribute("aria-disabled") ?? String((pencil as HTMLButtonElement).disabled),
   ).toBe("true");
-  expect(pencil.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.no_grant);
+  const described = (pencil.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent);
+  expect(described).toContain(CONFIG_WRITE_REASONS.no_grant);
 });
 
 // THE CEILING A CAP IS REFUSED ABOVE IS A ROW BESIDE IT, named in words and
