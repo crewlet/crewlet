@@ -2,19 +2,16 @@ package jetstream
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"strconv"
 	"time"
 
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
-	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -114,13 +111,13 @@ import (
 // # Every pull on one inbox, and a quiet one settled by the consumer's word
 //
 // A read's pulls are asked on an INBOX OF ITS OWN, held for the whole read
-// ([pulling]), so a delivery reaches it however late it arrives: a pull the
+// ([jsapi.Pulls]), so a delivery reaches it however late it arrives: a pull the
 // client had given up on, its inbox dropped at its expiry, threw away a
 // delivery queued on the link behind other bytes, and the read failed on
 // the consumer's count of a delivery that never arrived.
 //
 // A pull that hears nothing for a quiet second ([letterQuiet]) asks the
-// consumer what it says of itself ([pulling.quiet]), given the time the
+// consumer what it says of itself ([jsapi.Pulls.Quiet]), given the time the
 // message it reads takes to cross, since the consumer's answer crosses the
 // link behind it: held to the read term and the ceiling alone, every answer
 // arrived after the ceiling on a link that carries the message in longer, and
@@ -128,7 +125,7 @@ import (
 // consumer's FIRST pull routinely — natsobj measured one read in twenty-five
 // on a loaded three-member fleet — and a consumer that holds no pull and has
 // delivered nothing never got it: it is deleted and made again, up to
-// [firstPullRemakes] times, as internal/objstore/natsobj's reads do. One that
+// [jsapi.FirstPullRemakes] times, as internal/objstore/natsobj's reads do. One that
 // holds the pull, or has delivered what has not arrived, is being read
 // however slowly — a whole message at the floor takes minutes to cross — and
 // is waited on, on the same inbox. Waited on with no word, the read failed
@@ -175,120 +172,46 @@ func (q *Queue) throwaway(ctx context.Context, stream string,
 	}, nil
 }
 
-// fetched is one message a consumer handed its reader, and where it stands.
-type fetched struct {
-	msg  *nats.Msg
-	meta *nats.MsgMetadata
-}
-
-// pulling is one reader's pulls of one consumer, every one of them asked on
-// ONE INBOX the reader holds until it is done ([pulling.stop]) — see this
-// file's head — and the consumer's own count of the last delivery the reader
-// took.
-//
-// ITS OWN RATHER THAN THE CLIENT'S FETCH, which subscribes an inbox for one
-// pull and drops it when the client decides the pull is over: a delivery the
-// server made before then, still crossing the link when the client gave up,
-// lands on an inbox nobody holds. And rather than the domain consumers'
-// standing pull ([puller]), which keeps a buffer, hands records back and
-// keeps requests standing for an applier that reads a consumer for its whole
-// life: a throwaway is read once, for one message or one listing, and
-// deleted.
-type pulling struct {
-	nc   *nats.Conn
-	cons jetstream.Consumer
-	// timing is the queue's ([Queue.provisioning]): what the consumer's
-	// info is asked at.
-	timing jsprovision.Timing
-	// subject is the subject the consumer's pulls are asked on, in the API
-	// the connection speaks.
-	subject string
-	sub     *nats.Subscription
-	// arrived is the consumer's count of the last delivery the reader
-	// took.
-	arrived uint64
-}
-
 // pulls opens a reader's pulls of cons, a consumer of stream, on an inbox of
-// their own.
-func (q *Queue) pulls(stream string, cons jetstream.Consumer) (*pulling, error) {
-	next, err := q.API().Subject(fmt.Sprintf(server.JSApiRequestNextT, stream, cons.CachedInfo().Name))
-	if err != nil {
-		return nil, fmt.Errorf("address the pulls of %s: %w", stream, err)
-	}
-	sub, err := q.nc.SubscribeSync(q.nc.NewInbox())
-	if err != nil {
-		return nil, fmt.Errorf("subscribe the pulls of %s: %w", stream, err)
-	}
-	return &pulling{nc: q.nc, cons: cons, timing: q.provisioning(), subject: next, sub: sub}, nil
-}
-
-// stop ends the reader's pulls: a delivery that arrives after it is dropped,
-// as the consumer it was delivered for is about to be.
-func (p *pulling) stop() { _ = p.sub.Unsubscribe() }
-
-// ask asks the consumer for up to n deliveries on the reader's inbox, held by
-// the broker for no longer than expires and — where maxBytes is not zero —
-// none larger than maxBytes as the broker counts a delivery.
-func (p *pulling) ask(n int, expires time.Duration, maxBytes int) error {
-	body, err := json.Marshal(server.JSApiConsumerGetNextRequest{
-		Batch: n, Expires: expires, MaxBytes: maxBytes})
-	if err != nil {
-		return fmt.Errorf("encode a pull: %w", err)
-	}
-	if err := p.nc.PublishRequest(p.subject, p.sub.Subject, body); err != nil {
-		return fmt.Errorf("send a pull: %w", err)
-	}
-	return nil
+// their own ([jsapi.Pulls]) — see this file's head — the consumer's info asked
+// at the queue's timing ([Queue.provisioning]).
+func (q *Queue) pulls(stream string, cons jetstream.Consumer) (*jsapi.Pulls, error) {
+	return jsapi.NewPulls(q.nc, q.API(), stream, cons, q.provisioning())
 }
 
 // errExpired is a pull the broker ended because its wait ran out with
-// nothing more to deliver (`408`).
+// nothing more to deliver ([jsapi.Expired]).
 var errExpired = errors.New("the consumer's pull expired")
 
 // errPastMaxBytes is a pull the broker ended in place of a delivery larger
-// than its byte bound ([pastMaxBytes]).
+// than its byte bound ([jsapi.PastMaxBytes]).
 var errPastMaxBytes = errors.New("the consumer's next message is larger than its pull's byte bound")
 
-// next is the next delivery on the reader's inbox before ctx ends, or what
-// the broker said of a pull instead: that it expired ([errExpired]), that its
-// next message is past its byte bound ([errPastMaxBytes]), or that it was
-// refused ([pullStatus]). A heartbeat says nothing and is passed over.
+// pulled is the next delivery on p's inbox before ctx ends, or what the
+// broker said of the reader's pull instead: that it expired ([errExpired]),
+// that its next message is past its byte bound ([errPastMaxBytes]), or that it
+// was refused ([jsapi.Event.Refusal]). A heartbeat, and a count filled with
+// bytes of the bound to spare, say nothing a throwaway's reader acts on, and
+// are passed over — the reader has its delivery by then.
 //
-// THE CONSUMER'S OWN COUNT GUARDS EVERY DELIVERY: one it counted that never
-// arrived fails the read at the delivery after it, since a reader that went on
-// past it would take the next delivery for the one it lost, and a message
-// missing from a read reads to its reader as one that is not there.
-func (p *pulling) next(ctx context.Context) (fetched, error) {
+// THE CONSUMER'S OWN COUNT GUARDS EVERY DELIVERY ([jsapi.ErrDeliveryLost]): a
+// reader that went on past one it lost would take the next delivery for it.
+func pulled(ctx context.Context, p *jsapi.Pulls) (jsapi.Event, error) {
 	for {
-		msg, err := p.sub.NextMsgWithContext(ctx)
+		ev, err := p.Next(ctx)
 		if err != nil {
-			return fetched{}, err
+			return jsapi.Event{}, err
 		}
-		status, failure := pullStatus(msg)
-		switch {
-		case failure != nil:
-			return fetched{}, failure
-		case status == statusHeartbeat:
-			continue
-		case status == statusTimeout:
-			return fetched{}, errExpired
-		case pastMaxBytes(msg):
-			return fetched{}, errPastMaxBytes
-		case status != "":
-			continue
+		switch ev.Kind {
+		case jsapi.Delivered:
+			return ev, nil
+		case jsapi.Expired:
+			return jsapi.Event{}, errExpired
+		case jsapi.PastMaxBytes:
+			return jsapi.Event{}, errPastMaxBytes
+		case jsapi.Refused:
+			return jsapi.Event{}, ev.Refusal()
 		}
-		meta, err := msg.Metadata()
-		if err != nil {
-			return fetched{}, fmt.Errorf("a message was delivered with no position this build "+
-				"can read: %w", err)
-		}
-		if meta.Sequence.Consumer != p.arrived+1 {
-			return fetched{}, fmt.Errorf("the consumer counted delivery %d after %d: a message "+
-				"it delivered never arrived", meta.Sequence.Consumer, p.arrived)
-		}
-		p.arrived = meta.Sequence.Consumer
-		return fetched{msg: msg, meta: meta}, nil
 	}
 }
 
@@ -296,84 +219,17 @@ func (p *pulling) next(ctx context.Context) (fetched, error) {
 // its quiet did, while the read's own context goes on.
 var errQuiet = errors.New("no delivery yet")
 
-// within is [pulling.next], waited for no longer than quiet: [errQuiet] where
-// the quiet ended it and ctx goes on.
-func (p *pulling) within(ctx context.Context, quiet time.Duration) (fetched, error) {
+// within is [pulled], waited for no longer than quiet: [errQuiet] where the
+// quiet ended it and ctx goes on.
+func within(ctx context.Context, p *jsapi.Pulls, quiet time.Duration) (jsapi.Event, error) {
 	soon, cancel := context.WithTimeout(ctx, quiet)
 	defer cancel()
-	d, err := p.next(soon)
+	d, err := pulled(soon, p)
 	if errors.Is(err, context.DeadlineExceeded) && soon.Err() != nil && ctx.Err() == nil {
-		return fetched{}, errQuiet
+		return jsapi.Event{}, errQuiet
 	}
 	return d, err
 }
-
-// quietSays is what a consumer's own info says of a reader that heard nothing
-// from it for a quiet ([pulling.quiet]).
-type quietSays int
-
-const (
-	// crossing: the consumer delivered what the reader has not had yet, or
-	// holds the reader's pull with something to deliver — what the reader
-	// waits for is on its way.
-	crossing quietSays = iota
-	// unpulled: the consumer holds messages, holds no pull, and delivered
-	// nothing the reader has not had — the reader's pull never reached it.
-	unpulled
-	// drained: the consumer holds nothing more, and the reader has had all
-	// it delivered.
-	drained
-)
-
-// quiet asks the consumer what it says of a reader that heard nothing from it
-// for a quiet, and answers its info with that — asked again while nobody
-// answers, as every read of a leader is ([jsprovision.ReadWith]): only the
-// consumer's leader answers its info, and a member that still believes in one
-// its group just lost drops the request without a word.
-//
-// arrival is how long the answer may take to reach the reader behind what the
-// consumer delivered ahead of it, beyond the read term and the ceiling
-// ([jsprovision.Timing.Arriving]): the answer crosses the same link as the
-// deliveries, and a message arrives whole only once its last byte is in, so a
-// probe given less than a message still crossing was asked again behind it
-// until the ceiling, and failed a read whose message was on its way.
-func (p *pulling) quiet(ctx context.Context, arrival time.Duration) (quietSays, *jetstream.ConsumerInfo, error) {
-	info, err := jsprovision.ReadWith(ctx, p.timing.Arriving(arrival),
-		func(ctx context.Context) (*jetstream.ConsumerInfo, error) { return p.cons.Info(ctx) }, nil)
-	switch {
-	case err != nil:
-		return 0, nil, err
-	case info.Delivered.Consumer > p.arrived:
-		return crossing, info, nil
-	case info.Delivered.Consumer < p.arrived:
-		return 0, nil, fmt.Errorf("the consumer counts %d deliveries, and its reader took %d",
-			info.Delivered.Consumer, p.arrived)
-	case info.NumPending == 0:
-		return drained, info, nil
-	case info.NumWaiting > 0:
-		return crossing, info, nil
-	}
-	return unpulled, info, nil
-}
-
-// owed is how many deliveries the consumer info describes still owes its
-// reader: what it holds, and what it delivered that has not arrived.
-func (p *pulling) owed(info *jetstream.ConsumerInfo) uint64 {
-	return info.NumPending + (info.Delivered.Consumer - p.arrived)
-}
-
-// firstPullRemakes is how many times a copy read makes its consumer again
-// after one never got its first pull, before it asks that consumer once more
-// on the same inbox and waits for the delivery like any other.
-//
-// THREE, internal/objstore/natsobj's own number for the same drop, for its
-// reason: a cluster dropped a first pull one read in twenty-five at the worst
-// measured, and a pull made again was dropped as often as a first one, so
-// after three one read in four hundred thousand would still be waiting — and a
-// consumer still without its pull after three is behind a link slow enough
-// to hold the pull itself back, where a fourth consumer only adds a create
-// while the pull is on its way.
-const firstPullRemakes = 3
 
 // leaderCarries reports whether a stream leader's read of a message of
 // messageBytes, header block and payload, reaches this queue's connection —
@@ -465,18 +321,18 @@ func (c *copyRead) at(ctx context.Context, seq uint64) (copyAt, error) {
 		// and states its payload's size in place of it — whatever subject
 		// it is on, since this read is unfiltered to see that.
 		HeadersOnly: true,
-	}, 0, 0, func(d fetched) error {
-		if early := atOrPast(d, seq); early != nil || d.meta.Sequence.Stream > seq {
+	}, 0, 0, func(d jsapi.Event) error {
+		if early := atOrPast(d, seq); early != nil || d.Meta.Sequence.Stream > seq {
 			// PAST SEQ: the leader holds no message there.
 			return early
 		}
-		size, sizeErr := strconv.Atoi(d.msg.Header.Get(nats.MsgSize))
+		size, sizeErr := strconv.Atoi(d.Msg.Header.Get(nats.MsgSize))
 		if sizeErr != nil {
 			return fmt.Errorf("the message at %d was delivered without the size of its "+
 				"payload: %w", seq, sizeErr)
 		}
-		found = copyAt{held: true, subject: d.msg.Subject,
-			bytes: (&nats.Msg{Header: d.msg.Header}).Size() + size}
+		found = copyAt{held: true, subject: d.Msg.Subject,
+			bytes: (&nats.Msg{Header: d.Msg.Header}).Size() + size}
 		return nil
 	})
 	return found, err
@@ -502,12 +358,12 @@ func (c *copyRead) message(ctx context.Context, seq uint64, at copyAt) (stored, 
 		FilterSubject: at.subject,
 		DeliverPolicy: jetstream.DeliverByStartSequencePolicy,
 		OptStartSeq:   seq,
-	}, c.crossing(at.bytes), at.delivered(c.stream), func(d fetched) error {
-		if early := atOrPast(d, seq); early != nil || d.meta.Sequence.Stream > seq {
+	}, c.crossing(at.bytes), at.delivered(c.stream), func(d jsapi.Event) error {
+		if early := atOrPast(d, seq); early != nil || d.Meta.Sequence.Stream > seq {
 			return early
 		}
-		got = stored{subject: d.msg.Subject, header: d.msg.Header, data: d.msg.Data,
-			time: d.meta.Timestamp}
+		got = stored{subject: d.Msg.Subject, header: d.Msg.Header, data: d.Msg.Data,
+			time: d.Meta.Timestamp}
 		held = true
 		return nil
 	})
@@ -547,8 +403,8 @@ func (c *copyRead) last(ctx context.Context, subject string) (uint64, bool, erro
 		// consumer is made — which counts it, or counts nothing there.
 		DeliverPolicy: jetstream.DeliverLastPolicy,
 		HeadersOnly:   true,
-	}, 0, 0, func(d fetched) error {
-		newest = d.meta.Sequence.Stream
+	}, 0, 0, func(d jsapi.Event) error {
+		newest = d.Meta.Sequence.Stream
 		return nil
 	})
 	return newest, newest > 0, err
@@ -556,9 +412,9 @@ func (c *copyRead) last(ctx context.Context, subject string) (uint64, bool, erro
 
 // atOrPast refuses a delivery before seq: a consumer begun at seq never
 // delivers one, so it is a consumer that did not begin where it was asked.
-func atOrPast(d fetched, seq uint64) error {
-	if d.meta.Sequence.Stream < seq {
-		return fmt.Errorf("a consumer begun at %d delivered %d, before it", seq, d.meta.Sequence.Stream)
+func atOrPast(d jsapi.Event, seq uint64) error {
+	if d.Meta.Sequence.Stream < seq {
+		return fmt.Errorf("a consumer begun at %d delivered %d, before it", seq, d.Meta.Sequence.Stream)
 	}
 	return nil
 }
@@ -588,9 +444,9 @@ var errUnpulled = errors.New("the consumer never got its first pull")
 // Its delivery is pulled no larger than maxBytes where that is not zero, and
 // the whole read is bounded as [copyRead.bounded] says for a message taking
 // crossing to cross. A consumer whose first pull a cluster dropped is made
-// again ([firstPullRemakes]).
+// again ([jsapi.FirstPullRemakes]).
 func (c *copyRead) read(ctx context.Context, cfg jetstream.ConsumerConfig, crossing time.Duration,
-	maxBytes int, take func(fetched) error) error {
+	maxBytes int, take func(jsapi.Event) error) error {
 
 	ctx, cancel := c.bounded(ctx, crossing)
 	defer cancel()
@@ -599,7 +455,7 @@ func (c *copyRead) read(ctx context.Context, cfg jetstream.ConsumerConfig, cross
 		if err != nil {
 			return err
 		}
-		got, err := c.first(ctx, cons, crossing, maxBytes, remade < firstPullRemakes)
+		got, err := c.first(ctx, cons, crossing, maxBytes, remade < jsapi.FirstPullRemakes)
 		drop()
 		switch {
 		case errors.Is(err, errUnpulled):
@@ -618,9 +474,9 @@ func (c *copyRead) read(ctx context.Context, cfg jetstream.ConsumerConfig, cross
 // [errUnpulled], where remake allows it, for a consumer whose pull never
 // reached it: see this file's head. crossing is how long the message takes to
 // cross raw, which the consumer's answer to a quiet pull may wait behind
-// ([pulling.quiet]).
+// ([jsapi.Pulls.Quiet]).
 func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, crossing time.Duration,
-	maxBytes int, remake bool) (*fetched, error) {
+	maxBytes int, remake bool) (*jsapi.Event, error) {
 
 	if cons.CachedInfo().NumPending == 0 {
 		return nil, nil
@@ -629,41 +485,41 @@ func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, crossing 
 	if err != nil {
 		return nil, err
 	}
-	defer p.stop()
+	defer p.Stop()
 	// THE PULL WAITS FOR AS LONG AS THE READ DOES, which ctx always bounds
 	// ([copyRead.bounded]).
 	deadline, _ := ctx.Deadline()
-	if err = p.ask(1, time.Until(deadline), maxBytes); err != nil {
+	if err = ask(p, deadline, maxBytes); err != nil {
 		return nil, err
 	}
-	got, err := p.within(ctx, letterQuiet)
+	got, err := within(ctx, p, letterQuiet)
 	if errors.Is(err, errQuiet) {
 		// ITS ANSWER BEHIND THE MESSAGE: what the consumer delivered
 		// before the probe crosses the link ahead of the probe's answer.
-		says, _, qerr := p.quiet(ctx, crossing)
+		says, _, qerr := p.Quiet(ctx, crossing)
 		switch {
 		case errors.Is(qerr, jetstream.ErrConsumerNotFound):
 			// GONE before it delivered anything — as good as one that
 			// never had the pull.
-			says = unpulled
+			says = jsapi.Unpulled
 		case qerr != nil:
 			return nil, qerr
 		}
 		switch {
-		case says == drained:
+		case says == jsapi.Drained:
 			// REMOVED since the consumer counted it: nothing there any
 			// more.
 			return nil, nil
-		case says == unpulled && remake:
+		case says == jsapi.Unpulled && remake:
 			return nil, errUnpulled
-		case says == unpulled:
+		case says == jsapi.Unpulled:
 			// THE REMAKES ARE SPENT: asked once more, on the same inbox,
 			// and waited for whole.
-			if err = p.ask(1, time.Until(deadline), maxBytes); err != nil {
+			if err = ask(p, deadline, maxBytes); err != nil {
 				return nil, err
 			}
 		}
-		got, err = p.next(ctx)
+		got, err = pulled(ctx, p)
 	}
 	switch {
 	case errors.Is(err, errExpired), errors.Is(err, context.DeadlineExceeded):
@@ -673,6 +529,17 @@ func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, crossing 
 		return nil, err
 	}
 	return &got, nil
+}
+
+// ask asks p for the one delivery a copy read takes, no larger than maxBytes
+// where that is not zero, held by the broker until deadline — the read's own —
+// and answers the deadline's passing where it has.
+func ask(p *jsapi.Pulls, deadline time.Time, maxBytes int) error {
+	expires := time.Until(deadline)
+	if expires <= 0 {
+		return context.DeadlineExceeded
+	}
+	return p.Ask(1, maxBytes, expires, 0)
 }
 
 // placementPause is how long a read waits before each consumer it makes past

@@ -297,6 +297,20 @@ func Arrival(messageBytes int, pace time.Duration) time.Duration {
 	return Handling(messageBytes) + Crossing(messageBytes, pace)
 }
 
+// Delivering is [Arrival]'s RAW twin: how long a consumer's delivery of
+// messageBytes, as the broker counts them against a pull (the subject, the
+// reply, the header block and the payload), takes to reach its reader whole —
+// handled at [HandlingPace] in the engine's own processes and crossing a link
+// carrying a mebibyte in as long as pace, none for a pace of zero. A delivery
+// carries its messages as they were stored, never base64-encoded inside JSON
+// as a leader's reply does ([ReplyBytes]), so Arrival(m, pace) is
+// Delivering(ReplyBytes(m), pace). It is what a reader of a consumer's pulls
+// gives a request whose answer queues behind a pull of that many bytes still
+// on its way ([Pulls]).
+func Delivering(messageBytes int, pace time.Duration) time.Duration {
+	return time.Duration(float64(HandlingPace+pace) * float64(messageBytes) / mebibyte)
+}
+
 // Handling is how long the reply to a message read that carries a message of
 // messageBytes ([ReplyBytes]) is given to be built by the stream's leader,
 // carried in process and decoded by its reader, at [HandlingPace]: what every
