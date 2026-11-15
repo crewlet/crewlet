@@ -420,7 +420,47 @@ type Execution struct {
 	// and a reader that draws it says the arguments are sealed rather than
 	// that the call sent none. Never set on a call of the loop's own.
 	Held, Approved bool
+
+	// ArgsUnknown is why no record says what the call was made with, "" on
+	// every call whose Args are what it was made with (a call made with none
+	// among them). Args is not what the call sent wherever it is set, empty
+	// or the object a harness made of text that did not parse, and a reader
+	// that draws the call says the arguments are not known, and why, rather
+	// than drawing Args: drawn `{}`, the call reads as the tool called with
+	// none, a different call. Set by the loop on its own call whose arguments
+	// did not parse, and on an executor run's call by its collection
+	// (internal/agent/ledger's Call.ArgsUnread and Call.Unfinished).
+	ArgsUnknown ArgsUnknown
 }
+
+// ArgsUnknown is why a call's arguments are not known ([Execution.ArgsUnknown]).
+//
+// TWO REASONS, kept apart because they tell a reader different things: a call
+// whose arguments did not read was answered for them (by the loop, or the
+// bridge, unrun) or its record was damaged, so its result says what became of
+// it; a call still running as its round was read may have taken effect, and
+// its result says so. Drawn alike, the second read as a call refused for its
+// arguments, which a person would not check before having it made again.
+type ArgsUnknown string
+
+const (
+	// ArgsUnread is a call made with arguments in text that could not be
+	// read: what the model wrote did not parse, and the call was answered
+	// unrun; or the record of an executor run's call holds text that does
+	// not read back (internal/agent/ledger's Call.ArgsUnread).
+	ArgsUnread ArgsUnknown = "unread"
+	// ArgsUnkept is an executor run's call still in flight when its round's
+	// calls were read, whose log entry kept its identity alone, so no record
+	// holds what it was called with (internal/agent/ledger's
+	// Call.Unfinished).
+	ArgsUnkept ArgsUnknown = "unkept"
+)
+
+// ArgsUnknowns is the closed set, in a fresh slice.
+func ArgsUnknowns() []ArgsUnknown { return []ArgsUnknown{ArgsUnread, ArgsUnkept} }
+
+// Valid reports whether a is one of [ArgsUnknowns].
+func (a ArgsUnknown) Valid() bool { return slices.Contains(ArgsUnknowns(), a) }
 
 // Round is one model request of the loop: when it was made, how long the model
 // took to answer, who answered and what it cost.
