@@ -304,6 +304,11 @@ describe("Members", () => {
     const bo = { kind: "human", name: "Bo Chen" } as Parameters<typeof removalWords>[1];
     expect(removalWords("private", bo)).toMatch(/^They can no longer read this room/);
     expect(removalWords("public", bo)).toMatch(/^They stop getting its messages/);
+    const ops = { kind: "agent", name: "Ops Agent" } as Parameters<typeof removalWords>[1];
+    expect(removalWords("public", ops)).toMatch(
+      /^It stops getting its messages, and it leaves its room list/,
+    );
+    expect(removalWords("private", ops)).toMatch(/add it back\.$/);
   });
 
   test("finding a member narrows the list, and says so when nobody matches", async () => {

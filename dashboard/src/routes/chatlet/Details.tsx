@@ -696,11 +696,12 @@ export function removalWords(
   kind: ChatChannelDetail["channel"]["kind"],
   person: ChatPerson,
 ): string {
-  const who = person.kind === "agent" ? "It" : "They";
+  const agent = person.kind === "agent";
+  const [who, them, their] = agent ? ["It", "it", "its"] : ["They", "them", "their"];
   if (membersOnly(kind)) {
-    return `${who} can no longer read this room or post in it. Somebody in the room can add ${person.kind === "agent" ? "it" : "them"} back.`;
+    return `${who} can no longer read this room or post in it. Somebody in the room can add ${them} back.`;
   }
-  return `${who} stop getting its messages and it leaves ${person.kind === "agent" ? "its" : "their"} room list. Anybody can still find it under Browse rooms and join again.`;
+  return `${who} ${agent ? "stops" : "stop"} getting its messages, and it leaves ${their} room list. Anybody can still find it under Browse rooms and join again.`;
 }
 
 /**

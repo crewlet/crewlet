@@ -173,7 +173,7 @@ export function TaskTypesDialog({ onClose }: { onClose: () => void }) {
           refusal={catalogue.refusal}
           loading={catalogue.loading && !catalogue.data}
         >
-          <ul className="col gap-2" aria-label="Task types">
+          <ul className="col gap-2 task-types" aria-label="Task types">
             {live.map((type) => (
               <li key={type.slug} className="col gap-2">
                 <div className="row gap-2">
@@ -339,7 +339,7 @@ export function TaskTypesDialog({ onClose }: { onClose: () => void }) {
           {retired.length > 0 && (
             <div className="col gap-2">
               <span className="t-label">Archived</span>
-              <ul className="col gap-2" aria-label="Archived task types">
+              <ul className="col gap-2 task-types" aria-label="Archived task types">
                 {retired.map((type) => (
                   <li key={type.slug} className="row gap-2">
                     <Tag appearance="outline">{type.name}</Tag>

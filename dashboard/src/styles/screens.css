@@ -4332,6 +4332,14 @@ a.knowledge-reader-how:hover {
   outline: 2px dashed var(--color-brand-accent-soft-strong);
   outline-offset: 4px;
 }
+/* The company's task types, one row each, in the dialog that edits them
+   (`routes/worklet/TaskTypes.tsx`): the rows carry their own spacing. */
+.task-types {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .work-col-head {
   display: flex;
   align-items: center;
