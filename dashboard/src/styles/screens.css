@@ -9053,13 +9053,27 @@ a.live-row:hover {
    longer than the whole cell is the only thing that is ever cut. The line is
    a small control's height, which holds the chip at every density, and the
    name is set on it, so the line is that tall with or without the chip and
-   the name sits where it does in every other cell. The title says both. */
-.crewlet-data-grid__cell > .revision-author {
+   the name sits where it does in every other cell. The title says both.
+   The credential a revision was written through is a caption line under
+   it, cut on its own, where one line cut it into the name. */
+.revision-author {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.crewlet-data-grid__cell > .revision-author > .revision-author__who {
   flex-wrap: wrap;
   row-gap: var(--spacing-1);
   height: var(--size-control-sm);
   line-height: var(--size-control-sm);
   overflow: hidden;
+}
+.revision-author__through {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- Signing in ----------------------------------------------------------

@@ -10,8 +10,8 @@
  * whole on the clipboard rather than cut on the screen.
  */
 
-import { Copyable } from "@crewlethq/ui";
-import { credentialOf } from "~/lib/attribution.ts";
+import { Copyable, TableTwoLineCell } from "@crewlethq/ui";
+import { authorParts, credentialOf } from "~/lib/attribution.ts";
 
 /**
  * A credential as a cell or a fact: its kind in words, its id copied. One
@@ -33,4 +33,23 @@ export function Credential({ through }: { through: string }) {
       title={`Copy ${credential.id}`}
     />
   );
+}
+
+/**
+ * A recorded author as a table cell: the name, and the credential they wrote
+ * through on a quieter line under it ([authorParts]), so a narrow column cuts
+ * neither into the other.
+ */
+export function AuthorCell({
+  author,
+  operatorId,
+  name,
+}: {
+  author: string;
+  operatorId: string | undefined;
+  /** The reader's name for the author, where the caller has a better one. */
+  name?: string | undefined;
+}) {
+  const parts = authorParts(author, operatorId, name);
+  return <TableTwoLineCell value={parts.name} detail={parts.through || undefined} />;
 }
