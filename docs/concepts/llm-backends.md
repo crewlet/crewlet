@@ -2810,8 +2810,13 @@ run ends — on every outcome, a failure, a timeout and a run the engine stopped
 included — whatever it spent beyond what was charged is charged too: the harness's
 own total for the run where it reports one (Muse Code's record carries counts
 only for the whole run, so each of its requests is estimated as it is read and
-the total settles them; OpenCode's last step prints none, and the server's
-session holds them), and an estimate where nothing reports.
+the total settles them; OpenCode 2.0.32 and 2.1.4 often drop the final step's
+counts, and the server's session holds them), and an estimate where nothing
+reports. **Where exactly one request read no counts of its own** in a record
+that carries each request's, the remainder is that request's: it is told again
+with those counts, so its round shows what it cost rather than nothing. Two or
+more without counts split nothing honestly, and an estimate is never a
+request's: then the remainder is the run's alone.
 
 A text function's `Completion.InputTokens` / `OutputTokens` come from the harness's
 own usage report where the profile can find one: on stdout (Claude Code, Codex,
@@ -2918,12 +2923,15 @@ declaring one means every call quietly falls back to an estimate while
 what that line exists to settle.
 
 **Or record them and only ask afterwards.** OpenCode 2's `run --format json`
-emits each step's counts in a `step_finish` event — and drops the *final*
-step's: measured on 2.0.32, a text-only call printed no `step_finish` in six
-runs of six, and a call that used a tool printed the tool step's counts and
-not the answer's. Read from stdout, every call would be charged for nothing
-or for its first step. The session the call ran in holds the whole total, so
-the profile names the call's session and asks about it once the call has
+emits each step's counts in a `step_finish` event — and on 2.0.32 and 2.1.4
+drops some of them: measured over twenty runs with tools per release, each of
+four steps of three calls and a final answer, every `tool_use` and every
+intermediate `step_finish` arrived, but the *final* step's `step_finish` was
+missing in 13 of 20 runs on 2.0.32 and 12 of 20 on 2.1.4, and in none on 2.2.7
+and 2.3.0; a one-step run printed it in 10 of 36 whole captures on 2.0.32 and 3
+of 41 on 2.1.4. Read from stdout alone, a call would be charged for nothing, or
+for its steps but the last. The session the call ran in holds the whole total,
+so the profile names the call's session and asks about it once the call has
 ended:
 
 ```yaml

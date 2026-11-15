@@ -144,7 +144,9 @@ func TestAnAnswerCutThroughAPipeArrivesWhole(t *testing.T) {
 			t.Errorf("the answer is %d bytes, want the whole %d", len(comp.Content), len(big))
 		}
 		turns, _, _, _ := host.snapshot()
-		if len(turns) != 1 || turns[0].Text != big {
+		// Each request as it was told last: one without counts of its own
+		// is told again with the run's remainder.
+		if turns = lastByID(turns); len(turns) != 1 || turns[0].Text != big {
 			t.Errorf("the host was told %d requests, want one carrying the whole answer", len(turns))
 		}
 	})
@@ -850,7 +852,7 @@ func TestAWholeLastEventWithoutItsLineBreakIsRead(t *testing.T) {
 			t.Fatalf("Complete = %v, %v; want the answer", comp, err)
 		}
 		turns, _, _, _ := host.snapshot()
-		if len(turns) != 2 || turns[1].Text != "the answer" {
+		if turns = lastByID(turns); len(turns) != 2 || turns[1].Text != "the answer" {
 			t.Errorf("the host was told %+v, want the last request carrying the answer", turns)
 		}
 	})

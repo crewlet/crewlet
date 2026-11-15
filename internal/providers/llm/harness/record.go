@@ -735,6 +735,15 @@ func (r *recordReader) finish() {
 // count: each request's output it never gave a count for, from what the request
 // wrote, and — where it showed no request at all — one request of the prompt
 // the engine sent and the answer.
+//
+// THE REMAINDER IS A REQUEST'S where exactly one request of a record that
+// carries each request's counts read none of its own, and the harness gave its
+// total: OpenCode 2.0.32 and 2.1.4 drop a step's step_finish (the final one's
+// in 13 and 12 of 20 runs, measured), and a request told without counts
+// records its round as costing nothing. That request is told again with the
+// remainder as its counts. Two or more without counts split nothing honestly,
+// and an estimate is never a request's: either way the remainder stays the
+// run's alone.
 func (r *recordReader) settle(total *llm.Usage, answer string) llm.Usage {
 	r.mu.Lock()
 	var rem llm.Usage
@@ -770,12 +779,42 @@ func (r *recordReader) settle(total *llm.Usage, answer string) llm.Usage {
 	} else {
 		rem = llm.Usage{}
 	}
+	var retold *llm.Turn
+	if req := r.countlessLocked(); req != nil && total != nil && rem != (llm.Usage{}) {
+		req.reported = rem
+		t := r.turnOf(req)
+		t.Usage = &rem
+		retold = &t
+	}
 	spent := r.spent
 	r.mu.Unlock()
 	if rem != (llm.Usage{}) {
 		r.host.Spent(rem)
 	}
+	if retold != nil {
+		r.host.Observe(*retold)
+	}
 	return spent
+}
+
+// countlessLocked is the one request that read no counts of its own, in a
+// record whose rules carry each request's: nil where there is none, or more
+// than one.
+func (r *recordReader) countlessLocked() *request {
+	if !r.perRequestUsage {
+		return nil
+	}
+	var found *request
+	for _, req := range r.requests {
+		if req.has[figInput] || req.has[figOutput] {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = req
+	}
+	return found
 }
 
 // last is the last request's prose and model, where the record showed any.
