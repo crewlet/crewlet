@@ -40,3 +40,35 @@ func TestTheDashboardKnowsEveryInvocationOutcome(t *testing.T) {
 		t.Error("Valid accepts an outcome the engine never records")
 	}
 }
+
+// THE DASHBOARD KNOWS EVERY REASON A CALL'S ARGUMENTS ARE NOT KNOWN, both
+// ways. A reason it does not know is still drawn as arguments not known, in
+// general words, so a person reading a call cut off in flight is not told
+// why; one it names that the engine never records is a branch nothing reaches.
+func TestTheDashboardKnowsEveryReasonArgumentsAreNotKnown(t *testing.T) {
+	t.Parallel()
+	client, err := clientsource.Union(clientsource.Tree(t), "ArgumentsUnknown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var engine []string
+	for _, a := range toolloop.ArgsUnknowns() {
+		if !a.Valid() {
+			t.Errorf("ArgsUnknowns lists %q, which Valid refuses", a)
+		}
+		engine = append(engine, string(a))
+	}
+	for _, a := range engine {
+		if !slices.Contains(client, a) {
+			t.Errorf("the engine records arguments_unknown %q and contract/calls.ts does not name it", a)
+		}
+	}
+	for _, a := range client {
+		if !slices.Contains(engine, a) {
+			t.Errorf("contract/calls.ts names arguments_unknown %q, which the engine never records", a)
+		}
+	}
+	if toolloop.ArgsUnknown("none").Valid() || toolloop.ArgsUnknown("").Valid() {
+		t.Error("Valid accepts a reason the engine never records")
+	}
+}

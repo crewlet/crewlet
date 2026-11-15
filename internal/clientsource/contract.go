@@ -728,6 +728,9 @@ var contract = []Entry{
 	{"StopReason", ReadUnion, "internal/providers/llm.TestTheDashboardKnowsEveryStopReason"},
 	{"InvocationOutcome", ReadUnion, "internal/agent/toolloop.TestTheDashboardKnowsEveryInvocationOutcome"},
 
+	// calls.ts
+	{"ArgumentsUnknown", ReadUnion, "internal/agent/toolloop.TestTheDashboardKnowsEveryReasonArgumentsAreNotKnown"},
+
 	// fleet.ts
 	{"BROKER_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerKind"},
 	{"BROKER_FINDING_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerFinding"},

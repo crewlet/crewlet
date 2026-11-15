@@ -1429,6 +1429,8 @@ func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided
 			// WHICH OF THE TWO CALLS WHOSE ARGUMENTS ARE SEALED, so the record
 			// says so in their place rather than drawing a call made with none.
 			Held: call.Held, Approved: call.Approved,
+			// AND WHY A CALL'S ARGUMENTS ARE NOT KNOWN, for the same reason.
+			ArgsUnknown: argsUnknown(call.Call),
 		})
 	}
 	if strings.TrimSpace(answer) != "" {
@@ -1446,6 +1448,25 @@ func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided
 	}
 	return phaseResult{Text: answer, Rounds: runRound, Result: res,
 		Caps: roundCaps{max: runRound, ceiling: runRound}, RunElided: elided}
+}
+
+// argsUnknown is why the record of an executor run's call does not say what
+// it was made with, as the ledger's line of it says ([ledger.FormatCalls]):
+// its arguments were in text that could not be read ([ledger.Call.ArgsUnread]),
+// or it was still in flight as its round was read and its entry kept none
+// ([ledger.Call.Unfinished]). "" on every other call: a withheld one says
+// which of its two it is instead (Held, Approved), and an unfinished call that
+// carries arguments is drawn with them.
+func argsUnknown(call ledger.Call) toolloop.ArgsUnknown {
+	switch {
+	case call.Withheld:
+		return ""
+	case call.ArgsUnread:
+		return toolloop.ArgsUnread
+	case call.Unfinished && len(call.Args) == 0:
+		return toolloop.ArgsUnkept
+	}
+	return ""
 }
 
 // runReads is the notes the jobs of a collected round read, in the order read,

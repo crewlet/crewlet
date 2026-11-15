@@ -1498,6 +1498,12 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 		if ex.Approved {
 			row["approved"] = true
 		}
+		// AND A CALL WHOSE ARGUMENTS ARE NOT KNOWN says why: its `arguments`
+		// are not what it was made with, and drawn as they stand a reader
+		// takes it for the tool called with none (types.ToolExecution).
+		if ex.ArgsUnknown != "" {
+			row["arguments_unknown"] = string(ex.ArgsUnknown)
+		}
 		if ex.Failed {
 			// Rendered in place of the result when the call failed, so a
 			// consumer showing `result ?? error` has something to show.

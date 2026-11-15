@@ -346,6 +346,48 @@ test("a call a person approved is marked so, its sealed records never drawn as e
   expect(result?.textContent).toContain("(handed to the run sealed, not kept on the record)");
 });
 
+// A CALL WHOSE ARGUMENTS DID NOT PARSE was answered unrun by the bridge, which
+// holds no object of what the model wrote, so the log records it with no
+// arguments, as it records a call made with none: drawn "(none)", it read as
+// the tool called with none, a different call. The log says it apart
+// (`args_unparsed`), and so does the board, in the words the execute card and
+// the trace use; a call made with none is still drawn "(none)".
+//
+// Mutation: draw an unparsed call's empty arguments as any other call's, and
+// this goes red.
+test("a call whose arguments did not parse says they are not known", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            {
+              name: "slack_post",
+              args_unparsed: true,
+              failed: true,
+              output: "slack_post was NOT run: its arguments could not be read",
+              at: "2026-06-15T12:02:00Z",
+            },
+            { name: "list_files", origin: "builtin", at: "2026-06-15T12:03:00Z" },
+          ],
+        })}
+      />
+    </Router>,
+    "height",
+    (c) => {
+      for (const button of c.querySelectorAll<HTMLButtonElement>(
+        'button[aria-label^="Show the arguments and result"]',
+      )) {
+        fireEvent.click(button);
+      }
+    },
+  );
+  const unparsed = container.querySelector('[aria-label="slack_post arguments"]');
+  const none = container.querySelector('[aria-label="list_files arguments"]');
+  expect(unparsed?.textContent).toContain("(not known: sent in text that could not be read)");
+  expect(none?.textContent).toContain("(none)");
+});
+
 // A CALL THAT FINISHED AFTER A RELAUNCH is a call of its round that the round's
 // record took only once a relaunch had carried the round on: its effect
 // happened, but it is charged to no launch, is never the round's submission

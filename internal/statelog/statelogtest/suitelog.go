@@ -33,6 +33,11 @@ type suiteLog struct {
 	// expects is every expectation an append carried, in order — nil for
 	// none.
 	expects []*uint64
+
+	// stamp is the broker instant this log stamps sequence seq with, where a
+	// case names one; nil is [suiteStoredAt]. Set before the log is first
+	// read and never after, so it is read without the lock.
+	stamp func(seq uint64) time.Time
 }
 
 type suiteMessage struct {
@@ -46,6 +51,14 @@ func newSuiteLog() *suiteLog { return &suiteLog{first: 1, next: 1} }
 // deterministic, so two runs agree on every record's instant.
 func suiteStoredAt(seq uint64) time.Time {
 	return time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(seq) * time.Second)
+}
+
+// storedAt is the broker instant this log holds sequence seq at.
+func (l *suiteLog) storedAt(seq uint64) time.Time {
+	if l.stamp != nil {
+		return l.stamp(seq)
+	}
+	return suiteStoredAt(seq)
 }
 
 // lastOn is subject's last surviving sequence, or zero. The caller holds mu.
@@ -97,7 +110,7 @@ func (l *suiteLog) At(_ context.Context, seq uint64) (string, []byte, time.Time,
 		return "", nil, time.Time{}, false, nil
 	}
 	m := l.records[seq-1]
-	return m.subject, m.body, suiteStoredAt(seq), true, nil
+	return m.subject, m.body, l.storedAt(seq), true, nil
 }
 
 // Bounds is the log's first surviving sequence and its last.
@@ -124,7 +137,7 @@ func (l *suiteLog) Fetch(ctx context.Context, maxMessages, _ int, wait time.Dura
 		var out []statelog.Message
 		for l.next <= uint64(len(l.records)) && len(out) < maxMessages {
 			out = append(out, statelog.Message{
-				Seq: l.next, StoredAt: suiteStoredAt(l.next), Payload: l.records[l.next-1].body,
+				Seq: l.next, StoredAt: l.storedAt(l.next), Payload: l.records[l.next-1].body,
 			})
 			l.next++
 		}

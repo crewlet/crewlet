@@ -51,6 +51,17 @@ type probeApplier struct {
 	// "retained N" for each [statelog.RetentionHook] call and a
 	// "committed" for each [statelog.Applier.Committed].
 	hooks []string
+
+	// instants is the broker instant each applied record was handed, by
+	// sequence: the record's own and the options', exactly as they arrived.
+	instants map[uint64]probeInstant
+}
+
+// probeInstant is the broker instant one apply was handed, twice over: on the
+// record ([statelog.Record.StoredAt]) and in the options
+// ([statelog.ApplyOptions.StoredAt]).
+type probeInstant struct {
+	record, options time.Time
 }
 
 // THE PROBE TAKES THE OPTIONAL HOOK, as every applier that implements it must
@@ -58,7 +69,8 @@ type probeApplier struct {
 var _ statelog.RetentionHook = (*probeApplier)(nil)
 
 func newProbeApplier() *probeApplier {
-	return &probeApplier{gated: map[uint64]bool{}, asked: map[uint64]int{}, rowsPer: 1}
+	return &probeApplier{gated: map[uint64]bool{}, asked: map[uint64]int{}, rowsPer: 1,
+		instants: map[uint64]probeInstant{}}
 }
 
 func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opts statelog.ApplyOptions) (int, error) {
@@ -95,6 +107,7 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 	a.mu.Lock()
 	a.applied = append(a.applied, rec.Position)
 	a.epochs = append(a.epochs, opts.Epoch)
+	a.instants[rec.Position.Seq] = probeInstant{record: rec.StoredAt, options: opts.StoredAt}
 	a.mu.Unlock()
 	return per, nil
 }
@@ -130,6 +143,15 @@ func (a *probeApplier) seen() []statelog.Position {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]statelog.Position(nil), a.applied...)
+}
+
+// instantAt is the broker instant the apply at seq was handed, and false for a
+// sequence this applier never applied.
+func (a *probeApplier) instantAt(seq uint64) (probeInstant, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	at, applied := a.instants[seq]
+	return at, applied
 }
 
 // epochsSeen is the epoch each applied record was handed, in apply order.

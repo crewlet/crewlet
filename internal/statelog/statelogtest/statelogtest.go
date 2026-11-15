@@ -24,7 +24,11 @@
 // subjects then has to pass, because a log whose anchors nothing removes grows
 // a row for every subject it ever wrote (ADR-0080) — the read index's barrier,
 // which must change no row, because a linearizable read is released on it
-// before its transaction commits — and the domain that gates
+// before its transaction commits — the broker's instant for a record, which
+// must write the same bytes whether the record was applied as it arrived, in
+// either of two zones, or held back and applied later, because the broker
+// reports it in the node's own zone at nanoseconds and the deferred table keeps
+// a microsecond in UTC — and the domain that gates
 // seat admission, which must replay strictly, because a compacted domain's gap
 // is a coverage number that would otherwise withhold every seat claim on a
 // node. Whether a domain's copy is JUDGED is not a declaration and has no case
@@ -193,6 +197,7 @@ func Run(t *testing.T, new Factory) {
 	t.Run("node gates", func(t *testing.T) { runNodeGates(t, new) })
 	t.Run("trimmed anchors", func(t *testing.T) { runTrimmed(t, new) })
 	t.Run("barrier", func(t *testing.T) { runBarrier(t, new) })
+	t.Run("broker instant", func(t *testing.T) { runInstant(t, new) })
 }
 
 // openEstate brings up a replicated estate with the framework's tables and
