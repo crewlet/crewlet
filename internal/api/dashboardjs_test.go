@@ -2490,7 +2490,12 @@ const (
 	// schedule writes, and the repository and room writes, merged on kit
 	// 0.126.3 with the train before it, measures 6132.4 KiB (6,279,549
 	// bytes), 124,606 bytes over the 6010.7 KiB it was built on: 6133 KiB.
-	treeBudget = 5<<20 + 1013<<10
+	// A Doclet page's bar without the search, recent activity read by page
+	// and a trashed page read only, an empty sheet's columns named in place,
+	// New design's own Create design, and Chatlet's switcher, phone rows,
+	// wording and toasts at the foot added 5,540 bytes and took it to
+	// 6138.1 KiB (6,285,406 bytes): 6139 KiB.
+	treeBudget = 5<<20 + 1019<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
