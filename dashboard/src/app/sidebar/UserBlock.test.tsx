@@ -108,6 +108,7 @@ const nobody: ViewerState = {
   assistant: "disabled",
   assistantModel: null,
   assistantReadsImages: false,
+  assistantDeliberate: false,
   chatVendors: [],
 };
 const ada: ViewerState = {

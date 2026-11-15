@@ -217,6 +217,11 @@ image is refused: paste the text the image shows instead, or ask an
 administrator to turn on deep work. A question that reaches the engine with
 images all the same is answered with the same advice.
 
+**Think harder** on a hard question, where your company sets a stronger model:
+press it beside **Attach image** and the next question is answered by that
+model, which takes longer and costs more. It applies to that one question;
+press it again for another.
+
 **Take you somewhere:** an **Open in app** card links to the dashboard page a
 record lives on. Links come only from the engine's own route table, never from
 text the model wrote.
