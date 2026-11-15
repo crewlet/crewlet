@@ -387,8 +387,9 @@ test("the Make row offers every kind on All and Yours, each opening its kind's o
   mount("all");
   const make = screen.getByRole("region", { name: "Start a new artifact" });
   const tiles = within(make).getAllByRole("link");
+  // ONE NAME PER KIND, the New menu's: a doc is a "Doc" on both.
   expect(tiles.map((t) => t.getAttribute("aria-label"))).toEqual([
-    "Docs",
+    "Doc",
     "Slides",
     "Design",
     "Dashboard",

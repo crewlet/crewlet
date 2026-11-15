@@ -72,7 +72,12 @@ vi.mock("~/lib/viewer.ts", async () => {
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useConnection: () => ({ connected: true, accessRefused: null }) };
+  return {
+    ...actual,
+    useConnection: () => ({ connected: true, accessRefused: null }),
+    // THE COMPANY'S NAME, which Move… says who sees a folder in.
+    useOrg: () => null,
+  };
 });
 vi.mock("~/lib/artifacts/access.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/artifacts/access.ts")>(
@@ -358,6 +363,21 @@ test("a kind's views are drawn in the bar and its rows in More", () => {
   expect(within(menu).getByRole("menuitem", { name: "Print or save as PDF" })).toBeTruthy();
   expect(within(menu).getByRole("menuitem", { name: "Rename" })).toBeTruthy();
   expect(within(menu).getByRole("menuitem", { name: "Move to the trash" })).toBeTruthy();
+});
+
+// THE SAME ACTIONS ON THE CARD AND THE PAGE: the card's menu files an
+// artifact with Move to…, and its own More did not, so where it was kept
+// could be changed from the gallery and never from the artifact.
+test("More files the artifact with Move to…, as its card's menu does", () => {
+  mount(`#/artifacts/${ID}`);
+  expect(moreRows("wide")).toContain("Move to…");
+  const bar = screen.getByRole("banner");
+  const wideMore = [...bar.querySelectorAll(".crewlet-artifact-bar__wide")]
+    .map((el) => within(el as HTMLElement).queryByRole("button", { name: /^More for/ }))
+    .find(Boolean)!;
+  fireEvent.click(wideMore);
+  fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Move to…" }));
+  expect(screen.getByRole("dialog", { name: /^Move “/ })).toBeTruthy();
 });
 
 test("the title is renamed in place, through the same route Settings renames by", async () => {

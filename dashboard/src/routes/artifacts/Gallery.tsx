@@ -76,7 +76,7 @@ import { offeredKinds, settingsSectionOpen } from "~/app/nav.ts";
 import { useServicesRun } from "~/lib/services.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
-import { TRASH_KEPT, isArtifactKind, type MakeKind } from "~/lib/artifacts/words.ts";
+import { KIND_WORDS, TRASH_KEPT, isArtifactKind, type MakeKind } from "~/lib/artifacts/words.ts";
 import { NewArtifactButton } from "./new/NewArtifactMenu.tsx";
 import {
   DEFAULT_SORT,
@@ -108,16 +108,6 @@ const SCOPE: Readonly<Record<ArtifactSection, ArtifactListScope>> = {
 
 /** The Make row's heading: what the reader does there, said plainly. */
 export const MAKE_TITLE = "Start a new artifact";
-
-/** What each kind is called on the Make row: the kind's word, said as what one makes. */
-const MAKE_WORDS: Readonly<Record<MakeKind, string>> = {
-  doc: "Docs",
-  slides: "Slides",
-  design: "Design",
-  dashboard: "Dashboard",
-  html: "HTML",
-  sheet: "Sheet",
-};
 
 /**
  * What each kind is for, in a few words under its name on the Make row: what
@@ -444,7 +434,9 @@ function MakeRow() {
         aria-label={MAKE_TITLE}
         items={offeredKinds(runs).map((k) => ({
           kind: k,
-          label: MAKE_WORDS[k],
+          // ONE NAME PER KIND, the New menu's and every card's (`KIND_WORDS`):
+          // a second table here called a doc "Docs" beside the menu's "Doc".
+          label: KIND_WORDS[k],
           detail: MAKE_DETAILS[k],
           href: href(newArtifactPath(k)),
         }))}
