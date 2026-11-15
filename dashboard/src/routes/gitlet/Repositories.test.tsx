@@ -181,14 +181,17 @@ test("the repositories are the engine's listing over REST, each row opening its 
   expect(onTheRight(grid, "Last push")).toBe(true);
   expect(within(grid).getByText("web")).toBeTruthy();
   expect(within(grid).getByText("api")).toBeTruthy();
-  // WHAT A ROW KNOWS: the state beyond active, the owner by name — a unit's
-  // from the chart, a seat's badge — which seats read it, the head, the rules.
+  // WHAT A ROW KNOWS: its marks beside its name — the state beyond active, a
+  // repository only its owner's seats read — the owner by name (a unit's from
+  // the chart, a seat's badge), the head, the rules.
   expect(within(grid).getByText("Archived")).toBeTruthy();
-  // AN ACTIVE REPOSITORY'S STATE IS SAID, never a blank cell.
-  expect(within(grid).getByText("Active")).toBeTruthy();
+  expect(within(grid).getByText("Unit")).toBeTruthy();
+  // AN ACTIVE REPOSITORY CARRIES NO MARK: every mark is the exception it
+  // reads for, and there is no state column for a blank to stand in.
+  expect(within(grid).queryByText("Active")).toBeNull();
+  expect(within(grid).queryByRole("columnheader", { name: "State" })).toBeNull();
   expect(within(grid).getByText("Engineering")).toBeTruthy();
   expect(within(grid).getByText("CTO")).toBeTruthy();
-  expect(within(grid).getByText("Its owner's seats")).toBeTruthy();
   expect(within(grid).getByText("0123456")).toBeTruthy();
   expect(within(grid).getByText("empty")).toBeTruthy();
   expect(within(grid).getByText("1 rule")).toBeTruthy();
