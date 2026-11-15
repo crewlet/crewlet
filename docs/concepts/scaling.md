@@ -1247,7 +1247,11 @@ What each one decides:
   which is what the limiter is sized against: four claims per five-second sweep
   — twenty seats absorbed in ~25 s, and never more than four subprocess trees
   forked in one tick — against two releases, since giving a seat up interrupts a
-  live agent while claiming one only starts it.
+  live agent while claiming one only starts it. That pace is for seats whose
+  memory hydrates in a moment: a hydration has no total and holds its sweep
+  for as long as its bytes take, so a seat with a large memory across a slow
+  link stretches it
+  ([What waits for a long hydration](seat-ownership.md#a-seats-memory-follows-it)).
 - **A wedged-but-alive node holds only what it already fetched.** There is no
   prefetch to hold hostage: a pull consumer asks for work when it is ready to
   run it, so a loop that has stopped turning is holding at most the batch in its

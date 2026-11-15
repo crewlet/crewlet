@@ -1833,10 +1833,12 @@ opencode:
   event_type_path: ["type"]
   text_events: ["text"]
   text_paths: [["part", "text"]]
-  # USAGE FROM THE SESSION, NOT THE STREAM: `run --format json` drops the
-  # final step's counts (see usage_args in docs/concepts/llm-backends.md),
-  # and the session the call ran in holds the
-  # whole total. `output` is the visible text alone, beside `reasoning` —
+  # USAGE FROM THE SESSION, NOT THE STREAM: `run --format json` drops step
+  # events on 2.0.32 and 2.1.4 — the final step's step_finish in 13 and 12
+  # runs of 20 with tools, a one-step run's in all but 10 of 36 and 3 of 41
+  # whole captures; 2.2.7 and 2.3.0 printed every one (measured; see
+  # usage_args in docs/concepts/llm-backends.md) — and the session the call
+  # ran in holds the whole total. `output` is the visible text alone, beside `reasoning` —
   # 2.0 subtracts the one from the other — so reasoning is declared and
   # added back, as every provider bills it. Through the engine on 2.0.32 and
   # 2.1.4, on both channels, the answer came from the `text` event and the
@@ -1912,10 +1914,14 @@ opencode:
   # step_finish with its stop reason and counts, which closes it. A call is
   # printed only once it has COMPLETED, so the record shows a step's calls
   # only after they ran (late_calls): a step is told once it closes or the
-  # next begins. The final step prints neither step_start nor step_finish,
-  # so its counts are the remainder of the session's total, asked of the
-  # server (mcp.usage_args). The harness sends no id of its own with a call; a
-  # call is joined to its request by name and arguments.
+  # next begins. 2.0.32 and 2.1.4 print a step's step_start and step_finish
+  # only sometimes — the final step's step_finish was missing in 13 and 12
+  # runs of 20, every intermediate one present — and 2.2.7 and 2.3.0 always.
+  # A step whose step_finish was dropped is told when the run ends, with no
+  # counts; where it is the run's only request without counts, it is told
+  # again with the remainder of the session's total, asked of the server
+  # (mcp.usage_args). The harness sends no id of its own with a call; a call
+  # is joined to its request by name and arguments.
   #
   # NO CAP: OpenCode's own step limit (an agent's `steps`) ends a run that
   # reaches it like any other — exit 0, the session "succeeded" — and says so

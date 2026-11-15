@@ -27,10 +27,11 @@ import (
 // second fact: a create's reply is held until the object it made has a leader
 // ([AskTerm]), and a second create sent while the first is held is a second
 // write, so it asks through [Timing.Ask]. A write with neither is asked as a
-// read is, and there is one: internal/learning/memsync's hydration barrier, a
-// publish the stream answers once it has stored it, or never, to a subject the
-// stream keeps one message of, so a second copy replaces the first rather than
-// adding a fact.
+// read is, and there is one kind: internal/learning/memsync's hydration
+// barriers, the one a hydration publishes before its first table and the end
+// barrier each table's replay publishes after it, each a publish the stream
+// answers once it has stored it, or never, to a subject the stream keeps one
+// message of, so a second copy replaces the first rather than adding a fact.
 //
 // # And never past t.Lookup, whatever its caller set
 //
@@ -151,10 +152,14 @@ func ReadBounded[T any](ctx context.Context, bound time.Duration, one func(conte
 // processed all the same, and what the hedge keeps beside each is a reply
 // this side still listens for. For a read that was ONE request until it was
 // hedged ([ReadBoundedWith]: coordination's, the object store's, a listing's
-// pages, the backup's, and memsync's barrier, a write, each request a publish
-// the stream stores) it is more: three requests inside a deadline-less
+// pages and the backup's) it is more: three requests inside a deadline-less
 // read's five seconds where it sent one, and up to fifteen under the ceiling
-// for a caller that waits that long. So while a leader's API queue answers
+// for a caller that waits that long. memsync's hydration reads are asked
+// through [ReadWith] to the ceiling, its arrival added to both: its identity
+// reads and a hydration's first barrier up to fifteen requests, and each
+// table's end barrier, a write, each request a publish the stream stores,
+// whose term carries the rest of its replay's pull, one about every ten
+// seconds in a member's own process and every 17.5 across a link. So while a leader's API queue answers
 // slower than t.ReadTerm + t.ReAsk — an election's aftermath, a stall — every
 // read waiting on it adds a request at that cadence, and the queue's offered
 // load grows with its own latency, bounded by each read's bound and the

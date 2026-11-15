@@ -443,7 +443,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 // the entry's login and write what the harness refreshed back over it.
 func (p *Provider) unisolated(err error) Diagnosis {
 	d := Diagnosis{Provider: p.key, Harness: p.harness, Model: p.model,
-		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor}
+		Binary: string(p.profile.Binary), WrittenFor: p.profile.WrittenFor}
 	c := checks{}
 	c.set(CheckSignIn, "not tested")
 	c.fail(CheckSignIn, llm.KindFatal.String(), fmt.Sprintf("the candidate credentials for %q "+
@@ -529,7 +529,7 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 	smoke := opts.Smoke
 	d := Diagnosis{
 		Provider: p.key, Harness: p.harness, Model: p.model,
-		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor,
+		Binary: string(p.profile.Binary), WrittenFor: p.profile.WrittenFor,
 		StateDir: p.ws.StateDir(),
 	}
 	c := checks{}
@@ -540,7 +540,7 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 		}
 	}
 
-	path, err := exec.LookPath(p.profile.Binary)
+	path, err := exec.LookPath(string(p.profile.Binary))
 	switch {
 	case err != nil:
 		c.set(CheckBinary, "not on PATH")
@@ -551,9 +551,13 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 				"if it lives somewhere unusual", p.profile.Binary))
 	default:
 		c.set(CheckBinary, path)
-		version := p.probeVersion(ctx)
+		version, probeErr := p.probeVersion(ctx)
 		c.set(CheckVersion, version)
-		if version == "" {
+		switch {
+		case probeErr != nil:
+			c.fail(CheckVersion, llm.KindFatal.String(), fmt.Sprintf(
+				"the version probe could not be started: %v", probeErr))
+		case version == "":
 			c.fail(CheckVersion, CheckKindConfig, fmt.Sprintf(
 				"%s %s printed no version — the profile may not match this build; "+
 					"it was written for %s", path, strings.Join(p.profile.VersionArgs, " "),
@@ -1079,7 +1083,8 @@ func reportsCurrentClock(text string, now time.Time) bool {
 	return false
 }
 
-// probeVersion runs the harness's own version command.
+// probeVersion runs the harness's own version command, and returns the first
+// line it printed — or the error that kept it from starting.
 //
 // THROUGH run, like every other child this package spawns. It hand-rolled a
 // second exec.CommandContext with no procgroup, no Cancel and no WaitDelay —
@@ -1094,9 +1099,20 @@ func reportsCurrentClock(text string, now time.Time) bool {
 // nothing rather than one that failed to start. Nothing is read from a probe
 // that was not seen to its end either: a stdout a helper held was cut, and the
 // first line of a cut stream is not known to be a whole version.
-func (p *Provider) probeVersion(ctx context.Context) string {
+//
+// AN ERROR IS A PROBE THAT NEVER RAN, and is returned as that: output files
+// that could not be made in the workspace's captures directory, or no room
+// for them on state_dir's volume, is a fault of the host with its own remedy,
+// which "printed no version" would have hidden behind the profile.
+func (p *Provider) probeVersion(ctx context.Context) (string, error) {
 	if len(p.profile.VersionArgs) == 0 {
-		return ""
+		return "", nil
+	}
+	// MADE WHEN IT IS MISSING: the doctor may be the first command to run
+	// the harness from this state_dir at all.
+	captures, err := p.ws.capturesDir()
+	if err != nil {
+		return "", err
 	}
 	res, err := run(ctx, invocation{
 		binary: p.profile.Binary,
@@ -1107,11 +1123,18 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 		env:     p.probeEnv(),
 		timeout: probeTimeout,
 		grace:   p.termGrace,
+		outDir:  captures,
+		setting: p.stateSetting(),
+		hooks:   p.hooks,
+		janitor: &p.janitor,
 	})
-	if err != nil || res.exitCode != 0 || res.unfinished() != "" {
-		return ""
+	if err != nil {
+		return "", err
 	}
-	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0])
+	if res.exitCode != 0 || res.unfinished() != "" {
+		return "", nil
+	}
+	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0]), nil
 }
 
 // smokeTest runs a REAL completion with a REAL tool, served the way a seat's

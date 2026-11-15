@@ -149,7 +149,7 @@ func TestASeatStillBeingTakenIsNotPublishedByTheCycle(t *testing.T) {
 			seedMemory(t, kept)
 			writeNotesUnder(t, kept, "k", 3, 0)
 			changelog := jsOn(t, conn)
-			s := New(kept, changelog, func(string) string { return seat.AgentID })
+			s := newSyncer(kept, changelog, func(string) string { return seat.AgentID })
 			if tc.heldBefore {
 				// THE HOLDING FROM BEFORE, its backlog carried, onto a
 				// changelog of its own so the peer's rows stay the newer,
@@ -222,7 +222,7 @@ func TestAPublishThatStartsAfterForgetCarriesNothing(t *testing.T) {
 	seedMemory(t, db)
 	held := writeNotesUnder(t, db, "b", 20, 0)
 	js := &roundTripJS{}
-	s := New(db, js, func(string) string { return seat.AgentID })
+	s := newSyncer(db, js, func(string) string { return seat.AgentID })
 	if err := s.recordBoundary(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("record the boundary: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestAPublishAForgetOvertakesStopsAtItsNextRowAndLeavesNoMark(t *testing.T) 
 				seedMemory(t, db)
 				writeNotes(t, db, 300, noteWidth)
 				js := &roundTripJS{most: 300 + len(tables)}
-				s := New(db, js, func(string) string { return seat.AgentID })
+				s := newSyncer(db, js, func(string) string { return seat.AgentID })
 				publish := s.PublishOwn
 				if of == ownRange {
 					heldFromEmpty(s, seat.Handle)
@@ -472,7 +472,7 @@ func TestASeatWhoseHydrationFailedFlushesNothingOnItsRelease(t *testing.T) {
 			kept := openStore(t)
 			seedMemory(t, kept)
 			writeNotesUnder(t, kept, "k", 3, 0)
-			s := New(kept, openFailsJS{jsOn(t, conn)}, func(string) string { return seat.AgentID })
+			s := newSyncer(kept, openFailsJS{jsOn(t, conn)}, func(string) string { return seat.AgentID })
 			if tc.heldBefore {
 				heldFromEmpty(s, seat.Handle)
 			}

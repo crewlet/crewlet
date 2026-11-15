@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -152,23 +153,35 @@ func opencodeClient() {
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGTERM)
 	offset := 0
-	relay := func() {
+	relay := func(last bool) {
 		data, _ := os.ReadFile(fakeEventsFile)
+		if os.Getenv("FAKE_RECORD_UNTERMINATED") == "1" {
+			// The last event whole, its line break never written. EVERY relay
+			// holds back the file's trailing line break, which the next
+			// event's bytes carry out, and not only the one that sees the
+			// done file: the server writes the last event before that file,
+			// so an earlier relay may already have read the last event.
+			data = bytes.TrimSuffix(data, []byte("\n"))
+		}
 		if len(data) > offset {
-			_, _ = os.Stdout.Write(data[offset:])
+			fakeWrite(data[offset:])
 			offset = len(data)
+		}
+		if last {
+			// Bytes after the record: a stream cut inside its last event.
+			fakeWrite([]byte(os.Getenv("FAKE_RECORD_TAIL")))
 		}
 	}
 	for {
 		done, doneErr := os.ReadFile(fakeDoneFile)
-		relay()
+		relay(doneErr == nil)
 		if doneErr == nil {
 			code, _ := strconv.Atoi(string(done))
 			os.Exit(code)
 		}
 		select {
 		case <-term:
-			relay()
+			relay(false)
 			os.Exit(143)
 		case <-time.After(10 * time.Millisecond):
 		}

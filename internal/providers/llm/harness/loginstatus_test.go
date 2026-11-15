@@ -175,3 +175,22 @@ func TestTheStatusAPersonReadsIsTheTextForm(t *testing.T) {
 		t.Errorf("Status with no text form printed %q, want status_args' own output", out.String())
 	}
 }
+
+// A STATUS COMMAND ENDED AT ITS BOUND SAYS SO. A status command that printed
+// more than one answer's bound is refused for that, in its own words — never
+// read as one that "exited -1", the engine's kill, nor as signed in on a
+// clipped answer.
+//
+// Mutation: leave the cut out of unfinished's reasons.
+func TestAStatusCommandEndedAtItsBoundSaysSo(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_FLOOD": "stdout"},
+		map[string]any{"status_args": []any{"-test.run=TestFakeHarness"}})
+	got, err := p.LoginStatus(t.Context())
+	if err != nil {
+		t.Fatalf("LoginStatus: %v", err)
+	}
+	if got.State != LoginUnknown || !strings.Contains(got.Detail, "bound") || strings.Contains(got.Detail, "exited") {
+		t.Errorf("a status past its bound = %+v, want unknown, naming the bound", got)
+	}
+}

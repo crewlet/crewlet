@@ -597,9 +597,9 @@ func TestTheVersionProbeGetsTheAllowlistedEnvironment(t *testing.T) {
 	// stops passing an environment, because os/exec then hands the child
 	// the engine's own and the fake never sees the marker that tells it to
 	// answer at all.
-	if got := p.probeVersion(t.Context()); got != "SLACK_BOT_TOKEN present=false" {
-		t.Errorf("the version probe reported %q — it must run with the same "+
-			"allowlisted environment a completion gets", got)
+	if got, err := p.probeVersion(t.Context()); err != nil || got != "SLACK_BOT_TOKEN present=false" {
+		t.Errorf("the version probe reported %q (%v) — it must run with the same "+
+			"allowlisted environment a completion gets", got, err)
 	}
 
 	env := p.probeEnv()

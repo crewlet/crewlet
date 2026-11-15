@@ -256,7 +256,7 @@ COMPANY ?=
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test git-test chromium-test vet lint test test-norace test-cross test-solo \
-        require-npm bench git test-gitproc chromium \
+        require-npm bench git test-gitproc test-capture chromium \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -461,6 +461,24 @@ GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; \
 # it.
 test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (ci: git recipe (macOS))
 	$(REQUIRED) $(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/gitlet/gitproc/...
+
+# THE HARNESS'S OUTPUT CAPTURE ON THE PLATFORM NO OTHER JOB RUNS: what ci.yml's
+# `harness capture (macOS)` job runs. Every child the engine host starts for a
+# harness writes into files of its own (internal/providers/llm/harness's
+# capture.go), and on darwin those rest on calls no Linux job makes: flock's
+# per-description pin, F_PREALLOCATE for the room, F_PUNCHHOLE (a call
+# capture_darwin.go makes itself), a reopen by path whose identity is compared,
+# ftruncate through the engine's description, and sysctl's read of a process
+# group. CAPTURE_CASES are internal/flock's pin cases, the capture's unit cases
+# (one of which punches what was read past the bound and reserves the room
+# ahead through those very calls), one run whose record passes the bound and is
+# given back as it is read, and one call through a harness whose group outlives
+# it, all under -race. On Linux `make test` runs them with the rest, so `check`
+# does not depend on it.
+CAPTURE_CASES := ^(TestAPinIsHeldWhileAChildHoldsItsDescription|TestAProbeLeavesNoLockBehind|TestAPinRefusedByAnotherDescriptionIsAnError|TestNothingWrittenAfterTheEndIsRead|TestAPinLastsWhileAnyHolderHoldsTheDescription|TestAFileThatShrankUnderTheReaderIsRefused|TestACaptureOnAFilesystemWithoutPerDescriptionLocksIsRefused|TestAHeldCaptureIsEmptiedAtTheEnd|TestAnEscapedWriterCannotGrowItsCaptureAfterTheEnd|TestACapturePathReplacedBeforeItsReopenIsNamedAsSuch|TestACredentialCaptureIsInMemory|TestWhatWasReadPastTheBoundIsGivenBackAndRoomKeptAhead|TestARecordPastTheBoundIsReadWholeAndGivenBack|TestTheEndWaitsForTheHarnesssGroup)$$
+
+test-capture: ## run flock's pin cases and the harness capture's cases (ci: harness capture (macOS))
+	$(REQUIRED) $(SKIPGATE) -- $(GOTEST) -json -run '$(CAPTURE_CASES)' ./internal/flock/ ./internal/providers/llm/harness/
 
 ##@ The pinned Chromiums
 

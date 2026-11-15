@@ -127,7 +127,7 @@ func jsOn(t *testing.T, conn *nats.Conn) jetstream.JetStream {
 // runs takes the seat anew, its holding with it.
 func syncerOn(t *testing.T, db *store.DB, conn *nats.Conn) *Syncer {
 	t.Helper()
-	s := New(db, jsOn(t, conn), func(string) string { return seat.AgentID })
+	s := newSyncer(db, jsOn(t, conn), func(string) string { return seat.AgentID })
 	if s == nil {
 		t.Fatal("New returned nil with a store and a connection")
 	}
@@ -367,12 +367,12 @@ func TestABrokerAtItsStorageLimitRefusesTheSeatWithItsOwnAnswer(t *testing.T) {
 // refuses a connection publish permission on the memory subjects answers that
 // publish with nothing at all: it sends the connection a permissions error
 // instead, which the client keeps as the connection's last error, so the
-// barrier waits for an acknowledgement that never comes and the seat is
-// refused as the hydration's budget runs out, naming nothing an operator could
-// act on. It names the broker's refusal. Here a user may publish anywhere but
-// on crewlet.memory.>, the seat's rows were published by another, and the
-// hydration is held to three seconds of the fifteen it has, which its first
-// two requests fit in.
+// barrier waits for an acknowledgement that never comes, and the seat was
+// refused once nobody had answered, naming nothing an operator could act on.
+// It names the broker's refusal. Here a user may publish anywhere but on
+// crewlet.memory.>, the seat's rows were published by another, and the
+// hydration is cut at three seconds, which its first two requests fit in,
+// rather than waiting out the thirty its barrier is asked for.
 //
 // Mutation: refuse an unanswered barrier without reading the connection's last
 // error, and this goes red.
@@ -504,7 +504,7 @@ func TestHydrationTakesOnlyTheSeatItAsksFor(t *testing.T) {
 	}
 	// Publish both seats. The peer's syncer resolves its own agent id.
 	syncerOn(t, db, conn).PublishOwn(ctx, seat.Handle)
-	peer := heldFromEmpty(New(db, jsOn(t, conn), func(string) string { return "other-agent-id" }),
+	peer := heldFromEmpty(newSyncer(db, jsOn(t, conn), func(string) string { return "other-agent-id" }),
 		"ceo")
 	if _, err := peer.PublishOwn(ctx, "ceo"); err != nil {
 		t.Fatalf("publish the peer: %v", err)
@@ -841,7 +841,7 @@ func TestASeatWhoseIDMovedFindsNoneOfItsMemory(t *testing.T) {
 	}
 
 	newOwner := openStore(t)
-	moved := New(newOwner, jsOn(t, conn), func(string) string {
+	moved := newSyncer(newOwner, jsOn(t, conn), func(string) string {
 		return "11111111-2222-4333-8444-555555555555"
 	})
 	carried, err := moved.Hydrate(ctx, seat.Handle)
@@ -868,7 +868,7 @@ func TestASeatWithNoIDCarriesNothing(t *testing.T) {
 	db := openStore(t)
 	seedMemory(t, db)
 
-	nobody := New(db, jsOn(t, conn), func(string) string { return "" })
+	nobody := newSyncer(db, jsOn(t, conn), func(string) string { return "" })
 	if published, err := nobody.PublishOwn(ctx, seat.Handle); err != nil || published.Rows != 0 {
 		t.Fatalf("a seat with no id published %d rows (%v), want none and no error",
 			published.Rows, err)

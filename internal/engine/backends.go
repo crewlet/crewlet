@@ -1064,9 +1064,10 @@ func coordinationStoresOf(b *config.Bootstrap) coordinationStores {
 // JetStream across a LINK — a leaf's link to the members, or a dial to an
 // external cluster — rather than its own member in its own process: the one
 // reading of it the engine hands every store on that connection, the object
-// store's puts' window ([openObjects]) and the coordination store's writes
-// ([coordinationReach]) alike. The queue reads the same fact off how its own
-// connection was made.
+// store's puts' window ([openObjects]), the coordination store's writes
+// ([coordinationReach]) and the memory sync's hydrations (memsync.Config,
+// whose replays ride the coordination connection) alike. The queue reads the
+// same fact off how its own connection was made.
 func acrossLink(b *config.Bootstrap) bool { return b.BrokerKind() != placement.BrokerMember }
 
 // coordinationReach is how a node configured as b reaches the coordination
@@ -1180,10 +1181,11 @@ func runsBucketHome(b *config.Bootstrap) string {
 
 // clusteredStream is whether this node's broker has PEERS.
 //
-// The one place the engine decides it, so the queue, the lease store and the
-// fleet store cannot disagree about which budget they are on — and it is the
-// same rule [Queue.Clustered] applies, which is the rule the embedded server
-// itself is built by: the cluster block takes effect only when it is NAMED.
+// The one place the engine decides it, so the queue, the lease store, the
+// fleet store and the memory sync's hydrations (memsync.Config) cannot
+// disagree about which budget they are on — and it is the same rule
+// [Queue.Clustered] applies, which is the rule the embedded server itself is
+// built by: the cluster block takes effect only when it is NAMED.
 // Tier A refuses a port or a peer list without one, so the name is sufficient.
 //
 // A topology question rather than a replica count: an external NATS is

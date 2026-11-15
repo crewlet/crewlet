@@ -1463,13 +1463,12 @@ const (
 	// is gone. The merge, priorities, link and project dialogs are Worklet's
 	// chunk. So it moved to 413 KiB, 2.26 seconds.
 	// The release train of Worklet's task operations and the Doclet,
-	// Artifacts and Chatlet polish, merged on kit 0.130.2, measures 418.1 KiB
-	// over the 414.1 KiB of main it was built on: 1.4 KiB Worklet's task
-	// operations, 2.3 KiB the polish (the kit's punctuation peel a marked
-	// chip now takes among it, in the shared chunk) and 0.3 KiB the kit's
-	// readable column, trail, identifier and brand sample words. So it moved
-	// to 419 KiB, 2.29 seconds.
-	initialBudget = 419 << 10
+	// Artifacts and Chatlet polish, merged with main's Gitlet listing on kit
+	// 0.131.0, measures 417.0 KiB, 3.1 KiB over the 413.9 KiB of main it was
+	// built on: Worklet's task operations and the polish, the kit's
+	// punctuation peel a marked chip now takes among it, in the shared chunk.
+	// So it moved to 418 KiB, 2.28 seconds.
+	initialBudget = 418 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2589,12 +2588,17 @@ const (
 	// New design's own Create design, and Chatlet's switcher, phone rows,
 	// wording and toasts at the foot added 5,540 bytes and took it to
 	// 6138.1 KiB (6,285,406 bytes): 6139 KiB.
-	// The release train of those two (Worklet's task operations and the
-	// Doclet, Artifacts and Chatlet polish), merged on kit 0.130.2 (column,
-	// trail, identifier and brand sample words kept readable), measures
-	// 6258.3 KiB (6,408,510 bytes), 41,353 bytes over the 6217.9 KiB of main
-	// it was built on: 6259 KiB.
-	treeBudget = 5<<20 + 1139<<10
+	// Kit 0.131.0 (a reader's own remarks edited and deleted in a comment
+	// thread, a grid's short columns drawn at their content, the rail's
+	// field and rows kept wide, words kept readable in columns, trails and
+	// identifiers, and the Gitlet product mark) added 8,562 bytes, and Gitlet
+	// listed on Company › Integrations (its line, card and page) 1,572 more,
+	// script and sheet, and took it to 6227.8 KiB (6,377,291 bytes): 6228 KiB.
+	// The release train of Worklet's task operations and the Doclet,
+	// Artifacts and Chatlet polish, merged with main's Gitlet listing on kit
+	// 0.131.0, measures 6260.4 KiB (6,410,635 bytes), 33,344 bytes over the
+	// 6227.8 KiB of main it was built on: 6261 KiB.
+	treeBudget = 5<<20 + 1141<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

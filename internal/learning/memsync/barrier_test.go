@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -20,7 +20,7 @@ import (
 // A hydration publishes a barrier on the seat's barrier subject before its
 // first table, and each table's replay reads the table's subjects and that one
 // through one consumer, until it has received a barrier at or past its
-// hydration's and its copy holds nothing more. The cases below hold what a
+// hydration's, and then its own end barrier. The cases below hold what a
 // replay does with a barrier, on the package's broker.
 
 // barrierMessage is the seat's barrier as the changelog holds it now, read
@@ -97,44 +97,41 @@ func seatMessages(t *testing.T, conn *nats.Conn) (rows, barriers int) {
 // waits for its copy, and carries the rest. Here an earlier hydration of the
 // seat left its barrier on the changelog, the seat's holder then wrote a note,
 // and a later hydration's copy of the diary holds the earlier barrier and
-// lacks the note and the later barrier until it catches up. The later barrier
-// replaces the earlier on the changelog, which holds one of the seat's after
-// the two hydrations.
+// lacks the note and the later barrier until it catches up, half a second
+// later, played on a bubble's clock over the model changelog
+// (copyfake_test.go).
 //
 // Mutation: end a replay at any barrier, not only one at or past its
 // hydration's, and this goes red: the hydration comes back without the note.
 func TestABarrierBelowTheHydrationsDoesNotEndAReplay(t *testing.T) {
 	t.Parallel()
-	conn := broker(t)
 	holder := openStore(t)
 	seedMemory(t, holder)
-	if _, err := syncerOn(t, holder, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-	if _, err := syncerOn(t, openStore(t), conn).Hydrate(t.Context(), seat.Handle); err != nil {
-		t.Fatalf("the earlier hydration: %v", err)
-	}
-	earlier := barrierMessage(t, conn)
-	note := noteOfSize(t, "newest", 512)
-	publishOn(t, conn, registered(t, "agent_diary").subject(seat.AgentID, note.Values), note)
-
+	published := publishedBy(t, holder)
 	fresh := openStore(t)
-	syncer := syncerOn(t, fresh, conn)
-	syncer.js = laggingJS{JetStream: syncer.js, behind: 2, catchesUp: true, stale: earlier}
-	carried, err := syncer.Hydrate(t.Context(), seat.Handle)
-	if err != nil || carried != len(tables)+1 {
-		t.Fatalf("Hydrate = (%d, %v), want the seat's %d rows and the note its holder wrote after "+
-			"the earlier hydration", carried, err, len(tables)+1)
-	}
-	var content string
-	if err := fresh.SQL().QueryRowContext(t.Context(),
-		"SELECT content FROM agent_diary WHERE id = 'newest'").Scan(&content); err != nil {
-		t.Fatalf("the note written after the earlier hydration did not arrive: %v", err)
-	}
-	if _, barriers := seatMessages(t, conn); barriers != 1 {
-		t.Errorf("the changelog holds %d barriers of the seat's after two hydrations, want the "+
-			"later one alone", barriers)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		log := newFakeChangelog()
+		onto(log, published)
+		// THE EARLIER HYDRATION'S BARRIER, and the note the seat's holder
+		// wrote after it.
+		earlier := log.publish(barrierSubject(seat.AgentID), nil)
+		note := noteOfSize(t, "newest", 512)
+		body, err := encode(note)
+		if err != nil {
+			t.Fatal(err)
+		}
+		log.publish(registered(t, "agent_diary").subject(seat.AgentID, note.Values), body)
+		copies := newFakeCopies(log)
+		copies.scripts["agent_diary"] = []copyScript{{behind: true, holdsTo: earlier,
+			catchUpAfter: 500 * time.Millisecond}}
+		syncer := bubbleSyncer(t, fresh, copies, false)
+		carried, err := syncer.Hydrate(t.Context(), seat.Handle)
+		if err != nil || carried != len(tables)+1 {
+			t.Fatalf("Hydrate = (%d, %v), want the seat's %d rows and the note its holder wrote "+
+				"after the earlier hydration", carried, err, len(tables)+1)
+		}
+		diaryContent(t, syncer, "newest")
+	})
 }
 
 // EVERY HYDRATION OF A SEAT LEAVES IT ONE BARRIER, AND A PUBLISH NONE.
@@ -200,10 +197,11 @@ func TestTwoHydrationsOfASeatRacingEachOtherBothEnd(t *testing.T) {
 		carried int
 		err     error
 	}
-	first.js = racingJS{JetStream: first.js, filter: tableFilter(seat.AgentID, tables[0].name),
-		race: func(jetstream.Consumer) {
+	newSpyCopies(first).beforeAsk = func(filter string, _ replayPulls) {
+		if filter == tableFilter(seat.AgentID, tables[0].name) {
 			later.carried, later.err = second.Hydrate(t.Context(), seat.Handle)
-		}}
+		}
+	}
 	carried, err := first.Hydrate(t.Context(), seat.Handle)
 	if later.err != nil || later.carried != len(tables) {
 		t.Fatalf("the later hydration = (%d, %v), want the seat's %d rows", later.carried, later.err,
@@ -287,82 +285,20 @@ func TestTheBarrierIsNeverARow(t *testing.T) {
 	}
 }
 
-// racingJS is a JetStream whose replay of one table, the one filter names,
-// runs race before its first pull, handed that replay's consumer: a publish or
-// a hydration racing the hydration, landing after its barrier.
-type racingJS struct {
-	jetstream.JetStream
-	filter string
-	race   func(replay jetstream.Consumer)
-}
-
-func (j racingJS) CreateConsumer(ctx context.Context, stream string,
-	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
-
-	consumer, err := j.JetStream.CreateConsumer(ctx, stream, cfg)
-	if err != nil || !slices.Contains(cfg.FilterSubjects, j.filter) {
-		return consumer, err
-	}
-	return &racingConsumer{Consumer: consumer, race: j.race}, nil
-}
-
-type racingConsumer struct {
-	jetstream.Consumer
-	race func(replay jetstream.Consumer)
-	once sync.Once
-}
-
-func (c *racingConsumer) Fetch(batch int, opts ...jetstream.FetchOpt) (jetstream.MessageBatch, error) {
-	c.once.Do(func() { c.race(c.Consumer) })
-	return c.Consumer.Fetch(batch, opts...)
-}
-
-// counted waits until the copy serving replay counts want messages for it.
-//
-// The server counts a message for a consumer a moment after it has
-// acknowledged it, from the queue it signals consumers through, and a replay
-// reads only what its copy has counted by the time a barrier at or past its
-// hydration's says the copy holds nothing more ([Syncer.replay], "What the
-// copy's count can miss").
-func counted(t *testing.T, replay jetstream.Consumer, want uint64) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	var last uint64
-	for {
-		info, err := replay.Info(ctx)
-		if err == nil {
-			if last = info.NumPending; last == want {
-				return
-			}
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("the replay's copy counted %d messages for it, never %d: %v", last, want, err)
-		case <-time.After(10 * time.Millisecond): //fixedwait:liveness
-		}
-	}
-}
-
 // A ROW WRITTEN PAST THE BARRIER IS READ TOO.
 //
 // A replay is done once it has received a barrier at or past its hydration's
-// AND its copy holds nothing more, never at the barrier alone: a publish
-// racing the hydration — a releasing node's last flush still landing, say —
-// writes rows past the barrier, and a copy that has counted one by the time it
-// hands the barrier over is read to it. Here a seat with nothing on the
-// changelog has a note published as the diary's replay sends its first pull,
-// for which the reply that created the replay counted the barrier alone: the
-// case waits for the copy to count the note too, as it does a moment after
-// acknowledging it, and then the pull hands over the barrier, which says one
-// more message follows, and the replay pulls the note. A note the copy has not
-// counted by the time it hands the barrier over is left for the seat's next
-// hydration ([Syncer.replay]). A pull that delivered the barrier alone
-// delivered a message, so it is no row past the pull's bytes either.
+// and then its own end barrier, never at the barrier alone: a publish racing
+// the hydration — a releasing node's last flush still landing, say — writes
+// rows past the barrier, and every row stored before the end barrier lies
+// below it, so the replay reads it before it ends, whatever the copy's count
+// said as the barrier arrived. Here a seat with nothing on the changelog has
+// a note published as the diary's replay sends its first pull, after its
+// barrier. A pull that delivered a barrier alone delivered a message, so it is
+// no row past the pull's bytes either.
 //
-// Mutation: end a replay at its barrier whatever its copy still holds, or take
-// a pull that delivered no row for one that delivered nothing, and this goes
-// red.
+// Mutation: end a replay at its barrier, or take a pull that delivered no row
+// for one that delivered nothing, and this goes red.
 func TestARowWrittenPastTheBarrierIsReadToo(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -370,11 +306,11 @@ func TestARowWrittenPastTheBarrierIsReadToo(t *testing.T) {
 
 	fresh := openStore(t)
 	syncer := syncerOn(t, fresh, conn)
-	syncer.js = racingJS{JetStream: syncer.js, filter: tableFilter(seat.AgentID, "agent_diary"),
-		race: func(replay jetstream.Consumer) {
+	newSpyCopies(syncer).beforeAsk = func(filter string, _ replayPulls) {
+		if filter == tableFilter(seat.AgentID, "agent_diary") {
 			publishOn(t, conn, registered(t, "agent_diary").subject(seat.AgentID, note.Values), note)
-			counted(t, replay, 2)
-		}}
+		}
+	}
 	carried, err := syncer.Hydrate(t.Context(), seat.Handle)
 	if err != nil || carried != 1 {
 		t.Fatalf("Hydrate = (%d, %v), want the note published past its barrier", carried, err)

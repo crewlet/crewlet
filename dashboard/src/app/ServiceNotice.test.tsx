@@ -117,11 +117,12 @@ test("a chat run elsewhere offers Chatlet's page", async () => {
   expect(link.getAttribute("href")).toBe("#/company/integrations/chat");
 });
 
-// GITLET HAS NO CARD UNDER INTEGRATIONS: it is turned on in the
-// company document, so an admin is sent to Configuration and anybody else is
-// told who can, in product words rather than a config key. Mutation: give
-// Gitlet a card, name the key, or offer a reader without access the link,
-// and this fails.
+// GITLET'S STEP IS THE ONE THAT TURNS IT ON: nothing runs in its place for
+// its Integrations page to name, so an admin is sent to Configuration, where
+// the company document turns it on, and anybody else is told who can, in
+// product words rather than a config key. Mutation: offer Gitlet's
+// Integrations page, name the key, or offer a reader without access the
+// link, and this fails.
 test("a company hosting no code is told so in place, with the step a reader can take", async () => {
   mount(
     "code",

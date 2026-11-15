@@ -167,6 +167,73 @@ func TestEveryRoundRecordsItsOwnSpanAndTokens(t *testing.T) {
 	}
 }
 
+// A REQUEST TOLD AT THE END IS DATED BY ITS RECORD. A harness whose record
+// closes a request only when the run ends tells the host of its last request
+// after everything the run's end waited for (a helper of the harness still
+// running, the grace a held stream is given). Dated by when the host heard of
+// it, the round would count that wait as the model's time; dated by when the
+// record showed it ([llm.Turn.Seen]), it ends where the model did.
+//
+// The record's instant is the backend's clock and the round's span the
+// loop's, so it is held between the model's start and the moment the host
+// was told: a record clock ahead of the loop's dates the answer no later than
+// it was heard of, and one behind dates it no earlier than the model began.
+//
+// On a clock the case moves: the model writes for exactly delay, and the host
+// is told four seconds after the record showed the response.
+//
+// Mutation: make Observe ignore Seen and the first case's round takes four
+// seconds more than its model; drop either bound and the clock that disagrees
+// on that side dates the round outside its own span.
+func TestARequestToldAtTheEndIsDatedByItsRecord(t *testing.T) {
+	t.Parallel()
+	const delay, told = 15 * time.Millisecond, 4 * time.Second
+	for _, tc := range []struct {
+		name string
+		// seen is the record's instant for a response the model finished at
+		// written; it may move the case's clock.
+		seen func(clk *clock, written time.Time) time.Time
+		want time.Duration
+	}{
+		{"told four seconds after its record showed it", func(clk *clock, written time.Time) time.Time {
+			clk.advance(told)
+			return written
+		}, delay},
+		{"a record clock ahead of the loop's", func(_ *clock, written time.Time) time.Time {
+			return written.Add(time.Hour)
+		}, delay},
+		{"a record clock behind the loop's", func(_ *clock, written time.Time) time.Time {
+			return written.Add(-time.Hour)
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			clk := &clock{at: time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)}
+			began := clk.now()
+			prov := script(runOf(llmtest.Response{
+				Text:    "done",
+				Writing: func() { clk.advance(delay) },
+				Seen:    func() time.Time { return tc.seen(clk, clk.now()) },
+			}))
+			res, err := run(t, toolloop.Config{Provider: prov, Surface: newSurface("read"), MaxRounds: 6, Now: clk.now})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(res.Rounds) != 1 {
+				t.Fatalf("recorded rounds %+v, want the one request", res.Rounds)
+			}
+			round := res.Rounds[0]
+			if !round.StartedAt.Equal(began) {
+				t.Errorf("the round began at %v, want when the run did, %v", round.StartedAt, began)
+			}
+			if round.Duration != tc.want {
+				t.Errorf("the round took %v, want %v: dated by its record, held within its own span",
+					round.Duration, tc.want)
+			}
+		})
+	}
+}
+
 // A RUN'S FIRST ROUND STARTS WHEN THE RUN DID. A phase of several runs — a
 // corrective, a note, a long call — has a gap between them, the engine's own,
 // and a round timed from the previous run's last response would carry that gap

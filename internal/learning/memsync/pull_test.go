@@ -1,14 +1,9 @@
 package memsync
 
 import (
-	"context"
 	"fmt"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
-
-	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
@@ -21,103 +16,8 @@ import (
 // else, and it is held whole until its transaction writes it, while a row is
 // bounded only by the transport: 256 rows of up to 8 MiB each on the embedded
 // broker, inside seat acquisition. The cases below watch every pull a
-// hydration makes (pullsJS), on a broker carrying the max_payload each names.
-
-// pulled is what one replay pull delivered of the table's rows: for each, in
-// the order the pull delivered them, the bytes the broker counts it at against
-// the pull's byte bound. The barrier a pull may deliver beside them is no row,
-// and is not counted.
-type pulled struct {
-	sizes []int
-	// headed says a row carried headers, which the broker counts too and
-	// sizes does not.
-	headed bool
-}
-
-// bytes is what the pull held.
-func (p pulled) bytes() int {
-	total := 0
-	for _, size := range p.sizes {
-		total += size
-	}
-	return total
-}
-
-// pullsJS is a JetStream whose replay consumers record what each of their
-// pulls delivered, by the table's filter the replay reads beside the seat's
-// barrier, so a case sees the size of every pull a hydration makes.
-type pullsJS struct {
-	jetstream.JetStream
-	mu    sync.Mutex
-	pulls map[string][]pulled
-}
-
-func (j *pullsJS) CreateConsumer(ctx context.Context, stream string,
-	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
-
-	consumer, err := j.JetStream.CreateConsumer(ctx, stream, cfg)
-	if err != nil {
-		return nil, err
-	}
-	filter := cfg.FilterSubject
-	for _, subject := range cfg.FilterSubjects {
-		if subject != barrierSubject(seat.AgentID) {
-			filter = subject
-		}
-	}
-	return pullsConsumer{Consumer: consumer, js: j, filter: filter}, nil
-}
-
-// of is the pulls of the replay over filter, in the order they were made.
-func (j *pullsJS) of(filter string) []pulled {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return slices.Clone(j.pulls[filter])
-}
-
-type pullsConsumer struct {
-	jetstream.Consumer
-	js     *pullsJS
-	filter string
-}
-
-// Fetch is the consumer's own pull, read whole as the broker delivers it and
-// handed over as it was delivered, so the hydration reads what the broker
-// sent.
-func (c pullsConsumer) Fetch(batch int, opts ...jetstream.FetchOpt) (jetstream.MessageBatch, error) {
-	fetched, err := c.Consumer.Fetch(batch, opts...)
-	if err != nil {
-		return nil, err
-	}
-	var got pulled
-	msgs := make(chan jetstream.Msg, batch)
-	for msg := range fetched.Messages() {
-		msgs <- msg
-		if msg.Subject() == barrierSubject(seat.AgentID) {
-			continue
-		}
-		// WHAT THE BROKER COUNTS against a pull's bytes: the row's subject,
-		// the acknowledgement subject it is delivered with, its headers and
-		// its payload.
-		got.sizes = append(got.sizes, len(msg.Subject())+len(msg.Reply())+len(msg.Data()))
-		got.headed = got.headed || len(msg.Headers()) > 0
-	}
-	close(msgs)
-	c.js.mu.Lock()
-	c.js.pulls[c.filter] = append(c.js.pulls[c.filter], got)
-	c.js.mu.Unlock()
-	return pulledBatch{msgs: msgs, err: fetched.Error()}, nil
-}
-
-// pulledBatch hands over a pull's rows as the broker delivered them, and the
-// error it ended with.
-type pulledBatch struct {
-	msgs chan jetstream.Msg
-	err  error
-}
-
-func (b pulledBatch) Messages() <-chan jetstream.Msg { return b.msgs }
-func (b pulledBatch) Error() error                   { return b.err }
+// hydration makes (spyCopies), on a broker carrying the max_payload each
+// names.
 
 // writeNotesOfSize writes n diary notes for the seat whose content is size
 // bytes each.
@@ -177,8 +77,7 @@ func TestAReplayLargerThanAPullTakesSeveralAndDeliversEveryRow(t *testing.T) {
 
 			fresh := openStore(t)
 			syncer := syncerOn(t, fresh, conn)
-			spy := &pullsJS{JetStream: syncer.js, pulls: map[string][]pulled{}}
-			syncer.js = spy
+			spy := newSpyCopies(syncer)
 			carried, err := syncer.Hydrate(t.Context(), seat.Handle)
 			if err != nil {
 				t.Fatalf("a replay larger than a pull refused the seat: %v", err)
