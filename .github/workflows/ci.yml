@@ -564,6 +564,7 @@ jobs:
     outputs:
       race: ${{ steps.legs.outputs.race }}
       solo: ${{ steps.legs.outputs.solo }}
+      runners: ${{ steps.runners.outputs.runners }}
       weights-key: ${{ steps.key.outputs.prefix }}
     steps:
       - uses: actions/checkout@v7
@@ -635,6 +636,56 @@ jobs:
         run: |
           echo "race=[$(seq -s, 1 "$RACE_SHARDS")]" >> "$GITHUB_OUTPUT"
           echo "solo=[$(seq -s, 1 "$SOLO_SHARDS")]" >> "$GITHUB_OUTPUT"
+      # THE SHARDS' RUNNERS: an idle self-hosted `crewlet-ci` runner where
+      # there is one, GitHub's image for the rest. The pool is capacity beside
+      # GitHub's concurrent-job limit, not a faster machine, so a shard never
+      # waits for it. Never for a fork's or Dependabot's pull request, since a
+      # self-hosted runner runs whatever the head says: those get no token.
+      # `SELF_HOSTED_RUNNERS` (a repository variable, `on` to use the pool)
+      # switches it off, and a token or API failure falls back to GitHub with
+      # a warning rather than failing the run.
+      - name: mint a token that reads the self-hosted runners
+        id: runner-token
+        if: >-
+          vars.SELF_HOSTED_RUNNERS == 'on' &&
+          (github.event_name == 'push' ||
+           (github.event.pull_request.head.repo.full_name == github.repository &&
+            github.event.pull_request.user.login != 'dependabot[bot]'))
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RUNNER_STATUS_APP_ID }}
+          private-key: ${{ secrets.RUNNER_STATUS_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+      # Last of the plan's work, so the idle count is as fresh as it can be.
+      # The solo half first: its shards are the run's longest.
+      - name: deal the shards to runners
+        id: runners
+        env:
+          GH_TOKEN: ${{ steps.runner-token.outputs.token }}
+          TOKEN_OUTCOME: ${{ steps.runner-token.outcome }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          idle=0
+          case "$TOKEN_OUTCOME" in
+            skipped) echo "the self-hosted pool is not used for this run (SELF_HOSTED_RUNNERS is not 'on', or the pull request is from a fork or Dependabot)" ;;
+            success)
+              if ! idle=$(gh api "orgs/$ORG/actions/runners?per_page=100" \
+                  --jq '[.runners[] | select(.status == "online" and (.busy | not) and any(.labels[]; .name == "crewlet-ci"))] | length'); then
+                echo "::warning::could not read the self-hosted runners: every shard runs on GitHub's"
+                idle=0
+              fi ;;
+            *) echo "::warning::no token for the self-hosted runners ($TOKEN_OUTCOME): every shard runs on GitHub's" ;;
+          esac
+          legs="$(seq -f 'solo-%g' 1 "$SOLO_SHARDS") $(seq -f 'race-%g' 1 "$RACE_SHARDS")"
+          runners=$(jq -cn --argjson idle "$idle" --arg legs "$legs" '
+            $legs | split("\\s+"; null) | map(select(. != ""))
+            | to_entries
+            | map({key: .value, value: (if .key < $idle then ["self-hosted", "crewlet-ci"] else "ubuntu-24.04" end)})
+            | from_entries')
+          echo "idle crewlet-ci runners: $idle"
+          jq -r 'to_entries[] | "  \(.key): \(.value | if type == "array" then join(", ") else . end)"' <<<"$runners"
+          echo "runners=$runners" >> "$GITHUB_OUTPUT"
       # Kept for the thirty days a run can be re-run in, and overwritten by a
       # re-run of this job: a shard re-run alone must deal from this same file.
       - name: hand the shards the weights they deal by
@@ -654,7 +705,9 @@ jobs:
   test:
     name: test (race) ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: plan
-    runs-on: *linux
+    # GitHub's `ubuntu-24.04` or a self-hosted `crewlet-ci` runner, as the
+    # plan dealt this leg (`deal the shards to runners`).
+    runs-on: ${{ fromJSON(needs.plan.outputs.runners)[format('race-{0}', matrix.shard)] }}
     strategy:
       fail-fast: false
       matrix:
@@ -930,7 +983,8 @@ jobs:
   gates:
     name: end-to-end gates ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: plan
-    runs-on: *linux
+    # As the race shards: the plan deals this leg its runner.
+    runs-on: ${{ fromJSON(needs.plan.outputs.runners)[format('solo-{0}', matrix.shard)] }}
     strategy:
       fail-fast: false
       matrix:
