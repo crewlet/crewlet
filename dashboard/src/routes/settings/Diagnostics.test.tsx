@@ -269,3 +269,27 @@ test("a preview shows the exact JSON a report of the class would send", async ()
   });
   expect(screen.getByText(/internal\/agent\/turn\.Recovered/)).toBeTruthy();
 });
+
+// A CLASS'S SENTENCE NAMES A FACT OF THE REPORT IN BACKTICKS, as the
+// catalogue writes it ("The `fatal_kind` says what it was"): code, beside
+// the JSON that carries it, never the punctuation it travelled in.
+test("a preview's sentence draws a fact it names as code", async () => {
+  await mount(
+    reading({
+      previews: [
+        {
+          class: "process.crashed",
+          title: "The engine crashed",
+          summary: "The `fatal_kind` says what it was.",
+          payload: { schema: 2, facts: { fatal_kind: "concurrent_map" } },
+        },
+      ],
+    }),
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /the engine crashed/i }));
+    await settled();
+  });
+  expect(screen.getByText("fatal_kind", { selector: "code" })).toBeTruthy();
+  expect(document.body.textContent).not.toContain("`fatal_kind`");
+});

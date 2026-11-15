@@ -45,6 +45,7 @@ import { fmtDateTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { getConfig, savePatch } from "~/protocol/configWrite.ts";
+import { marked } from "~/ui/Problems.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 
 /** The guide this screen sums up. */
@@ -444,7 +445,10 @@ function ReportPreview({ answer }: { answer: IssueReportsAnswer }) {
         {answer.previews.map((preview) => (
           <Disclosure key={preview.class} title={preview.title}>
             <div className="col gap-2">
-              <Text as="p">{preview.summary}</Text>
+              {/* THE CATALOGUE'S SENTENCE, drawn as the engine's sentences
+                  are: it names a fact of the report below in backticks
+                  (`fatal_kind`), which is code, never punctuation. */}
+              <Text as="p">{marked(preview.summary)}</Text>
               <CodeBlock
                 plain
                 selectable

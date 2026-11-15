@@ -387,6 +387,36 @@ test("an alarm names a seat that runs every job on the model once", () => {
   expect(body).toContain("coding for Product Manager");
 });
 
+// DETAILS SAYS WHAT THE BODY DOES NOT. A refused credential's body already
+// says who it stops, so "Stops every job for …" under Details was the banner
+// twice; and the engine's recorded line is a sentence, its instant in the
+// reader's zone rather than the stamp the line carries for the logs.
+// Mutation: list the stops under Details again, or draw the line in the mono
+// face as written, and the case fails.
+test("a refused credential's details add the engine's record, not the body again", () => {
+  const stamp = "2026-11-14T22:58:34Z";
+  const data = modelsData({
+    entries: [modelEntry({ key: "solo", health: "rejected", used_by: runs("qa", ...EVERY_JOB) })],
+    alarms: [
+      {
+        kind: "llm_sign_in_refused",
+        detail: `solo's sign-in was refused at ${stamp}: Not logged in`,
+        remedy: "Replace it.",
+        entries: [{ key: "solo", detail: `solo's sign-in was refused at ${stamp}: Not logged in` }],
+      },
+    ],
+  });
+  mount(data);
+  const card = callouts()[0]!.el;
+  expect(card.textContent).toContain("It stops every job for Quality Lead");
+  fireEvent.click(screen.getByRole("button", { name: "Details" }));
+  const details = card.querySelector(".models-alarm__details") as HTMLElement;
+  expect(details.textContent).not.toMatch(/Stops/);
+  expect(details.textContent).not.toContain(stamp);
+  expect(details.querySelector("time")?.getAttribute("datetime")).toBe(stamp);
+  expect(details.querySelector(".mono")).toBeNull();
+});
+
 // A MODEL KEY IS AN IDENTIFIER, set as code wherever an alarm names it, so a
 // key that is an ordinary word ("limit", "default") never reads as prose.
 test("every model key an alarm names is set as code, in its title and its body", () => {

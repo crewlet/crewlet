@@ -112,6 +112,27 @@ test("a refusal from before the last stored credential is not shown as the cause
   expect(screen.queryByText(/401 invalid x-api-key/)).toBeNull();
 });
 
+// THE HARNESS'S OWN WORDS ARE A QUOTATION, attributed to it by name: they read
+// "Vendor said: Not logged in · Please run /login" in the mono face, naming
+// nobody a reader knows and setting a sentence as a value to copy. Mutation:
+// draw them in the mono face again and the case fails.
+test("a refusal's own words are quoted and named for the harness that said them", () => {
+  page({
+    key: "default",
+    health: "rejected",
+    last_failure: {
+      kind: "auth",
+      at: "2026-10-29T09:00:00Z",
+      said: "Not logged in · Please run /login",
+      node: "node-1",
+    },
+  });
+  const quoted = screen.getAllByText("Claude Code answered “Not logged in · Please run /login”");
+  expect(quoted.length).toBeGreaterThan(0);
+  for (const el of quoted) expect(el.className).not.toMatch(/mono/);
+  expect(document.body.textContent).not.toContain("Vendor said");
+});
+
 // QA Minor 12: nothing is edited, so a host sign-in stays on the page.
 test("a host sign-in moves to the sign-in card rather than opening the wizard", () => {
   const onFlow = page({

@@ -299,11 +299,20 @@ function failureStands(model: ModelView): boolean {
   return !stored || Date.parse(failure.at) > Date.parse(stored);
 }
 
-function VendorSaid({ said }: { said: string | undefined }) {
+/**
+ * The harness's own words about a failure, quoted and attributed to it by name
+ * ("Claude Code answered “Not logged in · Please run /login”").
+ *
+ * A QUOTATION, NOT A LOG LINE. It was "Vendor said:" in the mono face, which
+ * named nobody a reader knows and set a sentence as if it were a value to
+ * copy. The words stay whole and second to the page's own sentence above them
+ * (QA M11): the advice in them is the harness's, about its own terminal.
+ */
+function VendorSaid({ said, harness }: { said: string | undefined; harness: string }) {
   if (!said) return null;
   return (
-    <Text as="span" variant="caption" tone="secondary" mono className="models-said">
-      Vendor said: {said}
+    <Text as="span" variant="caption" tone="secondary" className="models-said">
+      {product(harness)} answered “{said}”
     </Text>
   );
 }
@@ -365,7 +374,7 @@ function ConditionCallout({
               ? ` ${plural(waiting.length, "seat")} ${waiting.length === 1 ? "waits" : "wait"} for it: ${listed(waiting.map((s) => seatName(data.seats, s)))}.`
               : ""}
           </span>
-          {admin ? <VendorSaid said={bench.said} /> : null}
+          {admin ? <VendorSaid said={bench.said} harness={model.harness} /> : null}
         </span>
       </Callout>
     );
@@ -387,7 +396,7 @@ function ConditionCallout({
               Refused <RelativeTime value={failure.at} /> on {failure.node}. Seats move to their
               backups until it signs in again.
             </span>
-            <VendorSaid said={failure.said} />
+            <VendorSaid said={failure.said} harness={model.harness} />
           </span>
         ) : entry.health === "rejected" ? (
           "Seats move to their backups until it signs in again."
@@ -546,7 +555,7 @@ function TestCard({ model, open }: { model: ModelView; open: Open }) {
                           {failureWords(failure.kind, signInOf(model))},{" "}
                           <RelativeTime value={failure.at} /> on {failure.node}
                         </span>
-                        <VendorSaid said={failure.said} />
+                        <VendorSaid said={failure.said} harness={model.harness} />
                       </span>,
                     ],
                   ] as const)
