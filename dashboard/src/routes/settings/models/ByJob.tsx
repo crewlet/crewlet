@@ -269,7 +269,6 @@ function AssistantLine({
             <span className="models-roles__picker models-byjob__picker">
               <Select
                 className="models-byjob__select"
-                menuClassName="models-byjob__menu"
                 width="auto"
                 ariaLabel="Model Ask Crewlet runs on"
                 aria-describedby={describe}
@@ -352,7 +351,6 @@ function JobCell({
         <span className="models-byjob__picker">
           <Select
             className="models-byjob__select"
-            menuClassName="models-byjob__menu"
             width="auto"
             ariaLabel={label}
             {...(notes ? { "aria-describedby": noteId } : {})}

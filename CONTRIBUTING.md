@@ -320,8 +320,9 @@ bounds are measured, and failed them; four keeps every machine at CI's
 ratio.
 
 **In CI each half runs on several runners at once.** A `test plan` job deals
-each half into shards by measured duration and proves that every package
-lands in exactly one. Each `test (race) I/N` leg runs `make test` on its
+each half into shards by measured weight — the race half by each package's
+CPU, since its runners are CPU-bound, and the solo half by wall time — and
+proves that every package lands in exactly one. Each `test (race) I/N` leg runs `make test` on its
 shard and each `end-to-end gates I/N` leg runs `make test-solo` on its own,
 still at `-p 1`: a shard is a separate machine, so no two packages that run
 alone ever share one. The jobs named `test (race)` and `end-to-end gates`,
@@ -329,16 +330,21 @@ the checks `main` requires, pass only when the plan and every shard of their
 half did. A local run can do what a shard does:
 
 ```bash
-make test TEST_TIMINGS=/tmp/test-timings.tsv                 # write how long each package and its tests took
-make test TEST_WEIGHTS=/tmp/test-timings.tsv                 # start the longest first by that
+make test TEST_TIMINGS=/tmp/test-timings.tsv                 # write each package's time, CPU and tests' times
+make test TEST_WEIGHTS=/tmp/test-timings.tsv                 # start the heaviest first by that
 make test TEST_WEIGHTS=/tmp/test-timings.tsv TEST_SHARD=2/4  # run the second of four shards
 ```
 
-`TEST_WEIGHTS` starts the longest packages first: `go test` starts package runs
+`TEST_WEIGHTS` starts the heaviest packages first: `go test` starts package runs
 in the order it is handed them, and alphabetical order started the three
 longest last. With `TEST_SHARD=I/N` the same weights deal the half across N
-shards, longest first, each package to the shard carrying the least so far;
-without weights the deal is by package count. The file must exist
+shards, heaviest first, each package to the shard carrying the least so far;
+without weights the deal is by package count. A package weighs its CPU in
+`make test`'s half, whose runners are CPU-bound, so a package's wall time
+there grows with whatever shares the machine with it, and its wall time in
+`make test-solo`'s, which runs one package at a time; skipgate estimates a
+package's CPU as its share of the run's CPU by its share of the tests' busy
+time. The file must exist
 (`internal/solo/partition` refuses one it cannot open rather than guess), and
 an empty file is `go list`'s order. CI's weights are the shards' timings from
 the last passing run on `main`, merged by `go run ./internal/solo/partition
