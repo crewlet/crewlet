@@ -5336,7 +5336,9 @@ phone. On a screen with a bar of its own, Chatlet's, it stands under that bar
 at the top right instead (see
 [Chatlet](#chatlet-a-top-bar-a-rooms-panel-a-room-and-where-you-have-read-to)).
 A screen that scrolls always keeps room at its end for one toast, over what a
-bar docked at the foot holds (`ToastRoom`): a toast raised by a press on a
+bar docked at the foot holds (`ToastRoom`), inside a section frame's body where
+the screen has one, so the frame (and the section column sticky within it)
+reaches the end of the scroll: a toast raised by a press on a
 table's last row covered that row's controls for as long as it showed, and a
 room made only then moved the page up under the pointer and back. A stack taller
 than that grows the room, and a reader at the end stays at the end, above it. A
@@ -10481,12 +10483,14 @@ sessions for itself: in view beside the list on a wide window and a drawer
 on a phone, stepped with `[` and `]`, closed by Back. It was a card drawn
 under the stats, the report and the whole grid, so pressing a row opened
 something below the fold and the page did not move. **The reader's own row
-leads with their Account** — "This is you" and a link to it, where their
+leads with their Account**: "This is you" and a link to it, where their
 password, two-step verification, sessions and personal access tokens are
-theirs to manage — and the administrator's gestures follow, each saying what
-it would do to them: before, a person who opened their own row was offered a
-reset link and "Sign out everywhere" and nothing that pointed at their own
-security. A sealed value this node's keyring cannot open reads *Locked*,
+theirs to manage. Their own sign-in gestures are not repeated here (no reset
+link, two-step reset, Sign out everywhere or Revoke on their own credentials),
+and Suspend and Remove are held on their own row with the reason ("Another
+administrator can"): before, a person who opened their own row was offered all
+of them, worded for somebody else, beside the callout sending them to Account.
+Edit stays, and says what a change to their own access would do to them. A sealed value this node's keyring cannot open reads *Locked*,
 never blank. A service account bound
 to none reads *No seat*, which is ordinary; a person always holds a
 human seat. A stage that is the resting one (*Active*) is quiet words in its
@@ -10534,9 +10538,13 @@ node that answered enforces it (`sign_in_policy`, an admin's): whether a
 second factor is required, the shortest password, how long a session lives
 from sign-in and unused, and how long a step-up authorises a sensitive
 gesture, each with its default applied where the node's file writes none. It
-is Tier A, written in each node's own `crewlet.yaml` (`api.auth`), so the page
-names the node rather than presenting the reading as the company's, and it is
-read-only: it changes with an edit to that file and a restart.
+is Tier A, written in each node's own configuration file (`api.auth`), so the
+page names the node rather than presenting the reading as the company's, and it
+is read-only: it changes with an edit to that file and a restart. **Settings
+names that file one way** (`lib/nodeFile.ts`): "Node configuration file" in a
+source column and the same words in a page's note, never `crewlet.yaml` on one
+page and "the bootstrap file" on the next. A setting's key (`api.auth.totp`)
+is behind the settings table's copy control rather than drawn under its name.
 
 **Delegated decisions** (`#/settings/delegated-decisions`) is what agent seats
 decide in a person's place ([Delegated decisions](../guides/delegated-decisions.md),
@@ -11346,13 +11354,23 @@ log_recreated`) or a log missing records the copy needs (`503 log_gap`) — in t
 engine's own hint. The request
 waits up to 12 hours, the CLI's own wait, and closing the dialog does not
 stop the copy: the outcome arrives as a notice either way. Its figures are the
-oldest backup any log's trim reads (each log reads the newest counted backup
-that covers it, so under `operator` there is one per log acknowledged, and the
-stalest is the one the backup-age alarm leads with), the `backup_floor` policy,
-how many were requested and failed (over the span the event log reads, named
-from the `event_history_seconds` the engine reports rather than written into
-the screen, or "in the newest N" when the history filled its page), and the
-backup owner (`retention.backup_owner`, "Not set" where nobody is named). With
+**Oldest backup in use**, the oldest any log's trim reads (each log reads the
+newest counted backup that covers it, so under `operator` there is one per log
+acknowledged, and the stalest is the one the backup-age alarm leads with);
+**Backups that count**, the `backup_floor` policy in words ("Any node's" or
+"Confirmed only"); how many were requested and failed (over the span the event
+log reads, named from the `event_history_seconds` the engine reports rather
+than written into the screen, or "in the newest N" when the history filled its
+page); and the **Backup owner** (`retention.backup_owner`, "Nobody named" where
+nobody is, with where that is set in words). **An alarm or a trim check the
+page can clear says so first**: the backup alarm points at Take a backup, the
+backup check links the dialog that takes one, and the engine's remedy, written
+for the command line it shares with `crewlet retention status`, is folded under
+"From the command line"; one the dashboard has no gesture for keeps the
+engine's sentence. A check is named in words alone, never with the engine's term
+(`min_hold`) under it, and a log's own page calls itself a log. **Evict is held
+with its reason** on the fleet's only node and on the node answering the
+reader: an eviction is for a node that has gone. With
 nothing backed up and every node's history read, the figure says "none yet"
 and the two lists are not drawn. Otherwise come **Newest per node and log**,
 each node's newest copy and the operator's newest acknowledgement of each log,
@@ -11368,7 +11386,7 @@ acknowledgement only, which is why a failed night shows in the history alone.
 
 **Audit log** reads five sources over one window: Worklet's feed, Doclet's
 changes, the configuration history, the credential rows,
-and **Runtime**, the runtime audit (`events{source: "operator"}`), which is
+and **Tool calls**, the runtime audit (`events{source: "operator"}`), which is
 every call a person made through a running node whatever became of it: each
 operator tool call that is not a proven read — through the act route, an
 assistant over `/operator/mcp` or the human write surface, whose chat erase,
@@ -11382,10 +11400,20 @@ call as the engine recorded it (`actor` and `actor_kind`: the seat a bound
 person acted as, or a credential's own login) with the credential it came
 through (`operator_id`) beside it, and in its detail's title the node that
 served it; its arguments are
-never recorded and the cell says so. A refused or failed call is marked as a
+never recorded and the cell says so. **Its Where is where the call was made**,
+the tool's app in the act contract (Chatlet, Gitlet, Worklet, Atlas) or the
+screen a gesture belongs to (Models, MCP & tools, Backups, Ask Crewlet), and
+"Other tool calls" for a tool no part owns; the filter offers each. **Its
+Detail is the outcome** ("Applied.", "Refused (conflict)."), the engine's
+summary less the author and the tool the row's other cells say. **The
+credential is said in words** ("Personal access token", "Signed-in session")
+with its id behind a copy control (`components/Credential.tsx`); the export
+keeps the engine's id. A refused or failed call is marked as a
 failure. Worklet's feed and the runtime audit are windowed by the engine,
 the other three are narrowed here, and a page that filled before it reached
-the window's start is named in a notice above the card — windowed or not. A
+the window's start is named in a notice above the card — windowed or not — as
+long as the Where filter shows its rows. On a phone Export CSV folds into the
+bar's More menu. A
 long value in the To column is cut with an ellipsis and carries the whole of
 itself on its title (on a phone card it wraps), and an empty one says why in
 the row's own terms: a tool call's arguments are "Not recorded", a backup row
