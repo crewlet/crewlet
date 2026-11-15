@@ -25,9 +25,38 @@ import (
 // answers them.
 
 // boundedTimes runs a case's script with every call to its server bounded at a
-// second, the least its whole-second clock reads, and the login loop out of the
-// way unless the case brings it back.
-var boundedTimes = executor.OpenCodeTimes{Call: time.Second, SessionCall: time.Second, Sync: time.Hour}
+// second, the least its whole-second clock reads, on [heldClock], and the login
+// loop out of the way unless the case brings it back.
+var boundedTimes = executor.OpenCodeTimes{Call: time.Second, SessionCall: time.Second, Sync: time.Hour,
+	Clock: heldClock}
+
+// heldClock is the clock the cases here read their bounds on: a second later
+// for every read of it while a call the server took and never answered still
+// runs (its `hung` record names the call's pid), and still otherwise. So a
+// bound runs out when, and only when, the server holds a call, and a call it
+// answers is never ended by its bound however long the machine takes over it.
+//
+// WHY NOT THE WALL CLOCK: it reads whole seconds, so a bound of one runs out at
+// the first tick, anywhere from at once to a second after the call starts. A
+// call the case needs answered was ended on a loaded runner, and the cancels'
+// shared bound, read again after the listing, could have no second left: a
+// leftover steer's cancel was never asked, and the case that holds a cancel's
+// bound failed on a cancel that never came (main's run 43653445196). A bound
+// long enough to outlast a loaded runner would make every case wait it out.
+//
+// WHY IT MOVES ON A READ, NOT ON A HELD CALL'S RECORD: a call's bound is read
+// after the call has started, so a server that holds it may have recorded it
+// first, and a clock that jumped once per record then stood still past it: the
+// bound was set beyond the only time the clock would ever read, and the held
+// call was never ended. Moving a second a read while a held call lives, the
+// clock reaches any bound a case sets for a call it expects ended in as many
+// of the script's polls (a second, the readiness loop's two), and the minute
+// a case expects outlasted in a minute's worth, longer than any case runs.
+// Each read that moves it appends a line to `held-reads`, so two processes
+// reading at once never move it back.
+const heldClock = `for p in $(cut -d ' ' -f 2 "$FAKE_DIR/hung" 2> /dev/null); do ` +
+	`if kill -0 "$p" 2> /dev/null; then echo >> "$FAKE_DIR/held-reads"; break; fi; done; ` +
+	`echo $(( $(cat "$FAKE_DIR/held-reads" 2> /dev/null | wc -l) ))`
 
 // hungCalls reads the calls the case's server took and never answered: the
 // kind of each, and the pid of the client that made it.
