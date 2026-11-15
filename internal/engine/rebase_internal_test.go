@@ -459,7 +459,7 @@ func TestADispatchThatCannotReadItsRebaseDoesNotRun(t *testing.T) {
 // unhandled deliveries and never with its poison. A real dispatch, so the
 // failure is the one runTurn returns, wrapped as the dispatcher wraps it.
 //
-// Mutation: drop the infrastructure's conditions from nakFailure's test and
+// Mutation: drop the infrastructure's conditions from nodesFailure and
 // the delivery is NAK'd as the mail's.
 func TestADispatchThatCannotReadItsRebaseIsHandedBackAsTheNodes(t *testing.T) {
 	t.Parallel()
@@ -592,5 +592,44 @@ func TestAResumeThatCannotReadItsRebaseIsHandedBack(t *testing.T) {
 	})
 	if !errors.Is(err, outage) {
 		t.Fatalf("resumeTurn over an unreachable store = %v, want the outage", err)
+	}
+}
+
+// AND THE SEAT'S CONTROL TOPIC HANDS IT BACK AS THE NODE'S OWN, as the
+// mailbox does the turn's: the coordinator returns the resume's failure for
+// the completion to come back ([sandbox.Coordinator.OnEvent]), and the
+// coordination store's outage behind it is nothing the completion did. One
+// answer decides the side for both handlers ([nodesFailure]); a copy of the
+// rule at the control topic asked the queue alone, and a backlog of
+// completions an outage spent was kept with its group's poison.
+//
+// Mutation: ask queue.NodeFault alone in controlOutcome and the hand-back is
+// counted against the message.
+func TestAResumeThatCannotReadItsRebaseIsHandedBackAsTheNodes(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	outage := fmt.Errorf("%w: read the rebase: nats: timeout", coord.ErrUnavailable)
+	e := &Engine{backends: &Backends{Fleet: failingFleet{memFleet: coordmem.NewFleet(), err: outage}}}
+	rig := newRebaseRig(t)
+	began := time.Now().UTC().Add(-40 * 24 * time.Hour)
+	seat := rig.company.Org.Roles[0]
+	run := sandbox.PendingRun{
+		TurnID: statelog.NewOpID(began, ""), WorkKey: "wk-parked", WorkSince: began,
+		AgentHandle: "swe", Reply: "none",
+	}
+	err := e.resumeTurn(ctx, resumeInput{
+		Company: rig.company, Run: run, Turn: resumedTurn(run, seat, rig.company.Org, nil),
+	})
+	if !errors.Is(err, outage) {
+		t.Fatalf("resumeTurn over an unreachable store = %v, want the outage", err)
+	}
+	// AS THE COORDINATOR HANDS IT BACK: the claim undone and the failure
+	// returned for the delivery to come round again.
+	got := controlOutcome(ctx, fmt.Errorf("sandbox: resuming %s: %w", run.TurnID, err))
+	if got.Outcome != queue.OutcomeNak {
+		t.Fatalf("outcome = %s (%s), want a NAK for a retry", got.Outcome, got.Reason)
+	}
+	if got.FailsMessage() {
+		t.Errorf("a resume the coordination store failed is NAK'd as the message's: %v", got.Err)
 	}
 }

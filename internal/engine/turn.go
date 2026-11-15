@@ -385,8 +385,8 @@ func (r Request) Ask() []*events.Event {
 //
 // A FAILURE OF THIS NODE'S IS NEVER THE MAIL'S OWN. Where the requeue of a
 // partition's tail or of a park's delivery fails, or the turn does, the NAK
-// asks [queue.NodeFault] and the infrastructure's conditions
-// ([builtin.InfrastructureKind]) through [nakFailure], so an outage, a queue
+// asks [nodesFailure] through [nakFailure], the answer the seat's sandbox
+// control topic NAKs by too ([controlOutcome]), so an outage, a queue
 // no longer live, a stop or drain that ended the delivery's context, or a
 // coordination store, a state log, a store or a disk that failed the turn is
 // NAK'd as the node's ([queue.NakNode]) and a delivery whose budget it spends
@@ -1622,11 +1622,8 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 }
 
 // nakFailure NAKs a seat's mail that failed, for a retry: as THIS NODE'S OWN
-// failure ([queue.NakNode]) where the queue tells it is one ([queue.NodeFault]:
-// a broker that did not answer, a queue no longer live, a delivery whose
-// context this node's stop or drain ended) or the failure is a condition of
-// the infrastructure the engine runs on ([builtin.InfrastructureKind]), and as
-// the mail's ([queue.Nak]) otherwise. Both return the delivery on the same
+// failure ([queue.NakNode]) where [nodesFailure] says it is one, and as the
+// mail's ([queue.Nak]) otherwise. Both return the delivery on the same
 // backoff behind its conversation's newer mail and spend the same budget; what
 // differs is where a delivery whose budget is spent is kept
 // ([queue.RetiredTo]). Counted as the mail's, an outage or a drain spending it
@@ -1634,29 +1631,62 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 // node's, it is kept with the group's unhandled deliveries, as one no member
 // handled.
 //
-// THE INFRASTRUCTURE'S CONDITIONS are the ones the queue cannot tell: a
-// coordination store that did not answer (a turn whose work began past the
-// operation ledger's horizon reads where its writes are minted before it runs,
-// [rebaseFor]), a state log, a data node or a store that could not take the
-// write, a file store, a disk, the fleet's nodes holding different keys or
-// builds. Read by the one classification of conditions, which every tool's
-// refusal reads and a failed turn's record names a condition by
-// ([builtin.ConditionKind]), never by a list of its own; and read off the
-// failure rather than off its record, so a provider's failure that wraps one
-// (a harness whose prompt a full disk could not take) is the node's though
-// its record names the provider's own kind. A deadline, an abandoned wait and
-// a coding sandbox's class stay the mail's: what it asked can cause each
-// ([builtin.InfrastructureKind] says how).
-//
 // The requeue of a partition's tail, a park's requeue and a turn's failure all
 // answer through it, so a failure one of them keeps out of the poison is one
-// the others keep out too, and the queue's test is the one internal/notify's
-// wakes and the seat control topic ask ([controlOutcome]).
+// the others keep out too.
 func nakFailure(ctx context.Context, err error) queue.Result {
-	if queue.NodeFault(ctx, err) || infrastructureFailure(err) {
+	if nodesFailure(ctx, err) {
 		return queue.NakNode(err)
 	}
 	return queue.Nak(err)
+}
+
+// nodesFailure reports whether err, the failure of a delivery a seat was
+// handed, is THIS NODE'S OWN or its infrastructure's rather than the work's:
+// the one answer both handlers of a seat's deliveries NAK by, its mailbox's
+// ([nakFailure]) and its sandbox control topic's ([controlOutcome]). One
+// answer, because the same failure reaches both: a turn and a resumed turn
+// read where their writes are minted from the same coordination store
+// ([rebaseFor]), and a copy of the rule at each handler had already let the
+// control topic count that read's outage against the message while the
+// mailbox kept it out of the poison.
+//
+// The node's, in four ways:
+//   - THE QUEUE TELLS IT AS THE NODE'S ([queue.NodeFault]): a broker that did
+//     not answer, a queue no longer live, a delivery whose context this
+//     node's stop or seat move ended, the test internal/notify's wakes ask
+//     too.
+//   - A CONDITION OF THE INFRASTRUCTURE the engine runs on, which the queue
+//     cannot tell: a coordination store that did not answer (a turn whose work
+//     began past the operation ledger's horizon reads where its writes are
+//     minted before it runs, [rebaseFor]), a state log, a data node or a
+//     store that could not take the write, a file store, a disk, the fleet's
+//     nodes holding different keys or builds. Read by the one classification of
+//     conditions, which every tool's refusal reads and a failed turn's record
+//     names a condition by ([builtin.ConditionKind],
+//     [builtin.InfrastructureKind] decides each kind's side and says why),
+//     never by a list of its own; and read off the failure rather than off
+//     its record, so a provider's failure that wraps one (a harness whose
+//     prompt a full disk could not take) is the node's though its record
+//     names the provider's own kind. A deadline, an abandoned wait and a
+//     coding sandbox's class stay the work's.
+//   - THE COORDINATION STORE'S SILENCE on a step of the sandbox coordinator's
+//     ([sandbox.ErrStoreSilent]).
+//   - A HAND-BACK MADE WHILE NO WAITER CAN ANNOUNCE ITS JOB
+//     ([sandbox.ErrUnannounced], [controlOutcome] says why).
+//
+// The last two are marks only the sandbox coordinator makes; a mailbox's turn
+// meets them where its launch or its resume asks the coordinator a step.
+func nodesFailure(ctx context.Context, err error) bool {
+	return storeUnheard(err) || queue.NodeFault(ctx, err) || infrastructureFailure(err)
+}
+
+// storeUnheard reports whether err carries one of the sandbox coordinator's
+// marks for a store that did not answer it: a step's silence
+// ([sandbox.ErrStoreSilent]) or a hand-back no waiter can announce again
+// ([sandbox.ErrUnannounced]).
+func storeUnheard(err error) bool {
+	return errors.Is(err, sandbox.ErrStoreSilent) || errors.Is(err, sandbox.ErrUnannounced)
 }
 
 // infrastructureFailure reports whether err is a condition of the

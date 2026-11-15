@@ -4218,16 +4218,21 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // too): a publish the broker did not answer or a queue no longer live refused,
 // the announcement of a park's question among them, and any failure under a
 // context that has ended, a collection this node's stop or seat move cut short
-// ("interrupted") among them. A DRAIN'S CUT IS NOT ONE: it ends only the turn's
+// ("interrupted") among them. AND SO IS A CONDITION OF THE INFRASTRUCTURE
+// the engine runs on: a resumed turn that could not read where its writes are
+// minted from a coordination store that did not answer ([rebaseFor]) is the
+// same failure the seat's mailbox hands back as the node's, and one answer
+// decides both ([nodesFailure]). A DRAIN'S CUT IS NOT ONE: it ends only the turn's
 // admission context (internal/node's cut), never the delivery's, so a hand-back
 // it interrupted reads as no failure of this node's here and is NAK'd as the
 // message's. Nothing turns on it: the cut fires only once the queue's own
 // broker connection is closed for good, so no outcome of that delivery reaches
 // the broker, and the message comes back to the seat's next holder when its
 // ack wait lapses, as every delivery a lost connection held does. A refusal
-// that waits is still acknowledged whatever the context, as above. A failure
-// the completion itself caused (a resume that failed, a refusal that names
-// nothing to wait on) stays the message's wherever a waiter announces the job
+// that waits is still acknowledged whatever the context, as above, unless a
+// store's silence stands in front of it. A failure the completion itself
+// caused (a resume that failed for what it ran, a refusal that names nothing
+// to wait on) stays the message's wherever a waiter announces the job
 // again; while none can, it is marked and handed back as the node's with every
 // other hand-back (above), since its delivery is then what carries the
 // completion.
@@ -4268,11 +4273,9 @@ func controlOutcome(ctx context.Context, err error) queue.Result {
 		return queue.Defer(queue.DeferDraining, err.Error())
 	case waits && refused.Condition == sandbox.SeatLost:
 		return queue.Defer(queue.DeferSeatMoved, err.Error())
-	case errors.Is(err, sandbox.ErrStoreSilent), errors.Is(err, sandbox.ErrUnannounced):
-		return queue.NakNode(err)
-	case waits:
+	case waits && !storeUnheard(err):
 		return queue.Ack()
-	case queue.NodeFault(ctx, err):
+	case nodesFailure(ctx, err):
 		return queue.NakNode(err)
 	}
 	return queue.Nak(err)

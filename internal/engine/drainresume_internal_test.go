@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/node"
@@ -435,11 +436,17 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 // poison. SO IS ONE THE QUEUE TELLS AS ITS NODE'S (queue.NodeFault, the test
 // internal/notify's wakes ask too): an announcement of the job's question the
 // broker did not take, and a handler this node's stop, drain or seat move
-// cancelled. A failure of the completion itself stays the message's.
+// cancelled. AND SO IS A CONDITION OF THE INFRASTRUCTURE, by the one answer
+// the seat's mailbox NAKs by too (nodesFailure): a resumed turn that could not
+// read where its writes are minted from a coordination store that did not
+// answer. A failure of the completion itself stays the message's, a resume
+// that ran past its deadline among them.
 //
 // Mutation: hand a store's silence, a broker's refusal or a cancelled handler
 // back with queue.Nak, and a delivery spent during an outage or a stop is kept
-// as poison.
+// as poison; ask queue.NodeFault alone after a refusal that waits, and the
+// resume the coordination store failed is counted against the message; read
+// every condition as the node's, and the deadline's row is not.
 func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 	t.Parallel()
 	live := t.Context()
@@ -472,7 +479,11 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 		"a collection this node's stop cut short": {
 			err: fmt.Errorf("sandbox: collecting t1 was interrupted: %w", context.Canceled), nodes: true,
 			stopped: true},
+		"a resume the coordination store failed": {err: fmt.Errorf("sandbox: resuming t1: "+
+			"engine: read the rebase: %w: nats: timeout", coord.ErrUnavailable), nodes: true},
 		"a resume that failed": {err: errors.New("sandbox: resuming t1: the model provider did not answer")},
+		"a resume that ran past its deadline": {err: fmt.Errorf("sandbox: resuming t1: runner: %w",
+			context.DeadlineExceeded)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

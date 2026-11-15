@@ -34,12 +34,17 @@ import (
 // stays the mail's, a deadline and a coding sandbox's class among them, since
 // what the mail asked can cause either.
 //
+// THE SAME ANSWER THE SEAT'S CONTROL TOPIC NAKS BY (nodesFailure), so the
+// sandbox coordinator's marks for a store that did not answer it
+// (sandbox.ErrStoreSilent, sandbox.ErrUnannounced) are the node's here too.
+//
 // Mutation: NAK any one of the three as the message's (queue.Nak), and its
 // rows for a broker, a queue, an ended context and the infrastructure count
 // the failure against the mail; drop the infrastructure's conditions from
-// nakFailure's test and the rows for a coordination store, a busy store and a
-// full disk do; read every condition as the node's and the deadline's and the
-// sandbox's rows count it against the node.
+// nodesFailure and the rows for a coordination store, a busy store and a
+// full disk do; drop the coordinator's marks and theirs do; read every
+// condition as the node's and the deadline's and the sandbox's rows count it
+// against the node.
 func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 	t.Parallel()
 	live := t.Context()
@@ -60,6 +65,10 @@ func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 			err: fmt.Errorf("worklet: %w: database is locked", store.ErrBusy), nodes: true},
 		"a full disk": {err: fmt.Errorf("write the notes: %w",
 			&os.PathError{Op: "write", Path: "/var/lib/crewlet/notes", Err: syscall.ENOSPC}), nodes: true},
+		"a step the coordination store was silent on": {err: fmt.Errorf("runner: launching the "+
+			"executor's run: %w: sandbox: read run t1: nats: timeout", sandbox.ErrStoreSilent), nodes: true},
+		"a hand-back no waiter announces": {err: fmt.Errorf("runner: resuming t1: %w: its run is not "+
+			"settled", sandbox.ErrUnannounced), nodes: true},
 		"a deadline the turn ran past": {
 			err: fmt.Errorf("runner: the harness's run: %w", context.DeadlineExceeded)},
 		"a coding sandbox's class": {err: fmt.Errorf("runner: launching the executor's run: %w",
