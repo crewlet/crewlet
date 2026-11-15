@@ -111,6 +111,15 @@ var settingRanges = map[string]Range{
 	// nothing, and at most all of it.
 	"turn_engine.delegation.budget_fraction": {Min: 0, MinExclusive: true, Max: atMost(1)},
 
+	// THE DELEGATED-DECISION LIMITS (delegated.Limits). A deadline under
+	// five minutes reaches people before a delegate's turn can answer, and
+	// one over sandbox.DefaultPauseTTL (30 minutes) after the paused box
+	// waiting on it was let go. One delegate decides one request a turn and a
+	// turn takes a minute or more, so an hourly cap over 60 bounds nothing.
+	"delegated_decisions.deadline_seconds":       {Min: 300, Max: atMost(1800)},
+	"delegated_decisions.allows_per_hour":        {Min: 1, Max: atMost(60)},
+	"delegated_decisions.server_allows_per_hour": {Min: 1, Max: atMost(60)},
+
 	"notification_rate_limit":         {Min: 0},
 	"notification_coalesce_max_batch": {Min: 1, Max: atMost(coalesceMaxBatchMax)},
 }

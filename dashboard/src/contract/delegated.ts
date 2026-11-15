@@ -9,6 +9,8 @@
  * and is drawn as plain text, never as Markdown.
  */
 
+import type { LimitRow } from "./limits.ts";
+
 /**
  * What a request is for: its act, set by the engine from the structured data
  * that made it (`delegated.Kind`): a command on a server, a merge of one
@@ -93,16 +95,6 @@ export interface DelegatedRequiredChecks {
   checks: string[];
 }
 
-/** The limits the engine holds every delegate to, whatever the document says. */
-interface DelegatedLimits {
-  /** A request no delegate answered in this long goes to people. */
-  deadline_minutes: number;
-  /** Allows per kind and delegate in one clock hour. */
-  decisions_per_hour: number;
-  /** Allows per server in one clock hour. */
-  server_allows_per_hour: number;
-}
-
 /** Who gave a verdict (`accessdomain.VerdictBy`). */
 type DelegatedGiver = "agent" | "person" | "engine";
 
@@ -157,7 +149,13 @@ export interface DelegatedVerdictRow {
 export interface DelegatedDecisionsAnswer {
   enabled: boolean;
   rules: DelegatedRule[];
-  limits: DelegatedLimits;
+  /**
+   * The limits the engine holds every delegate to, whatever a delegate
+   * answers: the deadline and the two hourly caps, each a row of the
+   * `limits` shape (group `delegated`), the document's value or the default,
+   * with the range a change is held to.
+   */
+  limits: LimitRow[];
   /** The company day the digest covers, `2026-11-09`. */
   day: string;
   since: string;

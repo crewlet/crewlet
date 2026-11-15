@@ -235,7 +235,10 @@ func TestEverySettableLimitReportsTheRangeTheValidatorHolds(t *testing.T) {
 		t.Fatalf("limits: %v", err)
 	}
 	checked := 0
-	for _, row := range got.Limits {
+	// THE DELEGATED-DECISION LIMITS are rows of the same kind, edited by the
+	// same field, so they are held to the validator the same way.
+	rows := append(got.Limits, queries.DelegatedLimitRows(c)...)
+	for _, row := range rows {
 		if !row.Settable {
 			if row.Range != nil {
 				t.Errorf("%s is no setting of the document and reports a range", row.Key)

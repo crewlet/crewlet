@@ -19,10 +19,14 @@ const (
 	LimitDelegation    LimitGroup = "delegation"
 	LimitNotifications LimitGroup = "notifications"
 	LimitSchedules     LimitGroup = "schedules"
+	// LimitDelegated is what every delegate of a delegated decision is held
+	// to (delegated.Limits), answered on `delegated_decisions` beside the
+	// rules it bounds, never on `limits`.
+	LimitDelegated LimitGroup = "delegated"
 )
 
-// LimitGroups are the four, in that order.
-var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules}
+// LimitGroups are the five, in that order: `limits` answers the first four.
+var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules, LimitDelegated}
 
 // LimitUnit is what a limit's number counts.
 type LimitUnit string
@@ -156,11 +160,30 @@ var limits = []limit{
 		}},
 }
 
+// delegatedLimits are the limits every delegate is held to, the rows of
+// `delegated_decisions`' `limits`, read through the one accessor every reader
+// of them uses ([config.DelegatedDecisions.Limits]).
+var delegatedLimits = []limit{
+	{key: "delegated_decisions.deadline_seconds", group: LimitDelegated, unit: LimitSeconds,
+		read: func(c *config.Company) float64 { return c.DelegatedDecisions.Limits().Deadline.Seconds() }},
+	{key: "delegated_decisions.allows_per_hour", group: LimitDelegated, unit: LimitCount,
+		read: func(c *config.Company) float64 { return float64(c.DelegatedDecisions.Limits().AllowsPerHour) }},
+	{key: "delegated_decisions.server_allows_per_hour", group: LimitDelegated, unit: LimitCount,
+		read: func(c *config.Company) float64 {
+			return float64(c.DelegatedDecisions.Limits().ServerAllowsPerHour)
+		}},
+}
+
 // limitsAnswer is every row read off c, beside the engine's defaults.
 func limitsAnswer(c *config.Company) LimitsAnswer {
+	return LimitsAnswer{Limits: limitRows(c, limits)}
+}
+
+// limitRows is each row of table read off c, beside the engine's defaults.
+func limitRows(c *config.Company, table []limit) []LimitRow {
 	defaults := config.DefaultCompany()
-	out := LimitsAnswer{Limits: make([]LimitRow, 0, len(limits))}
-	for _, l := range limits {
+	out := make([]LimitRow, 0, len(table))
+	for _, l := range table {
 		value, def := l.read(c), l.read(&defaults)
 		row := LimitRow{
 			Key: l.key, Group: l.group, Unit: l.unit,
@@ -172,7 +195,7 @@ func limitsAnswer(c *config.Company) LimitsAnswer {
 		if r, ok := config.RangeOf(l.key); ok && row.Settable {
 			row.Range = &r
 		}
-		out.Limits = append(out.Limits, row)
+		out = append(out, row)
 	}
 	return out
 }

@@ -102,7 +102,7 @@ func TestAParkedRunSaysWhomItIsPutToAndWhoMayAnswerIt(t *testing.T) {
 	up.HeldCall = &escalated
 	late := run
 	lateHeld := held
-	lateHeld.HeldAt = now.Add(-delegated.Deadline - time.Minute)
+	lateHeld.HeldAt = now.Add(-delegated.DefaultDeadline - time.Minute)
 	late.HeldCall = &lateHeld
 
 	founder := asPerson(t, "founder@example.com", "founder", iam.KindPerson)

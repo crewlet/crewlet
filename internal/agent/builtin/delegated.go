@@ -39,14 +39,6 @@ import (
 // ReviewDelegatedTool is the verdict tool, named after its authority row.
 const ReviewDelegatedTool = string(authz.ActionReviewDelegated)
 
-// ServerAllowsPerHour bounds the allows of ssh_operate commands on one server
-// in one clock hour (UTC), past which a command goes to people.
-//
-// TEN: a routine operation on one server is a handful of commands an hour (a
-// restart, a deploy step, a cleanup); an eleventh in the same hour is an
-// incident or a loop, either of which a person should see.
-const ServerAllowsPerHour = 10
-
 // DelegatedVerdict is one decision on a delegated request as the access log
 // keeps it: who gave it and how, what was asked and what took effect.
 type DelegatedVerdict struct {
@@ -94,6 +86,8 @@ type DelegatedDesk interface {
 	// Release is what the rule naming kind adds to a merge's or a deploy's
 	// conditions: its always-escalate paths and its required checks.
 	Release(kind delegated.Kind) delegated.Release
+	// Limits are the limits the company holds every delegate to now.
+	Limits() delegated.Limits
 	// Held is the active run whose row holds held call id.
 	Held(ctx context.Context, id string) (sandbox.PendingRun, bool, error)
 	// Arguments are run's held call's arguments, opened from their seal.
@@ -402,13 +396,14 @@ func (t *reviewDelegated) overrule(ctx context.Context, turn *turnctx.Turn, run 
 	if len(overruled) > 0 {
 		return overruled, said
 	}
+	limits := desk.Limits()
 	caps := []struct {
 		bucket, word, sentence string
 		limit                  int
 	}{
 		{"delegated:" + string(kind) + ":" + delegate, delegated.OverruledRateLimit,
 			fmt.Sprintf("%s already allowed %d %s requests this hour, the most a delegate may.", delegate,
-				delegated.DecisionsPerHour, kind), delegated.DecisionsPerHour},
+				limits.AllowsPerHour, kind), limits.AllowsPerHour},
 	}
 	if kind == delegated.KindSSHOperate {
 		caps = append(caps, struct {
@@ -416,7 +411,7 @@ func (t *reviewDelegated) overrule(ctx context.Context, turn *turnctx.Turn, run 
 			limit                  int
 		}{"delegated:" + string(delegated.KindSSHOperate) + ":server:" + host, delegated.OverruledServerRateLimit,
 			fmt.Sprintf("Delegates already allowed %d commands on %s this hour, the most they may.",
-				ServerAllowsPerHour, host), ServerAllowsPerHour})
+				limits.ServerAllowsPerHour, host), limits.ServerAllowsPerHour})
 	}
 	for _, c := range caps {
 		ok, err := desk.Allow(ctx, c.bucket, c.limit, now)

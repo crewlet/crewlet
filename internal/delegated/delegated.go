@@ -18,15 +18,16 @@
 // confidence; [Combine] is what a request's answers come to, and every limit
 // that turns an allow into an escalation is the engine's, checked before the
 // verdict acts: a request the delegate made, asked for, handed on or leads; a
-// cap per kind and delegate per hour ([DecisionsPerHour]); a request that
+// cap per kind and delegate per hour ([Limits.AllowsPerHour]); a request that
 // touches access, budgets or spend, data deletion, secrets or the company
 // document, or one on an item labelled security, privacy or legal; and each
 // kind's own conditions, read from the server or the code host when the
 // verdict is given ([Unmet]), with what the kind's rule adds to them
 // ([Release]): its own paths, and the checks it requires on a repository's
 // branch where the code host requires none ([RequiredChecks]). A request no
-// delegate answered in [Deadline], and every request once delegated decisions
-// are turned off, goes to people.
+// delegate answered in [Limits.Deadline], and every request once delegated
+// decisions are turned off, goes to people. The company document may move each
+// of [Limits] within a range and never switch one off ([DefaultLimits]).
 //
 // # One open request per subject
 //
@@ -50,6 +51,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Kind is what a request is for: its act.
@@ -232,17 +235,54 @@ func SensitiveLabel(labels []string) (string, bool) {
 	return "", false
 }
 
-// DecisionsPerHour bounds one delegate's allows of one kind in one clock hour
-// (UTC), past which its requests go to people.
+// Limits are the bounds the engine holds every delegate to, whatever a
+// delegate answers: the company document may move each within the range its
+// validator holds it to (config's delegated_decisions), never switch one off.
+type Limits struct {
+	// Deadline is how long a request waits on its delegates before it goes
+	// to people.
+	Deadline time.Duration
+	// AllowsPerHour bounds one delegate's allows of one kind in one clock
+	// hour (UTC), past which its requests go to people.
+	AllowsPerHour int
+	// ServerAllowsPerHour bounds the allows of ssh_operate commands on one
+	// server in one clock hour (UTC), past which a command goes to people.
+	ServerAllowsPerHour int
+}
+
+// DefaultLimits are the limits of a company document that sets none.
+func DefaultLimits() Limits {
+	return Limits{Deadline: DefaultDeadline, AllowsPerHour: DefaultAllowsPerHour,
+		ServerAllowsPerHour: DefaultServerAllowsPerHour}
+}
+
+// DeadlineWords is the deadline as a person reads it: whole minutes as
+// minutes, anything else as seconds.
+func (l Limits) DeadlineWords() string {
+	if l.Deadline%time.Minute == 0 {
+		return words.Count(int(l.Deadline/time.Minute), "minute", "minutes")
+	}
+	return words.Count(int(l.Deadline/time.Second), "second", "seconds")
+}
+
+// DefaultAllowsPerHour is [Limits.AllowsPerHour] where the document sets none.
 //
 // THIRTY: one allow every two minutes, all hour. Requests past that are coming
 // faster than any reviewer reads them, which is a loop or an incident.
-const DecisionsPerHour = 30
+const DefaultAllowsPerHour = 30
 
-// Deadline is how long a request waits on its delegates before it goes to
-// people: a delegate's turn starts within a minute on an idle seat, and
-// fifteen covers a launch retry and a queue of several requests.
-const Deadline = 15 * time.Minute
+// DefaultServerAllowsPerHour is [Limits.ServerAllowsPerHour] where the
+// document sets none.
+//
+// TEN: a routine operation on one server is a handful of commands an hour (a
+// restart, a deploy step, a cleanup); an eleventh in the same hour is an
+// incident or a loop, either of which a person should see.
+const DefaultServerAllowsPerHour = 10
+
+// DefaultDeadline is [Limits.Deadline] where the document sets none: a
+// delegate's turn starts within a minute on an idle seat, and fifteen covers a
+// launch retry and a queue of several requests.
+const DefaultDeadline = 15 * time.Minute
 
 // DefaultSampleOneIn is the spot-check rate a rule naming none takes: one
 // decision in ten shown to people after the fact, a handful a week for a busy

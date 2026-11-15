@@ -980,7 +980,6 @@ var contract = []Entry{
 	{"DelegatedRule", ReadInterface, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
 	{"DelegatedRequiredChecks", ReadInterface,
 		"internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
-	{"DelegatedLimits", ReadInterface, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
 	{"DelegatedVerdictRow", ReadInterface,
 		"internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
 	{"DelegatedAct", ReadUnion, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
