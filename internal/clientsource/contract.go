@@ -112,6 +112,7 @@ var contract = []Entry{
 	{"PAUSED_SEAT_CLASSES", ReadLiteral, "internal/advisor.TestTheDashboardKnowsEveryClassAPausedSeatRaises"},
 	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"PROJECT_FILE_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_OPTION_MAX_BYTES", ReadScalar,

@@ -2997,7 +2997,13 @@ writers putting the same path contend, and exactly one wins.
 
 Seats reach them with the four tools in [What a seat can do](#what-a-seat-can-do);
 a person reaches them on the dashboard's project page, through their own
-assistant (the same four tools), or over REST —
+assistant (the same four tools), or over REST. On the project's **Files** lens,
+**Upload** puts each file you pick at the project's top level under its own
+name (a name the project already keeps is refused, since replacing is the
+row's), **Replace** on a row writes a new copy over that file and **Remove**
+takes it out, both naming the version on screen so a file somebody changed
+since is refused rather than overwritten. A file past the size cap is refused
+before its bytes are sent. Over REST,
 [`/worklet/files`](../reference/api-endpoints.md#project-files) takes an upload and
 streams a download without either passing through a model.
 

@@ -5577,6 +5577,7 @@ a tool arrives in it with the control that sends it. The controls
 | Message, where the company runs the engine's own chat and you hold Chatlet (chat's New direct message, the seat chosen) | A seat's page and peek | `open_dm{to}`: opening one that exists is that conversation |
 | Message elsewhere, and Ask as a task in More where Message is the conversation (the same sheet, titled "Ask {seat}") | A seat's page and peek | `create_work_item{title, project, assignee, ask, …}`: the answer lands in your Inbox |
 | Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
+| Upload · Replace · Remove (a file) | A project's Files | `PUT /worklet/files/{project}/{path}` with the file's bytes (Replace with `If-Match` on the version on screen) / `DELETE` with `If-Match`, each keyed |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Edit · Delete (your own comment) | A task's activity, on a comment you wrote, and not on a task in the trash | `PATCH /worklet/items/{id}/comments/{cid} {body}`, rewritten in place where Enter saves / `DELETE` on the same address after a confirmation, each keyed; Delete is not offered on a question or an answer, which the engine never takes down |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
