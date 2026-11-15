@@ -294,6 +294,21 @@ export function ViewerProvider({ children }: { children: ReactNode }) {
 }
 
 /**
+ * Whether a remark (a task's comment, a page's) is the reader's own: written
+ * under the name their writes are recorded under (`iam.ActorFor`), their seat
+ * when the directory binds them to one ([ViewerState.owner]) or, for a login
+ * acting as itself, that login. An engine's remark (no author) is nobody's.
+ * The one rule both threads offer Edit and Delete by.
+ */
+export function ownsRemark(
+  remark: { author?: string | null },
+  viewer: Pick<ViewerState, "owner" | "login">,
+): boolean {
+  const author = remark.author ?? "";
+  return author !== "" && (author === viewer.owner || author === viewer.login);
+}
+
+/**
  * Who the frame read this browser as.
  *
  * THROWS OUTSIDE A [ViewerProvider] rather than asking for itself, as the

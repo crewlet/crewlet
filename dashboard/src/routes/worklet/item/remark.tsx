@@ -29,25 +29,13 @@ import { useState, type ReactNode } from "react";
 import { Button, Callout, Composer, Modal, Text, useToast } from "@crewlethq/ui";
 import { PencilGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { ownsRemark, useViewer } from "~/lib/viewer.ts";
 import { pathSegment, type WorkComment, type WorkItem } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
 
 /** The remark's own address on its task. */
 export function remarkRoute(item: Pick<WorkItem, "id">, comment: Pick<WorkComment, "id">): string {
   return `/worklet/items/${pathSegment(item.id)}/comments/${pathSegment(comment.id)}`;
-}
-
-/**
- * Whether a remark is the reader's own: written under the name their writes
- * are recorded under. An engine's remark (no author) is nobody's.
- */
-export function ownsRemark(
-  comment: Pick<WorkComment, "author">,
-  viewer: { owner: string; login: string },
-): boolean {
-  const author = comment.author;
-  return author !== "" && (author === viewer.owner || author === viewer.login);
 }
 
 /** Whether the engine takes a remark down: never one that asks or answers. */

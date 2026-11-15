@@ -15,16 +15,43 @@
  * other row of a page is: a person comments AS their seat, so the author is
  * the seat's handle, and a credential bound to no seat comments under its
  * login. A comment with no author is the engine's.
+ *
+ * THE READER'S OWN REMARK IS EDITED AND TAKEN DOWN IN PLACE, by the kit's
+ * thread: an edit is `PATCH /doclet/pages/{id}/comments/{cid}` with the new
+ * words and a removal `DELETE` on the same address, each keyed so a retry
+ * after a lost answer is the same write. A remark is the reader's when its
+ * author is the name their writes are recorded under ([ownsRemark]); who may
+ * is the engine's rule, and its refusal is said in a toast, since the press
+ * came from a control that closes when it lands.
  */
 
 import { useMemo } from "react";
-import { CommentThread, type CommentThreadComment } from "@crewlethq/ui";
+import { CommentThread, useToast, type CommentThreadComment } from "@crewlethq/ui";
 import { RefusalNote } from "~/components/WriteButton.tsx";
+import { useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { indexOrg, principalOfSeat } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
-import type { PageComment } from "~/protocol/index.ts";
+import { ownsRemark, useViewer } from "~/lib/viewer.ts";
+import { pathSegment, type PageComment } from "~/protocol/index.ts";
+import { session } from "~/protocol/session.ts";
+
+/** A remark's own address on its page. */
+export function pageRemarkRoute(pageID: string, commentID: string): string {
+  return `/doclet/pages/${pathSegment(pageID)}/comments/${pathSegment(commentID)}`;
+}
+
+/**
+ * A keyed page write that landed: the page and its thread are asked again,
+ * past the position it landed at, as an act's reads are.
+ */
+function landed(answer: KeyedAnswer | null): boolean {
+  if (answer?.kind !== "done") return false;
+  const position = typeof answer.body.position === "string" ? answer.body.position : null;
+  session.written("pages", position, ["knowledge"]);
+  return true;
+}
 
 export function PageCommentThread({
   pageID,
@@ -38,18 +65,45 @@ export function PageCommentThread({
   now: number;
 }) {
   const write = useAct("comment_on_page");
+  const remark = useKeyedGesture();
+  const toast = useToast();
+  const viewer = useViewer();
   const org = useOrg();
   const rows = useMemo<CommentThreadComment[]>(() => {
     const seats = indexOrg(org).byHandle;
-    return comments.map((c) => ({
-      id: c.id,
-      author: c.author ? principalOfSeat(seats.get(c.author), c.author) : null,
-      body: renderMarkdown(c.body),
-      createdAt: c.created_at,
-      editedAt: c.updated_at,
-      replyTo: c.reply_to,
-    }));
-  }, [comments, org]);
+    return comments.map((c) => {
+      const own = ownsRemark(c, viewer);
+      return {
+        id: c.id,
+        author: c.author ? principalOfSeat(seats.get(c.author), c.author) : null,
+        body: renderMarkdown(c.body),
+        createdAt: c.created_at,
+        editedAt: c.updated_at,
+        replyTo: c.reply_to,
+        source: c.body,
+        editable: own,
+        removable: own,
+      };
+    });
+  }, [comments, org, viewer]);
+
+  // A REFUSAL IS SAID IN A TOAST, in the engine's words: the control that made
+  // the press stays where it was, and the thread keeps the words typed.
+  const said = (answer: KeyedAnswer | null, done: string): boolean => {
+    if (landed(answer)) {
+      toast.ok(done);
+      return true;
+    }
+    if (answer && answer.kind !== "done") {
+      toast.show({
+        variant: answer.kind === "unknown" ? "warning" : "danger",
+        title: answer.kind === "unknown" ? "Not confirmed yet" : "Not changed",
+        message: answer.text,
+        duration: 0,
+      });
+    }
+    return false;
+  };
 
   return (
     <CommentThread
@@ -66,6 +120,22 @@ export function PageCommentThread({
         );
         return !!result && (result.kind === "applied" || result.kind === "pending");
       }}
+      onEdit={async (comment, body) =>
+        said(
+          await remark.run({
+            method: "PATCH",
+            path: pageRemarkRoute(pageID, comment.id),
+            body: { body },
+          }),
+          `Edited your comment on “${title}”`,
+        )
+      }
+      onRemove={async (comment) =>
+        said(
+          await remark.run({ method: "DELETE", path: pageRemarkRoute(pageID, comment.id) }),
+          `Deleted your comment on “${title}”`,
+        )
+      }
       disabledReason={write.access.can ? undefined : write.access.reason}
       busy={write.busy}
       hint="The page’s watchers are told, and anyone you mention."
