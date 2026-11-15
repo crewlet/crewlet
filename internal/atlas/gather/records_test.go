@@ -293,6 +293,74 @@ func TestRecordsJoinTheEntryTheyAreAbout(t *testing.T) {
 	}
 }
 
+// staleNodes is fakeNodes whose records were written at another presence
+// epoch than the one each node holds now: a node that restarted and has not
+// written its record yet.
+type staleNodes struct{ fakeNodes }
+
+func (s staleNodes) NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error) {
+	records, err := s.fakeNodes.NodeStatusRecords(ctx)
+	for i := range records {
+		records[i].Epoch++
+	}
+	return records, err
+}
+
+// unreadNodes is fakeNodes whose status records cannot be read.
+type unreadNodes struct{ fakeNodes }
+
+func (unreadNodes) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+	return nil, errors.New("records unavailable")
+}
+
+// A NODE'S STATUS RECORD COUNTS ONLY AT ITS PRESENCE'S EPOCH, AND ONE NOT READ
+// IS SAID. What a node says of its tools and its models joins the entries only
+// while the node holds its presence at the epoch the record was written under:
+// an earlier incarnation's record — a failed tool server, a failing model —
+// raises nothing, though the node is still drawn from its presence. And records
+// the store could not answer leave the same entries unjudged and the nodes'
+// source said to be read in part, never whole.
+//
+// Mutations: join the records by node alone, or drop the records' read error,
+// and this is red.
+func TestANodesRecordCountsOnlyAtItsEpochAndAnUnreadOneIsSaid(t *testing.T) {
+	t.Parallel()
+	c := company()
+	base := records(t, c)
+	nodes := base.NodeStatuses.(fakeNodes)
+	for name, statuses := range map[string]gather.NodeStatuses{
+		"an earlier epoch's record": staleNodes{nodes}, "unreadable records": unreadNodes{nodes},
+	} {
+		src := base
+		src.NodeStatuses = statuses
+		a := read(t, c, src)
+		for _, key := range []struct {
+			kind atlas.Kind
+			key  string
+		}{{atlas.KindToolServer, "mcp/files"}, {atlas.KindModel, "llm/main"}} {
+			e, ok := a.View.Find(atlas.MustRef(key.kind, key.key).ID())
+			if !ok {
+				t.Fatalf("%s: %s is not in the atlas", name, key.key)
+			}
+			for _, s := range e.Signals {
+				if s.Kind == atlas.SignalToolServerDown || s.Kind == atlas.SignalModelFailing {
+					t.Errorf("%s: %s raised %s off a record no reader counts", name, key.key, s.Kind)
+				}
+			}
+		}
+		if _, ok := a.View.Find(atlas.MustRef(atlas.KindHost, "crewlet/n0").ID()); !ok {
+			t.Errorf("%s: the live node is not drawn from its presence", name)
+		}
+		i := slices.IndexFunc(a.Coverage, func(c gather.Coverage) bool { return c.Source == gather.SourceNodes })
+		unread := name == "unreadable records"
+		if i < 0 || a.Coverage[i].Complete == unread {
+			t.Errorf("%s: the nodes' source reads %+v, want complete %v", name, a.Coverage, !unread)
+		} else if unread && !strings.Contains(a.Coverage[i].Reason, "records unavailable") {
+			t.Errorf("%s: the nodes' source says %q, want the records' error", name, a.Coverage[i].Reason)
+		}
+	}
+}
+
 // AN EMAIL ADDRESS IN A RECORD IS NEVER READ: a vendor account's name, the
 // account an agent's lane observed, who signed a tool server in, who ran a
 // test, a model plan's sign-in account and who asked for an integration all
