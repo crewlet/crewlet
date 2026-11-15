@@ -143,7 +143,7 @@ Crewlet records each role by name and role ID and never adopts a role by its nam
 A level is the safe default. When an agent needs a permission no level holds, give it one AWS managed policy beside its level, instead of a higher level:
 
 - **On the Agents tab:** open the agent's row, choose **Add grant**, pick the policy from AWS's own list, and how long: 4 hours, 24 hours, 7 days, or permanent.
-- **From the agent's request:** when AWS refuses a call with `AccessDenied`, the agent asks with `request_access`, naming the policy and why. You answer in your Inbox: **Grant for this change** (it lapses after the hours shown), **Add to this agent permanently**, or **Not now**. Either grant opens the exact change for you to apply first.
+- **From the agent's request:** when AWS refuses a call with `AccessDenied`, the agent asks with `request_access`, naming the policy and why. You answer in your Inbox: **Grant for this change** (it lapses after the hours shown), **Add to this agent permanently**, or **Not now**. Either grant shows the exact grant first, and **Grant** approves it: the engine saves it and only then tells the agent yes.
 
 What Crewlet does:
 
