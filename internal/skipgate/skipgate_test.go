@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ran is the package set a case says the run covered.
@@ -592,10 +593,14 @@ func TestEveryAllowanceIsWellFormed(t *testing.T) {
 // internal/solo/partition reads this file to decide which packages start
 // first, so a FAILED package's elapsed time, which stops wherever the failure
 // stopped it, would teach the next run that a package is short because it
-// broke, and start it late. A package cut off mid-run has no result to time at
-// all. And a package with no test files is in the half like any other, so it
-// is timed (as a zero) rather than left out, where it would weigh the half's
-// median.
+// broke, and start it late; its tests go with it, the ones that passed
+// included. A package cut off mid-run has no result to time at all. And a
+// package with no test files is in the half like any other, so it is timed
+// (as a zero) rather than left out, where it would weigh the half's median.
+//
+// Under each package that passed, its TOP-LEVEL tests that passed or skipped,
+// in name order: a subtest is inside its parent's seconds, so a line of its
+// own would count it twice.
 func TestTheTimingsTimeWhatPassed(t *testing.T) {
 	t.Parallel()
 
@@ -608,7 +613,13 @@ func TestTheTimingsTimeWhatPassed(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"Action":"start","Package":"` + passed + `"}`,
 		`{"Action":"run","Package":"` + passed + `","Test":"TestX"}`,
+		`{"Action":"run","Package":"` + passed + `","Test":"TestX/sub"}`,
+		`{"Action":"pass","Package":"` + passed + `","Test":"TestX/sub","Elapsed":4}`,
 		`{"Action":"pass","Package":"` + passed + `","Test":"TestX","Elapsed":12.1}`,
+		`{"Action":"run","Package":"` + passed + `","Test":"TestSkipped"}`,
+		`{"Action":"skip","Package":"` + passed + `","Test":"TestSkipped","Elapsed":0.004}`,
+		`{"Action":"run","Package":"` + passed + `","Test":"TestB"}`,
+		`{"Action":"pass","Package":"` + passed + `","Test":"TestB","Elapsed":0.5}`,
 		`{"Action":"pass","Package":"` + passed + `","Elapsed":12.5}`,
 		`{"Action":"skip","Package":"` + noTests + `","Elapsed":0}`,
 		`{"Action":"run","Package":"` + failed + `","Test":"TestY"}`,
@@ -624,7 +635,12 @@ func TestTheTimingsTimeWhatPassed(t *testing.T) {
 	if err := writeTimings(&got, r); err != nil {
 		t.Fatal(err)
 	}
-	if want := passed + "\t12.500\n" + noTests + "\t0.000\n"; got.String() != want {
+	want := passed + "\t12.500\n" +
+		passed + "\tTestB\t0.500\n" +
+		passed + "\tTestSkipped\t0.004\n" +
+		passed + "\tTestX\t12.100\n" +
+		noTests + "\t0.000\n"
+	if got.String() != want {
 		t.Errorf("timings =\n%s\nwant\n%s", got.String(), want)
 	}
 }
@@ -1041,5 +1057,36 @@ func TestTheVerdictNamesAPackageThatFailedWithNoFailingTest(t *testing.T) {
 					"explanation, which buries the name that is the answer:\n%s", note)
 			}
 		})
+	}
+}
+
+// THE CPU LINE SAYS WHAT THE COMMAND USED, AND SAYS SO WHEN IT CANNOT.
+//
+// The line is how a CI log tells a CPU-bound shard from one that waits: the
+// CPU used over the wall time is the average number of busy CPUs, printed
+// against the CPUs the run had. A command that never exited must not print a
+// zero, which reads as a run that sat idle, and a run too short to have a wall
+// time must not divide by it.
+func TestTheCPULineSaysWhatTheCommandUsed(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct {
+		used, wall time.Duration
+		cpus       int
+		want       string
+	}{
+		{3612 * time.Second, 1057 * time.Second, 4,
+			"skipgate: the run used 3612 CPU-seconds in 1057 s, 3.4 of 4 CPUs busy on average"},
+		{300 * time.Second, 1200 * time.Second, 4,
+			"skipgate: the run used 300 CPU-seconds in 1200 s, 0.2 of 4 CPUs busy on average"},
+		{0, 0, 2,
+			"skipgate: the run used 0 CPU-seconds in 0 s, 0.0 of 2 CPUs busy on average"},
+	} {
+		if got := cpuLine(c.used, c.wall, c.cpus); got != c.want {
+			t.Errorf("cpuLine(%v, %v, %d) =\n%q\nwant\n%q", c.used, c.wall, c.cpus, got, c.want)
+		}
+	}
+	if got, want := cpuUse(nil, time.Minute, 4), "skipgate: the command did not exit, so the CPU it used is unknown"; got != want {
+		t.Errorf("cpuUse(nil) = %q, want %q", got, want)
 	}
 }

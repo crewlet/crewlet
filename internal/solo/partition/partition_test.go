@@ -249,12 +249,20 @@ func TestAnUnmeasuredPackageWeighsTheMedianOfItsOwnHalf(t *testing.T) {
 func TestAWeightsFileIsReadStrictly(t *testing.T) {
 	t.Parallel()
 
-	got, err := readWeights(strings.NewReader("x/a\t12.5\n\nx/b\t0\nx/c\t3\n"), "w.tsv")
+	got, err := readWeights(strings.NewReader("x/a\t12.5\nx/a\tTestOne\t9\nx/a\tExampleTwo\t0.001\n\n"+
+		"x/b\t0\nx/c\t3\nx/c\tFuzzThree\t2.5\n"), "w.tsv")
 	if err != nil {
 		t.Fatalf("a well-formed file was refused: %v", err)
 	}
-	if want := map[string]float64{"x/a": 12.5, "x/b": 0, "x/c": 3}; !maps.Equal(got, want) {
-		t.Errorf("read %v, want %v", got, want)
+	if want := map[string]float64{"x/a": 12.5, "x/b": 0, "x/c": 3}; !maps.Equal(got.packages, want) {
+		t.Errorf("read the packages %v, want %v", got.packages, want)
+	}
+	wantTests := map[string]map[string]float64{
+		"x/a": {"TestOne": 9, "ExampleTwo": 0.001},
+		"x/c": {"FuzzThree": 2.5},
+	}
+	if !maps.EqualFunc(got.tests, wantTests, maps.Equal) {
+		t.Errorf("read the tests %v, want %v", got.tests, wantTests)
 	}
 
 	for name, c := range map[string]struct{ text, says string }{
@@ -262,11 +270,19 @@ func TestAWeightsFileIsReadStrictly(t *testing.T) {
 		"no path":           {"\t12\n", "w.tsv:1"},
 		"a path with space": {"x/a b\t12\n", "w.tsv:1"},
 		"not a number":      {"x/a\t12\nx/b\tslow\n", "w.tsv:2"},
-		"two tabs":          {"x/a\t1\t2\n", "w.tsv:1"},
+		"three tabs":        {"x/a\tTestA\t1\t2\n", "w.tsv:1"},
+		"no test name":      {"x/a\t1\nx/a\t\t2\n", "w.tsv:2"},
+		"not a test's name": {"x/a\t1\nx/a\t1\t2\n", "not a top-level test"},
+		"a subtest":         {"x/a\t1\nx/a\tTestA/sub\t2\n", "not a top-level test"},
+		"a test with space": {"x/a\t1\nx/a\tTest A\t2\n", "not a top-level test"},
+		"a test's seconds":  {"x/a\t1\nx/a\tTestA\tslow\n", "w.tsv:2"},
 		"negative":          {"x/a\t-1\n", "non-negative"},
 		"NaN":               {"x/a\tNaN\n", "finite"},
 		"infinite":          {"x/a\t+Inf\n", "finite"},
 		"named twice":       {"x/a\t1\nx/b\t2\nx/a\t3\n", "named twice"},
+		"a test twice":      {"x/a\t1\nx/a\tTestA\t1\nx/a\tTestA\t2\n", "x/a TestA is named twice"},
+		"an untimed package": {"x/a\t1\nx/b\tTestB\t2\nx/b\tTestC\t2\n",
+			"w.tsv:2: x/b times tests of a package it does not time"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -432,13 +448,16 @@ func TestMergeJoinsDisjointTimingsAndRefusesOverlap(t *testing.T) {
 	t.Parallel()
 
 	got, err := merge([]timings{
-		{"shard-2.tsv", []byte("x/b\t2.000\nx/d\t0.000\n")},
-		{"shard-1.tsv", []byte("x/a\t1.500\n\nx/c\t3.250\n")},
+		{"shard-2.tsv", []byte("x/b\t2.000\nx/b\tTestZ\t1.000\nx/b\tTestA\t1.500\nx/d\t0.000\n")},
+		{"shard-1.tsv", []byte("x/a\t1.500\nx/a\tTestOnly\t1.400\n\nx/c\t3.250\n")},
 	})
 	if err != nil {
 		t.Fatalf("disjoint timings were refused: %v", err)
 	}
-	if want := "x/a\t1.500\nx/b\t2.000\nx/c\t3.250\nx/d\t0.000\n"; string(got) != want {
+	want := "x/a\t1.500\nx/a\tTestOnly\t1.400\n" +
+		"x/b\t2.000\nx/b\tTestA\t1.500\nx/b\tTestZ\t1.000\n" +
+		"x/c\t3.250\nx/d\t0.000\n"
+	if string(got) != want {
 		t.Errorf("merged\n%q\nwant\n%q", got, want)
 	}
 	if _, err := readWeights(strings.NewReader(string(got)), "merged"); err != nil {
@@ -452,6 +471,10 @@ func TestMergeJoinsDisjointTimingsAndRefusesOverlap(t *testing.T) {
 		"a package two runners timed": {
 			[]timings{{"one.tsv", []byte("x/a\t1\nx/b\t2\n")}, {"two.tsv", []byte("x/b\t2\n")}},
 			"x/b is timed by both one.tsv and two.tsv",
+		},
+		"a test whose package another runner timed": {
+			[]timings{{"one.tsv", []byte("x/b\t2\n")}, {"two.tsv", []byte("x/a\t1\nx/b\tTestB\t2\n")}},
+			"two.tsv:2: x/b times tests of a package it does not time",
 		},
 		"a line the reader refuses": {
 			[]timings{{"one.tsv", []byte("x/a\t1\n")}, {"two.tsv", []byte("x/b 2\n")}},

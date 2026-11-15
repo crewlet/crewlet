@@ -25,8 +25,9 @@
 //
 // `-weights FILE` names the seconds each package's test binary took on a
 // measured run (`importpath<TAB>seconds`, what internal/skipgate's -timings
-// writes), and it changes the ORDER a half is printed in, longest first, and
-// nothing else. `go test` starts package runs strictly in command-line order —
+// writes, with a line per top-level test under each package that this reads
+// strictly and does not deal by), and it changes the ORDER a half is printed
+// in, longest first, and nothing else. `go test` starts package runs strictly in command-line order —
 // cmd/go chains a barrier action between consecutive runs, so run i starts
 // only once run i-1 has — and go list's order is alphabetical. Measured on CI
 // before this existed: internal/search (472s), internal/store (203s) and
@@ -70,7 +71,8 @@
 // one weights file, each read by the strict reader -weights uses. A package
 // two files name is refused, because the deal gives each package to one shard
 // and two timings of it mean two runners ran it. Lines are written as read,
-// sorted by import path as internal/skipgate writes them.
+// sorted by import path with each package's tests under it, as
+// internal/skipgate writes them.
 package main
 
 import (
@@ -147,15 +149,49 @@ func partition(pkgs []pkg) (parallel, solo []string) {
 	return parallel, solo
 }
 
-// readWeights parses a weights file: one `importpath<TAB>seconds` per line.
+// measurement is one weights file: each package's seconds, and the seconds of
+// each top-level test under it.
+//
+// tests is read and held to the same rules as packages, and is not dealt by
+// here: the partition deals whole packages, by packages alone. The test lines
+// travel with the file into the merged measurement, which is where a person
+// reads which tests a package's time goes to (the `test-weights` artifact).
+type measurement struct {
+	packages map[string]float64
+	tests    map[string]map[string]float64
+}
+
+// topLevelTest reports whether name is one `go test -json` gives a top-level
+// test, fuzz target or example: the three kinds a package's binary runs and
+// times. A subtest's name carries a slash, and a name with a space is not one
+// cmd/go prints.
+func topLevelTest(name string) bool {
+	if strings.ContainsAny(name, " /") {
+		return false
+	}
+	for _, kind := range []string{"Test", "Fuzz", "Example"} {
+		if strings.HasPrefix(name, kind) {
+			return true
+		}
+	}
+	return false
+}
+
+// readWeights parses a weights file: one `importpath<TAB>seconds` line per
+// package, and one `importpath<TAB>Test<TAB>seconds` line per top-level test
+// under it.
 //
 // STRICT, because the only producer is internal/skipgate's -timings and a line
 // it did not write is a bug somewhere upstream that would otherwise surface
 // as a mysteriously ordered run. A blank line is skipped (a file that ends
-// in one is still that file); anything else that is not a path, one tab and a
-// finite, non-negative number of seconds is refused naming the line, and so
-// is a path named twice — one run measures each package once, so two entries
-// are two runs spliced together and neither number is the measurement.
+// in one is still that file); anything else that is not a path, optionally a
+// top-level test's name ([topLevelTest]: a subtest is inside its parent's
+// seconds, so skipgate never writes one), and a finite, non-negative number of
+// seconds is
+// refused naming the line, and so is a package or a test named twice — one
+// run measures each once, so two entries are two runs spliced together and
+// neither number is the measurement — and a test whose package has no line of
+// its own, since skipgate times a test only under a package it timed.
 //
 // The rule can be tightened or loosened freely, because ci.yml keys the
 // measurement it keeps on a hash of this package's source and
@@ -166,33 +202,59 @@ func partition(pkgs []pkg) (parallel, solo []string) {
 // it accepts, since only a run whose half passed saves at all.
 //
 // Pure over a reader so the refusals can be stated directly.
-func readWeights(r io.Reader, name string) (map[string]float64, error) {
-	weights := map[string]float64{}
+func readWeights(r io.Reader, name string) (measurement, error) {
+	m := measurement{packages: map[string]float64{}, tests: map[string]map[string]float64{}}
+	firstTestLine := map[string]int{}
 	sc := bufio.NewScanner(r)
 	for line := 1; sc.Scan(); line++ {
 		text := sc.Text()
 		if text == "" {
 			continue
 		}
-		path, secs, ok := strings.Cut(text, "\t")
-		if !ok || path == "" || strings.ContainsAny(path, " \t") {
-			return nil, fmt.Errorf("%s:%d: %q is not `importpath<TAB>seconds` — "+
-				"the file internal/skipgate -timings writes is the only format read here", name, line, text)
+		fields := strings.Split(text, "\t")
+		if len(fields) < 2 || len(fields) > 3 || fields[0] == "" || strings.ContainsAny(fields[0], " ") {
+			return measurement{}, fmt.Errorf("%s:%d: %q is neither `importpath<TAB>seconds` nor "+
+				"`importpath<TAB>Test<TAB>seconds` — the file internal/skipgate -timings writes is the only format read here",
+				name, line, text)
 		}
+		path, secs := fields[0], fields[len(fields)-1]
 		w, err := strconv.ParseFloat(secs, 64)
 		if err != nil || math.IsNaN(w) || math.IsInf(w, 0) || w < 0 {
-			return nil, fmt.Errorf("%s:%d: %q is not a finite, non-negative number of seconds", name, line, secs)
+			return measurement{}, fmt.Errorf("%s:%d: %q is not a finite, non-negative number of seconds", name, line, secs)
 		}
-		if _, dup := weights[path]; dup {
-			return nil, fmt.Errorf("%s:%d: %s is named twice; a measured run times each package "+
-				"once, so this file is two runs spliced together", name, line, path)
+		if len(fields) == 2 {
+			if _, dup := m.packages[path]; dup {
+				return measurement{}, fmt.Errorf("%s:%d: %s is named twice; a measured run times each package "+
+					"once, so this file is two runs spliced together", name, line, path)
+			}
+			m.packages[path] = w
+			continue
 		}
-		weights[path] = w
+		test := fields[1]
+		if !topLevelTest(test) {
+			return measurement{}, fmt.Errorf("%s:%d: %q is not a top-level test's name "+
+				"(Test…, Fuzz… or Example…, with no space or slash)", name, line, test)
+		}
+		if _, dup := m.tests[path][test]; dup {
+			return measurement{}, fmt.Errorf("%s:%d: %s %s is named twice; a measured run times each test "+
+				"once, so this file is two runs spliced together", name, line, path, test)
+		}
+		if m.tests[path] == nil {
+			m.tests[path] = map[string]float64{}
+			firstTestLine[path] = line
+		}
+		m.tests[path][test] = w
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("read %s: %w", name, err)
+		return measurement{}, fmt.Errorf("read %s: %w", name, err)
 	}
-	return weights, nil
+	for _, path := range slices.Sorted(maps.Keys(m.tests)) {
+		if _, ok := m.packages[path]; !ok {
+			return measurement{}, fmt.Errorf("%s:%d: %s times tests of a package it does not time; "+
+				"skipgate writes a test's line only under its package's", name, firstTestLine[path], path)
+		}
+	}
+	return m, nil
 }
 
 // weigh gives every package of a half its weight, and says how many the
@@ -337,16 +399,19 @@ type timings struct {
 // them name.
 //
 // Each input is held to [readWeights] whole and its lines are kept as read, so
-// the output is exactly what internal/skipgate wrote, sorted by import path.
+// the output is exactly what internal/skipgate wrote: sorted by import path,
+// each package's line before its tests' lines, those in name order. A test
+// line travels with its package, which the reader holds to the same file, so
+// a package two inputs name is the one overlap there is to refuse.
 func merge(inputs []timings) ([]byte, error) {
 	from := map[string]string{}
 	var lines []string
 	for _, in := range inputs {
-		weights, err := readWeights(bytes.NewReader(in.data), in.name)
+		m, err := readWeights(bytes.NewReader(in.data), in.name)
 		if err != nil {
 			return nil, err
 		}
-		for _, p := range slices.Sorted(maps.Keys(weights)) {
+		for _, p := range slices.Sorted(maps.Keys(m.packages)) {
 			if other, dup := from[p]; dup {
 				return nil, fmt.Errorf("%s is timed by both %s and %s: two runners ran it, "+
 					"so their shards were not dealt from one partition", p, other, in.name)
@@ -359,10 +424,21 @@ func merge(inputs []timings) ([]byte, error) {
 			}
 		}
 	}
+	// By path, then the package's own line (no test field) before its tests.
+	key := func(line string) (path, test string) {
+		fields := strings.Split(line, "\t")
+		if len(fields) == 3 {
+			return fields[0], fields[1]
+		}
+		return fields[0], ""
+	}
 	slices.SortFunc(lines, func(a, b string) int {
-		pa, _, _ := strings.Cut(a, "\t")
-		pb, _, _ := strings.Cut(b, "\t")
-		return strings.Compare(pa, pb)
+		pa, ta := key(a)
+		pb, tb := key(b)
+		if c := strings.Compare(pa, pb); c != 0 {
+			return c
+		}
+		return strings.Compare(ta, tb)
 	})
 	var out bytes.Buffer
 	for _, line := range lines {
@@ -405,7 +481,8 @@ func list(ctx context.Context) ([]pkg, error) {
 	}
 }
 
-// loadWeights reads the -weights file, or answers nil when none was named.
+// loadWeights reads the -weights file's package seconds, or answers nil when
+// none was named.
 func loadWeights(path string) (map[string]float64, error) {
 	if path == "" {
 		return nil, nil
@@ -415,7 +492,8 @@ func loadWeights(path string) (map[string]float64, error) {
 		return nil, fmt.Errorf("-weights: %w (it is the TEST_WEIGHTS make variable; leave it empty to run without one)", err)
 	}
 	defer func() { _ = f.Close() }() // read-only: nothing a close could lose
-	return readWeights(f, path)
+	m, err := readWeights(f, path)
+	return m.packages, err
 }
 
 // runMerge is `partition merge FILE...`: the merged file goes to stdout.
