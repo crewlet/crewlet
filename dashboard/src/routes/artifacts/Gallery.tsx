@@ -389,9 +389,11 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
         empty={
           rows.length === 0 && pinned.items.length === 0
             ? trashed
-              ? {
+              ? // THE NOTE ABOVE SAYS WHO SEES THE TRASH AND HOW LONG AN
+                // ARTIFACT STAYS, so the empty state says how one gets here.
+                {
                   title: "Nothing in the trash",
-                  hint: `An artifact you trash stays here for ${TRASH_KEPT}, then is deleted.`,
+                  hint: "An artifact you move to the trash from its More menu waits here, ready to restore.",
                 }
               : filtered
                 ? noMatch(q.trim(), kind)

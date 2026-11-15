@@ -9037,8 +9037,12 @@ a.live-row:hover {
   margin-inline-start: auto;
 }
 
+/* WHAT THE TRASH IS, said once, under the toolbar and never pulled up into it:
+   the toolbar already takes back its host's gap (`.toolbar` in frame.css)
+   and is opaque over the content, so a negative top margin here slid the
+   line's upper half under the band. */
 .artifacts-trash-note {
-  margin: calc(-1 * var(--spacing-3)) 0 0;
+  margin: 0;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }

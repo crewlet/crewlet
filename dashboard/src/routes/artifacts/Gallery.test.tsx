@@ -235,6 +235,16 @@ test("the trash says when each went in and when it goes for good, and offers a r
   expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeTruthy();
 });
 
+// SAID ONCE: the line over the trash says who sees it and how long an
+// artifact stays, and the empty state under it does not repeat it.
+test("an empty trash says how long an artifact stays once, and how one gets there", () => {
+  items = [];
+  mount("yours", "#/artifacts/yours?status=trashed");
+  expect(screen.getByText("Nothing in the trash")).toBeTruthy();
+  expect(screen.getAllByText(/30 days/)).toHaveLength(1);
+  expect(screen.getByText(/from its More menu waits here/)).toBeTruthy();
+});
+
 // A ROW OPENS ON A PAGE OF ITS OWN in a new tab, with no opener; the trash's rows do not.
 test("a row's More opens the artifact's standalone page in a new tab", () => {
   asList();
