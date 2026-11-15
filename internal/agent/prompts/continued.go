@@ -230,12 +230,18 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 // call's like in the session could take the told call for it and lose it,
 // re-issuing nothing or reading it as a call that never ran.
 //
-// TRUE ON EVERY PATH, OF THE CALLS IT HEADS: each is one the session holds, so
-// it says the session shows them, never that it lacks one; and it says the
-// call in the other list is one of its own, made as well, so the two are never
-// read as one call shown twice. It names neither list, which differ by path
-// (the calls since a save point the session may already show, the late
-// calls), and needs neither: "another list of this message" is true of both.
+// WHAT IT CLAIMS, OF THE CALLS IT HEADS: each is one the save point holds
+// (internal/agent/runner's heldAt), never the call a person approved that the
+// brief's lead tells, which the engine made on the host and which runner keeps
+// off that side, so it says the session shows them, never that it lacks one;
+// and it says the call in the other list is one of its own, made as well, so
+// the two are never read as one call shown twice. "Shows" is the point's
+// claim, as exact as the point: the calls a Claude Code subagent made through
+// the bridge are held where its session was saved past them, while the main
+// thread a resumed session reads shows only the subagent's report of them. It
+// names neither list, which differ by path (the calls since a save point the
+// session may already show, the late calls), and needs neither: "another list
+// of this message" is true of both.
 const shownAgainHeader = "## Calls the session above shows, listed again" +
 	"\nThe session above shows each of these calls. Each is listed again because a call in another list" +
 	" of this message names the same tool with arguments that read alike here: that one is a call of its" +
