@@ -199,11 +199,13 @@
 // every call this bridge runs starts its answer the moment its tool starts
 // ([toolsession.Call.Running]): a progress on the call's own token, another
 // every [answerEvery], none once the tool has returned, on every server of
-// the opening. A call answered without running is answered at once and gets
-// none, and a request with no progress token gets its answer alone: both
-// harnesses that dial the bridge give one on every call (measured). A
-// progress that can no longer be written is the call's response gone, and the
-// call is recorded as one nobody waited for.
+// the opening; and one progress ahead of the answer however soon the tool
+// returns, since whether a call ran decides it ([binding.Call]). A call
+// answered without running is answered at once and gets none, and a request
+// with no progress token gets its answer alone: both harnesses that dial the
+// bridge give one on every call (measured). A progress that can no longer be
+// written is the call's response gone, and the call is recorded as one nobody
+// waited for.
 //
 // # How long a box waits for a call
 //
@@ -2180,12 +2182,19 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	// on the log, or an update the store did not take yet — is done after that
 	// answer, so the box waits for none of it ([binding.writeAhead],
 	// [binding.conclude]).
-	concluded := make(chan answer, 1)
+	//
+	// ITS TWO ANSWERS COME APART: notRun is the answer of a call its opening
+	// decided not to run ([binding.writeAhead]), which comes in place of its
+	// start, and concluded the answer of a call whose tool ran, which comes
+	// after it. On one channel, a tool that returned at once had its answer
+	// beside its start by the time the handler looked, and the runtime's pick
+	// between two ready cases skipped the call's first progress half the time.
+	notRun, concluded := make(chan answer, 1), make(chan answer, 1)
 	go func() {
 		defer o.calls.done(c)
 		refusal, admitted, after := o.writeAhead(c, entry, args, digest)
 		if admitted == nil {
-			concluded <- refusal
+			notRun <- refusal
 			if after != nil {
 				after()
 			}
@@ -2209,15 +2218,27 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	// its first progress, and telling those apart here would be this
 	// package's own idea of the surface's gates. Nil for a call no request
 	// carries.
+	//
+	// DECIDED BY WHETHER THE TOOL RAN, never by which ready case the runtime
+	// picks: a call is begun or refused, never both, so began and notRun are
+	// never ready together, however soon its tool returns; and an end that
+	// answered it decided under the opening's lock whether it had begun
+	// ([binding.endKeeping]), which unrun says once cut is closed. So a call
+	// that ran is told so once, before its answer, whichever came first.
+	if o.calls.answering != nil {
+		o.calls.answering(c.recorded)
+	}
 	select {
 	case <-c.began:
-		if in.Running != nil {
-			in.Running()
-		}
-	case a := <-concluded:
+	case a := <-notRun:
 		return c.answerOf(a)
 	case <-c.cut:
-		return c.endsAnswer()
+		if c.unrun {
+			return c.endsAnswer()
+		}
+	}
+	if in.Running != nil {
+		in.Running()
 	}
 	select {
 	case a := <-concluded:

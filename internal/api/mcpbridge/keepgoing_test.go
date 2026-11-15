@@ -266,6 +266,67 @@ func TestACallTheBridgeAnswersWithoutRunningGetsNoProgress(t *testing.T) {
 	}
 }
 
+// A CALL WHOSE TOOL RETURNS AT ONCE IS TOLD IT RAN, once and before its
+// answer, on the job's endpoint and on one of the seat's servers alike. Each
+// call's handler is held until the call is recorded, so its start and its
+// answer are both ready as the handler first looks, as a tool that returns at
+// once has them on a loaded runner; read off the wire in the order the box
+// reads it, every call's answer opens with one progress. Sixteen calls on
+// each, since the runtime picks between two ready cases at random.
+//
+// Mutation: hand a call that ran its answer on the channel a refusal takes,
+// and about half the calls are answered with no progress: the case passes one
+// run in 2^32.
+func TestACallWhoseToolReturnsAtOnceIsToldItRan(t *testing.T) {
+	t.Parallel()
+	const calls = 16
+	for _, tc := range []struct {
+		where string
+		open  func(t *testing.T) (bridge *mcpbridge.Bridge, url, tool string)
+	}{
+		{"on the job's endpoint", func(t *testing.T) (*mcpbridge.Bridge, string, string) {
+			g := newGated(t)
+			return g.bridge, g.url, "read_page"
+		}},
+		{"on one of the seat's servers", func(t *testing.T) (*mcpbridge.Bridge, string, string) {
+			f := newServersFixture(t)
+			return f.bridge, mcpbridge.ServerURL(f.endpoint, "github"), "create_issue"
+		}},
+	} {
+		t.Run(tc.where, func(t *testing.T) {
+			t.Parallel()
+			bridge, url, tool := tc.open(t)
+			mcpbridge.HoldAnswersUntilRecorded(bridge)
+			tap := &wireTap{next: httpxtest.Pool(t).Transport}
+			client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil)
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+				Endpoint: url, HTTPClient: &http.Client{Transport: tap},
+			}, nil)
+			if err != nil {
+				t.Fatalf("connect: %v", err)
+			}
+			t.Cleanup(func() { _ = sess.Close() })
+			for i := range calls {
+				token := fmt.Sprintf("at-once-%02d", i)
+				if res := <-callWithToken(ctx, sess, tool, map[string]any{}, token); res.IsError {
+					t.Fatalf("call %s failed: %q", token, text(res))
+				}
+			}
+			for i := range calls {
+				token := fmt.Sprintf("at-once-%02d", i)
+				answer := tap.answerTo(t, token)
+				progress, result := strings.Index(answer, "notifications/progress"), strings.Index(answer, `"result"`)
+				if n := strings.Count(answer, "notifications/progress"); n != 1 || progress > result {
+					t.Errorf("call %s was sent %d progress, the first at %d and its answer at %d; want one, "+
+						"before its answer:\n%s", token, n, progress, result, answer)
+				}
+			}
+		})
+	}
+}
+
 // boundedTool is a tool that declares the longest one call of it runs, as a
 // seat's MCP server's tools and `delegate` do.
 type boundedTool struct {

@@ -24,6 +24,7 @@ import (
 type serversFixture struct {
 	surface  *tools.Surface
 	ledger   *ledger
+	bridge   *mcpbridge.Bridge
 	endpoint string
 }
 
@@ -65,6 +66,7 @@ func openServers(t *testing.T, surface *tools.Surface, configure ...func(*mcpbri
 	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: server.URL,
 	})
+	f.bridge = bridge
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	mux.Handle(mcpbridge.ServerPattern, bridge.Handler())

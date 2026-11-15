@@ -38,6 +38,14 @@ func OpeningServers(s *Session) []*mcp.Server {
 // running ([binding.endKeeping]).
 func AwaitClosing(b *Bridge) { b.calls.closing.Wait() }
 
+// HoldAnswersUntilRecorded holds each call's handler on b, between starting
+// the call and waiting on it, until the call is recorded: its start and its
+// answer are then both ready as the handler first looks, as a tool that
+// returns at once has them on a loaded runner. Called before any call.
+func HoldAnswersUntilRecorded(b *Bridge) {
+	b.calls.answering = func(recorded <-chan struct{}) { <-recorded }
+}
+
 // The answers a call is handed as its opening ends, or after it ended.
 const (
 	EndedNote        = endedNote
