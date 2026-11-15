@@ -2490,7 +2490,13 @@ const (
 	// schedule writes, and the repository and room writes, merged on kit
 	// 0.126.3 with the train before it, measures 6132.4 KiB (6,279,549
 	// bytes), 124,606 bytes over the 6010.7 KiB it was built on: 6133 KiB.
-	treeBudget = 5<<20 + 1013<<10
+	// A Gitlet repository laid out as a code host lays one out (its Code tab
+	// with the latest commit across the files, the README and the About rail,
+	// a file's card with its blame runs, Clone, commits banded by day, the
+	// Changes tab and an empty repository's card), on a sheet of its own,
+	// added 16,455 bytes, script and sheet, and took it to 6148.8 KiB
+	// (6,296,321 bytes): 6149 KiB.
+	treeBudget = 5<<20 + 1029<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

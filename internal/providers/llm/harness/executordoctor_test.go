@@ -234,3 +234,43 @@ func TestTheReportShowsTheExecutorSection(t *testing.T) {
 		t.Errorf("the rendered report has no executor section:\n%s", rendered)
 	}
 }
+
+// A CLAUDE CODE EXECUTOR A ROOT ENGINE RUNS AS ROOT NEVER LAUNCHES, and the
+// smoke run cannot show it (it uses the deny-local-tools profile, not the
+// executor's bypassPermissions mode), so `doctor` is where it is caught. Only
+// the cells whose box runs as the engine's user are faulted.
+//
+// Mutation: drop the RunsAsRoot case, and `problems: none` comes back.
+func TestDoctorFaultsAClaudeCodeExecutorThatRunsAsRoot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		cell    string
+		root    bool
+		harness string
+		faulted bool
+	}{
+		{"direct", true, "claude-code", true},
+		{"container", true, "claude-code", true},
+		{"direct", false, "claude-code", false},
+		{"e2b", true, "claude-code", false},
+	} {
+		t.Run(tc.cell+"/"+tc.harness, func(t *testing.T) {
+			t.Parallel()
+			p := doctorEntry(t, tc.harness)
+			d := p.Diagnose(t.Context(), DiagnoseOptions{
+				ExecutorSeats:     []string{"swe"},
+				ExecutorHarnesses: []string{"claude-code", "opencode"},
+				Cell:              tc.cell,
+				BridgeURL:         "https://engine.example.com",
+				RunsAsRoot:        tc.root,
+			})
+			joined := strings.Join(d.Problems, "\n")
+			if got := strings.Contains(joined, "runs as root"); got != tc.faulted {
+				t.Errorf("faulted = %v, want %v:\n%s", got, tc.faulted, joined)
+			}
+			if tc.faulted && !strings.Contains(joined, "non-root user") {
+				t.Errorf("the problem does not name the fix:\n%s", joined)
+			}
+		})
+	}
+}

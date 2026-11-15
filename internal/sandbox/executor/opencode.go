@@ -574,6 +574,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`imported= spid= xpid= xout=%s url=`, loop)
 	b.WriteString(openCodeStops())
 	b.WriteString(openCodeBounded(paths, times))
+	b.WriteString(openCodeCursor())
 	// holds: the file is a whole, non-empty JSON array.
 	line(`holds() { t=$(tr -d '[:space:]' < "$1") || return 1; case "$t" in '['*']') [ "$t" != '[]' ];; *) return 1;; esac; }`)
 	// keep TAG FILE FLAGS...: one export into FILE, moved over the document
@@ -671,6 +672,12 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		line(`done`)
 	}
 
+	// WHERE THE RUN BEGAN IN THE SESSION IT CONTINUES, recorded before the
+	// run takes it up: see [openCodeRunStart].
+	if session.Continues {
+		b.WriteString(openCodeRunStart(paths, times, ans))
+	}
+
 	// WHAT THE CONTINUED SESSION HAD SPENT, asked of the server that runs it
 	// just before the run takes it up ([openCodeUsageBefore]) — after an
 	// import, so the totals it restored are among what is taken off. A run
@@ -702,6 +709,44 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`stop; trap - EXIT TERM INT HUP`)
 	line(`exit "$code"`)
 	return b.String()
+}
+
+// openCodeRunStart is the part of a run's script that records, for a run that
+// continues its session (`continued yes`), WHERE THE RUN BEGAN IN IT: the
+// newest message the session holds before the run takes it up, asked of the
+// run's own server once it listens and its MCP servers are ready — never on an
+// end request, which the bounded call refuses before the run
+// ([openCodeBounded]) — and written into the session's record as a `from` line
+// ([Paths.SessionRecord], [parseSessionRecord]), which the run's capture keeps
+// ([sandbox.RunStart]). Every message after it is then the run's own, and the
+// message itself, and every one before it, was there before the run.
+//
+// ONE MESSAGE, NEWEST FIRST, SAID SO: `session.message.list` with
+// `order=desc` and `limit=1`, the list read in the 2.0.32, 2.1.4 and 2.2.7
+// bundles as ordered by each message's place in its session, newest first
+// where no order is named; named here rather than left to a default. Its
+// answer goes through a file, never a variable: one message is bounded in
+// count, not in bytes. The message is named by the cursor the answer ends
+// with ([openCodeCursor]), its `next`, which encodes that message's id: so
+// nothing of the message itself is read.
+//
+// THE RECORD WRITTEN ANEW, `from` before `release`, beside the record and moved
+// over it whole, so a reader finds the old record or the new one: the reader
+// reads the record only as far as its release, which the script writes last,
+// and a release printed over several lines runs on after it, where no line of
+// it is read as `from`. A run that began its session writes none: its
+// `continued no` says the whole session is its own.
+//
+// AND ANYTHING THAT FAILS WRITES NO `from`: no answer, an answer with no
+// cursor, a call past its bound ([openCodeSessionCallWait], [openCodeBounded])
+// or one an end request ended, a record that could not be written. The
+// capture then names no start, which is "not known", never "the whole
+// session".
+func openCodeRunStart(paths Paths, times openCodeTimes, ans string) string {
+	rec := sandbox.ShellQuote(paths.SessionRecord())
+	next := sandbox.ShellQuote(paths.SessionRecord() + ".next")
+	return fmt.Sprintf(`if [ "$k" = yes ] && bounded start %[1]d e opencode api --server "$url" session.message.list --param sessionID="$sid" --param order=desc --param limit=1 > %[2]s 2> /dev/null; then rs=$(listcursor %[2]s); [ -z "$rs" ] || { printf 'id %%s\ncontinued %%s\nwhy %%s\nfrom %%s\nrelease %%s\n' "$sid" "$k" "$w" "$rs" "$v" > %[4]s && mv -f %[4]s %[3]s; }; fi; rm -f %[2]s %[4]s
+`, secs(times.sessionCall), ans, rec, next)
 }
 
 // openCodeAnswerFile is the file a run's script has OpenCode write the answers
@@ -989,15 +1034,12 @@ func openCodePack(paths Paths, staged, dest, server, call string) string {
 // which takes the first figure. No page is ever left out between two printed,
 // so no older figure is taken for a newer request.
 //
-// THE CURSOR IS READ AS TEXT, as the steers' ids are ([openCodeLeftoverSteers]),
-// since a box may have no JSON parser: the answer is `{"data": [...], "cursor":
-// {"previous": ..., "next": ...}}`, so its `next` is the last key of the whole
-// answer, read anchored at its end (base64url, which holds no quote), and a
-// `next` key inside a message's content is never it. An answer that ends
-// otherwise yields no cursor, and the asking stops: no figure, never a wrong one.
-// Measured on OpenCode 2.0.32 and 2.2.7 (testdata/opencode/<version>/context):
-// the answer is one line, ends with its cursor's `next`, and names a step by the
-// id the run's stream names it by (`part.messageID`).
+// THE CURSOR IS THE ANSWER'S OWN, read as every list answer's is
+// ([openCodeCursor]): an answer that ends otherwise yields no cursor, and the
+// asking stops: no figure, never a wrong one. Measured on OpenCode 2.0.32 and
+// 2.2.7 (testdata/opencode/<version>/context): the answer is one line, ends
+// with its cursor's `next`, and names a step by the id the run's stream names it
+// by (`part.messageID`).
 //
 // NEVER ON AN END REQUEST: a stop's, a loss's and a turn's cap end the round the
 // job ran, which no relaunch continues in place, and the pages would spend the
@@ -1024,11 +1066,45 @@ func openCodeContext(paths Paths, times openCodeTimes) string {
 	line(`  ctxleft=$((ctxleft - ctxsize))`)
 	line(`  printf '{"type":"%s","page":'; tr -d '\n' < "$ctxfile"; printf '}\n'`, openCodeContextEvent)
 	line(`  grep -q '"error"[[:space:]]*:[[:space:]]*{' "$ctxfile" || break`)
-	line(`  ctxcur=$(tr -d '\n' < "$ctxfile" | sed -n 's/.*"next"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)"[[:space:]]*}[[:space:]]*}[[:space:]]*$/\1/p')`)
+	line(`  ctxcur=$(listcursor "$ctxfile")`)
 	line(`  [ -n "$ctxcur" ] || break`)
 	line(`done`)
 	line(`rm -f "$ctxfile"`)
 	return b.String()
+}
+
+// openCodeCursorTail is how much of a list answer's end the script reads its
+// cursor from ([openCodeCursor]).
+//
+// ONE KIBIBYTE. The answer ends `"cursor":{"previous":"…","next":"…"}}`, each
+// cursor unpadded base64url of `{"id":…,"order":"desc","direction":…}`: 98
+// characters (`next`) and 103 (`previous`) for the 30-byte message ids OpenCode
+// mints (testdata/opencode/<version>/context), 143 and 148 for a 64-byte one.
+// The cursor object is then 226 and 316 bytes, 236 and 326 with `"cursor":` and
+// the closing brace; a pretty-printer's indentation adds tens. A kibibyte holds
+// the widest with that margin, and none of the data URI a message can carry,
+// which can run to tens of mebibytes.
+const openCodeCursorTail = 1 << 10
+
+// openCodeCursor is the script's one reading of a list answer's cursor,
+// `listcursor FILE`: the `next` of the answer in FILE, or nothing.
+//
+// READ AS TEXT, as the steers' ids are ([openCodeLeftoverSteers]), since a box
+// may have no JSON parser: the answer is `{"data": [...], "cursor": {"previous":
+// ..., "next": ...}}`, so its `next` is the last key of the whole answer, read
+// anchored at its end (base64url, which holds no quote), and a `next` key
+// inside a message's content is never it.
+//
+// FROM ITS END ALONE ([openCodeCursorTail]), and UNDER LC_ALL=C: a message is
+// bounded in count and not in bytes, and the end of an answer cut there can
+// fall inside a multi-byte character. Under a UTF-8 locale GNU sed's `.` matches
+// no such cut character, so the unanchored match would begin after it and print
+// it in front of the cursor, which would then name no page; under LC_ALL=C
+// every byte is a character the `.` matches. tail and tr run under it too, so no step
+// reads the bytes as anything but bytes.
+func openCodeCursor() string {
+	return fmt.Sprintf(`listcursor() { LC_ALL=C tail -c %d "$1" | LC_ALL=C tr -d '\n' | LC_ALL=C sed -n 's/.*"next"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)"[[:space:]]*}[[:space:]]*}[[:space:]]*$/\1/p'; }
+`, openCodeCursorTail)
 }
 
 // openCodeStops is the script's two stops beside end ([endFunction], which

@@ -54,7 +54,50 @@ type SessionArchive struct {
 	// a capture ([Result.Captured]); a carried session's is its runner's to
 	// choose.
 	Path string
+
+	// RunStart is where the run that packed the archive began in its session,
+	// as the run's script recorded it in its box ([RunStart]): the box's word,
+	// as the session's id and its release are, and kept by the take as the
+	// take keeps the session ([SessionCapture.RunBegan]). The zero value is not
+	// known: a runner whose script records none, and an older host's answer.
+	RunStart RunStart
 }
+
+// RunStart is where the run that packed a session's archive began in that
+// session: the whole session its own, where the run began the session
+// (Began), or every message after the one After names, where it continued
+// one — the newest message the session held before the run, which a run's
+// script asks its own server for before the run starts (internal/sandbox/
+// executor). So a message after it is the run's, and one at it or before it
+// was there before the run.
+//
+// THE ZERO VALUE IS "NOT KNOWN", which says nothing of where the run began: a
+// run whose record names neither — a harness whose script records no start,
+// a continued run whose server never answered, an older build's record — and
+// never "the whole session".
+type RunStart struct {
+	Began bool
+	After string
+}
+
+// Known reports whether s says where its run began: it began its session, or
+// it began after a message whose id is one a box may name ([ValidMessageID]),
+// and never both.
+func (s RunStart) Known() bool {
+	if s.Began {
+		return s.After == ""
+	}
+	return ValidMessageID(s.After)
+}
+
+// MaxMessageIDBytes bounds a session's message id as the engine keeps one
+// ([ValidMessageID]): SIXTY-FOUR BYTES of letters, digits, `-` and `_`. The
+// ids OpenCode mints are `msg_` and twenty-six characters, thirty bytes
+// (testdata/opencode/<version>/export.json in internal/sandbox/executor), so
+// the bound is twice them and a little more, as the call id's is
+// ([MaxBridgeCallIDBytes]), and an id past it is no id rather than one cut:
+// two ids cut alike would name one message.
+const MaxMessageIDBytes = 64
 
 // CarriedSession is a session archive handed to a run to continue
 // ([RunRequest.Carried]): what it is, and its bytes, read once by the run's
@@ -106,11 +149,23 @@ func ValidSessionID(id string) bool {
 	return id != "" && len(id) <= executorkeep.SessionIDMaxBytes && !strings.ContainsFunc(id, outsideIDCharset)
 }
 
+// ValidMessageID reports whether id is one a box may name a message of its
+// session by, as the engine keeps one ([RunStart.After]): letters, digits, `-`
+// and `_`, at most [MaxMessageIDBytes] of them — the shape a session's id and a
+// call's are held to, at a bound of its own. The id is the box's word, a line of
+// its session record, so a runner refuses any other as it reads the box
+// (internal/sandbox/executor) and the take as it keeps the start
+// ([SessionCapture.Bounded]).
+func ValidMessageID(id string) bool {
+	return id != "" && len(id) <= MaxMessageIDBytes && !strings.ContainsFunc(id, outsideIDCharset)
+}
+
 // outsideIDCharset reports whether r is outside the characters an id a box
 // hands the engine is held to — letters, digits, `-` and `_` — which a
-// session's id ([ValidSessionID]) and a call's ([ValidCallID]) are each held
-// to, at bounds of their own: each is the box's word, and each written as
-// itself by the store's encoder, so neither costs more than its length.
+// session's id ([ValidSessionID]), a call's ([ValidCallID]) and a message's
+// ([ValidMessageID]) are each held to, at bounds of their own: each is the
+// box's word, and each written as itself by the store's encoder, so none
+// costs more than its length.
 func outsideIDCharset(r rune) bool {
 	return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
 }

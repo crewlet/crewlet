@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -338,6 +339,13 @@ type DiagnoseOptions struct {
 	// that serves the API dials the node's own listener on loopback; every
 	// other box dials BridgeURL.
 	Cell string
+
+	// RunsAsRoot is whether this engine's effective user is root and its
+	// sandbox is a real one: a box that runs as the engine's user then runs
+	// the harness as uid 0, which Claude Code refuses to start in the
+	// executor's permission mode. A bool, because its zero value is the
+	// ordinary answer.
+	RunsAsRoot bool
 
 	// BridgeURL is CREWLET_MCP_BRIDGE_URL as the engine would read it:
 	// parsed by the one grammar every URL a box dials shares
@@ -857,6 +865,15 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 				"with none of the seat's tools cannot answer anybody or submit "+
 				"its work. Set it to a URL that box reaches the node at",
 			orNone(opts.Cell), bridgeURLVar, p.key))
+	}
+	if opts.RunsAsRoot && p.harness == string(config.HarnessClaudeCode) &&
+		config.RunsAsEngineUser(config.Placement(opts.Cell)) {
+		// ALONGSIDE THE BRIDGE'S VERDICT, not instead of it: both are launches
+		// that fail at a seat's first work. The smoke run cannot show it,
+		// because it runs the deny-local-tools profile, not the executor's
+		// bypassPermissions mode.
+		lines = append(lines, "user: root — Claude Code refuses its executor's permission mode")
+		problems = append(problems, config.RootClaudeCodeProblem(p.key, config.Placement(opts.Cell)))
 	}
 	return lines, problems
 }

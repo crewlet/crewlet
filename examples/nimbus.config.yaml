@@ -1,7 +1,10 @@
 # yaml-language-server: $schema=../schema/bootstrap.schema.json
 # Tier A bootstrap config for the Nimbus example company.
 #
-# Pairs with examples/nimbus.company.yaml (Tier B).  Run the pair
+# Pairs with examples/nimbus.company.yaml (Tier B).  Run the engine as a
+# non-root user: its seats' Claude Code executors run in `direct` boxes as the
+# engine's own user, and Claude Code refuses its executor's permission mode for
+# root, so a root engine refuses this company at validate and apply.  Run the pair
 # end-to-end with:
 #
 #     # 0. What this file reads from the environment, which every command
