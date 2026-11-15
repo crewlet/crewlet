@@ -1189,6 +1189,10 @@ code:
   identity_domain: example.com   # docs-writer, stating no email, commits as docs-writer@example.com
 ```
 
+An administrator changes it on **Settings › Gitlet**, under **Scratch
+repositories and commit identity**, where its row shows the domain in force
+beside the default; the engine checks a typed domain before it is stored.
+
 Its committer is the engine, `Crewlet <engine@example.com>`. That marks the
 commits Gitlet built in your history and proves nothing — any git
 client can write the same committer — so who made a commit is its push's
@@ -1251,7 +1255,7 @@ code:
 An administrator changes both on **Settings › Gitlet**, under **Scratch
 repositories and commit identity**: each row's pencil writes its key, held to
 its range as it is typed and checked against the whole company before it is
-stored.
+stored. The identity domain beside them is changed the same way.
 
 You never create a scratch repository — it is a seat's — and you maintain
 every one: archive one to keep it, or restore a deleted one before its purge

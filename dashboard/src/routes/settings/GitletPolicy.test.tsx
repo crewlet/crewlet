@@ -2,7 +2,8 @@
  * What Settings › Gitlet's code policy card WRITES: each scratch setting is
  * the engine's own row, changed in place by the field Settings › Limits
  * changes a cap with, checked by the engine first and saved as a patch of
- * its one key.
+ * its one key; and the identity domain is the engine's row of it
+ * (`settings`), changed in place by its text field on the same path.
  *
  * Its own file because `Gitlet.test.tsx` renders with a socket of its own,
  * and this suite answers the socket as the settings frame does.
@@ -11,6 +12,7 @@
 import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { LimitsAnswer } from "~/contract/limits.ts";
+import type { SettingsAnswer } from "~/contract/settings.ts";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
@@ -71,10 +73,36 @@ const LIMITS: LimitsAnswer = {
   ],
 };
 
-async function show(viewer?: Record<string, unknown>) {
+const SETTINGS: SettingsAnswer = {
+  settings: [
+    {
+      key: "code.identity_domain",
+      group: "code",
+      kind: "text",
+      value: "seats.invalid",
+      default: "seats.invalid",
+      set: false,
+      off: false,
+      has_off: false,
+    },
+    // ANOTHER PAGE'S ROW, which this card never draws.
+    {
+      key: "timezone",
+      group: "company",
+      kind: "zone",
+      value: "UTC",
+      default: "UTC",
+      set: false,
+      off: false,
+      has_off: false,
+    },
+  ],
+};
+
+async function show(viewer?: Record<string, unknown>, settings: SettingsAnswer = SETTINGS) {
   const mounted = mountSettings(
-    <CodePolicy doc={DOC} />,
-    { limits: LIMITS },
+    <CodePolicy />,
+    { limits: LIMITS, settings },
     {
       hash: "#/settings/gitlet",
       viewer,
@@ -94,8 +122,94 @@ test("the scratch policy is the engine's rows, each beside its default, and noth
   expect(within(idle).getByText("Default")).toBeTruthy();
   const most = within(table).getByRole("row", { name: /Scratch repositories a seat may hold/ });
   expect(within(most).getByText("Changed from 50")).toBeTruthy();
-  expect(within(table).getByRole("row", { name: /Identity domain/ })).toBeTruthy();
+  // THE IDENTITY DOMAIN IS THE ENGINE'S ROW: its default, said as one, and no
+  // other page's setting beside it.
+  const domain = within(table).getByRole("row", { name: /Identity domain/ });
+  expect(within(domain).getByText("seats.invalid")).toBeTruthy();
+  expect(within(domain).getByText("Default")).toBeTruthy();
   expect(within(table).queryByRole("row", { name: /Review rounds/ })).toBeNull();
+  expect(within(table).queryByRole("row", { name: /Time zone/ })).toBeNull();
+});
+
+// THE IDENTITY DOMAIN IS CHANGED IN PLACE, through the same check and save as
+// the numbers, as a patch of its one key; and going back to the default
+// removes the key. Mutation: send the whole code block, or write the default's
+// text rather than removing the key, and this fails.
+test("the identity domain is changed in place as a patch of its one key", async () => {
+  const written = { ...DOC, code: { backend: "gitlet", identity_domain: "old.example" } };
+  const calls = stubEngine((call) => {
+    if (call.method === "GET") return engineAnswer(written, 200, { ETag: '"r1"' });
+    if (call.path.includes("dry_run=true")) return validAnswer();
+    return savedAnswer();
+  });
+  await show(undefined, {
+    settings: [{ ...SETTINGS.settings[0]!, value: "old.example", set: true }],
+  });
+  expect(screen.getByText("Changed from seats.invalid")).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Change Identity domain" }));
+  });
+  const field = screen.getByRole("textbox");
+  expect((field as HTMLInputElement).value).toBe("old.example");
+  fireEvent.change(field, { target: { value: " commits.example.com " } });
+  await act(async () => {
+    fireEvent.submit(field.closest("form")!);
+  });
+  await act(afterMicrotasks);
+  const save = calls.find((c) => c.method === "PATCH" && !c.path.includes("dry_run"));
+  expect(save!.body).toEqual({
+    code: { identity_domain: "commits.example.com" },
+    _summary: "Gitlet: Identity domain set to commits.example.com (code.identity_domain)",
+  });
+
+  // BACK TO THE DEFAULT: an empty field removes the key.
+  calls.length = 0;
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Change Identity domain" }));
+  });
+  const again = screen.getByRole("textbox");
+  fireEvent.change(again, { target: { value: "" } });
+  await act(async () => {
+    fireEvent.submit(again.closest("form")!);
+  });
+  await act(afterMicrotasks);
+  const cleared = calls.find((c) => c.method === "PATCH" && !c.path.includes("dry_run"));
+  expect(cleared!.body).toEqual({
+    code: { identity_domain: null },
+    _summary: "Gitlet: Identity domain back to the default (code.identity_domain)",
+  });
+});
+
+// THE ENGINE'S REFUSAL IS SAID IN ITS OWN WORDS FOR A PERSON, from the check,
+// and nothing is saved. Mutation: show the operator's message, or save after a
+// refused check, and this fails.
+test("a domain the engine refuses is said in the engine's words for a person, and not saved", async () => {
+  const said = "That is not a domain name. Use lowercase letters, digits and hyphens.";
+  const message = 'code.identity_domain: shape: "Not_A_Domain" is not a lowercase DNS name';
+  const calls = stubEngine((call) => {
+    if (call.method === "GET") return engineAnswer(DOC, 200, { ETag: '"r1"' });
+    return engineAnswer(
+      {
+        error: "invalid_patch",
+        detail: message,
+        problems: [{ path: "code.identity_domain", segments: null, kind: "shape", message, said }],
+      },
+      400,
+    );
+  });
+  await show();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Change Identity domain" }));
+  });
+  const field = screen.getByRole("textbox");
+  fireEvent.change(field, { target: { value: "Not_A_Domain" } });
+  await act(async () => {
+    fireEvent.submit(field.closest("form")!);
+  });
+  await act(afterMicrotasks);
+  expect(screen.getByText(said)).toBeTruthy();
+  expect(screen.queryByText(message)).toBeNull();
+  expect(calls.some((c) => c.method === "PATCH" && !c.path.includes("dry_run"))).toBe(false);
 });
 
 test("a scratch setting is changed in place as a patch of its one key", async () => {

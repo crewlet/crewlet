@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/clientsource"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -397,30 +396,6 @@ func TestTheDashboardKnowsEveryCodeAlarm(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's CODE_ALARM_KINDS is %v, want the alarm table's code kinds, in order: %v",
 			got, want)
-	}
-}
-
-// THE DASHBOARD STATES THE CODE POLICY'S DEFAULTS AS THE ENGINE APPLIES THEM.
-//
-// Settings › Gitlet says what an unset `code.identity_domain` reads as, from
-// `CODE_IDENTITY_DOMAIN` (`contract/code.ts`): a default moved in the engine
-// and not there is a page telling an administrator a policy nothing enforces.
-// The scratch policy's defaults ride the engine's own `limits` rows.
-//
-// Mutation: change it on either side, and this fails.
-func TestTheDashboardStatesTheCodePolicysDefaults(t *testing.T) {
-	t.Parallel()
-	tree := clientsource.Tree(t)
-	for _, c := range []struct{ name, want string }{
-		{"CODE_IDENTITY_DOMAIN", config.DefaultCodeIdentityDomain},
-	} {
-		got, err := clientsource.Scalar(tree, c.name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got != c.want {
-			t.Errorf("the dashboard's %s is %q, want the engine's default %q", c.name, got, c.want)
-		}
 	}
 }
 

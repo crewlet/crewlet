@@ -9036,9 +9036,9 @@ engine's alarm table both ways), with a node that has evaluated no table yet
 named apart rather than counted as quiet; the scratch policy as the engine's
 own rows (`limits`, group `code`: `code.scratch.idle_days` and
 `max_per_seat`), each value beside the engine's default with the Settings ›
-Limits pencil that changes it in place, and `code.identity_domain` read off
-the company document beside the default it reads as (`CODE_IDENTITY_DOMAIN`,
-held to the engine's default); and Gitlet's
+Limits pencil that changes it in place, and `code.identity_domain` as the
+engine's row of it (`settings`, group `code`), beside its default and changed
+in place by its text field (`TextSetting`); and Gitlet's
 own listing of the protected repositories (`code_repos` asked with
 `protected`, which the engine walks by an index of those alone), paged with
 Load more and never one page of every repository filtered here, each a fold
@@ -9046,8 +9046,7 @@ whose rules' gates are read from the repository's detail (`code_repo` with
 `gates=true`) once, as it is first opened, and kept while the page is, with
 who last changed each rule and when from the same answer (`rule_sources`),
 drawn as a caption under the rule (`ruleSourceLine`, the wording the
-repository's Settings tab shares). The identity domain is changed where the
-configuration is.
+repository's Settings tab shares).
 
 ## Chatlet: a top bar, a Rooms panel, a room, and where you have read to
 
@@ -10518,6 +10517,31 @@ the cap. An emptied field is the default, which removes the key rather than
 writing today's default. The saved value is drawn, marked *applying…*, until
 this node applied the revision and the answer carries it. Limits is admin's,
 and Principles offers it as a related row to a reader who may open it.
+
+**A setting is changed where it is read, by one editor.** Every value of the
+company document a page draws as a row is the engine's own row of it, never
+the document read beside a copy of a default: a number is a `limits` row
+(`queries.LimitRow`, with the range its validator holds it to), and any other
+value a `settings` row (`queries.SettingRow`: a line of text, a time zone, a
+space key, a list of space keys or a switch, with its default and whether the
+document sets it). Both are drawn and changed by `SettingEditor`: the row's
+name, key, value and source, and a pencil opening a panel whose field is the
+kind's, whose Save reads the document, checks the change with the engine
+(`PATCH /config?dry_run=true`), stops on any warning the change introduces
+with **Save anyway**, saves, and draws the saved value as applying until this
+node applies it. A number is held to its range as it is typed (a range may
+admit 0 apart from its scale, as Chatlet's message horizon does: 0 keeps
+messages for ever, and 1 to 29 days is refused beside the field); no other
+kind copies a rule, and a refusal is the engine's, said in the words its rule
+wrote for a person. Going back to the default removes the key, and an Off a
+setting has of its own (`knowledge.skills_container: ""`) is a value written.
+The places: Settings › Limits; Delegated decisions; Settings › Gitlet (the
+scratch policy and the identity domain); Worklet's, Doclet's and Chatlet's
+Settings under Integrations (the inbox horizon; the company pages space, the
+tool skills space, the search reach and search by meaning; the company's
+message horizon); Atlas › Sources (the read interval); and Company › Budgets'
+**Company clock** (`timezone`, whose change the engine's check warns moves
+every budget window and every schedule without a zone of its own).
 
 **The brand is Company's too, and published.** **Company › Brand**
 (`#/company/brand`) is how the company looks and sounds in everything its
