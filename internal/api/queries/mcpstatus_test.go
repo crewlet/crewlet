@@ -51,9 +51,10 @@ mcp_servers:
       Authorization: Bearer literal-linear-secret
 `
 
-// presentNode puts one node on the lease table with the heartbeat it
-// publishes, or — with no status — the placement half alone, which is what a
-// beat whose status hook did not answer within its share of the beat carries.
+// presentNode puts one node on the lease table and, where record is given,
+// writes its status record at the epoch of the presence it claimed; with no
+// record the node is live and says nothing, as one is before its writer's first
+// write at its epoch.
 func presentNode(t *testing.T, backend coord.Backend, id string, record *coord.NodeStatusRecord) {
 	t.Helper()
 	presence, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
@@ -69,6 +70,26 @@ func presentNode(t *testing.T, backend coord.Backend, id string, record *coord.N
 	r.Node, r.Epoch = id, presence.Epoch
 	if err := recordsOf(backend).PutNodeStatus(t.Context(), r); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// reclaimPresence gives node id's presence up and claims it again, at a new
+// epoch, as a node that restarted does: what its record says was said at the
+// epoch before.
+func reclaimPresence(t *testing.T, backend coord.Backend, id string) {
+	t.Helper()
+	held, err := backend.Get(t.Context(), coord.NodeResource(id))
+	if err != nil || held == nil {
+		t.Fatalf("read %s's presence: %v, %v", id, held, err)
+	}
+	if ok, err := backend.Release(t.Context(), held.Resource, held.Owner, held.Epoch); err != nil || !ok {
+		t.Fatalf("give %s's presence up: %v, %v", id, ok, err)
+	}
+	again, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+		Owner: id + ":2", TTL: time.Minute, Meta: map[string]any{"roles": []string{"seats"}},
+	})
+	if err != nil || again == nil || again.Epoch == held.Epoch {
+		t.Fatalf("claim %s's presence again: %v, %v (was epoch %d)", id, again, err, held.Epoch)
 	}
 }
 
@@ -266,6 +287,20 @@ func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 	for _, row := range askMCPStatus(t, mcpSources(t, backend)).Servers {
 		if row.State != queries.MCPUnreported {
 			t.Errorf("%s = %s in a fleet with no report, want unreported", row.Name, row.State)
+		}
+	}
+
+	// AN EARLIER INCARNATION'S RECORD IS NOT THIS ONE'S: node-c's record
+	// says docs started, then its presence was given up and claimed again
+	// at a new epoch, and the live node has not written yet — it did not
+	// say, whatever the store still holds.
+	backend = coordmemory.New()
+	presentNode(t, backend, "node-c", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
+		{Server: "docs", Shared: true, Started: 1, Tools: 4}}})
+	reclaimPresence(t, backend, "node-c")
+	for _, row := range askMCPStatus(t, mcpSources(t, backend)).Servers {
+		if row.State != queries.MCPUnreported {
+			t.Errorf("%s = %s off a record node-c's earlier epoch wrote, want unreported", row.Name, row.State)
 		}
 	}
 
@@ -494,7 +529,8 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 // commands and each failure's first line are the configuration and what
 // became of it, which `/config` shows the same reader, so a caller holding
 // every app but admin is answered, in a member's reading. And an unreadable
-// lease table is an error, not a fleet with no nodes.
+// lease table, or unreadable status records, is an error, not a fleet with no
+// nodes or with nodes that say nothing.
 //
 // Mutation: register the question at admin, or answer every caller the
 // admin's reading, and this is red.
@@ -522,6 +558,15 @@ func TestTheServerStatusIsEverybodysAndNeverGuesses(t *testing.T) {
 		NodeStatuses: coordmemory.NewFleet()})
 	if _, err := broken.Answer(everyGrant(t), "mcp_servers_status", nil); err == nil {
 		t.Error("an unreadable lease table was answered as a fleet")
+	}
+	// AND SO ARE UNREADABLE STATUS RECORDS: every live node read as not
+	// saying over a store blip is the wrong thing to show.
+	unread := queries.NewRegistry()
+	readable := coordmemory.New()
+	presentNode(t, readable, "node-a", nil)
+	queries.Register(unread, queries.Sources{Coord: readable, NodeStatuses: unreadableRecords{}})
+	if _, err := unread.Answer(everyGrant(t), "mcp_servers_status", nil); err == nil {
+		t.Error("unreadable status records were answered as a fleet that says nothing")
 	}
 }
 
@@ -658,6 +703,14 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 type unreadableLeases struct{ coord.Backend }
 
 func (unreadableLeases) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
+	return nil, errors.New("the coordination store did not answer")
+}
+
+// unreadableRecords is a status record store whose listing fails, as a store
+// blip makes it.
+type unreadableRecords struct{}
+
+func (unreadableRecords) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
 	return nil, errors.New("the coordination store did not answer")
 }
 
