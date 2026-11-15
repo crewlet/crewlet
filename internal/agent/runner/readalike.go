@@ -8,59 +8,70 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/kept"
 )
 
-// readAlike reports whether a model reading the line a brief tells t by,
-// rendered under opts, could take it for h, a call the session it continues
-// shows whole: the same tool, and arguments that read alike in t's line. Its
-// result is never compared: a successful call's line carries none, and two
-// calls of one tool whose arguments read alike read alike whatever they
-// returned.
+// readAlike reports whether a model reading the lines a brief and the session
+// it continues show of a and b, two calls rendered under opts, could take one
+// for the other: the same tool, and arguments their lines do not tell apart.
+// Symmetric, so neither call is the held one or the told one to it. Results are
+// never compared: a successful call's line carries none, and two calls of one
+// tool whose arguments read alike read alike whatever they returned.
 //
-// PER ARGUMENT, AS THE LINE SHOWS IT, never by the calls' digests alone. A
-// line shows a value as itself only where it fits the ledger's budget
+// PER VALUE, AS THE LINES SHOW IT, never by the calls' digests alone. A line
+// shows a value as itself only where it fits the ledger's budget
 // ([ledger.ShowsWhole]); a longer one is a rewrite or omitted by its size, so
 // two writes to one path whose contents differ past the budget read alike in
-// their lines, digests apart. So a value t's line does not show whole may
-// equal anything, and h's and t's arguments read apart only where some key is
-// in one and not the other (a key the line shows is seen, whatever its value)
-// or t's line shows a value whole that h's does not read alike ([valuesAlike]).
-// A key whose value is null is read as absent, on both sides: `"thread_ts":null`
-// and no thread_ts at all say the same to a reader.
+// their lines, digests apart. And the session may show EITHER call only as a
+// line (a fresh brief's prior work, the calls an earlier brief told), so a
+// value either line shows as a piece may equal anything; and so may a value a
+// record left out in place ([kept.IsLeftOut], [valuesAlike]), at any depth.
+// The calls read apart only where some key is in one and not the other (a key
+// a line shows is seen, whatever its value) or both lines show a key's value
+// whole and the two are not alike. A key whose value is null is read as
+// absent, on both sides: `"thread_ts":null` and no thread_ts at all say the
+// same to a reader.
 //
-// ALIKE WHEREVER EITHER CALL'S ARGUMENTS ARE NOT KNOWN WHOLE: withheld
-// ([ledger.Call.Withheld]), in flight ([ledger.Call.Unfinished]), kept less
-// than whole by the run's record ([BridgedCall.ArgsBytes]), with no digest,
-// nothing having recorded them, or recorded in text the engine could not read
-// back ([ledger.Call.ArgsUnread], whose line says so; nil arguments, which a
-// record of an older build leaves unmarked). Nothing says they read apart, and the one direction that costs
-// anything is reading two calls apart that a model takes for one: listing a
-// held call again that no told call could be taken for costs a line, while
-// leaving one out loses the told call.
-func readAlike(h, t BridgedCall, opts ledger.FormatOptions) bool {
+// ALIKE WHEREVER EITHER CALL'S ARGUMENTS ARE NOT COMPARABLE ([argsComparable]):
+// withheld, in flight, recorded in text the engine could not read back, with
+// no digest or nil, or left out whole by their record. Nothing says they read
+// apart, and the one direction that costs anything is reading two calls apart
+// that a model takes for one: listing a call again that no told call could be
+// taken for costs a line, while leaving one out loses the told call.
+//
+// NEVER BY HOW MUCH A RECORD KEPT ([BridgedCall.ArgsBytes]): a record that kept
+// a call's arguments less than whole says so in them, each value it left out a
+// marker or the whole {"not_kept": marker} ([kept.Record.Args]), so the values
+// it kept are compared as any are, and only what it left out reads as anything.
+func readAlike(a, b ledger.Call, opts ledger.FormatOptions) bool {
 	switch {
-	case h.Name != t.Name:
+	case a.Name != b.Name:
 		return false
-	case !argsKnownWhole(h) || !argsKnownWhole(t) || h.Digest == t.Digest:
+	case !argsComparable(a) || !argsComparable(b) || a.Digest == b.Digest:
 		return true
 	}
-	for key, tv := range t.Args {
-		hv := h.Args[key]
-		if (hv == nil) != (tv == nil) || (tv != nil && ledger.ShowsWhole(tv, opts) && !valuesAlike(hv, tv)) {
+	for key, bv := range b.Args {
+		av := a.Args[key]
+		if (av == nil) != (bv == nil) {
+			return false
+		}
+		if bv != nil && ledger.ShowsWhole(av, opts) && ledger.ShowsWhole(bv, opts) && !valuesAlike(av, bv) {
 			return false
 		}
 	}
-	for key, hv := range h.Args {
-		if hv != nil && t.Args[key] == nil {
+	for key, av := range a.Args {
+		if av != nil && b.Args[key] == nil {
 			return false
 		}
 	}
 	return true
 }
 
-// argsKnownWhole reports whether call's arguments are known whole: neither
-// withheld nor in flight, kept whole by the run's record and read back from
-// it, and digested where they were admitted ([readAlike]).
+// argsComparable reports whether call's arguments are ones a line shows value
+// by value: neither withheld nor in flight, read back from their record and
+// digested where they were admitted, and not left out whole by it
+// ([kept.IsNotKept]). A value left out within them reads alike whatever it was
+// ([valuesAlike]).
 //
 // WITHHELD IS ITS OWN TEST, never left to the arguments and digest a withheld
 // call's record clears (sandbox's keptCall): its line draws its arguments as
@@ -71,9 +82,9 @@ func readAlike(h, t BridgedCall, opts ledger.FormatOptions) bool {
 // says its arguments did not read back whatever the call carries
 // ([ledger.Call.ArgsUnread]). Nil arguments stay a test of their own too, for
 // a record an older build read, which marks no call so.
-func argsKnownWhole(call BridgedCall) bool {
-	return !call.Withheld && !call.Unfinished && !call.ArgsUnread && call.ArgsBytes == 0 &&
-		call.Digest != "" && call.Args != nil
+func argsComparable(call ledger.Call) bool {
+	return !call.Withheld && !call.Unfinished && !call.ArgsUnread && call.Digest != "" && call.Args != nil &&
+		!kept.IsNotKept(call.Args)
 }
 
 // valuesAlike reports whether a reader could take h and t, two argument values
@@ -86,7 +97,15 @@ func argsKnownWhole(call BridgedCall) bool {
 // number or a boolean it spells (`"7"` and 7, `"true"` and true), the safe
 // reading of a value a model compares by its characters. Two strings read
 // alike only where they are the same text.
+//
+// A VALUE A RECORD LEFT OUT ([kept.IsLeftOut]) READS ALIKE ANY, at any depth:
+// a leaf or a container replaced by its marker names a value it does not show,
+// which may have been the other. Compared as the text it is, the marker would
+// read apart two calls whose left-out values may have been one.
 func valuesAlike(h, t any) bool {
+	if kept.IsLeftOut(h) || kept.IsLeftOut(t) {
+		return true
+	}
 	switch tv := t.(type) {
 	case nil:
 		return h == nil

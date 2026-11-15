@@ -705,27 +705,28 @@ func (r *Runner) checkoutName() string {
 //
 // AND A CALL THE SESSION HOLDS THAT A TOLD CALL COULD BE TAKEN FOR IS LISTED
 // AGAIN ([prompts.AfterSave.Shown]), under words that say the session may show
-// it and that the told one could be taken for it and is a call of its own,
-// made as well. The words over the
-// calls after a point the session may already show, and over the late calls,
-// say a call shown both in the session and in the list is ONE call, made once:
-// so where a held call and a told call name one tool with arguments that read
-// alike in the told call's line ([readAlike]), a model that saw the held call
-// could take the told one for it and lose it, re-issuing nothing or reading
-// it as a call that never ran. That is reachable wherever a point holds calls
-// beside a late one (a capture whose harness ended its own run, placed by its
-// own read; a capture cut off that another build stamped; the copy whose
-// harness ended its own run, which holds every call but the late ones), on
-// every harness. The held side is every call of the round held at the point
-// ([heldAt]); never a skipped meta-tool's, the call a person approved that the
-// lead tells, which no list holds, nor a call the log dropped, which keeps no
-// arguments to compare. The told side is every late call and the calls after
-// the point where mayShow; never the owed reads, whose words say an earlier
-// message counted them, and never a list under words that say its calls are
-// not in the session, where no call is shown twice. Fitted, capped and defused
-// with the other lists, each rendered only where it is not empty, since an
-// empty list renders as "(none)"; the calls listed again only where the cap
-// leaves them a call to list, never as a count of reads alone.
+// it and that the told one could be taken for it and is a call of its own, made
+// as well. The words over the calls after a point the session may already show,
+// and over the late calls, say a call shown both in the session and in the list
+// is ONE call, made once: so where a held call and a told call name one tool
+// with arguments neither call's line tells apart ([readAlike]: value by value
+// as each line shows it, a value either line shows as a piece, or a record left
+// out, alike whatever it was), a model that saw the held call could take the
+// told one for it and lose it, re-issuing nothing or reading it as a call that
+// never ran. That is reachable wherever a point holds calls beside a late one
+// (a capture whose harness ended its own run, placed by its own read; a capture
+// cut off that another build stamped; the copy whose harness ended its own run,
+// which holds every call but the late ones), on every harness. The held side is
+// every call of the round held at the point ([heldAt]); never a skipped
+// meta-tool's, the call a person approved that the lead tells, which no list
+// holds, nor a call the log dropped, which keeps no arguments to compare. The
+// told side is every late call and the calls after the point where mayShow;
+// never the owed reads, whose words say an earlier message counted them, and
+// never a list under words that say its calls are not in the session, where no
+// call is shown twice. Fitted, capped and defused with the other lists, each
+// rendered only where it is not empty, since an empty list renders as "(none)";
+// the calls listed again only where the cap leaves them a call to list, never
+// as a count of reads alone.
 func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int, owed []int, mayShow bool,
 	leadHeld []string, surface *tools.Surface, b provenance.Boundary) (prompts.AfterSave, []int) {
 
@@ -843,16 +844,16 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 // listedAgain is every call of held, the calls of a round a brief tells no
 // session it lacks, that a call of told could be taken for ([readAlike]), in
 // held's order: the calls [Runner.calledAfter] lists again, under words that
-// say the session shows them ([prompts.AfterSave.Shown]).
+// say the session may show them ([prompts.AfterSave.Shown]).
 //
 // ONE PASS IS THE WHOLE ANSWER. A call listed again is told as one the session
-// shows, never as one it may lack, so it is no told call another held call
+// may show, never as one it may lack, so it is no told call another held call
 // could be taken for: matching held against told alone, and never against what
 // it lists, is a fixed point.
 func listedAgain(held, told []BridgedCall, opts ledger.FormatOptions) []BridgedCall {
 	var out []BridgedCall
 	for _, h := range held {
-		if slices.ContainsFunc(told, func(t BridgedCall) bool { return readAlike(h, t, opts) }) {
+		if slices.ContainsFunc(told, func(t BridgedCall) bool { return readAlike(h.Call, t.Call, opts) }) {
 			out = append(out, h)
 		}
 	}

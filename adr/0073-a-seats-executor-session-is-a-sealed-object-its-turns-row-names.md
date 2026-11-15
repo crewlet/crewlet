@@ -3184,26 +3184,36 @@ session may show only in part (a Claude Code subagent's bridged calls reach its
 main thread as the subagent's report), so it says "may show", never "shows",
 and never that the session lacks one; and "could be taken for" is the engine's
 reason on every path, where "arguments that read alike" would be false of a
-told call in flight, a sealed call, or one whose arguments are not known whole
-for any other reason (`readAlike`, below).
+told call in flight, a sealed call, one whose arguments are not comparable for
+any other reason, or a value either line shows as a piece or a record left out
+(`readAlike`, below).
 
-**Read alike as the line shows it** (`runner.readAlike`). The same tool; then
-alike where either call's arguments are not known whole (withheld, in flight,
-kept less than whole by the run's record, with no digest, or in text the engine
-could not read back) or the two digests are equal; otherwise apart only where a
-key is in one call and not the other, a key whose value is null read as absent,
-or in both with the told call's value one its line shows whole
-(`ledger.ShowsWhole`, the render's own test) and the held call's not the same
-JSON value (`runner.valuesAlike`): a number by its value however it is spelled,
-compared exactly as a sign, digits and an exponent, never as a float or by the
-power an exponent names; an object or an array value by value; a string alike
-only the same text, or the number or boolean it spells.
-Never by digests alone: a told call's line shows a value past the ledger's
-budget as a rewrite, or omitted by its size, so two writes to one path whose
-contents differ there read alike in their lines, digests apart. Results are
-never compared: a successful call's line carries none. Reading two calls alike
-that a model would tell apart costs a line; reading apart two it would take for
-one loses a call, so every unknown is alike.
+**Read alike as the lines show it** (`runner.readAlike`). Symmetric, over two
+`ledger.Call`s. The same tool; then alike where either call's arguments are not
+comparable (`runner.argsComparable`: withheld, in flight, in text the engine
+could not read back, with no digest, or left out whole by their record,
+`kept.IsNotKept`) or the two digests are equal; otherwise apart only where a key
+is in one call and not the other, a key whose value is null read as absent, or
+in both with a value each line shows whole (`ledger.ShowsWhole`, the render's
+own test, asked of both) and the two not the same JSON value
+(`runner.valuesAlike`): a number by its value however it is spelled, compared
+exactly as a sign, digits and an exponent, never as a float or by the power an
+exponent names; an object or an array value by value; a string alike only the
+same text, or the number or boolean it spells; and a value a record left out in
+place (`kept.IsLeftOut`, the marker under any record's name), at any depth,
+alike any value. Either line, because the session may show either call only as
+a line (a fresh brief's prior work, the calls an earlier brief told), and a line
+shows a value past the ledger's budget as a rewrite, or omitted by its size, so
+two writes to one path whose contents differ there read alike in their lines,
+digests apart. Never by how much a record kept (`ArgsBytes`): a record that
+kept a call's arguments less than whole says so in them, each value it left out
+a marker or the whole `{"not_kept": marker}`, so the values it kept are compared
+as any are and only what it left out reads as anything, where reading the whole
+call as unknown listed it beside every call of its tool. Per value, too, so no
+digest is load-bearing beyond equal digests reading alike. Results are never
+compared: a successful call's line carries none. Reading two calls alike that a
+model would tell apart costs a line; reading apart two it would take for one
+loses a call, so every unknown is alike.
 
 **The held side and the told side.** Held: every call the point holds; never a
 skipped meta-tool's, the call a person approved that the brief's lead tells
@@ -3228,8 +3238,8 @@ brief carries an empty one.
 brief and so in its launch's floor and any rewrite of a long value; nothing
 where none does, so a brief whose held and told calls read apart is byte for
 byte what it was, OpenCode's among them. That is not always a line or two: one
-told call whose arguments are not known whole (in flight, sealed for a
-person's approval, kept past the log's budget, or with no digest) reads alike
+told call whose arguments are not comparable (in flight, sealed for a
+person's approval, left out whole by the log, or with no digest) reads alike
 every held call of its tool, so on the copy whose harness ended its own run,
 which holds every call of the round but the late ones, a single late call of a
 much-used tool lists every held call of that tool again, each write whole and

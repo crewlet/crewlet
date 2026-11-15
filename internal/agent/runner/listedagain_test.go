@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -176,6 +177,115 @@ func TestACallWhoseShownArgumentsDifferIsNotListedAgain(t *testing.T) {
 	}
 }
 
+// A VALUE EITHER LINE SHOWS AS A PIECE READS ALIKE ANYTHING. The session may
+// show the held call, too, only as a line (a fresh brief's prior work, the
+// calls an earlier brief told), and a line shows a value past the ledger's
+// budget as a rewrite or omitted by its size, never as itself. So a held write
+// whose content is past the budget and a told write to its path whose short
+// content the told line shows whole read alike, and the held write is listed
+// again; a told write to another path, which both lines show whole, is not.
+//
+// Mutation: judge a value by the told line alone, dropping the held line's
+// ShowsWhole, and the held write to the told write's path is not listed again.
+func TestAValueEitherLineShowsAsAPieceReadsAlikeAnything(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", ledger.ValueLimit+50)
+	for name, tc := range map[string]struct {
+		heldPath, toldPath string
+		listed             bool
+	}{
+		"to the held write's path": {heldPath: "notes.md", toldPath: "notes.md", listed: true},
+		"to another path":          {heldPath: "a.md", toldPath: "b.md"},
+	} {
+		held := digested(numbered("write_file", map[string]any{"path": tc.heldPath, "content": long}, 1, 1))
+		told := digested(numbered("write_file", map[string]any{"path": tc.toldPath, "content": "short"}, 2, 2))
+		brief := lostRelaunch(t, cutOffKept(1), runner.Resume{Bridged: []runner.BridgedCall{held, told}}).Session.Brief
+		if _, listed := sectionOf(brief, listedAgainHeading); listed != tc.listed {
+			t.Errorf("a told write %s: the held write is listed again %v, want %v:\n%s", name, listed, tc.listed,
+				brief)
+		}
+	}
+}
+
+// A VALUE A RECORD LEFT OUT READS ALIKE ANYTHING, AND THE REST IS COMPARED. A
+// run's record keeps a call's arguments past its budget with their largest
+// values left out, each replaced by a marker naming its size and digest, or
+// the whole as {"not_kept": marker} (kept.Record.Args), and says how much it
+// kept beside them (BridgedCall.ArgsBytes). A marker names a value it does not
+// show, so it reads alike any value, at the top of the arguments or inside an
+// object, a leaf's or a container's; but the values the record kept are the
+// call's own and are compared as any are, so a told write kept in part to
+// another path than the held write's is not listed again, where reading the
+// whole call as unknown listed it. Arguments left out whole read alike every
+// call of their tool.
+//
+// Mutation: read a call its record kept in part as one whose arguments are all
+// unknown, and the cases that read apart are listed; compare a marker as its
+// text at the top or inside an object, and the cases alike there are not;
+// compare arguments left out whole key by key, and no held call is listed.
+func TestAValueARecordLeftOutReadsAlikeAnythingAndTheRestIsCompared(t *testing.T) {
+	t.Parallel()
+	marker := kept.Record("the run's record").LeftOut([]byte(`"` + strings.Repeat("b", 9000) + `"`))
+	call := func(name string, args map[string]any, seq int) runner.BridgedCall {
+		return digested(numbered(name, args, seq, seq))
+	}
+	inPart := func(c runner.BridgedCall) runner.BridgedCall {
+		c.ArgsBytes = 9100
+		return c
+	}
+	for name, tc := range map[string]struct {
+		held, told runner.BridgedCall
+		listed     bool
+	}{
+		"a told write kept in part, to another path": {
+			held: call("write_file", map[string]any{"path": "a.md", "content": "x"}, 1),
+			told: inPart(call("write_file", map[string]any{"path": "b.md", "content": marker}, 2))},
+		"a told write kept in part, to the held write's path": {
+			held:   call("write_file", map[string]any{"path": "notes.md", "content": "x"}, 1),
+			told:   inPart(call("write_file", map[string]any{"path": "notes.md", "content": marker}, 2)),
+			listed: true},
+		"a held write kept in part, to the told write's path": {
+			held:   inPart(call("write_file", map[string]any{"path": "notes.md", "content": marker}, 1)),
+			told:   call("write_file", map[string]any{"path": "notes.md", "content": "x"}, 2),
+			listed: true},
+		"a marker inside an object, the rest alike": {
+			held: call("jira_update", map[string]any{"fields": map[string]any{"summary": "s1", "description": "x"}}, 1),
+			told: inPart(call("jira_update",
+				map[string]any{"fields": map[string]any{"summary": "s1", "description": marker}}, 2)),
+			listed: true},
+		"a marker inside an object, the rest apart": {
+			held: call("jira_update", map[string]any{"fields": map[string]any{"summary": "s1", "description": "x"}}, 1),
+			told: inPart(call("jira_update",
+				map[string]any{"fields": map[string]any{"summary": "s2", "description": marker}}, 2))},
+		"a container left out, the rest alike": {
+			held:   call("jira_update", map[string]any{"key": "P-1", "fields": map[string]any{"summary": "s1"}}, 1),
+			told:   inPart(call("jira_update", map[string]any{"key": "P-1", "fields": marker}, 2)),
+			listed: true},
+		"a container left out, the rest apart": {
+			held: call("jira_update", map[string]any{"key": "P-1", "fields": map[string]any{"summary": "s1"}}, 1),
+			told: inPart(call("jira_update", map[string]any{"key": "P-2", "fields": marker}, 2))},
+	} {
+		if !kept.IsLeftOut(marker) {
+			t.Fatalf("the case's marker %q is not one a record writes", marker)
+		}
+		brief := lostRelaunch(t, cutOffKept(1), runner.Resume{Bridged: []runner.BridgedCall{tc.held, tc.told}}).
+			Session.Brief
+		if _, listed := sectionOf(brief, listedAgainHeading); listed != tc.listed {
+			t.Errorf("%s: the held call is listed again %v, want %v:\n%s", name, listed, tc.listed, brief)
+		}
+	}
+
+	whole := inPart(digested(numbered("slack_post", map[string]any{kept.NotKeptKey: marker}, 3, 3)))
+	other := digested(numbered("slack_post", map[string]any{"channel": "C2", "text": "other"}, 2, 2))
+	brief := lostRelaunch(t, cutOffKept(2), runner.Resume{Bridged: []runner.BridgedCall{post("hi", 1), other,
+		whole}}).Session.Brief
+	again, listed := sectionOf(brief, listedAgainHeading)
+	if !listed || !strings.Contains(again, `"text":"hi"`) || !strings.Contains(again, `"text":"other"`) {
+		t.Errorf("a told call whose arguments were left out whole is not listed beside every held call of its "+
+			"tool:\n%s", brief)
+	}
+}
+
 // A VALUE READS AS THE VALUE IT IS, NEVER AS ITS SPELLING. The run's record
 // keeps a number as its literal's text, so a held call and a told call can
 // carry one value spelled two ways, and a model reading the told line beside
@@ -237,31 +347,28 @@ func TestAValueReadsAsTheValueItIsNeverAsItsSpelling(t *testing.T) {
 }
 
 // A CALL WHOSE ARGUMENTS ARE NOT KNOWN IS LISTED BESIDE EVERY CALL OF ITS TOOL.
-// Nothing says arguments not known whole read apart from any: a told call's
-// withheld, in flight, kept less than whole by the run's record, recorded
-// with no digest or in text the engine could not read back, or a held call's
-// kept less than whole or not read back. So the held call is
-// listed again beside a told call of its tool whose arguments, as far as they
-// are known, differ. A call whose record did not read back is marked so
+// Nothing says arguments not known read apart from any: a told call's
+// withheld, in flight, recorded with no digest or in text the engine could not
+// read back, or a held call's not read back. So the held call is listed again
+// beside a told call of its tool whose arguments, as far as they are known,
+// differ. (Arguments a record kept less than whole are known but for the
+// values it left out, which TestAValueARecordLeftOutReadsAlikeAnythingAndTheRestIsCompared
+// reads.) A call whose record did not read back is marked so
 // (ledger.Call.ArgsUnread), and its line says so in place of its arguments,
 // never `slack_post()`, the tool called with none; marked, it reads so
 // whatever arguments it carries, as a withheld call does, since its line
 // shows none of them; and a record of an older build, which marks no call,
 // leaves its arguments nil, which read so too.
 //
-// Mutation: read a call kept less than whole, or one whose arguments were not
-// read back, as one known whole, and its cases go red; read the mark by the
-// arguments it leaves nil alone, and the marked calls carrying arguments do.
+// Mutation: read a call whose arguments were not read back as one whose
+// arguments are known, and its cases go red; read the mark by the arguments it
+// leaves nil alone, and the marked calls carrying arguments do.
 func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testing.T) {
 	t.Parallel()
 	// WITHHELD, though it carries arguments and their digest, which no record
 	// keeps for a withheld call: its line draws them sealed whatever it holds.
 	withheld := post("told", 2)
 	withheld.Withheld = true
-	keptShort := post("told", 2)
-	keptShort.ArgsBytes = 70_000
-	heldShort := post("hi", 1)
-	heldShort.ArgsBytes = 70_000
 	undigested := numbered("slack_post", map[string]any{"channel": "C1", "text": "told"}, 2, 2)
 	unreadToldCall := post("told", 2)
 	unreadToldCall.Args, unreadToldCall.ArgsUnread = nil, true
@@ -278,12 +385,8 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 	inFlight := []runner.BridgedCall{{Call: ledger.Call{Name: "slack_post", Result: runner.UnfinishedNote,
 		Failed: true, Digest: post("told", 2).Digest, Unfinished: true}, Seq: 2}}
 	for name, round := range map[string]runner.Resume{
-		"a withheld told call":  {Bridged: []runner.BridgedCall{post("hi", 1), withheld}},
-		"a told call in flight": {Bridged: []runner.BridgedCall{post("hi", 1)}, Unfinished: inFlight},
-		"a told call its record kept less than whole": {
-			Bridged: []runner.BridgedCall{post("hi", 1), keptShort}},
-		"a held call its record kept less than whole": {
-			Bridged: []runner.BridgedCall{heldShort, post("told", 2)}},
+		"a withheld told call":       {Bridged: []runner.BridgedCall{post("hi", 1), withheld}},
+		"a told call in flight":      {Bridged: []runner.BridgedCall{post("hi", 1)}, Unfinished: inFlight},
 		"a told call with no digest": {Bridged: []runner.BridgedCall{post("hi", 1), undigested}},
 		"a told call whose record could not be read back": {
 			Bridged: []runner.BridgedCall{post("hi", 1), unreadToldCall}},
@@ -312,10 +415,10 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 
 // EVERY REASON A CALL IS LISTED AGAIN IS HEADED BY THE SAME WORDS. A held call
 // is listed again wherever the engine cannot rule out that a told call is
-// taken for it (runner's readAlike): their arguments read alike in the told
-// call's line, or either call's arguments are not known whole, in flight,
-// sealed for a person's approval, with no digest or recorded in text that did
-// not read back. The words over the section are one header on every such
+// taken for it (runner's readAlike): their lines do not tell their arguments
+// apart, or either call's arguments are not comparable, in flight, sealed for
+// a person's approval, with no digest or recorded in text that did not read
+// back. The words over the section are one header on every such
 // path, and true on each: that the session may show each call listed, that
 // the told call could be taken for it, and that the told call is one of its
 // own. None says the session shows it, which a point's claim does not make
@@ -356,7 +459,7 @@ func TestEveryReasonACallIsListedAgainIsHeadedByTheSameWords(t *testing.T) {
 
 // THE CALLS LISTED AGAIN ARE DEFUSED UNDER THE TURN'S TOKEN. A held call's
 // arguments are a model's words, and a told call of its tool whose arguments
-// are not known whole reads alike it, so it is listed again: its words reach
+// are not comparable reads alike it, so it is listed again: its words reach
 // the brief with no live marker, as every list's do.
 //
 // Mutation: list the calls listed again without defusing them, and the brief
