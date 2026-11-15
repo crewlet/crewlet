@@ -179,13 +179,8 @@ test("a comparison's title stays clear of the files' toolbar", async () => {
   expect(band.top).toBeGreaterThanOrEqual(Math.floor(under.bottom));
 });
 
-// THE CLONE PANEL SHOWS ITS WHOLE ADDRESS. The kit's panel is a declared
-// width range (at most 380px) that scrolls what it cannot hold, and the clone
-// block once asked for 30rem of its own: wider than its panel, it scrolled
-// sideways the moment the panel handed focus to its first control, the copy
-// button at the block's far end, so the heading read "TPS" and the address
-// lost its scheme. Mutation: give `.code-clone` its `width: min(30rem, 80vw)`
-// back, and the panel scrolls sideways and the heading starts left of it.
+// THE CLONE PANEL SHOWS ITS WHOLE ADDRESS, with no sideways scroll once it
+// focuses its copy button. Mutation: `.code-clone { width: 30rem }` fails it.
 for (const width of [1440, 390]) {
   test(`the clone panel holds its whole address, inside its card and the viewport, at ${width}px`, async () => {
     await page.viewport(width, 900);
@@ -204,8 +199,7 @@ for (const width of [1440, 390]) {
       return listing!;
     });
     clone.click();
-    // PLACED, AND HOLDING FOCUS: the scroll came with the focus the panel
-    // hands in once it has somewhere to be, so the case measures after it.
+    // Measured once placed and focused: the focus is what scrolled it.
     const panel = await eventually(() => {
       const el = document.querySelector<HTMLElement>('.crewlet-popover[aria-label="Clone web"]');
       expect(el).toBeTruthy();

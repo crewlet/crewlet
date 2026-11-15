@@ -812,11 +812,7 @@
 }
 
 /* CLONE: the address in a block of its own, and what git asks for under it.
-   NO WIDTH OF ITS OWN: the kit's panel is a declared width range that scrolls
-   what it cannot hold, and the block's copy button is the first control the
-   panel focuses, so a block wider than its panel opened scrolled sideways to
-   that button, its heading reading "TPS". The block takes the panel's width,
-   and the address wraps inside it as a block value does. */
+   No width of its own: wider than the kit's panel, it scrolls sideways. */
 .code-clone {
   display: flex;
   flex-direction: column;
