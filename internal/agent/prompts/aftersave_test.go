@@ -583,3 +583,141 @@ func TestEveryCountThatSaysTheTallyIsBelowHasItBelow(t *testing.T) {
 		}
 	}
 }
+
+// THE CALLS LISTED AGAIN ARE ONES A TOLD CALL COULD BE TAKEN FOR. A call the
+// session may show that a told call could be taken for is listed again under
+// words that say the session may show it, never that it shows it, since a
+// save point's claim is not what a resumed session reads back, and never that
+// the session lacks it; that say the told call could be taken for it, the one
+// reason true wherever runner lists it, never that their arguments read alike,
+// which is false of a told call in flight or a sealed one; and that the told
+// call is one of its own, made as well. After the calls since the save and
+// before the late calls, the owed reads and the held submission's line before
+// them all; and no section at all where none is listed again.
+//
+// Mutation: drop the section, place it anywhere else, word it as calls the
+// session may lack, say the session shows each, or say the arguments read
+// alike, and this goes red.
+func TestTheCallsListedAgainAreOnesAToldCallCouldBeTakenFor(t *testing.T) {
+	t.Parallel()
+	const (
+		owed   = "- slack_history({\"channel\":\"C0\"}) → success (read)"
+		listed = "- slack_post({\"text\":\"hi\"}) → success"
+		shown  = "- slack_post({\"text\":\"hi\"}) → success"
+		late   = "- jira_create({\"summary\":\"the late one\"}) → success"
+	)
+	got := CalledAfter(AfterSave{HeldSubmission: true, Owed: owed, Calls: listed, Shown: shown, Late: late,
+		Interrupted: true})
+	want := strings.Join([]string{heldSubmission, owedHeader + "\n" + owed, calledSinceHeader + "\n" + listed,
+		shownAgainHeader + "\n" + shown, lateCallsHeader + "\n" + late}, "\n\n")
+	if got != want {
+		t.Errorf("a session with a call listed again is told:\n%s\nwant:\n%s", got, want)
+	}
+	if got := CalledAfter(AfterSave{Late: late}); strings.Contains(got, shownAgainHeader) {
+		t.Errorf("a session with no call listed again is told the section:\n%s", got)
+	}
+	for _, said := range []string{"## Calls the session above may show, listed again",
+		"The session above may show each of these calls", "names the same tool and could be taken for it",
+		"a call of its own, made as well as this one", "never this one shown twice"} {
+		if !strings.Contains(shownAgainHeader, said) {
+			t.Errorf("the heading of the calls listed again does not say %q:\n%s", said, shownAgainHeader)
+		}
+	}
+	for _, unsaid := range []string{"shows each", "session above shows", "read alike", "not in it",
+		"may not show", "\u2014"} {
+		if strings.Contains(shownAgainHeader, unsaid) {
+			t.Errorf("the heading of the calls listed again says %q:\n%s", unsaid, shownAgainHeader)
+		}
+	}
+}
+
+// AN EARLIER ROUND'S CALL IS SAID TO BE OF AN EARLIER ROUND OF THE TURN, OR OF
+// THE FIRE. A call of the turn's closed rounds that a brief lists again ends its
+// line with a note that says where in the session above it may be: in an
+// earlier round of this turn, or, in a schedule's conversation, whose turns are
+// its fires, of this fire. In parentheses, as the ledger's own marks on a line
+// are, and with no em dash.
+//
+// Mutation: say "turn" of a schedule's fire, or "fire" of a conversation's turn,
+// and a row goes red.
+func TestAnEarlierRoundsCallIsSaidToBeOfAnEarlierRoundOfTheTurnOrFire(t *testing.T) {
+	t.Parallel()
+	for fire, want := range map[bool]string{
+		false: "(made in an earlier round of this turn)",
+		true:  "(made in an earlier round of this fire)",
+	} {
+		if got := EarlierRoundNote(fire); got != want || strings.Contains(got, "\u2014") {
+			t.Errorf("EarlierRoundNote(%t) = %q, want %q", fire, got, want)
+		}
+	}
+}
+
+// OTHER CALLS ARE SAID TO BE NONE OF THE LISTED ONES. Calls the session may show
+// that no list of the brief names (an earlier turn's, an earlier round's in a
+// summary's words, ones the record no longer lists one by one, a worker's) are
+// told in a section of their own, each part only where it holds, by the tools
+// it names: before every list, right after the held submission, so "below" is
+// every list, and closing with words that say none of them is a listed call.
+// A schedule's conversation says it in a fire's words, and nothing to tell is
+// no section.
+//
+// Mutation: drop a part, say a turn's words of a fire, or tell the section
+// after the owed reads, and a row goes red.
+func TestOtherCallsAreSaidToBeNoneOfTheListedOnes(t *testing.T) {
+	t.Parallel()
+	const (
+		head    = "## Other calls the session above may show\nThe session above may also show calls no list below holds one by one:\n"
+		closing = "\nHowever alike one of them reads to a call listed below, it is a call of its own, never that one" +
+			" shown twice."
+		turns   = "- calls of this conversation's earlier turns, made before this turn began"
+		rounds  = "- calls of this turn's earlier rounds, in full or only in a summary's words, made to `slack_post`"
+		dropped = "- calls of this turn the record no longer lists one by one, made to `slack_post`, `jira_get` and" +
+			" `tr_close_issue` and to tools it does not name"
+		workers = "- calls of workers this turn delegated to, in their reports' words, made to tools the record" +
+			" does not name"
+	)
+	post := ToolsNamed{Tools: []string{"slack_post"}}
+	three := ToolsNamed{Tools: []string{"slack_post", "jira_get", "tr_close_issue"}, Unnamed: true}
+	unnamed := ToolsNamed{Unnamed: true}
+	for name, tc := range map[string]struct {
+		other OtherCalls
+		want  string
+	}{
+		"none":                       {},
+		"the earlier turns alone":    {other: OtherCalls{EarlierTurns: true}, want: head + turns + closing},
+		"the earlier rounds alone":   {other: OtherCalls{EarlierRounds: post}, want: head + rounds + closing},
+		"the calls no longer listed": {other: OtherCalls{Unlisted: three}, want: head + dropped + closing},
+		"the workers' alone":         {other: OtherCalls{Workers: unnamed}, want: head + workers + closing},
+		"every part, in their order": {other: OtherCalls{EarlierTurns: true, EarlierRounds: post, Unlisted: three,
+			Workers: unnamed}, want: head + turns + "\n" + rounds + "\n" + dropped + "\n" + workers + closing},
+		"a part naming no tool at all": {other: OtherCalls{Unlisted: ToolsNamed{}}},
+		"a schedule's fire": {other: OtherCalls{Fire: true, EarlierTurns: true, EarlierRounds: post, Unlisted: post,
+			Workers: ToolsNamed{Tools: []string{"jira_get"}}},
+			want: head + "- calls of this schedule's earlier fires, made before this fire began\n" +
+				"- calls of this fire's earlier rounds, in full or only in a summary's words, made to `slack_post`\n" +
+				"- calls of this fire the record no longer lists one by one, made to `slack_post`\n" +
+				"- calls of workers this fire delegated to, in their reports' words, made to `jira_get`" + closing},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			other := tc.other
+			if got := otherCalls(other); got != tc.want {
+				t.Errorf("the section is:\n%s\nwant:\n%s", got, tc.want)
+			}
+			if strings.Contains(otherCalls(other), "\u2014") || strings.Contains(otherCalls(other), "count") {
+				t.Errorf("the section carries an em dash or speaks of a count:\n%s", otherCalls(other))
+			}
+		})
+	}
+
+	brief := CalledAfter(AfterSave{HeldSubmission: true, Other: OtherCalls{EarlierTurns: true},
+		Owed: "- jira_get({\"key\":\"OPS-1\"}) → success (read)", Late: "- slack_post({}) → success"})
+	held, other, owed := strings.Index(brief, heldSubmission), strings.Index(brief, otherCallsHeader),
+		strings.Index(brief, owedHeader)
+	if held < 0 || other < held || owed < other {
+		t.Errorf("the other calls are not told after the held submission and before the owed reads:\n%s", brief)
+	}
+	if brief := CalledAfter(AfterSave{Late: "- slack_post({}) → success"}); strings.Contains(brief, otherCallsHeader) {
+		t.Errorf("nothing to tell of other calls is told:\n%s", brief)
+	}
+}

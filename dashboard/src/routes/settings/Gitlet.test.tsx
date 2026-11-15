@@ -21,7 +21,6 @@ import {
   LiveSocket,
   Store,
   type CodeRepoSummary,
-  type CompanyDocument,
   type FleetAnswer,
   type FleetNode,
   type OrgProjection,
@@ -34,7 +33,6 @@ import {
   RepoProtection,
   codeAlarmsOf,
   quietWords,
-  codePolicyOf,
   protectionLines,
 } from "./Gitlet.tsx";
 
@@ -93,29 +91,6 @@ test("nothing firing is said of the nodes it is true of", () => {
   expect(quietWords(["booting"])).toBe("No code alarm is firing on the nodes that have reported.");
 });
 
-// AN UNSET FIELD READS AS THE ENGINE'S DEFAULT, and says it is one; a set one
-// is the document's value. Mutation: draw an unset field as zero or empty, or
-// mark a set one as the default, and this fails.
-test("an unset scratch policy and identity domain read as the engine's defaults, marked as defaults", () => {
-  const unset = codePolicyOf({ code: { backend: "gitlet" } } as unknown as CompanyDocument);
-  expect(unset.idleDays).toEqual({ value: 7, set: false });
-  expect(unset.maxPerSeat).toEqual({ value: 50, set: false });
-  expect(unset.identityDomain).toEqual({ value: "seats.invalid", set: false });
-
-  const set = codePolicyOf({
-    code: {
-      backend: "gitlet",
-      scratch: { idle_days: 3, max_per_seat: 0 },
-      identity_domain: "acme.example",
-    },
-  } as unknown as CompanyDocument);
-  expect(set.idleDays).toEqual({ value: 3, set: true });
-  expect(set.maxPerSeat).toEqual({ value: 0, set: true });
-  expect(set.identityDomain).toEqual({ value: "acme.example", set: true });
-
-  expect(codePolicyOf(null).idleDays).toEqual({ value: 7, set: false });
-});
-
 // THE GATE PER PATTERN: each rule says what a merge into it must meet, read
 // from the repository's detail by its own pattern; a rule the detail gives
 // no gate SAYS it has none; and before the detail answers nothing is claimed
@@ -142,7 +117,7 @@ test("each protected rule says its own gate, or that it has none once the detail
   ]);
   const read = protectionLines(rules, [{ pattern: "refs/heads/main", gate }]);
   expect(read[0]?.says).toBe(
-    "nobody pushes to it directly; a merge into it is merged by its maintainers, one approval, 1 check pass, landed by its queue, each change tested merged on the branch before it lands",
+    "nobody pushes to it directly; a merge into it is merged by its maintainers, one approval, 1 check pass, landed by its queue, each change tested merged on the branch before it lands (4 candidates at once, 4 changes each), a change to its checks (.crewlet/**) needs a person",
   );
   expect(read[1]?.says).toBe(
     "only a person pushes to it directly, forced pushes allowed; no merge gate",

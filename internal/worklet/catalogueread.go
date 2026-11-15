@@ -23,6 +23,12 @@ type CatalogueAnswer struct {
 	// the same slug. See [EffectiveTypes].
 	Types []TaskType `json:"types"`
 
+	// DeclaredTypes is the company's OWN declarations, archived ones
+	// included whatever the query asked: what a write of `types` replaces,
+	// so a writer sends back exactly these with its change. Sent back, the
+	// effective set would copy every builtin into the company's words.
+	DeclaredTypes []TaskType `json:"declared_types"`
+
 	// Fields are the WORKSPACE's declarations. A project declares its own
 	// beside them, and a task's effective set is the union — which is why
 	// this answer names its scope rather than claiming to be complete.
@@ -103,6 +109,7 @@ func (r *Reader) Catalogue(ctx context.Context, q CatalogueQuery) (CatalogueAnsw
 			return err
 		}
 		out.Types = EffectiveTypes(types.Types)
+		out.DeclaredTypes = append([]TaskType{}, types.Types...)
 		out.Fields = fields.Fields
 		out.PolicyVersion = fields.PolicyVersion
 		out.TypesVersion, out.FieldsVersion = types.Version, fields.Version

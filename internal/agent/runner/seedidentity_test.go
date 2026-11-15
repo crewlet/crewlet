@@ -247,6 +247,32 @@ func TestACallWhoseArgumentsAreWithheldIsSeededAsOneNoLaterCallRepeats(t *testin
 	}
 }
 
+// A CALL WHOSE ARGUMENTS DID NOT READ BACK IS SEEDED AS ONE NO LATER CALL
+// REPEATS. A call with no digest, as an older build's is, whose record holds
+// its arguments in text that does not read back (ledger.Call.ArgsUnread) was
+// made with arguments no record says, so a resumed segment counts it as a call
+// of its tool that asked for something else, as it does a withheld one. Seeded
+// by the arguments it reads as, which are none, it counted as the tool called
+// with none, and a later call with none took it for the same call.
+//
+// Mutation: seed such a call by the arguments it reads as, and a later call
+// with no arguments counts it as the same call.
+func TestACallWhoseArgumentsDidNotReadBackIsSeededAsOneNoLaterCallRepeats(t *testing.T) {
+	t.Parallel()
+	unread := []runner.BridgedCall{{Call: ledger.Call{Name: "set_status", Result: "applied", ArgsUnread: true},
+		Seq: 1}}
+	open := reopenedLog(t, unread, nil, nil, nil)
+	if got := open.Ordinal("set_status", map[string]any{}); got != 1 {
+		t.Errorf("the open round's call whose arguments did not read back counts %d against a later call with "+
+			"no arguments, want 1", got)
+	}
+	closed := reopenedLog(t, nil, nil, nil, []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{unread[0].Call}}})
+	if got := closed.Ordinal("set_status", map[string]any{}); got != 1 {
+		t.Errorf("a closed round's call whose arguments did not read back counts %d against a later call with "+
+			"no arguments, want 1", got)
+	}
+}
+
 // submissionOf is submit_work's arguments with a summary of n bytes: a round
 // blocked, which every turn may report.
 func submissionOf(n int) map[string]any {

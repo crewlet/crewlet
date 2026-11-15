@@ -95,6 +95,9 @@ func integrationLine(in Integration) string {
 	if len(parts) == 0 {
 		parts = append(parts, "your own account.")
 	}
+	if len(in.Grants) > 0 {
+		parts = append(parts, "Beside it: "+strings.Join(in.Grants, "; ")+".")
+	}
 	parts = append(parts, grantSentence(seataccess.Lane(in.Lane)))
 	if tool := toolSentence(seataccess.ToolState(in.Tool), false, voiceOf(ForSeat)); tool != "" {
 		parts = append(parts, capitalized(tool))
@@ -108,8 +111,20 @@ func integrationLine(in Integration) string {
 // grantSentence is where a lane's level, permissions and scope are decided:
 // the seat's Crewlet grant, and the screen an administrator changes it on.
 func grantSentence(lane seataccess.Lane) string {
-	return "Your Crewlet grant sets this; an administrator changes it under " +
+	out := "Your Crewlet grant sets this; an administrator changes it under " +
 		seataccess.GrantPlace(lane) + "."
+	if slices.Contains(seataccess.GrantLanes(), lane) {
+		// THE WAY TO MORE, on the lane an agent meets a refusal on: a person
+		// editing the token at the vendor is drift the next sync undoes.
+		refusal := ""
+		if w := seataccess.GrantTermsOf(lane).Refusal; w != "" {
+			refusal = " (" + w + ")"
+		}
+		out += " When " + seataccess.LaneName(lane) + " refuses a call for a permission you lack" + refusal +
+			", ask for that one permission with " + toolname.RequestAccess + "; never ask a person to " +
+			"change your credential at " + seataccess.LaneName(lane) + " by hand."
+	}
+	return out
 }
 
 // commandsSentence is one SSH host's read commands, as the seat types them.

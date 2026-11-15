@@ -97,6 +97,7 @@ two units or two seats may share one):
 | The link carries | The builder opens |
 |---|---|
 | `seat=<handle>` and `editor=open` | that seat's editor (a seat's **Edit** beside its setup on its page, **Edit in org** in its menu) |
+| `seat=<handle>` and `editor=model` or `editor=advanced` | that seat's editor on its Model or Advanced tab (a seat's Settings tab: **Edit models**, and **Change** beside Learning) |
 | `unit=<key>` and `editor=open` | that unit's editor |
 | `add=agent`, `add=human` or `add=unit` | the Add on that kind at the company's top level |
 | `unit=<key>` and `add=…` | the Add under that unit |
@@ -712,7 +713,7 @@ parts:
 
 | Node | Tabs |
 |---|---|
-| Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers and token ceilings), **Integrations** (the seat's code access first, where the company runs Gitlet, then one card per connected tool), **Advanced** (what the configuration document sets, and Delete) |
+| Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers, models per phase and token ceilings), **Integrations** (the seat's code access first, where the company runs Gitlet, then one card per connected tool), **Advanced** (learning, workers, placement and the executor box's numbers, then what the configuration document sets, and Delete) |
 | Human seat | **Profile** (name, email, handle and kind; the **Person** who holds the seat; and the role: goal, backstory, responsibilities), **Contact** (contact identities and availability), **Work** (manages, and Delete) |
 | Unit | **Profile** (name, key, type, purpose, goals), **Leadership** (Reports to, the unit's lead, and channel), **Work** (owns, references, schedules), **Advanced** (tool credentials, and Delete) |
 
@@ -821,14 +822,17 @@ credentials are written in the configuration document.
 | Schedules: enabled | Agent seats. |
 | Integrations | Agent seats; see below. |
 | Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes and where it files its own. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. Changing either takes `admin`. |
+| Models per phase: reviewer, sub-agents, auxiliary, round-cap judge | Agent seats, on **Model**. `llm_review`, `llm_subagent`, `llm_auxiliary` and `llm_judge`, each a chain of the company's providers in order; empty uses the seat's model. A chain written as a per-phase mapping is shown and left to the configuration document. |
+| Learning | Agent seats, on **Advanced**. `learning_enabled`: the company's default (unset), on or off. Off skips reflection after the seat's turns; its episodes are still written. |
+| Workers it may delegate to | Agent seats, on **Advanced**. `workers`, chosen from the delegate templates the company publishes; empty is every one. |
+| Placement: pinned to node, node labels | Agent seats, on **Advanced**. `placement.node` and `placement.labels`, each label written `key=value`; a node must carry every label to run the seat. |
+| Executor box: paused for, rounds per run | Agent seats, on **Advanced**. `sandbox.pause_ttl_seconds` and `sandbox.max_turns`, whole numbers; empty is the default, and 0 is a setting (never pause, or no round cap). |
 
-Shown with the reason they are not changed here: per-phase models
-(`llm_review` and the other `llm_*` fields), the executor box (the seat's
-setup steps, variables, tool servers and turn cap; where it runs is its model
-entry's `run_in`), workers, placement, learning, tool credentials (names only)
-and whether the seat is the Datadog fallback. The executor box, placement,
-workers and tool credentials each depend on a company-level block the builder
-does not edit.
+Shown with the reason they are not changed here: the rest of the executor
+box (the seat's setup steps, variables and tool servers; where it runs is its
+model entry's `run_in`), tool credentials (names only) and whether the seat is
+the Datadog fallback. Each depends on a company-level block the builder does
+not edit.
 
 **Delete seat** is on the editor's last tab (**Advanced** for an agent seat,
 **Work** for a human seat) and opens the same dialog as the chart's Delete.

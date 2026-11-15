@@ -19,10 +19,25 @@ const (
 	LimitDelegation    LimitGroup = "delegation"
 	LimitNotifications LimitGroup = "notifications"
 	LimitSchedules     LimitGroup = "schedules"
+	// LimitDelegated is what every delegate of a delegated decision is held
+	// to (delegated.Limits), answered on `delegated_decisions` beside the
+	// rules it bounds, never on `limits`.
+	LimitDelegated LimitGroup = "delegated"
+	// LimitInbox, LimitAtlas and LimitCode are the settings the Worklet,
+	// Atlas and Gitlet screens change in place, answered on `limits` and
+	// drawn there rather than on Settings › Limits.
+	LimitInbox LimitGroup = "inbox"
+	LimitAtlas LimitGroup = "atlas"
+	LimitCode  LimitGroup = "code"
+	// LimitChat is Chatlet's company-wide message horizon, which its own
+	// screen changes in place.
+	LimitChat LimitGroup = "chat"
 )
 
-// LimitGroups are the four, in that order.
-var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules}
+// LimitGroups are every group, in drawing order. Settings › Limits draws the
+// first four; `delegated_decisions` answers the delegated rows.
+var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules, LimitDelegated,
+	LimitInbox, LimitAtlas, LimitCode, LimitChat}
 
 // LimitUnit is what a limit's number counts.
 type LimitUnit string
@@ -38,10 +53,12 @@ const (
 	LimitFraction LimitUnit = "fraction"
 	// LimitPerSecond is a rate.
 	LimitPerSecond LimitUnit = "per_second"
+	// LimitDays is a whole number of days: a retention, an idle time.
+	LimitDays LimitUnit = "days"
 )
 
-// LimitUnits are the four.
-var LimitUnits = []LimitUnit{LimitCount, LimitSeconds, LimitFraction, LimitPerSecond}
+// LimitUnits are the five.
+var LimitUnits = []LimitUnit{LimitCount, LimitSeconds, LimitFraction, LimitPerSecond, LimitDays}
 
 // LimitRow is one cap: where the company document sets it, the value the
 // engine enforces, and the engine's default for it.
@@ -69,8 +86,9 @@ type LimitRow struct {
 	// Default is what it enforces when the document says nothing.
 	Default float64 `json:"default"`
 	// Off is whether Value switches the limit off rather than bounding
-	// anything: a `notification_rate_limit` of 0 is no rate limit, and an
-	// `onboarding_max_tool_rounds` of 0 is no onboarding pass.
+	// anything: a `notification_rate_limit` of 0 is no rate limit, an
+	// `onboarding_max_tool_rounds` of 0 is no onboarding pass, and a token
+	// floor of 0 is no floor.
 	Off bool `json:"off"`
 	// DefaultOff is the same question asked of Default, so a screen that
 	// says which default a set value replaced says Off where the default is
@@ -124,8 +142,13 @@ var limits = []limit{
 		read: func(c *config.Company) float64 {
 			return float64(c.TurnEngine.OnboardingRounds())
 		}},
+	{key: "turn_engine.extension_round_step", group: LimitTurn, unit: LimitCount,
+		read: func(c *config.Company) float64 { return float64(c.TurnEngine.ExtensionRoundStep) }},
 	{key: "turn_engine.delegation_depth_limit", group: LimitTurn, unit: LimitCount,
 		read: func(c *config.Company) float64 { return float64(c.TurnEngine.DelegationDepthLimit) }},
+	{key: "turn_engine.executor_min_budget_tokens", group: LimitTurn, unit: LimitCount,
+		zeroIsOff: true,
+		read:      func(c *config.Company) float64 { return float64(c.TurnEngine.ExecutorFloor()) }},
 	{key: "turn_engine.delegation.max_parallel", group: LimitDelegation, unit: LimitCount,
 		read: func(c *config.Company) float64 { return float64(c.TurnEngine.Delegation.MaxParallel) }},
 	{key: "turn_engine.delegation.max_tasks_per_call", group: LimitDelegation, unit: LimitCount,
@@ -134,6 +157,13 @@ var limits = []limit{
 		}},
 	{key: "turn_engine.delegation.max_turns", group: LimitDelegation, unit: LimitCount,
 		read: func(c *config.Company) float64 { return float64(c.TurnEngine.Delegation.MaxTurns) }},
+	// THE CEILING "Turns per worker" is refused above, drawn beside it so a
+	// person told "can be at most N" can see and raise N.
+	{key: "turn_engine.delegation.max_turns_ceiling", group: LimitDelegation, unit: LimitCount,
+		read: func(c *config.Company) float64 { return float64(c.TurnEngine.Delegation.MaxTurnsCeiling) }},
+	{key: "turn_engine.delegation.min_tokens_per_task", group: LimitDelegation, unit: LimitCount,
+		zeroIsOff: true,
+		read:      func(c *config.Company) float64 { return float64(c.TurnEngine.Delegation.PerTaskFloor()) }},
 	{key: "turn_engine.delegation.budget_fraction", group: LimitDelegation, unit: LimitFraction,
 		read: func(c *config.Company) float64 { return c.TurnEngine.Delegation.BudgetFraction }},
 	{key: "turn_engine.delegation.task_timeout_seconds", group: LimitDelegation, unit: LimitSeconds,
@@ -154,13 +184,58 @@ var limits = []limit{
 		read: func(*config.Company) float64 {
 			return float64(org.DefaultScheduleTimeout / time.Second)
 		}},
+	{key: "inbox.retention_days", group: LimitInbox, unit: LimitDays,
+		read: func(c *config.Company) float64 { return float64(c.Inbox.Days()) }},
+	{key: "atlas.refresh_interval_seconds", group: LimitAtlas, unit: LimitSeconds,
+		read: func(c *config.Company) float64 { return c.Atlas.RefreshInterval().Seconds() }},
+	{key: "code.scratch.idle_days", group: LimitCode, unit: LimitDays,
+		read: func(c *config.Company) float64 {
+			idle, _ := c.Code.Scratch.Resolved()
+			return float64(idle)
+		}},
+	// ZERO LETS NO SEAT CREATE ONE, which is a setting rather than no limit,
+	// so it is not Off.
+	{key: "code.scratch.max_per_seat", group: LimitCode, unit: LimitCount,
+		read: func(c *config.Company) float64 {
+			_, most := c.Code.Scratch.Resolved()
+			return float64(most)
+		}},
+	// ZERO KEEPS MESSAGES FOR EVER, so it is Off: no horizon prunes them.
+	{key: "chat.chatlet.message_retention_days", group: LimitChat, unit: LimitDays,
+		zeroIsOff: true,
+		read: func(c *config.Company) float64 {
+			horizon, bounded := c.Chat.Chatlet.MessageRetention()
+			if !bounded {
+				return 0
+			}
+			return horizon.Hours() / 24
+		}},
+}
+
+// delegatedLimits are the limits every delegate is held to, the rows of
+// `delegated_decisions`' `limits`, read through the one accessor every reader
+// of them uses ([config.DelegatedDecisions.Limits]).
+var delegatedLimits = []limit{
+	{key: "delegated_decisions.deadline_seconds", group: LimitDelegated, unit: LimitSeconds,
+		read: func(c *config.Company) float64 { return c.DelegatedDecisions.Limits().Deadline.Seconds() }},
+	{key: "delegated_decisions.allows_per_hour", group: LimitDelegated, unit: LimitCount,
+		read: func(c *config.Company) float64 { return float64(c.DelegatedDecisions.Limits().AllowsPerHour) }},
+	{key: "delegated_decisions.server_allows_per_hour", group: LimitDelegated, unit: LimitCount,
+		read: func(c *config.Company) float64 {
+			return float64(c.DelegatedDecisions.Limits().ServerAllowsPerHour)
+		}},
 }
 
 // limitsAnswer is every row read off c, beside the engine's defaults.
 func limitsAnswer(c *config.Company) LimitsAnswer {
+	return LimitsAnswer{Limits: limitRows(c, limits)}
+}
+
+// limitRows is each row of table read off c, beside the engine's defaults.
+func limitRows(c *config.Company, table []limit) []LimitRow {
 	defaults := config.DefaultCompany()
-	out := LimitsAnswer{Limits: make([]LimitRow, 0, len(limits))}
-	for _, l := range limits {
+	out := make([]LimitRow, 0, len(table))
+	for _, l := range table {
 		value, def := l.read(c), l.read(&defaults)
 		row := LimitRow{
 			Key: l.key, Group: l.group, Unit: l.unit,
@@ -172,7 +247,7 @@ func limitsAnswer(c *config.Company) LimitsAnswer {
 		if r, ok := config.RangeOf(l.key); ok && row.Settable {
 			row.Range = &r
 		}
-		out.Limits = append(out.Limits, row)
+		out = append(out, row)
 	}
 	return out
 }

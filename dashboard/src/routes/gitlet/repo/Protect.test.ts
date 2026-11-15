@@ -10,18 +10,23 @@
  */
 
 import { expect, test } from "vitest";
-import { protectArgs, type HeldRule } from "./Protect.tsx";
+import { landingHeld, protectArgs, type HeldRule, type ProtectForm } from "./Protect.tsx";
 
-const FORM = {
+const FORM: ProtectForm = {
   directPush: "persons",
   allowForce: false,
   allowDelete: false,
   gated: false,
   mergeBy: "writers",
   approvals: "none",
+  approvalsUnless: [],
+  humanPaths: [],
   checks: "",
+  depth: "4",
+  batch: "2",
   ownersApprove: false,
   deleteSource: "seats",
+  agentsEditChecks: false,
 };
 
 const HELD: HeldRule = {
@@ -29,12 +34,27 @@ const HELD: HeldRule = {
   gate: {
     merge_by: "writers",
     approvals: "one",
+    approvals_unless: ["whitespace_only"],
+    human_paths: [{ glob: "migrations/**" }, { glob: "*.sql", unless: ["comment_only"] }],
     checks: ["unit", "lint"],
+    landing: { depth: 2, batch: 1 },
     delete_source: "seats",
   },
 } as unknown as HeldRule;
 
-const asHeld = { ...FORM, gated: true, approvals: "one", checks: "unit, lint" };
+const asHeld: ProtectForm = {
+  ...FORM,
+  gated: true,
+  approvals: "one",
+  approvalsUnless: ["whitespace_only"],
+  humanPaths: [
+    { glob: "migrations/**", unless: [] },
+    { glob: "*.sql", unless: ["comment_only"] },
+  ],
+  checks: "unit, lint",
+  depth: "2",
+  batch: "1",
+};
 
 test("a rule as it was read sends nothing", () => {
   expect(protectArgs(HELD, asHeld)).toEqual({});
@@ -56,7 +76,7 @@ test("a gate newly made names who merges and its approvals, even at the defaults
 });
 
 test("a gate turned off is remove_gate and nothing of it", () => {
-  expect(protectArgs(HELD, { ...asHeld, gated: false, checks: "" })).toEqual({
+  expect(protectArgs(HELD, { ...asHeld, gated: false, checks: "", humanPaths: [] })).toEqual({
     remove_gate: true,
   });
   // NO GATE TO REMOVE: nothing is sent for it.
@@ -74,4 +94,63 @@ test("the required checks change by what was added and what was removed", () => 
     approvals: "none",
     owners_approve: true,
   });
+});
+
+// THE EXEMPTING CLASSES MOVE ITEM BY ITEM, in the engine's order. Mutation:
+// send `approvals_unless` as the list ticked, and a class another person
+// ticked meanwhile is dropped; this fails.
+test("the classes that exempt a change from approval change by what moved", () => {
+  expect(protectArgs(HELD, { ...asHeld, approvalsUnless: ["comment_only"] })).toEqual({
+    approvals_unless: { add: ["comment_only"], remove: ["whitespace_only"] },
+  });
+});
+
+// THE HUMAN PATHS MOVE BY GLOB: a new glob put, a dropped one removed, a kept
+// one put again only where its classes moved. Mutation: send the paths whole,
+// or put an unchanged glob, and this fails.
+test("the paths a person approves change by glob", () => {
+  expect(
+    protectArgs(HELD, {
+      ...asHeld,
+      humanPaths: [
+        { glob: "*.sql", unless: [] },
+        { glob: "infra/**", unless: ["whitespace_only"] },
+        { glob: "infra/**", unless: [] },
+      ],
+    }),
+  ).toEqual({
+    human_paths: {
+      put: [{ glob: "*.sql" }, { glob: "infra/**", unless: ["whitespace_only"] }],
+      remove: ["migrations/**"],
+    },
+  });
+});
+
+// THE LANDING A FIELD AT A TIME, against the gate's, or the engine's new
+// gate's for a gate newly made. Mutation: send both fields on any move, or
+// send the defaults for a new gate, and this fails.
+test("the queue's depth and batch are sent a field at a time", () => {
+  expect(protectArgs(HELD, { ...asHeld, depth: "3" })).toEqual({ landing: { depth: 3 } });
+  expect(protectArgs(undefined, { ...FORM, gated: true })).not.toHaveProperty("landing");
+  expect(protectArgs(undefined, { ...FORM, gated: true, batch: "5" })).toMatchObject({
+    landing: { batch: 5 },
+  });
+});
+
+// A SEAT APPROVING THE CHECKS' OWN CHANGE is sent where it moved, and only
+// then. Mutation: drop the field, or send it unmoved, and this fails.
+test("a seat approving a change to the checks is sent where it moved", () => {
+  expect(protectArgs(HELD, { ...asHeld, agentsEditChecks: true })).toEqual({
+    agents_edit_checks: true,
+  });
+});
+
+// THE QUEUE'S BOUNDS ARE THE ENGINE'S, judged only for a gated rule.
+// Mutation: admit 0, 9 or a fraction, or judge an ungated form, and this fails.
+test("a gate's queue is held to whole numbers inside the engine's bounds", () => {
+  expect(landingHeld({ gated: true, depth: "8", batch: "1" })).toBeUndefined();
+  expect(landingHeld({ gated: true, depth: "9", batch: "1" })).toMatch(/1 to 8/);
+  expect(landingHeld({ gated: true, depth: "2", batch: "0" })).toMatch(/1 to 8/);
+  expect(landingHeld({ gated: true, depth: "1.5", batch: "1" })).toMatch(/whole number/);
+  expect(landingHeld({ gated: false, depth: "", batch: "" })).toBeUndefined();
 });

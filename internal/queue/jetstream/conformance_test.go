@@ -236,7 +236,7 @@ func inspector(q queue.EventQueue) *Queue {
 // settlePoll is how often settleQueue reads the loops again while one has not
 // settled: a fifth of the harness's poll (testTimings' FetchWait), so a loop
 // that has come round is seen within a fifth of its cycle. It decides nothing:
-// each read does, and the suite's settleFor bounds them all.
+// each read does, and the suite's stallFor bounds them all.
 const settlePoll = 5 * time.Millisecond
 
 // settleQueue is this backend's Settle: it returns once q will dispatch nothing

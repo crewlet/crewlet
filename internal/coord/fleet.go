@@ -2105,6 +2105,7 @@ type Fleet interface {
 	AtlasSourceRefreshes
 	AtlasCodeScans
 	SeatAccess
+	GrantRequests
 	AccessReviews
 	AtlasWakes
 	ConversationHolds

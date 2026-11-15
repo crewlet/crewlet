@@ -78,13 +78,15 @@ test("the document's own value is read by the key's path", () => {
 test("a change is worked out against the document as it is now", () => {
   const cap = row({ key: "turn_engine.max_iterations" });
   const writes = { name: "Acme", turn_engine: { max_iterations: 5 } };
-  expect(limitPlan(cap, "Review rounds per turn", 5)(writes)).toBeNull();
-  expect(limitPlan(cap, "Review rounds per turn", null)({ name: "Acme" })).toBeNull();
-  expect(limitPlan(cap, "Review rounds per turn", null)(writes)).toEqual({
+  expect(limitPlan(cap, "Review rounds per turn", 5, "Limits")(writes)).toBeNull();
+  expect(limitPlan(cap, "Review rounds per turn", null, "Limits")({ name: "Acme" })).toBeNull();
+  expect(limitPlan(cap, "Review rounds per turn", null, "Limits")(writes)).toEqual({
     patch: { turn_engine: { max_iterations: null } },
     summary: "Limits: Review rounds per turn back to the default (turn_engine.max_iterations)",
   });
-  expect(limitPlan(SHARE, "Share of the budget a call may spend", 0.35)({ name: "Acme" })).toEqual({
+  expect(
+    limitPlan(SHARE, "Share of the budget a call may spend", 0.35, "Limits")({ name: "Acme" }),
+  ).toEqual({
     patch: { turn_engine: { delegation: { budget_fraction: 0.35 } } },
     summary:
       "Limits: Share of the budget a call may spend set to 35% (turn_engine.delegation.budget_fraction)",
@@ -151,4 +153,45 @@ test("the engine's refusal of a cap is said without the document's keys", () => 
   expect(limitRefusal(rounds, [at("mcp_servers.0.name")])).toBe(
     "This value does not fit the rest of the company’s configuration.",
   );
+});
+
+// A RANGE WITH A HOLE: 0 is admitted beside 30 to 3650 days (keep for ever),
+// while 1 to 29 is refused in words that name both. Mutation: drop the zero
+// carve-out from rangeAdmits and 0 is refused; drop it from rangeWords and the
+// refusal of 12 never offers for ever.
+test("a range that also admits zero takes 0 and refuses the hole below its least", () => {
+  const horizon = row({
+    key: "chat.chatlet.message_retention_days",
+    group: "chat",
+    unit: "days",
+    value: 365,
+    default: 365,
+    range: { min: 30, max: 3650, or_zero: true },
+  });
+  const zero = "0 to keep them for ever";
+  expect(readLimit(horizon, "0", zero)).toEqual({ ok: true, value: 0 });
+  expect(readLimit(horizon, "30", zero)).toEqual({ ok: true, value: 30 });
+  for (const typed of ["1", "12", "29", "3651", "-1"]) {
+    expect(readLimit(horizon, typed, zero)).toEqual({
+      ok: false,
+      error: "From 30 days to 3,650 days, or 0 to keep them for ever.",
+    });
+  }
+  // THE ENGINE'S REFUSAL carrying the range is said the same way.
+  expect(
+    limitRefusal(
+      horizon,
+      [
+        {
+          path: "chat.chatlet.message_retention_days",
+          segments: null,
+          kind: "out_of_range",
+          message:
+            "chat.chatlet.message_retention_days: out of range: must be 0 or between 30 and 3650, got 12",
+          range: { min: 30, max: 3650, or_zero: true },
+        },
+      ],
+      zero,
+    ),
+  ).toBe("From 30 days to 3,650 days, or 0 to keep them for ever.");
 });

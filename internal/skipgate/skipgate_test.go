@@ -8,8 +8,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ran is the package set a case says the run covered.
@@ -592,10 +594,14 @@ func TestEveryAllowanceIsWellFormed(t *testing.T) {
 // internal/solo/partition reads this file to decide which packages start
 // first, so a FAILED package's elapsed time, which stops wherever the failure
 // stopped it, would teach the next run that a package is short because it
-// broke, and start it late. A package cut off mid-run has no result to time at
-// all. And a package with no test files is in the half like any other, so it
-// is timed (as a zero) rather than left out, where it would weigh the half's
-// median.
+// broke, and start it late; its tests go with it, the ones that passed
+// included. A package cut off mid-run has no result to time at all. And a
+// package with no test files is in the half like any other, so it is timed
+// (as a zero) rather than left out, where it would weigh the half's median.
+//
+// Under each package that passed, its TOP-LEVEL tests that passed or skipped,
+// in name order: a subtest is inside its parent's seconds, so a line of its
+// own would count it twice.
 func TestTheTimingsTimeWhatPassed(t *testing.T) {
 	t.Parallel()
 
@@ -608,7 +614,13 @@ func TestTheTimingsTimeWhatPassed(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"Action":"start","Package":"` + passed + `"}`,
 		`{"Action":"run","Package":"` + passed + `","Test":"TestX"}`,
+		`{"Action":"run","Package":"` + passed + `","Test":"TestX/sub"}`,
+		`{"Action":"pass","Package":"` + passed + `","Test":"TestX/sub","Elapsed":4}`,
 		`{"Action":"pass","Package":"` + passed + `","Test":"TestX","Elapsed":12.1}`,
+		`{"Action":"run","Package":"` + passed + `","Test":"TestSkipped"}`,
+		`{"Action":"skip","Package":"` + passed + `","Test":"TestSkipped","Elapsed":0.004}`,
+		`{"Action":"run","Package":"` + passed + `","Test":"TestB"}`,
+		`{"Action":"pass","Package":"` + passed + `","Test":"TestB","Elapsed":0.5}`,
 		`{"Action":"pass","Package":"` + passed + `","Elapsed":12.5}`,
 		`{"Action":"skip","Package":"` + noTests + `","Elapsed":0}`,
 		`{"Action":"run","Package":"` + failed + `","Test":"TestY"}`,
@@ -624,7 +636,12 @@ func TestTheTimingsTimeWhatPassed(t *testing.T) {
 	if err := writeTimings(&got, r); err != nil {
 		t.Fatal(err)
 	}
-	if want := passed + "\t12.500\n" + noTests + "\t0.000\n"; got.String() != want {
+	want := passed + "\t12.500\n" +
+		passed + "\tTestB\t0.500\n" +
+		passed + "\tTestSkipped\t0.004\n" +
+		passed + "\tTestX\t12.100\n" +
+		noTests + "\t0.000\n"
+	if got.String() != want {
 		t.Errorf("timings =\n%s\nwant\n%s", got.String(), want)
 	}
 }
@@ -1041,5 +1058,124 @@ func TestTheVerdictNamesAPackageThatFailedWithNoFailingTest(t *testing.T) {
 					"explanation, which buries the name that is the answer:\n%s", note)
 			}
 		})
+	}
+}
+
+// THE CPU LINE SAYS WHAT THE COMMAND USED, AND SAYS SO WHEN IT CANNOT.
+//
+// The line is how a CI log tells a CPU-bound shard from one that waits: the
+// CPU used over the wall time is the average number of busy CPUs, printed
+// against the CPUs the run had. A command that never exited must not print a
+// zero, which reads as a run that sat idle, and a run too short to have a wall
+// time must not divide by it.
+func TestTheCPULineSaysWhatTheCommandUsed(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct {
+		used, wall time.Duration
+		cpus       int
+		want       string
+	}{
+		{3612 * time.Second, 1057 * time.Second, 4,
+			"skipgate: the run used 3612 CPU-seconds in 1057 s, 3.4 of 4 CPUs busy on average"},
+		{300 * time.Second, 1200 * time.Second, 4,
+			"skipgate: the run used 300 CPU-seconds in 1200 s, 0.2 of 4 CPUs busy on average"},
+		{0, 0, 2,
+			"skipgate: the run used 0 CPU-seconds in 0 s, 0.0 of 2 CPUs busy on average"},
+	} {
+		if got := cpuLine(c.used, c.wall, c.cpus); got != c.want {
+			t.Errorf("cpuLine(%v, %v, %d) =\n%q\nwant\n%q", c.used, c.wall, c.cpus, got, c.want)
+		}
+	}
+	if got, want := cpuUse(nil, time.Minute, 4), "skipgate: the command did not exit, so the CPU it used is unknown"; got != want {
+		t.Errorf("cpuUse(nil) = %q, want %q", got, want)
+	}
+}
+
+// THE SLOWEST LIST IS THE LONGEST FIRST, SUBTESTS INCLUDED, AND NO MORE.
+//
+// A suite run as subtests of one test spends its time in those subtests,
+// and the -timings file stops at the top level, so the list is where they
+// are seen: it must rank them beside top-level tests, cut at n, break ties
+// by name so two runs of one measurement print one list, and print nothing
+// for a run that timed nothing rather than a header over an empty list.
+func TestTheSlowestListIsTheLongestFirst(t *testing.T) {
+	t.Parallel()
+
+	timed := []timedTest{
+		{"internal/a", "TestShort", 0.5},
+		{"internal/b", "TestSuite/case_two", 40},
+		{"internal/a", "TestTie", 7},
+		{"internal/b", "TestSuite", 61.25},
+		{"internal/a", "TestAlsoTie", 7},
+		{"internal/c", "TestSkipped", 0},
+	}
+	got := slowest(timed, 4)
+	want := "skipgate: the 4 slowest tests and subtests:\n" +
+		"     61.250s  internal/b TestSuite\n" +
+		"     40.000s  internal/b TestSuite/case_two\n" +
+		"      7.000s  internal/a TestAlsoTie\n" +
+		"      7.000s  internal/a TestTie\n"
+	if got != want {
+		t.Errorf("slowest(…, 4) =\n%s\nwant\n%s", got, want)
+	}
+	if got := slowest(timed[:2], 25); !strings.HasPrefix(got, "skipgate: the 2 slowest") {
+		t.Errorf("slowest of 2 timed tests, asked for 25, =\n%s\nwant a list of the 2", got)
+	}
+	if got := slowest(nil, 25); got != "" {
+		t.Errorf("slowest of nothing = %q, want nothing printed", got)
+	}
+}
+
+// A TEST IS TIMED BY ITS ACTIVE SPAN, NOT BY ITS OWN ELAPSED.
+//
+// The testing package stops a test's clock when its body returns, before its
+// parallel subtests run, so a suite of parallel cases under one test reported
+// its setup alone (internal/coord/kv's TestContract: 0.25 s). Its stamps say
+// what it held: from `run` to its result, less the stretch t.Parallel held it
+// paused. A `=== CONT` cmd/go prints only because the output switched back to
+// a running test is not a resume, and must not restart its clock.
+func TestATestIsTimedByItsActiveSpan(t *testing.T) {
+	t.Parallel()
+
+	const pkg = "github.com/crewlet/crewlet/internal/a"
+	at := func(seconds int) string {
+		return time.Date(2026, 11, 15, 12, 0, seconds, 0, time.UTC).Format(time.RFC3339Nano)
+	}
+	ev := func(action, test string, seconds int, elapsed float64) string {
+		return `{"Time":"` + at(seconds) + `","Action":"` + action + `","Package":"` + pkg +
+			`","Test":"` + test + `","Elapsed":` + strconv.FormatFloat(elapsed, 'f', -1, 64) + `}`
+	}
+	stream := strings.Join([]string{
+		// A suite: its body returns at once, its parallel cases run a minute.
+		ev("run", "TestSuite", 0, 0),
+		ev("run", "TestSuite/case", 0, 0),
+		ev("pause", "TestSuite/case", 0, 0),
+		ev("cont", "TestSuite/case", 0, 0),
+		ev("pass", "TestSuite/case", 60, 60),
+		ev("pass", "TestSuite", 60, 0.25),
+		// A parallel test held thirty seconds for a slot, then ten running,
+		// with a CONT in the middle that only marks switched output.
+		ev("run", "TestWaited", 0, 0),
+		ev("pause", "TestWaited", 1, 0),
+		ev("cont", "TestWaited", 31, 0),
+		ev("cont", "TestWaited", 35, 0),
+		ev("pass", "TestWaited", 41, 11),
+		`{"Time":"` + at(61) + `","Action":"pass","Package":"` + pkg + `","Elapsed":61}`,
+	}, "\n")
+
+	r := read(bufio.NewScanner(strings.NewReader(stream)), devNull(t))
+	var got strings.Builder
+	if err := writeTimings(&got, r); err != nil {
+		t.Fatal(err)
+	}
+	want := pkg + "\t61.000\n" +
+		pkg + "\tTestSuite\t60.000\n" +
+		pkg + "\tTestWaited\t11.000\n"
+	if got.String() != want {
+		t.Errorf("timings =\n%s\nwant\n%s", got.String(), want)
+	}
+	if list := slowest(r.timed, 3); !strings.Contains(list, "60.000s  internal/a TestSuite/case") {
+		t.Errorf("the slowest list does not time the parallel case by its span:\n%s", list)
 	}
 }

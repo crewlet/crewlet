@@ -60,11 +60,30 @@ type Call struct {
 	// update refused by the store (internal/sandbox's BridgeLog.InFlight). It
 	// is Failed, so no reader takes it for a delivery or a submission, and its
 	// Result says its effects may stand and are to be checked before it is
-	// made again, never that it failed; Args are empty, an entry keeping none.
+	// made again, never that it failed; Args are empty, an entry keeping none,
+	// and its line says no record keeps them ([FormatCalls]).
 	// A later segment's call log counts it by Digest, or, where it has none —
 	// a tool that may ask a person first — as a call of its tool whose
 	// arguments are not known, never as the tool called with none.
 	Unfinished bool `json:"Unfinished,omitempty"`
+
+	// ArgsUnread is a call made with arguments in text that could not be
+	// read: its record holds them as text that does not read back
+	// (internal/tools' ReadArgs answers nil for it), a record something
+	// truncated or damaged; or the bridge could not parse what the model
+	// wrote and answered the call unrun, recording no text
+	// (internal/sandbox's BridgeCall.ArgsUnparsed). Args are nil on it, as
+	// they are on a call its record says was made with none (no text at
+	// all), so this says which of the two it is. Its line says its arguments
+	// could not be read whatever Args holds ([FormatCalls]), and every reader
+	// that compares or counts calls by their arguments reads it as a call of
+	// its tool whose arguments are not known: drawn or counted as the tool
+	// called with none, it is a different call.
+	//
+	// ADDITIVE ON THE WIRE: a build before it drops the key where a parked
+	// turn's closed rounds carry it, and draws and counts the call as it
+	// always did, as one with no arguments.
+	ArgsUnread bool `json:"ArgsUnread,omitempty"`
 }
 
 // FormatOptions controls how a run of calls renders.
@@ -94,6 +113,22 @@ type FormatOptions struct {
 	// Fitted is the caller's rewrite of each piece [CallPieces] named.
 	// A piece missing from it renders whole.
 	Fitted Fitted
+
+	// Notes is words a call's line ends with, per group of a
+	// [FormatCallGroups] render ([FormatCalls]: its one group) and per call
+	// of the group BY ITS PLACE IN THE GROUP: "" for none, and a group or a
+	// place past the end of it for none at all, so nil renders every line as
+	// it was. The caller's own words, rendered as given: never a piece, never
+	// fitted ([CallPieces] does not read them), and never counted against a
+	// budget. A call the render leaves out carries none, its note printed
+	// nowhere, since a note names the call whose line it ends.
+	//
+	// BY PLACE, NEVER BY SHOWN POSITION: a caller knows which call it means
+	// by where it stands in the group it handed over, and the render leaves
+	// out skipped names and reads past the cap from anywhere in a group, so
+	// the k-th line printed is not the group's k-th call. [ShownIndices] is
+	// the walk by place, for a caller that must know which places are shown.
+	Notes [][]string
 }
 
 // Format is the budgeted form the cross-round ledger uses, and the lists of
@@ -103,8 +138,10 @@ type FormatOptions struct {
 // every call of the round for a run of its own, which [FormatElided] follows
 // there as it does a round here; the late ones (those that finished only after
 // their run stopped waiting for them, those nobody waited for, and those still
-// in flight); and the reads an earlier brief to the session counted without
-// listing them, rendered together under one read cap ([FormatCallGroups]).
+// in flight); the reads an earlier brief to the session counted without
+// listing them; and the calls the session holds that a told call could be
+// taken for, listed again, rendered together under one read cap
+// ([FormatCallGroups]).
 // The caller fits the pieces it names and sets [FormatOptions.Fitted].
 func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{
@@ -117,6 +154,40 @@ func Format(skip, reads []string) FormatOptions {
 // names, and the reads past MaxReadCalls.
 func visible(calls []Call, opts FormatOptions) []Call {
 	return ShownCallGroups([][]Call{calls}, opts)[0]
+}
+
+// ShownIndices is the places in each group of the calls a [FormatCallGroups]
+// render of groups under opts shows, ascending: the walk itself, which
+// [ShownCallGroups] and the render are both built on, so a place is here
+// exactly where its call's line is printed. Every write's place is here, never
+// a skipped name's, and the reads past the one read cap, COUNTED ACROSS THE
+// GROUPS in the order given, are each group's last reads.
+//
+// A caller that must know which calls of a group its render shows, to end a
+// line with words of its own ([FormatOptions.Notes]), reads the places here
+// rather than matching values against [ShownCallGroups]: two equal calls of
+// one group, one shown and one left out past the cap, are told apart by place
+// and by nothing else.
+func ShownIndices(groups [][]Call, opts FormatOptions) [][]int {
+	out := make([][]int, len(groups))
+	reads := 0
+	for i, calls := range groups {
+		at := make([]int, 0, len(calls))
+		for j, call := range calls {
+			if slices.Contains(opts.Skip, call.Name) {
+				continue
+			}
+			if slices.Contains(opts.Reads, call.Name) {
+				if opts.MaxReadCalls > 0 && reads >= opts.MaxReadCalls {
+					continue
+				}
+				reads++
+			}
+			at = append(at, j)
+		}
+		out[i] = at
+	}
+	return out
 }
 
 // ShownCallGroups is the calls each group of a [FormatCallGroups] render of
@@ -137,22 +208,15 @@ func visible(calls []Call, opts FormatOptions) []Call {
 // shown calls, in order: a call is shown where it is the next shown call, else
 // it is left out. Read off this walk rather than off a second rule, the calls
 // a caller names left out are never other than the ones the render counted.
+// It is the calls at the places [ShownIndices] walks, which a caller that must
+// know a shown call's place reads instead.
 func ShownCallGroups(groups [][]Call, opts FormatOptions) [][]Call {
+	at := ShownIndices(groups, opts)
 	out := make([][]Call, len(groups))
-	reads := 0
 	for i, calls := range groups {
-		shown := make([]Call, 0, len(calls))
-		for _, call := range calls {
-			if slices.Contains(opts.Skip, call.Name) {
-				continue
-			}
-			if slices.Contains(opts.Reads, call.Name) {
-				if opts.MaxReadCalls > 0 && reads >= opts.MaxReadCalls {
-					continue
-				}
-				reads++
-			}
-			shown = append(shown, call)
+		shown := make([]Call, 0, len(at[i]))
+		for _, j := range at[i] {
+			shown = append(shown, calls[j])
 		}
 		out[i] = shown
 	}
@@ -162,8 +226,13 @@ func ShownCallGroups(groups [][]Call, opts FormatOptions) [][]Call {
 // FormatCalls renders an evidence-only summary of tool calls.
 //
 // Each line is `- name(args) → success | error: text`, with a trailing
-// "(read)" when the tool is positively annotated read-only. A call whose
-// arguments every record withholds says so in their place ([Call.Withheld]).
+// "(read)" when the tool is positively annotated read-only, and last the words
+// the caller ends the call's line with ([FormatOptions.Notes]). A call whose
+// arguments are not known says why in their place, never `name()`, which reads
+// as the tool called with none: every record withholds them
+// ([Call.Withheld]), they were in text that could not be read
+// ([Call.ArgsUnread]), or its outcome is unknown and no record keeps them
+// ([Call.Unfinished]).
 //
 // No calls — or none that survive Skip — renders "(none)" rather than an empty
 // string, so a reader sees an explicit "no action taken" signal rather than an
@@ -177,33 +246,42 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 
 // FormatCallGroups renders the lists of calls one brief tells under headings
 // of its own (internal/agent/runner's calledAfter: the late ones, those still
-// in flight among them; the calls after a session's save; and the reads an
-// earlier brief counted without listing them), one string per group in the
-// order given, each as [FormatCalls] renders a
+// in flight among them; the calls after a session's save; the reads an
+// earlier brief counted without listing them; and the calls the session holds
+// that a told call could be taken for, listed again), one string per group in
+// the order given, each as [FormatCalls] renders a
 // list, "(none)" and its omitted line included, UNDER ONE READ CAP:
 // [FormatOptions.MaxReadCalls] counts the read lines of every group together,
 // spent in the order the groups are given, and each group's omitted line counts
-// the reads of that group the cap left out.
+// the reads of that group the cap left out. A shown call's line ends with the
+// words [FormatOptions.Notes] gives its place in its group, where it gives any.
 //
 // ONE CAP, NEVER ONE PER GROUP: the cap bounds what one render tells of a round,
 // and a brief rendering a round's calls as N lists capped apart is told N times
 // the reads the cap allows. Fit them with [CallPieces] over the groups'
 // concatenation, which names exactly what this shows.
 func FormatCallGroups(groups [][]Call, opts FormatOptions) []string {
-	shown := ShownCallGroups(groups, opts)
+	at := ShownIndices(groups, opts)
 	out := make([]string, len(groups))
 	for i, calls := range groups {
-		out[i] = renderCalls(calls, shown[i], opts)
+		var notes []string
+		if i < len(opts.Notes) {
+			notes = opts.Notes[i]
+		}
+		out[i] = renderCalls(calls, at[i], notes, opts)
 	}
 	return out
 }
 
-// renderCalls is one group's lines: shown, the calls of calls the render shows
-// ([ShownCallGroups]), and the line counting the reads of calls it leaves out.
-func renderCalls(calls, shown []Call, opts FormatOptions) string {
+// renderCalls is one group's lines: those of the calls at the places at that
+// the render shows ([ShownIndices]), each ending with the note notes gives its
+// place where it gives one, and the line counting the reads of calls it leaves
+// out, which carries no note.
+func renderCalls(calls []Call, at []int, notes []string, opts FormatOptions) string {
 	var lines []string
 	readsShown := 0
-	for _, call := range shown {
+	for _, j := range at {
+		call := calls[j]
 		isRead := slices.Contains(opts.Reads, call.Name)
 		outcome := "success"
 		if call.Failed {
@@ -225,14 +303,28 @@ func renderCalls(calls, shown []Call, opts FormatOptions) string {
 			readsShown++
 		}
 		args := renderArgs(call.Args, opts)
-		if call.Withheld {
+		switch {
+		case call.Withheld:
 			// SAID, never drawn as `()`: a call whose arguments every record
 			// withholds made a call with arguments, and `tool()` reads as
 			// the tool called with none — a different call, and a repeat a
 			// reader takes for a retry of nothing.
 			args = withheldArgs
+		case call.ArgsUnread:
+			// SAID WHATEVER ARGS HOLDS, as a withheld call's are: its record
+			// says only that it was made with some.
+			args = unreadArgs
+		case call.Unfinished && len(call.Args) == 0:
+			// SAID, for the same reason: its entry kept its identity alone,
+			// so no record says what it was called with. One that carries
+			// arguments is drawn with them.
+			args = unkeptArgs
 		}
-		lines = append(lines, "- "+call.Name+"("+args+") → "+outcome+marker)
+		note := ""
+		if j < len(notes) && notes[j] != "" {
+			note = " " + notes[j]
+		}
+		lines = append(lines, "- "+call.Name+"("+args+") → "+outcome+marker+note)
 	}
 	if dropped := readsIn(calls, opts) - readsShown; dropped > 0 {
 		// Only READS are ever omitted, and they are re-runnable by
@@ -252,6 +344,20 @@ func renderCalls(calls, shown []Call, opts FormatOptions) string {
 // held, whose arguments wait sealed for a person's approval, and the one the
 // person approved, made off those sealed arguments.
 const withheldArgs = "arguments sealed for a person's approval, kept on no record"
+
+// unreadArgs is what [FormatCalls] renders in place of the arguments of a call
+// made with arguments in text that could not be read ([Call.ArgsUnread]): its
+// record holds text that does not read back, or the bridge could not parse
+// what the model wrote. TRUE OF BOTH, so it never says the text was recorded,
+// which the second is not: it was made with arguments, and no record says
+// which.
+const unreadArgs = "arguments in text that could not be read"
+
+// unkeptArgs is what [FormatCalls] renders in place of the arguments of a call
+// whose outcome is unknown ([Call.Unfinished]) and which carries none: its log
+// entry kept its identity alone, so no record holds what it was called with,
+// and `tool()` would read as the tool called with none, a different call.
+const unkeptArgs = "arguments kept on no record"
 
 // noCalls is what [FormatCalls] renders for a run of calls that shows none.
 const noCalls = "(none)"

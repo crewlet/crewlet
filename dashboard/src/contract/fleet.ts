@@ -59,3 +59,11 @@ export const OBJECTS_STATES = ["unavailable", "not_yet", "reported"] as const;
  * health.
  */
 export const OBJECT_FINDINGS = ["missing", "damaged", "unanswered"] as const;
+
+/**
+ * How often the object collector runs each pass, in seconds: a collection
+ * every `collect.CollectInterval` and an audit every `collect.AuditInterval`.
+ * File storage draws each pass's cadence from these.
+ */
+export const OBJECT_COLLECT_INTERVAL_SECONDS = 3600;
+export const OBJECT_AUDIT_INTERVAL_SECONDS = 86400;

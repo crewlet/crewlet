@@ -22,7 +22,8 @@ import {
   stubEngine,
   validAnswer,
 } from "~/test/settingsScreen.tsx";
-import { Limits, limitSource } from "./Limits.tsx";
+import { limitSource } from "~/components/LimitSetting.tsx";
+import { Limits } from "./Limits.tsx";
 
 afterEach(() => {
   cleanup();
@@ -451,4 +452,53 @@ test("a reader without the grant sees the pencils disabled with the reason", asy
     pencil.getAttribute("aria-disabled") ?? String((pencil as HTMLButtonElement).disabled),
   ).toBe("true");
   expect(pencil.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.no_grant);
+});
+
+// THE CEILING A CAP IS REFUSED ABOVE IS A ROW BESIDE IT, named in words and
+// changed by the same pencil: "Turns per worker can be at most 40" names a
+// value the page shows and changes.
+test("the ceilings and floors a cap is held to are named rows with pencils", async () => {
+  await show({
+    limits: [
+      row({ key: "turn_engine.delegation.max_turns", group: "delegation", range: { min: 1 } }),
+      row({
+        key: "turn_engine.delegation.max_turns_ceiling",
+        group: "delegation",
+        value: 40,
+        default: 40,
+        range: { min: 1 },
+      }),
+      row({
+        key: "turn_engine.delegation.min_tokens_per_task",
+        group: "delegation",
+        value: 500,
+        default: 500,
+        range: { min: 0 },
+      }),
+      row({
+        key: "turn_engine.extension_round_step",
+        group: "turn",
+        value: 8,
+        default: 8,
+        range: { min: 1 },
+      }),
+      row({
+        key: "turn_engine.executor_min_budget_tokens",
+        group: "turn",
+        value: 25000,
+        default: 25000,
+        range: { min: 0 },
+      }),
+    ],
+  });
+  for (const name of [
+    "Most turns a worker may ask for",
+    "Fewest tokens a worker is given",
+    "Rounds one extension may grant a first turn",
+    "Tokens an executor launch needs",
+  ]) {
+    const line = screen.getByRole("row", { name: new RegExp(name) });
+    expect(within(line).getByRole("button", { name: `Change ${name}` })).toBeDefined();
+  }
+  expect(screen.getByText("25,000")).toBeTruthy();
 });

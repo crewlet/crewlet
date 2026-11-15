@@ -231,7 +231,7 @@ type PositionRegister interface {
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS NINETEEN KEY CLASSES, and every one needs the same
+// THE REGISTER HOLDS TWENTY-ONE KEY CLASSES, and every one needs the same
 // retention, which is NONE.
 //
 // Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
@@ -268,7 +268,9 @@ type PositionRegister interface {
 // which an age would turn into a group never consumed and so a replay of its
 // log's whole retention (feedmarks.go). The twentieth is [ModelCheckKey], a
 // model entry's latest check, lapsed by its own fields as a device sign-in is
-// (modelcheck.go).
+// (modelcheck.go). The twenty-first is [GrantRequestKey], an agent's request
+// for one grant, swept past its own stamp as a model retry ages out of
+// meaning by its own (grantrequests.go).
 //
 // They share a bucket because they share that retention and because a bucket
 // is a stream with a replica count, a place in every sweep and a retention

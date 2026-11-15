@@ -70,6 +70,10 @@ type RoleGoogleCloud struct {
 
 	// Projects are the Google Cloud project IDs the level is granted on.
 	Projects []string `yaml:"projects,omitempty" json:"projects,omitempty" desc:"Google Cloud project IDs this agent's level is granted on, each prepared for Crewlet. Required when enabled: an agent in no project can reach nothing."`
+
+	// Grants are roles the account holds beside the level, each on some
+	// projects, for a while or for good.
+	Grants []SeatGrant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"Google Cloud roles this agent's account holds beside its level, each on some projects (its own projects where it names none) whose grants list names the role, added on the Agents tab or by approving the agent's request."`
 }
 
 // LevelOrDefault is the seat's level, viewer where it names none.
@@ -194,4 +198,5 @@ func (c *Company) checkGoogleCloud(p *problems, path Path, b *RoleGoogleCloud) {
 		}
 		seen[id] = true
 	}
+	checkSeatGrants(p, at(path, "grants"), b.Grants)
 }

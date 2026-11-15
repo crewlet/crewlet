@@ -188,6 +188,10 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/settings/integrations/access/AgentsAccess.tsx"],
     why: "an agent's permissions and scope, set in their dialogs into the Agents tab's draft, which the tab declares",
   },
+  "routes/settings/integrations/access/Grants.tsx": {
+    screen: ["routes/settings/integrations/access/AgentsAccess.tsx"],
+    why: "an agent's grant, added from its dialog into the Agents tab's draft, which the tab declares with each agent's grants",
+  },
   // A SHEET, AND STILL THE BOARD'S: each change made in a widget's settings is
   // written into the board being arranged as it is made, through Home's own
   // setter, and Done keeps it there (Cancel takes it back).
@@ -242,6 +246,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/worklet/NewTask.tsx": "modal: the one sheet every New task opens",
   "routes/worklet/ProjectSettings.tsx":
     "modal: a project label's name, or a field's declaration, each in its dialog until its write",
+  "routes/worklet/TaskTypes.tsx":
+    "modal: a task type's new name, or a new type's name and description, in the task types dialog until its write",
   "routes/worklet/taskMenu.tsx":
     "modal: a permanent delete's reason and typed key, a person's own confirmation and never a draft, a move's project, and a merge's surviving task, in their dialogs",
   "routes/settings/SecretDialog.tsx":
@@ -267,12 +273,15 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/repo/BranchWrites.tsx": "modal: a new branch's name, in its dialog",
   "routes/gitlet/repo/FileWrites.tsx":
     "modal: a file's path, content and commit message, or a delete's message, in their dialogs",
+  "routes/gitlet/repo/PathOwners.tsx": "modal: a path owner and its globs, in its dialog",
   "routes/gitlet/repo/Protect.tsx": "modal: a branch protection rule, in its dialog",
   "routes/gitlet/repo/RepoLife.tsx": "modal: a repository delete's reason, in its dialog",
   "routes/gitlet/repo/RepoWrites.tsx":
-    "modal: a repository's details and its mirrors, in their dialogs",
-  "routes/settings/Limits.tsx":
-    "saved per change: one limit's value, in the panel its pencil opens, written by that " +
+    "modal: a repository's details, its new name and its mirrors, in their dialogs",
+  "routes/settings/integrations/SshServers.tsx":
+    "modal: an SSH server's fields and host keys, in its Add a server and Edit dialog",
+  "components/SettingEditor.tsx":
+    "saved per change: one setting's value, in the panel its pencil opens, written by that " +
     "panel's own Save",
   "components/TitleField.tsx":
     "not an editor: one field; every screen that draws it holds the value and declares the draft",

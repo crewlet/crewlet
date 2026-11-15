@@ -41,6 +41,9 @@ delegated_decisions:
         - repo: acme/api
           branch: main
           checks: [test, lint]
+  deadline_seconds: 900        # optional, 300 to 1800, default 900 (15 minutes)
+  allows_per_hour: 30          # optional, 1 to 60, default 30
+  server_allows_per_hour: 10   # optional, 1 to 60, default 10
 ```
 
 | Field | Meaning |
@@ -52,6 +55,9 @@ delegated_decisions:
 | `rules[].sample_one_in` | One decision in this many is shown to `escalate_to` after the fact, for a spot-check. |
 | `rules[].always_escalate_paths` | Repository path globs (`docs/**`, `services/*/billing/**`) beside the [built-in list](#paths-no-delegate-allows): a merge or deploy touching one goes to people. Only for a rule of `pr_merge` or `deploy`; at most 64. |
 | `rules[].required_checks` | The checks a GitHub repository's branch requires before a delegate's merge or deploy stands, beside any its branch protection or rulesets require: each entry a `repo` (`owner/name`), a `branch` and its `checks` (one to 32 names, as GitHub shows their check runs). See [Checks a rule requires](#checks-a-rule-requires). Only for a rule of `pr_merge` or `deploy`; at most 64 entries, one per repository and branch. |
+| `deadline_seconds` | How long a request waits on its delegates before it goes to people: 300 to 1800 seconds, 900 (15 minutes) when unset. |
+| `allows_per_hour` | How many requests of one kind one delegate may allow in one clock hour (UTC), counted across the fleet; past it, requests go to people. 1 to 60, 30 when unset. |
+| `server_allows_per_hour` | How many commands delegates may allow on one server in one clock hour (UTC), counted across the fleet; past it, commands go to people. 1 to 60, 10 when unset. |
 
 A delegate is an agent seat, never a person. A delegate for `ssh_operate`
 holds no SSH access of its own; any agent may ask for a merge or a deploy, so
@@ -69,6 +75,17 @@ company before it is stored, so a rule the engine refuses is refused there in
 the same words, and nothing is saved. Turning delegation off removes
 `enabled`, and an empty spot-check rate leaves `sample_one_in` out, so the
 document says the default rather than today's value of it.
+
+The limits Crewlet holds every delegate to are on the same page, under **What
+Crewlet enforces**: the deadline and the two hourly caps, each with the
+engine's default beside the value in force. Each row's pencil changes its key
+in the same way, a value outside its range is said beside the field before
+anything is sent, and an empty field removes the key so the default applies.
+The ranges are hard: no limit can be switched off. A deadline under five
+minutes reaches people before a delegate's turn could answer, and one past half
+an hour (a paused box's default lifetime) after the box waiting on it was let
+go. A delegate decides one request a turn, so a cap over 60 an hour bounds
+nothing.
 
 ## What a delegate does
 
@@ -111,9 +128,9 @@ verdict naming another digest is refused.
 | Always-escalate rules | A request that touches access grants, budgets or spend, data deletion, secrets or the company's own document goes to people. For a command, that is the [always-escalate list](../integrations/ssh.md#what-a-delegate-never-allows); for a merge or a deploy, the [paths no delegate allows](#paths-no-delegate-allows). |
 | A merge's conditions | Read from the code host when the verdict is given. The head is the one asked about, the change is open and not a draft, every check its target requires and every one its rule [requires of that branch](#checks-a-rule-requires) passed on that head, reported by something other than one of the company's own agents (a target with neither goes to people), it merges cleanly, its target's own gate is otherwise met, and somebody other than its authors and the requesting agent approved that head. Otherwise it goes to people. |
 | A deploy's conditions | Every change it names has merged into one branch, the commit holds each and is on that branch, and every check the branch requires and every one its rule requires of that branch passed on the commit, a branch with neither going to people (on Gitlet: the commit is at or behind the branch's newest green commit). Otherwise it goes to people. |
-| Hourly caps | At most 30 allows per kind and delegate, and 10 commands per server, in one clock hour (UTC), counted across the fleet. Past either, requests go to people. A count Crewlet cannot take also goes to people. |
+| Hourly caps | At most `allows_per_hour` allows per kind and delegate (30 unless the document sets it), and `server_allows_per_hour` commands per server (10 unless set), in one clock hour (UTC), counted across the fleet. Past either, requests go to people. A count Crewlet cannot take also goes to people. |
 | A fact it cannot read | A code host that does not answer, a change touching more paths than Crewlet reads, or a check it may not read: the request goes to people. GitHub refusing branch protection or rulesets because the repository's plan does not include them is not one: it is read as the branch requiring nothing of its own, and the rule's own checks decide. |
-| Time | A request no delegate answered in 15 minutes goes to people. |
+| Time | A request no delegate answered within `deadline_seconds` (15 minutes unless the document sets it) goes to people. A new deadline applies at once to every request still waiting. |
 | Turning it off | `enabled: false`, removing a rule, or changing its delegates shows its waiting requests to people on the next read, and records why within a minute. |
 
 Every verdict, and every escalation Crewlet makes itself, is recorded in the

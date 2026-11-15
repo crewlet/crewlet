@@ -6,7 +6,9 @@
  *
  * Every value on this tab is one the org editor writes, so the tab offers
  * "Edit in org" (`#/company/org/edit?seat=`) rather than a second, narrower form
- * that would have its own idea of which fields exist.
+ * that would have its own idea of which fields exist. The model card's Edit
+ * models and Learning's Change open that editor on the tab that edits them
+ * (`editor=model`, `editor=advanced`).
  *
  * # A credential is named, never shown
  *
@@ -24,10 +26,10 @@
  * with fallbacks ("default provider" is a model for a seat that runs none).
  */
 
-import { EDITOR_OPEN, STRUCTURE_PATH } from "~/app/routes.ts";
+import { EDITOR_OPEN, STRUCTURE_PATH, editorOpenAt } from "~/app/routes.ts";
 import { placeName } from "~/app/nav.ts";
 import { useMemo, type ReactNode } from "react";
-import { ButtonLink, Callout, Card, EmptyState, InlineCode } from "@crewlethq/ui";
+import { ButtonLink, Callout, Card, EmptyState, InlineCode, Link } from "@crewlethq/ui";
 import { CpuGlyph, KeyGlyph, PencilGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
@@ -100,6 +102,8 @@ export function Settings({
     [settings, human, seat.kind],
   );
   const edit = href(STRUCTURE_PATH, { seat: seat.handle, ...EDITOR_OPEN });
+  const editModels = href(STRUCTURE_PATH, { seat: seat.handle, ...editorOpenAt("model") });
+  const editAdvanced = href(STRUCTURE_PATH, { seat: seat.handle, ...editorOpenAt("advanced") });
   // THE COMPANY'S CEILINGS, as written on the public chart: a seat with none
   // of its own in a window is still bound by the company's there.
   const company = useOrg()?.token_budget;
@@ -167,7 +171,14 @@ export function Settings({
 
       {!human && (
         <Card>
-          <Card.Header icon={<CpuGlyph size="sm" />}>
+          <Card.Header
+            icon={<CpuGlyph size="sm" />}
+            actions={
+              <ButtonLink size="small" variant="ghost" href={editModels}>
+                Edit models
+              </ButtonLink>
+            }
+          >
             <Card.Title as="h3">Model and budget</Card.Title>
           </Card.Header>
           {state(
@@ -206,14 +217,24 @@ export function Settings({
                         // is neither of the other two.
                         // A DEFAULTED VALUE IN THE QUIET TONE every other
                         // unset row on this card takes.
-                        value:
-                          role?.learning_enabled == null ? (
-                            <span className="muted">the company&rsquo;s default</span>
-                          ) : role.learning_enabled ? (
-                            "on"
-                          ) : (
-                            "off"
-                          ),
+                        value: (
+                          <span className="row gap-2 wrap">
+                            {role?.learning_enabled == null ? (
+                              <span className="muted">the company&rsquo;s default</span>
+                            ) : role.learning_enabled ? (
+                              "on"
+                            ) : (
+                              "off"
+                            )}
+                            <Link
+                              href={editAdvanced}
+                              size="inherit"
+                              aria-label={`Change ${seat.name}'s learning`}
+                            >
+                              Change
+                            </Link>
+                          </span>
+                        ),
                       },
                       ...BUDGET_WINDOWS.map(({ period }) => {
                         const limit = role?.token_budget?.[period];

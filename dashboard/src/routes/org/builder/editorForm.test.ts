@@ -23,6 +23,8 @@ import {
   llmChain,
   renames,
   seatForm,
+  placementLabelsError,
+  wholeNumberError,
   seatParts,
   tokenBudgetErrors,
   unitForm,
@@ -477,4 +479,57 @@ test("the parts record as one edit that applies what the form says", () => {
     manages: ["SRE"],
   });
   expect(editIntent(COMPANY_KEY, [])).toEqual({ type: "edit", target: COMPANY_KEY, intents: [] });
+});
+
+// THE ADVANCED FACTS, as the seat's own keys: each written only when its box
+// changed, removed when emptied, and a 0 in the executor box kept as the
+// setting it is.
+describe("a seat's advanced settings", () => {
+  test("each is written as the document spells it, and only when it changed", () => {
+    const data = { ...dev(), learning_enabled: false, llm_auxiliary: "fast", workers: ["a"] };
+    const initial = seatForm(data, "");
+    expect(initial.learning).toBe("off");
+    expect(initial.phaseModels.llm_auxiliary).toEqual(["fast"]);
+    expect(seatParts("seat:dev", data, initial, initial, { editableHandle: false })).toEqual([]);
+    const form = {
+      ...initial,
+      learning: "" as const,
+      phaseModels: { ...initial.phaseModels, llm_auxiliary: ["fast", "smart"] },
+      workers: [],
+      placementNode: "node-a",
+      placementLabels: ["region=eu", "tier = gpu"],
+      pauseTTL: "0",
+      maxTurns: "30",
+    };
+    const [part] = seatParts("seat:dev", data, initial, form, { editableHandle: false });
+    expect(part).toEqual({
+      type: "updateSeat",
+      target: "seat:dev",
+      set: [
+        { path: ["llm_auxiliary"], value: ["fast", "smart"] },
+        { path: ["learning_enabled"] },
+        { path: ["workers"] },
+        { path: ["placement", "node"], value: "node-a" },
+        { path: ["placement", "labels"], value: { region: "eu", tier: "gpu" } },
+        { path: ["sandbox", "pause_ttl_seconds"], value: 0 },
+        { path: ["sandbox", "max_turns"], value: 30 },
+      ],
+    });
+  });
+
+  test("a chain written as a per-phase mapping is shown and never written", () => {
+    const data = { ...dev(), llm_review: { plan: "smart" } } as unknown as ConfigRole;
+    const initial = seatForm(data, "");
+    expect(initial.phaseModels.llm_review).toBeNull();
+    expect(seatParts("seat:dev", data, initial, initial, { editableHandle: false })).toEqual([]);
+  });
+
+  test("a label that is not key=value, or names a key twice, and a number that is not whole are refused", () => {
+    expect(placementLabelsError(["region=eu"])).toBeUndefined();
+    expect(placementLabelsError(["region"])).toMatch(/write it as key=value/);
+    expect(placementLabelsError(["a=1", "a=2"])).toMatch(/named twice/);
+    expect(wholeNumberError("")).toBeUndefined();
+    expect(wholeNumberError("0")).toBeUndefined();
+    expect(wholeNumberError("1.5")).toMatch(/whole number/);
+  });
 });

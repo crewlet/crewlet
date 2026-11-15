@@ -26,10 +26,12 @@
  * A declared repository's settings are the company document's (`code.repos`),
  * settled by every activation, so Settings shows them and leads to Settings ›
  * Configuration, where they are changed. One a tool or a person made is
- * changed here: its details (description, default branch and owner), its
- * search mode and its mirrors (`RepoWrites.tsx`, `code_update_repo`), its
- * protection rules (`Protect.tsx`, `code_protect_branch`) and its delete
- * (`RepoLife.tsx`, `code_delete_repo`, asked once its name is typed). Any
+ * changed here: its details (description, default branch, owner and who
+ * reads it), its name, its archive, its search mode and its mirrors
+ * (`RepoWrites.tsx`, `code_update_repo`), its path owners (`PathOwners.tsx`,
+ * the same act's `path_owners`), its protection rules (`Protect.tsx`,
+ * `code_protect_branch`) and its delete (`RepoLife.tsx`, `code_delete_repo`,
+ * asked once its name is typed). Any
  * repository's unreachable history is purged here, after a confirmation naming
  * who keeps copies. A deleted repository says so above its tabs and offers its
  * restore (`code_restore_repo`), and its Settings draw what it holds and none
@@ -93,9 +95,17 @@ import { REPO_TABS, changesHref, compareHref, repoHref, type RepoTab } from "../
 import { About, managedWord, readByWord, searchWord } from "./About.tsx";
 import { Files } from "./Files.tsx";
 import { Branches, Commits } from "./History.tsx";
+import { AddPathOwnerButton, PathOwnerControls } from "./PathOwners.tsx";
 import { ProtectButton, RuleControls } from "./Protect.tsx";
 import { DeleteRepoControl, DeletedNotice } from "./RepoLife.tsx";
-import { DetailsControl, MirrorControls, PurgeControl, SearchModeControl } from "./RepoWrites.tsx";
+import {
+  ArchiveControl,
+  DetailsControl,
+  MirrorControls,
+  PurgeControl,
+  RenameControl,
+  SearchModeControl,
+} from "./RepoWrites.tsx";
 import { useRevisions } from "./refs.tsx";
 import "~/styles/gitlet.css";
 
@@ -414,6 +424,9 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
   const gates = new Map((full?.gates ?? []).map((g) => [g.pattern, g.gate]));
   const sources = new Map((full?.rule_sources ?? []).map((s) => [s.pattern, s]));
   const owners = full?.path_owners ?? [];
+  // A RULE MAKING PATH OWNERS APPROVE gates its merges on them, so taking a
+  // glob from one loosens it, which is a person's.
+  const ownersGate = (full?.gates ?? []).some((g) => g.gate.owners_approve);
   const detailState =
     settings.loading && !full ? (
       <Skeleton variant="text" rows={2} label="Loading its rules and owners" />
@@ -457,15 +470,22 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
         </Callout>
       ) : (
         <Callout variant="neutral">
-          This repository was made here or by a tool, so it is changed here: its details, its search
-          mode, its mirrors, its protection rules and its delete are below. Its path owners are set
-          by a seat, or by your assistant.
+          This repository was made here or by a tool, so it is changed here: its details, its name,
+          its protection rules, its path owners, its search mode, its mirrors, its archive and its
+          delete are below.
         </Callout>
       )}
       <SettingsCard
         title="Repository"
         description="What it is and who reads it."
-        actions={gone ? undefined : <DetailsControl repo={repo} />}
+        actions={
+          gone ? undefined : (
+            <>
+              <RenameControl repo={repo} />
+              <DetailsControl repo={repo} />
+            </>
+          )
+        }
       >
         <PropertiesRail
           headings="sentence"
@@ -525,6 +545,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
       <SettingsCard
         title="Path owners"
         description="Whose review a change touching their paths asks for."
+        actions={gone || !full ? undefined : <AddPathOwnerButton repo={repo} owners={owners} />}
       >
         {!full ? (
           detailState
@@ -538,6 +559,15 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
                   <span>{ownerName(p.owner)}</span>
                   <span className="muted mono">{p.paths.join(", ")}</span>
                 </span>
+                {!gone && (
+                  <PathOwnerControls
+                    repo={repo}
+                    owner={p}
+                    owners={owners}
+                    name={ownerName(p.owner)}
+                    gating={ownersGate}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -567,6 +597,12 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
           >
             {purgeStanding(repo) && <p className="muted">{purgeStanding(repo)}</p>}
             <PurgeControl repo={repo} />
+          </SettingsCard>
+          <SettingsCard
+            title="Archive"
+            description="An archived repository is read-only: still cloned, fetched and read, and takes no push."
+          >
+            <ArchiveControl repo={repo} />
           </SettingsCard>
           {/* LAST, as the one write that takes the repository away. */}
           <SettingsCard

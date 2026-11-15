@@ -10,9 +10,9 @@
 //
 //   - the PROVISIONER (CN crewlet-<company>-provisioner) creates, changes and
 //     deletes seat roles only under the company's seat path, only with the
-//     seat boundary attached, and attaches only the fixed level policies; it
-//     writes no policy document, cannot touch itself or the broker, and can
-//     never become a role;
+//     seat boundary attached, and attaches only the fixed level policies and
+//     AWS managed policies; it writes no policy document, cannot touch itself
+//     or the broker, and can never become a role;
 //   - the BROKER (CN crewlet-<company>-seat-*) can only assume seat roles, each
 //     of which trusts the broker alone with its source identity pinned to its
 //     own certificate name, so CloudTrail's sourceIdentity names the agent.
@@ -23,9 +23,10 @@
 // names the atlas behind an hourly read of the account and never an agent
 // (ADR-0148, atlas.go).
 //
-// A seat's level is one or more fixed customer managed policies; turning a
-// seat off attaches AWS's AWSDenyAll, which reaches sessions already issued,
-// and removing it deletes the role. The boundary holds what no level may ever
-// do. A live probe against a real account proved every call here before it
+// A seat's level is one or more fixed customer managed policies, and each
+// extra grant one AWS managed policy beside them (grants.go); turning a seat
+// off attaches AWS's AWSDenyAll, which reaches sessions already issued, and
+// removing it deletes the role. The boundary holds what no level or grant may
+// ever do. A live probe against a real account proved every call here before it
 // was built (docs/integrations/aws.md).
 package aws

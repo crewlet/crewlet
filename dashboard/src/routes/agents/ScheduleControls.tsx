@@ -43,6 +43,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { describe as describeCron } from "~/lib/cron.ts";
+import { fmtSetting } from "~/lib/format.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useLastHealth } from "~/lib/useLastHealth.ts";
 import { nodeStanding, type ActivatedRevision, type Standing } from "~/lib/nodeStanding.ts";
@@ -471,6 +472,15 @@ function zoneOptions(companyZone: string, current: string): SelectOption[] {
  * A new schedule, or an existing one's edit, checked by the engine before it
  * is saved.
  */
+/**
+ * What an empty time limit means, from the engine's own default: a copy of
+ * the constant here would be a second answer that drifts.
+ */
+export function emptyCapWords(seconds: number | undefined): string {
+  if (seconds === undefined || seconds <= 0) return "Empty is the engine’s default.";
+  return `Empty is the engine’s ${fmtSetting(seconds)}.`;
+}
+
 export function ScheduleDialog({
   mode,
   onClose,
@@ -553,7 +563,10 @@ export function ScheduleDialog({
   // THE NAMES ALREADY TAKEN where the schedule would land, from the
   // company's schedules: the engine refuses a duplicate too, this says so
   // before anything is sent.
-  const listed = useQuery("schedules", undefined, { enabled: !editing });
+  // ALSO WHAT AN EMPTY TIME LIMIT MEANS, the engine's own default, read on
+  // an edit too.
+  const listed = useQuery("schedules", undefined);
+  const defaultCap = listed.data?.default_timeout_seconds;
   const taken = useMemo(() => {
     if (!owner || editing) return [];
     return (listed.data?.schedules ?? [])
@@ -755,7 +768,7 @@ export function ScheduleDialog({
         optional
         {...(problem("timeout")
           ? { error: problem("timeout") }
-          : { helper: "Empty is the engine’s 30 minutes. A run past it is stopped." })}
+          : { helper: `${emptyCapWords(defaultCap)} A run past it is stopped.` })}
       >
         {(field) => (
           <Input

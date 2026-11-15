@@ -262,6 +262,46 @@ describe("an edit", () => {
   });
 });
 
+// A SERVER'S TIMEOUTS ARE THE CONNECTION STEP'S: an edit starts from the
+// entry's, a typed one is written as a number, an emptied one is left out
+// (the engine's default), and the engine's problem with one lands on the
+// step. Mutation: write the base's timeout back over the field, send an empty
+// one, or send it as text, and this fails.
+describe("a server's timeouts", () => {
+  const base = {
+    name: "linear",
+    transport: "http",
+    url: "https://mcp.linear.app/mcp",
+    startup_timeout_seconds: 30,
+  };
+
+  test("an edit changes them, and an emptied one is the engine's default again", () => {
+    const d = fromServer(base, [], null, "none");
+    expect([d.startupTimeout, d.requestTimeout]).toEqual(["30", ""]);
+    const written = entityOf({ ...d, startupTimeout: "", requestTimeout: "600" }, base);
+    expect(written).not.toHaveProperty("startup_timeout_seconds");
+    expect(written.request_timeout_seconds).toBe(600);
+  });
+
+  test("a new server writes only the timeout typed", () => {
+    const d = { ...emptyDraft(), name: "linear", url: base.url, requestTimeout: " 45.5 " };
+    const written = entityOf(d, null);
+    expect(written.request_timeout_seconds).toBe(45.5);
+    expect(written).not.toHaveProperty("startup_timeout_seconds");
+  });
+
+  test("the engine's problem with one lands on the connection step", () => {
+    const at = (field: string): ConfigProblem => ({
+      path: `mcp_servers.3.${field}`,
+      segments: ["mcp_servers", 3, field],
+      kind: "invalid",
+      message: "must be 0 (the default) or positive",
+    });
+    expect(stepOf(at("startup_timeout_seconds"), "http")).toBe("connection");
+    expect(stepOf(at("request_timeout_seconds"), "stdio")).toBe("connection");
+  });
+});
+
 describe("a pasted configuration", () => {
   // IT IS READ, NEVER RUN, AND ITS VALUES ARE LEFT OUT. Mutation: carry a
   // pasted value into the draft, and this is red.

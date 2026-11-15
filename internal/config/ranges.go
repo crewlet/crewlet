@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -37,10 +38,17 @@ type Range struct {
 	// Max is the greatest value admitted; nil where nothing bounds the
 	// setting from above.
 	Max *float64 `json:"max,omitempty"`
+	// OrZero admits 0 beside Min..Max: a setting whose zero is a choice of
+	// its own rather than the low end of its scale (a message horizon of 0
+	// keeps messages for ever, while 1 to 29 days is refused).
+	OrZero bool `json:"or_zero,omitempty"`
 }
 
 // Admits reports whether v is a value of the range.
 func (r Range) Admits(v float64) bool {
+	if r.OrZero && v == 0 {
+		return true
+	}
 	if v < r.Min || (r.MinExclusive && v == r.Min) {
 		return false
 	}
@@ -50,6 +58,12 @@ func (r Range) Admits(v float64) bool {
 // refusal is what a value outside the range is told, in this package's words
 // for an operator: the bound, and the value that broke it.
 func (r Range) refusal(v float64) string {
+	if r.OrZero {
+		// The same bound, with the zero beside it named first.
+		scale := r
+		scale.OrZero = false
+		return "must be 0 or " + strings.TrimPrefix(scale.refusal(v), "must be ")
+	}
 	got := number(v)
 	switch {
 	case r.Max != nil && r.MinExclusive:
@@ -111,6 +125,27 @@ var settingRanges = map[string]Range{
 	// nothing, and at most all of it.
 	"turn_engine.delegation.budget_fraction": {Min: 0, MinExclusive: true, Max: atMost(1)},
 
+	// THE DELEGATED-DECISION LIMITS (delegated.Limits). A deadline under
+	// five minutes reaches people before a delegate's turn can answer, and
+	// one over sandbox.DefaultPauseTTL (30 minutes) after the paused box
+	// waiting on it was let go. One delegate decides one request a turn and a
+	// turn takes a minute or more, so an hourly cap over 60 bounds nothing.
+	"delegated_decisions.deadline_seconds":       {Min: 300, Max: atMost(1800)},
+	"delegated_decisions.allows_per_hour":        {Min: 1, Max: atMost(60)},
+	"delegated_decisions.server_allows_per_hour": {Min: 1, Max: atMost(60)},
+
+	// SETTINGS A PAGE CHANGES IN PLACE beside the caps: each bound's reason
+	// is at its constant.
+	"inbox.retention_days":           {Min: MinInboxRetentionDays, Max: atMost(MaxInboxRetentionDays)},
+	"atlas.refresh_interval_seconds": {Min: MinAtlasRefreshInterval.Seconds()},
+	"code.scratch.idle_days":         {Min: CodeScratchIdleDaysFloor, Max: atMost(CodeScratchIdleDaysCeiling)},
+	"code.scratch.max_per_seat":      {Min: 0, Max: atMost(CodeScratchMaxPerSeatCeiling)},
+	// 0 KEEPS MESSAGES FOR EVER, a choice of its own below the shortest
+	// horizon (ChatletConfig.MessageRetentionDays says why it is three-valued).
+	"chat.chatlet.message_retention_days": {
+		Min: MinMessageRetentionDays, Max: atMost(MaxMessageRetentionDays), OrZero: true,
+	},
+
 	"notification_rate_limit":         {Min: 0},
 	"notification_coalesce_max_batch": {Min: 1, Max: atMost(coalesceMaxBatchMax)},
 }
@@ -129,6 +164,12 @@ func RangeOf(key string) (Range, bool) {
 // with why the bound exists appended for the operator reading it, and the
 // range itself on the fault for a screen to word.
 func (p *problems) within(path Path, value float64, why string) {
+	p.withinSaying(path, value, why, "")
+}
+
+// withinSaying is [problems.within] with the refusal in a person's words
+// beside the operator's ([Fault.Said]).
+func (p *problems) withinSaying(path Path, value float64, why, said string) {
 	r, ok := RangeOf(path.String())
 	if !ok {
 		panic(fmt.Sprintf("config: %s is held to a range settingRanges does not declare", path))
@@ -140,5 +181,5 @@ func (p *problems) within(path Path, value float64, why string) {
 	if why != "" {
 		detail += ": " + why
 	}
-	*p = append(*p, &Fault{Path: path, Kind: ErrOutOfRange, Detail: detail, Range: &r})
+	*p = append(*p, &Fault{Path: path, Kind: ErrOutOfRange, Detail: detail, Range: &r, Said: said})
 }

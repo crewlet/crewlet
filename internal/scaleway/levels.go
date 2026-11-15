@@ -197,31 +197,6 @@ func normalProjects(projects []string) []string {
 	return slices.Compact(out)
 }
 
-// heldBy is what rules grant: the level they are exactly, "" where they are
-// none, and the projects the project-scoped rules name.
-func heldBy(rules []Rule) (string, []string) {
-	var project, org, projects []string
-	for _, r := range rules {
-		if r.OnOrganization() {
-			org = append(org, r.PermissionSetNames...)
-			continue
-		}
-		project = append(project, r.PermissionSetNames...)
-		projects = append(projects, r.ProjectIDs...)
-	}
-	slices.Sort(project)
-	slices.Sort(org)
-	project, org = slices.Compact(project), slices.Compact(org)
-	projects = normalProjects(projects)
-	for _, id := range Levels() {
-		sets, _ := ProjectSets(id)
-		if slices.Equal(project, sets) && slices.Equal(org, OrgSets()) {
-			return id, projects
-		}
-	}
-	return "", projects
-}
-
 // unlisted is, by level, the sets the organization's catalogue does not offer
 // at the scope the level grants them at.
 func unlisted(catalogue []PermissionSet) map[string][]string {

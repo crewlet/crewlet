@@ -66,6 +66,7 @@ import type {
   REPO_STATUSES,
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
+import type { SettingsAnswer } from "../contract/settings.ts";
 import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
 import type {
   AtlasActivityAnswer,
@@ -2009,7 +2010,12 @@ export interface ScheduleRow {
    *  defaulted — see `schedule.Row`. */
   target: string;
   enabled: boolean;
+  /** The cap a run is held to: the engine's default where the schedule sets
+   *  none, which `timeout_default` says. */
   timeout_seconds: number;
+  /** True when the schedule writes no cap of its own and runs to the
+   *  engine's default. */
+  timeout_default: boolean;
   catchup: boolean;
   /** The seats a fire actually reaches, resolved from the scope and target. */
   runners: string[];
@@ -2054,6 +2060,8 @@ export interface ScheduleRunRow {
 
 export interface SchedulesAnswer {
   schedules: ScheduleRow[];
+  /** The cap a schedule that sets none runs to, as the engine holds it. */
+  default_timeout_seconds: number;
   /** The COMPANY's newest fires, capped across every schedule — so a company
    *  with twenty hourly ones fills this in a couple of hours. One schedule's
    *  own history is `schedule_runs`. */
@@ -3440,6 +3448,10 @@ export interface WorkCatalogueAnswer {
   /** The EFFECTIVE set: what this build ships plus what the company declared,
    *  a declaration replacing a builtin of the same slug. */
   types: WorkTypeDef[];
+  /** The company's OWN type declarations, archived ones included whatever was
+   *  asked: what a write of `types` replaces, so a writer sends back exactly
+   *  these with its change, never the effective set. */
+  declared_types: WorkTypeDef[];
   /** The WORKSPACE's declarations. A project declares its own beside them. */
   fields: WorkFieldDef[];
   policy_version: number;
@@ -8077,6 +8089,8 @@ export interface QueryMap {
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;
+  /** The settings that are not numbers, as the engine applies them: an administrator's. */
+  settings: SettingsAnswer;
   /** The rules delegates decide by, and what they decided: an administrator's
    *  and the people a rule escalates to (ADR-0125). */
   delegated_decisions: DelegatedDecisionsAnswer;

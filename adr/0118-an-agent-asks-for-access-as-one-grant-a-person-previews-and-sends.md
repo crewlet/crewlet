@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/advisor`
-- **Enforced-by:** `internal/advisor.TestEveryGrantChangesOnlyWhatItNames`, `internal/advisor.TestAGrantThatCannotBeMadeIsRefused`, `internal/advisor.TestEveryAccessKeyIsAnOptionID`, `internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix`, `internal/agent/builtin.TestAnAccessRequestIsADecisionWhoseOptionIsTheGrant`, `internal/agent/builtin.TestAnAccessRequestNobodyCouldGrantIsRefused`, `internal/agent/builtin.TestNoAuthorsDecisionMayOfferAGrant`, `internal/agent/builtin.TestAGrantIsAnsweredOnlyOnceItsAskerHoldsIt`, `internal/advisor.TestTheAccessCatalogueIsWhatASeatCanHold`, `internal/advisor.TestAGrantHoldsAtItsLevelAndBringsWhatItNeeds`, `internal/github.TestEveryNeedIsAPermissionASeatCanHold`, `internal/agent/builtin.TestRequestAccessOffersWhatASeatCanHoldAndWhereItIsSet`
+- **Enforced-by:** `internal/agent/builtin.TestAPermissionRequestIsTheEnginesDecision`, `internal/agent/builtin.TestAPermissionIsAnsweredOnlyOnceItsAgentHoldsIt`, `internal/advisor.TestEveryGrantChangesOnlyWhatItNames`, `internal/advisor.TestAGrantThatCannotBeMadeIsRefused`, `internal/advisor.TestEveryAccessKeyIsAnOptionID`, `internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix`, `internal/agent/builtin.TestAnAccessRequestIsADecisionWhoseOptionIsTheGrant`, `internal/agent/builtin.TestAnAccessRequestNobodyCouldGrantIsRefused`, `internal/agent/builtin.TestNoAuthorsDecisionMayOfferAGrant`, `internal/agent/builtin.TestAGrantIsAnsweredOnlyOnceItsAskerHoldsIt`, `internal/advisor.TestTheAccessCatalogueIsWhatASeatCanHold`, `internal/advisor.TestAGrantHoldsAtItsLevelAndBringsWhatItNeeds`, `internal/github.TestEveryNeedIsAPermissionASeatCanHold`, `internal/agent/builtin.TestRequestAccessOffersWhatASeatCanHoldAndWhereItIsSet`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -62,6 +62,19 @@ closed catalogue, and the grant is made only by a person who previewed it.**
   The write is `config.write`, so it asks for the person's step-up as every
   configuration change does. Closing the preview answers nothing; declining
   answers at once. One request is one grant, never batched.
+
+**Amended: one permission at an integration, beside the level (ADR-0150).**
+The tool takes a second form, `integration`, `permission`, optional `scope`
+and `hours`, for one permission from that integration's live catalogue (a
+Cloudflare permission group) held beside the agent's level rather than
+replacing it. The engine checks it against the live catalogue, stores the
+request and posts a decision of three options, its grant options carrying
+the request's id under the reserved prefix (`grant-r<id>-t` for the
+request's hours, recommended, `grant-r<id>-p` for good) and declining. The
+person previews the grant built from the stored request, saves it on the
+integration's Agents tab, and only then is the question answered; the engine
+accepts the answer only once the active revision holds a live grant naming
+that request. A level is still never asked for this way.
 
 ## Why the obvious alternatives are wrong
 

@@ -81,10 +81,13 @@ func newSyncWorld(t *testing.T, level string, projects ...string) *syncWorld {
 func (w *syncWorld) seat() *config.RoleScaleway { return w.company.Roles[0].Integrations.Scaleway }
 
 // advance moves the world's clock, and the fake's with it.
-func (w *syncWorld) advance(d time.Duration) {
-	w.clock = w.clock.Add(d)
-	now := w.clock
-	w.f.edit(func(f *fakeScaleway) { f.now = now })
+func (w *syncWorld) advance(d time.Duration) { w.at(w.clock.Add(d)) }
+
+// at sets the world's clock to an instant the case states, and the fake's with
+// it, so a case reaches an instant without reading how far off it is.
+func (w *syncWorld) at(t time.Time) {
+	w.clock = t
+	w.f.edit(func(f *fakeScaleway) { f.now = t })
 }
 
 func (w *syncWorld) open() seataccess.OpenInput {

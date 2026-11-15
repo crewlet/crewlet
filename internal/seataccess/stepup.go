@@ -14,7 +14,9 @@ import "slices"
 // ([PermissionSpec.AdministersOnWrite]). Nothing in the document says "admin".
 //
 // A seat that already held the grant does not need a step-up to keep it, and
-// lowering never does: the rule guards the moment power is handed out.
+// lowering never does: the rule guards the moment power is handed out. An
+// extra grant of a write permission is a raise as an administration level is
+// ([RaisesGrant]).
 //
 // IT FAILS CLOSED. A level the offer cannot vouch for (the vendor's list could
 // not be read, or does not name the level) cannot be shown not to administer,
@@ -24,6 +26,9 @@ import "slices"
 func NeedsStepUp(opts Options, before, after Desired) bool {
 	if !after.Enabled {
 		return false
+	}
+	if RaisesGrant(opts, before, after) {
+		return true
 	}
 	if after.Level != "" && (!before.Enabled || before.Level != after.Level) {
 		levels, known := opts.LevelsOf(after.Level)
@@ -62,6 +67,14 @@ func Administers(opts Options, d Desired) bool {
 	}
 	levels, _ := opts.LevelsOf(d.Level)
 	if slices.ContainsFunc(levels, func(l Level) bool { return l.Administers }) {
+		return true
+	}
+	// A WRITE GRANT IS MARKED as the level it is a raise like; one the
+	// catalogue cannot name is not called one here, as for a level.
+	if slices.ContainsFunc(d.Grants, func(g Grant) bool {
+		entry, ok := opts.Grantable(g.Permission)
+		return ok && entry.Write
+	}) {
 		return true
 	}
 	return slices.ContainsFunc(opts.Permissions, func(p PermissionSpec) bool {

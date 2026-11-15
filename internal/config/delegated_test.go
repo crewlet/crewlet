@@ -3,6 +3,7 @@ package config_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/delegated"
@@ -253,6 +254,48 @@ func TestARequiredCheckOutsideTheCompanysGitHubIsAdvised(t *testing.T) {
 	} {
 		if got := advised(c.github); strings.Join(got, " ") != strings.Join(c.want, " ") {
 			t.Errorf("%s: advised %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// The limits every delegate is held to are the document's where it writes
+// them and the engine's defaults where it does not, and a written value is
+// held to its range: a deadline or a cap that would switch a limit off, or
+// stretch it past what it bounds, is refused naming the key.
+//
+// Mutation: read a written limit as the default, or skip the range, and a
+// company's caps either never apply or switch off.
+func TestADelegatedLimitIsTheDocumentsWithinItsRange(t *testing.T) {
+	t.Parallel()
+	rule := "    - {kinds: [ssh_operate], delegates: [security-a], escalate_to: [ops-lead]}\n"
+	cfg, err := config.ParseCompany([]byte(delegatedDoc(t, rule)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.DelegatedDecisions.Limits(); got != delegated.DefaultLimits() {
+		t.Errorf("a document that writes no limits holds %+v, want the defaults %+v", got,
+			delegated.DefaultLimits())
+	}
+	written := delegatedDoc(t, rule) + "  deadline_seconds: 1500\n  allows_per_hour: 5\n  server_allows_per_hour: 3\n"
+	if cfg, err = config.ParseCompany([]byte(written)); err != nil {
+		t.Fatal(err)
+	}
+	want := delegated.Limits{Deadline: 25 * time.Minute, AllowsPerHour: 5, ServerAllowsPerHour: 3}
+	if got := cfg.DelegatedDecisions.Limits(); got != want {
+		t.Errorf("the document's limits read %+v, want %+v", got, want)
+	}
+	for _, c := range []struct{ line, path string }{
+		{"  deadline_seconds: 120\n", "delegated_decisions.deadline_seconds"},
+		{"  deadline_seconds: 7200\n", "delegated_decisions.deadline_seconds"},
+		{"  allows_per_hour: -1\n", "delegated_decisions.allows_per_hour"},
+		{"  allows_per_hour: 0\n", "delegated_decisions.allows_per_hour"},
+		{"  deadline_seconds: 0\n", "delegated_decisions.deadline_seconds"},
+		{"  allows_per_hour: 61\n", "delegated_decisions.allows_per_hour"},
+		{"  server_allows_per_hour: 500\n", "delegated_decisions.server_allows_per_hour"},
+	} {
+		_, err := config.ParseCompany([]byte(delegatedDoc(t, rule) + c.line))
+		if p, ok := problemAt(err, c.path); !ok || p.Kind != "out_of_range" || p.Range == nil {
+			t.Errorf("%q: %v, want out_of_range at %s carrying its range", strings.TrimSpace(c.line), err, c.path)
 		}
 	}
 }

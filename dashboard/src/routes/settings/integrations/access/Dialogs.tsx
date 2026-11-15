@@ -89,6 +89,7 @@ import {
 } from "./api.ts";
 import {
   changeSummary,
+  grantWords,
   lanesOf,
   levelName,
   levelsHeading,
@@ -156,6 +157,14 @@ function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow
       to: scopeWords(lane, to.scope),
     });
   }
+  if (grantWords(lane, from.grants) !== grantWords(lane, to.grants)) {
+    out.push({
+      kind: "changed",
+      label: "Grants",
+      from: grantWords(lane, from.grants),
+      to: grantWords(lane, to.grants),
+    });
+  }
   return out;
 }
 
@@ -167,6 +176,7 @@ const VERB_GLYPH: Record<AccessStep["verb"], ComponentType<GlyphProps>> = {
   enable: PowerGlyph,
   rerole: SlidersVerticalGlyph,
   scope: FolderGlyph,
+  ungrant: BanGlyph,
   disable: CircleStopGlyph,
   revoke: BanGlyph,
   remove: TrashGlyph,

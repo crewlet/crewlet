@@ -504,7 +504,7 @@ type CodeScratch struct {
 	// deleted repository. A read is not activity, and neither is a turn's
 	// hold: a live turn's hold keeps the repository while the turn lasts and
 	// moves no clock. 0 is unset, the default ([DefaultCodeScratchIdleDays]).
-	IdleDays int `yaml:"idle_days,omitempty" json:"idle_days,omitempty" js:"min=1;max=365" desc:"How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7."`
+	IdleDays *int `yaml:"idle_days,omitempty" json:"idle_days,omitempty" js:"min=1;max=365" desc:"How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7, and a written 0 is refused."`
 	// MaxPerSeat is how many scratch repositories one seat may hold — every
 	// one it owns short of purged, a deleted one counting until its purge
 	// frees its room. A POINTER because 0 is a setting — no seat may create
@@ -518,9 +518,9 @@ type CodeScratch struct {
 // (internal/gitlet.ScratchOf), so what `crewlet validate` judges and what a
 // create and an expiry are held to are one reading of the document.
 func (s CodeScratch) Resolved() (idleDays, maxPerSeat int) {
-	idleDays, maxPerSeat = s.IdleDays, DefaultCodeScratchMaxPerSeat
-	if idleDays == 0 {
-		idleDays = DefaultCodeScratchIdleDays
+	idleDays, maxPerSeat = DefaultCodeScratchIdleDays, DefaultCodeScratchMaxPerSeat
+	if s.IdleDays != nil {
+		idleDays = *s.IdleDays
 	}
 	if s.MaxPerSeat != nil {
 		maxPerSeat = *s.MaxPerSeat
@@ -529,22 +529,22 @@ func (s CodeScratch) Resolved() (idleDays, maxPerSeat int) {
 }
 
 // zero is a block that sets nothing.
-func (s CodeScratch) zero() bool { return s.IdleDays == 0 && s.MaxPerSeat == nil }
+func (s CodeScratch) zero() bool { return s.IdleDays == nil && s.MaxPerSeat == nil }
 
 // validate holds code.scratch's rules at path: each field inside its bounds.
 func (s CodeScratch) validate(scratch Path) error {
 	var p problems
-	if d := s.IdleDays; d != 0 && (d < CodeScratchIdleDaysFloor || d > CodeScratchIdleDaysCeiling) {
-		p.add(at(scratch, "idle_days"), ErrOutOfRange,
-			"%d is outside %d..%d days, or unset for the default %d: a day at least, because a "+
-				"live turn's hold on an idle repository is ordered against the expiry by a record "+
-				"its holder writes a day less two hours after the repository's last activity",
-			d, CodeScratchIdleDaysFloor, CodeScratchIdleDaysCeiling, DefaultCodeScratchIdleDays)
+	// POINTERS, so a written value is held to its range (settingRanges) and
+	// only an absent one is the default.
+	if d := s.IdleDays; d != nil {
+		p.within(at(scratch, "idle_days"), float64(*d), fmt.Sprintf("unset is the default %d; a day at "+
+			"least, because a live turn's hold on an idle repository is ordered against the expiry by a "+
+			"record its holder writes a day less two hours after the repository's last activity",
+			DefaultCodeScratchIdleDays))
 	}
-	if n := s.MaxPerSeat; n != nil && (*n < 0 || *n > CodeScratchMaxPerSeatCeiling) {
-		p.add(at(scratch, "max_per_seat"), ErrOutOfRange,
-			"%d is outside 0..%d scratch repositories a seat, or unset for the default %d",
-			*n, CodeScratchMaxPerSeatCeiling, DefaultCodeScratchMaxPerSeat)
+	if n := s.MaxPerSeat; n != nil {
+		p.within(at(scratch, "max_per_seat"), float64(*n), fmt.Sprintf("unset is the default %d",
+			DefaultCodeScratchMaxPerSeat))
 	}
 	return p.err()
 }
@@ -1407,7 +1407,8 @@ func (c Code) validate(path Path, o *org.Organization) error {
 					"code.deleted_retention_days")
 		}
 		if c.IdentityDomain != "" {
-			p.add(at(path, "identity_domain"), ErrConflict,
+			p.addSaying(at(path, "identity_domain"), ErrConflict,
+				"Turn Gitlet on first: no commit is built for this domain to name while nothing hosts code.",
 				"nothing hosts code on this company, so no commit is built to name it: set "+
 					"code.backend: gitlet, or remove code.identity_domain")
 		}
@@ -1447,7 +1448,9 @@ func (c Code) validate(path Path, o *org.Organization) error {
 			CodeMaxDeletedRetentionDays, DefaultCodeDeletedRetentionDays, d)
 	}
 	if d := c.IdentityDomain; d != "" && !validDomainName(d) {
-		p.add(at(path, "identity_domain"), ErrShape,
+		p.addSaying(at(path, "identity_domain"), ErrShape,
+			fmt.Sprintf("%q is not a domain name. Use lowercase letters, digits and hyphens, in "+
+				"parts joined by dots, like example.com, at most %d characters.", d, CodeMaxIdentityDomainBytes),
 			"%q is not a lowercase DNS name of at most %d bytes: labels of letters, digits and hyphens, "+
 				"none starting or ending with a hyphen, joined by dots (example.com), or unset for %s",
 			d, CodeMaxIdentityDomainBytes, DefaultCodeIdentityDomain)

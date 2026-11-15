@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/setup"
+	sshint "github.com/crewlet/crewlet/internal/ssh"
 )
 
 // THE FORM READS WHAT THE SETUP WIRE SENDS: each declaration in
@@ -33,6 +34,7 @@ func TestTheSetupFormReadsWhatTheSetupWireSends(t *testing.T) {
 		{"SetupSSHServers", reflect.TypeFor[setupapi.SSHServers](), nil},
 		{"SetupSSHServer", reflect.TypeFor[setupapi.SSHServer](), nil},
 		{"SetupSSHInventoryCommand", reflect.TypeFor[setupapi.SSHInventoryCommand](), nil},
+		{"SetupSSHScannedKey", reflect.TypeFor[sshint.ScannedKey](), nil},
 		{"SetupVerdict", reflect.TypeFor[setup.Verdict](), nil},
 		{"SetupVerdictFact", reflect.TypeFor[setup.Fact](), nil},
 		{"SetupVerdictWarning", reflect.TypeFor[setup.Warning](), nil},

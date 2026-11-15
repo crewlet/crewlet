@@ -231,7 +231,9 @@ func TestAnUnfinishedCallIsToldItMayHaveTakenEffect(t *testing.T) {
 func TestEveryReaderOfARoundIsToldACallWhoseOutcomeIsUnknownMayHaveTakenEffect(t *testing.T) {
 	t.Parallel()
 	const excepted = "did not take effect, unless it says its outcome is unknown: that one may have"
-	line := "- set_status() → error: " + runner.UnfinishedNote
+	// ITS ARGUMENTS SAID TO BE KEPT ON NO RECORD, never drawn `set_status()`,
+	// the tool called with none (ledger.Call.Unfinished).
+	line := "- set_status(arguments kept on no record) → error: " + runner.UnfinishedNote
 	// rules is the section of text under heading, up to the next heading.
 	rules := func(t *testing.T, reader, text, heading string) string {
 		t.Helper()

@@ -389,8 +389,9 @@ type RuleSpec struct {
 
 // PermissionSet is one entry of the organization's catalogue.
 type PermissionSet struct {
-	Name      string `json:"name"`
-	ScopeType string `json:"scope_type"`
+	Name       string   `json:"name"`
+	ScopeType  string   `json:"scope_type"`
+	Categories []string `json:"categories,omitempty"`
 }
 
 // Project is one project of the organization.

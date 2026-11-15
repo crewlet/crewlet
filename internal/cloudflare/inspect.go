@@ -26,6 +26,18 @@ type inspection struct {
 	// nil where its own policy could not be read. Never a gap: a token
 	// without them is whole (ADR-0145).
 	atlasUnheld []string
+
+	// own is the token's own policy, which bounds what an agent may be
+	// granted beside its level.
+	own ownPolicy
+}
+
+// ownPolicy is the provisioner token's own policy as Cloudflare showed it;
+// shown is false where Cloudflare would not show it, which says nothing about
+// what the token holds.
+type ownPolicy struct {
+	policies []Policy
+	shown    bool
 }
 
 // stage is one read of an inspection, and the permission it needs.
@@ -109,7 +121,7 @@ func inspect(
 	in.unresolved = in.cat.unresolvedLevels()
 	err := call(stageOwn, func(ctx context.Context) error {
 		var err error
-		in.unheld, in.atlasUnheld, err = readUnheld(ctx, c, in.cat, in.status.ID)
+		in.unheld, in.atlasUnheld, in.own, err = readUnheld(ctx, c, in.cat, in.status.ID)
 		return err
 	})
 	return in, err
@@ -119,19 +131,22 @@ func inspect(
 // the atlas's optional ones it does not, read from its own policy; nil where
 // Cloudflare will not show the token that policy, which says nothing about
 // what it holds, so nothing is guessed.
-func readUnheld(ctx context.Context, c *Client, cat catalogue, tokenID string) (unheld, optional []string, err error) {
-	own, found, err := c.Token(ctx, tokenID)
+func readUnheld(ctx context.Context, c *Client, cat catalogue, tokenID string) (
+	unheld, optional []string, own ownPolicy, err error) {
+
+	tok, found, err := c.Token(ctx, tokenID)
 	if Status(err) == http.StatusForbidden {
 		// NOT SHOWN, which is an answer rather than a failure: no gap is judged.
-		return nil, nil, nil
+		return nil, nil, ownPolicy{}, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, ownPolicy{}, err
 	}
 	if !found {
-		return nil, nil, nil
+		return nil, nil, ownPolicy{}, nil
 	}
-	return cat.unheldOf(own.Policies, ProvisionerGroups()), cat.unheldOf(own.Policies, AtlasGroups()), nil
+	own = ownPolicy{policies: tok.Policies, shown: true}
+	return cat.unheldOf(tok.Policies, ProvisionerGroups()), cat.unheldOf(tok.Policies, AtlasGroups()), own, nil
 }
 
 // unheldOf is every group of names the policies do not allow. A group the

@@ -249,6 +249,29 @@ func (c *Company) Location() *time.Location {
 	return loc
 }
 
+// ClockMoves warns of a write that moves the company's clock (ADR-0018) from
+// prior's zone to next's: every budget window, day and week then begins at
+// the new zone's midnight, and every schedule naming no zone of its own fires
+// at the new zone's hour.
+//
+// A TRANSITION, not a property of either document, so it is raised by the
+// write that makes it, beside the document's own warnings, and by nothing
+// that reads a revision afterwards. Worded for the person making the change,
+// since it names no key to fix: nothing is wrong, only far-reaching.
+func ClockMoves(next, prior *Company) []Warning {
+	if next == nil || prior == nil {
+		return nil
+	}
+	from, to := prior.Location().String(), next.Location().String()
+	if from == to {
+		return nil
+	}
+	return []Warning{advisory(field("timezone"), fmt.Sprintf("This moves the company's "+
+		"clock from %s to %s. Every budget's day, week and month will start at midnight "+
+		"in %s, cutting the window running now, and every schedule without a time zone "+
+		"of its own will run on %s time.", from, to, to, to))}
+}
+
 // skillVariableKey is the substitution-identifier rule.
 //
 // The operator key space has to be provably identical to the ${name} render
@@ -547,7 +570,14 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	// through, so the company's clock and a schedule's own zone are
 	// admitted by the same rule — a host's own clock refused by both.
 	if _, err := period.LoadZone(c.Timezone); err != nil {
-		p.add(field("timezone"), ErrUnknownValue, "%v", err)
+		said := fmt.Sprintf("%q is not a time zone. Pick one by its name, like "+
+			"Europe/Berlin, America/New_York or UTC.", c.Timezone)
+		if errors.Is(err, period.ErrHostClock) {
+			said = fmt.Sprintf("%q is whatever zone each server is set to, so two servers "+
+				"would start the company's day at different hours. Pick a named zone, "+
+				"like Europe/Berlin or UTC.", c.Timezone)
+		}
+		p.addSaying(field("timezone"), ErrUnknownValue, said, "%v", err)
 	}
 	p.wrap(c.Artifacts.validate(field("artifacts")))
 	p.wrap(c.Diagnostics.Insights.validate(field("diagnostics.insights")))
@@ -799,7 +829,8 @@ func (c *Company) validateKnowledgeBackend() error {
 	// and configures nothing — the silence this whole rule exists to end.
 	if c.KnowledgeBackendFor() == KnowledgeNone {
 		if len(c.Knowledge.KnowledgeScope) > 0 {
-			p.add(field("knowledge.scope"), ErrConflict,
+			p.addSaying(field("knowledge.scope"), ErrConflict,
+				"Search reach needs a knowledge base to search.",
 				"a read scope needs a knowledge backend")
 		}
 		// VECTORS NEED SOMETHING TO SEARCH, and a knowledge base is not
@@ -808,12 +839,15 @@ func (c *Company) validateKnowledgeBackend() error {
 		// work here is entitled to semantic recall over the work.
 		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors &&
 			c.TrackerBackendFor() != TrackerWorklet {
-			p.add(field("knowledge.vectors"), ErrConflict,
+			p.addSaying(field("knowledge.vectors"), ErrConflict,
+				"Search by meaning needs a knowledge base or Worklet to search.",
 				"vectors need a knowledge backend or Worklet to search")
 		}
 	}
 	if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors && c.Providers.Embeddings == nil {
-		p.add(field("knowledge.vectors"), ErrConflict,
+		p.addSaying(field("knowledge.vectors"), ErrConflict,
+			"Search by meaning needs an embeddings provider to compute embeddings with, "+
+				"and this company has none.",
 			"vectors need providers.embeddings to compute embeddings with")
 	}
 	return p.err()
@@ -1077,12 +1111,10 @@ func (i Inbox) Retention() time.Duration {
 
 func (i Inbox) validate(path Path) error {
 	var p problems
-	if d := i.RetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
-		p.add(at(path, "retention_days"), ErrOutOfRange,
-			"%d is outside %d..%d. Under a month, notices are gone before "+
-				"people see them, and past ten years they only repeat the "+
-				"history they point at", d, MinInboxRetentionDays,
-			MaxInboxRetentionDays)
+	// ZERO IS UNSET, the default; anything written is held to its range.
+	if d := i.RetentionDays; d != 0 {
+		p.within(at(path, "retention_days"), float64(d), "under a month, notices are gone before "+
+			"people see them, and past ten years they only repeat the history they point at")
 	}
 	return p.err()
 }

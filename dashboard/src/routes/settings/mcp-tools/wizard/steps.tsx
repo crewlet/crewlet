@@ -40,6 +40,10 @@ import type {
   McpOAuthClient,
   McpToolLevel,
 } from "~/contract/mcp.ts";
+import {
+  MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+  MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS,
+} from "~/contract/mcp.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { AccessAnswer } from "~/contract/access.ts";
 import { listed, plural } from "~/lib/format.ts";
@@ -346,6 +350,50 @@ export function ConnectionStep({
             autoComplete="off"
             spellCheck={false}
             onChange={(e) => set({ toolPrefix: e.target.value })}
+          />
+        )}
+      </FormField>
+      <FormField
+        label="Start timeout, in seconds"
+        optional
+        helper={`How long starting it and its handshake may take, and again its first tool listing, before it is given up on. Empty means ${MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS}.`}
+        error={problemAt(problems, "startup_timeout_seconds")}
+      >
+        {(field) => (
+          <Input
+            id={field.id}
+            aria-describedby={field.describedBy}
+            aria-invalid={field.invalid || undefined}
+            error={field.invalid}
+            type="number"
+            inputMode="decimal"
+            min={0}
+            width="xs"
+            value={draft.startupTimeout}
+            placeholder={String(MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS)}
+            onChange={(e) => set({ startupTimeout: e.target.value })}
+          />
+        )}
+      </FormField>
+      <FormField
+        label="Call timeout, in seconds"
+        optional
+        helper={`How long one tool call may take before it fails back to the agent. Empty means ${MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS}.`}
+        error={problemAt(problems, "request_timeout_seconds")}
+      >
+        {(field) => (
+          <Input
+            id={field.id}
+            aria-describedby={field.describedBy}
+            aria-invalid={field.invalid || undefined}
+            error={field.invalid}
+            type="number"
+            inputMode="decimal"
+            min={0}
+            width="xs"
+            value={draft.requestTimeout}
+            placeholder={String(MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS)}
+            onChange={(e) => set({ requestTimeout: e.target.value })}
           />
         )}
       </FormField>

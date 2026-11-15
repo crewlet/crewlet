@@ -202,6 +202,10 @@ function mount(
     integrations?: IntegrationsAnswer;
     /** The chart's seats, where a case needs agents on it. */
     roles?: unknown[];
+    /** The `limits` answer, the engine's rows of the settings a pane changes. */
+    limits?: unknown;
+    /** The `settings` answer, the engine's rows of the settings that are not numbers. */
+    settings?: unknown;
   } = {},
 ): Mounted {
   const fetched: string[] = [];
@@ -250,6 +254,8 @@ function mount(
     if (what === "integrations")
       return Promise.resolve(structuredClone(extra.integrations ?? answer));
     if (what === "config" && config !== undefined) return Promise.resolve(config);
+    if (what === "limits" && extra.limits !== undefined) return Promise.resolve(extra.limits);
+    if (what === "settings" && extra.settings !== undefined) return Promise.resolve(extra.settings);
     if (what === "work_projects") {
       return Promise.resolve({ projects: [], total: 0, census: { active: 0 } });
     }
@@ -913,11 +919,156 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
 // there, so the pane said the default whatever a company set. Mutation: read
 // it under `tracker` again, and a company keeping ninety days is told the
 // engine's default.
-test("Worklet's settings say how long the company's inbox keeps a notice", async () => {
-  mount(ADMIN, "worklet", BUILT_IN, undefined, { name: "Acme", inbox: { retention_days: 90 } });
+test("Worklet's settings say how long the company's inbox keeps a notice, and change it", async () => {
+  // TWO UNITS FILING UNDER ONE PROJECT name it once.
+  const doc = {
+    name: "Acme",
+    inbox: { retention_days: 90 },
+    units: [
+      { id: "web", name: "Web", project: "PROD" },
+      { id: "api", name: "API", project: "PROD" },
+      { id: "eng", name: "Engineering", project: "ENG" },
+    ],
+  };
+  mount(ADMIN, "worklet", BUILT_IN, undefined, doc, {
+    limits: {
+      limits: [
+        {
+          key: "inbox.retention_days",
+          group: "inbox",
+          unit: "days",
+          value: 90,
+          default: 365,
+          off: false,
+          default_off: false,
+          settable: true,
+          range: { min: 30, max: 3650 },
+        },
+      ],
+    },
+  });
   fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
-  const row = (await screen.findByText("Inbox keeps a notice for")).parentElement as HTMLElement;
+  const row = await screen.findByRole("row", { name: /Inbox keeps a notice for/ });
   await waitFor(() => expect(row.textContent).toContain("90 days"));
+  expect(within(row).getByText("Changed from 365 days")).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Change Inbox keeps a notice for" })).toBeTruthy();
+  // WHERE EACH LIVES, said truly: the inbox is not under tracker.
+  expect(screen.getByText(/the inbox under inbox/)).toBeTruthy();
+  const projects = screen.getByRole("row", { name: /Projects the chart declares/ });
+  await waitFor(() => expect(projects.textContent).toContain("ENG"));
+  expect(projects.textContent).not.toContain("PROD, PROD");
+});
+
+// DOCLET'S SETTINGS ARE THE ENGINE'S ROWS (`settings`, group `knowledge`): each
+// the value in force beside its default, said in the page's words, with the
+// pencil that changes it. They were read off the document with a dashboard
+// sentence for every unset key ("The engine's default"), so a company never
+// learned which space its pages lived in. Mutation: read them off `config`
+// again, and the defaults' values are gone.
+test("Doclet's settings are the engine's rows, each beside its default, and change in place", async () => {
+  const knowledge = (
+    key: string,
+    kind: string,
+    value: unknown,
+    def: unknown,
+    over: Record<string, unknown> = {},
+  ) => ({
+    key,
+    group: "knowledge",
+    kind,
+    value,
+    default: def,
+    set: false,
+    off: false,
+    has_off: false,
+    ...over,
+  });
+  mount(
+    ADMIN,
+    "doclet",
+    BUILT_IN,
+    undefined,
+    { name: "Acme" },
+    {
+      settings: {
+        settings: [
+          knowledge("knowledge.root_space", "container", "HOME", "HOME", { has_off: true }),
+          knowledge("knowledge.skills_container", "container", "", "TS", {
+            has_off: true,
+            off: true,
+            set: true,
+          }),
+          knowledge("knowledge.scope", "containers", ["ENG", "PROD"], [], { set: true }),
+          knowledge("knowledge.vectors", "switch", true, true),
+        ],
+      },
+    },
+  );
+  fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+  await waitFor(() =>
+    expect(screen.getByRole("row", { name: /Company pages/ }).textContent).toContain("HOME"),
+  );
+  const pages = screen.getByRole("row", { name: /Company pages/ });
+  expect(within(pages).getByText("Default")).toBeTruthy();
+  const skills = screen.getByRole("row", { name: /Tool skills/ });
+  expect(within(skills).getByText("Off")).toBeTruthy();
+  expect(within(skills).getByText("Changed from TS")).toBeTruthy();
+  const reach = screen.getByRole("row", { name: /Search reaches/ });
+  expect(within(reach).getByText("ENG, PROD")).toBeTruthy();
+  const meaning = screen.getByRole("row", { name: /Search by meaning/ });
+  expect(within(meaning).getByText("On")).toBeTruthy();
+  for (const label of ["Company pages", "Tool skills", "Search reaches", "Search by meaning"]) {
+    expect(screen.getByRole("button", { name: `Change ${label}` })).toBeTruthy();
+  }
+});
+
+test("a reader without Admin is told Doclet's settings are an admin's, and asked nothing of them", async () => {
+  const { asked } = mount(MEMBER, "doclet");
+  fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+  const pages = await screen.findByRole("row", { name: /Company pages/ });
+  expect(within(pages).getByText("Admins see this")).toBeTruthy();
+  expect(asked).not.toContain("settings");
+});
+
+// THE COMPANY'S MESSAGE HORIZON IS SHOWN AND CHANGED ON CHATLET'S PAGE: the
+// engine's row (`limits`, group `chat`), whose 0 keeps messages for ever and
+// reads so. Its value was never drawn anywhere: a room said "as long as the
+// company default" and no screen said how long that was. (What its field
+// writes is `components/LimitSetting.test.tsx`'s.)
+test("Chatlet's settings say how long the company keeps messages, and change it", async () => {
+  mount(
+    { ...ADMIN, grants: [...ADMIN.grants, "chatlet"] },
+    "chat",
+    BUILT_IN,
+    undefined,
+    undefined,
+    {
+      limits: {
+        limits: [
+          {
+            key: "chat.chatlet.message_retention_days",
+            group: "chat",
+            unit: "days",
+            value: 0,
+            default: 365,
+            off: true,
+            default_off: false,
+            settable: true,
+            range: { min: 30, max: 3650, or_zero: true },
+          },
+        ],
+      },
+    },
+  );
+  // THE ROW IS DRAWN AGAIN once the engine's answer lands, so it is found then.
+  await waitFor(() =>
+    expect(screen.getByRole("row", { name: /Messages are kept for/ }).textContent).toContain(
+      "For ever",
+    ),
+  );
+  const row = screen.getByRole("row", { name: /Messages are kept for/ });
+  expect(within(row).getByText("Changed from 365 days")).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Change Messages are kept for" })).toBeTruthy();
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {

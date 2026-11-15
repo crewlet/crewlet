@@ -14,6 +14,7 @@ import type {
   AccessAnswer,
   AccessBoxLine,
   AccessDesired,
+  AccessGrant,
   AccessLaneKey,
   AccessLaneStatus,
   AccessObserved,
@@ -23,8 +24,9 @@ import type {
   AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { inTime, plural, relTime } from "~/lib/format.ts";
 import { andList } from "~/lib/words.ts";
+import { grantEntry, grantReach } from "~/lib/grants.ts";
 import { integrationDocHref } from "../docs.ts";
 import type { AccessDraft } from "./api.ts";
 import { GITHUB_ACCESS_NAMES, laneWords, type LaneWords } from "./words.ts";
@@ -271,8 +273,68 @@ export function sameDesired(lane: Lane, a: AccessDesired, b: AccessDesired): boo
     a.enabled === b.enabled &&
     sameLevel(lane, a.level, b.level) &&
     samePermissions(lane, a.permissions, b.permissions) &&
-    sameScope(a.scope, b.scope)
+    sameScope(a.scope, b.scope) &&
+    sameGrants(a.grants, b.grants)
   );
+}
+
+/** A stored grant as one comparable line: every field the engine stores. */
+const grantLine = (g: AccessGrant) =>
+  [
+    g.id ?? "",
+    g.permission,
+    [...(g.scope ?? [])].sort().join(","),
+    g.expires_at ?? "",
+    g.request ?? "",
+  ].join("|");
+
+/** Whether two lists hold the same grants, whatever their order. */
+export function sameGrants(a: AccessGrant[] | undefined, b: AccessGrant[] | undefined): boolean {
+  const x = (a ?? []).map(grantLine).sort();
+  const y = (b ?? []).map(grantLine).sort();
+  return x.length === y.length && x.every((line, i) => line === y[i]);
+}
+
+/** Add grant: one more grant in the seat's draft. */
+export function withGrant(
+  draft: AccessDraft,
+  seat: AccessSeat,
+  lane: Lane,
+  grant: AccessGrant,
+): AccessDraft {
+  const grants = [...(wantOf(draft, seat, lane.key).grants ?? []), grant];
+  return drafted(draft, seat, lane, { grants });
+}
+
+/** Remove: the grant at index dropped from the seat's draft. */
+export function withoutGrant(
+  draft: AccessDraft,
+  seat: AccessSeat,
+  lane: Lane,
+  index: number,
+): AccessDraft {
+  const grants = (wantOf(draft, seat, lane.key).grants ?? []).filter((_, i) => i !== index);
+  return drafted(draft, seat, lane, { grants });
+}
+
+/** A seat's grants in words, for the review: each permission in the vendor's words and where. */
+export function grantWords(lane: Lane, grants: AccessGrant[] | undefined): string {
+  const out = (grants ?? []).map(
+    (g) => `${grantEntry(lane, g.permission)?.name ?? g.permission} (${grantReach(lane, g)})`,
+  );
+  return out.length === 0 ? "None" : andList(out);
+}
+
+/** Whether a grant has lapsed at now: the engine applies it no more. */
+export function grantLapsed(g: AccessGrant, now: number): boolean {
+  return g.expires_at !== undefined && Date.parse(g.expires_at) <= now;
+}
+
+/** When a grant lapses, in words: Permanent, Expired, or how long it has left. */
+export function grantExpiry(g: AccessGrant, now: number): string {
+  if (!g.expires_at) return "Permanent";
+  if (grantLapsed(g, now)) return "Expired";
+  return `Expires ${inTime(g.expires_at, now)}`;
 }
 
 /** What a seat asks for on a lane as the draft stands: its drafted state, else what is saved. */
@@ -368,6 +430,7 @@ export function changeSummary(lane: Lane, from: AccessDesired, to: AccessDesired
   const parts = [
     !sameLevel(lane, from.level, to.level) && "Level",
     !samePermissions(lane, from.permissions, to.permissions) && "Permissions",
+    !sameGrants(from.grants, to.grants) && "Grants",
     scopeApplies(lane, to) &&
       !sameScope(from.scope, to.scope) &&
       (laneWords(lane.key).scope?.noun ?? "Scope"),

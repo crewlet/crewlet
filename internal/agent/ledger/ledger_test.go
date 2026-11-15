@@ -264,6 +264,146 @@ func TestTheShownGroupsAreWhatTheRenderPrints(t *testing.T) {
 	}
 }
 
+// A NOTE ENDS THE LINE OF THE CALL IT NAMES, by the call's place in the group
+// the caller handed over. A caller that ends a line with words of its own
+// (internal/agent/runner's calledAfter, saying a call listed again was made in
+// an earlier round) knows the call by where it stands in its group, and the
+// render leaves out skipped names and reads past the one cap from anywhere in
+// a group, so a note given by place lands on that call's line and on no other:
+// a write's, a shown read's after the read marker, and never a read the cap
+// left out, whose note is printed nowhere, its omitted line included. Every
+// line without a note is the line it was, a note is the caller's words as
+// given, and no notes at all render every group as before. [FormatCalls] reads
+// its one group's notes.
+//
+// Mutation: index the notes by a line's position among the lines printed, and
+// the skipped name and the read before the write move every note one line up;
+// drop the note, and no line ends with it; print a left-out read's note on the
+// omitted line, and words naming a call the brief never shows are told.
+func TestANoteEndsTheLineOfTheCallItNames(t *testing.T) {
+	t.Parallel()
+	read := func(n int) Call { return Call{Name: "get", Args: map[string]any{"n": n}} }
+	opts := Format([]string{"activate_tool"}, []string{"get"})
+	first := []Call{{Name: "activate_tool"}}
+	for n := 1; n <= MaxReadCalls-2; n++ {
+		first = append(first, read(n))
+	}
+	first = append(first, Call{Name: "post", Args: map[string]any{"group": 0}})
+	second := []Call{
+		{Name: "activate_tool"}, read(11),
+		{Name: "post", Args: map[string]any{"group": 1}},
+		read(12), read(13), read(14),
+	}
+	groups := [][]Call{first, second}
+	const write, shownRead, leftOutRead, skipped = "(note on the write)", "(note on the shown read)",
+		"(note on the left-out read)", "(note on the skipped name)"
+
+	plain := FormatCallGroups(groups, opts)
+	opts.Notes = [][]string{{0: skipped}, {2: write, 3: shownRead, 5: leftOutRead}}
+	noted := FormatCallGroups(groups, opts)
+	if !strings.Contains(plain[1], "omitted") {
+		t.Fatalf("the second group leaves out no read past the cap, so the case tests nothing:\n%s", plain[1])
+	}
+	for g := range groups {
+		before, after := strings.Split(plain[g], "\n"), strings.Split(noted[g], "\n")
+		if len(before) != len(after) {
+			t.Fatalf("group %d renders %d lines with notes and %d without:\n%s", g, len(after), len(before),
+				noted[g])
+		}
+		for i := range before {
+			want := before[i]
+			switch before[i] {
+			case FormatCalls([]Call{second[2]}, Format(nil, nil)):
+				want += " " + write
+			case FormatCalls([]Call{read(12)}, Format(nil, []string{"get"})):
+				want += " " + shownRead
+			}
+			if after[i] != want {
+				t.Errorf("group %d line %d reads %q, want %q", g, i, after[i], want)
+			}
+		}
+	}
+	told := strings.Join(noted, "\n")
+	for _, note := range []string{write, shownRead} {
+		if strings.Count(told, note) != 1 {
+			t.Errorf("the note %q is told %d times, want once, on its call's line:\n%s", note,
+				strings.Count(told, note), told)
+		}
+	}
+	for _, note := range []string{leftOutRead, skipped} {
+		if strings.Contains(told, note) {
+			t.Errorf("the note %q names a call the render leaves out, and is told:\n%s", note, told)
+		}
+	}
+
+	one := []Call{{Name: "post", Args: map[string]any{"channel": "C1"}}}
+	if got, want := FormatCalls(one, FormatOptions{Notes: [][]string{{"(its own words)"}}}),
+		`- post({"channel":"C1"}) → success (its own words)`; got != want {
+		t.Errorf("FormatCalls with its one group's note reads %q, want %q", got, want)
+	}
+	for _, notes := range [][][]string{nil, {}, {nil, {"", ""}}, {{0: ""}}} {
+		opts.Notes = notes
+		if got := FormatCallGroups(groups, opts); !reflect.DeepEqual(got, plain) {
+			t.Errorf("notes %q that give no words change the render:\n%s", notes, strings.Join(got, "\n"))
+		}
+	}
+}
+
+// THE PLACES ARE THE WALK THE RENDER DRAWS. [ShownIndices] names, per group,
+// the places of exactly the calls the render prints a line for, ascending: a
+// write's always, a skipped name's never, and the reads past the one cap,
+// counted across the groups in order, each group's last. Two equal reads of
+// one group either side of the cap are told apart by place alone, the earlier
+// shown. [ShownCallGroups] is the calls at those places.
+//
+// Mutation: count each group's reads from zero, show a skipped name, or leave
+// out a group's first reads rather than its last, and a place is named whose
+// call the render does not print, or one it prints is missing.
+func TestShownIndicesIsTheWalkShownCallGroupsDraws(t *testing.T) {
+	t.Parallel()
+	read := func(n int) Call { return Call{Name: "get", Args: map[string]any{"n": n}} }
+	opts := Format([]string{"activate_tool"}, []string{"get"})
+	var first []Call
+	for n := 1; n <= MaxReadCalls-1; n++ {
+		first = append(first, Call{Name: "activate_tool"}, read(n))
+	}
+	// THE SAME READ TWICE across the cap's edge: the first of them takes the
+	// cap's last place, the second falls past it.
+	second := []Call{{Name: "post", Args: map[string]any{"group": 1}}, read(99), read(99),
+		{Name: "post", Args: map[string]any{"group": 2}}, read(100)}
+	groups := [][]Call{first, second, nil}
+
+	at := ShownIndices(groups, opts)
+	shown := ShownCallGroups(groups, opts)
+	rendered := FormatCallGroups(groups, opts)
+	if len(at) != len(groups) {
+		t.Fatalf("%d groups of places for %d groups", len(at), len(groups))
+	}
+	if want := [][]int{{1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21}, {0, 1, 3}, {}}; !reflect.DeepEqual(at, want) {
+		t.Errorf("the places shown are %v, want %v", at, want)
+	}
+	for g, group := range groups {
+		lines := strings.Split(rendered[g], "\n")
+		calls := make([]Call, 0, len(at[g]))
+		for k, j := range at[g] {
+			if k > 0 && j <= at[g][k-1] {
+				t.Errorf("group %d's places %v do not ascend", g, at[g])
+			}
+			calls = append(calls, group[j])
+			if k >= len(lines) || lines[k] != FormatCalls([]Call{group[j]}, opts) {
+				t.Errorf("group %d's place %d is shown and its line is not the render's line %d:\n%s", g, j, k,
+					rendered[g])
+			}
+		}
+		if !reflect.DeepEqual(calls, shown[g]) {
+			t.Errorf("group %d's calls at its places are %+v, and ShownCallGroups shows %+v", g, calls, shown[g])
+		}
+	}
+	if !strings.Contains(rendered[1], "(+2 further read call(s) omitted)") {
+		t.Errorf("the second group does not count its two reads past the cap:\n%s", rendered[1])
+	}
+}
+
 // THE GROUPS' PIECES ARE THOSE THEIR RENDER SHOWS. Fitted over the groups'
 // concatenation, every payload past its budget the groups show is named, so
 // none renders whole, and nothing is named that the one cap leaves out, so no
@@ -355,6 +495,70 @@ func TestFailureRendersAsFailureNotSuccess(t *testing.T) {
 	}
 	if !strings.Contains(got, "jira_note() → success") {
 		t.Errorf("a successful call whose output mentions an error was read as failed:\n%s", got)
+	}
+}
+
+// A CALL OF UNKNOWN OUTCOME SAYS NO RECORD KEEPS ITS ARGUMENTS. A call still
+// in flight as its round was read keeps its identity alone on every record
+// (Call.Unfinished), so nothing says what it was called with; drawn `name()`,
+// its line read as the tool called with none, a different call, and a run told
+// to check whether it took effect before making it again had nothing to check
+// by. One that carries arguments is drawn with them, a failed call with none
+// that is not of unknown outcome is still drawn `name()`, and a withheld call
+// still says its arguments are sealed.
+//
+// Mutation: drop the clause, and the first line reads `set_status()`; draw
+// every call with no arguments so, and the plain failure does too; draw it so
+// whatever it carries, and the second line loses its arguments; let it win
+// over a withheld call, and the sealed line goes.
+func TestACallOfUnknownOutcomeSaysNoRecordKeepsItsArguments(t *testing.T) {
+	t.Parallel()
+	got := FormatCalls([]Call{
+		{Name: "set_status", Result: "unknown", Failed: true, Digest: "d1", Unfinished: true},
+		{Name: "set_status", Args: map[string]any{"status": "draft"}, Result: "unknown", Failed: true,
+			Unfinished: true},
+		{Name: "slack_post", Result: "channel_not_found", Failed: true},
+		{Name: "close_issue", Result: "asked a person", Failed: true, Withheld: true, Unfinished: true},
+	}, Format(nil, nil))
+	want := strings.Join([]string{
+		"- set_status(arguments kept on no record) → error: unknown",
+		`- set_status({"status":"draft"}) → error: unknown`,
+		"- slack_post() → error: channel_not_found",
+		"- close_issue(arguments sealed for a person's approval, kept on no record) → error: asked a person",
+	}, "\n")
+	if got != want {
+		t.Errorf("the calls render\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A CALL WHOSE ARGUMENTS DID NOT READ BACK SAYS SO. A record that holds a
+// call's arguments as text that does not read back (Call.ArgsUnread) says it
+// was made with some and no longer says which; drawn `name()`, its line read
+// as the tool called with none. So its line says they did not read back,
+// whatever its arguments hold, as a withheld call's says they are sealed; a
+// call its record says was made with none is still drawn `name()`; and a
+// withheld call still says its arguments are sealed.
+//
+// Mutation: drop the clause, and the first line reads `jira_create()`; draw it
+// so only where no arguments are held, and the second line shows them; let it
+// win over a withheld call, and the sealed line goes.
+func TestACallWhoseArgumentsDidNotReadBackSaysSo(t *testing.T) {
+	t.Parallel()
+	got := FormatCalls([]Call{
+		{Name: "jira_create", Result: "created", Digest: "d1", ArgsUnread: true},
+		{Name: "jira_create", Args: map[string]any{"summary": "a stray value"}, Result: "created",
+			ArgsUnread: true},
+		{Name: "jira_create", Result: "created"},
+		{Name: "close_issue", Result: "asked a person", Failed: true, Withheld: true, ArgsUnread: true},
+	}, Format(nil, nil))
+	want := strings.Join([]string{
+		"- jira_create(arguments in text that could not be read) → success",
+		"- jira_create(arguments in text that could not be read) → success",
+		"- jira_create() → success",
+		"- close_issue(arguments sealed for a person's approval, kept on no record) → error: asked a person",
+	}, "\n")
+	if got != want {
+		t.Errorf("the calls render\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -568,6 +772,73 @@ func TestAMultiByteIdentifierIsNeverAPiece(t *testing.T) {
 	pieces := CallPieces([]Call{{Name: "post", Args: map[string]any{"channel": channel}}}, Format(nil, nil))
 	if len(pieces) != 0 {
 		t.Fatalf("a %d-rune identifier became a piece: %+v", 150, pieces)
+	}
+}
+
+// A VALUE IS SHOWN WHOLE EXACTLY WHERE ITS LINE SHOWS IT. ShowsWhole is what
+// a caller comparing a told call with a held one reads to know which of the
+// told call's values a model can compare, so it must agree with the line itself on every side of the budget: a value
+// it calls whole that the line fits is a rewrite compared as the value, and a
+// value it calls a piece that the line shows is a difference nobody sees.
+// Each case renders one call under a Fitted that marks every piece CallPieces
+// names, and reads the value back off the line. Mutations: ShowsWhole always
+// true, the long string and the long object red; always false, the short ones
+// red; judged in bytes rather than runes, the multi-byte string red.
+func TestAValueIsShownWholeExactlyWhereItsLineShowsIt(t *testing.T) {
+	t.Parallel()
+	const marker = "(a rewrite of the piece)"
+	cases := []struct {
+		name  string
+		value any
+		whole bool
+	}{
+		{"a string at the budget", strings.Repeat("a", ValueLimit), true},
+		{"a string one rune past it", strings.Repeat("a", ValueLimit+1), false},
+		{"multi-byte runes within it, past it in bytes", strings.Repeat("営", ValueLimit), true},
+		{"multi-byte runes past it", strings.Repeat("営", ValueLimit+1), false},
+		{"a number", 42, true},
+		{"a short object", map[string]any{"path": "docs/a.md", "n": 3}, true},
+		{"a long object", map[string]any{"rows": strings.Split(strings.Repeat("row,", 100), ",")}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			calls := []Call{{Name: "put", Args: map[string]any{"v": tc.value}}}
+			opts := Format(nil, nil)
+			opts.Fitted = Fitted{}
+			for _, p := range CallPieces(calls, opts) {
+				opts.Fitted[p] = marker
+			}
+			line := FormatCalls(calls, opts)
+			args, ok := strings.CutPrefix(line, "- put(")
+			if !ok {
+				t.Fatalf("the line reads %q, want one line of put", line)
+			}
+			args, _, ok = strings.Cut(args, ") → ")
+			if !ok {
+				t.Fatalf("the line reads %q, want its outcome after its arguments", line)
+			}
+			var shown map[string]any
+			if err := json.Unmarshal([]byte(args), &shown); err != nil {
+				t.Fatalf("the line's arguments %q are not JSON: %v", args, err)
+			}
+			encoded, err := json.Marshal(tc.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var sent any
+			if err := json.Unmarshal(encoded, &sent); err != nil {
+				t.Fatal(err)
+			}
+			lineShowsIt := reflect.DeepEqual(shown["v"], sent) && !strings.Contains(line, marker)
+			if lineShowsIt != tc.whole {
+				t.Fatalf("the line shows the value whole: %v, want %v (the case is mislabelled or the render moved):\n%s",
+					lineShowsIt, tc.whole, line)
+			}
+			if got := ShowsWhole(tc.value, opts); got != lineShowsIt {
+				t.Errorf("ShowsWhole = %v, but the line shows the value whole: %v:\n%.300s", got, lineShowsIt, line)
+			}
+		})
 	}
 }
 

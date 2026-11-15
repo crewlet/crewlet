@@ -27,7 +27,9 @@ import (
 // read's reply — a stream leader's message of megabytes, base64-encoded a
 // third larger — crosses back, on a real link as slowly. A case may also hold
 // the broker's bytes back for a while ([Link.Delay]), as a reply is held on a
-// slow link behind what was sent ahead of it.
+// slow link behind what was sent ahead of it. A link may instead LAG
+// ([Lagging]): carry every byte at once but each a fixed while after it was
+// sent, each way, as a loaded broker answers every request a while late.
 //
 // # It reads what each side sends as fast as it comes
 //
@@ -51,6 +53,9 @@ type Link struct {
 	// back is how many bytes a second it carries back towards the node:
 	// none for a link that carries them at once ([Slow]).
 	back int64
+	// lagging is a link that carries both ways at once but each chunk
+	// [Link.Lag] after it was sent ([Lagging]); rate and back are then 0.
+	lagging bool
 	// done is closed when the case ends, which ends every delivery waiting
 	// on the link's pace.
 	done chan struct{}
@@ -62,6 +67,9 @@ type Link struct {
 	// heldUntil is when what the broker sends stops being held back
 	// ([Link.Delay]); zero for never held.
 	heldUntil time.Time
+	// lag is how long after it was sent a lagging link delivers a chunk
+	// ([Link.Lag]).
+	lag time.Duration
 }
 
 // Slow listens on a loopback port and carries every connection made to it on
@@ -81,6 +89,31 @@ func SlowEachWay(t testing.TB, target string, rate int64) *Link {
 	return open(t, target, rate, rate)
 }
 
+// Lagging listens on a loopback port and carries every connection made to it
+// on to target, both ways, until the case ends: at once until the case sets a
+// lag ([Link.Lag]), and from then on every chunk either side sends that lag
+// after it was sent.
+//
+// A LAG, NOT A RATE, so what it plays is a loaded broker rather than a narrow
+// link: every round trip costs twice the lag, every time, however much the
+// two sides send, where a rate lets a stream of small long-poll requests
+// build a backlog that grows. Set once the node has linked, since a link's
+// own handshake keeps deadlines a lag of hundreds of milliseconds each way
+// already misses, and what a lagging link is for is the traffic after it.
+//
+// AND SIZE EVERY WINDOW THE NODE WAITS IN FOR AN ANSWER TO THE ROUND TRIP: a
+// window that ends before its answer crosses back does not wait for it, it
+// loses it, so a case whose windows suit a loopback that answers at once
+// shows answers lost, not answers late (jetstream's lagging leaf says which
+// windows, and what it measured when they were not).
+func Lagging(t testing.TB, target string) *Link {
+	t.Helper()
+	l := listen(t, target)
+	l.lagging = true
+	l.start(t)
+	return l
+}
+
 // open is a link to target carrying rate bytes a second towards it and back
 // bytes a second from it, none for at once.
 func open(t testing.TB, target string, rate, back int64) *Link {
@@ -88,18 +121,32 @@ func open(t testing.TB, target string, rate, back int64) *Link {
 	if rate <= 0 {
 		t.Fatalf("a slow link carries %d bytes a second, which carries nothing", rate)
 	}
+	l := listen(t, target)
+	l.rate, l.back = rate, back
+	l.start(t)
+	return l
+}
+
+// listen binds a link to target on a loopback port, carrying nothing yet.
+func listen(t testing.TB, target string) *Link {
+	t.Helper()
 	// THE CASE'S CONTEXT, which ends as the case does, just before its
 	// cleanups (this link's close among them): a connection it dialled
 	// outlives it, as a dialled connection does its dial's context.
 	ctx := t.Context()
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("bind the slow link: %v", err)
+		t.Fatalf("bind the link: %v", err)
 	}
-	l := &Link{ln: ln, target: target, rate: rate, back: back, done: make(chan struct{})}
+	return &Link{ln: ln, target: target, done: make(chan struct{})}
+}
+
+// start carries every connection the link takes, dialling the target for each
+// in the case's context, until the case ends.
+func (l *Link) start(t testing.TB) {
+	ctx := t.Context()
 	l.wg.Go(func() { l.accept(ctx) })
 	t.Cleanup(l.close)
-	return l
 }
 
 // Addr is the host and port the node dials to cross the link.
@@ -114,6 +161,22 @@ func (l *Link) Delay(d time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.heldUntil = time.Now().Add(d)
+}
+
+// Lag makes a lagging link ([Lagging]) deliver every chunk either side sends
+// from now on d after it was sent; what was sent before is delivered at the
+// lag it was sent under.
+func (l *Link) Lag(d time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lag = d
+}
+
+// lagNow is the lag a chunk sent now is delivered at.
+func (l *Link) lagNow() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lag
 }
 
 // held is how long what the broker sends now is still to be held back
@@ -173,6 +236,26 @@ func (l *Link) carry(ctx context.Context, in net.Conn) {
 	}
 	held := &backlog{more: make(chan struct{}, 1)}
 	var wg sync.WaitGroup
+	if l.lagging {
+		// BOTH WAYS THROUGH A BACKLOG, each chunk stamped as it is read
+		// and delivered at its lag, with no rate to cross at.
+		replies := &backlog{more: make(chan struct{}, 1)}
+		for _, way := range []struct {
+			held     *backlog
+			from, to net.Conn
+		}{{held, in, out}, {replies, out, in}} {
+			wg.Go(func() {
+				defer closeBoth()
+				way.held.fillLagging(way.from, l.lagNow)
+			})
+			wg.Go(func() {
+				defer closeBoth()
+				way.held.deliver(way.to, 0, l.done, nil)
+			})
+		}
+		wg.Wait()
+		return
+	}
 	wg.Go(func() {
 		defer closeBoth()
 		held.fill(in)
@@ -249,21 +332,40 @@ func (l *Link) close() {
 // order it was sent.
 type backlog struct {
 	mu     sync.Mutex
-	chunks [][]byte
+	chunks []chunk
 	// ended is set once the node's side has nothing more to send.
 	ended bool
 	// more is signalled whenever a chunk is added or the node's side ends.
 	more chan struct{}
 }
 
+// chunk is one read of what a side sent, and when a lagging link delivers it:
+// zero for as soon as the link's rate lets it.
+type chunk struct {
+	bytes []byte
+	due   time.Time
+}
+
 // fill reads src as fast as it sends, holding each read, until src ends.
 func (b *backlog) fill(src io.Reader) {
-	defer b.push(nil, true)
+	b.fillLagging(src, nil)
+}
+
+// fillLagging is fill whose every read is due lag() after it was read; nil for
+// no lag.
+func (b *backlog) fillLagging(src io.Reader, lag func() time.Duration) {
+	defer b.push(chunk{}, true)
 	for {
 		buf := make([]byte, 64<<10)
 		n, err := src.Read(buf)
 		if n > 0 {
-			b.push(buf[:n], false)
+			read := chunk{bytes: buf[:n]}
+			if lag != nil {
+				if d := lag(); d > 0 {
+					read.due = time.Now().Add(d)
+				}
+			}
+			b.push(read, false)
 		}
 		if err != nil {
 			return
@@ -271,10 +373,10 @@ func (b *backlog) fill(src io.Reader) {
 	}
 }
 
-func (b *backlog) push(chunk []byte, ended bool) {
+func (b *backlog) push(c chunk, ended bool) {
 	b.mu.Lock()
-	if chunk != nil {
-		b.chunks = append(b.chunks, chunk)
+	if c.bytes != nil {
+		b.chunks = append(b.chunks, c)
 	}
 	b.ended = b.ended || ended
 	b.mu.Unlock()
@@ -286,24 +388,24 @@ func (b *backlog) push(chunk []byte, ended bool) {
 
 // next is the oldest chunk not yet carried, waiting for one; false once the
 // node's side has ended with nothing left, or done is closed.
-func (b *backlog) next(done <-chan struct{}) ([]byte, bool) {
+func (b *backlog) next(done <-chan struct{}) (chunk, bool) {
 	for {
 		b.mu.Lock()
 		if len(b.chunks) > 0 {
-			chunk := b.chunks[0]
+			c := b.chunks[0]
 			b.chunks = b.chunks[1:]
 			b.mu.Unlock()
-			return chunk, true
+			return c, true
 		}
 		ended := b.ended
 		b.mu.Unlock()
 		if ended {
-			return nil, false
+			return chunk{}, false
 		}
 		select {
 		case <-b.more:
 		case <-done:
-			return nil, false
+			return chunk{}, false
 		}
 	}
 }
@@ -311,13 +413,27 @@ func (b *backlog) next(done <-chan struct{}) ([]byte, bool) {
 // deliver writes each chunk to dst once a link carrying rate bytes a second
 // would have carried it: a chunk's own time after the one before it was
 // written, so the link never carries faster than rate, and an idle link lets
-// no burst through at once. hold, where it is not nil, is how long a chunk is
-// still to be held back before it starts to cross ([Link.Delay]).
+// no burst through at once; a rate of 0 carries it at once. hold, where it is
+// not nil, is how long a chunk is still to be held back before it starts to
+// cross ([Link.Delay]), and a chunk with a due instant is held until it
+// ([Link.Lag]).
 func (b *backlog) deliver(dst io.Writer, rate int64, done <-chan struct{}, hold func() time.Duration) {
 	for {
-		chunk, ok := b.next(done)
+		c, ok := b.next(done)
 		if !ok {
 			return
+		}
+		if !c.due.IsZero() {
+			wait := time.Until(c.due) //fixedwait:measure the instant a lagging link delivers a chunk at, which the relay holds bytes to rather than decides by
+			if wait > 0 {
+				late := time.NewTimer(wait) //fixedwait:simulated a loaded broker answering every request a while late
+				select {
+				case <-late.C:
+				case <-done:
+					late.Stop()
+					return
+				}
+			}
 		}
 		if hold != nil {
 			if wait := hold(); wait > 0 {
@@ -330,14 +446,16 @@ func (b *backlog) deliver(dst io.Writer, rate int64, done <-chan struct{}, hold 
 				}
 			}
 		}
-		crossing := time.NewTimer(time.Duration(len(chunk)) * time.Second / time.Duration(rate)) //fixedwait:simulated a link carrying a side's bytes at its rate
-		select {
-		case <-crossing.C:
-		case <-done:
-			crossing.Stop()
-			return
+		if rate > 0 {
+			crossing := time.NewTimer(time.Duration(len(c.bytes)) * time.Second / time.Duration(rate)) //fixedwait:simulated a link carrying a side's bytes at its rate
+			select {
+			case <-crossing.C:
+			case <-done:
+				crossing.Stop()
+				return
+			}
 		}
-		if _, err := dst.Write(chunk); err != nil {
+		if _, err := dst.Write(c.bytes); err != nil {
 			return
 		}
 	}

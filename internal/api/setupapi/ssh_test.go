@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -191,6 +192,68 @@ func TestAnSSHServerIsWrittenAsARevisionAndRemovedOnlyOnceNoAgentNamesIt(t *test
 	}
 	if res := s.do(t, http.MethodDelete, "/setup/integrations/ssh/hosts/db-9", "", nil); res.Code != http.StatusNotFound {
 		t.Errorf("removing a server nobody registered = %d", res.Code)
+	}
+}
+
+// AN SSH SERVER IS EDITED WHOLE FROM ITS OWN ANSWER: the answer carries every
+// field a PUT replaces, its key lines and its allowlist beside the
+// fingerprints, and the revision it was read from. So an edit sent back from
+// the answer with that revision keeps what it did not change, and one built
+// on a revision that moved since is refused rather than undoing the change
+// made meanwhile.
+//
+// Mutation: leave host_keys, read_allowlist or revision_id out of the answer,
+// and the edit drops the allowlist, is refused for its keys, or races.
+func TestAnSSHServerIsEditedWholeFromItsOwnAnswer(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	s.connect(t, "ssh", `{"values": {"enabled": "true"}, "generate": ["certificate_authority"]}`)
+	line, _ := sshHostKeyLine(t)
+	allowlist := []string{"/usr/bin/uptime", "/usr/bin/systemctl status *"}
+	host, err := json.Marshal(map[string]any{"address": "api-1.example.com", "host_keys": []string{line},
+		"users": map[string]string{"read": "crewlet-read"}, "read_allowlist": allowlist})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := s.do(t, http.MethodPut, "/setup/integrations/ssh/hosts/api-1", string(host), nil); res.Code != http.StatusOK {
+		t.Fatalf("add the server = %d: %s", res.Code, res.Body)
+	}
+	read := func() *setupapi.SSHServers {
+		t.Helper()
+		var state setupapi.ToolState
+		body := s.do(t, http.MethodGet, "/setup/integrations/ssh", "", nil).Body.Bytes()
+		if unreadable := json.Unmarshal(body, &state); unreadable != nil {
+			t.Fatal(unreadable)
+		}
+		if state.SSH == nil || len(state.SSH.Hosts) != 1 {
+			t.Fatalf("the answer shows %+v", state.SSH)
+		}
+		return state.SSH
+	}
+	before := read()
+	h := before.Hosts[0]
+	if before.RevisionID == "" || !slices.Equal(h.HostKeys, []string{line}) || !slices.Equal(h.ReadAllowlist, allowlist) {
+		t.Fatalf("the answer carries revision %q, keys %v, allowlist %v", before.RevisionID, h.HostKeys, h.ReadAllowlist)
+	}
+	edit, err := json.Marshal(map[string]any{"address": h.Address, "port": h.Port, "host_keys": h.HostKeys,
+		"users": h.Users, "description": "Production API server", "containers": h.Containers,
+		"inventory": h.Inventory, "read_allowlist": h.ReadAllowlist, "if_match": before.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := s.do(t, http.MethodPut, "/setup/integrations/ssh/hosts/api-1", string(edit), nil); res.Code != http.StatusOK {
+		t.Fatalf("edit the server from its answer = %d: %s", res.Code, res.Body)
+	}
+	after := read()
+	if g := after.Hosts[0]; g.Description != "Production API server" || !slices.Equal(g.ReadAllowlist, allowlist) ||
+		!slices.Equal(g.HostKeys, []string{line}) || after.RevisionID == before.RevisionID {
+		t.Fatalf("after the edit the server is %+v at revision %q", g, after.RevisionID)
+	}
+	// THE SAME EDIT AGAIN names the revision it was read from, which moved.
+	res := s.do(t, http.MethodPut, "/setup/integrations/ssh/hosts/api-1", string(edit), nil)
+	if res.Code != http.StatusPreconditionFailed || decode(t, res)["error"] != "revision_advanced" {
+		t.Errorf("an edit built on a revision that moved = %d: %s", res.Code, res.Body)
 	}
 }
 

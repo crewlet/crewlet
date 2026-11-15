@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,41 +63,58 @@ func escalation(t *testing.T, store sandbox.PendingStore, turnID string) *sandbo
 	return run.HeldCall.Delegation.Escalated
 }
 
-// A request no delegate answered goes to people once its deadline passes, and
-// not a moment before; the escalation is recorded as the engine's, naming the
-// server and the command it decided, which the access log refuses a record
-// without.
+// A request no delegate answered goes to people once the company's deadline
+// passes, and not a moment before, whether the deadline is the engine's
+// default or one the document sets; the escalation is recorded as the
+// engine's, naming the server and the command it decided, which the access log
+// refuses a record without, and its sentence says the deadline it waited.
 //
 // Mutation: compare the deadline the wrong way round, or skip the sweep's
-// write, and a request waits on a silent delegate for ever; record no subject,
-// and the escalation never lands in the access log.
+// write, and a request waits on a silent delegate for ever; sweep by the
+// default rather than the document's deadline, and a company that gave its
+// delegates longer sees their requests early; record no subject, and the
+// escalation never lands in the access log.
 func TestADelegatedRequestReachesPeopleAtItsDeadline(t *testing.T) {
 	t.Parallel()
-	heldAt := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
-	store := sandbox.NewCoordStore(memory.NewFleet())
-	sandboxtest.DelegatedParked(t, store, "t-late", []string{"security-a"}, heldAt)
-	rules, audit := sweepRules{delegates: []string{"security-a"}, live: true}, &sweepAudit{}
+	for _, c := range []struct {
+		deadline time.Duration
+		words    string
+	}{
+		{delegated.DefaultDeadline, "within 15 minutes"},
+		{25 * time.Minute, "within 25 minutes"},
+		{450 * time.Second, "within 450 seconds"},
+	} {
+		heldAt := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+		store := sandbox.NewCoordStore(memory.NewFleet())
+		sandboxtest.DelegatedParked(t, store, "t-late", []string{"security-a"}, heldAt)
+		rules, audit := sweepRules{delegates: []string{"security-a"}, live: true}, &sweepAudit{}
 
-	sweepDelegated(t.Context(), store, rules, audit, openHeld(t), heldAt.Add(delegated.Deadline-time.Second))
-	if e := escalation(t, store, "t-late"); e != nil || len(audit.verdicts) != 0 {
-		t.Fatalf("a request a second before its deadline went to people: %+v, %+v", e, audit.verdicts)
-	}
-	sweepDelegated(t.Context(), store, rules, audit, openHeld(t), heldAt.Add(delegated.Deadline))
-	e := escalation(t, store, "t-late")
-	if e == nil || !slices.Equal(e.Overruled, []string{delegated.OverruledDeadline}) {
-		t.Fatalf("a request at its deadline: %+v, want it put to people for the deadline", e)
-	}
-	if len(audit.verdicts) != 1 || audit.verdicts[0].ByKind != builtin.VerdictByEngine ||
-		audit.verdicts[0].Verdict != string(delegated.Escalate) || !audit.verdicts[0].Final ||
-		!audit.verdicts[0].At.Equal(heldAt) {
-		t.Fatalf("the sweep recorded %+v, want one final escalation by the engine, minted at the request", audit.verdicts)
-	}
-	if v := audit.verdicts[0]; v.Host != "api-1" || v.Subject != "sudo systemctl restart api" {
-		t.Fatalf("the engine's escalation names %q on %q, want the command it decided on api-1", v.Subject, v.Host)
-	}
-	sweepDelegated(t.Context(), store, rules, audit, openHeld(t), heldAt.Add(2*delegated.Deadline))
-	if len(audit.verdicts) != 1 {
-		t.Fatalf("a second sweep recorded again: %+v", audit.verdicts)
+		sweepDelegated(t.Context(), store, rules, c.deadline, audit, openHeld(t), heldAt.Add(c.deadline-time.Second))
+		if e := escalation(t, store, "t-late"); e != nil || len(audit.verdicts) != 0 {
+			t.Fatalf("%v: a request a second before its deadline went to people: %+v, %+v", c.deadline, e,
+				audit.verdicts)
+		}
+		sweepDelegated(t.Context(), store, rules, c.deadline, audit, openHeld(t), heldAt.Add(c.deadline))
+		e := escalation(t, store, "t-late")
+		if e == nil || !slices.Equal(e.Overruled, []string{delegated.OverruledDeadline}) {
+			t.Fatalf("%v: a request at its deadline: %+v, want it put to people for the deadline", c.deadline, e)
+		}
+		if len(e.Engine) != 1 || !strings.Contains(e.Engine[0], c.words) {
+			t.Fatalf("%v: people are told %q, want it to say %q", c.deadline, e.Engine, c.words)
+		}
+		if len(audit.verdicts) != 1 || audit.verdicts[0].ByKind != builtin.VerdictByEngine ||
+			audit.verdicts[0].Verdict != string(delegated.Escalate) || !audit.verdicts[0].Final ||
+			!audit.verdicts[0].At.Equal(heldAt) {
+			t.Fatalf("the sweep recorded %+v, want one final escalation by the engine, minted at the request",
+				audit.verdicts)
+		}
+		if v := audit.verdicts[0]; v.Host != "api-1" || v.Subject != "sudo systemctl restart api" {
+			t.Fatalf("the engine's escalation names %q on %q, want the command it decided on api-1", v.Subject, v.Host)
+		}
+		sweepDelegated(t.Context(), store, rules, c.deadline, audit, openHeld(t), heldAt.Add(2*c.deadline))
+		if len(audit.verdicts) != 1 {
+			t.Fatalf("a second sweep recorded again: %+v", audit.verdicts)
+		}
 	}
 }
 
@@ -119,7 +137,8 @@ func TestTurningDelegationOffReturnsEveryRequestToPeople(t *testing.T) {
 		store := sandbox.NewCoordStore(memory.NewFleet())
 		sandboxtest.DelegatedParked(t, store, "t-off", []string{"security-a"}, heldAt)
 		audit := &sweepAudit{}
-		sweepDelegated(t.Context(), store, c.rules, audit, openHeld(t), heldAt.Add(time.Minute))
+		sweepDelegated(t.Context(), store, c.rules, delegated.DefaultDeadline, audit, openHeld(t),
+			heldAt.Add(time.Minute))
 		e := escalation(t, store, "t-off")
 		if e == nil || !slices.Equal(e.Overruled, []string{delegated.OverruledOff}) || len(audit.verdicts) != 1 {
 			t.Errorf("%s: the request reads %+v with %d records, want it put to people for delegation_off",
@@ -128,8 +147,8 @@ func TestTurningDelegationOffReturnsEveryRequestToPeople(t *testing.T) {
 	}
 	store := sandbox.NewCoordStore(memory.NewFleet())
 	sandboxtest.DelegatedParked(t, store, "t-on", []string{"security-a"}, heldAt)
-	sweepDelegated(t.Context(), store, sweepRules{delegates: []string{"security-a"}, live: true}, &sweepAudit{},
-		openHeld(t), heldAt.Add(time.Minute))
+	sweepDelegated(t.Context(), store, sweepRules{delegates: []string{"security-a"}, live: true},
+		delegated.DefaultDeadline, &sweepAudit{}, openHeld(t), heldAt.Add(time.Minute))
 	if e := escalation(t, store, "t-on"); e != nil {
 		t.Errorf("a request its live rule still delegates went to people early: %+v", e)
 	}
@@ -149,8 +168,8 @@ func TestADelegatesOwnRequestReachesPeopleAtOnce(t *testing.T) {
 	// sandboxtest's runs are swe's.
 	sandboxtest.DelegatedParked(t, store, "t-own", []string{"swe", "security-b"}, heldAt)
 	audit := &sweepAudit{}
-	sweepDelegated(t.Context(), store, sweepRules{delegates: []string{"swe", "security-b"}, live: true}, audit,
-		openHeld(t), heldAt.Add(time.Second))
+	sweepDelegated(t.Context(), store, sweepRules{delegates: []string{"swe", "security-b"}, live: true},
+		delegated.DefaultDeadline, audit, openHeld(t), heldAt.Add(time.Second))
 	e := escalation(t, store, "t-own")
 	if e == nil || !slices.Equal(e.Overruled, []string{delegated.OverruledSelf}) || len(audit.verdicts) != 1 ||
 		audit.verdicts[0].Subject == "" {

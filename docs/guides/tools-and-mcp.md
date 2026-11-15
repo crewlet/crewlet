@@ -44,7 +44,7 @@ nineteen in full.
 | `create_work_item` | File one. `project` defaults to the seat's own unit's, and is required when the unit owns none. `status` says where it starts (default `todo`). With no `assignee` it goes to the project's default assignee, else to triage for the lead, and the answer's `assignee` says which. `ask` (with an optional `decision`) files it as a question to that person, in one record |
 | `update_work_item` | Move it — status, assignee (with an optional `reason` the new assignee reads), priority, labels, links, one checklist change — with an optional `if_match` that refuses on a concurrent edit |
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once. `ask` puts a question to somebody and `decision` structures it as options; `answers` with `choice` answers one |
-| `request_access` | Ask a person for one more kind of access from a closed list, as a decision on the work item that needs it; the person previews the exact change and applies it, or declines. |
+| `request_access` | Ask a person for one more kind of access from a closed list, or for one permission at an integration beside the agent's level (a Cloudflare permission group, for some hours or for good), as a decision on the work item that needs it; the person previews the exact change and applies it, or declines. |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
 | `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's, as a re-route is |
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions; a text that is exactly one task key answers that task first. `mode` picks the ranking as `search_knowledge`'s does — `hybrid` by default, `keyword` or `semantic` — and the answer names the mode it served, with a `degraded` sentence when that is not the one asked for |
@@ -1150,7 +1150,9 @@ sent write-only. Its steps:
    the registry the company names, marked *Not reviewed*.
 2. **Name**, and what the server is for.
 3. **Connection.** The address, or the command, its arguments and its
-   variables, and the tool prefix.
+   variables, the tool prefix, and the start and call timeouts in seconds
+   (`startup_timeout_seconds`, `request_timeout_seconds`), each left empty
+   for the engine's default of 120 and 300.
 4. **Sign-in.** The vendor's integration where the catalogue names one (each
    agent gets its own instance, signed in as itself, and which agents get it
    is set on that integration's Agents tab); [OAuth](#signing-in-with-oauth),

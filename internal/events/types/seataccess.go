@@ -46,6 +46,7 @@ type AccessSetting struct {
 	Level       string            `json:"level,omitempty"`
 	Permissions map[string]string `json:"permissions,omitempty"`
 	Scope       []string          `json:"scope,omitempty"`
+	Grants      []GrantSetting    `json:"grants,omitempty"`
 }
 
 // EventType is the "seat_access_drift_restored" wire type.

@@ -18,6 +18,7 @@ import type {
   AccessAnswer,
   AccessCredentialAnswer,
   AccessDraftRequest,
+  AccessGrantRequest,
   AccessInstallLink,
   AccessPlanAnswer,
   AccessRefusal,
@@ -43,6 +44,9 @@ const ifMatch = (revision: string) => ({ "If-Match": `"${revision}"` });
 export const accessApi = {
   read: async (kind: string, signal?: AbortSignal) =>
     (await rest.get(`/setup/integrations/${pathSegment(kind)}/access`, signal)) as AccessAnswer,
+  /** One agent's open request for a grant, which a request's options name by id. */
+  request: async (id: string, signal?: AbortSignal) =>
+    (await rest.get(`/setup/access/requests/${pathSegment(id)}`, signal)) as AccessGrantRequest,
   plan: async (kind: string, seats: AccessDraft) =>
     (await rest.post(`/setup/integrations/${pathSegment(kind)}/access/plan`, {
       seats,
@@ -137,6 +141,7 @@ const REFUSAL_FIELDS: Record<AccessRefusalField, true> = {
   level: true,
   permissions: true,
   scope: true,
+  grants: true,
 };
 
 const isRefusalField = (v: unknown): v is AccessRefusalField =>

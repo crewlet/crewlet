@@ -93,6 +93,73 @@ interface AccessLevel {
   grants?: string[];
 }
 
+/**
+ * One permission a lane's live catalogue offers a seat beside its level (a
+ * Cloudflare permission group), as the company's connection can grant it now.
+ */
+export interface AccessGrantEntry {
+  /** The vendor's own name for it, which a grant stores ("Origin Write"). */
+  id: string;
+  /** How a person finds it at the vendor ("Origin Rules: Edit"). */
+  name: string;
+  /** The heading a picker lists it under ("Zone", "Account"). */
+  group?: string;
+  /** What its scope entries are, in the vendor's word ("zone"), or "account" where it takes none. */
+  scope_kind: string;
+  /** It may change things at the vendor: granting it asks for a fresh step-up. */
+  write?: boolean;
+  /** The lowest level that already holds it. */
+  in_level?: string;
+  /** Why the connection cannot grant it yet: offered disabled with this reason. */
+  unavailable?: string;
+  /** What to add at the vendor first, as a person adds it there. */
+  missing?: string[];
+  action_url?: string;
+}
+
+/**
+ * One permission a seat holds beside its level, as the company document stores
+ * it. The engine writes `id`, `granted_by` and `granted_at`: a draft sends a
+ * new grant without them, and what a credential holds carries none.
+ */
+export interface AccessGrant {
+  id?: string;
+  permission: string;
+  /** Where it applies (zone names); absent is its whole reach. */
+  scope?: string[];
+  /** When it lapses, absent for permanent. */
+  expires_at?: string;
+  granted_by?: string;
+  granted_at?: string;
+  reason: string;
+  /** The agent's request it answered, where it answered one. */
+  request?: string;
+}
+
+/**
+ * Every option of an agent's request for one grant begins with this, followed
+ * by the request's id and `-t` (for its hours) or `-p` (for good). Held to the
+ * engine's own seataccess.GrantOptionTemporary.
+ */
+export const GRANT_REQUEST_OPTION_PREFIX = "grant-r";
+
+/** One agent's stored request for one grant, as the engine wrote it when the agent asked. */
+export interface AccessGrantRequest {
+  id: string;
+  kind: string;
+  lane: AccessLaneKey;
+  handle: string;
+  permission: string;
+  scope?: string[];
+  /** How long the temporary option grants it for. */
+  hours: number;
+  /** The agent's own words for why. */
+  reason: string;
+  item: string;
+  ask: string;
+  asked_at: string;
+}
+
 /** One GitHub App permission a seat can hold, in GitHub's own name. */
 interface AccessPermission {
   key: string;
@@ -171,6 +238,20 @@ export interface AccessOptions {
    * managed outside Crewlet.
    */
   managed?: AccessManaged;
+  /**
+   * Every permission a seat may be granted beside its level, from the
+   * vendor's live catalogue; absent on a lane that takes no grants.
+   */
+  grants?: AccessGrantEntry[];
+  /** The entries a grant's scope may name (the zones the company's agents reach). */
+  grant_scope?: string[];
+  /**
+   * Where a scoped grant naming no entry applies ("every zone the company's
+   * agents reach", "the agent's own projects"), in the lane's own words.
+   */
+  grant_whole?: string;
+  /** Where a grant on the whole connection applies ("the account", "the Organization"). */
+  grant_account?: string;
 }
 
 /** What the company document asks for one seat on one lane. */
@@ -179,6 +260,8 @@ export interface AccessDesired {
   level?: string;
   permissions?: Record<string, GitHubAccess>;
   scope?: string[];
+  /** The seat's grants beside its level, as stored; only the live ones are applied. */
+  grants?: AccessGrant[];
 }
 
 /** A seat's credential: the engine-owned variable it is sealed in, and when. Never the value. */
@@ -210,6 +293,8 @@ export interface AccessObserved {
   level?: string;
   permissions?: Record<string, GitHubAccess>;
   scope?: string[];
+  /** The grants the credential holds beside its level, as the last sync read it back. */
+  grants?: AccessGrant[];
   /** GitHub only: the permissions the app is registered with, which tokens are narrowed from. */
   ceiling?: Record<string, GitHubAccess>;
   credential?: AccessCredential;
@@ -239,6 +324,7 @@ type AccessOp =
   | "enable"
   | "level"
   | "scope"
+  | "grants"
   | "mint"
   | "disable"
   | "revoke"
@@ -258,6 +344,7 @@ type AccessVerb =
   | "remove"
   | "rotate"
   | "restore"
+  | "ungrant"
   | "approve"
   | "observe";
 
@@ -455,7 +542,7 @@ export interface AccessPlanAnswer {
 }
 
 /** The control of one seat's lane an `access_not_offered` refusal is about. */
-export type AccessRefusalField = "level" | "permissions" | "scope";
+export type AccessRefusalField = "level" | "permissions" | "scope" | "grants";
 
 /**
  * An `access_not_offered` refusal's body, beside the envelope's `error` and

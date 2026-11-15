@@ -23,6 +23,7 @@ import {
 } from "~/test/settingsScreen.tsx";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { Schedules } from "./Schedules.tsx";
+import { emptyCapWords } from "./ScheduleControls.tsx";
 
 afterEach(() => {
   cleanup();
@@ -44,6 +45,7 @@ function row(over: Partial<ScheduleRow> = {}): ScheduleRow {
     target: "",
     enabled: true,
     timeout_seconds: 1800,
+    timeout_default: true,
     catchup: true,
     runners: ["pm"],
     next_run: "2026-06-16T09:00:00Z",
@@ -118,4 +120,14 @@ test("a pause just saved holds Run now with the reason, and the page is read aga
   expect(asked.filter((q) => q === "schedules").length).toBeGreaterThan(before);
   expect(screen.getByText(/Nothing while it is paused/)).toBeTruthy();
   expect(runNow().getAttribute("aria-disabled")).toBe("true");
+});
+
+// AN EMPTY TIME LIMIT IS THE ENGINE'S DEFAULT, read from the schedules answer:
+// the form kept "30 minutes" as a copy of the constant, which nothing tied to
+// the engine's figure.
+test("the form says what an empty time limit means from the engine's own default", () => {
+  expect(emptyCapWords(2700)).toBe("Empty is the engine’s 45 minutes.");
+  expect(emptyCapWords(1800)).toBe("Empty is the engine’s 30 minutes.");
+  // NOT READ YET: no figure is guessed.
+  expect(emptyCapWords(undefined)).toBe("Empty is the engine’s default.");
 });

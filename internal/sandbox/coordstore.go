@@ -1540,7 +1540,7 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string
 // heldCommit.Record), and the row's budget holds whatever a later one hands.
 func approvedCall(made BridgeCall, held HeldCall) BridgeCall {
 	made.Name, made.Approved, made.At, made.HeldID = held.Tool, true, held.MadeAt, held.ID
-	made.Args, made.Output, made.OutputBytes, made.Digest = "", "", 0, ""
+	made.Args, made.Output, made.OutputBytes, made.Digest, made.ArgsUnparsed = "", "", 0, "", false
 	made.Held, made.Seq, made.Appended, made.Late, made.Abandoned, made.CallID = false, 0, 0, false, false, ""
 	return keptCall(made, MaxBridgeArgsBytes)
 }

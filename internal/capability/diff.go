@@ -39,6 +39,8 @@ const (
 	ChangeBoxAdded          ChangeKind = "box_added"
 	ChangeBoxRemoved        ChangeKind = "box_removed"
 	ChangeBoxChanged        ChangeKind = "box_changed"
+	ChangeGrantAdded        ChangeKind = "grant_added"
+	ChangeGrantRemoved      ChangeKind = "grant_removed"
 )
 
 // ChangeKinds is the closed list, in the order a turn is told them.
@@ -49,6 +51,7 @@ var ChangeKinds = []ChangeKind{
 	ChangePolicyAdded, ChangePolicyRemoved,
 	ChangeSetupStepAdded, ChangeSetupStepRemoved, ChangeSetupStepModified,
 	ChangeBoxAdded, ChangeBoxRemoved, ChangeBoxChanged,
+	ChangeGrantAdded, ChangeGrantRemoved,
 }
 
 // Valid reports whether k is one of [ChangeKinds].
@@ -107,7 +110,7 @@ func (c Change) Terms() []string {
 		terms = append(terms, c.Lane)
 		switch c.Kind {
 		case ChangeScopeAdded, ChangeScopeRemoved, ChangePermission,
-			ChangePendingStarted, ChangePendingCleared:
+			ChangePendingStarted, ChangePendingCleared, ChangeGrantAdded, ChangeGrantRemoved:
 			terms = append(terms, c.Items...)
 		case ChangeLevel:
 			terms = append(terms, c.From, c.To)
@@ -204,6 +207,43 @@ func integrationChanges(old, now Snapshot, v voice) []Change {
 			continue
 		}
 		out = append(out, laneChanges(base, was, is, v)...)
+		// A BASELINE FROM BEFORE GRANTS WERE TOLD told none, so none is a
+		// change from it: "Your access" says them.
+		if old.V >= grantsFrom {
+			out = append(out, grantChanges(base, was, is, v)...)
+		}
+	}
+	return out
+}
+
+// grantChanges is each grant the credential gained or lost beside its level,
+// told once. A grant whose lapse moved is the same grant.
+func grantChanges(base Change, was, is Integration, v voice) []Change {
+	key := func(line string) string { k, _, _ := strings.Cut(line, " until "); return k }
+	had := map[string]bool{}
+	for _, line := range was.Grants {
+		had[key(line)] = true
+	}
+	has := map[string]bool{}
+	var out []Change
+	for _, line := range is.Grants {
+		has[key(line)] = true
+		if had[key(line)] {
+			continue
+		}
+		c := base
+		c.Kind, c.Items = ChangeGrantAdded, []string{key(line)}
+		c.Line = fmt.Sprintf("%s: %s Crewlet grant now adds %s beside %s level.", base.Vendor, v.your, line, v.your)
+		out = append(out, c)
+	}
+	for _, line := range was.Grants {
+		if has[key(line)] {
+			continue
+		}
+		c := base
+		c.Kind, c.Items = ChangeGrantRemoved, []string{key(line)}
+		c.Line = fmt.Sprintf("%s: %s is no longer in %s Crewlet grant.", base.Vendor, key(line), v.your)
+		out = append(out, c)
 	}
 	return out
 }

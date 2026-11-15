@@ -51,7 +51,7 @@ func (r *Refused) session() string                         { return "" }
 func (r *Refused) boxKept() bool                           { return r.BoxKept }
 func (r *Refused) continuation(provenance.Boundary) string { return r.Reseed() }
 func (r *Refused) reseed(provenance.Boundary) string       { return r.Reseed() }
-func (r *Refused) tellsHeld() string                       { return "" }
+func (r *Refused) tellsHeld() (id, tool string)            { return "", "" }
 func (r *Refused) lead() *sandbox.Lead                     { return nil }
 func (r *Refused) keeps() bool                             { return false }
 func (r *Refused) branch() string                          { return "" }
