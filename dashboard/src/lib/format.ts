@@ -248,7 +248,10 @@ const MONTH_DAY_YEAR: DateShape = Object.freeze({ ...MONTH_DAY, year: "numeric" 
 export function companyDateLabel(date: string): string {
   const at = Date.parse(`${date}T12:00:00Z`);
   if (!Number.isFinite(at)) return date;
-  return dateTimeFormat(undefined, "UTC", COMPANY_DAY).format(at);
+  // ONE WORD TO THE LINE BREAKER: a sentence carrying a date ("the month on
+  // Dec 1.") broke inside it at a tablet's width, leaving "1." alone on the
+  // next line. The parts are joined with no-break spaces.
+  return dateTimeFormat(undefined, "UTC", COMPANY_DAY).format(at).replace(/ /g, "\u00a0");
 }
 
 const COMPANY_DAY: DateShape = Object.freeze({ month: "short", day: "numeric" });

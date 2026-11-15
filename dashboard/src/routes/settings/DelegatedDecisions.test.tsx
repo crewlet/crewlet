@@ -303,7 +303,7 @@ test("a day named in the address is the day asked for and headed", () => {
   expect(answer.asked).toContainEqual({ day: "2026-11-05" });
   // THE DAY AS A DATE IS SAID, never the engine's `2026-11-05` label.
   // Mutation: draw `data.day` and the heading reads the label.
-  expect(screen.getByRole("table", { name: "Decided on Nov 5" })).toBeTruthy();
+  expect(screen.getByRole("table", { name: /^Decided on Nov\s5$/ })).toBeTruthy();
   expect(screen.queryByText("2026-11-05")).toBeNull();
   // A WHOLE DAY PAGES FORWARD, towards today.
   fireEvent.click(screen.getByRole("button", { name: "The day after" }));

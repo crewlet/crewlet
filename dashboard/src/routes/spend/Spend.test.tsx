@@ -373,7 +373,7 @@ test("the monthly budget is drawn in the engine's state, with its reset", async 
   );
   await settle();
   const meter = screen.getByRole("meter", { name: "This month" });
-  expect(meter.getAttribute("aria-valuetext")).toMatch(/refusing charges, resets Oct 1/);
+  expect(meter.getAttribute("aria-valuetext")).toMatch(/refusing charges, resets Oct\s1/);
   expect(screen.getByText(/70M of 80M · resets Oct 1/)).toBeTruthy();
   expect(screen.getByText("Full until Oct 1.")).toBeTruthy();
 });
