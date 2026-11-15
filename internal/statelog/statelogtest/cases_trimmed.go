@@ -490,13 +490,29 @@ func (l *loop) stop() {
 // drained signals ([statelog.RunnerDeps.OnDrained]) — and a run comes level
 // only from its loop, after its startup, so every record an earlier build
 // retained has been reprocessed by then. A run that returns first is refused
-// with what it returned.
+// with what it returned, and a stop or a fault as soon as the runner reports
+// one, as [loop.waitPast] refuses them: a record the applier refuses is
+// retried in place rather than returned, and a wait on the drain alone would
+// sit out the test binary's timeout before it said so.
 func (l *loop) waitDrained(drained <-chan struct{}) error {
-	select {
-	case <-drained:
-		return nil
-	case <-l.done:
-		return fmt.Errorf("the applier returned before it came level with its log: %w", l.err)
+	// THE TICK ONLY PACES THE ASKING: the drain, the return, the stop and
+	// the fault decide, and nothing here is judged by when it came.
+	tick := time.NewTicker(2 * time.Millisecond) //fixedwait:liveness
+	defer tick.Stop()
+	for {
+		select {
+		case <-drained:
+			return nil
+		case <-l.done:
+			return fmt.Errorf("the applier returned before it came level with its log: %w", l.err)
+		case <-tick.C:
+		}
+		if err := l.runner.Stopped(); err != nil {
+			return fmt.Errorf("the applier stopped before it came level with its log: %w", err)
+		}
+		if msg, faulted := l.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget)); faulted {
+			return fmt.Errorf("the applier faulted before it came level with its log: %s", msg)
+		}
 	}
 }
 
