@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
@@ -76,6 +78,62 @@ type Assistant struct {
 	// harness for a task that needs research, scripts, files or many steps
 	// (ADR-0054). Absent: the assistant answers in quick mode only.
 	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."`
+
+	// Research is the web Ask Crewlet may read, through the engine (ADR-0151).
+	Research *AssistantResearch `yaml:"research,omitempty" json:"research,omitempty" desc:"Web research: Ask Crewlet reads pages, through the engine, from the hosts listed here. Absent: it reads no web page."`
+}
+
+// AssistantResearch is the `assistant.research` block (ADR-0151).
+type AssistantResearch struct {
+	Hosts []string `yaml:"hosts" json:"hosts" desc:"The hosts Ask Crewlet may read pages from over https, each a host name alone (docs.example.com), at most 50. Required."`
+}
+
+// MaxResearchHosts bounds the list a person confirms host by host.
+const MaxResearchHosts = 50
+
+// researchHost is a host name as the list takes it: lower case, dotted, no
+// scheme, port, path or wildcard.
+var researchHost = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
+})
+
+// ResearchHosts are the hosts research may read from; none where it is off.
+func (a Assistant) ResearchHosts() []string {
+	if a.Research == nil {
+		return nil
+	}
+	return a.Research.Hosts
+}
+
+// problems reports a research block with no host, too many, or one that
+// is not a bare host name.
+func (r *AssistantResearch) problems(path Path) error {
+	var p problems
+	if r == nil {
+		return nil
+	}
+	hosts := at(path, "hosts")
+	switch {
+	case len(r.Hosts) == 0:
+		p.add(hosts, ErrMissing, "research lists no host: list the documentation hosts "+
+			"Ask Crewlet may read, such as developers.cloudflare.com")
+	case len(r.Hosts) > MaxResearchHosts:
+		p.add(hosts, ErrOutOfRange, "research lists %d hosts, past the %d a person can "+
+			"confirm", len(r.Hosts), MaxResearchHosts)
+	}
+	seen := map[string]bool{}
+	for i, h := range r.Hosts {
+		entry := idx(hosts, i)
+		switch {
+		case !researchHost().MatchString(h):
+			p.add(entry, ErrUnknownValue, "%q is not a host name: write the host alone, in "+
+				"lower case, with no scheme, port, path or wildcard (docs.example.com)", h)
+		case seen[h]:
+			p.add(entry, ErrConflict, "%s is listed twice", h)
+		}
+		seen[h] = true
+	}
+	return p.err()
 }
 
 // AssistantDeepWork is the `assistant.deep_work` block.
@@ -212,7 +270,7 @@ func (a Assistant) Retention() time.Duration {
 func (a Assistant) IsZero() bool {
 	return a.Enabled == nil && len(a.LLM) == 0 && a.MaxSteps == 0 && a.TurnTimeoutSeconds == 0 &&
 		a.ProposalTTLSeconds == 0 && a.RetentionDays == 0 && a.TokenBudget == (TokenBudget{}) &&
-		a.DeepWork == nil
+		a.DeepWork == nil && a.Research == nil
 }
 
 // Timeout is the longest one deep-work run may take.
@@ -377,6 +435,7 @@ func (c *Company) validateAssistant() error {
 		p.wrap(c.assistantChainProblems(path))
 	}
 	p.wrap(c.deepWorkProblems(at(path, "deep_work")))
+	p.wrap(a.Research.problems(at(path, "research")))
 	return p.err()
 }
 

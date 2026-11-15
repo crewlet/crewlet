@@ -233,6 +233,8 @@ type Tool struct {
 	// the answer itself, redacted, fenced and cut: a generic read, whose
 	// route the catalogue holds no spec for ([APIRequestTool]).
 	Infer bool
+	// PerTurn is the most calls of the tool one turn makes; zero is no bound.
+	PerTurn int
 	// Label renders the step's sentence from the call's safe arguments.
 	Label func(args map[string]any) string
 	// Scope is what the call's arguments narrowed a read to, in a few words

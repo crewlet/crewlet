@@ -122,6 +122,10 @@ var trustDoors = map[string]trustDoor{
 	// writer earns (a vendor's integration names what it reports); one
 	// entry says its sources, and is a vendor's where an integration is
 	// among them and the company's own words otherwise.
+	"internal/assistant/catalog/research.go:fetchWebPage": {vendor, []string{
+		"internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites",
+		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
+	}},
 	"internal/assistant/catalog/atlasread.go:atlasReads": {vendor, []string{
 		"internal/assistant/catalog.TestAnAtlasSearchIsATableOfEntriesWithTheMapToOpen",
 		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",

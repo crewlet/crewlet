@@ -496,7 +496,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if briefing {
 		tools = briefTools(s.catalogue.Offered(ts.Person, acts))
 	} else {
-		tools = s.withDeep(ctx, s.catalogue.Offered(ts.Person, acts))
+		tools = s.withConfigured(ctx, s.catalogue.Offered(ts.Person, acts))
 	}
 	earlier := historyEntries(history, ts.Person)
 	t.used(historyApps(earlier))

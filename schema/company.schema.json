@@ -177,6 +177,10 @@
             "null"
           ]
         },
+        "research": {
+          "$ref": "#/$defs/AssistantResearch",
+          "description": "Web research: Ask Crewlet reads pages, through the engine, from the hosts listed here. Absent: it reads no web page."
+        },
         "retention_days": {
           "description": "How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30.",
           "maximum": 365,
@@ -241,6 +245,30 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantResearch": {
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "description": "The hosts Ask Crewlet may read pages from over https, each a host name alone (docs.example.com), at most 50. Required.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
             "null"
           ]
         }

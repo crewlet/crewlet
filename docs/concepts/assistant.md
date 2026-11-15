@@ -155,6 +155,10 @@ of taste ("make it friendlier"), Ask Crewlet reads what is there, then asks
 one short question with the options it found, or sets out an ordered plan and
 proposes its first step. It says what each proposal does before its card.
 
+**Read a vendor's documentation** where an administrator lists its hosts
+(`assistant.research`): the engine reads the page, never the model's own tools,
+and a change prepared after reading one says so.
+
 **Prepare changes for you to approve:** filing, changing and commenting on
 tasks, answering a decision, setting your priorities, marking your inbox,
 pausing and resuming an agent, steering a running turn, answering an
