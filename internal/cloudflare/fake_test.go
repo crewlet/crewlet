@@ -111,12 +111,17 @@ var (
 		"Firewall Services Read", "Zone WAF Read", "SSL and Certificates Read", "Cache Purge",
 		"Cache Settings Write", "Zone Settings Write", "Response Compression Write", "Zone WAF Write",
 		"Zone Transform Rules Read", "Zone Transform Rules Write",
+		// Groups no level grants, which a seat may be granted beside it.
+		"Origin Read", "Origin Write", "DNS Write",
 	}
 	accountGroups = []string{
 		"Account Analytics Read", "Account Settings Read", "Account API Tokens Write", "Account API Tokens Read",
 		"Account Rule Lists Read", "Account Rule Lists Write",
 		// What the atlas reads more with, which the provisioner may hold.
 		"Workers Scripts Read", "Pages Read", "Workers R2 Storage Read", "Cloudflare Tunnel Read",
+		// Groups no agent is ever granted, whatever the provisioner holds.
+		"Billing Read", "Billing Write", "Account Settings Write", "Memberships Write",
+		"Access: Organizations, Identity Providers, and Groups Write",
 	}
 )
 

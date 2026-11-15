@@ -1967,6 +1967,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// chart would refuse a colleague who joined this morning and
 		// admit one who left.
 		FleetSeat: e.FleetSeat,
+		Grants:    e.GrantDesk(),
 		ChangeRef: e.ChangeRef,
 		Seats:     e.seatCorpus,
 		// AND THE UNIT SEAM, read per call for the reason the default

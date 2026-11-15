@@ -689,6 +689,7 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// AND THE FLEET'S SEATS, which an answer choosing a grant is
 			// checked against (ADR-0118).
 			FleetSeat: e.FleetSeat,
+			Grants:    e.GrantDesk(),
 			Seats: func() []colleague.Seat {
 				c := e.Company()
 				if c == nil {

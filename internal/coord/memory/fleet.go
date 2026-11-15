@@ -61,6 +61,9 @@ type Fleet struct {
 	// seatAccess is the seat access ledger, by integration then handle.
 	seatAccess map[string]map[string][]byte
 
+	// grantRequests is the agents' grant requests, by id.
+	grantRequests map[string][]byte
+
 	// accessReviews is each seat's pending access review, by handle, and the
 	// counter its revisions are drawn from.
 	accessReviews        map[string]accessReview
@@ -205,6 +208,7 @@ func NewFleet() *Fleet {
 		atlasCode:         map[string][]byte{},
 		atlasRefresh:      map[string][]byte{},
 		seatAccess:        map[string]map[string][]byte{},
+		grantRequests:     map[string][]byte{},
 		accessReviews:     map[string]accessReview{},
 		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},

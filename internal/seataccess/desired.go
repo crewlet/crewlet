@@ -111,7 +111,7 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 		if b == nil {
 			return Desired{}, false
 		}
-		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
+		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault(), Grants: b.Grants}
 	case LaneExpo:
 		b := in.Expo
 		if b == nil {
@@ -221,7 +221,7 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 		if in.Cloudflare == nil {
 			in.Cloudflare = &config.RoleCloudflare{}
 		}
-		in.Cloudflare.Enabled, in.Cloudflare.Level = &on, d.Level
+		in.Cloudflare.Enabled, in.Cloudflare.Level, in.Cloudflare.Grants = &on, d.Level, d.Grants
 	case LaneExpo:
 		if in.Expo == nil {
 			in.Expo = &config.RoleExpo{}

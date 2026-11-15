@@ -51,6 +51,9 @@ func TestTheDashboardReadsAccessAsTheEngineWritesIt(t *testing.T) {
 		{"AccessSeatReview", reflect.TypeFor[seataccess.SeatReview]()},
 		{"AccessInstallLink", reflect.TypeFor[seataccess.InstallLink]()},
 		{"AccessRefusal", reflect.TypeFor[seataccess.OfferRefusal]()},
+		{"AccessGrantEntry", reflect.TypeFor[seataccess.GrantEntry]()},
+		{"AccessGrant", reflect.TypeFor[seataccess.Grant]()},
+		{"AccessGrantRequest", reflect.TypeFor[seataccess.GrantRequest]()},
 	} {
 		members, err := clientsource.Interface(tree, c.client)
 		if err != nil {
@@ -133,7 +136,8 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 		{"AccessActor", strs(string(seataccess.ByCrewlet), string(seataccess.ByYou)),
 			func(v string) bool { return seataccess.StepActor(v).Valid() }},
 		{"AccessRefusalField", strs(string(seataccess.FieldLevel), string(seataccess.FieldPermissions),
-			string(seataccess.FieldScope)), func(v string) bool { return seataccess.RefusalField(v).Valid() }},
+			string(seataccess.FieldScope), string(seataccess.FieldGrants)),
+			func(v string) bool { return seataccess.RefusalField(v).Valid() }},
 		{"AccessLaneStatus", wire(seataccess.LaneStatuses()),
 			func(v string) bool { return seataccess.LaneStatus(v).Valid() }},
 		{"AccessOutcome", strs(
@@ -175,4 +179,18 @@ func wire[T ~string](values []T) []string {
 		out = append(out, string(v))
 	}
 	return out
+}
+
+// THE DASHBOARD KNOWS A REQUEST'S OPTION BY THE ENGINE'S PREFIX, so the Inbox
+// draws a request's grant options in the engine's words and saves the grant
+// before it answers, never as a plain choice.
+func TestTheDashboardKnowsARequestOptionByTheEnginesPrefix(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "GRANT_REQUEST_OPTION_PREFIX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.TrimSuffix(seataccess.GrantOptionTemporary(""), "-t"); got != want {
+		t.Errorf("the dashboard's prefix is %q, the engine's %q", got, want)
+	}
 }

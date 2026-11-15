@@ -295,6 +295,11 @@ type WorkDeps struct {
 	// refuses every grant choice: the grant cannot be confirmed.
 	FleetSeat func(ctx context.Context, handle string) (*org.Role, error)
 
+	// Grants is the engine's half of an agent's request for one
+	// integration permission and of its answer. Nil omits request_access's
+	// integration form and refuses every answer choosing such a grant.
+	Grants GrantDesk
+
 	// Holders says whose record somebody else's LOGIN names — the identity
 	// directory's half of [iam.OwnerOf], which every person verb resolves
 	// its name through before it decides or reads or writes anything.
@@ -3842,6 +3847,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	t.deps.settle(ctx, got.Position)
+	t.deps.requestDeclined(ctx, comment.Choice, actor.Handle, thread)
 	answer := withOperation(ReceiptOf(map[string]any{
 		"comment_id": comment.ID,
 		"mentioned":  comment.Mentions, "outcome": string(got.Outcome), "position": positionOf(got.Position),

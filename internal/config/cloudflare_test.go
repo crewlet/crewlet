@@ -135,3 +135,42 @@ func TestCloudflareZoneKey(t *testing.T) {
 		}
 	}
 }
+
+// A SEAT'S GRANTS ARE HELD TO THE SHAPE THE ENGINE WRITES: a grant id, a
+// permission, who granted it and when, why, a scope listed once and an expiry
+// after its grant; one well-formed reads back with its instants. What a grant
+// may name is the vendor's live catalogue, judged where it is saved.
+// Mutation: drop checkSeatGrants from checkCloudflare and every case parses.
+func TestACloudflareSeatsGrantsAreHeldToTheirShape(t *testing.T) {
+	t.Parallel()
+	doc := func(grant string) string {
+		return "name: Acme\nintegrations:\n  cloudflare:\n" + completeCloudflare +
+			"\nroles:\n  - {name: SRE, handle: sre, integrations: {cloudflare: {enabled: true, grants: [" +
+			grant + "]}}}\n"
+	}
+	const good = `{id: gabcdefghij, permission: Origin Write, scope: [example.com], ` +
+		`granted_by: Ada, granted_at: "2026-11-15T09:00:00Z", expires_at: "2026-11-15T13:00:00Z", ` +
+		`reason: an origin rule, request: abcdefghij}`
+	c, err := config.ParseCompany([]byte(doc(good)))
+	if err != nil {
+		t.Fatalf("a well-formed grant was refused: %v", err)
+	}
+	g := c.Roles[0].Integrations.Cloudflare.Grants[0]
+	if g.Permission != "Origin Write" || g.ExpiresAt.Hour() != 13 || g.GrantedAt.Hour() != 9 {
+		t.Errorf("grant = %+v, want it read back whole", g)
+	}
+	for name, grant := range map[string]string{
+		"no id":          `{permission: Origin Write, granted_by: Ada, granted_at: "2026-11-15T09:00:00Z", reason: x}`,
+		"no permission":  `{id: gabcdefghij, granted_by: Ada, granted_at: "2026-11-15T09:00:00Z", reason: x}`,
+		"no author":      `{id: gabcdefghij, permission: Origin Write, granted_at: "2026-11-15T09:00:00Z", reason: x}`,
+		"no reason":      `{id: gabcdefghij, permission: Origin Write, granted_by: Ada, granted_at: "2026-11-15T09:00:00Z"}`,
+		"lapses earlier": `{id: gabcdefghij, permission: Origin Write, granted_by: Ada, granted_at: "2026-11-15T09:00:00Z", expires_at: "2026-11-15T08:00:00Z", reason: x}`,
+		"twice a zone":   `{id: gabcdefghij, permission: Origin Write, scope: [a.com, a.com], granted_by: Ada, granted_at: "2026-11-15T09:00:00Z", reason: x}`,
+		"one id twice":   good + ", " + good,
+	} {
+		if _, err := config.ParseCompany([]byte(doc(grant))); err == nil ||
+			!strings.Contains(err.Error(), "roles[0].integrations.cloudflare.grants") {
+			t.Errorf("%s: %v, want a refusal naming the seat's grants", name, err)
+		}
+	}
+}

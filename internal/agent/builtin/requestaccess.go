@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/decision"
-	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
@@ -37,17 +37,23 @@ func (t *requestAccess) Name() string { return RequestAccessTool }
 
 func (t *requestAccess) Description() string {
 	return "Ask a person for one more kind of access your work needs, on the work item " +
-		"that needs it: " + accessList() + ". Your access is your Crewlet grant, which an " +
+		"that needs it: " + accessList() + " with `access`; or, with `integration` and " +
+		"`permission`, one permission at an integration beside your level there, as its " +
+		"catalogue names it (a Cloudflare permission group such as `Origin Write`, on the " +
+		"zones in `scope` or all of them), granted for `hours` or for good. When an " +
+		"integration's API refuses you for a permission your token lacks (Cloudflare: 403, " +
+		"\"request is not authorized\"), ask for that permission here; never ask a person to " +
+		"change your token at the vendor by hand. Your access is your Crewlet grant, which an " +
 		"administrator sets in Crewlet, never at the vendor. The person sees the exact " +
 		"change to your access and decides; nothing changes until they apply it, and you " +
 		"are told your new access on your next turn. Ask an administrator, who can grant " +
 		"it, and say in `why` what you tried and what the access is for. " + outsideList
 }
 
-// outsideList is what a seat does for access the catalogue does not name.
-const outsideList = "For access this list does not name (another integration, a level " +
-	"or a scope), ask an administrator in words with " + CommentOnWorkTool + ", naming " +
-	"where they set it: Settings, Integrations, then the integration's Agents tab."
+// outsideList is what a seat does for access neither form names.
+const outsideList = "For access neither form names (a level or a scope), ask an " +
+	"administrator in words with " + CommentOnWorkTool + ", naming where they set it: " +
+	"Settings, Integrations, then the integration's Agents tab."
 
 func (t *requestAccess) Parameters() map[string]any {
 	keys := make([]any, 0, len(advisor.AccessKeys()))
@@ -62,12 +68,25 @@ func (t *requestAccess) Parameters() map[string]any {
 			"ask": map[string]any{"type": "string",
 				"description": "The handle of the person to ask: an administrator."},
 			"access": map[string]any{"type": "string", "enum": keys,
-				"description": "The one access to ask for."},
+				"description": "The one access to ask for. Leave it out to ask for an integration's permission."},
+			"integration": map[string]any{"type": "string",
+				"description": "The integration whose permission you lack: one of " + grantLaneList() + "."},
+			"permission": map[string]any{"type": "string",
+				"description": "The one permission to ask for at `integration`, as its catalogue names it " +
+					"(for Cloudflare, the permission group's API name: `Origin Write`, `DNS Write`)."},
+			"scope": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
+				"description": "Where the permission applies (Cloudflare zone names). Leave it out for " +
+					"every zone the company's agents reach, or for an account permission."},
+			"hours": map[string]any{"type": "integer", "minimum": seataccess.MinGrantHours,
+				"maximum": seataccess.MaxGrantHours,
+				"description": fmt.Sprintf("How long the change needs it, %d to %d hours; %d when left out. "+
+					"The person may grant it for good instead.", seataccess.MinGrantHours,
+					seataccess.MaxGrantHours, seataccess.DefaultGrantHours)},
 			"why": map[string]any{"type": "string",
 				"description": fmt.Sprintf("What you tried and what the access is for, in at "+
 					"most %d bytes. It is the person's reason to say yes.", MaxAccessReasonBytes)},
 		},
-		"required": []any{"item", "ask", "access", "why"},
+		"required": []any{"item", "ask", "why"},
 	}
 }
 
@@ -80,6 +99,13 @@ func (t *requestAccess) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	if turn == nil || turn.Seat == nil || turn.Org == nil {
 		return notInATurn(RequestAccessTool), nil
+	}
+	integration := strings.TrimSpace(argString(args, "integration"))
+	switch access := strings.TrimSpace(argString(args, "access")); {
+	case access != "" && integration != "":
+		return failed(RequestAccessTool + ": give `access` or `integration` with `permission`, not both."), nil
+	case integration != "":
+		return t.requestGrant(ctx, turn, args)
 	}
 	key := advisor.AccessKey(strings.TrimSpace(argString(args, "access")))
 	person := strings.TrimSpace(argString(args, "ask"))
@@ -96,15 +122,8 @@ func (t *requestAccess) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"an administrator turns on for you under " + key.Place() + "; ask for it in " +
 			"words with " + CommentOnWorkTool + ", naming that place."), nil
 	}
-	switch asked := turn.Org.Role(person); {
-	case asked == nil || asked.Kind != org.KindHuman:
-		return failed(RequestAccessTool + ": `ask` is a person's handle: only a person " +
-			"decides what an agent may do."), nil
-	case why == "":
-		return failed(RequestAccessTool + " needs `why`: what you tried and what the access is for."), nil
-	case len(why) > MaxAccessReasonBytes:
-		return failed(fmt.Sprintf("%s: `why` is %d bytes; it can be at most %d.",
-			RequestAccessTool, len(why), MaxAccessReasonBytes)), nil
+	if refused := askable(turn, person, why); refused != nil {
+		return *refused, nil
 	}
 	name := turn.Seat.Name
 	question := fmt.Sprintf("Allow %s to %s?", name, key.Does())
@@ -147,7 +166,11 @@ func accessList() string {
 func (d WorkDeps) grantChosen(ctx context.Context, choice string,
 	thread worklet.ResolvedThread) *tools.Result {
 
-	if thread.AnswersDecision == nil || !strings.HasPrefix(choice, advisor.AccessPrefix) {
+	if refused := d.grantRequestChosen(ctx, choice, thread); refused != nil {
+		return refused
+	}
+	if _, _, request := seataccess.GrantOption(choice); request || thread.AnswersDecision == nil ||
+		!strings.HasPrefix(choice, advisor.AccessPrefix) {
 		return nil
 	}
 	key := advisor.AccessKey(choice)

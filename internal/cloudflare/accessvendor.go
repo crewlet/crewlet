@@ -36,17 +36,23 @@ func (accessVendor) Catalog() seataccess.Catalog {
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneCloudflare, Levels: true,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
-			Rotatable: true,
+			Rotatable: true, Grants: true,
 		}},
 	}
 }
 
 // Steps is each op as Cloudflare takes it, in the order Apply takes it. Pure.
-func (accessVendor) Steps(
-	seat seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
+func (v accessVendor) Steps(
+	seat seataccess.SeatRef, lane seataccess.Lane, op seataccess.Op,
 	want seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	out := cloudflareSteps(seat, op, want, have)
+	return v.StepsFor(seataccess.StepsInput{Seat: seat, Lane: lane, Op: op, Want: want, Have: have})
+}
+
+// StepsFor is [accessVendor.Steps] naming a grant's reach from the lane's
+// catalogue where the caller read it ([seataccess.NamedSteps]).
+func (accessVendor) StepsFor(in seataccess.StepsInput) []seataccess.Step {
+	out := cloudflareSteps(in.Seat, in.Op, in.Want, in.Have, in.Options)
 	for i := range out {
 		out[i].Index = i
 	}
@@ -55,6 +61,7 @@ func (accessVendor) Steps(
 
 func cloudflareSteps(
 	seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
+	opts seataccess.Options,
 ) []seataccess.Step {
 	sink := seataccess.SinkName(integration.KindCloudflare, TokenField, seat.Handle)
 	step := func(verb seataccess.StepVerb, text string) seataccess.Step {
@@ -78,6 +85,8 @@ func cloudflareSteps(
 		return out
 	case seataccess.OpLevel:
 		return []seataccess.Step{step(seataccess.VerbRerole, "Narrow its token to "+level)}
+	case seataccess.OpGrants:
+		return grantSteps(op, want, have, opts)
 	case seataccess.OpMint, seataccess.OpRotate:
 		return []seataccess.Step{roll, renew}
 	case seataccess.OpDisable:
@@ -141,9 +150,9 @@ func (accessVendor) open(in seataccess.OpenInput, hc *http.Client, now func() ti
 	// grant are what the session would read again, call for call, from the
 	// same token and the same configured zones.
 	if read, ok := in.Reads.(*Inspection); ok && read != nil && read.account == account {
-		cat := read.in.cat
+		cat, own := read.in.cat, read.in.own
 		gaps := levelGaps(read.in.unresolved, read.in.unheld, client.TokensURL())
-		s.cat, s.gaps = &cat, &gaps
+		s.cat, s.gaps, s.own = &cat, &gaps, &own
 	}
 	return s, nil
 }
@@ -161,6 +170,7 @@ type accessSession struct {
 	mu   sync.Mutex
 	cat  *catalogue
 	gaps *[]seataccess.LevelGap
+	own  *ownPolicy
 }
 
 // catalogue reads the account's permission groups and zones once.
@@ -202,13 +212,13 @@ func (s *accessSession) levelGaps(ctx context.Context) ([]seataccess.LevelGap, e
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare: read the provisioner token: %w", reject(err))
 	}
-	unheld, _, err := readUnheld(ctx, s.client, cat, status.ID)
+	unheld, _, own, err := readUnheld(ctx, s.client, cat, status.ID)
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare: read the provisioner token's own permissions: %w", reject(err))
 	}
 	gaps := levelGaps(cat.unresolvedLevels(), unheld, s.client.TokensURL())
 	s.mu.Lock()
-	s.gaps = &gaps
+	s.gaps, s.own = &gaps, &own
 	s.mu.Unlock()
 	return gaps, nil
 }
@@ -269,9 +279,16 @@ func (s *accessSession) Observe(ctx context.Context, in seataccess.ObserveInput)
 		if err != nil {
 			return nil, err
 		}
+		// IN THE TERMS THE LAST CONVERGED SYNC APPLIED, where the token holds
+		// exactly that, so grants overlapping a higher level never flap.
+		var applied *seataccess.Desired
+		if lr, ok := rec.Lanes[seataccess.LaneCloudflare]; ok {
+			applied = lr.Applied
+		}
+		level, grants := cat.accessOf(tok.Policies, applied)
 		observed := seataccess.Observed{
 			Exists: true, Enabled: tok.Status == StatusActive,
-			Account: tok.Name, AccountID: tok.ID, Level: cat.levelOf(tok.Policies),
+			Account: tok.Name, AccountID: tok.ID, Level: level, Grants: grants,
 			CreatedAt: rec.Account.CreatedAt,
 		}
 		// ABOUT TO LAPSE: the plan mints a fresh value, with a fresh expiry,
@@ -306,6 +323,13 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 		}
 	case seataccess.OpLevel:
 		return s.write(ctx, in, false)
+	case seataccess.OpGrants:
+		// THE WHOLE POLICY AT ONCE: the op's first step writes the level and
+		// every live grant, and the rest have nothing left to write.
+		if len(in.Prior) > 0 {
+			return seataccess.StepResult{}, nil
+		}
+		return s.write(ctx, in, false)
 	case seataccess.OpMint, seataccess.OpRotate:
 		if in.Step.Verb == seataccess.VerbMint {
 			return s.roll(ctx, in)
@@ -323,8 +347,8 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 	}
 }
 
-// policiesFor is the policy a level grants on the company's zones, or the
-// refusal saying why it cannot be built.
+// policiesFor is the policy a level and the seat's live grants make on the
+// company's zones, or the refusal saying why it cannot be built.
 func (s *accessSession) policiesFor(ctx context.Context, in seataccess.ApplyInput) ([]Policy, error) {
 	cat, err := s.catalogue(ctx)
 	if err != nil {
@@ -352,7 +376,15 @@ func (s *accessSession) policiesFor(ctx context.Context, in seataccess.ApplyInpu
 			ActionURL: gaps[i].ActionURL,
 		}
 	}
-	return cat.policies(g), nil
+	extra, err := cat.resolveGrants(in.Want.Grants)
+	if err != nil {
+		return nil, &seataccess.Refusal{
+			Said:   "Cloudflare: " + err.Error(),
+			Remedy: "Remove the grant on the Agents tab",
+			Actor:  seataccess.ByYou,
+		}
+	}
+	return cat.policiesWith(g, extra), nil
 }
 
 // create mints the seat's token at its level, expiring in 90 days, and hands
@@ -409,6 +441,10 @@ func (s *accessSession) write(ctx context.Context, in seataccess.ApplyInput, ena
 		status := tok.Status
 		if enable {
 			status = StatusActive
+		}
+		if status == tok.Status && slices.Equal(policyKeys(tok.Policies), policyKeys(policies)) {
+			// ALREADY HELD, as when a level step wrote the grants too.
+			return seataccess.StepResult{}, nil
 		}
 		_, err = s.client.UpdateToken(ctx, tok.ID, TokenSpec{
 			Name: tok.Name, Policies: policies, ExpiresOn: tok.ExpiresOn, Status: status,
