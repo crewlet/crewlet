@@ -141,23 +141,28 @@ func TestTheMergeRateAlarmBorrowsTheQueuesCapacity(t *testing.T) {
 
 	// THE HOME'S READING, read until it names the queue: the worker's first
 	// turn — once this node is listed as the repository's home — builds the
-	// train, and a later one, a gitlethome.Backstop after at the latest, finds
-	// it standing and prices the queue at its age. The deadline is three
-	// passes — the loop's first, at Start, may find this node not yet
-	// listed — and room for a loaded machine.
-	deadline := time.Now().Add(3*gitlethome.Backstop + time.Minute)
+	// train, and a later one finds it standing and prices the queue at its
+	// age. The case runs the home's passes itself (engine.PollHomeForTest)
+	// rather than waiting for the loop's ticker, whose gitlethome.Backstop
+	// minute between passes was most of the case's time on CI; a pass is the
+	// same pass either way. The deadline is room for a loaded machine, and
+	// only ends the wait.
+	deadline := time.Now().Add(time.Minute)
 	var reading statelog.Reading
 	for {
+		if err := engine.PollHomeForTest(t.Context(), e); err != nil {
+			t.Fatalf("a pass of the home's loop: %v", err)
+		}
 		reading = engine.CodeReadingForTest(t.Context(), e)
 		if reading.CodeMergeRateOver > 0 {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its firing only ends the wait
 			train, n := queue.trainRecorded()
 			t.Fatalf("the home's reading names no queue past its capacity; the worker recorded %d train(s), "+
 				"the last %q", n, train)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 	if train, n := queue.trainRecorded(); train == "" || n != 1 {
 		t.Errorf("the worker recorded %d train(s) before pricing the queue, want the one it then timed", n)
@@ -191,11 +196,11 @@ func TestTheMergeRateAlarmBorrowsTheQueuesCapacity(t *testing.T) {
 		if slices.Contains(kinds, statelog.KindCodeMergeRateOver) {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: its firing only ends the wait
 			t.Fatalf("the node's alarms are %v with a queue asked past its capacity, want %s", kinds,
 				statelog.KindCodeMergeRateOver)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) //fixedwait:liveness
 	}
 	report, ok := e.RetentionReport(t.Context())
 	if !ok {
