@@ -37,7 +37,8 @@ const modulePath = "github.com/crewlet/crewlet"
 // it is and what it reads.
 var modelInputs = map[string][]string{
 	modulePath + "/internal/providers/llm": {"Request"},
-	modulePath + "/internal/agent/runner":  {"AgentRunRequest", "Continuation", "SessionContinuation"},
+	modulePath + "/internal/agent/runner": {"AgentRunRequest", "Continuation", "SessionContinuation",
+		"ExactTelling"},
 	modulePath + "/internal/sandbox": {"LaunchRequest", "Continuation", "RunRequest", "SessionContinuation",
 		"ExactTelling", "CarriedSession"},
 	modulePath + "/internal/assistant": {"DeepRun"},
@@ -230,9 +231,11 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 	}},
 	// AND ITS TRANSPORT to the sandbox layer: the two briefs the runner
-	// composed, each where the box it was written for gets it.
+	// composed, each where the box it was written for gets it, and beside a
+	// kept capture's the two told by a reading of what it holds.
 	"internal/engine/executorrestore.go:sandboxSession": {tests: []string{
 		"internal/engine.TestARelaunchContinuesItsSessionInTheBoxItGetsWithTheBriefForIt",
+		"internal/engine.TestTheBriefToldByAReadingReachesTheSandboxBesideTheOtherTwo",
 		"internal/engine.TestTheFrozenBaseOutlivesASiblingsEnd",
 		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
 	}},
