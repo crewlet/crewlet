@@ -301,7 +301,10 @@ test("a day named in the address is the day asked for and headed", () => {
   answer.data = { ...ANSWER, day: "2026-11-05", complete: true };
   mount("#/settings/delegated-decisions?day=2026-11-05");
   expect(answer.asked).toContainEqual({ day: "2026-11-05" });
-  expect(screen.getByRole("table", { name: "Decided on 2026-11-05" })).toBeTruthy();
+  // THE DAY AS A DATE IS SAID, never the engine's `2026-11-05` label.
+  // Mutation: draw `data.day` and the heading reads the label.
+  expect(screen.getByRole("table", { name: "Decided on Nov 5" })).toBeTruthy();
+  expect(screen.queryByText("2026-11-05")).toBeNull();
   // A WHOLE DAY PAGES FORWARD, towards today.
   fireEvent.click(screen.getByRole("button", { name: "The day after" }));
   expect(location.hash).toContain("day=2026-11-06");
