@@ -310,7 +310,7 @@ func (d WorkDeps) grantRequestChosen(ctx context.Context, choice string,
 	// THE WRITE FIRST, before anything is read for the save, so a caller who
 	// may not save one learns that and nothing else; the raise once the save
 	// has judged the grant against the live catalogue.
-	if err := d.authorizeGrant(ctx, authz.ActionSetupAccessWrite); err != nil {
+	if err = d.authorizeGrant(ctx, authz.ActionSetupAccessWrite); err != nil {
 		refusal := authorityRefusal(string(authz.ActionSetupAccessWrite), err)
 		return &refusal
 	}
