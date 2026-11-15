@@ -63,7 +63,7 @@ func TestAccessReadsBackFromItsPolicies(t *testing.T) {
 	for _, level := range config.AWSLevels() {
 		for _, iamRead := range []bool{false, true} {
 			want := Access{Level: level, IAMRead: iamRead}
-			if got, foreign := conn.AccessOf(conn.Policies(want)); got != want || foreign != nil {
+			if got, foreign := conn.AccessOf(conn.Policies(want)); !got.Equal(want) || foreign != nil {
 				t.Errorf("%+v read back as %+v (foreign %v)", want, got, foreign)
 			}
 		}
@@ -76,9 +76,59 @@ func TestAccessReadsBackFromItsPolicies(t *testing.T) {
 		t.Errorf("an off role reads as %+v", got)
 	}
 	gap := []string{conn.resolve(policyARN(levelOperate))}
-	foreignARN := "arn:aws:iam::aws:policy/AdministratorAccess"
+	foreignARN := "arn:aws:iam::123456789012:policy/someone-elses"
 	if got, foreign := conn.AccessOf(append(gap, foreignARN)); got.Level != "" || !slices.Equal(foreign, []string{foreignARN}) {
 		t.Errorf("Operate without Read and a foreign grant read as %+v, foreign %v", got, foreign)
+	}
+}
+
+// A GRANT IS AN AWS MANAGED POLICY BESIDE THE LEVEL, read back as itself and
+// never as foreign; AWS's deny-all is the off switch and never a grant.
+func TestAccessReadsGrantsBackBesideTheLevel(t *testing.T) {
+	t.Parallel()
+	conn := mustConnection(t)
+	s3 := "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+	job := "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"
+	want := Access{Level: config.AWSLevelRead, Grants: []string{s3, job}}
+	got, foreign := conn.AccessOf(conn.Policies(want))
+	slices.Sort(want.Grants)
+	if !got.Equal(want) || foreign != nil {
+		t.Fatalf("%+v read back as %+v (foreign %v)", want, got, foreign)
+	}
+	if got, _ := conn.AccessOf([]string{conn.resolve(denyAllARN)}); got.Grants != nil || !got.Off {
+		t.Fatalf("AWS's deny-all read as %+v, want off with no grant", got)
+	}
+	other := "arn:aws-cn:iam::aws:policy/AmazonS3FullAccess"
+	if got, foreign := conn.AccessOf([]string{other}); got.Grants != nil || len(foreign) != 1 {
+		t.Fatalf("another partition's policy read as %+v, foreign %v", got, foreign)
+	}
+}
+
+// A GRANT ATTACHES WITH THE LEVEL AND DETACHES ALONE, and an AWS managed policy
+// nobody granted (attached by hand at AWS) is detached as drift.
+func TestChangesAttachAndDetachGrants(t *testing.T) {
+	t.Parallel()
+	conn := mustConnection(t)
+	p := func(name string) string { return conn.resolve(policyARN(name)) }
+	s3 := "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+	admin := "arn:aws:iam::aws:policy/AdministratorAccess"
+	read := Access{Level: config.AWSLevelRead}
+	withS3 := Access{Level: config.AWSLevelRead, Grants: []string{s3}}
+	for name, tc := range map[string]struct {
+		have []string
+		want Access
+		out  []Change
+	}{
+		"create with a grant": {nil, withS3, []Change{{true, p(levelRead)}, {true, s3}}},
+		"grant":               {conn.Policies(read), withS3, []Change{{true, s3}}},
+		"lapse":               {conn.Policies(withS3), read, []Change{{false, s3}}},
+		"by hand":             {append(conn.Policies(read), admin), read, []Change{{false, admin}}},
+		"off": {conn.Policies(withS3), Access{Level: config.AWSLevelRead, Grants: []string{s3}, Off: true},
+			[]Change{{true, conn.resolve(denyAllARN)}, {false, p(levelRead)}, {false, s3}}},
+	} {
+		if got := conn.Changes(tc.have, tc.want); !slices.Equal(got, tc.out) {
+			t.Errorf("%s: %v, want %v", name, got, tc.out)
+		}
 	}
 }
 

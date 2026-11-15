@@ -412,7 +412,7 @@ func (s *accessSession) foreign(role SeatRole) *seataccess.Refusal {
 	case len(held) > 0:
 		return &seataccess.Refusal{
 			Said:   "AWS: " + role.Name + " also holds " + words.And(held) + ", which no level grants",
-			Remedy: "Remove them from the role in IAM; Crewlet's provisioner may only attach and detach its own levels",
+			Remedy: "Remove them from the role in IAM; Crewlet's provisioner may only attach and detach its own levels and AWS managed policies",
 			Actor:  seataccess.ByYou, ActionURL: s.roleURL(role.Name),
 		}
 	}

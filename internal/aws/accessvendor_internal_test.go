@@ -142,7 +142,7 @@ func TestObserveReadsOnlyRecordedRoles(t *testing.T) {
 		name("intruder"): {id: "AROAX", policies: operate},
 		name("swapped"):  {id: "AROANEWER", policies: operate},
 		name("off"):      {id: "AROAOFF", policies: conn.Policies(Access{Off: true})},
-		name("foreign"):  {id: "AROAF", policies: append(slices.Clone(operate), "arn:aws:iam::aws:policy/AdministratorAccess")},
+		name("foreign"):  {id: "AROAF", policies: append(slices.Clone(operate), "arn:aws:iam::123456789012:policy/someone-elses")},
 	}
 	_, s := fakeAccount(t, roles)
 	in := seataccess.ObserveInput{

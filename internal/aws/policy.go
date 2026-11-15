@@ -60,6 +60,9 @@ const (
 	brokerARN      = "arn:{partition}:iam::{account}:role/crewlet/{company}/" + brokerName
 	atlasARN       = "arn:{partition}:iam::{account}:role/crewlet/{company}/" + atlasName
 	denyAllARN     = "arn:{partition}:iam::aws:policy/AWSDenyAll"
+	// awsManagedPrefix begins every AWS managed policy's ARN, the unit a
+	// seat's extra grant attaches.
+	awsManagedPrefix = "arn:{partition}:iam::aws:policy/"
 )
 
 // Company is the slug every Crewlet name in the account carries.
@@ -288,15 +291,21 @@ func levelARNs() []string {
 }
 
 // provisionerDoc is the engine's IAM reach: Crewlet's seat roles, created only
-// with the boundary, given only the fixed level policies. It cannot become a
-// seat: only the broker can.
+// with the boundary, given only the fixed level policies and AWS managed
+// policies as extra grants, which the boundary still holds to what a seat may
+// ever do. It cannot become a seat: only the broker can.
 func provisionerDoc() obj {
 	b := policyARN(boundaryName)
+	attach := []string{"iam:AttachRolePolicy", "iam:DetachRolePolicy"}
 	return doc(
 		with(stmt("CreateSeatRolesWithTheBoundary", "Allow", []string{"iam:CreateRole"}, seatRolesARN),
 			"ArnEquals", "iam:PermissionsBoundary", b),
-		with(with(stmt("AttachOnlyLevels", "Allow", []string{"iam:AttachRolePolicy", "iam:DetachRolePolicy"}, seatRolesARN),
+		with(with(stmt("AttachOnlyLevels", "Allow", attach, seatRolesARN),
 			"ArnEquals", "iam:PermissionsBoundary", b), "ArnEquals", "iam:PolicyARN", levelARNs()...),
+		with(with(stmt("AttachAWSManagedGrants", "Allow", attach, seatRolesARN),
+			"ArnEquals", "iam:PermissionsBoundary", b), "ArnLike", "iam:PolicyARN", awsManagedPrefix+"*"),
+		stmt("ListAWSManagedPolicies", "Allow", []string{"iam:ListPolicies"}),
+		stmt("ReadAWSManagedPolicies", "Allow", []string{"iam:GetPolicy", "iam:GetPolicyVersion"}, awsManagedPrefix+"*"),
 		stmt("TagAndDeleteSeatRoles", "Allow", []string{"iam:TagRole", "iam:UntagRole", "iam:DeleteRole"}, seatRolesARN),
 		stmt("ReadCrewletRoles", "Allow", []string{"iam:GetRole", "iam:GetRolePolicy", "iam:ListAttachedRolePolicies",
 			"iam:ListRolePolicies", "iam:ListRoleTags", "iam:SimulatePrincipalPolicy"}, crewletRoles),
