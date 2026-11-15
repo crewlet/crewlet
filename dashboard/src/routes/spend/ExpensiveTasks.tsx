@@ -244,9 +244,13 @@ export function ExpensiveTasks() {
           <DataGrid
             name="tasks"
             // LOADING IS NOT EMPTY: with no answer yet this grid said no task
-            // had spent tokens, before it had asked.
+            // had spent tokens, before it had asked. AND NO ANSWER IS THE
+            // WAIT, whichever read it is on: the list is asked only once the
+            // window's own read has answered, and a question not yet asked
+            // reports neither loading nor data, so a flag read off it alone
+            // was false, over no rows, for the whole of the first read.
             rows={rows}
-            loading={answer.loading && !answer.data}
+            loading={!answer.data && !answer.error}
             rowKey={(r) => r.id}
             // THE ENGINE ORDERED THE SET, by the column this list is about;
             // a head that re-sorted the fifty loaded rows would answer a

@@ -1,7 +1,7 @@
 import { TestClient } from "~/test/client.tsx";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { installWindow } from "~/testing.tsx";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -111,7 +111,7 @@ test("a refused preview lists the linter's findings and takes the editor to one"
     "Venue poll",
   );
   await act(async () => {
-    fireEvent.click(screen.getAllByRole("button", { name: "Preview privately" })[0]!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Save private draft" })[0]!);
   });
   await screen.findByText(
     "The preview was refused, so nothing was saved. Fix these and preview again.",
@@ -125,9 +125,9 @@ test("a refused preview lists the linter's findings and takes the editor to one"
 });
 
 // THE FIRST PREVIEW MAKES THE DRAFT, private, as an HTML page with what it
-// may use; the bar then offers Update preview and Open page. Command+Enter
-// previews from the editor only, so the editor says so and the bar's Update
-// preview claims no key.
+// may use; the bar then offers Update draft and Open page. Command+Enter
+// saves from the editor only, so the editor says so and the bar's Update
+// draft claims no key.
 test("a landed preview makes a private draft and frames it", async () => {
   vi.mocked(keyedWrite).mockResolvedValue({
     kind: "done",
@@ -151,8 +151,10 @@ test("a landed preview makes a private draft and frames it", async () => {
   });
   expect(screen.getByText("Private draft, v1")).toBeTruthy();
   expect(screen.getAllByRole("button", { name: "Open page" }).length).toBeGreaterThan(0);
-  expect(document.querySelector(".html-create-editor-keys")?.textContent).toMatch(/to preview$/);
-  for (const update of screen.getAllByRole("button", { name: "Update preview" })) {
+  expect(document.querySelector(".html-create-editor-keys")?.textContent).toMatch(
+    /to save and see it$/,
+  );
+  for (const update of screen.getAllByRole("button", { name: "Update draft" })) {
     expect(update.getAttribute("aria-keyshortcuts")).toBeNull();
   }
 });
@@ -201,7 +203,7 @@ test("a preview that failed, not refused, stays on Preview and says why", async 
   });
   mount("#/artifacts/new/html?mode=source");
   await act(async () => {
-    fireEvent.click(screen.getAllByRole("button", { name: "Preview privately" })[0]!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Save private draft" })[0]!);
   });
   await screen.findByText("The engine could not save the draft.");
   expect(screen.getByRole("tab", { name: "Preview" }).getAttribute("aria-selected")).toBe("true");
@@ -222,6 +224,99 @@ test("leaving with unsaved words asks to discard them, as every create page does
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 
+/** Write a page and save its private draft, as the first press does: the draft a-1 at v1. */
+async function saveDraft() {
+  vi.mocked(keyedWrite).mockResolvedValue({
+    kind: "done",
+    pending: false,
+    body: { artifact: "a-1", number: 1, warnings: [] },
+  });
+  const source = screen.getByRole("textbox", { name: "Source of index.html" });
+  fireEvent.change(source, { target: { value: page("") } });
+  await act(async () => {
+    fireEvent.click(screen.getAllByRole("button", { name: "Save private draft" })[0]!);
+  });
+  await screen.findByText("The draft a-1 at version 1");
+  vi.mocked(keyedWrite).mockClear();
+}
+
+// SEEING THE PAGE MAKES AN ARTIFACT, so the press says so: it was named
+// "Preview privately", which reads as writing nothing.
+test("the first press is named for what it writes, a private draft", () => {
+  mount("#/artifacts/new/html?panel=closed");
+  expect(screen.queryByRole("button", { name: "Preview privately" })).toBeNull();
+  expect(screen.getAllByRole("button", { name: "Save private draft" }).length).toBeGreaterThan(0);
+  expect(screen.getByText("Seeing the page saves a private draft")).toBeTruthy();
+});
+
+// CANCEL TAKES BACK WHAT THE PAGE MADE: the question's primary answer
+// discards the draft. Mutation: make Keep draft the primary again (or leave
+// on Cancel unasked) and every Cancel leaves an artifact behind.
+test("Cancel with a draft asks to discard it, and Discard moves it to the trash before leaving", async () => {
+  mount("#/artifacts/new/html?panel=closed");
+  await saveDraft();
+  vi.mocked(keyedWrite).mockResolvedValue({ kind: "done", pending: false, body: {} });
+  fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
+  const ask = screen.getByRole("alertdialog", { name: "Discard this draft?" });
+  expect(ask.textContent).toContain("Discard it to the trash");
+  expect(ask.textContent).toContain("under Yours in Artifacts");
+  const answers = within(ask).getAllByRole("button");
+  // The last, primary answer is Discard draft; keeping is the one before it.
+  expect(answers.map((b) => b.textContent)).toEqual([
+    "Keep editing",
+    "Keep draft",
+    "Discard draft",
+  ]);
+  await act(async () => {
+    fireEvent.click(within(ask).getByRole("button", { name: "Discard draft" }));
+  });
+  expect(vi.mocked(keyedWrite).mock.calls[0]![0]).toMatchObject({
+    method: "DELETE",
+    path: "/artifacts/a-1",
+  });
+  await screen.findByText("Draft discarded");
+  expect(location.hash).toBe("#/artifacts");
+});
+
+test("Keep draft leaves it where it is and goes, writing nothing", async () => {
+  mount("#/artifacts/new/html?panel=closed");
+  await saveDraft();
+  fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
+  fireEvent.click(screen.getByRole("button", { name: "Keep draft" }));
+  expect(vi.mocked(keyedWrite)).not.toHaveBeenCalled();
+  expect(location.hash).toBe("#/artifacts");
+});
+
+// EVERY WAY OFF THE PAGE ASKS, not Cancel alone: the way back, a link in the
+// sidebar and Back left the draft behind with nothing said. Mutation: drop
+// the leave guard and the move is made unasked.
+test("a move elsewhere with a draft is held and asked, and made once the reader answers", async () => {
+  mount("#/artifacts/new/html?panel=closed");
+  await saveDraft();
+  act(() => {
+    location.hash = "#/inbox";
+  });
+  const ask = await screen.findByRole("alertdialog", { name: "Discard this draft?" });
+  // Held: the page is where it was.
+  await waitFor(() => expect(location.hash).toContain("#/artifacts/new/html"));
+  vi.mocked(keyedWrite).mockResolvedValue({ kind: "done", pending: false, body: {} });
+  await act(async () => {
+    fireEvent.click(within(ask).getByRole("button", { name: "Discard draft" }));
+  });
+  expect(vi.mocked(keyedWrite).mock.calls[0]![0]).toMatchObject({ method: "DELETE" });
+  await waitFor(() => expect(location.hash).toBe("#/inbox"));
+});
+
+test("Open page leaves for the draft's own page without asking", async () => {
+  mount("#/artifacts/new/html?panel=closed");
+  await saveDraft();
+  await act(async () => {
+    fireEvent.click(screen.getAllByRole("button", { name: "Open page" })[0]!);
+  });
+  expect(location.hash).toBe("#/artifacts/a-1");
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+});
+
 test("the checks speak while the page is written", async () => {
   vi.useFakeTimers();
   try {
@@ -238,7 +333,7 @@ test("the checks speak while the page is written", async () => {
     expect(checkPage).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: /Checks/ }));
     expect(screen.getByRole("button", { name: /index\.html, line 2/ })).toBeTruthy();
-    const preview = screen.getAllByRole("button", { name: "Preview privately" })[0]!;
+    const preview = screen.getAllByRole("button", { name: "Save private draft" })[0]!;
     expect(preview.getAttribute("aria-disabled")).toBe("true");
   } finally {
     vi.useRealTimers();

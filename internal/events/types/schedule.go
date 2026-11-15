@@ -59,6 +59,10 @@ type ScheduledTaskFired struct {
 	// dispatch time the envelope stamps: a catchup run for a missed tick
 	// reports the tick it is making up, which is the whole point of naming it.
 	ScheduledAt string `json:"scheduled_at"`
+	// RequestedBy is the person who asked for this run now, off the
+	// schedule's cron, and empty for a fire the cron made. ScheduledAt is
+	// then the moment they asked.
+	RequestedBy string `json:"requested_by,omitempty"`
 }
 
 // EventType is the "scheduled_task_fired" wire type.
@@ -79,6 +83,9 @@ func (e ScheduledTaskFired) Summary() string {
 	}
 	if who == "" {
 		who = e.ScopeID
+	}
+	if e.RequestedBy != "" {
+		return "Scheduled '" + e.ScheduleName + "' run now for " + who + ", asked by " + e.RequestedBy
 	}
 	return "Scheduled '" + e.ScheduleName + "' fired for " + who
 }

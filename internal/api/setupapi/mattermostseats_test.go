@@ -2,6 +2,7 @@ package setupapi_test
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -122,4 +123,94 @@ func keysOf(seats map[string]map[string]any) []string {
 		out = append(out, handle)
 	}
 	return out
+}
+
+// A company whose agents are on at Mattermost: two turned on, each with the
+// channels it was given, one turned off, and one with no block at all.
+const mattermostOnDoc = `{
+  "name": "Acme",
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "integrations": {
+    "mattermost": {"enabled": true, "url": "https://chat.example.com", "team": "acme"}
+  },
+  "roles": [
+    {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu",
+     "integrations": {"mattermost": {"enabled": true, "roles": ["system_user"], "channels": ["engineering"]}}},
+    {"name": "Builder", "handle": "builder", "llm": "zulu",
+     "integrations": {"mattermost": {"enabled": true, "roles": ["system_user"], "channels": ["town-square"]}}},
+    {"name": "Writer", "handle": "writer", "llm": "zulu",
+     "integrations": {"mattermost": {"enabled": false, "roles": ["system_user"]}}},
+    {"name": "Reviewer", "handle": "reviewer", "llm": "zulu"}
+  ]
+}`
+
+// A DISCONNECT FINISHES WHILE AGENTS ARE STILL TURNED ON THERE. The document
+// refuses an agent turned on at an integration the company has not connected,
+// so the block alone could not be removed: the engine's teardown retried the
+// same refused revision for ever, and forcing answered 400, until somebody
+// turned every agent off by hand, one by one. The disconnect's revision now
+// turns those agents off with the block, as ONE revision: each keeps what it
+// was given (its channels), so connecting again and turning it on restores it,
+// and a seat that was already off, or had no block, is not touched.
+//
+// THE CONTROL is the bare patch a disconnect used to send, which the document
+// still refuses: the rule is right, and it is the disconnect that owed it the
+// seats. Mutation: drop TurnOffDisconnected from configapi.Service.Disconnect
+// and the forced disconnect answers the control's refusal.
+func TestADisconnectTurnsOffTheAgentsStillOnThere(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedDocument(t, mattermostOnDoc)
+	before := s.active(t).ID
+
+	bare := s.do(t, http.MethodPatch, "/config", `{"integrations":{"mattermost":null}}`,
+		map[string]string{"Content-Type": "application/merge-patch+json", "X-Summary": "the block alone"})
+	if bare.Code < 400 || !strings.Contains(bare.Body.String(), "turned on at mattermost") {
+		t.Fatalf("the block alone = %d: %s; want the document's refusal of agents left on",
+			bare.Code, bare.Body)
+	}
+
+	res := s.do(t, http.MethodDelete, "/setup/integrations/mattermost", `{"force": true}`, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("a forced disconnect with agents on = %d: %s", res.Code, res.Body)
+	}
+	body := decode(t, res)
+	off, _ := body["seats_off"].([]any)
+	if body["removed"] != true || len(off) != 2 ||
+		!slices.Contains(off, any("sre-lead")) || !slices.Contains(off, any("builder")) {
+		t.Fatalf("the disconnect answered removed %v and seats_off %v, want the two agents that were on",
+			body["removed"], off)
+	}
+	after := s.active(t)
+	if after.ID == before || after.ParentID != before {
+		t.Errorf("the disconnect wrote revision %s over %s, want ONE revision on the one it read",
+			after.ID, before)
+	}
+	doc := decode(t, s.do(t, http.MethodGet, "/config", "", nil))
+	config, _ := doc["config"].(map[string]any)
+	if config == nil {
+		config = doc
+	}
+	if in, _ := config["integrations"].(map[string]any); in["mattermost"] != nil {
+		t.Errorf("integrations.mattermost is still %v", in["mattermost"])
+	}
+	seats := map[string]map[string]any{}
+	roles, _ := config["roles"].([]any)
+	for _, r := range roles {
+		role, _ := r.(map[string]any)
+		in, _ := role["integrations"].(map[string]any)
+		block, _ := in["mattermost"].(map[string]any)
+		seats[role["handle"].(string)] = block
+	}
+	for _, handle := range []string{"sre-lead", "builder", "writer"} {
+		if seats[handle]["enabled"] != false {
+			t.Errorf("%s is %v at mattermost after the disconnect, want off", handle, seats[handle]["enabled"])
+		}
+	}
+	if channels, _ := seats["sre-lead"]["channels"].([]any); !slices.Contains(channels, any("engineering")) {
+		t.Errorf("sre-lead's channels are %v, want what it was given kept for a reconnect", channels)
+	}
+	if seats["reviewer"] != nil {
+		t.Errorf("the reviewer, who had no block, was given one: %v", seats["reviewer"])
+	}
 }

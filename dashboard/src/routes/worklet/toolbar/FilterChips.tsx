@@ -59,7 +59,10 @@ export function FilterChips({
               key={chip.param}
               field={chip.label}
               operator={chip.verb}
-              value={chip.value}
+              // A NARROWING THIS SHAPE SETS ASIDE SAYS SO in its own sentence,
+              // muted, rather than standing in the row as though it applied.
+              value={chip.inert ? `${chip.value ?? ""} (${chip.inert})` : chip.value}
+              className={chip.inert ? "work-chip-inert" : undefined}
               onRemove={() => onRemove(chip.param)}
             />
           ))}

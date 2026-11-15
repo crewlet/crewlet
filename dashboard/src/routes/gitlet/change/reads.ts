@@ -50,6 +50,7 @@ import {
   type CodeCommentRow,
   type CodeFindingRow,
   type CodeReviewRow,
+  type CodeReviewerRow,
   type CodeRevisionRow,
   type LogRefusal,
   type QueryRefusal,
@@ -141,7 +142,10 @@ export function useAskAgainWhenMoved(moved: string, enabled: boolean, again: () 
 const reviewsOf = (a: CodeChangeAnswer) => a.reviews ?? [];
 const commentsOf = (a: CodeChangeAnswer) => a.comments ?? [];
 const findingsOf = (a: CodeChangeAnswer) => a.findings ?? [];
+const reviewersOf = (a: CodeChangeAnswer) => a.reviewers ?? [];
 const rowId = (row: { id: string }) => row.id;
+// A REVIEWER IS ASKED ONCE A CHANGE: the engine keys its row by the handle.
+const reviewerId = (row: CodeReviewerRow) => `${row.kind}:${row.reviewer}`;
 const partNext = (a: CodeChangeAnswer) => a.next ?? "";
 
 /**
@@ -155,7 +159,7 @@ const partNext = (a: CodeChangeAnswer) => a.next ?? "";
  */
 function usePagedPart<T>(
   change: CodeChangeDetail,
-  part: "reviews" | "comments" | "findings",
+  part: "reviews" | "comments" | "findings" | "reviewers",
   pick: (a: CodeChangeAnswer) => readonly T[],
   idOf: (row: T) => string,
   extra: Readonly<Record<string, string | number | undefined>>,
@@ -183,6 +187,24 @@ function usePagedPart<T>(
 /** A change's reviews, every page the reader asked for, oldest first. */
 export function usePagedReviews(change: CodeChangeDetail): Paged<CodeReviewRow, CodeChangeAnswer> {
   return usePagedPart(change, "reviews", reviewsOf, rowId, {}, partMovedBy(change, "reviews"));
+}
+
+/**
+ * Whom the change has asked for a review, every page the reader asked for, as
+ * the conversation's rail lists them: each with who asked and why, a
+ * withdrawn ask among them.
+ */
+export function usePagedReviewers(
+  change: CodeChangeDetail,
+): Paged<CodeReviewerRow, CodeChangeAnswer> {
+  return usePagedPart(
+    change,
+    "reviewers",
+    reviewersOf,
+    reviewerId,
+    {},
+    partMovedBy(change, "reviewers"),
+  );
 }
 
 /** A change's comments, every page the reader asked for, in thread order. */

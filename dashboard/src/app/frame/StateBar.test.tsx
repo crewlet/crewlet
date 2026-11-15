@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 
-import { StateBar, degradationOf } from "./StateBar.tsx";
+import { FirstDialChip, StateBar, degradationOf } from "./StateBar.tsx";
 
 afterEach(cleanup);
 
@@ -16,23 +16,33 @@ const state = (connected: boolean, everConnected: boolean, configured = true) =>
     onConfig: noop,
   });
 
-// THE FIRST DIAL FLOATS: in the flow it pushed every page down by its height
-// and pulled it back up when the engine answered, a shift on every cold load.
-// Mutation: draw the first dial in the flow and the first case goes red.
+// THE FIRST DIAL IS THE PAGE BAR'S. In the flow it pushed every page down by
+// its height on a cold load, and floated under the bar it lay over the first
+// lines of the screen (Home's greeting, struck through). Mutation: draw the
+// first dial as a strip again and the PageHeader suite's case goes red.
 describe("the state bar's connection notices", () => {
-  test("the first dial floats over the page rather than taking a line", () => {
-    const { container } = render(<StateBar degraded={state(false, false)} />);
-    const notice = container.querySelector(".state-bar__float");
-    expect(notice?.textContent).toContain("Connecting to the engine.");
+  test("the first dial is said once, as a status, by the chip the page bar draws", () => {
+    const first = state(false, false)!;
+    expect(first.firstDial).toBe(true);
+    render(<FirstDialChip degraded={first} />);
+    const status = screen.getByRole("status", { name: "Connecting to the engine." });
+    expect(status.textContent).toBe("Connecting to the engine.");
   });
 
-  test("a reconnect and a missing company stay in the flow, where a reader is told", () => {
-    const reconnect = render(<StateBar degraded={state(false, true)} />);
-    expect(reconnect.container.querySelector(".state-bar__float")).toBeNull();
-    expect(reconnect.container.textContent).toContain("Reconnecting.");
-    reconnect.unmount();
+  test("with no page bar to say it in, the first dial stands in the flow", () => {
+    const { container } = render(<StateBar degraded={state(false, false)} />);
+    expect(container.querySelector(".state-bar")?.textContent).toContain(
+      "Connecting to the engine.",
+    );
+  });
+
+  test("a reconnect and a missing company stay strips under the bar, where a reader is told", () => {
+    const reconnect = state(false, true)!;
+    expect(reconnect.firstDial).toBeUndefined();
+    const drawn = render(<StateBar degraded={reconnect} />);
+    expect(drawn.container.textContent).toContain("Reconnecting.");
+    drawn.unmount();
     const unconfigured = render(<StateBar degraded={state(true, true, false)} />);
-    expect(unconfigured.container.querySelector(".state-bar__float")).toBeNull();
     expect(unconfigured.container.textContent).toContain("No company is active");
   });
 });

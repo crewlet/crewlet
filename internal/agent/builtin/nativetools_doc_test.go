@@ -156,6 +156,9 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		AtlasWrite: builtin.AtlasWriteDeps{Log: newAtlasLedger(), Actor: actor,
 			Org: func() *org.Organization { return company }},
 		AtlasRefresh: builtin.AtlasRefreshDeps{Sources: stillSources{}, Actor: actor},
+		// AND A SCHEDULE RUN NOW.
+		ScheduleRuns: builtin.ScheduleRunDeps{Runner: stillRunner{}, Actor: actor,
+			Org: func() *org.Organization { return company }},
 	})
 	// THE CODE TOOLS JOIN THE LIST through codeCandidates, which this
 	// fixture wires: every read and write a seat's registry takes, beside
@@ -181,7 +184,8 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	}
 	for _, name := range append([]string{builtin.AnswerExecutorTool, builtin.PauseSeatTool,
 		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool,
-		builtin.AtlasRefreshTool, builtin.CodeRepoReadersTool, builtin.CodeMarkInboxTool}, append(chatlet.OperatorOnlyTools(),
+		builtin.AtlasRefreshTool, builtin.RunScheduleTool, builtin.CodeRepoReadersTool,
+		builtin.CodeMarkInboxTool}, append(chatlet.OperatorOnlyTools(),
 		builtin.AtlasWriteTools...)...) {
 		if !slices.Contains(only, name) {
 			t.Fatalf("the operator surface with every seam wired does not serve %s "+

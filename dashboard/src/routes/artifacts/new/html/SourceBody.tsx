@@ -17,10 +17,17 @@
  * and the linter's findings (Checks), every one taking the editor to its line.
  * On a phone the panes stack, the source first.
  *
- * THE BAR CARRIES THE GESTURES: Preview privately (Command+Enter) before the
- * first draft; then Update preview and Open page. Cancel asks before it
- * leaves anything behind: a draft is kept or discarded, unsaved text is lost
- * only once the person says so.
+ * THE BAR CARRIES THE GESTURES: Save private draft (Command+Enter) before the
+ * first draft; then Update draft and Open page.
+ *
+ * SEEING THE PAGE MAKES IT. A page's own script runs only on the artifact
+ * origin, which serves only published versions, so the first look at it is a
+ * real artifact, private to the person, and every later one a version of it.
+ * The gesture is named for what it writes ("Save private draft"), never for
+ * what it shows, and leaving takes it back: Cancel, the way back, a link
+ * elsewhere and Back all ask first, and the question's first answer is to
+ * discard the draft. Keeping it is a choice the person makes, never what
+ * leaving does by itself. Unsaved text is lost only once they say so.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -56,7 +63,7 @@ import {
   RefreshCwGlyph,
   UploadGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useNavigator } from "~/app/router.tsx";
+import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { asSentence, bytesOverWords, utf8Bytes } from "~/lib/format.ts";
@@ -204,6 +211,12 @@ export function SourceBody() {
   const [skipped, setSkipped] = useState<string[]>([]);
   const [side, setSide] = useState<"preview" | "checks">("preview");
   const [leaving, setLeaving] = useState(false);
+  // WHERE A HELD MOVE WAS GOING (a link, Back, the way back), made once the
+  // person answers; null for Cancel, which leaves for where the page began.
+  const heldMove = useRef<(() => void) | null>(null);
+  // SET ONCE THE PAGE IS LEFT ON PURPOSE (an answer to the question, the
+  // draft opened, a task filed), so the move that follows is not asked again.
+  const released = useRef(false);
   const [reveal, setReveal] = useState<{ path: string; line: number } | null>(null);
 
   const entry = entryOf(files);
@@ -265,7 +278,10 @@ export function SourceBody() {
       seat: who.seat,
       project: who.project,
     });
-    if (filed) nav.to(["worklet", filed.item]);
+    if (filed) {
+      released.current = true;
+      nav.to(["worklet", filed.item]);
+    }
   };
   const used = CAPABILITY_CHOICES.filter((c) => capabilities.includes(c.capability));
 
@@ -302,7 +318,7 @@ export function SourceBody() {
           },
         ),
       },
-      blocked: () => (running ? "The preview is being published." : null),
+      blocked: () => (running ? "The draft is being saved." : null),
     }),
   );
 
@@ -399,7 +415,7 @@ export function SourceBody() {
           (blocking > 0
             ? `Fix the ${blocking === 1 ? "problem" : `${blocking} problems`} in Checks first.`
             : running
-              ? "Publishing the preview."
+              ? "Saving the draft."
               : undefined)));
 
   const preview = async () => {
@@ -421,7 +437,40 @@ export function SourceBody() {
 
   const open = async () => {
     const current = dirty ? await preview() : draft.draft;
-    if (current) nav.to(artifactPath(current.id));
+    if (current) {
+      released.current = true;
+      nav.to(artifactPath(current.id));
+    }
+  };
+
+  // ---- leaving ---------------------------------------------------------------
+  // WHAT LEAVING WOULD LEAVE BEHIND OR LOSE: the draft, words not yet saved
+  // anywhere, or a brief. Every way off the page asks while there is one.
+  const holds = draft.draft !== null || dirty || brief.trim() !== "";
+  useLeaveGuard(
+    holds
+      ? (_to, move) => {
+          if (released.current) return false;
+          heldMove.current = move;
+          setLeaving(true);
+          return true;
+        }
+      : null,
+  );
+  const askToLeave = () => {
+    heldMove.current = null;
+    if (holds) setLeaving(true);
+    else leave();
+  };
+  const stay = () => {
+    heldMove.current = null;
+    setLeaving(false);
+  };
+  /** Leave as asked: on the move that was held, or for where the page began. */
+  const go = () => {
+    released.current = true;
+    setLeaving(false);
+    (heldMove.current ?? leave)();
   };
 
   const discard = async () => {
@@ -431,7 +480,7 @@ export function SourceBody() {
       return;
     }
     toast.ok("Draft discarded");
-    leave();
+    go();
   };
 
   const runKeys = ["Mod", "Enter"] as const;
@@ -444,8 +493,8 @@ export function SourceBody() {
         ...(dirty && hold ? { disabledReason: hold } : {}),
       }
     : {
-        label: "Preview privately",
-        short: "Preview",
+        label: "Save private draft",
+        short: "Save",
         icon: <EyeGlyph size="sm" />,
         onSelect: () => void preview(),
         ...(hold ? { disabledReason: hold } : {}),
@@ -454,14 +503,14 @@ export function SourceBody() {
     ? [
         {
           key: "update",
-          label: "Update preview",
+          label: "Update draft",
           icon: <RefreshCwGlyph size="sm" />,
           labelled: true,
           onSelect: () => void preview(),
           ...(hold
             ? { disabledReason: hold }
             : !dirty
-              ? { disabledReason: "The preview shows this version already." }
+              ? { disabledReason: "The draft is this version already." }
               : {}),
         },
       ]
@@ -471,7 +520,7 @@ export function SourceBody() {
   const status = running
     ? phone
       ? "Saving…"
-      : "Publishing the preview…"
+      : "Saving the draft…"
     : draft.draft && !phone
       ? `Private draft, v${draft.draft.head}${dirty ? ", edited" : ""}`
       : null;
@@ -482,7 +531,7 @@ export function SourceBody() {
       action={action}
       tools={tools}
       status={status}
-      onCancel={() => (draft.draft || dirty || brief.trim() ? setLeaving(true) : leave())}
+      onCancel={askToLeave}
       notice={noPages && <Callout variant="info">{noPages}</Callout>}
       handoff={{
         tool: askTool(who, panel),
@@ -654,7 +703,7 @@ export function SourceBody() {
             </FileDrop>
             {shown?.kind === "text" ? (
               <p className="html-create-keys html-create-editor-keys">
-                <Kbd keys={[...runKeys]} subtle /> to preview
+                <Kbd keys={[...runKeys]} subtle /> to save and see it
               </p>
             ) : null}
           </div>
@@ -729,8 +778,8 @@ export function SourceBody() {
                 <div className="html-create-first">
                   <EmptyState
                     icon={<EyeGlyph size={32} />}
-                    title="Preview publishes a private draft"
-                    description="The page runs on its own isolated origin, so previewing saves it as a draft only you can see, and shows it here. Nothing is shared until you share it."
+                    title="Seeing the page saves a private draft"
+                    description="The page runs on its own isolated origin, so to show it here it is saved as a draft only you can see. Leaving discards it unless you keep it, and nothing is shared until you share it."
                     action={
                       // ITS KEY IS SAID ONCE, under the editor it is pressed in.
                       <Button
@@ -741,7 +790,7 @@ export function SourceBody() {
                         disabledReason={hold}
                         onClick={() => void preview()}
                       >
-                        Preview privately
+                        Save private draft
                       </Button>
                     }
                   />
@@ -769,8 +818,8 @@ export function SourceBody() {
           title={draft.draft?.title ?? title}
           hasDraft={draft.draft !== null}
           discarding={draft.discarding}
-          onStay={() => setLeaving(false)}
-          onLeave={leave}
+          onStay={stay}
+          onLeave={go}
           onDiscard={() => void discard()}
         />
       ) : null}

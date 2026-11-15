@@ -441,6 +441,7 @@ func (in *interleaving) install(repo string) string {
 // installer holds a repository to after a failed try.
 func (in *interleaving) waitOutInstaller() {
 	for _, repo := range in.repos {
+		//fixedwait:stated the retry instant is the installer's c.now() plus its window, on in.clk, compared with in.clk.Now()
 		if at, _ := cache.InstallWait(in.c, repo); at.After(in.clk.Now()) {
 			in.clk.Set(at)
 		}

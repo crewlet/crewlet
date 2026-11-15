@@ -92,6 +92,7 @@ const PAGE = 100;
  * offer is a fixed vocabulary of windows rather than a claim about retention.
  */
 const LOG_OFFER: Offer = {
+  screen: "live.activity",
   ranges: ["1h", "6h", "1d", "7d", "30d"],
   custom: true,
   fallback: "1d",
@@ -373,10 +374,16 @@ export function Activity() {
         >
           <Card.Title>When</Card.Title>
         </Card.Header>
+        {/* THE COUNT IN FLIGHT IS THE CHART'S OWN BOX, as tall as the bars it
+            stands for: `QueryState` draws nothing while it waits, and the card
+            was a title over an empty frame. */}
+        {series.loading && !series.data && (
+          <Skeleton variant="box" height={96} label="Counting events" />
+        )}
         <QueryState
           error={series.error}
           refusal={series.refusal}
-          loading={series.loading}
+          loading={series.loading && !series.data}
           empty={
             series.data && series.data.total === 0
               ? {

@@ -136,7 +136,13 @@ var modelCalls = map[string]modelCall{
 	// nothing an earlier read wrote opens or closes a later fence. What the
 	// continuation adds — the notes the session has not read, the calls made
 	// after it was saved, the engine's record of its box — is fenced or
-	// defused under the relaunching segment's token.
+	// defused under the relaunching segment's token; and so is every call of
+	// the round a fresh run carrying it on is told, its arguments a model's and
+	// a failed call's error whatever the tool said, in the reseed and in the
+	// base's continuation, which takes the reseed whole; and every answer that
+	// carried the turn's work on before a fresh brief, a send-back's included,
+	// told in words of its own, a chat reply fenced under the relaunching
+	// segment's token as the one carrying the round on now is.
 	//
 	// TWO THINGS RIDE UNFENCED, defused, ON PURPOSE: an answer by turn and a
 	// note a person sends the turn. Each is a person's instruction to this
@@ -161,10 +167,14 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/prefetch.TestEveryBlockDefusesWhatItReads",
 		"internal/agent/builtin.TestEveryUntrustedReadIsFenced",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
+		"internal/agent/runner.TestAFreshRunsEarlierAnswersAreFencedUnderItsToken",
 		"internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken",
 	}},
 	"internal/agent/runner/agentrun.go:continueAgentRun": {tests: []string{
 		"internal/agent/runner.TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn",
+		"internal/agent/runner.TestAFreshRunsToldCallsAreDefusedUnderItsToken",
+		"internal/agent/runner.TestAToldAgainAnswerIsFencedUnderTheRelaunchsToken",
+		"internal/agent/runner.TestAFreshRunsEarlierAnswersAreFencedUnderItsToken",
 		"internal/engine.TestAChatReplyToAParkedRunIsRecordedAsWhatThePersonTyped",
 		"internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote",
 		"internal/agent/prefetch.TestEveryBlockDefusesWhatItReads",
@@ -190,11 +200,15 @@ var modelCalls = map[string]modelCall{
 	// turn has read, under the engine's header — as their senders' (each
 	// defused, as a note in any brief is), the calls made after the session
 	// was saved defused under the turn's token, and the engine's record of the
-	// session's box and branch defused. keptSession fences and defuses each part before
-	// the relaunch's last budget check; led only puts the lead in front of
-	// them once that check has passed, so it is led's request this holds.
+	// session's box and branch defused; and, of a session cut off, the leads its
+	// job's brief opened with told again, a chat reply fenced under the
+	// relaunching segment's token and every other word defused.
+	// keptSession fences and defuses each part before the relaunch's last
+	// budget check; led only puts the lead in front of them once that check has
+	// passed, so it is led's request this holds.
 	"internal/agent/runner/continued.go:led": {tests: []string{
 		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
+		"internal/agent/runner.TestAToldAgainAnswerIsFencedUnderTheRelaunchsToken",
 		"internal/agent/runner.TestACarriedOnSessionIsToldWhatCameAfterItWasSaved",
 		"internal/agent/runner.TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn",
 		"internal/agent/runner.TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds",
@@ -204,9 +218,11 @@ var modelCalls = map[string]modelCall{
 	// engine's own lead — the turn boundary and the new box, the base's turn
 	// and home defused under the launching segment's token, in a schedule's
 	// words for a schedule's fire — then the launch's own fresh brief whole,
-	// whose fences its own entries hold.
+	// whose fences its own entries hold, the turn's earlier answers among it.
 	"internal/agent/runner/continued.go:baseSession": {tests: []string{
 		"internal/agent/runner.TestAConversationsNextTurnIsToldWhereItBegins",
+		"internal/agent/runner.TestAFreshRunsToldCallsAreDefusedUnderItsToken",
+		"internal/agent/runner.TestAFreshRunsEarlierAnswersAreFencedUnderItsToken",
 		"internal/agent/runner.TestAConversationsNextTurnIsToldWhatItsNewBoxHolds",
 		"internal/agent/runner.TestAScheduledFireIsToldWhereItBegins",
 		"internal/agent/runner.TestABaseContinuationArmsAnEmptyGuard",

@@ -4,9 +4,9 @@
 
 | Role | Identity | What they own |
 |---|---|---|
-| **SWE** | `agent-swe` | `nimbuscore` (Go, control-plane REST), `nimbusk0s` (k0s worker image), operational `nimbuscode` (Terraform). |
+| **SWE** | `agent-swe` | `nimbuscore` (Go, control-plane REST), `nimbusk0s` (k0s worker image). |
 | **Frontend SWE** | `agent-frontend-swe` | `console` (React/Vite dashboard), `website` (React marketing landing). |
-| **AI Systems Engineer** | `agent-ai-systems-engineer` | `nimbus-hq/<framework>` (Python SDK + runtime — repo name TBD; they propose it). |
+| **AI Systems Engineer** | `agent-ai-systems-engineer` | `nimbusflow` (Python SDK + runtime — starts empty; they push its first commit). |
 
 CTO leads this team (via Engineering department lead inheritance) and
 also serves as code-review fallback for any of the three repos.
@@ -16,9 +16,9 @@ also serves as code-review fallback for any of the three repos.
 Read the **Repo Ownership** page (it lives in the LEAD
 project) in full. The short version: **stay in your repos.** If a story
 you receive belongs to a different engineer, reassign it with a
-comment rather than crossing repo boundaries. Per-role GitLab PATs are
-scoped to the repos the role owns; if `git push` fails with a permission
-error, that is the control working.
+comment rather than crossing repo boundaries. Every repo is on Gitlet,
+and no seat pushes to `main`: your work lands as a change from your own
+branch, so if a push to `main` is refused, that is the control working.
 
 ## Coordination model
 
@@ -55,18 +55,19 @@ collective progress via the related-work-items panel.
 *Do not do this.* The control plane is the single source of truth for
 the cluster surface.
 
-## Branching and MR conventions
+## Branching and change conventions
 
-- Branch from `main`; one branch per work item; branch name
-  `<role>/<work-item-key>-<short-slug>` (e.g. `backend/ENG-142-job-placement-api`).
-- MR title format: `<work-item-key>: <one-line summary>` — so the work
-  item is traceable from the MR (and vice versa via a link in the MR
-  description).
-- MRs include: what changed, why, how to verify, screenshots (Frontend),
-  benchmark numbers (perf-sensitive paths).
-- MRs **must** include tests — unit for logic, integration for API
+- One branch per work item: `code_checkout` puts you on your own,
+  `seats/<your handle>/<work-item-key>` (e.g. `seats/agent-swe/ENG-142`),
+  so every run on one item continues the same branch.
+- Change title format: `<work-item-key>: <one-line summary>` — so the
+  work item is traceable from the change (and vice versa via a link in
+  the change's description).
+- Changes include: what changed, why, how to verify, screenshots
+  (Frontend), benchmark numbers (perf-sensitive paths).
+- Changes **must** include tests — unit for logic, integration for API
   contracts, smoke for critical user flows.
-- Squash-merge into `main`. Delete the branch on merge.
+- Merge into `main` once the change is reviewed.
 - Conventional commit style (`feat:`, `fix:`, `refactor:`, `docs:`,
   `test:`, `chore:`) so changelog generation works.
 
@@ -110,7 +111,7 @@ add the missing observability before declaring the story Done.
   the wrong priority, or missing acceptance criteria, comment on the
   work item — do not unilaterally re-organise the backlog.
 - **DevRel** consumes your ADRs and your ships. When you ship a public
-  API change, **mention DevRel in the MR**. They will draft the docs
+  API change, **mention DevRel on the change**. They will draft the docs
   page and ask you for technical review.
 - **CTO** is your escalation target. When stuck for >2 hours, surface
   it on the work item with what you tried, options you see, your

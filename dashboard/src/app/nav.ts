@@ -1426,6 +1426,40 @@ export function workspaceOf(path: readonly string[]): Workspace | "" {
 }
 
 /**
+ * Whether a row is its sidebar group's LANDING: it owns the group's own
+ * segment, as Principles owns `#/company`, so the bare address opens it.
+ * That prefix is the group's rather than the row's, which is what the trail
+ * and the sidebar each read here: the trail names the group for it, and the
+ * sidebar marks the row only where the address is the row's own.
+ */
+export function groupLanding(row: WorkspaceRow): boolean {
+  const owns = ownedBy(row);
+  return (
+    owns.length === 1 &&
+    owns[0] === row.place &&
+    SIDEBAR_GROUPS.some((g) => g.place === row.place && g.label !== "")
+  );
+}
+
+/**
+ * The row the sidebar marks for an address, or "" for none.
+ *
+ * [workspaceOf], except under a group's landing row. That row owns the whole
+ * group's prefix so that the bare address lands on it, and an address under
+ * the prefix that no row holds (`#/company/structure`) is Not Found in the
+ * group, not on the landing's page: marking Principles there told a reader
+ * they were on a page they were not. So the landing row is marked at the bare
+ * address and under its own path, and nowhere else.
+ */
+export function sidebarRowOf(path: readonly string[]): Workspace | "" {
+  const key = workspaceOf(path);
+  const row = workspaceRow(key);
+  if (!row || !groupLanding(row)) return key;
+  const bare = path.length === ownedBy(row).length;
+  return bare || startsWith(path, row.path) ? key : "";
+}
+
+/**
  * The routes drawn OUTSIDE the frame: signing in, redeeming an invitation,
  * setting a password from a reset link, and enrolling the second factor a
  * deployment requires before anything else.

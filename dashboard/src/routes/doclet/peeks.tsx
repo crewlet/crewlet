@@ -285,6 +285,10 @@ function SpacePages({
       >
         <Card.Title>Recent pages</Card.Title>
       </Card.Header>
+      {/* IN FLIGHT, A SKELETON beside `QueryState`, which draws nothing while it waits. */}
+      {list.loading && recent.length === 0 && (
+        <Skeleton variant="text" rows={4} label="Loading recent pages" />
+      )}
       <QueryState
         error={list.error}
         refusal={list.refusal}

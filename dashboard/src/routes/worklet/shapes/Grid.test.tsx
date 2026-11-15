@@ -43,6 +43,8 @@ vi.mock("~/lib/viewer.ts", () => ({
     anonymous: true,
     loading: false,
     asking: false,
+    failed: null,
+    failedRefusal: null,
     configWriter: true,
     configManagedBy: [],
     chatVendors: [],

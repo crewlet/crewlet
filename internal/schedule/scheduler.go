@@ -678,12 +678,88 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 			return fireDeferred
 		}
 	}
+	switch s.dispatcher().dispatch(ctx, dispatch{
+		entry: e, seat: seat, agentID: agentID, handle: handle, at: fireUTC, label: label,
+		outcome: OutcomeFired,
+	}).status {
+	case dispatchSent:
+		return fireSent
+	default:
+		return fireNotSent
+	}
+}
+
+// dispatcher is the half of a fire the tick and a person's ask share: the
+// claim, and the publish it admits.
+func (s *Scheduler) dispatcher() dispatcher {
+	return dispatcher{pub: s.pub, ledger: s.ledger, trace: s.trace}
+}
+
+// dispatcher claims one fire and publishes it.
+//
+// ONE IMPLEMENTATION for a cron tick's fire and for a run a person asked for
+// ([Manual]), so the two cannot disagree about what a fire is: the claim
+// before the publish, the trace each run gets, the conversation it is stamped
+// with and the record of it are written once.
+type dispatcher struct {
+	pub    Publisher
+	ledger Claimer
+	trace  func(context.Context) events.TraceContext
+}
+
+// dispatch is one fire to send: the schedule, the runner seat as the caller
+// resolved it from the org, and the fire's identity.
+type dispatch struct {
+	entry   Entry
+	seat    *org.Role
+	agentID uuid.UUID
+	handle  string
+	// at is the instant the fire stands for: the tick it was due at, or the
+	// moment a person asked.
+	at time.Time
+	// label is the fire's identity within its schedule: [FireLabel] for a
+	// tick, [ManualFireLabel] for an ask.
+	label string
+	// outcome is what the ledger records the fire as: [OutcomeFired] for a
+	// tick, [OutcomeFiredManually] for an ask.
+	outcome Outcome
+	// requestedBy is the person who asked for the run, empty for a tick.
+	requestedBy string
+}
+
+// dispatchStatus is what became of one dispatch.
+type dispatchStatus int
+
+const (
+	// dispatchSent is a fire claimed and published.
+	dispatchSent dispatchStatus = iota
+	// dispatchHeld is a fire whose identity was already claimed: a peer's
+	// tick, a run before a restart, or the same ask made again.
+	dispatchHeld
+	// dispatchClaimUnknown is a claim the ledger could not answer. Nothing
+	// was sent.
+	dispatchClaimUnknown
+	// dispatchPublishFailed is a fire claimed whose publish failed. The
+	// claim is spent and the broker may or may not hold the event.
+	dispatchPublishFailed
+)
+
+// dispatched is a dispatch's answer: what became of it, and the trace and run
+// id it was sent under where it was claimed.
+type dispatched struct {
+	status  dispatchStatus
+	traceID string
+	runID   string
+}
+
+func (d dispatcher) dispatch(ctx context.Context, f dispatch) dispatched {
+	e, handle, label, fireUTC := f.entry, f.handle, f.label, f.at
 	// Each dispatched run gets its OWN trace, detached from the tick, so the
 	// ledger row and exactly this turn's calls are linked. The TaskAssigned
 	// carries it and the agent's turn restores it.
-	trace := s.trace(ctx)
+	trace := d.trace(ctx)
 
-	claimed, err := s.ledger.Claim(ctx, Run{
+	claimed, err := d.ledger.Claim(ctx, Run{
 		FireKey: FireKey{
 			Scope:        e.Scope,
 			ScopeID:      e.ScopeID,
@@ -692,7 +768,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 			TargetHandle: handle,
 		},
 		ScheduledAt: fireUTC,
-		Outcome:     OutcomeFired,
+		Outcome:     f.outcome,
 		TraceID:     trace.TraceID,
 	})
 	if err != nil {
@@ -700,13 +776,14 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		// unreadable ledger is how one fire becomes N.
 		log.ErrorContext(ctx, "schedule_claim_failed", "schedule", e.Schedule.Name,
 			"handle", handle, "fire_label", label, "error", err)
-		return fireNotSent
+		return dispatched{status: dispatchClaimUnknown}
 	}
 	if !claimed {
-		return fireNotSent
+		return dispatched{status: dispatchHeld}
 	}
 
 	runID := runID(e, label, handle)
+	out := dispatched{status: dispatchSent, traceID: trace.TraceID, runID: runID}
 	// TYPED, not a Payload bag. The schedule's `task:` text is the whole ask
 	// this fire exists to deliver, and the bag it used to travel in had no
 	// reader anywhere in the engine — so the seat was woken with the event's
@@ -714,13 +791,14 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	// it. Description and Schedule are read back by [types.TaskAssigned.Brief].
 	task := events.New(types.TaskAssigned{
 		TaskID:      runID,
-		Agent:       agentID.String(),
-		RoleName:    seat.Name,
+		Agent:       f.agentID.String(),
+		RoleName:    f.seat.Name,
 		Description: e.Schedule.Task,
 		Schedule:    e.Schedule.Name,
 		ScopeType:   e.Scope,
 		ScopeID:     e.ScopeID,
 		ScheduledAt: fireUTC.UTC(),
+		RequestedBy: f.requestedBy,
 
 		TimeoutSeconds: int(e.Schedule.Timeout() / time.Second),
 	}, trace)
@@ -732,7 +810,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	key := FirePartition(e)
 	notify.Stamp(task, key, key)
 
-	if err := s.pub.Publish(ctx, topics.AgentInbox(agentID), task); err != nil {
+	if err := d.pub.Publish(ctx, topics.AgentInbox(f.agentID), task); err != nil {
 		// The claim is already spent, and that is the at-most-once side of
 		// the trade rather than an oversight: a publish failure is
 		// AMBIGUOUS — the broker may have persisted the event and lost the
@@ -742,12 +820,14 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 			"fire_label", label, "error", err,
 			"hint", "the fire is CLAIMED and will not be retried; the ledger row records a "+
 				"dispatch that never reached the seat")
-		return fireNotSent
+		out.status = dispatchPublishFailed
+		return out
 	}
 
 	log.InfoContext(ctx, "schedule_fired", "schedule", e.Schedule.Name, "scope_type", e.Scope,
 		"scope", e.ScopeName, "scope_id", e.ScopeID, "handle", handle,
-		"scheduled_at", fireUTC.Format(time.RFC3339), "trace_id", trace.TraceID)
+		"scheduled_at", fireUTC.Format(time.RFC3339), "trace_id", trace.TraceID,
+		"requested_by", f.requestedBy)
 
 	// Observability only, and best-effort: the seat has already been woken,
 	// so a failure here costs a dashboard row rather than a run.
@@ -758,12 +838,13 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		ScheduleName: e.Schedule.Name,
 		TargetHandle: handle,
 		ScheduledAt:  fireUTC.Format(time.RFC3339),
+		RequestedBy:  f.requestedBy,
 	}, trace)
 	fired.Source = "scheduler"
-	if err := s.pub.Publish(ctx, topics.Event(fired.Type), fired); err != nil {
+	if err := d.pub.Publish(ctx, topics.Event(fired.Type), fired); err != nil {
 		log.ErrorContext(ctx, "scheduled_task_fired_publish_failed", "schedule", e.Schedule.Name, "error", err)
 	}
-	return fireSent
+	return out
 }
 
 // FirePartition is the inbox partition every fire of one schedule shares, and

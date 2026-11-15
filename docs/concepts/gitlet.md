@@ -4555,16 +4555,19 @@ each lazy fetch of a blob into a blobless clone among them — reads its run's
 record once, from the stream leader of the bucket the fleet keeps runs in,
 and each raise of its floor is one compare-and-set of that record — which
 holds the job's facts and never its bridged tool log, nor the sealed secrets
-the job's box was handed, each kept beside it under a key of its own
+the job's box was handed, nor the turn's leads, each kept beside it under a key
+of its own
 ([Code Sandbox](code-sandbox.md#the-runs-record-and-what-it-costs-to-read)).
 Measured on three members with every bucket at three replicas, from a member
 not leading the runs' bucket, for a job parked with a 32 KiB frozen context
 and a full bridge log of 200 calls, its launch numbered on the record and no
-capture of its session stamped there yet: the record is 37 957 bytes, the
-frozen context and the 2 KiB brief among them, and the 16 of them the
-attach of its box adds to say which brief the job was handed (`"brief":
+capture of its session stamped there yet: the record is 38 008 bytes, the
+frozen context and the 2 KiB brief among them, the 16 of them the attach of
+its box adds to say which brief the job was handed (`"brief":
 "fresh"`; a job whose launch continues no session records no
-`session_start`). A read takes 0.38 ms and a raise 0.90 ms at the median
+`session_start`), and the 51 the launch that created it adds to name the run
+its leads are kept for (`"leads_run"` and the launch's id). A read takes
+0.38 ms and a raise 0.90 ms at the median
 (0.61 and 2.40 at the 99th percentile), measured on the benchmark's record,
 which names no box and so was 37 941 bytes. The log
 beside it is 478 374 bytes, and only the calls that use it move it: an append
@@ -8372,7 +8375,7 @@ words, since git does not read the header.
 | The node is applying the configuration the fleet activated | `this node is applying the configuration the fleet activated and answers once that apply ends: retry in 5 seconds, or against another node (applying)` (503) | Retry. |
 | The node could not apply the configuration the fleet activated | `this node could not apply the configuration the fleet activated, which hosts code (GET /fleet and this node's log say why): ask another node, or activate a corrected configuration (config_apply_failed)` (503) | Ask another node. An operator reads why in `GET /fleet` and the node's log, and activates a corrected configuration. |
 | The node could not read the configuration the fleet activated | `this node could not read the configuration the fleet activated, so it cannot say whether this company hosts code (GET /fleet and this node's log say why): ask another node (code_unknown)` (503) | Ask another node. An operator reads why in `GET /fleet` and the node's log. |
-| The node's native runtime was running before Gitlet was turned on | `this node's native runtime was running before Gitlet was turned on, and it serves Gitlet once restarted: ask another node, or restart this one (native_backend_needs_restart)` (503) | Ask another node, or restart this one. |
+| The node was already running when Gitlet was turned on | `this node was already running when the company turned Gitlet on, and it starts Gitlet when it restarts: restart this node, or ask another one (native_backend_needs_restart)` (503) | Restart this node, or ask another one. |
 | The node is draining for a shutdown | `this node is draining for a shutdown and begins no new fetch or push: retry in 30 s, against another node or once it has restarted` (503) | Retry; a balancer sends you to another node. A fetch the node had already begun is served to its end. |
 | The repository is not declared | `repository "<name>" not found` (404) | Check the name in `code.repos`. |
 | The repository was renamed ([Repositories made by tools](#repositories-made-by-tools)) | a clone or a fetch of the old name runs against the repository — git prints `warning: redirecting to <base>/git/<new>.git/` where it presents its credential up front, and nothing where a credential helper answers its challenge; a push of the old name is told `remote: "<old>" was renamed to "<new>" on <instant>; set your remote to /git/<new>.git at the same address (the old name serves clones and fetches until <instant>)` (404), and pushes nothing | Set your remote to the new name before the old one is released, a month after the rename. |

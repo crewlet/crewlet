@@ -339,6 +339,56 @@ func TestTheApplyThatStartsTheRuntimeSaysNothing(t *testing.T) {
 	}
 }
 
+// WHICH SERVICES A READER IS REFUSED UNTIL A RESTART: the ones a revision
+// turned ON over a runtime built without them, by the names the org
+// projection's `services` uses, and never one it turned off, which the node
+// goes on serving.
+//
+// Mutation: report every switch whatever its direction, and the Worklet a
+// revision moved to Jira is named as waiting, so the dashboard hides a tracker
+// the node still serves; name them by half ("Chatlet"), and the dashboard,
+// which reads `chat`, matches none.
+func TestOnlyAServiceTurnedOnAwaitsARestart(t *testing.T) {
+	t.Parallel()
+	vendors := builtWith{tracker: config.TrackerJira, knowledge: config.KnowledgeConfluence,
+		chat: config.ChatVendor, code: config.CodeNone}
+	native := builtWith{tracker: config.TrackerWorklet, knowledge: config.KnowledgeDoclet,
+		chat: config.ChatChatlet, code: config.CodeGitlet}
+	for _, tc := range []struct {
+		name      string
+		built     builtWith
+		activated *config.Company
+		want      []string
+	}{{
+		name: "every service turned on", built: vendors,
+		activated: &config.Company{Code: config.Code{Backend: config.CodeGitlet}},
+		want:      []string{"tracker", "knowledge", "chat", "code"},
+	}, {
+		name: "chat alone moved to Chatlet",
+		built: builtWith{tracker: config.TrackerWorklet, knowledge: config.KnowledgeDoclet,
+			chat: config.ChatVendor},
+		activated: &config.Company{},
+		want:      []string{"chat"},
+	}, {
+		name: "every service turned off", built: native,
+		activated: &config.Company{
+			Tracker:   config.Tracker{Backend: config.TrackerNone},
+			Knowledge: config.Knowledge{Backend: config.KnowledgeNone},
+			Chat:      config.Chat{Backend: config.ChatNone},
+		},
+	}, {
+		name: "nothing moved", built: native,
+		activated: &config.Company{Code: config.Code{Backend: config.CodeGitlet}},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := awaitingRestart(tc.built, tc.activated); !slices.Equal(got, tc.want) {
+				t.Errorf("awaiting a restart: %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // restartLines is every `native_backend_needs_restart` record written so far.
 func restartLines(t *testing.T, logs *stopLineBuffer) []map[string]any {
 	t.Helper()

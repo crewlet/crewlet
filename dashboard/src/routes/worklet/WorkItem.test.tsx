@@ -948,7 +948,7 @@ test("a refused poll says so even when children were listed before", async () =>
     />,
   );
   await settle();
-  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
+  expect(screen.getByText(/the engine failed to answer\./)).toBeTruthy();
   expect(screen.queryByText("A child")).toBeNull();
 });
 

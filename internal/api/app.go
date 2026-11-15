@@ -841,7 +841,7 @@ func New(opts Options) (*App, error) {
 		// the CONFIGURATION alone: what each seat is doing comes from the
 		// live projection over the placement below.
 		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
-		Org:    func() any { return orgProjection(opts.Sources.Company) },
+		Org:    func() any { return orgProjection(opts.Sources.Company, opts.Sources.AwaitingRestart) },
 		Tools:  func() any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half
@@ -1120,12 +1120,18 @@ func New(opts Options) (*App, error) {
 			return nil, fmt.Errorf("api: mount the assistant surface: %w", err)
 		}
 	}
-	// The dashboard shell and its assets. All four paths are exempt from
+	// The dashboard shell and its assets. All five paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
 	// authenticated fetch.
 	mux.Handle("GET /{$}", http.RedirectHandler(auth.PathDashboard, http.StatusFound))
 	mux.Handle("GET "+auth.PathDashboard, http.HandlerFunc(files.serveIndex))
+	// THE SLASH FORM IS THE SAME PLACE, and the one people type and tools
+	// append. An exact pattern matches one spelling, so `/dashboard/` was the
+	// mux's own JSON 404 on the address of the product. Redirected rather than
+	// served twice: the shell's links and its invitations are built on one
+	// spelling, and a browser carries the fragment (the screen) across.
+	mux.Handle("GET "+auth.PathDashboardSlash+"{$}", http.RedirectHandler(auth.PathDashboard, http.StatusFound))
 	mux.Handle("GET /favicon.ico", http.HandlerFunc(files.serveFavicon))
 	mux.Handle("GET /static/", http.HandlerFunc(files.serveStatic))
 	// The inbound edge. Exempt from the guard by prefix (see the auth

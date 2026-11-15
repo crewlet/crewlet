@@ -338,10 +338,12 @@ func TestTheWrapperCopiesTheResultLineAfterTheHarnessExits(t *testing.T) {
 		t.Errorf("the copy is not the stream's last line into the result file:\n%s", copy)
 	}
 
+	// The copy, not any tail: an OpenCode run's script reads a list's cursor
+	// from the answer's last bytes with `tail -c` (openCodeCursor).
 	oc := executor.NewOpenCode()
 	ob := box(t, oc)
 	start(t, oc, ob)
-	if script := lastBackground(t, ob); strings.Contains(script, "tail") {
+	if script := lastBackground(t, ob); strings.Contains(script, "tail -n 1 ") {
 		t.Errorf("a harness whose result is its stream had a result copied:\n%s", script)
 	}
 }

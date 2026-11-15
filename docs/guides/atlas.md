@@ -73,8 +73,12 @@ and one selection.
   into Quiet, Needs a look and Alerting, each with its count.
 - **Needs attention now**: the two most urgent entries, each with the reason in
   one sentence ("A standing alarm is raised", "Two sources disagree, and nobody
-  has settled it"), and how many need attention in all. Pressing a card
-  selects that entry on the map.
+  has settled it") on up to two lines, the whole of it on hover where it is
+  longer. Pressing a card selects that entry on the map. Beside the title,
+  how many are **Alerting** and how many **Need a look**, each a link that
+  narrows the map and the catalogue to them, so the entries past the two cards
+  are one press away. The tile shows a placeholder until its list has been
+  read, and says "Nothing needs attention." only when nothing does.
 - **Recorded this week**: how many lines the atlas's own log took in the last
   seven days, over its lines a day for the last fourteen. It is a count of what
   people, integrations and agents recorded. What the engine reads from the
@@ -133,8 +137,26 @@ its name.
   than the engine draws at once arrives with some groups closed by the engine,
   named above the map with a link to read each in the catalogue.
 
+**The map opens with all of it in view**, centred and zoomed to fit the space
+it has, so a large company opens zoomed out and a phone shows the whole map
+small. It fits again when a filter changes what it draws, and when its space
+changes size (a sheet opening beside the page, fullscreen) while you have not
+moved it. Once you zoom or pan, the map keeps your view as it refreshes. A
+link to one entry (**Show it on the map** from its page or its sheet, or an
+address with the entry selected) opens the map on that entry instead, in the
+middle, at a size its card reads.
+
 Drag to pan, scroll or use the zoom bar to zoom, press `0` to fit the whole
 map, and use the fullscreen button in the zoom bar to give the map the screen.
+The map keeps a signal you can read at every zoom. From half size down an
+entry is a tile: its kind's glyph filling the cell, its name at a size that
+still reads and cut to what fits, and the whole cell in its health colour when
+it is not quiet. Zoomed out further than a name fits, each entry is a filled
+mark in its health colour, and every cluster keeps its title, its count and
+its tally of entries that need a look at their own size, so the picture reads
+as how much of each cluster is quiet. An empty lane is its dashed outline until
+you zoom in to half size, where it says what would fill it. A tile is pressed
+like a card; zoom in to press a mark.
 With the keyboard, Tab onto the map, move with the arrow keys, press Enter to
 select an entry or open a group and Escape to clear; typing a name finds it.
 The moving dashes stand still for a reader who asked the system for less
@@ -288,6 +310,21 @@ On an entry's sheet and page, under its header:
 
 What the company's settings, Gitlet or the engine's own records declare is
 changed where it is declared: the engine refuses it here and says where.
+
+Every one of these is recorded under the seat of the person who made it, so
+a sign-in that holds no seat (an API token, or an account bound to none)
+changes nothing in the atlas, whatever access it holds. The controls stay
+drawn and are held with that sentence, and a note under them says it once
+with a link to Company › Structure, where a person joins and takes a seat.
+Asking a source to be read now (Sources › Refresh now) is the one exception:
+any sign-in with Atlas access may ask.
+
+A change waits only on the sources that describe its entry. While a source
+cannot be read (the coverage line says which), you still add and correct what
+that source does not describe: with Gitlet unreachable, a service, a server or
+a vendor account is changed as usual, and only a change to a Gitlet repository
+waits. When a change does wait, the message under the form names the source
+that could not be read.
 
 ## Review
 

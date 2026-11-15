@@ -28,11 +28,54 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { installWindow } from "~/testing.tsx";
+import { StateBar, degradationOf } from "../frame/StateBar.tsx";
 
 /** A company running every service built into Crewlet. */
 const EVERY = { tracker: true, knowledge: true, chat: true, code: true } as const;
 
 afterEach(cleanup);
+
+// THE FIRST DIAL IS SAID IN THE BAR'S OWN ROW: a strip floated under the bar
+// lay over the first lines of the screen. Mutation: leave the chip out of
+// the bar and this goes red.
+test("the bar says the first dial in its own row, over nothing", () => {
+  location.hash = "#/home";
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  const first = degradationOf({
+    authRejected: false,
+    connected: false,
+    everConnected: false,
+    configured: undefined,
+    onSignIn: () => {},
+    onConfig: () => {},
+  });
+  const { container } = render(
+    <Router>
+      <ClientContext.Provider value={{ store, socket }}>
+        <AppShell
+          topbar={
+            <PageHeader
+              runs={EVERY}
+              grants={null}
+              crumbs={[]}
+              row={undefined}
+              counts={{}}
+              title="Home"
+              workspace="home"
+              connecting={first}
+            >
+              <StateBar degraded={null} />
+            </PageHeader>
+          }
+        />
+      </ClientContext.Provider>
+    </Router>,
+  );
+  const bar = container.querySelector<HTMLElement>(".page-bar")!;
+  expect(within(bar).getByRole("status", { name: "Connecting to the engine." })).toBeDefined();
+  expect(container.querySelector(".state-bar")).toBeNull();
+});
 
 // A STAR IS A SHORTCUT TO A PAGE, so it is offered on a page and nowhere else.
 describe("the star", () => {
@@ -489,13 +532,13 @@ test("a section's figure rides beside its name, and only if published", () => {
   expect(screen.getByRole("link", { name: /^Org chart/ }).textContent).toBe("Org chart");
 });
 
-// ON A PHONE SETTINGS' COLUMN IS A PICKER, and whether it is open says whether
-// the reader has chosen a section. Folded on every arrival, Settings' own
-// address showed a phone reader one row naming its first section, and its
-// four groups only behind a tap nothing told them to make. A deep link still
-// arrives folded, since the section it names starts right under the picker,
-// and any pick folds it. Mutation: start folded everywhere, or
-// leave the list open after a pick that moves no path, and a case goes red.
+// ON A PHONE SETTINGS' COLUMN IS A PICKER, FOLDED ON EVERY ARRIVAL. The
+// workspace's own address is a section's (Settings lands on Models) and the
+// one the sidebar's Settings row opens: with the list open there, the page a
+// reader asked for began under twenty rows of other pages. The folded control
+// says it is a picker, and any pick folds it. Mutation: open the list on the
+// landing address, or leave it open after a pick that moves no path, and a
+// case goes red.
 describe("Settings' section picker on a phone", () => {
   const settings = WORKSPACES.find((w) => w.key === "settings")!;
   let window: ReturnType<typeof installWindow>;
@@ -524,33 +567,15 @@ describe("Settings' section picker on a phone", () => {
     return copy.textContent?.replace(/\s+/g, " ").trim();
   };
 
-  test("arriving at Settings' own address opens the list, every group in it", () => {
+  test("arriving at Settings' own address is folded, with the list one press away", () => {
     render(column(["settings", "models"]));
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(toggle().closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(false);
+    expect(shown()).toBe("Section · Models");
+    fireEvent.click(toggle());
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
-    expect(toggle().closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(true);
     expect(row("#/settings/spend")).not.toBeNull();
     expect(row("#/settings/storage")).not.toBeNull();
-  });
-
-  // SETTINGS' OWN ADDRESS IS ITS MODELS SECTION, so an address that asks for
-  // more than the landing (a wizard, a lens) is a deep link and arrives folded.
-  // Mutation: decide on the path alone and the wizard opens under the list.
-  test("an address that asks for a flow or a view arrives folded, a kept key does not", () => {
-    const at = (query: string) => (
-      <SectionColumn
-        row={settings}
-        path={["settings", "models"]}
-        query={new URLSearchParams(query)}
-        grants={null}
-        figures={{}}
-        runs={EVERY}
-      />
-    );
-    const view = render(at("flow=add"));
-    expect(toggle().getAttribute("aria-expanded"), "Add a model").toBe("false");
-    view.unmount();
-    render(at("window=7d"));
-    expect(toggle().getAttribute("aria-expanded"), "the kept window").toBe("true");
   });
 
   test("a link to a section arrives folded, and says it is a picker", () => {
@@ -561,20 +586,23 @@ describe("Settings' section picker on a phone", () => {
 
   test("a pick folds it, the section the reader is already on included", () => {
     render(column(["settings", "models"]));
+    fireEvent.click(toggle());
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(row("#/settings/models"));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
 
-  test("a pick that lands on Settings' own address leaves it folded; an arrival nobody picked opens it", () => {
+  test("a pick that lands on Settings' own address leaves it folded, and so does an arrival nobody picked", () => {
     const view = render(column(["settings", "people"]));
     fireEvent.click(row("#/settings/models"));
     view.rerender(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded"), "a pick of Models").toBe("false");
     view.rerender(column(["settings", "nodes"]));
     expect(toggle().getAttribute("aria-expanded"), "a link to Nodes").toBe("false");
-    // THE SIDEBAR'S SETTINGS ROW, or Back: no pick in this list made it.
+    // THE SIDEBAR'S SETTINGS ROW, or Back: no pick in this list made it, and
+    // the section it names still starts right under the picker.
     view.rerender(column(["settings", "models"]));
-    expect(toggle().getAttribute("aria-expanded"), "an arrival at Settings").toBe("true");
+    expect(toggle().getAttribute("aria-expanded"), "an arrival at Settings").toBe("false");
   });
 
   // A SECTION READING A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Expensive

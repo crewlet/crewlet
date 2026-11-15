@@ -164,6 +164,7 @@ import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
  * wider and does not bother with the quarter-hour.
  */
 const AUDIT_OFFER: Offer = {
+  screen: "settings.audit",
   ranges: ["1d", "7d", "30d", "90d"],
   custom: true,
   fallback: "7d",

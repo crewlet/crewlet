@@ -171,8 +171,9 @@ import (
 // AN UNKNOWN IS NEVER A NO: `continuable` is null, and `not_continuable` says
 // why, where the turn's run record or its row at the relaunch's level could not
 // be read, and where the launch would not decide now either — its job still
-// working or being collected, its capture still being kept, what the launch is
-// launched on not to be said now (every member of the seat's chain sitting out
+// working or being collected, its capture still being kept or its record
+// awaiting the log's answer, which a relaunch asks again before it decides
+// ([sandbox.ReadContinuityOf]), what the launch is launched on not to be said now (every member of the seat's chain sitting out
 // its plan, no node holding the seat, the node holding it not answering), a
 // relaunch only the resume of its job's collection decides, and a turn whose
 // end is not on the log yet, which its conversation's head decides once it

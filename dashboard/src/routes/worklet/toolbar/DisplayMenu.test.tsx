@@ -194,7 +194,7 @@ test("the menu holds the order, the second axis, the columns and the lanes, and 
   expect(screen.getByRole("combobox", { name: "Sort" })).toBeTruthy();
   cleanup();
   openDisplay({ shape: "list", groupBy: "status" });
-  expect(screen.getByRole("combobox", { name: "Then by" })).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Subgroup by" })).toBeTruthy();
   expect(screen.getByText("Columns")).toBeTruthy();
   expect(screen.queryByRole("combobox", { name: "Group by" })).toBeNull();
   expect(document.querySelector(".work-display-shape")).toBeNull();
@@ -296,10 +296,21 @@ test("a board with no chosen axis shows the one it is grouped by anyway", () => 
 // row would then be alone in its own band.
 test("the second axis offers everything but the first", () => {
   openDisplay({ shape: "list", groupBy: "status", workspace: true });
-  const offered = optionsOf("Then by");
+  const offered = optionsOf("Subgroup by");
   expect(offered).toEqual(secondAxisOptions("status", true).map((o) => o.label));
   expect(offered).not.toContain("Status");
-  expect(offered[0]).toBe("No second grouping");
+  expect(offered[0]).toBe("No subgroups");
+});
+
+// THE SECOND GROUPING IS A GROUPING, worded and placed as one: it sits above
+// the order rather than under it, and says it splits a band. Worded "Then by"
+// directly under Sort, it read as a second sort key.
+test("the subgrouping is named as one and sits before the order", () => {
+  openDisplay({ shape: "list", groupBy: "status" });
+  const sub = screen.getByRole("combobox", { name: "Subgroup by" });
+  const sort = screen.getByRole("combobox", { name: "Sort" });
+  expect(sub.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByText("Then by")).toBeNull();
 });
 
 // WHAT A SHAPE DOES NOT DRAW, IT DOES NOT OFFER. A board's second axis is a
@@ -307,18 +318,18 @@ test("the second axis offers everything but the first", () => {
 // so it has no grouping at all; and a band inside a band is what the two grid
 // shapes draw. A control writing a key its shape drops is a control whose
 // effect the reader cannot see.
-test("Then by is drawn on a grid shape with a first axis, and nowhere else", () => {
+test("Subgroup by is drawn on a grid shape with a first axis, and nowhere else", () => {
   openDisplay({ shape: "list", groupBy: "status" });
-  expect(screen.getByRole("combobox", { name: "Then by" })).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Subgroup by" })).toBeTruthy();
   cleanup();
   openDisplay({ shape: "list", groupBy: "" });
-  expect(screen.queryByRole("combobox", { name: "Then by" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Subgroup by" })).toBeNull();
   cleanup();
   openDisplay({ shape: "board", groupBy: "status" });
-  expect(screen.queryByRole("combobox", { name: "Then by" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Subgroup by" })).toBeNull();
   cleanup();
   openDisplay({ shape: "timeline", groupBy: "status" });
-  expect(screen.queryByRole("combobox", { name: "Then by" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Subgroup by" })).toBeNull();
 });
 
 test("the calendar offers neither a grouping nor an order, because it spends both", () => {

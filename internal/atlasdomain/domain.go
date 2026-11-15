@@ -37,12 +37,17 @@ const MaxRecordBytes = 256 << 10
 // minutes, which outlasts a publisher's retry budget.
 const AtlasLogDuplicates = 2 * time.Minute
 
-// LinearizableReadsPerSeatDay is this log's read model: none. A person's edit
-// decides from the entry's version in its own snapshot, where the broker
-// arbitrates what a stale copy decided, and every read of the atlas is at its
-// caller's own level, `session` by default ([DefaultRead]), so no reader takes
-// a barrier.
-const LinearizableReadsPerSeatDay = 0
+// LinearizableReadsPerSeatDay is this log's read model: one barrier for each
+// turn that reads the atlas, at the reference company's thirty turns a seat a
+// day. A person's edit decides from the entry's version in its own snapshot,
+// where the broker arbitrates what a stale copy decided, and the dashboard reads
+// at its own level, `session` by default ([DefaultRead]); but an AGENT's atlas
+// tools, and the operator's, read at the seat surface's `linearizable`
+// (statelog.SurfaceSeat), as every seat tool does, so each turn that consults
+// the atlas takes a barrier on this log. Declared as none, the census-drift
+// alarm fired on the first such read and never cleared, on a company doing
+// exactly the work the log was sized for.
+const LinearizableReadsPerSeatDay = 30
 
 // Stream is the atlas log, at the domain's whole budget.
 func (Domain) Stream() statelog.StreamSpec {

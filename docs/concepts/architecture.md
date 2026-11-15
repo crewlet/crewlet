@@ -338,9 +338,11 @@ company declared.
 Then the node's surface takes the socket over, and only after that does the
 engine start claiming seats. A seat is not claimed until its per-role MCP
 children are up — one subprocess per server per seat, each a spawn, a handshake
-and a `tools/list` — and on the example company, whose one `shared: false`
-server is Mattermost, that is 7 children; a company with a tracker, a wiki and
-a code host wired in runs three times that. Serving first means the dashboard,
+and a `tools/list` — and the example company declares no server at all, since
+its chat, tracker, wiki and code are builtin tools, while the same seven seats
+with a vendor's chat, tracker, wiki and code host wired in run three children
+each — chat's, the Atlassian server the tracker and the wiki share, and the
+code host's — 21 in all. Serving first means the dashboard,
 the REST API and every webhook route answer during that window, and `/health`
 says honestly that this node holds no seats yet: its `seats` list is the seats
 claimed so far, which is none. `/ready` carries no seats at all. Webhooks
@@ -992,4 +994,4 @@ here.
 | DACI, and the structured ask that is all the engine records of a decision | `internal/worklet` | [Decision framework](decision-framework.md) · [Asking for a decision](../guides/worklet.md#asking-for-a-decision) |
 | More than one node | `internal/seat/placement` | [Scaling out](scaling.md) · [Running a fleet](../guides/fleet.md) · [Satellite nodes](../guides/satellite-nodes.md) |
 | The seal every state-log record, every signed request and every sealed answer carries under the fleet's keyring: a frame naming the key it was signed under, opened into one of three verdicts | `internal/recordseal` | [ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md) |
-| What one node asks another to carry out (an estate write, a broker removal, a note to a running turn, a read of a run's box asked of the node it is on, a box's tool call relayed to the node holding its session, a replay or a stop of an Ask Crewlet turn running elsewhere, a code search of several repositories) and the live relay an out-of-service node's dashboards hear a peer through, signed and bound to one request; and the presence and Ask Crewlet frames a node broadcasts for its peers to show, sealed one way | `internal/signedask` | [Scaling out](scaling.md#how-a-request-reaches-the-estate) · [ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md) |
+| What one node asks another to carry out (an estate write, a broker removal, a note to a running turn, a read of a run's box asked of the node it is on, a box's tool call relayed to the node holding its session, a replay or a stop of an Ask Crewlet turn running elsewhere, a code search of several repositories, a test of an MCP server asked of the nodes it runs on) and the live relay an out-of-service node's dashboards hear a peer through, signed and bound to one request; and the presence and Ask Crewlet frames a node broadcasts for its peers to show, sealed one way | `internal/signedask` | [Scaling out](scaling.md#how-a-request-reaches-the-estate) · [ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md) |

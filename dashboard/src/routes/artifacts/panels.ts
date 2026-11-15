@@ -17,7 +17,7 @@
 import type { ArtifactPanelSize } from "@crewlethq/ui";
 
 /** Every panel, in the bar's order. */
-export const PANELS = ["details", "history", "data", "people", "settings"] as const;
+export const PANELS = ["details", "history", "data", "files", "people", "settings"] as const;
 export type PanelName = (typeof PANELS)[number];
 
 /**
@@ -30,6 +30,7 @@ export const PANEL_SPECS: Readonly<Record<PanelName, { title: string; size: Arti
     details: { title: "Details", size: "md" },
     history: { title: "Versions and history", size: "md" },
     data: { title: "Data", size: "lg" },
+    files: { title: "Files", size: "md" },
     people: { title: "People here", size: "md" },
     settings: { title: "Settings", size: "md" },
   };
@@ -52,14 +53,24 @@ function isPanel(value: string | null): value is PanelName {
   return value !== null && (PANELS as readonly string[]).includes(value);
 }
 
+/** The panels only some artifacts have: Data, and the Files its own page shows. */
+export interface PanelsHeld {
+  /** It keeps data (a sheet, a board's datasets, a page's datastore). */
+  data: boolean;
+  /** It runs its own page, which shows the files kept beside its versions. */
+  files: boolean;
+}
+
 /**
  * The panel an address opens, if this artifact has it: `panel=`, else the tab
- * or the rail an older link named. Data only where the artifact keeps data.
+ * or the rail an older link named. Data only where the artifact keeps data,
+ * and Files only where it runs a page of its own.
  */
-export function panelOf(query: URLSearchParams, hasData: boolean): PanelName | null {
+export function panelOf(query: URLSearchParams, held: PanelsHeld): PanelName | null {
   const named = query.get("panel");
   const asked = isPanel(named) ? named : legacyPanel(query);
-  if (asked === "data" && !hasData) return null;
+  if (asked === "data" && !held.data) return null;
+  if (asked === "files" && !held.files) return null;
   return asked;
 }
 

@@ -141,6 +141,23 @@ export function linkWorkItem(
   return { method: "POST", path: `${base(id)}/work-items`, body };
 }
 
+/**
+ * Finalize one file of an asset upload into the artifact's asset store (`POST
+ * /artifacts/{id}/assets`), an editor's: the bytes are read back and checked,
+ * and the answer names the asset made. Publishes no version.
+ */
+export function addAsset(id: string, upload: string, name: string): Omit<KeyedRequest, "key"> {
+  return { method: "POST", path: `${base(id)}/assets`, body: { upload, name } };
+}
+
+/**
+ * Remove one asset (`DELETE /artifacts/{id}/assets/{asset}`), an editor's. A
+ * page that shows it by its address stops showing it; no version changes.
+ */
+export function removeAsset(id: string, asset: string): Omit<KeyedRequest, "key"> {
+  return { method: "DELETE", path: `${base(id)}/assets/${pathSegment(asset)}` };
+}
+
 /** Move an artifact to the trash (`DELETE /artifacts/{id}`). */
 export function trashArtifact(id: string): Omit<KeyedRequest, "key"> {
   return { method: "DELETE", path: base(id) };
@@ -711,10 +728,15 @@ export async function uploadFiles(
   id: string | null,
   files: readonly UploadFile[],
   key: string,
+  purpose: "version" | "assets" = "version",
 ): Promise<{ upload: string; files: PublishFile[] }> {
   const facts = await Promise.all(files.map(declared));
   const entries = files.map((f, i) => ({ path: f.path, ...facts[i]! }));
-  const ask = { body: { entries }, headers: { "Idempotency-Key": key } };
+  // AN ASSET UPLOAD SAYS SO (`asset: true`): the engine decides it by
+  // `upload_artifact_asset` rather than the publish, holds it to the asset
+  // store's bounds and never carries a file the artifact already holds.
+  const body = purpose === "assets" ? { entries, asset: true } : { entries };
+  const ask = { body, headers: { "Idempotency-Key": key } };
   const intent = (
     id === null
       ? await rest.request("POST", "/artifacts/uploads", ask)

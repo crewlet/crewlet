@@ -3,6 +3,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -48,13 +49,14 @@ func NewModelSurface(e *engine.Engine, config *configapi.Service, cipher secrets
 }
 
 // ModelSources fills the model half of the question sources over e: what this
-// node resolved, the fleet's secret rows, its device sign-ins, and the model
-// catalogue. The alarms are the node's latest evaluation, which every answer
-// reads ([queries.Sources.Alarms]).
+// node resolved, the fleet's secret rows, its device sign-ins, each model's
+// latest check, and the model catalogue. The alarms are the node's latest
+// evaluation, which every answer reads ([queries.Sources.Alarms]).
 func ModelSources(s *queries.Sources, e *engine.Engine, cipher secrets.Cipher) {
 	s.Models = modelSource{e: e}
 	s.Secrets = fleetsecrets.New(e.Backends().Fleet, cipher)
 	s.DeviceSignIns = e.Backends().Fleet
+	s.ModelChecks = e
 	s.Catalogue = modelcatalog.New(modelcatalog.Options{})
 }
 
@@ -95,8 +97,9 @@ func (m modelEngine) CheckModel(ctx context.Context, key string, draft *config.L
 	var handed map[string]string
 	if values != nil {
 		// A CANDIDATE IS TESTED BY THE REAL CALL: the smoke run is what
-		// signs the harness in with it, so it always runs, within the entry's
-		// own timeout capped at the credential budget.
+		// signs the harness in with it, so it always runs, and alone
+		// (harness.DiagnoseOptions.Values), within the entry's own timeout
+		// capped at the credential budget.
 		smoke = true
 		budget = min(llmapi.CredentialBudget, time.Duration(spec.Timeout()*float64(time.Second)))
 		profile, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides)
@@ -236,6 +239,23 @@ func (m modelEngine) StartDeviceSignIn(ctx context.Context, key string,
 			Line: strings.TrimSpace(strings.TrimPrefix(line, ":"))}
 	}
 	return coord.DeviceSignIn{}, modelErr(err)
+}
+
+func (m modelEngine) StartModelCheck(ctx context.Context, ask llmapi.ModelCheckAsk,
+	run func(context.Context) (json.RawMessage, error)) (coord.ModelCheck, error) {
+
+	started, err := m.e.StartModelCheck(ctx, engine.ModelCheckAsk{Entry: ask.Entry, Draft: ask.Draft,
+		Smoke: ask.Smoke, By: ask.By, Budget: ask.Budget}, run)
+	var running *engine.ModelCheckInProgressError
+	switch {
+	case err == nil:
+		return started, nil
+	case errors.As(err, &running):
+		return coord.ModelCheck{}, &llmapi.ModelCheckInProgressError{Running: running.Running}
+	case errors.Is(err, engine.ErrModelChecksStopped):
+		return coord.ModelCheck{}, llmapi.ErrModelChecksStopped
+	}
+	return started, err
 }
 
 func (m modelEngine) CancelDeviceSignIn(ctx context.Context, id uuid.UUID,

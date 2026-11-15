@@ -79,7 +79,8 @@ import { DecisionRow } from "~/components/DecisionRow.tsx";
 import { LiveDot, LiveRoom, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { mergeRuns, RunStatus, runTitle } from "./Executors.tsx";
+import { RunStatus, runTitle } from "./Executors.tsx";
+import { mergeRuns } from "~/lib/runs.ts";
 import { RecentPhases } from "./RecentPhases.tsx";
 import { useAgents, useEngineHealth, useEvents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -107,6 +108,7 @@ import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
  * a sixty-cell strip would not be.
  */
 const STRIP_OFFER: Offer = {
+  screen: "live.now",
   ranges: ["15m", "1h", "6h"],
   custom: false,
   fallback: "1h",
@@ -384,7 +386,7 @@ export function LiveNow() {
                 </a>
               }
             >
-              <Card.Title as="h3">Running turns</Card.Title>
+              <Card.Title>Running turns</Card.Title>
             </Card.Header>
             <LiveRoom>
               {running.length === 0 && org === null ? (
@@ -416,7 +418,7 @@ export function LiveNow() {
 
           <Card padding="none" className="live-card">
             <Card.Header icon={<CircleQuestionMarkGlyph size="sm" />} count={waiting.length}>
-              <Card.Title as="h3">Waiting on a person</Card.Title>
+              <Card.Title>Waiting on a person</Card.Title>
             </Card.Header>
             {waiting.length === 0 && !runsKnown ? (
               <Skeleton variant="text" rows={3} label="Loading the waiting executors" />
@@ -452,7 +454,7 @@ export function LiveNow() {
                 </a>
               }
             >
-              <Card.Title as="h3">In a box</Card.Title>
+              <Card.Title>In a box</Card.Title>
             </Card.Header>
             {runs.error && !runs.data ? (
               <QueryState error={runs.error} refusal={runs.refusal} loading={false} />
@@ -504,7 +506,7 @@ export function LiveNow() {
                 </a>
               }
             >
-              <Card.Title as="h3">Activity</Card.Title>
+              <Card.Title>Activity</Card.Title>
             </Card.Header>
             {viewer.loading ? (
               <Skeleton variant="text" rows={4} label="Checking your access" />
@@ -582,7 +584,7 @@ export function LiveNow() {
           // nobody but an admin, and drawn locked for everybody else.
           <Card padding="none" className="live-card">
             <Card.Header icon={<BrainGlyph size="sm" />}>
-              <Card.Title as="h3">Recent phases</Card.Title>
+              <Card.Title>Recent phases</Card.Title>
             </Card.Header>
             {viewer.loading ? (
               <Skeleton variant="text" rows={4} label="Checking your access" />

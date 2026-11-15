@@ -50,6 +50,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { QueryState } from "~/components/common.tsx";
 import {
   Button,
   ButtonLink,
@@ -322,7 +323,11 @@ export function BrandPage() {
           onDiscard={() => setConfirming("discard")}
         />
       ) : null}
-      {adoption === undefined || (adoption === null && company === undefined) ? (
+      {adoption === undefined && brand.error !== null ? (
+        // A FAILED READ IS SAID, with its Try again: the brand is unknown,
+        // never "no brand yet", which invites setting one up over it.
+        <QueryState error={brand.error} refusal={brand.refusal} loading={false} />
+      ) : adoption === undefined || (adoption === null && company === undefined) ? (
         <div aria-busy="true">
           <Card>
             <Skeleton variant="text" rows={6} label="Loading the company's brand" />

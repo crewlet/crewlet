@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -60,6 +61,15 @@ func (f fakeDevices) ListDeviceSignIns(context.Context) ([]coord.DeviceSignIn, e
 	return f, nil
 }
 
+// fakeModelChecks is each entry's latest check, as the engine reads it: a lapsed
+// record is the engine's to leave out, so this holds none.
+type fakeModelChecks map[string]coord.ModelCheck
+
+func (f fakeModelChecks) ModelCheck(_ context.Context, entry string) (coord.ModelCheck, bool, error) {
+	c, ok := f[entry]
+	return c, ok, nil
+}
+
 // modelSources is the fixture company over a lease table, with this node's
 // default signing in with a stored token and codex-review signed out.
 func modelSources(t *testing.T, backend coord.Backend) queries.Sources {
@@ -86,6 +96,7 @@ func modelSources(t *testing.T, backend coord.Backend) queries.Sources {
 		Secrets: fakeSecretRows{{Name: "CLAUDE_CODE_OAUTH_TOKEN", UpdatedBy: "morgan",
 			UpdatedAt: pinned.Add(-360 * 24 * time.Hour)}},
 		DeviceSignIns: fakeDevices{},
+		ModelChecks:   fakeModelChecks{},
 	}
 }
 
@@ -425,6 +436,68 @@ func TestADeviceSignInIsReadUntilItLapses(t *testing.T) {
 	}
 }
 
+// A MODEL'S CHECK IS READ BY ITS ENTRY WHILE ITS RECORD ANSWERS, from any node:
+// running until its deadline, lost past it with the node it was running on
+// named, and ended with what it found or why it found nothing. A key with no
+// check answering is not found, and no key is a bad question.
+//
+// Mutation: read a running check past its deadline as running, or drop an
+// ended check's lines, and this is red.
+func TestAModelsCheckIsReadByItsEntryFromAnyNode(t *testing.T) {
+	t.Parallel()
+	running := coord.ModelCheck{ID: uuid.New(), Entry: "sonnet", Node: "node-b", Smoke: true,
+		StartedAt: pinned.Add(-time.Minute), Deadline: pinned.Add(2 * time.Minute), By: "jane.doe",
+		ByKind: iam.ActorHuman}
+	checks := fakeModelChecks{"sonnet": running}
+	s := queries.Sources{ModelChecks: checks, Now: func() time.Time { return pinned }}
+	got := asMap(t, answer(t, s, "llm_check", map[string]any{"key": "sonnet"}))
+	if got["state"] != "running" || got["node"] != "node-b" || got["ended_at"] != nil || got["check"] != nil ||
+		got["failure"] != nil || got["smoke"] != true || got["by"] != "jane.doe" {
+		t.Errorf("a running check = %v", got)
+	}
+
+	s.Now = func() time.Time { return pinned.Add(3 * time.Minute) }
+	got = asMap(t, answer(t, s, "llm_check", map[string]any{"key": "sonnet"}))
+	if failure, _ := got["failure"].(string); got["state"] != "lost" || !strings.Contains(failure, "node-b") ||
+		got["ended_at"] != nil {
+		t.Errorf("a check past its deadline = %v, want it lost naming its node", got)
+	}
+
+	ended := running
+	ended.EndedAt, ended.Answer = pinned, json.RawMessage(`{"ok":true,"lines":[{"check":"smoke","ok":true}]}`)
+	checks["sonnet"] = ended
+	got = asMap(t, answer(t, s, "llm_check", map[string]any{"key": "sonnet"}))
+	check, _ := got["check"].(map[string]any)
+	if lines, _ := check["lines"].([]any); got["state"] != "ended" || got["ended_at"] == nil || check["ok"] != true ||
+		len(lines) != 1 || got["failure"] != nil {
+		t.Errorf("an ended check = %v, want what it found", got)
+	}
+	failed := running
+	failed.EndedAt, failed.Failure = pinned, "the node checking the model stopped before the check ended; check again"
+	checks["sonnet"] = failed
+	got = asMap(t, answer(t, s, "llm_check", map[string]any{"key": "sonnet"}))
+	if got["state"] != "ended" || got["check"] != nil || got["failure"] != failed.Failure {
+		t.Errorf("a check that ended finding nothing = %v, want why", got)
+	}
+
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	if _, err := r.Answer(everyGrant(t), "llm_check", map[string]any{"key": "opus"}); !errors.Is(err, queries.ErrNotFound) {
+		t.Errorf("an entry with no check = %v, want not found", err)
+	}
+	if _, err := r.Answer(everyGrant(t), "llm_check", map[string]any{}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("no key = %v, want bad params", err)
+	}
+	for _, state := range queries.ModelCheckStates {
+		if !state.Valid() {
+			t.Errorf("%s is not Valid", state)
+		}
+	}
+	if queries.ModelCheckState("checking").Valid() {
+		t.Error("a state the build never names is Valid")
+	}
+}
+
 // THE ADMIN'S QUESTIONS ARE ADMIN'S, AND THE CONDITION IS EVERYBODY'S.
 func TestTheModelQuestionsTakeTheirGrants(t *testing.T) {
 	t.Parallel()
@@ -432,7 +505,7 @@ func TestTheModelQuestionsTakeTheirGrants(t *testing.T) {
 	s.Catalogue = fakeCatalogue{}
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	for _, what := range []string{"llm_runners", "llm_models", "llm_device_sign_in"} {
+	for _, what := range []string{"llm_runners", "llm_models", "llm_device_sign_in", "llm_check"} {
 		requiresExactly(t, r, what, iam.GrantAdmin)
 	}
 	if !r.PostureOf("llm_entries").IsEverybody() {
@@ -488,5 +561,24 @@ func TestTheModelsAnswerCarriesNoMoney(t *testing.T) {
 	walk("$", tree)
 	if !strings.Contains(string(raw), `"total_tokens"`) {
 		t.Errorf("the answer lost its token usage: %s", raw)
+	}
+}
+
+// THE MODELS SCREEN NAMES EVERY STATE A CHECK IS IN. The Test dialog and the
+// wizard ask again while a check is running and stop on any other state; a
+// state the engine adds that the page lacks is a check polled for ever, or one
+// abandoned while it still runs.
+func TestTheModelsScreenNamesEveryCheckState(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Union(clientsource.Tree(t), "ModelCheckState")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]string, 0, len(queries.ModelCheckStates))
+	for _, state := range queries.ModelCheckStates {
+		want = append(want, string(state))
+	}
+	if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+		t.Errorf("contract/models.ts ModelCheckState is %v, want exactly the engine's %v", got, want)
 	}
 }

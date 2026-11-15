@@ -149,7 +149,7 @@ test("a refused first page is not a company that has published nothing", async (
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
+  expect(screen.getByText(/the engine failed to answer\./)).toBeTruthy();
   expect(screen.queryByText("Nothing has been published yet")).toBeNull();
 });
 
@@ -191,13 +191,13 @@ test("a refused first page keeps the control that asks it again", async () => {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
+  expect(screen.getByText(/the engine failed to answer\./)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /^Load \d+ older$/ }));
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
   expect(screen.getByText("opened a task")).toBeTruthy();
-  expect(screen.queryByText(/The engine failed to answer\./)).toBeNull();
+  expect(screen.queryByText(/the engine failed to answer\./)).toBeNull();
 });
 
 // AND A PAGE STILL IN FLIGHT IS NOT ONE EITHER.
@@ -537,4 +537,22 @@ test("a log missing a node names it", async () => {
   expect(screen.getByText("node-b")).toBeTruthy();
   expect(screen.getByText(/This log is missing 1 node\./)).toBeTruthy();
   location.hash = "#/";
+});
+
+// THE COUNT IN FLIGHT IS THE CHART'S OWN BOX: the When card was a title over
+// an empty frame, which reads as a window nothing was published in.
+test("the When chart in flight is a skeleton, not an empty card", () => {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: () => Promise<unknown> }).query = () => new Promise(() => {});
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Activity />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  const card = screen.getByText("When").closest(".crewlet-card") as HTMLElement;
+  expect(card.querySelector(".crewlet-skeleton")).not.toBeNull();
+  expect(screen.queryByText("Nothing was published in this window")).toBeNull();
 });

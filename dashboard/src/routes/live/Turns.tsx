@@ -112,6 +112,7 @@ const DAY_MS = 86_400_000;
  * asked of the event log.
  */
 const TURN_OFFER: Offer = {
+  screen: "live.turns",
   ranges: ["1h", "6h", "1d", "7d", "30d"],
   custom: true,
   fallback: "7d",

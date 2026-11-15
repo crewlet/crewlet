@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"time"
 
@@ -182,6 +183,12 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 	return newCompany(c, env, nil)
 }
 
+// processEUID is the user this engine runs as, the one fact
+// [config.Company.ValidateHost] needs. A variable so a test judges a root
+// engine without being one, and a suite run as root, in a container, does not
+// change what every case that builds an epoch means.
+var processEUID = os.Geteuid
+
 // newCompany builds an epoch whose harness entries keep their sit-outs on
 // plans, the node's registry ([harness.Plans]); nil for an epoch nothing runs.
 func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (*Company, error) {
@@ -204,6 +211,9 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 	// through. See [config.Company.ValidateRunnable].
 	if err := c.ValidateRunnable(); err != nil {
 		return nil, fmt.Errorf("engine: invalid company config: %w", err)
+	}
+	if err := c.ValidateHost(processEUID()); err != nil {
+		return nil, fmt.Errorf("engine: this node cannot launch the company config: %w", err)
 	}
 	organization, err := c.Organization()
 	if err != nil {

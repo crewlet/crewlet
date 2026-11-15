@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -343,6 +344,14 @@ type buildOpts struct {
 	// surfaces are bound to — for the cases about what a run has called.
 	calls *turnctx.CallLog
 
+	// boundary pins the token every fence of the turn context calls builds
+	// carries ([turnctx.Turn.Boundary]), for the cases about which token a
+	// brief fences somebody's words under. Unset, each fence of a brief mints a
+	// token of its own ([turnctx.Turn.FenceBoundary]), so no case could tell
+	// the turn's token from another valid one. Set only beside calls, whose
+	// context carries it.
+	boundary provenance.Boundary
+
 	// budget is the turn's meter, for the cases about what a refusal stops.
 	budget toolloop.BudgetMeter
 
@@ -434,7 +443,9 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 
 	runTurn := runner.Turn{RunID: "t-1", WorkKey: "wk-1", AgentID: "a-1", ConversationKey: opts.conversation}
 	if opts.calls != nil {
-		runTurn.Context = &turnctx.Turn{RunID: "t-1", WorkKey: "wk-1", Calls: opts.calls}
+		runTurn.Context = &turnctx.Turn{RunID: "t-1", WorkKey: "wk-1", Calls: opts.calls, Boundary: opts.boundary}
+	} else if opts.boundary != "" {
+		t.Fatal("buildOpts.boundary pins the token of the turn context calls builds: set calls beside it")
 	}
 	launcher := opts.launcher
 	if launcher == nil {

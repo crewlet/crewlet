@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // The budget park, end to end over the in-memory queue: a seat whose capped
@@ -105,7 +106,17 @@ type parkRig struct {
 	// ran, and left the deliveries each had left as its turn ran.
 	worked []uuid.UUID
 	left   []int
-	turnFn func() (turn.Result, error)
+	// current is the request of the turn the rig's dispatcher runs now, or
+	// ran last, which a turn the case plays launches for ([parkRig.turning]).
+	current Request
+	turnFn  func() (turn.Result, error)
+}
+
+// turning is the request of the turn the rig's dispatcher is running.
+func (r *parkRig) turning() Request {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.current
 }
 
 func (r *parkRig) clock() time.Time {
@@ -172,6 +183,9 @@ func newFlooredParkRig(t *testing.T, dayCeiling, floor string) *parkRig {
 	d := &Dispatcher{
 		Budget:   r.e.budgetPark,
 		Provider: r.e.providerPark,
+		// AND WHAT A DELIVERY THE SEAT IS DONE WITH LEAVES OF ITS WAIT, as a
+		// node's dispatcher is wired ([Engine.buildDispatcher]).
+		Gone: r.e.budgetDeliveryGone,
 		NoteDeferred: func(string) {
 			r.mu.Lock()
 			r.noted++
@@ -180,6 +194,7 @@ func newFlooredParkRig(t *testing.T, dayCeiling, floor string) *parkRig {
 		Turn: func(ctx context.Context, req Request) (turn.Result, error) {
 			r.mu.Lock()
 			r.ran++
+			r.current = req
 			for _, ev := range req.Events {
 				r.worked = append(r.worked, ev.ID)
 				left, _ := queue.DeliveriesLeftFor(ctx, ev.ID)
@@ -501,6 +516,40 @@ func TestASeatBelowTheExecutorFloorIsParkedUntilItsWindowTurnsOver(t *testing.T)
 	alarms[0].fire()
 	if got := r.runs(); got != 2 {
 		t.Fatalf("after the window turned over %d turns ran, want the held one", got)
+	}
+}
+
+// A NODE'S DISPATCHER DROPS THE WAIT OF A DELIVERY THAT IS GONE, AND NO OTHER.
+// What the seat's park recorded for a delivery whose launch was refused below
+// its floor is read by that delivery's every try until the dispatcher says it
+// will not come back ([Dispatcher.Gone]): then nothing reads it again, and
+// kept it would grow the seat's record for as long as the node holds the seat.
+// Dropped for that delivery alone: the seat's other parked delivery keeps the
+// window its next try is owed.
+//
+// Mutation: leave the node's dispatcher without the drop, drop nothing, or
+// drop the seat's every wait with one delivery's, and the case goes red.
+func TestANodesDispatcherDropsTheWaitOfADeliveryThatIsGoneAndNoOther(t *testing.T) {
+	t.Parallel()
+	r := newParkRig(t, "100")
+	// THE NODE'S OWN WIRING, every hook the case does not hand it the
+	// engine's, as a node's is built.
+	d := r.e.buildDispatcher(Options{Dispatch: &Dispatcher{NoteDeferred: func(string) {}}}, r.e.backends)
+	seat := seatOf("lead")
+	day := sandbox.BudgetWindow{Period: period.Day, Label: "2026-09-22"}
+	gone := []*events.Event{{ID: uuid.New(), Type: "task_assigned"}, {ID: uuid.New(), Type: "task_assigned"}}
+	parked := []*events.Event{{ID: uuid.New(), Type: "task_assigned"}}
+	r.e.floorWaits.parked(seat, deliveryOf(gone), day)
+	r.e.floorWaits.parked(seat, deliveryOf(parked), day)
+	if d.Gone == nil {
+		t.Fatal("a node's dispatcher drops nothing of a delivery that is gone")
+	}
+	d.Gone(t.Context(), "lead", gone)
+	if left := r.e.floorWaits.waited(seat, deliveryOf(gone)); len(left) != 0 {
+		t.Errorf("the seat keeps the wait %+v of a delivery that is gone", left)
+	}
+	if kept := r.e.floorWaits.waited(seat, deliveryOf(parked)); len(kept) != 1 || kept[0] != day {
+		t.Errorf("the seat's other parked delivery keeps %+v, want the window %+v its next try is owed", kept, day)
 	}
 }
 

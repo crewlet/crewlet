@@ -2,7 +2,8 @@
  * A live change's merge controls, above its tabs: where its gate stands, and
  * Merge — or Add to queue, where its target's gate requires a check — with
  * how it merges, whether its branch goes and whether its work item closes;
- * Override, a person's merge past the gate; and Re-run checks.
+ * Override, a person's merge past the gate; Re-run checks; Rebase; and Take
+ * out of the queue (`ChangeWrites.tsx`), each confirmed in the page.
  *
  * # The engine decides, and the page says what it decided
  *
@@ -33,16 +34,21 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Modal, SegmentedControl, Textarea } from "@crewlethq/ui";
+import { Button, Callout, Card, Modal, SegmentedControl, Textarea } from "@crewlethq/ui";
+import { CircleCheckGlyph, CircleDashedGlyph, CircleStopGlyph } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { MERGE_CONFLICT, MERGE_METHODS, MERGE_REFUSALS } from "~/contract/merge.ts";
-import { changeLive } from "~/lib/code.ts";
+import { changeLive, refName } from "~/lib/code.ts";
 import { useAct, type Act } from "~/lib/useAct.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { CodeChangeDetail, CodePrecondition } from "~/protocol/index.ts";
 import { preconditionSentence, readinessCount, readinessNext } from "../readinessWords.ts";
+import { useNow } from "~/lib/clock.ts";
+import { Readiness } from "../ChangePeek.tsx";
+import { Byline } from "../ui.tsx";
+import { DequeueButton, RebaseButton, RevertChangePanel } from "./ChangeWrites.tsx";
 
 type MergeMethod = (typeof MERGE_METHODS)[number];
 type MergeRefusal = (typeof MERGE_REFUSALS)[number];
@@ -171,18 +177,18 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
   const [closeTask, setCloseTask] = useState(false);
   const [overriding, setOverriding] = useState(false);
   const seatBadge = useSeatBadgeOf();
-  const readiness = change.readiness;
   if (!changeLive(change.state)) return null;
   const nameOf = (h: string) => seatBadge(h).name;
-  const { viaQueue, held } = mergeStanding(change, nameOf);
-  const line = readiness ? `${readinessCount(readiness)}. ${held ?? "It may merge."}` : held;
+  const { viaQueue, queued, held } = mergeStanding(change, nameOf);
   // A DRAFT IS NOT OFFERED A MERGE: its method, branch and merge controls
   // wait until it is marked ready, which is the page bar's primary action.
   if (change.state === "draft") {
     return (
-      <section className="col gap-2" aria-label="Merge">
-        <p className="muted">{line}</p>
-      </section>
+      <div className="code-merge-box__controls">
+        <div className="row gap-2 wrap">
+          <RebaseButton change={change} />
+        </div>
+      </div>
     );
   }
   const work = change.work_item;
@@ -206,8 +212,7 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
     );
   };
   return (
-    <section className="col gap-2" aria-label="Merge">
-      <p className={held ? "muted" : undefined}>{line}</p>
+    <div className="code-merge-box__controls">
       <div className="row gap-2 wrap">
         <SegmentedControl<MergeMethod>
           semantics="radio"
@@ -278,6 +283,12 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
         >
           Re-run checks
         </WriteButton>
+        <RebaseButton change={change} />
+        <DequeueButton
+          changeRef={change.ref}
+          target={refName(change.target_ref).name}
+          queued={queued !== undefined}
+        />
       </div>
       {!overriding && <MergeRefusalNote write={merge} />}
       {overriding && (
@@ -289,8 +300,125 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
           onClose={() => setOverriding(false)}
         />
       )}
-    </section>
+    </div>
   );
+}
+
+/**
+ * How a merged change came to be merged, in words, by the engine's
+ * `merged_via` (`gitlet.MergedVias`): a push that brought its target to its
+ * head, a merge record held to its gate (or a person's override of it), or
+ * its target's queue. A way a newer engine names is said as the gate's.
+ */
+function mergedVia(change: CodeChangeDetail): string {
+  switch (change.merged_via) {
+    case "push":
+      return "brought its target to its head by a push";
+    case "queue":
+      return "landed it through its target's queue";
+  }
+  return change.override_reason ? "merged it past its gate" : "merged it through its gate";
+}
+
+/**
+ * Whether the change may merge, as a code host's merge box says it, in the
+ * conversation under the description: its standing across the head — a check
+ * when every condition is met, a dashed ring while one is not — then each
+ * condition (`ChangePeek.tsx`'s `Readiness`), then the controls. A merged
+ * change says into what, by whom and how, and offers its revert; a closed one
+ * says why it closed.
+ */
+export function MergeBox({ change }: { change: CodeChangeDetail }) {
+  const now = useNow();
+  const seatBadge = useSeatBadgeOf();
+  const nameOf = (h: string) => seatBadge(h).name;
+  const target = refName(change.target_ref).name;
+  if (change.state === "merged") {
+    return (
+      <Card as="section" padding="none" className="code-merge-box" aria-label="Merge">
+        <div className="code-merge-box__head">
+          <span className="code-merge-box__glyph code-merge-box__glyph--done">
+            <CircleCheckGlyph size="md" />
+          </span>
+          <span className="code-merge-box__title">
+            <strong>Merged into {target}</strong>
+            <span className="code-merge-box__said">
+              {change.merged_by && (
+                <Byline
+                  who={change.merged_by}
+                  verb={mergedVia(change)}
+                  at={change.merged_at}
+                  now={now}
+                />
+              )}
+              {!change.merged_by && <span>{mergedSentence(change)}</span>}
+            </span>
+          </span>
+        </div>
+        <RevertChangePanel change={change} />
+      </Card>
+    );
+  }
+  if (change.state === "closed") {
+    return (
+      <Card as="section" padding="none" className="code-merge-box" aria-label="Merge">
+        <div className="code-merge-box__head">
+          <span className="code-merge-box__glyph">
+            <CircleStopGlyph size="md" />
+          </span>
+          <span className="code-merge-box__title">
+            <strong>Closed without being merged</strong>
+            <span className="code-merge-box__said">
+              {change.close_reason ?? "Nobody said why."} Reopen it from the page bar.
+            </span>
+          </span>
+        </div>
+      </Card>
+    );
+  }
+  const readiness = change.readiness;
+  const ready = readiness !== undefined && readiness.met === readiness.total;
+  const { held } = mergeStanding(change, nameOf);
+  const title =
+    change.state === "draft"
+      ? "A draft merges nowhere"
+      : ready
+        ? "Ready to merge"
+        : readiness
+          ? readinessCount(readiness)
+          : "Not judged yet";
+  return (
+    <Card as="section" padding="none" className="code-merge-box" aria-label="Merge">
+      <div className="code-merge-box__head">
+        {/* COLOUR IS STATE: a change every condition of which is met is
+            ready, and only that is drawn as done. */}
+        <span className={`code-merge-box__glyph${ready ? " code-merge-box__glyph--done" : ""}`}>
+          {ready ? <CircleCheckGlyph size="md" /> : <CircleDashedGlyph size="md" />}
+        </span>
+        <span className="code-merge-box__title">
+          <strong>{title}</strong>
+          <span className="code-merge-box__said">{held ?? "Every condition to merge is met."}</span>
+        </span>
+      </div>
+      {readiness && (
+        <div className="code-merge-box__checks">
+          <Readiness change={change} readiness={readiness} lead={false} />
+        </div>
+      )}
+      <MergePanel change={change} />
+    </Card>
+  );
+}
+
+/** How a merged change came to be merged where no record names who merged it. */
+function mergedSentence(change: CodeChangeDetail): string {
+  switch (change.merged_via) {
+    case "push":
+      return "Its target came to hold its head by a push.";
+    case "queue":
+      return "Its target's queue landed it.";
+  }
+  return "It merged through its gate.";
 }
 
 /**

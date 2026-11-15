@@ -330,8 +330,8 @@ func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64,
 			continue
 		}
 		// AND THE ONE VALUE A REMOVAL CAN LEAVE: a part beside a sandbox
-		// run — its log, its handed set — whose record went while its node
-		// stopped before the part did — found in the SAME pass, which
+		// run (its log, its handed set, its leads) whose record went while its
+		// node stopped before the part did, found in the SAME pass, which
 		// already carries every record key and every part key of the runs
 		// bucket, so the logs, up to half a megabyte each, are walked once
 		// a tick rather than twice.

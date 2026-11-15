@@ -150,7 +150,9 @@ export const CHANGES = [
   { kind: "view_saved", mark: "save", phrase: "saved a view" },
   { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
   { kind: "prioritised", mark: "arrow-up", phrase: "reordered somebody's priorities" },
-  { kind: "person_updated", mark: "inbox", phrase: "changed their own bookkeeping" },
+  // A PERSON'S OWN PINS, INBOX MARKS AND SNOOZES: left out of the company's
+  // History, and drawn only where somebody asks for this kind.
+  { kind: "person_updated", mark: "inbox", phrase: "changed their pins or inbox" },
   { kind: "file_written", mark: "file-text", phrase: "wrote a file" },
   { kind: "file_removed", mark: "minus", phrase: "removed a file" },
   {
@@ -193,6 +195,12 @@ export const GROUP_AXES: readonly { value: string; label: string; workspace?: bo
   { value: "tag", label: "Tag" },
   { value: "project", label: "Project", workspace: true },
   { value: "unit", label: "Unit" },
+  // WHOSE SUBTASKS THEY ARE: a band per parent, headed with the parent's key
+  // and title (the engine reads those off the parent's own row, since the
+  // column is keyed by its id), and one for the work no task holds. Every row
+  // is filtered on its own here (`subtasks=separate`), so the bands are the
+  // subtasks the question admits, under the task each belongs to.
+  { value: "parent", label: "Parent" },
   // WHEN THE WORK IS DUE, which is the one axis that is not a stored value:
   // the engine cuts it against the COMPANY's day rather than the reader's, so
   // the bands, a row's overdue flag and every `due=` filter agree about a

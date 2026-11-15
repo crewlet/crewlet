@@ -112,10 +112,12 @@ type Fleet struct {
 	partWatchers     map[runPartKey]map[*watcher[coord.SandboxRunUpdate]]struct{}
 	chatReadWatchers map[*watcher[coord.ChatReadUpdate]]struct{}
 
-	// retries and signIns are the two classes keyed by a model entry, each
-	// with its own open watches.
-	retries entryRecords[coord.ModelRetry, coord.ModelRetryUpdate]
-	signIns entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
+	// retries and signIns are two classes keyed by a model entry, each with
+	// its own open watches, and modelChecks the third, which nothing
+	// watches.
+	retries     entryRecords[coord.ModelRetry, coord.ModelRetryUpdate]
+	signIns     entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
+	modelChecks entryRecords[coord.ModelCheck, coord.ModelCheck]
 
 	// listings are each node's listing of each MCP server, by its key, and
 	// definitions each tool definition by its digest.
@@ -213,6 +215,7 @@ func NewFleet() *Fleet {
 		uploads:           map[string]versioned{},
 		retries:           newRetryRecords(),
 		signIns:           newSignInRecords(),
+		modelChecks:       newModelCheckRecords(),
 		listings:          newListingRecords(),
 		restarts:          newRestartRecords(),
 		checks:            newCheckRecords(),

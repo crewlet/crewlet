@@ -106,66 +106,115 @@ func checkScopeChosen(p *problems, here Path, role *Role, lane string, required 
 
 // seatEnabled is a seat's `enabled` for lane, and whether the block is there.
 func (r *Role) seatEnabled(lane string) (*bool, bool) {
-	in := r.Integrations
+	field := r.seatEnabledField(lane)
+	if field == nil {
+		return nil, false
+	}
+	return *field, true
+}
+
+// seatEnabledField is where a seat's `enabled` for lane is kept, nil where
+// the seat carries no block for it: the one place a lane names its block, for
+// the rule that reads it and the disconnect that turns it off.
+func (r *Role) seatEnabledField(lane string) **bool {
+	in := &r.Integrations
 	switch lane {
 	case "datadog":
 		if in.Datadog != nil {
-			return in.Datadog.Enabled, true
+			return &in.Datadog.Enabled
 		}
 	case "gitlab":
 		if in.GitLab != nil {
-			return in.GitLab.Enabled, true
+			return &in.GitLab.Enabled
 		}
 	case "jira":
 		if in.Jira != nil {
-			return in.Jira.Enabled, true
+			return &in.Jira.Enabled
 		}
 	case "confluence":
 		if in.Confluence != nil {
-			return in.Confluence.Enabled, true
+			return &in.Confluence.Enabled
 		}
 	case "github":
 		if in.GitHub != nil {
-			return in.GitHub.Enabled, true
+			return &in.GitHub.Enabled
 		}
 	case "slack":
 		if in.Slack != nil {
-			return in.Slack.Enabled, true
+			return &in.Slack.Enabled
 		}
 	case "mattermost":
 		if in.Mattermost != nil {
-			return in.Mattermost.Enabled, true
+			return &in.Mattermost.Enabled
 		}
 	case "cloudflare":
 		if in.Cloudflare != nil {
-			return in.Cloudflare.Enabled, true
+			return &in.Cloudflare.Enabled
 		}
 	case "expo":
 		if in.Expo != nil {
-			return in.Expo.Enabled, true
+			return &in.Expo.Enabled
 		}
 	case "digitalocean":
 		if in.DigitalOcean != nil {
-			return in.DigitalOcean.Enabled, true
+			return &in.DigitalOcean.Enabled
 		}
 	case "scaleway":
 		if in.Scaleway != nil {
-			return in.Scaleway.Enabled, true
+			return &in.Scaleway.Enabled
 		}
 	case "aws":
 		if in.AWS != nil {
-			return in.AWS.Enabled, true
+			return &in.AWS.Enabled
 		}
 	case "google_cloud":
 		if in.GoogleCloud != nil {
-			return in.GoogleCloud.Enabled, true
+			return &in.GoogleCloud.Enabled
 		}
 	case "ssh":
 		if in.SSH != nil {
-			return in.SSH.Enabled, true
+			return &in.SSH.Enabled
 		}
 	}
-	return nil, false
+	return nil
+}
+
+// TurnOffDisconnected turns off every seat's access at a lane whose
+// connection the company held in prior and no longer holds in c, and answers
+// the handles of the seats it turned off, each once.
+//
+// WHAT A DISCONNECT OWES THE DOCUMENT. An agent on at Mattermost, Jira,
+// Confluence or SSH works through the company's connection there
+// ([Company.connected]), and the document refuses one turned on without it.
+// So a disconnect that dropped the company's block alone wrote a document its
+// own rules refuse, and never finished while any agent was still on. The
+// engine turns those agents off at the vendor as part of the same disconnect;
+// this says the same in the document, in the same revision.
+//
+// OFF, NEVER REMOVED: the block keeps what the agent was given (its roles,
+// channels, projects, servers), so connecting again and turning it back on
+// restores it. ONLY THE LANES THIS CHANGE DISCONNECTED: a seat already on at
+// a lane the company had not connected before is a finding the document
+// carried, and is not this write's to settle.
+func (c *Company) TurnOffDisconnected(prior *Company) []string {
+	var off []string
+	for _, lane := range SeatAccessLanes() {
+		if prior == nil || !prior.connected(lane) || c.connected(lane) {
+			continue
+		}
+		for role := range c.EachRole() {
+			field := role.seatEnabledField(lane)
+			if field == nil || !SeatAccessOn(*field) {
+				continue
+			}
+			no := false
+			*field = &no
+			if !slices.Contains(off, role.Handle) {
+				off = append(off, role.Handle)
+			}
+		}
+	}
+	return off
 }
 
 // GitHubAccess is GitHub's grant on one App permission: read or write. Absent

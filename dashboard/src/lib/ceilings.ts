@@ -28,11 +28,11 @@
  */
 
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
-import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
+import type { ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { TokenBudget } from "~/protocol/types.ts";
 import { PERIOD_ADJECTIVE, readCeiling } from "./budget.ts";
 import { fmtCount, possessive } from "./format.ts";
-import { configGuardedReason } from "./useWriteAccess.ts";
+import { configRefusalWords } from "./configRefusal.ts";
 
 export type Period = (typeof BUDGET_WINDOWS)[number]["period"];
 
@@ -219,56 +219,25 @@ export function ceilingSummary(
 
 /**
  * A refused write in one sentence a person can act on, and whether a fresh
- * read is the remedy.
+ * read is the remedy: `lib/configRefusal.ts`'s reading of a refusal, in a
+ * ceiling's words where the answer is about the ceilings themselves.
  */
 export function refusalWords(
   refusal: ConfigRefusal | { readonly kind: "missing" } | { readonly kind: "none" },
   scope: CeilingScope,
 ): { message: string; reload: boolean } {
-  switch (refusal.kind) {
-    case "guarded":
-      return { message: configGuardedReason(refusal.code), reload: false };
-    case "managed":
-      return { message: managedSentence(refusal.managedBy), reload: false };
-    case "conflict":
-      return {
-        message:
-          "The company's configuration changed since this was read, so nothing was saved. Reload to see the ceilings as they are now.",
-        reload: true,
-      };
-    case "draining":
-      return {
-        message: `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
-        reload: false,
-      };
-    case "starting":
-      return {
-        message: `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
-        reload: false,
-      };
-    case "unavailable":
-      // The engine's own sentence: what stopped it, that nothing was
-      // stored, and that waiting clears it.
-      return { message: refusal.detail, reload: false };
-    case "unsettled":
-      return {
-        message: `${unsettledSentence(refusal)} The change may or may not have landed. Reload before trying again.`,
-        reload: true,
-      };
-    case "missing":
-      return {
-        message:
-          scope.kind === "seat"
-            ? `${scope.name} is no longer in the company's configuration.`
-            : "No company is configured yet.",
-        reload: true,
-      };
-    case "none":
-      return { message: "No company is configured yet.", reload: false };
-    case "problems":
-      return {
-        message: refusal.problems.map((p) => p.message).join(" ") || "The engine refused it.",
-        reload: false,
-      };
+  if (refusal.kind === "missing") {
+    return {
+      message:
+        scope.kind === "seat"
+          ? `${scope.name} is no longer in the company's configuration.`
+          : "No company is configured yet.",
+      reload: true,
+    };
   }
+  const { message, reload } = configRefusalWords(
+    refusal,
+    "Reload to see the ceilings as they are now.",
+  );
+  return { message, reload };
 }

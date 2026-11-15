@@ -336,7 +336,7 @@ export function RecentPhases({
         count={settled.items.length}
         subtitle="newest first · open a row for its turn"
       >
-        <Card.Title as="h3">Recent phases</Card.Title>
+        <Card.Title>Recent phases</Card.Title>
       </Card.Header>
       <CoverageNote coverage={paged.answers.map((p) => p.coverage)} what="this list" />
       {settled.pending > 0 && (

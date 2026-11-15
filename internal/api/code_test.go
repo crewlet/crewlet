@@ -824,7 +824,7 @@ func TestANodeServingNoGitletSaysWhy(t *testing.T) {
 			"code_unknown", "", "cannot say whether this company hosts code", "",
 			[]string{"which hosts code", "does not host code", "serves Gitlet", "config_apply_failed"}},
 		{"needs restart", engine.ErrCodeNeedsRestart, http.StatusServiceUnavailable,
-			"native_backend_needs_restart", "", "once restarted", "", nil},
+			"native_backend_needs_restart", "", "starts Gitlet when it restarts", "", nil},
 		{"unexplained", errors.New("a seam that says something else"), http.StatusInternalServerError,
 			"query_failed", "", "", "", nil},
 	} {

@@ -173,6 +173,79 @@ var runPartCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE TURN'S LEADS ARE A PART OF THEIR OWN, kept apart for the log's
+	// reason: half a mebibyte of them on the record would ride every read of
+	// it and every listing. Written beside the log and the handed set, they
+	// move neither, nor the record; a listing carries none of them; a watch
+	// of them hears their own writes and nothing of any other key's; and they
+	// go with the run's removal, so a run created again under the turn reads
+	// none of the ended run's.
+	name: "a run's leads are a part of their own, kept apart from the record and its other parts, and go with it",
+	fn: func(h *fleetHarness) {
+		ctx, cancel := context.WithCancel(h.ctx)
+		defer cancel()
+		h.createRun("turn-1", `{"status":"running"}`)
+		before, _ := h.run("turn-1")
+		log, _ := h.putRunLog("turn-1", `{"calls":["first"]}`)
+		handed, _ := h.putRunPart("turn-1", coord.RunHanded, `{"sealed":"s"}`)
+		updates := h.watchRunPart(ctx, "turn-1", coord.RunLeads)
+		if u := h.nextRunUpdate(updates); u.Found {
+			h.t.Fatalf("the first update of leads nobody kept = %+v, want none", u)
+		}
+		written, changed := h.putRunPart("turn-1", coord.RunLeads, `{"leads":["first"]}`)
+		if !changed || written.Key != "turn-1" || string(written.Value) != `{"leads":["first"]}` {
+			h.t.Fatalf("the first write of the leads answered (%+v, %v), want them written under the turn",
+				written, changed)
+		}
+		if u := h.nextRunUpdate(updates); !u.Found || u.Record.Version != written.Version ||
+			string(u.Record.Value) != `{"leads":["first"]}` {
+			h.t.Fatalf("the update after the leads' first write = %+v, want them as written (%+v)", u, written)
+		}
+		if after, _ := h.run("turn-1"); after.Version != before.Version {
+			h.t.Errorf("writing the leads moved the record: %+v, was %+v", after, before)
+		}
+		if again, _ := h.runLog("turn-1"); again.Version != log.Version ||
+			string(again.Value) != `{"calls":["first"]}` {
+			h.t.Errorf("writing the leads moved the log: %+v, was %+v", again, log)
+		}
+		if again, _ := h.runPart("turn-1", coord.RunHanded); again.Version != handed.Version ||
+			string(again.Value) != `{"sealed":"s"}` {
+			h.t.Errorf("writing the leads moved the handed set: %+v, was %+v", again, handed)
+		}
+		h.putRunLog("turn-1", `{"calls":["first","second"]}`)
+		h.putRunPart("turn-1", coord.RunHanded, `{"sealed":"t"}`)
+		h.putRun("turn-1", `{"status":"resumed"}`)
+		next, _ := h.putRunPart("turn-1", coord.RunLeads, `{"leads":["first","second"]}`)
+		if u := h.nextRunUpdate(updates); !u.Found || u.Record.Version != next.Version {
+			h.t.Fatalf("the next update = %+v, want the leads' own next write (%+v) and nothing of the record's "+
+				"or the other parts'", u, next)
+		}
+		runs, err := h.f.SandboxRuns(h.ctx)
+		if err != nil {
+			h.t.Fatalf("SandboxRuns: %v", err)
+		}
+		if len(runs) != 1 || runs[0].Key != "turn-1" || string(runs[0].Value) != `{"status":"resumed"}` {
+			h.t.Errorf("the listing of records = %+v, want the one record and never its leads", runs)
+		}
+		if !h.removeRun("turn-1") {
+			h.t.Fatal("the run could not be removed")
+		}
+		// READ BEFORE THE WATCH IS WAITED ON: leads the removal left would
+		// never reach the watch, which would wait out its whole budget.
+		if held, found := h.runPart("turn-1", coord.RunLeads); found {
+			h.t.Fatalf("the ended run's leads survived it: %s", held.Value)
+		}
+		if u := h.nextRunUpdate(updates); u.Found {
+			h.t.Errorf("the update after the run's removal = %+v, want its leads gone with it", u)
+		}
+		h.createRun("turn-1", `{"status":"launching"}`)
+		if held, found := h.runPart("turn-1", coord.RunLeads); found {
+			h.t.Errorf("a run created again under the turn reads the ended run's leads: %s", held.Value)
+		}
+		cancel()
+		h.awaitClosed(updates)
+	},
+}, {
 	// The log's own read-decide-write, held to the record's: a decision
 	// another writer beat is decided again on the log as it now stands —
 	// never sent as it was, which would drop the call the other writer

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/runanswer"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -38,14 +39,14 @@ func TestAHeldCallsArgumentsAreReadOnlyByWhoMayApproveIt(t *testing.T) {
 	run := sandbox.PendingRun{TurnID: "t-held", LaunchID: "launch-1", AgentHandle: "backend-dev",
 		Status: sandbox.StatusAwaiting, AudienceHandles: []string{"cto"}, HeldCall: &held}
 
-	whole := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Body: true}, src.opened(run))
+	whole := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Body: true}, src.opened(run), runanswer.Waiting{})
 	if call, ok := whole["held_call"].(map[string]any); !ok || call["tool"] != "gh_merge_pull_request" {
 		t.Fatalf("a reader of the trail reads held_call %v", whole["held_call"])
 	}
 	if args, ok := whole["held_arguments"].(map[string]any); !ok || args["pull"] != float64(7) {
 		t.Fatalf("a reader of the trail reads held_arguments %v, want them opened", whole["held_arguments"])
 	}
-	asked := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Record: "cto"}, src.opened(run))
+	asked := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Record: "cto"}, src.opened(run), runanswer.Waiting{})
 	if _, ok := asked["held_call"]; !ok {
 		t.Error("the person the question is put to does not read which call it is about")
 	}
@@ -53,7 +54,7 @@ func TestAHeldCallsArgumentsAreReadOnlyByWhoMayApproveIt(t *testing.T) {
 		t.Error("the question's audience reads what the call would send without reading the seat's trail")
 	}
 	plain := sandbox.PendingRun{TurnID: "t-plain", Status: sandbox.StatusRunning}
-	bare := serialiseRun(plain, sandbox.BridgeLog{}, livestate.Reach{Body: true}, src.opened(plain))
+	bare := serialiseRun(plain, sandbox.BridgeLog{}, livestate.Reach{Body: true}, src.opened(plain), runanswer.Waiting{})
 	if slices.ContainsFunc([]string{"held_call", "held_arguments"}, func(k string) bool { _, ok := bare[k]; return ok }) {
 		t.Errorf("a run holding no call carries %v", bare)
 	}
@@ -75,7 +76,7 @@ func TestTheInboxReadsWhatAHeldCallSends(t *testing.T) {
 		Digest: "sha256:abc", HeldAt: time.Now().UTC()}
 	run := sandbox.PendingRun{TurnID: "t-gate", LaunchID: "launch-2", AgentHandle: "backend-dev",
 		Status: sandbox.StatusAwaiting, HeldCall: &held}
-	row := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(run))
+	row := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(run), runanswer.Waiting{})
 	call, ok := row["held_call"].(map[string]any)
 	if !ok {
 		t.Fatalf("a parked run holding a call carries held_call %v", row["held_call"])
@@ -120,13 +121,13 @@ func TestAHeldOperateCallIsInItsApproversInbox(t *testing.T) {
 			t.Errorf("the decisions read puts the held call to %q: %v, want %v", handle, got, want)
 		}
 	}
-	row := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(run))
+	row := serialiseRun(run, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(run), runanswer.Waiting{})
 	if row["answerable_in_chat"] != false {
 		t.Fatalf("a held call reads answerable in chat: %v", row["answerable_in_chat"])
 	}
 	unheld := run
 	unheld.HeldCall = nil
-	if row := serialiseRun(unheld, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(unheld)); row["answerable_in_chat"] != true {
+	if row := serialiseRun(unheld, sandbox.BridgeLog{}, livestate.Reach{Body: true}, Sources{}.opened(unheld), runanswer.Waiting{}); row["answerable_in_chat"] != true {
 		t.Fatalf("the premise: a question on a conversation reads answerable in chat, got %v", row["answerable_in_chat"])
 	}
 }

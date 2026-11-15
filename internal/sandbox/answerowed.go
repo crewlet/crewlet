@@ -237,6 +237,16 @@ type Refusal struct {
 	// one the clock has already passed without lifting it, so it is read as
 	// zero ([Coordinator.waitOwed]).
 	Until time.Time
+
+	// Window is the budget window an executor launch was refused below its
+	// floor in, the one Until is the end of, where the refusal is that
+	// launch's: a resumed segment's relaunch the seat's budget held. The
+	// release that hands the claim back counts it onto the job's record
+	// ([Release.RelaunchRefusedIn]), a held completion's and a turned-back
+	// answer's alike, so the turn's next relaunch, in a later window, waits
+	// for its brief's room no longer (internal/engine's launchfloor.go). Zero
+	// for every other refusal: a gate's, which no launch met, and a round's.
+	Window BudgetWindow
 }
 
 // Admission says whether a seat may run a resume NOW, and if not, why and

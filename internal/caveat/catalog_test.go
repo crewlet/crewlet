@@ -65,6 +65,7 @@ var refusalSamples = map[string]caveat.Refusal{
 	"AtlasEntryExists":           caveat.AtlasEntryExists(false),
 	"AtlasEntryExists (retired)": caveat.AtlasEntryExists(true),
 	"AtlasChangedMeanwhile":      caveat.AtlasChangedMeanwhile(),
+	"AtlasSourceUnread":          caveat.AtlasSourceUnread("Gitlet's repositories"),
 	"ValueInWrongForm":           caveat.ValueInWrongForm(),
 	"TitleTooLong":               caveat.TitleTooLong(),
 	"DescriptionTooLong":         caveat.DescriptionTooLong(),
@@ -105,6 +106,14 @@ var refusalSamples = map[string]caveat.Refusal{
 	"RepositoryFull":                 caveat.RepositoryFull(),
 	"MergeAskedForSomebodyWhoMayNot": caveat.MergeAskedForSomebodyWhoMayNot(),
 	"QueueEntryNotYours":             caveat.QueueEntryNotYours(),
+	"ScheduleSwitchedOff":            caveat.ScheduleSwitchedOff(),
+	"SchedulingSwitchedOff":          caveat.SchedulingSwitchedOff(),
+	"SchedulesWaitForAModel":         caveat.SchedulesWaitForAModel(),
+	"ScheduleHasNobodyToRun (lead)":  caveat.ScheduleHasNobodyToRun(true),
+	"ScheduleHasNobodyToRun":         caveat.ScheduleHasNobodyToRun(false),
+	"ScheduleSeatsPaused":            caveat.ScheduleSeatsPaused([]string{"qa-dev"}),
+	"ScheduleSeatsPaused (several)":  caveat.ScheduleSeatsPaused([]string{"qa-dev", "qa-lead"}),
+	"ScheduleSeatsNotReady":          caveat.ScheduleSeatsNotReady([]string{"qa-dev"}),
 }
 
 // EVERY CAVEAT A PERSON CAN BE SHOWN IS WORDED FOR A PERSON.

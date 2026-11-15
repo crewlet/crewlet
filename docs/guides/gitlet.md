@@ -121,6 +121,32 @@ and that is all it is: it reads and pushes the repository as its seat always
 could, so owning `deploy/**` lets no seat push there that could not before
 ([Path owners](../concepts/gitlet.md#path-owners)).
 
+### Or make one in the dashboard
+
+A project the document does not declare is made in the dashboard too: **New
+repository** on **Gitlet › Repositories** (`code_create_repo`) takes its name,
+the unit that owns it and, where you say them, a description, a default
+branch and which seats read it, and opens its page. Its **Code** tab, where
+the page lands, adds its first file with **Add a file**, the root commit that
+makes its default branch, so it needs no clone to start; beside it, the
+address to clone it from and the two commands that push a repository you
+already have into it. From then on the repository's page writes it from the
+browser, each write one commit or one ref moved, as you:
+
+- **Code**, on a branch: **Edit** a text file of up to 256 KiB, **Delete
+  file**, or **New file** in a directory (`code_commit_files`), each at the
+  commit the page read, so a push made since is refused rather than written
+  over;
+- **Branches**: **New branch** at a branch, a tag or a commit
+  (`code_create_branch`), and **Delete** at the head the row shows
+  (`code_delete_branch`), after a confirmation;
+- a commit's page: **Revert** and **Cherry-pick** onto a branch you choose
+  (`code_revert`, `code_cherry_pick`); a conflict commits nothing.
+
+Its protection rules are set on its **Settings** tab ([Protecting a
+branch](#protecting-a-branch)), and it is deleted and restored there too
+([Delete and restore a repository](#delete-and-restore-a-repository)).
+
 ## Give each person a token
 
 **First, the Gitlet permission.** Reaching any repository takes it — the
@@ -199,7 +225,8 @@ and a service account is created with it (`crewlet iam create -kind machine
 
 ## Clone, fetch and push
 
-The address is the API's own, on `api.port` — never the public listener:
+The address is the API's own, on `api.port` — never the public listener —
+and a repository's page offers it under **Clone**, beside its files:
 
 ```sh
 git clone https://crewlet.example.com/git/web.git
@@ -415,8 +442,10 @@ revision touches paths the repository's `path_owners` name asks their owners
 itself, once its home has read the revision ([Path
 owners](../concepts/gitlet.md#path-owners)).
 
-**Read it.** **Conversation** is the change's readiness, its description and
-its timeline in the order its records landed; **Files** is a revision's
+**Read it.** **Conversation** is the change's description, its merge box —
+every condition to merge with where it stands, and the merge controls — and
+its activity in the order its records landed, beside a rail of whom it asked
+for a review and where each stands; **Files** is a revision's
 diff — the head unless you pick another, or what changed since an earlier
 revision — with each finding under the lines it points at, and one whose
 lines have changed since drawn above the diff, never dropped. A seat reads the
@@ -473,7 +502,7 @@ or, where the gate lets none of them, the lead of the repository's owner
 ([Who a change wakes](../concepts/gitlet.md#who-a-change-wakes)) — and
 merge it as [Merging a change](#merging-a-change) says.
 
-**Who heard about it.** The page's **Woke** tab is whom each record about the
+**Who heard about it.** The page's **Notified** tab is whom each record about the
 change reached, newest first, each with the one reason they heard under; the
 same answer is `GET /gitlet/repos/{name}/changes/{n}/routing` ([A change's
 questions](../reference/api-endpoints.md#a-changes-questions)).
@@ -558,12 +587,13 @@ change; a seat cannot override.
 ### From the change's page
 
 A live change's page (**Gitlet › Changes**, then the change) carries the same
-call as controls above its tabs, each made as you and never ahead of the
-engine's answer:
+call in its **Conversation**'s merge box, under the description, each control
+made as you and never ahead of the engine's answer:
 
-- **Where its gate stands** — how many of its conditions are met, and the
-  first one that is not, judged with *you* as the merger, so a reader without
-  the authority to merge into the target is told so before pressing anything.
+- **Where its gate stands** — how many of its conditions are met, each
+  condition with where it stands, and the first one that is not, judged with
+  *you* as the merger, so a reader without the authority to merge into the
+  target is told so before pressing anything.
 - **Merge**, or **Add to queue** where the target's gate requires a check, with
   how it merges (**Merge commit**, **Squash** or **Fast-forward**), **Delete
   its branch** — left unticked, the rule above decides — and **Close ENG-42
@@ -578,6 +608,19 @@ engine's answer:
 - **Re-run checks** — every check of the change's head whose latest attempt
   did not pass, each at its next attempt (`code_rerun_checks` with
   `all_failed`).
+- **Rebase**: the change's commits replayed onto its target's tip
+  ([Rebasing a change](#rebasing-a-change)), after a confirmation that says
+  its branch moves by one forced push from the head the page shows.
+- **Take out of the queue**: a queued change leaves its target's merge queue
+  and stays open (`code_dequeue_change`), after a confirmation; held while
+  the change is not queued. **Gitlet › Queue** offers the same on each entry.
+
+A merged change shows **Revert** in their place ([Reverting a
+change](#reverting-a-change)): a confirmation that says what it opens, with a
+box to merge the revert once it is open. A finding that still stands is
+answered on the **Files** tab with **Answer finding**: Resolved, Won't fix or
+Disputed by an author, or Dismiss by its raiser, a maintainer or a person
+(`code_resolve_finding`).
 
 A refusal is said beside the controls in words of its own: a head that moved
 ("somebody pushed to it since you loaded it"), a target that moved under every
@@ -597,8 +640,11 @@ rules](../concepts/gitlet.md#protection-rules)), and — with a **merge
 gate** — what a change must meet before it merges into one. Unset, a rule's
 `direct_push` lets only a person push to the branch, so a seat's work reaches
 it as a change. A rule is declared with the repository in the company
-document, or set on a repository a tool made with `code_protect_branch`, by a
-seat or your own assistant ([Who may change a
+document, or set on a repository the document does not declare with
+`code_protect_branch`: by a seat, by your own assistant, or by you on the
+repository's **Settings** tab in the dashboard, where **Protect a branch**
+adds a rule, each rule has **Edit** and **Remove**, and the row of a branch
+no rule names on the **Branches** tab has **Protect** ([Who may change a
 protection](../concepts/gitlet.md#who-may-change-a-protection)):
 
 ```yaml
@@ -645,7 +691,8 @@ field of a gate is in [Merge gates](../concepts/gitlet.md#merge-gates).
 
 A change whose target has moved on is rebased onto it with
 `code_rebase_change`, naming the change and the head you read
-(`expected_head`) — by a seat, or by your own assistant, as you. Gitlet
+(`expected_head`): by a seat, or by your own assistant or the dashboard's
+**Rebase** on the change's page, as you. Gitlet
 replays the change's commits its target does not hold onto the target's tip,
 oldest first, and moves the change's branch to the last of them with **one
 forced push** of yours: the branch's protections and your right to force-push
@@ -677,7 +724,8 @@ node](../concepts/gitlet.md#the-home-gitlet-node) under forty seconds of git
 
 A merged change that turns out wrong is undone by **a change of its own**,
 never by moving its target back: `code_revert_change`, naming the change — by
-a seat, or by your own assistant, as you. Gitlet undoes what the
+a seat, or by your own assistant or the dashboard's **Revert** on the merged
+change's page, as you. Gitlet undoes what the
 change's merge brought into its target, onto the target's current tip, as one
 commit of yours on a **new branch** — `seats/<handle>/revert-<n>` for a seat,
 `revert-<n>` for a person — and the push of that branch opens the change
@@ -1443,8 +1491,8 @@ exists already when it is made a pull mirror — its `code.repos` entry's
 `importing` until the source has landed, every branch and tag it holds but a
 seat's own made the source's and one the source does not have deleted. Your own assistant does the
 same with `code_import_repo`, and so does **Import a repository** on the
-dashboard's Gitlet › Repositories, where the repository's Overview then says
-how far the import went; no seat is offered it. Every flag is in
+dashboard's Gitlet › Repositories, where the About rail beside the
+repository's code then says how far the import went; no seat is offered it. Every flag is in
 [`crewlet gitlet import`](../reference/cli.md#crewlet-gitlet-import).
 
 #### Your machine pushes it
@@ -1695,6 +1743,15 @@ name within that window restores it** as it was, with the settings you declare
 it with now. Past the window it is purged, in bounded steps, and its name is
 free again. A purge cannot be undone, which is why the window exists; see
 [Deletion and purge](../concepts/gitlet.md#deletion-and-purge).
+
+A repository the document does not declare (one made with **New repository**
+on the dashboard's Gitlet › Repositories, by an import or by a tool) is
+deleted with `code_delete_repo` and restored with `code_restore_repo`, by
+whoever maintains it: from a seat or your assistant, or in the dashboard,
+where **Delete repository** on its **Settings** tab asks you to type its name
+and takes a reason, and a deleted repository (the **Deleted** filter of the
+listing) says so on its page and offers **Restore repository**. The same
+window and purge apply.
 
 ## A leaked secret is rotated, then purged
 

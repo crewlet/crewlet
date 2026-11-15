@@ -132,6 +132,41 @@ func (r Ref) EngineNamed() (Source, bool) {
 	return Source{}, false
 }
 
+// Claims reports whether the engine's record family r can state a fact of the
+// entry ref names: Gitlet of its own repositories, checks and account, the
+// integrations' status of an account, the tool servers' listings of a tool
+// server, and the fleet's presence of the engine, its nodes, its broker and
+// that broker's servers, and its object store. The other families (seat
+// access, connection tests, the access log, usage) state no fact at all: what
+// they say is joined to the view as health and use, never claimed.
+//
+// THE ANSWER IS BY THE KEY ALONE, so it holds for a record that could not be
+// read: a write about an entry asks it to learn whether an unread family
+// could have held a fact of that entry. A family that starts stating facts of
+// more entries widens this in the same change, and the gather package's test
+// over every derived claim fails until it does.
+func (r Record) Claims(ref Ref) bool {
+	switch r {
+	case RecordGitlet:
+		return ref.OnGitlet()
+	case RecordIntegrations:
+		return ref.Kind == KindAccount
+	case RecordToolServers:
+		return ref.Kind == KindToolServer
+	case RecordFleet:
+		switch ref.Kind {
+		case KindService:
+			return ref.Key == EngineService
+		case KindHost:
+			return ref.OnFleet() || strings.HasPrefix(ref.Key, BrokerServerPrefix+"/")
+		case KindBucket:
+			return ref.OnFleet() || strings.HasPrefix(ref.Key, ObjectsS3Prefix+"/")
+		}
+		return ref.OnFleet()
+	}
+	return false
+}
+
 // MustRef is [NewRef] for a key the caller built from values already parsed.
 func MustRef(k Kind, key string) Ref {
 	r, err := NewRef(k, key)

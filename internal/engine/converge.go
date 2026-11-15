@@ -172,8 +172,10 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// modelretry.go and mcprestart.go.
 		e.clearRemovedModelRetries(ctx, c)
 		e.clearRemovedMCPRestarts(ctx, c)
-		// AND A SERVER'S LATEST TEST GOES WITH THE SERVER. See mcpcheck.go.
+		// AND A SERVER'S LATEST TEST GOES WITH THE SERVER, and a model's
+		// latest check with the model. See mcpcheck.go and modelcheckrun.go.
 		e.clearRemovedMCPChecks(ctx, c)
+		e.clearRemovedModelChecks(ctx, c)
 		steps = append(steps, "mailboxes")
 	}
 

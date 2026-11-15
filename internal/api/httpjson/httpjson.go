@@ -1279,6 +1279,11 @@ const (
 	// CodeSignInInProgress is a device sign-in started while another for the
 	// same model is running, which the answer carries. 409.
 	CodeSignInInProgress Code = "sign_in_in_progress"
+	// CodeCheckInProgress is a check of a model asked while another check of
+	// it runs that is not the one asked for — of a draft, or with the other
+	// smoke setting — which the answer carries. 409; one asking what the
+	// running check asks is handed it instead.
+	CodeCheckInProgress Code = "check_in_progress"
 	// CodeNoDeviceSignIn is a device sign-in for a model whose harness has
 	// none, or whose sign-in reads no login. 422.
 	CodeNoDeviceSignIn Code = "no_device_sign_in"
@@ -1321,9 +1326,10 @@ const (
 	// code, which this node never read. 503 and no Retry-After.
 	CodeCodeUnknown Code = "code_unknown"
 	// CodeNativeBackendNeedsRestart is a node whose native runtime was
-	// running before the configuration turned Gitlet on, and which
-	// serves it once restarted. 503 and no Retry-After: only a restart
-	// clears it, and another node serves the request meanwhile.
+	// running before the configuration turned one of the company's own
+	// halves on (Worklet, Doclet, Chatlet or Gitlet), and which serves it
+	// once restarted. 503 and no Retry-After: only a restart clears it, and
+	// another node serves the request meanwhile.
 	CodeNativeBackendNeedsRestart Code = "native_backend_needs_restart"
 	// CodeVerifyRunning is a verify of a repository on a node already
 	// checking it with the other repair setting. 409, the running one
@@ -1826,6 +1832,8 @@ var codes = map[Code]string{
 		"test it instead.",
 	CodeSignInInProgress: "A sign-in for this model is already in progress. Finish or " +
 		"cancel that one first.",
+	CodeCheckInProgress: "A check of this model is already running. Wait for it to end, " +
+		"then check again.",
 	CodeNoDeviceSignIn:          "This model can't sign in with a device code.",
 	CodeDeviceSignInUnavailable: "The harness didn't print a sign-in code in time. Try again.",
 	CodeNoHostLogin:             "This model signs in without a harness login, so there is none to check.",
@@ -2196,6 +2204,21 @@ func NoActiveRevision(w http.ResponseWriter, detail Detail) {
 const NativeHalvesNotUp = "this node isn't running a company yet, so " +
 	"Worklet, Doclet and Chatlet aren't up here. The ones the company uses " +
 	"start as soon as it's set up, with no restart"
+
+// NeedsRestart is the detail a question about one of the company's own halves
+// (Worklet, Doclet, Chatlet or Gitlet, named by half) is answered with beside
+// [CodeNativeBackendNeedsRestart], on both transports.
+//
+// ONE SENTENCE FOR EVERY HALF, for [NativeHalvesNotUp]'s reason, and IN A
+// PERSON'S WORDS: what happened (the company turned it on while this node was
+// running), what brings it (the node's restart) and what serves the question
+// meanwhile (another node), with no "native runtime", which is how the engine
+// describes itself.
+func NeedsRestart(half string) string {
+	return "this node was already running when the company turned " + half +
+		" on, and it starts " + half + " when it restarts: restart this node, or " +
+		"ask another one"
+}
 
 // Unavailable writes a 503 carrying a Retry-After, which is the pair a client
 // needs to tell "come back" from "do not come back".

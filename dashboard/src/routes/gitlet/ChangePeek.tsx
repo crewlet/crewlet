@@ -9,7 +9,8 @@
  * listing's read.
  */
 
-import { EmptyState, Skeleton, Stack, Tag } from "@crewlethq/ui";
+import { EmptyState, Skeleton, Stack, VisuallyHidden } from "@crewlethq/ui";
+import { CircleAlertGlyph, CircleCheckGlyph, CircleDashedGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { changeLive, parseChangeRef, preconditionWord, refName, repoPath } from "~/lib/code.ts";
@@ -19,6 +20,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodePrecondition, CodeReadiness } from "~/protocol/index.ts";
 import { ChangeStateTag } from "./Changes.tsx";
 import { preconditionSentence, readinessCount, readinessNext } from "./readinessWords.ts";
+import "~/styles/gitlet.css";
 
 /**
  * How often an open peek reads its change again: a MINUTE, the listing's own
@@ -146,32 +148,42 @@ function endedSentence(change: CodeChangeDetail): string {
 }
 
 /**
- * A live change's readiness: how many conditions to merge are met, what the
- * reader acts on next, and each condition with where it stands, worded from
- * what the engine judged (`readinessWords.ts`). The engine's own sentence, a
- * model's words, is each line's hover text for the facts it carries.
+ * A live change's readiness, as a code host's merge box lists its checks: how
+ * many conditions to merge are met and what the reader acts on next, then
+ * each condition — a glyph for where it stands, its word, and the sentence of
+ * what it waits on — worded from what the engine judged
+ * (`readinessWords.ts`). The engine's own sentence, a model's words, is each
+ * line's hover text for the facts it carries.
  */
 export function Readiness({
   change,
   readiness,
+  lead = true,
 }: {
   change: CodeChangeDetail;
   readiness: CodeReadiness;
+  /** Whether the count and the next step lead the list: off where a box's head says them. */
+  lead?: boolean;
 }) {
   const seatBadge = useSeatBadgeOf();
   const subject = { change, nameOf: (h: string) => seatBadge(h).name };
   return (
-    <section aria-label="Readiness">
-      <p>
-        <strong>{readinessCount(readiness)}</strong>. {readinessNext(readiness, subject)}
-      </p>
-      <ul className="code-person-band__list">
+    <section aria-label="Readiness" className="code-checks-list">
+      {lead && (
+        <p className="code-checks-list__lead">
+          <strong>{readinessCount(readiness)}</strong>. {readinessNext(readiness, subject)}
+        </p>
+      )}
+      <ul className="code-checklist">
         {readiness.preconditions.map((p) => {
           const said = preconditionSentence(p, subject);
           return (
-            <li key={p.kind} title={p.detail}>
-              <PreconditionTag precondition={p} /> {preconditionWord(p.kind)}
-              {said && <span className="muted"> {said}</span>}
+            <li key={p.kind} title={p.detail} className="code-checklist__item">
+              <PreconditionGlyph precondition={p} />
+              <span className="code-checklist__what">
+                <span className="code-checklist__word">{preconditionWord(p.kind)}</span>
+                {said && <span className="code-checklist__said">{said}</span>}
+              </span>
             </li>
           );
         })}
@@ -181,35 +193,36 @@ export function Readiness({
 }
 
 /**
- * Where one precondition stands, in a word. COLOUR IS STATE: met is done and
- * unmet waits on somebody; one the engine is still computing waits on nobody,
- * and is outlined.
+ * Where one precondition stands: a glyph and, to a screen reader, its word.
+ * COLOUR IS STATE: met is done, and unmet waits on somebody; one the engine is
+ * still computing waits on nobody, and takes no hue. The SHAPE says it too —
+ * a check, an alert, a dashed ring — for a reader who cannot tell the inks
+ * apart.
  */
-export function PreconditionTag({ precondition }: { precondition: CodePrecondition }) {
+export function PreconditionGlyph({ precondition }: { precondition: CodePrecondition }) {
   switch (precondition.state) {
     case "met":
       return (
-        <Tag size="sm" variant="success">
-          Met
-        </Tag>
+        <span className="code-checklist__glyph code-checklist__glyph--met">
+          <CircleCheckGlyph size="sm" />
+          <VisuallyHidden>Met:</VisuallyHidden>
+        </span>
       );
     case "unmet":
       return (
-        <Tag size="sm" variant="warning">
-          Waiting
-        </Tag>
-      );
-    case "computing":
-      return (
-        <Tag size="sm" appearance="outline">
-          Computing
-        </Tag>
+        <span className="code-checklist__glyph code-checklist__glyph--unmet">
+          <CircleAlertGlyph size="sm" />
+          <VisuallyHidden>Waiting:</VisuallyHidden>
+        </span>
       );
     default:
       return (
-        <Tag size="sm" appearance="outline">
-          {precondition.state}
-        </Tag>
+        <span className="code-checklist__glyph">
+          <CircleDashedGlyph size="sm" />
+          <VisuallyHidden>
+            {precondition.state === "computing" ? "Computing:" : `${precondition.state}:`}
+          </VisuallyHidden>
+        </span>
       );
   }
 }

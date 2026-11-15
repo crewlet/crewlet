@@ -61,6 +61,7 @@ import type {
 } from "~/protocol/index.ts";
 import { FLEET_POLL_MS } from "./Fleet.tsx";
 import { LogRow, useRetentionReport } from "./Retention.tsx";
+import "~/styles/gitlet.css";
 
 /** The state log Gitlet keeps its rows on (`gitlet.Domain`). */
 export const CODE_DOMAIN = "code";
