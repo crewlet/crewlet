@@ -4164,9 +4164,11 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //     ([Engine.readmitResumes]), and the waiter's next announcement is the
 //     backstop for a clearing nothing signals, at most twenty poll intervals
 //     after its last, beside the coordinator's own re-fire of what it keeps,
-//     at the refusal's instant and never later than five minutes, which no
-//     silent store keeps from coming. Before it hands this the refusal, the coordinator has
-//     written on the run's row that it owes the completion
+//     which no silent store keeps from coming: at the refusal's instant, and
+//     never later than five minutes save for a completion the coordinator
+//     holds off itself until that instant, refused after its claim, whose
+//     re-fire waits for it. Before it hands this the refusal, the coordinator
+//     has written on the run's row that it owes the completion
 //     ([sandbox.Coordinator.OnEvent]), which a restart or the seat's next
 //     holder re-fires at its recovery; a record the store did not take
 //     reaches this as the store's silence alone, which is handed back as the

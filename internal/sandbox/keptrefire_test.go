@@ -124,6 +124,45 @@ func TestAKeptCompletionIsReFiredWithoutASignal(t *testing.T) {
 	}
 }
 
+// A COMPLETION THIS NODE HOLDS IS RE-FIRED AT ITS INSTANT, AND NEVER SOONER. A
+// resume refused after its claim, on a limit that names the instant it lifts,
+// is held here until then ([Coordinator.stillRefused]): the gate admitted it
+// and would again, so every re-fire before the instant claimed the job again,
+// woke its box to collect it and ran its review into the same refusal. Its own
+// re-fire is the keep's, and fired at the backstop it dropped the keep, the
+// hold with it, so the re-fire found nothing held and resumed the job into the
+// limit every five minutes until the instant. Armed for the instant, it comes
+// once, when the limit lifts with nothing to signal it.
+//
+// Mutation: arm a held completion's re-fire no later than the backstop, as
+// the gate's own refusals are, and the job is resumed again five minutes on,
+// into the same limit.
+func TestACompletionHeldHereIsReFiredAtItsInstantAndNeverSooner(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		rig := newCoordRigWith(t, func(o *CoordinatorOptions) { o.After = nil })
+		const lifts = 4 * answerWaitBackstop
+		limitedAfterClaim(t, rig, rig.now.Add(lifts))
+		// PAST EVERY BACKSTOP, a second short of the instant: still held,
+		// and nothing resumed into the limit again.
+		time.Sleep(lifts - time.Second)
+		synctest.Wait()
+		if begun := rig.resumer.turnsBegun(); begun != 1 {
+			t.Fatalf("%d resumed turns began before the limit's instant; want only the one that met it, "+
+				"the job held here until %v", begun, lifts)
+		}
+		// THE LIMIT LIFTS AT ITS INSTANT, with nothing to signal it, and the
+		// held completion is carried, once.
+		rig.resumer.failWith(nil)
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if calls, begun := rig.resumer.calls(), rig.resumer.turnsBegun(); len(calls) != 1 || begun != 2 {
+			t.Fatalf("the held completion resumed %d times in %d turns a second past its instant; want it "+
+				"carried once by its own re-fire", len(calls), begun)
+		}
+	})
+}
+
 // A RE-FIRE THE STORE DID NOT ANSWER IS KEPT FOR ITS BACKSTOP. A kept
 // completion's re-fire, a recovery's at once from the job's record or a
 // signal's, has no delivery the broker brings back when it fails, and the

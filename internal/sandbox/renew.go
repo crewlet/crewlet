@@ -137,14 +137,16 @@ import (
 // as this node's failure. Kept in memory alone, a restart or a letting go of
 // the seat before that signal left the job with nothing to announce it for as
 // long as that host's store was silent. And WITH NO RESTART AND NO SEAT MOVE,
-// the keep re-fires itself at its refusal's instant, or at [answerWaitBackstop]
-// where it names none ([Coordinator.keepLocked]), as a recovery's re-arm and a
-// re-fire that settled nothing do ([Coordinator.keepAgain]): a condition that
-// lifts on the clock with no edge (a lease merely stale, a provider's limit at
-// its instant) left the kept completion waiting on this node, for the signal
-// that never came and the announcement that host's waiter never made, for as
-// long as that store's silence lasted. Its re-fire's collection starts the
-// clock where the silence still stands.
+// the keep re-fires itself at its refusal's instant, no later than
+// [answerWaitBackstop] unless this node holds it off itself until that instant,
+// and at the backstop where it names none ([Coordinator.keepLocked]), as a
+// recovery's re-arm and a re-fire that settled nothing do
+// ([Coordinator.keepAgain]): a condition that lifts on the clock with no edge
+// (a lease merely stale, a provider's limit at its instant) left the kept
+// completion waiting on this node, for the signal that never came and the
+// announcement that host's waiter never made, for as long as that store's
+// silence lasted. Its re-fire's collection starts the clock where the silence
+// still stands.
 //
 // WHAT IT COSTS: a hand-back that settles nothing for as long as it lasts is
 // NAK'd again at the queue's backoff, at most every thirty seconds, each
