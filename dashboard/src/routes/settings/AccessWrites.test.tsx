@@ -22,7 +22,7 @@ import { Suspense, type ComponentType } from "react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "@crewlethq/ui";
-import { People, ServiceAccounts } from "./Access.tsx";
+import { People, SELF_HELD, ServiceAccounts } from "./Access.tsx";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { loadChunk } from "~/app/lazyScreen.ts";
 import { Router } from "~/app/router.tsx";
@@ -1107,15 +1107,14 @@ test("taking your own Admin in an edit says it is you, and when nobody else admi
   }
 });
 
-// A GESTURE ON THE READER'S OWN ROW SAYS IT IS THEM and that it signs them out
-// at once, and the whole dialog speaks to them; the one administrator left
-// suspending or removing themselves is told that only a Tier A token could
-// administer people afterwards. The CONTROLS: a second administrator takes
-// that sentence away, and somebody else's row says neither and names them.
-// Mutation: compare the row with anything but the session's person, drop the
-// count, or word a body in the third person whoever reads it, and one side
-// goes red.
-test("suspending or removing yourself says it is you, and when nobody else administers", async () => {
+// YOUR OWN ROW HOLDS SUSPEND AND REMOVE, and sends your own sign-in to your
+// Account. The panel offered both gestures beside "This is you", with a second
+// set of your Account's sign-in gestures (a reset link, two-step, signing out
+// everywhere, revoking your password) worded for somebody else. Held with
+// their reason, never hidden; your sign-in is one place. The CONTROL: somebody
+// else's row offers every gesture and names them. Mutation: drop the hold or
+// list the sign-in gestures for yourself again, and one side goes red.
+test("your own row holds suspend and remove, and your sign-in is on your Account", async () => {
   const ana = {
     id: "p-ana",
     kind: "person",
@@ -1129,54 +1128,24 @@ test("suspending or removing yourself says it is you, and when nobody else admin
   engine({}, directory);
   location.hash = "#/settings/people?peek=person:p-ana";
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Suspend" }));
-  const suspend = await screen.findByRole("dialog", { name: "Suspend yourself?" });
-  expect(within(suspend).getByText("This is you")).toBeTruthy();
-  expect(await within(suspend).findByText(/You’re the only admin/)).toBeTruthy();
-  // THE WHOLE DIALOG SPEAKS TO THEM, its body included: a third-person body
-  // under "This is you" read as two people.
+  const suspend = await screen.findByRole("button", { name: "Suspend" });
+  expect(suspend.getAttribute("aria-disabled") ?? suspend.getAttribute("disabled")).not.toBeNull();
+  expect(suspend.getAttribute("title")).toBe(SELF_HELD);
+  fireEvent.click(suspend);
+  expect(screen.queryByRole("dialog", { name: /Suspend/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "More for Ana Admin" }));
+  const menu = await screen.findByRole("menu");
+  for (const gone of ["Get reset link", "Reset two-step verification", "Sign out everywhere"]) {
+    expect(within(menu).queryByRole("menuitem", { name: gone })).toBeNull();
+  }
   expect(
-    within(suspend).getByText("You can’t sign in until another admin reactivates you."),
-  ).toBeTruthy();
-  expect(within(suspend).queryByText(/Ana Admin/)).toBeNull();
-  fireEvent.click(within(suspend).getByRole("button", { name: "Cancel" }));
-  await more("Remove");
-  const remove = await screen.findByRole("dialog", { name: "Remove yourself?" });
-  expect(within(remove).getByText(/You’re the only admin/)).toBeTruthy();
-  expect(within(remove).getByText("Can’t be undone.")).toBeTruthy();
-  fireEvent.click(within(remove).getByRole("button", { name: "Cancel" }));
-  await more("Sign out everywhere");
-  const sessions = await screen.findByRole("dialog", { name: "Sign out everywhere?" });
-  expect(
-    within(sessions).getByText("Your sessions, tokens and reset link stop working."),
-  ).toBeTruthy();
-  fireEvent.click(within(sessions).getByRole("button", { name: "Cancel" }));
-  await more("Reset two-step verification");
-  const factor = await screen.findByRole("dialog", {
-    name: "Reset your two-step verification?",
-  });
-  expect(within(factor).getByText("Your app and recovery codes stop working.")).toBeTruthy();
-  fireEvent.click(within(factor).getByRole("button", { name: "Cancel" }));
-  // AND A RESET LINK, which said "for Ana Admin … for them" to Ana herself,
-  // and says where a password she knows is changed with no link at all.
-  await more("Get reset link");
-  const link = await screen.findByRole("dialog", { name: "Get a reset link for yourself?" });
-  expect(
-    within(link).getByText(
-      "Works once, within a day. To change a known password, use Account › Security.",
-    ),
-  ).toBeTruthy();
-  expect(within(link).queryByText(/Ana Admin/)).toBeNull();
-  cleanup();
-
-  administrators = 2;
-  engine({}, directory);
-  mount();
-  await more("Remove");
-  const another = await screen.findByRole("dialog", { name: "Remove yourself?" });
-  await settle();
-  expect(within(another).getByText("This is you")).toBeTruthy();
-  expect(within(another).queryByText(/You’re the only admin/)).toBeNull();
+    within(menu)
+      .getByRole("menuitem", { name: /Remove/ })
+      .getAttribute("aria-disabled"),
+  ).toBe("true");
+  // AND NO REVOKE on your own credentials: the callout opens your Account.
+  expect(screen.queryByRole("button", { name: /^Revoke/ })).toBeNull();
+  expect(screen.getByRole("link", { name: "Open Account" }).getAttribute("href")).toBe("#/account");
   cleanup();
 
   location.hash = "#/settings/people?peek=person:p-bo";
