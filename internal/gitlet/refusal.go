@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Refusal is why a command was refused, or why a push was not committed — a
@@ -15,7 +16,7 @@ import (
 // build does not know is a value rather than a panic.
 type Refusal string
 
-// The codes. The first nineteen may be RECORDED on a command ([Refusal.Recorded]);
+// The codes. The first twenty may be RECORDED on a command ([Refusal.Recorded]);
 // the last eleven are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
@@ -69,6 +70,16 @@ const (
 	// and refs/heads/feature/x are never both live, because every client
 	// keeps a ref as a file and a file is never also a directory.
 	RefusalRefConflict Refusal = "ref_conflict"
+	// RefusalDefaultBranch is a deletion of the repository's default branch
+	// ([DefaultBranchRefusal]): the branch its HEAD names, which every clone
+	// checks out and a change is proposed into where it names no target. It
+	// is refused whoever deletes it, by a push, a write or a merge deleting
+	// its source, and lands once another branch is made the default.
+	//
+	// RECORDED, as a protection's refusal is: who tried to delete it is an
+	// audit fact. A build that predates it reads the code as a value and the
+	// detail beside it as it was written.
+	RefusalDefaultBranch Refusal = "default_branch"
 	// RefusalUploadExpired is a pack uploaded longer ago than a write may
 	// still name it (objstore.RecordWithin).
 	RefusalUploadExpired Refusal = "upload_expired"
@@ -214,7 +225,7 @@ func Refusals() []Refusal {
 		RefusalStale, RefusalProtectedForce, RefusalProtectedDelete,
 		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalBadRef,
 		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoImporting, RefusalRepoMirrored, RefusalRepoSize,
-		RefusalRepoRefs, RefusalRefConflict,
+		RefusalRepoRefs, RefusalRefConflict, RefusalDefaultBranch,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
 		RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalTooManyChanges,
 		RefusalUnavailable, RefusalStoreFull, RefusalForgedCommitter, RefusalNotApplied, RefusalUnknown,
@@ -261,6 +272,8 @@ var sentences = map[Refusal]string{
 	RefusalRepoRefs: "the repository holds as many live refs as one repository may",
 	RefusalRefConflict: "a ref and a directory of refs never share a name (feature beside feature/x): " +
 		"every clone holding one could not fetch the other",
+	RefusalDefaultBranch: "the repository's default branch is not deleted: make another branch the default " +
+		"first",
 	RefusalUploadExpired: "the pack was uploaded too long ago to be committed; run git push again",
 	RefusalAtomic:        "refused with the rest of this --atomic push",
 	RefusalBlobTooLarge:  "a blob is larger than code.limits.max_blob_bytes; keep large binaries in Worklet's project files",
@@ -480,6 +493,39 @@ func StatelessRefusal(c Command) Refusal {
 		return RefusalTagMoved
 	}
 	return ""
+}
+
+// DefaultBranchRefusal is the rule that keeps a repository's default branch,
+// named defaultBranch ("main"), in a repository named repo: a deletion of it is
+// refused default_branch, with its sentence; "" for every other command.
+//
+// THE HOST'S RULE, NOT A PROTECTION'S. The default branch is what the
+// repository's HEAD names: deleted, every clone checks nothing out, a change
+// opened with no target proposes into nothing, the Files tab reads an empty
+// repository and every page that starts at the default branch starts nowhere,
+// while the repository still holds every other branch. No setting makes that
+// a state anybody wants, so no rule has to be written to refuse it, and none
+// can allow it: it is refused whoever asks, a person included. The remedy is
+// the one write that leaves the repository whole, another branch made the
+// default first (code_update_repo), and then the old one is a branch like any
+// other.
+//
+// ONE FUNCTION every judge of a deletion asks (ADR-0008): the push decide
+// (after the protections, so a protected default branch is refused by the
+// rule that names it), an engine write's judge, and a merge deleting its
+// source.
+func DefaultBranchRefusal(c Command, repo, defaultBranch string) (Refusal, string) {
+	if c.New != ZeroOID || defaultBranch == "" || c.Ref != branchPrefix+defaultBranch {
+		return "", ""
+	}
+	return RefusalDefaultBranch, DefaultBranchDetail(repo, defaultBranch)
+}
+
+// DefaultBranchDetail is the sentence of a deletion refused default_branch:
+// which branch, of which repository, and the change that lets it go.
+func DefaultBranchDetail(repo, defaultBranch string) string {
+	return fmt.Sprintf("%s is %s's default branch, which every clone checks out, so it is not deleted: "+
+		"make another branch the default first ("+toolname.CodeUpdateRepo+" default_branch)", defaultBranch, repo)
 }
 
 // reservedRef reports a ref no principal pushes: one outside refs/heads/ and

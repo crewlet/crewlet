@@ -1258,6 +1258,9 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 		// person changes; an IMPORT clears with waiting, as a busy repository
 		// does.
 		gitlet.RefusalRepoMirrored: tools.RefusalConflict, gitlet.RefusalRepoImporting: tools.RefusalUnavailable,
+		// THE DEFAULT BRANCH is a setting of the repository, which a person
+		// changes before the same delete lands.
+		gitlet.RefusalDefaultBranch: tools.RefusalConflict,
 	}
 	for _, refusal := range gitlet.Refusals() {
 		writer := &codeWrites{write: func(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {

@@ -43,8 +43,8 @@ func TestEveryRefusalHasItsSentence(t *testing.T) {
 				"about a push never is", r, r.Recorded())
 		}
 	}
-	if len(seen) != 30 {
-		t.Errorf("%d refusal codes, and the closed set is thirty", len(seen))
+	if len(seen) != 31 {
+		t.Errorf("%d refusal codes, and the closed set is thirty-one", len(seen))
 	}
 	if unknown := gitlet.Refusal("something_new"); unknown.Valid() || unknown.Recorded() ||
 		unknown.Sentence() != "something_new" {
@@ -427,6 +427,42 @@ func TestEveryReceiverSentenceFitsAProposal(t *testing.T) {
 			update("refs/heads/main", oidOf("A"), oidOf("C")))
 		if err := p.Validate(); err != nil {
 			t.Errorf("a proposal carrying %s's sentence at its longest (%d bytes): %v", tc.what, len(tc.detail), err)
+		}
+	}
+}
+
+// THE DEFAULT BRANCH IS NEVER DELETED, and only it: a deletion of the branch
+// the repository names its default is default_branch, naming the branch and
+// the repository and the change that lets it go; an update of it, a deletion
+// of any other branch, a tag of its name and a repository with no default
+// named are none.
+//
+// Mutation: compare the ref without its refs/heads/ prefix, or refuse every
+// deletion, and this fails.
+func TestOnlyTheDefaultBranchIsKeptFromDeletion(t *testing.T) {
+	t.Parallel()
+	a := strings.Repeat("a", 40)
+	for _, tc := range []struct {
+		cmd           gitlet.Command
+		defaultBranch string
+		want          gitlet.Refusal
+	}{
+		{gitlet.Command{Ref: "refs/heads/main", Old: a, New: gitlet.ZeroOID}, "main", gitlet.RefusalDefaultBranch},
+		{gitlet.Command{Ref: "refs/heads/release/1", Old: a, New: gitlet.ZeroOID}, "release/1",
+			gitlet.RefusalDefaultBranch},
+		{gitlet.Command{Ref: "refs/heads/main", Old: a, New: strings.Repeat("b", 40)}, "main", ""},
+		{gitlet.Command{Ref: "refs/heads/feature", Old: a, New: gitlet.ZeroOID}, "main", ""},
+		{gitlet.Command{Ref: "refs/tags/main", Old: a, New: gitlet.ZeroOID}, "main", ""},
+		{gitlet.Command{Ref: "refs/heads/main", Old: a, New: gitlet.ZeroOID}, "", ""},
+	} {
+		got, why := gitlet.DefaultBranchRefusal(tc.cmd, "web", tc.defaultBranch)
+		if got != tc.want {
+			t.Errorf("DefaultBranchRefusal(%s → %s, default %q) = %q, want %q", tc.cmd.Ref, tc.cmd.New[:1],
+				tc.defaultBranch, got, tc.want)
+		}
+		if got != "" && (!strings.Contains(why, tc.defaultBranch+" is web's default branch") ||
+			!strings.Contains(why, "make another branch the default first")) {
+			t.Errorf("the sentence %q does not name the branch, the repository and the remedy", why)
 		}
 	}
 }

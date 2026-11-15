@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -1339,7 +1340,8 @@ func writeRefusalError(refusal, detail string) error {
 //   - the REPOSITORY in a state that refuses the push until somebody changes
 //     it — archived and so read-only, or a pull mirror its syncs alone move —
 //     is CONFLICT, the same push landing once a person unarchives it or turns
-//     its mirror off;
+//     its mirror off; and so is a deletion of its default branch
+//     (default_branch), which lands once another branch is the default;
 //   - the repository at a limit on what it keeps — its bytes past
 //     code.limits.repo_max_bytes, its live refs at MaxRefsPerRepo — is
 //     QUOTA_EXCEEDED, which no permission lifts and no retry clears;
@@ -1367,7 +1369,7 @@ func pushClass(r gitlet.Refusal) (tools.Refusal, bool) {
 	case gitlet.RefusalNotPermitted, gitlet.RefusalProtectedForce, gitlet.RefusalProtectedDelete,
 		gitlet.RefusalProtectedDirect, gitlet.RefusalPushQuota:
 		return tools.RefusalForbidden, true
-	case gitlet.RefusalRepoArchived, gitlet.RefusalRepoMirrored:
+	case gitlet.RefusalRepoArchived, gitlet.RefusalRepoMirrored, gitlet.RefusalDefaultBranch:
 		return tools.RefusalConflict, true
 	case gitlet.RefusalRepoSize, gitlet.RefusalRepoRefs:
 		return tools.RefusalQuotaExceeded, true
@@ -1421,6 +1423,13 @@ func pushRefused(ctx context.Context, tool, repo, branch string, cmd gitlet.Comm
 		said += " Another ref holds that name's path: use another name, or delete that ref first."
 	case tools.RefusalInvalid:
 		said += " The same call is refused again; change what it names."
+	}
+	if cmd.Reason == gitlet.RefusalDefaultBranch {
+		// THE DEFAULT BRANCH IS KEPT, which a person meets as Delete on a
+		// listing read before the default moved: told in their words what
+		// lets it go, never the conflict class's "collided with another
+		// change".
+		return toPerson(refusedBy(class, cause, said), caveat.DefaultBranchKept())
 	}
 	return refusedBy(class, cause, said)
 }

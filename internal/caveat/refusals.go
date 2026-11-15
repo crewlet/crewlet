@@ -219,14 +219,25 @@ func MergeGateUnmet(unmet []GateCondition) Refusal {
 }
 
 // MergeWouldDeleteAKeptBranch is a merge asked to delete its branch where that
-// deletion is refused: a protection rule keeps the branch, or whoever merges
-// may not delete it. ONE PHRASING FOR BOTH, and true of each, for
+// deletion is refused: it is the repository's default branch, a protection
+// rule keeps the branch, or whoever merges may not delete it. ONE PHRASING FOR
+// ALL THREE, and true of each, for
 // [DatastoreQuotaReached]'s reason: which one it was Gitlet names only
 // in its sentence for a model, which is never parsed for a person's words.
 func MergeWouldDeleteAKeptBranch() Refusal {
 	return Refusal{person: "Nothing was merged, because this merge would also delete its " +
-		"branch, and a protection rule keeps that branch or you may not delete it. Merge it " +
-		"keeping its branch."}
+		"branch, and that branch is kept, as the repository's default branch, by a protection " +
+		"rule, or because you may not delete it. Merge it keeping its branch."}
+}
+
+// DefaultBranchKept is a deletion of a repository's default branch, which no
+// push, write or merge makes: every clone checks it out. NO REMEDY beside it:
+// the repository's own Settings tab is where its default branch changes, and
+// the words say so.
+func DefaultBranchKept() Refusal {
+	return Refusal{person: "This is the repository's default branch, which every clone checks " +
+		"out, so it was not deleted. Make another branch the default in the repository's " +
+		"settings first."}
 }
 
 // RepositoryFull is a merge whose commits would take its repository past the
