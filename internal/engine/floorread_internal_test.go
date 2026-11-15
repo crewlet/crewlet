@@ -198,9 +198,10 @@ func (f *listingsHeld) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPa
 }
 
 // ForgetBackupPoint lists the register because it walks the owner's backup
-// points under their key class to purge them, and SeatAccessRecords because it
-// reads an integration's whole ledger: both are listings the KV backend makes,
-// held like the rest.
+// points under their key class to purge them, SeatAccessRecords because it
+// reads an integration's whole ledger, and GrantRequests because it reads
+// every agent's open grant request for the sweep: all three are listings the
+// KV backend makes, held like the rest.
 func (f *listingsHeld) ForgetBackupPoint(ctx context.Context, owner string) error {
 	if err := f.hold(ctx); err != nil {
 		return err
@@ -213,6 +214,13 @@ func (f *listingsHeld) SeatAccessRecords(ctx context.Context, kind string) (map[
 		return nil, err
 	}
 	return f.wrappedFleet.SeatAccessRecords(ctx, kind)
+}
+
+func (f *listingsHeld) GrantRequests(ctx context.Context) (map[string][]byte, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.GrantRequests(ctx)
 }
 
 // listingBound is how long a case waits on a read the write path makes: the
