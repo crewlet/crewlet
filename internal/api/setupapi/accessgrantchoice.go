@@ -12,34 +12,15 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// Choosing an agent's request's grant option is the approval (ADR-0118): the
-// person answers the request's question, and the answer's route has the grant
-// saved here before it posts the answer. The same rules as a grant added on the
-// Agents tab, read from the same places: the grant is built from the request as
-// stored, stamped by the engine with the person and the time, checked against
-// the lane's live catalogue, and written as one revision held to the revision
-// it was judged on; then recorded, its request settled, and its sync started.
-// What the person decides is only whether it lapses after the request's hours
-// or is for good.
+// Choosing a request's grant option saves the grant here before the answer posts
+// (ADR-0118), by the Agents tab's own rules for a grant.
 
-// grantSaveAttempts is how many times a save is judged and written again when
-// the company document moved between its read and its write: a second write
-// landing in that window is ordinary on a busy company, and three in a row is
-// a document somebody is editing continuously, which the person is told to
-// answer again rather than have the answer wait on.
+// grantSaveAttempts bounds re-judging a save the document moved under.
 const grantSaveAttempts = 3
 
-// SaveRequestedGrant saves the grant request id asks for, for the agent seat
-// asker, as the person ctx resolves to: for good where permanent, for the
-// request's hours otherwise. Before anything is written it asks admit, handed
-// whether the grant raises ([seataccess.NeedsStepUp]), and returns admit's
-// refusal as it is: the caller decides the person's authority at the access
-// write's own proof. A grant asker already holds for this request (an answer
-// sent again) is saved again by nobody.
-//
-// [seataccess.ErrNoRequest] where the request lapsed or was settled; a
-// [*seataccess.GrantRefused] where it cannot be saved as asked; a
-// [*configapi.ManagedError] where the operator writes the document.
+// SaveRequestedGrant saves request id's grant for asker as the person ctx
+// resolves to, after admit(raise) admits it, and saves nothing twice. Errors:
+// [seataccess.ErrNoRequest], [*seataccess.GrantRefused], [*configapi.ManagedError].
 func (s *Service) SaveRequestedGrant(ctx context.Context, asker, id string, permanent bool,
 	admit func(raise bool) error) error {
 
@@ -65,8 +46,7 @@ func (s *Service) SaveRequestedGrant(ctx context.Context, asker, id string, perm
 		"saved; send the answer again: %w", grantSaveAttempts, err)
 }
 
-// saveRequestedGrant is one attempt of [Service.SaveRequestedGrant], judged on
-// the fleet's revision as it reads now.
+// saveRequestedGrant is one attempt, on the fleet's revision as it reads now.
 func (s *Service) saveRequestedGrant(ctx context.Context, req seataccess.GrantRequest, permanent bool,
 	admit func(raise bool) error) error {
 

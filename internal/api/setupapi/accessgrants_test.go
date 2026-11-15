@@ -196,8 +196,7 @@ func TestARequestsGrantIsBuiltFromTheRequest(t *testing.T) {
 	}
 }
 
-// founderAsking is the context of a person signed in to choose a request's
-// grant: what the answer's route hands the save.
+// founderAsking is an administrator's context, as the answer's route hands it.
 func founderAsking() context.Context {
 	return iam.WithPrincipal(context.Background(), iam.Principal{
 		ID: uuid.MustParse("018f3a9c-0000-7000-8000-00000000f001"), Kind: iam.KindPerson,
@@ -206,8 +205,7 @@ func founderAsking() context.Context {
 	})
 }
 
-// originRequest is the SRE's request for Origin Rules: Edit on example.com for
-// four hours, as the engine stored it.
+// originRequest is a stored request for Origin Rules: Edit on example.com.
 func originRequest(id, handle string) seataccess.GrantRequest {
 	return seataccess.GrantRequest{ID: id, Kind: integration.KindCloudflare, Lane: seataccess.LaneCloudflare,
 		Handle: handle, Permission: "Origin Write", Scope: []string{"example.com"}, Hours: 4,
@@ -215,13 +213,8 @@ func originRequest(id, handle string) seataccess.GrantRequest {
 		AskedAt: time.Now().UTC()}
 }
 
-// CHOOSING A REQUEST'S GRANT SAVES THE GRANT THE STORED REQUEST ASKS FOR
-// (ADR-0118): its permission, scope, hours and reason, the request it answers,
-// and the person choosing as its author, written as one revision, recorded and
-// synced. admit is handed whether the grant raises (a write permission does)
-// before anything is written. Choosing it again saves nothing twice. Mutation:
-// build the grant from anything but the stored request, or ask admit after the
-// write, and this fails.
+// CHOOSING A REQUEST'S GRANT SAVES THE GRANT THE STORED REQUEST ASKS FOR, once,
+// asking admit before the write. Mutation: ask admit after the write and this fails.
 func TestChoosingARequestsGrantSavesTheGrantItAsked(t *testing.T) {
 	t.Parallel()
 	s := newCloudflareSurface(t)
@@ -265,11 +258,7 @@ func TestChoosingARequestsGrantSavesTheGrantItAsked(t *testing.T) {
 	}
 }
 
-// A REQUEST'S GRANT THAT CANNOT BE SAVED AS ASKED WRITES NOTHING, saying why: a
-// request another agent asked, one lapsed or settled, a permission the
-// company's connection does not hold, and a person admit refuses, whose
-// refusal is returned as it is. Mutation: save before admit answers, or skip
-// the catalogue's check, and this fails.
+// A REQUEST'S GRANT THAT CANNOT BE SAVED AS ASKED WRITES NOTHING.
 func TestARequestsGrantThatCannotBeSavedWritesNothing(t *testing.T) {
 	t.Parallel()
 	refused := errors.New("refused: step up")

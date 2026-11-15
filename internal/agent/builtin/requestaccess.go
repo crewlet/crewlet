@@ -158,13 +158,8 @@ func accessList() string {
 	return words.Or(parts)
 }
 
-// grantChosen decides an answer that chooses a grant (ADR-0118): a request's
-// grant option is saved by choosing it ([WorkDeps.grantRequestChosen]), and an
-// access key's grant is refused until its asker holds it, whoever sends it.
-//
-// EVERY CHOICE UNDER THE RESERVED PREFIX IS A GRANT, the engine's own options
-// alone carrying one, so a key this build no longer grants (a request asked
-// before its catalogue changed) is refused rather than answered as a plain yes.
+// grantChosen decides an answer choosing a grant (ADR-0118): a request's option
+// is saved by choosing it; an access key's is refused until its asker holds it.
 func (d WorkDeps) grantChosen(ctx context.Context, choice string,
 	thread worklet.ResolvedThread) *tools.Result {
 

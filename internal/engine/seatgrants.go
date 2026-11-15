@@ -217,25 +217,15 @@ func (d grantDesk) Granted(ctx context.Context, handle, id string, permanent boo
 	return false, nil
 }
 
-// GrantSaver saves the grant an agent's request asks for, as the person ctx
-// resolves to, when they choose one of its grant options (ADR-0118): the
-// setup surface's, which holds the Agents tab's rules for a grant and the
-// config surface the save writes through ([builtin.GrantDesk]'s Grant).
+// GrantSaver saves a chosen request's grant (ADR-0118): the setup surface's.
 type GrantSaver func(ctx context.Context, asker, id string, permanent bool,
 	admit func(raise bool) error) error
 
-// UseGrantSaver installs what saves a request's grant when its option is
-// chosen.
-//
-// INSTALLED RATHER THAN CONSTRUCTED HERE, as [Engine.UseConfigWriter] is: the
-// setup surface is built where the API is, after the engine, and the tools a
-// person answers with are handed this engine's desk before then. An answer
-// choosing a grant before it is installed is refused ([ErrNoGrantSaver]),
-// and nothing is posted.
+// UseGrantSaver installs the grant save, as [Engine.UseConfigWriter] is: the setup
+// surface is built after the engine; until then a choice is refused.
 func (e *Engine) UseGrantSaver(save GrantSaver) { e.grantSaver.Store(&save) }
 
-// ErrNoGrantSaver reports a node whose setup surface has not installed its
-// grant save ([Engine.UseGrantSaver]).
+// ErrNoGrantSaver reports a node whose setup surface installed no grant save.
 var ErrNoGrantSaver = errors.New("engine: this node cannot save a grant yet; its setup surface is not serving")
 
 // Grant implements builtin.GrantDesk through the installed [GrantSaver].
