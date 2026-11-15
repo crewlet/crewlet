@@ -234,6 +234,22 @@ export function changeLive(state: CodeChangeState): boolean {
 }
 
 /**
+ * Whether the reader is one of a change's AUTHORS, as the engine counts them
+ * (`gitlet.ChangeAuthor`): the seat a person holds, or an agent's own, with
+ * the party kind it wrote as. An author's review counts for nothing, so the
+ * engine takes none (`own_change`), and the change page holds its verdicts
+ * for them. A reader the directory binds to no seat is nobody's author.
+ */
+export function authoredBy(
+  change: { readonly authors: readonly { author: string; kind: string }[] },
+  reader: { readonly handle: string; readonly kind: string },
+): boolean {
+  if (reader.handle === "") return false;
+  const kind = reader.kind === "human" ? "person" : reader.kind;
+  return change.authors.some((a) => a.author === reader.handle && a.kind === kind);
+}
+
+/**
  * The value of the listing's state filter that names no state: every change,
  * whatever its state — which the engine lists only where a repository, a work
  * item, a reviewer or a need narrows the walk, since it keeps no index of

@@ -7,9 +7,10 @@
  * its lines and the reviewer's standing findings; a draft is the tab's —
  * kept in sessionStorage until that one press — and forgotten only once the
  * engine has taken the review; nothing on screen moves before the engine
- * answers; a change no longer live holds its review controls with the reason;
- * an outdated finding is said under a Disclosure, never dropped; and whom its
- * records woke is said in the voice of somebody else's notice.
+ * answers; a change no longer live offers only what still applies to it, and
+ * its author's verdicts are held with the reason; an outdated finding is said
+ * under a Disclosure, never dropped; and whom its records woke is said in the
+ * voice of somebody else's notice.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -737,14 +738,69 @@ test("the conversation asks its reviews and comments again only when somebody wr
   await waitFor(() => expect(asked("comments")).toBe(2));
 });
 
-// A CHANGE NO LONGER LIVE takes no review: each control stays drawn, held with
-// the reason. Mutation: hide them, or let them press, and this fails.
-test("a merged change holds its review controls with the reason", async () => {
+// A FINISHED CHANGE OFFERS ONLY WHAT STILL APPLIES: a merged change takes no
+// review, no ask and no close from anybody, so its bar draws none of them and
+// its Revert stands where the merge controls were; a closed one offers its
+// Reopen alone. Mutation: draw the live bar for every state, and the verdicts
+// stand beside the Merged badge again.
+test("a merged change offers no review, no ask and no close, only its revert", async () => {
   stubEngine(detail({ state: "merged", readiness: undefined }), () => json({}));
   mount();
-  const approve = await screen.findByRole("button", { name: "Approve" });
-  expect(approve.getAttribute("title")).toMatch(/This change is merged/);
-  expect(screen.getByRole("button", { name: "Close" }).getAttribute("title")).toMatch(/final/);
+  await screen.findByRole("button", { name: "Revert" });
+  for (const name of ["Approve", "Request changes", "Request review", "Close", "Reopen"]) {
+    expect(screen.queryByRole("button", { name }), name).toBeNull();
+  }
+});
+
+test("a closed change offers its reopen alone", async () => {
+  const acted = stubEngine(detail({ state: "closed", readiness: undefined }), () =>
+    json({ outcome: "applied" }),
+  );
+  mount();
+  const reopen = await screen.findByRole("button", { name: "Reopen" });
+  for (const name of ["Approve", "Request changes", "Request review", "Close"]) {
+    expect(screen.queryByRole("button", { name }), name).toBeNull();
+  }
+  await waitFor(() => expect(reopen.getAttribute("title")).toBeNull());
+  fireEvent.click(reopen);
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Reopen" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_close_change",
+    args: { change: "web!42", expected_version: 5, reopen: true },
+  });
+});
+
+// AN AUTHOR'S REVIEW COUNTS FOR NOTHING, so the engine takes none: the reader
+// who wrote the change is held from every verdict with the reason, and asking
+// for a review is the step that leads their bar, the one kept in view on a
+// phone. Mutation: draw the verdicts for every reader, and the author is
+// offered Approve and then refused.
+test("the change's author is held from reviewing it, and asks for a review instead", async () => {
+  stubEngine(
+    detail({
+      authors: [
+        { author: "dev", kind: "agent", first_revision: 1, position: POSITION },
+        { author: "jane", kind: "person", first_revision: 2, position: POSITION },
+      ],
+    }),
+    () => json({}),
+  );
+  mount();
+  const ask = await screen.findByRole("button", { name: "Request review" });
+  // THE BAR'S OWN: the Conversation tab's comment box has a Comment of its own.
+  for (const name of ["Approve", "Request changes", "Comment"]) {
+    const verdict = screen
+      .getAllByRole("button", { name })
+      .find((b) => b.closest(".page-action-folds") !== null);
+    await waitFor(() =>
+      expect(verdict?.getAttribute("title"), name).toBe(
+        "You wrote this change, so your review would not count. Ask somebody else to review it.",
+      ),
+    );
+  }
+  expect(ask.closest(".page-action-folds")).toBeNull();
 });
 
 // A LINE PICKED ON THE HEAD DRAFTS A FINDING INTO THE TAB, never to the
