@@ -298,3 +298,77 @@ func TestTheSummarizedTellingIsNeverTheShorterWithClosedCallsListedAgain(t *test
 			len(summed.Brief), len(summed.Replaced), len(held.Brief), len(held.Replaced))
 	}
 }
+
+// THE COPY IN ITS BOX IS TOLD ITS CLOSED ROUNDS AS A KEPT SESSION IS. A relaunch
+// carrying round 2 on in its job's own box continues a copy that went through
+// round 1 as surely as a kept session did, so round 1's post a late post could
+// be taken for is listed again, with its note: where the job's harness ended its
+// own run and the copy holds every call of the round, and where it was cut off
+// and the round is told from its start. Where a task is told again, rendering
+// round 1 as work already done, round 1's post is told there once and never
+// listed again too. And where the copy's thread restarted before its job, it may
+// hold round 1 only in a summary's words, so it is told the post's tool among
+// the earlier rounds' calls.
+//
+// Mutation: hand either in-box telling no closed rounds, leave out the rounds a
+// task told again renders, or ignore the copy's restart, and a case goes red.
+func TestTheCopyInItsBoxIsToldItsClosedRoundsAsAKeptSessionIs(t *testing.T) {
+	t.Parallel()
+	closedPost := ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1", "text": "round one"},
+		Result: "done"}
+	history := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{closedPost}}}
+	roundOne := `- slack_post({"channel":"C1","text":"round one"}) → success`
+	for name, end := range map[string]sandbox.HarnessEnd{
+		"its harness ended its own run": sandbox.HarnessEndOwnRun,
+		"cut off":                       sandbox.HarnessEndCutOff,
+	} {
+		brief := inBoxOver(t, history, runner.Resume{HarnessEnd: end,
+			Bridged: []runner.BridgedCall{heldIssue, latePost("bye", 2)}}).Continue.Brief
+		again, _ := sectionOf(brief, listedAgainHeading)
+		if !strings.Contains(again, roundOne+" "+earlierRound) {
+			t.Errorf("%s: round 1's post is not listed again with its note:\n%s", name, brief)
+		}
+	}
+
+	task := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-1", Seq: 1, Round: 2,
+		Task: &sandbox.LeadTask{Rounds: 1}}
+	brief := inBoxOver(t, history, runner.Resume{Leads: []runner.ResumeLead{toldLead(task)}, Base: baseTurn,
+		HarnessEnd: sandbox.HarnessEndCutOff, Bridged: []runner.BridgedCall{heldIssue, latePost("bye", 2)}}).
+		Continue.Brief
+	if !strings.Contains(leadsSection(brief), roundOne) || strings.Count(brief, roundOne) != 1 {
+		t.Errorf("round 1's post is not told once, in the task told again:\n%s", brief)
+	}
+
+	restarted := runner.Resume{Bridged: []runner.BridgedCall{heldIssue, latePost("bye", 2)}}
+	copyOf(sandbox.HarnessEndOwnRun, &sandbox.ResumedCount{Tokens: 10_000, Restart: new("r-1")})(&restarted)
+	brief = inBoxOver(t, []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{post("hi", 1).Call}}},
+		restarted).Continue.Brief
+	if got, want := otherCallsIn(brief), otherCallsOf(earlierRoundsPart); got != want {
+		t.Errorf("the copy restarted before its job is told:\n%s\nwant:\n%s\nin:\n%s", got, want, brief)
+	}
+}
+
+// inBoxOver is the relaunch that carries round len(history)+1 on, over the
+// turn's closed rounds history, in the asking job's own box after a person
+// answered it, as resume says the job's record reads.
+func inBoxOver(t *testing.T, history []ledger.Iteration, resume runner.Resume) runner.AgentRunRequest {
+	t.Helper()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, len(history)+1, "", history)
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	resume.State = parked.State
+	resume.Asked = &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder", SessionID: "sess-1",
+		BoxKept: true}
+	launcher := &probingLauncher{basis: inBoxBasis}
+	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: launcher,
+		resume: &resume})
+	if _, _, err := collector.Resume(t.Context(), history); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	again := launcher.last(t)
+	if again.Continue == nil || again.Continue.SessionID != "sess-1" {
+		t.Fatalf("the relaunch continues %+v in place, want sess-1 (kept %+v)", again.Continue, again.Session)
+	}
+	return again
+}

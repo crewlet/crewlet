@@ -60,18 +60,29 @@ func lostRelaunchIn(t *testing.T, conversation string, basis runner.SessionBasis
 	round runner.Resume) runner.AgentRunRequest {
 
 	t.Helper()
+	return lostRelaunchWith(t, buildOpts{conversation: conversation}, basis, history, round)
+}
+
+// lostRelaunchWith is [lostRelaunchOver] in the conversation opts names, its
+// relaunch's fences of the turn context under the token opts pins
+// ([buildOpts.boundary]), "" for one each fence mints.
+func lostRelaunchWith(t *testing.T, opts buildOpts, basis runner.SessionBasis, history []ledger.Iteration,
+	round runner.Resume) runner.AgentRunRequest {
+
+	t.Helper()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
 	notes := ""
 	if len(history) > 0 {
 		notes = history[len(history)-1].ReviewNotes
 	}
-	launched, req := launch(t, entries, buildOpts{conversation: conversation}, len(history)+1, notes, history)
+	launched, req := launch(t, entries, buildOpts{conversation: opts.conversation}, len(history)+1, notes,
+		history)
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 	relauncher := &probingLauncher{basis: basis}
 	round.State, round.Lost = parked.State, &runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
-		resume: &round, conversation: conversation})
+		resume: &round, conversation: opts.conversation, boundary: opts.boundary})
 	if _, _, err := collector.Resume(t.Context(), history); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}

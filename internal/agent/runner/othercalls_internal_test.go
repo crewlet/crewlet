@@ -38,3 +38,35 @@ func TestAFreshRunIsToldNoOtherCalls(t *testing.T) {
 		}
 	}
 }
+
+// A SPAN HOLDING THE TOLD ROUND IS NO PARTNER OF ITS CALLS. The park's last
+// tier folds every closed round, the round a send-back collected included, into
+// one span, and a task told again renders it. Its tally counts the round's own
+// calls, which are told by their own rules: read as work already done, it
+// would mark every told call of its tools against those same calls. A span of
+// earlier rounds alone is work already done like any other.
+//
+// Mutation: read a span as standing for its first round alone, or take the
+// entry standing for the round as a partner, and the first case is marked.
+func TestASpanHoldingTheToldRoundIsNoPartnerOfItsCalls(t *testing.T) {
+	t.Parallel()
+	span := func(through int) ledger.Iteration {
+		return ledger.Iteration{Iteration: 1, Through: through, Elided: []ledger.Elided{{Name: "slack_post",
+			Calls: 3}}}
+	}
+	told := BridgedCall{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"text": "hi"}}, Late: true}
+	opts := ledger.Format(nil, nil)
+	r := &Runner{}
+	for name, tc := range map[string]struct {
+		rendered []ledger.Iteration
+		want     bool
+	}{
+		"a span holding the round": {rendered: []ledger.Iteration{span(2)}},
+		"a span of earlier rounds": {rendered: []ledger.Iteration{span(1)}, want: true},
+		"no rendered round":        {},
+	} {
+		if got := r.partnersOf(2, toldAs{rendered: tc.rendered}).couldBeTakenFor(told, opts); got != tc.want {
+			t.Errorf("%s: a partner could be taken for the told post: %t, want %t", name, got, tc.want)
+		}
+	}
+}

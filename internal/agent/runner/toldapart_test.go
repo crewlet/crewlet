@@ -151,6 +151,33 @@ func TestAToldCallLikeAHeldCallALeadTellsIsMarked(t *testing.T) {
 	}
 }
 
+// A HELD CALL BESIDE AN EARLIER ROUND'S ANSWER OF ITS TOOL IS MARKED. A lead
+// spares the held calls of its own round and tool, whose fate it tells; but a
+// lead of an earlier round tells what became of another call, approved and
+// made, whose arguments no line shows. A run of its own carrying round 2 on,
+// told round 1's answer that allowed `vendor_post` once, could take round 2's
+// held `vendor_post` for that approved call and lose it, so the held line is
+// marked.
+//
+// Mutation: spare a held call from every lead of its tool, whatever its round,
+// and the case goes red.
+func TestAHeldCallBesideAnEarlierRoundsAnswerOfItsToolIsMarked(t *testing.T) {
+	t.Parallel()
+	brief := freshRelaunchOver(t, []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{post("x", 1).Call}}},
+		runner.Resume{Lost: lostWithItsBox(),
+			Leads: []runner.ResumeLead{{Lead: heldAnswer(), Told: true,
+				Result: &sandbox.HeldResult{Output: "posted to #eng"}}},
+			Bridged: []runner.BridgedCall{heldFor("vendor_post", 1, 1)}}).Brief
+	const line = "- vendor_post(arguments sealed for a person's approval, kept on no record) → error: held for a" +
+		" person's approval"
+	if !strings.Contains(brief, line) {
+		t.Fatalf("the round's held call is not told, so the case tests nothing:\n%s", brief)
+	}
+	if !strings.Contains(brief, line+toldApart) {
+		t.Errorf("the round's held call beside an earlier round's answer of its tool is not marked:\n%s", brief)
+	}
+}
+
 // A LATE CALL LIKE WORK ALREADY DONE IS MARKED. A run of its own carrying round
 // 2 on is told round 1 as work already done (its prior work, whose words say
 // a call marked `→ success` ALREADY RAN) and round 2's late post under words
