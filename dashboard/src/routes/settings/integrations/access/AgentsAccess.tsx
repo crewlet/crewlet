@@ -490,7 +490,6 @@ export const AgentsAccess = memo(function AgentsAccess({
               <Select
                 size="sm"
                 width="full"
-                menuClassName="agent-access-menu"
                 multiple
                 ariaLabel={`${seat.name}'s ${lane.name} permissions`}
                 {...refusedProps(seat, lane, "level")}
@@ -510,7 +509,6 @@ export const AgentsAccess = memo(function AgentsAccess({
               <Select
                 size="sm"
                 width="full"
-                menuClassName="agent-access-menu"
                 ariaLabel={`${seat.name}'s ${lane.name} access`}
                 {...refusedProps(seat, lane, "level")}
                 value={want.level ?? ""}
