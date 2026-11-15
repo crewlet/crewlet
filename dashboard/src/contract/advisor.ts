@@ -23,3 +23,11 @@ export const PAUSED_SEAT_CLASSES = [
   "sandbox.credential_refused",
   "sandbox.image_unstartable",
 ] as const;
+
+/**
+ * The dashboard pages an `open_page` fix is taken on, each one gesture there:
+ * `backups` is Backups & retention's Take a backup. Held to the engine's own
+ * `advisor.Pages`, in both directions: a page the engine names that this list
+ * lacks is a finding whose row offers no way to take its step.
+ */
+export const ADVISOR_PAGES = ["backups"] as const;

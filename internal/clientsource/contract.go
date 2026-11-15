@@ -110,6 +110,7 @@ var contract = []Entry{
 	// advisor.ts
 	{"ACCESS_OPTION_PREFIX", ReadScalar, "internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix"},
 	{"PAUSED_SEAT_CLASSES", ReadLiteral, "internal/advisor.TestTheDashboardKnowsEveryClassAPausedSeatRaises"},
+	{"ADVISOR_PAGES", ReadLiteral, "internal/advisor.TestTheDashboardTakesEveryPageAFixOpens"},
 	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
