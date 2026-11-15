@@ -195,6 +195,19 @@ Ask Crewlet reports **No model** until the chain is fixed.
 To turn it off, set `enabled: false` (or remove the block). Conversations are
 kept and purged on their normal retention; nothing is deleted by turning it off.
 
+## Turning tool families off
+
+`assistant.tools.deny` keeps families of tools away from everybody, whatever
+their own permissions allow: `writes` makes Ask Crewlet read only, and
+`chat_writes`, `atlas_writes`, `agent_controls`, `generic_changes`,
+`generic_reads`, `page_changes` and `deep_work` each turn one family off. A
+denied tool is never offered to the model, in a question, a brief, a turn
+resumed after an approval or a deep-work run, so it cannot be talked into
+trying one. It only narrows: a person still never gets a tool their own
+permissions do not offer. The
+[configuration reference](../getting-started/configuration.md#ask-crewlet)
+lists what each family holds.
+
 ## Choosing the model
 
 Every round is one launch of the vendor's harness, so the model and the harness's

@@ -377,3 +377,27 @@ func TestAStrongerChainIsHeldToTheAssistantsRules(t *testing.T) {
 		t.Errorf("assistant off: err = %v, want ErrAssistantOff", err)
 	}
 }
+
+// tools.deny takes each known family once; an unknown or repeated one is
+// refused at its own index.
+func TestToolsDenyTakesEachKnownFamilyOnce(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t, assistantCompany(assistantEntry,
+		"  enabled: true\n  llm: [assistant]\n  tools:\n    deny: [writes, deep_work]\n"))
+	if !cfg.Assistant.Tools.Denies(FamilyWrites) || cfg.Assistant.Tools.Denies(FamilyChatWrites) {
+		t.Errorf("deny = %v", cfg.Assistant.Tools.Deny)
+	}
+	for name, tc := range map[string]struct{ deny, at, want string }{
+		"unknown":  {"[writes, everything]", "assistant.tools.deny[1]", `"everything"`},
+		"repeated": {"[chat_writes, chat_writes]", "assistant.tools.deny[1]", "listed twice"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := rejects(t, assistantCompany(assistantEntry,
+				"  enabled: true\n  llm: [assistant]\n  tools:\n    deny: "+tc.deny+"\n"), tc.at)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal does not name %q:\n%v", tc.want, err)
+			}
+		})
+	}
+}
