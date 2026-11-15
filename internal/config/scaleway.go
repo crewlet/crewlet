@@ -68,6 +68,10 @@ type RoleScaleway struct {
 
 	// Projects are the Scaleway project IDs the policy grants the level on.
 	Projects []string `yaml:"projects,omitempty" json:"projects,omitempty" desc:"Scaleway project IDs this agent's policy grants its level on. Required when enabled: an agent in no project can reach nothing."`
+
+	// Grants are permission sets the policy holds beside the level, each on
+	// some projects or the Organization, for a while or for good.
+	Grants []SeatGrant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"Scaleway permission sets this agent's policy holds beside its level, each on some projects (its own projects where it names none) or the Organization, added on the Agents tab or by approving the agent's request."`
 }
 
 // LevelOrDefault is the seat's level, read where it names none.
@@ -170,4 +174,5 @@ func (c *Company) checkScaleway(p *problems, path Path, b *RoleScaleway) {
 		}
 		seen[id] = true
 	}
+	checkSeatGrants(p, at(path, "grants"), b.Grants)
 }
