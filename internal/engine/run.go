@@ -2454,7 +2454,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		Turn:       e.mailboxTurn,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
-		// parked before anything can deliver to it.
+		// parked before anything can deliver to it, and A SEAT A PERSON
+		// PAUSED is held before its inbox is attached, so placement moving
+		// it here does not deliver the mail it is holding: the release on
+		// the node it left dropped that node's hold with the attachment. See
+		// seatpause.go.
 		SeatReady: func(ctx context.Context, s placement.Seat, lease coord.Lease, inbox queue.Attachment) error {
 			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner, inbox)
 		},
@@ -2480,11 +2484,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		SeatTurnEnded: func(handle string) {
 			e.readmitResumes(waitSeatBusy, handle)
 		},
-		// A SEAT A PERSON PAUSED is attached already held, so placement
-		// moving it here does not deliver the mail it is holding: the
-		// release on the node it left dropped that node's hold with the
-		// attachment. See seatpause.go.
-		AttachHolds:   e.attachHolds,
 		LeaseTTL:      e.leaseTTL,
 		SweepInterval: opts.sweepEvery,
 		// The host's own ceiling, from Tier A. Per NODE, so a fleet's is

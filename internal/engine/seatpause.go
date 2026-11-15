@@ -33,9 +33,11 @@ import (
 //     in order, and is delivered when somebody resumes it. Taken only for a
 //     seat this node holds, because a hold is taken for one attachment of the
 //     inbox (seatinbox.go) and a node that does not hold the seat has none to
-//     name; a detach drops it with the attachment, which is why the node that
-//     acquires a paused seat takes it again before it attaches the inbox
-//     ([node.Config.AttachHolds]).
+//     name; a detach drops it with the attachment, which is why the seat's
+//     preparation on the node that acquires a paused seat takes it again
+//     before the node attaches the inbox ([Engine.acquireInbox]). Every hold
+//     is taken and recorded as ONE STEP under the lock the pauses are folded
+//     under, so a resume finds either no hold or the record of one.
 //   - ANSWER THE SCREENING. [inbox.Conditions.Paused] and PauseUnknown are
 //     read off this cache, so a delivery that raced the hold is held and
 //     parked rather than run, and one that arrives before this node has read
@@ -165,20 +167,43 @@ func (e *Engine) seatPaused(seat uuid.UUID) (bool, error) {
 	return paused, nil
 }
 
-// attachHolds names the holds a seat's mailbox is attached under — see
-// [node.Config.AttachHolds]. A seat whose pause state is not yet known is
-// attached with none: the screening defers its deliveries until it is.
-func (e *Engine) attachHolds(seat uuid.UUID, inbox queue.Attachment) []string {
+// acquireInbox records the attachment a node's acquisition makes of seat's
+// inbox ([Engine.attachInbox]) and, for a seat a person paused, takes the pause
+// hold for it: the first step of the seat's preparation, which the node runs
+// before it attaches the inbox ([node.Config.SeatReady]), so a paused seat is
+// attached already held. A hold taken after the attach would be taken after the
+// first delivery can arrive, and the mail the pause was holding would be the
+// first thing this node ran. A seat whose pause state is not yet known is held
+// by nothing: the screening defers its deliveries until it is.
+//
+// RECORDED AND TAKEN AS ONE STEP, under the lock every pause and resume is
+// folded under, so a resume lands wholly before it (no pause, no hold) or
+// wholly after it (a record, which its lift reads under the same lock). The
+// node used to take this hold itself, after the engine had named and recorded
+// it under the lock and outside that lock: a resume between the two found the
+// record, lifted a hold that was not there yet, and the hold the node took
+// next was recorded nowhere, so the seat attached held with nothing left to
+// lift it. The attachment is recorded under the same lock for the same
+// reason: a pause folded here reads it ([Engine.takePauseHoldLocked]), and
+// sees either this node's attachment, and holds it itself, or none, and leaves
+// the hold to this step.
+//
+// A hold that cannot be taken REFUSES the seat rather than attach it without
+// one: a seat whose hold could not be taken would run the mail it exists to
+// keep. A pause fails only on a client that has stopped.
+func (e *Engine) acquireInbox(ctx context.Context, seat uuid.UUID, at queue.Attachment) error {
 	e.pauses.mu.Lock()
 	defer e.pauses.mu.Unlock()
+	e.attachInbox(seat, at)
 	if _, paused := e.pauses.pauses[seat]; !paused {
 		return nil
 	}
-	// Recorded as HELD because the node is about to take it, for the
-	// attachment it takes it for: the lift that arrives after the attach
-	// must know there is something to release, and on which attachment.
-	e.recordHeldLocked(seat, inbox)
-	return []string{seatPauseHold}
+	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
+	if err := e.backends.Queue.PauseTopic(ctx, subject, group, at, seatPauseHold); err != nil {
+		return fmt.Errorf("hold the paused seat's inbox before it is attached: %w", err)
+	}
+	e.recordHeldLocked(seat, at)
+	return nil
 }
 
 // holdPausedInbox is the dispatcher's pause-and-park for a paused seat: it
@@ -471,10 +496,11 @@ func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 // call does not drain, so that is safe.
 //
 // A SEAT THIS NODE DOES NOT HOLD is left alone: every node folds every pause,
-// and one whose acquisition reads the pause after this attaches the seat under
-// its hold ([Engine.attachHolds]), while one that recorded its attachment
-// before this read it is held here, before or after its attach. A seat
-// released as this runs ended the attachment, and the queue refuses the hold.
+// and the seat's acquisition records its attachment under this same lock
+// ([Engine.acquireInbox]), so one that records it after this fold takes the
+// hold itself, while one that recorded it before is held here, before or after
+// its attach. A seat released as this runs ended the attachment, and the queue
+// refuses the hold.
 func (e *Engine) takePauseHoldLocked(ctx context.Context, seat uuid.UUID) {
 	at := e.inboxOf(seat)
 	if at == 0 {

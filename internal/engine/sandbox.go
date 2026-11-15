@@ -4013,8 +4013,12 @@ func waiterDutyTTL(interval time.Duration) time.Duration {
 func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int64, owner string,
 	inbox queue.Attachment) error {
 	handle := seat.Handle
-	// THE ATTACHMENT FIRST, before any step below can hold the seat's inbox.
-	e.attachInbox(seat.ID, inbox)
+	// THE ATTACHMENT FIRST, before any step below can hold the seat's inbox,
+	// and with it a person's pause hold where the seat is paused, taken
+	// before the node attaches the inbox (seatpause.go).
+	if err := e.acquireInbox(ctx, seat.ID, inbox); err != nil {
+		return err
+	}
 	// THE SEAT'S OWN TOOLS FIRST, because OnAcquire's whole contract is
 	// that everything the first turn needs is ready before the mailbox
 	// opens. A seat that started consuming before its per-role children

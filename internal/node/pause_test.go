@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // pausedHold is the hold a person's pause takes, spelled as the engine spells
@@ -21,9 +19,11 @@ const pausedHold = "seat_paused"
 // The node that held the paused seat held its mail under a pause hold, and the
 // RELEASE drops that hold with the attachment — so the node that acquires the
 // seat next starts with none, and the mail that waited through the pause would
-// be the first thing its consumer ran. The hold has to be on the subscription
-// before the attach, which is what node.Config.AttachHolds is for; a hold
-// taken after the attach is taken after the first delivery can arrive.
+// be the first thing its consumer ran. The hold has to be taken before the
+// attach, for the attachment the acquisition makes, which is what
+// node.Config.SeatReady is handed that attachment for: the engine's preparation
+// takes a paused seat's hold there. A hold taken after the attach is taken
+// after the first delivery can arrive.
 //
 // The resume is then the only thing that delivers the mail: lifting the hold
 // on the node that now holds the seat hands it on, in order.
@@ -37,7 +37,7 @@ func TestPlacementMovingAPausedSeatKeepsItPaused(t *testing.T) {
 			paused := true
 			// ASKED BY THE SEAT'S ID, the key a pause is kept under: a
 			// hold answered for any other seat would hold the wrong mail.
-			f.attachHolds = func(id uuid.UUID, _ queue.Attachment) []string {
+			f.holdOnAcquire = func(id uuid.UUID) []string {
 				mu.Lock()
 				defer mu.Unlock()
 				if paused && id == seatID("ceo") {

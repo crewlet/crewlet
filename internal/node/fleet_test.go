@@ -171,9 +171,11 @@ type fleet struct {
 	// hosts' sweeps afterwards, so it needs no lock of its own.
 	pinned map[string]placement.SeatPlacement
 
-	// attachHolds is every node's [node.Config.AttachHolds], for the cases
-	// about a seat a person paused. Set before any node starts.
-	attachHolds func(seat uuid.UUID, inbox queue.Attachment) []string
+	// holdOnAcquire names the pause holds every node's seat preparation
+	// ([node.Config.SeatReady]) takes on a seat's mailbox, for the
+	// attachment the node hands it, for the cases about a seat a person
+	// paused. Set before any node starts.
+	holdOnAcquire func(seat uuid.UUID) []string
 
 	// queues is each started node's own broker client, by node id: a pause
 	// hold lives on the client that took it.
@@ -213,6 +215,23 @@ func (f *fleet) pin(handle, node string) {
 	f.pinned[handle] = placement.SeatPlacement{Node: node}
 }
 
+// seatReady is a node's [node.Config.SeatReady] on q: the holds holdOnAcquire
+// names, each taken for the attachment the acquisition hands it, as the
+// engine's preparation takes a person's pause hold. Nil without holdOnAcquire.
+func (f *fleet) seatReady(q queue.EventQueue) func(context.Context, placement.Seat, coord.Lease, queue.Attachment) error {
+	if f.holdOnAcquire == nil {
+		return nil
+	}
+	return func(ctx context.Context, s placement.Seat, _ coord.Lease, at queue.Attachment) error {
+		for _, hold := range f.holdOnAcquire(s.ID) {
+			if err := q.PauseTopic(ctx, inbox(s.Handle), inboxGroup(s.Handle), at, hold); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 // start brings up a node and returns it.
 func (f *fleet) start(id string) *node.Node {
 	f.t.Helper()
@@ -233,7 +252,7 @@ func (f *fleet) start(id string) *node.Node {
 		LeaseTTL:          fleetTTL,
 		HeartbeatInterval: fleetTTL / 4,
 		SweepInterval:     fleetTTL / 8,
-		AttachHolds:       f.attachHolds,
+		SeatReady:         f.seatReady(q),
 		Turn: func(_ context.Context, handle string, evs []*events.Event) queue.Result {
 			work := make([]string, len(evs))
 			for i, e := range evs {

@@ -107,7 +107,11 @@ type Config struct {
 	// SeatReady runs as this node takes a seat, BEFORE its mailbox is
 	// attached, and a failure refuses the seat. inbox is the attachment of
 	// the seat's mailbox this acquisition makes ([queue.Attachment]), which
-	// every hold of it is to be taken for until the seat's release.
+	// every hold of it is to be taken for until the seat's release: a hold
+	// SeatReady takes for it is in force when the mailbox is attached, which
+	// is how a seat a person paused is attached already held. A hold is taken
+	// FOR an attachment, the span from one detach to the next whether or not
+	// a consumer is attached yet, and that is what lets it be taken first.
 	//
 	// Before, because of the ordering OnAcquire exists to enforce: whatever
 	// the first turn will need must be ready before the first event can
@@ -116,27 +120,6 @@ type Config struct {
 	// can deliver, or the first message starts a second turn beside an
 	// executor that is still going.
 	SeatReady func(ctx context.Context, seat placement.Seat, lease coord.Lease, inbox queue.Attachment) error
-
-	// AttachHolds names the pause holds a seat's mailbox must already carry
-	// when it is attached — the reasons [queue.EventQueue.PauseTopic] is
-	// given for it, taken after SeatReady and BEFORE the attach. Nil takes
-	// none.
-	//
-	// BEFORE, for the reason the attach is last: a hold taken after the
-	// consumer starts is taken after the first delivery can arrive. A seat
-	// a person paused that placement moves here is the case — the node
-	// that released it held its mail, the release dropped that hold with
-	// the attachment, and the mail waiting on the inbox would be the first
-	// thing this node's consumer ran. A hold is taken FOR an attachment,
-	// the one this acquisition makes, which is current from the release's
-	// detach to the next one whether or not a consumer is attached yet:
-	// that is what lets it be taken first.
-	//
-	// ASKED BY THE SEAT'S ID, the name the held mailbox is built from and
-	// the key every hold is kept under: the agent id derived from the
-	// seat's handle (ADR-0013), and the attachment the holds are taken for,
-	// which a subsystem that lifts its own hold later names in that lift.
-	AttachHolds func(seat uuid.UUID, inbox queue.Attachment) []string
 
 	// SeatsAdmitted reports whether this node may take on NEW seats right
 	// now. Nil always admits. It gates the CLAIM only — see
@@ -653,10 +636,10 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 	}
 
 	// THE ATTACHMENT THIS ACQUISITION MAKES, read first: every hold of the
-	// mailbox from here, the seat's preparation's and the attach holds
-	// below included, is taken for it, so the queue refuses one that was
-	// decided while this node held the seat before and asked after that
-	// holding's release, rather than carry it onto this attachment.
+	// mailbox from here, the seat's preparation's included, is taken for it,
+	// so the queue refuses one that was decided while this node held the
+	// seat before and asked after that holding's release, rather than carry
+	// it onto this attachment.
 	at, err := n.cfg.Queue.Attachment(ctx, inbox, group)
 	if err != nil {
 		return fmt.Errorf("node: read the attachment seat %q's mailbox is taken under: %w", handle, err)
@@ -671,18 +654,6 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 			// whose in-flight runs could not be recovered would take new
 			// work beside an executor nothing is tracking.
 			return fmt.Errorf("node: preparing seat %q: %w", handle, err)
-		}
-	}
-
-	if n.cfg.AttachHolds != nil {
-		for _, hold := range n.cfg.AttachHolds(s.ID, at) {
-			if err = n.cfg.Queue.PauseTopic(ctx, inbox, group, at, hold); err != nil {
-				// REFUSED rather than attached without it: a seat whose
-				// hold could not be taken would run the mail it exists to
-				// keep. A pause fails only on a client that has stopped.
-				return fmt.Errorf("node: hold seat %q under %q before attaching it: %w",
-					handle, hold, err)
-			}
 		}
 	}
 
