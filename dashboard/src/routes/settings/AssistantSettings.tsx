@@ -315,7 +315,7 @@ export function AssistantSettings() {
               <Card.Body padding="md">
                 <PageNote>
                   Each person's token budget for Ask Crewlet is set on{" "}
-                  <a className="t-link" href={href(["company", "budgets"])}>
+                  <a className="t-link prose-link" href={href(["company", "budgets"])}>
                     Company › Budgets
                   </a>
                   .
