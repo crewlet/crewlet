@@ -41,15 +41,8 @@ var whatAnswersIt = []string{
 	"approver",
 }
 
-// A QUESTION REACHES THE MODEL WITH WHAT ANSWERS IT. Each read that lists a
-// question hands the model, in its card's summary, the decision it carries and
-// the ids the answering call names: a task's question its comment id
-// (answer_decision's `answers`), an executor's its turn and launch ids
-// (answer_executor's), and on a thread whom a question asks and the option an
-// answer chose. Read as their titles and bodies alone, the model had to guess
-// those ids or fall back to the raw answer, cut at what one step reads.
-// Mutation: drop any decision column, the comment, turn or launch column, or
-// an item fact, and this names the read and what it lost.
+// Each read of a question hands the model its decision and the ids the answer
+// names (comment id; an executor's turn and launch ids; a thread's ask and choice).
 func TestAQuestionReachesTheModelWithWhatAnswersIt(t *testing.T) {
 	t.Parallel()
 	ask := map[string]any{"key": "OPS-7", "title": "Route the library", "comment": "c-9",
@@ -96,11 +89,7 @@ func TestAQuestionReachesTheModelWithWhatAnswersIt(t *testing.T) {
 	}
 }
 
-// THE QUESTIONS WAITING ARE READ A PAGE AT A TIME, ten unless the call asks for
-// more, and a page that says more lie past it says so to the model: the
-// route's own page of fifty, each question with its body and decision whole,
-// can pass what one step reads and leave the model nothing. Mutation: drop the
-// limit or the card's More, and this fails.
+// list_decisions reads ten unless asked, and a page with more past it says so.
 func TestTheQuestionsWaitingAreReadAPageAtATime(t *testing.T) {
 	t.Parallel()
 	tool := mustTool(t, "list_decisions")

@@ -108,12 +108,8 @@ func TestDecisionsCountsAsksAndRunsForThePerson(t *testing.T) {
 	}
 }
 
-// A PAGE OF DECISIONS IS THE CALLER'S SIZE AND SAYS WHAT LIES PAST IT: `limit`
-// cuts the merged page, newest first, and `more` is set by an item the cut
-// dropped or by an open ask the tracker's own page left unread, and by nothing
-// else. Ask Crewlet reads a page of its own size, since fifty questions with
-// their bodies and decisions can pass what one of its steps reads. Mutation:
-// ignore `limit`, or set `more` from the cut alone, and this fails.
+// `limit` cuts the merged page, and `more` is set by an item the cut dropped or an
+// open ask past the tracker's own page, and by nothing else.
 func TestADecisionsPageSaysWhatLiesPastIt(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)

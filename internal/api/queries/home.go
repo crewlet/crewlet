@@ -695,11 +695,8 @@ func (a *accessChanges) of(ctx context.Context, handle string, asked time.Time) 
 // most [worklet.MaxDecisions], with the full count and the oldest one's
 // instant beside the page.
 //
-// `limit` asks for a smaller page, and `more` says whether anything lies past
-// the page answered. A screen reads the whole page; Ask Crewlet reads one of
-// its own size, because each question rides with its body and its decision
-// whole, and fifty of them can pass what one of its steps reads, which then
-// shows it none.
+// `limit` asks for a smaller page and `more` says something lies past it: Ask
+// Crewlet reads a page that fits one of its steps.
 //
 // # And, on the caller's own record, what they may unblock
 //

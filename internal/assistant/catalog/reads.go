@@ -85,15 +85,8 @@ func taskTable(title, rows string) cards.Spec {
 		Open:  &cards.Open{Screen: "worklet-tasks"}}}
 }
 
-// decisionColumns are the columns of the decision a question carries
-// (ADR-0023) at path within a row, read at alt where a row keeps it there
-// instead (an executor's, beside a task's ask). Every one is detail: the
-// drawer draws the question, and these are what the model chooses with and
-// the downloads keep.
-//
-// THE OPTIONS BY THE ID AN ANSWER NAMES: answer_decision and answer_executor
-// take an option's id as `choice`, and a decision read as its question alone
-// left the model guessing at ids or reading the raw answer instead.
+// decisionColumns are a question's decision (ADR-0023) at path, or at alt, as detail
+// columns: its options by the id answer_decision and answer_executor take as choice.
 func decisionColumns(path, alt string) []cards.Column {
 	at := func(field string) string { return path + "." + field }
 	or := func(field string) string {
@@ -131,19 +124,15 @@ func decisionFacts() []cards.Fact {
 	}
 }
 
-// A decision's options, each by its id and then its label and detail
-// (decision.Option), and its evidence, each by its kind and then its
-// reference and label (decision.Evidence): a task's or a page's id, a turn's,
-// a run's, or a URL.
+// A decision's options by id, label and detail, and its evidence by kind, reference
+// and label.
 var (
 	optionEntries   = cards.Entries{Lead: "id", Words: []string{"label", "detail"}}
 	evidenceEntries = cards.Entries{Lead: "kind", Words: []string{"ref", "label"}}
 )
 
-// decisionsPage is the most a decisions read asks for, the route's own page
-// (worklet.MaxDecisions), and decisionsDefault what it asks for unless told:
-// ten questions with their decisions and bodies whole sit well inside what one
-// step reads, where the route's fifty can pass it and leave the model nothing.
+// decisionsPage is the route's page (worklet.MaxDecisions); decisionsDefault is
+// what a read asks for unless told, ten, which fits one step whole.
 const (
 	decisionsPage    = 50
 	decisionsDefault = 10
