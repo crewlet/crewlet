@@ -36,19 +36,25 @@ const SandboxKindPrefix = "sandbox_"
 
 // InfrastructureKind reports whether kind ([ConditionKind]) is a condition of
 // the infrastructure the engine runs on: a store, a log, a broker, a disk, the
-// fleet's nodes and what they hold. Nothing a piece of work carries causes one,
-// so a failure on one is the failing node's, never the work's: a seat's mail
-// that failed on one is handed back as the node's own (internal/engine's
-// nakFailure), and a delivery it spends is kept with its group's unhandled
-// deliveries rather than with its poison.
+// fleet's nodes and what they hold. A failure on one is counted as the failing
+// node's, never the work's: a seat's mail that failed on one is handed back as
+// the node's own (internal/engine's nakFailure), and a delivery it spends is
+// kept with its group's unhandled deliveries rather than with its poison.
 //
-// FALSE FOR THE THREE KINDS THE WORK CAN CAUSE: a coding sandbox's class
-// ([SandboxKindPrefix]), whose provider refusing a key, a setup that fails or
-// a limit reached can follow from what was asked of it, and a deadline
-// (`timeout`) and an abandoned wait (`canceled`), the provider layer's words
-// for a call that ran past its own wall clock or that its caller gave up on,
-// which the length of what was asked decides as much as the node does. False
-// for anything that is no kind of a condition.
+// A KIND IS AS WIDE AS WHAT IT CLASSES. The state log's is every refusal of
+// the log ([statelog.ErrUnavailable]), and among them are refusals of the
+// write itself rather than of the log, such as a record larger than the
+// broker takes, an object deleted for good or an operation id reused. The
+// kind does not tell them apart, so they are the node's with the rest.
+//
+// FALSE FOR THE THREE KINDS LEFT TO THE WORK: a coding sandbox's class
+// ([SandboxKindPrefix]), one of which does not say whether the box failed for
+// what was asked of it or for its provider (a command the box timed out or
+// killed, a provider that did not answer: [sandbox.WhyProviderUnavailable]);
+// and a deadline (`timeout`) and an abandoned wait (`canceled`), the provider
+// layer's words for a call that ran past its own wall clock or that its
+// caller gave up on, which the length of what was asked decides as much as
+// the node does. False for anything that is no kind of a condition.
 //
 // EVERY KIND THIS PACKAGE DECLARES IS NAMED HERE, on one side, and
 // TestEveryConditionKindIsTheNodesOrTheWorks holds each to it: a new kind
@@ -69,9 +75,12 @@ func InfrastructureKind(kind string) bool {
 // is a condition of the environment ([Condition]), and false for a fault. The
 // same classification the tools and the API answer a condition by, so a
 // record's kind and a refusal's words cannot disagree about what failed; and
-// the one a failure is told as the failing node's or the work's by
-// ([InfrastructureKind]), so where a delivery that failed is kept cannot
-// disagree with what its record says failed either.
+// the one a seat's mail that failed is told the failing node's or the work's
+// by ([InfrastructureKind]). That reads the failure itself, and a record's
+// kind does not always: a provider's failure that wraps a condition (a
+// harness whose prompt a full disk could not take) is recorded under the
+// provider's own kind (internal/agent/runner's ErrorKind), while its mail is
+// handed back as the node's.
 func ConditionKind(err error) (string, bool) {
 	said, ok := condition(err)
 	return said.kind, ok

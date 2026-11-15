@@ -453,8 +453,8 @@ func TestADispatchThatCannotReadItsRebaseDoesNotRun(t *testing.T) {
 // AND THE DISPATCHER HANDS THE DELIVERY BACK AS THE NODE'S OWN. A coordination
 // store that did not answer is nothing the mail did, but the queue cannot tell
 // it ([queue.NodeFault] reads its own broker and the delivery's context): read
-// as a condition of the infrastructure, by the classification the turn's
-// record reads ([builtin.InfrastructureKind]), it is NAK'd as the node's
+// as a condition of the infrastructure ([builtin.ConditionKind],
+// [builtin.InfrastructureKind]), it is NAK'd as the node's
 // ([queue.NakNode]), so a backlog an outage spends is kept with the group's
 // unhandled deliveries and never with its poison. A real dispatch, so the
 // failure is the one runTurn returns, wrapped as the dispatcher wraps it.

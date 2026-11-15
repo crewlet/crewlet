@@ -1639,11 +1639,14 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 // operation ledger's horizon reads where its writes are minted before it runs,
 // [rebaseFor]), a state log, a data node or a store that could not take the
 // write, a file store, a disk, the fleet's nodes holding different keys or
-// builds. Read by the classification every failed turn's record and every
-// tool's refusal reads ([builtin.ConditionKind]), never by a list of its own,
-// so a delivery is kept where its record says it failed. A deadline, an
-// abandoned wait and a coding sandbox's class stay the mail's: what it asked
-// can cause each.
+// builds. Read by the one classification of conditions, which every tool's
+// refusal reads and a failed turn's record names a condition by
+// ([builtin.ConditionKind]), never by a list of its own; and read off the
+// failure rather than off its record, so a provider's failure that wraps one
+// (a harness whose prompt a full disk could not take) is the node's though
+// its record names the provider's own kind. A deadline, an abandoned wait and
+// a coding sandbox's class stay the mail's: what it asked can cause each
+// ([builtin.InfrastructureKind] says how).
 //
 // The requeue of a partition's tail, a park's requeue and a turn's failure all
 // answer through it, so a failure one of them keeps out of the poison is one
