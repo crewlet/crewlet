@@ -280,3 +280,39 @@ func (e *Engine) announceSeatPause(ctx context.Context, ev *events.Event) {
 			"detail", "the pause itself is recorded; the feed has no row for it")
 	}
 }
+
+// failurePauseRefusal is what a launch's completion on handle's seat is refused
+// for while the engine holds the seat paused for a failure that will repeat
+// ([Engine.pauseForFailure]): a wait on the pause ([waitPause]), which the
+// pause's lift signals ([Engine.readmitResumes]), whether a person resumes the
+// seat or an apply changes what the failure depended on. False for a seat that
+// is not paused, or that a person paused.
+//
+// # Why a paused seat's review waits here at all
+//
+// A person's pause holds a seat's inbox and lets a job already running finish:
+// its completion is reviewed, so the work is not lost to the pause. The
+// engine's failure pause is no such pause. It says the seat's turns fail the
+// same way until somebody changes something, and a review is a turn of the
+// seat: every model it can use refusing its credential refuses the review, and
+// a sandbox that cannot start refuses the run a review sends back. The resume
+// that met the failure paused the seat and handed the completion back on the
+// pause, and the waiter that drives the job's box announces it again on its
+// schedule. Admitted, every announcement collected the job and ran its review
+// into the same failure, a turn started and failed per announcement, for as
+// long as the pause stood. Held, the job waits collected on its row, and the
+// lift that is the change the failure waited on resumes it.
+//
+// A PERSON'S PAUSE ON TOP of the engine's makes the pause theirs (ADR-0117)
+// and lets the review run as any paused seat's does.
+func (e *Engine) failurePauseRefusal(handle string) (sandbox.Refusal, bool) {
+	seat, err := e.seatID(handle)
+	if err != nil {
+		return sandbox.Refusal{}, false
+	}
+	p, paused, _ := e.pauseOf(seat)
+	if !paused || p.Failure == nil {
+		return sandbox.Refusal{}, false
+	}
+	return sandbox.Refusal{Condition: waitPause, Reason: p.Reason}, true
+}

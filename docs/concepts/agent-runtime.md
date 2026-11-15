@@ -599,6 +599,13 @@ the seat pauses again on its second time
 A person who pauses a seat the engine paused makes the pause theirs: it loses
 its failure, takes their stop if they ask for one, and ends only when somebody
 resumes it.
+The review of a finished executor job counts too: it is the turn's next model
+call, made when the job's completion resumes the turn, so a seat whose models
+refuse their sign-in is paused on its second refused review as it is on its
+second refused turn. While the engine's pause stands the job waits, collected,
+for the pause to lift, rather than having its review retried into the same
+refusal, and a resumed attempt that did not end the turn is never listed or
+counted as a turn that ended.
 A conversation whose context does not fit is held rather than the seat: when a
 run runs out of context after the conversation's previous run did, the second
 time on a fresh session, the engine stops starting turns on that conversation
