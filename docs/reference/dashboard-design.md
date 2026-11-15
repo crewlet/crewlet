@@ -8986,7 +8986,8 @@ as they are typed in.
   since when, and Leave where a person may leave; under them Archive room or
   Reopen room, and for an admin **Delete older messages**), its Members (find,
   Add people where the engine adds anybody, people before agents, each opening
-  their profile), what it **Shared** (every link said in it, newest first, as
+  their profile; Add people's suggestions grow to the room its dialog has, and
+  on a phone's sheet run down to its foot), what it **Shared** (every link said in it, newest first, as
   the room unfurls it, each opening the message it came in) and its
   **Notifications**. **A profile** (`pane=profile:{handle}`) is the seat's
   face, team and what it is doing now, Message, its page in the org chart, and

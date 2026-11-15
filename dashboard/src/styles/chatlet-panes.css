@@ -428,8 +428,10 @@
 
 .chat-suggest {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: var(--spacing-1);
+  min-height: 0;
 }
 
 .chat-suggest__label {
@@ -439,12 +441,25 @@
   font-weight: var(--font-weight-medium);
 }
 
-/* A list that scrolls in the dialog, its rows' fill bleeding past the edge. */
+/* A list that scrolls in the dialog, its rows' fill bleeding past the edge.
+   IT GROWS TO THE ROOM THE DIALOG HAS, in a dialog whose body its form fills
+   (the kit's `fill`): a cap of six control heights showed five 52px rows and
+   a sliver of the sixth on a dialog with room to spare, and on a phone's
+   sheet left a third of the screen empty under it. Its floor keeps two rows
+   in view when a long list of chosen chips crowds it. */
 .chat-suggest__list {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  max-height: calc(var(--size-control-lg) * 6);
+  min-height: calc(var(--size-control-lg) * 2);
   margin-inline: calc(var(--spacing-2) * -1);
+  overflow-y: auto;
+}
+
+/* A FORM ITS DIALOG'S BODY IS FILLED BY (the kit's `fill`) scrolls itself as
+   a last resort, where even the list at its floor and what is pinned around
+   it do not fit. */
+.chat-form--fills {
   overflow-y: auto;
 }
 

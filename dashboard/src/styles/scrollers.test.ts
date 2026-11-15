@@ -149,8 +149,6 @@ const LITERAL_BOUND: Record<string, string> = {
     "the manifest inside the integration setup Modal, which is portaled outside the page",
   "screens.css .design-opened--actual":
     "a board at its own size inside the opened-board Modal, which is portaled outside the page",
-  "chatlet-panes.css .chat-suggest__list":
-    "the suggestions inside Add people's Modal, which is portaled outside the page",
   "integrations.css .int-subjects":
     "9rem of chips on a finding — shorter than any view it can sit in, so once scrolled to it is wholly on screen",
 };
