@@ -26,6 +26,8 @@ import {
   type MenuEntry,
   type SelectOption,
 } from "@crewlethq/ui";
+import { usePeek } from "~/app/frame/peekAddress.ts";
+import { useNavigator } from "~/app/router.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import type {
   AtlasEntry,
@@ -77,6 +79,15 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
   const drawn = removable(entry);
   const draws = relationsFrom(entry.ref.kind).length > 0;
   const close = () => setDialog(null);
+  // A PURGED ENTRY IS LEFT, as the toast says it is gone: its sheet closes
+  // (and its selection with it), its page goes back to the atlas. It stayed
+  // drawn, every control on it live, until a reload said Not Found.
+  const nav = useNavigator();
+  const peek = usePeek();
+  const leave = () => {
+    if (peek?.kind === "atlas" && peek.id === entry.id) nav.filter({ peek: null, sel: null });
+    else nav.to(["company", "atlas"]);
+  };
   const items: MenuEntry[] = [
     { key: "owner", label: "Set owner", onSelect: () => setDialog("owner"), ...menuHold(owner) },
     {
@@ -173,7 +184,7 @@ export function EntryActions({ answer, names }: { answer: AtlasEntryAnswer; name
       {dialog === "merge" && <MergeDialog answer={answer} onClose={close} />}
       {dialog === "split" && <SplitDialog entry={entry} onClose={close} />}
       {dialog === "retire" && <RetireDialog entry={entry} onClose={close} />}
-      {dialog === "purge" && <PurgeDialog entry={entry} onClose={close} />}
+      {dialog === "purge" && <PurgeDialog entry={entry} onClose={close} onErased={leave} />}
     </div>
   );
 }
@@ -741,7 +752,7 @@ function RetireDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => vo
     <ConfirmModal
       open
       title={`Retire ${entry.name}?`}
-      message="It leaves the map at once. It stays in its history and under the retired entries, and Restore brings it back."
+      message="It leaves the map at once. It stays in its history, Filter › Show retired entries only lists it, and Restore on its page brings it back."
       confirmLabel="Retire"
       cancelLabel="Keep it"
       onClose={onClose}
@@ -773,7 +784,16 @@ function RetireDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => vo
  * what it is, typed back to confirm, and sent only after the engine's fresh
  * sign-in check.
  */
-function PurgeDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => void }) {
+function PurgeDialog({
+  entry,
+  onClose,
+  onErased,
+}: {
+  entry: AtlasEntry;
+  onClose: () => void;
+  /** The entry itself was erased: leave it. */
+  onErased: () => void;
+}) {
   const write = useSeated(useAct("atlas_purge"));
   const [what, setWhat] = useState<"entry" | "value">("entry");
   const [value, setValue] = useState("");
@@ -801,11 +821,15 @@ function PurgeDialog({ entry, onClose }: { entry: AtlasEntry; onClose: () => voi
       danger
       alert
       onClose={onClose}
-      onSubmit={() =>
-        write.run(what === "entry" ? { atlas_entry: member } : { value }, {
+      onSubmit={async () => {
+        const result = await write.run(what === "entry" ? { atlas_entry: member } : { value }, {
           done: what === "entry" ? `Purged ${entry.name}` : "Purged a value from the atlas",
-        })
-      }
+        });
+        // ONE KEY OF A MERGED ENTRY leaves the entry under its other keys.
+        const gone = what === "entry" && !merged;
+        if (gone && (result?.kind === "applied" || result?.kind === "pending")) onErased();
+        return result;
+      }}
     >
       <SegmentedControl
         label="What to erase"
