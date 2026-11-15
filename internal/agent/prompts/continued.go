@@ -385,22 +385,22 @@ func (n ToolsNamed) madeTo(namer string) string {
 // hold them (the earlier turns, the earlier rounds, the calls the record no
 // longer lists, the workers'), and the closing.
 func otherCalls(o OtherCalls) string {
-	words := nextTurnWordsFor(NextTurn{Fire: o.Fire})
+	said := nextTurnWordsFor(NextTurn{Fire: o.Fire})
 	var parts []string
 	if o.EarlierTurns {
-		parts = append(parts, "- calls of this "+words.whole+"'s earlier "+words.turn+"s, made before this "+
-			words.turn+" began")
+		parts = append(parts, "- calls of this "+said.whole+"'s earlier "+said.turn+"s, made before this "+
+			said.turn+" began")
 	}
 	if o.EarlierRounds.told() {
-		parts = append(parts, "- calls of this "+words.turn+"'s earlier rounds, in full or only in a summary's words"+
+		parts = append(parts, "- calls of this "+said.turn+"'s earlier rounds, in full or only in a summary's words"+
 			o.EarlierRounds.madeTo("the record"))
 	}
 	if o.Unlisted.told() {
-		parts = append(parts, "- calls of this "+words.turn+" the record no longer lists one by one"+
+		parts = append(parts, "- calls of this "+said.turn+" the record no longer lists one by one"+
 			o.Unlisted.madeTo("it"))
 	}
 	if o.Workers.told() {
-		parts = append(parts, "- calls of workers this "+words.turn+" delegated to, in their reports' words"+
+		parts = append(parts, "- calls of workers this "+said.turn+" delegated to, in their reports' words"+
 			o.Workers.madeTo("the record"))
 	}
 	if len(parts) == 0 {
@@ -1119,10 +1119,10 @@ const KeyKeptSession = "kept_session"
 // what the run can do about it is the same whatever the reason — read what
 // that session did.
 func KeptSession(turn string, thisTurn, fire bool) string {
-	words := nextTurnWordsFor(NextTurn{Fire: fire})
-	whose, what := "This "+words.whole+"'s last "+words.turn, "it did"
+	said := nextTurnWordsFor(NextTurn{Fire: fire})
+	whose, what := "This "+said.whole+"'s last "+said.turn, "it did"
 	if thisTurn {
-		whose, what = "This "+words.turn+"'s earlier launches", "they did"
+		whose, what = "This "+said.turn+"'s earlier launches", "they did"
 	}
 	return keptSessionHeader + "\n" + whose + " worked in a session this run does not continue. Read what " +
 		what + " with `" + toolname.ReadSession + "`, turn_id `" + turn + "`; `match` finds a word in it."
@@ -1215,18 +1215,18 @@ func (w nextTurnWords) named(turn string) string {
 // and that the session may not hold the last of what it did: no frame of that
 // turn saw it end.
 func BuildNextTurn(m NextTurn) string {
-	words := nextTurnWordsFor(m)
+	said := nextTurnWordsFor(m)
 	var w strings.Builder
-	w.WriteString("## A new " + words.turn + " of this " + words.whole + " begins here" +
-		"\nEverything above is this " + words.whole + " as your " + words.turn + "s left it")
-	span, ended := nextTurnSpan(m, words)
+	w.WriteString("## A new " + said.turn + " of this " + said.whole + " begins here" +
+		"\nEverything above is this " + said.whole + " as your " + said.turn + "s left it")
+	span, ended := nextTurnSpan(m, said)
 	w.WriteString(span)
 	w.WriteString(". " + ended + " " +
-		words.woke + ", and the task below is this " + words.turn + "'s." +
+		said.woke + ", and the task below is this " + said.turn + "'s." +
 		"\n- **What you read above may be stale:** read it again before relying on it." +
-		"\n- **Tools you activated and skills you loaded above were set up anew for this " + words.turn +
+		"\n- **Tools you activated and skills you loaded above were set up anew for this " + said.turn +
 		":** activate or load them again before relying on them.")
-	w.WriteString("\n\n## This " + words.turn + " is in a new box\nYou are in a new box")
+	w.WriteString("\n\n## This " + said.turn + " is in a new box\nYou are in a new box")
 	if m.Checkout == "" {
 		w.WriteString(", on a FRESH checkout of the repository")
 	}
@@ -1248,32 +1248,32 @@ func BuildNextTurn(m NextTurn) string {
 // ended is told: [BuildNextTurn]'s span, and both builders' ending.
 // [NextTurnAgain] names the turn in [turnAgainSpan]'s words instead, which say
 // nothing of the session.
-func nextTurnSpan(m NextTurn, words nextTurnWords) (span, ended string) {
+func nextTurnSpan(m NextTurn, said nextTurnWords) (span, ended string) {
 	var w strings.Builder
-	ended = "How the " + words.whole + "'s earlier " + words.turn + "s ended is told below."
+	ended = "How the " + said.whole + "'s earlier " + said.turn + "s ended is told below."
 	switch {
 	case m.WentOn:
-		w.WriteString(", up to a session kept while " + words.named(m.BaseTurn) + " still worked")
+		w.WriteString(", up to a session kept while " + said.named(m.BaseTurn) + " still worked")
 		if !m.CapturedAt.IsZero() {
 			w.WriteString(", at " + m.CapturedAt.UTC().Format(time.RFC3339))
 		}
-		w.WriteString(": what that " + words.turn + " did after it is not above")
+		w.WriteString(": what that " + said.turn + " did after it is not above")
 		if m.Lost {
-			w.WriteString(", and that " + words.turn + " was lost")
+			w.WriteString(", and that " + said.turn + " was lost")
 		}
-		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
-			words.turn + "s, is told below."
+		ended = "How " + said.named(m.BaseTurn) + " ended, among the " + said.whole + "'s earlier " +
+			said.turn + "s, is told below."
 	case m.Lost:
-		w.WriteString(", through " + words.named(m.BaseTurn) + ", which was lost")
+		w.WriteString(", through " + said.named(m.BaseTurn) + ", which was lost")
 		if !m.EndedAt.IsZero() {
 			w.WriteString(" and ended at " + m.EndedAt.UTC().Format(time.RFC3339))
 		}
-		w.WriteString(": the session above may not hold the last of what that " + words.turn + " did")
-		ended = "How " + words.named(m.BaseTurn) + " ended, among the " + words.whole + "'s earlier " +
-			words.turn + "s, is told below."
+		w.WriteString(": the session above may not hold the last of what that " + said.turn + " did")
+		ended = "How " + said.named(m.BaseTurn) + " ended, among the " + said.whole + "'s earlier " +
+			said.turn + "s, is told below."
 	default:
 		if m.BaseTurn != "" {
-			w.WriteString(", through " + words.named(m.BaseTurn))
+			w.WriteString(", through " + said.named(m.BaseTurn))
 		}
 		if !m.EndedAt.IsZero() {
 			w.WriteString(", which ended at " + m.EndedAt.UTC().Format(time.RFC3339))
@@ -1319,31 +1319,31 @@ func nextTurnSpan(m NextTurn, words nextTurnWords) (span, ended string) {
 // after the boundary, where its harness wrote any of it, so the boundary is
 // told as where the turn began rather than where the session ends.
 func NextTurnAgain(m NextTurn) string {
-	words := nextTurnWordsFor(m)
-	_, ended := nextTurnSpan(m, words)
+	said := nextTurnWordsFor(m)
+	_, ended := nextTurnSpan(m, said)
 	var w strings.Builder
-	w.WriteString("### A new " + words.turn + " of this " + words.whole + " began here" +
-		"\nThis " + words.turn + " began after your earlier " + words.turn + "s of this " + words.whole +
-		turnAgainSpan(m, words) + ", and the task below is this " + words.turn + "'s. " + ended +
-		"\n- **What was read before this " + words.turn + " began may be stale:** read it again before " +
+	w.WriteString("### A new " + said.turn + " of this " + said.whole + " began here" +
+		"\nThis " + said.turn + " began after your earlier " + said.turn + "s of this " + said.whole +
+		turnAgainSpan(m, said) + ", and the task below is this " + said.turn + "'s. " + ended +
+		"\n- **What was read before this " + said.turn + " began may be stale:** read it again before " +
 		"relying on it." +
-		"\n- **Tools activated and skills loaded before this " + words.turn + " began were set up anew for " +
+		"\n- **Tools activated and skills loaded before this " + said.turn + " began were set up anew for " +
 		"it:** activate or load them again before relying on them." +
-		"\n\nWhere the session above began as the one your earlier " + words.turn + "s left, in full or in a " +
+		"\n\nWhere the session above began as the one your earlier " + said.turn + "s left, in full or in a " +
 		"summary:")
 	switch {
 	case m.WentOn:
-		w.WriteString("\n- **It was kept while " + words.named(m.BaseTurn) + " still worked")
+		w.WriteString("\n- **It was kept while " + said.named(m.BaseTurn) + " still worked")
 		if !m.CapturedAt.IsZero() {
 			w.WriteString(", at " + m.CapturedAt.UTC().Format(time.RFC3339))
 		}
-		w.WriteString(":** what that " + words.turn + " did after it is not in it.")
+		w.WriteString(":** what that " + said.turn + " did after it is not in it.")
 	case m.Lost:
-		w.WriteString("\n- **It may not hold the last of what " + words.named(m.BaseTurn) + " did,** which was " +
+		w.WriteString("\n- **It may not hold the last of what " + said.named(m.BaseTurn) + " did,** which was " +
 			"lost.")
 	}
-	w.WriteString("\n- **What it says about files on disk from before this " + words.turn + " began** is what " +
-		"the box of the " + words.turn + " it came from held.")
+	w.WriteString("\n- **What it says about files on disk from before this " + said.turn + " began** is what " +
+		"the box of the " + said.turn + " it came from held.")
 	if m.Interrupted {
 		w.WriteString("\n- " + baseCutOffAgain)
 	}
@@ -1355,14 +1355,14 @@ func NextTurnAgain(m NextTurn) string {
 // conversation": that turn, and of how it ended only what is the turn's own,
 // when it ended and that it was lost. Nothing of the session it left, which
 // [NextTurnAgain] says only of a session that began as that one.
-func turnAgainSpan(m NextTurn, words nextTurnWords) string {
+func turnAgainSpan(m NextTurn, said nextTurnWords) string {
 	if m.BaseTurn == "" && !m.WentOn && !m.Lost {
 		if m.EndedAt.IsZero() {
 			return ""
 		}
 		return ", which ended at " + m.EndedAt.UTC().Format(time.RFC3339)
 	}
-	span := ", through " + words.named(m.BaseTurn)
+	span := ", through " + said.named(m.BaseTurn)
 	switch {
 	case m.Lost && !m.WentOn && !m.EndedAt.IsZero():
 		return span + ", which was lost and ended at " + m.EndedAt.UTC().Format(time.RFC3339)
