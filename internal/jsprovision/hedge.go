@@ -27,10 +27,11 @@ import (
 // second fact: a create's reply is held until the object it made has a leader
 // ([AskTerm]), and a second create sent while the first is held is a second
 // write, so it asks through [Timing.Ask]. A write with neither is asked as a
-// read is, and there is one: internal/learning/memsync's hydration barrier, a
-// publish the stream answers once it has stored it, or never, to a subject the
-// stream keeps one message of, so a second copy replaces the first rather than
-// adding a fact.
+// read is, and there is one kind: internal/learning/memsync's hydration
+// barriers, the one a hydration publishes before its first table and the end
+// barrier each table's replay publishes after it, each a publish the stream
+// answers once it has stored it, or never, to a subject the stream keeps one
+// message of, so a second copy replaces the first rather than adding a fact.
 //
 // # And never past t.Lookup, whatever its caller set
 //
