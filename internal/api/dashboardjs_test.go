@@ -2559,7 +2559,12 @@ const (
 	// main's Gitlet audit fixes on kit 0.129.1, measures 6217.9 KiB
 	// (6,367,157 bytes), 29,976 bytes over the 6188.7 KiB of main it was
 	// built on: 6218 KiB.
-	treeBudget = 5<<20 + 1098<<10
+	// Settings changed in place (the shared limit editor and the rows it
+	// draws on Delegated decisions, Gitlet, Worklet and Atlas, then one
+	// editor for the settings that are not numbers: Doclet's four, Gitlet's
+	// identity domain, Chatlet's message horizon and the company clock, and
+	// a person's name) take it to 6227.3 KiB (6,376,767 bytes): 6228 KiB.
+	treeBudget = 5<<20 + 1108<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
