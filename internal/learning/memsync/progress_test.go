@@ -92,9 +92,9 @@ func TestACopyThatStopsAnsweringRefusesTheSeatAfterItsStall(t *testing.T) {
 			t.Fatalf("the hydration was still running a second past its stall of %v", stall)
 		}
 		if !says(h.err, fmt.Sprint(stall), "(3 rows carried)", "the barrier this replay reads to is "+
-			"at sequence 6", "1 consumers made") {
+			"at sequence 6", "1 consumer made", "the next placement sweep") {
 			t.Errorf("the refusal = %v, want it to name the stall of %v, the 3 rows carried, the "+
-				"barrier at sequence 6 and the one consumer made", h.err, stall)
+				"barrier at sequence 6, the one consumer made and what happens next", h.err, stall)
 		}
 	})
 }

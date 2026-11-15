@@ -144,31 +144,52 @@ func (p *spyPulls) Next(ctx context.Context) (jsapi.Event, error) {
 			p.c.beforeNext()
 		}
 		ev, err := p.replayPulls.Next(ctx)
-		if err != nil || ev.Kind != jsapi.Delivered {
+		if ev, shown := p.watch(ev, err); shown {
 			return ev, err
 		}
-		if p.through > 0 && ev.Meta.Sequence.Stream > p.through {
-			// A COPY BEHIND holds nothing past where it stands: what the
-			// broker delivered past it is not the replay's to see, and a
-			// pull it ended ends as one the copy had nothing for.
-			if ev.Ended {
-				return jsapi.Event{Kind: jsapi.Expired, Code: "408", Ended: true}, nil
-			}
-			continue
-		}
-		if ev.Msg.Subject != barrierSubject(seat.AgentID) {
-			p.c.mu.Lock()
-			pulls := p.c.pulls[p.filter]
-			if len(pulls) > 0 {
-				last := &pulls[len(pulls)-1]
-				// WHAT THE BROKER COUNTS against a pull's bytes: the row's
-				// subject, the acknowledgement subject it is delivered
-				// with, its headers and its payload.
-				last.sizes = append(last.sizes, len(ev.Msg.Subject)+len(ev.Msg.Reply)+len(ev.Msg.Data))
-				last.headed = last.headed || len(ev.Msg.Header) > 0
-			}
-			p.c.mu.Unlock()
-		}
-		return ev, nil
 	}
+}
+
+func (p *spyPulls) Ready() (jsapi.Event, bool, error) {
+	for {
+		ev, ok, err := p.replayPulls.Ready()
+		if !ok {
+			return ev, ok, err
+		}
+		if ev, shown := p.watch(ev, err); shown {
+			return ev, ok, err
+		}
+	}
+}
+
+// watch records a delivery the replay is handed, and says whether the replay
+// sees ev: a delivery a copy behind does not hold is not seen, and one that
+// ended its pull is seen as the pull's expiry.
+func (p *spyPulls) watch(ev jsapi.Event, err error) (jsapi.Event, bool) {
+	if err != nil || ev.Kind != jsapi.Delivered {
+		return ev, true
+	}
+	if p.through > 0 && ev.Meta.Sequence.Stream > p.through {
+		// A COPY BEHIND holds nothing past where it stands: what the
+		// broker delivered past it is not the replay's to see, and a
+		// pull it ended ends as one the copy had nothing for.
+		if ev.Ended {
+			return jsapi.Event{Kind: jsapi.Expired, Code: "408", Ended: true}, true
+		}
+		return ev, false
+	}
+	if ev.Msg.Subject != barrierSubject(seat.AgentID) {
+		p.c.mu.Lock()
+		pulls := p.c.pulls[p.filter]
+		if len(pulls) > 0 {
+			last := &pulls[len(pulls)-1]
+			// WHAT THE BROKER COUNTS against a pull's bytes: the row's
+			// subject, the acknowledgement subject it is delivered
+			// with, its headers and its payload.
+			last.sizes = append(last.sizes, len(ev.Msg.Subject)+len(ev.Msg.Reply)+len(ev.Msg.Data))
+			last.headed = last.headed || len(ev.Msg.Header) > 0
+		}
+		p.c.mu.Unlock()
+	}
+	return ev, true
 }

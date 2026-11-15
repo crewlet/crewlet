@@ -61,18 +61,19 @@
 // ([Syncer.Hydrate]).
 //
 // BOUNDED BY ITS PROGRESS, NEVER BY A TOTAL (crewlet/crewlet#1065). A
-// hydration takes what its bytes take: it is refused only when a pull hears
-// nothing for its stall, or every copy it is placed on stays a minute behind
-// its barrier, and a replay whose copy is behind is placed again on another,
-// past the last sequence it received (replay.go).
+// hydration takes what its bytes take: time refuses it only when a pull hears
+// nothing for its stall, or no copy it is placed on delivers anything for a
+// minute, and a replay whose copy is behind is placed again on another, past
+// the last sequence it received (replay.go).
 //
 // A PULL AT A TIME, bounded in messages and in bytes, each pull's rows written
 // in one transaction: at most fetchBatch messages, which sets a table's round
 // trips where its rows are small, and at most one message at the transport's
 // limit and the room the broker counts beside it ([Syncer.pullBytes]), which
 // is what a hydration holds of the changelog's rows at once; across a link, a
-// window the floor carries within the node's lease heartbeat, so its lease
-// renewals cross behind it in time ([Syncer.pullBound]). Bounded by its count
+// window the floor carries within the node's lease heartbeat, so a lease
+// renewal crosses behind its pull in time ([Syncer.pullBound], which says
+// what it does not cover). Bounded by its count
 // alone, one pull held up to 256 rows of up to 8 MiB each
 // (crewlet/crewlet#1052). A row larger than this node's pull is refused by
 // name, never read as a copy that stalled.

@@ -367,12 +367,12 @@ func TestABrokerAtItsStorageLimitRefusesTheSeatWithItsOwnAnswer(t *testing.T) {
 // refuses a connection publish permission on the memory subjects answers that
 // publish with nothing at all: it sends the connection a permissions error
 // instead, which the client keeps as the connection's last error, so the
-// barrier waits for an acknowledgement that never comes and the seat is
-// refused as the hydration's budget runs out, naming nothing an operator could
-// act on. It names the broker's refusal. Here a user may publish anywhere but
-// on crewlet.memory.>, the seat's rows were published by another, and the
-// hydration is held to three seconds of the fifteen it has, which its first
-// two requests fit in.
+// barrier waits for an acknowledgement that never comes, and the seat was
+// refused once nobody had answered, naming nothing an operator could act on.
+// It names the broker's refusal. Here a user may publish anywhere but on
+// crewlet.memory.>, the seat's rows were published by another, and the
+// hydration is cut at three seconds, which its first two requests fit in,
+// rather than waiting out the thirty its barrier is asked for.
 //
 // Mutation: refuse an unanswered barrier without reading the connection's last
 // error, and this goes red.

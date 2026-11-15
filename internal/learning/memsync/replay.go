@@ -19,13 +19,15 @@ import (
 // A TABLE'S REPLAY, BOUNDED BY ITS PROGRESS (crewlet/crewlet#1065).
 //
 // A hydration has no deadline of its own. It takes what its bytes take, and
-// fails only where nothing arrives: a replay is refused when it hears nothing
-// for its pull's STALL ([Syncer.stall]), or when every copy it is placed on
-// stays BEHIND the barrier it reads to for a minute ([behindWait]). Every
-// request it makes keeps its own bound ([Syncer.createConsumer],
-// [Syncer.barrier], [Syncer.checkIdentity]). A seat that is merely large is
-// never refused for its size: no refusal can be produced while messages
-// arrive.
+// TIME refuses it only where nothing arrives: a replay is refused when it
+// hears nothing for its pull's STALL ([Syncer.stall]), or when no copy it is
+// placed on delivers anything for a minute ([behindWait]). Every request it
+// makes keeps its own bound ([Syncer.createConsumer], [Syncer.barrier],
+// [Syncer.checkIdentity]), and the answers that refuse a seat whatever the
+// time — a recreated changelog, a broker's refusal of a barrier, a row past
+// what this node's connection carries, a row the store refuses — refuse it
+// here too. A seat that is merely large is never refused for its size: no
+// refusal for time can be produced while messages arrive.
 //
 // # What progress is
 //
@@ -36,20 +38,29 @@ import (
 // behind sends them for ever. It tells "the copy holds nothing for me now"
 // apart from "nothing has been heard", and serves the two clocks:
 //
-//   - SILENCE runs from the pull's send, or from the last word its inbox
-//     carried — a delivery, a heartbeat, a status. Past the pull's stall the
-//     seat is refused: no bytes for a bounded time is the one failure a
+//   - SILENCE runs from the pull's send, from the last word its inbox carried
+//     — a delivery, a heartbeat, a status — and from the end of the replay's
+//     own end barrier, which the replay publishes between two words and
+//     which holds it from its inbox while words arrive. Past the pull's stall
+//     the seat is refused: no bytes for a bounded time is the one failure a
 //     hydration has. It refuses rather than placing the replay again,
 //     because a dead link fails a new placement too, and nothing tells a dead
-//     server from a pull still crossing at the floor. A probe's answer
-//     ([jsapi.Pulls.Quiet]) decides what a quiet replay does next, never how
-//     long it may stay quiet: a consumer that keeps saying a delivery is on
-//     its way while none arrives is held to the stall like any other.
-//   - BEHIND accumulates while the copies say they hold nothing for the table
-//     and the barrier it reads to has not arrived, across placements and the
-//     time spent making them, and is reset by any delivery. A replay behind
-//     for [copyBehindWait] on one copy is placed again ([tableReplay.place]);
-//     behind for [behindWait] on every copy, it is refused.
+//     server from a pull still crossing at the floor. It refuses only once
+//     the inbox holds nothing ([jsapi.Pulls.Ready]): a word that arrived
+//     while the replay's own request held it from reading is heard first. A
+//     probe's answer ([jsapi.Pulls.Quiet]) decides what a quiet replay does
+//     next, never how long it may stay quiet: a consumer that keeps saying a
+//     delivery is on its way while none arrives is held to the stall like
+//     any other.
+//   - BEHIND runs from the first word that a copy holds nothing for the
+//     replay while the barrier it reads to is owed, or from the first time
+//     the replay is placed again for any cause, whichever comes first since
+//     its last delivery, across placements and the time spent making them,
+//     and is reset by any delivery. A replay behind for [copyBehindWait] on
+//     one copy is placed again ([tableReplay.place]); a replay nothing has
+//     been delivered to for [behindWait], however many copies it was placed
+//     on and whatever each said — behind, gone, refusing its pulls, never
+//     pulled, losing a delivery — is refused ([tableReplay.behind]).
 //
 // # The end: a barrier at or past the hydration's, then an end barrier
 //
@@ -144,9 +155,10 @@ const quietWait = time.Second
 // lags at the same cadence (natsobj.go, lagging).
 const copyBehindWait = time.Second
 
-// behindWait is how long a replay's copies may stay behind the barrier it
-// reads to, every placement and the time spent making them counted, before
-// the seat is refused ([tableReplay.nothing]).
+// behindWait is how long a replay's copies may deliver nothing while the
+// barrier it reads to is owed, every placement and the time spent making them
+// counted, before the seat is refused ([tableReplay.nothing],
+// [tableReplay.again]).
 //
 // [objstore.Stall], the minute after which the object store calls a transfer
 // whose copies hold nothing for it stalled (natsobj's errBehind): a copy that
@@ -201,9 +213,13 @@ type copies interface {
 type replayPulls interface {
 	Ask(n, maxBytes int, expires, heartbeat time.Duration) error
 	Next(ctx context.Context) (jsapi.Event, error)
+	Ready() (jsapi.Event, bool, error)
 	Quiet(ctx context.Context, arrival time.Duration) (jsapi.QuietSays, *jetstream.ConsumerInfo, error)
 	Stop()
 	Name() string
+	// RequestBatch is the most messages the consumer takes in one pull, as
+	// the reply that made it says, and 0 for no limit.
+	RequestBatch() int
 }
 
 // replays is where s's replays make their consumers.
@@ -227,7 +243,8 @@ func (c changelogCopies) open(ctx context.Context, cfg jetstream.ConsumerConfig)
 	if err == nil {
 		var pulls *jsapi.Pulls
 		if pulls, err = jsapi.NewPulls(c.s.js.Conn(), api, topics.MemoryStream, cons, c.s.timing); err == nil {
-			return namedPulls{Pulls: pulls, name: cfg.Name}, nil
+			return namedPulls{Pulls: pulls, name: cfg.Name,
+				batch: cons.CachedInfo().Config.MaxRequestBatch}, nil
 		}
 	}
 	c.drop(ctx, cfg.Name)
@@ -238,13 +255,24 @@ func (c changelogCopies) drop(ctx context.Context, name string) { c.s.deleteCons
 
 func (c changelogCopies) maxPayload() int64 { return c.s.js.Conn().MaxPayload() }
 
-// namedPulls is a consumer's pulls and the name it is deleted by.
+// namedPulls is a consumer's pulls, the name it is deleted by, and the most
+// messages it takes in one pull.
+//
+// THE BROKER'S LIMIT, READ OFF THE CONSUMER IT MADE: a server whose JetStream
+// limits set max_request_batch gives every pull consumer made with
+// none of its own that limit (nats-server consumer.go,
+// setConsumerConfigDefaults), and refuses a pull asking more
+// (`409 Exceeded MaxRequestBatch of N`), so a replay asks no more than the
+// consumer it was given takes.
 type namedPulls struct {
 	*jsapi.Pulls
-	name string
+	name  string
+	batch int
 }
 
 func (p namedPulls) Name() string { return p.name }
+
+func (p namedPulls) RequestBatch() int { return p.batch }
 
 // createConsumer makes one of a hydration's consumers, NAMED, so asking again
 // for one whose reply was lost answers the one the first request made.
@@ -335,22 +363,33 @@ func (s *Syncer) pullBytes() int {
 // A replay rides the coordination connection (ADR-0001), and across a link
 // the node's lease renewals cross the same link, behind whatever pull is in
 // flight. A pull of the transport's 8 MiB at the floor every link is promised
-// ([objstore.MiBPace]) holds a renewal four minutes. Windowed, a renewal waits
-// behind at most one heartbeat's bytes at the floor, so a renewal sent a
-// heartbeat after the last lands with a whole interval of its lease to spare:
-// the rule internal/objstore/natsobj windows an upload by (linkWindow),
-// counted in bytes here because a row has no fixed size. 524 288 bytes at the
-// shipped lease, renewed every fifteen seconds; 174 762 at
-// config.MinLeaseTTL's.
+// ([objstore.MiBPace]) holds a renewal four minutes. Windowed, a renewal's
+// reply waits behind at most one heartbeat's bytes of this hydration's pulls
+// at the floor, since a replay keeps one pull out at a time
+// ([tableReplay.pull]), so a renewal sent a heartbeat after the last lands
+// with a whole interval of its lease to spare: the rule
+// internal/objstore/natsobj windows an upload by (linkWindow), counted in
+// bytes here because a row has no fixed size. 524 288 bytes at the shipped
+// lease, renewed every fifteen seconds; 174 762 at config.MinLeaseTTL's.
 //
 // Its price is round trips on a fast distant link: a year of episodes, 368
 // windows, takes about a minute with its writes across 100 ms at 100 Mbit/s,
-// where 8 MiB pulls took half that. What it does not cover is
-// crewlet/crewlet#1035's: a renewal's own request term is five seconds, so on
-// a link slower than a window in five seconds (0.84 Mbit/s at the shipped
-// lease) a renewal sent behind a full window still misses its term, as one
-// behind an upload does; and one row larger than the window crosses alone,
-// holding the link for its own crossing.
+// where 8 MiB pulls took half that.
+//
+// # What the window does not cover
+//
+// crewlet/crewlet#1035's residual. A renewal's own request term is five
+// seconds, so on a link slower than a window in five seconds (0.84 Mbit/s at
+// the shipped lease) a renewal sent behind a full window still misses its
+// term. And the window is this hydration's alone: the object store's upload
+// window is a budget of its own on the same connection (natsobj, linkWindow),
+// and an upload's bytes cross the link outbound while a pull's cross it
+// inbound, so a renewal whose request crosses behind an upload and whose reply
+// crosses behind a pull waits behind both — up to two windows, a MiB at the
+// shipped lease, which misses the term below 1.68 Mbit/s. (A node hydrates
+// one seat at a time: the seat host's placement pass claims them one after
+// another.) One row larger than the window crosses alone, holding the link for
+// its own crossing.
 func (s *Syncer) pullBound() int {
 	bound := s.pullBytes()
 	if s.window > 0 {
@@ -378,13 +417,31 @@ func (s *Syncer) stall(maxBytes int) time.Duration {
 
 // reapAfter is how long the broker keeps a replay's consumer once its reader
 // stops pulling (its InactiveThreshold), should the reader die before it
-// deletes it: the longest silence the server keeps ([jsprovision.LookupBudget])
-// and one transport-bound pull's delivery at this node's pace. It counts from
-// a pull's receipt (nats-server consumer.go), so it outlasts one pull's
-// delivery and the transaction, the end barrier and the probe between two
-// pulls. 38 s in a member's own process; 278 s across a link.
+// deletes it.
+//
+// It counts from the consumer's last delivery or the expiry of its last pull
+// (nats-server consumer.go, deleteNotActive and waiting.last), and is
+// outlasted by nothing a live replay does before its next pull reaches the
+// consumer: the last bytes of a pull of the transport's bound still crossing
+// to it ([jsapi.Delivering]), then its end barrier, published behind those
+// bytes and asked for as long as it is asked ([Syncer.endBarrierArrival],
+// under [jsprovision.LookupBudget]). 46 s in a member's own process at the
+// transport's bound; 526 s across a link. A replay that outruns it still —
+// a transaction the store holds longer — finds its consumer gone, and is
+// placed again past what it received ([placedGone]); a reader that died
+// leaves its consumer that long, which costs the broker one idle consumer.
 func (s *Syncer) reapAfter() time.Duration {
-	return jsprovision.LookupBudget + jsapi.Delivering(s.pullBytes(), s.pace)
+	n := s.pullBytes()
+	return s.timing.Arriving(s.endBarrierArrival(n)).Lookup + jsapi.Delivering(n, s.pace)
+}
+
+// endBarrierArrival is how long a table's end barrier's acknowledgement takes
+// to reach this node behind what it waits behind ([Syncer.barrier]): the
+// publish's own crossing at the floor across a link, and the rest of the pull
+// of maxBytes its replay has out, which the acknowledgement queues behind on
+// the same connection.
+func (s *Syncer) endBarrierArrival(maxBytes int) time.Duration {
+	return jsapi.Sending(0, s.pace) + jsapi.Delivering(maxBytes, s.pace)
 }
 
 // errRowPastPull is a pull of the transport's bound that the broker ended in
@@ -423,10 +480,34 @@ func (c placeCause) Valid() bool {
 	return false
 }
 
-// placeAgain is a pull's outcome that places the replay again, for why.
-type placeAgain struct{ why placeCause }
+// placeAgain is a pull's outcome that places the replay again, for why, and
+// what the broker or the link said of it, where either said anything: a
+// refusal's status line, a lost delivery's counts, a probe's error.
+type placeAgain struct {
+	why    placeCause
+	detail string
+}
 
-func (p placeAgain) Error() string { return "memsync: place the replay again: " + string(p.why) }
+func (p placeAgain) Error() string {
+	if p.detail == "" {
+		return "memsync: place the replay again: " + string(p.why)
+	}
+	return "memsync: place the replay again: " + string(p.why) + ": " + p.detail
+}
+
+// told is how a refusal says what ended a replay's last placement.
+func (p placeAgain) told() string {
+	said := map[placeCause]string{
+		placedBehind:   "its copy held nothing for it",
+		placedGone:     "the broker refused its pull or no longer had its consumer",
+		placedUnpulled: "its consumer never got its pull",
+		placedGap:      "the link lost a delivery",
+	}[p.why]
+	if p.detail != "" {
+		said += " (" + p.detail + ")"
+	}
+	return said
+}
 
 // hydrationRun is what one hydration has done so far, across its tables: the
 // figures its lines report.
@@ -448,11 +529,15 @@ type hydrationRun struct {
 // rows_carried is every row the hydration has received so far: the rows its
 // pulls' transactions committed, and those the pull still out has staged.
 func (s *Syncer) slow(ctx context.Context, run *hydrationRun, table string, staged int) {
-	if time.Now().Before(run.slowAt) {
+	now := time.Now()
+	if now.Before(run.slowAt) {
 		return
 	}
-	run.slowAt = run.slowAt.Add(objstore.Stall)
-	elapsed := time.Since(run.start)
+	// A MINUTE FROM NOW, never from when the line was due: a step that held
+	// the replay longer than a minute — a create or a barrier asked to its
+	// ceiling — is said once as it ends, not once for each minute it took.
+	run.slowAt = now.Add(objstore.Stall)
+	elapsed := now.Sub(run.start)
 	s.info(ctx, "memory_hydration_slow", "seat", run.handle, "table", table,
 		"rows_carried", run.rows+staged, "elapsed", elapsed,
 		"bytes_per_second", int64(float64(run.bytes)/elapsed.Seconds()))
@@ -476,10 +561,15 @@ type cursor struct {
 	// placements is the consumers made for the table, and remakes the
 	// placements in a row made for a pull a consumer never got.
 	placements, remakes int
-	placedAt            time.Time
-	lastDelivery        time.Time
-	// behindSince is when the copies began saying they hold nothing for the
-	// replay, zero while they have delivered since.
+	// delivered is the deliveries the replay received since its last
+	// placement.
+	delivered    int
+	placedAt     time.Time
+	lastDelivery time.Time
+	// behindSince is when the copies began delivering nothing to the
+	// replay: the first word that one holds nothing for it, or the first
+	// placement again, since its last delivery; zero while they have
+	// delivered since ([tableReplay.behind]).
 	behindSince time.Time
 	// transport says the next pull asks one message at the transport's
 	// bound, for a row past the window ([Syncer.pullBound]).
@@ -511,7 +601,6 @@ type replayPull struct {
 	maxBytes  int
 	transport bool
 	delivered int
-	reasked   bool
 }
 
 // replay carries one table of a seat's memory into this node's store, and says
@@ -562,36 +651,53 @@ type replayPull struct {
 // deleted and made again from one past the last sequence it received, and
 // the broker places the new one afresh, preferring the members its metadata
 // leader counts caught up (nats-server jetstream_cluster.go,
-// selectPeerGroup), so a draw lands on a copy that holds the barrier at least
-// one time in three on three members. So is a consumer the broker said is gone,
-// one that never got its pull (up to [jsapi.FirstPullRemakes] times in a row),
-// and one whose delivery the link lost. NOTHING IS SKIPPED: every message at
+// createGroupForConsumer), so a draw lands on a copy that holds the barrier at
+// least one time in three on three members. So is a consumer the broker said
+// is gone or whose pull it refused, one that never got its pull (up to
+// [jsapi.FirstPullRemakes] times in a row), and one whose delivery the link
+// lost; a placement that delivered nothing is followed by the next no sooner
+// than [copyBehindWait] after it ([tableReplay.again]), so a broker that
+// refuses every pull is asked for a consumer a second, not as fast as it
+// answers. NOTHING IS SKIPPED: every message at
 // or below where the new placement begins was received, or removed by a later
 // version that lies past it, and sequences are the stream's, so the argument
 // holds across copies. NOTHING IS READ TWICE: the new placement delivers
 // nothing at or below where it begins, and the upsert is idempotent anyway.
-// The copies staying behind for [behindWait] refuse the seat.
+// Nothing delivered for [behindWait], across every placement, refuses the seat
+// ([tableReplay.behind]).
+//
+// # A pull's rows are written before anything else is done
+//
+// Whatever ended the pull, the rows it delivered are written in its
+// transaction before the replay is placed again or refused: each was received
+// with no gap before it, and a placement begins past the last of them. So a
+// transaction the store fails fails the hydration, whatever ended the pull: a
+// replay placed again past rows that never committed would carry the seat
+// without them.
 func (s *Syncer) replay(ctx context.Context, run *hydrationRun, handle string, ref seatRef, spec table,
 	first uint64, orphaned map[string]int) (int, error) {
 
 	r := &tableReplay{s: s, run: run, handle: handle, ref: ref, spec: spec, orphaned: orphaned,
 		filter: tableFilter(ref.AgentID, spec.name), barrier: barrierSubject(ref.AgentID), first: first}
 	defer r.close(ctx)
-	if err := r.place(ctx, ""); err != nil {
+	if err := r.place(ctx, placeAgain{}); err != nil {
 		return r.carried, err
 	}
 	for {
 		done, err := r.pull(ctx)
-		// THE PULL'S ROWS, whatever ended it: each was received with no gap
-		// before it, so it is what the store holds of the changelog, and a
-		// placement after it begins past it.
-		if werr := r.write(ctx); werr != nil && err == nil {
+		var again placeAgain
+		placing := errors.As(err, &again)
+		// THE PULL'S ROWS, whatever ended it ("A pull's rows are written
+		// before anything else is done"). A pull's own failure outranks its
+		// rows' — a cut, a refusal — since a transaction cut with it fails
+		// for the same reason; a placement does not, since it would begin
+		// past them.
+		if werr := r.write(ctx); werr != nil && (err == nil || placing) {
 			return r.carried, werr
 		}
-		var again placeAgain
 		switch {
-		case errors.As(err, &again):
-			if perr := r.place(ctx, again.why); perr != nil {
+		case placing:
+			if perr := r.again(ctx, again); perr != nil {
 				return r.carried, perr
 			}
 		case err != nil:
@@ -600,6 +706,39 @@ func (s *Syncer) replay(ctx context.Context, run *hydrationRun, handle string, r
 			return r.carried, nil
 		}
 	}
+}
+
+// again places the replay again for a, once the behind clock allows it: armed
+// here where nothing armed it since the replay's last delivery, and refusing
+// the seat once nothing has been delivered for [behindWait] ([tableReplay.behind]).
+//
+// PACED: a placement that delivered nothing is followed by the next no sooner
+// than [copyBehindWait] after it was made, raft's heartbeat, by which a member
+// the metadata leader passed over is counted caught up again — the cadence
+// internal/queue/jetstream's copy reads place again at (placementPause). Every
+// placement is a delete and a create, each a proposal to the metadata group,
+// and a broker that refuses every pull at once was asked for them as fast as it
+// answered.
+func (r *tableReplay) again(ctx context.Context, a placeAgain) error {
+	now := time.Now()
+	if r.at.behindSince.IsZero() {
+		r.at.behindSince = now
+	}
+	if now.Sub(r.at.behindSince) >= behindWait {
+		return r.behind(ctx, a)
+	}
+	if r.at.delivered == 0 {
+		if wait := time.Until(r.at.placedAt.Add(copyBehindWait)); wait > 0 {
+			paced := time.NewTimer(wait)
+			defer paced.Stop()
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("memsync: replay %s's %s: %w", r.handle, r.spec.name, ctx.Err())
+			case <-paced.C:
+			}
+		}
+	}
+	return r.place(ctx, a)
 }
 
 // close stops the replay's pulls and deletes its consumer.
@@ -613,13 +752,16 @@ func (r *tableReplay) close(ctx context.Context) {
 }
 
 // place makes the replay's consumer, after deleting the one before it where
-// there was one: from the stream's start for the table's first placement, and
-// from one past the last sequence the replay received after it, on a copy the
-// broker chooses afresh, for why.
-func (r *tableReplay) place(ctx context.Context, why placeCause) error {
+// there was one: from the stream's start for the table's first placement (a
+// zero a), and from one past the last sequence the replay received after it,
+// on a copy the broker chooses afresh, for a's cause.
+func (r *tableReplay) place(ctx context.Context, a placeAgain) error {
 	r.close(ctx)
 	cfg := jetstream.ConsumerConfig{
-		Name:           nuid.Next(),
+		Name: nuid.Next(),
+		// NAMED FOR WHAT IT READS, so a consumer the broker lists while it
+		// stands, or until it is reaped, says whose replay it is.
+		Description:    fmt.Sprintf("memsync: a replay of %s's %s", r.handle, r.spec.name),
 		FilterSubjects: []string{r.filter, r.barrier},
 		DeliverPolicy:  jetstream.DeliverAllPolicy,
 		AckPolicy:      jetstream.AckNonePolicy,
@@ -641,10 +783,11 @@ func (r *tableReplay) place(ctx context.Context, why placeCause) error {
 	r.cons = cons
 	r.at.placements++
 	r.run.placements++
-	r.at.placedAt = time.Now()
-	if why != "" {
+	r.at.placedAt, r.at.delivered = time.Now(), 0
+	if a.why != "" {
 		r.s.info(ctx, "memory_replay_placed_again", "seat", r.handle, "table", r.spec.name,
-			"why", string(why), "reached", r.at.reached, "target", r.target(), "placement", r.at.placements)
+			"why", string(a.why), "detail", a.detail, "reached", r.at.reached, "target", r.target(),
+			"placement", r.at.placements)
 	}
 	return nil
 }
@@ -661,8 +804,14 @@ func (r *tableReplay) target() uint64 {
 // ask sends the replay's next pull: [fetchBatch] messages at the replay's
 // bound ([Syncer.pullBound]), or one message at the transport's for a row
 // past that bound.
+//
+// No more messages than the consumer takes in one pull ([namedPulls]), where
+// the broker set it fewer than [fetchBatch].
 func (r *tableReplay) ask() (*replayPull, error) {
 	p := &replayPull{n: fetchBatch, maxBytes: r.s.pullBound()}
+	if most := r.cons.RequestBatch(); most > 0 {
+		p.n = min(p.n, most)
+	}
 	if r.at.transport {
 		p.n, p.maxBytes, p.transport = 1, r.s.pullBytes(), true
 	}
@@ -675,7 +824,9 @@ func (r *tableReplay) ask() (*replayPull, error) {
 
 // pull asks one pull and reads it until it ends, the table ends, or the
 // replay must be placed again ([placeAgain]) or refused, and says whether the
-// table ended. One pull is out at a time.
+// table ended. One pull is out at a time: the window a pull is bounded by
+// ([Syncer.pullBound]) is the most a lease renewal waits behind only while
+// that holds.
 func (r *tableReplay) pull(ctx context.Context) (bool, error) {
 	p, err := r.ask()
 	if err != nil {
@@ -685,38 +836,16 @@ func (r *tableReplay) pull(ctx context.Context) (bool, error) {
 	heard := time.Now()
 	for {
 		r.s.slow(ctx, r.run, r.spec.name, len(r.staged))
-		until := heard.Add(stall)
-		wait := min(quietWait, time.Until(until))
-		if wait <= 0 {
-			return false, r.silence(ctx, p, stall)
-		}
-		next, cancel := context.WithTimeout(ctx, wait)
-		ev, err := r.cons.Next(next)
-		cancel()
+		ev, err := r.next(ctx, p, heard.Add(stall), stall)
 		switch {
-		case err == nil:
-		case ctx.Err() != nil:
-			return false, fmt.Errorf("memsync: replay %s's %s: %w", r.handle, r.spec.name, ctx.Err())
-		case errors.Is(err, jsapi.ErrDeliveryLost):
-			// DISCARDED, never staged: the replay is placed again past the
-			// last delivery it received whole.
-			return false, placeAgain{placedGap}
-		case errors.Is(err, context.DeadlineExceeded):
-			if !time.Now().Before(until) {
-				return false, r.silence(ctx, p, stall)
-			}
-			reasked, qerr := r.quiet(ctx, p, until, stall)
-			if qerr != nil {
+		case errors.Is(err, errQuiet):
+			if qerr := r.quiet(ctx, p, heard.Add(stall)); qerr != nil {
 				return false, qerr
 			}
-			if reasked {
-				heard = time.Now()
-			}
 			continue
-		default:
-			return false, fmt.Errorf("memsync: replay %s's %s: %w", r.handle, r.spec.name, err)
+		case err != nil:
+			return false, err
 		}
-		heard = time.Now()
 		switch ev.Kind {
 		case jsapi.Delivered:
 			done, err := r.receive(ctx, ev, p)
@@ -748,60 +877,110 @@ func (r *tableReplay) pull(ctx context.Context) (bool, error) {
 			return false, nil
 		default:
 			// REFUSED: the consumer deleted under the pull, its leader
-			// moving, nobody answering.
-			return false, placeAgain{placedGone}
+			// moving, a request limit, nobody answering.
+			return false, placeAgain{why: placedGone, detail: ev.Code + " " + ev.Description}
 		}
+		// HEARD ONCE THE WORD IS TAKEN, a delivery's end barrier included:
+		// the publish holds the replay from its inbox, and what arrives
+		// meanwhile is no silence of the copy's.
+		heard = time.Now()
 	}
 }
 
-// quiet asks the consumer what it says of itself once the replay has heard
-// nothing for [quietWait], under what is left of the silence clock, and acts
-// on it: a delivery still crossing is waited on, a copy that holds nothing is
-// behind, a consumer that never got its pull is made again, or once
-// [jsapi.FirstPullRemakes] remakes are spent, asked once more on the same
-// inbox, which it reports. Unanswered by until, the seat is refused for its
-// silence.
-func (r *tableReplay) quiet(ctx context.Context, p *replayPull, until time.Time,
-	stall time.Duration) (reasked bool, err error) {
+// errQuiet is a replay that has heard nothing for [quietWait], with its
+// silence clock still running ([tableReplay.next]).
+var errQuiet = errors.New("memsync: the replay has heard nothing for a while")
 
+// next is the next word on the replay's inbox for its pull p: waited for up
+// to [quietWait] and never past until, the end of the pull's silence, and
+// [errQuiet] where the quiet wait passes first. Once until has passed, the
+// word the inbox already holds, if any ([jsapi.Pulls.Ready]): the replay's own
+// requests — its end barrier, a probe of its consumer — hold it from its inbox,
+// and what arrived meanwhile is heard before the pull is called silent
+// ([tableReplay.silence]).
+func (r *tableReplay) next(ctx context.Context, p *replayPull, until time.Time,
+	stall time.Duration) (jsapi.Event, error) {
+
+	if wait := min(quietWait, time.Until(until)); wait > 0 {
+		waiting, cancel := context.WithTimeout(ctx, wait)
+		ev, err := r.cons.Next(waiting)
+		cancel()
+		switch {
+		case err == nil:
+			return ev, nil
+		case ctx.Err() != nil:
+			return ev, fmt.Errorf("memsync: replay %s's %s: %w", r.handle, r.spec.name, ctx.Err())
+		case !errors.Is(err, context.DeadlineExceeded):
+			return ev, r.unread(err)
+		case time.Now().Before(until):
+			return ev, errQuiet
+		}
+	}
+	ev, ok, err := r.cons.Ready()
+	switch {
+	case err != nil:
+		return ev, r.unread(err)
+	case !ok:
+		return ev, r.silence(ctx, p, stall)
+	}
+	return ev, nil
+}
+
+// unread is err, a word on the replay's inbox that could not be read, as the
+// pull's outcome: a delivery the link lost places the replay again past the
+// last it received whole, the lost one discarded, never staged.
+func (r *tableReplay) unread(err error) error {
+	if errors.Is(err, jsapi.ErrDeliveryLost) {
+		return placeAgain{why: placedGap, detail: err.Error()}
+	}
+	return fmt.Errorf("memsync: replay %s's %s: %w", r.handle, r.spec.name, err)
+}
+
+// quiet asks the consumer what it says of itself once the replay has heard
+// nothing for [quietWait], under what is left of the silence clock, until,
+// and acts on it: a delivery still crossing is waited on, a copy that holds
+// nothing is behind, and a consumer that never got its pull is made again.
+//
+// ONCE [jsapi.FirstPullRemakes] REMAKES ARE SPENT, its pull is waited for
+// like any other, under the silence clock, and nothing more is asked of it: a
+// consumer still without its pull after three remakes is behind a link slow
+// enough to hold the pull back, and the pull reaches it in the end. A second
+// pull asked beside it on the same inbox would stand with it once it did, and
+// with two pulls out every pull after them would be read against the other's
+// end, and twice the window would be out ahead of a lease renewal, for the
+// rest of the table.
+//
+// A probe unanswered by until returns with nothing to do: the pull's next
+// read hears what arrived during it, or calls it silent ([tableReplay.next]).
+func (r *tableReplay) quiet(ctx context.Context, p *replayPull, until time.Time) error {
 	probe, cancel := context.WithDeadline(ctx, until)
 	defer cancel()
 	says, _, err := r.cons.Quiet(probe, jsapi.Delivering(p.maxBytes, r.s.pace))
 	switch {
 	case err == nil:
 	case ctx.Err() != nil:
-		return false, fmt.Errorf("memsync: replay %s's %s: %w", r.handle, r.spec.name, ctx.Err())
+		return fmt.Errorf("memsync: replay %s's %s: %w", r.handle, r.spec.name, ctx.Err())
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
-		return false, placeAgain{placedGone}
+		return placeAgain{why: placedGone, detail: err.Error()}
 	case probe.Err() != nil:
-		return false, r.silence(ctx, p, stall)
+		return nil
 	default:
 		// AN ANSWER THAT SAYS THE CONSUMER IS NOT THE ONE THE REPLAY READ:
 		// one that counts fewer deliveries than arrived was made again under
 		// it.
-		return false, placeAgain{placedGone}
+		return placeAgain{why: placedGone, detail: err.Error()}
 	}
 	switch says {
 	case jsapi.StillCrossing:
-		return false, nil
+		return nil
 	case jsapi.Drained:
-		return false, r.nothing(ctx)
+		return r.nothing(ctx)
 	}
 	if r.at.remakes < jsapi.FirstPullRemakes {
 		r.at.remakes++
-		return false, placeAgain{placedUnpulled}
+		return placeAgain{why: placedUnpulled}
 	}
-	if p.reasked {
-		return false, nil
-	}
-	// THE REMAKES ARE SPENT: asked once more, on the same inbox, as a copy
-	// read does, and left to the silence clock.
-	p.reasked = true
-	if err := r.cons.Ask(p.n, p.maxBytes, pullExpiry, pullHeartbeat); err != nil {
-		return false, fmt.Errorf("memsync: replay %s's %s: %w", r.handle, r.spec.name, err)
-	}
-	r.run.pulls++
-	return true, nil
+	return nil
 }
 
 // nothing is a copy saying it holds nothing for the replay now — a heartbeat,
@@ -815,14 +994,14 @@ func (r *tableReplay) nothing(ctx context.Context) error {
 		r.at.behindSince = now
 	}
 	if now.Sub(r.at.behindSince) >= behindWait {
-		return r.behind(ctx)
+		return r.behind(ctx, placeAgain{why: placedBehind})
 	}
 	since := r.at.placedAt
 	if r.at.lastDelivery.After(since) {
 		since = r.at.lastDelivery
 	}
 	if now.Sub(since) >= copyBehindWait {
-		return placeAgain{placedBehind}
+		return placeAgain{why: placedBehind}
 	}
 	return nil
 }
@@ -834,6 +1013,7 @@ func (r *tableReplay) nothing(ctx context.Context) error {
 // nothing after it in the pull is read.
 func (r *tableReplay) receive(ctx context.Context, ev jsapi.Event, p *replayPull) (bool, error) {
 	p.delivered++
+	r.at.delivered++
 	seq := ev.Meta.Sequence.Stream
 	r.at.reached = seq
 	r.at.lastCount, r.at.counted = int(ev.Meta.NumPending), true
@@ -847,11 +1027,15 @@ func (r *tableReplay) receive(ctx context.Context, ev jsapi.Event, p *replayPull
 		if r.at.target == 0 && r.at.barrier >= r.first {
 			end, err := r.s.barrier(ctx, r.ref.AgentID,
 				fmt.Sprintf("the end barrier of %s's %s", r.handle, r.spec.name),
-				jsapi.Sending(0, r.s.pace)+jsapi.Delivering(p.maxBytes, r.s.pace))
+				r.s.endBarrierArrival(p.maxBytes))
 			if err != nil {
 				return false, err
 			}
 			r.at.target = end
+			// THE COPY IS HEARD FROM AGAIN ONLY ONCE THE PUBLISH HAS
+			// RETURNED: what it held for the replay meanwhile waited on
+			// the replay, not the replay on it ([copyBehindWait]).
+			r.at.lastDelivery = time.Now()
 		}
 		return r.at.target > 0 && r.at.barrier >= r.at.target, nil
 	}
@@ -933,21 +1117,37 @@ func (r *tableReplay) silence(ctx context.Context, p *replayPull, stall time.Dur
 	return fmt.Errorf("memsync: replay %s's %s: nothing arrived for %v, the %v request term and "+
 		"the %v a pull of %d bytes takes to arrive %s: the copy serving it had delivered the "+
 		"table's messages to sequence %d (%d rows carried) and %s; the barrier this replay reads "+
-		"to is at sequence %d; %d consumers made for the table", r.handle, r.spec.name, stall,
-		r.s.js.Options().DefaultTimeout, jsapi.Delivering(p.maxBytes, r.s.pace), p.maxBytes, where,
-		r.at.reached, r.carried, held, r.target(), r.at.placements)
+		"to is at sequence %d; %s for the table. The member serving the replay, or the link to "+
+		"it, stopped answering: look at that member and this node's connection to the broker. "+
+		"The seat is taken again at the next placement sweep, from the start of its memory",
+		r.handle, r.spec.name, stall, r.s.js.Options().DefaultTimeout,
+		jsapi.Delivering(p.maxBytes, r.s.pace), p.maxBytes, where, r.at.reached, r.carried, held,
+		r.target(), consumersMade(r.at.placements))
 }
 
-// behind refuses the seat for copies that held nothing past the replay's
-// position for [behindWait] without the barrier it reads to.
-func (r *tableReplay) behind(ctx context.Context) error {
+// behind refuses the seat for a replay its copies delivered nothing to for
+// [behindWait] while the barrier it reads to was owed, last for last's cause:
+// the rows it received are written first, and said.
+func (r *tableReplay) behind(ctx context.Context, last placeAgain) error {
 	if err := r.write(ctx); err != nil {
 		return err
 	}
-	return fmt.Errorf("memsync: replay %s's %s: every copy the broker placed it on held nothing "+
-		"past sequence %d for %v and had not applied the barrier at sequence %d: %d consumers "+
-		"made, %d rows carried", r.handle, r.spec.name, r.at.reached, behindWait, r.target(),
-		r.at.placements, r.carried)
+	return fmt.Errorf("memsync: replay %s's %s: no copy delivered anything past sequence %d for %v, "+
+		"and the barrier at sequence %d it reads to never arrived: %s for the table, the last "+
+		"ending because %s; %d rows carried. The changelog's copies were behind its leader, or "+
+		"the broker refused or lost the replay's pulls, for that long: look at a member "+
+		"restarting or catching up, and at what the last placement says. The seat is taken "+
+		"again at the next placement sweep, from the start of its memory",
+		r.handle, r.spec.name, r.at.reached, behindWait, r.target(), consumersMade(r.at.placements),
+		last.told(), r.carried)
+}
+
+// consumersMade says how many consumers a refusal's replay made.
+func consumersMade(n int) string {
+	if n == 1 {
+		return "1 consumer made"
+	}
+	return fmt.Sprintf("%d consumers made", n)
 }
 
 // rowPastPull refuses the seat for a row the broker would not send in a pull

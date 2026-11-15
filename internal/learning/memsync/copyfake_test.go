@@ -165,6 +165,21 @@ type copyScript struct {
 	// loses, when above 0, is the delivery, counted from the consumer's
 	// first, that the link loses.
 	loses uint64
+	// refuses, when set, is the description of the `409` every pull asked of
+	// the consumer is refused with: a consumer deleted under its pulls, or a
+	// limit the broker holds them to.
+	refuses string
+	// maxBatch, when above 0, is the most messages the consumer takes in one
+	// pull, as the reply that made it says; a pull asking more is refused
+	// (`409 Exceeded MaxRequestBatch of N`), as the broker refuses one.
+	maxBatch int
+	// firstPullAfter, when above 0, is how long the consumer's first pull
+	// takes to reach it: a pull held back by a slow link, which the consumer
+	// holds no word of until then.
+	firstPullAfter time.Duration
+	// probeUnanswered is a consumer whose info nobody answers, while its
+	// deliveries arrive.
+	probeUnanswered bool
 }
 
 // fakeCopies is every consumer one hydration makes on the model changelog,
@@ -328,8 +343,12 @@ type fakePull struct {
 	// heartbeats (nil where it asked for none).
 	expiry *time.Timer
 	beat   *time.Ticker
-	// dropped is a pull the consumer never received.
+	// dropped is a pull the consumer has not received: never, where
+	// reaches is nil, and otherwise once reaches fires.
 	dropped bool
+	reaches <-chan time.Time
+	// refusal, when set, is the status the consumer refuses the pull with.
+	refusal *jsapi.Event
 	rec     *askedPull
 }
 
@@ -419,8 +438,8 @@ func fakeSize(m fakeMsg) int {
 
 // fakeJS is the changelog's JetStream for a hydration on a bubble's clock:
 // its identity read, its barriers' publishes and its count of the retired
-// tables, all answered by the model changelog at once. A replay's consumers
-// are the copies' ([fakeCopies]).
+// tables, all answered by the model changelog at once unless a case says
+// otherwise. A replay's consumers are the copies' ([fakeCopies]).
 //
 // Embedded rather than stubbed: anything else called on it is a nil
 // interface's panic, which is a case reaching further than it means to.
@@ -431,6 +450,24 @@ type fakeJS struct {
 	conn    *nats.Conn
 	// replay, when set, serves the CreateConsumer of a table's replay.
 	replay func(ctx context.Context, cfg jetstream.ConsumerConfig) (jetstream.Consumer, error)
+
+	// identityUnanswered is a changelog whose info nobody answers.
+	identityUnanswered bool
+	// ackAfter, when set, is how long the acknowledgement of the nth
+	// publish of a barrier asked (from 1, each request counted) takes to
+	// come, the publish stored as it comes; a negative one never comes.
+	ackAfter func(n int) time.Duration
+	// countUnanswered is a count of a retired table whose create nobody
+	// answers.
+	countUnanswered bool
+
+	mu sync.Mutex
+	// publishes is the barrier publishes asked so far.
+	publishes int
+	// countAsked is when the first create of a retired table's count was
+	// asked, and deleteBounds the time each consumer's deletion was given.
+	countAsked   time.Time
+	deleteBounds []time.Duration
 }
 
 func (j *fakeJS) Options() jetstream.JetStreamOptions {
@@ -439,16 +476,39 @@ func (j *fakeJS) Options() jetstream.JetStreamOptions {
 
 func (j *fakeJS) Conn() *nats.Conn { return j.conn }
 
-func (j *fakeJS) Stream(context.Context, string) (jetstream.Stream, error) {
+func (j *fakeJS) Stream(ctx context.Context, _ string) (jetstream.Stream, error) {
+	if j.identityUnanswered {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return fakeStream{info: &jetstream.StreamInfo{Config: jetstream.StreamConfig{
 		Name:     topics.MemoryStream,
 		Metadata: map[string]string{statelog.CreatedAtKey: j.created.Format(time.RFC3339Nano)},
 	}, Created: j.created}}, nil
 }
 
-func (j *fakeJS) Publish(_ context.Context, subject string, data []byte,
+func (j *fakeJS) Publish(ctx context.Context, subject string, data []byte,
 	_ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 
+	j.mu.Lock()
+	j.publishes++
+	n := j.publishes
+	j.mu.Unlock()
+	if j.ackAfter != nil {
+		switch after := j.ackAfter(n); {
+		case after < 0:
+			<-ctx.Done()
+			return nil, ctx.Err()
+		case after > 0:
+			acked := time.NewTimer(after) //fixedwait:simulated a barrier's acknowledgement on its way
+			defer acked.Stop()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-acked.C:
+			}
+		}
+	}
 	return &jetstream.PubAck{Stream: topics.MemoryStream, Sequence: j.log.publish(subject, data)}, nil
 }
 
@@ -459,10 +519,29 @@ func (j *fakeJS) CreateConsumer(ctx context.Context, stream string,
 		return j.replay(ctx, cfg)
 	}
 	// A RETIRED TABLE'S COUNT, which the model changelog holds none of.
+	j.mu.Lock()
+	if j.countAsked.IsZero() {
+		j.countAsked = time.Now()
+	}
+	j.mu.Unlock()
+	if j.countUnanswered {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return countedConsumer{info: &jetstream.ConsumerInfo{Name: "count-" + cfg.FilterSubject}}, nil
 }
 
-func (j *fakeJS) DeleteConsumer(context.Context, string, string) error { return nil }
+func (j *fakeJS) DeleteConsumer(ctx context.Context, _, _ string) error {
+	deadline, ok := ctx.Deadline()
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	bound := time.Duration(-1)
+	if ok {
+		bound = time.Until(deadline) //fixedwait:measure the bound the deletion was handed, read on a bubble's clock that stands still meanwhile
+	}
+	j.deleteBounds = append(j.deleteBounds, bound)
+	return nil
+}
 
 type fakeStream struct {
 	jetstream.Stream
@@ -594,6 +673,18 @@ func (f *fakeConsumer) Ask(n, maxBytes int, expires, heartbeat time.Duration) er
 	f.pull = &fakePull{n: n, bytesLeft: maxBytes, bounded: maxBytes > 0,
 		expiry:  time.NewTimer(expires), //fixedwait:simulated the server holding a pull to its expiry
 		dropped: f.script.dropFirstPull && f.pullsAsked == 1, rec: rec}
+	if f.script.firstPullAfter > 0 && f.pullsAsked == 1 {
+		f.pull.dropped = true
+		f.pull.reaches = time.After(f.script.firstPullAfter) //fixedwait:simulated a pull crossing a slow link
+	}
+	switch {
+	case f.script.refuses != "":
+		f.pull.refusal = &jsapi.Event{Kind: jsapi.Refused, Code: "409", Description: f.script.refuses,
+			Ended: true}
+	case f.script.maxBatch > 0 && n > f.script.maxBatch:
+		f.pull.refusal = &jsapi.Event{Kind: jsapi.Refused, Code: "409",
+			Description: fmt.Sprintf("Exceeded MaxRequestBatch of %d", f.script.maxBatch), Ended: true}
+	}
 	if heartbeat > 0 {
 		f.pull.beat = time.NewTicker(heartbeat) //fixedwait:simulated the server's idle heartbeats
 	}
@@ -620,7 +711,9 @@ func (f *fakeConsumer) ended() {
 	f.pull = nil
 }
 
-// Next is the next word on the replay's inbox before ctx ends.
+// Next is the next word on the replay's inbox before ctx ends. A word that is
+// ready is answered ahead of ctx's ending, so [fakeConsumer.Ready] reads what
+// the inbox holds on a context already over.
 func (f *fakeConsumer) Next(ctx context.Context) (jsapi.Event, error) {
 	for {
 		switch {
@@ -629,9 +722,13 @@ func (f *fakeConsumer) Next(ctx context.Context) (jsapi.Event, error) {
 		case f.inflight != nil:
 			if f.arrival != nil {
 				select {
-				case <-ctx.Done():
-					return jsapi.Event{}, ctx.Err()
 				case <-f.arrival.C:
+				default:
+					select {
+					case <-ctx.Done():
+						return jsapi.Event{}, ctx.Err()
+					case <-f.arrival.C:
+					}
 				}
 			}
 			return f.arrive()
@@ -643,10 +740,28 @@ func (f *fakeConsumer) Next(ctx context.Context) (jsapi.Event, error) {
 			f.ended()
 			return jsapi.Event{Kind: jsapi.BatchCompleted, Code: "409",
 				Description: "Batch Completed", Ended: true}, nil
-		case f.pull == nil || f.pull.dropped:
+		case f.pull == nil:
 			// NO PULL THE CONSUMER HOLDS: nothing ever comes.
 			<-ctx.Done()
 			return jsapi.Event{}, ctx.Err()
+		case f.pull.dropped:
+			// A PULL THE CONSUMER HAS NOT RECEIVED: nothing comes until it
+			// does, and never for one it never will.
+			select {
+			case <-f.pull.reaches:
+			default:
+				select {
+				case <-ctx.Done():
+					return jsapi.Event{}, ctx.Err()
+				case <-f.pull.reaches:
+				}
+			}
+			f.pull.dropped, f.pull.reaches = false, nil
+			continue
+		case f.pull.refusal != nil:
+			ev := *f.pull.refusal
+			f.ended()
+			return ev, nil
 		}
 		if held := f.held(); len(held) > 0 && f.pull.bounded && fakeSize(held[0]) > f.pull.bytesLeft {
 			f.ended()
@@ -669,20 +784,56 @@ func (f *fakeConsumer) Next(ctx context.Context) (jsapi.Event, error) {
 		if f.pull.beat != nil {
 			beat = f.pull.beat.C
 		}
+		moved, caught := f.copies.log.waiting(), f.catching()
+		select {
+		case <-moved:
+			continue
+		case <-caught:
+			continue
+		case <-f.pull.expiry.C:
+			return f.expired(), nil
+		case <-beat:
+			return fakeHeartbeat, nil
+		default:
+		}
 		select {
 		case <-ctx.Done():
 			return jsapi.Event{}, ctx.Err()
-		case <-f.copies.log.waiting():
-		case <-f.catching():
+		case <-moved:
+		case <-caught:
 		case <-f.pull.expiry.C:
-			f.ended()
-			return jsapi.Event{Kind: jsapi.Expired, Code: "408", Description: "Request Timeout",
-				Ended: true}, nil
+			return f.expired(), nil
 		case <-beat:
-			return jsapi.Event{Kind: jsapi.Heartbeat, Code: "100", Description: "Idle Heartbeat"}, nil
+			return fakeHeartbeat, nil
 		}
 	}
 }
+
+// fakeHeartbeat is an idle heartbeat.
+var fakeHeartbeat = jsapi.Event{Kind: jsapi.Heartbeat, Code: "100", Description: "Idle Heartbeat"}
+
+// expired ends the consumer's pull at its expiry.
+func (f *fakeConsumer) expired() jsapi.Event {
+	f.ended()
+	return jsapi.Event{Kind: jsapi.Expired, Code: "408", Description: "Request Timeout", Ended: true}
+}
+
+// Ready is the word the replay's inbox already holds, without waiting.
+func (f *fakeConsumer) Ready() (jsapi.Event, bool, error) {
+	over, cancel := context.WithCancel(context.Background())
+	cancel()
+	ev, err := f.Next(over)
+	switch {
+	case errors.Is(err, context.Canceled):
+		return jsapi.Event{}, false, nil
+	case err != nil:
+		return jsapi.Event{}, false, err
+	}
+	return ev, true, nil
+}
+
+// RequestBatch is the most messages the consumer takes in one pull.
+func (f *fakeConsumer) RequestBatch() int { return f.script.maxBatch }
 
 // arrive hands the delivery in flight over, counted against the open pull.
 func (f *fakeConsumer) arrive() (jsapi.Event, error) {
@@ -717,7 +868,7 @@ func (f *fakeConsumer) arrive() (jsapi.Event, error) {
 func (f *fakeConsumer) Quiet(ctx context.Context, _ time.Duration) (jsapi.QuietSays,
 	*jetstream.ConsumerInfo, error) {
 
-	if f.silent() {
+	if f.silent() || f.script.probeUnanswered {
 		<-ctx.Done()
 		return "", nil, ctx.Err()
 	}

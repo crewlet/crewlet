@@ -674,24 +674,24 @@ func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spe
 // # Bounded by its progress, never by a total
 //
 // A hydration has no deadline of its own: it takes what its bytes take, and
-// fails only where nothing arrives for a pull's stall, or where every copy a
-// replay is placed on stays behind its barrier for a minute (replay.go's
-// head). Every request it makes keeps its own bound. What waits for a long
+// time refuses it only where nothing arrives for a pull's stall, or where no
+// copy a replay is placed on delivers anything for a minute (replay.go's
+// head); the answers that refuse a seat whatever the time refuse it too. Every request it makes keeps its own bound. What waits for a long
 // hydration is the seat host's placement pass that runs it (docs/concepts/
 // seat-ownership.md, "What waits for a long hydration"); its lease is renewed
 // throughout, and a lost lease, a drain or a stop cuts it, through ctx.
 //
 // # A hydration writes
 //
-// The barrier is a WRITE, the one a hydration makes before it reads a row, so
-// a broker that refuses this node's writes refuses its hydrations, as it
-// already refuses the seat's mailbox and its memory's publishes. An account or
-// a server at its storage limit answers the publish with its refusal, which
-// refuses the seat wrapped whole. A user without publish permission on the
-// memory subjects (crewlet.memory.>) is refused with no acknowledgement at
-// all, only an error the broker sends the connection, and the hydration names
-// that error once the publish has gone unanswered for as long as it is asked
-// ([Syncer.barrier]). The barrier is no
+// The barriers are WRITES, the only ones a hydration makes, the first before
+// it reads a row, so a broker that refuses this node's writes refuses its
+// hydrations, as it already refuses the seat's mailbox and its memory's
+// publishes. An account or a server at its storage limit answers the publish
+// with its refusal, which refuses the seat wrapped whole. A user without
+// publish permission on the memory subjects (crewlet.memory.>) is refused
+// with no acknowledgement at all, only an error the broker sends the
+// connection, and the hydration names that error once the publish has gone
+// unanswered for as long as it is asked ([Syncer.barrier]). A barrier is no
 // row and takes none away: its subject is no table's, and nothing on the
 // changelog makes room for a message but the stream's one message per subject
 // (topics.MemoryBarrierToken).
@@ -908,6 +908,7 @@ func (s *Syncer) held(ctx context.Context, filter string) (int, error) {
 	name := nuid.Next()
 	consumer, err := s.createConsumer(ctx, jetstream.ConsumerConfig{
 		Name:              name,
+		Description:       "memsync: a count of " + filter,
 		FilterSubject:     filter,
 		DeliverPolicy:     jetstream.DeliverAllPolicy,
 		AckPolicy:         jetstream.AckNonePolicy,
@@ -1183,9 +1184,12 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 // it waits behind: the publish's own crossing at the floor across a link
 // ([jsapi.Sending]), and for an end barrier the rest of the pull its replay
 // has out, which the acknowledgement queues behind on the same connection
-// ([jsapi.Delivering]) — so across a link at the window it is asked once in
-// about 21.5 seconds rather than asked again behind the bytes the first is
-// waiting on. Only the stream's leader takes a publish — no other member
+// ([Syncer.endBarrierArrival]) — so an end barrier is presumed lost after
+// about 9.0 seconds in a member's own process at the transport's bound and
+// asked again at 10, and across a link at the window after about 16.5 seconds
+// and asked again at 17.5, rather than asked again behind the bytes the first
+// is waiting on; the identity reads and the hydration's first barrier, which
+// wait behind no pull, are asked every two seconds. Only the stream's leader takes a publish — no other member
 // subscribes to the stream's subjects (nats-server stream.go, setLeader) — and
 // a member that still believes it leads after its group has moved on drops
 // one without a reply: one it queued while it led and takes once it no longer

@@ -73,7 +73,7 @@ func TestAReplayServedByACopyThatIsBehindIsNeverAShortHydration(t *testing.T) {
 					t.Fatalf("Hydrate reported success with %d of %d rows: the seat would serve "+
 						"having forgotten the newest thing it learned", carried, len(tables))
 				}
-				if !says(err, "had not applied the barrier at sequence") {
+				if !says(err, "it reads to never arrived", "its copy held nothing for it") {
 					t.Errorf("the hydration was refused for another reason than the barrier its "+
 						"copies never delivered: %v", err)
 				}

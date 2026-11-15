@@ -154,21 +154,21 @@ func TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat(
 	}
 }
 
-// A FAILED FETCH REPORTS NONE OF THE ROWS ITS TRANSACTION ROLLED BACK.
+// A FAILED PULL REPORTS NONE OF THE ROWS ITS TRANSACTION ROLLED BACK.
 //
-// A hydration writes each fetch in one transaction, so a row the store refuses
-// rolls back every row of its fetch. They were counted as they were written,
-// inside the transaction, so a hydration that failed reported rows it had
-// rolled back: with the store holding none of the seat's rows, it said it had
-// carried some. A fetch's rows are counted once its transaction commits, so a
-// failed hydration reports exactly the rows it left in the store. The row the
-// store refuses here is an episode carrying nothing but its id, which breaks
-// the table's NOT NULL columns, behind the seat's own episode in one fetch and
-// behind the diary.
+// A hydration writes each pull's rows in one transaction, so a row the store
+// refuses rolls back every row of its pull. They were counted as they were
+// written, inside the transaction, so a hydration that failed reported rows it
+// had rolled back: with the store holding none of the seat's rows, it said it
+// had carried some. A pull's rows are counted once its transaction commits, so
+// a failed hydration reports exactly the rows it left in the store. The row
+// the store refuses here is an episode carrying nothing but its id, which
+// breaks the table's NOT NULL columns, behind the seat's own episode in one
+// pull and behind the diary.
 //
 // Mutation: count each row as it is written, inside the transaction, and this
 // goes red.
-func TestAFailedFetchReportsNoneOfTheRowsItsTransactionRolledBack(t *testing.T) {
+func TestAFailedPullReportsNoneOfTheRowsItsTransactionRolledBack(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
 	holder := openStore(t)

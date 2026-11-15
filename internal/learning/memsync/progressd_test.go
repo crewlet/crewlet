@@ -46,10 +46,11 @@ func TestEveryPlacementBehindRefusesTheSeatAfterAMinute(t *testing.T) {
 			t.Fatalf("the hydration was still running past the minute its copies stayed behind")
 		}
 		made := len(copies.openedFor("agent_diary"))
-		if made < 2 || !says(h.err, "held nothing past sequence 2 for 1m0s",
-			"had not applied the barrier at sequence 4", fmt.Sprintf("%d consumers made", made)) {
+		if made < 2 || !says(h.err, "no copy delivered anything past sequence 2 for 1m0s",
+			"the barrier at sequence 4 it reads to never arrived", fmt.Sprintf("%d consumers made", made),
+			"the last ending because its copy held nothing for it", "the next placement sweep") {
 			t.Errorf("the refusal = %v, want it to name sequence 2, the minute, the barrier at "+
-				"sequence 4 and the %d consumers made", h.err, made)
+				"sequence 4, the %d consumers made, why the last ended and what happens next", h.err, made)
 		}
 	})
 }
@@ -123,18 +124,24 @@ func TestAPullStillCrossingIsNeitherAStallNorAskedAgain(t *testing.T) {
 	})
 }
 
-// A REPLACEMENT STORED BEFORE THE BARRIER'S DELIVERY COMES BEFORE THE END
-// BARRIER, ON THE BROKER THIS BUILD RUNS.
+// A ROW REPLACED AHEAD OF A REPLAY IS DELIVERED BEFORE ITS END BARRIER, ON THE
+// BROKER THIS BUILD RUNS.
 //
 // The end barrier's proof rests on the server delivering a consumer's copy in
-// sequence order from its store, so a row replaced after the consumer passed
-// its old version is delivered at its new sequence, below a barrier published
-// after it (nats-server consumer.go, getNextMsg). Held here on the embedded
-// server: rows and a barrier, a consumer delivering to the barrier, a
-// replacement of an earlier row, then the end barrier; reading on delivers the
-// replacement, then the end barrier. A nats-server bump that changes the order
-// turns this red.
-func TestAReplacementStoredBeforeTheBarriersDeliveryComesBeforeTheEndBarrierOnTheBrokerThisBuildRuns(t *testing.T) {
+// sequence order from its store, reading the store at each delivery, so a row
+// replaced after the replay's barrier was stored and before the replay
+// reached the row is delivered at its NEW sequence, past that barrier and
+// below an end barrier published after it (nats-server consumer.go,
+// getNextMsg). Held here on the embedded server, as a replay reads, one
+// message a pull: two notes and a barrier; a pull takes the first note; the
+// second, not yet delivered, is replaced, which removes its first version
+// ahead of the consumer and stores the replacement past the barrier; the next
+// pull takes the barrier, its first version skipped; the end barrier is
+// published once the barrier has arrived, as a replay publishes it; and
+// reading on delivers the replacement and then the end barrier. The first
+// version is never delivered, and the replacement is not missed. A
+// nats-server bump that changes that order turns this red.
+func TestARowReplacedAheadOfAReplayIsDeliveredBeforeTheEndBarrierOnTheBrokerThisBuildRuns(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
 	s := syncerOn(t, openStore(t), conn)
@@ -157,36 +164,53 @@ func TestAReplacementStoredBeforeTheBarriersDeliveryComesBeforeTheEndBarrierOnTh
 		t.Fatalf("open the consumer: %v", err)
 	}
 	t.Cleanup(func() { pulls.Stop(); s.replays().drop(t.Context(), pulls.Name()) })
-	if err := pulls.Ask(fetchBatch, s.pullBytes(), time.Minute, 0); err != nil {
-		t.Fatalf("ask: %v", err)
-	}
-	read := func(want int) []uint64 {
+	// read asks one pull of n messages, with no byte bound, so it ends at
+	// its count's last delivery and nothing follows it, and answers the
+	// subject and stream sequence of each delivery.
+	read := func(n int) []string {
 		t.Helper()
-		var seqs []uint64
-		for len(seqs) < want {
+		if err := pulls.Ask(n, 0, time.Minute, 0); err != nil {
+			t.Fatalf("ask: %v", err)
+		}
+		var got []string
+		for len(got) < n {
 			ev, err := pulls.Next(t.Context())
 			if err != nil {
 				t.Fatalf("read the consumer: %v", err)
 			}
-			if ev.Kind == jsapi.Delivered {
-				seqs = append(seqs, ev.Meta.Sequence.Stream)
+			if ev.Kind != jsapi.Delivered {
+				t.Fatalf("the pull of %d ended with %s %s after %v", n, ev.Code, ev.Description, got)
 			}
+			got = append(got, fmt.Sprintf("%s@%d", ev.Msg.Subject, ev.Meta.Sequence.Stream))
 		}
-		return seqs
+		return got
 	}
-	if got := read(3); got[2] != barrier {
-		t.Fatalf("the consumer delivered %v, want the two notes and then the barrier at %d", got, barrier)
+	at := func(subject string) string {
+		return fmt.Sprintf("%s@%d", subject, sequenceOf(t, conn, subject))
 	}
-	replaced := noteOfSize(t, "first", 600)
-	publishOn(t, conn, diary.subject(seat.AgentID, replaced.Values), replaced)
-	stored := sequenceOf(t, conn, diary.subject(seat.AgentID, replaced.Values))
+	firstSubject := diary.subject(seat.AgentID, first.Values)
+	secondSubject := diary.subject(seat.AgentID, second.Values)
+	if got, want := read(1), at(firstSubject); got[0] != want {
+		t.Fatalf("the first pull delivered %v, want the first note, %s", got, want)
+	}
+	replaced := noteOfSize(t, "second", 600)
+	publishOn(t, conn, secondSubject, replaced)
+	stored := sequenceOf(t, conn, secondSubject)
+	if stored <= barrier {
+		t.Fatalf("the premise: the replacement was stored at %d, not past the barrier at %d", stored, barrier)
+	}
+	b := barrierSubject(seat.AgentID)
+	if got, want := read(1), fmt.Sprintf("%s@%d", b, barrier); got[0] != want {
+		t.Fatalf("the pull after the first note delivered %v, want the barrier, %s, the replaced "+
+			"note's first version skipped", got, want)
+	}
 	end, err := s.barrier(t.Context(), seat.AgentID, "the end barrier", 0)
 	if err != nil {
 		t.Fatalf("publish the end barrier: %v", err)
 	}
-	if got := read(2); !slices.Equal(got, []uint64{stored, end}) || stored > end {
-		t.Errorf("reading on delivered %v, want the replacement at %d and then the end barrier at %d",
-			got, stored, end)
+	want := []string{fmt.Sprintf("%s@%d", secondSubject, stored), fmt.Sprintf("%s@%d", b, end)}
+	if got := read(2); !slices.Equal(got, want) {
+		t.Errorf("reading on delivered %v, want the replacement and then the end barrier, %v", got, want)
 	}
 }
 
@@ -249,10 +273,24 @@ func TestTheHydrationLinesSayWhatItTook(t *testing.T) {
 //
 // A pull's heartbeat at most half its expiry, which the server requires; the
 // expiry the moment the replay calls its copy behind; four heartbeats inside
-// the quiet wait; the behind bound the object store's stall; and across a
-// link the window what the floor carries within the lease's heartbeat.
+// the quiet wait; the behind bound the object store's stall; across a link
+// the window what the floor carries within the lease's heartbeat; and on
+// either topology a replay's consumer kept by the broker past the last bytes
+// of a pull at the transport's bound and an end barrier asked to its ceiling
+// behind them, the longest a live replay goes between two pulls.
 func TestTheReplaysKnobsHoldTheirReasons(t *testing.T) {
 	t.Parallel()
+	agentID := func(string) string { return seat.AgentID }
+	for _, s := range []*Syncer{newSyncer(openStore(t), &fakeJS{}, agentID),
+		newSyncerAcross(openStore(t), &fakeJS{}, agentID)} {
+		s.copies = newFakeCopies(newFakeChangelog())
+		n := s.pullBytes()
+		between := jsapi.Delivering(n, s.pace) + s.timing.Arriving(s.endBarrierArrival(n)).Lookup
+		if reap := s.reapAfter(); reap < between {
+			t.Errorf("a replay's consumer is reaped %v after its last word, before the %v a live "+
+				"replay may take to ask its next pull (pace %v)", reap, between, s.pace)
+		}
+	}
 	if 2*pullHeartbeat > pullExpiry {
 		t.Errorf("a pull's heartbeat of %v is more than half its expiry of %v", pullHeartbeat, pullExpiry)
 	}
