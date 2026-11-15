@@ -139,8 +139,10 @@ other permission is looked up by part of its name with
 it changes things, and whether the connection can grant it. Crewlet grants
 only what the company's own connection to the vendor holds: where that
 connection lacks a permission (Cloudflare's provisioner token without
-Origin Rules: Edit, say), the read names what a person adds to it at the vendor
-and where, and Ask Crewlet says so. Adding it is a person's step at the vendor;
+Origin Rules: Edit, say), the read names what a person adds to it at the vendor,
+and its card carries a link to that page, built by the engine from the vendor's
+catalogue and opened only after the dashboard names its destination. Ask
+Crewlet says so, and never writes a vendor's address itself. Adding it is a person's step at the vendor;
 the catalogue is read again within a minute, and the permission can then be
 granted to the agent in Crewlet.
 

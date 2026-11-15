@@ -90,31 +90,75 @@ func wordGrants(out *LaneView, offer Options, la LaneAnswer, q ViewQuery) {
 	out.Grantable = grantableWords(out.Integration, beside, lacking)
 
 	var lines []string
+	var worded []GrantEntry
 	seen := map[string]bool{}
 	for _, id := range named {
 		if e, ok := offer.Grantable(id); ok && !seen[e.ID] {
 			seen[e.ID] = true
 			lines = append(lines, entryWords(offer, e, want.Level))
+			worded = append(worded, e)
 		}
 	}
 	out.Permissions = strings.Join(lines, "; ")
 
-	if lookup == "" {
-		return
+	if lookup != "" {
+		for _, e := range offer.Grants {
+			if !entryMatches(e, lookup) {
+				continue
+			}
+			if len(out.Lookup) == MaxLookup {
+				out.LookupMore = true
+				break
+			}
+			out.Lookup = append(out.Lookup, lookupEntry(offer, e, want.Level))
+			worded = append(worded, e)
+		}
+		if len(out.Lookup) == 0 {
+			out.LookupNote = "No permission in " + out.Integration + "'s catalogue matches " +
+				strconv.Quote(lookup)
+		}
 	}
-	for _, e := range offer.Grants {
-		if !entryMatches(e, lookup) {
+	out.AtVendor = vendorStep(out.Integration, worded)
+}
+
+// VendorStep is what a person adds to the company's own connection at a vendor
+// (Cloudflare's provisioner token, say): Crewlet grants only what it holds.
+type VendorStep struct {
+	// Label says the step, naming the vendor.
+	Label string `json:"label"`
+
+	// Add is each permission to add, as the vendor shows it.
+	Add []string `json:"add"`
+
+	// URL is where, from the catalogue's engine-built [GrantEntry.ActionURL].
+	URL string `json:"url,omitempty" link:"engine"`
+}
+
+// vendorStep is the step the unavailable entries ask of a person, or nil.
+func vendorStep(integration string, entries []GrantEntry) *VendorStep {
+	var step VendorStep
+	for _, e := range entries {
+		if e.Unavailable == "" {
 			continue
 		}
-		if len(out.Lookup) == MaxLookup {
-			out.LookupMore = true
-			break
+		add := e.Missing
+		if len(add) == 0 {
+			add = []string{e.Name}
 		}
-		out.Lookup = append(out.Lookup, lookupEntry(offer, e, want.Level))
+		for _, a := range add {
+			if !slices.Contains(step.Add, a) {
+				step.Add = append(step.Add, a)
+			}
+		}
+		if step.URL == "" {
+			step.URL = e.ActionURL
+		}
 	}
-	if len(out.Lookup) == 0 {
-		out.LookupNote = "No permission in " + out.Integration + "'s catalogue matches " + strconv.Quote(lookup)
+	if len(step.Add) == 0 {
+		return nil
 	}
+	step.Label = "Add to the company's connection at " + integration
+	return &step
 }
 
 // LookupEntry is one catalogue entry a lookup matched, judged for one seat.

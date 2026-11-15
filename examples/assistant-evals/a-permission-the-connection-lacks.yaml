@@ -58,6 +58,10 @@ answers:
         things, in no level): The provisioner token does not hold Origin Rules:
         Edit; a person adds Origin Rules: Edit to the company's connection at
         https://dash.cloudflare.com/profile/api-tokens
+      at_vendor:
+        label: Add to the company's connection at Cloudflare
+        add: ["Origin Rules: Edit"]
+        url: https://dash.cloudflare.com/profile/api-tokens
       lookup:
         - {id: Origin Read, name: "Origin Rules: Read", group: Zone, write: false, level: No level, grantable: "Yes"}
         - id: Origin Write
@@ -98,4 +102,6 @@ expect:
     - Permissions in the catalogue
     - Add at the vendor
     - "The provisioner token does not hold Origin Rules: Edit"
+    - Add at the vendor first
+    - Add to the company's connection at Cloudflare
   says: [no Cloudflare level holds, add it to that token at Cloudflare]

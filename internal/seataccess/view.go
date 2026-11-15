@@ -77,6 +77,10 @@ type LaneView struct {
 	LookupMore bool          `json:"lookup_more,omitempty"`
 	LookupNote string        `json:"lookup_note,omitempty"`
 
+	// AtVendor is what a person adds to the company's connection at the vendor
+	// before a permission named here can be granted; nil where nothing is missing.
+	AtVendor *VendorStep `json:"at_vendor,omitempty"`
+
 	// CheckedAt is when a pass last read the vendor for this lane, a dry run
 	// included; AppliedAt when a sync last wrote it, Outcome how that ended
 	// and Refusal the vendor's reason with its remedy where it failed.
