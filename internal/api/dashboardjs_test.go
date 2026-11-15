@@ -1468,7 +1468,8 @@ const (
 	// built on: Worklet's task operations and the polish, the kit's
 	// punctuation peel a marked chip now takes among it, in the shared chunk.
 	// So it moved to 418 KiB, 2.28 seconds.
-	initialBudget = 418 << 10
+	// Delegated decisions made readable, on kit 0.134.0: 418.0 KiB, 508 bytes over main: 419 KiB, 2.29 seconds.
+	initialBudget = 419 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2636,6 +2637,7 @@ const (
 	// The company's sign-in policy changed in place (Settings › Sign-in
 	// policy's pencils, a duration typed as one) takes it to 6316.7 KiB
 	// (6,468,275 bytes): 6317 KiB.
+	// Delegated decisions made readable, on kit 0.134.0: 6322.5 KiB, 9,271 bytes over main: 6323 KiB.
 	treeBudget = 5<<20 + 1205<<10
 )
 

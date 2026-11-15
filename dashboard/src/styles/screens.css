@@ -8974,37 +8974,83 @@ a.live-row:hover {
 }
 
 /* SETTINGS › DELEGATED DECISIONS: what the switch's change came to, under the
-   card's head, and one required-checks entry as a row (the repository, its
-   branch, the checks taking what is left, its bin). */
+   card's head. */
 .delegated-rules-status {
   padding: var(--spacing-2) var(--spacing-3);
 }
 .delegated-rules-status:has(> .ceiling-status:empty) {
   display: none;
 }
-/* The kinds a rule decides: a group of checkboxes named by its label, with
-   none of the browser's frame around a fieldset. */
+/* One rule as a sentence: what and who on the first line, the rest under it. */
+.delegated-rule {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.delegated-rule-head,
+.delegated-rule-meta {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--spacing-2);
+  row-gap: var(--spacing-1);
+}
+.delegated-rule-arrow {
+  align-self: center;
+  color: var(--color-text-tertiary);
+}
+.delegated-rule-meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+/* The dot trails its item, so a wrapped line never starts with one. */
+.delegated-rule-meta > :not(:last-child)::after {
+  content: "·";
+  margin-left: var(--spacing-2);
+  color: var(--color-text-tertiary);
+}
+/* The sheet's groups, a rule between each. */
+.delegated-form-group + .delegated-form-group {
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-4);
+}
 .delegated-kinds {
   margin: 0;
   padding: 0;
   border: 0;
   min-width: 0;
 }
-.delegated-kinds > legend {
-  padding: 0;
-  margin-bottom: var(--spacing-1);
+.delegated-field-error {
+  color: var(--color-feedback-danger-ink);
 }
+.delegated-sample-custom {
+  align-items: center;
+}
+/* One required-checks entry: the repository, its branch and its bin on a row
+   that wraps, the checks under them. */
 .delegated-checks-entry {
-  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
 }
-.delegated-checks-entry > :nth-child(1),
-.delegated-checks-entry > :nth-child(2) {
-  flex: 0 0 9rem;
-  min-width: 0;
+.delegated-checks-target {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr) auto;
+  gap: var(--spacing-2);
+  align-items: center;
 }
-.delegated-checks-entry > :nth-child(3) {
-  flex: 1 1 auto;
-  min-width: 0;
+@media (width < 640px) {
+  .delegated-checks-target {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .delegated-checks-target > :nth-child(2) {
+    grid-row: 2;
+  }
 }
 
 /* SETTINGS › CONFIGURATION › ENTITIES: a list and the one it opened. A fixed

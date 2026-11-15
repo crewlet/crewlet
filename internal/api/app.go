@@ -964,6 +964,7 @@ func New(opts Options) (*App, error) {
 	// (ADR-0125).
 	if d, ok := opts.Runtime.(delegatedRuntime); ok {
 		sources.Delegated = d.DelegatedReads()
+		sources.DelegatedGitHub = d.DelegatedGitHub()
 	}
 	// And the company's atlas, where the runtime reads one (ADR-0126).
 	if a, ok := opts.Runtime.(atlasRuntime); ok {
