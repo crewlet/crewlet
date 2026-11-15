@@ -228,10 +228,13 @@ export function useSpaces(): {
   error: QueryErrorCode | null;
   /** Why the read was refused, beside `error`: what `QueryState` names. */
   refusal: QueryRefusal | LogRefusal | null;
+  /** The space tool skills are written in, "" where the company has none. */
+  skills: string;
 } {
   const containers = useQuery("containers", undefined, { pollMs: SPACES_POLL_MS });
   return {
     spaces: containers.data?.containers ?? [],
+    skills: containers.data?.skills ?? "",
     read: containers.data !== null,
     loading: containers.loading,
     error: containers.error,

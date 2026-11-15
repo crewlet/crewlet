@@ -9404,7 +9404,11 @@ own index). A head asks and never sorts here: it would order the rows one window
 held, so past a window "Updated" put the newest of the alphabetically first
 skills at the top. The engine reads each order one way, so a second press goes
 back to the default. Home's **Agent skills** widget asks for the newest the same
-way, a widget's window of the engine's order.
+way, a widget's window of the engine's order. **An empty catalogue says where
+a tool skill goes**: the space the engine names for them (`containers`
+answers `skills`, its key), linked, and **New page** filed in it, held for
+anybody but an admin, who alone may write there; a company with tool skills
+turned off is told so.
 **Learned** (`kind=learned&seat=`) is one agent
 seat's synthesized skills from `agent_memory`, answered by the node holding
 the seat, with "n of total" when the page is cut. Their order is the HOLDER's
@@ -9419,14 +9423,19 @@ used" was the most used of the newest fifty.
 `#/doclet/diaries` lists EVERY agent seat in the chart (the landing it
 replaced stopped at a dozen), from `memory_overview`: each agent's newest note,
 when it was written, and its entry, episode and skill TOTALS, counted by the
-node holding the agent, which the row names. An agent no node holds says so
-and shows no counts, since no copy of its memory is current; an agent whose
-holder did not answer says that instead of drawing zeros, and the partial
-callout every fleet answer draws names the node and why. The landing's **Agent
+node holding the agent. No row names that node: which node runs an agent is
+the fleet's business (Settings › Nodes, the seat's own page), and a column of
+raw node names, the same on every row of a one-node company, was the one a
+narrow screen kept longest. An agent no node holds says so and shows no
+counts, since no copy of its memory is current; an agent whose holder did not
+answer says that instead of drawing zeros, and the partial callout every
+fleet answer draws names the node and why. The landing's **Agent
 diaries** row counts the agents listed. `#/doclet/diaries/{handle}` is one
 agent's diary and episodes (the same two cards its page's Memory section
-draws, from the same holder-answered `agent_memory`), with the node that
-answered, or the reason nothing is shown, and the way to its whole memory.
+draws, from the same holder-answered `agent_memory`), with when it last wrote,
+or the reason nothing is shown, and the way to its whole memory: a link to
+the seat's learned skills and remembered colleagues, and plain words when it
+has neither, since a link to nothing more is no way anywhere.
 
 ## Spend: tokens by phase, agent and model
 

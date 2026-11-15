@@ -345,3 +345,47 @@ test("a seat's learned skills in flight are a wait, not a seat that learned noth
   expect(screen.queryByText(/has learned no skills yet/)).toBeNull();
   expect(document.querySelector('[aria-busy="true"]')).not.toBeNull();
 });
+
+// AN EMPTY CATALOGUE SAYS WHERE A SKILL GOES, and offers the way there. It
+// said "Add a page to the skills space that names a tool." with no link to
+// that space and no page to start; the engine names the space
+// (`containers.skills`). The new page is an admin's to write, held for
+// anybody else, and a company with tool skills off is told so.
+test("an empty catalogue links the tool skills space and offers a page filed in it", async () => {
+  const containers = {
+    containers: [{ key: "TS", name: "Tool skills", pages: 0 }],
+    skills: "TS",
+  };
+  mount({ pages: { pages: [], limit: 500, total: 0 }, containers });
+  await settle();
+  expect(screen.getByText("No tool skills yet")).toBeTruthy();
+  expect(
+    screen.getByText(
+      "A tool skill is a page in the Tool skills space that teaches agents one tool.",
+    ),
+  ).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Tool skills" }).getAttribute("href")).toBe(
+    "#/doclet/TS",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "New page" }));
+  await settle();
+  expect(location.hash).toBe("#/doclet/new?space=TS");
+
+  cleanup();
+  location.hash = "#/doclet/skills";
+  mount({
+    pages: { pages: [], limit: 500, total: 0 },
+    containers,
+    viewer: { ...(FRAME_ANSWERS.viewer as object), grants: ["doclet"] },
+  });
+  await settle();
+  const held = screen.getByRole("button", { name: "New page" });
+  expect(held.getAttribute("aria-disabled")).toBe("true");
+  expect(held.getAttribute("title")).toBe("Only an admin adds a tool skill.");
+
+  cleanup();
+  mount({ pages: { pages: [], limit: 500, total: 0 }, containers: { containers: [] } });
+  await settle();
+  expect(screen.getByText(/turned tool skills off/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "New page" })).toBeNull();
+});
