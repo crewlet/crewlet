@@ -543,3 +543,30 @@ func TestAKeysLineIsReadForItsGutterWithinMaxReach(t *testing.T) {
 	}
 }
 
+// A KEY ON THE REST OF A LINE AN ESCAPED BREAK ENDED A KEY'S LINE ON NAMES WHAT
+// FOLLOWS IT, WHETHER OR NOT THE STRING GOES ON past it to another escaped
+// line: the punctuation that rest opens with is no value of the first key's,
+// which names none, and the second key reads its own. Read as one of the
+// string's lines where it went on, the rest gave the first key its opening
+// `|` for a value, and the second key, its line no longer opened, its own
+// closing `|`, publishing what followed; and where the bound cut the rest, no
+// escaped line followed it within the bound, so the key on it ended the first
+// key's read, until a second pass, the second key's value now its marker,
+// found the string going on within the bound and took the `|`.
+//
+// Mutation: read the rest as one of the string's lines before looking for a
+// key on it, and both rows turn.
+func TestAKeyOnTheRestOfALineNamesItsValueWhereverTheStringGoes(t *testing.T) {
+	t.Parallel()
+	m := redact.Marker + "password]"
+	row := func(n int) string {
+		return `x=" | Password: |\n| Password: | x` + strings.Repeat("A", n) + `| hunter2 |\n` + "\n"
+	}
+	want := `x=" | Password: |\n| Password: | ` + m + ` hunter2 |\n` + "\n"
+	for name, n := range map[string]int{
+		"a rest the string goes on past": 10,
+		"a rest the bound cuts":          reach,
+	} {
+		atTheBound(t, name, row(n), want)
+	}
+}

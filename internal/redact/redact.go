@@ -1269,12 +1269,16 @@ func closingOf(suffix string) string {
 // whether the rest opens with punctuation before a key of its own — which
 // makes the punctuation the value, as it is before another key on the key's
 // own line ([lineEndUnnamed]).
+//
+// A KEY ON THE REST NAMES IT WHETHER OR NOT THE STRING GOES ON past it to
+// another escaped line, and so whether or not the bound cuts it: looked for
+// only where no escaped line followed, a rest the bound cut held a key that
+// ended the read, while a second pass, a value on that rest now its marker,
+// found the string going on within the bound, read the rest as one of its
+// lines, and took the punctuation it opens with for the first key's value
+// (`| Password: |` over `| Password: | x` and a value a line long).
 func (r *valueRead) restOfLine(pos int) (int, bool, bool) {
 	lineEnd, next := lineAt(r.text, pos)
-	if next >= 0 && r.text[lineEnd] != '\n' {
-		// The string goes on to another escaped line: one of its lines.
-		return pos, true, false
-	}
 	rest := trimLine(r.text[pos:lineEnd])
 	word, _, _ := strings.Cut(rest, " ")
 	if rest == "" || isValue(word) {
@@ -1282,6 +1286,10 @@ func (r *valueRead) restOfLine(pos int) (int, bool, bool) {
 	}
 	if passwordRule.index(rest) >= 0 {
 		return pos, true, true
+	}
+	if next >= 0 && r.text[lineEnd] != '\n' {
+		// The string goes on to another escaped line: one of its lines.
+		return pos, true, false
 	}
 	r.setSuffix(rest)
 	return next, false, false
