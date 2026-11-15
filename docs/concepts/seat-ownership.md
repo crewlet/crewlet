@@ -419,8 +419,15 @@ a counterparty profile, a skill's state and use count, an onboarding marker — 
 one whose *update is the content*, so the carried copy wins. That is safe
 rather than merely convenient while one node at a time publishes the seat,
 which is what holding it means: the changelog's latest value for a subject is
-then the value its current owner wrote. A seat's move is where that does not
-hold, and an older copy can win there (below).
+then the value its current owner wrote. So a node publishes a seat only under
+its **holding** of it: live from the moment its hydration of the seat
+completes, when the memory cycles carry it; releasing from the moment its
+release begins, when only the release's flush carries it; and none before the
+hydration completes, after a taking that failed, or once the release has
+forgotten the seat. Each publish checks the holding before every row it sends,
+so a cycle partway through a seat whose release begins stops at its next row.
+A seat's move is where one publisher can still be two, and an older copy can
+win there (below).
 
 What is new is found by that **change sequence**: one counter per node, which
 every inserted diary note, episode and skill version — and every vector set on
@@ -430,7 +437,7 @@ hydration records where the counter stood as it completed: the seat's
 while held here, its own; rows at or below it are what the node held for it
 when it took it, the rows the hydration wrote and those it found already
 present, its backlog. A seat whose hydration here has not completed has no
-boundary, and every row of it counts as its own. A seat has a mark over each
+boundary, and no holding, so nothing here publishes it. A seat has a mark over each
 range in each of these tables: the stamp of the last row of the range the
 changelog acknowledged, which moves with each one. The rows of a range above
 its mark are read a mebibyte at a time and published one by one, so a cycle
@@ -474,8 +481,7 @@ turns leave of a cycle then moves while another seat's drains, rather than
 handing every whole cycle its cuts earn to the seat after it. Under overload,
 when the
 seats' turns run cycles out (a burst a seat wrote, profiles and skills that
-outlast a cycle, seats still being taken, every row of each counting as its
-own until its hydration completes), the backlogs' turn still comes once in
+outlast a cycle), the backlogs' turn still comes once in
 every lap of the seats, so the backlogs keep draining, as they would not if
 they went only after every seat's turn in each cycle. That is why the
 backlogs' turn is part of the rotation for good, and not only until the
@@ -503,7 +509,10 @@ carried, or that had the whole cycle and was cut inside one of the tables sent
 whole, is a warning, `seat_memory_not_carried`. A seat's own pass and its
 backlog are each said on their own: a seat whose own pass failed while the
 cycle had time left warns, with `pass=own`, whatever its backlog then did, and
-so does a backlog that failed with time left, with `pass=backlog`.
+so does a backlog that failed with time left, with `pass=backlog`. A seat the
+cycle does not carry because this node's holding does not let it, one still
+being taken or one whose release has begun, says nothing, and neither does the
+release of a seat whose taking failed, which flushes nothing.
 
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.
@@ -558,9 +567,8 @@ crash loses up to 2k + 3 cycles' writes. While cycles run out, a cycle can
 start part-way through the seats, and the older rows' turn then comes before
 the own rows of the seats after it, which had theirs in the cycle before.
 Among the k are a seat whose own rows
-outlast a cycle, one whose profiles and skills do, and one still being taken,
-every row of which counts as its own until its hydration completes; the last
-is what a restart's cycles meet first, once per seat taken. A graceful handoff
+outlast a cycle and one whose profiles and skills do; a seat still being taken
+is not, since no cycle carries it until its hydration completes. A graceful handoff
 flushes on release what the cycles have not carried, from the marks they left,
 in the same order: the seat's own rows, then its profiles, skills and marker,
 then its backlog, for up to five seconds at one broker round trip a row (about
@@ -582,12 +590,17 @@ the broker takes, eight mebibytes on the embedded one, is refused every time it
 is published, so every pass that meets it stops at it, and nothing after it in
 that pass, in its table or in the tables the pass carries after it, is carried
 while this node holds the seat
-([#349](https://github.com/crewlet/crewlet/issues/349)). And while a seat
-moves, an older copy of its profiles, skills or onboarding marker can land
-after the newer one and replace it: published by the releasing node's own
-sync, from a cycle it began before the release, by the next holder while it
-is still taking the seat, or by a node whose taking of the seat failed, in the
-flush that gives it back ([#511](https://github.com/crewlet/crewlet/issues/511)).
+([#349](https://github.com/crewlet/crewlet/issues/349)). Each node publishes
+the seat only under its holding (above), so neither the releasing node's
+cycle, once the release has begun, nor the next holder while it is still
+taking the seat, nor a node whose taking of the seat failed, in the flush that
+gives it back, publishes it. While a seat moves, an older copy of its
+profiles, skills or onboarding marker can still land after the newer one and
+replace it in two ways: the one row the releasing node's cycle was sending as
+its release began, which can land after the flush's copy of it, and two nodes
+holding the seat at once, a node whose lease lapsed under it still carrying
+the seat while the next holder writes it
+([#511](https://github.com/crewlet/crewlet/issues/511)).
 A publish of the seat landing in that window while the next holder hydrates it
 can also move a row the hydration has not read yet past its barrier, and slip
 by the count its replay ends on, which the broker moves for the replaced row

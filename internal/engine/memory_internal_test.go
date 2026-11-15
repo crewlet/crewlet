@@ -57,11 +57,13 @@ func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 	}
 }
 
-// scriptedMemory is the memory syncer as a cycle and a flush call it: each
-// seat's own pass is played by a script, and so is its backlog, and it records
-// the seats the running cycle or flush called, those it called on a bound
-// already spent, and those whose call returned with nothing wrong, for each
-// call, and every call in the order it was made.
+// scriptedMemory is the memory syncer as a cycle, a flush and a release call
+// it: each seat's own pass is played by a script, and so is its backlog, a
+// cycle's call and a flush's alike, and it records the seats the running cycle
+// or flush called, those it called on a bound already spent, and those whose
+// call returned with nothing wrong, for each call, and every call in the order
+// it was made, a release's turn of the seat to releasing and its forgetting of
+// the seat among them.
 type scriptedMemory struct {
 	// play is seat's own pass, handed the bound and runOut, which spends it
 	// as a seat the cycle cannot carry does before its call returns; first
@@ -80,8 +82,30 @@ type scriptedMemory struct {
 	calls, late, completed            []string
 	backlog, backlogLate, backlogDone []string
 
-	// order is every call as it was made: "own:a", "backlog:a".
+	// order is every call as it was made: "own:a", "backlog:a", and a
+	// release's "releasing:a" and "forget:a".
 	order []string
+}
+
+// FlushOwn is a flush's own pass, played as a cycle's is ([PublishOwn]).
+func (m *scriptedMemory) FlushOwn(ctx context.Context, seat string) (memsync.Carried, error) {
+	return m.PublishOwn(ctx, seat)
+}
+
+// FlushBacklog is a flush's backlog, played as a cycle's is
+// ([PublishBacklog]).
+func (m *scriptedMemory) FlushBacklog(ctx context.Context, seat string) (memsync.Carried, error) {
+	return m.PublishBacklog(ctx, seat)
+}
+
+// Releasing records the release turning the seat's holding to releasing.
+func (m *scriptedMemory) Releasing(seat string) {
+	m.order = append(m.order, "releasing:"+seat)
+}
+
+// Forget records the release forgetting the seat.
+func (m *scriptedMemory) Forget(seat string) {
+	m.order = append(m.order, "forget:"+seat)
 }
 
 // PublishOwn plays the seat's script, after failing at once on a bound
@@ -987,9 +1011,8 @@ func TestEveryHeldSeatsOwnPassComesBeforeAnySeatsBacklog(t *testing.T) {
 // THE BACKLOGS HAVE THEIR TURN WHILE A SEAT'S OWN PASS RUNS EVERY CYCLE OUT.
 //
 // A seat's own pass can outlast a cycle for as long as the seat keeps
-// writing (#1041), as long as its profiles and skills, which every own pass
-// sends whole, outlast one (#1040), or while it is still being taken, every
-// row of it its own until its hydration completes. The backlogs' turn is a
+// writing (#1041), or as long as its profiles and skills, which every own
+// pass sends whole, outlast one (#1040). The backlogs' turn is a
 // turn of the rotation, so the cycles that pass the seat reach it, every
 // seat's backlog with it, that seat's own included. Begun only once every
 // seat's own pass had returned, the backlogs would have no cycle while one
