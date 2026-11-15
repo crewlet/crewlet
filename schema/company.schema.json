@@ -1208,7 +1208,7 @@
       "additionalProperties": false,
       "properties": {
         "idle_days": {
-          "description": "How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7.",
+          "description": "How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7, and a written 0 is refused.",
           "maximum": 365,
           "minimum": 1,
           "type": [
@@ -1498,6 +1498,20 @@
     "DelegatedDecisions": {
       "additionalProperties": false,
       "properties": {
+        "allows_per_hour": {
+          "description": "How many requests of one kind one delegate may allow in one clock hour (UTC), counted across the fleet; past it, requests go to people: 1 to 60. Empty is 30.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "deadline_seconds": {
+          "description": "How long a request waits on its delegates before it goes to people: 300 to 1800 seconds. Empty is 900 (15 minutes).",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "enabled": {
           "description": "Turn delegated decisions on. Off puts every request to people at once, and keeps the rules.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -1514,6 +1528,13 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "server_allows_per_hour": {
+          "description": "How many commands delegates may allow on one server in one clock hour (UTC), counted across the fleet; past it, commands go to people: 1 to 60. Empty is 10.",
+          "type": [
+            "integer",
             "null"
           ]
         }

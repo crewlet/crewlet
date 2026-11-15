@@ -2,11 +2,16 @@
  * Which part of the company's work a limit bounds. COPIES of
  * `queries.LimitGroups`, in the engine's drawing order, held by
  * `internal/api`'s `TestTheDashboardReadsExactlyTheLimitsTheEngineSends`.
+ * Settings › Limits draws the first four; `delegated` is what every delegate
+ * is held to, answered on `delegated_decisions` beside its rules; `inbox`,
+ * `atlas` and `code` are the settings Worklet, Atlas and Gitlet change in
+ * place.
  */
-type LimitGroup = "turn" | "delegation" | "notifications" | "schedules";
+type LimitGroup =
+  "turn" | "delegation" | "notifications" | "schedules" | "delegated" | "inbox" | "atlas" | "code";
 
 /** What a limit's number counts. COPIES of `queries.LimitUnits`. */
-type LimitUnit = "count" | "seconds" | "fraction" | "per_second";
+type LimitUnit = "count" | "seconds" | "fraction" | "per_second" | "days";
 
 /**
  * The values a cap admits, as the engine's validator holds it: `config.Range`
@@ -29,7 +34,7 @@ export interface SettingRange {
  * whether a value was written, so there is no "set" flag: what is true to
  * say is whether `value` differs from `default`.
  */
-interface LimitRow {
+export interface LimitRow {
   /** The setting's path in the company document, e.g. `turn_engine.max_iterations`. */
   key: string;
   group: LimitGroup;

@@ -402,19 +402,16 @@ func TestTheDashboardKnowsEveryCodeAlarm(t *testing.T) {
 
 // THE DASHBOARD STATES THE CODE POLICY'S DEFAULTS AS THE ENGINE APPLIES THEM.
 //
-// Settings › Gitlet says what an unset `code.scratch.idle_days`,
-// `code.scratch.max_per_seat` and `code.identity_domain` read as, from
-// `CODE_SCRATCH_IDLE_DAYS`, `CODE_SCRATCH_MAX_PER_SEAT` and
+// Settings › Gitlet says what an unset `code.identity_domain` reads as, from
 // `CODE_IDENTITY_DOMAIN` (`contract/code.ts`): a default moved in the engine
 // and not there is a page telling an administrator a policy nothing enforces.
+// The scratch policy's defaults ride the engine's own `limits` rows.
 //
-// Mutation: change any of the three on either side, and this fails.
+// Mutation: change it on either side, and this fails.
 func TestTheDashboardStatesTheCodePolicysDefaults(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
 	for _, c := range []struct{ name, want string }{
-		{"CODE_SCRATCH_IDLE_DAYS", strconv.Itoa(config.DefaultCodeScratchIdleDays)},
-		{"CODE_SCRATCH_MAX_PER_SEAT", strconv.Itoa(config.DefaultCodeScratchMaxPerSeat)},
 		{"CODE_IDENTITY_DOMAIN", config.DefaultCodeIdentityDomain},
 	} {
 		got, err := clientsource.Scalar(tree, c.name)

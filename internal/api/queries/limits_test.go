@@ -46,6 +46,10 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 		"turn_engine.max_iterations":                  "5",
 		"turn_engine.onboarding_max_tool_rounds":      "7",
 		"turn_engine.delegation_depth_limit":          "4",
+		"turn_engine.extension_round_step":            "6",
+		"turn_engine.executor_min_budget_tokens":      "30000",
+		"turn_engine.delegation.max_turns_ceiling":    "45",
+		"turn_engine.delegation.min_tokens_per_task":  "800",
 		"turn_engine.delegation.max_parallel":         "2",
 		"turn_engine.delegation.max_tasks_per_call":   "6",
 		"turn_engine.delegation.max_turns":            "17",
@@ -54,8 +58,12 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 		"turn_engine.delegation.call_timeout_seconds": "720",
 		"notification_rate_limit":                     "9",
 		"notification_coalesce_max_batch":             "33",
+		"inbox.retention_days":                        "90",
+		"atlas.refresh_interval_seconds":              "1800",
+		"code.scratch.idle_days":                      "14",
+		"code.scratch.max_per_seat":                   "20",
 	}
-	doc := "name: Acme\n" + nest(written)
+	doc := "name: Acme\n" + nest(withContext(written))
 	c, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse:\n%s\n%v", doc, err)
@@ -108,6 +116,18 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 			t.Errorf("the document writes %s and the answer has no row for it", key)
 		}
 	}
+}
+
+// withContext is flat with what each key needs beside it to be read at all: a
+// Gitlet setting configures nothing on a company that hosts no code.
+func withContext(flat map[string]string) map[string]string {
+	out := maps.Clone(flat)
+	for key := range flat {
+		if strings.HasPrefix(key, "code.") {
+			out["code.backend"] = "gitlet"
+		}
+	}
+	return out
 }
 
 // nest writes dotted keys as one YAML document, so a key that is not a path
@@ -235,7 +255,10 @@ func TestEverySettableLimitReportsTheRangeTheValidatorHolds(t *testing.T) {
 		t.Fatalf("limits: %v", err)
 	}
 	checked := 0
-	for _, row := range got.Limits {
+	// THE DELEGATED-DECISION LIMITS are rows of the same kind, edited by the
+	// same field, so they are held to the validator the same way.
+	rows := append(got.Limits, queries.DelegatedLimitRows(c)...)
+	for _, row := range rows {
 		if !row.Settable {
 			if row.Range != nil {
 				t.Errorf("%s is no setting of the document and reports a range", row.Key)
@@ -255,7 +278,7 @@ func TestEverySettableLimitReportsTheRangeTheValidatorHolds(t *testing.T) {
 			outside = append(outside, *r.Max+1)
 		}
 		for _, v := range outside {
-			doc := "name: Acme\n" + nest(map[string]string{row.Key: fmt.Sprint(v)})
+			doc := "name: Acme\n" + nest(withContext(map[string]string{row.Key: fmt.Sprint(v)}))
 			_, err := config.ParseCompany([]byte(doc))
 			problem, ok := problemAt(config.Problems(err), row.Key)
 			if !ok {
@@ -276,10 +299,15 @@ func TestEverySettableLimitReportsTheRangeTheValidatorHolds(t *testing.T) {
 		if r.MinExclusive {
 			inside = row.Default
 		}
-		doc := "name: Acme\n" + nest(map[string]string{row.Key: fmt.Sprint(inside)})
+		// A CEILING AT ITS LEAST is below the cap it bounds (max_turns_ceiling
+		// 1 under max_turns 20), a rule about both that carries no range; only
+		// a refusal of the bound itself disagrees with the row.
+		doc := "name: Acme\n" + nest(withContext(map[string]string{row.Key: fmt.Sprint(inside)}))
 		if _, err := config.ParseCompany([]byte(doc)); err != nil {
-			t.Errorf("%s = %v is inside its reported range %+v, and the validator refuses it: %v",
-				row.Key, inside, r, err)
+			if p, ok := problemAt(config.Problems(err), row.Key); !ok || p.Range != nil {
+				t.Errorf("%s = %v is inside its reported range %+v, and the validator refuses it: %v",
+					row.Key, inside, r, err)
+			}
 		}
 		checked++
 	}

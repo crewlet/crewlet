@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/delegated"
@@ -113,12 +112,7 @@ func (s Sources) delegatedDecisions(ctx context.Context, p Params) (any, error) 
 			"always_escalate_paths": nonNilStrings(r.AlwaysEscalatePaths), "required_checks": checks})
 	}
 	return map[string]any{
-		"enabled": company.Enabled, "rules": rules,
-		"limits": map[string]any{
-			"deadline_minutes":       int(delegated.Deadline / time.Minute),
-			"decisions_per_hour":     delegated.DecisionsPerHour,
-			"server_allows_per_hour": builtin.ServerAllowsPerHour,
-		},
+		"enabled": company.Enabled, "rules": rules, "limits": s.delegatedLimitRows(),
 		"day": day.Label, "since": day.Start.UTC(), "until": day.End.UTC(), "complete": !now.Before(day.End),
 		"decided": decided, "decided_more": decidedMore,
 		"spot_checks": samples, "spot_checks_more": samplesMore,
@@ -152,6 +146,15 @@ func (s Sources) delegatedVerdicts(ctx context.Context, q accessdomain.VerdictQu
 
 // currentDelegation is the running document's delegated decisions, the zero
 // value where none is running.
+// delegatedLimitRows are the limits every delegate is held to, as Settings ›
+// Limits draws and changes a cap ([LimitRow]): the engine's defaults on a node
+// running no company.
+func (s Sources) delegatedLimitRows() []LimitRow {
+	company := config.DefaultCompany()
+	company.DelegatedDecisions = s.currentDelegation()
+	return limitRows(&company, delegatedLimits)
+}
+
 func (s Sources) currentDelegation() config.DelegatedDecisions {
 	if s.Company == nil {
 		return config.DelegatedDecisions{}

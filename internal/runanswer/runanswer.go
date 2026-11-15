@@ -138,7 +138,8 @@ type Waiting struct {
 	// MayAnswer is whether the reader may answer it ([May]).
 	MayAnswer bool
 	// Escalated is a delegated call its delegates escalated to people, and
-	// Overdue one still with its delegates past [delegated.Deadline].
+	// Overdue one still with its delegates past the company's deadline
+	// ([delegated.Limits]).
 	Escalated bool
 	Overdue   bool
 }
@@ -152,8 +153,9 @@ func (w Waiting) NeedsYou() bool {
 }
 
 // Delegation is whether a held call is with its delegates, escalated, or past
-// their deadline at now.
-func Delegation(run sandbox.PendingRun, now time.Time) (withDelegates, escalated, overdue bool) {
+// deadline (the company's, [delegated.Limits]) at now.
+func Delegation(run sandbox.PendingRun, deadline time.Duration, now time.Time) (withDelegates, escalated,
+	overdue bool) {
 	held := run.HeldCall
 	if held == nil || held.Delegation == nil {
 		return false, false, false
@@ -161,5 +163,5 @@ func Delegation(run sandbox.PendingRun, now time.Time) (withDelegates, escalated
 	if held.Delegation.Escalated != nil {
 		return false, true, false
 	}
-	return true, false, !held.HeldAt.IsZero() && !now.Before(held.HeldAt.Add(delegated.Deadline))
+	return true, false, !held.HeldAt.IsZero() && !now.Before(held.HeldAt.Add(deadline))
 }

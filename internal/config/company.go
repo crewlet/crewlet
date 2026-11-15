@@ -1077,12 +1077,10 @@ func (i Inbox) Retention() time.Duration {
 
 func (i Inbox) validate(path Path) error {
 	var p problems
-	if d := i.RetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
-		p.add(at(path, "retention_days"), ErrOutOfRange,
-			"%d is outside %d..%d. Under a month, notices are gone before "+
-				"people see them, and past ten years they only repeat the "+
-				"history they point at", d, MinInboxRetentionDays,
-			MaxInboxRetentionDays)
+	// ZERO IS UNSET, the default; anything written is held to its range.
+	if d := i.RetentionDays; d != 0 {
+		p.within(at(path, "retention_days"), float64(d), "under a month, notices are gone before "+
+			"people see them, and past ten years they only repeat the history they point at")
 	}
 	return p.err()
 }

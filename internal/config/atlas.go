@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Atlas is the company's policy over its atlas, the map and catalogue of what
 // it runs on: how long what people record in it is kept as history
@@ -106,12 +109,12 @@ func (a Atlas) validate(path Path) error {
 				"the company ran on when it happened, and past ten years the field is not a horizon", d,
 			MinAtlasRetentionDays, MaxAtlasRetentionDays)
 	}
-	if secs := a.RefreshIntervalSeconds; secs != 0 && time.Duration(secs)*time.Second < MinAtlasRefreshInterval {
-		p.add(at(path, "refresh_interval_seconds"), ErrOutOfRange,
-			"%d is below the floor of %d: a read of a vendor's whole inventory shares the token's "+
-				"rate-limit window with the integration reconcile loop, and an unchanged read writes "+
-				"nothing anyway. Leave it unset for the default of %d",
-			secs, int(MinAtlasRefreshInterval.Seconds()), int(DefaultAtlasRefreshInterval.Seconds()))
+	// ZERO IS UNSET, the default; anything written is held to its range.
+	if secs := a.RefreshIntervalSeconds; secs != 0 {
+		p.within(at(path, "refresh_interval_seconds"), float64(secs), fmt.Sprintf("a read of a vendor's "+
+			"whole inventory shares the token's rate-limit window with the integration reconcile loop, "+
+			"and an unchanged read writes nothing anyway. Leave it unset for the default of %d",
+			int(DefaultAtlasRefreshInterval.Seconds())))
 	}
 	return p.err()
 }
