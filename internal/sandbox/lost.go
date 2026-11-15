@@ -84,6 +84,13 @@ const (
 	// collecting node's store answered ([hostUnsettled]): its box is there,
 	// but only that node can read it, and it could not. Recorded by the
 	// collection that found it so, on its own claim ([Coordinator.loseWithHost]).
+	// That node can still hold its taker lease, its leases another stream
+	// than its runs, so a capture it was keeping stays begun on the row with
+	// no stamp of its own to come: the relaunch that carries the round on
+	// reads the turn's row once its wait for that capture runs out, or at
+	// once where the capture is past its budget, which a silence as long as
+	// the box's timeout can make it, and continues it where the log took its
+	// record ([Coordinator.ContinuedCapture]).
 	// A build that does not know it reads it as a cause it does not know,
 	// which leaves no box to read and is said in general terms.
 	LossLaunchNodeStoreSilent LossCause = "launch_node_store_silent"

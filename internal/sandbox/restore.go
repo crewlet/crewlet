@@ -135,7 +135,15 @@ import (
 // restart continues a capture whose record the log took before that read
 // rather than starting fresh beside it; and a capture whose record was sent
 // and never answered is asked again under its own operation, as the turn's end
-// asks it ([Coordinator.settleUnresolved]): one that lands is continued. A
+// asks it ([Coordinator.settleUnresolved]): one that lands is continued. And
+// once the wait has run out, a capture of the job it follows still begun under
+// a taker whose lease HOLDS, however long ago it began, is read off the turn's
+// row once more, in a read held to as long again as the wait, and settled
+// landed where the row names its place, never refused: a host whose store
+// answers its leases and not its runs keeps its lease while no stamp of its
+// own reaches the row, for as long as that silence lasts, and the relaunch
+// that follows a job lost with that host continues the capture the log took
+// rather than start fresh beside it. A
 // record the log takes only after the settle's read — one its taker had handed
 // on before its lease's window closed — lands beside a stamp that says refused
 // (session.go, "WHAT THE FENCE CANNOT REACH"): the log keeps it, and the
@@ -999,6 +1007,26 @@ func relaunchDependsOn(run PendingRun, stamp SessionCapture) bool {
 // ([Coordinator.awaitCapture]): whether it still waits.
 func relaunchWaits(run PendingRun, now time.Time) bool { return relaunchWaitsOn(run, now) != nil }
 
+// followedBegunUnderTaker reports whether run has a stamp of the job its
+// relaunch follows still begun under a taker it names: its newest capture, or
+// its save under way ([PendingRun.savingTake]), still being kept or not. A
+// relaunch reads the turn's row once past its wait for such a stamp
+// ([Coordinator.ContinuedCapture]), WHATEVER ITS AGE: a host whose
+// coordination store answers its leases and not its runs holds its taker
+// lease for as long as that silence lasts, and the job lost with it is found
+// only once the silence has lasted the box's timeout, so a keep under way
+// when the silence began can be past a capture's budget by the time its
+// relaunch reads it, and the log's all the same. A stamp that names no taker
+// is read by its age alone, as [beganUnderTaker] has a wait read it.
+func followedBegunUnderTaker(run PendingRun) bool {
+	for _, stamp := range []*SessionCapture{run.Capture, run.savingTake()} {
+		if stamp != nil && stamp.State == CaptureBegun && stamp.Taker != "" && stamp.LaunchSeq == run.LaunchSeq {
+			return true
+		}
+	}
+	return false
+}
+
 // boxCarry is whether a relaunch carrying a run's round on in the box its job
 // ran in would continue the session that box holds ([inParkedBox]).
 type boxCarry int
@@ -1159,6 +1187,13 @@ type ContinuedSession struct {
 // a slow moment; a keep past it is one a slow upload of a large session, an
 // outage or a stopped node is holding, whose own budget runs to minutes
 // ([SessionCaptureBudget]) — which the frame does not wait out.
+//
+// AND AS LONG AGAIN FOR THE ONE READ PAST IT ([Coordinator.ContinuedCapture]):
+// a lease read, a read of the turn's row on the log and a settle's stamp,
+// each answered in milliseconds and within a publisher's five-second wait,
+// on the same frame. Bounded by nothing of its own, that read held the frame
+// for a stamp's whole budget and the row's crossing on a store slow to take
+// its write.
 const relaunchCaptureWait = 15 * time.Second
 
 // ContinuedCapture is the session a relaunch of turnID continues — the kept
@@ -1174,10 +1209,14 @@ const relaunchCaptureWait = 15 * time.Second
 //
 // WHAT IS UNSETTLED IS SETTLED FIRST, within that same wait — see the file
 // comment: a capture whose taker is gone, from the turn's row on the log, as
-// every wait for a capture settles it ([Coordinator.awaitCapture]); and the
-// followed job's capture whose record was never answered, asked again under
-// its own operation ([Coordinator.settleUnresolved]) — asked by the turn's end
-// alone, it left a relaunch reading a record the log had taken as one never
+// every wait for a capture settles it ([Coordinator.awaitCapture]); once the
+// wait has run out, in one read of its own held to as long again, the
+// followed job's capture still begun under a taker whose lease holds, however
+// long ago it began ([followedBegunUnderTaker]), landed where the turn's row
+// names its place ([Coordinator.settleGone]'s readHeld); and the followed
+// job's capture whose record was never answered, asked again under its own
+// operation ([Coordinator.settleUnresolved]) — asked by the turn's end alone,
+// it left a relaunch reading a record the log had taken as one never
 // answered, and starting a session of its own beside it. A SAVE UNDER WAY of
 // the turn is waited for, settled and asked the same way as its newest
 // capture ([relaunchWaitsOn], [captureAwaitsAnswer]), and a reason the wait
@@ -1209,6 +1248,27 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	// below leaves of it is what an ask of an unanswered record gets.
 	settleBy := time.Now().Add(c.relaunchWait)
 	run, found, err = c.awaitCapture(ctx, run, c.relaunchWait, relaunchWaits)
+	if found && err == nil && followedBegunUnderTaker(run) {
+		// THE ONE READ PAST THE WAIT, where a capture of the job the
+		// relaunch follows is still begun under a taker it names, in flight
+		// or past a capture's budget: one whose taker's lease holds may be
+		// the log's although no stamp of it reached the row, as where that
+		// taker's host is the one the job was lost with, its store answering
+		// its leases and not its runs. Settled landed where the turn's row
+		// names its place ([Coordinator.settleGone]), it is the capture the
+		// relaunch continues; where the row does not, a live taker's is left
+		// as it was.
+		//
+		// HELD TO A WAIT OF ITS OWN, as long as the relaunch's
+		// ([relaunchCaptureWait]): its lease reads and its row read under it,
+		// and its settle's stamp never past it, as every settle inside the
+		// wait is held to the wait's end. The frame still holds the seat and
+		// a slot of the node's admission.
+		held, cancel := context.WithTimeout(ctx, c.relaunchWait)
+		heldBy, _ := held.Deadline()
+		run, found = c.settleGone(held, heldBy, run, true)
+		cancel()
+	}
 	if !found {
 		return ContinuedSession{}, "the turn's run record was gone before the capture of the job " +
 			"the relaunch follows settled"

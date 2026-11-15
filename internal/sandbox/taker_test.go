@@ -36,6 +36,9 @@ type takerStore struct {
 	// store that takes a call and never answers it does; held counts them.
 	holding bool
 	held    int
+	// stalling, when set, holds every read of a lease until its caller gives
+	// up, as a store slow to answer does.
+	stalling bool
 	// reads counts the reads of each lease.
 	reads map[string]int
 }
@@ -75,10 +78,14 @@ func (s *takerStore) Renew(ctx context.Context, resource, owner string, epoch in
 func (s *takerStore) Get(ctx context.Context, resource string) (*coord.Lease, error) {
 	s.mu.Lock()
 	s.reads[resource]++
-	down := s.down
+	down, stalling := s.down, s.stalling
 	s.mu.Unlock()
 	if down != nil {
 		return nil, down
+	}
+	if stalling {
+		<-ctx.Done()
+		return nil, errors.Join(coord.ErrUnavailable, ctx.Err())
 	}
 	return s.Backend.Get(ctx, resource)
 }
@@ -100,6 +107,24 @@ func (s *takerStore) holdRenewals() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.holding = true
+}
+
+// stallReads makes every read of a lease from here on wait for its caller to
+// give up.
+func (s *takerStore) stallReads() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stalling = true
+}
+
+// stallingSettles is a pending-run store whose every settle of a begun stamp
+// ([PendingStore.SettleBegun]) waits for its caller to give up: a store that
+// answers its reads and is slow to take a write.
+type stallingSettles struct{ PendingStore }
+
+func (stallingSettles) SettleBegun(ctx context.Context, _ string, _ SessionCapture) (bool, error) {
+	<-ctx.Done()
+	return false, errors.Join(coord.ErrUnavailable, ctx.Err())
 }
 
 // renewalsHeld is how many renewals the store has held.
@@ -252,7 +277,7 @@ func TestACaptureWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 				} else {
 					lapse(store)
 				}
-				settled, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1"))
+				settled, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1"), false)
 				if !found {
 					t.Fatal("the run's row was read as gone")
 				}
@@ -361,8 +386,9 @@ func TestAnEndDoesNotWaitOutACaptureWhoseTakersLeaseLapsed(t *testing.T) {
 // upload; the node's taker lease is held until the last of those keeps ends.
 // So a turn's end that waits on a capture the draining node is still keeping
 // reads its taker's lease held at the epoch the stamp names, and waits — one
-// read of the lease a pass, the turn's row on the log never read — until the
-// keep lands, and then ends the turn with that capture kept. Settled as gone on
+// read of the lease a pass, the turn's row on the log not read before a
+// record's budget of the wait has passed — until the keep lands, and then ends
+// the turn with that capture kept. Settled as gone on
 // the node's missing presence, the end would refuse the capture and tombstone
 // the turn before the keep's record landed: the record refused, and the turn's
 // last session lost.
@@ -433,7 +459,8 @@ func TestADrainingTakersCaptureIsNotSettledUnderIt(t *testing.T) {
 			t.Errorf("the end's wait read node-a's taker lease %d times, want it asked at every pass", reads)
 		}
 		if read := restore.askedFor(); len(read) != 0 {
-			t.Errorf("the turn's row was read %v to settle a capture whose taker still held its lease", read)
+			t.Errorf("the turn's row was read %v before a record's budget of the wait had passed, for a capture "+
+				"whose taker still held its lease", read)
 		}
 	})
 }
@@ -465,7 +492,7 @@ func TestATakerLeaseHeldAtAnotherEpochIsGone(t *testing.T) {
 			t.Errorf("a capture under the epoch node-a's lease holds now reads gone = %v, %v; want it kept for", gone,
 				err)
 		}
-		if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1")); !found {
+		if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1"), false); !found {
 			t.Fatal("the run's row was read as gone")
 		}
 		got := rig.get("t1")
@@ -496,7 +523,7 @@ func TestAStoreThatCannotAnswerNeverReadsATakerAsGone(t *testing.T) {
 		begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
 		lapse(store)
 		store.setDown(errors.New("coord: the lease store did not answer"))
-		if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1")); !found {
+		if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1"), false); !found {
 			t.Fatal("the run's row was read as gone")
 		}
 		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
@@ -506,7 +533,7 @@ func TestAStoreThatCannotAnswerNeverReadsATakerAsGone(t *testing.T) {
 			t.Fatalf("the turn's row was read %v while the store could not say whether the taker was gone", read)
 		}
 		store.setDown(nil)
-		if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1")); !found {
+		if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1"), false); !found {
 			t.Fatal("the run's row was read as gone")
 		}
 		if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureRefused {
@@ -544,7 +571,7 @@ func TestAGoneTakersCaptureIsSettledOnlyByAnAnswerFromTheLog(t *testing.T) {
 			restore.mu.Lock()
 			restore.unreadRows = errors.New("estate: no data node answered the read")
 			restore.mu.Unlock()
-			settled, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1"))
+			settled, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1"), false)
 			if !found || settled.Capture == nil || !settled.Capture.sameTake(begun) ||
 				settled.Capture.State != CaptureBegun {
 				t.Fatalf("a read that failed answered %+v (found %v), want the capture left begun", settled.Capture,
@@ -557,7 +584,7 @@ func TestAGoneTakersCaptureIsSettledOnlyByAnAnswerFromTheLog(t *testing.T) {
 			restore.mu.Lock()
 			restore.unreadRows = nil
 			restore.mu.Unlock()
-			if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1")); !found {
+			if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1"), false); !found {
 				t.Fatal("the run's row was read as gone")
 			}
 			if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureLanded {
@@ -584,7 +611,7 @@ func TestAGoneTakersCaptureIsSettledOnlyByAnAnswerFromTheLog(t *testing.T) {
 			lapse(store)
 			restore := &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true}
 			rig.coordinator.restore = restore
-			if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1")); !found {
+			if _, found := rig.coordinator.settleGone(t.Context(), time.Time{}, rig.get("t1"), false); !found {
 				t.Fatal("the run's row was read as gone")
 			}
 			got := rig.get("t1").Capture
@@ -635,12 +662,14 @@ func relaunchAfterTaker(t *testing.T, gone, landed bool,
 // of its own — beside a record the log may well have taken. Its taker's lease
 // has lapsed, so the relaunch's wait settles it from the turn's row at once:
 // one the row names landed, and is continued; one it does not was refused,
-// which the relaunch says. A taker whose lease still holds is waited for, as
-// before.
+// which the relaunch says. A taker whose lease still holds is waited for, and
+// once the wait has run out the turn's row is read again: a capture it names
+// landed, and is continued; one it does not is still being kept.
 //
 // Mutation: drop the settle from the relaunch's wait, and the first two cases
-// say the capture is still being kept; settle a capture whose taker's lease
-// still holds, and the third is decided under a keep still under way.
+// say the capture is still being kept; drop the read past the wait, and the
+// third says so too; settle a held taker's capture refused where the log has
+// not taken it, and the fourth's stamp is no longer left begun.
 func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 	t.Parallel()
 	t.Run("its record landed", func(t *testing.T) {
@@ -670,16 +699,351 @@ func TestARelaunchSettlesACaptureWhoseTakerIsGoneBeforeItDecides(t *testing.T) {
 			}
 		})
 	})
-	t.Run("its taker's lease still holds", func(t *testing.T) {
+	t.Run("its taker's lease still holds, and its record landed", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			rig, begun, _, why := relaunchAfterTaker(t, false, true, 50*time.Millisecond)
+			rig, begun, continued, why := relaunchAfterTaker(t, false, true, 50*time.Millisecond)
+			if why != "" || !continued.Capture.samePlace(begun) || continued.Capture.State != CaptureLanded {
+				t.Fatalf("the relaunch continues %+v (%q), want the capture the log took, settled landed past "+
+					"the wait though its taker still holds its lease", continued, why)
+			}
+			if kept := rig.get("t1").Kept; kept == nil || !kept.samePlace(begun) || kept.State != CaptureLanded {
+				t.Errorf("the row keeps %+v, want the capture the relaunch continued", kept)
+			}
+		})
+	})
+	t.Run("its taker's lease still holds, and its record is not on the log", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, begun, _, why := relaunchAfterTaker(t, false, false, 50*time.Millisecond)
 			if !strings.Contains(why, "still being kept") {
 				t.Fatalf("the relaunch answered %q, want the capture of a taker still holding its lease waited for",
 					why)
 			}
 			if c := rig.get("t1").Capture; c == nil || !c.sameTake(begun) || c.State != CaptureBegun {
 				t.Errorf("the row holds %+v, want the live taker's capture left begun", c)
+			}
+		})
+	})
+}
+
+// A CAPTURE THE LOG TOOK IS SETTLED LANDED WHATEVER ITS TAKER'S LEASE. A node
+// whose coordination store answers its leases and not its runs (the two are
+// other streams) keeps its taker lease while no stamp of its own reaches the
+// run's row: the job lost with it (launch_node_store_silent) leaves its
+// capture begun under a lease that holds, though the capture's record is on
+// the log. Settled by the lease alone, the relaunch carrying its round on
+// started without that capture, and the turn's end waited out its whole
+// budget. So a wait reads the turn's row for such a capture too, and settles
+// it landed where the row names its place: a relaunch once, after its wait has
+// run out, and the end at most once every record's budget, going on once the
+// log names the capture. The relaunch reads it however long ago the capture
+// began: the loss is found only once the silence has lasted the box's timeout,
+// so the capture can be past its budget, no longer waited for, and the log's
+// all the same. A save a refused final take overtook is read so as much as the
+// newest capture, by the end and by the relaunch. And the relaunch's read past
+// its wait is held to a wait of its own, as long as the relaunch's, the frame
+// still holding the seat: a store slow to answer the lease's read, or to take
+// the settle's write, holds it no longer.
+//
+// IN A SYNCTEST BUBBLE, so each wait is measured on the bubble's clock, which
+// only the waits' own timers advance; the record reaches the log once the
+// end's wait has read the row once, a witness the wait itself leaves.
+//
+// Mutation: settle a capture landed only where its taker is gone, and the
+// relaunch says it is still being kept and the end names it begun and never
+// finished; read the turn's row at every pass of a wait, and the relaunch
+// reads it before its wait has run out and the end more often than a
+// record's budget; read it past the relaunch's wait only for a capture still
+// being kept, and the relaunch of a capture past its budget starts without
+// it; read or settle the newest capture alone, and the end waits out the
+// save's whole budget, or the relaunch leaves the save unsettled; read the
+// lease or the row past the wait under the relaunch's own context, or settle
+// under no deadline of its own, and a slow store holds the relaunch an hour.
+func TestACaptureTheLogTookIsSettledLandedWhateverItsTakersLease(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// aged moves the coordinator's clock a capture's budget past the
+		// capture's begin: no longer in flight, its taker's lease still held.
+		aged bool
+	}{
+		{name: "a relaunch of the job lost with that node"},
+		{name: "a relaunch of the job lost with that node, its capture begun longer ago than a capture can take",
+			aged: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				store := newTakerStore()
+				rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+				rig.coordinator.relaunchWait = 2 * time.Second
+				lease := claimTaker(t, store, takingProcess)
+				begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+				row := landedRow(t, begun)
+				onTheLog(restore, row)
+				if c.aged {
+					rig.now = rig.now.Add(SessionCaptureBudget)
+				}
+				started := time.Now()
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				waited := time.Since(started)
+				if held := heldBy(t, store, takingProcess); held == nil || held.Epoch != lease.Epoch {
+					t.Fatalf("the premise: node-a's taker lease is %+v, want it still held at %d", held,
+						lease.Epoch)
+				}
+				if why != "" || !continued.Capture.samePlace(begun) || continued.Capture.State != CaptureLanded ||
+					continued.Capture.Object != row.Object.Key.String() || continued.Capture.ContextTokens != 42_000 ||
+					continued.CopyContext != 42_000 {
+					t.Fatalf("the relaunch continues %+v (%q), want the capture the log took, landed as the "+
+						"turn's row names it, of 42000 tokens", continued, why)
+				}
+				got := rig.get("t1")
+				if got.Kept == nil || !got.Kept.samePlace(begun) || got.Kept.State != CaptureLanded ||
+					got.Kept.Taker != takingProcess || got.Kept.TakerEpoch != lease.Epoch {
+					t.Errorf("the row keeps %+v, want the capture settled landed, its taker kept", got.Kept)
+				}
+				switch {
+				case !c.aged && waited < rig.coordinator.relaunchWait:
+					t.Errorf("the relaunch decided %s after it asked, want its whole wait of %s for a keep whose "+
+						"taker still held its lease", waited, rig.coordinator.relaunchWait)
+				case c.aged && waited > 0:
+					t.Errorf("the relaunch decided %s after it asked, want it at once: a capture past its "+
+						"budget is no keep it waits for", waited)
+				}
+				if read := restore.askedFor(); len(read) != 2 {
+					t.Errorf("the turn's row was read %v, want once past the wait to settle the capture and "+
+						"once to decide", read)
+				}
+			})
+		})
+	}
+	t.Run("a relaunch of the job lost with that node, its save overtaken by a refused final take",
+		func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				store := newTakerStore()
+				rig, _, _ := keepingRigWith(t, taking(thisProcess, store))
+				rig.runner.Carries = true
+				rig.coordinator.relaunchWait = 2 * time.Second
+				rig.launchKept(t, "t1")
+				lease := claimTaker(t, store, takingProcess)
+				save, _ := overtakenSave(t, rig, "t1", takingProcess, lease.Epoch, CaptureRefused)
+				restore := &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": landedRow(t, save)}}
+				rig.coordinator.restore = restore
+				continued, why := rig.coordinator.ContinuedCapture(t.Context(), "t1", rig.runner)
+				if held := heldBy(t, store, takingProcess); held == nil || held.Epoch != lease.Epoch {
+					t.Fatalf("the premise: node-a's taker lease is %+v, want it still held at %d", held,
+						lease.Epoch)
+				}
+				if kept := rig.get("t1").Kept; kept == nil || !kept.sameTake(save) || kept.State != CaptureLanded {
+					t.Fatalf("the row keeps %+v (%q), want the save the log took, settled landed past the wait",
+						kept, why)
+				}
+				if continued.KeptTurn != "t1" {
+					t.Errorf("the relaunch names %q to its run as a session to read, want the turn's own, whose "+
+						"save the read past the wait settled landed", continued.KeptTurn)
+				}
+				if len(restore.askedFor()) == 0 {
+					t.Error("the turn's row was never read, want it read past the wait to settle the save")
+				}
+			})
+		})
+	for _, c := range []struct {
+		name string
+		// slow makes the store slow to answer what the read past the wait
+		// asks of it.
+		slow func(rig *coordRig, store *takerStore)
+	}{
+		{name: "a relaunch's read past its wait, beside a store slow to answer the taker's lease",
+			slow: func(_ *coordRig, store *takerStore) { store.stallReads() }},
+		{name: "a relaunch's read past its wait, beside a store slow to take the settle's write",
+			slow: func(rig *coordRig, _ *takerStore) {
+				rig.coordinator.pending = stallingSettles{PendingStore: rig.coordinator.pending}
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				store := newTakerStore()
+				rig, restore, kept := keptTurnBy(t, taking(thisProcess, store))
+				// A RECORD'S BUDGET OF AN HOUR, which a settle under no
+				// deadline of its own would be held to.
+				rig.coordinator.relaunchWait, rig.coordinator.recordBudget = 2*time.Second, time.Hour
+				lease := claimTaker(t, store, takingProcess)
+				begun := takenBy(t, rig, kept, takingProcess, lease.Epoch)
+				onTheLog(restore, landedRow(t, begun))
+				c.slow(rig, store)
+				// AN HOUR FOR THE WHOLE RELAUNCH, which a read under its own
+				// context would be held to.
+				ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+				defer cancel()
+				started := time.Now()
+				_, why := rig.coordinator.ContinuedCapture(ctx, "t1", rig.runner)
+				waited := time.Since(started)
+				if bound := 2 * rig.coordinator.relaunchWait; waited > bound {
+					t.Errorf("the relaunch decided %s after it asked (%q), want it within its wait and a wait as "+
+						"long again for its read past it, %s", waited, why, bound)
+				}
+				if got := rig.get("t1").Capture; got == nil || !got.sameTake(begun) || got.State != CaptureBegun {
+					t.Errorf("the row holds %+v, want the capture left begun by a read that was not answered", got)
+				}
+			})
+		})
+	}
+	t.Run("the turn's end", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			ctx := t.Context()
+			store := newTakerStore()
+			rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
+			rig.coordinator.captureTick = time.Second
+			run := rig.launchKept(t, "t1")
+			lease := claimTaker(t, store, takingProcess)
+			begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+				State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
+				TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
+			if took, err := rig.pending.StampCapture(ctx, "t1", begun); err != nil || !took {
+				t.Fatalf("stamping the begun capture = %v, %v", took, err)
+			}
+			// THE TURN'S ROW ON THE LOG, its begin's: it names no capture
+			// until the record reaches it, after the wait's first read.
+			restore := &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": {Handle: "swe", Turn: "t1"}}}
+			rig.coordinator.restore = restore
+			row := landedRow(t, begun)
+			stop, recorded, renewing := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(recorded)
+				for len(restore.askedFor()) < 1 {
+					select {
+					case <-stop:
+						return
+					case <-time.After(time.Millisecond):
+					}
+				}
+				onTheLog(restore, row)
+			}()
+			// node-a's PROCESS RENEWS ITS TAKER LEASE as a live process does,
+			// its leases answered while its runs are not: the lease holds
+			// through every pass of the end's wait.
+			go func() {
+				defer close(renewing)
+				for {
+					select {
+					case <-stop:
+						return
+					case <-time.After(seat.SeatLeaseTTL / coord.KeptRenewals):
+					}
+					if ok, err := store.Backend.Renew(ctx, coord.TakerResource(takingProcess), takingProcess,
+						lease.Epoch, seat.SeatLeaseTTL); err != nil || !ok {
+						t.Errorf("renewing node-a's taker lease = %v, %v", ok, err)
+						return
+					}
+				}
+			}()
+
+			started := time.Now()
+			rig.coordinator.finish(ctx, rig.get("t1"), ending{fence: fenceOf(run),
+				note: &failureNote{reason: string(LossLaunchNodeStoreSilent),
+					detail: "the node it ran on could not reach the coordination store for the box timeout"}})
+			for range 3 {
+				if rig.fireRetries() == 0 {
+					break
+				}
+			}
+			waited := time.Since(started)
+			held := heldBy(t, store, takingProcess)
+			close(stop)
+			<-recorded
+			<-renewing
+			if held == nil || held.Epoch != lease.Epoch {
+				t.Fatalf("the premise: node-a's taker lease is %+v, want it still held at %d", held, lease.Epoch)
+			}
+
+			ends := writes.endedRecords()
+			if len(ends) != 1 {
+				t.Fatalf("recorded %d ends, want the turn's one", len(ends))
+			}
+			if unkept := ends[0].Ending.Unkept; unkept != nil {
+				t.Errorf("the end names %+v unkept, want the capture the log took kept", unkept)
+			}
+			if waited >= SessionCaptureBudget {
+				t.Errorf("the end waited %s, want it recorded once the log named the capture, not by its age",
+					waited)
+			}
+			read := restore.askedFor()
+			if len(read) != 2 {
+				t.Errorf("the turn's row was read %v, want once finding nothing and once finding the capture", read)
+			}
+			if paced := time.Duration(len(read)) * heldRowPace; paced > waited {
+				t.Errorf("the turn's row was read %d times in %s, want at most once every %s", len(read), waited,
+					heldRowPace)
+			}
+		})
+	})
+	t.Run("the turn's end, beside a save overtaken by a refused final take", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			ctx := t.Context()
+			store := newTakerStore()
+			rig, writes, _ := keepingRigWith(t, taking(thisProcess, store))
+			rig.coordinator.captureTick = time.Second
+			run := rig.launchKept(t, "t1")
+			lease := claimTaker(t, store, takingProcess)
+			save, final := overtakenSave(t, rig, "t1", takingProcess, lease.Epoch, CaptureRefused)
+			restore := &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": landedRow(t, save)}}
+			rig.coordinator.restore = restore
+			// node-a's PROCESS RENEWS ITS TAKER LEASE as a live process does:
+			// the lease holds through every pass of the end's wait.
+			stop, renewing := make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(renewing)
+				for {
+					select {
+					case <-stop:
+						return
+					case <-time.After(seat.SeatLeaseTTL / coord.KeptRenewals):
+					}
+					if ok, err := store.Backend.Renew(ctx, coord.TakerResource(takingProcess), takingProcess,
+						lease.Epoch, seat.SeatLeaseTTL); err != nil || !ok {
+						t.Errorf("renewing node-a's taker lease = %v, %v", ok, err)
+						return
+					}
+				}
+			}()
+
+			started := time.Now()
+			rig.coordinator.finish(ctx, rig.get("t1"), ending{fence: fenceOf(run),
+				note: &failureNote{reason: string(LossLaunchNodeStoreSilent),
+					detail: "the node it ran on could not reach the coordination store for the box timeout"}})
+			for range 3 {
+				if rig.fireRetries() == 0 {
+					break
+				}
+			}
+			waited := time.Since(started)
+			held := heldBy(t, store, takingProcess)
+			close(stop)
+			<-renewing
+			if held == nil || held.Epoch != lease.Epoch {
+				t.Fatalf("the premise: node-a's taker lease is %+v, want it still held at %d", held, lease.Epoch)
+			}
+
+			ends := writes.endedRecords()
+			if len(ends) != 1 {
+				t.Fatalf("recorded %d ends, want the turn's one", len(ends))
+			}
+			if u := ends[0].Ending.Unkept; u == nil || u.LaunchSeq != final.LaunchSeq ||
+				u.CaptureSeq != final.CaptureSeq || !ends[0].Ending.WentOn {
+				t.Errorf("the end names %+v unkept, the turn gone on %v; want the refused final take unkept and "+
+					"the turn gone on past the save the log took", u, ends[0].Ending.WentOn)
+			}
+			if waited >= SessionCaptureBudget {
+				t.Errorf("the end waited %s, want it recorded once the log named the save, not by its age",
+					waited)
+			}
+			if read := restore.askedFor(); len(read) != 1 {
+				t.Errorf("the turn's row was read %v, want once, finding the save", read)
 			}
 		})
 	})
@@ -1359,7 +1723,7 @@ func TestASettleLeavesWhatItsTakerStampedSince(t *testing.T) {
 		}
 		lapse(store)
 
-		settled, found := rig.coordinator.settleGone(t.Context(), time.Time{}, asRead)
+		settled, found := rig.coordinator.settleGone(t.Context(), time.Time{}, asRead, false)
 		if !found {
 			t.Fatal("the run's row was read as gone")
 		}

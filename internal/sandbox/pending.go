@@ -2779,7 +2779,8 @@ type PendingStore interface {
 	// under way ([PendingRun.Saving]), is the settled capture's own take
 	// ([SessionCapture.sameTake]), still BEGUN.
 	// It is the write of a node that did not take the capture and settles it
-	// from the executor log once its taker is gone
+	// from the executor log once its taker is gone, or landed once the log
+	// took its record whatever its taker's lease
 	// ([Coordinator.settleGone]) — a decision made from a copy of the
 	// row on which the take stood begun, so where the row has moved on since
 	// — the taker's own outcome stamped, an unresolved record it sent among
