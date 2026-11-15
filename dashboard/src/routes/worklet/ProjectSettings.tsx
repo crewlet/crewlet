@@ -37,12 +37,12 @@ import {
   EmptyValue,
   FormField,
   Input,
-  Modal,
   Select,
   Tag,
   TagsInput,
   type SelectOption,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { HashGlyph, PlusGlyph, SlidersVerticalGlyph } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";

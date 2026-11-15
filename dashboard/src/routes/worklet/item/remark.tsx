@@ -26,7 +26,8 @@
  */
 
 import { useState, type ReactNode } from "react";
-import { Button, Callout, Composer, Modal, Text, useToast } from "@crewlethq/ui";
+import { Button, Callout, Composer, Text, useToast } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { PencilGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { useKeyedGesture, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { ownsRemark, useViewer } from "~/lib/viewer.ts";
