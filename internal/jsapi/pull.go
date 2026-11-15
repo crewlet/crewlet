@@ -114,7 +114,7 @@ func pastMaxBytes(msg *nats.Msg) bool {
 // batchCompleted reports a status that ended a pull because its count was
 // delivered with bytes of its byte bound to spare — the `409` the server sends
 // after the delivery that filled the count (nats-server v2.15.2, consumer.go's
-// getNextMsg loop: JsPullRequestRemainingBytesT, "Batch Completed").
+// loopAndGatherMsgs: JsPullRequestRemainingBytesT, "Batch Completed").
 func batchCompleted(msg *nats.Msg) bool {
 	return msg.Header.Get(statusHeader) == statusConflict &&
 		strings.Contains(strings.ToLower(msg.Header.Get(descriptionHeader)), "batch completed")
@@ -316,8 +316,15 @@ func (p *Pulls) read(msg *nats.Msg) (Event, error) {
 		ev.Kind = Expired
 	case pastMaxBytes(msg):
 		ev.Kind = PastMaxBytes
-	default:
+	case batchCompleted(msg):
 		ev.Kind = BatchCompleted
+	default:
+		// A STATUS [PullStatus] PASSED AND NOTHING HERE NAMES is no
+		// ordinary end this reader knows the meaning of, so it is read as
+		// the refusal every other unnamed status is, never as one of the
+		// ends above.
+		ev.Kind, ev.refusal = Refused, fmt.Errorf("%w: the server ended the pull with %s %s, "+
+			"a status this build does not name", ErrPullRefused, code, ev.Description)
 	}
 	if ev.Ended {
 		p.open = openPull{}
@@ -349,7 +356,7 @@ func (p *Pulls) delivered(msg *nats.Msg) (Event, error) {
 	if p.open.bounded {
 		// COUNTED AS THE SERVER COUNTS IT: the subject, the reply, the
 		// header block and the payload (nats.go's Msg.Size, the server's
-		// sz in consumer.go's getNextMsg loop). A delivery that leaves
+		// sz in consumer.go's loopAndGatherMsgs). A delivery that leaves
 		// nothing of the bound is the server's last for the pull, and it
 		// sends no status after it (consumer.go: at zero it sets the
 		// request's count to one, and sends a Batch Completed only for

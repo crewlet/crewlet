@@ -15,7 +15,10 @@ import (
 // next. So each status the server sends a pull is named for what it is, and
 // every one but a heartbeat ends the pull: its expiry, the byte bound the next
 // message would pass, the count filled with bytes to spare — and anything
-// else, which is the pull refused, carrying its code and its text.
+// else, which is the pull refused, carrying its code and its text. The
+// statuses are nats-server v2.15.2's: the `404` only a no-wait pull is sent,
+// the `408 Interest Expired` of a pull whose reader went away, a server
+// shutting down, and the `400` of a request it could not take.
 //
 // Mutation: read a heartbeat as an end, or a refusal as an expiry, and its row
 // goes red.
@@ -28,10 +31,14 @@ func TestEveryStatusAPullEndsWithIsNamed(t *testing.T) {
 	}{
 		{"100", "Idle Heartbeat", Heartbeat, false},
 		{"408", "Request Timeout", Expired, true},
+		{"408", "Interest Expired", Expired, true},
+		{"404", "No Messages", Expired, true},
 		{"409", "Message Size Exceeds MaxBytes", PastMaxBytes, true},
 		{"409", "Batch Completed", BatchCompleted, true},
 		{"409", "Consumer Deleted", Refused, true},
 		{"409", "Leadership Change", Refused, true},
+		{"409", "Server Shutdown", Refused, true},
+		{"400", "Bad Request - heartbeat value too large", Refused, true},
 		{"503", "", Refused, true},
 	} {
 		p := &Pulls{open: openPull{count: 4, bytesLeft: 1 << 20, bounded: true}}

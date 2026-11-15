@@ -304,9 +304,10 @@ func Arrival(messageBytes int, pace time.Duration) time.Duration {
 // carrying a mebibyte in as long as pace, none for a pace of zero. A delivery
 // carries its messages as they were stored, never base64-encoded inside JSON
 // as a leader's reply does ([ReplyBytes]), so Arrival(m, pace) is
-// Delivering(ReplyBytes(m), pace). It is what a reader of a consumer's pulls
-// gives a request whose answer queues behind a pull of that many bytes still
-// on its way ([Pulls]).
+// Delivering(ReplyBytes(m), pace) to within a nanosecond (Arrival rounds its
+// two terms down apart, this its one). It is what a reader of a consumer's
+// pulls gives a request whose answer queues behind a pull of that many bytes
+// still on its way ([Pulls]).
 func Delivering(messageBytes int, pace time.Duration) time.Duration {
 	return time.Duration(float64(HandlingPace+pace) * float64(messageBytes) / mebibyte)
 }
