@@ -1196,7 +1196,7 @@ func (r *Runner) partnersOf(of int, as toldAs) partners {
 //   - A SHOWN CALL OF THE RENDERED ROUNDS that reads alike t ([readAlike]).
 func (p partners) couldBeTakenFor(t BridgedCall, opts ledger.FormatOptions) bool {
 	if slices.ContainsFunc(p.leads, func(l toldHeld) bool {
-		return l.tool == t.Name && !(t.Held && l.round == p.of)
+		return l.tool == t.Name && (!t.Held || l.round != p.of)
 	}) {
 		return true
 	}
