@@ -3796,7 +3796,10 @@ answer is the decision or an input to it.
 priority, assignee (with **Reassign**, whose dialog asks why), reporter,
 project, type, labels (the project's declared set), due and start, and the
 estimate, then any custom fields and the record (created, updated, in status
-since, filed into). A row a change touched after the task was filed says who
+since, filed into). A field drawn as its value is named by that value first,
+then by what it changes ("In review, Status of ENG-42"), here and in a list's
+cells alike: named "Status of ENG-42" while it showed the status, a person who
+says what they see reached nothing. A row a change touched after the task was filed says who
 last set it, named as the person the activity names — a person's change is
 drawn as the seat the engine recorded it under, and so is the reporter; the
 create itself draws no line,

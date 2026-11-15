@@ -1556,6 +1556,31 @@ test.each([
   expect(posted).toEqual([]);
 });
 
+// A PICKER DRAWN AS ITS VALUE IS NAMED BY THAT VALUE FIRST, then by what it
+// changes. Named "Status of ENG-42" while it showed the status, its name did
+// not contain what is on screen (axe label-content-name-mismatch), so a
+// person who says what they see reached nothing.
+test("the rail's pickers are named by the value they show, then by what they change", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  for (const field of ["Status", "Labels"]) {
+    const picker = screen.getByRole("button", { name: new RegExp(`, ${field} of ENG-42$`) });
+    expect(picker.hasAttribute("aria-label"), field).toBe(false);
+    // WHAT THE EYE GETS: the button's words less those only a screen reader hears.
+    const seen = picker.cloneNode(true) as HTMLElement;
+    seen
+      .querySelectorAll(".crewlet-visually-hidden, .sr-only, [aria-hidden='true']")
+      .forEach((node) => node.remove());
+    const shown = (seen.textContent ?? "").trim();
+    // A VALUE DRAWN AS A MARK ALONE (an empty value's dash) shows no words
+    // for its name to start with, and is named by what the mark means.
+    if (!shown) continue;
+    expect(screen.getByRole("button", { name: `${shown}, ${field} of ENG-42` }), field).toBe(
+      picker,
+    );
+  }
+});
+
 // A WRITER'S FIELD IS CHANGED WHERE IT IS READ, conditional on the version the
 // page was drawn from — so a race lost to somebody else is refused, not
 // overwritten.
@@ -2146,7 +2171,7 @@ test("a narrow page leads with the four fields, before the description", async (
   narrowPage();
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
-  const status = screen.getByRole("button", { name: /^Status of ENG-42/ });
+  const status = screen.getByRole("button", { name: /Status of ENG-42$/ });
   const edit = screen.getByRole("button", { name: /description$/i });
   expect(status.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   const lead = status.closest(".task-lead") as HTMLElement;
