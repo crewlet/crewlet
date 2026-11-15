@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -636,11 +637,11 @@ func TestTheTimingsTimeWhatPassed(t *testing.T) {
 	if err := writeTimings(&got, r); err != nil {
 		t.Fatal(err)
 	}
-	want := passed + "\t12.500\n" +
+	want := passed + "\t12.500\t0.000\n" +
 		passed + "\tTestB\t0.500\n" +
 		passed + "\tTestSkipped\t0.004\n" +
 		passed + "\tTestX\t12.100\n" +
-		noTests + "\t0.000\n"
+		noTests + "\t0.000\t0.000\n"
 	if got.String() != want {
 		t.Errorf("timings =\n%s\nwant\n%s", got.String(), want)
 	}
@@ -1180,6 +1181,20 @@ func TestATestIsTimedByWhenSomePartOfItRan(t *testing.T) {
 		ev("cont", "TestQueued/y", 200, 0),
 		ev("pass", "TestQueued/y", 201, 1),
 		ev("pass", "TestQueued", 201, 0),
+		// A table whose cases' own names hold a slash, as t.Run(mode+"/"+name)
+		// makes them: each is ONE subtest of the table, never one of a
+		// "TestSlashed/normal" that never ran. They queued 120 s and ran a
+		// second each.
+		ev("run", "TestSlashed", 0, 0),
+		ev("run", "TestSlashed/normal/a", 0, 0),
+		ev("pause", "TestSlashed/normal/a", 0, 0),
+		ev("run", "TestSlashed/seal/a", 0, 0),
+		ev("pause", "TestSlashed/seal/a", 0, 0),
+		ev("cont", "TestSlashed/normal/a", 120, 0),
+		ev("pass", "TestSlashed/normal/a", 121, 1),
+		ev("cont", "TestSlashed/seal/a", 121, 0),
+		ev("pass", "TestSlashed/seal/a", 122, 1),
+		ev("pass", "TestSlashed", 122, 0),
 		// Sequential cases with the body's own work around them: all of it
 		// ran, eight seconds.
 		ev("run", "TestInTurn", 0, 0),
@@ -1196,9 +1211,10 @@ func TestATestIsTimedByWhenSomePartOfItRan(t *testing.T) {
 	if err := writeTimings(&got, r); err != nil {
 		t.Fatal(err)
 	}
-	want := pkg + "\t202.000\n" +
+	want := pkg + "\t202.000\t0.000\n" +
 		pkg + "\tTestInTurn\t8.000\n" +
 		pkg + "\tTestQueued\t2.000\n" +
+		pkg + "\tTestSlashed\t2.000\n" +
 		pkg + "\tTestSuite\t60.000\n" +
 		pkg + "\tTestWaited\t11.000\n"
 	if got.String() != want {
@@ -1206,5 +1222,51 @@ func TestATestIsTimedByWhenSomePartOfItRan(t *testing.T) {
 	}
 	if list := slowest(r.timed, 3); !strings.Contains(list, "60.000s  internal/a TestSuite/case") {
 		t.Errorf("the slowest list does not time the parallel case by when it ran:\n%s", list)
+	}
+}
+
+// A PACKAGE'S CPU IS ITS SHARE OF THE RUN'S, BY ITS SHARE OF THE BUSY TIME.
+//
+// go test reports no package's CPU, only the process tree's, so the run's CPU
+// is shared out by each package's busy time — its top-level tests' — and a
+// package with no busy time is given none. A failed package's tests used the
+// CPU too, so its busy time counts toward the whole even though its line is
+// never written; and a run that measured no busy time at all shares nothing
+// out rather than dividing by it.
+func TestAPackagesCPUIsItsShareOfTheRunsByBusyTime(t *testing.T) {
+	t.Parallel()
+
+	r := report{
+		cpu: 120 * time.Second,
+		topLevel: map[string]map[string]float64{
+			"x/heavy": {"TestA": 40, "TestB": 20},
+			"x/light": {"TestC": 15},
+			"x/broke": {"TestD": 5},
+		},
+	}
+	got := cpuShares(r)
+	want := map[string]float64{"x/heavy": 90, "x/light": 22.5, "x/broke": 7.5}
+	if !maps.Equal(got, want) {
+		t.Errorf("cpuShares = %v, want %v", got, want)
+	}
+	if got := cpuShares(report{cpu: time.Minute}); len(got) != 0 {
+		t.Errorf("cpuShares of a run with no busy time = %v, want nothing shared out", got)
+	}
+
+	r.finished = map[string]finish{
+		"x/heavy": {action: "pass", elapsed: 30},
+		"x/broke": {action: "fail", elapsed: 3},
+		"x/empty": {action: "skip"},
+	}
+	var lines strings.Builder
+	if err := writeTimings(&lines, r); err != nil {
+		t.Fatal(err)
+	}
+	wantLines := "x/empty\t0.000\t0.000\n" +
+		"x/heavy\t30.000\t90.000\n" +
+		"x/heavy\tTestA\t40.000\n" +
+		"x/heavy\tTestB\t20.000\n"
+	if lines.String() != wantLines {
+		t.Errorf("timings =\n%s\nwant\n%s", lines.String(), wantLines)
 	}
 }

@@ -209,6 +209,8 @@ type harness struct {
 	// seat a push mirror pushes as: nil for every seat held by an active
 	// person using every app (gitlettest.FixturePeople).
 	people gitlet.People
+	// ended is the workers' mirror.Options.Ended: nil for none.
+	ended func(repoID string, out bool, err error)
 
 	mu  sync.Mutex
 	now time.Time
@@ -300,7 +302,8 @@ func (h *harness) mirrors() *mirror.Mirrors {
 	}
 	m, err := mirror.New(mirror.Options{Estate: h.est, Cache: n.Cache(), Git: git, Objects: objects,
 		Dial: dial, NodeID: n.ID(), Limits: func() gitlet.Limits { return h.limits },
-		Roster: gitlettest.FixtureRoster, People: people, Events: &h.events, Faults: h.faults, Now: h.clock})
+		Roster: gitlettest.FixtureRoster, People: people, Events: &h.events, Faults: h.faults, Now: h.clock,
+		Ended: h.ended})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -664,6 +667,45 @@ func TestAnImportPastTheBlobLimitEndsWithItsError(t *testing.T) {
 	if len(dones) != 1 || dones[0].Seq != 0 || !strings.Contains(dones[0].Error, big) ||
 		!strings.Contains(dones[0].Error, "max_blob_bytes") {
 		t.Fatalf("the import ended %+v; want one end at chunk 0 naming blob %s and max_blob_bytes", dones, big)
+	}
+}
+
+// AN ATTEMPT'S END IS TOLD ONCE THE WORKER HAS RECORDED IT (Options.Ended):
+// over, one failure in a row, stamped at the worker's clock.
+// Mutation: tell Ended before the record, and the attempt still runs.
+func TestAnAttemptsEndIsToldOnceItIsRecorded(t *testing.T) {
+	h := newHarness(t, gitlet.Limits{})
+	refused := errors.New("the source refuses every connection")
+	h.dial = func(context.Context, string, string) (gitproc.Remote, error) { return gitproc.Remote{}, refused }
+	type told struct {
+		out, running bool
+		err          error
+		failures     int
+		ended        time.Time
+	}
+	var m *mirror.Mirrors
+	ends := make(chan told, 4)
+	h.ended = func(repoID string, out bool, err error) {
+		running, failures, ended := m.Attempted(repoID, out)
+		ends <- told{out: out, running: running, err: err, failures: failures, ended: ended}
+	}
+	h.f.Declare(t, gitlet.Declared{Name: "imported", Settings: gitlettest.Settings(),
+		Import: &gitlet.ImportSource{URL: h.src.url}})
+	m = h.mirrors()
+
+	h.pass(m)
+
+	if len(ends) != 1 {
+		t.Fatalf("%d attempts were told ended, want the import's one", len(ends))
+	}
+	got := <-ends
+	if got.out || !errors.Is(got.err, refused) {
+		t.Errorf("the import's end was told as out %v with %v, want in, with the dial's refusal", got.out, got.err)
+	}
+	if got.running || got.failures != 1 || !got.ended.Equal(h.clock()) {
+		t.Errorf("as its end was told the attempt was running %v, %d failure(s) in a row, ended at %v; "+
+			"want it over, one failure, ended at the worker's clock %v", got.running, got.failures, got.ended,
+			h.clock())
 	}
 }
 
