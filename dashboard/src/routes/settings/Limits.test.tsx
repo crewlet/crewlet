@@ -22,7 +22,8 @@ import {
   stubEngine,
   validAnswer,
 } from "~/test/settingsScreen.tsx";
-import { Limits, limitSource } from "./Limits.tsx";
+import { limitSource } from "~/components/LimitSetting.tsx";
+import { Limits } from "./Limits.tsx";
 
 afterEach(() => {
   cleanup();

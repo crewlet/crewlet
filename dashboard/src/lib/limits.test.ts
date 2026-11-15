@@ -78,13 +78,15 @@ test("the document's own value is read by the key's path", () => {
 test("a change is worked out against the document as it is now", () => {
   const cap = row({ key: "turn_engine.max_iterations" });
   const writes = { name: "Acme", turn_engine: { max_iterations: 5 } };
-  expect(limitPlan(cap, "Review rounds per turn", 5)(writes)).toBeNull();
-  expect(limitPlan(cap, "Review rounds per turn", null)({ name: "Acme" })).toBeNull();
-  expect(limitPlan(cap, "Review rounds per turn", null)(writes)).toEqual({
+  expect(limitPlan(cap, "Review rounds per turn", 5, "Limits")(writes)).toBeNull();
+  expect(limitPlan(cap, "Review rounds per turn", null, "Limits")({ name: "Acme" })).toBeNull();
+  expect(limitPlan(cap, "Review rounds per turn", null, "Limits")(writes)).toEqual({
     patch: { turn_engine: { max_iterations: null } },
     summary: "Limits: Review rounds per turn back to the default (turn_engine.max_iterations)",
   });
-  expect(limitPlan(SHARE, "Share of the budget a call may spend", 0.35)({ name: "Acme" })).toEqual({
+  expect(
+    limitPlan(SHARE, "Share of the budget a call may spend", 0.35, "Limits")({ name: "Acme" }),
+  ).toEqual({
     patch: { turn_engine: { delegation: { budget_fraction: 0.35 } } },
     summary:
       "Limits: Share of the budget a call may spend set to 35% (turn_engine.delegation.budget_fraction)",

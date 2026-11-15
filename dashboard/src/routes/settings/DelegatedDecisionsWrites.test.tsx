@@ -49,7 +49,41 @@ const ANSWER: DelegatedDecisionsAnswer = {
     { rule: 1, ...SSH, sample_one_in: 10, always_escalate_paths: [], required_checks: [] },
     { rule: 2, ...RELEASE },
   ] as DelegatedDecisionsAnswer["rules"],
-  limits: { deadline_minutes: 15, decisions_per_hour: 30, server_allows_per_hour: 10 },
+  limits: [
+    {
+      key: "delegated_decisions.deadline_seconds",
+      group: "delegated",
+      unit: "seconds",
+      value: 900,
+      default: 900,
+      off: false,
+      default_off: false,
+      settable: true,
+      range: { min: 300, max: 1800 },
+    },
+    {
+      key: "delegated_decisions.allows_per_hour",
+      group: "delegated",
+      unit: "count",
+      value: 30,
+      default: 30,
+      off: false,
+      default_off: false,
+      settable: true,
+      range: { min: 1, max: 60 },
+    },
+    {
+      key: "delegated_decisions.server_allows_per_hour",
+      group: "delegated",
+      unit: "count",
+      value: 10,
+      default: 10,
+      off: false,
+      default_off: false,
+      settable: true,
+      range: { min: 1, max: 60 },
+    },
+  ],
   day: "2026-11-10",
   since: "2026-11-10T00:00:00Z",
   until: "2026-11-11T00:00:00Z",
@@ -207,4 +241,69 @@ test("a reader without the grant sees every control disabled with the reason", a
     expect(control.getAttribute("title")).toBe(reason);
   }
   expect(screen.getByRole("switch", { name: "On" }).getAttribute("title")).toBe(reason);
+});
+
+/** Opens one limit's field from its pencil, types `value` and submits it. */
+async function changeLimit(name: RegExp, value: string) {
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name }));
+  });
+  const field = screen.getByRole("textbox");
+  fireEvent.change(field, { target: { value } });
+  await act(async () => {
+    fireEvent.submit(field.closest("form")!);
+  });
+  await act(afterMicrotasks);
+}
+
+// THE LIMITS ARE THE DOCUMENT'S, changed where they are read by the field
+// Settings › Limits changes a cap with: checked by the engine first, then
+// saved as a patch of the one key, on the revision the read named.
+test("a limit the engine enforces is changed in place as a patch of its one key", async () => {
+  const calls = stubEngine(engine);
+  await show();
+  const limits = screen.getByRole("table", { name: "What Crewlet enforces" });
+  const deadline = within(limits).getByRole("row", { name: /goes to people after/ });
+  expect(within(deadline).getByText("15 minutes")).toBeTruthy();
+  expect(within(deadline).getByText("Default")).toBeTruthy();
+  await changeLimit(/Change A request no delegate answered goes to people after/, "1200");
+  const [save] = writes(calls);
+  expect(save!.headers.get("If-Match")).toBe('"r1"');
+  expect(save!.body).toEqual({
+    delegated_decisions: { deadline_seconds: 1200 },
+    _summary:
+      "Delegated decisions: A request no delegate answered goes to people after set to 1200 " +
+      "(delegated_decisions.deadline_seconds)",
+  });
+  // THE SAVED VALUE, MARKED AS APPLYING, in the row it was changed in.
+  const row = within(screen.getByRole("table", { name: "What Crewlet enforces" })).getByRole(
+    "row",
+    {
+      name: /goes to people after/,
+    },
+  );
+  expect(within(row).getByText("20 minutes")).toBeTruthy();
+  expect(within(row).getByText("applying…")).toBeTruthy();
+});
+
+// THE ENGINE'S RANGE, said beside the field before anything is sent: no cap
+// can be switched off or stretched past what it bounds.
+test("a limit outside its range is said beside the field, and nothing is sent", async () => {
+  const calls = stubEngine(engine);
+  await show();
+  await changeLimit(/Change Allows per kind and delegate/, "61");
+  expect(calls).toEqual([]);
+  expect(screen.getByRole("textbox").getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getAllByText("From 1 to 60.").length).toBeGreaterThan(0);
+});
+
+// NEVER HIDDEN: a person a rule escalates to reads the limits, and sees each
+// pencil disabled with the reason.
+test("a reader who may not change the document sees each limit's pencil held with the reason", async () => {
+  await show(READER_VIEWER);
+  const pencil = screen.getByRole("button", { name: /Change Commands allowed per server/ });
+  expect(
+    pencil.getAttribute("aria-disabled") ?? String((pencil as HTMLButtonElement).disabled),
+  ).toBe("true");
+  expect(pencil.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.no_grant);
 });

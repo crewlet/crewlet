@@ -269,8 +269,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/repo/RepoLife.tsx": "modal: a repository delete's reason, in its dialog",
   "routes/gitlet/repo/RepoWrites.tsx":
     "modal: a repository's details and its mirrors, in their dialogs",
-  "routes/settings/Limits.tsx":
-    "saved per change: one limit's value, in the panel its pencil opens, written by that " +
+  "components/LimitSetting.tsx":
+    "saved per change: one setting's value, in the panel its pencil opens, written by that " +
     "panel's own Save",
   "components/TitleField.tsx":
     "not an editor: one field; every screen that draws it holds the value and declares the draft",
