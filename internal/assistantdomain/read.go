@@ -522,7 +522,7 @@ func (r *Reader) transcriptIn(ctx context.Context, tx *sql.Tx, id uuid.UUID,
 		AuditReads: []AuditRead{}}
 	conversation := id.String()
 	var summary string
-	if err := tx.QueryRowContext(ctx, `SELECT summary_sealed, summary_through
+	if err = tx.QueryRowContext(ctx, `SELECT summary_sealed, summary_through
 		FROM assistant_conversations WHERE id = ?`, conversation).Scan(&summary,
 		&t.SummaryThrough); err != nil {
 		return Transcript{}, fmt.Errorf("assistantdomain: conversation %s's summary: %w", id, err)

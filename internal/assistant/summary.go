@@ -83,7 +83,7 @@ func (s *Service) summarizeConversation(ctx context.Context, t *turn,
 	if through-from < SummaryBatch {
 		return nil
 	}
-	if err := toolloop.Refusal(ctx, meter); err != nil {
+	if err = toolloop.Refusal(ctx, meter); err != nil {
 		return err
 	}
 	var in strings.Builder
