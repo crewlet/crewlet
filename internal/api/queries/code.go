@@ -30,7 +30,7 @@ import (
 // AND A CHANGE'S ROWS AND ITS ROUTING (codechange.go): `code_changes`,
 // `code_change`, `code_change_routing` and `code_reviews`, decided per
 // repository alike; AND A REPOSITORY'S CONTENT (codegit.go): `code_refs`,
-// `code_tree`, `code_blob`, `code_log`, `code_blame`, `code_diff`,
+// `code_tree`, `code_find`, `code_blob`, `code_log`, `code_blame`, `code_diff`,
 // `code_compare` and `code_commit`, decided per repository alike — the Gitlet
 // node that answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
 // (codechecks.go): `code_queue`, `code_checks`, `code_check` and
@@ -474,6 +474,7 @@ func registerCode(r *Registry, s Sources) {
 	r.Register("code_reviews", gated, s.codeRead(gitlet.ReadReviews, "code_reviews"))
 	r.Register("code_refs", gated, s.codeRead(gitlet.ReadRefs, "code_refs"))
 	r.Register("code_tree", gated, s.codeTree)
+	r.Register("code_find", gated, s.codeFind)
 	r.Register("code_blob", gated, s.codeBlob)
 	r.Register("code_log", gated, s.codeLog)
 	r.Register("code_blame", gated, s.codeBlame)

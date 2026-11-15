@@ -16,7 +16,8 @@ import (
 // A REPOSITORY'S FILES, HISTORY AND DIFFS, AS QUESTIONS: `code_refs`, its live
 // refs under a prefix (GET /gitlet/repos/{name}/refs, the reader's `refs`);
 // `code_tree` and `code_blob`, a directory and a file at a revision (…/tree,
-// …/blob); `code_log` and `code_blame`, a path's history and who last changed
+// …/blob); `code_find`, a file found by its name in a revision's tree
+// (…/find); `code_log` and `code_blame`, a path's history and who last changed
 // each line of a file (…/log, …/blame); `code_diff` and `code_compare`, what
 // changed between two revisions and how they relate, with what merging the
 // one into the other would do (…/diff, …/compare); and `code_commit`, one
@@ -80,6 +81,7 @@ type CodePage struct {
 	Diff  *gitlet.DiffAnswer  `json:"diff,omitempty"`
 	Log   *gitlet.LogAnswer   `json:"log,omitempty"`
 	Blame *gitlet.BlameAnswer `json:"blame,omitempty"`
+	Find  *gitlet.FindAnswer  `json:"find,omitempty"`
 	// Compare is a comparison's own part, beside its merge preview
 	// ([CodeComparison]).
 	Compare *gitlet.CompareAnswer `json:"compare,omitempty"`
@@ -290,7 +292,7 @@ func (g gitAsk) read(ctx context.Context, repo gitlet.RepoRef, q gitlet.GitQuery
 		return CodePage{}, false, codeRefusal(g.name, err)
 	}
 	page := CodePage{Repo: g.name, Kind: a.Kind, Rev: a.Rev, Next: a.Next, Tree: a.Tree, Blob: a.Blob, Diff: a.Diff,
-		Log: a.Log, Blame: a.Blame, Compare: a.Compare}
+		Log: a.Log, Blame: a.Blame, Find: a.Find, Compare: a.Compare}
 	if immutable {
 		return page, true, nil
 	}
@@ -387,6 +389,44 @@ func (s Sources) codeTree(ctx context.Context, p Params) (any, error) {
 	}
 	page, immutable, err := g.read(ctx, repo, gitlet.GitQuery{Kind: gitlet.GitTree, Tree: &gitlet.TreeQuery{Rev: rev.oid,
 		Path: path, PathB64: b64, Recursive: recursive}}, p.String("cursor"), rev)
+	if err != nil {
+		return nil, err
+	}
+	return answered(page, immutable), nil
+}
+
+// codeFind answers `code_find`: the files of `ref`'s tree (the default
+// branch where it names none) whose path holds `q`'s characters in order,
+// case-folded, best first: `limit` of them (1 to gitlet.MaxFindLimit,
+// gitlet.DefaultFindLimit where it names none), and how many match. One
+// answer, no cursor: a person narrows it by typing on.
+func (s Sources) codeFind(ctx context.Context, p Params) (any, error) {
+	g, err := s.gitAskOf(ctx, p, "code_find")
+	if err != nil {
+		return nil, err
+	}
+	rev, err := revParam(p, "ref", true)
+	if err != nil {
+		return nil, err
+	}
+	f := gitlet.FindQuery{Query: p.String("q")}
+	if f.Query == "" {
+		return nil, fmt.Errorf("%w: q is required: the characters a file's path holds, in order", ErrBadParams)
+	}
+	if p.Has("limit") {
+		n, whole := p.WholeInt("limit")
+		if !whole || n < 0 {
+			return nil, fmt.Errorf("%w: the limit %q is not a whole number of zero or more (0 is the find's "+
+				"own %d)", ErrBadParams, p.String("limit"), gitlet.DefaultFindLimit)
+		}
+		f.Limit = int(n)
+	}
+	repo, err := g.resolve(ctx, rev)
+	if err != nil {
+		return nil, err
+	}
+	f.Rev = rev.oid
+	page, immutable, err := g.read(ctx, repo, gitlet.GitQuery{Kind: gitlet.GitFind, Find: &f}, "", rev)
 	if err != nil {
 		return nil, err
 	}

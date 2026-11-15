@@ -9032,6 +9032,30 @@ export interface CodeTreeAnswer {
   total: number;
 }
 
+/** One file a find found (`gitlet.FindMatch`). */
+export interface CodeFindMatch {
+  /** From the repository's root; in base64 as `path_b64` where it is no valid UTF-8. */
+  path: string;
+  path_b64?: string;
+  oid: string;
+  /** Git's: 100644 a file, 100755 an executable, 120000 a link. */
+  mode: string;
+  /** The runs of `path` the query matched, each [start, end) in code points of `path`: index `Array.from(path)`, not the string. */
+  spans: [number, number][];
+}
+
+/**
+ * The files of a revision's tree whose path holds a query's characters in
+ * order (`gitlet.FindAnswer`): the best, best first, with how many match and
+ * how many files the tree holds. One answer, no next page.
+ */
+export interface CodeFindAnswer {
+  tree: string;
+  matches: CodeFindMatch[] | null;
+  total: number;
+  files: number;
+}
+
 /** One page of a file's lines (`gitlet.BlobAnswer`). */
 export interface CodeBlobAnswer {
   path?: string;
@@ -9116,13 +9140,14 @@ export interface CodeBlameAnswer {
  */
 export interface CodeGitAnswer {
   repo: string;
-  kind: "tree" | "blob" | "log" | "blame" | "diff" | "compare" | (string & {});
+  kind: "tree" | "blob" | "log" | "blame" | "diff" | "compare" | "find" | (string & {});
   rev?: string;
   next?: string;
   tree?: CodeTreeAnswer;
   blob?: CodeBlobAnswer;
   log?: CodeLogAnswer;
   blame?: CodeBlameAnswer;
+  find?: CodeFindAnswer;
   diff?: CodeDiffAnswer;
   compare?: CodeCompareFacts;
   resolved?: Record<string, CodeResolved>;
@@ -9364,6 +9389,7 @@ export interface CodeQueryMap {
   code_repo: CodeRepoAnswer;
   code_refs: CodeRefsAnswer;
   code_tree: CodeGitAnswer;
+  code_find: CodeGitAnswer;
   code_blob: CodeGitAnswer;
   code_log: CodeGitAnswer;
   code_blame: CodeGitAnswer;

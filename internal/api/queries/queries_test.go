@@ -388,6 +388,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// again by the Gitlet node that answers a read by object id.
 		"code_refs":    string(iam.GrantGitlet),
 		"code_tree":    string(iam.GrantGitlet),
+		"code_find":    string(iam.GrantGitlet),
 		"code_blob":    string(iam.GrantGitlet),
 		"code_log":     string(iam.GrantGitlet),
 		"code_blame":   string(iam.GrantGitlet),

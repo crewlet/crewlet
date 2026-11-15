@@ -159,6 +159,7 @@ var SESSION_QUERIES = {
 		"code_reviews",
 		"code_refs",
 		"code_tree",
+		"code_find",
 		"code_blob",
 		"code_log",
 		"code_blame",

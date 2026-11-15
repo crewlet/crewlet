@@ -324,13 +324,14 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/changes/{n}", what: "code_change", path: map[string]string{"name": "name", "n": "change"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/changes/{n}/routing", what: "code_change_routing", path: map[string]string{"name": "name", "n": "change"}},
 	{method: "GET", pattern: "/gitlet/reviews", what: "code_reviews"},
-	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file, a path's
-	// history, a file's blame, a diff, a comparison with its merge preview
-	// and one commit with the changes it belongs to — each read by object id
-	// of the repository's home Gitlet node, and decided per repository as the
-	// rows are.
+	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file found by its
+	// name, a file, a path's history, a file's blame, a diff, a comparison
+	// with its merge preview and one commit with the changes it belongs to —
+	// each read by object id of the repository's home Gitlet node, and
+	// decided per repository as the rows are.
 	{method: "GET", pattern: "/gitlet/repos/{name}/refs", what: "code_refs", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/tree", what: "code_tree", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/gitlet/repos/{name}/find", what: "code_find", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/blob", what: "code_blob", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/log", what: "code_log", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/blame", what: "code_blame", path: map[string]string{"name": "name"}},

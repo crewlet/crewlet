@@ -37,6 +37,7 @@ var gitQuestions = []struct {
 	args func(rev string) map[string]any
 }{
 	{"code_tree", func(rev string) map[string]any { return map[string]any{"name": "web", "ref": rev} }},
+	{"code_find", func(rev string) map[string]any { return map[string]any{"name": "web", "ref": rev, "q": "main"} }},
 	{"code_blob", func(rev string) map[string]any {
 		return map[string]any{"name": "web", "ref": rev, "path": "go.mod"}
 	}},
@@ -424,5 +425,46 @@ func TestAReadByObjectIDRefusesInThisSurfacesVocabulary(t *testing.T) {
 			"ref": whole}); !tc.check(err) {
 			t.Errorf("%s: answered %v", tc.name, err)
 		}
+	}
+}
+
+// A FIND NAMES ITS QUERY. `q` and `limit` reach the read by object id as the
+// find's query and its limit, the revision its `ref`; a request naming no
+// `q`, or a limit that is no whole number of zero or more, is bad_params
+// before anything is read, the rows or a Gitlet node.
+//
+// Mutation: drop codeFind's check of q, or of its limit being whole: the
+// request with none, or with 2.5, reaches the reader, red.
+func TestAFindNamesItsQuery(t *testing.T) {
+	t.Parallel()
+	stub := &stubCode{}
+	if _, err := askNative(t, queries.Sources{Code: stub}, "code_find", map[string]any{"name": "web",
+		"ref": whole, "q": "cmd/ma", "limit": 7}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.read) != 1 || stub.read[0].Kind != gitlet.GitFind ||
+		*stub.read[0].Find != (gitlet.FindQuery{Rev: whole, Query: "cmd/ma", Limit: 7}) {
+		t.Fatalf("the find was read as %+v, want one find of cmd/ma at %s, limit 7", stub.read, whole)
+	}
+	for _, args := range []map[string]any{
+		{"name": "web", "ref": whole},
+		{"name": "web", "ref": whole, "q": ""},
+		{"name": "web", "ref": "main", "q": "main", "limit": 2.5},
+		{"name": "web", "ref": "main", "q": "main", "limit": -1},
+		{"name": "web", "ref": "main", "q": "main", "limit": "many"},
+	} {
+		none := &stubCode{}
+		_, err := askNative(t, queries.Sources{Code: none}, "code_find", args)
+		if !errors.Is(err, queries.ErrBadParams) || len(none.asked)+len(none.resolved)+len(none.read) != 0 {
+			t.Errorf("a find of %v answered %v having read %d rows, %d resolves and %d reads, want bad_params "+
+				"before anything", args, err, len(none.asked), len(none.resolved), len(none.read))
+		}
+	}
+	past := &stubCode{}
+	if _, err := askNative(t, queries.Sources{Code: past}, "code_find", map[string]any{"name": "web",
+		"ref": whole, "q": "main", "limit": gitlet.MaxFindLimit + 1}); !errors.Is(err, queries.ErrBadParams) ||
+		len(past.read) != 0 {
+		t.Errorf("a find of %d files answered %v having read %d, want bad_params", gitlet.MaxFindLimit+1, err,
+			len(past.read))
 	}
 }
