@@ -191,9 +191,13 @@ func TestACutOffKeptSessionIsToldOnlyTheCallsItsReadingDoesNotHold(t *testing.T)
 // carries, nor a skill load its harness's hook reported, which carries no id
 // (an id a call in flight carries: [TestAnIDACallInFlightCarriesIsNeverAskedAbout]).
 // An owed read is asked. And it is asked for the release that wrote the
-// session.
+// session, each asked call with its outcome as the log keeps it: a failed
+// call failed, its error its output, and a call whose output the log cut its
+// opening, beside the whole output's size; the reader holds a call only where
+// its records agree with that outcome.
 //
-// Mutation: drop any one exclusion, and this goes red.
+// Mutation: drop any one exclusion, or carry a call's failure, output or size
+// otherwise than the log keeps it, and this goes red.
 func TestAReadingIsAskedOnlyOfTheCallsTheTellingWouldList(t *testing.T) {
 	t.Parallel()
 	basis := cutOffClaude(far)
@@ -205,6 +209,10 @@ func TestAReadingIsAskedOnlyOfTheCallsTheTellingWouldList(t *testing.T) {
 	abandoned := calledAs("jira_create", map[string]any{"summary": "abandoned"}, 6, "toolu_06")
 	abandoned.Abandoned = true
 	load := loadSkill(10)
+	failed := calledAs("jira_create", map[string]any{"summary": "failed"}, 12, "toolu_12")
+	failed.Failed, failed.Result = true, "jira_create: the project is archived"
+	cut := calledAs("jira_search", map[string]any{"jql": "project = OPS"}, 13, "toolu_13")
+	cut.Result, cut.OutputBytes = "OPS-1, OPS-2, [output cut]", 90000
 	bridged := []runner.BridgedCall{
 		calledAs("jira_create", map[string]any{"summary": "at the point"}, 1, "toolu_01"),
 		calledAs("slack_history", map[string]any{"channel": "C1"}, 2, "toolu_02"),
@@ -217,6 +225,8 @@ func TestAReadingIsAskedOnlyOfTheCallsTheTellingWouldList(t *testing.T) {
 		calledAs("jira_create", map[string]any{"summary": "shared two"}, 9, "toolu_08"),
 		load,
 		calledAs("jira_create", map[string]any{"summary": "asked"}, 11, "toolu_11"),
+		failed,
+		cut,
 	}
 	reads := &reading{}
 	relaunchDown(t, guarded{basis: basis, bridged: bridged, reads: reads, skip: []string{"activate_tool"}},
@@ -234,14 +244,24 @@ func TestAReadingIsAskedOnlyOfTheCallsTheTellingWouldList(t *testing.T) {
 			len(bridged)-1)
 	}
 	var askedIDs []string
+	outcomes := map[string]sandbox.LoggedCall{}
 	for _, c := range ask.Calls {
 		if c.Asked {
 			askedIDs = append(askedIDs, c.ID)
+			outcomes[c.ID] = c
 		}
 	}
-	if want := []string{"toolu_02", "toolu_11"}; !slices.Equal(askedIDs, want) {
-		t.Errorf("the reading is asked about %v, want the owed read and the one call the telling lists that "+
+	if want := []string{"toolu_02", "toolu_11", "toolu_12", "toolu_13"}; !slices.Equal(askedIDs, want) {
+		t.Errorf("the reading is asked about %v, want the owed read and the calls the telling lists that "+
 			"the reader can name, %v", askedIDs, want)
+	}
+	for id, want := range map[string]sandbox.LoggedCall{
+		"toolu_12": {ID: "toolu_12", Asked: true, Failed: true, Output: failed.Result},
+		"toolu_13": {ID: "toolu_13", Asked: true, Output: cut.Result, OutputBytes: cut.OutputBytes},
+	} {
+		if got := outcomes[id]; got != want {
+			t.Errorf("call %s is asked as %+v, want its outcome as the log keeps it, %+v", id, got, want)
+		}
 	}
 }
 
@@ -326,8 +346,10 @@ func TestNoReadingIsAskedOfACaptureWhoseHarnessEndedItsOwnRun(t *testing.T) {
 // AN OPENCODE RELAUNCH IS ASKED NO READING AND TOLD AS BEFORE. This build does
 // not judge an OpenCode session's first request, so no reading may be used for
 // it: its relaunch asks none and hands no brief told by one, and its brief is
-// the one main told it, byte for byte, where no held call reads alike a told
-// one.
+// the one this build told it before any reading, byte for byte: of a round
+// where no call is listed again, no told line is marked and no call the
+// session may show goes unlisted (ADR-0073, a told call is kept apart), as
+// this one is.
 //
 // Mutation: ask a reading under every verdict but the brief's, and this goes
 // red.
@@ -596,6 +618,42 @@ func TestASubagentsSubmissionIsSaidNotToStandUnderItsName(t *testing.T) {
 	}
 }
 
+// A SUBMISSION THE READING HOLDS IS SAID NOT TO STAND. The job submitted after
+// its session's save point and was cut off, and the reading finds the session
+// holding that successful `submit_work`: the brief told by it lists no such
+// call, so it opens by saying that a submission the session above shows is no
+// submission of the work, as it does of one the save point holds; read as
+// done, the run could end without its own, and the work be rescued as
+// incomplete.
+//
+// Mutation: leave a held submission the reading finds unsaid, and this goes
+// red.
+func TestASubmissionTheReadingHoldsIsSaidNotToStand(t *testing.T) {
+	t.Parallel()
+	reads := &reading{held: []string{"toolu_02"}}
+	req := relaunchDown(t, guarded{basis: cutOffClaude(far), reads: reads, bridged: []runner.BridgedCall{
+		calledAs("jira_create", map[string]any{"summary": "at the point"}, 1, "toolu_01"),
+		calledAs(runner.SubmitWorkTool, map[string]any{"outcome": "delivered", "summary": "done"}, 2, "toolu_02"),
+		calledAs("jira_create", map[string]any{"summary": "a told issue"}, 3, "toolu_03"),
+	}}, carriedOn)
+	if req.Session == nil || req.Session.Exact == nil {
+		t.Fatalf("the relaunch hands no brief told by its reading: %+v", req.Session)
+	}
+	brief := req.Session.Exact.Replaced
+	said, listed := strings.Index(brief, heldSubmissionWords), strings.Index(brief, readHeaderWords)
+	if said < 0 || listed < said {
+		t.Errorf("the brief told by the reading does not open its calls by saying the held submission does not "+
+			"stand:\n%s", brief)
+	}
+	if strings.Contains(brief, "- "+runner.SubmitWorkTool+"(") {
+		t.Errorf("the brief told by the reading lists the submission the session holds:\n%s", brief)
+	}
+}
+
+// heldSubmissionWords is what a brief says of a successful `submit_work` the
+// session above shows that no list tells (prompts' heldSubmission).
+const heldSubmissionWords = "A `" + runner.SubmitWorkTool + "` the session above shows does NOT stand"
+
 // A SUBAGENT NAMED IN A BRIEF IS DEFUSED AND CUT. Its name is the box's words:
 // a fence marker in it is defused and the turn's fence token removed, every run
 // of whitespace is one space, so no newline opens a line of its own, and it is
@@ -699,6 +757,88 @@ func TestACallTheReadingHoldsIsListedAgainBesideALikeCall(t *testing.T) {
 	}
 }
 
+// A CALL THE READING HOLDS IS LISTED AGAIN BESIDE A LIKE CALL TOLD UNDER A
+// SUBAGENT. The reading finds the session holding a post, and finds a post of
+// the same words in the thread of a subagent whose report the session does
+// not hold: told under that subagent's name, the second could be taken for the
+// first, which the session may show, so the first is listed again, as it is
+// beside a like call after the point.
+//
+// Mutation: leave the subagents' calls off the told side of the calls listed
+// again, and this goes red.
+func TestACallTheReadingHoldsIsListedAgainBesideALikeCallUnderASubagent(t *testing.T) {
+	t.Parallel()
+	reads := &reading{held: []string{"toolu_02"}, under: map[string]string{"toolu_03": "a1b2c3"}}
+	req := relaunchDown(t, guarded{basis: cutOffClaude(far), reads: reads, bridged: []runner.BridgedCall{
+		calledAs("jira_create", map[string]any{"summary": "at the point"}, 1, "toolu_01"),
+		calledAs("slack_post", map[string]any{"channel": "C1", "text": "hi"}, 2, "toolu_02"),
+		calledAs("slack_post", map[string]any{"channel": "C1", "text": "hi"}, 3, "toolu_03"),
+	}}, carriedOn)
+	brief := req.Session.Exact.Replaced
+	if _, ok := sectionOf(brief, subagentsHeading); !ok {
+		t.Fatalf("the brief tells no call under a subagent, so the case tests nothing:\n%s", brief)
+	}
+	if !strings.Contains(brief, listedAgainSection) {
+		t.Errorf("the call the reading holds is not listed again beside the like call under a subagent:\n%s",
+			brief)
+	}
+}
+
+// A SUBAGENT'S CALL AND A LIKE CALL OF THE MAIN LIST ARE EACH MARKED. The
+// reading tells one post under a subagent's name and another of the same words
+// after the point: two calls of two told lists, either of which could be taken
+// for the other, so each line ends with the note that it is a call of its own.
+//
+// Mutation: leave the subagents' groups out of the marks, and this goes red.
+func TestASubagentsCallAndALikeCallOfTheMainListAreEachMarked(t *testing.T) {
+	t.Parallel()
+	const hi = `- slack_post({"channel":"C1","text":"hi"}) → success`
+	reads := &reading{under: map[string]string{"toolu_02": "a1b2c3"}}
+	req := relaunchDown(t, guarded{basis: cutOffClaude(far), reads: reads, bridged: []runner.BridgedCall{
+		calledAs("jira_create", map[string]any{"summary": "at the point"}, 1, "toolu_01"),
+		calledAs("slack_post", map[string]any{"channel": "C1", "text": "hi"}, 2, "toolu_02"),
+		calledAs("slack_post", map[string]any{"channel": "C1", "text": "hi"}, 3, "toolu_03"),
+	}}, carriedOn)
+	brief := req.Session.Exact.Replaced
+	section, ok := sectionOf(brief, subagentsHeading)
+	if !ok || !strings.Contains(section, hi) {
+		t.Fatalf("the brief tells no post under a subagent, so the case tests nothing:\n%s", brief)
+	}
+	if got := strings.Count(brief, hi+toldApart); got != 2 || !strings.Contains(section, hi+toldApart) {
+		t.Errorf("%d lines are marked, want the subagent's and the main list's:\n%s", got, brief)
+	}
+}
+
+// A SUBAGENT'S TOOLS NAME NO CALL THE SESSION MAY SHOW THAT NO LIST HOLDS. Beside
+// a late call, whose words say a call may be shown twice, the brief names the
+// tools of the calls the round's log dropped that a told call could be taken
+// for: of the late call's tool, never of a tool only a call told under a
+// subagent's name calls, whose words say nothing of a call shown twice.
+//
+// Mutation: name the subagents' tools among the told tools, and this goes red.
+func TestASubagentsToolsNameNoCallTheSessionMayShowThatNoListHolds(t *testing.T) {
+	t.Parallel()
+	late := calledAs("slack_post", map[string]any{"channel": "C1", "text": "bye"}, 6, "toolu_06")
+	late.Late = true
+	reads := &reading{under: map[string]string{"toolu_02": "a1b2c3"}}
+	dropped := func(r *runner.Resume) {
+		carriedOn(r)
+		r.Elided = []ledger.Elided{{Name: "slack_post", Calls: 2}, {Name: "jira_create", Calls: 3}}
+	}
+	req := relaunchDown(t, guarded{basis: cutOffClaude(far), reads: reads, bridged: []runner.BridgedCall{
+		calledAs("jira_get", map[string]any{"key": "OPS-1"}, 1, "toolu_01"),
+		calledAs("jira_create", map[string]any{"summary": "a subagent's issue"}, 2, "toolu_02"),
+		late,
+	}}, dropped)
+	brief := req.Session.Exact.Replaced
+	if section, ok := sectionOf(brief, subagentsHeading); !ok || !strings.Contains(section, "a subagent's issue") {
+		t.Fatalf("the brief tells no call under a subagent, so the case tests nothing:\n%s", brief)
+	}
+	if got, want := otherCallsIn(brief), otherCallsOf(unlistedPart); got != want {
+		t.Errorf("the brief tells:\n%s\nwant:\n%s\nin:\n%s", got, want, brief)
+	}
+}
+
 // heldLoad is a load of the seat's one required skill the job made after its
 // session's save point, which its harness named id.
 func heldLoad(id string) runner.BridgedCall {
@@ -714,32 +854,50 @@ func exactDecided(runner.AgentRunRequest) runner.SessionDecision {
 	return runner.SessionDecision{Continues: true, Kept: true, NewBox: true, Exact: true}
 }
 
-// A GUARD ARMS THE LOADS THE HANDED READING HOLDS. A job loaded the seat's
-// skill after its session's save point, and the reading finds the session
-// holding that load: where the launch hands the brief told by the reading, the
-// guard holds the skill, which the session holds whole; where it hands the
-// brief told by the save point, it does not; and where the job restarted the
-// session after its brief, it holds nothing, whatever the reading holds.
+// A GUARD ARMS THE LOADS THE HANDED READING HOLDS, AND NO OTHER. A job loaded
+// the seat's skill after its session's save point. Where the reading finds the
+// session holding that load and the launch hands the brief told by the
+// reading, the guard holds the skill, which the session holds whole; where it
+// hands the brief told by the save point, it does not; and where the job
+// restarted the session after its brief, it holds nothing, whatever the
+// reading holds. Nor where the launch hands the brief told by the reading but
+// the reading does not hold the load: it holds another call of the job, and
+// tells the load in the list of calls the session lacks, or tells it under a
+// subagent whose report the session does not hold; nor where the load it holds
+// is no call of the job, made at or before the job's own start (its
+// BridgeFrom), so the skills its launch armed are the ones that count.
 //
-// Mutation: arm the guard whatever the launch handed, or read the reading's
-// held loads under a restart in the job, and a case goes red.
+// Mutation: arm the guard whatever the launch handed, read the reading's held
+// loads under a restart in the job, arm every load of the job where the brief
+// told by the reading is handed, arm a load told under a subagent, or arm a
+// held load at or before the job's start, and a case goes red.
 func TestAGuardArmsTheLoadsTheHandedReadingHolds(t *testing.T) {
 	t.Parallel()
 	active := guarded{basis: inBoxBasis}.relaunch(t).Surface.Active()
 	for name, tc := range map[string]struct {
-		decides   func(runner.AgentRunRequest) runner.SessionDecision
-		restarted bool
-		armed     bool
+		decides    func(runner.AgentRunRequest) runner.SessionDecision
+		restarted  bool
+		held       []string
+		under      map[string]string
+		bridgeFrom int
+		armed      bool
 	}{
-		"handed the brief told by the reading": {decides: exactDecided, armed: true},
-		"handed the brief told by the point":   {},
-		"its job restarted the session":        {decides: exactDecided, restarted: true},
+		"handed the brief told by the reading": {decides: exactDecided, held: []string{"toolu_02"}, armed: true},
+		"handed the brief told by the point":   {held: []string{"toolu_02"}},
+		"its job restarted the session": {decides: exactDecided, restarted: true,
+			held: []string{"toolu_02"}},
+		"the reading holds another call, not the load": {decides: exactDecided, held: []string{"toolu_03"}},
+		"the load told under a subagent": {decides: exactDecided, held: []string{"toolu_03"},
+			under: map[string]string{"toolu_02": "a1b2c3"}},
+		"a held load at the job's start": {decides: exactDecided, held: []string{"toolu_02"}, bridgeFrom: 2},
 	} {
 		g := guarded{basis: cutOffClaude(far), decides: tc.decides,
-			state:   execstate.State{ActiveTools: active},
-			reads:   &reading{held: []string{"toolu_02"}},
-			bridged: []runner.BridgedCall{calledAs("jira_create", map[string]any{"summary": "at the point"}, 1, "toolu_01"), heldLoad("toolu_02")},
-			carry:   carriedOn, prep: noRestart}
+			state: execstate.State{ActiveTools: active, BridgeFrom: tc.bridgeFrom},
+			reads: &reading{held: tc.held, under: tc.under},
+			bridged: []runner.BridgedCall{
+				calledAs("jira_create", map[string]any{"summary": "at the point"}, 1, "toolu_01"), heldLoad("toolu_02"),
+				calledAs("jira_create", map[string]any{"summary": "another call"}, 3, "toolu_03")},
+			carry: carriedOn, prep: noRestart}
 		if tc.restarted {
 			g.carry = func(r *runner.Resume) { answered("use main")(r); r.BasisRestart = new("an earlier restart") }
 			g.prep = nil
@@ -757,29 +915,36 @@ func TestAGuardArmsTheLoadsTheHandedReadingHolds(t *testing.T) {
 }
 
 // THE RUN'S OPENING FRAME IS THE BRIEF TOLD BY THE READING WHERE IT WAS HANDED:
-// the phase's record states the prompt the run read, the brief for a new box
-// told by the reading where the launch decided it handed that one, and the one
-// told by the save point where it did not.
+// the phase's record states the prompt the run read, the brief told by the
+// reading where the launch decided it handed that one, for a new box or for
+// the box the session was last worked in, and the one told by the save point
+// where it did not.
 //
-// Mutation: publish the default brief whatever the launch handed, and this goes
-// red.
+// Mutation: publish the default brief whatever the launch handed, for either
+// box, and a case goes red.
 func TestTheRunsOpeningFrameIsTheBriefToldByTheReadingWhereItWasHanded(t *testing.T) {
 	t.Parallel()
-	for name, decides := range map[string]func(runner.AgentRunRequest) runner.SessionDecision{
-		"handed": exactDecided, "not handed": nil,
+	sameBox := func(runner.AgentRunRequest) runner.SessionDecision {
+		return runner.SessionDecision{Continues: true, Kept: true, Exact: true}
+	}
+	for name, tc := range map[string]struct {
+		decides func(runner.AgentRunRequest) runner.SessionDecision
+		want    func(*runner.SessionContinuation) string
+	}{
+		"handed, a new box": {decides: exactDecided,
+			want: func(s *runner.SessionContinuation) string { return s.Exact.Replaced }},
+		"handed, its own box": {decides: sameBox,
+			want: func(s *runner.SessionContinuation) string { return s.Exact.Brief }},
+		"not handed": {want: func(s *runner.SessionContinuation) string { return s.Replaced }},
 	} {
 		pub := newCapture()
-		req := relaunchDown(t, guarded{basis: cutOffClaude(far), pub: pub, decides: decides,
+		req := relaunchDown(t, guarded{basis: cutOffClaude(far), pub: pub, decides: tc.decides,
 			reads: &reading{held: []string{"toolu_02"}}, bridged: []runner.BridgedCall{
 				calledAs("jira_create", map[string]any{"summary": "at the point"}, 1, "toolu_01"),
 				calledAs("jira_create", map[string]any{"summary": "held"}, 2, "toolu_02"),
 				calledAs("jira_create", map[string]any{"summary": "told"}, 3, "toolu_03"),
 			}}, carriedOn)
-		published := pub.promptsFor("execute")
-		want := req.Session.Replaced
-		if decides != nil {
-			want = req.Session.Exact.Replaced
-		}
+		published, want := pub.promptsFor("execute"), tc.want(req.Session)
 		if len(published) == 0 || !strings.Contains(published[len(published)-1], want) {
 			t.Errorf("%s: the opening frame does not state the brief the run was handed", name)
 		}
