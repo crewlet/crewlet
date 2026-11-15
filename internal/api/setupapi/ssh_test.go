@@ -656,3 +656,18 @@ func TestTheSSHAuditsPageIsTheReadersOwn(t *testing.T) {
 		t.Errorf("a page past the reader's = %d: %s", res.Code, res.Body)
 	}
 }
+
+// A SCAN OF A PORT NO SERVER CAN LISTEN ON is refused beside the port field,
+// in a person's words, before anything is dialled.
+func TestAnSSHScanOfAPortOutOfRangeIsRefusedAtThePort(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	s.connect(t, "ssh", `{"values": {"enabled": "true"}, "generate": ["certificate_authority"]}`)
+	res := s.do(t, http.MethodPost, "/setup/integrations/ssh/hosts/scan", `{"address": "api-1.example.com", "port": 70000}`, nil)
+	body := decode(t, res)
+	if res.Code != http.StatusBadRequest || body["field"] != "port" ||
+		!strings.Contains(fmt.Sprint(body["detail"]), "1 to 65535") {
+		t.Errorf("a scan of port 70000 = %d: %s", res.Code, res.Body)
+	}
+}

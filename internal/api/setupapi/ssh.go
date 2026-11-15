@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -196,11 +197,23 @@ func (s *Service) sshScan(w http.ResponseWriter, r *http.Request) {
 			"field": "address", "detail": sentence})
 		return
 	}
+	if req.Port != 0 && !sshint.ScanPort(req.Port) {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid, map[string]string{
+			"field": "port", "detail": sshint.PortWords(req.Port)})
+		return
+	}
 	keys, err := sshint.Scan(r.Context(), req.Address, req.Port)
 	if err != nil {
+		// THE PERSON IS TOLD WHICH WAY IT FAILED and what to check, in the
+		// scan's own words for them; the chain, which names the engine's
+		// resolver, is the operator's.
+		slog.InfoContext(r.Context(), "ssh_scan_failed", "address", req.Address, "port", req.Port, "err", err)
+		said := "The server's host keys could not be read. Check the address and port."
+		if failed, ok := errors.AsType[*sshint.ScanError](err); ok {
+			said = failed.Said
+		}
 		httpjson.FailWith(w, http.StatusBadGateway, httpjson.CodeServerUnreachable, map[string]string{
-			"detail": "the server's host keys could not be read: " + err.Error(),
-			"hint":   "check the address and port, and that the engine's address may reach port 22 there",
+			"detail": said,
 		})
 		return
 	}

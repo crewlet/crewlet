@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -74,6 +75,10 @@ func (c *Client) TestConnection(ctx context.Context, in TestInput, rec Recorder)
 	dialCtx, cancel := context.WithTimeout(ctx, DialTimeout)
 	conn, err := c.dial(dialCtx, "tcp", addr)
 	cancel()
+	if err != nil {
+		// THE DIAL'S OWN ERROR IS THE OPERATOR'S: the step says it in words.
+		slog.InfoContext(ctx, "ssh_test_unreached", "host", h.ID, "address", addr, "err", err)
+	}
 	if !add(StepReach, err == nil, reachDetail(addr, err)) {
 		return steps
 	}
@@ -210,10 +215,11 @@ func (c *Client) runOn(ctx context.Context, client *ssh.Client, line string) (st
 	return out.text(), 0, err
 }
 
+// reachDetail is the reach step's line: which way the dial failed and what to
+// check ([unreachedWords]), never the dial's own error.
 func reachDetail(addr string, err error) string {
 	if err != nil {
-		return "Could not reach " + addr + " within " + DialTimeout.String() + ": " + err.Error() +
-			". Let the engine's address through the server's firewall."
+		return unreachedWords(addr, err)
 	}
 	return "Reached " + addr + "."
 }

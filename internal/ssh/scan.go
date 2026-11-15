@@ -44,20 +44,21 @@ var ErrNoHostKey = errors.New("ssh: the server presented no host key the engine 
 var errScanUnreached = errors.New("ssh: the address did not answer")
 
 // Scan reads the host keys the server at address and port presents, through
-// the same address rule a registered host is held to.
+// the same address rule a registered host is held to. A scan that reads no key
+// fails with a [*ScanError], which says why in a person's words.
 func Scan(ctx context.Context, address string, port int) ([]ScannedKey, error) {
 	return scan(ctx, guardedDial, address, port)
 }
 
 func scan(ctx context.Context, dial dialer, address string, port int) ([]ScannedKey, error) {
 	if sentence := config.SSHAddress(address); sentence != "" {
-		return nil, fmt.Errorf("%w: %s", ErrUnreachableAddress, sentence)
+		return nil, scanFailed(sentence+".", fmt.Errorf("%w: %s", ErrUnreachableAddress, sentence))
 	}
 	if port == 0 {
 		port = config.SSHDefaultPort
 	}
-	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("ssh: %d is not a port", port)
+	if !ScanPort(port) {
+		return nil, scanFailed(PortWords(port), fmt.Errorf("ssh: %d is not a port", port))
 	}
 	addr := net.JoinHostPort(address, strconv.Itoa(port))
 	var out []ScannedKey
@@ -67,10 +68,10 @@ func scan(ctx context.Context, dial dialer, address string, port int) ([]Scanned
 		key, err := scanOne(ctx, dial, addr, algo)
 		switch {
 		case errors.Is(err, ErrUnreachableAddress):
-			return nil, err
+			return nil, scanFailed(unreachedWords(addr, err), err)
 		case errors.Is(err, errScanUnreached):
 			// NOBODY ANSWERED: the next algorithm would wait as long again.
-			return nil, fmt.Errorf("%w: %w", ErrNoHostKey, err)
+			return nil, scanFailed(unreachedWords(addr, err), fmt.Errorf("%w: %w", ErrNoHostKey, err))
 		case err != nil:
 			lastErr = err
 			continue
@@ -90,9 +91,22 @@ func scan(ctx context.Context, dial dialer, address string, port int) ([]Scanned
 		if lastErr == nil {
 			lastErr = ErrNoHostKey
 		}
-		return nil, fmt.Errorf("%w: %w", ErrNoHostKey, lastErr)
+		// IT ANSWERED, and offered none of the algorithms asked for: the keys
+		// are still on the server, to be pasted by hand.
+		return nil, scanFailed(fmt.Sprintf("%s answered on port %d but presented no host key Crewlet can pin. "+
+			"Paste the server's keys from /etc/ssh/ssh_host_*_key.pub instead.", address, port),
+			fmt.Errorf("%w: %w", ErrNoHostKey, lastErr))
 	}
 	return out, nil
+}
+
+// ScanPort reports whether port can be dialled: 1 to 65535, after an empty
+// port has been read as 22.
+func ScanPort(port int) bool { return port >= 1 && port <= 65535 }
+
+// PortWords is a port that cannot be dialled, said for a person.
+func PortWords(port int) string {
+	return fmt.Sprintf("%d is not a port. Give one from 1 to 65535, or leave it empty for 22.", port)
 }
 
 // scanOne is the key presented under one algorithm, read before any
