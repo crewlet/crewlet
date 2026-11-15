@@ -5296,6 +5296,12 @@ export interface SetupListing {
   external_url: {
     value: string;
     config_path: string;
+    /**
+     * The address names a loopback host, which only the engine's own machine
+     * reaches, so no third-party app can deliver to it: the engine's rule
+     * (`config.LoopbackURL`), answered rather than re-derived here.
+     */
+    loopback: boolean;
   };
 }
 

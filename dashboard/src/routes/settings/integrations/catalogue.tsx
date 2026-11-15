@@ -102,14 +102,20 @@ export interface Entry {
   key: string;
   name: string;
   /**
-   * What the tool DOES for the company, in one sentence — the line a tile
-   * carries when nothing is owed on it.
+   * What the tool covers for the company, in one sentence: the line a tile
+   * carries when nothing is owed on it, and the line under its name on its
+   * page.
    *
    * A SENTENCE RATHER THAN A CATEGORY. It read "Team communication" and
    * "Code and pull requests", which named a shelf in a shop: every reader
    * already knows what Slack is, and what they did not know is what the
-   * engine does with it — that each agent posts as its own bot, that a
-   * monitor routes by its tags.
+   * engine reaches there: the channels and threads, the zones and DNS, the
+   * alerts a monitor routes by its tags.
+   *
+   * AND NEVER HOW EACH AGENT GETS IN. That is the story's `identity`, which
+   * the page draws under "Each agent" beside this line, so a line that said
+   * it too ("Each agent posts as its own bot" over "Each agent posts as its
+   * own Slack app") said one fact twice on every page.
    */
   description: string;
   vendor: Vendor;
@@ -121,6 +127,24 @@ export interface Entry {
    * here: Learn more.
    */
   doc: string;
+}
+
+/**
+ * What names an app at the head of its page or its peek: the eyebrow, its
+ * mark and its name.
+ *
+ * NEVER ITS KEY. The document's key is the app's name in config spelling, so
+ * drawn as the header's identifier it read "Integration slack" over "Slack":
+ * one name said twice, once in a face a reader has no use for. One place for
+ * every header that names an app, so none names it by its key again.
+ */
+export function appHeading(entry: Entry, size: number) {
+  return {
+    kind: "Integration",
+    icon: "plug" as const,
+    mark: <VendorMark vendor={entry.vendor} size={size} />,
+    title: entry.name,
+  };
 }
 
 /** The published address of an integration's own page. See [integrationDocHref]. */
@@ -170,7 +194,7 @@ export const CATALOG: Entry[] = [
   {
     key: "slack",
     name: "Slack",
-    description: "Each agent posts as its own bot.",
+    description: "Mentions, threads and direct messages in your workspace.",
     vendor: "slack",
     surfaces: surfacesOf("slack"),
     doc: "slack",
@@ -178,7 +202,7 @@ export const CATALOG: Entry[] = [
   {
     key: "mattermost",
     name: "Mattermost",
-    description: "Self-hosted chat. Each agent posts as its own bot.",
+    description: "Self-hosted chat: mentions, channels and direct messages.",
     vendor: "mattermost",
     surfaces: surfacesOf("mattermost"),
     doc: "mattermost",
@@ -186,7 +210,7 @@ export const CATALOG: Entry[] = [
   {
     key: "atlassian",
     name: "Atlassian",
-    description: "Jira and Confluence, an account per agent.",
+    description: "Jira issues and Confluence pages.",
     vendor: "atlassian",
     surfaces: surfacesOf("atlassian"),
     doc: "jira",
@@ -194,7 +218,7 @@ export const CATALOG: Entry[] = [
   {
     key: "github",
     name: "GitHub",
-    description: "Issues and pull requests, an app per agent.",
+    description: "Issues, pull requests and failed checks.",
     vendor: "github",
     surfaces: surfacesOf("github"),
     doc: "github",
@@ -202,7 +226,7 @@ export const CATALOG: Entry[] = [
   {
     key: "gitlab",
     name: "GitLab",
-    description: "Merge requests and code, a token per agent.",
+    description: "Merge requests, pipelines and code.",
     vendor: "gitlab",
     surfaces: surfacesOf("gitlab"),
     doc: "gitlab",
@@ -218,7 +242,7 @@ export const CATALOG: Entry[] = [
   {
     key: "cloudflare",
     name: "Cloudflare",
-    description: "Zones, cache and DNS, a scoped token per agent.",
+    description: "Zones, cache and DNS.",
     vendor: "cloudflare",
     surfaces: surfacesOf("cloudflare"),
     doc: "cloudflare",
@@ -226,7 +250,7 @@ export const CATALOG: Entry[] = [
   {
     key: "scaleway",
     name: "Scaleway",
-    description: "Projects, servers, networks and storage, with an IAM application per agent.",
+    description: "Projects, servers, networks and storage.",
     vendor: "scaleway",
     surfaces: surfacesOf("scaleway"),
     doc: "scaleway",
@@ -234,7 +258,7 @@ export const CATALOG: Entry[] = [
   {
     key: "expo",
     name: "Expo",
-    description: "EAS builds, updates and submissions, a robot per agent.",
+    description: "EAS builds, updates and submissions.",
     vendor: "expo",
     surfaces: surfacesOf("expo"),
     doc: "expo",
@@ -242,7 +266,7 @@ export const CATALOG: Entry[] = [
   {
     key: "digitalocean",
     name: "DigitalOcean",
-    description: "Droplets, Kubernetes, databases and DNS, a token per agent.",
+    description: "Droplets, Kubernetes, databases and DNS.",
     vendor: "digitalocean",
     surfaces: surfacesOf("digitalocean"),
     doc: "digitalocean",
@@ -250,7 +274,7 @@ export const CATALOG: Entry[] = [
   {
     key: "aws",
     name: "AWS",
-    description: "EC2, ECS, EKS, Lambda, RDS, S3 and CloudWatch, an IAM role per agent.",
+    description: "EC2, ECS, EKS, Lambda, RDS, S3 and CloudWatch.",
     vendor: "aws",
     surfaces: surfacesOf("aws"),
     doc: "aws",
@@ -258,7 +282,7 @@ export const CATALOG: Entry[] = [
   {
     key: "google_cloud",
     name: "Google Cloud",
-    description: "Projects, VMs, GKE, Cloud Run and Cloud SQL, a service account per agent.",
+    description: "Projects, VMs, GKE, Cloud Run and Cloud SQL.",
     vendor: "google-cloud",
     surfaces: surfacesOf("google_cloud"),
     doc: "google-cloud",
@@ -266,7 +290,7 @@ export const CATALOG: Entry[] = [
   {
     key: "ssh",
     name: "SSH",
-    description: "Your servers, through certificates Crewlet signs for minutes at a time.",
+    description: "Your own servers, over SSH.",
     // NO THIRD PARTY: SSH is a protocol, so the kit draws Crewlet's own key for
     // it, never the brand mark the built-in services carry.
     vendor: "ssh",
@@ -2100,11 +2124,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
     <>
       <ObjectHeader
         size="peek"
-        kind="Integration"
-        icon="plug"
-        identifier={entry.key}
-        mark={<VendorMark vendor={entry.vendor} size={28} />}
-        title={entry.name}
+        {...appHeading(entry, 28)}
         status={
           state.tag === "" ? undefined : (
             <Tag variant={state.tone} appearance={state.outline ? "outline" : "soft"}>

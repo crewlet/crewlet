@@ -888,8 +888,14 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		// the three fields that described its absence described a state
 		// that can no longer occur. WHICH key it is read from rides beside
 		// it, because there are two once a public listener is set.
+		//
+		// AND WHETHER IT IS LOOPBACK, by the config's own rule
+		// ([config.LoopbackURL]): an address only this machine reaches is
+		// one no vendor can deliver to, and a screen showing it bare read
+		// as the address every app was set up on.
 		"external_url": map[string]any{
 			"value": s.webhookBase, "config_path": s.webhookBaseKey,
+			"loopback": config.LoopbackURL(s.webhookBase),
 		},
 	})
 }

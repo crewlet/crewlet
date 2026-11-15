@@ -21,13 +21,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { VendorMark } from "@crewlethq/icons";
 import { QueryState } from "~/components/common.tsx";
 import { SetupForm, heldReason } from "../SetupForm.tsx";
 import { listed } from "~/lib/format.ts";
 import { href } from "~/app/router.tsx";
 import { WATCH_MS } from "../recheck.ts";
-import { SetupPasses, SurfaceDeliveries, integrationFacts, seatStepFor } from "./catalogue.tsx";
+import {
+  SetupPasses,
+  SurfaceDeliveries,
+  appHeading,
+  integrationFacts,
+  seatStepFor,
+} from "./catalogue.tsx";
 import type { Intent, Model, Tool } from "./model.ts";
 import {
   actionName,
@@ -187,11 +192,7 @@ export function AppPane({
 
   const header = (
     <ObjectHeader
-      kind="Integration"
-      icon="plug"
-      identifier={tool.entry.key}
-      mark={<VendorMark vendor={tool.entry.vendor} size={36} />}
-      title={tool.entry.name}
+      {...appHeading(tool.entry, 36)}
       status={<BucketTag tool={tool} />}
       description={tool.entry.description}
       facts={open ? undefined : facts}
