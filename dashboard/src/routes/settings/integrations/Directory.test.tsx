@@ -202,6 +202,8 @@ function mount(
     integrations?: IntegrationsAnswer;
     /** The chart's seats, where a case needs agents on it. */
     roles?: unknown[];
+    /** The `limits` answer, the engine's rows of the settings a pane changes. */
+    limits?: unknown;
   } = {},
 ): Mounted {
   const fetched: string[] = [];
@@ -250,6 +252,7 @@ function mount(
     if (what === "integrations")
       return Promise.resolve(structuredClone(extra.integrations ?? answer));
     if (what === "config" && config !== undefined) return Promise.resolve(config);
+    if (what === "limits" && extra.limits !== undefined) return Promise.resolve(extra.limits);
     if (what === "work_projects") {
       return Promise.resolve({ projects: [], total: 0, census: { active: 0 } });
     }
@@ -904,11 +907,38 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
 // there, so the pane said the default whatever a company set. Mutation: read
 // it under `tracker` again, and a company keeping ninety days is told the
 // engine's default.
-test("Worklet's settings say how long the company's inbox keeps a notice", async () => {
-  mount(ADMIN, "worklet", BUILT_IN, undefined, { name: "Acme", inbox: { retention_days: 90 } });
+test("Worklet's settings say how long the company's inbox keeps a notice, and change it", async () => {
+  mount(
+    ADMIN,
+    "worklet",
+    BUILT_IN,
+    undefined,
+    { name: "Acme", inbox: { retention_days: 90 } },
+    {
+      limits: {
+        limits: [
+          {
+            key: "inbox.retention_days",
+            group: "inbox",
+            unit: "days",
+            value: 90,
+            default: 365,
+            off: false,
+            default_off: false,
+            settable: true,
+            range: { min: 30, max: 3650 },
+          },
+        ],
+      },
+    },
+  );
   fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
-  const row = (await screen.findByText("Inbox keeps a notice for")).parentElement as HTMLElement;
+  const row = await screen.findByRole("row", { name: /Inbox keeps a notice for/ });
   await waitFor(() => expect(row.textContent).toContain("90 days"));
+  expect(within(row).getByText("Changed from 365 days")).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Change Inbox keeps a notice for" })).toBeTruthy();
+  // WHERE EACH LIVES, said truly: the inbox is not under tracker.
+  expect(screen.getByText(/the inbox under inbox/)).toBeTruthy();
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {

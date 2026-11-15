@@ -22,7 +22,7 @@ import {
 import { PencilGlyph } from "@crewlethq/icons/glyphs";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
-import { fmtSetting } from "~/lib/format.ts";
+import { fmtSetting, plural } from "~/lib/format.ts";
 import {
   limitPlan,
   limitRefusal,
@@ -51,6 +51,8 @@ export function limitAmountWords(row: LimitRow, amount: number, off: boolean): s
       return `${amount.toLocaleString()} per second`;
     case "count":
       return amount.toLocaleString();
+    case "days":
+      return plural(amount, "day");
   }
 }
 

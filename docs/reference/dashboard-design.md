@@ -9033,10 +9033,12 @@ the two pages cannot disagree about the log; Gitlet's alarms on every
 node, from the fleet's node rows (each node's own table at its last beat, the
 kinds `CODE_ALARM_KINDS` names, which `internal/gitlet`'s gate holds to the
 engine's alarm table both ways), with a node that has evaluated no table yet
-named apart rather than counted as quiet; the company document's
-`code.scratch` and `code.identity_domain`, each unset field drawn beside the
-default it reads as (`CODE_SCRATCH_IDLE_DAYS`, `CODE_SCRATCH_MAX_PER_SEAT`,
-`CODE_IDENTITY_DOMAIN`, held to the engine's defaults); and Gitlet's
+named apart rather than counted as quiet; the scratch policy as the engine's
+own rows (`limits`, group `code`: `code.scratch.idle_days` and
+`max_per_seat`), each value beside the engine's default with the Settings ›
+Limits pencil that changes it in place, and `code.identity_domain` read off
+the company document beside the default it reads as (`CODE_IDENTITY_DOMAIN`,
+held to the engine's default); and Gitlet's
 own listing of the protected repositories (`code_repos` asked with
 `protected`, which the engine walks by an index of those alone), paged with
 Load more and never one page of every repository filtered here, each a fold
@@ -9044,8 +9046,8 @@ whose rules' gates are read from the repository's detail (`code_repo` with
 `gates=true`) once, as it is first opened, and kept while the page is, with
 who last changed each rule and when from the same answer (`rule_sources`),
 drawn as a caption under the rule (`ruleSourceLine`, the wording the
-repository's Settings tab shares). It edits nothing: the policy is changed
-where the configuration is.
+repository's Settings tab shares). The identity domain is changed where the
+configuration is.
 
 ## Chatlet: a top bar, a Rooms panel, a room, and where you have read to
 

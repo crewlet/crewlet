@@ -1233,7 +1233,7 @@ it as it does any repository it maintains. Two settings bound them:
 code:
   scratch:
     max_per_seat: 50   # 0..1000; 0 lets no seat make one. Unset is 50
-    idle_days: 7       # 1..365; untouched this long, one is deleted. Unset is 7
+    idle_days: 7       # 1..365; untouched this long, one is deleted. Unset is 7; 0 is refused
 ```
 
 - **`max_per_seat`** counts **every** scratch repository a seat owns until it
@@ -1247,6 +1247,11 @@ code:
   idle expiry](../concepts/gitlet.md#a-scratch-repositorys-idle-expiry)).
   The duty's `code_retention_pass` line counts the ones it `expired` and the
   idle ones a turn kept (`scratch_held`).
+
+An administrator changes both on **Settings › Gitlet**, under **Scratch
+repositories and commit identity**: each row's pencil writes its key, held to
+its range as it is typed and checked against the whole company before it is
+stored.
 
 You never create a scratch repository — it is a seat's — and you maintain
 every one: archive one to keep it, or restore a deleted one before its purge

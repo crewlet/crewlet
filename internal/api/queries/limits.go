@@ -23,10 +23,18 @@ const (
 	// to (delegated.Limits), answered on `delegated_decisions` beside the
 	// rules it bounds, never on `limits`.
 	LimitDelegated LimitGroup = "delegated"
+	// LimitInbox, LimitAtlas and LimitCode are the settings the Worklet,
+	// Atlas and Gitlet screens change in place, answered on `limits` and
+	// drawn there rather than on Settings › Limits.
+	LimitInbox LimitGroup = "inbox"
+	LimitAtlas LimitGroup = "atlas"
+	LimitCode  LimitGroup = "code"
 )
 
-// LimitGroups are the five, in that order: `limits` answers the first four.
-var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules, LimitDelegated}
+// LimitGroups are every group, in drawing order. Settings › Limits draws the
+// first four; `delegated_decisions` answers the delegated rows.
+var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules, LimitDelegated,
+	LimitInbox, LimitAtlas, LimitCode}
 
 // LimitUnit is what a limit's number counts.
 type LimitUnit string
@@ -42,10 +50,12 @@ const (
 	LimitFraction LimitUnit = "fraction"
 	// LimitPerSecond is a rate.
 	LimitPerSecond LimitUnit = "per_second"
+	// LimitDays is a whole number of days: a retention, an idle time.
+	LimitDays LimitUnit = "days"
 )
 
-// LimitUnits are the four.
-var LimitUnits = []LimitUnit{LimitCount, LimitSeconds, LimitFraction, LimitPerSecond}
+// LimitUnits are the five.
+var LimitUnits = []LimitUnit{LimitCount, LimitSeconds, LimitFraction, LimitPerSecond, LimitDays}
 
 // LimitRow is one cap: where the company document sets it, the value the
 // engine enforces, and the engine's default for it.
@@ -170,6 +180,22 @@ var limits = []limit{
 		constant: true,
 		read: func(*config.Company) float64 {
 			return float64(org.DefaultScheduleTimeout / time.Second)
+		}},
+	{key: "inbox.retention_days", group: LimitInbox, unit: LimitDays,
+		read: func(c *config.Company) float64 { return float64(c.Inbox.Days()) }},
+	{key: "atlas.refresh_interval_seconds", group: LimitAtlas, unit: LimitSeconds,
+		read: func(c *config.Company) float64 { return c.Atlas.RefreshInterval().Seconds() }},
+	{key: "code.scratch.idle_days", group: LimitCode, unit: LimitDays,
+		read: func(c *config.Company) float64 {
+			idle, _ := c.Code.Scratch.Resolved()
+			return float64(idle)
+		}},
+	// ZERO LETS NO SEAT CREATE ONE, which is a setting rather than no limit,
+	// so it is not Off.
+	{key: "code.scratch.max_per_seat", group: LimitCode, unit: LimitCount,
+		read: func(c *config.Company) float64 {
+			_, most := c.Code.Scratch.Resolved()
+			return float64(most)
 		}},
 }
 

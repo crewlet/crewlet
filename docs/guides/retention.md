@@ -2484,8 +2484,9 @@ that is running and finding nothing from one that was never armed.
 
 A person's **inbox** — one row per routed change per recipient — is swept at
 the company's `inbox.retention_days`, **365 days** by default and settable
-between 30 and 3650, and changed live: the sweep reads it off the running
-company at every tick, as the applier does at every batch. It is the company's
+between 30 and 3650 (an administrator changes it in place on Company ›
+Integrations › Worklet › Settings), and changed live: the sweep reads it off
+the running company at every tick, as the applier does at every batch. It is the company's
 setting rather than the tracker's because a person's inbox is every native
 domain's notices under one horizon. It deletes something a person reads, and it deletes a *pointer* rather than the thing
 pointed at: the history row behind every notice is never swept, so "what was I

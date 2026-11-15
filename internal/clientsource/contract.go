@@ -499,8 +499,6 @@ var contract = []Entry{
 	{"CODE_ALARM_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryCodeAlarm"},
 	{"CODE_MAX_BLAME_LINES", ReadScalar, "internal/gitlet.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers"},
 	{"CHANGE_PART_PAGE", ReadScalar, "internal/gitlet.TestTheDashboardReadsAChangesConversationAtTheEnginesPage"},
-	{"CODE_SCRATCH_IDLE_DAYS", ReadScalar, "internal/gitlet.TestTheDashboardStatesTheCodePolicysDefaults"},
-	{"CODE_SCRATCH_MAX_PER_SEAT", ReadScalar, "internal/gitlet.TestTheDashboardStatesTheCodePolicysDefaults"},
 	{"CODE_IDENTITY_DOMAIN", ReadScalar, "internal/gitlet.TestTheDashboardStatesTheCodePolicysDefaults"},
 	{"CHECK_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"CHECK_ENDED_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},

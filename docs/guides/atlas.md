@@ -402,7 +402,8 @@ which is optional
 [Expo](../integrations/expo.md#let-the-atlas-read-the-account)); until then
 their cards say Not read yet, and nothing else is affected. Each is read whole on a timer (every hour
 unless [`atlas.refresh_interval_seconds`](../getting-started/configuration.md)
-says otherwise), and its card says how the last read went:
+says otherwise; an administrator changes it at the top of **Sources**, in
+place, no shorter than five minutes), and its card says how the last read went:
 
 - **Its state**: Read, Partly read (the read finished and was refused some
   part), Last read failed, or Not read yet, with when it was read and when it

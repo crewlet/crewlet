@@ -120,6 +120,13 @@ var settingRanges = map[string]Range{
 	"delegated_decisions.allows_per_hour":        {Min: 1, Max: atMost(60)},
 	"delegated_decisions.server_allows_per_hour": {Min: 1, Max: atMost(60)},
 
+	// SETTINGS A PAGE CHANGES IN PLACE beside the caps: each bound's reason
+	// is at its constant.
+	"inbox.retention_days":           {Min: MinInboxRetentionDays, Max: atMost(MaxInboxRetentionDays)},
+	"atlas.refresh_interval_seconds": {Min: MinAtlasRefreshInterval.Seconds()},
+	"code.scratch.idle_days":         {Min: CodeScratchIdleDaysFloor, Max: atMost(CodeScratchIdleDaysCeiling)},
+	"code.scratch.max_per_seat":      {Min: 0, Max: atMost(CodeScratchMaxPerSeatCeiling)},
+
 	"notification_rate_limit":         {Min: 0},
 	"notification_coalesce_max_batch": {Min: 1, Max: atMost(coalesceMaxBatchMax)},
 }

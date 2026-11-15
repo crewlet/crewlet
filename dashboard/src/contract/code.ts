@@ -306,14 +306,12 @@ export const CODE_MAX_BLAME_LINES = 500;
 export const CHANGE_PART_PAGE = 200;
 
 /**
- * What an unset `code.scratch` and `code.identity_domain` read as — the
- * engine's own defaults (`config.DefaultCodeScratchIdleDays`,
- * `DefaultCodeScratchMaxPerSeat`, `DefaultCodeIdentityDomain`), which
- * Settings › Gitlet says beside an unset field so the page states the policy in
- * force. Held by `internal/gitlet.TestTheDashboardStatesTheCodePolicysDefaults`.
+ * What an unset `code.identity_domain` reads as, the engine's own default
+ * (`config.DefaultCodeIdentityDomain`), which Settings › Gitlet says beside an
+ * unset field so the page states the policy in force. The scratch policy's
+ * defaults come on the engine's own rows (`limits`, group `code`). Held by
+ * `internal/gitlet.TestTheDashboardStatesTheCodePolicysDefaults`.
  */
-export const CODE_SCRATCH_IDLE_DAYS = 7;
-export const CODE_SCRATCH_MAX_PER_SEAT = 50;
 export const CODE_IDENTITY_DOMAIN = "seats.invalid";
 
 /**

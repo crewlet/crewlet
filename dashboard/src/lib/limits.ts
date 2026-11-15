@@ -27,7 +27,7 @@
  */
 
 import type { LimitsAnswer, SettingRange } from "~/contract/limits.ts";
-import { fmtSetting } from "~/lib/format.ts";
+import { fmtSetting, plural } from "~/lib/format.ts";
 import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import type { SettingChange, SettingPlan } from "./useSettingWrite.ts";
 
@@ -49,6 +49,8 @@ export function limitTyping(row: LimitRow): string {
       return "A whole number per second.";
     case "count":
       return "A whole number.";
+    case "days":
+      return "A whole number of days.";
   }
 }
 
@@ -74,6 +76,8 @@ function notOfUnit(row: LimitRow, typed: string): string {
     case "per_second":
     case "count":
       return `“${typed}” is not a whole number.`;
+    case "days":
+      return `“${typed}” is not a whole number of days.`;
   }
 }
 
@@ -91,6 +95,8 @@ function boundWords(row: LimitRow, n: number): string {
       return `${n.toLocaleString()} per second`;
     case "count":
       return n.toLocaleString();
+    case "days":
+      return plural(n, "day");
   }
 }
 
@@ -135,6 +141,7 @@ export function readLimit(row: LimitRow, text: string): TypedLimit {
       break;
     case "count":
     case "per_second":
+    case "days":
       if (!Number.isInteger(n)) return { ok: false, error: notOfUnit(row, typed) };
       value = n;
       break;

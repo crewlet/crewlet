@@ -37,6 +37,7 @@ import {
   DescriptionList,
   EmptyValue,
   List,
+  SettingsTable,
   StatusDot,
   Tabs,
   Tag,
@@ -47,6 +48,7 @@ import { VendorMark } from "@crewlethq/icons";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PROJECT_PAGE } from "~/contract/work.ts";
+import { LimitSetting } from "~/components/LimitSetting.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { documentUnits, handleLabel, indexOrg, seatPath, type Seat } from "~/lib/seats.ts";
@@ -407,14 +409,10 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
     agents.find((a) => a.handle === handle)?.name ?? handle ?? "Someone";
   // THE COMPANY'S HORIZON, at the top of its document (`inbox.retention_days`)
   // and not under `tracker`: a person's inbox is every native domain's
-  // notices, and this pane says how long Worklet's are kept. AN UNSET KEY
-  // IS THE ENGINE'S DEFAULT, said as such: a copy of the engine's constant here
-  // would be a second answer that drifts.
-  const inbox = block(config.data, "inbox");
-  const retention =
-    typeof inbox.retention_days === "number" && inbox.retention_days > 0
-      ? `${inbox.retention_days} days`
-      : DEFAULT;
+  // notices. The engine's own row (`limits`, group `inbox`) carries the value
+  // in force beside its default, and the field that changes it.
+  const limits = useQuery("limits", undefined, { enabled: viewer.admin });
+  const horizon = limits.data?.limits.find((r) => r.key === "inbox.retention_days");
 
   if (!enabled) {
     return (
@@ -531,28 +529,41 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
         )}
         {tab === "settings" && (
           <div className="int-tab">
-            <DescriptionList
-              dense
-              items={[
-                ["Work tracker", "Worklet"],
-                [
-                  "Inbox keeps a notice for",
-                  viewer.admin ? retention : <EmptyValue label="Admins see this" />,
-                ],
-                [
-                  "Projects the chart declares",
-                  viewer.admin ? (
-                    documentUnits(config.data)
-                      .map((u) => u.project)
-                      .filter(Boolean)
-                      .join(", ") || <EmptyValue label="None" />
-                  ) : (
-                    <EmptyValue label="Admins see this" />
-                  ),
-                ],
-              ]}
-            />
-            <p className="t-caption">These live in the company document, under tracker.</p>
+            <SettingsTable aria-label="Worklet settings">
+              <SettingsTable.Row label="Work tracker" settingKey="tracker.backend">
+                Worklet
+              </SettingsTable.Row>
+              {horizon ? (
+                <LimitSetting
+                  cap={horizon}
+                  label="Inbox keeps a notice for"
+                  area="Worklet"
+                  reread="Reload to see the Worklet settings as they are now."
+                  onApplied={limits.refetch}
+                />
+              ) : (
+                <SettingsTable.Row
+                  label="Inbox keeps a notice for"
+                  settingKey="inbox.retention_days"
+                >
+                  {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
+                </SettingsTable.Row>
+              )}
+              <SettingsTable.Row label="Projects the chart declares">
+                {viewer.admin ? (
+                  documentUnits(config.data)
+                    .map((u) => u.project)
+                    .filter(Boolean)
+                    .join(", ") || <EmptyValue label="None" />
+                ) : (
+                  <EmptyValue label="Admins see this" />
+                )}
+              </SettingsTable.Row>
+            </SettingsTable>
+            <p className="t-caption">
+              These live in the company document: the tracker under tracker, the inbox under inbox,
+              and each project on its unit in Structure.
+            </p>
           </div>
         )}
       </div>
