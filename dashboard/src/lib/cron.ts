@@ -26,6 +26,7 @@
  * this is drawn beside the engine's answer rather than instead of it.
  */
 
+import { CRON_FIELDS } from "~/contract/cron.ts";
 import { zoneOffset } from "./format.ts";
 import { knownZone } from "./formatters.ts";
 
@@ -44,36 +45,6 @@ interface Cron {
   anyWeekday: boolean;
 }
 
-const BOUNDS: Record<string, [number, number]> = {
-  minute: [0, 59],
-  hour: [0, 23],
-  day: [1, 31],
-  month: [1, 12],
-  weekday: [0, 6],
-};
-
-const NAMES: Record<string, number> = {
-  sun: 0,
-  mon: 1,
-  tue: 2,
-  wed: 3,
-  thu: 4,
-  fri: 5,
-  sat: 6,
-  jan: 1,
-  feb: 2,
-  mar: 3,
-  apr: 4,
-  may: 5,
-  jun: 6,
-  jul: 7,
-  aug: 8,
-  sep: 9,
-  oct: 10,
-  nov: 11,
-  dec: 12,
-};
-
 const DAY_LABEL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTH_LABEL = [
   "January",
@@ -90,71 +61,123 @@ const MONTH_LABEL = [
   "December",
 ];
 
+/** A field as an expression writes it: its key in the grammar and what a sentence calls it. */
+const FIELDS: readonly { readonly key: keyof typeof CRON_FIELDS; readonly words: string }[] = [
+  { key: "minute", words: "minute" },
+  { key: "hour", words: "hour" },
+  { key: "day-of-month", words: "day of the month" },
+  { key: "month", words: "month" },
+  { key: "day-of-week", words: "weekday" },
+];
+
 /**
- * Parse one field into the values it matches.
+ * Parse one field into the values it matches, or say what is wrong with it.
  *
- * Returns null on anything this grammar does not have — which the caller
- * reports as "this build cannot read that expression" rather than guessing.
- * The engine is what runs the schedule, so a reading aid that could not parse
- * an expression must say so; inventing a reading would put a sentence on the
- * screen that the engine does not act on.
+ * THE ENGINE'S GRAMMAR, rule for rule (`internal/cron`'s parseField): terms
+ * split on commas, a step after the first `/`, a range at the first `-` after
+ * the term's first character, a bare value with a step running to the field's
+ * end, and a name read only in the field that has it. The bounds and the names
+ * are the engine's own ([CRON_FIELDS]). Day-of-week takes 0 to 7 and folds 7
+ * onto Sunday AFTER the range is read, so `6-7` is the weekend it says rather
+ * than a range that runs backwards.
+ *
+ * A REFUSAL NAMES THE FIELD. This answered null for any mistake, and the form
+ * said "this is not a cron expression: five fields" of `61 25 * * *`, which
+ * has five fields and one minute out of range.
  */
-function parseField(raw: string, name: string): Field | null {
-  const [lo, hi] = BOUNDS[name] as [number, number];
+function parseField(raw: string, key: keyof typeof CRON_FIELDS, words: string): Field | string {
+  const { min: lo, max: hi } = CRON_FIELDS[key];
   const out = new Set<number>();
   for (const part of raw.split(",")) {
-    const [range, stepRaw] = part.split("/");
-    const step = stepRaw === undefined ? 1 : Number(stepRaw);
-    if (!Number.isInteger(step) || step < 1) return null;
-
-    let from = lo;
-    let to = hi;
-    if (range !== "*" && range !== undefined) {
-      const ends = range.split("-");
-      if (ends.length > 2) return null;
-      const first = value(ends[0] ?? "", lo, hi);
-      if (first === null) return null;
-      from = first;
-      if (ends.length === 2) {
-        const second = value(ends[1] ?? "", lo, hi);
-        if (second === null) return null;
-        to = second;
-      } else {
-        // A BARE VALUE WITH A STEP is a range to the end of the field —
-        // `5/10` in the minute field is 5, 15, 25… — while a bare value
-        // alone is only itself.
-        to = stepRaw === undefined ? first : hi;
+    const term = part.trim();
+    if (term === "") return `The ${words} has an empty entry between its commas.`;
+    const slash = term.indexOf("/");
+    const base = (slash < 0 ? term : term.slice(0, slash)).trim();
+    let step = 1;
+    if (slash >= 0) {
+      const n = integer(term.slice(slash + 1));
+      if (n === null || n < 1) {
+        return `The ${words}’s step, after the “/”, must be a whole number above 0.`;
       }
+      step = n;
     }
-    if (from > to) return null;
-    for (let v = from; v <= to; v += step) out.add(v);
+    let from: number;
+    let to: number;
+    if (base === "*") {
+      from = lo;
+      to = hi;
+    } else if (base.slice(1).includes("-")) {
+      // AT THE FIRST DASH, as the engine cuts it. The first character is
+      // skipped only in deciding whether this IS a range: a leading `-` is a
+      // negative value, refused as a value rather than as a range.
+      const dash = base.indexOf("-");
+      const first = value(base.slice(0, dash), key);
+      const second = value(base.slice(dash + 1), key);
+      if (first === null || second === null) return outside(key, words);
+      if (second < first) {
+        return `The ${words} range ${base} runs backwards. A range does not wrap, so write it as two ranges.`;
+      }
+      from = first;
+      to = second;
+    } else {
+      const first = value(base, key);
+      if (first === null) return outside(key, words);
+      // A BARE VALUE WITH A STEP is a range to the end of the field
+      // (`5/10` in the minute field is 5, 15, 25 and on), while a bare
+      // value alone is only itself.
+      from = first;
+      to = slash < 0 ? first : hi;
+    }
+    // SUNDAY IS BOTH 0 AND 7, folded once the range is read: a schedule
+    // written `0 9 * * 7` that silently matched nothing would be a schedule
+    // that never fires with nothing on the screen to say why.
+    for (let v = from; v <= to; v += step) out.add(key === "day-of-week" && v === 7 ? 0 : v);
   }
-  if (out.size === 0) return null;
   return [...out].sort((a, b) => a - b);
 }
 
-function value(raw: string, lo: number, hi: number): number | null {
-  const word = NAMES[raw.trim().toLowerCase()];
-  const n = word ?? Number(raw);
-  if (!Number.isInteger(n) || n < lo) return null;
-  // SUNDAY IS BOTH 0 AND 7 in every cron this engine will meet, and a
-  // schedule written `0 9 * * 7` that silently matched nothing would be a
-  // schedule that never fires with nothing on the screen to say why.
-  if (hi === 6 && n === 7) return 0;
-  if (n > hi) return null;
+/** A value of the field, by its number or its name, or null outside the field. */
+function value(raw: string, key: keyof typeof CRON_FIELDS): number | null {
+  const { min, max, names } = CRON_FIELDS[key];
+  const token = raw.trim().toLowerCase();
+  const named = (names as readonly string[]).indexOf(token);
+  if (named >= 0) return min + named;
+  const n = integer(token);
+  if (n === null || n < min || n > max) return null;
   return n;
 }
 
-/** Parse a whole expression, or null when this build cannot read it. */
-export function parseCron(expression: string): Cron | null {
-  const parts = (expression ?? "").trim().split(/\s+/);
-  if (parts.length !== 5) return null;
-  const minute = parseField(parts[0] as string, "minute");
-  const hour = parseField(parts[1] as string, "hour");
-  const day = parseField(parts[2] as string, "day");
-  const month = parseField(parts[3] as string, "month");
-  const weekday = parseField(parts[4] as string, "weekday");
-  if (!minute || !hour || !day || !month || !weekday) return null;
+/** A whole number as the engine's `strconv.Atoi` reads one, or null. */
+function integer(raw: string): number | null {
+  const text = raw.trim();
+  if (!/^[+-]?\d+$/.test(text)) return null;
+  const n = Number(text);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/** What a field takes, as the sentence that refuses anything else. */
+function outside(key: keyof typeof CRON_FIELDS, words: string): string {
+  const { min, max, names } = CRON_FIELDS[key];
+  const named =
+    names.length > 0
+      ? `, or ${names[0]!.toUpperCase()} to ${names[names.length - 1]!.toUpperCase()}`
+      : "";
+  return `The ${words} must be ${min} to ${max}${named}.`;
+}
+
+/** A whole expression read, or what is wrong with it, field by field in order. */
+function readCron(expression: string): Cron | string {
+  const parts = (expression ?? "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== FIELDS.length) {
+    return `A cron expression has five fields: minute, hour, day of the month, month and weekday. This one has ${parts.length}.`;
+  }
+  const read: Field[] = [];
+  for (const [i, { key, words }] of FIELDS.entries()) {
+    const field = parseField(parts[i] as string, key, words);
+    if (typeof field === "string") return field;
+    read.push(field);
+  }
+  const [minute, hour, day, month, weekday] = read as [Field, Field, Field, Field, Field];
   return {
     minute,
     hour,
@@ -164,6 +187,27 @@ export function parseCron(expression: string): Cron | null {
     anyDay: parts[2] === "*",
     anyWeekday: parts[4] === "*",
   };
+}
+
+/**
+ * Parse a whole expression, or null when it is not one the engine reads.
+ *
+ * Returns null rather than a guess: the engine is what runs the schedule, so a
+ * reading aid that could not parse an expression must say so, and inventing a
+ * reading would put a sentence on the screen that the engine does not act on.
+ */
+export function parseCron(expression: string): Cron | null {
+  const read = readCron(expression);
+  return typeof read === "string" ? null : read;
+}
+
+/**
+ * What is wrong with an expression, in a sentence naming the field ("The
+ * minute must be 0 to 59."), or null when the engine reads it.
+ */
+export function cronProblem(expression: string): string | null {
+  const read = readCron(expression);
+  return typeof read === "string" ? read : null;
 }
 
 /**

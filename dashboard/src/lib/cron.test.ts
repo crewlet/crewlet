@@ -1,5 +1,5 @@
 import { describe as group, expect, it } from "vitest";
-import { describe, nextFires, parseCron } from "./cron.ts";
+import { cronProblem, describe, nextFires, parseCron } from "./cron.ts";
 
 function fires(expression: string, from: string, count = 3, zone = "UTC"): string[] {
   return nextFires(expression, new Date(from), zone, count).map((d) => d.toISOString());
@@ -67,6 +67,57 @@ group("reading an expression as a sentence", () => {
       expect(describe(bad), bad).toBeNull();
       expect(parseCron(bad), bad).toBeNull();
     }
+  });
+});
+
+// A REFUSAL NAMES THE FIELD THAT BROKE IT. Every mistake used to read as "this
+// is not a cron expression: five fields", including an expression with five
+// fields and one minute out of range, which left the person to find which of
+// the five was wrong.
+group("saying what is wrong with an expression", () => {
+  it("names the field out of range, with the values it takes", () => {
+    expect(cronProblem("61 25 * * *")).toBe("The minute must be 0 to 59.");
+    expect(cronProblem("0 25 * * *")).toBe("The hour must be 0 to 23.");
+    expect(cronProblem("0 9 0 * *")).toBe("The day of the month must be 1 to 31.");
+    expect(cronProblem("0 9 * 13 *")).toBe("The month must be 1 to 12, or JAN to DEC.");
+    expect(cronProblem("0 9 * * 8")).toBe("The weekday must be 0 to 7, or SUN to SAT.");
+    expect(cronProblem("0 9 * * MON-FRY")).toBe("The weekday must be 0 to 7, or SUN to SAT.");
+  });
+
+  it("says how many fields there are when that is what is wrong", () => {
+    expect(cronProblem("0 9 * *")).toBe(
+      "A cron expression has five fields: minute, hour, day of the month, month and weekday. This one has 4.",
+    );
+  });
+
+  it("names a step, an empty entry and a range that runs backwards", () => {
+    expect(cronProblem("*/0 * * * *")).toBe(
+      "The minute’s step, after the “/”, must be a whole number above 0.",
+    );
+    expect(cronProblem("0 9,,10 * * *")).toBe("The hour has an empty entry between its commas.");
+    expect(cronProblem("0 22-2 * * *")).toBe(
+      "The hour range 22-2 runs backwards. A range does not wrap, so write it as two ranges.",
+    );
+  });
+
+  it("answers nothing for an expression the engine reads", () => {
+    expect(cronProblem("30 9 * * 1-5")).toBeNull();
+  });
+});
+
+// THE ENGINE'S GRAMMAR, NOT A SECOND ONE. The copy beside the form had drifted
+// from `internal/cron`: it refused the weekend the engine documents and read a
+// month's name in the weekday field.
+group("reading the grammar the engine reads", () => {
+  it("reads 6-7 as the weekend, 7 being Sunday", () => {
+    expect(cronProblem("0 9 * * 6-7")).toBeNull();
+    expect(describe("0 9 * * 6-7")).toBe("at 09:00 on weekends");
+  });
+
+  it("reads a name only in the field it names", () => {
+    expect(cronProblem("0 9 * * JAN")).toBe("The weekday must be 0 to 7, or SUN to SAT.");
+    expect(cronProblem("0 9 * MON *")).toBe("The month must be 1 to 12, or JAN to DEC.");
+    expect(cronProblem("MON 9 * * *")).toBe("The minute must be 0 to 59.");
   });
 });
 

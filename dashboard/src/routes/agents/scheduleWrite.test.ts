@@ -181,6 +181,18 @@ describe("what the form refuses before anything is sent", () => {
       {},
     );
   });
+
+  // FIVE FIELDS WITH ONE OUT OF RANGE IS NOT "NOT A CRON EXPRESSION": the
+  // form names the field the engine's grammar refuses.
+  test("a cron expression is refused by the field that is wrong", () => {
+    const draft = { ...NEW_DRAFT, name: "n", task: "t" };
+    expect(draftProblems({ ...draft, cron: "61 25 * * *" }, []).cron).toBe(
+      "The minute must be 0 to 59.",
+    );
+    expect(draftProblems({ ...draft, cron: "" }, []).cron).toBe(
+      "Say when it runs, as a cron expression.",
+    );
+  });
 });
 
 // THE ENGINE'S PROBLEM IS DRAWN BESIDE ITS FIELD where it is about the
