@@ -125,6 +125,9 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 		`ATTACHED files are refused`,
 		`attach it to the report`,
 		`attach a file to the task`,
+		// A STEP A PERSON IS SHOWN, whose object is a format verb: the
+		// word after it is prose, not the statement's AS.
+		`Attach %s to its role, %s, held to the boundary`,
 	} {
 		if attaches(negative) {
 			t.Errorf("control: %q attaches nothing but the matcher flagged it", negative)
@@ -137,12 +140,22 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 		`"ATTACH " + quote(path) + " AS peer"`,
 		`fmt.Sprintf("ATTACH DATABASE %q AS peer", path)`,
 		`"ATTACH DATABASE " + quote(path) + " AS peer"`,
+		// ITS AS COMPOSED TOO, or appended by a later statement: the walk
+		// sees the operand and nothing it can read after it.
+		`"ATTACH " + quote(path) + as`,
+		`"ATTACH " + quote(path)`,
 	} {
 		text, ok := composedString(mustParse(t, src), map[string]string{})
 		if !ok || !attaches(text) {
 			t.Errorf("control: %s attaches a second file and the walk did not "+
 				"flag it (rendered %q)", src, text)
 		}
+	}
+	text, ok := composedString(mustParse(t,
+		`fmt.Sprintf("Attach %s to its role, %s, held to the boundary", name, until)`), map[string]string{})
+	if !ok || attaches(text) {
+		t.Errorf("control: a step whose object is a format verb attaches nothing but the walk "+
+			"flagged it (rendered %q, read %v)", text, ok)
 	}
 
 	// COMPOSED STRINGS, not literals alone, for the reason the applier
@@ -178,18 +191,34 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 // attachStatement is SQLite's ATTACH: the keyword, then either DATABASE or
 // whatever can name the file — a quoted string, any parameter spelling, a
 // format verb, or the rune [composedString] renders an operand it cannot
-// resolve as.
+// resolve as. After a format verb or such an operand it captures the word
+// that follows, if one does, for [attaches] to read.
 //
 // THE KEYWORD MUST BE FOLLOWED BY SPACE, which is what keeps prose out: no
-// English sentence puts "attach" before one of these, and "attached" and
-// "attachment" never match the keyword at all. What it must not require is a
-// literal path after DATABASE: the first version did, and every attach whose
-// path is computed in Go — `fmt.Sprintf("ATTACH DATABASE %q AS p", path)`,
-// `"ATTACH DATABASE " + quote(path)` — passed.
-var attachStatement = regexp.MustCompile(`(?is)\bATTACH\s+(?:DATABASE\b|['"?:$@%` + unresolved + `])`)
+// English sentence puts "attach" before DATABASE, a quote or a parameter, and
+// "attached" and "attachment" never match the keyword at all. What it must
+// not require is a literal path after DATABASE: the first version did, and
+// every attach whose path is computed in Go — `fmt.Sprintf("ATTACH DATABASE
+// %q AS p", path)`, `"ATTACH DATABASE " + quote(path)` — passed.
+var attachStatement = regexp.MustCompile(`(?is)\bATTACH\s+(?:DATABASE\b|['"?:$@]|[%` + unresolved +
+	`]\S*(?:\s+([a-z]+)\b)?)`)
 
 // attaches reports whether a statement attaches a second database file.
-func attaches(text string) bool { return attachStatement.MatchString(text) }
+//
+// A FORMAT VERB OR AN UNREAD OPERAND IS PROSE'S OBJECT AS OFTEN AS A FILE: a
+// step a person is shown reads "Attach %s to its role". SQLite's grammar
+// puts AS straight after the file (ATTACH [DATABASE] expr AS schema), so a
+// word after the operand that is not AS is a sentence, and the operand
+// followed by AS, by nothing the walk can read, or by another operand (an AS
+// clause composed too) is a statement.
+func attaches(text string) bool {
+	for _, m := range attachStatement.FindAllStringSubmatch(text, -1) {
+		if m[1] == "" || strings.EqualFold(m[1], "AS") {
+			return true
+		}
+	}
+	return false
+}
 
 // sqlVerb introduces a table name in the statements this engine writes.
 var sqlVerb = regexp.MustCompile(`(?is)\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+([a-z_][a-z0-9_]*)`)
