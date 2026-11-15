@@ -126,6 +126,10 @@
           "$ref": "#/$defs/AssistantDeepWork",
           "description": "Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
         },
+        "deliberate": {
+          "$ref": "#/$defs/AssistantDeliberate",
+          "description": "A stronger model chain for hard questions: a person asks for it with Think harder, one question at a time, and briefs of a decision may use it. Held to assistant.llm's rules and charged to the same budgets. Absent: every question runs on assistant.llm."
+        },
         "enabled": {
           "description": "Run Ask Crewlet for this company. Absent or false: off.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -243,6 +247,48 @@
             "integer",
             "null"
           ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantDeliberate": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_briefs": {
+          "description": "Run a brief of a decision (Brief me on this decision) on this chain too. Absent or false: briefs run on assistant.llm.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": "array"
+            }
+          ],
+          "description": "providers.llm keys a question asked to think harder runs on, a fallback chain held to assistant.llm's rules: each an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Required."
         }
       },
       "type": [

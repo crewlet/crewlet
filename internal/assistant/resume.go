@@ -135,12 +135,19 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	}
 	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantTurn,
 		TurnID: r.Turn.String()}
-	provider, key, err := s.models.Chain(ctx, person, use)
+	// THE SAME MODEL AS THE SEGMENT IT CONTINUES: a question asked to think
+	// harder is answered on the stronger chain after its approval too.
+	strength := keep.Strength
+	if strength == "" {
+		strength = Quick
+	}
+	provider, key, err := s.models.Chain(ctx, person, use, strength)
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{Cause: err}
 	}
 	page, fresh := s.resumedPage(ctx, keep, r)
 	t := s.newTurn(person, r.Conversation, r.Turn, "", r.Read, page, acts)
+	t.strength = strength
 	t.derived = &Derivation{At: row.StartedAt, Name: "assistant_resume",
 		Identity: []string{r.Turn.String(), r.Proposal.String()}}
 	if provenance.Boundary(keep.Boundary).Valid() {

@@ -76,6 +76,19 @@ type Assistant struct {
 	// harness for a task that needs research, scripts, files or many steps
 	// (ADR-0054). Absent: the assistant answers in quick mode only.
 	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."`
+
+	// Deliberate is a stronger chain for a hard question, which a person
+	// asks for one question at a time. Absent: every question runs on LLM.
+	Deliberate *AssistantDeliberate `yaml:"deliberate,omitempty" json:"deliberate,omitempty" desc:"A stronger model chain for hard questions: a person asks for it with Think harder, one question at a time, and briefs of a decision may use it. Held to assistant.llm's rules and charged to the same budgets. Absent: every question runs on assistant.llm."`
+}
+
+// AssistantDeliberate is the `assistant.deliberate` block: a stronger chain
+// for Think harder, held to `assistant.llm`'s rules and charged to its budgets.
+type AssistantDeliberate struct {
+	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys a question asked to think harder runs on, a fallback chain held to assistant.llm's rules: each an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Required."`
+	// DecisionBriefs is whether "Brief me on this decision" runs on this
+	// chain: a decision is the hard question it exists for.
+	DecisionBriefs bool `yaml:"decision_briefs,omitempty" json:"decision_briefs,omitempty" desc:"Run a brief of a decision (Brief me on this decision) on this chain too. Absent or false: briefs run on assistant.llm."`
 }
 
 // AssistantDeepWork is the `assistant.deep_work` block.
@@ -351,6 +364,29 @@ func (c *Company) AssistantChain() (ProviderKeys, error) {
 	return slices.Clone(c.Assistant.LLM), nil
 }
 
+// ErrNoDeliberate is what [Company.DeliberateChain] answers for a company that
+// sets no `assistant.deliberate` block.
+var ErrNoDeliberate = errors.New("assistant.deliberate is not set, so Ask Crewlet has no " +
+	"stronger model to think harder on: set assistant.deliberate.llm")
+
+// DeliberateChain is the one place `assistant.deliberate.llm` is handed out:
+// [ErrAssistantOff], [ErrNoDeliberate], or the chain held to `assistant.llm`'s rules.
+func (c *Company) DeliberateChain() (ProviderKeys, error) {
+	if !c.Assistant.On() {
+		return nil, ErrAssistantOff
+	}
+	d := c.Assistant.Deliberate
+	if d == nil {
+		return nil, ErrNoDeliberate
+	}
+	if err := c.chainProblems(field("assistant.deliberate.llm"), d.LLM,
+		"Ask Crewlet's stronger chain names no model: list a providers.llm key, e.g. "+
+			"llm: [assistant-strong]"); err != nil {
+		return nil, err
+	}
+	return slices.Clone(d.LLM), nil
+}
+
 // validateAssistant holds the `assistant:` block to its rules.
 //
 // AN ADMISSION RULE, every part of it: nothing about running a SEAT depends on
@@ -377,6 +413,11 @@ func (c *Company) validateAssistant() error {
 		p.wrap(c.assistantChainProblems(path))
 	}
 	p.wrap(c.deepWorkProblems(at(path, "deep_work")))
+	if a.Deliberate != nil {
+		p.wrap(c.chainProblems(at(path, "deliberate.llm"), a.Deliberate.LLM,
+			"assistant.deliberate names no model: list a providers.llm key, e.g. "+
+				"llm: [assistant-strong], or remove the block"))
+	}
 	return p.err()
 }
 
@@ -385,17 +426,22 @@ func (c *Company) validateAssistant() error {
 // an entry whose merged profile leaves the harness's local or web tools
 // reachable. Each problem names the field to change.
 func (c *Company) assistantChainProblems(path Path) error {
+	return c.chainProblems(at(path, "llm"), c.Assistant.LLM,
+		"Ask Crewlet is enabled but names no model: list a providers.llm "+
+			"key, e.g. llm: [assistant], whose harness's local tools are denied and "+
+			"whose entry has overrides: {web_tools: denied}")
+}
+
+// chainProblems reports every way chain, at llmPath, cannot carry the assistant.
+// Both chains are held to it, so a stronger model is never one the quick chain refuses.
+func (c *Company) chainProblems(llmPath Path, chain ProviderKeys, empty string) error {
 	var p problems
-	llmPath := at(path, "llm")
-	if len(c.Assistant.LLM) == 0 {
-		p.add(llmPath, ErrMissing,
-			"Ask Crewlet is enabled but names no model: list a providers.llm "+
-				"key, e.g. llm: [assistant], whose harness's local tools are denied and "+
-				"whose entry has overrides: {web_tools: denied}")
+	if len(chain) == 0 {
+		p.add(llmPath, ErrMissing, "%s", empty)
 		return p.err()
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
-	for i, key := range c.Assistant.LLM {
+	for i, key := range chain {
 		member := idx(llmPath, i)
 		entry, ok := c.Providers.LLM[key]
 		if !ok {
