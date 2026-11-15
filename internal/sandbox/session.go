@@ -92,6 +92,13 @@ import (
 // which the turn's end, and a relaunch before it decides, asks again under the
 // same operation.
 //
+// A SAVE, a capture of a job still working, reserves its place the same way
+// and keeps a second one beside it ([PendingRun.Saving],
+// [PendingStore.ReserveSave]) until it can no longer become the turn's kept
+// capture, so a final take of the job that overtakes it never hides it; it is
+// reserved only while its job runs undecided ([licensesSave]). saving.go is
+// its account.
+//
 // # Two reads of one job: one holds the place, the other stands by
 //
 // A stop's read and a collection's of one job can take its session at once,
@@ -892,11 +899,19 @@ func (c SessionCapture) sameTake(o SessionCapture) bool {
 }
 
 // holdsStamp reports whether run's row already holds capture as it is: the
-// same take's stamp at the newest place, in the same state — what a write the
-// store applied and answered too late for its asker to hear leaves there.
+// same take's stamp in the same state, in ANY of the row's capture sections:
+// its newest ([PendingRun.Capture]), its save under way ([PendingRun.Saving])
+// or, for a stamp that landed, its kept one ([PendingRun.Kept]). What a write
+// the store applied and answered too late for its asker to hear leaves there.
+// A save's outcome asked again after a final take moved the newest place on is
+// held by the save's section, or by the kept one where it landed; one refused
+// and let go is held by none, and answered not taken, which no asker of an
+// outcome's stamp acts on ([Coordinator.stampSettled]).
 func holdsStamp(run PendingRun, capture SessionCapture) bool {
-	newest := run.Capture
-	return newest != nil && capture.sameTake(*newest) && newest.State == capture.State
+	holds := func(section *SessionCapture) bool {
+		return section != nil && capture.sameTake(*section) && section.State == capture.State
+	}
+	return holds(run.Capture) || holds(run.Saving) || (capture.State == CaptureLanded && holds(run.Kept))
 }
 
 // stampOnto stamps capture on run as [PendingStore.StampCapture] does, and
@@ -920,8 +935,21 @@ func holdsStamp(run PendingRun, capture SessionCapture) bool {
 // stamps what it holds, which never knew of it, and a capture refused or left
 // unanswered under it is one that read can still keep in the next place. A
 // newer capture holds the place in its stead, and takes none over.
+//
+// AND A SAVE UNDER WAY STAYS IN SIGHT ([PendingRun.Saving], saving.go) until it
+// can no longer become the turn's kept capture. A stamp of the save's own take
+// moves it on in its own section, whatever the newest place holds, and counts
+// as taking; and every stamp that took lets it go once it landed or was
+// refused, or once the row keeps a capture at or past its place
+// ([savingAfter]), decided on the newest capture as the stamp FOUND it, where
+// a build without the section may have settled the save's take, and never on
+// the place the stamp just replaced. A save that lands behind a refused final
+// take is the turn's kept capture by the rule above. A stamp that did not take
+// changes nothing of it, so the store never answers taken for a stale save
+// swept.
 func stampOnto(run *PendingRun, capture SessionCapture) bool {
 	took := false
+	found := run.Capture
 	newest := run.Capture
 	switch {
 	case newest == nil || capture.newerThan(*newest):
@@ -943,6 +971,14 @@ func stampOnto(run *PendingRun, capture SessionCapture) bool {
 		kept.StandbyTaker, kept.StandbyTakerEpoch, kept.StandbyAt = "", 0, time.Time{}
 		run.Kept, took = &kept, true
 	}
+	if save := run.Saving; save != nil && capture.sameTake(*save) && save.State.advancesTo(capture.State) {
+		moved := capture
+		moved.StandbyTaker, moved.StandbyTakerEpoch, moved.StandbyAt = "", 0, time.Time{}
+		run.Saving, took = &moved, true
+	}
+	if took {
+		run.Saving = savingAfter(found, *run)
+	}
 	return took
 }
 
@@ -960,6 +996,32 @@ func (c SessionCapture) standsBy(take SessionCapture) bool {
 // out, before it took the next place or withdrew.
 func (c SessionCapture) standing(now time.Time) bool {
 	return c.State != CaptureLanded && !c.StandbyAt.IsZero() && now.Sub(c.StandbyAt) < standbyBudget
+}
+
+// keeping reports whether c is being kept as of now: BEGUN, and younger than a
+// capture's budget ([SessionCaptureBudget]) from the instant its take stamped
+// it. Past it, its taker's node stopped, or its keep ran out, before it stamped
+// what came of it.
+func (c SessionCapture) keeping(now time.Time) bool {
+	return c.State == CaptureBegun && now.Sub(c.At) < SessionCaptureBudget
+}
+
+// unresolvedWithin reports whether c's record was sent and not answered, and
+// may still land as of now: UNRESOLVED, and its object not past
+// objstore.RecordWithin, past which no record may name it ([pastRecordWithin]).
+// An object key that does not parse is asked as any other is, as the ask itself
+// asks it ([Coordinator.settleCapture]).
+func (c SessionCapture) unresolvedWithin(now time.Time) bool {
+	return c.State == CaptureUnresolved && !pastRecordWithin(c.Object, now)
+}
+
+// mayLand reports whether c may still become a kept capture as of now: being
+// kept ([SessionCapture.keeping]), a read standing by to keep it in the next
+// place ([SessionCapture.standing]), or its record sent and not yet answered
+// ([SessionCapture.unresolvedWithin]). THE PREDICATE for "may still land" that
+// a save's license holds off for ([PendingRun.capturesMayLand]).
+func (c SessionCapture) mayLand(now time.Time) bool {
+	return c.keeping(now) || c.standing(now) || c.unresolvedWithin(now)
 }
 
 // standbyOf is the read standing by for c as the stamp it stood by with: at c's

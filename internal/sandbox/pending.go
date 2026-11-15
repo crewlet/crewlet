@@ -1296,6 +1296,27 @@ type PendingRun struct {
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`
 
+	// Saving is the turn's SAVE UNDER WAY: a capture of a job still working
+	// (saving.go), from its reservation ([PendingStore.ReserveSave]), which
+	// takes Capture's place and this one together, until it can no longer
+	// become the turn's kept capture: it landed or was refused, or the row
+	// keeps a capture at or past its place. Capture alone lost sight of it:
+	// a final take of the job reserves the place after the save and replaces
+	// Capture while the save may still be uploading.
+	//
+	// A READING, NOT A ROW INVARIANT: read only through one rule
+	// ([PendingRun.savingTake], [PendingRun.saving]), which a source walk
+	// holds every reader to, since a build without the field carries it in
+	// Extra and writes it back unchanged, so the row may hold a stale save.
+	// Written by the reservation and by every stamp that takes, which moves
+	// the save's own take on here and lets it go, decided on the row as the
+	// stamp found it ([stampOnto], [savingAfter]); read, besides that rule, by
+	// what answers a stamp the row already holds ([holdsStamp], [holdsSave])
+	// and what a settle is written over ([stillBegun]). The TURN'S, kept by
+	// every relaunch as Capture and Kept are; a section of its own with an
+	// Extra (wirekeys.go).
+	Saving *SessionCapture `json:"session_saving,omitempty"`
+
 	// Base is the read the turn's FIRST launch made of its conversation —
 	// where its head was read, the turns it handed out that the brief told,
 	// and the head itself, which the turn's launches continue while the turn
@@ -2732,8 +2753,10 @@ type PendingStore interface {
 	// turn's kept one wherever it is newer than the kept one, so an
 	// unresolved capture answered after a newer one began still counts.
 	//
-	// A STAMP THE ROW ALREADY HOLDS, the same take's in the same state, is
-	// answered taken, and nothing is written: a store that applied an earlier
+	// A STAMP THE ROW ALREADY HOLDS, the same take's in the same state in any
+	// of its capture sections ([holdsStamp]), its newest, its save under way
+	// ([PendingRun.Saving]) or, landed, its kept one, is answered taken, and
+	// nothing is written: a store that applied an earlier
 	// ask and whose answer never came back leaves the place its asker's, and
 	// asked again the asker learns so, rather than reading its own
 	// reservation as another read's and leaving it begun with nobody to
@@ -2752,8 +2775,9 @@ type PendingStore interface {
 	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
 	// SettleBegun is [PendingStore.StampCapture] held to one more condition,
-	// decided on the row as it stands: the row's newest capture is the
-	// settled capture's own take ([SessionCapture.sameTake]), still BEGUN.
+	// decided on the row as it stands: the row's newest capture, or its save
+	// under way ([PendingRun.Saving]), is the settled capture's own take
+	// ([SessionCapture.sameTake]), still BEGUN.
 	// It is the write of a node that did not take the capture and settles it
 	// from the executor log once its taker is gone
 	// ([Coordinator.settleGoneTaker]) — a decision made from a copy of the
@@ -2765,6 +2789,40 @@ type PendingStore interface {
 	// nothing and is no error; and a stamp past its bounds is refused as
 	// there.
 	SettleBegun(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
+
+	// ReserveSave reserves the place of save, a SAVE, the capture of a job
+	// still working (saving.go), on its row, as its newest capture and as
+	// its save under way ([PendingRun.Saving]) at once, answering whether it
+	// was taken.
+	//
+	// ONLY WHILE ITS JOB RUNS UNDECIDED ([licensesSave]), decided on the row
+	// as it stands, with now the clock of the node making the write: the run
+	// running; the save of its current launch, by its job and its ordinal;
+	// nothing of the job's end read, and no refusal of its completion owed
+	// ([PendingRun.jobOver]); no loss marked; no ending decided, owed or
+	// recorded; no capture or save of the turn that may still land
+	// ([PendingRun.capturesMayLand]), so one save of a run is in flight at a
+	// time, fleet wide; and the save placed at the next place after the row's
+	// newest. Every read that takes a job's final capture writes its decision
+	// on the row before it reads the row for its place, so a final take
+	// either places itself after a reserved save or the save is refused: A
+	// FINAL TAKE NEVER LOSES ITS PLACE TO A SAVE. Refused, false is answered
+	// and nothing is written.
+	//
+	// ITS PLACE, ITS SAVE POINT AND ITS NOTE CURSOR ARE READ OFF ONE READ OF
+	// THE ROW MADE BEFORE ITS PACK: a capture placed since that read moves the
+	// next place and refuses the save, so the place order is the content
+	// order, and a save never takes a save point a later read placed.
+	//
+	// A RESERVATION THE ROW ALREADY HOLDS, its save under way or its newest
+	// capture the same take ([SessionCapture.sameTake]), is answered taken,
+	// and nothing is written, as [PendingStore.StampCapture] answers a stamp
+	// it holds. A save that is not one (not begun, final, not cut off,
+	// holding notes, stating no save point, or naming a read standing by for
+	// it) or a stamp past its bounds is refused with an error before anything
+	// is written ([reservable]); a row that is gone takes nothing and is no
+	// error.
+	ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error)
 
 	// StandBy records capture's take — a read whose place another read of
 	// the same job holds, begun at that place — as the read STANDING BY for
@@ -4951,6 +5009,9 @@ type LaunchRecord struct {
 	// AN OBLIGATION, NEVER A HOLD: nothing reads it as a reason to refuse or
 	// to hold off the job's announcements, and the condition is the holder's
 	// that refused; the recovering holder asks its own gate (ADR-0064). A
+	// save's license reads it as the job's completion announced and refuses a
+	// save of the job ([PendingRun.jobOver]), which holds off nothing of the
+	// job's announcements. A
 	// build that predates it keeps both keys in [LaunchRecord.Extra] and
 	// writes them back as they are, and neither writes, reads nor clears
 	// them.

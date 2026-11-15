@@ -208,6 +208,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, lateCases...)
 	cases = append(cases, briefReadCases...)
 	cases = append(cases, inFlightCases...)
+	cases = append(cases, savingCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -227,11 +228,21 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	}
 	raw = append(raw, noteRawCases...)
 	raw = append(raw, bytesRawCases...)
+	raw = append(raw, savingRawCases...)
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			store, runs := newStore(t)
 			tc.fn(t, store, runs)
+		})
+	}
+	// TWO NODES' STORES OVER ONE BACKEND, for the cases whose subject is what
+	// one node's write leaves the other.
+	for _, tc := range savingFleetCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, runs := newStore(t)
+			tc.fn(t, store, over(runs))
 		})
 	}
 	for _, tc := range slices.Concat(stagedLogCases, lateStagedCases) {
