@@ -151,7 +151,7 @@ func lookupEntry(offer Options, e GrantEntry, level string) LookupEntry {
 	case heldByLevel(offer, e.InLevel, level):
 		out.Level = "Already in this agent's level"
 	default:
-		out.Level = levelName(offer, e.InLevel) + " and above"
+		out.Level = inLevelName(offer, e.InLevel) + " and above"
 	}
 	if e.Unavailable != "" {
 		out.Grantable = e.Unavailable
@@ -256,7 +256,7 @@ func entryWords(offer Options, e GrantEntry, level string) string {
 	case heldByLevel(offer, e.InLevel, level):
 		facts = append(facts, "already in this agent's level")
 	default:
-		facts = append(facts, "in the "+levelName(offer, e.InLevel)+" level and above")
+		facts = append(facts, "in the "+inLevelName(offer, e.InLevel)+" level and above")
 	}
 	words := e.Name + " (" + strings.Join(facts, ", ") + ")"
 	if e.Unavailable == "" {
@@ -270,6 +270,16 @@ func entryWords(offer Options, e GrantEntry, level string) string {
 		}
 	}
 	return words
+}
+
+// inLevelName is the one level a catalogue entry names as the lowest holding
+// it ([GrantEntry.InLevel]), by the vendor's name for it, its id where the
+// offer names none.
+func inLevelName(offer Options, id string) string {
+	if l, _, ok := offer.Level(id); ok && l.Name != "" {
+		return l.Name
+	}
+	return id
 }
 
 // grantableWords counts the catalogue beside a seat's level.
