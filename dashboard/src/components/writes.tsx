@@ -1083,12 +1083,8 @@ function AskAnswer({
     onOpenChange(false);
   };
 
-  // A GRANT IS PREVIEWED BEFORE IT IS ANSWERED (ADR-0118), so a person sees
-  // exactly what they grant. An access key's grant is applied by its dialog
-  // and only then answered; an agent's request's grant is answered alone,
-  // since choosing its option is the approval and the engine saves the grant
-  // before it posts the answer. Either way the agent is never told yes with
-  // nothing changed.
+  // A grant is previewed before it is answered (ADR-0118): an access key's is
+  // applied first; a request's is answered alone, and the engine saves it first.
   const [granting, setGranting] = useState<string | null>(null);
   const send = async (choice: string) => {
     if ((isAccessOption(choice) || requestOption(choice)) && options.some((o) => o.id === choice)) {
@@ -1307,8 +1303,7 @@ function AskAnswer({
     setGranting(null);
     void answer(granting);
   };
-  // ONE WRITE, THE ANSWER: the dialog stays open on a refusal, which it draws
-  // under the grant, and closes once the question is answered.
+  // One write, the answer; the dialog stays open on a refusal.
   const grantRequested = async () => {
     if (granting && (await answer(granting))) setGranting(null);
   };

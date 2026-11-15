@@ -1,14 +1,7 @@
 /**
- * An agent's request for one permission at an integration, answered from its
- * question (ADR-0118): choosing "Grant for this change" or "Add to this agent
- * permanently" opens what the grant will be, built from the request as the
- * engine stored it, never from the question's words. Grant sends one write,
- * the answer itself: choosing the request's grant option is the approval, so
- * the engine saves the grant from the stored request and only then posts the
- * answer, and the agent is told yes only once it holds the permission. The
- * transport confirms who the person is where the engine asks it (an
- * administrator's access write, and in person for a permission that changes
- * things) and sends the same answer again.
+ * An agent's grant request answered from its question (ADR-0118): shows the grant
+ * from the stored request, and Grant sends one write, the answer, which the engine
+ * saves the grant for first. The transport confirms a stale sign-in and resends.
  */
 
 import { useEffect, useState, type ReactNode } from "react";
@@ -54,9 +47,8 @@ export function RequestGrantDialog({
           `/setup/access/requests/${pathSegment(option.id)}`,
           ctl.signal,
         )) as AccessGrantRequest;
-        // THE AGENTS TAB'S OWN ROUTE, read as the tab reads it (`accessApi`)
-        // to draw the grant, each path written out so the dev server's proxy
-        // gate reads it. Nothing is saved through it.
+        // The Agents tab's route, read only to draw the grant; paths written out
+        // for the dev server's proxy gate.
         const answer = (await rest.get(
           `/setup/integrations/${pathSegment(request.kind)}/access`,
           ctl.signal,

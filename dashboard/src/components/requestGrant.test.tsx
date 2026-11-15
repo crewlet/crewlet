@@ -1,10 +1,6 @@
 /**
- * An agent's request for one integration permission, answered from its
- * question (ADR-0118). The invariants: choosing a grant option shows the grant
- * built from the stored request and sends nothing; Grant sends one write, the
- * answer choosing that option, which the engine saves the grant for before it
- * posts the answer, and the dashboard saves nothing itself; a refused answer
- * keeps the grant open with the refusal under it; declining answers at once.
+ * A grant request answered from its question (ADR-0118): choosing shows the grant
+ * and sends nothing; Grant sends one write, the answer; a refusal keeps it open.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
