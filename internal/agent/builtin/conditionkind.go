@@ -34,10 +34,44 @@ const (
 // classed: `sandbox_` and the class ([sandbox.Why]).
 const SandboxKindPrefix = "sandbox_"
 
+// InfrastructureKind reports whether kind ([ConditionKind]) is a condition of
+// the infrastructure the engine runs on: a store, a log, a broker, a disk, the
+// fleet's nodes and what they hold. Nothing a piece of work carries causes one,
+// so a failure on one is the failing node's, never the work's: a seat's mail
+// that failed on one is handed back as the node's own (internal/engine's
+// nakFailure), and a delivery it spends is kept with its group's unhandled
+// deliveries rather than with its poison.
+//
+// FALSE FOR THE THREE KINDS THE WORK CAN CAUSE: a coding sandbox's class
+// ([SandboxKindPrefix]), whose provider refusing a key, a setup that fails or
+// a limit reached can follow from what was asked of it, and a deadline
+// (`timeout`) and an abandoned wait (`canceled`), the provider layer's words
+// for a call that ran past its own wall clock or that its caller gave up on,
+// which the length of what was asked decides as much as the node does. False
+// for anything that is no kind of a condition.
+//
+// EVERY KIND THIS PACKAGE DECLARES IS NAMED HERE, on one side, and
+// TestEveryConditionKindIsTheNodesOrTheWorks holds each to it: a new kind
+// lands on the side its author chose rather than on a default.
+func InfrastructureKind(kind string) bool {
+	switch kind {
+	case KindStateLogUnavailable, KindFileStoreFull, KindFileStoreUnavailable,
+		KindCoordinationUnavailable, KindNoDataNode, KindEstateClosed,
+		KindStoreBusy, KindQueueNotLive, KindQueueUnavailable,
+		KindExecutorUnanswered, KindFleetKeysDiffer, KindFleetBuildsDiffer,
+		KindDiskFull, KindDiskReadOnly, KindDiskFailed, KindOpenFilesExhausted:
+		return true
+	}
+	return false
+}
+
 // ConditionKind is the kind a failed phase or turn records err under when err
 // is a condition of the environment ([Condition]), and false for a fault. The
 // same classification the tools and the API answer a condition by, so a
-// record's kind and a refusal's words cannot disagree about what failed.
+// record's kind and a refusal's words cannot disagree about what failed; and
+// the one a failure is told as the failing node's or the work's by
+// ([InfrastructureKind]), so where a delivery that failed is kept cannot
+// disagree with what its record says failed either.
 func ConditionKind(err error) (string, bool) {
 	said, ok := condition(err)
 	return said.kind, ok

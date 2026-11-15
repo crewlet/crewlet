@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -10,8 +11,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -442,6 +447,39 @@ func TestADispatchThatCannotReadItsRebaseDoesNotRun(t *testing.T) {
 	}
 	if reason, abandon := turn.Abandon(res, err); abandon {
 		t.Fatalf("the refused turn would be abandoned (%s) rather than redelivered", reason)
+	}
+}
+
+// AND THE DISPATCHER HANDS THE DELIVERY BACK AS THE NODE'S OWN. A coordination
+// store that did not answer is nothing the mail did, but the queue cannot tell
+// it ([queue.NodeFault] reads its own broker and the delivery's context): read
+// as a condition of the infrastructure, by the classification the turn's
+// record reads ([builtin.InfrastructureKind]), it is NAK'd as the node's
+// ([queue.NakNode]), so a backlog an outage spends is kept with the group's
+// unhandled deliveries and never with its poison. A real dispatch, so the
+// failure is the one runTurn returns, wrapped as the dispatcher wraps it.
+//
+// Mutation: drop the infrastructure's conditions from nakFailure's test and
+// the delivery is NAK'd as the mail's.
+func TestADispatchThatCannotReadItsRebaseIsHandedBackAsTheNodes(t *testing.T) {
+	t.Parallel()
+	outage := fmt.Errorf("%w: read the rebase: nats: timeout", coord.ErrUnavailable)
+	e := &Engine{backends: &Backends{Fleet: failingFleet{memFleet: coordmem.NewFleet(), err: outage}}}
+	e.epoch.current.Store(newRebaseRig(t).company)
+	d := &Dispatcher{Ledgered: func(string) bool { return true }, Turn: e.runTurn}
+	// A BACKLOG'S MAIL, published a month ago, so its work began past the
+	// horizon and the turn reads where its writes are minted.
+	backlog := events.New(types.TaskAssigned{TaskID: "task-1"}, events.TraceContext{})
+	backlog.Timestamp = time.Now().UTC().Add(-31 * 24 * time.Hour)
+	got := d.Dispatch(t.Context(), "swe", []*events.Event{backlog})
+	if got.Outcome != queue.OutcomeNak {
+		t.Fatalf("outcome = %s (%s), want a NAK for a retry", got.Outcome, got.Reason)
+	}
+	if !errors.Is(got.Err, outage) {
+		t.Fatalf("the NAK carries %v, want the coordination store's outage", got.Err)
+	}
+	if got.FailsMessage() {
+		t.Errorf("a turn the coordination store failed is NAK'd as the mail's: %v", got.Err)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/accessreview"
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -384,13 +385,16 @@ func (r Request) Ask() []*events.Event {
 //
 // A FAILURE OF THIS NODE'S IS NEVER THE MAIL'S OWN. Where the requeue of a
 // partition's tail or of a park's delivery fails, or the turn does, the NAK
-// asks [queue.NodeFault] through [nakFailure], so an outage, a queue no longer
-// live or a stop or drain that ended the delivery's context is NAK'd as the
-// node's ([queue.NakNode]) and a delivery whose budget it spends is kept with
-// its group's unhandled deliveries, never with its poison. A dispatcher built
-// with no requeue path NAKs that tail and that park as the mail's, for a
-// wiring defect rather than a requeue that failed, and the engine builds none:
-// it fills in [Dispatcher.Park] where its caller left it nil.
+// asks [queue.NodeFault] and the infrastructure's conditions
+// ([builtin.InfrastructureKind]) through [nakFailure], so an outage, a queue
+// no longer live, a stop or drain that ended the delivery's context, or a
+// coordination store, a state log, a store or a disk that failed the turn is
+// NAK'd as the node's ([queue.NakNode]) and a delivery whose budget it spends
+// is kept with its group's unhandled deliveries, never with its poison. A
+// dispatcher built with no requeue path NAKs that tail and that park as the
+// mail's, for a wiring defect rather than a requeue that failed, and the
+// engine builds none: it fills in [Dispatcher.Park] where its caller left it
+// nil.
 //
 // NO PANIC LEAVES THIS FRAME. A phase that panics is recovered inside the turn
 // loop and comes back as an ordinary broken turn; anything else that panics
@@ -1006,9 +1010,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// See workedthrough.go.
 			//
 			// THE NODE'S OWN where the queue tells the failure as this
-			// node's ([nakFailure]): a turn a drain ended, or one whose
-			// publish the broker did not answer, failed for nothing the
-			// mail did, so a delivery it spends is never kept as poison.
+			// node's, or it is a condition of the infrastructure
+			// ([nakFailure]): a turn a drain ended, one whose publish the
+			// broker did not answer, or one that could not read where its
+			// writes are minted from a coordination store that did not
+			// answer, failed for nothing the mail did, so a delivery it
+			// spends is never kept as poison.
 			return nakFailure(ctx, fmt.Errorf("engine: turn for %s: %w", handle, err))
 		}
 		return d.abandon(ctx, handle, req, err, reason)
@@ -1617,23 +1624,44 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 // nakFailure NAKs a seat's mail that failed, for a retry: as THIS NODE'S OWN
 // failure ([queue.NakNode]) where the queue tells it is one ([queue.NodeFault]:
 // a broker that did not answer, a queue no longer live, a delivery whose
-// context this node's stop or drain ended), and as the mail's ([queue.Nak])
-// otherwise. Both return the delivery on the same backoff behind its
-// conversation's newer mail and spend the same budget; what differs is where a
-// delivery whose budget is spent is kept ([queue.RetiredTo]). Counted as the
-// mail's, an outage or a drain spending it put a healthy message with its
-// group's poison, which nothing replays; as the node's, it is kept with the
-// group's unhandled deliveries, as one no member handled.
+// context this node's stop or drain ended) or the failure is a condition of
+// the infrastructure the engine runs on ([builtin.InfrastructureKind]), and as
+// the mail's ([queue.Nak]) otherwise. Both return the delivery on the same
+// backoff behind its conversation's newer mail and spend the same budget; what
+// differs is where a delivery whose budget is spent is kept
+// ([queue.RetiredTo]). Counted as the mail's, an outage or a drain spending it
+// put a healthy message with its group's poison, which nothing replays; as the
+// node's, it is kept with the group's unhandled deliveries, as one no member
+// handled.
+//
+// THE INFRASTRUCTURE'S CONDITIONS are the ones the queue cannot tell: a
+// coordination store that did not answer (a turn whose work began past the
+// operation ledger's horizon reads where its writes are minted before it runs,
+// [rebaseFor]), a state log, a data node or a store that could not take the
+// write, a file store, a disk, the fleet's nodes holding different keys or
+// builds. Read by the classification every failed turn's record and every
+// tool's refusal reads ([builtin.ConditionKind]), never by a list of its own,
+// so a delivery is kept where its record says it failed. A deadline, an
+// abandoned wait and a coding sandbox's class stay the mail's: what it asked
+// can cause each.
 //
 // The requeue of a partition's tail, a park's requeue and a turn's failure all
 // answer through it, so a failure one of them keeps out of the poison is one
-// the others keep out too, and the test is the one internal/notify's wakes and
-// the seat control topic ask ([controlOutcome]).
+// the others keep out too, and the queue's test is the one internal/notify's
+// wakes and the seat control topic ask ([controlOutcome]).
 func nakFailure(ctx context.Context, err error) queue.Result {
-	if queue.NodeFault(ctx, err) {
+	if queue.NodeFault(ctx, err) || infrastructureFailure(err) {
 		return queue.NakNode(err)
 	}
 	return queue.Nak(err)
+}
+
+// infrastructureFailure reports whether err is a condition of the
+// infrastructure the engine runs on, by the one classification of conditions
+// ([builtin.ConditionKind], [builtin.InfrastructureKind]).
+func infrastructureFailure(err error) bool {
+	kind, ok := builtin.ConditionKind(err)
+	return ok && builtin.InfrastructureKind(kind)
 }
 
 // dropWorked removes the events the completion ledger has already recorded.
