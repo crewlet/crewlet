@@ -31,6 +31,16 @@
  * whether it asked them anything. The three EMPTY answers are three different
  * facts and keep three sentences ([NobodyWoken]).
  *
+ * # A long thread is read from its newest entry
+ *
+ * A standing task collects a comment a day, each a report, and read whole
+ * they made the page a scroll past dozens of reports to reach the latest. So
+ * a comment much longer than a screenful is folded behind Show more (the
+ * kit's `Clamp`), except the newest, which is the one a reader opened the
+ * task for; and once the thread runs past a screen or two, the head offers
+ * Jump to latest, which lands on the newest entry with the box to answer it
+ * under it.
+ *
  * # An ask is answered where it stands
  *
  * An open ask put to the reader carries its answer on its own row
@@ -49,9 +59,10 @@
  * with one sentence that says what would open them.
  */
 
-import { useMemo, useState } from "react";
-import { Button, EmptyState, SegmentedControl, Skeleton, Tag } from "@crewlethq/ui";
+import { useMemo, useRef, useState } from "react";
+import { Button, Clamp, EmptyState, SegmentedControl, Skeleton, Tag } from "@crewlethq/ui";
 import {
+  ArrowDownGlyph,
   ArrowRightGlyph,
   BellGlyph,
   CheckGlyph,
@@ -82,6 +93,7 @@ import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import {
+  fmtAt,
   fmtCount,
   fmtDateCompact,
   fmtDateTime,
@@ -125,6 +137,16 @@ const TAB_LABEL: Record<ActivityTab, string> = {
   turns: "Agent turns",
   changes: "Changes",
 };
+
+/**
+ * How tall a comment may stand before it is folded behind Show more: about
+ * fifteen lines of the thread's body text, a screenful's share beside its
+ * neighbours. The kit folds only what is a quarter longer than this.
+ */
+const COMMENT_FOLD = "22rem";
+
+/** How many entries make a thread long enough to offer Jump to latest. */
+const LONG_THREAD = 6;
 
 /** What each tab says when there is nothing in it. */
 const EMPTY: Record<ActivityTab, string> = {
@@ -306,6 +328,22 @@ export function Activity({
     ? { kind: "reply", replyTo: replyTo.id }
     : { kind: "comment" };
   const assignee = item.assignee ? (chrome.seatName?.(item.assignee) ?? item.assignee) : "";
+  // THE NEWEST COMMENT DRAWN, which stays open: the one a reader came for.
+  const newestComment = useMemo(() => {
+    for (let i = drawn.entries.length - 1; i >= 0; i--) {
+      const entry = drawn.entries[i];
+      if (entry?.kind === "comment") return entry.comment.id;
+    }
+    return "";
+  }, [drawn.entries]);
+  // JUMP TO LATEST lands on the newest entry, and the keyboard with it.
+  const feed = useRef<HTMLOListElement | null>(null);
+  const jumpToLatest = () => {
+    const last = feed.current?.lastElementChild;
+    if (!(last instanceof HTMLElement)) return;
+    last.scrollIntoView({ block: "start" });
+    last.querySelector<HTMLElement>("[data-entry]")?.focus({ preventScroll: true });
+  };
 
   return (
     <section className="task-activity" aria-labelledby="task-activity-title">
@@ -314,6 +352,16 @@ export function Activity({
           Activity
         </h2>
         <span className="spacer" />
+        {!loading && drawn.entries.length >= LONG_THREAD && (
+          <Button
+            size="small"
+            variant="ghost"
+            leadingIcon={<ArrowDownGlyph size="sm" />}
+            onClick={jumpToLatest}
+          >
+            Jump to latest
+          </Button>
+        )}
         {!asked && (
           <SegmentedControl<ActivityTab>
             semantics="radio"
@@ -363,7 +411,7 @@ export function Activity({
       ) : drawn.entries.length === 0 && !runningHere ? (
         <p className="muted task-activity-empty">{EMPTY[asked ? "comments" : tab]}</p>
       ) : (
-        <ol className="task-feed">
+        <ol ref={feed} className="task-feed">
           {drawn.entries.map((entry) => (
             <FeedEntry
               key={entry.id}
@@ -373,6 +421,7 @@ export function Activity({
               index={index}
               now={now}
               onReply={asked ? undefined : setReplyTo}
+              newest={entry.kind === "comment" && entry.comment.id === newestComment}
               answer={
                 entry.kind === "comment" && mine.has(entry.comment.id)
                   ? {
@@ -463,6 +512,7 @@ function FeedEntry({
   now,
   onReply,
   answer,
+  newest,
 }: {
   entry: Entry;
   item: WorkItem;
@@ -473,6 +523,8 @@ function FeedEntry({
   onReply: ((c: WorkComment) => void) | undefined;
   /** Set on an open ask put to the reader: its answer, on its own row. */
   answer: AnswerHere | undefined;
+  /** The newest comment drawn, which is never folded. */
+  newest: boolean;
 }) {
   switch (entry.kind) {
     case "change":
@@ -486,6 +538,7 @@ function FeedEntry({
           now={now}
           onReply={onReply}
           answer={answer}
+          newest={newest}
         />
       );
     case "turn":
@@ -563,7 +616,7 @@ function ChangeRow({
       <span className="task-entry-mark" aria-hidden="true">
         <NamedGlyph name={changeMark(record.kind)} size="sm" />
       </span>
-      <div className="task-entry-line">
+      <div className="task-entry-line" data-entry tabIndex={-1}>
         <p>
           <b>{actorOf(record, chrome)}</b> {what}
           {why && <>: “{why}”</>}{" "}
@@ -610,6 +663,7 @@ function CommentRow({
   now,
   onReply,
   answer,
+  newest,
 }: {
   comment: WorkComment;
   chrome: RowChrome;
@@ -617,6 +671,8 @@ function CommentRow({
   now: number;
   onReply: ((c: WorkComment) => void) | undefined;
   answer: AnswerHere | undefined;
+  /** The newest comment in the thread: drawn open, never folded. */
+  newest: boolean;
 }) {
   // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity directory
   // binds to a seat comments AS that seat, so the author is who they are;
@@ -639,15 +695,19 @@ function CommentRow({
           decorative
         />
       </span>
-      <article className="task-comment" aria-label={`${name}'s comment`}>
+      <article className="task-comment" aria-label={`${name}'s comment`} data-entry tabIndex={-1}>
         <header className="task-comment-head">
           <b>{name}</b>
+          {/* THE MINUTE, AND THE DAY WHEN IT IS NOT TODAY ("09:41", "Sat, Nov
+              7, 09:41"), the year only when it is not this one: a standing
+              task collects several remarks a day, and a date alone could not
+              tell two of them apart. */}
           <time
             className="task-when"
             dateTime={comment.created_at}
             title={fmtDateTime(comment.created_at)}
           >
-            {fmtDateCompact(comment.created_at, now)}
+            {fmtAt(comment.created_at, now)}
           </time>
           {comment.updated_at && <span className="task-when">(edited)</span>}
           {comment.ask && (
@@ -668,15 +728,17 @@ function CommentRow({
             </Button>
           )}
         </header>
-        <div className="prose md task-comment-body">
-          {comment.removed ? (
-            <span className="muted">(this comment was removed)</span>
-          ) : comment.body.trim() ? (
-            renderMarkdown(comment.body)
-          ) : chosen ? (
-            <p>{`Chose “${chosen}”.`}</p>
-          ) : null}
-        </div>
+        <Clamp className="task-comment-fold" height={COMMENT_FOLD} defaultOpen={newest}>
+          <div className="prose md task-comment-body">
+            {comment.removed ? (
+              <span className="muted">(this comment was removed)</span>
+            ) : comment.body.trim() ? (
+              renderMarkdown(comment.body)
+            ) : chosen ? (
+              <p>{`Chose “${chosen}”.`}</p>
+            ) : null}
+          </div>
+        </Clamp>
         {comment.decision && (
           <div className="task-comment-decision">
             <span className="task-lbl">{comment.decision.question}</span>
@@ -787,7 +849,12 @@ export function TurnCard({
           decorative
         />
       </span>
-      <article className="task-turn" aria-label={turn.ordinal ? `Turn ${turn.ordinal}` : "A turn"}>
+      <article
+        className="task-turn"
+        aria-label={turn.ordinal ? `Turn ${turn.ordinal}` : "A turn"}
+        data-entry
+        tabIndex={-1}
+      >
         <header className="task-turn-head">
           <b>{name}</b>
           <span className="muted">
@@ -904,6 +971,7 @@ function LiveRow({
       </span>
       <a
         className="task-live"
+        data-entry
         href={turn ? watchHref(turn) : href(["live"])}
         aria-label={`${name} is on turn ${ordinal} of ${item.key}. Watch live.`}
       >

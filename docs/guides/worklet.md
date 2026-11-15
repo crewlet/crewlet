@@ -1716,7 +1716,10 @@ drawn for everybody and held with that reason for anybody without it.
   announced change has **Who this reached**: the people it woke and why. The
   three histories are read a page at a time, and **Earlier activity** reads
   further back — the merged list only ever shows a stretch of time that is
-  complete in all three. The rail ends with **what this task has cost** —
+  complete in all three. A long comment is folded behind **Show more**,
+  except the newest, and a thread of six entries or more offers **Jump to
+  latest**, so a standing task that collects a report a day opens on the
+  latest one. The rail ends with **what this task has cost** —
   turns, tokens and agent time, from the task's own counters — and its
   hand-offs against the engine's budget.
 
