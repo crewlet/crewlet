@@ -517,6 +517,14 @@ func newProbeRig(t *testing.T, model llm.Provider) *probeRig {
 	r.e = &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}, clock: r.clock}
 	r.e.epoch.current.Store(c)
 	r.e.providerParks.after = r.alarms.after
+	// EVERY SEAT HELD HERE: each park's hold names its inbox's attachment.
+	for _, handle := range []string{"lead", "pm", "qa"} {
+		id, err := r.e.seatID(handle)
+		if err != nil {
+			t.Fatalf("seatID(%s): %v", handle, err)
+		}
+		takeInbox(t, r.e, q, id)
+	}
 	return r
 }
 
@@ -772,14 +780,16 @@ func TestAnOlderProbeCallLeavesTheNewerOnesCancel(t *testing.T) {
 }
 
 // A RELEASED SEAT'S PROVIDER PARK TAKES ITS HOLD WITH IT. The release detaches
-// the seat's inbox, which drops every hold on it, and forgets the seat's parks
-// after; a park a turn took in between (a resume, or a delivery the release did
-// not wait for) holds an inbox the detach is done with, and forgotten without
-// its hold, it kept the seat deaf on this node, with no park left to lift it.
-// The probe rig's inbox has no attachment, as a released seat's has not.
+// the seat's inbox, which drops every hold on it and ends the attachment they
+// were taken for, and forgets the seat's parks after; a park a turn asks for in
+// between (a resume, or a delivery the release did not wait for) names that
+// ended attachment, and the queue refuses it. Taken anyway, as it was when
+// holds were keyed by the subscription alone, its hold kept the seat deaf on
+// this node once it came back, with no park left to lift it.
 //
-// Mutation: forget the park without lifting its hold (seatParks.forget), and
-// the provider's hold stays on the seat's inbox.
+// Mutation: take a park's hold for the inbox's current attachment rather than
+// the one the seat held, and the park asked between the detach and the forget
+// holds the seat's inbox.
 func TestAReleasedSeatsProviderParkTakesItsHoldWithIt(t *testing.T) {
 	t.Parallel()
 	r := newProbeRig(t, answers{})
@@ -789,15 +799,32 @@ func TestAReleasedSeatsProviderParkTakesItsHoldWithIt(t *testing.T) {
 		t.Fatalf("the premise: the park holds the inbox under %q, holds %v", pauseReasonProvider, holds)
 	}
 
+	// THE RELEASE'S DETACH, and a park asked before the release tells the
+	// engine.
+	if _, err := r.q.Detach(t.Context(), inbox, group); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: parkedAt.Add(time.Hour),
+		Err: errors.New("You've hit your 5-hour limit")}
+	limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+		Failures: []error{refusal}, Err: refusal})
+	if !limited {
+		t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+	}
+	if _, parked, err := r.e.providerPark(t.Context(), "lead", limit); !errors.Is(err, queue.ErrAttachmentGone) || parked {
+		t.Fatalf("a park asked once the release detached the inbox = %v, %v; want it refused", parked, err)
+	}
+	r.e.detachInbox(seatOf("lead"))
 	r.e.forgetProviderPark(t.Context(), seatOf("lead"))
 	if holds := r.q.PauseHolds(inbox, group); slices.Contains(holds, pauseReasonProvider) {
-		t.Fatalf("the released seat's inbox is still held %v by the park it forgot", holds)
+		t.Fatalf("the released seat's inbox is still held %v by a park asked after its detach", holds)
 	}
 }
 
 // A PARK ITS SEAT'S RELEASE FORGOT BEFORE THE PARK WAS WHOLE IS UNDONE ALL THE
 // SAME. The release's forget can land between a park's take and the park's own
-// look at the seat: it drops the record and lifts the hold, and the park joins
+// look at the seat: it drops the record (the release's detach having dropped
+// the hold), and the park joins
 // its chain's probe and says the seat parked after it. With no record left to
 // release, the park that finds its seat gone still leaves the probe and says
 // the seat released: kept on the probe, the seat's alarm went on calling the

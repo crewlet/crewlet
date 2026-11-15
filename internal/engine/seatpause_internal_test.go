@@ -88,6 +88,18 @@ func (s *seatTurns) seen() []string {
 	return slices.Clone(s.work)
 }
 
+// takeInbox records seat's inbox attachment on q with e, as a node's
+// acquisition hands it to the seat's preparation before the attach: every hold
+// e takes on the inbox names it.
+func takeInbox(t *testing.T, e *Engine, q queue.EventQueue, seat uuid.UUID) {
+	t.Helper()
+	at, err := q.Attachment(t.Context(), topics.AgentInbox(seat), topics.AgentInboxGroup(seat))
+	if err != nil {
+		t.Fatalf("Attachment: %v", err)
+	}
+	e.attachInbox(seat, at)
+}
+
 func attachSeat(t *testing.T, e *Engine, q *memory.Queue, handle string) *seatTurns {
 	t.Helper()
 	turns := &seatTurns{}
@@ -113,6 +125,7 @@ func attachSeat(t *testing.T, e *Engine, q *memory.Queue, handle string) *seatTu
 			return turn.Result{}, nil
 		},
 	}
+	takeInbox(t, e, q, seatOf(handle))
 	if err := q.SubscribeBatch(t.Context(), topics.AgentInbox(seatOf(handle)),
 		topics.AgentInboxGroup(seatOf(handle)),
 		func(ctx context.Context, evs []*events.Event) queue.Result {
@@ -212,7 +225,7 @@ func TestAPausedSeatParksAndHoldsItsInboxWhenADeliveryRacesTheHold(t *testing.T)
 func TestAPausedSeatIsAttachedUnderItsHold(t *testing.T) {
 	t.Parallel()
 	e, _, fleet := pausingEngine(t)
-	if got := e.attachHolds(ceoSeat); len(got) != 0 {
+	if got := e.attachHolds(ceoSeat, noSeatInbox); len(got) != 0 {
 		t.Fatalf("attachHolds(unpaused) = %v, want none", got)
 	}
 	pauseSeat(t, fleet, ceoSeat, false)
@@ -220,7 +233,7 @@ func TestAPausedSeatIsAttachedUnderItsHold(t *testing.T) {
 		_, paused, _ := e.pauseOf(ceoSeat)
 		return paused
 	})
-	if got := e.attachHolds(ceoSeat); !slices.Equal(got, []string{string(inbox.HoldSeatPaused)}) {
+	if got := e.attachHolds(ceoSeat, noSeatInbox); !slices.Equal(got, []string{string(inbox.HoldSeatPaused)}) {
 		t.Errorf("attachHolds(paused) = %v, want the pause's hold", got)
 	}
 }

@@ -105,6 +105,16 @@ roles:
 	}
 	e := &Engine{backends: &Backends{Queue: q}, mode: statelog.ModeNormal}
 	e.epoch.current.Store(company)
+	// EVERY SEAT HELD HERE, as a node that took them hands each seat's
+	// preparation the attachment of its inbox: every hold the engine takes
+	// names it.
+	for _, handle := range []string{"ceo", "cto"} {
+		id, err := e.seatID(handle)
+		if err != nil {
+			t.Fatalf("seatID(%s): %v", handle, err)
+		}
+		takeInbox(t, e, q, id)
+	}
 	return e, q
 }
 

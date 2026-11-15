@@ -10,7 +10,7 @@ func (n *Node) ReleaseSeatTurnHoldForTest(handle string) {
 	held := n.running[handle]
 	n.mu.Unlock()
 	if held != nil {
-		n.holdInbox(context.Background(), handle, held.hold, false)
+		n.holdInbox(context.Background(), held, false)
 	}
 }
 

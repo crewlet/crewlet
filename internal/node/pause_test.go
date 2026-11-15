@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // pausedHold is the hold a person's pause takes, spelled as the engine spells
@@ -35,7 +37,7 @@ func TestPlacementMovingAPausedSeatKeepsItPaused(t *testing.T) {
 			paused := true
 			// ASKED BY THE SEAT'S ID, the key a pause is kept under: a
 			// hold answered for any other seat would hold the wrong mail.
-			f.attachHolds = func(id uuid.UUID) []string {
+			f.attachHolds = func(id uuid.UUID, _ queue.Attachment) []string {
 				mu.Lock()
 				defer mu.Unlock()
 				if paused && id == seatID("ceo") {

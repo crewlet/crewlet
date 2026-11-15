@@ -496,14 +496,9 @@ func (e *Engine) reconcileBudgetParks(ctx context.Context, next *Company) {
 // ([seatParks.forget]), and what its parks recorded of a launch's floor for its
 // deliveries' next launches here ([floorWaits]): the record is the park's, and
 // the seat's next holder decides its own.
-//
-// THE RECORD FIRST, before the park's hold is lifted: a lifted hold may hand
-// the seat's mail to a handler at once (the in-memory queue drains into it
-// synchronously), and a launch there would read the record the release is
-// dropping.
-func (e *Engine) forgetBudgetPark(ctx context.Context, seat uuid.UUID) {
+func (e *Engine) forgetBudgetPark(seat uuid.UUID) {
 	e.floorWaits.forget(seat)
-	e.budgetParks.forget(ctx, e, budgetParkSpec, seat)
+	e.budgetParks.forget(seat)
 }
 
 // budgetDeliveryGone drops what handle's seat's parks recorded of a launch

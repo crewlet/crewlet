@@ -37,8 +37,8 @@ func recorded(e *Engine) []string {
 	e.modelHolds.mu.Lock()
 	defer e.modelHolds.mu.Unlock()
 	var out []string
-	for _, handle := range e.modelHolds.seats {
-		out = append(out, handle)
+	for _, hold := range e.modelHolds.seats {
+		out = append(out, hold.handle)
 	}
 	slices.Sort(out)
 	return out

@@ -173,7 +173,7 @@ type fleet struct {
 
 	// attachHolds is every node's [node.Config.AttachHolds], for the cases
 	// about a seat a person paused. Set before any node starts.
-	attachHolds func(seat uuid.UUID) []string
+	attachHolds func(seat uuid.UUID, inbox queue.Attachment) []string
 
 	// queues is each started node's own broker client, by node id: a pause
 	// hold lives on the client that took it.

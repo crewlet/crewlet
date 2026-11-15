@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/redact"
 )
@@ -1096,9 +1097,10 @@ type Coordinator struct {
 	// retries are the owed answers this node is retrying the resume (or
 	// the hand-back) of, by turn id; owed is which of them each seat owes,
 	// which with the seat's holding count is what its inbox hold is taken
-	// for; held whether that hold is applied, and holdBusy, holdDirty and
-	// holdGen the serialisation [Coordinator.reconcileHold] runs under. All
-	// under mu.
+	// for; held whether that hold is applied, inboxes the attachment of each
+	// seat's inbox it is taken for ([Coordinator.RecoverSeat]), and holdBusy,
+	// holdDirty and holdGen the serialisation [Coordinator.reconcileHold]
+	// runs under. All under mu.
 	retries map[string]*answerRetry
 	// releases are the claims' hand-backs this node is making or owes, by
 	// turn id, recorded before each is sent, each with its write in its
@@ -1136,6 +1138,7 @@ type Coordinator struct {
 	refused   map[string]refusedCompletion
 	owed      map[string]map[string]struct{}
 	held      map[string]bool
+	inboxes   map[string]queue.Attachment
 	holdBusy  map[string]bool
 	holdDirty map[string]bool
 	holdGen   map[string]uint64
@@ -1309,6 +1312,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		refused:      map[string]refusedCompletion{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
+		inboxes:      map[string]queue.Attachment{},
 		holdBusy:     map[string]bool{},
 		holdDirty:    map[string]bool{},
 		holdGen:      map[string]uint64{},
@@ -6259,6 +6263,12 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 
 // RecoverSeat re-attaches to a seat's still-active runs as this node claims it.
 //
+// inbox is the attachment of the seat's inbox this node is about to make
+// ([queue.Attachment]): every hold of the seat's inbox from here, this
+// recovery's own included, is taken for it, so one decided while this node
+// held the seat before and asked after that holding's release is refused by
+// the queue rather than carried onto this one (seathold.go).
+//
 // PER-SEAT, and inside the acquire hook, because a fleet-wide boot scan is
 // wrong twice over: every node would re-mark and reap runs belonging to seats
 // its peers own, and a node that claims a seat LATER — a takeover, not a boot
@@ -6308,7 +6318,11 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 // held the seat twice, a question was counted twice, the seat's mail offered
 // to an answer match with nothing more to answer, and a tail a recount had
 // counted kept the seat held after its reap.
-func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epoch int64) error {
+func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epoch int64,
+	inbox queue.Attachment) error {
+	// THE ATTACHMENT FIRST, before anything this recovery counts can ask
+	// for the seat's hold: every hold from here is taken for it.
+	c.attachInbox(handle, inbox)
 	active, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
 		return fmt.Errorf("sandbox: recovering %s: %w", handle, err)

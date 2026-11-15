@@ -149,7 +149,7 @@ type refusedOnce struct {
 	refused bool
 }
 
-func (h *refusedOnce) Hold(ctx context.Context, handle string) error {
+func (h *refusedOnce) Hold(ctx context.Context, handle string, at queue.Attachment) error {
 	h.mu.Lock()
 	first := !h.refused
 	h.refused = true
@@ -157,11 +157,11 @@ func (h *refusedOnce) Hold(ctx context.Context, handle string) error {
 	if first {
 		return fmt.Errorf("the queue refused the hold")
 	}
-	return h.inner.Hold(ctx, handle)
+	return h.inner.Hold(ctx, handle, at)
 }
 
-func (h *refusedOnce) Release(ctx context.Context, handle string) error {
-	return h.inner.Release(ctx, handle)
+func (h *refusedOnce) Release(ctx context.Context, handle string, at queue.Attachment) error {
+	return h.inner.Release(ctx, handle, at)
 }
 
 // EACH REFUSAL NAMES WHAT IT WAITS ON, which is what lets a retried resume wait
@@ -305,7 +305,8 @@ func recoverHeld(t *testing.T, e *Engine, coordinator *sandbox.Coordinator, hand
 	if !held {
 		t.Fatalf("the premise: this node holds %s", handle)
 	}
-	if err := coordinator.RecoverSeat(t.Context(), handle, fence.Owner, fence.Epoch); err != nil {
+	if err := coordinator.RecoverSeat(t.Context(), handle, fence.Owner, fence.Epoch,
+		e.inboxOf(seatIn(t, e, handle))); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 }

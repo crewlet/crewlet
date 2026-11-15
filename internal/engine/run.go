@@ -360,6 +360,10 @@ type Engine struct {
 	// nomodels.go.
 	modelHolds modelHolds
 
+	// inboxes is the attachment of each seat's inbox this node holds, which
+	// every hold it takes on one names. See seatinbox.go.
+	inboxes seatInboxes
+
 	// budgetParks is every seat inbox this node holds because a capped
 	// token window is refusing, each with the alarm that releases it when
 	// the window turns over. See budgetpark.go.
@@ -2451,8 +2455,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
 		// parked before anything can deliver to it.
-		SeatReady: func(ctx context.Context, s placement.Seat, lease coord.Lease) error {
-			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner)
+		SeatReady: func(ctx context.Context, s placement.Seat, lease coord.Lease, inbox queue.Attachment) error {
+			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner, inbox)
 		},
 		SeatDone: e.releaseSeat,
 		// A seat that starts admitting turns re-checks at once what was

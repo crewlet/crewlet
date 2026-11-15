@@ -630,7 +630,7 @@ func TestASeatThatMovesWhileItsExecutorLaunchesIsHandedOn(t *testing.T) {
 					}
 				}
 				if tc.recover {
-					if err := successor.RecoverSeat(ctx, seat.Handle(), "node-b:1", 7); err != nil {
+					if err := successor.RecoverSeat(ctx, seat.Handle(), "node-b:1", 7, noSeatInbox); err != nil {
 						t.Errorf("the next holder's recovery: %v", err)
 					}
 				}
@@ -1483,3 +1483,8 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 	}
 	return bridge
 }
+
+// noSeatInbox is the zero attachment, which names none: what a case hands a
+// seat's recovery or preparation where nothing it does holds the seat's inbox,
+// or where what it reads is not the hold.
+const noSeatInbox queue.Attachment = 0

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // chatReply is a chat delivery offered as an answer: the conversation it came
@@ -115,7 +116,7 @@ type holdSpy struct {
 	log  []string
 }
 
-func (h *holdSpy) Hold(_ context.Context, handle string) error {
+func (h *holdSpy) Hold(_ context.Context, handle string, _ queue.Attachment) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.held == nil {
@@ -126,7 +127,7 @@ func (h *holdSpy) Hold(_ context.Context, handle string) error {
 	return nil
 }
 
-func (h *holdSpy) Release(_ context.Context, handle string) error {
+func (h *holdSpy) Release(_ context.Context, handle string, _ queue.Attachment) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.held, handle)
@@ -515,9 +516,9 @@ type holdStep struct {
 	at func(handle string)
 }
 
-func (h *holdStep) Hold(ctx context.Context, handle string) error {
+func (h *holdStep) Hold(ctx context.Context, handle string, inbox queue.Attachment) error {
 	h.at(handle)
-	return h.holdSpy.Hold(ctx, handle)
+	return h.holdSpy.Hold(ctx, handle, inbox)
 }
 
 // AN OWED RUN HOLDS ITS SEAT'S MAIL ONLY BEHIND A SERIES RECORDED AND ARMED TO

@@ -92,7 +92,7 @@ func (r *restartRig) answeredAfter(t *testing.T, run sandbox.PendingRun) *coord.
 	}
 	resumer := &takingResumer{}
 	next := r.w.holder(t, sandbox.Fence{Owner: after.Owner, Epoch: after.Epoch}, resumer)
-	if err := next.coordinator.RecoverSeat(t.Context(), "swe", after.Owner, after.Epoch); err != nil {
+	if err := next.coordinator.RecoverSeat(t.Context(), "swe", after.Owner, after.Epoch, noInbox); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	next.deliver(t, answerAgainst(run, "use main"))

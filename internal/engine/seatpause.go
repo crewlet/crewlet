@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -29,11 +30,12 @@ import (
 //   - HOLD THE INBOX. The moment a pause lands, this node takes the
 //     [inbox.HoldSeatPaused] hold on the seat's mailbox, and lifts it the
 //     moment the pause is lifted — so the seat's mail waits on the broker,
-//     in order, and is delivered when somebody resumes it. Taken for every
-//     paused seat rather than only the ones attached here, because a hold
-//     lives on the subscription rather than on an attachment and costs a map
-//     entry; a detach drops it, which is why the node takes it again before
-//     it attaches a paused seat it acquires ([node.Config.AttachHolds]).
+//     in order, and is delivered when somebody resumes it. Taken only for a
+//     seat this node holds, because a hold is taken for one attachment of the
+//     inbox (seatinbox.go) and a node that does not hold the seat has none to
+//     name; a detach drops it with the attachment, which is why the node that
+//     acquires a paused seat takes it again before it attaches the inbox
+//     ([node.Config.AttachHolds]).
 //   - ANSWER THE SCREENING. [inbox.Conditions.Paused] and PauseUnknown are
 //     read off this cache, so a delivery that raced the hold is held and
 //     parked rather than run, and one that arrives before this node has read
@@ -117,10 +119,11 @@ type seatPauses struct {
 	pauses map[uuid.UUID]coord.SeatPause
 
 	// held is every seat inbox this client holds under [seatPauseHold],
-	// by the seat id its mailbox is named after. RECORDED for the reason
+	// by the seat id its mailbox is named after, with the attachment the
+	// hold was taken for, which its lift names. RECORDED for the reason
 	// [modelHolds] is: which holds this client took is a fact only this
 	// process knows, and the queue contract lists none.
-	held map[uuid.UUID]struct{}
+	held map[uuid.UUID]queue.Attachment
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -165,15 +168,16 @@ func (e *Engine) seatPaused(seat uuid.UUID) (bool, error) {
 // attachHolds names the holds a seat's mailbox is attached under — see
 // [node.Config.AttachHolds]. A seat whose pause state is not yet known is
 // attached with none: the screening defers its deliveries until it is.
-func (e *Engine) attachHolds(seat uuid.UUID) []string {
+func (e *Engine) attachHolds(seat uuid.UUID, inbox queue.Attachment) []string {
 	e.pauses.mu.Lock()
 	defer e.pauses.mu.Unlock()
 	if _, paused := e.pauses.pauses[seat]; !paused {
 		return nil
 	}
-	// Recorded as HELD because the node is about to take it: the lift that
-	// arrives after the attach must know there is something to release.
-	e.recordHeldLocked(seat)
+	// Recorded as HELD because the node is about to take it, for the
+	// attachment it takes it for: the lift that arrives after the attach
+	// must know there is something to release, and on which attachment.
+	e.recordHeldLocked(seat, inbox)
 	return []string{seatPauseHold}
 }
 
@@ -192,14 +196,13 @@ func (e *Engine) holdPausedInbox(ctx context.Context, handle string) error {
 		return err
 	}
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	at, err := e.backends.Queue.Attachment(ctx, subject, group)
-	if err != nil {
-		return err
-	}
+	// FOR THE ATTACHMENT THE DELIVERY CAME IN ON, which the seat holds here
+	// until its release ends it (seatinbox.go).
+	at := e.inboxOf(seat)
 	e.pauses.mu.Lock()
 	err = e.backends.Queue.PauseTopic(ctx, subject, group, at, seatPauseHold)
 	if err == nil {
-		e.recordHeldLocked(seat)
+		e.recordHeldLocked(seat, at)
 	}
 	_, still := e.pauses.pauses[seat]
 	e.pauses.mu.Unlock()
@@ -270,12 +273,13 @@ func stopOf(err error) (coord.SeatPause, bool) {
 	return coord.SeatPause{}, false
 }
 
-// recordHeldLocked notes a hold this client took. The caller holds the lock.
-func (e *Engine) recordHeldLocked(seat uuid.UUID) {
+// recordHeldLocked notes a hold this client took, for the attachment inbox
+// names. The caller holds the lock.
+func (e *Engine) recordHeldLocked(seat uuid.UUID, inbox queue.Attachment) {
 	if e.pauses.held == nil {
-		e.pauses.held = map[uuid.UUID]struct{}{}
+		e.pauses.held = map[uuid.UUID]queue.Attachment{}
 	}
-	e.pauses.held[seat] = struct{}{}
+	e.pauses.held[seat] = inbox
 }
 
 // seatLabel is how a log line names a seat: its handle in the running company,
@@ -462,13 +466,24 @@ func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 	e.stopSeatRuns(ctx, u.Seat, *u.Pause)
 }
 
-// takePauseHoldLocked takes the hold on one paused seat's inbox. The caller
-// holds the lock; the queue call does not drain, so that is safe.
+// takePauseHoldLocked takes the hold on one paused seat's inbox, for the
+// attachment this node holds it under. The caller holds the lock; the queue
+// call does not drain, so that is safe.
+//
+// A SEAT THIS NODE DOES NOT HOLD is left alone: every node folds every pause,
+// and one whose acquisition reads the pause after this attaches the seat under
+// its hold ([Engine.attachHolds]), while one that recorded its attachment
+// before this read it is held here, before or after its attach. A seat
+// released as this runs ended the attachment, and the queue refuses the hold.
 func (e *Engine) takePauseHoldLocked(ctx context.Context, seat uuid.UUID) {
+	at := e.inboxOf(seat)
+	if at == 0 {
+		return
+	}
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	at, err := e.backends.Queue.Attachment(ctx, subject, group)
-	if err == nil {
-		err = e.backends.Queue.PauseTopic(ctx, subject, group, at, seatPauseHold)
+	err := e.backends.Queue.PauseTopic(ctx, subject, group, at, seatPauseHold)
+	if errors.Is(err, queue.ErrAttachmentGone) {
+		return
 	}
 	if err != nil {
 		// A pause fails only on a client that has stopped, which is a
@@ -477,7 +492,7 @@ func (e *Engine) takePauseHoldLocked(ctx context.Context, seat uuid.UUID) {
 		log.WarnContext(ctx, "seat_pause_hold_not_taken", "agent_id", seat.String(), "error", err)
 		return
 	}
-	e.recordHeldLocked(seat)
+	e.recordHeldLocked(seat, at)
 }
 
 // liftPauseHold releases the hold this client took on one seat, if it took
@@ -488,23 +503,19 @@ func (e *Engine) takePauseHoldLocked(ctx context.Context, seat uuid.UUID) {
 // handler does is read this copy.
 func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) {
 	e.pauses.mu.Lock()
-	_, held := e.pauses.held[seat]
+	at, held := e.pauses.held[seat]
 	delete(e.pauses.held, seat)
 	e.pauses.mu.Unlock()
 	if !held {
 		return
 	}
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	at, err := e.backends.Queue.Attachment(ctx, subject, group)
-	if err == nil {
-		err = e.backends.Queue.ResumeTopic(ctx, subject, group, at, seatPauseHold)
-	}
-	if err != nil {
+	if err := e.backends.Queue.ResumeTopic(ctx, subject, group, at, seatPauseHold); err != nil {
 		// Kept on the record, as the no-model release keeps its own, so a
 		// later lift tries again: a resume fails only on a client that has
 		// stopped.
 		e.pauses.mu.Lock()
-		e.recordHeldLocked(seat)
+		e.recordHeldLocked(seat, at)
 		e.pauses.mu.Unlock()
 		log.WarnContext(ctx, "seat_pause_not_lifted", "seat", e.seatLabel(seat),
 			"agent_id", seat.String(), "error", err,

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/origin"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -71,17 +72,28 @@ const pauseReasonNoTurnEngine = string(inbox.HoldNoTurnEngine)
 // longer names.
 // BY THE SEAT'S ID, the agent id derived from its handle (ADR-0013), which is
 // what the paused topic is named by. The handle rides along for the log lines.
+//
+// WITH THE ATTACHMENT the hold was taken for, which its lift names: a seat
+// released since ended it, and the lift then lifts nothing, never the hold a
+// later attachment of the inbox took under the same reason.
 type modelHolds struct {
 	mu    sync.Mutex
-	seats map[uuid.UUID]string
+	seats map[uuid.UUID]modelHold
+}
+
+// modelHold is one inbox's no-model pause: the seat's handle, for the log
+// lines, and the attachment the hold was taken for.
+type modelHold struct {
+	handle string
+	inbox  queue.Attachment
 }
 
 // record notes that this seat's inbox holds the no-model pause.
-func (h *modelHolds) record(id uuid.UUID, handle string) {
+func (h *modelHolds) record(id uuid.UUID, hold modelHold) {
 	if h.seats == nil {
-		h.seats = map[uuid.UUID]string{}
+		h.seats = map[uuid.UUID]modelHold{}
 	}
-	h.seats[id] = handle
+	h.seats[id] = hold
 }
 
 // holdInbox takes the hold a screening's pause-and-park names, before the park
@@ -115,14 +127,13 @@ func (e *Engine) pause(ctx context.Context, handle, reason string) error {
 		return err
 	}
 	subject, group := topics.AgentInbox(id), topics.AgentInboxGroup(id)
-	at, err := e.backends.Queue.Attachment(ctx, subject, group)
-	if err != nil {
-		return err
-	}
+	// FOR THE ATTACHMENT THE SEAT HOLDS NOW, which a release ends: a pause
+	// asked after it is refused (seatinbox.go).
+	at := e.inboxOf(id)
 	e.modelHolds.mu.Lock()
 	err = e.backends.Queue.PauseTopic(ctx, subject, group, at, pauseReasonNoTurnEngine)
 	if err == nil {
-		e.modelHolds.record(id, handle)
+		e.modelHolds.record(id, modelHold{handle: handle, inbox: at})
 	}
 	e.modelHolds.mu.Unlock()
 	if err != nil {
@@ -156,19 +167,16 @@ func (e *Engine) releaseModelHolds(ctx context.Context) {
 		return strings.Compare(a.String(), b.String())
 	})
 	for _, id := range ids {
-		handle := held[id]
+		hold := held[id]
+		handle := hold.handle
 		subject, group := topics.AgentInbox(id), topics.AgentInboxGroup(id)
-		at, err := e.backends.Queue.Attachment(ctx, subject, group)
-		if err == nil {
-			err = e.backends.Queue.ResumeTopic(ctx, subject, group, at, pauseReasonNoTurnEngine)
-		}
-		if err != nil {
+		if err := e.backends.Queue.ResumeTopic(ctx, subject, group, hold.inbox, pauseReasonNoTurnEngine); err != nil {
 			// Kept on the record, so the next release tries it again. A
 			// resume fails only on a client that has stopped, which is a
 			// process on its way out; forgetting the hold would be the one
 			// way to make it permanent.
 			e.modelHolds.mu.Lock()
-			e.modelHolds.record(id, handle)
+			e.modelHolds.record(id, hold)
 			e.modelHolds.mu.Unlock()
 			log.WarnContext(ctx, "seat_inbox_not_resumed", "handle", handle,
 				"error", err, "detail", "this seat's held work stays on its inbox "+

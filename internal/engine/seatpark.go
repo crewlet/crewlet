@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -45,10 +46,13 @@ import (
 // that have to be right for both.
 //
 // A PARK OUTLIVES NO SEAT. The seat's release detaches its inbox, which drops
-// every hold on it, and then forgets its parks; it waits for none of the turns
-// that can park the seat, so a park can land in between, or after. The forget
-// lifts the hold of a park it finds ([seatParks.forget]), and a park that finds
-// its seat gone once it is taken undoes itself.
+// every hold on it and ends the attachment each was taken for, and then forgets
+// its parks; it waits for none of the turns that can park the seat, so a park
+// can be asked for in between, or after. Its hold names the attachment the seat
+// held as it was asked (seatinbox.go), so one asked after the detach is refused
+// and records no park, the forget drops the record of one it finds
+// ([seatParks.forget]), and a park that finds its seat gone once it is taken
+// undoes itself.
 //
 // HOLDS ARE KEYED BY REASON, so two parks on one inbox (a seat whose window is
 // spent AND whose model is limited) are two holds, and neither release lifts
@@ -97,12 +101,14 @@ type seatParks[B any] struct {
 }
 
 // seatParking is one parked seat: what the park was decided under, when its
-// alarm releases it (zero for a park something else releases), and the seat's
-// handle, for the log lines.
+// alarm releases it (zero for a park something else releases), the attachment
+// of the seat's inbox its hold was taken for, which its release names, and the
+// seat's handle, for the log lines.
 type seatParking[B any] struct {
 	handle string
 	basis  B
 	until  time.Time
+	inbox  queue.Attachment
 	alarm  alarm
 }
 
@@ -127,16 +133,17 @@ func (p *seatParks[B]) take(ctx context.Context, e *Engine, spec parkSpec, seat 
 	handle string, basis B, until time.Time, why string) error {
 
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	at, err := e.backends.Queue.Attachment(ctx, subject, group)
-	if err != nil {
-		return err
-	}
+	// FOR THE ATTACHMENT THE SEAT HOLDS NOW: one its release has ended is
+	// refused, so no park is recorded for a seat already let go
+	// (seatinbox.go).
+	at := e.inboxOf(seat)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err := e.backends.Queue.PauseTopic(ctx, subject, group, at, spec.hold); err != nil {
 		return err
 	}
-	p.recordLocked(ctx, e, spec, seat, &seatParking[B]{handle: handle, basis: basis, until: until}, why)
+	p.recordLocked(ctx, e, spec, seat,
+		&seatParking[B]{handle: handle, basis: basis, until: until, inbox: at}, why)
 	return nil
 }
 
@@ -229,11 +236,7 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 	p.mu.Unlock()
 
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	at, err := e.backends.Queue.Attachment(ctx, subject, group)
-	if err == nil {
-		err = e.backends.Queue.ResumeTopic(ctx, subject, group, at, spec.hold)
-	}
-	if err != nil {
+	if err := e.backends.Queue.ResumeTopic(ctx, subject, group, parking.inbox, spec.hold); err != nil {
 		// Kept on the record with no alarm, as the no-model release keeps
 		// its own: a resume fails only on a client that has stopped, which
 		// is a process on its way out, and the record is what
@@ -244,7 +247,7 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 				p.seats = map[uuid.UUID]*seatParking[B]{}
 			}
 			p.seats[seat] = &seatParking[B]{handle: parking.handle, basis: parking.basis,
-				until: parking.until}
+				until: parking.until, inbox: parking.inbox}
 		}
 		p.mu.Unlock()
 		log.WarnContext(ctx, spec.notReleased, "seat", parking.handle,
@@ -274,38 +277,25 @@ func (p *seatParks[B]) changed(keep func(seat uuid.UUID, basis B) bool) []uuid.U
 
 // forget drops a released seat's park without resuming anything, reporting
 // whether there was one: its alarm, which would otherwise fire into a seat
-// this node no longer holds, and its hold.
+// this node no longer holds.
 //
-// THE HOLD TOO, though the seat's release DETACHED its inbox before this, and
-// a detach drops every hold on it. The release waits for none of the turns
-// that can park the seat, so a park can be taken between the detach and here,
-// and its hold is on an inbox the detach is done with: forgotten without it,
-// the hold outlived its park, and the seat, held by this node again, took no
-// mail, with no park left to lift it. A park taken after this asks for the seat
-// itself once it is taken, and undoes itself where the seat is gone
-// ([Engine.budgetPark], [Engine.providerPark]). Lifted outside the lock, as
-// every release lifts one, onto an inbox with no attachment to hand mail to; a
-// client that has stopped holds nothing, since its stop dropped every hold.
-func (p *seatParks[B]) forget(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID) (*seatParking[B], bool) {
+// NOT ITS HOLD, which there is nothing left of to lift. The seat's release
+// DETACHED its inbox before this, which dropped every hold on it and ended the
+// attachment each was taken for, and a park asked between the detach and here
+// named that ended attachment, which the queue refused, so no park was
+// recorded for it. A lift from here would name the same ended attachment and
+// lift nothing; a park taken after this asks for the seat itself once it is
+// taken, and undoes itself where the seat is gone ([Engine.budgetPark],
+// [Engine.providerPark]).
+func (p *seatParks[B]) forget(seat uuid.UUID) (*seatParking[B], bool) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	parking := p.seats[seat]
 	if parking == nil {
-		p.mu.Unlock()
 		return nil, false
 	}
 	parking.disarm()
 	delete(p.seats, seat)
-	p.mu.Unlock()
-
-	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	at, err := e.backends.Queue.Attachment(ctx, subject, group)
-	if err == nil {
-		err = e.backends.Queue.ResumeTopic(ctx, subject, group, at, spec.hold)
-	}
-	if err != nil {
-		log.DebugContext(ctx, "seat_park_hold_not_lifted", "seat", parking.handle,
-			"agent_id", seat.String(), "reason", spec.hold, "error", err)
-	}
 	return parking, true
 }
 

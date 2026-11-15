@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -426,10 +427,21 @@ func newCoordRigWith(t *testing.T, with func(*CoordinatorOptions)) *coordRig {
 
 // recoverSeat takes the seat for this rig's coordinator under owner and epoch,
 // as a seat host's acquisition does: the lease the coordinator writes on the
-// seat's behalf under from then on, and its recovery pass over the seat's runs.
+// seat's behalf under from then on, and its recovery pass over the seat's runs,
+// for the attachment [rigInbox].
 func (r *coordRig) recoverSeat(ctx context.Context, owner string, epoch int64) error {
+	return r.recoverSeatOn(ctx, owner, epoch, rigInbox)
+}
+
+// rigInbox is the attachment of the seat's inbox a rig's recovery is handed:
+// any one, since a rig's holds are taken on a spy that keeps no queue.
+const rigInbox queue.Attachment = 1
+
+// recoverSeatOn is [coordRig.recoverSeat] for the attachment inbox names.
+func (r *coordRig) recoverSeatOn(ctx context.Context, owner string, epoch int64,
+	inbox queue.Attachment) error {
 	r.coordinator.lease = leased(Fence{Owner: owner, Epoch: epoch})
-	return r.coordinator.RecoverSeat(ctx, "swe", owner, epoch)
+	return r.coordinator.RecoverSeat(ctx, "swe", owner, epoch, inbox)
 }
 
 // fireRetries runs every owed-answer attempt the coordinator has scheduled
@@ -2595,7 +2607,7 @@ func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 1000})
 	successor := rig.withResumer(t, &resumeSpy{})
 	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, _ PendingRun) {
-		if err := successor.RecoverSeat(ctx, "swe", "node-b:1", 2); err != nil {
+		if err := successor.RecoverSeat(ctx, "swe", "node-b:1", 2, rigInbox); err != nil {
 			t.Errorf("the successor's recovery: %v", err)
 		}
 	}})
@@ -2606,7 +2618,7 @@ func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
 	}
 	// The reap ended the run, and the hand-back leaves it ended.
 	rig.finished("t1")
-	if err := successor.RecoverSeat(t.Context(), "swe", "node-c:1", 3); err != nil {
+	if err := successor.RecoverSeat(t.Context(), "swe", "node-c:1", 3, rigInbox); err != nil {
 		t.Fatalf("a later recovery: %v", err)
 	}
 	if successor.SeatHeldBySandbox("swe") {

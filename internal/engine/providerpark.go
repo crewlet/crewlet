@@ -146,14 +146,14 @@ import (
 // parks ([Engine.forgetProviderPark]); it waits for none of the turns that can
 // park the seat: a lost lease detaches the inbox under a running delivery, and
 // a resume runs in no delivery at all, its review minutes long. So a park can
-// land while the seat is being released, or after. One taken after the
-// release forgot the seat's parks asks for the seat again once it is whole,
-// and undoes itself where it is gone ([Engine.unparkReleased]); one taken
-// between the detach and the forget has its hold lifted by the forget
-// ([seatParks.forget]). Left standing, such a park outlived the seat here: its
-// probe went on calling the models and publishing the seat parked while a peer
-// ran it, and its hold kept the seat's inbox shut on this node with no park
-// left to lift it.
+// land while the seat is being released, or after. One taken while the seat
+// was held asks for the seat again once it is whole, and undoes itself where
+// the release has taken it meanwhile ([Engine.unparkReleased]); one asked once
+// the detach had ended the attachment its hold names is refused by the queue,
+// so it records no park and holds nothing (seatinbox.go). Left standing, such a
+// park outlived the seat here: its probe went on calling the models and
+// publishing the seat parked while a peer ran it, and its hold kept the seat's
+// inbox shut on this node with no park left to lift it.
 //
 // A RELEASE IS ALSO A SIGNAL to the resumes waiting on the same condition
 // ([waitProvider]): a launch's completion or a person's answer refused
@@ -896,7 +896,7 @@ func (e *Engine) reconcileProviderParks(ctx context.Context, next *Company) {
 // that takes it asks its own models on the first delivery.
 func (e *Engine) forgetProviderPark(ctx context.Context, seat uuid.UUID) {
 	e.endParkWait(seat)
-	if parking, ok := e.providerParks.forget(ctx, e, providerParkSpec, seat); ok {
+	if parking, ok := e.providerParks.forget(seat); ok {
 		e.leaveLimitProbe(seat, parking.basis)
 		e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: seatReleasedHere})
 	}

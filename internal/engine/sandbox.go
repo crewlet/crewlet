@@ -3427,24 +3427,16 @@ type seatHold struct{ engine *Engine }
 
 var _ sandbox.SeatHold = seatHold{}
 
-func (h seatHold) Hold(ctx context.Context, handle string) error {
+func (h seatHold) Hold(ctx context.Context, handle string, at queue.Attachment) error {
 	subject, group, err := h.inboxOf(handle)
-	if err != nil {
-		return err
-	}
-	at, err := h.engine.backends.Queue.Attachment(ctx, subject, group)
 	if err != nil {
 		return err
 	}
 	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, at, string(inbox.HoldSandbox))
 }
 
-func (h seatHold) Release(ctx context.Context, handle string) error {
+func (h seatHold) Release(ctx context.Context, handle string, at queue.Attachment) error {
 	subject, group, err := h.inboxOf(handle)
-	if err != nil {
-		return err
-	}
-	at, err := h.engine.backends.Queue.Attachment(ctx, subject, group)
 	if err != nil {
 		return err
 	}
@@ -4015,9 +4007,14 @@ func waiterDutyTTL(interval time.Duration) time.Duration {
 }
 
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
-// and start listening for their completions, BEFORE its mailbox opens.
-func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int64, owner string) error {
+// and start listening for their completions, BEFORE its mailbox opens. inbox is
+// the attachment of the mailbox the node is about to make, which every hold of
+// it is taken for until the seat's release (seatinbox.go).
+func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int64, owner string,
+	inbox queue.Attachment) error {
 	handle := seat.Handle
+	// THE ATTACHMENT FIRST, before any step below can hold the seat's inbox.
+	e.attachInbox(seat.ID, inbox)
 	// THE SEAT'S OWN TOOLS FIRST, because OnAcquire's whole contract is
 	// that everything the first turn needs is ready before the mailbox
 	// opens. A seat that started consuming before its per-role children
@@ -4100,7 +4097,7 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	// ATTACHED FROM HERE, whatever recovery says: a release has to detach
 	// what this call attached, and a refused seat is released.
 	e.markSandboxSeat(handle, true)
-	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch); err != nil {
+	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch, e.inboxOf(seat.ID)); err != nil {
 		return err
 	}
 	// A SEAT TAKEN WHILE A PERSON'S STOP IS ON IT ends the runs its last
@@ -4397,6 +4394,9 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 // it refers to is still real.
 func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	handle := seat.Handle
+	// THE INBOX'S ATTACHMENT, which the node's detach has ended: a hold asked
+	// from here names none, and the queue refuses it (seatinbox.go).
+	e.detachInbox(seat.ID)
 	// FIRST, while the queue is still reachable and before anything this
 	// release tears down: a seat that went away with no event left its
 	// last state standing on every dashboard — stuck "working" in a phase
@@ -4428,7 +4428,7 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// The detach that released the inbox dropped their holds, all but the
 	// hold of a park a turn took after it, which goes here with its park
 	// ([seatParks.forget]).
-	e.forgetBudgetPark(ctx, seat.ID)
+	e.forgetBudgetPark(seat.ID)
 	e.forgetProviderPark(ctx, seat.ID)
 	// AND WHAT IT READ OF THE SEAT'S HELD CONVERSATIONS: the next holder reads its own.
 	e.conversations.forget(seat.ID)

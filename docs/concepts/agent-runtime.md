@@ -654,8 +654,9 @@ stateDiagram-v2
   (`paused_by`, `paused_by_kind`) and the credential they came through
   (`operator_id`).
 - **Every node carries it out from its own copy.** Each node watches the
-  records and, the moment a pause lands, takes a pause hold (`seat_paused`) on
-  the seat's inbox; the resume lifts it and the mail that waited is delivered.
+  records and, the moment a pause lands, the node holding the seat takes a
+  pause hold (`seat_paused`) on the seat's inbox, for the attachment of the
+  inbox it holds; the resume lifts it and the mail that waited is delivered.
   A node that acquires a paused seat — placement moved it, or its holder
   restarted — takes the hold **before** attaching the seat's mailbox, so the
   mail it has been holding is never the first thing the new holder runs. A

@@ -139,6 +139,11 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 		},
 		NoteDeferred: func(string) {},
 	}
+	// THE SEAT TAKEN, as a node's acquisition takes it: recovered for the
+	// attachment of its inbox before the attach, which every hold names.
+	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1, fixtureAttachment(t, q, "swe")); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
 	mail := watchAcks(q, fixtureInbox("swe"))
 	if err := q.Subscribe(ctx, fixtureInbox("swe"), fixtureInboxGroup("swe"),
 		mail.handler(fixtureInbox("swe"), func(ctx context.Context, ev *events.Event) queue.Result {

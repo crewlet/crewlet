@@ -86,6 +86,11 @@ func newBusySeat(t *testing.T, resume func(*busySeat) sandbox.Resumer) *busySeat
 		return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
 			SeatHeldBySandbox: held, SandboxAwaitsAnswer: awaits}
 	}
+	// THE SEAT TAKEN, as a node's acquisition takes it: recovered for the
+	// attachment of its inbox before the attach, which every hold names.
+	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1, fixtureAttachment(t, q, "swe")); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
 	s.mail = watchAcks(q, s.inbox(), s.control())
 	if err := q.Subscribe(ctx, s.inbox(), fixtureInboxGroup("swe"),
 		s.mail.handler(s.inbox(), func(ctx context.Context, ev *events.Event) queue.Result {

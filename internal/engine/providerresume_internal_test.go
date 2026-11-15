@@ -784,12 +784,18 @@ func TestTheWaitsAStopDecidesAreTheResumesWaits(t *testing.T) {
 // review minutes long, so the park can land after the release has forgotten
 // the seat's parks. It outlived the seat here: a provider park's probe went on
 // calling the models and publishing the seat parked while a peer ran it, a
-// budget park's alarm fired into a seat a peer ran, and either one's hold,
-// taken after the detach that drops holds, kept the inbox shut on this node.
-// And a budget park on a launch's refusal below its floor takes with it the
-// window it recorded for that delivery here: the record is the park's, and a
-// node that holds no park of the seat keeps nothing of it, the seat's next
-// holder recording its own.
+// budget park's alarm fired into a seat a peer ran, and either one's hold kept
+// the inbox shut on this node. And a budget park on a launch's refusal below
+// its floor takes with it the window it recorded for that delivery here: the
+// record is the park's, and a node that holds no park of the seat keeps nothing
+// of it, the seat's next holder recording its own.
+//
+// Each park's hold names the attachment of the seat's inbox it is for, so a
+// park asked once the release has ended that attachment is refused and records
+// nothing (the case after this one). The park this case undoes is one whose
+// hold the queue took, for an attachment still current as it was asked, before
+// the release reached its re-check: staged here by handing the drained engine
+// an attachment of the seat's inbox again, which the queue takes a hold for.
 //
 // Mutation: drop the seat's re-check from providerPark, or from budgetPark,
 // and that park, its probe or alarm, and its hold stay on a seat this node no
@@ -798,18 +804,12 @@ func TestTheWaitsAStopDecidesAreTheResumesWaits(t *testing.T) {
 func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
 	t.Parallel()
 	// drained is a rig's engine once its drain has handed every seat back,
-	// with the parks' alarms fired by the case.
+	// with the parks' alarms fired by the case, and an attachment of the
+	// seat's inbox the park's hold is taken for.
 	drained := func(t *testing.T, doc string) (*Engine, *fakeAlarms) {
 		t.Helper()
-		r := newDrainRig(t)
-		r.doc = doc
-		e := r.start(t)
-		alarms := &fakeAlarms{}
-		e.providerParks.after, e.budgetParks.after = alarms.after, alarms.after
-		e.Drain(t.Context())
-		if _, held := e.launchFence("swe"); held {
-			t.Fatal("the premise: the drained node still holds the seat")
-		}
+		e, alarms := drainedEngine(t, doc)
+		takeInbox(t, e, e.backends.Queue, seatIn(t, e, "swe"))
 		return e, alarms
 	}
 	t.Run("a provider park", func(t *testing.T) {
@@ -871,6 +871,86 @@ func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
 		}
 		if holds := inboxHolds(t, e, "swe"); slices.Contains(holds, pauseReasonBudget) {
 			t.Fatalf("the seat's inbox is held %v by a park on a seat this node no longer holds", holds)
+		}
+	})
+}
+
+// drainedEngine is a drain rig's engine once its drain has handed every seat
+// back, with the parks' alarms fired by the case.
+func drainedEngine(t *testing.T, doc string) (*Engine, *fakeAlarms) {
+	t.Helper()
+	r := newDrainRig(t)
+	r.doc = doc
+	e := r.start(t)
+	alarms := &fakeAlarms{}
+	e.providerParks.after, e.budgetParks.after = alarms.after, alarms.after
+	e.Drain(t.Context())
+	if _, held := e.launchFence("swe"); held {
+		t.Fatal("the premise: the drained node still holds the seat")
+	}
+	return e, alarms
+}
+
+// A PARK ASKED ONCE ITS SEAT'S RELEASE HAS DETACHED THE INBOX IS REFUSED, and
+// records nothing: its hold names the attachment the seat held here, which the
+// release ended, and the queue refuses a hold for an ended attachment rather
+// than carry it onto the inbox's next attachment on this node. Taken anyway, as
+// it was when holds were keyed by the subscription alone, the hold landed on
+// the inbox this node attaches if it takes the seat back, which then consumed
+// nothing, with no park left to lift it.
+//
+// Mutation: take a park's hold for the inbox's current attachment rather than
+// the one the seat held, and each park is taken, its hold left on the inbox.
+func TestAParkAskedAfterItsSeatsReleaseIsRefused(t *testing.T) {
+	t.Parallel()
+	t.Run("a provider park", func(t *testing.T) {
+		t.Parallel()
+		e, alarms := drainedEngine(t, "")
+		refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: time.Now().Add(time.Hour),
+			Err: errors.New("You've hit your 5-hour limit")}
+		limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+			Failures: []error{refusal}, Err: refusal})
+		if !limited {
+			t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+		}
+		_, parked, err := e.providerPark(t.Context(), "swe", limit)
+		if !errors.Is(err, queue.ErrAttachmentGone) || parked {
+			t.Fatalf("providerPark = %v, %v; want it refused, the seat's attachment ended", parked, err)
+		}
+		if parking := e.providerParks.parking(seatIn(t, e, "swe")); parking != nil {
+			t.Fatal("a park refused its hold was recorded")
+		}
+		if live := alarms.live(); len(live) != 0 {
+			t.Fatalf("%d probe alarms armed for a park refused its hold, want none", len(live))
+		}
+		if holds := inboxHolds(t, e, "swe"); len(holds) != 0 {
+			t.Fatalf("the seat's inbox is held %v after its release", holds)
+		}
+	})
+	t.Run("a budget park", func(t *testing.T) {
+		t.Parallel()
+		e, alarms := drainedEngine(t, cappedSWEDoc)
+		if _, err := e.backends.Fleet.PostCharge(t.Context(), coord.AgentScope(seatIn(t, e, "swe").String()),
+			1000, coord.WindowsAt(time.Now(), time.UTC)); err != nil {
+			t.Fatalf("PostCharge: %v", err)
+		}
+		refused := &floorRefusal{floor: staticFloor(e.Company()), left: 0}
+		delivery := []*events.Event{{ID: uuid.New(), Type: "task_assigned"}}
+		_, parked, err := e.budgetPark(t.Context(), "swe", delivery, refused)
+		if !errors.Is(err, queue.ErrAttachmentGone) || parked {
+			t.Fatalf("budgetPark = %v, %v; want it refused, the seat's attachment ended", parked, err)
+		}
+		if parking := e.budgetParks.parking(seatIn(t, e, "swe")); parking != nil {
+			t.Fatal("a park refused its hold was recorded")
+		}
+		if waited := e.floorWaits.waited(seatIn(t, e, "swe"), deliveryOf(delivery)); len(waited) != 0 {
+			t.Fatalf("a park refused its hold left the window %+v for the delivery's next launch", waited[0])
+		}
+		if live := alarms.live(); len(live) != 0 {
+			t.Fatalf("%d reset alarms armed for a park refused its hold, want none", len(live))
+		}
+		if holds := inboxHolds(t, e, "swe"); len(holds) != 0 {
+			t.Fatalf("the seat's inbox is held %v after its release", holds)
 		}
 	})
 }

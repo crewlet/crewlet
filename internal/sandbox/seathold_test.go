@@ -5,8 +5,14 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 )
 
 // A SEAT A RUN HOLDS HAS ITS INBOX HELD, AND ONLY FOR AS LONG AS THE RUN DOES.
@@ -110,7 +116,7 @@ type flakyHold struct {
 	held bool
 }
 
-func (h *flakyHold) Hold(context.Context, string) error {
+func (h *flakyHold) Hold(context.Context, string, queue.Attachment) error {
 	if h.fail {
 		return errRefusedCall
 	}
@@ -118,7 +124,7 @@ func (h *flakyHold) Hold(context.Context, string) error {
 	return nil
 }
 
-func (h *flakyHold) Release(context.Context, string) error {
+func (h *flakyHold) Release(context.Context, string, queue.Attachment) error {
 	h.held = false
 	return nil
 }
@@ -282,4 +288,157 @@ func TestAFailedLaunchGivesItsSeatBack(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A HOLD DECIDED BEFORE ITS SEAT'S RELEASE NEVER GATES THE SEAT'S NEXT ATTACHMENT.
+//
+// The window: a transition decides "hold" while this node holds the seat, and
+// its queue call lands after the release has detached the inbox and the
+// coordinator has forgotten the seat. Keyed by the subscription alone, that
+// hold was carried onto the inbox this node attached when it took the seat
+// back, and a recovery with nothing to drive took no hold of its own and so
+// lifted none: the seat consumed no mail here until it moved again. Taken for
+// the attachment the decision was made under, it is refused.
+//
+// Mutation: hold the inbox's current attachment rather than the one the
+// decision was made for, and the retaken inbox attaches held.
+func TestAHoldDecidedBeforeTheReleaseDoesNotGateTheNextAttachment(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r := newInboxRig(t)
+	r.take(1)
+
+	// THE RELEASE LANDS BETWEEN THE DECISION AND THE QUEUE CALL: the seat's
+	// inbox detached, then the coordinator told, as a node's release does.
+	r.hold.between = func() {
+		if _, err := r.q.Detach(ctx, seatInbox, seatInboxGroup); err != nil {
+			t.Errorf("Detach: %v", err)
+		}
+		r.coordinator.ReleaseSeat("swe")
+	}
+	r.start("t1")
+	if !r.hold.asked {
+		t.Fatal("the started run decided no hold, so the window was never staged")
+	}
+
+	// THE RUN SETTLES ON ANOTHER HOLDER, and this node takes the seat back
+	// with nothing to recover.
+	if _, _, err := r.pending.DecideEnding(ctx, "t1", Decision{
+		License: License{WhileIn: Active, Launch: EveryLaunch}, Reason: "x", Detail: "x",
+	}); err != nil {
+		t.Fatalf("DecideEnding: %v", err)
+	}
+	if _, _, err := r.pending.Finish(ctx, "t1", r.get("t1").Ending.ID); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	r.take(2)
+	if err := r.q.Publish(ctx, seatInbox, &events.Event{ID: uuid.New(), Type: "after-retake",
+		Source: "seathold_test", Timestamp: time.Now().UTC()}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case typ := <-r.got:
+		if typ != "after-retake" {
+			t.Fatalf("delivered %q, want the mail published after the retake", typ)
+		}
+	default:
+		t.Fatalf("the seat's inbox attached held, holds %v: a hold decided before the release "+
+			"landed on the attachment this node made when it took the seat back, and nothing "+
+			"that knew of it was left to lift it", r.q.PauseHolds(seatInbox, seatInboxGroup))
+	}
+}
+
+// A HOLD DECIDED WHILE THE SEAT IS HELD IS TAKEN, for the attachment its
+// recovery was handed: the case above's refusal is the queue's answer to an
+// attachment that ended, never every hold refused.
+//
+// Mutation: hold for the zero attachment, and no hold is taken.
+func TestAHoldIsTakenForTheAttachmentTheSeatWasRecoveredFor(t *testing.T) {
+	t.Parallel()
+	r := newInboxRig(t)
+	r.take(1)
+	r.start("t1")
+	if got := r.q.PauseHolds(seatInbox, seatInboxGroup); !slices.Equal(got, []string{"sandbox"}) {
+		t.Fatalf("holds = %v, want the run's hold on the inbox the seat was recovered for", got)
+	}
+}
+
+// inboxRig is a coordinator rig whose seat hold is taken on a real queue's
+// inbox, as the engine's is, and taken as a node takes a seat.
+type inboxRig struct {
+	*coordRig
+	q    *queuememory.Queue
+	hold *inboxHold
+	got  chan string
+}
+
+func newInboxRig(t *testing.T) *inboxRig {
+	t.Helper()
+	q := queuememory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	r := &inboxRig{coordRig: newCoordRig(t), q: q, hold: &inboxHold{q: q}, got: make(chan string, 4)}
+	r.coordinator.hold = r.hold
+	return r
+}
+
+// take is a node's acquisition of the seat under epoch: the attachment read,
+// the seat recovered for it, then the inbox attached.
+func (r *inboxRig) take(epoch int64) {
+	r.t.Helper()
+	ctx := r.t.Context()
+	at, err := r.q.Attachment(ctx, seatInbox, seatInboxGroup)
+	if err != nil {
+		r.t.Fatalf("Attachment: %v", err)
+	}
+	if err := r.recoverSeatOn(ctx, "node-a", epoch, at); err != nil {
+		r.t.Fatalf("RecoverSeat: %v", err)
+	}
+	if err := r.q.Subscribe(ctx, seatInbox, seatInboxGroup,
+		func(_ context.Context, ev *events.Event) queue.Result {
+			r.got <- ev.Type
+			return queue.Ack()
+		}); err != nil {
+		r.t.Fatalf("Subscribe: %v", err)
+	}
+}
+
+// start launches turnID's job and announces its start, which counts the run as
+// holding the seat and decides the seat's hold.
+func (r *inboxRig) start(turnID string) {
+	r.t.Helper()
+	run := r.launch(turnID)
+	if err := r.coordinator.OnStarted(r.t.Context(), types.ExecutorLaunched{
+		AgentHandle: "swe", TurnID: run.TurnID, LaunchID: run.LaunchID,
+	}); err != nil {
+		r.t.Fatalf("OnStarted: %v", err)
+	}
+}
+
+const (
+	seatInbox      = "crewlet.agent.swe.inbox"
+	seatInboxGroup = "seat-swe"
+)
+
+// inboxHold is a [SeatHold] on a real queue's inbox, as the engine's is. between
+// runs once, after the coordinator has decided a hold and before its queue call.
+type inboxHold struct {
+	q       *queuememory.Queue
+	between func()
+	asked   bool
+}
+
+func (h *inboxHold) Hold(ctx context.Context, _ string, inbox queue.Attachment) error {
+	h.asked = true
+	if f := h.between; f != nil {
+		h.between = nil
+		f()
+	}
+	return h.q.PauseTopic(ctx, seatInbox, seatInboxGroup, inbox, "sandbox")
+}
+
+func (h *inboxHold) Release(ctx context.Context, _ string, inbox queue.Attachment) error {
+	return h.q.ResumeTopic(ctx, seatInbox, seatInboxGroup, inbox, "sandbox")
 }
