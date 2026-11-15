@@ -2373,9 +2373,9 @@ test("the description keeps its own DOM across a clock tick", async () => {
 // A removed task
 // ---------------------------------------------------------------------------
 
-// A TASK IN THE TRASH IS SAID TO BE IN THE TRASH — the detail read does not
-// filter removed tasks, so without the flag it rendered as an ordinary one.
-test("a removed task is marked, and a live one carries no such mark", () => {
+// A TASK IN THE TRASH HAS ONE MARK, the note: the chip the flags drew above it
+// said "In the trash" a second time.
+test("the trash is not one of a task's flags", () => {
   const { container } = render(
     <>
       {itemFlags(
@@ -2385,10 +2385,7 @@ test("a removed task is marked, and a live one carries no such mark", () => {
       )}
     </>,
   );
-  expect(container.textContent).toContain("In the trash");
-  cleanup();
-  const live = render(<>{itemFlags(detail())}</>);
-  expect(live.container.textContent ?? "").not.toContain("In the trash");
+  expect(container.textContent ?? "").not.toContain("In the trash");
 });
 
 // THE FLAG ON THE PAGE IS THE FLAG ON THE CARD: only open work reads as blocked.
@@ -2404,12 +2401,52 @@ test("a finished task's page carries no Blocked flag, an open one's does", () =>
   expect(finished.container.textContent ?? "").not.toContain("Blocked");
 });
 
-test("the removal note names its author and when", () => {
+// BY NAME, as the feed beside it names every actor: the tombstone's handle and
+// kind printed "jane-founder (human)".
+test("the removal note names who moved it to the trash, when, and the way back", () => {
   const { container } = render(
-    <RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />,
+    <RemovedNote
+      tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }}
+      now={NOW}
+      seatName={(h) => ({ ada: "Ada Okonkwo" })[h] ?? h}
+    />,
   );
-  expect(screen.getByText(/ada/)).toBeTruthy();
-  expect(container.textContent).toMatch(/^In the trash\. Removed by ada \(human\) \S.*\.$/);
+  expect(container.textContent).toMatch(
+    /^In the trash\. Moved to the trash by Ada Okonkwo \S.*\. Restore it to change it\.$/,
+  );
+  expect(container.textContent).not.toContain("(human)");
+});
+
+// THE ENGINE FREEZES A TASK IN THE TRASH (no comment, body, field or relation
+// of it changes until a restore), so its page offers none of them: every edit
+// it drew was one the engine would refuse.
+test("a task in the trash reads only: no editor, no comment box, no reply", async () => {
+  const removed = { by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" };
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_item: detail({ task: task({ removed }) }) },
+  });
+  await settle();
+  expect(screen.getByText(/Moved to the trash by Ada Okonkwo/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Edit the title" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Edit description|Add a description/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Comment" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  // AND A LIVE ONE STILL OFFERS THEM, so the case is about the trash.
+  cleanup();
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  expect(screen.getByRole("button", { name: "Edit the title" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Comment" })).toBeTruthy();
+});
+
+// "CHANGED" GOES BEFORE A FIELD'S DELTA AND NOWHERE ELSE: a removal and a
+// restore have nothing to compare, and the row read "changed Removed it".
+test("a removal and a restore read as what was done to the task", () => {
+  const chrome = { seatName: (h: string) => h };
+  expect(changeSentence(record({ kind: "removed" }), task(), chrome).what).toBe(
+    "moved it to the trash",
+  );
+  expect(changeSentence(record({ kind: "restored" }), task(), chrome).what).toBe("restored it");
 });
 
 test("a task removed alongside its parent names the parent", () => {
@@ -2875,4 +2912,22 @@ test("an open ask in words reads as waiting for its answer, with one Reply and o
   expect(card.textContent).not.toContain("Answered in words");
   expect(within(card).getAllByRole("button", { name: "Reply" })).toHaveLength(1);
   expect(within(card).getByRole("button", { name: "Answer" })).toBeTruthy();
+});
+
+// THE DESCRIPTION'S HEADINGS NEST UNDER A SECTION: "## Context" renders an h3,
+// which stood straight under the title's h1 (axe heading-order) before the
+// Activity section's h2.
+test("the description's headings sit under a section heading of the page", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_item: detail({ task: task({ body: "## Context\n\nWhy this matters." }) }) },
+  });
+  await settle();
+  const levels = [...document.querySelectorAll("h1, h2, h3, h4")].map((h) => Number(h.tagName[1]));
+  for (let i = 1; i < levels.length; i++) {
+    expect(
+      levels[i]! - levels[i - 1]!,
+      `heading ${i} jumps from h${levels[i - 1]}`,
+    ).toBeLessThanOrEqual(1);
+  }
+  expect(screen.getByRole("heading", { level: 2, name: "Description" })).toBeTruthy();
 });

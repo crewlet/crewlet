@@ -3699,9 +3699,25 @@ open, in Gitlet › Changes' own grid, paged with Load more, each row opening it
 change in the peek. The rail stays beside both tabs. The activity filter's
 **Changes** is the task's own history and a different thing.
 
+**The address follows the task.** A move to another project re-keys a task and
+its old key still opens it, so a page opened at a key the task no longer holds
+(or at its id, while it has a key of its own) replaces the address with the one
+it answers to now (`lib/work.ts`'s `movedAddress`), and the trail names the
+project the task is in rather than the one its old key named.
+
+**A task in the trash reads only.** The engine freezes a tombstoned task (no
+comment, body, field or relation of it changes until a restore), so its page
+offers none of them: the trash note is its one mark ("In the trash. Moved to the
+trash by Jane Founder just now. Restore it to change it.", the author by name),
+with Restore in the page bar, and no editor, comment box, Reply or answer is
+drawn under it.
+
 **The column is the task in the order a person reads one.** The exceptional
-flags only (in the trash, blocked, archived), the title (24px, edited in place),
-the description as prose (edited as its markdown), each named checklist ("Done
+flags only (blocked, archived; the trash is its note above), the title (24px, edited in place),
+the description as prose under a section heading drawn for a reader who moves
+by headings (its own headings render a level below, so "## Context" is an h3
+that needs an h2 above it),
+(edited as its markdown), each named checklist ("Done
 when") as boxes a writer ticks, and the sub-tasks as a card whose head is "1 /
 3" and a meter, each row the child's status mark, key, title and holder. A
 status mark is drawn in the artboards' own shapes, one per status — an empty
@@ -3729,7 +3745,9 @@ back again from a list with no hole in it.
 All | Comments | Agent turns | Changes narrows it.
 A change is a sentence about the task ("Jane Founder filed this in ENG",
 "CTO assigned it to SWE: “owns the provisioner”", "Jane Founder ticked 1 on
-Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
+Acceptance — 1 of 4 done", "Jane Founder moved it to the trash"); "changed"
+goes only before a field's delta, since a kind with nothing to compare is its
+own verb phrase, with a quiet **· Who this reached ›** at the end of
 its line opening its routing: the reason each person was woken, whether it asked
 anything, and the three different empty answers in three sentences. A comment
 is a card with its ask, answer or choice and a **Reply**, which says something

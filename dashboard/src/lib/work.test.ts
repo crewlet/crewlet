@@ -15,6 +15,7 @@ import { expect, test } from "vitest";
 // carrying its own copy of the glyph goes green on whatever is written.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  movedAddress,
   SCOPES,
   STATUSES,
   STATUS_TONE,
@@ -2063,4 +2064,25 @@ test("an archived project's own list asks for its archived work", () => {
   expect(
     build({ shape: "list", archivedContainer: true, view: { archived: "only" } }).archived,
   ).toBe("only");
+});
+
+// A PAGE OPENED BY ANOTHER OF THE TASK'S NAMES MOVES TO ITS ADDRESS: a key a
+// move left it, its id while it has a key, a key typed in lower case. Never a
+// name the answer does not carry, which is an answer to the address before.
+test("a task's page moves to its address from another of its names, and only from one", () => {
+  const moved = {
+    task: { id: "t-1", key: "LEAD-43", former_keys: ["ENG-56"] },
+  } as unknown as Parameters<typeof movedAddress>[1];
+  expect(movedAddress("ENG-56", moved)).toBe("LEAD-43");
+  expect(movedAddress("t-1", moved)).toBe("LEAD-43");
+  expect(movedAddress("lead-43", moved)).toBe("LEAD-43");
+  expect(movedAddress("LEAD-43", moved)).toBeNull();
+  expect(movedAddress("ENG-57", moved)).toBeNull();
+  // A DUPLICATE OF A KEY IS ADDRESSED BY ITS ID, and its key is not its name.
+  const duplicate = {
+    task: { id: "t-2", key: "ENG-5" },
+    key_collision: true,
+  } as unknown as Parameters<typeof movedAddress>[1];
+  expect(movedAddress("t-2", duplicate)).toBeNull();
+  expect(movedAddress("ENG-5", duplicate)).toBeNull();
 });
