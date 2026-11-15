@@ -4396,6 +4396,14 @@ a.knowledge-reader-how:hover {
   top: var(--spacing-1);
   box-shadow: var(--shadow-sm);
 }
+/* THE CARD MAKES ROOM FOR ITS MENU: the menu stands on the card's top-right
+   corner, which is where the holder's badge ends the top row, and on a screen
+   with no hover it is always shown, so every badge was half covered (initials
+   cut to one letter). The top row keeps the menu's width clear, so the badge sits
+   beside it whether or not it is shown. */
+.work-col-slot:has(> .task-row-menu) .work-card-top {
+  padding-inline-end: calc(var(--size-control-sm) + var(--spacing-1));
+}
 .tl-name-row > .task-row-menu {
   top: 50%;
   transform: translateY(-50%);
