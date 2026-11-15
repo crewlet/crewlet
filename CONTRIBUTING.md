@@ -329,7 +329,7 @@ the checks `main` requires, pass only when the plan and every shard of their
 half did. A local run can do what a shard does:
 
 ```bash
-make test TEST_TIMINGS=/tmp/test-timings.tsv                 # write how long each package took
+make test TEST_TIMINGS=/tmp/test-timings.tsv                 # write how long each package and its tests took
 make test TEST_WEIGHTS=/tmp/test-timings.tsv                 # start the longest first by that
 make test TEST_WEIGHTS=/tmp/test-timings.tsv TEST_SHARD=2/4  # run the second of four shards
 ```
@@ -344,7 +344,11 @@ an empty file is `go list`'s order. CI's weights are the shards' timings from
 the last passing run on `main`, merged by `go run ./internal/solo/partition
 merge`. The Actions cache keeps them for CI, and each run also publishes them
 as its `test-weights` artifact, which a local run can download with `gh run
-download <run-id> -n test-weights`. None of the three variables changes which
+download <run-id> -n test-weights`. Under each package's line the file names
+the seconds of each of its top-level tests, which is where to look for the
+tests a slow package spends its time in, and the gate's last lines say how much
+CPU the run used against the CPUs it had, which tells a shard that is short of
+cores from one that waits. None of the three variables changes which
 packages are in a half, and left unset, the default, `make test` is the whole
 half in `go list` order, as it always was. `make test-solo` takes the same
 three: at `-p 1` its order changes nothing, but a shard of it takes the sum of
