@@ -197,12 +197,13 @@ SKIPGATE = $(GO) run ./internal/skipgate
 # several runners, longest packages first. Left unset, a local run is the
 # whole half in go list's order, exactly as it was:
 #
-#   TEST_WEIGHTS=FILE the measured seconds per package (a skipgate -timings
-#                     file) the partition deals and orders by. It must exist;
+#   TEST_WEIGHTS=FILE the measured weight per package (a skipgate -timings
+#                     file: its CPU for this half, its wall time for the solo
+#                     half) the partition deals and orders by. It must exist;
 #                     empty, or unset, deals by package count in go list's order.
-#   TEST_TIMINGS=FILE write how long each package that passed took, and each of
-#                     its top-level tests; ci.yml merges its shards' files into
-#                     the next run's TEST_WEIGHTS.
+#   TEST_TIMINGS=FILE write how long each package that passed took, the CPU it
+#                     used, and each of its top-level tests' time; ci.yml merges
+#                     its shards' files into the next run's TEST_WEIGHTS.
 #   TEST_SHARD=I/N    run the I-th of N shards of the half, dealt by weight.
 #
 # Membership of a half never depends on any of them: `go doc

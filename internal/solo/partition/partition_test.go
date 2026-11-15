@@ -249,12 +249,12 @@ func TestAnUnmeasuredPackageWeighsTheMedianOfItsOwnHalf(t *testing.T) {
 func TestAWeightsFileIsReadStrictly(t *testing.T) {
 	t.Parallel()
 
-	got, err := readWeights(strings.NewReader("x/a\t12.5\nx/a\tTestOne\t9\nx/a\tExampleTwo\t0.001\n\n"+
-		"x/b\t0\nx/c\t3\nx/c\tFuzzThree\t2.5\n"), "w.tsv")
+	got, err := readWeights(strings.NewReader("x/a\t12.5\t30\nx/a\tTestOne\t9\nx/a\tExampleTwo\t0.001\n\n"+
+		"x/b\t0\t0\nx/c\t3\t1.5\nx/c\tFuzzThree\t2.5\n"), "w.tsv")
 	if err != nil {
 		t.Fatalf("a well-formed file was refused: %v", err)
 	}
-	if want := map[string]float64{"x/a": 12.5, "x/b": 0, "x/c": 3}; !maps.Equal(got.packages, want) {
+	if want := map[string]weight{"x/a": {12.5, 30}, "x/b": {0, 0}, "x/c": {3, 1.5}}; !maps.Equal(got.packages, want) {
 		t.Errorf("read the packages %v, want %v", got.packages, want)
 	}
 	wantTests := map[string]map[string]float64{
@@ -266,22 +266,24 @@ func TestAWeightsFileIsReadStrictly(t *testing.T) {
 	}
 
 	for name, c := range map[string]struct{ text, says string }{
-		"no tab":            {"x/a 12\n", "w.tsv:1"},
-		"no path":           {"\t12\n", "w.tsv:1"},
-		"a path with space": {"x/a b\t12\n", "w.tsv:1"},
-		"not a number":      {"x/a\t12\nx/b\tslow\n", "w.tsv:2"},
-		"three tabs":        {"x/a\tTestA\t1\t2\n", "w.tsv:1"},
-		"no test name":      {"x/a\t1\nx/a\t\t2\n", "w.tsv:2"},
-		"not a test's name": {"x/a\t1\nx/a\t1\t2\n", "not a top-level test"},
-		"a subtest":         {"x/a\t1\nx/a\tTestA/sub\t2\n", "not a top-level test"},
-		"a test with space": {"x/a\t1\nx/a\tTest A\t2\n", "not a top-level test"},
-		"a test's seconds":  {"x/a\t1\nx/a\tTestA\tslow\n", "w.tsv:2"},
-		"negative":          {"x/a\t-1\n", "non-negative"},
-		"NaN":               {"x/a\tNaN\n", "finite"},
-		"infinite":          {"x/a\t+Inf\n", "finite"},
-		"named twice":       {"x/a\t1\nx/b\t2\nx/a\t3\n", "named twice"},
-		"a test twice":      {"x/a\t1\nx/a\tTestA\t1\nx/a\tTestA\t2\n", "x/a TestA is named twice"},
-		"an untimed package": {"x/a\t1\nx/b\tTestB\t2\nx/b\tTestC\t2\n",
+		"no tab":                 {"x/a 12 3\n", "w.tsv:1"},
+		"no path":                {"\t12\t3\n", "w.tsv:1"},
+		"a path with space":      {"x/a b\t12\t3\n", "w.tsv:1"},
+		"a package's wall alone": {"x/a\t12\n", "w.tsv:1"},
+		"not a number":           {"x/a\t12\t3\nx/b\tslow\t3\n", "w.tsv:2"},
+		"a package's CPU":        {"x/a\t12\tbusy\n", "w.tsv:1"},
+		"four fields":            {"x/a\tTestA\t1\t2\n", "w.tsv:1"},
+		"no test name":           {"x/a\t1\t1\nx/a\t\t2\n", "w.tsv:2"},
+		"a subtest":              {"x/a\t1\t1\nx/a\tTestA/sub\t2\n", "nor is it a top-level test's name"},
+		"a test with space":      {"x/a\t1\t1\nx/a\tTest A\t2\n", "nor is it a top-level test's name"},
+		"a test's seconds":       {"x/a\t1\t1\nx/a\tTestA\tslow\n", "w.tsv:2"},
+		"negative":               {"x/a\t-1\t1\n", "non-negative"},
+		"negative CPU":           {"x/a\t1\t-1\n", "non-negative"},
+		"NaN":                    {"x/a\tNaN\t1\n", "finite"},
+		"infinite":               {"x/a\t+Inf\t1\n", "finite"},
+		"named twice":            {"x/a\t1\t1\nx/b\t2\t2\nx/a\t3\t3\n", "named twice"},
+		"a test twice":           {"x/a\t1\t1\nx/a\tTestA\t1\nx/a\tTestA\t2\n", "x/a TestA is named twice"},
+		"an untimed package": {"x/a\t1\t1\nx/b\tTestB\t2\nx/b\tTestC\t2\n",
 			"w.tsv:2: x/b times tests of a package it does not time"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -290,6 +292,28 @@ func TestAWeightsFileIsReadStrictly(t *testing.T) {
 				t.Errorf("readWeights(%q) = %v, want an error saying %q", c.text, err, c.says)
 			}
 		})
+	}
+}
+
+// EACH HALF IS WEIGHED BY ITS OWN KIND: the parallel half by CPU, since its
+// runners are CPU-bound and a package's wall there measures what shared the
+// machine with it; the solo half by wall time, since it runs one package at a
+// time and mostly waits. A file that names nothing weighs nothing.
+func TestEachHalfIsWeighedByItsOwnKind(t *testing.T) {
+	t.Parallel()
+
+	m, err := readWeights(strings.NewReader("x/engine\t804\t1600\nx/cluster\t760\t40\n"), "w.tsv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m.of("parallel"), map[string]float64{"x/engine": 1600, "x/cluster": 40}; !maps.Equal(got, want) {
+		t.Errorf("the parallel half weighs %v, want each package's CPU %v", got, want)
+	}
+	if got, want := m.of("solo"), map[string]float64{"x/engine": 804, "x/cluster": 760}; !maps.Equal(got, want) {
+		t.Errorf("the solo half weighs %v, want each package's wall %v", got, want)
+	}
+	if got := (measurement{}).of("parallel"); got != nil {
+		t.Errorf("no weights file weighs %v, want nothing", got)
 	}
 }
 
@@ -448,15 +472,15 @@ func TestMergeJoinsDisjointTimingsAndRefusesOverlap(t *testing.T) {
 	t.Parallel()
 
 	got, err := merge([]timings{
-		{"shard-2.tsv", []byte("x/b\t2.000\nx/b\tTestZ\t1.000\nx/b\tTestA\t1.500\nx/d\t0.000\n")},
-		{"shard-1.tsv", []byte("x/a\t1.500\nx/a\tTestOnly\t1.400\n\nx/c\t3.250\n")},
+		{"shard-2.tsv", []byte("x/b\t2.000\t4.000\nx/b\tTestZ\t1.000\nx/b\tTestA\t1.500\nx/d\t0.000\t0.000\n")},
+		{"shard-1.tsv", []byte("x/a\t1.500\t2.250\nx/a\tTestOnly\t1.400\n\nx/c\t3.250\t1.000\n")},
 	})
 	if err != nil {
 		t.Fatalf("disjoint timings were refused: %v", err)
 	}
-	want := "x/a\t1.500\nx/a\tTestOnly\t1.400\n" +
-		"x/b\t2.000\nx/b\tTestA\t1.500\nx/b\tTestZ\t1.000\n" +
-		"x/c\t3.250\nx/d\t0.000\n"
+	want := "x/a\t1.500\t2.250\nx/a\tTestOnly\t1.400\n" +
+		"x/b\t2.000\t4.000\nx/b\tTestA\t1.500\nx/b\tTestZ\t1.000\n" +
+		"x/c\t3.250\t1.000\nx/d\t0.000\t0.000\n"
 	if string(got) != want {
 		t.Errorf("merged\n%q\nwant\n%q", got, want)
 	}
@@ -469,15 +493,15 @@ func TestMergeJoinsDisjointTimingsAndRefusesOverlap(t *testing.T) {
 		says   string
 	}{
 		"a package two runners timed": {
-			[]timings{{"one.tsv", []byte("x/a\t1\nx/b\t2\n")}, {"two.tsv", []byte("x/b\t2\n")}},
+			[]timings{{"one.tsv", []byte("x/a\t1\t1\nx/b\t2\t2\n")}, {"two.tsv", []byte("x/b\t2\t2\n")}},
 			"x/b is timed by both one.tsv and two.tsv",
 		},
 		"a test whose package another runner timed": {
-			[]timings{{"one.tsv", []byte("x/b\t2\n")}, {"two.tsv", []byte("x/a\t1\nx/b\tTestB\t2\n")}},
+			[]timings{{"one.tsv", []byte("x/b\t2\t2\n")}, {"two.tsv", []byte("x/a\t1\t1\nx/b\tTestB\t2\n")}},
 			"two.tsv:2: x/b times tests of a package it does not time",
 		},
 		"a line the reader refuses": {
-			[]timings{{"one.tsv", []byte("x/a\t1\n")}, {"two.tsv", []byte("x/b 2\n")}},
+			[]timings{{"one.tsv", []byte("x/a\t1\t1\n")}, {"two.tsv", []byte("x/b 2\n")}},
 			"two.tsv:1",
 		},
 	} {
