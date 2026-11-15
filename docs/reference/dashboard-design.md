@@ -3269,7 +3269,11 @@ widgets, Cancel and Done. New task steps aside until Done.
   it is listed under, the access that opens it and where its card's **Open**
   goes: a reader whose access does not open the page is never offered the
   widget (the tray says how many were held back), and one who loses that access
-  later sees a sentence in its place, never the data. A widget asks the same
+  later sees a sentence in its place, never the data. Whatever stands in a
+  widget's place keeps the widget's own name as its card's title: that
+  sentence, a widget that could not be drawn, and the failed read of who the
+  reader is (with its Try again), so a Home whose every read failed still says
+  which card is which. A widget asks the same
   questions its page asks and only reads; every write stays on the page. A
   contribution that names no such page is left out and reported, and a suite
   (`board/registry.test.ts`) fails the build on it.

@@ -462,6 +462,20 @@ describe("the figures", () => {
       screen.getAllByText("This didn’t load: the engine failed to answer.").length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(0);
+    // AND EACH FAILED CARD STILL SAYS WHICH WIDGET IT IS: the failed viewer
+    // read drew a bare card holding only the failure, so the board was a
+    // column of identical red boxes. Mutation: draw the viewer's failure in a
+    // card with no header, and a failed card has no heading.
+    const failed = screen
+      .getAllByText("This didn’t load: the engine failed to answer.")
+      .map((line) => line.closest(".home-card"))
+      .filter((card): card is HTMLElement => card !== null);
+    expect(failed.length).toBeGreaterThan(0);
+    for (const card of failed) {
+      expect(within(card).queryByRole("heading", { level: 3 })).not.toBeNull();
+    }
+    expect(screen.getByRole("heading", { name: "Needs your decision" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Live now" })).toBeTruthy();
   });
 
   test("the range a reader chose is the one Home opens on when they come back", async () => {
