@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/objstore"
 )
 
 // ---------------------------------------------------------------------
@@ -355,5 +357,108 @@ func TestALossCauseThisBuildDoesNotKnowIsCarriedOnInGeneralTerms(t *testing.T) {
 	}
 	if failed := rig.failures(); len(failed) != 0 {
 		t.Fatalf("announced %+v for a lost job whose round is carried on", failed)
+	}
+}
+
+// A LOST RUN'S LINE SAYS HOW LONG IT RAN AND SINCE ITS SAVE: the line that
+// carries a lost job's round on gives, in whole seconds to the instant the loss
+// was found, how long the job ran from its launch (ran_s) and how long since the
+// newest capture of its own launch that was kept (since_save_s): the time the
+// loss cost, and the work a relaunch continuing that capture does again. Each
+// is left out where its instant is not known, never said as a figure no clock
+// gave: a kept capture of an earlier launch says nothing of this job, and a
+// launch, a capture or a verdict stating no instant states nothing to count
+// from. A final capture kept after the loss was found lost no kept work, so
+// it gives zero, never a figure below it.
+//
+// The instants are literals and so are the seconds, the clocks being the
+// stamps' own.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+//
+// Mutation: read the row's kept capture whatever its launch, and an earlier
+// launch's capture is counted as this job's; drop a guard on an instant not
+// known, and a figure is said from no instant; drop the clamp, and a capture
+// kept after the loss is said as one taken before it; drop the figures from
+// the line, and the carry says neither.
+func TestALostRunsLineSaysHowLongItRanAndSinceItsSave(t *testing.T) {
+	started := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	saved := time.Date(2026, 8, 23, 12, 1, 15, 0, time.UTC)
+	found := time.Date(2026, 8, 23, 12, 2, 30, 0, time.UTC)
+	afterwards := time.Date(2026, 8, 23, 12, 3, 0, 0, time.UTC)
+	launched := func(start time.Time, kept *SessionCapture) PendingRun {
+		return PendingRun{TurnID: "t1", LaunchID: "job-2", LaunchSeq: 2,
+			Launch: LaunchRecord{StartedAt: start}, Kept: kept}
+	}
+	ownCapture := func(at time.Time, final bool) *SessionCapture {
+		return &SessionCapture{Launch: "job-2", LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded,
+			Final: final, At: at}
+	}
+	for _, c := range []struct {
+		name string
+		run  PendingRun
+		at   time.Time
+		want map[string]any
+	}{
+		{"a job that kept a capture of its own launch", launched(started, ownCapture(saved, false)), found,
+			map[string]any{"ran_s": 150, "since_save_s": 75}},
+		{"a job whose turn kept only an earlier launch's capture",
+			launched(started, &SessionCapture{Launch: "job-2", LaunchSeq: 1, CaptureSeq: 1,
+				State: CaptureLanded, At: saved}), found,
+			map[string]any{"ran_s": 150}},
+		{"a launch recorded with no start", launched(time.Time{}, ownCapture(saved, false)), found,
+			map[string]any{"since_save_s": 75}},
+		{"a final capture kept after the loss was found", launched(started, ownCapture(afterwards, true)), found,
+			map[string]any{"ran_s": 150, "since_save_s": 0}},
+		{"a kept capture stating no instant", launched(started, ownCapture(time.Time{}, false)), found,
+			map[string]any{"ran_s": 150}},
+		{"a verdict stating no instant", launched(started, ownCapture(saved, false)), time.Time{},
+			map[string]any{}},
+	} {
+		spans := lossSpans(c.run, c.at)
+		got := map[string]any{}
+		for i := 0; i+1 < len(spans); i += 2 {
+			got[spans[i].(string)] = spans[i+1]
+		}
+		if len(spans)%2 != 0 || len(got) != len(c.want) {
+			t.Errorf("%s: the line says %v, want %v", c.name, spans, c.want)
+			continue
+		}
+		for key, want := range c.want {
+			if got[key] != want {
+				t.Errorf("%s: the line says %s=%v, want %v", c.name, key, got[key], want)
+			}
+		}
+	}
+
+	// THE CARRY SAYS THEM: a job launched, a capture of it kept, its box lost
+	// from its host, and its round carried on.
+	logs := captureLogs(t)
+	rig := newCoordRig(t)
+	rig.now = started
+	run := rig.launch("t1")
+	if took, err := rig.pending.StampCapture(t.Context(), "t1", SessionCapture{Launch: run.LaunchID,
+		LaunchSeq: run.LaunchSeq, CaptureSeq: 1, State: CaptureLanded, At: saved,
+		Object: objstore.KeyAt(saved).String(), ObjectHash: strings.Repeat("e", 64),
+		ObjectSize: 5}); err != nil || !took {
+		t.Fatalf("stamping the job's kept capture = %v, %v", took, err)
+	}
+	rig.now = found
+	if marked, err := rig.pending.MarkLost(t.Context(), "t1", run.LaunchID,
+		JobLoss{Cause: LossBoxGone, At: found}); err != nil || !marked {
+		t.Fatalf("MarkLost = %v, %v", marked, err)
+	}
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	var line string
+	for l := range strings.Lines(logs.String()) {
+		if strings.Contains(l, "sandbox_run_lost_carried_on") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, " ran_s=150 ") || !strings.Contains(line, " since_save_s=75 ") {
+		t.Fatalf("the carry's line %q does not say the job ran 150 s and 75 s since its kept capture", line)
 	}
 }
