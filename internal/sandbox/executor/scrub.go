@@ -191,8 +191,13 @@ func boundsFor(archiveMax int64) scrubBounds {
 	return scrubBounds{plain: scrubExpansion * archiveMax, piece: scrubPieceMaxBytes}
 }
 
-// scrubber takes the engine's own values out of text.
-type scrubber struct{ r *strings.Replacer }
+// scrubber takes the engine's own values out of text: a whole text through
+// strings.Replacer ([scrubber.apply]), and a text that arrives in pieces
+// through a [valueStream] of the same values ([scrubber.stream]).
+type scrubber struct {
+	r      *strings.Replacer
+	values *valueTable
+}
 
 // newScrubber is the scrubber for values: each line of each value at least
 // [minScrubBytes] long — a multi-line value (a key file a setup step wrote) is
@@ -231,7 +236,7 @@ func newScrubber(values []string) scrubber {
 	for _, old := range olds {
 		pairs = append(pairs, old, scrubMarker)
 	}
-	return scrubber{r: strings.NewReplacer(pairs...)}
+	return scrubber{r: strings.NewReplacer(pairs...), values: newValueTable(olds)}
 }
 
 // apply is s with every value taken out.
@@ -240,6 +245,154 @@ func (s scrubber) apply(text string) string {
 		return text
 	}
 	return s.r.Replace(text)
+}
+
+// valueStream is the by-value pass over a text that arrives in pieces, cut
+// anywhere: what it writes to w, put together, is [scrubber.apply] of the
+// whole text, however the text was cut, once Close has written the last of it.
+//
+// AS THE REPLACER DECIDES, A PLACE AT A TIME: from the text's start, the
+// longest value that begins at a place is taken out and the reading goes on
+// after it, and where none begins the place's byte is kept and the reading
+// goes on at the next; so a value is taken out leftmost, and longest where
+// values begin at the same place, as strings.Replacer takes the first of its
+// pairs, which [newScrubber] orders longest first.
+//
+// IT HOLDS FEWER BYTES THAN THE LONGEST VALUE from one piece to the next, and
+// reads a piece where it lies: a place is decided once the longest value's
+// length of text from it is read, or the text has ended, so only a place
+// nearer a piece's end than that waits for the next piece. A value taken out
+// lies whole within the bytes its place is decided on, so the stream carries
+// nothing else from piece to piece.
+type valueStream struct {
+	w      io.Writer
+	values *valueTable
+	// held is the text past the last place decided, fewer bytes than the
+	// longest value.
+	held []byte
+	// joined is held and the start of the next piece, read together.
+	joined []byte
+	// err is the first error of w, which ends the stream.
+	err error
+}
+
+// valueTable is the values a [scrubber] takes out, as a [valueStream] reads
+// them: by their first byte, longest first, and the longest one's length.
+type valueTable struct {
+	byFirst [256][][]byte
+	longest int
+}
+
+// newValueTable is the table of olds, ordered longest first.
+func newValueTable(olds []string) *valueTable {
+	t := &valueTable{}
+	for _, old := range olds {
+		t.byFirst[old[0]] = append(t.byFirst[old[0]], []byte(old))
+		t.longest = max(t.longest, len(old))
+	}
+	return t
+}
+
+// stream is s's by-value pass onto w, for a text written to it a piece at a
+// time.
+func (s scrubber) stream(w io.Writer) *valueStream {
+	return &valueStream{w: w, values: s.values}
+}
+
+// Write reads the next piece of the text, and writes what of the text it has
+// decided.
+func (v *valueStream) Write(p []byte) (int, error) {
+	if v.err != nil {
+		return 0, v.err
+	}
+	if v.values == nil {
+		return v.result(len(p), v.literal(p))
+	}
+	n := len(p)
+	if len(v.held) > 0 {
+		// Every place in held is decided on held and the first twice the
+		// longest value's length of p: a value read from a place in held
+		// ends within the longest value's length past it.
+		take := min(len(p), 2*v.values.longest)
+		v.joined = append(append(v.joined[:0], v.held...), p[:take]...)
+		if take == len(p) {
+			at, err := v.step(v.joined, len(v.joined), false)
+			v.held = append(v.held[:0], v.joined[at:]...)
+			return v.result(n, err)
+		}
+		at, err := v.step(v.joined, len(v.held), false)
+		if err != nil {
+			return v.result(n, err)
+		}
+		p = p[at-len(v.held):]
+	}
+	at, err := v.step(p, len(p), false)
+	v.held = append(v.held[:0], p[at:]...)
+	return v.result(n, err)
+}
+
+// Close decides every place still held, as the text's end decides them, and
+// writes them. It closes nothing it was handed.
+func (v *valueStream) Close() error {
+	if v.err != nil || v.values == nil {
+		return v.err
+	}
+	_, err := v.step(v.held, len(v.held), true)
+	v.held = v.held[:0]
+	_, err = v.result(0, err)
+	return err
+}
+
+// step decides the places of text before stop, from its start, and writes
+// them, a value taken out as [scrubMarker]: every place, once the text has
+// ended, and otherwise each with the longest value's length of text read from
+// it. It answers the first place it did not decide, every byte before which
+// is written.
+func (v *valueStream) step(text []byte, stop int, ended bool) (int, error) {
+	at, last := 0, 0
+	for at < stop {
+		if !ended && at+v.values.longest > len(text) {
+			break
+		}
+		matched := 0
+		for _, value := range v.values.byFirst[text[at]] {
+			if bytes.HasPrefix(text[at:], value) {
+				matched = len(value)
+				break
+			}
+		}
+		if matched == 0 {
+			at++
+			continue
+		}
+		if err := v.literal(text[last:at]); err != nil {
+			return at, err
+		}
+		if _, err := io.WriteString(v.w, scrubMarker); err != nil {
+			return at, err
+		}
+		at += matched
+		last = at
+	}
+	return at, v.literal(text[last:at])
+}
+
+// literal writes text as it is, and nothing where it is empty.
+func (v *valueStream) literal(text []byte) error {
+	if len(text) == 0 {
+		return nil
+	}
+	_, err := v.w.Write(text)
+	return err
+}
+
+// result is n read and the stream's error once err ends it.
+func (v *valueStream) result(n int, err error) (int, error) {
+	if err != nil {
+		v.err = err
+		return 0, err
+	}
+	return n, nil
 }
 
 // memberName is a tar member's name as the kept archive holds it: scrubbed by
@@ -274,7 +427,7 @@ func jsonEscaped(s string) string {
 // AWS names a session token and a security token both, an auth token and a
 // bearer token, a private key and a private token (GitLab's header), the
 // authorization a request carries, a secret, a credential itself, an OpenID
-// Connect ID token ([namesIDToken]), and the identity token and registry token
+// Connect ID token ([keyReading.idToken]), and the identity token and registry token
 // a Docker config holds beside a registry's `auth`, which is its user and
 // password encoded.
 //
@@ -292,65 +445,281 @@ func jsonEscaped(s string) string {
 // (`input_tokens`, `sessionId`), an access key's id is no secret
 // (`AccessKeyId`), a commit's author and a server's OAuth settings are no
 // credential (`author`, `oauth_provider`), and a value under one is none.
+//
+// ONE READING, IN PIECES OR WHOLE: credentialKey is a [keyReading] handed the
+// whole key at once, and a reader that has a key's decoded text a piece at a
+// time hands one each piece, so a key cut anywhere is read as the same key
+// whole and the rule has one implementation.
 func credentialKey(key string) bool {
-	if redact.NamesPassword(key) {
-		return true
-	}
-	k := strings.ToLower(key)
-	if k == "token" || k == "key" || k == "auth" {
-		return true
-	}
-	joined := strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			return r
-		}
-		return -1
-	}, k)
-	for _, name := range []string{"apikey", "apitoken", "accesstoken", "refreshtoken", "sessiontoken",
-		"securitytoken", "authtoken", "bearertoken", "privatekey", "privatetoken", "authorization", "secret",
-		"credential", "identitytoken", "registrytoken"} {
-		if strings.Contains(joined, name) {
-			return true
-		}
-	}
-	return namesIDToken(key)
+	var k keyReading
+	k.WriteString(key)
+	return k.Credential()
 }
 
-// namesIDToken reports whether key names an OpenID Connect ID token: `id` a
-// word of its own and `token` after it, however a format joins the two
-// (`id_token`, `idToken`, `OIDC_ID_TOKEN`).
+// wholeCredentialKeys are the keys [credentialKey] reads only as the whole key,
+// lowercase: never at large, where a transcript's own keys spell them.
+var wholeCredentialKeys = []string{"token", "key", "auth"}
+
+// credentialNames are the names [credentialKey] reads anywhere in a key once
+// it is lowercase and its separators are dropped.
+var credentialNames = [][]byte{[]byte("apikey"), []byte("apitoken"), []byte("accesstoken"),
+	[]byte("refreshtoken"), []byte("sessiontoken"), []byte("securitytoken"), []byte("authtoken"),
+	[]byte("bearertoken"), []byte("privatekey"), []byte("privatetoken"), []byte("authorization"),
+	[]byte("secret"), []byte("credential"), []byte("identitytoken"), []byte("registrytoken")}
+
+// keyReadingReach is how far back each of [keyReading]'s windows has to reach:
+// the longest whole key, the longest name, and the most runes a password's
+// key spans ([redact.PasswordKeyMaxBytes]).
+var keyReadingReach = func() (r struct{ whole, name, password int }) {
+	for _, key := range wholeCredentialKeys {
+		r.whole = max(r.whole, len(key))
+	}
+	for _, name := range credentialNames {
+		r.name = max(r.name, len(name))
+	}
+	r.password = max(redact.PasswordKeyMaxBytes(), 1)
+	return r
+}()
+
+// keyReading is a JSON object's key read a piece at a time, as its decoded
+// text arrives, cut anywhere, a rune's bytes included: Write hands it the next
+// piece, and Credential ends the key and reports whether it names a
+// credential, [credentialKey]'s reading of the whole key.
 //
-// A WORD OF ITS OWN, where every other name is read anywhere in the key,
-// because `idtoken` is what a count spells by chance — `paid_tokens`,
-// `invalid_tokens` — and a number under such a key is no credential's.
-func namesIDToken(key string) bool {
-	for i := 0; i+len("id") <= len(key); i++ {
-		if !strings.EqualFold(key[i:i+len("id")], "id") || !wordStarts(key, i) {
+// ITS STATE DOES NOT GROW WITH THE KEY, since a box's code can write a key a
+// gibibyte long. It holds the bytes of a rune a piece ended inside (three at
+// most); the key lowered for as long as it is no longer than the longest whole
+// key; the key's last runes, as written, in a window twice the most a
+// password's key spans, asked of [redact.NamesPassword] each time it fills and
+// cut back to one rune fewer than that span, so a key the window has not yet
+// seen whole is still in it; the lowered key's last letters and digits, in a
+// window twice the longest name, read for every name and cut back the same
+// way; and how far an ID token has read ([keyReading.idToken]), a few words.
+//
+// EVERY RUNE AS THE WHOLE KEY'S READING DECODES IT: a byte that begins no rune
+// is U+FFFD wherever the key is cut, since a piece's last bytes wait for the
+// next piece until they are a whole rune or none ([utf8.FullRune]).
+type keyReading struct {
+	// cut is the bytes of a rune the last piece ended inside.
+	cut  [utf8.UTFMax - 1]byte
+	ncut int
+	// lowered is the key lowered while it is no longer than the longest
+	// whole key; long once it is.
+	lowered []byte
+	long    bool
+	// written is the key's last runes as written, U+FFFD for a byte that
+	// begins none, and runes how many it holds.
+	written []byte
+	runes   int
+	// joined is the lowered key's last letters and digits.
+	joined []byte
+	// prev is the key's last rune; any whether it has one.
+	prev rune
+	any  bool
+	// id is how far an ID token has read, and token how much of `token`.
+	id    idTokenRead
+	token int
+	// named is whether a credential is named already: nothing read after
+	// changes it.
+	named bool
+}
+
+// idTokenRead is how far [keyReading.idToken] has read an ID token's words.
+type idTokenRead int
+
+const (
+	// idNone: no `id` that starts a word is being read.
+	idNone idTokenRead = iota
+	// idI: an `i` that starts a word, its `d` next.
+	idI
+	// idWord: `id`, its separators being read, `token` next.
+	idWord
+	// idToken: `id` and its separators, and keyReading.token bytes of
+	// `token`.
+	idToken
+)
+
+// WriteString is Write of s's bytes.
+func (k *keyReading) WriteString(s string) {
+	for len(s) > 0 {
+		var chunk [256]byte
+		n := copy(chunk[:], s)
+		_, _ = k.Write(chunk[:n])
+		s = s[n:]
+	}
+}
+
+// Write reads the next piece of the key. It never fails.
+func (k *keyReading) Write(p []byte) (int, error) {
+	n := len(p)
+	if k.named {
+		return n, nil
+	}
+	if k.ncut > 0 {
+		// The rune a piece ended inside, finished from this one: at most
+		// three of its bytes are needed, and a run that is no rune is read
+		// a byte at a time, as the whole key's decode reads it.
+		var joined [2*utf8.UTFMax - 2]byte
+		s := append(joined[:0], k.cut[:k.ncut]...)
+		s = append(s, p[:min(len(p), utf8.UTFMax-1)]...)
+		i := 0
+		for i < k.ncut {
+			if !utf8.FullRune(s[i:]) {
+				// The whole of p is in s, and still no rune.
+				k.ncut = copy(k.cut[:], s[i:])
+				return n, nil
+			}
+			r, w := utf8.DecodeRune(s[i:])
+			k.rune(r)
+			i += w
+		}
+		p = p[i-k.ncut:]
+		k.ncut = 0
+	}
+	for i := 0; i < len(p); {
+		if c := p[i]; c < utf8.RuneSelf {
+			k.rune(rune(c))
+			i++
 			continue
 		}
-		rest := strings.TrimLeftFunc(key[i+len("id"):], func(r rune) bool {
-			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-		})
-		if len(rest) >= len("token") && strings.EqualFold(rest[:len("token")], "token") {
+		if !utf8.FullRune(p[i:]) {
+			k.ncut = copy(k.cut[:], p[i:])
+			break
+		}
+		r, w := utf8.DecodeRune(p[i:])
+		k.rune(r)
+		i += w
+	}
+	return n, nil
+}
+
+// Credential ends the key, a rune a piece ended inside read as the whole
+// key's decode reads it, and reports whether the key names a credential.
+func (k *keyReading) Credential() bool {
+	for i := 0; i < k.ncut; {
+		r, w := utf8.DecodeRune(k.cut[i:k.ncut])
+		k.rune(r)
+		i += w
+	}
+	k.ncut = 0
+	if k.named {
+		return true
+	}
+	if k.runes > 0 && redact.NamesPassword(string(k.written)) {
+		return true
+	}
+	if !k.long && slices.Contains(wholeCredentialKeys, string(k.lowered)) {
+		return true
+	}
+	return k.joinedNames()
+}
+
+// rune reads the key's next rune.
+func (k *keyReading) rune(r rune) {
+	if k.named {
+		return
+	}
+	reach := keyReadingReach
+	k.written = utf8.AppendRune(k.written, r)
+	if k.runes++; k.runes == 2*reach.password {
+		if redact.NamesPassword(string(k.written)) {
+			k.named = true
+			return
+		}
+		k.written, k.runes = lastRunes(k.written, reach.password-1), reach.password-1
+	}
+	lower := unicode.ToLower(r)
+	if !k.long {
+		if k.lowered = utf8.AppendRune(k.lowered, lower); len(k.lowered) > reach.whole {
+			k.long, k.lowered = true, nil
+		}
+	}
+	if unicode.IsLetter(lower) || unicode.IsDigit(lower) {
+		if k.joined = utf8.AppendRune(k.joined, lower); len(k.joined) >= 2*reach.name {
+			if k.joinedNames() {
+				k.named = true
+				return
+			}
+			// A name still to be read whole begins in the last bytes
+			// but one of its length: bytes, not runes, since the names
+			// are matched as bytes.
+			k.joined = append(k.joined[:0], k.joined[len(k.joined)-(reach.name-1):]...)
+		}
+	}
+	k.idToken(r)
+	k.prev, k.any = r, true
+}
+
+// joinedNames reports whether the joined window holds one of
+// [credentialNames].
+func (k *keyReading) joinedNames() bool {
+	for _, name := range credentialNames {
+		if bytes.Contains(k.joined, name) {
 			return true
 		}
 	}
 	return false
 }
 
-// wordStarts reports whether one of key's words begins at byte i: at the key's
-// start, after a character that is neither a letter nor a digit, or at an
-// uppercase letter after a lowercase one or a digit (`oidcIdToken`).
-func wordStarts(key string, i int) bool {
-	if i == 0 {
+// idToken reads r for an OpenID Connect ID token: `id` a word of its own and
+// `token` after it, however a format joins the two (`id_token`, `idToken`,
+// `OIDC_ID_TOKEN`), each of its letters in either case.
+//
+// A WORD OF ITS OWN, where every other name is read anywhere in the key,
+// because `idtoken` is what a count spells by chance (`paid_tokens`,
+// `invalid_tokens`), and a number under such a key is no credential's.
+//
+// ONE `id` AT A TIME: no letter of `d`, the separators or `token` is an `i`,
+// so an `id` read on is never beside another that could start, and a rune that
+// ends one reading is read again as the start of the next.
+func (k *keyReading) idToken(r rune) {
+	switch k.id {
+	case idI:
+		if r == 'd' || r == 'D' {
+			k.id = idWord
+			return
+		}
+	case idWord:
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return
+		}
+		if r == 't' || r == 'T' {
+			k.id, k.token = idToken, 1
+			return
+		}
+	case idToken:
+		if r|0x20 == rune("token"[k.token]) {
+			if k.token++; k.token == len("token") {
+				k.named = true
+			}
+			return
+		}
+	}
+	k.id = idNone
+	if (r == 'i' || r == 'I') && k.wordStarts(r) {
+		k.id = idI
+	}
+}
+
+// wordStarts reports whether one of the key's words begins at r, read after
+// the key's last rune: at the key's start, after a character that is neither
+// a letter nor a digit, or at an uppercase letter after a lowercase one or a
+// digit (`oidcIdToken`).
+func (k *keyReading) wordStarts(r rune) bool {
+	if !k.any || !unicode.IsLetter(k.prev) && !unicode.IsDigit(k.prev) {
 		return true
 	}
-	prev, _ := utf8.DecodeLastRuneInString(key[:i])
-	if !unicode.IsLetter(prev) && !unicode.IsDigit(prev) {
-		return true
+	return unicode.IsUpper(r) && (unicode.IsLower(k.prev) || unicode.IsDigit(k.prev))
+}
+
+// lastRunes is b's last n runes, moved to b's start.
+func lastRunes(b []byte, n int) []byte {
+	at := len(b)
+	for ; n > 0 && at > 0; n-- {
+		_, w := utf8.DecodeLastRune(b[:at])
+		at -= w
 	}
-	cur, _ := utf8.DecodeRuneInString(key[i:])
-	return unicode.IsUpper(cur) && (unicode.IsLower(prev) || unicode.IsDigit(prev))
+	return append(b[:0], b[at:]...)
 }
 
 // scrubArchive streams the archive first holds, of layout, scrubbed onto dst,
