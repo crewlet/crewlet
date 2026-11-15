@@ -123,6 +123,25 @@ export function retryDelayMs(code: QueryErrorCode, err: unknown): number | null 
   return unavailableRetryMs(err instanceof QueryError ? err.refusal : null);
 }
 
+/**
+ * Whether a refusal REPLACES the answer on screen rather than standing beside
+ * it.
+ *
+ * Two kinds of refusal, and the last reading means different things beside
+ * each. A failure to answer (`unavailable`, `timeout`, `closed`,
+ * `query_failed`) says nothing about the subject, so the last reading is still
+ * the best picture there is. An answer ABOUT the subject is the engine
+ * speaking for it: `not_found` (it is gone: deleted for good, or never
+ * disclosed), `unauthorized` (it is no longer this reader's to read: a grant
+ * taken away mid-session) and `artifact_trashed` (its content is in the
+ * trash). Kept beside one of those, the last reading drew what the engine had
+ * just said is not there. `useRest` draws the same line between a request
+ * that never arrived and a refusal.
+ */
+export function replacesData(code: QueryErrorCode): boolean {
+  return code === "not_found" || code === "unauthorized" || code === "artifact_trashed";
+}
+
 export function useQuery<K extends QueryName>(
   what: K,
   params?: Record<string, unknown>,
@@ -205,10 +224,16 @@ export function useQuery<K extends QueryName>(
         const detail = err instanceof QueryError && err.detail ? err.detail : undefined;
         const refusal = err instanceof QueryError ? err.refusal : null;
         setState((prev) => ({
-          // KEEP the last good answer. A screen that blanks on one failed poll
-          // tells the reader less than one that shows the last reading and
-          // says when it was taken.
-          data: prev.data,
+          // KEEP the last good answer through a FAILURE TO ANSWER. A screen
+          // that blanks on one failed poll tells the reader less than one
+          // that shows the last reading and says when it was taken.
+          //
+          // AN ANSWER ABOUT THE SUBJECT REPLACES IT ([replacesData]): the
+          // engine said the thing is gone or no longer this reader's, and the
+          // last reading is then a picture of something that is not there. A
+          // task deleted permanently was drawn whole, with Restore, under its
+          // own "No task called" state.
+          data: replacesData(code) ? null : prev.data,
           loading: false,
           error: code,
           refusal,

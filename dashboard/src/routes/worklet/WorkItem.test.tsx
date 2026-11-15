@@ -35,6 +35,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
+import { session } from "~/protocol/session.ts";
 import type {
   WorkActivityRecord,
   WorkItem,
@@ -2650,6 +2651,36 @@ test("a task that does not exist says so, naming the key, with the way back to T
     "#/worklet/tasks",
   );
   expect(screen.queryByText("Not found. It may have been removed.")).toBeNull();
+});
+
+// A TASK DELETED FOR GOOD WHILE ITS PAGE IS OPEN IS GONE FROM IT. The page read
+// a task in the trash, the purge landed, and the next read answered not_found:
+// the last reading stood beside the empty state, so the deleted task was drawn
+// whole under "No task called", Restore and More included. Mutation: keep the
+// last reading through a not_found and the title, Restore and More come back.
+test("a task deleted permanently while its page is open leaves only the not-found state", async () => {
+  location.hash = "#/worklet/ENG-42";
+  let purged = false;
+  const trashed = detail({
+    task: task({ removed: { by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" } }),
+  });
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: () =>
+        purged ? Promise.reject(new QueryError("not_found")) : Promise.resolve(trashed),
+    },
+  });
+  await settle();
+  expect(screen.getAllByRole("button", { name: "Restore ENG-42" }).length).toBeGreaterThan(0);
+  purged = true;
+  await act(async () => {
+    session.written("tracker", null, []);
+  });
+  await settle();
+  expect(screen.getByText("No task called “ENG-42”")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Restore ENG-42" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "More for ENG-42" })).toBeNull();
+  expect(screen.queryByText(trashed.task.title)).toBeNull();
 });
 
 test("the title open in its editor is the assistant's to read and set, and Save sends what it set", async () => {
