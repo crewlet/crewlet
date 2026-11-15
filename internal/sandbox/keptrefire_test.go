@@ -264,6 +264,49 @@ func TestARefireTheStoreDidNotAnswerIsKeptForItsBackstop(t *testing.T) {
 	})
 }
 
+// A SIGNAL THAT ENDED A HOLD IS NOT UNDONE BY A RE-FIRE THE STORE DID NOT
+// ANSWER. A completion held here until a limit's instant is re-fired at once
+// when the signal that ends the limit comes, and a re-fire that settles nothing
+// and was not refused again is kept again, for a re-fire of its own. Kept again
+// as it was, held, it refused the job's announcements here once more and armed
+// that re-fire for the instant the signal had ended, up to the hour a vendor's
+// window is benched for. Kept unheld, its re-fire comes at the backstop, and
+// the waiter's next announcement is asked of the gate.
+//
+// Mutation: keep the failed re-fire again with its hold, and the completion is
+// held here until the instant, its re-fire armed for it.
+func TestASignalledRefireTheStoreDidNotAnswerIsHeldNoLonger(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	// THE STORE ANSWERS THE FIRST CLAIM, whose resume met the limit, and not
+	// the second, the signal's re-fire's.
+	rig.coordinator.pending = &unansweredClaims{PendingStore: rig.coordinator.pending, before: 1, silent: 1,
+		answered: func() {}}
+	until := rig.now.Add(time.Hour)
+	payload, _ := limitedAfterClaim(t, rig, until)
+	// THE LIMIT LIFTS, AND THAT IS SIGNALLED; the re-fire's claim goes
+	// unanswered.
+	rig.resumer.failWith(nil)
+	rig.coordinator.Readmit(conditionLimit, "swe")
+	rig.coordinator.inflight.Wait()
+	if calls := rig.resumer.calls(); len(calls) != 0 {
+		t.Fatalf("the premise: the turn resumed %d times with the re-fire's claim unanswered", len(calls))
+	}
+	if refusal, held := rig.coordinator.stillRefused(payload); held {
+		t.Fatalf("the completion is held here again until %v, after the signal that ended its hold; want it "+
+			"kept unheld", refusal.Until)
+	}
+	if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != answerWaitBackstop {
+		t.Fatalf("the failed re-fire's re-fires armed = %v; want one, at the %v backstop", delays,
+			answerWaitBackstop)
+	}
+	rig.fireRetries()
+	rig.coordinator.inflight.Wait()
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("the turn resumed %d times at the failed re-fire's backstop; want it carried once", len(calls))
+	}
+}
+
 // A KEPT COMPLETION'S RE-FIRE GOES WITH IT. The re-fire armed for a kept
 // completion is the keep's own: once the completion goes, carried by an
 // announcement the gate admitted, let go of with the seat, or kept afresh by a

@@ -522,7 +522,18 @@ func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished,
 // already (a refusal's keep, or a recovery's re-arm still standing), which
 // owns the re-fire, and unless this node no longer holds the seat, whose
 // next holder owes the completion from the job's record.
+//
+// KEPT UNHELD, FOR THE BACKSTOP ALONE. What re-fired it ended whatever its
+// refusal held it to (the condition's signal, a person's stop, the instant
+// itself), and what it met since is a step that settled nothing, which names
+// no instant of its own. Kept again as it was, a completion held here until a
+// limit's instant ([Coordinator.stillRefused]), re-fired by the signal that
+// ended the limit and then not answered by the store, was held again: the
+// waiter's announcements of the job refused here, and its re-fire armed for
+// the instant the signal had ended, up to the hour a vendor's window is
+// benched for.
 func (c *Coordinator) keepAgain(kept refusedCompletion) {
+	kept.heldUntil, kept.reason, kept.until = time.Time{}, "", time.Time{}
 	c.mu.Lock()
 	if _, already := c.refused[kept.ev.TurnID]; already || c.closed {
 		c.mu.Unlock()
