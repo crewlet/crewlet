@@ -598,11 +598,11 @@ export const ACTIONS = {
   // A REPOSITORY'S LIFE (`routes/gitlet/repo/RepoWrites.tsx`,
   // `routes/gitlet/ImportRepo.tsx`). Each lands on the code log, whose position
   // raises this tab's code floor, and the repository's row and the listing
-  // are both in that domain's session set. Settings › Search mode and the
-  // mirrors, each one settings change of its own; a mirror is a person's
-  // alone, which the deciding data node holds every asker to (U49 a).
+  // are both in that domain's session set. Settings › its details, search
+  // mode and mirrors, each one settings change of its own; a mirror is a
+  // person's alone, which the deciding data node holds every asker to (U49 a).
   code_update_repo: {
-    args: ["repo", "search", "mirror_from", "mirror_to"],
+    args: ["repo", "description", "default_branch", "search", "owner", "mirror_from", "mirror_to"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
