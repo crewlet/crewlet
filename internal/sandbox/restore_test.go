@@ -455,22 +455,33 @@ func TestTheBriefMatchesWhatTheRunHas(t *testing.T) {
 // once that is decided, and names it — never "a session of its own" for a run
 // that goes on in the box's copy. A launch that refuses nothing says nothing,
 // and one that refuses the box's copy too says each, naming the same fallback.
+// A kept capture taken while its job still worked, which the box's copy of the
+// same session went on past, is passed over for that copy and said so
+// ([copyWentPast]); one the run's record does not keep as chosen is refused for
+// that, as any other.
 //
-// Mutation: log the refusal before the fallback is decided, or name a session
-// of its own whatever the launch continues, and a case goes red.
+// Mutation: log the refusal before the fallback is decided, name a session of
+// its own whatever the launch continues, pass a capture the copy went past
+// over without saying so, or judge one the record does not keep as chosen, and
+// a case goes red.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 	const (
 		refusedKept = "not the one its launch was asked to continue"
 		ranOut      = "ran out of"
+		wentPast    = "went on past the kept capture (launch 1, capture 1)"
 	)
 	for _, tc := range []struct {
 		name                   string
 		chosen, reused, ranOut bool
-		kind                   BriefKind
-		session, outcome       string
-		reasons                []string
+		// wentOn keeps a capture taken while its job still worked, of the
+		// session the box's copy is, and keepsChosen leaves it the one the
+		// launch was asked to continue.
+		wentOn, keepsChosen bool
+		kind                BriefKind
+		session, outcome    string
+		reasons             []string
 	}{
 		{name: "a refused kept session, the box's copy continued", chosen: true, reused: true,
 			kind: BriefContinued, session: "sess-ask", outcome: continuesBoxCopy, reasons: []string{refusedKept}},
@@ -481,6 +492,11 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 		{name: "the box's copy run out of context, nothing chosen", reused: true, ranOut: true,
 			kind: BriefFresh, outcome: startsItsOwn, reasons: []string{ranOut}},
 		{name: "the box's copy, nothing chosen", reused: true, kind: BriefContinued, session: "sess-ask"},
+		{name: "a kept session the box's copy went past, the copy continued", chosen: true, reused: true,
+			wentOn: true, keepsChosen: true, kind: BriefContinued, session: "sess-ask", outcome: continuesBoxCopy,
+			reasons: []string{wentPast}},
+		{name: "a refused kept session the box's copy went past", chosen: true, reused: true, wentOn: true,
+			kind: BriefContinued, session: "sess-ask", outcome: continuesBoxCopy, reasons: []string{refusedKept}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureLogs(t)
@@ -489,6 +505,9 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 			key := objstore.KeyAt(time.Now())
 			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: true,
 				Through: new(0), Object: key.String(), ObjectHash: strings.Repeat("a", 64), ObjectSize: 14}
+			if tc.wentOn {
+				kept.Final, kept.Interrupted, kept.SessionID = false, true, "sess-ask"
+			}
 			rig.coordinator.restore = &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, kept)},
 				archives: map[string][]byte{key.String(): []byte("the transcript")}}
 			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Capture: &kept, Kept: &kept}
@@ -496,9 +515,11 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 				opened.ExhaustedSessions = []string{"sess-ask"}
 			}
 			req := continuingKept(kept)
-			// REFUSED: the record keeps another capture than the one the
-			// launch was asked to continue.
-			req.Session.CaptureSeq = 2
+			if !tc.keepsChosen {
+				// REFUSED: the record keeps another capture than the one the
+				// launch was asked to continue.
+				req.Session.CaptureSeq = 2
+			}
 			if !tc.chosen {
 				req.Session = nil
 			}
@@ -524,6 +545,109 @@ func TestANotContinuedLineNamesWhatTheLaunchContinuesInstead(t *testing.T) {
 					t.Errorf("line %d is %q, want it saying %q and naming what the launch continues: %q", i,
 						line, tc.reasons[i], tc.outcome)
 				}
+			}
+		})
+	}
+}
+
+// A RELAUNCH IN ITS JOB'S OWN BOX CONTINUES THE COPY THAT WENT PAST ITS
+// CAPTURE. A kept capture taken while its job still worked is a point the job's
+// session passed through: the harness went on in the box after it. So a person's
+// answer that carries the round on in that box, offered the box's copy of the
+// same session, continues the copy, handed the brief that continues it there,
+// and restores nothing over it: the relaunch decided no kept session. Anywhere
+// else the capture is restored as before: in another box, which holds no copy;
+// where nothing offers the copy (a lost job's carry, a send-back, a copy its
+// floor could not carry); where the copy is another session; and where the
+// capture is final, holding the ended job's whole session, which its copy went
+// nowhere past.
+//
+// Mutation: restore the capture over the copy, pass a final capture over, pass
+// one over for a copy of another session or in a box that holds no copy, or
+// for no copy at all, and a case goes red.
+func TestARelaunchInItsJobsOwnBoxContinuesTheCopyThatWentPastItsCapture(t *testing.T) {
+	t.Parallel()
+	const (
+		copyBrief = "carry the box's copy on"
+		keptBrief = "carry on in the box you left"
+		newBox    = "carry on in a box that replaced yours"
+	)
+	for name, tc := range map[string]struct {
+		// final keeps a capture taken once its job had ended, and unnamed one
+		// whose stamp names no session.
+		final, unnamed, reused bool
+		// offered is the copy the launch is offered, nil for none at all.
+		offered *Continuation
+		want    BriefKind
+		brief   string
+		session string
+		// kept is the launch's decision: the turn's kept capture, carried
+		// into the box or found there.
+		kept, carried bool
+	}{
+		"its own box, offered the copy": {reused: true,
+			offered: &Continuation{SessionID: "s-1", Brief: copyBrief},
+			want:    BriefContinued, brief: copyBrief, session: "s-1"},
+		"another box, offered the copy": {
+			offered: &Continuation{SessionID: "s-1", Brief: copyBrief},
+			want:    BriefContinuedNewBox, brief: newBox, session: "s-1", kept: true, carried: true},
+		"its own box, a lost job's carry": {reused: true,
+			offered: &Continuation{Brief: "carry the lost round on"},
+			want:    BriefContinued, brief: keptBrief, session: "s-1", kept: true, carried: true},
+		"its own box, a send-back": {reused: true,
+			want: BriefContinued, brief: keptBrief, session: "s-1", kept: true, carried: true},
+		"its own box, the copy past its floor": {reused: true,
+			offered: &Continuation{Brief: copyBrief},
+			want:    BriefContinued, brief: keptBrief, session: "s-1", kept: true, carried: true},
+		"its own box, a copy of another session": {reused: true,
+			offered: &Continuation{SessionID: "s-other", Brief: copyBrief},
+			want:    BriefContinued, brief: keptBrief, session: "s-1", kept: true, carried: true},
+		"its own box, a final capture": {final: true, reused: true,
+			offered: &Continuation{SessionID: "s-1", Brief: copyBrief},
+			want:    BriefContinued, brief: keptBrief, session: "s-1", kept: true},
+		"its own box, a capture naming no session, no copy": {unnamed: true, reused: true,
+			offered: &Continuation{Brief: copyBrief},
+			want:    BriefContinued, brief: keptBrief, session: "s-1", kept: true, carried: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.coordinator.spoolDir = t.TempDir()
+			rig.runner.Carries = true
+			key := objstore.KeyAt(time.Now())
+			// THE SHAPE A CAPPED COLLECTION LEAVES where its end of the job
+			// failed: the job's newest capture, taken while it still worked,
+			// cut off, landed and kept.
+			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: tc.final,
+				Interrupted: !tc.final, Through: new(0), Object: key.String(),
+				ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, SessionID: "s-1"}
+			if tc.unnamed {
+				kept.SessionID = ""
+			}
+			restore := &keptRestore{rows: map[string]executorkeep.TurnRow{"t1": keptRow(t, kept)},
+				archives: map[string][]byte{key.String(): []byte("the transcript")}}
+			rig.coordinator.restore = restore
+			opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Capture: &kept, Kept: &kept}
+			req := continuingKept(kept)
+			req.Continue = tc.offered
+			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
+				rig.runner, tc.reused, false)
+			t.Cleanup(got.release)
+			if got.kind != tc.want || got.brief != tc.brief || got.session != tc.session {
+				t.Fatalf("the launch hands brief %q (%s) on session %q; want %q (%s) on %q", got.brief, got.kind,
+					got.session, tc.brief, tc.want, tc.session)
+			}
+			if got.decision().Kept != tc.kept {
+				t.Errorf("the launch tells its caller %+v, want the turn's kept session %v", got.decision(), tc.kept)
+			}
+			if (got.carried != nil) != tc.carried {
+				t.Errorf("the launch carries %+v into the box, want a capture carried %v", got.carried, tc.carried)
+			}
+			// NOTHING OF THE CAPTURE IS READ for a launch that passes it over:
+			// not even the turn's row, which only a capture tried is checked
+			// against.
+			if asked := restore.askedFor(); !tc.kept && len(asked) != 0 {
+				t.Errorf("a launch that continues the box's copy read the rows %v", asked)
 			}
 		})
 	}

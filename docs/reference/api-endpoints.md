@@ -10911,7 +10911,9 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   comes: the node answering asks it, once a page, a live turn's session by its
   turn and a head by none, itself where it holds the seat. **`continues_in`**
   says where: `any_box`, in whichever box the launch gets — a relaunch from the
-  turn's kept capture, the next turn from the head, in a box of its own; or
+  turn's kept capture (in the box its job parked in, where that capture was
+  taken while the job still worked, from the copy that box holds, which went on
+  past it), the next turn from the head, in a box of its own; or
   `parked_box`, a relaunch's alone, where the kept capture is not continued but
   a person's answer would carry the turn's parked run on in the box it parked
   in, which still holds that box, ran the row's own session there, and runs

@@ -51,6 +51,14 @@ import (
 // calls after by: one an older build stamped states only the places it read
 // the log at, which cannot say which calls came after it.
 //
+// AND NEVER OVER A COPY THAT WENT ON PAST IT ([copyWentPast]): a capture taken
+// while its job still worked is a point the job's session passed through, so
+// where a relaunch carries the round on in that job's own box, offered the copy
+// of the same session the box holds, it continues that copy, which holds
+// everything the capture does and all the job did after it, rather than roll
+// the session back to the capture. A final capture holds the ended job's whole
+// session and is continued there as anywhere.
+//
 // EXCEPT WHILE THE TURN HAS KEPT NOTHING AT ALL: its first job lost with its
 // box before any capture of it landed, its captures refused or unanswered. Then
 // the relaunch continues the session the turn's first launch froze — the one
@@ -401,9 +409,12 @@ const (
 	// ContinuesInAnyBox is a session continued in whichever box the launch
 	// gets: a live turn's kept capture, by a relaunch of the turn, restored
 	// into another box or as its own copy in the box it was last worked in
-	// ([ContinuityOf] says it continues); or an ended turn's that is its
-	// conversation's head, by the conversation's next turn, restored into a
-	// box of that turn's own ([BaseContinuityOf] says it continues).
+	// ([ContinuityOf] says it continues), though in the box its job parked
+	// in, where that capture was taken while the job still worked, as the
+	// copy that box holds, which went on past it ([copyWentPast]); or an
+	// ended turn's that is its conversation's head, by the conversation's
+	// next turn, restored into a box of that turn's own ([BaseContinuityOf]
+	// says it continues).
 	ContinuesInAnyBox ContinuesIn = "any_box"
 
 	// ContinuesInParkedBox is the session the box the turn's job parked in
@@ -1653,9 +1664,10 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 // [Coordinator.recordBegin]).
 //
 // IN THIS ORDER: the session its caller chose ([LaunchRequest.Session]) — the
-// turn's kept capture, in any box, or the session its conversation's last turn
-// left, in a box of its own ([Coordinator.continueBase]); else, where the box is
-// the job before's own, that job's session as the box holds it
+// turn's kept capture, in any box but over no copy that went on past it in the
+// job before's own box ([copyWentPast]), or the session its conversation's last
+// turn left, in a box of its own ([Coordinator.continueBase]); else, where the
+// box is the job before's own, that job's session as the box holds it
 // ([Continuation.SessionID]), as a run always could, unless that job ran out of
 // context in it; else a session of its own.
 //
@@ -1675,7 +1687,7 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		)
 		if want.Base {
 			launch, why = c.continueBase(ctx, req, opened, box, runner, reused, begun, *want)
-		} else {
+		} else if why = copyWentPast(req, opened, reused, *want); why == "" {
 			launch, why = c.continueKept(ctx, req, opened, box, runner, reused, *want)
 		}
 		if why == "" {
@@ -1705,6 +1717,48 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 		c.notContinued(ctx, req, why, outcome)
 	}
 	return launch
+}
+
+// copyWentPast is why the launch req, in the box the job it follows ran in
+// (reused), does not restore the turn's kept capture want over that box's own
+// copy of the session; "" where nothing keeps it from trying.
+//
+// A CAPTURE TAKEN WHILE ITS JOB STILL WORKED (not [SessionCapture.Final]) is a
+// point the job's session passed through: its harness went on working in the
+// box after the take, so the copy the box holds of the same session holds
+// everything the capture does and every call and note the job made after it.
+// Restoring the capture there replaces that copy ([CarriedSession.Replace],
+// since such a capture is cut off) and rolls the session back to where it was
+// taken. So where the launch is offered that copy ([Continuation.SessionID]:
+// a person's answer or a replaced sign-in carrying the round on in the box;
+// a lost job's carry and a refused request's offer none, and a launch's caller
+// clears one its floor cannot carry), and the copy is the capture's own
+// session, the kept capture is not tried, and the launch continues the copy,
+// told what a copy cut off is told (internal/agent/runner's in-place brief,
+// which reads the job's record and its carry, never the kept capture). A
+// FINAL capture holds the ended job's whole session, so the copy went nowhere
+// past it, and it is restored as before. Whether a capture is final is the
+// fact this reads, never its age or its place: a standby's takeover can keep
+// a final capture older than a refused newest one of its job.
+//
+// Only a capture the run's record keeps at want's place is judged: one it does
+// not keep is [Coordinator.continueKept]'s to refuse, saying so. And a launch
+// offered no copy tries the capture whatever session its stamp names, none
+// included: two empty names are no copy to go on in, and passing the capture
+// over there would start the run fresh.
+func copyWentPast(req LaunchRequest, opened PendingRun, reused bool, want SessionContinuation) string {
+	kept, offered := opened.Kept, req.Continue
+	switch {
+	case !reused || offered == nil || offered.SessionID == "":
+		return ""
+	case kept == nil || kept.LaunchSeq != want.LaunchSeq || kept.CaptureSeq != want.CaptureSeq:
+		return ""
+	case kept.Final || kept.SessionID != offered.SessionID:
+		return ""
+	}
+	return fmt.Sprintf("the box this launch reuses holds the job it follows' own copy of the session, which "+
+		"went on past the kept capture (launch %d, capture %d): that capture was taken while the job still "+
+		"worked, so it is not restored over the copy", kept.LaunchSeq, kept.CaptureSeq)
 }
 
 // continueKept continues the turn's kept capture want in box, or says why it
