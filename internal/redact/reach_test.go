@@ -450,3 +450,123 @@ func TestAnEndLinesRestIsReadToMaxReach(t *testing.T) {
 		atTheBound(t, name, c.text, c.want)
 	}
 }
+
+// A PASSWORD KEY'S LINE IS READ FOR ITS GUTTER ONLY WHERE IT BEGINS WITHIN
+// MaxReach OF THE KEY, AS WRITTEN AND AS THE RULE LEAVES IT, every value the
+// rule replaced on it before the key written as its marker; past that, it has
+// none, and the value under the key is read from the start of its line, past
+// the markers it opens with but a password's, the gutter's punctuation
+// redacted with it and a gutter's word taken for the value: never from where
+// the bound falls, which may be a gutter's start that the line's own is not.
+// Read from the bound, the gutter began wherever the bound fell, which a
+// marker longer or shorter than the value it replaced moved, so a second pass
+// read another gutter and took another value: a value of one byte, its marker
+// nineteen, carried a line within the bound past it, and a value a line long,
+// its marker nineteen, brought a line past the bound within it. And read from
+// a marker a line opens with, a token every line of a log carries, it named
+// no value, while a second pass, the key's line within the bound, matched the
+// marker as its gutter's and took the value after it.
+//
+// Mutation: read the bound on the line as written alone, and the rows whose
+// markers carry the line past it turn; read the gutter from the bound where
+// the line begins past it, and the row whose bound falls at a gutter's start
+// turns; take a line beginning exactly at the bound for one that begins
+// past it, in a string or on its own line, and the row at the bound turns; or
+// read the value from the marker a line opens with where the key's line has
+// no gutter, and the row a token opens past the bound turns.
+func TestAKeysLineIsReadForItsGutterWithinMaxReach(t *testing.T) {
+	t.Parallel()
+	m := redact.Marker + "password]"
+	// A diff's line holding a value of one byte and, n spaces on, a key
+	// whose line begins 14 bytes and n before it, 32 and n once the value
+	// is its marker; the key's value is on the next line, behind the
+	// diff's `+`.
+	grows := func(n int) string { return "+pwd=a" + spaces(n) + " Retype password:\n+hunter2x9\n" }
+	// The same with the first value n bytes long, on a line that begins
+	// 13 bytes and n before the key, after a line of its own.
+	shrinks := func(n int) string {
+		return "x\n+pwd=" + strings.Repeat("h", n) + " Retype password:\n+hunter2x9\n"
+	}
+	// The same in a string, its breaks escaped.
+	escaped := func(n int) string {
+		return `"x\n+pwd=a` + spaces(n) + ` Retype password:\n+hunter2x9\n"` + "\n"
+	}
+	// An echoed key, its value the line's quote, and n spaces on another
+	// key whose line begins 21 bytes and n before it, 39 and n once that
+	// quote is its marker.
+	echoed := func(n int) string {
+		return "echo \"Password:\" >> f" + spaces(n) + "password:\necho \"hunter2x9\" >> f\n"
+	}
+	// A token opening every line, the key's line carried past the bound by
+	// a value n bytes long before the key.
+	tokened := func(n int) string {
+		token := "sk-" + strings.Repeat("q", 24)
+		return token + " pwd=" + strings.Repeat("h", n) + " pwd:\n" + token + " hunter2x9\n"
+	}
+	api := redact.Marker + "api-key]"
+	for name, c := range map[string]struct{ text, want string }{
+		"a line its markers carry to the bound": {
+			grows(reach - 32), "+pwd=" + m + spaces(reach-32) + " Retype password:\n+" + m + "\n",
+		},
+		"a line its markers carry a byte past it": {
+			grows(reach - 31), "+pwd=" + m + spaces(reach-31) + " Retype password:\n" + m + "\n",
+		},
+		"a line beginning at the bound, its value a line long": {
+			shrinks(reach - 13), "x\n+pwd=" + m + " Retype password:\n+" + m + "\n",
+		},
+		"a line beginning a byte past it": {
+			shrinks(reach - 12), "x\n+pwd=" + m + " Retype password:\n" + m + "\n",
+		},
+		"a line beginning past it, the bound at its diff's mark": {
+			"xxxxxxxxxx" + shrinks(reach - 13)[2:], "xxxxxxxxxx+pwd=" + m + " Retype password:\n" + m + "\n",
+		},
+		"a string's line its markers carry to the bound": {
+			escaped(reach - 32), `"x\n+pwd=` + m + spaces(reach-32) + ` Retype password:\n+` + m + `\n"` + "\n",
+		},
+		"a string's line its markers carry a byte past it": {
+			escaped(reach - 31), `"x\n+pwd=` + m + spaces(reach-31) + ` Retype password:\n` + m + `\n"` + "\n",
+		},
+		"an echoed line its marker carries to the bound": {
+			echoed(reach - 39), "echo \"Password:" + m + " >> f" + spaces(reach-39) + "password:\necho \"" + m + " >> f\n",
+		},
+		"an echoed line its marker carries a byte past it": {
+			echoed(reach - 38), "echo \"Password:" + m + " >> f" + spaces(reach-38) + "password:\n" + m + " \"hunter2x9\" >> f\n",
+		},
+		"a line a token opens within the bound": {
+			tokened(10), api + " pwd=" + m + " pwd:\n" + api + " " + m + "\n",
+		},
+		"a line a token opens past it": {
+			tokened(reach), api + " pwd=" + m + " pwd:\n" + api + " " + m + "\n",
+		},
+	} {
+		atTheBound(t, name, c.text, c.want)
+	}
+}
+
+// A KEY ON THE REST OF A LINE AN ESCAPED BREAK ENDED A KEY'S LINE ON NAMES WHAT
+// FOLLOWS IT, WHETHER OR NOT THE STRING GOES ON past it to another escaped
+// line: the punctuation that rest opens with is no value of the first key's,
+// which names none, and the second key reads its own. Read as one of the
+// string's lines where it went on, the rest gave the first key its opening
+// `|` for a value, and the second key, its line no longer opened, its own
+// closing `|`, publishing what followed; and where the bound cut the rest, no
+// escaped line followed it within the bound, so the key on it ended the first
+// key's read, until a second pass, the second key's value now its marker,
+// found the string going on within the bound and took the `|`.
+//
+// Mutation: read the rest as one of the string's lines before looking for a
+// key on it, and both rows turn.
+func TestAKeyOnTheRestOfALineNamesItsValueWhereverTheStringGoes(t *testing.T) {
+	t.Parallel()
+	m := redact.Marker + "password]"
+	row := func(n int) string {
+		return `x=" | Password: |\n| Password: | x` + strings.Repeat("A", n) + `| hunter2 |\n` + "\n"
+	}
+	want := `x=" | Password: |\n| Password: | ` + m + ` hunter2 |\n` + "\n"
+	for name, n := range map[string]int{
+		"a rest the string goes on past": 10,
+		"a rest the bound cuts":          reach,
+	} {
+		atTheBound(t, name, row(n), want)
+	}
+}
