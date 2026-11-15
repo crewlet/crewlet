@@ -2352,7 +2352,7 @@ func (c *Company) codeWarnings() []Warning {
 			continue
 		}
 		out = append(out, advisory(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
-			"%s's default branch %s is unprotected: a person can force-push or delete it, and no merge "+
+			"%s's default branch %s is unprotected: a person can force-push it, and no merge "+
 				"gate holds what merges into it (add {branch: %s} to its protect list, with merge_by, "+
 				"approvals, human_paths or checks to gate its merges)", r.Name, branch, branch)))
 	}
