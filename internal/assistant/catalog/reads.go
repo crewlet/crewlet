@@ -737,7 +737,7 @@ func readTools() []Tool {
 			Routes: []string{"GET /query/{what}"}, Fence: true,
 			// DOCLET IS WRITTEN BY THE COMPANY; a connected
 			// one (Confluence) by whoever its own users are.
-			TrustOf: func(_ Args, answer any) provenance.Trust { return knowledgeTrust(answer) },
+			TrustOf: func(_ Args, answer any) Trusted { return knowledgeTrust(answer) },
 			Shows:   []authz.ObjectKind{authz.KindPage, authz.KindTask},
 			Build: func(a map[string]any) (exec.Request, error) {
 				return get("GET /query/{what}", map[string]string{"what": "knowledge"},
@@ -983,16 +983,17 @@ func artifactKinds() []string {
 }
 
 // outsideWhere is the trust of an answer whose rows (at rows) may carry an
-// executor's question at field: the one trust decided for an executor's
-// words (provenance.Executor) where any row carries one, and where none does
-// the engine's own records, a colleague's by the one rule for a surface the
-// engine hosts.
-func outsideWhere(rows, field string) func(Args, any) provenance.Trust {
-	return func(_ Args, answer any) provenance.Trust {
+// executor's question at field: the one label decided for an executor's
+// words (provenance.Executor), its surface included, where any row carries
+// one, and where none does the engine's own records, a colleague's by the one
+// rule for a surface the engine hosts.
+func outsideWhere(rows, field string) func(Args, any) Trusted {
+	return func(_ Args, answer any) Trusted {
 		if carriesRunAsk(answer, rows, field) {
-			return provenance.Executor("").Trust
+			l := provenance.Executor("")
+			return Trusted{Trust: l.Trust, Source: l.Source}
 		}
-		return provenance.TrustForHosted("", nil, false)
+		return Trusted{Trust: provenance.TrustForHosted("", nil, false)}
 	}
 }
 
@@ -1013,10 +1014,10 @@ func carriesRunAsk(answer any, rows, field string) bool {
 // doclet.Backend) by the one rule for a surface the engine hosts, a
 // colleague's with nobody named; a connected knowledge base's external, since
 // people outside the company may write its pages and the answer names nobody.
-func knowledgeTrust(answer any) provenance.Trust {
+func knowledgeTrust(answer any) Trusted {
 	switch cards.Text(cards.Lookup(answer, "backend")) {
 	case "", "native":
-		return provenance.TrustForHosted("", nil, false)
+		return Trusted{Trust: provenance.TrustForHosted("", nil, false)}
 	}
-	return provenance.TrustExternal
+	return Trusted{Trust: provenance.TrustExternal, Source: provenance.SourcePageBody}
 }

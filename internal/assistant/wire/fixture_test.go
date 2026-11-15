@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // framesGolden is the vocabulary stream: every event kind and every card kind
@@ -123,7 +124,7 @@ func vocabularyFrames() []wire.Frame {
 							{Op: wire.WordRemoved, Text: "sometimes."},
 							{Op: wire.WordAdded, Text: "on every third run."}}},
 				},
-				Audience: []string{"Core"}, Taint: "Read ENG-90, written by Agent PM",
+				Audience: []string{"Core"}, Taint: provenance.SourceWorkComment,
 				Digest:    wire.DigestPrefix + "9f2c0d6e5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0",
 				ExpiresAt: at.Add(15 * time.Minute), State: wire.ProposalProposed,
 				SourceRevision: "url:3f9c1a0e", ApproveLabel: "Approve and save"}})),

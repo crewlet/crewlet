@@ -130,22 +130,24 @@ func (t *turn) firstOutput() {
 	}
 }
 
-// tainted notes a read whose answer, at the trust it was fenced under,
-// somebody outside the company wrote.
-func (t *turn) tainted(tool catalog.Tool, trust provenance.Trust) {
-	if !tool.Fence || !outsideTrust(trust) {
+// tainted notes a fenced answer, from the surface src, that at the trust it
+// earned somebody outside the company wrote. The surface is the one the read
+// found the outside text in ([catalog.Result.Source]), so a proposal names
+// "an agent's question" rather than the API answer that carried it.
+func (t *turn) tainted(src provenance.Source, trust provenance.Trust) {
+	if !outsideTrust(trust) {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.outside = tool.Source
+	t.outside = src
 }
 
 // readAnswer notes an answer the turn's model is handed outside a step, a
 // resumed segment's decision ([resultOf]): from src, at the trust it is fenced
 // at, tainting the turn exactly as a step's read does.
 func (t *turn) readAnswer(src provenance.Source, trust provenance.Trust) {
-	t.tainted(catalog.Tool{Fence: true, Source: src}, trust)
+	t.tainted(src, trust)
 }
 
 // taintedBy carries the taint the turn's earlier segment parked with
@@ -162,10 +164,10 @@ func (t *turn) taintedBy(source provenance.Source) {
 }
 
 // taint is the outside source a proposal made now names, "" for none.
-func (t *turn) taint() string {
+func (t *turn) taint() provenance.Source {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return string(t.outside)
+	return t.outside
 }
 
 // stepStart opens one tool step: numbered, labelled from the call's safe
