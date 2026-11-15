@@ -63,9 +63,9 @@ func TestEachLevelGrantsTheOneBelowItAndMore(t *testing.T) {
 	}
 }
 
-// A POLICY WRITTEN AT A LEVEL READS BACK AS THAT LEVEL ON ITS PROJECTS, and
-// one with a set added or taken away is no level at all, so the plan rewrites
-// it.
+// A POLICY WRITTEN AT A LEVEL READS BACK AS THAT LEVEL ON ITS PROJECTS; one
+// with a set added reads as the level and a grant of the set, and one with a
+// level's set taken away as no level, so the plan rewrites either.
 func TestAPolicyReadsBackAsItsLevel(t *testing.T) {
 	t.Parallel()
 	for _, level := range scaleway.Levels() {
@@ -79,8 +79,17 @@ func TestAPolicyReadsBackAsItsLevel(t *testing.T) {
 		}
 		widened := rulesOf(specs)
 		widened[0].PermissionSetNames = append(widened[0].PermissionSetNames, "SecretManagerFullAccess")
-		if got, _ := scaleway.LevelOf(widened); got != "" {
+		if got, _ := scaleway.LevelOf(widened); got != level {
 			t.Errorf("%s with a set added reads as %q", level, got)
+		}
+		if grants := scaleway.GrantsOf(widened); len(grants) != 1 || grants[0].Permission != "SecretManagerFullAccess" ||
+			grants[0].Scope != nil {
+			t.Errorf("%s with a set added holds grants %+v, want the set on its own projects", level, grants)
+		}
+		narrowed := rulesOf(specs)
+		narrowed[0].PermissionSetNames = narrowed[0].PermissionSetNames[1:]
+		if got, _ := scaleway.LevelOf(narrowed); got == level {
+			t.Errorf("%s with a set taken away still reads as it", level)
 		}
 	}
 	if _, err := scaleway.RulesFor(config.ScalewayLevelRead, testOrg, nil); err == nil {

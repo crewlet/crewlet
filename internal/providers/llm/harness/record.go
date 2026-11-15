@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
@@ -40,6 +41,9 @@ type recordReader struct {
 	// sent is what the engine handed the harness, for the estimates a record
 	// with no counts is charged.
 	sent string
+	// now is the provider's clock, read as each event is, for when the
+	// record last showed each request ([llm.Turn.Seen]).
+	now func() time.Time
 
 	// streams says the profile streams prose apart from the requests'
 	// text, so the text is not streamed a second time.
@@ -107,6 +111,11 @@ type request struct {
 	// request was seen because the record carries no counts per request.
 	estimatedIn, estimatedOut bool
 
+	// seen is when the record last showed the request: the instant the
+	// latest event that read into it was read. It dates the request's
+	// answer however late the host is told of it ([llm.Turn.Seen]).
+	seen time.Time
+
 	observed bool
 	dirty    bool
 }
@@ -121,8 +130,8 @@ const (
 	figToolPrompt = "tool_prompt"
 )
 
-func newRecordReader(p harnessprofile.Profile, req llm.Request, sent string) *recordReader {
-	r := &recordReader{p: p, rule: p.Requests, host: req.Tools, req: req, sent: sent}
+func newRecordReader(p harnessprofile.Profile, req llm.Request, sent string, now func() time.Time) *recordReader {
+	r := &recordReader{p: p, rule: p.Requests, host: req.Tools, req: req, sent: sent, now: now}
 	if p.EffectiveOutput() == harnessprofile.OutputJSONL {
 		r.stdout = &streamExtractor{p: p}
 	}
@@ -264,6 +273,7 @@ func renderFields(doc map[string]any, fields []harnessprofile.Path) string {
 // what changed.
 func (r *recordReader) event(doc map[string]any) {
 	r.mu.Lock()
+	at := r.now()
 	var deltas []llm.Delta
 	touched := map[*request]bool{}
 	for _, e := range r.rule.Events {
@@ -273,6 +283,7 @@ func (r *recordReader) event(doc map[string]any) {
 		req := r.requestForLocked(doc, e)
 		if req != nil {
 			touched[req] = true
+			req.seen = at
 		}
 		if len(e.Tools) > 0 {
 			if v, ok := lookup(doc, e.Tools); ok {
@@ -679,7 +690,7 @@ func (r *recordReader) flushLocked(touched map[*request]bool, final bool) ([]llm
 func (r *recordReader) turnOf(req *request) llm.Turn {
 	t := llm.Turn{
 		ID: req.id, Text: req.prose(),
-		Calls: slices.Clone(req.calls), Model: req.model, Stop: req.stop,
+		Calls: slices.Clone(req.calls), Model: req.model, Stop: req.stop, Seen: req.seen,
 	}
 	if req.has[figInput] || req.has[figOutput] {
 		u := r.usageOf(req)
@@ -724,6 +735,15 @@ func (r *recordReader) finish() {
 // count: each request's output it never gave a count for, from what the request
 // wrote, and — where it showed no request at all — one request of the prompt
 // the engine sent and the answer.
+//
+// THE REMAINDER IS A REQUEST'S where exactly one request of a record that
+// carries each request's counts read none of its own, and the harness gave its
+// total: OpenCode 2.0.32 and 2.1.4 drop a step's step_finish (the final one's
+// in 13 and 12 of 20 runs, measured), and a request told without counts
+// records its round as costing nothing. That request is told again with the
+// remainder as its counts. Two or more without counts split nothing honestly,
+// and an estimate is never a request's: either way the remainder stays the
+// run's alone.
 func (r *recordReader) settle(total *llm.Usage, answer string) llm.Usage {
 	r.mu.Lock()
 	var rem llm.Usage
@@ -759,12 +779,42 @@ func (r *recordReader) settle(total *llm.Usage, answer string) llm.Usage {
 	} else {
 		rem = llm.Usage{}
 	}
+	var retold *llm.Turn
+	if req := r.countlessLocked(); req != nil && total != nil && rem != (llm.Usage{}) {
+		req.reported = rem
+		t := r.turnOf(req)
+		t.Usage = &rem
+		retold = &t
+	}
 	spent := r.spent
 	r.mu.Unlock()
 	if rem != (llm.Usage{}) {
 		r.host.Spent(rem)
 	}
+	if retold != nil {
+		r.host.Observe(*retold)
+	}
 	return spent
+}
+
+// countlessLocked is the one request that read no counts of its own, in a
+// record whose rules carry each request's: nil where there is none, or more
+// than one.
+func (r *recordReader) countlessLocked() *request {
+	if !r.perRequestUsage {
+		return nil
+	}
+	var found *request
+	for _, req := range r.requests {
+		if req.has[figInput] || req.has[figOutput] {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = req
+	}
+	return found
 }
 
 // last is the last request's prose and model, where the record showed any.

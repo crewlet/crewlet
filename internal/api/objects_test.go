@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -175,6 +176,28 @@ func TestTheDashboardKnowsEveryObjectFinding(t *testing.T) {
 		findings = append(findings, string(f))
 	}
 	holdStrings(t, clientsource.Tree(t), "OBJECT_FINDINGS", findings, "audit finding")
+}
+
+// THE COLLECTOR'S CADENCE IS THE ENGINE'S: File storage says how often each
+// pass runs beside when it last did, and a copy that drifted would read a
+// healthy collector as late, or a stalled one as on time.
+func TestTheDashboardStatesTheCollectorsCadence(t *testing.T) {
+	t.Parallel()
+	for name, engine := range map[string]time.Duration{
+		"OBJECT_COLLECT_INTERVAL_SECONDS": collect.CollectInterval,
+		"OBJECT_AUDIT_INTERVAL_SECONDS":   collect.AuditInterval,
+	} {
+		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := strconv.Atoi(raw)
+		if err != nil || client != int(engine/time.Second) {
+			t.Errorf("the dashboard says %s is %q and the engine runs it every %ds: change "+
+				"it in dashboard/src/contract/fleet.ts to the engine's figure",
+				name, raw, int(engine/time.Second))
+		}
+	}
 }
 
 // exampleUnder is the first JSON example in the section a heading opens, decoded.

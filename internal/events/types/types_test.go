@@ -94,6 +94,7 @@ func catalogue() []events.Payload {
 		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{},
 		// seataccess.go
 		SeatAccessDriftRestored{},
+		SeatGrantChanged{},
 		AgentCapabilityTold{},
 	}
 }
@@ -186,6 +187,7 @@ var wireTypes = []string{
 	"scheduled_fire_superseded",
 	"scheduled_task_fired",
 	"seat_access_drift_restored",
+	"seat_grant_changed",
 	"agent_capability_told",
 	"seat_inbox_waiting",
 	"seat_paused",
@@ -386,7 +388,7 @@ var wireTags = map[string][]string{
 	"delegated_review":              {"agent_handle", "agent_id", "at", "held_launch", "held_turn", "kind", "panel", "request", "requester", "rule"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"requested_by", "schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
-	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},
+	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "sender_name", "source_event_type", "subject", "subject_is_label", "writer"},
 	"turn_trigger_skipped":          {"agent_handle", "agent_id", "disposition", "reason", "trigger_id", "trigger_type", "wake"},
 	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},
@@ -450,6 +452,7 @@ var wireTags = map[string][]string{
 	"seat_paused":                   {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "reason", "role", "stop_running"},
 	"seat_resumed":                  {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "resumed_by", "resumed_by_kind", "role"},
 	"seat_access_drift_restored":    {"after", "agent_handle", "before", "integration", "lane", "restored_at"},
+	"seat_grant_changed":            {"agent_handle", "at", "by", "change", "detail", "grant", "integration", "lane", "request"},
 	"agent_capability_told":         {"agent_handle", "baseline", "changes", "digest", "lines", "revision_from", "revision_to", "told_at"},
 	"agent_turn_stopped":            {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"agent_turn_steered":            {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "retold", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},

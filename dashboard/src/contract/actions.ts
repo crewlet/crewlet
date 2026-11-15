@@ -120,6 +120,12 @@ export const ACTIONS = {
     // of the atlas entries the task touches. The marks the atlas draws from
     // them are read outside the tracker's session set, so they are refreshed.
     //
+    // `waiting_on` AND `blocking` ARE THE TASK PAGE'S DEPENDENCIES: "Link a
+    // task" as Blocks or Waiting on (with the `dependency_note` saying why),
+    // and the rail's remove on a dependency, each a delta on the end it names.
+    // `duplicate_of` is sent only as null, by the rail's remove on a
+    // duplicate link, which clears it (`lib/taskRelations.ts`).
+    //
     // THE TASK PAGE EDITS THE REST: the title and description, the labels
     // (which REPLACE the set), the schedule, a custom field by slug, one
     // checklist gesture at a time, and whether the person follows it.
@@ -133,6 +139,10 @@ export const ACTIONS = {
       "linked",
       "linked_pages",
       "linked_entries",
+      "waiting_on",
+      "blocking",
+      "dependency_note",
+      "duplicate_of",
       "title",
       "body",
       "labels",
@@ -171,6 +181,17 @@ export const ACTIONS = {
     refreshes: ["work_search"],
     scope: "person",
   },
+  merge_work_item: {
+    // "MERGE INTO…" on a task's page and peek and each row's menu
+    // (`routes/worklet/taskMenu.tsx`): the task folded into the one that
+    // survives, linked to it as its duplicate, its subtasks moved onto it
+    // unless the person keeps them (`move_subtasks`), and closed cancelled.
+    args: ["item", "into", "move_subtasks"],
+    domain: "tracker",
+    apps: ["worklet"],
+    refreshes: ["work_search"],
+    scope: "person",
+  },
   restore_work_item: {
     args: ["item"],
     domain: "tracker",
@@ -179,11 +200,23 @@ export const ACTIONS = {
     scope: "person",
   },
   write_project: {
-    // "EDIT PROJECT" on a project's page: the lead's target date. A project's
-    // settings are what every seat's tracker reads, so this is a COMPANY
-    // write, offered only on the project's own page — and the engine decides
-    // who may make it: the project's lead, or an admin.
-    args: ["project", "target_date"],
+    // A PROJECT'S OWN SETTINGS, on its page and nowhere else: "Edit project"
+    // (the lead's target date and default assignee), About's labels (declare,
+    // rename, archive) and fields (the project's own declarations, sent whole),
+    // and the page's Archive project. A project's settings are what every
+    // seat's tracker reads, so this is a COMPANY write. The engine decides
+    // each facet on its own: declaring a label is any colleague's, the rest
+    // the project's lead's or an admin's, and archiving also a person's.
+    args: [
+      "project",
+      "target_date",
+      "default_assignee",
+      "archived",
+      "fields",
+      "tags_add",
+      "tags_rename",
+      "tags_archive",
+    ],
     domain: "tracker",
     apps: ["worklet"],
     refreshes: [],
@@ -203,6 +236,10 @@ export const ACTIONS = {
     // conditional on the record's `version` — a reorder from a screen that
     // read an older order is refused rather than putting that order back.
     // `handle` is whose queue: the reader's own, or a report's for a lead.
+    //
+    // AND A TASK MENU'S "Add to my priorities" / "Remove from my priorities"
+    // (`routes/worklet/taskMenu.tsx`): the reader's own stored list with the
+    // task put at its end or taken out, under the same `if_match`.
     args: ["handle", "items", "if_match"],
     domain: "tracker",
     apps: ["worklet"],
@@ -559,13 +596,27 @@ export const ACTIONS = {
     scope: "person",
   },
   // A REPOSITORY'S LIFE (`routes/gitlet/repo/RepoWrites.tsx`,
-  // `routes/gitlet/ImportRepo.tsx`). Each lands on the code log, whose position
-  // raises this tab's code floor, and the repository's row and the listing
-  // are both in that domain's session set. Settings › Search mode and the
-  // mirrors, each one settings change of its own; a mirror is a person's
-  // alone, which the deciding data node holds every asker to (U49 a).
+  // `routes/gitlet/repo/PathOwners.tsx`, `routes/gitlet/ImportRepo.tsx`). Each
+  // lands on the code log, whose position raises this tab's code floor, and
+  // the repository's row and the listing are both in that domain's session
+  // set. Settings › its details, path owners, search mode and mirrors, each
+  // one settings change of its own; a mirror is a person's alone, which the
+  // deciding data node holds every asker to (U49 a). An archive and a rename
+  // are each a record of their own, sent alone.
   code_update_repo: {
-    args: ["repo", "search", "mirror_from", "mirror_to"],
+    args: [
+      "repo",
+      "description",
+      "default_branch",
+      "visibility",
+      "search",
+      "owner",
+      "path_owners",
+      "mirror_from",
+      "mirror_to",
+      "archived",
+      "rename_to",
+    ],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
@@ -618,9 +669,9 @@ export const ACTIONS = {
     scope: "person",
   },
   // A PROTECTION RULE (`routes/gitlet/repo/Protect.tsx`): who pushes to the
-  // refs a pattern names, whether a push may force or delete them, and the
-  // parts of its merge gate a form states; each field sent changes that field
-  // alone. `remove` takes the rule away and `remove_gate` its gate.
+  // refs a pattern names, whether a push may force or delete them, and every
+  // field of its merge gate; each field sent changes that field alone, each
+  // list item by item. `remove` takes the rule away and `remove_gate` its gate.
   code_protect_branch: {
     args: [
       "repo",
@@ -631,9 +682,13 @@ export const ACTIONS = {
       "remove",
       "merge_by",
       "approvals",
+      "approvals_unless",
+      "human_paths",
       "checks",
+      "landing",
       "owners_approve",
       "delete_source",
+      "agents_edit_checks",
       "remove_gate",
     ],
     domain: "code",

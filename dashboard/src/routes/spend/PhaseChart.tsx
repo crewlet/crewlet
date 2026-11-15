@@ -25,7 +25,7 @@ import { QueryState } from "~/components/common.tsx";
 import { GROUPS } from "~/contract/spend.ts";
 import { UNSPENT_CALLS, bandsOf, callsWords, unbandedTokens } from "~/lib/spend.ts";
 import { companyDateLabel, fmtCount, fmtExact } from "~/lib/format.ts";
-import { dayLabelIn } from "~/lib/range.ts";
+import { dayLabelIn } from "~/lib/companyDay.ts";
 
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { TokenSeries } from "~/protocol/types.ts";

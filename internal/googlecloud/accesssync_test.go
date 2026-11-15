@@ -416,6 +416,43 @@ func TestOnlyAFullySetUpProjectIsOffered(t *testing.T) {
 	}
 }
 
+// A GRANTS LIST KEEPS A PROJECT OFFERED while every role it names may be
+// granted, and takes it off the offer once one could mint a credential, act as
+// another identity or grant access, or is a role Google does not have.
+func TestAGrantsListIsAcceptedOnlyWhileEveryRoleMayBeGranted(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "", projectWeb)
+	grantsList := func(f *fakeGoogle, id string, roles ...string) {
+		f.projects[id].Policy.Bindings = append(f.projects[id].Policy.Bindings, googlecloud.Binding{
+			Role: "roles/resourcemanager.projectIamAdmin", Members: []string{"serviceAccount:" + provisioner},
+			Condition: condition(roles),
+		})
+	}
+	w.f.edit(func(f *fakeGoogle) {
+		f.roles["roles/pubsub.editor"] = googlecloud.Role{Name: "roles/pubsub.editor", Title: "Pub/Sub Editor",
+			Stage: "GA", Permissions: []string{"pubsub.topics.create", "pubsub.topics.get"}}
+		f.roles["roles/iam.serviceAccountTokenCreator"] = googlecloud.Role{Name: "roles/iam.serviceAccountTokenCreator",
+			Stage: "GA", Permissions: []string{"iam.serviceAccounts.getAccessToken"}}
+		f.addProject("acme-grants", "Grants", 3, true)
+		grantsList(f, "acme-grants", "roles/pubsub.editor")
+		f.addProject("acme-minting", "Minting", 3, true)
+		grantsList(f, "acme-minting", "roles/pubsub.editor", "roles/iam.serviceAccountTokenCreator")
+		f.addProject("acme-unknown", "Unknown", 3, true)
+		grantsList(f, "acme-unknown", "roles/nobody.has")
+	})
+	session, err := w.vendor.Open(t.Context(), w.open())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := session.Options(t.Context(), seataccess.LaneGoogleCloud)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{projectData, "acme-grants", projectWeb}; !slices.Equal(opts.Scope, want) {
+		t.Fatalf("offered %v, want %v", opts.Scope, want)
+	}
+}
+
 // A PROJECT NO LONGER SET UP IS REFUSED FOR THE SEAT that names it, before
 // anything is asked of Google.
 func TestAProjectNotSetUpIsRefusedForTheSeat(t *testing.T) {

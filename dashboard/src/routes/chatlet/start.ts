@@ -52,6 +52,7 @@ export type StartKind =
   | "leave"
   | "topic"
   | "members"
+  | "remove"
   | "following"
   | "delete"
   | "archive";
@@ -130,6 +131,7 @@ function retryAdvice(kind: StartKind): string {
       return "Ask again. If the first try worked, asking again changes nothing.";
     case "topic":
     case "members":
+    case "remove":
     case "following":
     case "delete":
     case "archive":
@@ -155,6 +157,8 @@ function what(kind: StartKind): string {
       return "the change was saved";
     case "members":
       return "they were added";
+    case "remove":
+      return "they were taken out";
     case "following":
       return "the change was saved";
     case "delete":

@@ -10,7 +10,7 @@ import { afterEach, expect, test } from "vitest";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { WorkCard } from "~/components/work.tsx";
-import { TaskRowMenu } from "../taskMenu.tsx";
+import { TaskRowMenu, type TaskActions } from "../taskMenu.tsx";
 import { Router } from "~/app/router.tsx";
 import type { WorkSummary } from "~/protocol/index.ts";
 
@@ -34,19 +34,28 @@ const ROW = {
   assignee: "ada",
 } as WorkSummary;
 
-/** The actions a menu is built from, none of which this case presses. */
-const ACTIONS = {
+/**
+ * The actions a menu is built from, none of which this case presses. TYPED AS
+ * THE HOOK'S ANSWER, so an action the menu gains is one this fixture is told
+ * to carry by the typecheck, rather than a menu that throws in the browser.
+ */
+const ACTIONS: TaskActions = {
   remove: () => {},
   restore: () => {},
   purge: () => {},
   move: () => {},
   moveHeld: undefined,
+  merge: () => {},
+  mergeHeld: undefined,
+  prioritise: () => {},
+  prioritised: () => false,
+  prioritiesHeld: undefined,
   removeHeld: undefined,
   restoreHeld: undefined,
   purgeHeld: undefined,
   busy: false,
   dialog: null,
-} as never;
+};
 
 const overlap = (a: DOMRect, b: DOMRect) =>
   a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;

@@ -52,9 +52,9 @@ func TestTheInboxHorizonIsTheCompanys(t *testing.T) {
 		problems := config.Problems(err)
 		if len(problems) != 1 || problems[0].Path != "inbox.retention_days" ||
 			problems[0].Kind != "out_of_range" ||
-			!strings.Contains(problems[0].Message, "30..3650") {
+			!strings.Contains(problems[0].Message, "between 30 and 3650") || problems[0].Range == nil {
 			t.Errorf("inbox.retention_days: %d answered %+v, want one out_of_range "+
-				"at inbox.retention_days naming 30..3650", days, problems)
+				"at inbox.retention_days naming 30 to 3650 and carrying its range", days, problems)
 		}
 	}
 }

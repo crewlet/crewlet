@@ -29,7 +29,6 @@ import {
   Input,
   ListDetail,
   ListDetailBack,
-  Menu,
   MessageAction,
   MessageActions,
   Switch,
@@ -37,7 +36,6 @@ import {
 } from "@crewlethq/ui";
 import {
   CheckGlyph,
-  ChevronDownGlyph,
   SearchGlyph,
   SquarePenGlyph,
   StarGlyph,
@@ -118,50 +116,32 @@ export function DirectMessagesView() {
       {/* THE HEAD AND THE FIND FIELD STAY while the conversations scroll under them. */}
       <div className="chat-dms-top">
         <div className="chat-dms-head">
-          {/* THE LIST'S MENU IS A CONTROL, NOT A HEADING: the page's one `h1`
-            is the page trail's last crumb, which names it. */}
-          <Menu
-            label="Direct messages"
-            activeDescendant
-            entrance="instant"
-            renderTrigger={(props) => (
-              <Button
-                {...props}
-                variant="ghost"
-                size="medium"
-                trailingIcon={<ChevronDownGlyph size="sm" />}
-              >
-                <span className="chat-dms-title">Direct messages</span>
-              </Button>
-            )}
-            items={[
-              {
-                key: "new",
-                label: "New message",
-                icon: <SquarePenGlyph size="sm" />,
-                onSelect: () => nav.go({ kind: "new" }),
-              },
-              {
-                key: "read-all",
-                label: "Mark all as read",
-                icon: <CheckGlyph size="sm" />,
-                disabled: waiting.length === 0,
-                onSelect: () => {
-                  for (const row of waiting) frame.markRead(row.channel.id);
-                },
-              },
-            ]}
-          />
+          {/* NO TITLE OF ITS OWN: the page trail names the list, and the top
+              bar's Messages switcher, right above it, is already a control
+              called "Direct messages". A second one of that name here, a
+              menu of New message and Mark all as read, read as one control
+              drawn twice. What it held is these two buttons. */}
+          <Tooltip content="Unreads" disabled={!narrow}>
+            <Switch
+              label="Unreads"
+              size="sm"
+              labelHidden={narrow}
+              checked={unreadOnly}
+              onCheckedChange={setUnreadOnly}
+            />
+          </Tooltip>
           <span className="chat-dms-tools">
-            <Tooltip content="Unreads" disabled={!narrow}>
-              <Switch
-                label="Unreads"
-                size="sm"
-                labelHidden={narrow}
-                checked={unreadOnly}
-                onCheckedChange={setUnreadOnly}
-              />
-            </Tooltip>
+            <IconButton
+              label="Mark all as read"
+              size="md"
+              variant="ghost"
+              icon={<CheckGlyph />}
+              tooltip
+              disabledReason={waiting.length === 0 ? "No conversation is unread." : undefined}
+              onClick={() => {
+                for (const row of waiting) frame.markRead(row.channel.id);
+              }}
+            />
             <Tooltip content="New message">
               <IconButton
                 label="New message"
@@ -177,8 +157,8 @@ export function DirectMessagesView() {
           <Input
             inputSize="md"
             leading={<SearchGlyph size="sm" />}
-            placeholder="Find a DM"
-            aria-label="Find a direct message"
+            placeholder="Find a conversation"
+            aria-label="Find a conversation"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onClear={() => setQuery("")}

@@ -41,7 +41,7 @@
 import { firstLine, fmtAt, fmtDuration, plural, zoneOffset } from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
-import { companyZone } from "~/lib/range.ts";
+import { companyZone } from "~/lib/companyDay.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import { codeReasonPhrase, parseChangeRef, severityWord } from "~/lib/code.ts";

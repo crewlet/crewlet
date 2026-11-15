@@ -42,11 +42,12 @@
  * it, so it is not sortable.
  */
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import {
   AvatarStack,
   Button,
+  ButtonLink,
   Card,
   EmptyState,
   Skeleton,
@@ -57,15 +58,15 @@ import {
   TableNumberCell,
   TableTextCell,
 } from "@crewlethq/ui";
-import { WandSparklesGlyph } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { FolderGlyph, PlusGlyph, WandSparklesGlyph } from "@crewlethq/icons/glyphs";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { QueryState } from "~/components/common.tsx";
 import { learnedSkillColumns } from "~/components/memory.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { ADMIN } from "~/lib/access.ts";
+import { ADMIN, holds } from "~/lib/access.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { TRAIL_WORDS, mayReadTrail } from "~/routes/agents/seat/profile.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -79,6 +80,7 @@ import { PAGE_LIST_ORDERS, type SkillLoad } from "~/contract/pages.ts";
 import { LEARNED_SKILL_ORDERS } from "~/contract/memory.ts";
 import type { PageSummary } from "~/protocol/index.ts";
 import { usePagedPages } from "./usePagedPages.ts";
+import { newPagePath, useSpaces } from "./parts.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 
 /** The tool-skill pages: published, and only skills. */
@@ -135,6 +137,57 @@ export function Skills() {
   );
 }
 
+/**
+ * What an empty catalogue says, and the two ways to fill it: the space tool
+ * skills are written in, and a new page filed there.
+ *
+ * NAMED AND LINKED, from the space the engine names (`containers.skills`). It
+ * said "Add a page to the skills space that names a tool." with no way to that
+ * space and no page to start. The new page is an admin's to write (the engine
+ * holds the space closed to everybody else), so it is held for anybody else
+ * with that reason, and a company with tool skills off is told so.
+ */
+function useNoToolSkills(): { title: string; hint: string; action?: ReactNode } {
+  const { spaces, skills } = useSpaces();
+  const viewer = useViewer();
+  const nav = useNavigator();
+  if (!skills) {
+    return {
+      title: "No tool skills",
+      hint: "This company turned tool skills off: no space is set aside for them.",
+    };
+  }
+  const name = spaces.find((s) => s.key === skills)?.name || skills;
+  const to = newPagePath(skills);
+  const admin = holds(viewer.grants, ADMIN);
+  return {
+    title: "No tool skills yet",
+    hint: `A tool skill is a page in the ${name} space that teaches agents one tool.`,
+    action: (
+      <span className="row gap-2 wrap">
+        <ButtonLink
+          size="small"
+          variant="secondary"
+          leadingIcon={<FolderGlyph size="sm" />}
+          href={href(["doclet", skills])}
+        >
+          {`Open ${name}`}
+        </ButtonLink>
+        <Button
+          size="small"
+          variant="primary"
+          leadingIcon={<PlusGlyph size="sm" />}
+          disabledReason={admin ? undefined : "Only an admin adds a tool skill."}
+          title={admin ? undefined : "Only an admin adds a tool skill."}
+          onClick={() => nav.to(to.path, to.query)}
+        >
+          New page
+        </Button>
+      </span>
+    ),
+  };
+}
+
 function ToolSkills({ order, onSort }: { order: ListOrder; onSort: (sort: string) => void }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -148,6 +201,7 @@ function ToolSkills({ order, onSort }: { order: ListOrder; onSort: (sort: string
   const avatarOf = (handle: string) => index.byHandle.get(handle)?.avatar;
   const loads = (row: PageSummary): SkillLoad[] | null =>
     listing.loadedBy ? (listing.loadedBy[row.id] ?? []) : null;
+  const noSkills = useNoToolSkills();
 
   // THE FIRST PAGE IN FLIGHT IS A SKELETON: `QueryState` draws nothing while
   // it waits, and the screen was its two tabs over an empty page.
@@ -159,14 +213,7 @@ function ToolSkills({ order, onSort }: { order: ListOrder; onSort: (sort: string
       error={listing.error}
       refusal={listing.refusal}
       loading={listing.loading}
-      empty={
-        rows.length
-          ? undefined
-          : {
-              title: "No tool skills yet",
-              hint: "Add a page to the skills space that names a tool.",
-            }
-      }
+      empty={rows.length ? undefined : noSkills}
     >
       <Card padding="none">
         <Card.Header icon={<WandSparklesGlyph size="sm" />} count={listing.total ?? rows.length}>

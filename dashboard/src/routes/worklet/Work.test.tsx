@@ -366,7 +366,7 @@ test("a due task appears once, on its own day", () => {
   expect(chips).toHaveLength(1);
   const cell = chips[0]?.closest(".work-cal-cell");
   expect(cell?.querySelector(".work-cal-day")?.textContent).toBe("16");
-  expect(dayKey(due)).toBe("2031-04-16");
+  expect(dayKey(due, "")).toBe("2031-04-16");
 });
 
 // AN OVERDUE CHIP IS TINTED AND A FINISHED ONE IS QUIETER — and neither is

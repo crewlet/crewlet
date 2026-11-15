@@ -13,6 +13,7 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { installWindow } from "~/testing.tsx";
 import { actEngine, applied, unknown, type Pressed } from "~/test/chat.tsx";
 import { SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 import type { ChatDirectoryRoom } from "~/protocol/index.ts";
@@ -148,6 +149,38 @@ describe("what is listed", () => {
   });
 });
 
+// WHAT A ROOM IS, WHERE A READER LOOKS FOR IT: a team's room has no topic of
+// its own, and what it is (its members are the org chart's) is its Topic cell,
+// never an empty dash with the sentence drawn as a line under the row.
+test("a team room's explanation is its Topic cell, and nothing is drawn under its row", async () => {
+  mount();
+  const platform = (await screen.findByText("platform")).closest<HTMLElement>('[role="row"]')!;
+  const cells = [...platform.querySelectorAll<HTMLElement>('[role="cell"], [role="gridcell"]')];
+  const topic = cells.find((cell) => cell.getAttribute("data-label") === "Topic")!;
+  expect(topic.textContent).toMatch(/Platform team’s own room.*set in the org chart/);
+  expect(document.getElementById(`${platform.id}-accessory`)).toBeNull();
+});
+
+// ON A PHONE EVERY VALUE CARRIES ITS NAME. The compact rows draw what follows
+// the lead as unnamed marks, so a bare member count and an empty dash read
+// "1 – Open"; the labelled card names each one.
+test("on a phone each fact is named: the rows are the labelled cards, not unnamed marks", async () => {
+  const win = installWindow(390);
+  try {
+    mount();
+    const table = await screen.findByRole("table", { name: "Rooms" });
+    const grid = table.closest(".crewlet-data-grid") ?? table;
+    expect(grid.getAttribute("data-phone-rows")).not.toBe("compact");
+    const launch = within(table).getByText("launch").closest<HTMLElement>('[role="row"]')!;
+    const labels = [...launch.querySelectorAll<HTMLElement>("[data-label]")].map((cell) =>
+      cell.getAttribute("data-label"),
+    );
+    expect(labels).toEqual(expect.arrayContaining(["Members", "Last message"]));
+  } finally {
+    win.restore();
+  }
+});
+
 describe("Join", () => {
   test("is offered on a public room the reader is not in, and nowhere else", async () => {
     mount();
@@ -158,9 +191,6 @@ describe("Join", () => {
     // A UNIT'S ROOM IS THE ORG CHART'S: Open, and the sentence that says so.
     const platform = await row("platform");
     expect(within(platform).queryByRole("button", { name: /^join$/i })).toBeNull();
-    // ON THE LINE UNDER THE ROW, which describes it.
-    const note = document.getElementById(`${platform.id}-accessory`)!;
-    expect(within(note).getByText(/set in the org chart/)).toBeTruthy();
   });
 
   test.each(WRITE_READERS)("is drawn for $who, held with why", async (reader) => {

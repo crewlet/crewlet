@@ -126,12 +126,15 @@ import {
   withLevel,
   withPermission,
   withScope,
+  withGrant,
+  withoutGrant,
   type Handoff,
   type Lane,
   type SeatAction,
   type Status,
 } from "./logic.ts";
 import { laneWords, RETIRED_GENERIC } from "./words.ts";
+import { AddGrantDialog, GrantsCell } from "./Grants.tsx";
 
 export interface AgentsAccessProps {
   /** The integration's key, which the access routes are keyed on. */
@@ -228,6 +231,7 @@ export const AgentsAccess = memo(function AgentsAccess({
   const [editing, setEditing] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [scoping, setScoping] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [rotating, setRotating] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
+  const [granting, setGranting] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   // THE HANDOFF IS HELD AS IT WAS OPENED, so the sheet keeps its robot and
   // role while the answer behind it moves on to In sync.
   const [handing, setHanding] = useState<{
@@ -270,6 +274,7 @@ export const AgentsAccess = memo(function AgentsAccess({
   const lanes = lanesOf(data);
   const seats = only ? data.seats.filter((s) => s.handle === only) : data.seats;
   const scoped = lanes.some((l) => l.scoped);
+  const granted = lanes.some((l) => l.grants !== undefined);
   // A HELD TAB says why on each control; a read-only one draws no control at all.
   // A HOLD stops everything; a read-only document stops only what writes it.
   const locked = held !== undefined || readOnly !== undefined || data.syncing;
@@ -613,6 +618,24 @@ export const AgentsAccess = memo(function AgentsAccess({
         );
       },
     },
+    grants: {
+      key: "grants",
+      header: "Grants",
+      label: "Grants beside the level",
+      floor: "12rem",
+      drop: 2,
+      cell: ({ seat, lane, want }) =>
+        lane.grants === undefined ? null : (
+          <GrantsCell
+            seat={seat}
+            lane={lane}
+            want={want}
+            disabled={!want.enabled || locked || seat.departed === true}
+            onRemove={(i) => change(seat, lane, (d) => withoutGrant(d, seat, lane, i))}
+            onAdd={() => setGranting({ seat, lane })}
+          />
+        ),
+    },
     status: {
       key: "status",
       header: "Status",
@@ -637,6 +660,7 @@ export const AgentsAccess = memo(function AgentsAccess({
     "on",
     "access",
     ...(scoped ? ["scope"] : []),
+    ...(granted ? ["grants"] : []),
     "status",
   ];
 
@@ -840,6 +864,18 @@ export const AgentsAccess = memo(function AgentsAccess({
               setRefusal(r);
             else setSaid(r.words);
           }}
+        />
+      )}
+      {granting && (
+        <AddGrantDialog
+          seat={granting.seat}
+          lane={granting.lane}
+          onAdd={(grant) =>
+            change(granting.seat, granting.lane, (d) =>
+              withGrant(d, granting.seat, granting.lane, grant),
+            )
+          }
+          onClose={() => setGranting(null)}
         />
       )}
       {editing && (

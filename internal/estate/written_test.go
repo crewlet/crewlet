@@ -43,6 +43,17 @@ func (w reportingWriter) EditComment(_ context.Context, opID, _, _, _, _ string,
 	return worklet.WriteResult{}, nil
 }
 
+// RemoveComment is the TRACKER's remark take-down, for EditComment's reason:
+// the node's own RemoveComment is the knowledge base's.
+func (w reportingWriter) RemoveComment(_ context.Context, opID, _, _, _ string,
+	_ worklet.CommentAuthority) (worklet.WriteResult, error) {
+	w.note("task_comment_remove")
+	w.mu.Lock()
+	w.opIDs = append(w.opIDs, opID)
+	w.mu.Unlock()
+	return worklet.WriteResult{}, nil
+}
+
 // turnSet is an asking turn's own set of the items it wrote, in its process.
 type turnSet struct {
 	mu      sync.Mutex

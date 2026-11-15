@@ -52,7 +52,6 @@ import {
   Button,
   Callout,
   ChatThread,
-  ConfirmModal,
   EmptyState,
   FileDrop,
   FilePickButton,
@@ -68,6 +67,7 @@ import {
   type MenuEntry,
   type ChatThreadHandle,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   LayoutDashboardGlyph,

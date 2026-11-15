@@ -275,6 +275,16 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
 		record.Kind, record.Mutation = worklet.ChangeComment, patch
+	case "Comment.Removed":
+		// A REMARK TAKEN DOWN BY ITS AUTHOR, its words blanked.
+		patch, err := json.Marshal(worklet.TaskPatch{Comment: &worklet.Comment{
+			ID: "c-gone", Task: "carrying", Author: "ada", AuthorKind: worklet.AuthorHuman,
+			Removed: true}})
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Subject = worklet.OpPatch, worklet.Subject{Kind: worklet.KindTask, ID: "carrying"}
+		record.Kind, record.Mutation = worklet.ChangeCommentRemoved, patch
 	case "Comment.Withdrawal":
 		// A RESOLVE THAT WITHDRAWS A QUESTION, SAYING WHY AND WHAT COVERS IT.
 		patch, err := json.Marshal(worklet.TaskPatch{Comment: &worklet.Comment{

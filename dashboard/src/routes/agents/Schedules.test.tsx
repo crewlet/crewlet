@@ -65,6 +65,7 @@ function row(over: Partial<ScheduleRow> = {}): ScheduleRow {
     target: "",
     enabled: true,
     timeout_seconds: 600,
+    timeout_default: false,
     catchup: false,
     runners: ["ceo"],
     next_run: "2026-06-16T00:00:00Z",
@@ -247,6 +248,26 @@ test("a role's scope is its seat by name, in every grid and in the definition", 
   );
   expect(screen.getByText("Seat · Chief Executive")).toBeTruthy();
   expect(screen.queryByText(/role · /)).toBeNull();
+});
+
+// THE CAP SAYS WHOSE IT IS. A schedule that sets none runs to the engine's
+// default, which the row says, so it never reads as a cap somebody wrote.
+test("a defaulted cap says it is the engine's, and a schedule's own cap is drawn alone", () => {
+  render(
+    <Router>
+      <ScheduleDefinition row={row({ timeout_seconds: 1800, timeout_default: true })} who={who} />
+    </Router>,
+  );
+  expect(screen.getByText("30m")).toBeTruthy();
+  expect(screen.getByText("the engine’s default")).toBeTruthy();
+  cleanup();
+  render(
+    <Router>
+      <ScheduleDefinition row={row({ timeout_seconds: 600, timeout_default: false })} who={who} />
+    </Router>,
+  );
+  expect(screen.getByText("10m")).toBeTruthy();
+  expect(screen.queryByText("the engine’s default")).toBeNull();
 });
 
 // THE EXPRESSION'S CHIP HUGS ITS TEXT. In the column's flex stack it was

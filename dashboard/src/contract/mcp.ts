@@ -1424,3 +1424,13 @@ export interface McpChangesPartial {
   /** The decision the store failed, then each one not tried after it. */
   undecided: string[];
 }
+
+/**
+ * What an MCP server's unset `startup_timeout_seconds` and
+ * `request_timeout_seconds` are (`mcp.DefaultStartupTimeout`,
+ * `DefaultRequestTimeout`): what the add or edit wizard's two timeout fields
+ * say an empty field means. Held by
+ * `internal/mcp.TestTheDashboardStatesTheEnginesTimeoutDefaults`.
+ */
+export const MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS = 120;
+export const MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS = 300;

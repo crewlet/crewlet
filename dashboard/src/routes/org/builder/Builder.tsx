@@ -78,7 +78,13 @@ import {
   useManagedConfig,
   useOrgWriteAccess,
 } from "~/lib/useWriteAccess.ts";
-import { EDITOR_OPEN, MODELS_PATH, PRINCIPLES_PATH, type StructureTab } from "~/app/routes.ts";
+import {
+  EDITOR_OPEN,
+  EDITOR_TABS,
+  MODELS_PATH,
+  PRINCIPLES_PATH,
+  type StructureTab,
+} from "~/app/routes.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
 import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
@@ -189,14 +195,13 @@ import {
   LayerHost,
   Menu,
   type MenuEntry,
-  ConfirmModal,
   Skeleton,
   Switch,
   Tag,
   useMediaMatch,
   useToast,
 } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 
 // ---------------------------------------------------------------------------
 // Surfaces
@@ -611,6 +616,8 @@ interface Arrival {
    * the address once answered, as `add=` is, so a reload asks nothing twice.
    */
   readonly project: string;
+  /** `editor=`: `open`, or the seat editor's tab to open on ([EDITOR_TABS]). */
+  readonly editor: string;
 }
 
 /**
@@ -1314,8 +1321,17 @@ function BuilderScreen({
   // Read once, in the first render, and spent the moment it is answered or the
   // reader moves the selection before the builder could answer it.
   const arrival = useRef<Arrival | null>(
-    addParam !== "" || projectParam !== "" || editorParam === EDITOR_OPEN.editor
-      ? { unit: unitParam, seat: seatParam, add: addParam, project: projectParam }
+    addParam !== "" ||
+      projectParam !== "" ||
+      editorParam === EDITOR_OPEN.editor ||
+      (EDITOR_TABS as readonly string[]).includes(editorParam)
+      ? {
+          unit: unitParam,
+          seat: seatParam,
+          add: addParam,
+          project: projectParam,
+          editor: editorParam,
+        }
       : null,
   );
   useEffect(() => {
@@ -1344,10 +1360,14 @@ function BuilderScreen({
     nav.filter({ project: null, editor: null });
     const key = keyOfParams(state, { unit: asked.unit, seat: asked.seat });
     if (key === null) return;
+    // A TAB THE ADDRESS NAMES is where the editor opens (`editor=model`).
+    const tab = EDITOR_TABS.find((t) => t === asked.editor);
     openDialog(
       asked.project !== ""
         ? { type: "editor", key, section: "project", preset: { project: asked.project } }
-        : { type: "editor", key },
+        : tab
+          ? { type: "editor", key, section: tab }
+          : { type: "editor", key },
     );
   }, [loaded, state, readOnlyReason, dialog, unitParam, seatParam, nav, openDialog]);
 

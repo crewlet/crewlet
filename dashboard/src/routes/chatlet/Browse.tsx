@@ -23,11 +23,17 @@
  *
  * Its facts were one prose line under a hand-built sort menu; as columns they
  * sort from their heads (the most recent activity first), give way in order at
- * a narrow width, and say which went. The row is one link to the room, Join or
- * Open stands at its end as a control of its own, and what the reader's
- * standing means (a team's room, a private one) or what a refused join came to
- * is a line under the row. Search keeps the list row (`BrowseRow`), where a
+ * a narrow width, and say which went. The row is one link to the room, and Join
+ * or Open stands at its end as a control of its own. What a room without a topic
+ * is (a team's room, whose members are the org chart's) is said in its Topic
+ * cell, where a reader looks for what the room is; only what a refused join came
+ * to is a line under the row. Search keeps the list row (`BrowseRow`), where a
  * room is one result among messages.
+ *
+ * ON A PHONE EVERY FACT IS NAMED (the kit's `labelled` rows, the grid's default).
+ * The compact rows draw each value after the lead as an unnamed mark, which
+ * suits a list whose values say what they are (a status, a date); here they are
+ * a bare count and an empty dash, and a row read "1 – Open".
  */
 
 import { useMemo, useState } from "react";
@@ -183,8 +189,8 @@ export function BrowseView() {
         )}
         {(answer.data?.unreadable ?? 0) > 0 && (
           <Callout variant="neutral">
-            {plural(answer.data?.unreadable ?? 0, "room")} came from a newer version of the engine
-            and {answer.data?.unreadable === 1 ? "isn’t" : "aren’t"} listed.
+            {plural(answer.data?.unreadable ?? 0, "room")} came from a newer version of Crewlet and{" "}
+            {answer.data?.unreadable === 1 ? "isn’t" : "aren’t"} listed.
           </Callout>
         )}
         <QueryState
@@ -207,11 +213,9 @@ export function BrowseView() {
               rowKey={(r) => r.channel.id}
               rowHref={(r) => nav.hrefOf({ kind: "room", id: r.channel.id })}
               defaultSort="-last"
-              phoneRows="compact"
               rowAccessory={(r) => {
                 const done = reports.get(r.channel.id);
-                if (done) return <StartNote report={done} />;
-                return roomNote(r) || null;
+                return done ? <StartNote report={done} /> : null;
               }}
               columns={[
                 {
@@ -227,13 +231,8 @@ export function BrowseView() {
                   header: "Topic",
                   overflow: "truncate",
                   drop: 2,
-                  title: (r) => r.channel.topic,
-                  cell: (r) =>
-                    r.channel.topic ? (
-                      <span>{r.channel.topic}</span>
-                    ) : (
-                      <EmptyValue label="No topic" />
-                    ),
+                  title: (r) => r.channel.topic || roomNote(r) || undefined,
+                  cell: (r) => <RoomAbout room={r} />,
                 },
                 {
                   key: "members",
@@ -282,7 +281,7 @@ export function BrowseView() {
 function RoomName({ room }: { room: ChatDirectoryRoom }) {
   const { channel } = room;
   return (
-    <span className="row gap-1">
+    <span className="row gap-1 chat-room-name">
       <NamedGlyph name={roomMark(channel.kind)} size="sm" aria-hidden="true" />
       <span className="truncate" title={channel.name || channel.id}>
         {channel.name || channel.id}
@@ -295,6 +294,18 @@ function RoomName({ room }: { room: ChatDirectoryRoom }) {
       {channel.archived_at && <Tag size="xs">Archived</Tag>}
     </span>
   );
+}
+
+/**
+ * What a room is about: its topic, or where it has none, what the reader's
+ * standing in it means (a team's room), in the quiet ink of a sentence about
+ * the room rather than one written in it; else the empty mark.
+ */
+function RoomAbout({ room }: { room: ChatDirectoryRoom }) {
+  if (room.channel.topic) return <span>{room.channel.topic}</span>;
+  const note = roomNote(room);
+  if (note) return <span className="secondary">{note}</span>;
+  return <EmptyValue label="No topic" />;
 }
 
 /** What the reader's standing in a room means, where it is not plain. */

@@ -11,11 +11,13 @@
  */
 
 import {
+  Card,
   Disclosure,
   EmptyState,
   FindingList,
   Link,
   PageNote,
+  SettingsTable,
   Skeleton,
   StatCard,
   StatGroup,
@@ -27,6 +29,7 @@ import {
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { LimitSetting } from "~/components/LimitSetting.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import type {
   AtlasSourceScope,
@@ -38,6 +41,7 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtDuration, plural, relTime } from "~/lib/format.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { ATLAS_POLL_MS } from "./filters.ts";
 import { sourceName } from "./words.ts";
@@ -278,8 +282,44 @@ export function span(seconds: number): string {
 /** How often the sources are read, and how soon one can be read again by hand. */
 function cadence(answer: AtlasSourcesAnswer): string {
   const every = span(answer.refresh_interval_seconds);
-  const floor = span(answer.refresh_floor_seconds);
-  return `Each source is read every ${every}. Refresh now reads one sooner, at most once every ${floor}.`;
+  return `Each source is read every ${every}. ${floorWords(answer)}`;
+}
+
+/** How soon Refresh now may read a source again: the engine's floor, never a setting. */
+function floorWords(answer: AtlasSourcesAnswer): string {
+  return `Refresh now reads one sooner, at most once every ${span(answer.refresh_floor_seconds)}.`;
+}
+
+/**
+ * The read interval as the engine's own row (`limits`, group `atlas`), with
+ * the field that changes it, for a reader the `limits` question answers; the
+ * sentence alone for anyone else.
+ */
+function Cadence({ answer }: { answer: AtlasSourcesAnswer }) {
+  const viewer = useViewer();
+  const limits = useQuery("limits", undefined, { enabled: viewer.admin });
+  const row = limits.data?.limits.find((r) => r.key === "atlas.refresh_interval_seconds");
+  if (!row) {
+    return (
+      <Text variant="body" tone="secondary">
+        {cadence(answer)}
+      </Text>
+    );
+  }
+  return (
+    <Card padding="none">
+      <SettingsTable aria-label="How often the sources are read">
+        <LimitSetting
+          cap={row}
+          label="Each source is read every"
+          area="Atlas"
+          reread="Reload to see the atlas settings as they are now."
+          onApplied={limits.refetch}
+        />
+      </SettingsTable>
+      <Card.Footer variant="meta">{floorWords(answer)}</Card.Footer>
+    </Card>
+  );
 }
 
 export function SourcesPage() {
@@ -310,9 +350,7 @@ export function SourcesPage() {
               />
             ) : (
               <>
-                <Text variant="body" tone="secondary">
-                  {cadence(answer)}
-                </Text>
+                <Cadence answer={answer} />
                 <div className="atlas-sources">
                   {answer.sources.map((source) => (
                     <SourceCard key={source.kind} source={source} now={now} />

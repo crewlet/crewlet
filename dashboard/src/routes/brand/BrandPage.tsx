@@ -56,13 +56,13 @@ import {
   ButtonLink,
   Callout,
   Card,
-  ConfirmModal,
   EmptyState,
   Menu,
   Skeleton,
   Stack,
   useToast,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import {
   EllipsisGlyph,
   ExternalLinkGlyph,

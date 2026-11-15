@@ -64,8 +64,8 @@ import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { authorLabel, throughOf } from "~/lib/attribution.ts";
-import { Credential } from "~/components/Credential.tsx";
+import { throughOf } from "~/lib/attribution.ts";
+import { AuthorCell, Credential } from "~/components/Credential.tsx";
 import { authorityWords } from "~/lib/refusal.ts";
 import { isAbort, rest, RestError } from "~/protocol/index.ts";
 import { restErrorCode, useRest } from "~/lib/useRest.ts";
@@ -579,7 +579,7 @@ export function Secrets({ name }: { name?: string }) {
               hint: (
                 <>
                   Store one with Store a secret, or from the command line with{" "}
-                  <InlineCode>crewlet secrets set</InlineCode>.
+                  <InlineCode close=".">crewlet secrets set</InlineCode>
                 </>
               ),
             }}
@@ -652,7 +652,7 @@ export function Secrets({ name }: { name?: string }) {
                 // for an empty string the reader would read as a name.
                 cell: (s) =>
                   s.updated_by ? (
-                    <TableTextCell>{authorLabel(s.updated_by, s.operator_id)}</TableTextCell>
+                    <AuthorCell author={s.updated_by} operatorId={s.operator_id} />
                   ) : (
                     <EmptyValue label="Nobody recorded" />
                   ),

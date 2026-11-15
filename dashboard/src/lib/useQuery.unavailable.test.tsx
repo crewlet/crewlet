@@ -192,3 +192,45 @@ test("a refusal's sentence is on the result until an answer replaces it", async 
   });
   expect(view.getByTestId("said").textContent).toBe("ok|");
 });
+
+// WHAT A REFUSAL DOES TO THE READING ON SCREEN turns on what it says. A failure
+// to answer keeps the last reading beside it; an answer about the subject (it
+// is gone, or no longer this reader's) replaces it. Kept, a task deleted for
+// good was drawn whole, Restore included, under its own "No task called" state.
+// Mutation: keep `prev.data` on every refusal and the not_found rows go red.
+test.each([
+  ["not_found", "replaced"],
+  ["unauthorized", "replaced"],
+  ["artifact_trashed", "replaced"],
+  ["unavailable", "kept"],
+  ["timeout", "kept"],
+  ["closed", "kept"],
+  ["query_failed", "kept"],
+] as const)("%s after a reading leaves it %s", async (code, outcome) => {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  let next = 0;
+  (socket as unknown as { query: () => Promise<unknown> }).query = () =>
+    next++ === 0 ? Promise.resolve({ nodes: [] }) : Promise.reject(new QueryError(code, null));
+  function Reading() {
+    const { data, error, refetch } = useQuery("fleet");
+    return (
+      <button type="button" onClick={refetch} data-testid="reading">
+        {error ?? "ok"}|{data ? "data" : "none"}
+      </button>
+    );
+  }
+  const view = render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Reading />
+    </ClientContext.Provider>,
+  );
+  await afterMicrotasks();
+  expect(view.getByTestId("reading").textContent).toBe("ok|data");
+  await act(async () => {
+    view.getByTestId("reading").click();
+  });
+  expect(view.getByTestId("reading").textContent).toBe(
+    `${code}|${outcome === "kept" ? "data" : "none"}`,
+  );
+});

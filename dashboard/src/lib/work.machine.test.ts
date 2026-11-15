@@ -185,15 +185,13 @@ test("the loaded count says what is loaded out of how many match", () => {
   expect(loadedOf(100, 100)).toBe("100 loaded");
 });
 
-// A BUSY DAY IS THE READER'S DAY, bounded by the reader's own midnights — a
-// bare date resolves on the company's clock, and a task due at 23:30 in the
-// cell would be missing from the list its "+N more" opened.
-test("every task on a busy day is reachable by a range of the reader's own day", () => {
+// A BUSY DAY IS THE COMPANY'S DAY, the one its cell keys its tasks on: two bare
+// dates, which the engine resolves on the company's clock, so the list a
+// cell's "+N more" opens holds exactly the cell's tasks.
+test("every task on a busy day is reachable by a range of the company's day", () => {
   const range = dayRange("2031-04-16");
-  const [from, to] = range.replace("range:", "").split("..");
-  expect(new Date(from!).getDate()).toBe(16);
-  expect(new Date(from!).getHours()).toBe(0);
-  expect(Date.parse(to!) - Date.parse(from!)).toBeGreaterThanOrEqual(23 * 3_600_000);
+  expect(range).toBe("range:2031-04-16..2031-04-17");
+  expect(dayRange("2031-12-31")).toBe("range:2031-12-31..2032-01-01");
   expect(dayOfRange(range)).toBe("2031-04-16");
   expect(dueFilterLabel(range)).toMatch(/^on /);
   // AND A RANGE SOMEBODY WROTE BY HAND IS NOT CLAIMED AS ONE DAY.

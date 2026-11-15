@@ -147,7 +147,13 @@ browser, each write one commit or one ref moved, as you:
 
 Its protection rules are set on its **Settings** tab ([Protecting a
 branch](#protecting-a-branch)), and it is deleted and restored there too
-([Delete and restore a repository](#delete-and-restore-a-repository)).
+([Delete and restore a repository](#delete-and-restore-a-repository)). The
+same tab changes its details (description, default branch, owning unit and
+which seats read it) with **Edit details**, its name with **Rename**
+([Renaming a repository](#renaming-a-repository)), its path owners with **Add
+a path owner** and each owner's **Edit** and **Remove**, and turns it
+read-only with **Archive repository** (and back with **Unarchive
+repository**), each one `code_update_repo` made as you.
 
 ## Give each person a token
 
@@ -1189,6 +1195,10 @@ code:
   identity_domain: example.com   # docs-writer, stating no email, commits as docs-writer@example.com
 ```
 
+An administrator changes it on **Settings › Gitlet**, under **Scratch
+repositories and commit identity**, where its row shows the domain in force
+beside the default; the engine checks a typed domain before it is stored.
+
 Its committer is the engine, `Crewlet <engine@example.com>`. That marks the
 commits Gitlet built in your history and proves nothing — any git
 client can write the same committer — so who made a commit is its push's
@@ -1233,7 +1243,7 @@ it as it does any repository it maintains. Two settings bound them:
 code:
   scratch:
     max_per_seat: 50   # 0..1000; 0 lets no seat make one. Unset is 50
-    idle_days: 7       # 1..365; untouched this long, one is deleted. Unset is 7
+    idle_days: 7       # 1..365; untouched this long, one is deleted. Unset is 7; 0 is refused
 ```
 
 - **`max_per_seat`** counts **every** scratch repository a seat owns until it
@@ -1247,6 +1257,11 @@ code:
   idle expiry](../concepts/gitlet.md#a-scratch-repositorys-idle-expiry)).
   The duty's `code_retention_pass` line counts the ones it `expired` and the
   idle ones a turn kept (`scratch_held`).
+
+An administrator changes both on **Settings › Gitlet**, under **Scratch
+repositories and commit identity**: each row's pencil writes its key, held to
+its range as it is typed and checked against the whole company before it is
+stored. The identity domain beside them is changed the same way.
 
 You never create a scratch repository — it is a seat's — and you maintain
 every one: archive one to keep it, or restore a deleted one before its purge
@@ -1267,7 +1282,8 @@ tools](../concepts/gitlet.md#repositories-made-by-tools).
 ### Renaming a repository
 
 A repository a tool made is renamed with `code_update_repo`'s `rename_to`, by
-the seat that maintains it or by you through your assistant. The new name
+the seat that maintains it, or by you through your assistant or with
+**Rename** on its **Settings** tab. The new name
 keeps its kind's form: a scratch repository keeps its seat's handle
 (`docs-writer.parser`), and a project stays one label. **The old name
 redirects for 30 days**: a clone or a fetch of the old URL still works — git

@@ -308,7 +308,7 @@ answer is that there is no such work.
 | **tags** | from a per-project tag set — see [Tags](#tags). A tag the project has not declared is REFUSED at the write. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
 | **checklists** | up to 16 named lists holding up to 64 items each and 256 between them, each item with its own assignee — see [Checklists](#checklists). |
-| **relations**, **dependencies** | links between tasks, and blocking edges. |
+| **relations**, **dependencies** | links between tasks, and blocking edges: `linked` (related, no blocking meaning), `waiting_on` and `blocking` (one edge seen from its two ends), each a set changed with `{add, remove}` on `update_work_item`, and `duplicate_of` (one task the item duplicates, cleared with `null` or `""`). |
 | **linked pages** | knowledge-base pages the task names, set with `linked_pages` on `update_work_item`. `linked_page=<page id>` lists the tasks that name a page. |
 | **atlas entries** | the entries of the company's [atlas](atlas.md) the task touches (the servers, services, databases, domains and accounts the work changes), set with `linked_entries` on `update_work_item`. Up to 32, each kept by the entry's id. See [The atlas entries a task touches](#the-atlas-entries-a-task-touches). |
 | **references** | other tasks this task's description mentions by key (`ENG-12`), derived by the applier on every data node from the first 64 distinct keys the description names, where a task's former key resolves like its current one. `references=<key>` lists the tasks whose description mentions it. A comment's mentions are not references. |
@@ -581,13 +581,29 @@ its options included. So read the catalogue, change what you mean to change,
 and send it back — a field composed from scratch loses whatever it is not
 carrying. That is the same rule the list itself follows, and it is why the
 settings are spelled here exactly as the read spells them: the object you are
-handed is the object you send.
+handed is the object you send. The `types` list is the same, read from the
+answer's `declared_types` (the company's own declarations, archived ones
+included whatever `archived` asked) rather than from `types`, the effective
+set: sent back, the effective set would copy every builtin into the
+company's words.
+
+**In the dashboard**, a project's About lists the types under *What this
+project calls things*, with **Edit the company's types**. Its dialog lists
+every type with **Rename** and **Archive** (archiving asks first and keeps
+the type on the tasks filed as it), the archived ones apart with **Restore**,
+and **Add type**, which shows the slug tasks will hold for good. Each press
+writes `PUT /worklet/catalogue` with the declarations whole and the one
+change applied; every control is drawn for every reader and held with the
+reason for anybody without `admin`.
 
 A **project's own** field declarations are the project **lead's** (or an
 administrator's), written with `write_project(fields: [...])`. That
 list REPLACES the project's declarations and leaves the workspace's alone —
 the two are separate scopes and a task's effective set is their union — so
-send the whole set, and read `describe_project` first. A project declaration sharing a workspace field's id
+send the whole set, and read `describe_project` first: its `own_fields` is
+exactly that set, archived declarations included, where its `fields` is the
+effective one a task files against, and sending that back would copy every
+workspace field into the project. A project declaration sharing a workspace field's id
 **shadows** it, which `describe_project` names so a reader can see which
 definition is in force.
 
@@ -865,6 +881,11 @@ the clock from 00:00 straight to 01:00, so on that day the day — and "today",
 and a task's all-day due date — begins at 01:00; where a zone sets its clock
 back from 01:00 to 00:00, as Cuba does, midnight happens twice and the day
 begins at the first. The week is the ISO week, Monday to Monday.
+
+The dashboard draws a due date and a start date as the company's date too, for
+every reader wherever they are: a task due on the 30th reads Nov 30 in its
+rail, its list row, its card, its history and its calendar cell, never the
+29th for a reader west of the company's clock.
 
 ### The timeline
 
@@ -1144,7 +1165,7 @@ over the project's [files](#a-projects-files):
 | `update_work_item` | change any field, with an optional `if_match`. `routing_unit` points the item at another team and is the one field that is not every caller's to set: it belongs to the **lead** of the project the item is filed in (or an administrator), because it decides which team hears about somebody else's work — see [Which team an item belongs to](#which-team-an-item-belongs-to). `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked`, `linked_pages` and `linked_entries` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it. An `assignee` may carry a **`reason`** — one line, at most 500 characters, that the new assignee is woken with and the item's history shows beside the hand-off; a `reason` without an `assignee` is refused, because the explanation of any other change is a comment. **`checklist`** makes one change to the item's checklists — see [Checklists](#checklists) |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
-| `request_access` | ask a person for one more kind of access, named from a closed list (watching the engine's health, or any permission the seat's own GitHub App can hold, at any level the Agents tab offers), as a decision on the item that needs it: the grant or declining. The person sees the exact change before it is made, and nothing changes until they apply it ([ADR-0118](../../adr/0118-an-agent-asks-for-access-as-one-grant-a-person-previews-and-sends.md)) |
+| `request_access` | ask a person for one more kind of access, named from a closed list (watching the engine's health, or any permission the seat's own GitHub App can hold, at any level the Agents tab offers), as a decision on the item that needs it: the grant or declining; or one permission at an integration beside its level (`integration`, `permission`, `scope`, `hours`), as grant for this change, grant permanently or not now. The person sees the exact change before it is made, and nothing changes until they apply it ([ADR-0118](../../adr/0118-an-agent-asks-for-access-as-one-grant-a-person-previews-and-sends.md), [ADR-0150](../../adr/0150-an-agents-access-at-an-integration-is-its-level-plus-grants-a-person-makes.md)) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A `text` that is exactly one task key, in any case, answers that task first: the current key or one a move or a rename left it, opened as a point read opens it, followed by the ranking without it, because the words index splits a key into pieces that rank every task mentioning it above the task itself. `mode` picks the ranking: `hybrid` (the default) fuses the words and, where the company has an embeddings provider, the meaning; `keyword` ranks by the words alone, for an exact name or error text; `semantic` by meaning alone (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)). Its `text` is at most 400 bytes, the bound every search shares, and a longer one is refused naming the limit rather than cut. The answer says the `mode` it **served**, and carries a `degraded` sentence whenever that is not the one asked for — a hybrid search with nothing to rank by meaning ranks by the words and says so, while a `semantic` one runs nothing at all and says that this tells the seat nothing about whether the work exists. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed, and an answer over part of the fleet carries a `partial` sentence for the same reason |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. Across two projects the subtasks cannot follow — a subtask lives in its parent's project, and one under an item in another project is drawn under it on neither board — so a merge whose duplicate **has subtasks to carry** into an item in another project is refused before it writes anything unless `move_subtasks` is false: move the duplicate first with `move_work_item` (its subtasks go with it), or merge with `move_subtasks: false`. A duplicate with no subtasks merges across projects either way, since nothing moves. So is one moving the subtasks onto one of them refused, since a subtask would end up under itself, and one moving them while a **cross-project move has not yet carried** the duplicate or the survivor answers **unavailable** — the walk is about to change which project that end is in, and the same call a moment later is decided on where it went. Both items must be live: a merge of an item in the **trash**, or into one, is refused whichever way the subtasks go (restore it first), and a subtask in the trash is frozen, so it stays under the duplicate, where a restore finds it. A merge that stops part-way (its node died, or the stream refused an append) is finished by the `tracker` duty on its first pass (every 15 minutes) after the merge's claim has lapsed — a minute after its holder's last heartbeat — so never beside a merge that is still running. One only a person can unblock waits, named on every tick with what releases it, without holding up the rest: a survivor that went to the trash since (`tracker_merges_waiting_on_the_trash`) until it is restored, a duplicate that did (`tracker_merges_of_items_in_the_trash`) until it is restored — the trash takes no write, so nothing moves on its behalf meanwhile — and a survivor filed under one of the duplicate's subtasks since (`tracker_merges_waiting_on_a_cycle`) until it is filed elsewhere. One whose survivor was purged has nothing left to merge into, so its mark is cleared and the duplicate stays open |
 | `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. It takes the authority `routing_unit` does — the **lead** of the item's project, or an administrator. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
@@ -1688,11 +1709,26 @@ drawn for everybody and held with that reason for anybody without it.
   **Every task has a menu** (the ellipsis at the end of a list or table row,
   on a board card's corner and beside a timeline row's name; a calendar day's
   task opens its peek, which has the same menu in its header). It holds
-  **Move to project…**, **Move to trash**, and in the trash **Restore** and
-  **Delete permanently**. A move takes one top-level task and its subtasks to
-  the project you choose, re-keyed there with their old keys still opening
-  them; a subtask's entry is held, since it moves with its parent, and the
-  lead of the task's project decides it.
+  **Move to project…**, **Merge into…**, **Add to my priorities** (or
+  **Remove from my priorities** for a task already on them), **Move to
+  trash**, and in the trash **Restore** and **Delete permanently**. A move
+  takes one top-level task and its subtasks to the project you choose,
+  re-keyed there with their old keys still opening them; a subtask's entry is
+  held, since it moves with its parent, and the lead of the task's project
+  decides it. A merge folds the task into the one you find by its key or its
+  words (`merge_work_item`): it is linked to that task as its duplicate, its
+  subtasks move onto it unless you keep them where they are, and it is closed
+  as cancelled; the dialog says so before you press Merge, draws the engine's
+  refusal in place, and takes you to the task that carries the work on. Add to
+  my priorities puts the task at the end of your own list (`set_priorities`
+  under your record's version), where My work's Priorities orders it.
+
+  **A task's links are drawn and taken off on its page.** Link a task asks
+  what this task is to the one you pick: **Related to**, **Blocking** or
+  **Waiting on**, the last two with an optional line saying why. Each task in
+  the rail's Relations has a remove control for a reader who may change the
+  task: a dependency comes off from either end, and a related link or a
+  duplicate drawn from the other task is taken off that task.
   A list or a table also takes a **selection**: tick rows (Shift ticks a
   range) and the bar over the grid moves them all to the trash, or restores
   them all in the trash. Moving a task with subtasks asks first whether they
@@ -1809,9 +1845,26 @@ drawn for everybody and held with that reason for anybody without it.
   declared its `project` key; a project declared on a seat rather than on a
   unit has none, so the line says which unit owns it instead. A project nothing
   has been filed into says so and offers **New task**, rather than showing an
-  empty list. **Edit project** sets or clears the target date
-  (`write_project{target_date}`) — the project's lead may, and so may a person
-  acting as themselves; a seat that does not lead the project is refused.
+  empty list. **Edit project** sets or clears the target date, picks the
+  **default assignee** (a seat from the chart, or nobody, which leaves new work
+  to the lead's triage) and archives or unarchives the project
+  (`write_project{target_date, default_assignee, archived}`). It sends only
+  what you changed, and archiving names itself on the button and says what it
+  does before it is pressed. The project's lead may, and so may an admin;
+  archiving is a person's, never an agent's. Anybody else sees **Edit
+  project** held with "Editing this project needs Admin access, or leading
+  it." before anything is chosen, and the engine refuses the change all the
+  same. About lists the project's
+  **Labels** with **Add label** (any colleague may declare one), and
+  **Rename** and **Archive** on each (the lead's); archived labels are listed
+  under them, since the tasks filed under one keep it. Its **Fields** card
+  lists the fields the project declares itself, with **Add field**, **Edit**
+  and **Archive** (the lead's), beside the company's fields its tasks carry as
+  well. A field's slug and type stay once it exists, a dropdown's choice taken
+  out is archived rather than dropped, and archiving a label or a field asks
+  first, since neither comes back. **Files** lists the project's files with
+  **Upload**, and **Replace** and **Remove** on each row (see
+  [A project's files](#a-projects-files)).
 - **Search** (`#/worklet/search`) ranks the company's work against a phrase:
   **Hybrid** (the default: words and meaning, each ranked and then fused),
   **Keyword** (the words, BM25) or **Meaning** (`semantic`: what the text is
@@ -2161,7 +2214,13 @@ Its author may correct a question's wording afterwards
 (`PATCH /worklet/items/{key}/comments/{cid}`), and that changes its words and
 nothing else: an answered question stays answered and nobody is asked it
 again, and the person it asks, the answer it closed and the decision it carries
-stay what its post made them. A remark is posted once: a re-run of the call
+stay what its post made them. A remark that asks or answers nothing can also be
+taken down (`DELETE` on the same address), by its author or by an admin
+moderating: the row stays on the thread with its words blanked, so the replies
+under it still read in order, and neither the item's history nor anybody's
+inbox goes on quoting it. A question or an answer is never taken down, since
+the ask would be left with no question behind it or closed with no answer:
+withdraw the question, or edit the words. A remark is posted once: a re-run of the call
 that posted it finds it on the thread and changes nothing — not its words, not
 its answer, not who follows the item — whatever has happened to it since, the
 item having been trashed included. And it is answered as that remark: the
@@ -2970,7 +3029,13 @@ writers putting the same path contend, and exactly one wins.
 
 Seats reach them with the four tools in [What a seat can do](#what-a-seat-can-do);
 a person reaches them on the dashboard's project page, through their own
-assistant (the same four tools), or over REST —
+assistant (the same four tools), or over REST. On the project's **Files** lens,
+**Upload** puts each file you pick at the project's top level under its own
+name (a name the project already keeps is refused, since replacing is the
+row's), **Replace** on a row writes a new copy over that file and **Remove**
+takes it out, both naming the version on screen so a file somebody changed
+since is refused rather than overwritten. A file past the size cap is refused
+before its bytes are sent. Over REST,
 [`/worklet/files`](../reference/api-endpoints.md#project-files) takes an upload and
 streams a download without either passing through a model.
 

@@ -237,6 +237,9 @@ func DashboardName(name string) string {
 			return p.builder
 		}
 	}
+	if builder, ok := builderNames[name]; ok {
+		return builder
+	}
 	return name
 }
 
@@ -292,6 +295,10 @@ type catalogue struct {
 	accountID string
 	groups    []PermissionGroup
 
+	// zones is every zone in the account, which a grant's zones are named
+	// from.
+	zones []Zone
+
 	// zoneIDs is the company's zones resolved to IDs, sorted; nil scopes a
 	// token to every zone in the account.
 	zoneIDs []string
@@ -302,7 +309,7 @@ type catalogue struct {
 
 // newCatalogue resolves the company's zone names against the account's zones.
 func newCatalogue(accountID string, groups []PermissionGroup, zones []Zone, configured []string) catalogue {
-	c := catalogue{accountID: accountID, groups: groups}
+	c := catalogue{accountID: accountID, groups: groups, zones: zones}
 	if len(configured) == 0 {
 		return c
 	}
@@ -382,19 +389,7 @@ func (e *missingGroupsError) Error() string {
 // policies is a level's grant as a token's policy: one statement for the
 // account and one for its zones. A configured zone the account lacks is left
 // out rather than guessed at, and reported by the reconcile.
-func (c catalogue) policies(g grant) []Policy {
-	var out []Policy
-	if len(g.account) > 0 {
-		out = append(out, Policy{
-			Effect: "allow", PermissionGroups: refs(g.account),
-			Resources: map[string]any{scopeAccount + "." + c.accountID: "*"},
-		})
-	}
-	if len(g.zone) > 0 && (c.zoneIDs == nil || len(c.zoneIDs) > 0) {
-		out = append(out, Policy{Effect: "allow", PermissionGroups: refs(g.zone), Resources: c.zoneResources()})
-	}
-	return out
-}
+func (c catalogue) policies(g grant) []Policy { return c.policiesWith(g, nil) }
 
 // zoneResources is every zone a token reaches: the company's, or every zone
 // in the account.

@@ -42,7 +42,6 @@ import {
   Button,
   Callout,
   Card,
-  ConfirmModal,
   DatasetSource,
   DatasetSourceList,
   EmptyState,
@@ -58,6 +57,7 @@ import {
   useReorder,
   useToast,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import {
   CheckGlyph,
   FileTextGlyph,
@@ -478,7 +478,6 @@ export function DashboardCreate() {
       }}
       handoff={{
         tool: askTool(who, panel),
-        open: () => panel.setOpen(true),
         panel: panel.open ? (
           <AskAgentPanel
             panel={panel}

@@ -521,7 +521,7 @@ func (e *Engine) publishDriftRestored(ctx context.Context, d seataccess.DriftRes
 }
 
 func accessSetting(d seataccess.Desired) types.AccessSetting {
-	out := types.AccessSetting{Level: d.Level, Scope: d.Scope}
+	out := types.AccessSetting{Level: d.Level, Scope: d.Scope, Grants: grantSettings(d.Grants)}
 	if len(d.Permissions) > 0 {
 		out.Permissions = make(map[string]string, len(d.Permissions))
 		for key, access := range d.Permissions {

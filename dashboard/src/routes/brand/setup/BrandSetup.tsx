@@ -31,7 +31,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import {
   Button,
   Card,
-  ConfirmModal,
   EditingStatus,
   EmptyState,
   SetupWizard,
@@ -40,6 +39,7 @@ import {
   useToast,
   type StepperStatus,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { SwatchBookGlyph } from "@crewlethq/icons/glyphs";
 import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";

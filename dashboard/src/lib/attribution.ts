@@ -191,10 +191,25 @@ export function authorLabel(
   operatorId: string | undefined,
   name: string = author,
 ): string {
-  if (!author) return "";
-  if (assisted(operatorId)) return authorWords(name, operatorId);
+  const parts = authorParts(author, operatorId, name);
+  return parts.through ? `${parts.name} (${parts.through})` : parts.name;
+}
+
+/**
+ * [authorLabel]'s two halves apart: who, and the credential they wrote through
+ * ("through a personal access token"), empty where there is none. A table cell
+ * draws the second under the first, where a narrow column cut the one line
+ * at "jane-founder (through s…".
+ */
+export function authorParts(
+  author: string,
+  operatorId: string | undefined,
+  name: string = author,
+): { name: string; through: string } {
+  if (!author) return { name: "", through: "" };
+  if (assisted(operatorId)) return { name: authorWords(name, operatorId), through: "" };
   const through = throughOf(author, operatorId);
-  return through ? `${name} (through ${credentialWords(through)})` : name;
+  return { name, through: through ? `through ${credentialWords(through)}` : "" };
 }
 
 /**

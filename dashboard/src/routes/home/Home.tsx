@@ -44,13 +44,13 @@ import {
   ArrangeGrid,
   ArrangeGroup,
   Button,
-  ConfirmModal,
   EmptyState,
   IconButton,
   VisuallyHidden,
   useReorderLists,
   useToast,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import {
   CopyGlyph,
   FoldVerticalGlyph,

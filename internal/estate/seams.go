@@ -469,6 +469,18 @@ func (w WorkWriter) ResolveComment(ctx context.Context, opID, taskID, project, c
 	return out, err
 }
 
+// RemoveComment takes a remark on a work item down, as its author or as a
+// moderator.
+func (w WorkWriter) RemoveComment(ctx context.Context, opID, taskID, project, commentID string,
+	authority worklet.CommentAuthority) (worklet.WriteResult, error) {
+	out, err := call(ctx, w.r, opRemoveTaskComment, &w.actor, removeCommentOnTaskArgs{
+		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID,
+		Authority: authority,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
 // WritePriorities sets a person's priority order, conditioned on ifMatch.
 func (w WorkWriter) WritePriorities(ctx context.Context, opID, handle string,
 	priorities []string, ifMatch *uint64, authority worklet.PersonAuthority) (worklet.WriteResult, error) {

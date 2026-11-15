@@ -2695,7 +2695,7 @@ a.prof-row:hover {
 }
 
 /* THE LANDING: tiles sized by what each is worth, on one screen. The newest
-   change takes the big tile, Recently written runs down the right, and the
+   change takes the big tile, Recent activity runs down the right, and the
    four small tiles share the rest, each one line when it has nothing to list.
    Every tile is placed by a named area, so the markup keeps the reading order
    at every width: below 928px the feed moves under the newest change and the
@@ -2727,7 +2727,7 @@ a.prof-row:hover {
     grid-template-areas: "latest" "written" "reading" "pinned" "watching" "agents";
   }
 }
-/* WITH NOTHING WRITTEN there is no Recently written tile, and no column for
+/* WITH NOTHING WRITTEN there is no Recent activity tile, and no column for
    it: the newest change's tile says so, and the small tiles share the row. */
 .knowledge-tiles[data-written="none"] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3131,14 +3131,38 @@ a.prof-row:hover {
 .knowledge-props {
   max-width: var(--size-measure-narrow);
 }
-.knowledge-props-place,
-.knowledge-props-step,
 .knowledge-props-person {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-1) var(--spacing-2);
   min-width: 0;
+}
+/* A PATH (`PathSteps`): its segments wrap as a row, and each "/" is bound to
+   the segment it introduces (`.knowledge-step`, which never breaks inside),
+   so a line breaks before a "/" and never leaves one alone. Inside a step the
+   segment's own words wrap beside its "/", which keeps to their first line. */
+.knowledge-path {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+}
+.knowledge-step {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  max-width: 100%;
+}
+.knowledge-step > :last-child {
+  min-width: 0;
+}
+/* Words that wrap keep their "/" on their first line. */
+.knowledge-props .knowledge-step {
+  align-items: baseline;
 }
 .knowledge-props-link {
   color: var(--color-text-primary);
@@ -4308,6 +4332,14 @@ a.knowledge-reader-how:hover {
   outline: 2px dashed var(--color-brand-accent-soft-strong);
   outline-offset: 4px;
 }
+/* The company's task types, one row each, in the dialog that edits them
+   (`routes/worklet/TaskTypes.tsx`): the rows carry their own spacing. */
+.task-types {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .work-col-head {
   display: flex;
   align-items: center;
@@ -9029,13 +9061,27 @@ a.live-row:hover {
    longer than the whole cell is the only thing that is ever cut. The line is
    a small control's height, which holds the chip at every density, and the
    name is set on it, so the line is that tall with or without the chip and
-   the name sits where it does in every other cell. The title says both. */
-.crewlet-data-grid__cell > .revision-author {
+   the name sits where it does in every other cell. The title says both.
+   The credential a revision was written through is a caption line under
+   it, cut on its own, where one line cut it into the name. */
+.revision-author {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.crewlet-data-grid__cell > .revision-author > .revision-author__who {
   flex-wrap: wrap;
   row-gap: var(--spacing-1);
   height: var(--size-control-sm);
   line-height: var(--size-control-sm);
   overflow: hidden;
+}
+.revision-author__through {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- Signing in ----------------------------------------------------------
@@ -9139,8 +9185,12 @@ a.live-row:hover {
   margin-inline-start: auto;
 }
 
+/* WHAT THE TRASH IS, said once, under the toolbar and never pulled up into it:
+   the toolbar already takes back its host's gap (`.toolbar` in frame.css)
+   and is opaque over the content, so a negative top margin here slid the
+   line's upper half under the band. */
 .artifacts-trash-note {
-  margin: calc(-1 * var(--spacing-3)) 0 0;
+  margin: 0;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }
@@ -9566,6 +9616,36 @@ a.live-row:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
+}
+/* AN EMPTY SHEET NAMES ITS COLUMNS IN PLACE (`NoColumns` in SheetView.tsx):
+   one field per column under the empty state's words, a column wide enough
+   for a name, its actions at its end. */
+.artifact-sheet-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  width: min(100%, 24rem);
+  text-align: start;
+}
+.artifact-sheet-setup-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-sheet-setup-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.artifact-sheet-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
 }
 /* Export closes the data bar, on the bar's own line. */
 .artifact-data-bar-end {

@@ -55,6 +55,11 @@ type PageChange struct {
 	Title     string `json:"title,omitempty"`
 	Container string `json:"container,omitempty"`
 
+	// Status is the page's CURRENT status, read with its title: a page in
+	// the trash keeps its title, so without it a reader leading with the
+	// newest change leads with a page in the trash.
+	Status Status `json:"status,omitempty"`
+
 	Kind      ChangeKind `json:"kind"`
 	Actor     string     `json:"actor,omitempty"`
 	ActorKind string     `json:"actor_kind,omitempty"`
@@ -227,17 +232,18 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 			break
 		}
 		var change PageChange
-		var kind string
+		var kind, status string
 		var quiet int
 		var at, version int64
 		if err := rows.Scan(&change.ID, &change.PageID, &kind, &change.Actor,
 			&change.ActorKind, &change.OperatorID, &change.CommentID,
 			&change.Excerpt, &change.TurnID, &quiet, &at, &version,
-			&change.Title, &change.Container); err != nil {
+			&change.Title, &change.Container, &status); err != nil {
 
 			return nil, "", fmt.Errorf("doclet: scan a change: %w", err)
 		}
 		change.Kind = ChangeKind(kind)
+		change.Status = Status(status)
 		change.Quiet = quiet != 0
 		change.At = store.DecodeTime(at)
 		change.LogSeq = uint64(version)
@@ -350,13 +356,13 @@ func pageActivityStatement(p pageActivityPredicate, rows int) (string, []any) {
 		arms[i] = "SELECT * FROM (" + arm("h.actor_kind = ?") + ")"
 		args = append(append(append(args, p.args...), kind), rows)
 	}
-	// THE MERGED ROWS ARE NAMED `h`, and the head's two columns by the
+	// THE MERGED ROWS ARE NAMED `h`, and the head's three columns by the
 	// names every arm gave them, so the merge reads the same columns an arm
 	// returns — and orders by the change's version, as an arm does.
 	return `
 		SELECT h.id, h.page_id, h.kind, h.actor, h.actor_kind, h.operator_id,
 		       h.comment_id, h.excerpt, h.turn_id, h.quiet, h.created_at,
-		       h.version, h.title, h.container
+		       h.version, h.title, h.container, h.status
 		  FROM (` + strings.Join(arms, `
 		 UNION ALL `) + `) h
 		 ORDER BY h.version DESC
@@ -364,12 +370,13 @@ func pageActivityStatement(p pageActivityPredicate, rows int) (string, []any) {
 }
 
 // pageChangeColumns is every column a change is read with — the change's own
-// under `h` and its head's title and container under `p`, absent for a page
-// since purged.
+// under `h` and its head's title, container and status under `p`, absent for
+// a page since purged.
 const pageChangeColumns = `h.id, h.page_id, h.kind, h.actor, h.actor_kind, h.operator_id,
 		       h.comment_id, h.excerpt, h.turn_id, h.quiet, h.created_at,
 		       h.version, COALESCE(p.title, '') AS title,
-		       COALESCE(p.container, '') AS container`
+		       COALESCE(p.container, '') AS container,
+		       COALESCE(p.status, '') AS status`
 
 // Revision answers one saved version of one page, body included.
 //

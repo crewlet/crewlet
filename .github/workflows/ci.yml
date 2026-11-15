@@ -789,13 +789,14 @@ jobs:
           pattern: test-timings-${{ env.LEGS }}-*
           path: ${{ runner.temp }}/timings
       # skipgate times every package that passed or had no test files, so on a
-      # green run each shard's timings name every package it ran.
+      # green run each shard's timings name every package it ran: the lines of
+      # two fields, since a package's top-level tests follow it with three.
       - &legs-covered
         name: every package of the half ran in exactly one shard
         shell: bash
         run: |
           set -u
-          cut -f1 "$RUNNER_TEMP"/timings/*/test-timings.tsv | sort > "$RUNNER_TEMP/ran.txt"
+          awk -F '\t' 'NF == 2 { print $1 }' "$RUNNER_TEMP"/timings/*/test-timings.tsv | sort > "$RUNNER_TEMP/ran.txt"
           twice="$(uniq -d "$RUNNER_TEMP/ran.txt")"
           if [ -n "$twice" ]; then
             echo "::error::run by two shards:"; echo "$twice"; exit 1
@@ -838,7 +839,7 @@ jobs:
       - name: merge them into one measurement
         run: |
           go run ./internal/solo/partition merge "$RUNNER_TEMP"/timings/*/test-timings.tsv > "$RUNNER_TEMP/test-weights.tsv"
-          echo "$(wc -l < "$RUNNER_TEMP/test-weights.tsv") packages timed"
+          echo "$(awk -F '\t' 'NF == 2' "$RUNNER_TEMP/test-weights.tsv" | wc -l) packages and $(awk -F '\t' 'NF == 3' "$RUNNER_TEMP/test-weights.tsv" | wc -l) top-level tests timed"
       - uses: actions/upload-artifact@v7
         with:
           name: test-weights
@@ -966,6 +967,38 @@ jobs:
       - name: gitproc's suite on the pinned gits
         run: make test-gitproc
       - *git-save
+      - *gobuild-prune
+      - *gobuild-save
+
+  # THE HARNESS'S OUTPUT CAPTURE ON macOS, on every pull request. A harness
+  # child's stdout and stderr are files of its own on the engine host
+  # (internal/providers/llm/harness/capture.go), and darwin's half of that
+  # rests on calls no Linux job makes: flock's pin on a description a child
+  # inherits, F_PREALLOCATE for the room a capture is given, F_PUNCHHOLE
+  # (declared and called by capture_darwin.go itself, since x/sys wraps it
+  # not), the reopen by path and its identity check, ftruncate through the
+  # engine's read-write description, and procgroup's sysctl read of a group.
+  # `make test-capture` runs internal/flock's pin cases, the capture's unit
+  # cases (one of which punches what was read past the bound and reserves
+  # the room ahead through those very calls), one run whose record passes
+  # the bound and is given back as it is read, and one call through a
+  # harness whose group outlives it, under -race. A failure here is a darwin engine host losing or holding a call's
+  # output: it is fixed, never skipped. Whether the job is a REQUIRED check
+  # is a repository setting.
+  #
+  # Its caches are gitrecipe-macos's, the build cache under this job's own
+  # key; it needs no pinned git, since none of these cases runs one.
+  capture-macos:
+    name: harness capture (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - *go-caches
+      - *gobuild-restore
+      - *gobuild-age
+      - name: the capture's cases on darwin
+        run: make test-capture
       - *gobuild-prune
       - *gobuild-save
 
@@ -1169,7 +1202,7 @@ jobs:
   # nothing, and keeping each kind's newest entry leaves theirs as it was.
   caches:
     name: keep main's newest caches
-    needs: [build, dashboard, plan, test, weights, gates, gitrecipe-macos, lint]
+    needs: [build, dashboard, plan, test, weights, gates, gitrecipe-macos, capture-macos, lint]
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: *linux
     permissions:

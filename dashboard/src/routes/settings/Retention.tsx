@@ -89,6 +89,7 @@ import {
 import { authorLabel } from "~/lib/attribution.ts";
 import { TAKE_BACKUP } from "~/lib/backups.ts";
 import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
+import { SNAPSHOT_DONORS_REQUIRED } from "~/contract/retention.ts";
 import { andList } from "~/lib/words.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
@@ -125,10 +126,6 @@ export const RETENTION_POLL_MS = 60_000;
 export function useRetentionReport(enabled: boolean): QueryResult<RetentionReport> {
   return useQuery("retention", undefined, { pollMs: RETENTION_POLL_MS, enabled });
 }
-
-/** The trim's sixth term (D72), and the number an operator has to fix when the
- *  banner names `snapshot_floor`. */
-const SNAPSHOT_DONORS_REQUIRED = 2;
 
 /** The alarm list's element, which `at=alarms` brings into view. */
 const ALARMS_ID = "retention-alarms";
@@ -894,7 +891,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
       <span className="col" style={{ gap: 6 }}>
         <span>
           <strong>Maintenance on {op.stream}</strong>: no node starts in service until it closes.
-          Phase <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since{" "}
+          Phase <InlineCode close=",">{op.phase}</InlineCode> attempt {op.attempt}, since{" "}
           {relTime(op.since, now)}
           {/* NOT IN PARENTHESES: the author's credential is in its own. */}
           {op.by && <>, run by {authorLabel(op.by, op.operator_id)}</>}. Resizing{" "}
@@ -1533,7 +1530,7 @@ export function DomainRefusals({ domain: d }: { domain: RetentionDomain }) {
         <Callout variant="warning" role="alert">
           <span>
             <strong>Writes refused on this node:</strong>{" "}
-            <InlineCode>{d.writes_refused.code}</InlineCode>: {d.writes_refused.detail}
+            <InlineCode close=":">{d.writes_refused.code}</InlineCode> {d.writes_refused.detail}
           </span>
         </Callout>
       )}

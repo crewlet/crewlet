@@ -22,7 +22,8 @@ import { CalendarGlyph, CircleAlertGlyph, UserGlyph } from "@crewlethq/icons/gly
 // `~/ui/Icon.tsx`, which is where one change moves every caller at once.
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { uiletTone } from "~/ui/primitives.tsx";
-import { fmtCount, fmtDateCompact, fmtDateTime, fmtExact, humanize, plural } from "~/lib/format.ts";
+import { fmtCount, fmtExact, humanize, plural } from "~/lib/format.ts";
+import { fmtCompanyDay, useCompanyZone } from "~/lib/companyDay.ts";
 import { useClock } from "~/lib/clock.ts";
 import { shortAge } from "~/lib/seats.ts";
 import { GENERATION_STRIDE } from "~/contract/positions.ts";
@@ -303,14 +304,26 @@ export function Assignee({
  * does not.
  */
 export function DueMark({ due, overdue }: { due?: string; overdue?: boolean }) {
+  return <DayMark day={due} overdue={overdue} />;
+}
+
+/**
+ * A DAY FIELD in a row or a card: a due date (with its overdue tint) or a
+ * start date, drawn as the company date it names.
+ */
+export function DayMark({ day: due, overdue }: { day?: string; overdue?: boolean }) {
+  // THE COMPANY'S DATE ([companyDayOf]), the calendar `overdue` beside it is
+  // cut on: on this browser's clock a day picked as Nov 30 read Nov 29 to
+  // every reader west of the company, beside a rail that said it was due today.
+  const zone = useCompanyZone();
   // ITS OWN CLOCK, re-rendering this mark alone and only when its words change.
-  const label = useClock((now) => (due ? fmtDateCompact(due, now) : ""));
+  const label = useClock((now) => (due ? fmtCompanyDay(due, zone, now) : ""));
   if (!due) return null;
   return (
-    // THE FULL INSTANT IS ON THE TITLE, always. What is DRAWN is the
-    // compact form, because a column of dates repeating one year on every
-    // row is how the one date not in this year goes unnoticed.
-    <span className={cx("work-due", overdue && "overdue")} title={fmtDateTime(due)}>
+    // THE FULL DATE IS ON THE TITLE, always. What is DRAWN is the compact
+    // form, because a column of dates repeating one year on every row is how
+    // the one date not in this year goes unnoticed.
+    <span className={cx("work-due", overdue && "overdue")} title={fmtCompanyDay(due, zone)}>
       <CalendarGlyph size="xs" />
       {label}
       {overdue && <span className="sr-only">, overdue</span>}

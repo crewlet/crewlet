@@ -202,6 +202,10 @@ function mount(
     integrations?: IntegrationsAnswer;
     /** The chart's seats, where a case needs agents on it. */
     roles?: unknown[];
+    /** The `limits` answer, the engine's rows of the settings a pane changes. */
+    limits?: unknown;
+    /** The `settings` answer, the engine's rows of the settings that are not numbers. */
+    settings?: unknown;
   } = {},
 ): Mounted {
   const fetched: string[] = [];
@@ -250,6 +254,8 @@ function mount(
     if (what === "integrations")
       return Promise.resolve(structuredClone(extra.integrations ?? answer));
     if (what === "config" && config !== undefined) return Promise.resolve(config);
+    if (what === "limits" && extra.limits !== undefined) return Promise.resolve(extra.limits);
+    if (what === "settings" && extra.settings !== undefined) return Promise.resolve(extra.settings);
     if (what === "work_projects") {
       return Promise.resolve({ projects: [], total: 0, census: { active: 0 } });
     }
@@ -288,8 +294,8 @@ afterEach(() => {
 // its group, beside the apps that answer it. ATLASSIAN IS LISTED BY PRODUCT,
 // one line under work tracking and one under docs, because it is one
 // connection that serves two needs. A PRODUCT NAMES ITS MAKER beside it:
-// Chatlet, Worklet and Doclet name Crewlet as Jira and Confluence name
-// Atlassian. Mutation: drop the services' vendor and the three lines lose
+// Chatlet, Worklet, Doclet and Gitlet name Crewlet as Jira and Confluence
+// name Atlassian. Mutation: drop the services' vendor and the four lines lose
 // "Crewlet".
 test("the directory groups by need, with Crewlet's own service first in each", async () => {
   mount(ADMIN);
@@ -313,7 +319,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Chat", ["Chatlet (Crewlet)", "Slack", "Mattermost"]],
     ["Work tracking", ["Worklet (Crewlet)", "Jira (Atlassian)"]],
     ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
-    ["Code", ["GitHub", "GitLab"]],
+    ["Code", ["Gitlet (Crewlet)", "GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
     [
       "Cloud and Infrastructure",
@@ -345,6 +351,7 @@ test("an address selects its line, Atlassian and its relay on Jira's", async () 
     ["forge", /^Jira/],
     ["confluence", /Confluence/],
     ["worklet", /^Worklet/],
+    ["gitlet", /^Gitlet/],
   ] as const) {
     mount(ADMIN, kind);
     expect((await line(name)).getAttribute("aria-current"), kind).toBe("page");
@@ -467,7 +474,15 @@ test("the home shows only what is in use, each a compact card with one action", 
   mount(ADMIN);
   const inUse = await screen.findByRole("region", { name: /^In use/ });
   const names = [...inUse.querySelectorAll(".int-tile-link")].map((a) => a.textContent);
-  expect(names).toEqual(["Chatlet", "Worklet", "Doclet", "Confluence", "GitLab", "Datadog"]);
+  expect(names).toEqual([
+    "Chatlet",
+    "Worklet",
+    "Doclet",
+    "Confluence",
+    "Gitlet",
+    "GitLab",
+    "Datadog",
+  ]);
   for (const card of inUse.querySelectorAll(".crewlet-catalog-tile")) {
     expect(card.className).toContain("crewlet-catalog-tile--compact");
   }
@@ -476,7 +491,7 @@ test("the home shows only what is in use, each a compact card with one action", 
     within(gitlab).getByRole("link", { name: "Replace key GitLab" }).getAttribute("href"),
   ).toBe("#/company/integrations/gitlab?open=rotate");
   // THE COUNT BESIDE IN USE is of every card under it, the services included.
-  expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 6");
+  expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 7");
 });
 
 // EVERY STATE IS DRAWN ONE WAY: a service's "In use" and an app's
@@ -904,11 +919,156 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
 // there, so the pane said the default whatever a company set. Mutation: read
 // it under `tracker` again, and a company keeping ninety days is told the
 // engine's default.
-test("Worklet's settings say how long the company's inbox keeps a notice", async () => {
-  mount(ADMIN, "worklet", BUILT_IN, undefined, { name: "Acme", inbox: { retention_days: 90 } });
+test("Worklet's settings say how long the company's inbox keeps a notice, and change it", async () => {
+  // TWO UNITS FILING UNDER ONE PROJECT name it once.
+  const doc = {
+    name: "Acme",
+    inbox: { retention_days: 90 },
+    units: [
+      { id: "web", name: "Web", project: "PROD" },
+      { id: "api", name: "API", project: "PROD" },
+      { id: "eng", name: "Engineering", project: "ENG" },
+    ],
+  };
+  mount(ADMIN, "worklet", BUILT_IN, undefined, doc, {
+    limits: {
+      limits: [
+        {
+          key: "inbox.retention_days",
+          group: "inbox",
+          unit: "days",
+          value: 90,
+          default: 365,
+          off: false,
+          default_off: false,
+          settable: true,
+          range: { min: 30, max: 3650 },
+        },
+      ],
+    },
+  });
   fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
-  const row = (await screen.findByText("Inbox keeps a notice for")).parentElement as HTMLElement;
+  const row = await screen.findByRole("row", { name: /Inbox keeps a notice for/ });
   await waitFor(() => expect(row.textContent).toContain("90 days"));
+  expect(within(row).getByText("Changed from 365 days")).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Change Inbox keeps a notice for" })).toBeTruthy();
+  // WHERE EACH LIVES, said truly: the inbox is not under tracker.
+  expect(screen.getByText(/the inbox under inbox/)).toBeTruthy();
+  const projects = screen.getByRole("row", { name: /Projects the chart declares/ });
+  await waitFor(() => expect(projects.textContent).toContain("ENG"));
+  expect(projects.textContent).not.toContain("PROD, PROD");
+});
+
+// DOCLET'S SETTINGS ARE THE ENGINE'S ROWS (`settings`, group `knowledge`): each
+// the value in force beside its default, said in the page's words, with the
+// pencil that changes it. They were read off the document with a dashboard
+// sentence for every unset key ("The engine's default"), so a company never
+// learned which space its pages lived in. Mutation: read them off `config`
+// again, and the defaults' values are gone.
+test("Doclet's settings are the engine's rows, each beside its default, and change in place", async () => {
+  const knowledge = (
+    key: string,
+    kind: string,
+    value: unknown,
+    def: unknown,
+    over: Record<string, unknown> = {},
+  ) => ({
+    key,
+    group: "knowledge",
+    kind,
+    value,
+    default: def,
+    set: false,
+    off: false,
+    has_off: false,
+    ...over,
+  });
+  mount(
+    ADMIN,
+    "doclet",
+    BUILT_IN,
+    undefined,
+    { name: "Acme" },
+    {
+      settings: {
+        settings: [
+          knowledge("knowledge.root_space", "container", "HOME", "HOME", { has_off: true }),
+          knowledge("knowledge.skills_container", "container", "", "TS", {
+            has_off: true,
+            off: true,
+            set: true,
+          }),
+          knowledge("knowledge.scope", "containers", ["ENG", "PROD"], [], { set: true }),
+          knowledge("knowledge.vectors", "switch", true, true),
+        ],
+      },
+    },
+  );
+  fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+  await waitFor(() =>
+    expect(screen.getByRole("row", { name: /Company pages/ }).textContent).toContain("HOME"),
+  );
+  const pages = screen.getByRole("row", { name: /Company pages/ });
+  expect(within(pages).getByText("Default")).toBeTruthy();
+  const skills = screen.getByRole("row", { name: /Tool skills/ });
+  expect(within(skills).getByText("Off")).toBeTruthy();
+  expect(within(skills).getByText("Changed from TS")).toBeTruthy();
+  const reach = screen.getByRole("row", { name: /Search reaches/ });
+  expect(within(reach).getByText("ENG, PROD")).toBeTruthy();
+  const meaning = screen.getByRole("row", { name: /Search by meaning/ });
+  expect(within(meaning).getByText("On")).toBeTruthy();
+  for (const label of ["Company pages", "Tool skills", "Search reaches", "Search by meaning"]) {
+    expect(screen.getByRole("button", { name: `Change ${label}` })).toBeTruthy();
+  }
+});
+
+test("a reader without Admin is told Doclet's settings are an admin's, and asked nothing of them", async () => {
+  const { asked } = mount(MEMBER, "doclet");
+  fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+  const pages = await screen.findByRole("row", { name: /Company pages/ });
+  expect(within(pages).getByText("Admins see this")).toBeTruthy();
+  expect(asked).not.toContain("settings");
+});
+
+// THE COMPANY'S MESSAGE HORIZON IS SHOWN AND CHANGED ON CHATLET'S PAGE: the
+// engine's row (`limits`, group `chat`), whose 0 keeps messages for ever and
+// reads so. Its value was never drawn anywhere: a room said "as long as the
+// company default" and no screen said how long that was. (What its field
+// writes is `components/LimitSetting.test.tsx`'s.)
+test("Chatlet's settings say how long the company keeps messages, and change it", async () => {
+  mount(
+    { ...ADMIN, grants: [...ADMIN.grants, "chatlet"] },
+    "chat",
+    BUILT_IN,
+    undefined,
+    undefined,
+    {
+      limits: {
+        limits: [
+          {
+            key: "chat.chatlet.message_retention_days",
+            group: "chat",
+            unit: "days",
+            value: 0,
+            default: 365,
+            off: true,
+            default_off: false,
+            settable: true,
+            range: { min: 30, max: 3650, or_zero: true },
+          },
+        ],
+      },
+    },
+  );
+  // THE ROW IS DRAWN AGAIN once the engine's answer lands, so it is found then.
+  await waitFor(() =>
+    expect(screen.getByRole("row", { name: /Messages are kept for/ }).textContent).toContain(
+      "For ever",
+    ),
+  );
+  const row = screen.getByRole("row", { name: /Messages are kept for/ });
+  expect(within(row).getByText("Changed from 365 days")).toBeTruthy();
+  expect(within(row).getByRole("button", { name: "Change Messages are kept for" })).toBeTruthy();
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {
@@ -922,11 +1082,12 @@ test("a service the company runs none of says so, with no product to open", asyn
 test("a node running no company says so and wears no state", async () => {
   mount(ADMIN, "worklet", null);
   expect(await screen.findByText("This node runs no company yet.")).toBeTruthy();
-  // ITS NAME AND ITS MAKER, and nothing after them: Crewlet beside Worklet, Doclet and Chatlet.
+  // ITS NAME AND ITS MAKER, and nothing after them: Crewlet beside each service.
   for (const [name, says] of [
     ["Worklet", "WorkletCrewlet"],
     ["Doclet", "DocletCrewlet"],
     ["Chatlet", "ChatletCrewlet"],
+    ["Gitlet", "GitletCrewlet"],
   ] as const) {
     expect((await line(new RegExp(name))).textContent, name).toBe(says);
   }
@@ -983,4 +1144,54 @@ test("a company running no chat says so, with nothing to open", async () => {
   mount(ADMIN, "chat", { ...BUILT_IN, chat: "none" });
   expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
   expect(screen.queryByRole("link", { name: "Open Chatlet" })).toBeNull();
+});
+
+// GITLET COUNTS NOTHING: which repositories a reader sees is their own grant's
+// answer, so its page says what it gives and the way in, asks no count, and
+// opens where the sidebar's Gitlet row does. Mutation: drop the service's
+// `open` and the link goes.
+test("Gitlet in use is In use, with its way in and nothing counted", async () => {
+  const { asked } = mount({ ...MEMBER, grants: [...MEMBER.grants, "gitlet"] }, "gitlet");
+  expect(await screen.findByRole("heading", { level: 2, name: "Gitlet" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Gitlet" }).getAttribute("href")).toBe("#/gitlet");
+  expect(screen.getByText("Git repositories, their changes and checks, hosted here.")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "What Gitlet gives you" })).toBeTruthy();
+  expect((await line(/Gitlet/)).textContent).toContain("In use");
+  // GITLET'S SETTINGS ARE AN ADMIN'S, as the company document is.
+  expect(screen.queryByRole("link", { name: "Gitlet settings" })).toBeNull();
+  expect(asked.filter((q) => q !== "viewer" && q !== "integrations")).toEqual([]);
+});
+
+// THE WAY IN IS OFFERED TO A HOLDER OF GITLET, as Chatlet's is to a holder of
+// Chatlet. Mutation: offer Open Gitlet to every reader, and a reader without
+// Gitlet is sent to a screen that refuses them.
+test("a reader without Gitlet is told what opens it, and offered no way in", async () => {
+  mount(MEMBER, "gitlet");
+  expect(await screen.findByRole("heading", { level: 2, name: "Gitlet" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Gitlet" })).toBeNull();
+  expect(screen.getByText(/needs Gitlet access/)).toBeTruthy();
+});
+
+// AN ADMIN IS SENT TO GITLET'S OWN SETTINGS, where the rest of `code` is read.
+// Mutation: drop the admin's link and this goes red.
+test("an Admin is offered Gitlet's settings beside its way in", async () => {
+  mount({ ...ADMIN, grants: ["admin", "gitlet"] }, "gitlet");
+  expect((await screen.findByRole("link", { name: "Gitlet settings" })).getAttribute("href")).toBe(
+    "#/settings/gitlet",
+  );
+  expect(screen.getByRole("link", { name: "Open Gitlet" })).toBeTruthy();
+});
+
+// NOTHING IS IN GITLET'S PLACE: GitHub and GitLab are integrations a seat
+// calls, never a host, so Gitlet off says Crewlet hosts none of the code
+// rather than "nothing does this" for a company that keeps it on GitHub.
+// Mutation: send Gitlet off through the replacement's sentences and the page
+// says "Nothing does this for your company".
+test("a company with Gitlet off is told Crewlet hosts none of its code", async () => {
+  mount(ADMIN, "gitlet", { ...BUILT_IN, code: "none" });
+  expect(await screen.findByText("Crewlet hosts none of your company's code")).toBeTruthy();
+  expect(screen.queryByText("Nothing does this for your company")).toBeNull();
+  expect(screen.getByRole("region", { name: "What Gitlet would give you" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Gitlet" })).toBeNull();
+  expect((await line(/Gitlet/)).textContent).toContain("Not in use");
 });

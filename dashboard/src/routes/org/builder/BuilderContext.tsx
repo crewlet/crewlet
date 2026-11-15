@@ -99,7 +99,7 @@ export interface BuilderDerived {
  * the unit) lands on it. A part the node does not have opens the editor as
  * usual.
  */
-export type EditorSectionName = "reports" | "leadership" | "project";
+export type EditorSectionName = "reports" | "leadership" | "project" | "model" | "advanced";
 
 /**
  * How the toolbar offers the company's principles. Its mission, vision and

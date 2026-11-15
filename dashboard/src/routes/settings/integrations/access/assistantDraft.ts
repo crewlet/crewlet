@@ -92,6 +92,7 @@ import { andList, orList } from "~/lib/words.ts";
 import type { AccessDraft } from "./api.ts";
 import {
   emptyLevel,
+  grantWords,
   joinLevels,
   levelIds,
   managedOutside,
@@ -107,6 +108,7 @@ import {
   withLevel,
   withPermission,
   withScope,
+  withoutGrant,
   type Lane,
 } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
@@ -442,6 +444,45 @@ function scopeField(seat: AccessSeat, lane: Lane, path: string): Field | null {
   };
 }
 
+/**
+ * The grants cell: each grant the agent holds beside its level, by the
+ * permission's name and where. A proposal keeps the grants it names and so
+ * removes the rest, as the tag's remove does; adding one is Add grant's, whose
+ * dialog takes a reason and, for a write, a fresh sign-in at the save.
+ */
+function grantsField(seat: AccessSeat, lane: Lane, path: string): Field | null {
+  if (lane.grants === undefined || managedOutside(lane)) return null;
+  const words = (d: AccessDraft) =>
+    (wantOf(d, seat, lane.key).grants ?? []).map((g) => grantWords(lane, [g]));
+  return {
+    path: `${path}.grants`,
+    label: named(seat, (name) => `${name}'s ${lane.name} grants`),
+    hint: "The grants to keep, by name; adding one is Add grant on the tab.",
+    read: words,
+    summary: (value) => {
+      const items = typeof value === "string" ? [value] : value;
+      return items.length > 0 ? andList(items) : "None";
+    },
+    write: (d, value) => {
+      const held = wantOf(d, seat, lane.key).grants ?? [];
+      const keep = typedItems(value);
+      const names = held.map((g) => grantWords(lane, [g]));
+      const unknown = keep.find((k) => !names.some((n) => n.toLowerCase() === k.toLowerCase()));
+      if (unknown !== undefined) {
+        return refuse(
+          said`${seat.name} holds no grant called “${unknown}”; add one with Add grant on the tab.`,
+        );
+      }
+      let next = d;
+      for (let i = held.length - 1; i >= 0; i--) {
+        if (!keep.some((k) => k.toLowerCase() === names[i]!.toLowerCase()))
+          next = withoutGrant(next, seat, lane, i);
+      }
+      return next;
+    },
+  };
+}
+
 /** One agent's row on one product: its switch first, then what its access cell and scope cell draw. */
 function rowFields(seat: AccessSeat, at: number, lane: Lane): Field[] {
   const path = `agent_${at}.${segment(lane.key)}`;
@@ -454,6 +495,8 @@ function rowFields(seat: AccessSeat, at: number, lane: Lane): Field[] {
   }
   const scope = scopeField(seat, lane, path);
   if (scope) fields.push(scope);
+  const grants = grantsField(seat, lane, path);
+  if (grants) fields.push(grants);
   return fields;
 }
 

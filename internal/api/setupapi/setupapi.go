@@ -432,6 +432,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// the connect verb: a rotate seals a credential, and a remove takes an
 	// account away at the vendor.
 	mount("GET /setup/integrations/{kind}/access", authz.ActionSetupRead, s.accessRead)
+	// AN AGENT'S REQUEST FOR ONE GRANT, which its question's options name by
+	// id: the Inbox builds the grant's draft from it (accessgrants.go).
+	mount("GET /setup/access/requests/{id}", authz.ActionSetupRead, s.accessRequest)
 	// ONE AGENT'S LANE, in words, for a reader that shows one agent's access.
 	mount("GET /setup/integrations/{kind}/access/seats/{handle}/{lane}", authz.ActionSetupRead,
 		s.accessSeatRead)
@@ -916,7 +919,7 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind == integration.KindSSH {
-		servers, err := s.sshServers(r.Context(), fc.company)
+		servers, err := s.sshServers(r.Context(), fc.company, fc.revision)
 		if err != nil {
 			log.WarnContext(r.Context(), "setup_ssh_tests_unavailable", "error", err.Error())
 			httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,

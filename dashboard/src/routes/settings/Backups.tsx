@@ -279,7 +279,8 @@ export function BackupRecord({
                 // in prose `crewlet backup -dir` read as four words of the hint.
                 hint: (
                   <>
-                    Take one from this page, or run <InlineCode>crewlet backup -dir</InlineCode>.
+                    Take one from this page, or run{" "}
+                    <InlineCode close=".">crewlet backup -dir</InlineCode>
                   </>
                 ),
                 icon: "database",

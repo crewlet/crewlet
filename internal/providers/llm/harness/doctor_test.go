@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -547,4 +548,28 @@ func TestTheReportSaysWhichPromptASeatRunsUnder(t *testing.T) {
 	if want := "system prompt : seats: A\n" + strings.Repeat(" ", 14) + ": side passes: B\n"; !strings.Contains(out.String(), want) {
 		t.Errorf("the report does not carry the two lines under \"system prompt\":\n%s", out.String())
 	}
+}
+
+// A VERSION PROBE THAT COULD NOT START SAYS WHY. Output files that the volume
+// under state_dir would not give room for keep the probe from running at all,
+// and the doctor says so, naming state_dir, rather than "printed no version",
+// which would send the operator to the profile.
+//
+// Mutation: probeVersion drops run's error.
+func TestAVersionProbeWithNoRoomNamesTheStateDir(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "fake-cli 1.2.3"},
+		map[string]any{"version_args": []any{"-test.run=TestFakeHarness"}})
+	p.hooks = &captureHooks{reserve: func(*os.File, int64, int64) error { return syscall.ENOSPC }}
+	d := p.Diagnose(t.Context(), DiagnoseOptions{})
+	for _, c := range d.Checks {
+		if c.Name != CheckVersion {
+			continue
+		}
+		if c.OK || !strings.Contains(c.Remedy, "providers.llm.sub.state_dir") || strings.Contains(c.Remedy, "printed no version") {
+			t.Errorf("the version line = %+v, want the probe refused for want of room, naming state_dir", c)
+		}
+		return
+	}
+	t.Fatal("the diagnosis has no version line")
 }

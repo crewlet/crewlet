@@ -45,6 +45,7 @@ export const DIRECTORY: { key: string; label: string; lines: Line[] }[] = [
     key: "code",
     label: "Code",
     lines: [
+      { kind: "service", key: "gitlet" },
       { kind: "app", key: "github" },
       { kind: "app", key: "gitlab" },
     ],

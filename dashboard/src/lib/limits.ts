@@ -27,7 +27,7 @@
  */
 
 import type { LimitsAnswer, SettingRange } from "~/contract/limits.ts";
-import { fmtSetting } from "~/lib/format.ts";
+import { fmtSetting, plural } from "~/lib/format.ts";
 import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import type { SettingChange, SettingPlan } from "./useSettingWrite.ts";
 
@@ -49,6 +49,8 @@ export function limitTyping(row: LimitRow): string {
       return "A whole number per second.";
     case "count":
       return "A whole number.";
+    case "days":
+      return "A whole number of days.";
   }
 }
 
@@ -74,6 +76,8 @@ function notOfUnit(row: LimitRow, typed: string): string {
     case "per_second":
     case "count":
       return `“${typed}” is not a whole number.`;
+    case "days":
+      return `“${typed}” is not a whole number of days.`;
   }
 }
 
@@ -91,17 +95,28 @@ function boundWords(row: LimitRow, n: number): string {
       return `${n.toLocaleString()} per second`;
     case "count":
       return n.toLocaleString();
+    case "days":
+      return plural(n, "day");
   }
 }
 
 /** Whether `range` admits `value`, as the engine's `config.Range.Admits` does. */
 export function rangeAdmits(range: SettingRange, value: number): boolean {
+  if (range.or_zero === true && value === 0) return true;
   if (value < range.min || (range.min_exclusive === true && value === range.min)) return false;
   return range.max === undefined || value <= range.max;
 }
 
-/** What a cap admits, in its own unit, as the sentence beside its field: "At least 1." */
-export function rangeWords(row: LimitRow, range: SettingRange): string {
+/**
+ * What a cap admits, in its own unit, as the sentence beside its field: "At
+ * least 1." A range that also admits 0 says it last, in `zeroWords` where the
+ * page knows what 0 means there ("0 keeps messages for ever").
+ */
+export function rangeWords(row: LimitRow, range: SettingRange, zeroWords?: string): string {
+  if (range.or_zero === true) {
+    const scale = rangeWords(row, { ...range, or_zero: false }).replace(/\.$/, "");
+    return `${scale}, or ${zeroWords ?? "0"}.`;
+  }
   const least = boundWords(row, range.min);
   if (range.max === undefined) {
     return range.min_exclusive ? `More than ${least}.` : `At least ${least}.`;
@@ -117,7 +132,7 @@ export function rangeWords(row: LimitRow, range: SettingRange): string {
  * admitted; any other value is held to its unit and then to the range the
  * engine holds the cap to.
  */
-export function readLimit(row: LimitRow, text: string): TypedLimit {
+export function readLimit(row: LimitRow, text: string, zeroWords?: string): TypedLimit {
   const typed = text.trim().replace(/%$/, "").trim();
   if (typed === "") return { ok: true, value: null };
   // A SIGN IS READ, so -2 is told the cap's range rather than that it is not
@@ -135,12 +150,13 @@ export function readLimit(row: LimitRow, text: string): TypedLimit {
       break;
     case "count":
     case "per_second":
+    case "days":
       if (!Number.isInteger(n)) return { ok: false, error: notOfUnit(row, typed) };
       value = n;
       break;
   }
   if (row.range && !rangeAdmits(row.range, value)) {
-    return { ok: false, error: rangeWords(row, row.range) };
+    return { ok: false, error: rangeWords(row, row.range, zeroWords) };
   }
   return { ok: true, value };
 }
@@ -164,11 +180,15 @@ export function limitUnchanged(row: LimitRow, value: number | null): boolean {
  * person, a value the rest of the company's configuration cannot take, and
  * the operator's line stays where an operator reads it.
  */
-export function limitRefusal(row: LimitRow, problems: readonly ConfigProblem[]): string {
+export function limitRefusal(
+  row: LimitRow,
+  problems: readonly ConfigProblem[],
+  zeroWords?: string,
+): string {
   const said = new Set<string>();
   let unsaid = false;
   for (const p of problems) {
-    if (p.path === row.key && p.range) said.add(rangeWords(row, p.range));
+    if (p.path === row.key && p.range) said.add(rangeWords(row, p.range, zeroWords));
     else if (p.said) said.add(p.said);
     else unsaid = true;
   }
@@ -204,9 +224,14 @@ export function limitPatch(key: string, value: number | null): Record<string, un
 /**
  * One cap's change against the document as it is now: nothing where the
  * document already holds what was typed, else the patch and the summary the
- * revision history shows for it.
+ * revision history shows for it, opened by the page it was made on (`area`).
  */
-export function limitPlan(row: LimitRow, label: string, value: number | null): SettingPlan {
+export function limitPlan(
+  row: LimitRow,
+  label: string,
+  value: number | null,
+  area: string,
+): SettingPlan {
   return (document): SettingChange | null => {
     const held = documentLimit(document, row.key);
     if (value === null ? held === undefined : held === value) return null;
@@ -214,8 +239,8 @@ export function limitPlan(row: LimitRow, label: string, value: number | null): S
       patch: limitPatch(row.key, value),
       summary:
         value === null
-          ? `Limits: ${label} back to the default (${row.key})`
-          : `Limits: ${label} set to ${limitText(row, value)}${row.unit === "fraction" ? "%" : ""} (${row.key})`,
+          ? `${area}: ${label} back to the default (${row.key})`
+          : `${area}: ${label} set to ${limitText(row, value)}${row.unit === "fraction" ? "%" : ""} (${row.key})`,
     };
   };
 }

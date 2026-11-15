@@ -22,7 +22,17 @@ func SetWait(c *Client, wait func(context.Context, time.Duration) error) { c.wai
 
 // LevelOf is the level rules hold, "" where they are none exactly, and the
 // projects they name.
-func LevelOf(rules []Rule) (string, []string) { return heldBy(rules) }
+func LevelOf(rules []Rule) (string, []string) {
+	level, projects, _ := accessOf(rules, nil, nil)
+	return level, projects
+}
+
+// GrantsOf is the grants rules hold beside their level, read with no applied
+// setting to compare against.
+func GrantsOf(rules []Rule) []seataccess.Grant {
+	_, _, grants := accessOf(rules, nil, nil)
+	return grants
+}
 
 // RulesFor is a seat's policy at a level on its projects.
 func RulesFor(level, org string, projects []string) ([]RuleSpec, error) {
@@ -42,4 +52,11 @@ func LevelAdds() (ids []string, adds [][]string) {
 		ids, adds = append(ids, l.id), append(adds, append([]string(nil), l.adds...))
 	}
 	return ids, adds
+}
+
+// RulesWith is a seat's policy at a level on its projects with its grants,
+// each set's scope type read from types.
+func RulesWith(level, org string, projects []string, grants []seataccess.Grant,
+	types map[string]string) ([]RuleSpec, error) {
+	return rulesWith(level, org, projects, grants, types)
 }

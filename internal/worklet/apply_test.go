@@ -1154,16 +1154,19 @@ func TestAResolveWritesTheResolutionAndNothingElse(t *testing.T) {
 	}
 }
 
-// A REMOVAL RECORD WRITES NOTHING. No gesture takes a tracker comment down, so
-// no writer forms the removal kind, and a record of it that reaches the apply
-// anyway must not take the post's arm, which every kind but an edit and a
-// resolve takes. There, on a node that did not hold the remark, it made one up
-// from the removal, closing the ask that remark claimed to answer. A removal
-// of a remark the node holds leaves it as posted: nothing takes one down.
+// A REMOVAL RECORD TAKES DOWN ONLY A REMARK THE NODE HOLDS.
+//
+// The removal kind is [worklet.Writer.RemoveComment]'s, and its apply blanks
+// and flags the remark's row and keeps it, so a reply under it still resolves.
+// A record of it naming a remark this node does not hold must not take the
+// post's arm, which every kind but an edit, a resolve and a removal takes:
+// there it made the remark up from the removal, closing the ask that remark
+// claimed to answer.
 //
 // Mutation: drop the removal kind's arm and the removal of a remark the node
-// does not hold writes a row and closes cm-2.
-func TestARemovalRecordWritesNothing(t *testing.T) {
+// does not hold writes a row and closes cm-2; make the arm write nothing and
+// cm-1 still reads as posted.
+func TestARemovalRecordTakesDownOnlyARemarkTheNodeHolds(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
 	at := time.Unix(1_700_000_100, 0).UTC()
@@ -1204,11 +1207,12 @@ func TestARemovalRecordWritesNothing(t *testing.T) {
 	}
 	var removed int64
 	var body string
+	var document []byte
 	var answeredBy sql.NullString
 	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(), `
-			SELECT removed, body FROM tracker_comments WHERE id = 'cm-1'`).
-			Scan(&removed, &body); err != nil {
+			SELECT removed, body, document FROM tracker_comments WHERE id = 'cm-1'`).
+			Scan(&removed, &body, &document); err != nil {
 			return err
 		}
 		return tx.QueryRowContext(t.Context(), `
@@ -1216,9 +1220,16 @@ func TestARemovalRecordWritesNothing(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read the thread: %v", err)
 	}
-	if removed != 0 || body != "the rollback is platform's" {
-		t.Errorf("after a removal record cm-1 reads removed=%d %q, want it as posted",
-			removed, body)
+	var stored worklet.Comment
+	if err := json.Unmarshal(document, &stored); err != nil {
+		t.Fatalf("decode cm-1: %v", err)
+	}
+	if removed != 1 || body != "" || !stored.Removed || stored.Body != "" {
+		t.Errorf("after its removal cm-1 reads removed=%d %q, document %+v, want it "+
+			"taken down with no words", removed, body, stored)
+	}
+	if stored.Author != "ana" || !stored.CreatedAt.Equal(at) {
+		t.Errorf("the removal rewrote more than the words: %+v", stored)
 	}
 	if answeredBy.Valid {
 		t.Errorf("a removal record closed cm-2 as answered by %q", answeredBy.String)

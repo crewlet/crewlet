@@ -25,7 +25,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { PAGE_LIST_ORDERS } from "~/contract/pages.ts";
 import { uncounted } from "~/routes/doclet/Diaries.tsx";
-import { foldRuns, runPhrase } from "~/routes/doclet/landing.ts";
+import { foldRuns, pageRows, runPhrase } from "~/routes/doclet/landing.ts";
 import {
   changeAuthor,
   Face,
@@ -67,11 +67,14 @@ function Written({ container }: { container?: string }) {
   const now = useNow();
   const feed = useQuery(
     "page_activity",
-    { kinds: WRITTEN_KINDS, limit: ROWS * 2, ...(container ? { container } : {}) },
+    { kinds: WRITTEN_KINDS, limit: ROWS * 6, ...(container ? { container } : {}) },
     { pollMs: SPACES_POLL_MS },
   );
+  // ONE ROW PER PAGE, its newest change (`pageRows`): a page discussed all
+  // morning was every row of the widget. Read well past the rows it draws for
+  // the same reason.
   const runs = useMemo(
-    () => foldRuns(feed.data?.changes ?? [], zone).slice(0, ROWS),
+    () => pageRows(foldRuns(feed.data?.changes ?? [], zone), -1, ROWS),
     [feed.data, zone],
   );
   return (
@@ -120,9 +123,9 @@ function Written({ container }: { container?: string }) {
   );
 }
 
-function RecentlyWritten() {
+function RecentActivity() {
   return (
-    <WidgetCard title="Recently written" from="doclet">
+    <WidgetCard title="Recent activity" from="doclet">
       <Written />
     </WidgetCard>
   );
@@ -350,13 +353,13 @@ export const widgets = defineWidgets([
   {
     key: "doclet.recent",
     from: "doclet",
-    label: "Recently written",
-    description: "The latest pages, saves and comments",
+    label: "Recent activity",
+    description: "The pages saved, discussed or written lately, one row each",
     icon: ListGlyph,
     hue: "cyan",
     size: { w: 4, minW: 3, minH: 8, vertical: true },
     once: true,
-    Component: RecentlyWritten,
+    Component: RecentActivity,
   },
   {
     key: "doclet.space",

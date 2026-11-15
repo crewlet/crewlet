@@ -8,17 +8,13 @@
  * The engine keeps the rest of a rule as it stands, so the form sends only
  * what the person moved from what the page read: a new rule's pattern and
  * whatever differs from the engine's own new rule (a person's push alone, no
- * force, no delete, no gate), and an edit's changed fields. The required
- * checks change item by item (`add`, `remove`), never as a list sent whole,
- * so a check somebody else added meanwhile is not dropped. Turning the gate
- * off is `remove_gate`.
- *
- * # What the form does not state
- *
- * A gate's path classes (`approvals_unless`, `human_paths`) and its queue's
- * depth and batch (`landing`) are shown where a rule has them, on the rule's
- * line, and are changed by the code tools or the company document: the form
- * leaves them exactly as they stand.
+ * force, no delete, no gate), and an edit's changed fields. Every list of a
+ * gate changes item by item, never sent whole, so an item somebody else
+ * added meanwhile is not dropped: the required checks and the classes that
+ * exempt a change from approval by what is added and removed (`add`,
+ * `remove`), the paths a person approves by glob (`put`, `remove`). The
+ * queue's depth and batch are sent a field at a time. Turning the gate off is
+ * `remove_gate`.
  *
  * REMOVING A RULE IS CONFIRMED in the page, naming what the refs lose. Every
  * control is drawn for every reader and held with its reason
@@ -27,9 +23,27 @@
  */
 
 import { useState } from "react";
-import { Button, Checkbox, ConfirmModal, FormField, Input, Select, Stack } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import {
+  Button,
+  Checkbox,
+  FormField,
+  Input,
+  ListInput,
+  Select,
+  Stack,
+  Text,
+  withDraft,
+} from "@crewlethq/ui";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import {
+  CODE_DEFAULT_QUEUE_BATCH,
+  CODE_DEFAULT_QUEUE_DEPTH,
+  CODE_MAX_QUEUE_BATCH,
+  CODE_MAX_QUEUE_DEPTH,
+  CODE_PATH_CLASSES,
+} from "~/contract/code.ts";
+import { PATH_CLASS_WORDS } from "~/lib/protection.ts";
 import { protectFormHeld, protectHeld, protectionPattern } from "~/lib/repoWrites.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -39,6 +53,33 @@ import type { CodeMergeGate, CodeProtection, CodeRepoSummary } from "~/protocol/
 export interface HeldRule {
   rule: CodeProtection;
   gate: CodeMergeGate | undefined;
+}
+
+/** One path a person approves, as the form holds it: its glob and the classes that exempt it. */
+export interface HumanPathDraft {
+  glob: string;
+  unless: readonly string[];
+}
+
+/** What the protection form holds, every field as the person left it. */
+export interface ProtectForm {
+  directPush: string;
+  allowForce: boolean;
+  allowDelete: boolean;
+  gated: boolean;
+  mergeBy: string;
+  approvals: string;
+  /** The classes that exempt a change from approval (`approvals_unless`). */
+  approvalsUnless: readonly string[];
+  /** The paths a person approves (`human_paths`), by glob, in the form's order. */
+  humanPaths: readonly HumanPathDraft[];
+  checks: string;
+  /** The queue's depth and batch as typed, each a whole number from 1. */
+  depth: string;
+  batch: string;
+  ownersApprove: boolean;
+  deleteSource: string;
+  agentsEditChecks: boolean;
 }
 
 /** The names a list of checks holds, as a person types them: by commas or spaces. */
@@ -53,6 +94,47 @@ function checkNames(typed: string): string[] {
   ];
 }
 
+/** Classes in the engine's order, each once: how a gate carries them. */
+function inClassOrder(classes: readonly string[]): string[] {
+  return CODE_PATH_CLASSES.filter((c) => classes.includes(c));
+}
+
+/** A list's change, item by item: what `wanted` adds to `had` and what it removes, or null for none. */
+function listChange(
+  wanted: readonly string[],
+  had: readonly string[],
+): { add?: string[]; remove?: string[] } | null {
+  const add = wanted.filter((c) => !had.includes(c));
+  const remove = had.filter((c) => !wanted.includes(c));
+  if (!add.length && !remove.length) return null;
+  return { ...(add.length ? { add } : {}), ...(remove.length ? { remove } : {}) };
+}
+
+/**
+ * The human paths' change, by glob: a glob put where it is new or its
+ * exempting classes moved, and a glob removed where the form dropped it, or
+ * null for none. A glob typed twice is put once, as first typed.
+ */
+function humanPathsChange(
+  wanted: readonly HumanPathDraft[],
+  had: readonly { glob: string; unless?: string[] }[],
+): { put?: { glob: string; unless?: string[] }[]; remove?: string[] } | null {
+  const seen = new Set<string>();
+  const put: { glob: string; unless?: string[] }[] = [];
+  for (const w of wanted) {
+    const glob = w.glob.trim();
+    if (glob === "" || seen.has(glob)) continue;
+    seen.add(glob);
+    const unless = inClassOrder(w.unless);
+    const was = had.find((h) => h.glob === glob);
+    if (was && inClassOrder(was.unless ?? []).join() === unless.join()) continue;
+    put.push({ glob, ...(unless.length ? { unless } : {}) });
+  }
+  const remove = had.map((h) => h.glob).filter((g) => !seen.has(g));
+  if (!put.length && !remove.length) return null;
+  return { ...(put.length ? { put } : {}), ...(remove.length ? { remove } : {}) };
+}
+
 /**
  * What a protect call sends for a form, beyond the repository and the
  * pattern: the fields that differ from the rule as it was read, or from the
@@ -60,17 +142,7 @@ function checkNames(typed: string): string[] {
  */
 export function protectArgs(
   held: HeldRule | undefined,
-  form: {
-    directPush: string;
-    allowForce: boolean;
-    allowDelete: boolean;
-    gated: boolean;
-    mergeBy: string;
-    approvals: string;
-    checks: string;
-    ownersApprove: boolean;
-    deleteSource: string;
-  },
+  form: ProtectForm,
 ): Record<string, unknown> {
   const was = held?.rule;
   const args: Record<string, unknown> = {};
@@ -86,20 +158,54 @@ export function protectArgs(
   // one even where every choice is the engine's default.
   if (!gate || form.mergeBy !== gate.merge_by) args.merge_by = form.mergeBy;
   if (!gate || form.approvals !== gate.approvals) args.approvals = form.approvals;
-  const wanted = checkNames(form.checks);
-  const had = gate?.checks ?? [];
-  const add = wanted.filter((c) => !had.includes(c));
-  const remove = had.filter((c) => !wanted.includes(c));
-  if (add.length || remove.length) {
-    args.checks = { ...(add.length ? { add } : {}), ...(remove.length ? { remove } : {}) };
-  }
+  const exemptions = listChange(inClassOrder(form.approvalsUnless), gate?.approvals_unless ?? []);
+  if (exemptions) args.approvals_unless = exemptions;
+  const paths = humanPathsChange(form.humanPaths, gate?.human_paths ?? []);
+  if (paths) args.human_paths = paths;
+  const checks = listChange(checkNames(form.checks), gate?.checks ?? []);
+  if (checks) args.checks = checks;
+  // THE LANDING A FIELD AT A TIME, against the gate's or the engine's new
+  // gate's (`config.CodeLanding`), so a queue's other field moved meanwhile
+  // is kept.
+  const depth = Number(form.depth);
+  const batch = Number(form.batch);
+  const landing = {
+    ...(depth !== (gate?.landing.depth ?? CODE_DEFAULT_QUEUE_DEPTH) ? { depth } : {}),
+    ...(batch !== (gate?.landing.batch ?? CODE_DEFAULT_QUEUE_BATCH) ? { batch } : {}),
+  };
+  if (Object.keys(landing).length) args.landing = landing;
   if (form.ownersApprove !== Boolean(gate?.owners_approve)) {
     args.owners_approve = form.ownersApprove;
   }
   if (form.deleteSource !== (gate?.delete_source ?? "seats")) {
     args.delete_source = form.deleteSource;
   }
+  if (form.agentsEditChecks !== Boolean(gate?.agents_edit_checks)) {
+    args.agents_edit_checks = form.agentsEditChecks;
+  }
   return args;
+}
+
+/**
+ * Why a gate's form cannot be sent yet, or undefined: the queue's depth and
+ * batch are whole numbers inside the engine's bounds (`gitlet.MaxQueueDepth`,
+ * `MaxQueueBatch`), each from 1. Judged only for a gated rule.
+ */
+export function landingHeld(
+  form: Pick<ProtectForm, "gated" | "depth" | "batch">,
+): string | undefined {
+  if (!form.gated) return undefined;
+  const bad = (typed: string, max: number) => {
+    const n = Number(typed);
+    return typed.trim() === "" || !Number.isInteger(n) || n < 1 || n > max;
+  };
+  if (bad(form.depth, CODE_MAX_QUEUE_DEPTH)) {
+    return `Changes tested at once is a whole number from 1 to ${CODE_MAX_QUEUE_DEPTH}.`;
+  }
+  if (bad(form.batch, CODE_MAX_QUEUE_BATCH)) {
+    return `Changes per candidate is a whole number from 1 to ${CODE_MAX_QUEUE_BATCH}.`;
+  }
+  return undefined;
 }
 
 /** "Protect a branch": the button that opens the form for a new rule. */
@@ -179,7 +285,6 @@ export function RuleControls({ repo, held }: { repo: CodeRepoSummary; held: Held
         confirmLabel="Remove protection"
         onClose={() => setRemoving(false)}
         submitting={write.busy}
-        busyReason="Waiting for the engine to answer"
         onConfirm={async () => {
           await write.run(
             { repo: repo.name, pattern, remove: true },
@@ -206,30 +311,39 @@ function ProtectDialog({
   const write = useAct("code_protect_branch");
   const gate = held?.gate;
   const [typed, setTyped] = useState(pattern);
-  const [directPush, setDirectPush] = useState(held?.rule.direct_push ?? "persons");
-  const [allowForce, setAllowForce] = useState(Boolean(held?.rule.allow_force));
-  const [allowDelete, setAllowDelete] = useState(Boolean(held?.rule.allow_delete));
-  const [gated, setGated] = useState(gate !== undefined);
-  const [mergeBy, setMergeBy] = useState(gate?.merge_by ?? "writers");
-  const [approvals, setApprovals] = useState(gate?.approvals ?? "none");
-  const [checks, setChecks] = useState((gate?.checks ?? []).join(", "));
-  const [ownersApprove, setOwnersApprove] = useState(Boolean(gate?.owners_approve));
-  const [deleteSource, setDeleteSource] = useState(gate?.delete_source ?? "seats");
-  const args = protectArgs(held, {
-    directPush,
-    allowForce,
-    allowDelete,
-    gated,
-    mergeBy,
-    approvals,
-    checks,
-    ownersApprove,
-    deleteSource,
-  });
+  const [form, setForm] = useState<ProtectForm>(() => ({
+    directPush: held?.rule.direct_push ?? "persons",
+    allowForce: Boolean(held?.rule.allow_force),
+    allowDelete: Boolean(held?.rule.allow_delete),
+    gated: gate !== undefined,
+    mergeBy: gate?.merge_by ?? "writers",
+    approvals: gate?.approvals ?? "none",
+    approvalsUnless: gate?.approvals_unless ?? [],
+    humanPaths: (gate?.human_paths ?? []).map((h) => ({ glob: h.glob, unless: h.unless ?? [] })),
+    checks: (gate?.checks ?? []).join(", "),
+    depth: String(gate?.landing.depth ?? CODE_DEFAULT_QUEUE_DEPTH),
+    batch: String(gate?.landing.batch ?? CODE_DEFAULT_QUEUE_BATCH),
+    ownersApprove: Boolean(gate?.owners_approve),
+    deleteSource: gate?.delete_source ?? "seats",
+    agentsEditChecks: Boolean(gate?.agents_edit_checks),
+  }));
+  // A GLOB TYPED AND NOT YET ADDED is part of what the person means to save.
+  const [pathDraft, setPathDraft] = useState("");
+  const set = (patch: Partial<ProtectForm>) => setForm((f) => ({ ...f, ...patch }));
+  const globs = form.humanPaths.map((h) => h.glob);
+  const sent: ProtectForm = {
+    ...form,
+    humanPaths: withDraft(globs, pathDraft).map(
+      (glob) => form.humanPaths.find((h) => h.glob === glob) ?? { glob, unless: [] },
+    ),
+  };
+  const args = protectArgs(held, sent);
   const blocked =
     protectFormHeld(typed) ??
+    landingHeld(form) ??
     (held && Object.keys(args).length === 0 ? "Nothing is changed yet." : undefined);
   const named = protectionPattern(typed);
+  const checked = checkNames(form.checks).length > 0;
   const submit = async () => {
     if (!pressable(write, blocked)) return;
     const result = await write.run(
@@ -238,15 +352,16 @@ function ProtectDialog({
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
+  const exemptBy = (classes: readonly string[], c: string, on: boolean) =>
+    on ? [...classes, c] : classes.filter((x) => x !== c);
   return (
     <Modal
       open
-      size="sm"
+      size="md"
       title={held ? `Protection on ${held.rule.pattern}` : `Protect a branch of ${repo.name}`}
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -287,8 +402,8 @@ function ProtectDialog({
             <Select
               id={field.id}
               ariaLabel="Direct pushes"
-              value={directPush}
-              onChange={(value) => setDirectPush(String(value))}
+              value={form.directPush}
+              onChange={(value) => set({ directPush: String(value) })}
               options={[
                 { value: "persons", label: "Only a person pushes to it directly" },
                 { value: "none", label: "Nobody pushes to it directly" },
@@ -299,30 +414,30 @@ function ProtectDialog({
         <Checkbox
           label="Allow forced pushes"
           description="A push may rewrite its history."
-          checked={allowForce}
-          onCheckedChange={setAllowForce}
+          checked={form.allowForce}
+          onCheckedChange={(allowForce) => set({ allowForce })}
         />
         <Checkbox
           label="Allow deletion"
           description="A push may delete it."
-          checked={allowDelete}
-          onCheckedChange={setAllowDelete}
+          checked={form.allowDelete}
+          onCheckedChange={(allowDelete) => set({ allowDelete })}
         />
         <Checkbox
           label="Gate merges into it"
           description="A change merges into it only once the gate below is met."
-          checked={gated}
-          onCheckedChange={setGated}
+          checked={form.gated}
+          onCheckedChange={(gated) => set({ gated })}
         />
-        {gated && (
+        {form.gated && (
           <>
             <FormField label="Merged by">
               {(field) => (
                 <Select
                   id={field.id}
                   ariaLabel="Merged by"
-                  value={mergeBy}
-                  onChange={(value) => setMergeBy(String(value))}
+                  value={form.mergeBy}
+                  onChange={(value) => set({ mergeBy: String(value) })}
                   options={[
                     { value: "writers", label: "Anybody who may write it" },
                     { value: "maintainers", label: "Its maintainers" },
@@ -336,8 +451,8 @@ function ProtectDialog({
                 <Select
                   id={field.id}
                   ariaLabel="Approvals"
-                  value={approvals}
-                  onChange={(value) => setApprovals(String(value))}
+                  value={form.approvals}
+                  onChange={(value) => set({ approvals: String(value) })}
                   options={[
                     { value: "none", label: "No approval" },
                     { value: "one", label: "One approval" },
@@ -345,6 +460,59 @@ function ProtectDialog({
                 />
               )}
             </FormField>
+            {CODE_PATH_CLASSES.map((c) => (
+              <Checkbox
+                key={c}
+                label={`No approval for a change of ${PATH_CLASS_WORDS[c]}`}
+                description={`A change whose every path changes ${PATH_CLASS_WORDS[c]} merges without one.`}
+                checked={form.approvalsUnless.includes(c)}
+                onCheckedChange={(on) =>
+                  set({ approvalsUnless: exemptBy(form.approvalsUnless, c, on) })
+                }
+              />
+            ))}
+            <ListInput
+              label="Paths a person approves"
+              itemName="path"
+              optional
+              helper="A change touching one waits for a person's approval, whatever else approved it. A glob such as migrations/** or *.sql."
+              placeholder="deploy/**"
+              value={globs}
+              draft={pathDraft}
+              onDraftChange={setPathDraft}
+              onChange={(next) =>
+                set({
+                  humanPaths: next.map(
+                    (glob) => form.humanPaths.find((h) => h.glob === glob) ?? { glob, unless: [] },
+                  ),
+                })
+              }
+            />
+            {form.humanPaths.map((h) => (
+              <div key={h.glob} role="group" aria-label={`When ${h.glob} needs no person`}>
+                <Stack gap={1}>
+                  <Text as="div" variant="caption">
+                    A person approves <span className="mono">{h.glob}</span>, unless every change to
+                    it is of
+                  </Text>
+                  {CODE_PATH_CLASSES.map((c) => (
+                    <Checkbox
+                      key={c}
+                      size="sm"
+                      label={PATH_CLASS_WORDS[c]}
+                      checked={h.unless.includes(c)}
+                      onCheckedChange={(on) =>
+                        set({
+                          humanPaths: form.humanPaths.map((x) =>
+                            x.glob === h.glob ? { ...x, unless: exemptBy(x.unless, c, on) } : x,
+                          ),
+                        })
+                      }
+                    />
+                  ))}
+                </Stack>
+              </div>
+            ))}
             <FormField
               label="Required checks"
               optional
@@ -357,24 +525,72 @@ function ProtectDialog({
                   width="full"
                   spellCheck={false}
                   placeholder="unit, lint"
-                  value={checks}
-                  onChange={(event) => setChecks(event.target.value)}
+                  value={form.checks}
+                  onChange={(event) => set({ checks: event.target.value })}
                 />
               )}
             </FormField>
+            {(checked || form.agentsEditChecks) && (
+              <>
+                <Checkbox
+                  label="A seat may approve a change to its checks"
+                  description="A change to .crewlet/**, where the checks are defined, merges on a seat's approval rather than waiting for a person's."
+                  checked={form.agentsEditChecks}
+                  onCheckedChange={(agentsEditChecks) => set({ agentsEditChecks })}
+                />
+                <FormField
+                  label="Changes tested at once"
+                  helper={`How many candidates its merge queue tests together, 1 to ${CODE_MAX_QUEUE_DEPTH}.`}
+                >
+                  {(field) => (
+                    <Input
+                      id={field.id}
+                      aria-describedby={field.describedBy}
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={CODE_MAX_QUEUE_DEPTH}
+                      step={1}
+                      width="xs"
+                      value={form.depth}
+                      onChange={(event) => set({ depth: event.target.value })}
+                    />
+                  )}
+                </FormField>
+                <FormField
+                  label="Changes per candidate"
+                  helper={`How many waiting changes one candidate takes, 1 to ${CODE_MAX_QUEUE_BATCH}.`}
+                >
+                  {(field) => (
+                    <Input
+                      id={field.id}
+                      aria-describedby={field.describedBy}
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={CODE_MAX_QUEUE_BATCH}
+                      step={1}
+                      width="xs"
+                      value={form.batch}
+                      onChange={(event) => set({ batch: event.target.value })}
+                    />
+                  )}
+                </FormField>
+              </>
+            )}
             <Checkbox
               label="Its path owners approve"
               description="A merge waits for an approval from an owner of every owned path it touches."
-              checked={ownersApprove}
-              onCheckedChange={setOwnersApprove}
+              checked={form.ownersApprove}
+              onCheckedChange={(ownersApprove) => set({ ownersApprove })}
             />
             <FormField label="A merged change's branch">
               {(field) => (
                 <Select
                   id={field.id}
                   ariaLabel="A merged change's branch"
-                  value={deleteSource}
-                  onChange={(value) => setDeleteSource(String(value))}
+                  value={form.deleteSource}
+                  onChange={(value) => set({ deleteSource: String(value) })}
                   options={[
                     { value: "seats", label: "A seat's branch is deleted as it merges" },
                     { value: "none", label: "Every branch is kept" },

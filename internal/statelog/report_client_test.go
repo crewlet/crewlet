@@ -2,6 +2,7 @@ package statelog_test
 
 import (
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/clientsource"
@@ -45,6 +46,22 @@ func TestTheDashboardKnowsEveryRetentionReportState(t *testing.T) {
 					v, gate.engine)
 			}
 		}
+	}
+}
+
+// THE SNAPSHOT FLOOR'S DONOR COUNT IS THE ENGINE'S: Settings › Retention says
+// "N of M donors" and tells an operator to reach M, so a copy that drifted
+// would send them to fix the wrong number.
+func TestTheDashboardCountsTheDonorsTheSnapshotFloorRequires(t *testing.T) {
+	t.Parallel()
+	raw, err := clientsource.Scalar(clientsource.Tree(t), "SNAPSHOT_DONORS_REQUIRED")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client, err := strconv.Atoi(raw); err != nil || client != statelog.SnapshotDonorsRequired {
+		t.Errorf("the dashboard requires %q snapshot donors and the engine %d: change "+
+			"SNAPSHOT_DONORS_REQUIRED in dashboard/src/contract/retention.ts to the engine's figure",
+			raw, statelog.SnapshotDonorsRequired)
 	}
 }
 

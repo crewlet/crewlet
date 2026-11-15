@@ -753,7 +753,26 @@ type ProjectDetail struct {
 	// the middle of a move between scopes is in.
 	Shadowed []string `json:"shadowed,omitempty"`
 
+	// OwnFields are the project's OWN field declarations exactly as they
+	// are stored, archived ones included, beside the workspace's: the set a
+	// `fields` write on write_project REPLACES, which is whole post-state.
+	//
+	// SERVED APART FROM [ProjectDetail.Fields], which is the EFFECTIVE set a
+	// caller files against (the two scopes merged, archived hidden). Read
+	// from that one, a caller editing the project's declarations could not
+	// tell its own from the workspace's: sending the effective set back
+	// copied every workspace field into the project as a shadow, and
+	// sending it without the archived ones dropped their declarations, and
+	// with them the names their values are kept under.
+	OwnFields []FieldDef `json:"own_fields"`
+
 	Tags []Tag `json:"tags,omitempty"`
+
+	// ArchivedTags are the labels that take no new work, which [Tags]
+	// leaves out because a create refuses them. A lead reads them to know
+	// what was retired and under which word, since the tasks filed under
+	// one keep it.
+	ArchivedTags []Tag `json:"archived_tags,omitempty"`
 
 	// PolicyStamp is what a task's own stamp is compared against: a task
 	// validated below it has not been checked against the current
@@ -919,6 +938,7 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 		return err
 	}
 	out.Fields, out.Shadowed = groupFields(fields.Fields, project.Fields, forType)
+	out.OwnFields = ownFields(project.Fields)
 	out.PolicyStamp = fields.PolicyVersion
 	if project.PolicyVersion > out.PolicyStamp {
 		// THE HIGHER OF THE TWO, because a task is validated against
@@ -933,7 +953,7 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 		return err
 	}
 	if held {
-		out.Tags = liveTags(tags.Tags)
+		out.Tags, out.ArchivedTags = liveTags(tags.Tags), archivedTags(tags.Tags)
 	}
 
 	position, applied, err := readCheckpoint(ctx, tx)
@@ -1026,6 +1046,25 @@ func groupFields(workspace, project []FieldDef, forType string) (
 		out = append(out, FieldGroup{AppliesTo: slug, Fields: fields})
 	}
 	return out, shadowed
+}
+
+// ownFields is a project's own declarations as a write sends them back: every
+// one, archived included, never nil, so an answer for a project that declares
+// none says so with an empty list rather than leaving the reader to wonder
+// whether the key was dropped.
+func ownFields(stored []FieldDef) []FieldDef {
+	return append(make([]FieldDef, 0, len(stored)), stored...)
+}
+
+// archivedTags is the other half of [liveTags].
+func archivedTags(in []Tag) []Tag {
+	var out []Tag
+	for _, tag := range in {
+		if tag.Archived {
+			out = append(out, tag)
+		}
+	}
+	return out
 }
 
 func liveTags(in []Tag) []Tag {

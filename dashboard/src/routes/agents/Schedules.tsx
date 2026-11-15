@@ -507,10 +507,17 @@ export function ScheduleDefinition({ row, who }: { row: ScheduleRow; who: Who })
               },
               {
                 label: "Cap",
-                // ABSENT IS NOT ZERO here either: a schedule with no cap
-                // declared runs to the engine's own default rather than for
-                // no time at all.
-                value: row.timeout_seconds > 0 ? fmtDuration(row.timeout_seconds * 1000) : "",
+                // THE CAP THE ENGINE HOLDS A RUN TO, and whose it is: a
+                // schedule that sets none runs to the engine's default,
+                // which the row says rather than reading as one it wrote.
+                value: row.timeout_default ? (
+                  <span className="row gap-2 wrap">
+                    {fmtDuration(row.timeout_seconds * 1000)}
+                    <span className="muted">the engine&rsquo;s default</span>
+                  </span>
+                ) : (
+                  fmtDuration(row.timeout_seconds * 1000)
+                ),
                 title: "Longest a run may take",
               },
             ],

@@ -22,11 +22,11 @@ import {
   companyMidnight,
   todayWindow,
   companyDays,
-  dayLabelIn,
   dayStartIn,
   daysInterval,
   daysLabel,
 } from "./range.ts";
+import { dayLabelIn } from "./companyDay.ts";
 import type { Offer } from "./range.ts";
 
 /** A screen that offers everything, so a case can isolate one rule. */

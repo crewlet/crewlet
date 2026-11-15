@@ -4,12 +4,14 @@
  * usage insights ([Insights], ADR-0119).
  *
  * The switch is `diagnostics.issue_reports.enabled` on the company document,
- * written as any setting is, so the same refusals apply. A WRITE APPLIES NOTHING:
- * each node applies the revision on its own tick, so the answer can lag the
- * write, and the switch holds the wanted state until the answer agrees.
+ * written through the one setting write (`lib/useSettingWrite.ts`): checked by
+ * the engine first, stopped on a warning it introduces, and watched until this
+ * node applies it. A WRITE APPLIES NOTHING by itself: each node applies the
+ * revision on its own tick, so the answer can lag the write, and the switch
+ * holds the wanted state until the answer agrees.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   Callout,
@@ -39,12 +41,13 @@ import type {
   IssueReportRow,
   IssueReportsAnswer,
 } from "~/protocol/issueReports.ts";
-import { refusalWords } from "~/lib/ceilings.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { getConfig, savePatch } from "~/protocol/configWrite.ts";
+import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
+import { issueReportsPlan } from "~/lib/diagnosticsSettings.ts";
+import { useSettingWrite } from "~/lib/useSettingWrite.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 
@@ -130,8 +133,8 @@ const STATUS_WORDS: Record<
   },
 };
 
-/** The setting is the company's own, never a lead's. */
-const COMPANY = { kind: "company" } as const;
+/** How a change that met a newer document ends. */
+export const REREAD = "Reload to see the setting as it is now.";
 
 function pretty(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
@@ -185,57 +188,27 @@ function ReportsSwitch({
   onSaved: () => void;
 }) {
   const access = useConfigWriteAccess();
-  // A SAVE IN FLIGHT IGNORES A PRESS RATHER THAN DISABLING THE SWITCH: a disabled
-  // input drops keyboard focus, and the next Space would go nowhere.
-  const saving = useRef(false);
-  const [refused, setRefused] = useState("");
-  const inflight = useRef<AbortController | null>(null);
-  useEffect(() => () => inflight.current?.abort(), []);
-
-  const write = useCallback(
-    (on: boolean) => {
-      if (saving.current) return;
-      saving.current = true;
-      const controller = new AbortController();
-      inflight.current = controller;
-      const { signal } = controller;
-      setRefused("");
-      void (async () => {
-        try {
-          const read = await getConfig(signal);
-          if (read.kind !== "document") {
-            setRefused(refusalWords(read, COMPANY).message);
-            return;
-          }
-          const outcome = await savePatch(
-            { diagnostics: { issue_reports: { enabled: on } } },
-            read.etag,
-            on ? "Turned on bug reports to Crewlet" : "Turned off bug reports to Crewlet",
-            signal,
-          );
-          // ALREADY SO is what was asked for: the engine stored nothing because
-          // the document already says it.
-          if (outcome.kind !== "saved" && outcome.kind !== "unchanged") {
-            setRefused(
-              outcome.kind === "valid"
-                ? "The engine checked the change but didn't save it. Please try again."
-                : refusalWords(outcome, COMPANY).message,
-            );
-            return;
-          }
-          onWanted(on);
-          onSaved();
-        } catch (err) {
-          if (!signal.aborted) {
-            setRefused(err instanceof Error ? err.message : "Couldn't reach the engine.");
-          }
-        } finally {
-          saving.current = false;
-        }
-      })();
-    },
-    [onSaved, onWanted],
-  );
+  // THE ONE SETTING WRITE: checked by the engine first, stopped on a warning
+  // the change introduces, and watched until this node applies it.
+  const write = useSettingWrite({ reread: REREAD, onApplied: onSaved });
+  const { state } = write;
+  // A CHANGE THAT CAME TO NOTHING lets go of the wanted state, so the switch
+  // goes back to what the engine holds.
+  useEffect(() => {
+    if (state.kind === "refused" || state.kind === "idle") onWanted(null);
+  }, [state.kind, onWanted]);
+  const press = (on: boolean) => {
+    // A SAVE IN FLIGHT IGNORES A PRESS RATHER THAN DISABLING THE SWITCH: a
+    // disabled input drops keyboard focus, and the next Space would go nowhere.
+    if (write.busy) return;
+    onWanted(on);
+    write.submit(issueReportsPlan(on));
+  };
+  const saved = state.kind === "saved" ? state : null;
+  const mark =
+    saved && (saved.standing === "applying" || saved.standing === "refused")
+      ? `Saved, ${standingWords(saved.standing)}`
+      : "";
 
   const shown = wanted ?? answer.enabled;
   return (
@@ -250,12 +223,20 @@ function ReportsSwitch({
           description="When the engine hits a bug in its own code, it opens a public issue on GitHub (crewlet/crewlet). At most one report a week for each bug."
           checked={shown}
           disabledReason={access.can ? undefined : access.reason}
-          onCheckedChange={write}
+          onCheckedChange={press}
         />
-        {refused && (
-          <Callout variant="danger" title="Couldn't save that">
-            {refused}
-          </Callout>
+        {mark && (
+          <span className="t-caption" role="status">
+            {mark}
+          </span>
+        )}
+        {state.kind !== "saved" && (
+          <SettingWriteStatus
+            write={write}
+            unchanged="Already so."
+            onReload={onSaved}
+            answersWarning
+          />
         )}
         {shown && answer.inert && (
           <Callout variant="warning" title="This build won't send reports">
@@ -266,8 +247,8 @@ function ReportsSwitch({
           <div className="col gap-2">
             <Text as="p">
               Every report is a short, fixed form with no free text. It goes to{" "}
-              <InlineCode>{answer.relay}</InlineCode>, which opens the GitHub issue, so your engine
-              never needs a GitHub login.
+              <InlineCode close=",">{answer.relay}</InlineCode> which opens the GitHub issue, so
+              your engine never needs a GitHub login.
             </Text>
             <Text as="h3" variant="label">
               What&rsquo;s sent

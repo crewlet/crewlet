@@ -93,6 +93,18 @@ for ROLE in roles/serviceusage.serviceUsageViewer roles/iam.roleViewer; do
     --role="$ROLE" --condition=None --format=none
 done
 
+# Optional: the roles Crewlet may grant an agent here beside its level, at most 10.
+GRANTS="'roles/pubsub.editor', 'roles/cloudscheduler.admin'"
+if [ -n "$GRANTS" ]; then
+  cat > crewlet-grants.yaml <<YAML
+title: Crewlet grants list
+description: Crewlet may grant or revoke only these roles, one agent at a time, on request.
+expression: "api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly([${GRANTS}])"
+YAML
+  gcloud projects add-iam-policy-binding "$TARGET" --member="serviceAccount:$PROV" \
+    --role=roles/resourcemanager.projectIamAdmin --condition-from-file=crewlet-grants.yaml --format=none
+fi
+
 # Only where "See more in Atlas" made its account: let it search this project too.
 ATLAS=crewlet-atlas@${IDENTITY}.iam.gserviceaccount.com
 if gcloud iam service-accounts describe "$ATLAS" --project="$IDENTITY" >/dev/null 2>&1; then
@@ -112,14 +124,15 @@ fi
 **What this does:**
 - It creates `crewletOperator`, a custom role with exactly the 12 restart and scale permissions above. Google has no predefined Compute or GKE operator role that holds no credential-making permission; see [Roles no level grants](#roles-no-level-grants-and-why).
 - It gives the provisioner **Project IAM Admin three times**, each under a condition listing one level's roles. The provisioner can then grant or revoke those roles and nothing else. Google limits one such list to 10 roles, so each level has its own.
-- It adds **Service Usage Viewer** (to check the project's APIs) and **Role Viewer** (to check `crewletOperator`).
+- It adds **Service Usage Viewer** (to check the project's APIs) and **Role Viewer** (to check `crewletOperator` and the grants list's roles).
+- Where `GRANTS` names roles, it gives the provisioner Project IAM Admin a fourth time, under the **grants list**: the roles Crewlet may grant one agent on request ([granting one more role](#granting-one-more-role)). Leave `GRANTS` empty for none.
 - Where [See more in Atlas](#see-more-in-atlas-what-each-project-runs) made the `crewlet-atlas` account, it lets that account search this project's resources by name and type.
 
 **Afterwards:**
-- On the project's IAM page, the provisioner should show Project IAM Admin three times, each with its "Crewlet ... roles only" condition, plus Service Usage Viewer and Role Viewer, and nothing else.
+- On the project's IAM page, the provisioner should show Project IAM Admin three times, each with its "Crewlet ... roles only" condition (four with the "Crewlet grants list"), plus Service Usage Viewer and Role Viewer, and nothing else.
 - Enable the APIs of the products your agents use on the project. Each product's MCP server is enabled with its API.
 
-**Crewlet finds your prepared projects itself.** It offers a project once all three conditions are there exactly and `crewletOperator` holds exactly its 12 permissions. A project that is half prepared is named on the card with what it is missing.
+**Crewlet finds your prepared projects itself.** It offers a project once all three conditions are there exactly, `crewletOperator` holds exactly its 12 permissions, and every role a grants list names may be granted: none that can act as another identity, mint or read a credential or key, grant access, run as a workload's identity or reach billing. A project that is half prepared, or whose grants list names such a role, is named on the card with what to change.
 
 ### Testing the connection
 
@@ -160,9 +173,41 @@ Each level is a fixed set of Google's roles, granted on each of the agent's proj
 | Turn on | Creates the agent's service account in the identity project, lets the provisioner make tokens for that account alone, then grants the level's roles on each project |
 | Change the level | Adds or removes the roles between the two levels on each project. The account and its unique ID stay the same |
 | Change the projects | Grants the level's roles on an added project, and removes them from a dropped one |
+| Grant or remove a role | Binds or unbinds that one role on the grant's projects, one write per role. A level change never removes a role a live grant holds |
 | Turn off | Disables the account first, so it stops everywhere at once, then removes its roles from every project. The account and its audit history stay |
 | Turn back on | Enables the account and grants its roles again. An account somebody else disabled at Google is never turned back on without being asked |
 | Remove (only when off) | Deletes the account. Cloud Audit Logs keep its entries |
+
+### Granting one more role
+
+A level is the safe default. When an agent needs a role no level holds, give it that role alone, beside its level, instead of a higher level:
+
+- **On the Agents tab:** open the agent's row, choose **Add grant**, pick the role, choose its projects (none is the agent's own projects), and how long: 4 hours, 24 hours, 7 days, or permanent.
+- **From the agent's request:** when Google refuses a call with `PERMISSION_DENIED`, the agent asks with `request_access`, naming the role that holds the permission and why. You answer in your Inbox: **Grant for this change** (it lapses after the hours shown), **Add to this agent permanently**, or **Not now**. Either grant opens the exact change for you to apply first.
+
+What Crewlet does:
+
+- **The catalogue is your grants lists.** Google lets the provisioner change only the roles its conditions list, so a role can be granted on a project only where that project's grants list names it ([Prepare a project](#prepare-a-project-for-crewlet)). Crewlet reads each listed role from Google, with its title and permissions, and offers it where any prepared project lists it. A grant naming a project whose list lacks the role is refused, naming the role and the condition to add it to.
+- **A grant is a plain binding of the role** to the agent's account on its projects, written one role at a time, so exactly one of the provisioner's conditions allows each write.
+- **A grant never outlives its expiry.** A pass runs a minute before a grant lapses and removes the binding; the level stays.
+- **A role holding any permission that is not a read needs a fresh sign-in**, as `operator` and `administer` do.
+
+```yaml
+roles:
+  - handle: sre
+    integrations:
+      google_cloud:
+        enabled: true
+        level: viewer
+        projects: [example-prod]
+        grants:
+          - id: g2h8v4d6s1q
+            permission: roles/pubsub.editor
+            expires_at: 2026-11-15T18:00:00Z
+            granted_by: ada@example.com
+            granted_at: 2026-11-15T14:00:00Z
+            reason: Create the release topic
+```
 
 ### The account is the engine's, and named for the seat
 
@@ -261,6 +306,7 @@ roles:
 | `roles[].integrations.google_cloud.enabled` | yes | Whether the agent has its own account. Off disables it and removes its roles. |
 | `roles[].integrations.google_cloud.level` | no | `viewer` (the default), `operator` or `administer`. |
 | `roles[].integrations.google_cloud.projects` | when enabled | The project IDs the agent acts on, each one prepared for Crewlet. At least one. |
+| `roles[].integrations.google_cloud.grants` | no | Roles its account holds beside its level ([granting one more role](#granting-one-more-role)). Written by the Agents tab and by approving the agent's request, never typed. |
 
 There is no company-wide project list: Crewlet reads the projects you prepared from the provisioner's own grants.
 

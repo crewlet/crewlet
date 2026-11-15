@@ -48,7 +48,7 @@ export function membersOnly(kind: ChatKind): boolean {
  * said one way wherever it holds a control.
  */
 export const NEWER_ROOM =
-  "This room was made by a newer version of the engine, so it can’t be changed from this node until it’s upgraded.";
+  "This room was made by a newer version of Crewlet, so it can’t be changed here until Crewlet is upgraded.";
 
 /**
  * The glyph a room is drawn with, in the design system's own vocabulary.

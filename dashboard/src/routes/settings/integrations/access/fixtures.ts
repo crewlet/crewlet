@@ -565,6 +565,104 @@ export function cloudflareAnswer(): AccessAnswer {
   };
 }
 
+/**
+ * Cloudflare whose catalogue offers grants beside a level: Origin Rules read
+ * and edit on its one zone, and DNS Write, which the provisioner does not
+ * hold; SRE holds Origin Rules: Edit on example.com for good.
+ */
+export function cloudflareGrantsAnswer(): AccessAnswer {
+  const answer = cloudflareAnswer();
+  answer.options = [
+    {
+      ...CLOUDFLARE_OPTIONS,
+      grants: [
+        { id: "Origin Read", name: "Origin Rules: Read", group: "Zone", scope_kind: "zone" },
+        {
+          id: "Origin Write",
+          name: "Origin Rules: Edit",
+          group: "Zone",
+          scope_kind: "zone",
+          write: true,
+        },
+        {
+          id: "DNS Write",
+          name: "DNS Write",
+          group: "Zone",
+          scope_kind: "zone",
+          write: true,
+          unavailable: "The provisioner token does not hold DNS Write",
+          missing: ["DNS Write"],
+        },
+      ],
+      grant_scope: ["example.com"],
+      grant_whole: "every zone the company's agents reach",
+      grant_account: "the account",
+    },
+  ];
+  const sre = answer.seats.find((s) => s.handle === "sre")!.lanes.cloudflare!;
+  sre.desired = {
+    ...sre.desired,
+    grants: [
+      {
+        id: "gaaaaaaaaaa",
+        permission: "Origin Write",
+        scope: ["example.com"],
+        granted_by: "Ada",
+        granted_at: ago(DAY),
+        reason: "an origin rule for the new backend",
+      },
+    ],
+  };
+  return answer;
+}
+
+/**
+ * Scaleway whose catalogue offers grants beside a level: Kubernetes full
+ * access on projects, and support tickets on the Organization; SRE holds
+ * Kubernetes full access on its own projects for good.
+ */
+export function scalewayGrantsAnswer(): AccessAnswer {
+  const answer = scalewayAnswer();
+  answer.options = [
+    {
+      ...SCALEWAY_OPTIONS,
+      grants: [
+        {
+          id: "KubernetesFullAccess",
+          name: "KubernetesFullAccess",
+          group: "Kubernetes",
+          scope_kind: "project",
+          write: true,
+          in_level: "administer",
+        },
+        {
+          id: "SupportTicketsReadOnly",
+          name: "SupportTicketsReadOnly",
+          group: "Support",
+          scope_kind: "account",
+        },
+      ],
+      grant_scope: [SCW_PROD, SCW_STAGING],
+      grant_whole: "the agent's own projects",
+      grant_account: "the Organization",
+    },
+  ];
+  const sre = answer.seats.find((s) => s.handle === "sre")!.lanes.scaleway!;
+  sre.desired = {
+    ...sre.desired,
+    grants: [
+      {
+        id: "gbbbbbbbbbb",
+        permission: "KubernetesFullAccess",
+        granted_by: "Ada",
+        granted_at: ago(DAY),
+        reason: "upgrade the cluster's node pool",
+      },
+    ],
+  };
+  return answer;
+}
+
 /** The token Crewlet sets in an on seat's box for the EAS CLI, as the engine sends it. */
 const expoBox = (handle: string): AccessBox => ({
   env: [{ name: "EXPO_TOKEN", value: `\${EXPO_TOKEN_${handle}}`, tool: true }],

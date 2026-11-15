@@ -16,12 +16,18 @@ export function SettingWriteStatus({
   write,
   onReload,
   unchanged = "Already set to that.",
+  answersWarning = false,
 }: {
   write: SettingWrite;
   /** Re-read what the page draws: offered where a fresh read is the remedy. */
   onReload: () => void;
   /** What "nothing to save" reads as for this field. */
   unchanged?: string;
+  /**
+   * Whether the warning is answered here, with Save anyway and Cancel: for a
+   * control that has no Save button of its own to say it on (a switch).
+   */
+  answersWarning?: boolean;
 }) {
   const { state } = write;
   return (
@@ -36,6 +42,16 @@ export function SettingWriteStatus({
               <li key={`${w.path}:${w.message}`}>{warningWords(w)}</li>
             ))}
           </ul>
+          {answersWarning && (
+            <div className="row gap-2">
+              <Button size="small" variant="primary" onClick={write.confirm}>
+                Save anyway
+              </Button>
+              <Button size="small" variant="ghost" onClick={write.reset}>
+                Cancel
+              </Button>
+            </div>
+          )}
         </Callout>
       )}
       {state.kind === "refused" && (

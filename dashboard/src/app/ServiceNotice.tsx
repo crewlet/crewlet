@@ -17,9 +17,10 @@
  * what the company runs. So the notice is drawn where the address is,
  * readable by anybody signed in, and offers Integrations to a reader who may
  * open it (`closedBy`, the rule every lock is drawn by), which is every reader
- * now: the services' pages are the overview everybody holds. Gitlet has no
- * page there to offer — it is turned on in the company document, which
- * the notice names instead.
+ * now: the services' pages are the overview everybody holds. Gitlet's is not
+ * the one offered: nothing runs in Gitlet's place for its page to name, so
+ * the notice offers the step that turns it on, the company document on
+ * Configuration, instead.
  *
  * # A service this node is waiting to start
  *
@@ -57,9 +58,9 @@ const INTEGRATIONS_PATH = ["company", "integrations"] as const;
 /**
  * Each service's line in the directory, which "See what is built into
  * Crewlet" opens: one per service, so a service with no line is a type error
- * rather than a link to another service's page. Gitlet has none (null),
- * since it is set in the company document rather than connected, and the
- * sentence under the heading names the setting.
+ * rather than a link to another service's page. Gitlet's is not offered
+ * (null): its page names nothing in its place, so the notice offers the step
+ * that turns it on instead ([CodeHostingStep]).
  */
 const LINES = {
   tracker: "worklet",

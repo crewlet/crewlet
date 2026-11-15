@@ -73,7 +73,6 @@ import {
 import {
   Button,
   Combobox,
-  ConfirmModal,
   FormField,
   Input,
   Select,
@@ -82,7 +81,7 @@ import {
   type ComboboxOption,
   type SelectOption,
 } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { useLeaveGuard, useNavigator } from "~/app/router.tsx";
 import type { NewTaskPreset } from "~/app/newTask.ts";
@@ -452,7 +451,6 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
       icon={<PlusGlyph />}
       onClose={leave}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       // THE FOOT SAYS WHAT THE PRESS WILL DO, or why it cannot be made — beside
       // the button, where the eye is when it presses. The kit writes a held
       // button's reason for a screen reader only, so a sighted reader saw a
@@ -611,7 +609,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           htmlFor="new-task-labels"
           helper={
             detail && (detail.tags ?? []).filter((t) => !t.archived).length === 0
-              ? `${draft.project} declares no labels yet.`
+              ? `${draft.project} declares no labels yet. Add them under the project's About.`
               : "Only this project’s labels."
           }
         >

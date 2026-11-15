@@ -46,7 +46,7 @@ Running the block again updates the stack in place, which is also how a new vers
 |---|---|---|
 | Stack | `crewlet-<name>` | Holds everything below; deleting it removes Crewlet's access |
 | Trust anchor | `crewlet-<name>` | Holds Crewlet's certificate, so Crewlet's sign-ins are accepted |
-| Provisioner role and profile | `crewlet/<name>/crewlet-<name>-provisioner` | Creates, levels, turns off and deletes the agents' roles, only inside the boundary, and nothing else |
+| Provisioner role and profile | `crewlet/<name>/crewlet-<name>-provisioner` | Creates, levels, turns off and deletes the agents' roles, and attaches the AWS managed policies they are granted, only inside the boundary, and nothing else |
 | Broker role and profile | `crewlet/<name>/crewlet-<name>-broker` | Becomes one agent's role at a time, and can do nothing else |
 | Permissions boundary | `crewlet-<name>-seat-boundary` | The most any agent role can ever do |
 | Level policies | `crewlet-<name>-level-read`, `-level-operate`, `-level-administer`, `-level-iam-read` | What each level grants |
@@ -111,6 +111,7 @@ Each agent seat is turned on or off, and given its level, on the integration's *
 |---|---|
 | `enabled` | Whether the agent has its own role. A seat with no block is off. |
 | `level` | `read`, `operate` or `administer`. Unset is `read`. |
+| `grants` | AWS managed policies its role holds beside its level ([granting one more policy](#granting-one-more-policy)). Written by the Agents tab and by approving the agent's request, never typed. |
 
 ```yaml
 roles:
@@ -127,6 +128,7 @@ roles:
 |---|---|
 | Turn a seat on | Creates the role `crewlet-<name>-<seat>` under `/crewlet/<name>/seat/`, within the boundary and trusting only the broker under the agent's name, then attaches its level's policies (a level attaches its own policy and every lower one) and the IAM read policy where that option is on. |
 | Change its level | Attaches or detaches level policies on the same role, so CloudTrail keeps one identity. It applies within about 2 minutes. |
+| Grant or remove a policy | Attaches or detaches that AWS managed policy on the same role, within the boundary. It applies within about 2 minutes. |
 | Turn IAM read on or off | Attaches or detaches the IAM read policy on every agent that is on. |
 | Turn it off | Attaches AWS's `AWSDenyAll` policy first, so the agent stops within about 2 minutes, then detaches its level policies. The role and its CloudTrail history stay. |
 | Turn it back on | Attaches its level's policies, then detaches `AWSDenyAll`. |
@@ -134,7 +136,38 @@ roles:
 
 `<seat>` is the agent's handle, up to its first 20 characters, and 6 characters of its hash, so two agents never share a role.
 
-Crewlet records each role by name and role ID and never adopts a role by its name: a role of the same name that it did not make is refused, with the step to delete it. A role holding an inline policy, a policy that is not Crewlet's, or a trust Crewlet did not write is refused too, since the provisioner may only attach and detach Crewlet's own levels; remove what it names in IAM.
+Crewlet records each role by name and role ID and never adopts a role by its name: a role of the same name that it did not make is refused, with the step to delete it. A role holding an inline policy, a customer managed policy that is not Crewlet's, or a trust Crewlet did not write is refused too, since the provisioner may only attach and detach Crewlet's own levels and AWS managed policies; remove what it names in IAM. An AWS managed policy nobody granted the agent is detached by the next pass and reported.
+
+### Granting one more policy
+
+A level is the safe default. When an agent needs a permission no level holds, give it one AWS managed policy beside its level, instead of a higher level:
+
+- **On the Agents tab:** open the agent's row, choose **Add grant**, pick the policy from AWS's own list, and how long: 4 hours, 24 hours, 7 days, or permanent.
+- **From the agent's request:** when AWS refuses a call with `AccessDenied`, the agent asks with `request_access`, naming the policy and why. You answer in your Inbox: **Grant for this change** (it lapses after the hours shown), **Add to this agent permanently**, or **Not now**. Either grant opens the exact change for you to apply first.
+
+What Crewlet does:
+
+- **The catalogue is AWS's.** It lists AWS's managed permissions policies (`iam:ListPolicies` with scope `AWS`), less those made for a service to act as itself and those no agent is ever given: `AdministratorAccess`, `PowerUserAccess`, and the IAM, IAM Identity Center, Organizations, account, billing, Secrets Manager, KMS and CloudTrail policies. Job function policies are listed under their own heading.
+- **The boundary still holds.** A grant is attached to the agent's role within the seat boundary, so it never reaches past what any agent may ever do: the services the levels name, never the actions the boundary denies, and only in the company's Regions. A policy whose actions lie outside the boundary grants nothing.
+- **A grant never outlives its expiry.** A pass runs a minute before a grant lapses and detaches it alone; the role and its other policies stay.
+- **A policy whose name does not say `ReadOnly` or `ViewOnly` needs a fresh sign-in**, as `administer` does.
+- **It needs the stack at version 3**, which lets the provisioner attach AWS managed policies, still only with the boundary, and list them. Until the CloudShell block is run again, the Agents tab offers no grant and the card names the outdated stack.
+
+```yaml
+roles:
+  - handle: sre
+    integrations:
+      aws:
+        enabled: true
+        level: read
+        grants:
+          - id: g7p3c8n2w5r
+            permission: arn:aws:iam::aws:policy/AmazonSQSFullAccess
+            expires_at: 2026-11-15T18:00:00Z
+            granted_by: ada@example.com
+            granted_at: 2026-11-15T14:00:00Z
+            reason: Redrive the dead-letter queue after the incident
+```
 
 ### Sessions are issued at use
 
@@ -209,7 +242,7 @@ integrations:
 | Limit | What it means here |
 |---|---|
 | IAM roles per account (1,000 by default) | One role per agent; Test warns when fewer than 20 are left. |
-| Managed policies per role (10 by default) | An agent holds at most five of Crewlet's. |
+| Managed policies per role (10 by default) | An agent holds at most five of Crewlet's, which leaves five for grants; a sixth is refused by AWS with `LimitExceeded`, named on the card. |
 | Policy changes are eventually consistent | A level change or a turn-off applies within about 2 minutes, as measured live. |
 | A session lasts 15 minutes at least (STS's minimum) | Sessions are issued for 15 minutes and renewed with 5 left. An agent role's maximum session is an hour, IAM's minimum for a role. |
 
@@ -225,7 +258,7 @@ integrations:
 | Symptom | Cause and fix |
 |---|---|
 | Test: "AWS refused Crewlet's sign-in" | The trust anchor does not hold this engine's certificate (a new certificate was minted, or the output is another stack's). Run the CloudShell block again in the right account. |
-| Test: "the stack is version ..." or "is not the one this engine expects" | The stack is older than this engine, or was edited by hand. Run the CloudShell block again. A stack made before version 2 reports this until the block is run once: version 2 narrows what Read can read of Lambda. |
+| Test: "the stack is version ..." or "is not the one this engine expects" | The stack is older than this engine, or was edited by hand. Run the CloudShell block again. A stack made before version 3 reports this until the block is run once: version 2 narrows what Read can read of Lambda, and version 3 lets the provisioner attach and list AWS managed policies for grants. |
 | Test: "The stack output does not carry the Atlas reader" | **See more in Atlas** is on and the block has not been run since, or its last line was not pasted again. Run the block and paste the last line. Agents are not affected. |
 | An agent's lane: "already exists, and Crewlet has no record of making it" | A role of the agent's name exists that Crewlet did not create. Delete it in IAM if nobody uses it. |
 | An agent's lane: "also holds ..., which no level grants" | Someone attached a policy to the agent's role. Remove it in IAM. |

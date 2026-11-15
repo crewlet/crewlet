@@ -36,3 +36,10 @@ export type RetentionGenerationState = "current" | "left" | "ahead" | "unknown";
  */
 export type RetentionTermName =
   "applied" | "min_hold" | "backup_floor" | "snapshot_floor" | "feed_ack_floor" | "age_floor";
+
+/**
+ * How many donors a domain must offer a snapshot from before the trim's
+ * `snapshot_floor` term stops holding the log (`statelog.SnapshotDonorsRequired`,
+ * D72): the number an operator has to fix when the banner names that term.
+ */
+export const SNAPSHOT_DONORS_REQUIRED = 2;

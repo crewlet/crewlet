@@ -29,7 +29,8 @@ func describeOrg() *org.Organization {
 			},
 			Schedules: []org.Schedule{
 				{Name: "standup", Cron: "30 9 * * 1-5", Task: "standup"},
-				{Name: "report", Cron: "0 16 * * 5", Task: "report", Target: org.TargetLead},
+				{Name: "report", Cron: "0 16 * * 5", Task: "report", Target: org.TargetLead,
+					TimeoutSeconds: 600},
 			},
 		}},
 	}
@@ -90,6 +91,11 @@ func TestDescribeShapeAndDefaults(t *testing.T) {
 	if want := int(org.DefaultScheduleTimeout / time.Second); nightly.TimeoutSeconds != want {
 		t.Errorf("nightly timeout = %d, want the %ds default", nightly.TimeoutSeconds, want)
 	}
+	// A DEFAULTED CAP SAYS SO, and one the schedule writes says it is its
+	// own: the two are the same number when a schedule writes the default.
+	if !nightly.TimeoutDefault {
+		t.Error("nightly sets no cap, so its row must say the cap is the engine's default")
+	}
 	if !nightly.Enabled || !nightly.Catchup {
 		t.Errorf("nightly enabled/catchup = %v/%v, want both true by default", nightly.Enabled, nightly.Catchup)
 	}
@@ -113,6 +119,10 @@ func TestDescribeShapeAndDefaults(t *testing.T) {
 	}
 	if !slices.Equal(report.Runners, []string{"qa-lead"}) {
 		t.Errorf("report runners = %v, want [qa-lead]", report.Runners)
+	}
+	if report.TimeoutSeconds != 600 || report.TimeoutDefault {
+		t.Errorf("report timeout = %d (default %v), want its own 600s",
+			report.TimeoutSeconds, report.TimeoutDefault)
 	}
 }
 

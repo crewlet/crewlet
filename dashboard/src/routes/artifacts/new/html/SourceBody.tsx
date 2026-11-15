@@ -535,7 +535,6 @@ export function SourceBody() {
       notice={noPages && <Callout variant="info">{noPages}</Callout>}
       handoff={{
         tool: askTool(who, panel),
-        open: () => panel.setOpen(true),
         panel: panel.open ? (
           <AskAgentPanel
             panel={panel}

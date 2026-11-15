@@ -36,6 +36,11 @@ const (
 	// OpScope moves the account to the document's scope.
 	OpScope Op = "scope"
 
+	// OpGrants moves the account to the seat's live grants beside its level
+	// ([Grant]): one added, one removed by a person, one lapsed. A vendor
+	// whose credential is written whole takes it as the level's write.
+	OpGrants Op = "grants"
+
 	// OpMint seals a credential for an account that is on and holds none.
 	OpMint Op = "mint"
 
@@ -67,7 +72,7 @@ const (
 // to as well as [Op.Valid].
 func Ops() []Op {
 	return []Op{
-		OpCreate, OpEnable, OpLevel, OpScope, OpMint, OpDisable, OpRevoke, OpRemove, OpRotate,
+		OpCreate, OpEnable, OpLevel, OpScope, OpGrants, OpMint, OpDisable, OpRevoke, OpRemove, OpRotate,
 		OpRetire,
 	}
 }
@@ -108,6 +113,9 @@ const (
 	VerbRestore StepVerb = "restore"
 	VerbApprove StepVerb = "approve"
 
+	// VerbUngrant takes a grant off the account: removed, or lapsed.
+	VerbUngrant StepVerb = "ungrant"
+
 	// VerbObserve is no step a plan draws: it names a failure to read a
 	// seat's account back ([SeatFaults]), which the sync records on the
 	// seat's lanes.
@@ -120,7 +128,7 @@ func StepVerbs() []StepVerb {
 	return []StepVerb{
 		VerbCreate, VerbGrant, VerbMint, VerbEnable, VerbRerole, VerbScope,
 		VerbDisable, VerbRevoke, VerbRemove, VerbRotate, VerbRestore, VerbApprove,
-		VerbObserve,
+		VerbUngrant, VerbObserve,
 	}
 }
 

@@ -200,6 +200,14 @@ export async function act<T extends ActionTool>(
   args: ActionArgs<T>,
   options: ActOptions = {},
 ): Promise<ActResult> {
+  // AN ARGUMENT ITS ROW DOES NOT NAME is the screen's mistake, refused before
+  // anything is sent: a conditional spread (`...(x ? { a } : {})`) escapes
+  // ActionArgs' own check, and a row that lies is a contract nothing holds.
+  const named: readonly string[] = ACTIONS[tool].args;
+  const stray = Object.keys(args).filter((k) => !named.includes(k));
+  if (stray.length > 0) {
+    throw new Error(`act: ${tool}'s row in contract/actions.ts names no ${stray.join(", ")}`);
+  }
   const opId = options.opId ?? newActOpID();
   const floors = options.floors ?? session;
   const unknown = (reason: string): ActResult => ({ kind: "unknown", tool, opId, reason });

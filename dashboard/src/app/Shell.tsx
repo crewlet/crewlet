@@ -370,8 +370,9 @@ export function usePageMenu(entries: readonly PageMenuEntry[]): void {
  * star with its other page actions (Doclet's page) would otherwise show it
  * twice. Doclet's landing says the same, because its design keeps the star
  * in each page's own menu and none in its bar, where the frame's would offer
- * the workspace the sidebar already lists. Cleared when the screen goes, for
- * the reason [usePageLabels] gives.
+ * the workspace the sidebar already lists; and so does a Chatlet room, whose
+ * More carries the room's star. Cleared when the screen goes, for the reason
+ * [usePageLabels] gives.
  */
 export function useOwnStar(): void {
   const { setOwnStar } = usePageContext();

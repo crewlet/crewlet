@@ -27,9 +27,6 @@ import { ADDABLE_KINDS, KEY_HINTS, addArgs, belongs, draftKey, type AddDraft } f
 /** The longest name or purpose the engine keeps: `atlas.MaxLabelRunes`. */
 export const LABEL_MAX = 120;
 
-/** What a dialog says while its press is out. */
-export const WAITING = "Waiting for the engine to answer";
-
 const KIND_OPTIONS: SelectOption[] = ADDABLE_KINDS.map((kind) => ({
   value: kind,
   label: KINDS[kind].word,
@@ -116,7 +113,6 @@ export function WriteDialog<T extends ActionTool>({
       icon={icon}
       onClose={onClose}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? WAITING : undefined}
       onSubmit={() => void submit()}
       footer={
         <>

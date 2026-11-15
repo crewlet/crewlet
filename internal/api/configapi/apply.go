@@ -575,6 +575,9 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	// the cross-tier consequence where they made the change, rather than in
 	// a node's log.
 	warnings := s.warnings(company)
+	// WHAT THIS WRITE MOVES, beside what the document says: a clock moved
+	// is no fault of either revision, only of the change between them.
+	warnings = append(warnings, config.ClockMoves(company, b.prior)...)
 	if d.warnings != nil {
 		warnings = append(warnings, d.warnings(company, b.prior)...)
 	}

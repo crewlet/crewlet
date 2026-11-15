@@ -329,7 +329,7 @@ func (s Sources) waiting(ctx context.Context, run sandbox.PendingRun, record str
 		return runanswer.Waiting{}, nil
 	}
 	now := s.clock()
-	_, escalated, overdue := runanswer.Delegation(run, now)
+	_, escalated, overdue := runanswer.Delegation(run, s.currentDelegation().Limits().Deadline, now)
 	w := runanswer.Waiting{PutTo: slices.Clone(run.AudienceHandles), PutToYou: putTo(run, record, s.delegating),
 		Escalated: escalated}
 	if s.delegating(run) {

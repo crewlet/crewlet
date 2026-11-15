@@ -20,7 +20,6 @@ import {
   Button,
   Callout,
   Checkbox,
-  ConfirmModal,
   FormField,
   IconButton,
   Input,
@@ -28,7 +27,7 @@ import {
   TagsInput,
   type TagsInputOption,
 } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { PlusGlyph, ShieldCheckGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
 import { configRefusalWords } from "~/lib/configRefusal.ts";

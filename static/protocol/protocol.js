@@ -1892,7 +1892,8 @@ async function attempt(method, path, options) {
 	const contentType = options.contentType ?? (body === void 0 ? void 0 : "application/json");
 	let encoded;
 	if (body !== void 0) {
-		if (contentType && !isJson(contentType)) {
+		if (body instanceof Blob) encoded = body;
+		else if (contentType && !isJson(contentType)) {
 			if (typeof body !== "string" && !(body instanceof Blob)) throw new TypeError(`rest.request: a ${contentType} body must be a string or a Blob`);
 			encoded = body;
 		} else encoded = JSON.stringify(body);
@@ -4039,6 +4040,10 @@ var ACTIONS = {
 			"linked",
 			"linked_pages",
 			"linked_entries",
+			"waiting_on",
+			"blocking",
+			"dependency_note",
+			"duplicate_of",
 			"title",
 			"body",
 			"labels",
@@ -4073,6 +4078,17 @@ var ACTIONS = {
 		refreshes: ["work_search"],
 		scope: "person"
 	},
+	merge_work_item: {
+		args: [
+			"item",
+			"into",
+			"move_subtasks"
+		],
+		domain: "tracker",
+		apps: ["worklet"],
+		refreshes: ["work_search"],
+		scope: "person"
+	},
 	restore_work_item: {
 		args: ["item"],
 		domain: "tracker",
@@ -4081,7 +4097,16 @@ var ACTIONS = {
 		scope: "person"
 	},
 	write_project: {
-		args: ["project", "target_date"],
+		args: [
+			"project",
+			"target_date",
+			"default_assignee",
+			"archived",
+			"fields",
+			"tags_add",
+			"tags_rename",
+			"tags_archive"
+		],
 		domain: "tracker",
 		apps: ["worklet"],
 		refreshes: [],
@@ -4412,9 +4437,16 @@ var ACTIONS = {
 	code_update_repo: {
 		args: [
 			"repo",
+			"description",
+			"default_branch",
+			"visibility",
 			"search",
+			"owner",
+			"path_owners",
 			"mirror_from",
-			"mirror_to"
+			"mirror_to",
+			"archived",
+			"rename_to"
 		],
 		domain: "code",
 		apps: ["gitlet"],
@@ -4480,9 +4512,13 @@ var ACTIONS = {
 			"remove",
 			"merge_by",
 			"approvals",
+			"approvals_unless",
+			"human_paths",
 			"checks",
+			"landing",
 			"owners_approve",
 			"delete_source",
+			"agents_edit_checks",
 			"remove_gate"
 		],
 		domain: "code",
@@ -5224,6 +5260,9 @@ function newActOpID(now = Date.now()) {
 * takes one reads it.
 */
 async function act(tool, args, options = {}) {
+	const named = ACTIONS[tool].args;
+	const stray = Object.keys(args).filter((k) => !named.includes(k));
+	if (stray.length > 0) throw new Error(`act: ${tool}'s row in contract/actions.ts names no ${stray.join(", ")}`);
 	const opId = options.opId ?? newActOpID();
 	const floors = options.floors ?? session;
 	const unknown = (reason) => ({

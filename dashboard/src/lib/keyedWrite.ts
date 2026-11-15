@@ -82,6 +82,11 @@ export interface KeyedRequest {
   method: "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   body?: unknown;
+  /**
+   * What the body is, where it is not a JSON document: a file's bytes go as a
+   * `Blob` under the file's own type, byte for byte ([RequestOptions]).
+   */
+  contentType?: string;
   query?: Record<string, QueryValue>;
   /** Headers the route reads beside the key: a publish's `If-Match`. */
   headers?: Record<string, string>;
@@ -114,6 +119,7 @@ export async function keyedWrite(
     const headers = { ...req.headers, ...(req.key ? { "Idempotency-Key": req.key } : {}) };
     const answer = await rest.request(req.method, req.path, {
       ...(req.body === undefined ? {} : { body: req.body }),
+      ...(req.contentType ? { contentType: req.contentType } : {}),
       ...(req.query ? { query: req.query } : {}),
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
     });

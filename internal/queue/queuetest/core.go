@@ -287,22 +287,7 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("handler_failure_triggers_redelivery", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(ctx, t)
-		j := newJournal()
-		var attempts int
-		subscribe(ctx, t, q, "topic.flaky", "grp", func(context.Context, *events.Event) queue.Result {
-			attempts++
-			j.record("attempt")
-			if attempts < 3 {
-				return queue.Nak(errors.New("transient failure"))
-			}
-			return queue.Ack()
-		})
-
-		publish(ctx, t, q, "topic.flaky", newEvent("t"))
-
-		j.await(t, "two failures and a success", func(seen []string) bool { return len(seen) == 3 })
-		j.staysAt(ctx, t, 3, "an acknowledged event")
+		s.handlerFailureTriggersRedelivery(ctx, t)
 	})
 
 	// A HANDLER RUNS UNDER ITS CONSUMER'S LIFETIME, NEVER ITS PUBLISHER'S.
@@ -1007,12 +992,12 @@ func (s *suite) runCore(t *testing.T) {
 		// itself here. Without -race it still exercises the interleaving
 		// and asserts the counts stay sane.
 		q := s.start(ctx, t)
-		var handled atomic.Int64
-		subscribe(ctx, t, q, "topic.overlap", "grp",
-			func(context.Context, *events.Event) queue.Result {
-				handled.Add(1)
-				return queue.Ack()
-			})
+		// A JOURNAL, so the wait for every message to be handled restarts
+		// its bound on each one handled: two hundred hand-overs are one
+		// wait's length but never one pause (#1197), and a timeout names
+		// what was handled.
+		handled := newJournal()
+		subscribe(ctx, t, q, "topic.overlap", "grp", recordingHandler(handled))
 
 		var (
 			wg        sync.WaitGroup
@@ -1049,10 +1034,10 @@ func (s *suite) runCore(t *testing.T) {
 		// one began — a drain that reports one in flight, rightly, for a
 		// handler that started after it woke. Only once nothing is left to
 		// start is a non-zero answer a handler the count failed to end.
-		awaitState(t, "every published message to be handled", func() bool {
-			return handled.Load() >= published.Load()
+		handled.await(t, "every published message to be handled", func(seen []string) bool {
+			return int64(len(seen)) >= published.Load()
 		})
-		remaining, err := q.WaitForHandlers(ctx, settleFor)
+		remaining, err := q.WaitForHandlers(ctx, stallFor)
 		if err != nil {
 			t.Fatalf("WaitForHandlers after the overlap: %v", err)
 		}
@@ -1102,7 +1087,7 @@ func (s *suite) runCore(t *testing.T) {
 
 		close(release)
 		awaitSignal(t, done, "the publish to return", func() {})
-		remaining, err = q.WaitForHandlers(ctx, settleFor)
+		remaining, err = q.WaitForHandlers(ctx, stallFor)
 		if err != nil {
 			t.Fatalf("WaitForHandlers after release: %v", err)
 		}
@@ -1390,4 +1375,26 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"DeadLetterMarks", marksErr(q.DeadLetterMarks(ctx, topics.DeadLettersUnder(topic)))},
 		{"DropDeadLetter", q.DropDeadLetter(ctx, letters, absentLetter)},
 	}
+}
+
+// handlerFailureTriggersRedelivery is handler_failure_triggers_redelivery: a
+// handler that fails twice is handed its event a third time, and once it
+// succeeds the event stays handled. One of the cases [RunLagged] runs too.
+func (s *suite) handlerFailureTriggersRedelivery(ctx context.Context, t *testing.T) {
+	q := s.start(ctx, t)
+	j := newJournal()
+	var attempts int
+	subscribe(ctx, t, q, "topic.flaky", "grp", func(context.Context, *events.Event) queue.Result {
+		attempts++
+		j.record("attempt")
+		if attempts < 3 {
+			return queue.Nak(errors.New("transient failure"))
+		}
+		return queue.Ack()
+	})
+
+	publish(ctx, t, q, "topic.flaky", newEvent("t"))
+
+	j.await(t, "two failures and a success", func(seen []string) bool { return len(seen) == 3 })
+	j.staysAt(ctx, t, 3, "an acknowledged event")
 }

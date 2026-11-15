@@ -66,6 +66,7 @@ import type {
   REPO_STATUSES,
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
+import type { SettingsAnswer } from "../contract/settings.ts";
 import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
 import type {
   AtlasActivityAnswer,
@@ -2009,7 +2010,12 @@ export interface ScheduleRow {
    *  defaulted — see `schedule.Row`. */
   target: string;
   enabled: boolean;
+  /** The cap a run is held to: the engine's default where the schedule sets
+   *  none, which `timeout_default` says. */
   timeout_seconds: number;
+  /** True when the schedule writes no cap of its own and runs to the
+   *  engine's default. */
+  timeout_default: boolean;
   catchup: boolean;
   /** The seats a fire actually reaches, resolved from the scope and target. */
   runners: string[];
@@ -2054,6 +2060,8 @@ export interface ScheduleRunRow {
 
 export interface SchedulesAnswer {
   schedules: ScheduleRow[];
+  /** The cap a schedule that sets none runs to, as the engine holds it. */
+  default_timeout_seconds: number;
   /** The COMPANY's newest fires, capped across every schedule — so a company
    *  with twenty hourly ones fills this in a couple of hours. One schedule's
    *  own history is `schedule_runs`. */
@@ -3362,7 +3370,13 @@ export interface WorkProjectDetail extends WorkProjectRow {
   /** The workspace field ids this project redeclares — the state a field in
    *  the middle of a move between scopes is in. */
   shadowed?: string[];
+  /** The project's OWN field declarations as stored, archived ones included:
+   *  the whole set a `fields` write on `write_project` replaces. `fields`
+   *  above is the effective set a task files against. */
+  own_fields?: WorkFieldDef[];
   tags?: WorkProjectTag[];
+  /** The labels that take no new work, which `tags` leaves out. */
+  archived_tags?: WorkProjectTag[];
   policy_stamp: number;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -3434,6 +3448,10 @@ export interface WorkCatalogueAnswer {
   /** The EFFECTIVE set: what this build ships plus what the company declared,
    *  a declaration replacing a builtin of the same slug. */
   types: WorkTypeDef[];
+  /** The company's OWN type declarations, archived ones included whatever was
+   *  asked: what a write of `types` replaces, so a writer sends back exactly
+   *  these with its change, never the effective set. */
+  declared_types: WorkTypeDef[];
   /** The WORKSPACE's declarations. A project declares its own beside them. */
   fields: WorkFieldDef[];
   policy_version: number;
@@ -3995,6 +4013,9 @@ export interface PageChange {
    *  entries are the record it ever existed. */
   title?: string;
   container?: string;
+  /** The page's CURRENT status, read with its title: a page in the trash keeps
+   *  its title, and this is how a reader tells it from a live one. */
+  status?: PageStatus;
   kind: string;
   actor?: string;
   actor_kind?: string;
@@ -8068,6 +8089,8 @@ export interface QueryMap {
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;
+  /** The settings that are not numbers, as the engine applies them: an administrator's. */
+  settings: SettingsAnswer;
   /** The rules delegates decide by, and what they decided: an administrator's
    *  and the people a rule escalates to (ADR-0125). */
   delegated_decisions: DelegatedDecisionsAnswer;
@@ -8146,7 +8169,9 @@ export interface QueryMap {
   chat_search: ChatSearchAnswer;
   pages: PagesAnswer;
   page: PageDetail;
-  containers: { containers: PageContainer[] };
+  /* `skills` NAMES THE SPACE TOOL SKILLS ARE WRITTEN IN, absent on a company
+     that turned tool skills off: Agent skills points at it when it holds none. */
+  containers: { containers: PageContainer[]; skills?: string };
   page_activity: PageActivityAnswer;
   page_reads: PageReadsAnswer;
   page_revision: PageRevisionBody;

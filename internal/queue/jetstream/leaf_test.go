@@ -38,6 +38,14 @@ func TestConformanceThroughALeaf(t *testing.T) {
 // with opts.
 func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	t.Helper()
+	return openLeafAcross(t, cfg, nil, opts...)
+}
+
+// openLeafAcross is openLeafForTest whose leaf reaches its member's leaf
+// listener at the address cross puts between them (a link of linktest's), or
+// directly when cross is nil.
+func openLeafAcross(t *testing.T, cfg Config, cross func(member string) string, opts ...queue.Option) *Queue {
+	t.Helper()
 	cfg = testTimings(cfg)
 	// ONE KEYRING FOR BOTH: the link is admitted only on a key the member
 	// holds.
@@ -58,7 +66,11 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 
 	leafCfg := cfg
 	leafCfg.ServerName = "leaf"
-	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", member.LeafPort())}
+	listener := fmt.Sprintf("127.0.0.1:%d", member.LeafPort())
+	if cross != nil {
+		listener = cross(listener)
+	}
+	leafCfg.LeafURLs = []string{"nats-leaf://" + listener}
 	// THE LEAF IS THE BROKER THIS CLIENT IS A CLIENT OF, so it is the one the
 	// BrokerDown capability stops: the client's own connection then goes into
 	// the reconnect loop every connection to a broker that went away does,

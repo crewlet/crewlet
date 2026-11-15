@@ -698,7 +698,7 @@ func TestARecordInAFileIsFollowedAsItIsWritten(t *testing.T) {
 	host := newTestHost(t, "search")
 	var seenAtCall int
 	host.handle("search", func(ctx context.Context, _ map[string]any) (string, bool) {
-		// The file is read every recordPoll, so the call and the record race.
+		// The file is read every tailPoll, so the call and the record race.
 		host.awaitRecorded(ctx, "search")
 		seenAtCall = len(host.latestTurns())
 		return "ok", false

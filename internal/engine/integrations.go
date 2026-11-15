@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seataccess"
 
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -327,6 +328,17 @@ type passConverger struct {
 }
 
 func (c *passConverger) Kind() integration.Kind { return c.pass.Kind() }
+
+// DueBy is when the kind's next pass is due at the latest: the instant its
+// earliest live grant leaves an agent's credential ([seataccess.NextExpiry]),
+// so a grant never outlives its expiry waiting for the settled interval.
+func (c *passConverger) DueBy(now time.Time) time.Time {
+	company := c.engine.Company()
+	if company == nil {
+		return time.Time{}
+	}
+	return seataccess.NextExpiry(company.Config, c.pass.Kind(), now)
+}
 
 func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, error) {
 	// A CANCELLED PASS IS A FAULT, AND THIS CHECK COMES FIRST FOR A REASON.

@@ -22,6 +22,7 @@ import {
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { targetLabel } from "~/lib/work.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
+import { PROJECT_EDIT_HELD } from "~/lib/useWriteAccess.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { pick } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
@@ -283,6 +284,69 @@ test("editing a project sets its target date, and clearing it sends null", async
   fireEvent.click(save());
   await waitFor(() => expect(sent).toHaveLength(2));
   expect(sent[1]!.body.args).toEqual({ project: "ENG", target_date: null });
+});
+
+// ONLY WHAT MOVED IS SENT, because the engine decides each facet on its own:
+// a lead who chose a default assignee is not asked about the archive, and the
+// archive is a press that says what it is. Mutation: send every facet and the
+// args carry the unchanged target and archive.
+test("editing a project sends only the facets that moved, and archiving says so first", async () => {
+  mount(
+    <EditProjectButton
+      project="ENG"
+      name="Core platform"
+      target="2031-06-30"
+      assignee=""
+      archived={false}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit project" }));
+  let dialog = await screen.findByRole("dialog", { name: "Edit Core platform" });
+  pick(within(dialog).getByLabelText("Default assignee"), /^Ada Okonkwo/);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0]!.body.args).toEqual({ project: "ENG", default_assignee: "ada" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(document.body.textContent).toContain("New work in Core platform now lands on Ada Okonkwo");
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit project" }));
+  dialog = await screen.findByRole("dialog", { name: "Edit Core platform" });
+  fireEvent.click(within(dialog).getByRole("switch", { name: /Archived/ }));
+  // THE PRESS THAT TAKES IT OUT OF CIRCULATION NAMES ITSELF, under a callout.
+  expect(within(dialog).getByText(/Nobody can file new work in Core platform/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Archive project" }));
+  await waitFor(() => expect(sent).toHaveLength(2));
+  expect(sent[1]!.body.args).toEqual({ project: "ENG", archived: true });
+});
+
+// THE PROJECT'S OWN RULE, BEFORE ANYTHING IS FILLED: a project's settings
+// are its lead's or an admin's, which the engine decides. Held only by the
+// act's Worklet access, the button opened the dialog for any Worklet reader,
+// who chose a date and was refused at Save.
+test("Edit project is held for a reader neither the project's lead nor an admin, and open to its lead", () => {
+  const PRIYA: ViewerState = {
+    ...JANE,
+    login: "priya",
+    handle: "priya",
+    owner: "priya",
+    admin: false,
+    grants: ["worklet"],
+  };
+  vi.mocked(useViewer).mockReturnValue(PRIYA);
+  const { unmount } = mount(
+    <EditProjectButton project="ENG" name="Core platform" target="" lead="jane" />,
+  );
+  const held = screen.getByRole("button", { name: "Edit project" });
+  expect(held.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById(held.getAttribute("aria-describedby")!)?.textContent).toBe(
+    PROJECT_EDIT_HELD,
+  );
+  fireEvent.click(held);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  unmount();
+  mount(<EditProjectButton project="ENG" name="Core platform" target="" lead="priya" />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit project" }));
+  expect(screen.getByRole("dialog", { name: "Edit Core platform" })).toBeTruthy();
 });
 
 // ENTER IS A SUBMIT THE SAVE BUTTON NEVER SEES: the dialog is a form, so a

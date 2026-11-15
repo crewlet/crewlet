@@ -247,7 +247,7 @@ func (s *syncer) seat(
 	want := map[Lane]Desired{}
 	if inDoc && !s.in.Disconnect {
 		for _, lane := range lanes {
-			want[lane], _ = DesiredOf(seat.Role, lane)
+			want[lane], _ = DesiredAt(seat.Role, lane, s.now)
 		}
 	}
 	// AN ACCOUNT THE VENDOR SHOWS ON IS ACTIVE, whoever turned it on: a
@@ -313,7 +313,9 @@ func (s *syncer) seat(
 		}
 		if f != nil {
 			blocked[lane] = f
+			continue
 		}
+		want[lane] = s.grantable(h, lane, d)
 	}
 
 	var removed bool
@@ -481,7 +483,7 @@ func (s *syncer) put(ctx context.Context, rec Record) error {
 // offer now, or nil.
 func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, error) {
 	spec, ok := s.cat.Lane(lane)
-	if !ok || (!spec.Levels && !spec.Scoped) {
+	if !ok || (!spec.Levels && !spec.Scoped && !spec.Grants) {
 		return nil, nil
 	}
 	if spec.ScopeRequired && len(d.Scope) == 0 {
@@ -495,7 +497,7 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 	opts, ok := s.options[lane]
 	if !ok {
 		var err error
-		if opts, err = s.sess.Options(ctx, lane); err != nil {
+		if opts, err = ReadOptions(ctx, s.sess, lane); err != nil {
 			return nil, fmt.Errorf("seataccess: read what %s offers: %w", LaneName(lane), err)
 		}
 		s.options[lane] = opts
@@ -549,6 +551,43 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 		}
 	}
 	return nil, nil
+}
+
+// grantable is d with every grant the lane's catalogue cannot give left out,
+// each reported: a permission the catalogue does not list, one the connection
+// cannot grant yet, or a scope outside what a grant may name. The rest of the
+// seat's access still converges, since a level alone is a state the seat may
+// hold, where a level short of its own groups is not.
+func (s *syncer) grantable(h string, lane Lane, d Desired) Desired {
+	spec, _ := s.cat.Lane(lane)
+	if !spec.Grants || len(d.Grants) == 0 {
+		return d
+	}
+	opts := s.options[lane]
+	kept := make([]Grant, 0, len(d.Grants))
+	for _, g := range d.Grants {
+		entry, listed := opts.Grantable(g.Permission)
+		err := CheckGrant(opts, "", g)
+		if err == nil {
+			kept = append(kept, g)
+			continue
+		}
+		f := integration.Finding{
+			Kind: integration.FindingUnknownTier, Subject: h,
+			Title:  "Grant not applied",
+			Detail: fmt.Sprintf("%s's grant of %s is not applied: %v", h, g.Permission, err),
+			Remedy: "Remove the grant on the Agents tab, or grant one the catalogue offers",
+		}
+		if listed && entry.Unavailable != "" {
+			f.Kind, f.Title = integration.FindingGrantShort, "Grant waits on the provisioner"
+			f.Remedy, f.ActionURL, f.Subjects = "Add "+strings.Join(entry.Missing, ", ")+
+				" to the company's own credential at "+KindName(s.kind)+", or remove the grant",
+				entry.ActionURL, slices.Clone(entry.Missing)
+		}
+		s.report.Findings = append(s.report.Findings, f)
+	}
+	d.Grants = kept
+	return d
 }
 
 // take takes one lane's steps in order, stopping at the first that fails or
@@ -793,7 +832,7 @@ func converged(rec *Record, want Desired, have Observed) Observed {
 		return out
 	}
 	if want.Enabled {
-		out.Level, out.Permissions, out.Scope = want.Level, want.Permissions, want.Scope
+		out.Level, out.Permissions, out.Scope, out.Grants = want.Level, want.Permissions, want.Scope, want.Grants
 		out.DisabledBy = ""
 		out.ChangedByHandAt = time.Time{}
 	} else {

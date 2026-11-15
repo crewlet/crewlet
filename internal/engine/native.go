@@ -1596,8 +1596,12 @@ func chartContainers(c *Company) []chartContainer {
 			add(role.Space, role.Name, "")
 		}
 	}
+	// TRUE OF AN EMPTY SPACE TOO: the purpose heads the space beside its page
+	// count, and "starting with the Onboarding page every seat reads first"
+	// promised a page beside "0 pages" on every new company. The Onboarding
+	// page is a convention of its title, so the purpose states it as one.
 	add(c.Config.RootSpaceKey(), "Company",
-		"The organisation's own pages, starting with the Onboarding page every seat reads first.")
+		"What is true of the whole company. A page here titled Onboarding is the first every seat reads.")
 	add(c.Config.SkillsContainerKey(), "Tool skills",
 		"Prompt fragments the engine injects into a phase. Excluded from knowledge search.")
 	return out
@@ -1967,6 +1971,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// chart would refuse a colleague who joined this morning and
 		// admit one who left.
 		FleetSeat: e.FleetSeat,
+		Grants:    e.GrantDesk(),
 		ChangeRef: e.ChangeRef,
 		Seats:     e.seatCorpus,
 		// AND THE UNIT SEAM, read per call for the reason the default

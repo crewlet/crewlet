@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -376,4 +377,45 @@ func mustBundle(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// THE PROVISIONER ATTACHES ONLY LEVELS AND AWS MANAGED POLICIES, and only to a
+// seat role under the boundary, so a seat's extra grant never reaches past
+// what the boundary lets any seat do.
+func TestTheProvisionerAttachesOnlyUnderTheBoundary(t *testing.T) {
+	t.Parallel()
+	allowed := append(levelARNs(), awsManagedPrefix+"*")
+	attaches := 0
+	for _, s := range provisionerDoc()["Statement"].([]obj) {
+		if s["Effect"] != "Allow" || !grants(s["Action"].([]string), "iam:AttachRolePolicy") {
+			continue
+		}
+		attaches++
+		cond, _ := s["Condition"].(obj)
+		if res := s["Resource"].([]string); !slices.Equal(res, []string{seatRolesARN}) {
+			t.Errorf("%v attaches to %v, not the seat roles alone", s["Sid"], res)
+		}
+		if b := cond["ArnEquals"].(obj)["iam:PermissionsBoundary"]; !slices.Equal(b.([]string), []string{policyARN(boundaryName)}) {
+			t.Errorf("%v attaches without the boundary: %v", s["Sid"], b)
+		}
+		var named []string
+		for _, op := range []string{"ArnEquals", "ArnLike"} {
+			if m, ok := cond[op].(obj); ok {
+				if arns, ok := m["iam:PolicyARN"].([]string); ok {
+					named = append(named, arns...)
+				}
+			}
+		}
+		if len(named) == 0 {
+			t.Errorf("%v attaches any policy", s["Sid"])
+		}
+		for _, arn := range named {
+			if !slices.Contains(allowed, arn) {
+				t.Errorf("%v attaches %s, which is no level and no AWS managed policy", s["Sid"], arn)
+			}
+		}
+	}
+	if attaches != 2 {
+		t.Fatalf("%d statements attach, want the levels' and the grants'", attaches)
+	}
 }

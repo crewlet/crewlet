@@ -56,6 +56,26 @@ type fakeAccess struct {
 	// about, with what was pasted.
 	handInErr error
 	handIns   []string
+	// requests are the agents' stored grant requests, by id, and grants
+	// every grant change a save recorded.
+	requests map[string]seataccess.GrantRequest
+	grants   []seataccess.GrantChange
+}
+
+func (f *fakeAccess) GrantRequest(_ context.Context, id string) (seataccess.GrantRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.requests[id]; ok {
+		return r, nil
+	}
+	return seataccess.GrantRequest{}, seataccess.ErrNoRequest
+}
+
+func (f *fakeAccess) RecordGrants(_ context.Context, _ integration.Kind, _ iam.Actor,
+	changes []seataccess.GrantChange) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grants = append(f.grants, changes...)
 }
 
 func (f *fakeAccess) Answer(_ context.Context, q setupapi.AccessQuery) (seataccess.Answer, error) {

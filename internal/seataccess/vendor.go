@@ -417,6 +417,51 @@ type LaneSpec struct {
 	// credential is sealed. The access answer reports it as the seat's
 	// credential ([IssuedCredential]). Never one of [Catalog.Credentials].
 	Issued string
+
+	// Grants is a lane that takes extra grants beside its level ([Grant]):
+	// its session is a [Granter], its Observe reads them back and its steps
+	// take [OpGrants]. Static, so a tool and the dashboard know without a
+	// call to the vendor.
+	Grants bool
+
+	// GrantTerms is how an agent reads the lane's grants ([GrantTerms]):
+	// set wherever Grants is.
+	GrantTerms GrantTerms
+}
+
+// Granter is the session of a vendor whose lane takes grants
+// ([LaneSpec.Grants]): the one call the shared core needs beyond Observe and
+// Apply.
+type Granter interface {
+	// GrantCatalogue is every permission the vendor offers a seat beside its
+	// level on lane now, read live (once per session), the vendor's
+	// never-granted permissions left out and each the connection cannot
+	// grant yet marked [GrantEntry.Unavailable]; and the scope entries a
+	// grant may name ([Options.GrantScope]).
+	GrantCatalogue(ctx context.Context, lane Lane) ([]GrantEntry, []string, error)
+}
+
+// ReadOptions is what a session offers on lane, with its grant catalogue where
+// it is a [Granter]: the one read the sync, the access routes and the request
+// tool make, so each judges a grant against the same catalogue.
+func ReadOptions(ctx context.Context, sess Session, lane Lane) (Options, error) {
+	opts, err := sess.Options(ctx, lane)
+	if err != nil {
+		return Options{}, err
+	}
+	if g, ok := sess.(Granter); ok {
+		entries, scope, err := g.GrantCatalogue(ctx, lane)
+		if err != nil {
+			return Options{}, err
+		}
+		opts.Grants, opts.GrantScope = entries, scope
+		if opts.Grants == nil {
+			opts.Grants = []GrantEntry{}
+		}
+		terms := GrantTermsOf(lane)
+		opts.GrantWhole, opts.GrantAccount = terms.Whole, terms.Account
+	}
+	return opts, nil
 }
 
 // BoxVar is one variable a box CLI reads a seat credential from: Env, set to
@@ -603,6 +648,19 @@ type Options struct {
 	// roles. Its Desired.Level is the chosen ids, sorted and space-separated,
 	// and the picker offers a multi-select.
 	Multiple bool `json:"multiple,omitempty"`
+
+	// Grants is every permission a seat may be granted beside its level on
+	// this lane ([Granter]); nil on a lane that takes no grants, empty on
+	// one whose catalogue offers none. GrantScope is the entries a grant's
+	// scope may name (the zones the company's agents reach).
+	Grants     []GrantEntry `json:"grants,omitempty"`
+	GrantScope []string     `json:"grant_scope,omitempty"`
+
+	// GrantWhole is where a scoped grant naming no entry applies, and
+	// GrantAccount where one on the whole connection does, in the lane's own
+	// words ([GrantTerms]), for a picker's labels; empty with no grants.
+	GrantWhole   string `json:"grant_whole,omitempty"`
+	GrantAccount string `json:"grant_account,omitempty"`
 
 	// RequiredLevel is, on a [Options.Multiple] lane, the level every other
 	// level in a set needs, so a set naming any level holds this one too:

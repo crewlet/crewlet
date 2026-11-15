@@ -1451,7 +1451,24 @@ const (
 	// config refusal in their owner's words, a limit's range, an engine pause
 	// drawn as a pause) took it to 414.1 KiB, most of it the refusal words and
 	// places the frame now reads. So it moved to 415 KiB, 2.27 seconds.
-	initialBudget = 415 << 10
+	// Worklet's task operations on kit 0.130.1 took it to 412.7 KiB, about
+	// 700 bytes past it (the kit's share of it its copyable setting keys and
+	// a comment thread's own Edit and Delete in the shared chunks), the rest
+	// in modules every first screen already reads: a due or start date
+	// read on the company's calendar (a row's due mark, through a lean
+	// lib/companyDay.ts rather than range.ts, whose windows had ridden into the
+	// entry with it and cost 2 KiB), a watch said as the gesture and a feed's
+	// labels in the change renderer, the act rows for a merge and a task's
+	// dependencies, and a read's last answer dropped once the engine says it
+	// is gone. The merge, priorities, link and project dialogs are Worklet's
+	// chunk. So it moved to 413 KiB, 2.26 seconds.
+	// The release train of Worklet's task operations and the Doclet,
+	// Artifacts and Chatlet polish, merged with main's Gitlet listing on kit
+	// 0.131.0, measures 417.0 KiB, 3.1 KiB over the 413.9 KiB of main it was
+	// built on: Worklet's task operations and the polish, the kit's
+	// punctuation peel a marked chip now takes among it, in the shared chunk.
+	// So it moved to 418 KiB, 2.28 seconds.
+	initialBudget = 418 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2559,7 +2576,58 @@ const (
 	// main's Gitlet audit fixes on kit 0.129.1, measures 6217.9 KiB
 	// (6,367,157 bytes), 29,976 bytes over the 6188.7 KiB of main it was
 	// built on: 6218 KiB.
-	treeBudget = 5<<20 + 1098<<10
+	// Kit 0.130.1 (a comment thread's own Edit and Delete, copyable setting
+	// keys) with Worklet's task operations (relation kinds and their removal,
+	// Merge into, a task on the reader's priorities, a remark edited and taken
+	// down on a task and on a page, a project's labels, fields, default
+	// assignee and archive, its files uploaded, replaced and removed, and
+	// every day field on the company's calendar) added 35,861 bytes, script
+	// and sheet, and took it to 6223.7 KiB (6,373,042 bytes): 6224 KiB.
+	// A Doclet page's bar without the search, recent activity read by page
+	// and a trashed page read only, an empty sheet's columns named in place,
+	// New design's own Create design, and Chatlet's switcher, phone rows,
+	// wording and toasts at the foot added 5,540 bytes and took it to
+	// 6138.1 KiB (6,285,406 bytes): 6139 KiB.
+	// Kit 0.131.0 (a reader's own remarks edited and deleted in a comment
+	// thread, a grid's short columns drawn at their content, the rail's
+	// field and rows kept wide, words kept readable in columns, trails and
+	// identifiers, and the Gitlet product mark) added 8,562 bytes, and Gitlet
+	// listed on Company › Integrations (its line, card and page) 1,572 more,
+	// script and sheet, and took it to 6227.8 KiB (6,377,291 bytes): 6228 KiB.
+	// The release train of Worklet's task operations and the Doclet,
+	// Artifacts and Chatlet polish, merged with main's Gitlet listing on kit
+	// 0.131.0, measures 6260.4 KiB (6,410,635 bytes), 33,344 bytes over the
+	// 6227.8 KiB of main it was built on: 6261 KiB.
+	// An agent's grants beside its level (the Agents tab's grants column and
+	// Add grant dialog, and the Inbox's grant of an agent's request) added
+	// 8,852 bytes, script and sheet, and took it to 6226.6 KiB (6,376,009
+	// bytes): 6227 KiB.
+	// The release train of an agent's grants (Cloudflare, then Scaleway, AWS
+	// and Google Cloud) and the settings changed in place, merged with main's
+	// audit follow-ups on kit 0.131.0, measures 6267.7 KiB (6,418,107 bytes),
+	// 11,535 bytes over the 6256.4 KiB of main it was built on: 6268 KiB.
+	// A repository's rename, archive, readers and path owners, every field of
+	// a merge gate in its form and its line, the SSH servers' add, edit,
+	// setup, test and remove, and an MCP server's timeouts in its wizard
+	// added 23,241 bytes, script and sheet, and took it to 6279.1 KiB
+	// (6,429,813 bytes): 6280 KiB.
+	// Editing work and seats in place (a chat member removed, the company's
+	// task types, a seat's per-phase models, learning, workers, placement
+	// and box, the diagnostics switches on the one setting write, and the
+	// schedule cap and audit window said from the engine) added 19,037 bytes
+	// over main's 6256.4 KiB and took it to 6275.0 KiB (6,425,609 bytes):
+	// 6276 KiB.
+	// Settings changed in place (the shared limit editor and the rows it
+	// draws on Delegated decisions, Gitlet, Worklet and Atlas, then one
+	// editor for the settings that are not numbers: Doclet's four, Gitlet's
+	// identity domain, Chatlet's message horizon and the company clock, and
+	// a person's name) take it to 6227.3 KiB (6,376,767 bytes): 6228 KiB.
+	// The release train of a repository's, an SSH server's and an MCP
+	// server's edits, work and seats edited in place, and the settings that
+	// are not numbers changed in place, merged on kit 0.131.0, measures
+	// 6313.1 KiB (6,464,594 bytes), 46,487 bytes over the 6267.7 KiB of main
+	// it was built on: 6314 KiB.
+	treeBudget = 5<<20 + 1194<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

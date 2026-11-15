@@ -59,7 +59,7 @@ func wordsFor(entry *config.LLMProvider, key string, names []string) credentialW
 		if known {
 			words.prefix = profile.TokenPrefix
 			if len(profile.CaptureTokenArgs) > 0 {
-				words.mint = strings.Join(append([]string{profile.Binary}, profile.CaptureTokenArgs...), " ")
+				words.mint = strings.Join(append([]string{string(profile.Binary)}, profile.CaptureTokenArgs...), " ")
 			}
 		}
 	case slotVar(sources.APIKey):

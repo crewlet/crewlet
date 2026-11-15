@@ -87,6 +87,19 @@ const SCOPE_LABEL: Record<Scope, string> = {
 };
 
 /**
+ * What each tab says before anything is typed: HOW THAT TAB SEARCHES. People
+ * and rooms are matched here on the words a row draws, not over the rooms a
+ * message search covers, so the People tab once told a reader about rooms.
+ */
+export const SCOPE_HELP: Record<Scope, string> = {
+  messages:
+    "Search covers every room you can read, including public and team rooms you haven’t joined. Results appear as you type.",
+  people: "Find a person or an agent by name, handle or team. Results appear as you type.",
+  rooms:
+    "Find a room you can read by its name or topic, joined or not. Results appear as you type.",
+};
+
+/**
  * What a full page of hits says beneath them. A RANKING CUT AT ITS PAGE IS NOT
  * "EVERYTHING THAT MATCHED": the engine answers at most [CHAT_SEARCH_PAGE] hits
  * and has no next page, so a full one may have more behind it.
@@ -182,9 +195,9 @@ export function SearchView() {
     return roomWhere(channel.kind, title);
   };
 
-  const peopleHits = q
-    ? people.everyone.filter((person) => keptBy(who, person) && matchesPerson(person, q))
-    : [];
+  // EVERY SEAT THAT MATCHES: the People tab is people and agents alike, each
+  // marked, and the Who filter is the Messages tab's (it narrows authors).
+  const peopleHits = q ? people.everyone.filter((person) => matchesPerson(person, q)) : [];
   const roomHits = q ? [...rooms.values()].filter((room) => matchesRoom(room, q)) : [];
   const counts: Record<Scope, number> = {
     messages: hits.length,
@@ -247,7 +260,7 @@ export function SearchView() {
               />
             </>
           )}
-          {scope !== "rooms" && (
+          {scope === "messages" && (
             <SegmentedControl
               label="Who"
               semantics="radio"
@@ -288,10 +301,7 @@ export function SearchView() {
       <TabPanel id={panel} value={scope}>
         <div className="chat-view-scroll">
           {!q ? (
-            <p className="chat-pane-note">
-              Search covers every room you can read, including public and team rooms you
-              haven&rsquo;t joined. Results appear as you type.
-            </p>
+            <p className="chat-pane-note">{SCOPE_HELP[scope]}</p>
           ) : scope === "messages" && !searchable ? (
             <p className="chat-pane-note">{TOO_SHORT}</p>
           ) : scope === "messages" ? (

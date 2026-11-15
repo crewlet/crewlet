@@ -76,6 +76,10 @@ type RoleAWS struct {
 
 	// Level is what the role may do; empty is read.
 	Level string `yaml:"level,omitempty" json:"level,omitempty" js:"enum=read|operate|administer" desc:"read (the default): describe and list compute, networking, containers, functions, databases, DNS and CDN, read metrics and CloudWatch Logs, and list object names, with no object, parameter or secret contents. operate: read plus starting, stopping, rebooting and scaling, invoking functions, invalidating the CDN, editing alarms and reading and writing S3 objects. administer: operate plus managing those services whole, which can leave access behind such as key pairs, user data and bucket policies."`
+
+	// Grants are AWS managed policies the role holds beside the level, for
+	// a while or for good, each still held to the seat boundary.
+	Grants []SeatGrant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"AWS managed policies, by ARN, this agent's role holds beside its level, each still held to the seat boundary, added on the Agents tab or by approving the agent's request."`
 }
 
 // LevelOrDefault is the seat's level, read where it names none.
@@ -319,4 +323,5 @@ func (c *Company) checkAWS(p *problems, path Path, b *RoleAWS) {
 			"%q is not an AWS level this engine offers; give %s",
 			b.Level, words.Or(AWSLevels()))
 	}
+	checkSeatGrants(p, at(path, "grants"), b.Grants)
 }

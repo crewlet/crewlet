@@ -38,6 +38,7 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 		15: {"TaskPatch.DeadWait", "TaskPatch.DeadWaitEnded"},
 		16: {"Relation.Kind atlas_entry"},
 		17: {"View.DeletedAt"},
+		18: {"Comment.Removed"},
 	}
 	got := map[int][]string{}
 	for _, field := range worklet.VersionedFields() {

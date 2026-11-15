@@ -2484,8 +2484,9 @@ that is running and finding nothing from one that was never armed.
 
 A person's **inbox** — one row per routed change per recipient — is swept at
 the company's `inbox.retention_days`, **365 days** by default and settable
-between 30 and 3650, and changed live: the sweep reads it off the running
-company at every tick, as the applier does at every batch. It is the company's
+between 30 and 3650 (an administrator changes it in place on Company ›
+Integrations › Worklet › Settings), and changed live: the sweep reads it off
+the running company at every tick, as the applier does at every batch. It is the company's
 setting rather than the tracker's because a person's inbox is every native
 domain's notices under one horizon. It deletes something a person reads, and it deletes a *pointer* rather than the thing
 pointed at: the history row behind every notice is never swept, so "what was I
@@ -2528,7 +2529,11 @@ between 30 and 3650, and **`0` to keep everything for ever** — is a policy
 decision rather than a bookkeeping one. `0` reads the opposite way here from
 `inbox.retention_days`, where it means "take the default": an
 inbox row is derived from history that answers for ever, and a message is not
-derived from anything.
+derived from anything. Its range is declared once with that hole in it (0, or
+30 to 3650), so the validator and the dashboard read one rule: Chatlet's page
+under Company › Integrations shows the horizon in force beside its default and
+changes it in place, saying a value in the hole beside the field before
+anything is sent.
 
 The prune is a record rather than a local delete, and that is forced rather
 than stylistic. A message's instant is the BROKER's, stamped when the record

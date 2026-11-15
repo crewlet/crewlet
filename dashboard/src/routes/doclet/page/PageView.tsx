@@ -72,6 +72,7 @@ import {
 import { pageSpaceKey, pageUpKey } from "~/app/crumbs.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useOwnStar, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { PageMenuEntry } from "~/app/header/PageHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
@@ -96,13 +97,14 @@ import {
   useSpaces,
   type Who,
   NotInDoclet,
+  PathSteps,
 } from "../parts.tsx";
 import { withoutRepeatedTitle } from "./body.ts";
 import { PageCommentThread } from "./CommentThread.tsx";
 import { Connections, Revisions } from "./Connections.tsx";
 import { PageEditor } from "./Editor.tsx";
 import { PageChanges, VersionView } from "./History.tsx";
-import { TrashedNotice, usePageTidy } from "./Tidy.tsx";
+import { IN_TRASH, TrashedNotice, usePageTidy } from "./Tidy.tsx";
 import { WatchControl } from "./Watch.tsx";
 
 /** How often a page reads itself again, and how often who read it. */
@@ -121,7 +123,7 @@ function kindOf(detail: PageDetail, who: Who): string {
         ? "Tool skill, not loaded in 30 days"
         : "Tool skill";
   return [
-    detail.page.status === "draft" ? "Draft, found by no search until it is published" : "",
+    detail.page.status === "draft" ? "Draft" : "",
     detail.page.status === "trashed" ? "In the trash" : "",
     detail.onboarding ? "Onboarding, read first by every new seat" : "",
     skill,
@@ -158,19 +160,16 @@ function PageProps({
   return (
     <DescriptionList dense className="knowledge-props">
       <DescriptionList.Item term="Space">
-        <span className="knowledge-props-place">
+        <PathSteps>
           <a className="knowledge-props-link" href={href(["doclet", page.container])}>
             {spaceName}
           </a>
           {(detail.ancestors ?? []).map((a) => (
-            <span key={a.id} className="knowledge-props-step">
-              <span aria-hidden="true">/</span>
-              <a className="knowledge-props-link" href={href(pagePath(a.id))}>
-                {a.title}
-              </a>
-            </span>
+            <a key={a.id} className="knowledge-props-link" href={href(pagePath(a.id))}>
+              {a.title}
+            </a>
           ))}
-        </span>
+        </PathSteps>
       </DescriptionList.Item>
       <DescriptionList.Item term="Author">
         {author ? (
@@ -282,7 +281,12 @@ export function PageView({ id }: { id: string }) {
       : {},
   );
 
-  const editing = edit === "1" && Boolean(page) && canEdit.can;
+  // A PAGE IN THE TRASH READS AND TAKES NO CHANGE: every control that would
+  // change it is held with the one reason (`IN_TRASH`), before the reader's
+  // own, and the engine refuses the write all the same.
+  const hold = page?.status === "trashed" ? IN_TRASH : undefined;
+  const editHold = hold ?? (canEdit.can ? undefined : canEdit.reason);
+  const editing = edit === "1" && Boolean(page) && editHold === undefined;
   const reading = version > 0 && !editing;
   const body = useMemo(
     () => (page ? withoutRepeatedTitle(page.body ?? "", page.title) : ""),
@@ -345,7 +349,7 @@ export function PageView({ id }: { id: string }) {
             const to = newPagePath(page.container, page.id);
             nav.to(to.path, to.query);
           },
-          ...menuHold(canWrite),
+          ...(hold ? { disabled: true, description: hold } : menuHold(canWrite)),
         },
         ...(page.status === "draft"
           ? [
@@ -364,7 +368,7 @@ export function PageView({ id }: { id: string }) {
                   key: "unpublish",
                   label: "Move back to draft",
                   icon: <EyeOffGlyph size="sm" />,
-                  description: "No search finds a draft",
+                  description: "Search leaves it out until it is published again",
                   onSelect: () => void moveStatus("draft"),
                   ...menuHold(canEdit),
                 },
@@ -417,10 +421,11 @@ export function PageView({ id }: { id: string }) {
       {/* WHILE EDITING, THE BAR IS THE EDITOR'S: its state, Cancel and Save
           (`Editor.tsx`), drawn into the same slot. */}
       {!editing && (
-        <DocletBar>
+        // THE PAGE'S OWN ACTIONS ALONE, no search: see `DocletBar`.
+        <PageActions>
           {page && (
             <>
-              <WatchControl page={page} />
+              <WatchControl page={page} hold={hold} />
               {/* ON A PHONE HISTORY AND MORE FOLD into the frame's menu, which
                 holds the same entries (`usePageMenu`), and Edit stays. */}
               <span className="page-action-folds">
@@ -441,10 +446,8 @@ export function PageView({ id }: { id: string }) {
                 size="small"
                 variant="secondary"
                 leadingIcon={<PencilGlyph size="sm" />}
-                disabledReason={
-                  canEdit.can ? (editing ? "You are editing it." : undefined) : canEdit.reason
-                }
-                title={canEdit.can ? undefined : canEdit.reason}
+                disabledReason={editHold ?? (editing ? "You are editing it." : undefined)}
+                title={editHold}
                 onPointerEnter={preloadRichEditor}
                 onFocus={preloadRichEditor}
                 onClick={() => {
@@ -465,7 +468,7 @@ export function PageView({ id }: { id: string }) {
               </span>
             </>
           )}
-        </DocletBar>
+        </PageActions>
       )}
 
       {loading && !data && <Skeleton variant="text" rows={10} label="Loading the page" />}
@@ -509,8 +512,7 @@ export function PageView({ id }: { id: string }) {
                     </WriteButton>
                   }
                 >
-                  It is listed in its space marked as a draft, and no search finds it until it is
-                  published.
+                  Search leaves it out until it is published.
                   <RefusalNote write={setStatus} />
                 </Callout>
               )}
@@ -533,8 +535,8 @@ export function PageView({ id }: { id: string }) {
               ) : (
                 <PageBody detail={data} body={body} />
               )}
-              {edit === "1" && !canEdit.can && (
-                <p className="knowledge-note">You cannot edit it here: {canEdit.reason}</p>
+              {edit === "1" && editHold !== undefined && (
+                <p className="knowledge-note">You cannot edit it here: {editHold}</p>
               )}
               {editing ? null : reading ? (
                 <PageChanges pageID={page.id} who={who} now={now} />
@@ -545,6 +547,7 @@ export function PageView({ id }: { id: string }) {
                     title={page.title}
                     comments={data.comments ?? []}
                     now={now}
+                    hold={hold}
                   />
                   <Connections
                     links={data.linked_from}

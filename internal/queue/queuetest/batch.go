@@ -117,7 +117,7 @@ func (s *suite) runBatch(t *testing.T) {
 
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
 		// LIVENESS: a backend that ignores the linger never reports a
-		// window, so settleFor only ends that case's wait.
+		// window, so stallFor only ends that case's wait.
 		awaitState(t, "the first event's window to outlast what no window collects", func() bool {
 			return lingering(q, "t", "g")
 		})
@@ -262,10 +262,10 @@ func (s *suite) runBatch(t *testing.T) {
 		// handler that saw them apart handed BOTH back and tried again,
 		// spending the fresh message's budget on the way. Measured with
 		// the harness at the shipped one-second spacing: three runs in
-		// four never paired them inside settleFor, and the fourth paired
-		// them only after the fresh one had gone round too, at EQUAL
-		// counts — the very reading this case exists to refuse. A retry
-		// loop is not a construction.
+		// four never paired them inside the three seconds the suite then
+		// waited, and the fourth paired them only after the fresh one had
+		// gone round too, at EQUAL counts — the very reading this case
+		// exists to refuse. A retry loop is not a construction.
 		//
 		// The assertion is RELATIONAL rather than two literals, because
 		// a backend is entitled to an extra redelivery on the way here
@@ -616,7 +616,7 @@ func (s *suite) runBatch(t *testing.T) {
 		opts.Set(clockedWindow.Seconds(), 20)
 		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
 		// LIVENESS: a backend that keeps the old window, of nothing, never
-		// reports one, so settleFor only ends that case's wait.
+		// reports one, so stallFor only ends that case's wait.
 		awaitState(t, "the reloaded window to outlast what no window collects", func() bool {
 			return lingering(q, "t", "g")
 		})
@@ -672,7 +672,7 @@ func (s *suite) runBatch(t *testing.T) {
 
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
 		// LIVENESS: a backend that ignores the linger never reports a
-		// window, so settleFor only ends that case's wait.
+		// window, so stallFor only ends that case's wait.
 		awaitState(t, "the window to hold the published event", func() bool {
 			return lingering(q, "t", "g")
 		})
@@ -776,7 +776,7 @@ func (s *suite) runBatch(t *testing.T) {
 		subscribeBatch(ctx, t, q, "t.hold", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(clockedWindow.Seconds(), 20))
 		// LIVENESS: a backend whose window never opens fails each of these
-		// waits, at settleFor.
+		// waits, at stallFor.
 		awaitWindow := func(what string) {
 			t.Helper()
 			awaitState(t, what, func() bool { return lingering(q, "t.hold", "g") })
@@ -842,7 +842,7 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("Publish from inside the delivery: %v", err)
 		}
 		// LIVENESS: a backend that delivered it with no window fails here,
-		// at settleFor; on the case's clock a window cannot end on its own.
+		// at stallFor; on the case's clock a window cannot end on its own.
 		awaitState(t, "the event published inside the delivery to open a window of its own", func() bool {
 			return lingering(q, "t.inflush", "g")
 		})

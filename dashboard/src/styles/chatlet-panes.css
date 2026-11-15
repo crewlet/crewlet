@@ -428,8 +428,10 @@
 
 .chat-suggest {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: var(--spacing-1);
+  min-height: 0;
 }
 
 .chat-suggest__label {
@@ -439,12 +441,25 @@
   font-weight: var(--font-weight-medium);
 }
 
-/* A list that scrolls in the dialog, its rows' fill bleeding past the edge. */
+/* A list that scrolls in the dialog, its rows' fill bleeding past the edge.
+   IT GROWS TO THE ROOM THE DIALOG HAS, in a dialog whose body its form fills
+   (the kit's `fill`): a cap of six control heights showed five 52px rows and
+   a sliver of the sixth on a dialog with room to spare, and on a phone's
+   sheet left a third of the screen empty under it. Its floor keeps two rows
+   in view when a long list of chosen chips crowds it. */
 .chat-suggest__list {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  max-height: calc(var(--size-control-lg) * 6);
+  min-height: calc(var(--size-control-lg) * 2);
   margin-inline: calc(var(--spacing-2) * -1);
+  overflow-y: auto;
+}
+
+/* A FORM ITS DIALOG'S BODY IS FILLED BY (the kit's `fill`) scrolls itself as
+   a last resort, where even the list at its floor and what is pinned around
+   it do not fit. */
+.chat-form--fills {
   overflow-y: auto;
 }
 
@@ -646,25 +661,20 @@
   background: var(--color-surface-background);
 }
 
+/* The list's own tools, on the find field's start line: the Unreads switch,
+   then Mark all as read and New message at the end. */
 .chat-dms-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3) 0 calc(var(--crewlet-chat-pad-x) - var(--spacing-2));
-}
-
-/* The list's title, its words inside the kit's button (a rule on the button
-   itself would lose to the kit's sheet in a built page). */
-.chat-dms-title {
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
+  padding: var(--spacing-2) var(--spacing-3) 0 var(--crewlet-chat-pad-x);
 }
 
 .chat-dms-tools {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-3);
+  gap: var(--spacing-1);
 }
 
 .chat-dms-find {
@@ -958,4 +968,21 @@
 .chat-view-scroll > .chat-read-failed {
   flex: none;
   padding: var(--spacing-4) 0;
+}
+
+/* A ROOM'S NAME IN A GRID CELL (Browse rooms) ON A PHONE'S CARD wraps its
+   tags under it. The card's
+   value owns the width there, so the name wraps rather than cutting (the
+   frame's `.truncate` rule on a phone), and beside Joined and Open a long
+   name was left a few letters wide and broke at every hyphen. The name keeps
+   the line beside its mark and takes what is left of it. */
+@media (width < 640px) {
+  .chat-room-name {
+    flex-wrap: wrap;
+  }
+
+  .chat-room-name > .truncate {
+    flex: 1 1 0;
+    min-width: 6rem;
+  }
 }

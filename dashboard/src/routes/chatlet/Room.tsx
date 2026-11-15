@@ -43,6 +43,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { usePageCoverage, usePageInView } from "~/app/Shell.tsx";
+import { useToastClearOf } from "~/app/toastInset.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { ActivityLine, Button, Callout, EmptyState } from "@crewlethq/ui";
@@ -277,6 +278,11 @@ function Conversation({ channelID }: { channelID: string }) {
   }, [since, member, read, open?.summary, channelID]);
 
   const transcript = useRef<TranscriptHandle | null>(null);
+  // THE ROOM'S FOOT KEEPS THE TOAST STACK ABOVE IT (`toastInset.tsx`), however
+  // tall the box grows as it is typed in, and whatever stands there instead
+  // (the bar of an archived room, the offline line).
+  const foot = useRef<HTMLElement | null>(null);
+  useToastClearOf(() => foot.current, true);
   const channel = open?.channel;
   const title = open?.title ?? channelID;
   const where = open?.where ?? title;
@@ -336,8 +342,8 @@ function Conversation({ channelID }: { channelID: string }) {
       {tail.unreadable > 0 && (
         <Callout variant="warning">
           {tail.unreadable} message{tail.unreadable === 1 ? "" : "s"} on this page came from a newer
-          version of the engine, so {tail.unreadable === 1 ? "it isn’t" : "they aren’t"} shown yet.
-          Upgrading this node shows {tail.unreadable === 1 ? "it" : "them"}.
+          version of Crewlet, so {tail.unreadable === 1 ? "it isn’t" : "they aren’t"} shown yet.
+          Upgrading Crewlet here shows {tail.unreadable === 1 ? "it" : "them"}.
         </Callout>
       )}
       {/* THE TRANSCRIPT IS DRAWN FROM A TAIL THAT HAS BEEN READ, never from
@@ -372,7 +378,7 @@ function Conversation({ channelID }: { channelID: string }) {
         />
       )}
 
-      <footer className="chat-room-foot">
+      <footer ref={foot} className="chat-room-foot">
         {/*
           THE BOX IS OFFERED WHEREVER THE ENGINE TAKES THE POST, by the one
           rule the room reads (`scope.tsx`'s `roomRules`, the engine's write

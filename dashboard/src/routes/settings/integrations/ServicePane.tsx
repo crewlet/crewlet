@@ -18,25 +18,36 @@
  *    names each with its counts: an Overview tab that listed them again here
  *    was a second copy of that page. No delivery count, because a built-in
  *    service has no inbound edge to count.
- *  - THE SETTINGS. The company document's `tracker` and `knowledge` blocks,
- *    and its top-level `inbox` horizon, with the engine's own defaults where a
- *    key is unset, read only by an Admin, as the `config` question is.
+ *  - THE SETTINGS. The engine's own rows of what the company document sets
+ *    for each service, read only by an Admin: Worklet's inbox horizon
+ *    (`limits`), Doclet's `knowledge` block (`settings`) and Chatlet's message
+ *    horizon (`limits`), each beside its default and changed in place on the
+ *    one write path (`components/SettingEditor.tsx`).
  *  - CHATLET COUNTS NOTHING: the rooms it answers for are the reader's own
  *    seat's, never the company's, so its page names no count and no roster,
  *    only what it gives and the way in, which is offered to a holder of Chatlet
  *    as Worklet and Doclet offer theirs to a holder of their apps.
+ *  - GITLET COUNTS NOTHING EITHER, and for the same reason: which
+ *    repositories a reader sees is their own grant's answer (the chart's
+ *    owners and each repository's `visibility`), never the company's count,
+ *    so its page says what it gives and the way in, offered to a holder of
+ *    Gitlet, and an Admin's way to Gitlet's own settings, where the code
+ *    log's retention and the rest of `code` are read.
  *
  * A service the company runs elsewhere says what replaces it and what
  * running it here would mean, with no control: switching is not offered yet.
+ * Gitlet is never run elsewhere: GitHub and GitLab are integrations a seat
+ * calls, never a host the engine runs in its place, so Gitlet off says that
+ * Crewlet hosts none of the company's code rather than naming a replacement.
  */
 
 import { useMemo, useState, type ReactNode } from "react";
 import {
   ButtonLink,
   Callout,
-  DescriptionList,
   EmptyValue,
   List,
+  SettingsTable,
   StatusDot,
   Tabs,
   Tag,
@@ -47,6 +58,9 @@ import { VendorMark } from "@crewlethq/icons";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PROJECT_PAGE } from "~/contract/work.ts";
+import { LimitSetting } from "~/components/LimitSetting.tsx";
+import { TextSetting } from "~/components/TextSetting.tsx";
+import type { SettingRow } from "~/contract/settings.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { documentUnits, handleLabel, indexOrg, seatPath, type Seat } from "~/lib/seats.ts";
@@ -54,15 +68,12 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useNow } from "~/lib/clock.ts";
-import { CHATLET, DOCLET, WORKLET, needsWords } from "~/lib/access.ts";
+import { CHATLET, DOCLET, GITLET, WORKLET, needsWords } from "~/lib/access.ts";
 import { fmtCount, plural, relTime } from "~/lib/format.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import { FeedRow, ServiceMark, ServiceState } from "./parts.tsx";
 import type { BuiltInService, Model, ReplacingApp } from "./model.ts";
-
-/** What a settings row says for a key the company document leaves unset. */
-const DEFAULT = "The engine's default";
 
 /** What a service gives the company: what running it here would give, or what Chatlet gives. */
 const GIVES: Record<BuiltInService["key"], string[]> = {
@@ -80,6 +91,11 @@ const GIVES: Record<BuiltInService["key"], string[]> = {
     "Talk with any agent from inside Crewlet",
     "Keep a conversation beside the work it is about",
     "Nothing to install: your agents are already here",
+  ],
+  gitlet: [
+    "Repositories your people clone and push over HTTPS",
+    "Changes reviewed by people and agents, with checks",
+    "Code your agents read and change without a token",
   ],
 };
 
@@ -107,23 +123,12 @@ function homeOf(
   return {};
 }
 
-function block(
-  doc: CompanyDocument | null | undefined,
-  key: "tracker" | "knowledge" | "inbox",
-): Record<string, unknown> {
-  return asRecord((doc as Record<string, unknown> | null | undefined)?.[key]);
-}
-
-/** A value of the company document as an object, or an empty one where it is none. */
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
 /** What each service holds, as the off state's sentences name it. */
 const HOLDS: Record<BuiltInService["key"], string> = {
   worklet: "tasks",
   doclet: "pages",
   chat: "conversations",
+  gitlet: "repositories",
 };
 
 /** A replacing app's name on its own line and button. */
@@ -152,6 +157,8 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
   // through the one Atlassian integration, a chat vendor as itself. A vendor
   // nobody named (the `viewer` answer tells the names to a holder of Chatlet) is
   // still a vendor's chat, said in words.
+  // GITLET OFF NAMES NOTHING IN ITS PLACE (see the file's doc).
+  if (service.key === "gitlet") return <GitletOff service={service} />;
   const how =
     service.key === "chat"
       ? `Your agents talk on ${by?.name}`
@@ -171,16 +178,7 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
           ? `${how}, so ${service.name} is not in use. Running both would leave two places for the same ${what}.`
           : `The company document leaves ${service.name} out and names nothing in its place.`}
       </Callout>
-      <section aria-label={`What ${service.name} would give you`}>
-        <h3 className="t-label">Running it here would give you</h3>
-        <List variant="plain" className="int-checks">
-          {GIVES[service.key].map((line) => (
-            <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
-              {line}
-            </List.Item>
-          ))}
-        </List>
-      </section>
+      <Gives service={service} would />
       <p className="t-caption">
         The company document decides which system holds the company&apos;s {what}, so this page
         offers no switch: moving them is a change to plan, not a toggle.
@@ -207,6 +205,47 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * What a service gives the company: what it gives where it is in use, or what
+ * running it here `would` give where it is not.
+ */
+function Gives({ service, would }: { service: BuiltInService; would: boolean }) {
+  return (
+    <section aria-label={`What ${service.name} ${would ? "would give" : "gives"} you`}>
+      <h3 className="t-label">{would ? "Running it here would give you" : "What it gives you"}</h3>
+      <List variant="plain" className="int-checks">
+        {GIVES[service.key].map((line) => (
+          <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
+            {line}
+          </List.Item>
+        ))}
+      </List>
+    </section>
+  );
+}
+
+/**
+ * Gitlet off: Crewlet hosts none of the company's code. NEVER "nothing does
+ * this": a company on GitHub or GitLab keeps its code there, and its agents
+ * reach it through those integrations, with Gitlet on or off.
+ */
+function GitletOff({ service }: { service: BuiltInService }) {
+  return (
+    <div className="int-service-off">
+      <Callout variant="neutral" title="Crewlet hosts none of your company's code">
+        The company document leaves {service.name} off, so its repositories live elsewhere, if
+        anywhere. Your agents reach GitHub and GitLab through their own integrations, with{" "}
+        {service.name} on or off.
+      </Callout>
+      <Gives service={service} would />
+      <p className="t-caption">
+        The company document decides where the company&apos;s {HOLDS[service.key]} are hosted, so
+        this page offers no switch: moving them is a change to plan, not a toggle.
+      </p>
     </div>
   );
 }
@@ -368,6 +407,7 @@ export function ServicePane({ service, model }: { service: BuiltInService; model
     );
   }
   if (service.key === "chat") return <ChatPane service={service} head={head} />;
+  if (service.key === "gitlet") return <GitletPane service={service} head={head} />;
   return service.key === "worklet" ? (
     <WorkletPane service={service} head={head} />
   ) : (
@@ -407,14 +447,10 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
     agents.find((a) => a.handle === handle)?.name ?? handle ?? "Someone";
   // THE COMPANY'S HORIZON, at the top of its document (`inbox.retention_days`)
   // and not under `tracker`: a person's inbox is every native domain's
-  // notices, and this pane says how long Worklet's are kept. AN UNSET KEY
-  // IS THE ENGINE'S DEFAULT, said as such: a copy of the engine's constant here
-  // would be a second answer that drifts.
-  const inbox = block(config.data, "inbox");
-  const retention =
-    typeof inbox.retention_days === "number" && inbox.retention_days > 0
-      ? `${inbox.retention_days} days`
-      : DEFAULT;
+  // notices. The engine's own row (`limits`, group `inbox`) carries the value
+  // in force beside its default, and the field that changes it.
+  const limits = useQuery("limits", undefined, { enabled: viewer.admin });
+  const horizon = limits.data?.limits.find((r) => r.key === "inbox.retention_days");
 
   if (!enabled) {
     return (
@@ -531,34 +567,88 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
         )}
         {tab === "settings" && (
           <div className="int-tab">
-            <DescriptionList
-              dense
-              items={[
-                ["Work tracker", "Worklet"],
-                [
-                  "Inbox keeps a notice for",
-                  viewer.admin ? retention : <EmptyValue label="Admins see this" />,
-                ],
-                [
-                  "Projects the chart declares",
-                  viewer.admin ? (
-                    documentUnits(config.data)
-                      .map((u) => u.project)
-                      .filter(Boolean)
-                      .join(", ") || <EmptyValue label="None" />
-                  ) : (
-                    <EmptyValue label="Admins see this" />
-                  ),
-                ],
-              ]}
-            />
-            <p className="t-caption">These live in the company document, under tracker.</p>
+            <SettingsTable aria-label="Worklet settings">
+              <SettingsTable.Row label="Work tracker" settingKey="tracker.backend">
+                Worklet
+              </SettingsTable.Row>
+              {horizon ? (
+                <LimitSetting
+                  cap={horizon}
+                  label="Inbox keeps a notice for"
+                  area="Worklet"
+                  reread="Reload to see the Worklet settings as they are now."
+                  onApplied={limits.refetch}
+                />
+              ) : (
+                <SettingsTable.Row
+                  label="Inbox keeps a notice for"
+                  settingKey="inbox.retention_days"
+                >
+                  {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
+                </SettingsTable.Row>
+              )}
+              <SettingsTable.Row label="Projects the chart declares">
+                {viewer.admin ? (
+                  // ONE PROJECT ONCE, however many units file under it.
+                  [
+                    ...new Set(
+                      documentUnits(config.data)
+                        .map((u) => u.project)
+                        .filter(Boolean),
+                    ),
+                  ].join(", ") || <EmptyValue label="None" />
+                ) : (
+                  <EmptyValue label="Admins see this" />
+                )}
+              </SettingsTable.Row>
+            </SettingsTable>
+            <p className="t-caption">
+              These live in the company document: the tracker under tracker, the inbox under inbox,
+              and each project on its unit in Structure.
+            </p>
           </div>
         )}
       </div>
     </div>
   );
 }
+
+/**
+ * Doclet's four settings, each the engine's row (`settings`) changed in place:
+ * what each is called here, the line under its field, and how a value reads
+ * where the plain words would mislead (an empty reach is every space).
+ */
+const DOCLET_SETTINGS: readonly {
+  key: string;
+  label: string;
+  helper: string;
+  words?: (value: SettingRow["value"]) => string;
+}[] = [
+  {
+    key: "knowledge.root_space",
+    label: "Company pages",
+    helper:
+      "The space that holds the company's own pages, starting with the Onboarding page every agent reads first.",
+  },
+  {
+    key: "knowledge.skills_container",
+    label: "Tool skills",
+    helper:
+      "The space that holds tool-skill pages, which search and routing leave out. Off turns tool skills off.",
+  },
+  {
+    key: "knowledge.scope",
+    label: "Search reaches",
+    helper: "The spaces a knowledge search reads. Empty reaches every space.",
+    words: (value) => (Array.isArray(value) && value.length > 0 ? value.join(", ") : "Every space"),
+  },
+  {
+    key: "knowledge.vectors",
+    label: "Search by meaning",
+    helper:
+      "Adds search by meaning to knowledge and work search. Off also stops embedding pages. The default follows whether an embeddings provider is set.",
+  },
+];
 
 function DocletPane({ service, head }: { service: BuiltInService; head: Head }) {
   const viewer = useViewer();
@@ -575,18 +665,20 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
   const containers = useQuery("containers", undefined, { enabled, pollMs: 60_000 });
   const feed = useQuery("page_activity", { limit: 20 }, { enabled, pollMs: 60_000 });
   const config = useQuery("config", undefined, { enabled: viewer.admin });
+  // THE ENGINE'S OWN ROWS of the `knowledge` block, each the value in force
+  // beside its default (`settings`, group `knowledge`), changed in place.
+  const settings = useQuery("settings", undefined, { enabled: viewer.admin });
   const [tab, setTab] = useTab();
 
   const spaces = containers.data?.containers ?? [];
   const pages = containers.data ? spaces.reduce((n, c) => n + c.pages, 0) : null;
   const changes = feed.data?.changes ?? [];
   const latest = changes[0]?.at;
-  const knowledge = block(config.data, "knowledge");
   const nameOf = (handle: string | undefined) =>
     index.byHandle.get(handle ?? "")?.name ?? handle ?? "Someone";
-  const skills =
-    typeof knowledge.skills_container === "string" ? knowledge.skills_container : undefined;
-  const scope = Array.isArray(knowledge.scope) ? (knowledge.scope as string[]) : [];
+  const knowledge = new Map(
+    (settings.data?.settings ?? []).filter((r) => r.group === "knowledge").map((r) => [r.key, r]),
+  );
 
   if (!enabled) {
     return (
@@ -696,30 +788,31 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
         )}
         {tab === "settings" && (
           <div className="int-tab">
-            <DescriptionList
-              dense
-              items={[
-                ["Knowledge base", "Doclet"],
-                ...(viewer.admin
-                  ? ([
-                      [
-                        "Company pages",
-                        typeof knowledge.root_space === "string" ? knowledge.root_space : DEFAULT,
-                      ],
-                      ["Tool skills", skills === "" ? "Off" : (skills ?? DEFAULT)],
-                      ["Search reaches", scope.length > 0 ? scope.join(", ") : "Every space"],
-                      [
-                        "Search by meaning",
-                        knowledge.vectors === false
-                          ? "Off"
-                          : knowledge.vectors === true
-                            ? "On"
-                            : "When an embeddings provider is set",
-                      ],
-                    ] as [string, string][])
-                  : ([["Everything else", "Admins see this"]] as [string, string][])),
-              ]}
-            />
+            <SettingsTable aria-label="Doclet settings">
+              <SettingsTable.Row label="Knowledge base" settingKey="knowledge.backend">
+                Doclet
+              </SettingsTable.Row>
+              {DOCLET_SETTINGS.map((d) => {
+                const row = knowledge.get(d.key);
+                return row ? (
+                  <TextSetting
+                    key={d.key}
+                    row={row}
+                    label={d.label}
+                    area="Doclet"
+                    reread="Reload to see the Doclet settings as they are now."
+                    onApplied={settings.refetch}
+                    helper={d.helper}
+                    {...(d.words ? { words: d.words } : {})}
+                    {...(d.key === "knowledge.scope" ? { choices: spaces.map((c) => c.key) } : {})}
+                  />
+                ) : (
+                  <SettingsTable.Row key={d.key} label={d.label} settingKey={d.key}>
+                    {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
+                  </SettingsTable.Row>
+                );
+              })}
+            </SettingsTable>
             <p className="t-caption">These live in the company document, under knowledge.</p>
           </div>
         )}
@@ -734,6 +827,11 @@ function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
   // without it is told what would open it rather than offered a link to a
   // screen that refuses them.
   const viewer = useViewer();
+  // THE COMPANY'S MESSAGE HORIZON, the engine's own row (`limits`, group
+  // `chat`): its value in force beside the default, changed in place. A room
+  // with no horizon of its own keeps its messages this long.
+  const limits = useQuery("limits", undefined, { enabled: viewer.admin });
+  const horizon = limits.data?.limits.find((r) => r.key === "chat.chatlet.message_retention_days");
   return (
     <div className="int-detail">
       {head(
@@ -749,16 +847,68 @@ function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
           {needsWords("Talking with your agents in it", [CHATLET])}
         </Callout>
       )}
-      <section aria-label={`What ${service.name} gives you`}>
-        <h3 className="t-label">What it gives you</h3>
-        <List variant="plain" className="int-checks">
-          {GIVES.chat.map((line) => (
-            <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
-              {line}
-            </List.Item>
-          ))}
-        </List>
+      <Gives service={service} would={false} />
+      <section aria-label={`${service.name} settings`}>
+        <h3 className="t-label">Settings</h3>
+        <SettingsTable aria-label={`${service.name} settings`}>
+          {horizon ? (
+            <LimitSetting
+              cap={horizon}
+              label="Messages are kept for"
+              area="Chatlet"
+              reread="Reload to see the Chatlet settings as they are now."
+              onApplied={limits.refetch}
+              off="For ever"
+              zero="0 to keep them for ever"
+            />
+          ) : (
+            <SettingsTable.Row
+              label="Messages are kept for"
+              settingKey="chat.chatlet.message_retention_days"
+            >
+              {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
+            </SettingsTable.Row>
+          )}
+        </SettingsTable>
+        <p className="t-caption">
+          A room with no horizon of its own keeps its messages this long. A room’s own horizon is
+          set in the room.
+        </p>
       </section>
+    </div>
+  );
+}
+
+/**
+ * Gitlet in use: what it gives and the way in, and no count (see the file's
+ * doc). The way in is the Gitlet app's, as Chatlet's is Chatlet's; Gitlet's
+ * settings are an Admin's, as the company document is.
+ */
+function GitletPane({ service, head }: { service: BuiltInService; head: Head }) {
+  const viewer = useViewer();
+  const ways = (
+    <>
+      {viewer.gitlet && service.open && (
+        <ButtonLink size="small" variant="primary" href={href(service.open.path)}>
+          {service.open.label}
+        </ButtonLink>
+      )}
+      {viewer.admin && (
+        <ButtonLink size="small" variant="secondary" href={href(["settings", "gitlet"])}>
+          {service.name} settings
+        </ButtonLink>
+      )}
+    </>
+  );
+  return (
+    <div className="int-detail">
+      {head(service.sentence, (viewer.gitlet && service.open) || viewer.admin ? ways : undefined)}
+      {!viewer.gitlet && (
+        <Callout variant="neutral">
+          {needsWords("Reading and reviewing the company's code in it", [GITLET])}
+        </Callout>
+      )}
+      <Gives service={service} would={false} />
     </div>
   );
 }

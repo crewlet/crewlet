@@ -243,6 +243,16 @@ describe("the Folders section", () => {
       true,
     );
     expect(within(dialog).getByText(/A folder never shares what is in it/)).toBeTruthy();
+    // ONE SENTENCE ABOUT WHAT IS FILED IN IT: each choice says who finds the
+    // folder, and the note under them says what it does to its artifacts.
+    // "Only you" said nobody saw anything filed in it, over a note that said
+    // each artifact keeps its own access.
+    expect(
+      within(dialog)
+        .getByRole("radio", { name: /Only you/ })
+        .closest("label")?.textContent,
+    ).toContain("Nobody else can find it or file into it.");
+    expect(within(dialog).queryByText(/anything you file in it/)).toBeNull();
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), {
       target: { value: "Partnerships" },
     });

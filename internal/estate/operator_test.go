@@ -253,6 +253,15 @@ func (w deskWriter) EditComment(_ context.Context, opID, _, _, commentID, body s
 	return w.d.note("edit_comment", opID, w.a), nil
 }
 
+func (w deskWriter) RemoveComment(_ context.Context, opID, _, _, commentID string,
+	authority worklet.CommentAuthority) (worklet.WriteResult, error) {
+	if commentID != "c-1" || !authority.Moderate {
+		return worklet.WriteResult{}, fmt.Errorf("the removal did not cross: %q %+v",
+			commentID, authority)
+	}
+	return w.d.note("remove_comment", opID, w.a), nil
+}
+
 // deskPageWriter is the knowledge base's operator writes on the desk.
 type deskPageWriter struct {
 	PageWriter
@@ -400,6 +409,10 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		{"edit_comment", func() (worklet.WriteResult, error) {
 			return w.EditComment(ctx, "op-10", "t-1", "ENG", "c-1", "reworded", nil)
 		}},
+		{"remove_comment", func() (worklet.WriteResult, error) {
+			return w.RemoveComment(ctx, "op-11", "t-1", "ENG", "c-1",
+				worklet.CommentAuthority{Moderate: true})
+		}},
 	}
 	writes = append(writes, struct {
 		op    string
@@ -408,7 +421,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		// A DROP WHOSE PLACE WAS REFUSED crosses with the refusal's
 		// identity, which the tool classifies — an error is an interface
 		// no encoder writes — beside the lane it did change.
-		placed, err := w.PlaceTask(ctx, "op-11", worklet.Place{Task: "t-1", Project: "ENG",
+		placed, err := w.PlaceTask(ctx, "op-12", worklet.Place{Task: "t-1", Project: "ENG",
 			After: "t-2"}, nil)
 		if !errors.Is(placed.Unplaced, worklet.ErrStaleVersion) || placed.Version != 12 {
 			t.Errorf("place = (%+v, %v), want the lane changed and a stale-version refusal "+

@@ -23,7 +23,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Button, ConfirmModal, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
+import { Button, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { readOnlyFrom, useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { listed } from "~/lib/format.ts";

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/delegated`
-- **Enforced-by:** `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`, `internal/delegated.TestALowConfidenceAlwaysEscalates`, `internal/delegated.TestOneDecisionInNIsSpotChecked`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/config.TestAPanelRunsOnTwoModels`, `internal/config.TestAnEscalationNamesAPerson`, `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`, `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`, `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`, `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`, `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`, `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`, `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`, `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`, `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`, `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`, `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`, `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`, `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`, `internal/delegated.TestEveryPathClassCatchesItsConventionalPlaces`, `internal/agent/builtin.TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition`, `internal/agent/builtin.TestADeployIsAllowedOnlyWhereItsChangesMergedAndItsCommitIsGreen`, `internal/agent/builtin.TestAGitletMergeIsHeldToItsTargetsGate`, `internal/agent/builtin.TestAnApprovedMergeMergesExactlyItsHeadAsTheSeat`, `internal/agent/builtin.TestADeployApprovalIsExactlyWhatWasAsked`, `internal/config.TestAMergeRuleAddsOnlyPathGlobsItCanMatch`, `internal/engine.TestADelegatesOwnRequestReachesPeopleAtOnce`, `internal/github.TestACheckAnAgentReportedCountsForNothing`, `internal/github.TestADeclaredCheckPassesOnlyAsASuccessfulRunOnTheHead`, `internal/github.TestAPlanWithoutProtectionRequiresNothingOfGitHub`, `internal/github.TestAFreePlanPullCarriesItsDeclaredChecksAndItsApprovals`, `internal/config.TestARuleRequiresChecksOnlyOfAGitHubBranchItReleases`, `internal/agent/builtin.TestAFreePlanReleaseStandsOnTheChecksItsRuleDeclares`, `internal/engine.TestAFreePlanReleaseIsJudgedOnItsDeclaredChecks`, `internal/delegated.TestASubjectIsWhatARequestDecidesNeverItsWording`, `internal/sandbox.TestAHeldCallIsOpenFromItsRecordingToItsAnswer`, `internal/agent/builtin.TestARepeatAskJoinsTheRequestStillOpen`, `internal/agent/builtin.TestAnAskThatDiffersInSubstanceIsItsOwnRequest`, `internal/agent/builtin.TestAnAskAfterItsRequestWasDecidedIsANewRequest`, `internal/agent/builtin.TestAnAskWhoseOpenRequestsCannotBeReadHoldsNothing`, `internal/agent/builtin.TestTwoTurnsAskingAtOnceComeToOneRequest`
+- **Enforced-by:** `internal/delegated.TestAPanelAllowsOnlyWhenEveryDelegateAllows`, `internal/delegated.TestALowConfidenceAlwaysEscalates`, `internal/delegated.TestOneDecisionInNIsSpotChecked`, `internal/config.TestADelegateIsAnAgentThatCannotRequestWhatItDecides`, `internal/config.TestAPanelRunsOnTwoModels`, `internal/config.TestAnEscalationNamesAPerson`, `internal/ssh.TestTheAlwaysEscalateListCatchesEveryClass`, `internal/agent/builtin.TestADelegateNeverDecidesARequestItMadeOrLeads`, `internal/agent/builtin.TestAnAlwaysEscalateRequestReachesPeopleWhateverTheDelegateSays`, `internal/agent/builtin.TestADelegatesAllowsStopAtTheirHourlyCaps`, `internal/agent/builtin.TestADelegatesHourlyCapsAreTheCompanys`, `internal/config.TestADelegatedLimitIsTheDocumentsWithinItsRange`, `internal/agent/builtin.TestARequestOnASensitiveItemReachesPeople`, `internal/agent/builtin.TestAVerdictActsOnlyOnTheRequestItWasShown`, `internal/agent/builtin.TestAVerdictActsOnlyOnceRecorded`, `internal/agent/builtin.TestWordsInsideARequestChangeNoEnforcedOutcome`, `internal/agent/builtin.TestAnApprovalAtTheDecisionRunsOnlyTheExactCall`, `internal/worklet.TestOnlyAnApproverChoosesAnActsApprovingOption`, `internal/engine.TestADelegatedRequestReachesPeopleAtItsDeadline`, `internal/engine.TestTurningDelegationOffReturnsEveryRequestToPeople`, `internal/api/queries.TestADelegatedCallIsPutToNobodyUntilEscalated`, `internal/delegated.TestEveryPathClassCatchesItsConventionalPlaces`, `internal/agent/builtin.TestAMergeIsAllowedOnlyWhereGitHubShowsEveryCondition`, `internal/agent/builtin.TestADeployIsAllowedOnlyWhereItsChangesMergedAndItsCommitIsGreen`, `internal/agent/builtin.TestAGitletMergeIsHeldToItsTargetsGate`, `internal/agent/builtin.TestAnApprovedMergeMergesExactlyItsHeadAsTheSeat`, `internal/agent/builtin.TestADeployApprovalIsExactlyWhatWasAsked`, `internal/config.TestAMergeRuleAddsOnlyPathGlobsItCanMatch`, `internal/engine.TestADelegatesOwnRequestReachesPeopleAtOnce`, `internal/github.TestACheckAnAgentReportedCountsForNothing`, `internal/github.TestADeclaredCheckPassesOnlyAsASuccessfulRunOnTheHead`, `internal/github.TestAPlanWithoutProtectionRequiresNothingOfGitHub`, `internal/github.TestAFreePlanPullCarriesItsDeclaredChecksAndItsApprovals`, `internal/config.TestARuleRequiresChecksOnlyOfAGitHubBranchItReleases`, `internal/agent/builtin.TestAFreePlanReleaseStandsOnTheChecksItsRuleDeclares`, `internal/engine.TestAFreePlanReleaseIsJudgedOnItsDeclaredChecks`, `internal/delegated.TestASubjectIsWhatARequestDecidesNeverItsWording`, `internal/sandbox.TestAHeldCallIsOpenFromItsRecordingToItsAnswer`, `internal/agent/builtin.TestARepeatAskJoinsTheRequestStillOpen`, `internal/agent/builtin.TestAnAskThatDiffersInSubstanceIsItsOwnRequest`, `internal/agent/builtin.TestAnAskAfterItsRequestWasDecidedIsANewRequest`, `internal/agent/builtin.TestAnAskWhoseOpenRequestsCannotBeReadHoldsNothing`, `internal/agent/builtin.TestTwoTurnsAskingAtOnceComeToOneRequest`
 - **Measured:** in one company over a month, the person answering one agent's requests took its recommendation on 90 of 95, and another agent's on 31 of 32 (the advisor's `approval.rubber_stamp`). Each was a merge, a deploy or a server command waiting in the Inbox.
 - **Tag-status:** unreleased
 
@@ -57,9 +57,9 @@ request shown). The engine then decides, not the model:
   every check the branch requires and the rule names for it passed on the
   commit; a target that requires none and names none fails it), or cannot be
   read; and past
-  `delegated.DecisionsPerHour` allows per kind and delegate, or
-  `ServerAllowsPerHour` per server, in one clock hour, counted fleet-wide and
-  failing closed.
+  the company's `allows_per_hour` allows per kind and delegate, or
+  `server_allows_per_hour` per server, in one clock hour (`delegated.Limits`),
+  counted fleet-wide and failing closed.
 - **Every verdict is recorded in the access log before it acts**, and a
   verdict the log does not hold never acts.
 - **An allow carries out what a person's approval would**, through the same
@@ -70,7 +70,7 @@ request shown). The engine then decides, not the model:
   head's SHA); for `deploy`, the approval handed back to the run, since the
   engine has no deploy path of its own.
   The answer is marked as decided under delegation and its rule.
-- **A request no delegate answered in `delegated.Deadline` goes to people**,
+- **A request no delegate answered within the company's `deadline_seconds` goes to people**,
   and so does every request once the rule is off or its delegates changed;
   a turned-off rule shows its requests to people on the next read.
 
@@ -118,6 +118,24 @@ takes it (`sandbox.PendingRun.HeldOpen`), so a request escalated to people
 still joins and one already answered does not. The read and the write are
 made under one lock on the node that holds the seat, the only node that
 serves the seat's calls, and a read that fails refuses the call.
+
+**Amended: the company sets the limits, within ranges that cannot switch
+one off.** The deadline and the two hourly caps were constants, so a company
+whose delegates needed longer, or whose servers saw more routine commands,
+could only turn delegation off. They are now `delegated_decisions`'
+`deadline_seconds` (300 to 1800, default 900), `allows_per_hour` (1 to 60,
+default 30) and `server_allows_per_hour` (1 to 60, default 10), read through
+one accessor (`config.DelegatedDecisions.Limits`) by the verdict tool's caps,
+the deadline sweep and every reader of whether a request is overdue. The
+document is the company's and no model writes it (a write of it is
+`config.write`, and a command touching it always escalates), so a request's
+words still change no enforced outcome. The ranges keep every limit a limit:
+a deadline under five minutes reaches people before a delegate's turn could
+answer and one past `sandbox.DefaultPauseTTL` after the box waiting on it was
+let go, and a delegate decides one request a turn, so a cap over 60 an hour
+bounds nothing. A written zero is refused rather than read as the default. A
+new deadline applies to every request still waiting, since a held call
+records when it was held and never its deadline.
 
 ## Why the obvious alternative is wrong
 

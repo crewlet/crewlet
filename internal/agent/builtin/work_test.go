@@ -1303,6 +1303,52 @@ func TestOneCallsLinkAndDuplicateBothSurvive(t *testing.T) {
 	}
 }
 
+// A DUPLICATE LINK COMES OFF THE WAY AN ASSIGNEE DOES: null or "" clears the
+// item's own duplicate edges. `duplicate_of` only ever added one, so a link
+// drawn by mistake stayed on both tasks for good.
+func TestADuplicateLinkIsTakenOffByAnEmptyDuplicateOf(t *testing.T) {
+	t.Parallel()
+	for _, cleared := range []any{nil, "", "  "} {
+		trk := newFakeTracker()
+		one := trk.tasks["ENG-1"]
+		one.Task.Relations = []worklet.Relation{
+			{Kind: worklet.RelationDuplicates, Other: "id-2"},
+			{Kind: worklet.RelationLinked, Other: "id-3"},
+		}
+		trk.tasks["ENG-1"] = one
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+		if got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+			"item": "ENG-1", "duplicate_of": cleared,
+		}); got.Failed {
+			t.Fatalf("duplicate_of %#v failed: %s", cleared, got.Output)
+		}
+		if len(trk.patched) != 1 || trk.patched[0].Relate == nil {
+			t.Fatalf("duplicate_of %#v wrote no relation gesture: %+v", cleared, trk.patched)
+		}
+		gesture := trk.patched[0].Relate
+		want := []worklet.Relation{{Kind: worklet.RelationDuplicates, Other: "id-2"}}
+		if len(gesture.Add) != 0 || !slices.Equal(gesture.Remove, want) {
+			t.Errorf("duplicate_of %#v: the gesture adds %v and removes %v, want "+
+				"the duplicate edge removed and the link left alone",
+				cleared, gesture.Add, gesture.Remove)
+		}
+	}
+
+	// AN ITEM THAT MARKS NOTHING A DUPLICATE HAS NOTHING TO CLEAR, and the
+	// call changes nothing rather than writing an empty gesture.
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "duplicate_of": nil, "status": "in_progress",
+	})
+	for _, patch := range trk.patched {
+		if patch.Relate != nil {
+			t.Errorf("clearing a duplicate link the item does not have wrote %+v", patch.Relate)
+		}
+	}
+}
+
 // IF-MATCH IS PASSED THROUGH AS THE MODEL'S OWN PRECONDITION, and omitting it
 // merges — which is what a model naming two fields needs.
 func TestIfMatchReachesTheWriter(t *testing.T) {

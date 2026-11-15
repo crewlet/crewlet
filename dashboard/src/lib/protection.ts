@@ -33,7 +33,33 @@ export function pushRuleLine(rule: CodeProtection): string {
   }`;
 }
 
-/** What a merge gate asks, in a line. */
+/**
+ * What each class of a path is called after "a change of" (`gitlet.PathClasses`),
+ * a class this build does not know said by its key.
+ */
+export const PATH_CLASS_WORDS: Readonly<Record<string, string>> = {
+  whitespace_only: "only whitespace",
+  comment_only: "only comments",
+};
+
+/** Classes said as a list: "only whitespace or only comments". */
+function classWords(classes: readonly string[]): string {
+  return classes.map((c) => PATH_CLASS_WORDS[c] ?? c).join(" or ");
+}
+
+/** The globs a person approves, named where there are few and counted where there are many. */
+function humanPathsWords(paths: readonly { glob: string; unless?: string[] }[]): string {
+  if (paths.length > 3) return `a person approves ${plural(paths.length, "path")}`;
+  const each = paths.map((h) =>
+    h.unless?.length ? `${h.glob} (unless a change of ${classWords(h.unless)})` : h.glob,
+  );
+  return `a person approves ${each.join(", ")}`;
+}
+
+/**
+ * What a merge gate asks, in a line: every field of it a merge is held to,
+ * so two rules the line says alike hold a merge alike.
+ */
 export function gateLine(gate: CodeMergeGate): string {
   const parts = [
     gate.merge_by === "persons"
@@ -43,16 +69,24 @@ export function gateLine(gate: CodeMergeGate): string {
         : "merged by its writers",
     gate.approvals === "one" ? "one approval" : "no approval",
   ];
-  if (gate.human_paths?.length)
-    parts.push(`a person approves ${plural(gate.human_paths.length, "path")}`);
+  if (gate.approvals_unless?.length) {
+    parts.push(`none for a change of ${classWords(gate.approvals_unless)}`);
+  }
+  if (gate.human_paths?.length) parts.push(humanPathsWords(gate.human_paths));
   if (gate.checks?.length) {
     parts.push(`${plural(gate.checks.length, "check")} pass`);
     // A GATE REQUIRING A CHECK LANDS THROUGH ITS QUEUE (the engine's rule:
     // the queue applies to a gated branch with a required check), so that
-    // the queue tests each change before it lands is part of what the gate
-    // asks. The engine has one way a queue lands, so the line names it
-    // rather than reading a policy off the gate.
-    parts.push("landed by its queue, each change tested merged on the branch before it lands");
+    // the queue tests each change before it lands, and how many at once, is
+    // part of what the gate asks.
+    parts.push(
+      `landed by its queue, each change tested merged on the branch before it lands (${plural(gate.landing.depth, "candidate")} at once, ${plural(gate.landing.batch, "change")} each)`,
+    );
+    parts.push(
+      gate.agents_edit_checks
+        ? "a seat may approve a change to its checks (.crewlet/**)"
+        : "a change to its checks (.crewlet/**) needs a person",
+    );
   }
   if (gate.owners_approve) parts.push("its path owners approve");
   return parts.join(", ");

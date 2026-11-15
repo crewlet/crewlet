@@ -64,7 +64,8 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ConfirmModal, isComposing } from "@crewlethq/ui";
+import { isComposing } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
 import {
   latestWrite,

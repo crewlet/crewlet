@@ -1,9 +1,12 @@
 /**
- * The repository page's writes: its details (description, default branch and
- * owner), its search mode, its mirrors, and a purge of its unreachable history,
- * each through `useAct` and a WriteButton, never optimistic (the page is
- * redrawn from the read the write's floor brings), and each drawn for every
- * reader, held with its reason (`lib/repoWrites.ts`).
+ * The repository page's writes: its details (description, default branch,
+ * owner and who reads it), its name, its archive, its search mode, its
+ * mirrors, and a purge of its unreachable history, each through `useAct` and a
+ * WriteButton, never optimistic (the page is redrawn from the read the write's
+ * floor brings), and each drawn for every reader, held with its reason
+ * (`lib/repoWrites.ts`). A rename and an archive are each a record of their
+ * own, so each is its own `code_update_repo` call, never folded into a
+ * details change.
  *
  * A repository the company document declares is changed in Settings ›
  * Configuration, so its details, search mode and mirrors are held here with
@@ -12,14 +15,16 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, ConfirmModal, FormField, Input, Select, Stack } from "@crewlethq/ui";
-import { Modal } from "~/components/Modal.tsx";
+import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { useNavigator } from "~/app/router.tsx";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { refName } from "~/lib/code.ts";
+import { refName, repoPath } from "~/lib/code.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import {
+  archiveHeld,
   credentialName,
   credentialRef,
   detailsFormHeld,
@@ -30,6 +35,8 @@ import {
   pullMirrorHeld,
   purgeHeld,
   purgeMessage,
+  renameFormHeld,
+  renameHeld,
   searchModeHeld,
   type MirrorKind,
 } from "~/lib/repoWrites.ts";
@@ -39,10 +46,11 @@ import type { CodeRepoDetail } from "~/protocol/index.ts";
 import { REPO_SEARCH_MODES } from "~/contract/code.ts";
 
 /**
- * "Edit details": the repository's description, default branch and owner, one
- * `code_update_repo` carrying only what the person changed. The default branch
- * is chosen from the branches the repository holds, so a repository whose
- * default branch holds nothing is repaired here by naming one that does.
+ * "Edit details": the repository's description, default branch, owner and who
+ * reads it, one `code_update_repo` carrying only what the person changed. The
+ * default branch is chosen from the branches the repository holds, so a
+ * repository whose default branch holds nothing is repaired here by naming one
+ * that does.
  */
 export function DetailsControl({ repo }: { repo: CodeRepoDetail }) {
   const write = useAct("code_update_repo");
@@ -79,10 +87,11 @@ function DetailsDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () =>
   const [description, setDescription] = useState(repo.description ?? "");
   const [defaultBranch, setDefaultBranch] = useState(repo.default_branch);
   const [owner, setOwner] = useState(ownerKey(repo.owner));
+  const [visibility, setVisibility] = useState(repo.visibility);
   const blocked =
     refs.loading && !refs.data
       ? "Reading its branches…"
-      : detailsFormHeld(repo, { description, defaultBranch, owner }, branches);
+      : detailsFormHeld(repo, { description, defaultBranch, owner, visibility }, branches);
   const ownerOptions = units.map((u) => ({
     value: ownerKey({ kind: "unit", ref: u.id }),
     label: u.name,
@@ -113,6 +122,7 @@ function DetailsDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () =>
           : {}),
         ...(defaultBranch !== repo.default_branch ? { default_branch: defaultBranch } : {}),
         ...(owner !== ownerKey(repo.owner) ? { owner: { kind, ref } } : {}),
+        ...(visibility !== repo.visibility ? { visibility } : {}),
       },
       { done: `Changed ${repo.name}'s details` },
     );
@@ -126,7 +136,6 @@ function DetailsDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () =>
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -181,8 +190,168 @@ function DetailsDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () =>
             />
           )}
         </FormField>
+        <FormField
+          label="Read by"
+          helper="Which seats read it. Every person reads every repository."
+        >
+          {(field) => (
+            <Select
+              id={field.id}
+              ariaLabel="Read by"
+              value={visibility}
+              onChange={(value) => setVisibility(String(value))}
+              options={VISIBILITY_OPTIONS}
+            />
+          )}
+        </FormField>
       </Stack>
     </Modal>
+  );
+}
+
+/** Who reads a repository, as its picker names each choice (`gitlet.Visibility`). */
+const VISIBILITY_OPTIONS = [
+  { value: "company", label: "Every seat" },
+  { value: "unit", label: "Its owner's seats" },
+];
+
+/**
+ * "Rename": the repository's new name, one `code_update_repo` naming
+ * `rename_to` alone, since a rename is a record of its own. The old name
+ * keeps leading here for a while, and the page moves to the new one once the
+ * engine applied it.
+ */
+export function RenameControl({ repo }: { repo: CodeRepoDetail }) {
+  const write = useAct("code_update_repo");
+  const viewer = useViewer();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant="secondary"
+        blocked={renameHeld(repo, viewer)}
+        onPress={() => setOpen(true)}
+      >
+        Rename
+      </WriteButton>
+      {open && <RenameDialog repo={repo} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function RenameDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () => void }) {
+  const write = useAct("code_update_repo");
+  const nav = useNavigator();
+  const [name, setName] = useState(repo.name);
+  const blocked = renameFormHeld(repo, name);
+  const submit = async () => {
+    if (!pressable(write, blocked)) return;
+    const to = name.trim();
+    const result = await write.run(
+      { repo: repo.name, rename_to: to },
+      { done: `Renamed ${repo.name} to ${to}` },
+    );
+    if (result && (result.kind === "applied" || result.kind === "pending")) {
+      onClose();
+      if (result.kind === "applied") nav.to(repoPath(to), { tab: "settings" });
+    }
+  };
+  return (
+    <Modal
+      open
+      size="sm"
+      title={`Rename ${repo.name}`}
+      onClose={onClose}
+      onSubmit={() => void submit()}
+      dismissable={!write.busy}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
+            Cancel
+          </Button>
+          <WriteButton
+            write={write}
+            variant="primary"
+            blocked={blocked}
+            onPress={() => void submit()}
+          >
+            Rename
+          </WriteButton>
+        </>
+      }
+    >
+      <FormField
+        label="New name"
+        helper="Clones, pushes and links to the old name keep reaching it for a while, then the old name is released."
+      >
+        {(field) => (
+          <Input
+            id={field.id}
+            aria-describedby={field.describedBy}
+            width="full"
+            spellCheck={false}
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        )}
+      </FormField>
+    </Modal>
+  );
+}
+
+/**
+ * "Archive repository" and "Unarchive repository": one `code_update_repo`
+ * naming `archived` alone. An archive is confirmed first, naming what stops;
+ * an unarchive gives back what the archive took, so it is pressed directly.
+ */
+export function ArchiveControl({ repo }: { repo: CodeRepoDetail }) {
+  const write = useAct("code_update_repo");
+  const viewer = useViewer();
+  const [confirming, setConfirming] = useState(false);
+  const archived = repo.status === "archived";
+  if (archived) {
+    return (
+      <WriteButton
+        write={write}
+        size="small"
+        variant="secondary"
+        blocked={detailsHeld(repo, viewer)}
+        onPress={() =>
+          void write.run({ repo: repo.name, archived: false }, { done: `Unarchived ${repo.name}` })
+        }
+      >
+        Unarchive repository
+      </WriteButton>
+    );
+  }
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant="secondary"
+        blocked={archiveHeld(repo, viewer)}
+        onPress={() => setConfirming(true)}
+      >
+        Archive repository
+      </WriteButton>
+      <ConfirmModal
+        open={confirming}
+        title={`Archive ${repo.name}?`}
+        message={`${repo.name} becomes read-only: it is still cloned, fetched and read, and takes no push, so nothing merges into it. It is unarchived here.`}
+        cancelLabel="Keep it active"
+        confirmLabel="Archive"
+        onClose={() => setConfirming(false)}
+        submitting={write.busy}
+        onConfirm={async () => {
+          await write.run({ repo: repo.name, archived: true }, { done: `Archived ${repo.name}` });
+          setConfirming(false);
+        }}
+      />
+    </>
   );
 }
 
@@ -335,7 +504,6 @@ function MirrorDialog({
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -428,7 +596,6 @@ export function PurgeControl({ repo }: { repo: CodeRepoDetail }) {
         // since the WriteButton draws the refusal beside itself, where the
         // person pressed, and a purge refused is never one asked.
         submitting={write.busy}
-        busyReason="Waiting for the engine to answer"
         onConfirm={async () => {
           await write.run({ repo: repo.name }, { done: `Asked for a purge of ${repo.name}` });
           setConfirming(false);

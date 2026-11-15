@@ -40,7 +40,11 @@ import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { FLEET_POLL_MS } from "./Fleet.tsx";
 
-import { fmtBytes, fmtCount, plural, tsKey } from "~/lib/format.ts";
+import { fmtBytes, fmtCount, fmtSetting, plural, tsKey } from "~/lib/format.ts";
+import {
+  OBJECT_AUDIT_INTERVAL_SECONDS,
+  OBJECT_COLLECT_INTERVAL_SECONDS,
+} from "~/contract/fleet.ts";
 import { FROM_NODE_FILE } from "~/lib/nodeFile.ts";
 import type {
   FleetObjects,
@@ -126,19 +130,29 @@ interface PassRow {
   cadence: string;
 }
 
+/**
+ * How often a pass runs, in words, from the engine's interval: "hourly",
+ * "daily", or "every N hours" for anything else.
+ */
+export function cadenceWords(seconds: number): string {
+  if (seconds === 3_600) return "hourly";
+  if (seconds === 86_400) return "daily";
+  return `every ${fmtSetting(seconds)}`;
+}
+
 function passRows(r: ReportedObjects): PassRow[] {
   return [
     {
       pass: "Collection",
       at: r.collect?.at,
       result: r.collect ? collectSummary(r.collect) : "",
-      cadence: "hourly",
+      cadence: cadenceWords(OBJECT_COLLECT_INTERVAL_SECONDS),
     },
     {
       pass: "Audit",
       at: r.audit?.found?.at ?? r.audit?.at,
       result: r.audit ? auditRow(r.audit) : "",
-      cadence: "daily",
+      cadence: cadenceWords(OBJECT_AUDIT_INTERVAL_SECONDS),
     },
   ];
 }
@@ -379,7 +393,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
               <span>
                 Unfinished uploads couldn’t be cleared: {reported.collect.sweep_error}. On S3, grant{" "}
                 <InlineCode>s3:ListBucketMultipartUploads</InlineCode> and{" "}
-                <InlineCode>s3:AbortMultipartUpload</InlineCode>.
+                <InlineCode close=".">s3:AbortMultipartUpload</InlineCode>
               </span>
             </Callout>
           </Card.Body>

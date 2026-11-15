@@ -19,7 +19,7 @@ func TestTheDashboardReadsExactlyTheLimitsTheEngineSends(t *testing.T) {
 	t.Parallel()
 	heldBothWays(t, "LimitsAnswer", reflect.TypeFor[queries.LimitsAnswer](), 1)
 	heldBothWays(t, "LimitRow", reflect.TypeFor[queries.LimitRow](), 9)
-	heldBothWays(t, "SettingRange", reflect.TypeFor[config.Range](), 3)
+	heldBothWays(t, "SettingRange", reflect.TypeFor[config.Range](), 4)
 	for _, tc := range []struct {
 		union  string
 		engine []string

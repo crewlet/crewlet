@@ -7,11 +7,12 @@
  * (`SpacesRow`), then TILES SIZED BY WHAT EACH IS WORTH, on one screen: the
  * newest change across the company in the big tile, open to read (the page,
  * what each save said, the lines the newest save changed and the page's
- * opening); every other save, comment and new page down the right (Recently
- * written); and four small tiles, for the pages a person read last (Continue
+ * opening); every other page saved, commented on or written lately down the
+ * right, one row each (Recent activity); and four small tiles, for the pages a person read last (Continue
  * reading), starred (Pinned) and follows (Watching), and the agents' own two
- * places. The search sits in the page bar of every Doclet screen
- * (`DocletSearchBar`); with a phrase in the address this screen is the
+ * places. The search sits in the page bar of this screen and a space's
+ * (`DocletBar`), never in a page's, whose bar is that page's own actions; with
+ * a phrase in the address this screen is the
  * RANKED ANSWER instead, grouped by space beside a preview of the chosen
  * result.
  *
@@ -126,19 +127,35 @@ import {
   useSpaces,
   type Who,
 } from "./parts.tsx";
-import { byDay, dayOf, foldRuns, leadOf, runPhrase, saveRevisions, type Run } from "./landing.ts";
+import {
+  byDay,
+  dayOf,
+  foldRuns,
+  leadOf,
+  pageRows,
+  runPhrase,
+  saveRevisions,
+  type Run,
+} from "./landing.ts";
 import { openingOf, withoutRepeatedTitle } from "./page/body.ts";
 
 /** How often the landing's tiles are read again. */
 const LANDING_POLL_MS = 60_000;
 
 /**
- * How many changes the landing reads: the newest leads the big tile and the
- * rest run down Recently written. Twelve fills that tall tile beside the
- * others at 1440 by 900 under its day headings, a glance rather than a
- * history; Every change is one press away.
+ * How many pages Recent activity lists beside the newest change. Eleven fill
+ * that tall tile beside the others at 1440 by 900 under its day headings, a
+ * glance rather than a history; Every change is one press away.
  */
-const WRITTEN_READ = 12;
+const ACTIVITY_ROWS = 11;
+
+/**
+ * How many changes the landing reads: the newest leads the big tile and the
+ * rest are folded to one row per page for Recent activity (`pageRows`). Read
+ * well past the rows it fills, because one page discussed all morning is many
+ * changes and one row.
+ */
+const WRITTEN_READ = 40;
 
 /**
  * How many pages a small tile lists: Continue reading, Pinned and Watching.
@@ -289,7 +306,7 @@ interface FeedState {
 
 /**
  * The landing's tiles, each sized by what it is worth: the newest change open
- * to read, Recently written down the right, and four small tiles for the pages
+ * to read, Recent activity down the right, and four small tiles for the pages
  * a person keeps and the agents' own two places, each one line when empty.
  *
  * ONE READ OF THE FEED feeds the first two, so the change the big tile leads
@@ -306,7 +323,7 @@ function Tiles() {
   );
   const runs = useMemo(() => foldRuns(feed.data?.changes ?? [], zone), [feed.data, zone]);
   const lead = leadOf(runs);
-  const rest = useMemo(() => runs.filter((_, i) => i !== lead), [runs, lead]);
+  const rest = useMemo(() => pageRows(runs, lead, ACTIVITY_ROWS), [runs, lead]);
   const state: FeedState = {
     error: feed.error,
     refusal: feed.refusal,
@@ -315,13 +332,13 @@ function Tiles() {
   // NOTHING ELSE WRITTEN IS SAID ONCE, by the newest change's tile: a second
   // tile three rows tall holding "Nothing has been written yet" (or "Nothing
   // else", beside the one change the big tile leads with) said it again in a
-  // 440px box. The grid then has no Recently written column
+  // 440px box. The grid then has no Recent activity column
   // (`data-written="none"`, screens.css).
   const nothing = !state.loading && !state.error && rest.length === 0;
   return (
     <div className="knowledge-tiles" data-written={nothing ? "none" : undefined}>
       <Latest run={runs[lead]} state={state} />
-      {!nothing && <RecentlyWritten runs={rest} state={state} />}
+      {!nothing && <RecentActivity runs={rest} state={state} />}
       <ContinueReading />
       <Pinned />
       <Watching />
@@ -416,6 +433,10 @@ function LatestNotes({ run, zone }: { run: Run; zone: string | undefined }) {
   if (kind !== "saved" && kind !== "comment") return null;
   const shown = run.slice(0, LATEST_NOTES);
   const more = run.length - shown.length;
+  // A TIME ONLY TELLS SAVES APART: the line above already says when the
+  // newest change was, so one comment or one save carried "Today 23:46" and
+  // then "23:46" again.
+  const timed = run.length > 1;
   return (
     <>
       <ol className="knowledge-latest-notes">
@@ -423,9 +444,11 @@ function LatestNotes({ run, zone }: { run: Run; zone: string | undefined }) {
           const note = changeNote(change);
           return (
             <li key={change.id} className="knowledge-latest-note">
-              <time dateTime={change.at} title={fmtDateTime(change.at)}>
-                {clockIn(tsKey(change.at), zone)}
-              </time>
+              {timed && (
+                <time dateTime={change.at} title={fmtDateTime(change.at)}>
+                  {clockIn(tsKey(change.at), zone)}
+                </time>
+              )}
               {note ? (
                 <span>{kind === "comment" ? `“${note}”` : note}</span>
               ) : (
@@ -527,11 +550,16 @@ function Opening({ detail }: { detail: PageDetail }) {
 }
 
 /**
- * Every save, comment and new page across the company after the one the big
- * tile leads with, under the COMPANY's days. Each row says its time on the
- * clock its day is cut on, and the note it carries, never the title again.
+ * The pages saved, commented on, renamed or written lately, ONE ROW PER PAGE
+ * with its newest change (`pageRows`), never the page the big tile leads with,
+ * under the COMPANY's days. Each row says its time on the clock its day is cut
+ * on, and the note it carries, never the title again.
+ *
+ * "RECENT ACTIVITY", because most of what moves a page lately is its
+ * discussion: under "Recently written" a column of comments read as writing
+ * nobody did.
  */
-function RecentlyWritten({ runs, state }: { runs: Run[]; state: FeedState }) {
+function RecentActivity({ runs, state }: { runs: Run[]; state: FeedState }) {
   const who = usePeople();
   const now = useNow();
   const zone = useOrg()?.timezone;
@@ -539,7 +567,7 @@ function RecentlyWritten({ runs, state }: { runs: Run[]; state: FeedState }) {
   return (
     <Tile
       className="knowledge-written"
-      title="Recently written"
+      title="Recent activity"
       icon={<ListGlyph size="sm" />}
       action={
         <a className="t-link" href={href(["settings", "audit"], { kind: "doclet" })}>
@@ -549,7 +577,7 @@ function RecentlyWritten({ runs, state }: { runs: Run[]; state: FeedState }) {
     >
       {state.loading ? (
         <TileBody>
-          <Skeleton variant="text" rows={6} label="Reading what was written" />
+          <Skeleton variant="text" rows={6} label="Reading recent activity" />
         </TileBody>
       ) : state.error ? (
         <TileBody>
@@ -574,7 +602,7 @@ function RecentlyWritten({ runs, state }: { runs: Run[]; state: FeedState }) {
 }
 
 /**
- * One row of Recently written: the page, who did what to it, the note it
+ * One row of Recent activity: the page, who did what to it, the note it
  * carries, and WHEN ON THE COMPANY'S CLOCK, the clock its day heading is cut
  * on. An age read against the heading above it disagreed with it ("1d ago"
  * under "Oct 09"); the age is the time's title.
@@ -968,13 +996,13 @@ export function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
             <>
               {" "}
               Set <InlineCode>knowledge.backend</InlineCode> to <InlineCode>doclet</InlineCode> or{" "}
-              <InlineCode>confluence</InlineCode>.
+              <InlineCode close=".">confluence</InlineCode>
             </>
           )}
           {answer.reason === "no_scope" && (
             <>
               {" "}
-              Add spaces to <InlineCode>knowledge.scope</InlineCode>.
+              Add spaces to <InlineCode close=".">knowledge.scope</InlineCode>
             </>
           )}
         </span>

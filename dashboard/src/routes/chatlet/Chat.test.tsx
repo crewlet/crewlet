@@ -171,9 +171,11 @@ describe("who the screen is for", () => {
     // fix. Mutation: draw the remedy with no `to` and the last two lines fail.
     mountScreen({ viewer: seatless });
     await waitFor(() => expect(screen.getByText(/read as the seat you hold/i)).toBeTruthy());
-    const command = screen.getByText("crewlet iam bind <id> <seat>");
-    const said = command.parentElement?.textContent ?? "";
+    // THE SENTENCE'S OWN ELEMENT: a chip that takes its full stop is drawn with
+    // it in one box, so the chip's parent is no longer the sentence.
+    const said = screen.getByText(/bind this account to an open seat/).textContent ?? "";
     expect(said).toMatch(/To read and write here, bind this account to an open seat/);
+    expect(said).toMatch(/crewlet iam bind <id> <seat>\. Its id/);
     expect(said).toMatch(/crewlet iam people -q ci:deploy/);
     expect(said).not.toMatch(/get work here/);
   });

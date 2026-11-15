@@ -305,6 +305,16 @@ func (s *suite) runAttachment(t *testing.T) {
 		// a handler that may run for minutes, which is the one moment it
 		// must not wait. It also deadlocks outright here, because the
 		// handler is released only once Detach returns.
+		//
+		// WHAT THIS DECIDES IS THAT DETACH DOES NOT JOIN THE HANDLER: one
+		// that did never returns, and stallFor ends the wait as liveness.
+		// One that joined it under a grace of its own shorter than
+		// stallFor would return in time, and nothing short of a clock tells
+		// "at once" from "after a grace" on a real broker; a clock that
+		// decided it would fail a healthy build a loaded runner paused
+		// (#1204). That half is held where its code sits: JetStream's
+		// Detach closes its attachments and returns, joining nothing
+		// (attach.go), and the twin's likewise.
 		detached := make(chan error, 1)
 		go func() {
 			_, err := q.Detach(ctx, "topic.q", "grp")
@@ -316,14 +326,14 @@ func (s *suite) runAttachment(t *testing.T) {
 				close(release)
 				t.Fatalf("Detach: %v", err)
 			}
-		case <-time.After(settleFor): //fixedwait:liveness
+		case <-time.After(stallFor): //fixedwait:liveness
 			// Release the handler so the process can still exit: a
 			// conformance suite that hangs a backend's test binary costs
 			// its author ten minutes and a goroutine dump to learn what
 			// one line could have told them.
 			close(release)
 			t.Fatalf("Detach blocked on an in-flight handler for %s.\n"+
-				"A fenced detach abandons a running handler; only Quiesce waits for one.", settleFor)
+				"A fenced detach abandons a running handler; only Quiesce waits for one.", stallFor)
 		}
 		close(release)
 		awaitSignal(t, published, "the deferral to be applied", func() {})

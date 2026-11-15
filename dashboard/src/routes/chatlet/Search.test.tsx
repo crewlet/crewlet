@@ -19,7 +19,7 @@ import { pick } from "~/testing.tsx";
 import { CHAT_ORG, SERVED } from "~/test/chatAccess.ts";
 
 import { mountView } from "./frameKit.tsx";
-import { FULL_PAGE, SearchView, TOO_SHORT, searchesMessages } from "./Search.tsx";
+import { FULL_PAGE, SCOPE_HELP, SearchView, TOO_SHORT, searchesMessages } from "./Search.tsx";
 
 const hit = (id: string, author: string, snippet: string) => ({
   message_id: id,
@@ -175,6 +175,21 @@ describe("people and rooms", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /^people/i }));
     fireEvent.click(await screen.findByRole("button", { name: /Bo Chen/ }));
     await waitFor(() => expect(decodeURIComponent(location.hash)).toContain("pane=profile:bo"));
+  });
+
+  // EACH TAB SAYS HOW IT SEARCHES, and only Messages carries the Who filter:
+  // it narrows a message's author, and on the People tab its "People" option
+  // repeated the tab while the help line spoke of rooms.
+  test("before a word is typed each tab says how it searches; only Messages has Who", async () => {
+    mount("");
+    expect(await screen.findByText(SCOPE_HELP.messages)).toBeTruthy();
+    expect(screen.getByRole("radio", { name: /^agents$/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: /^people/i }));
+    expect(await screen.findByText(SCOPE_HELP.people)).toBeTruthy();
+    expect(screen.queryByText(SCOPE_HELP.messages)).toBeNull();
+    expect(screen.queryByRole("radio", { name: /^agents$/i })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: /^rooms/i }));
+    expect(await screen.findByText(SCOPE_HELP.rooms)).toBeTruthy();
   });
 
   test("Rooms lists the rooms the reader may read whose name or topic matches", async () => {

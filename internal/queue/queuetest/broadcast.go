@@ -141,20 +141,25 @@ func (s *suite) runBroadcast(t *testing.T) {
 	// answered with success once the handler has returned.
 	//
 	// Mutation: return from the withdrawal without waiting on the gate, or
-	// wait on a context other than its bound, and the first half fails.
+	// wait on a context other than its bound, or wait out a grace of its own
+	// before answering, and the first half fails.
 	t.Run("a_withdrawal_waits_for_the_handler_running", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
 		held := holdListener(ctx, t, q, ns(t)+".room")
-		ended, cancel := context.WithTimeout(ctx, 0)
-		defer cancel()
+		// ENDED BY CANCELLING IT, so its error is Canceled: a grace of the
+		// withdrawal's own that it waited out instead answers
+		// DeadlineExceeded, however short, and the answer tells the two
+		// apart where no clock could.
+		ended, cancel := context.WithCancel(ctx)
+		cancel()
 		err := withdraw(ended, t, held, "a withdrawal under a bound that had ended", nil)
-		if !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("a withdrawal under a bound that had ended, with a handler still "+
 				"running, answered %v, want the bound's own %v: a withdrawal that returns "+
 				"without waiting says the handler is done, and a caller that tears down "+
 				"what the handler reads straight after withdrawing tears it down under "+
-				"that handler", err, context.DeadlineExceeded)
+				"that handler", err, context.Canceled)
 		}
 		if held.finished.Load() {
 			t.Fatal("the held handler had finished before the case released it: the " +
@@ -247,8 +252,8 @@ func (s *suite) runBroadcast(t *testing.T) {
 			if string(p) != string(payload) {
 				t.Fatalf("a broadcast arrived as %q, want %q", p, payload)
 			}
-		case <-time.After(5 * time.Second): //fixedwait:liveness
-			t.Fatal("the broadcast never arrived")
+		case <-time.After(stallFor): //fixedwait:liveness
+			t.Fatalf("the broadcast never arrived, in %s (stallFor)", stallFor)
 		}
 	})
 
@@ -303,7 +308,9 @@ func listen(ctx context.Context, t *testing.T, q queue.EventQueue, pattern strin
 		t.Fatalf("listen %s: %v", pattern, err)
 	}
 	t.Cleanup(func() {
-		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		// One pause, at stallFor: a withdrawal waits only for a handler
+		// running, which the case has released by now.
+		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), stallFor)
 		defer cancel()
 		if err := stop(bounded); err != nil {
 			t.Errorf("stop listening on %s: %v", pattern, err)
@@ -347,28 +354,26 @@ func (h *heard) all() []string {
 // waitFor waits until every wanted message has been heard, in any order: a
 // broadcast is unordered across publishers, and these cases assert who hears
 // what, never in which order.
+//
+// BOUNDED BY PROGRESS, as a journal's wait is ([awaitDeliveries]): every
+// message heard restarts stallFor, so a burst a loaded runner hands over
+// slowly is waited for for as long as it keeps arriving.
 func (h *heard) waitFor(t *testing.T, who string, want ...string) {
 	t.Helper()
-	deadline := time.After(10 * time.Second) //fixedwait:liveness
-	for {
+	ended := awaitDeliveries(func() bool {
 		got := h.all()
-		missing := false
 		for _, w := range want {
 			if !slices.Contains(got, w) {
-				missing = true
-				break
+				return false
 			}
 		}
-		if !missing {
-			return
-		}
-		select {
-		case <-h.more:
-		case <-deadline:
-			t.Fatalf("%s heard %v, want %v; a listener that misses a broadcast "+
-				"shows a room without somebody in it", who, got, want)
-		}
+		return true
+	}, nil, h.more)
+	if ended == endMet {
+		return
 	}
+	t.Fatalf("%s heard %v, want %v, when %s; a listener that misses a broadcast "+
+		"shows a room without somebody in it", who, h.all(), want, ended.how(false))
 }
 
 // holdListener makes q a listener on subject whose handler is held inside the
@@ -396,8 +401,8 @@ func holdListener(ctx context.Context, t *testing.T, q queue.EventQueue, subject
 	broadcast(ctx, t, q, subject, []byte("held"))
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second): //fixedwait:liveness
-		t.Fatal("the listener was never handed the message")
+	case <-time.After(stallFor): //fixedwait:liveness
+		t.Fatalf("the listener was never handed the message, in %s (stallFor)", stallFor)
 	}
 	return h
 }
