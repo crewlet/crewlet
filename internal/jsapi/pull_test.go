@@ -219,6 +219,56 @@ func TestAPullIsAskedOnOneInboxForItsWholeRead(t *testing.T) {
 	}
 }
 
+// READY HANDS OVER WHAT THE INBOX ALREADY HOLDS, AND WAITS FOR NOTHING.
+//
+// A reader whose own request held it from its inbox until its clock ran out
+// hears what arrived meanwhile before it calls the consumer silent, and a
+// context already over cannot ask that of Next, which fails at once whatever
+// the inbox holds. Here a heartbeat is put on the pulls' inbox (the inbox
+// read off the pull the broker held) and fenced behind a flush of the same
+// connection: Ready hands it over as the heartbeat it is, then answers that
+// the inbox holds nothing, at once, where Next on a context already over
+// would have answered the context.
+//
+// Mutation: answer Ready from Next on a context already over, and the
+// heartbeat is never handed over.
+func TestReadyHandsOverWhatTheInboxAlreadyHoldsAndWaitsForNothing(t *testing.T) {
+	t.Parallel()
+	srv, nc, js := pullServer(t)
+	p := pullsOf(t, nc, js, "ready", "pulls.a")
+	if _, ok, err := p.Ready(); ok || err != nil {
+		t.Fatalf("Ready on an empty inbox answered (%t, %v), want nothing", ok, err)
+	}
+	held := jsapitest.Hold(t, srv, jsapitest.ConsumerNext(pulledStream))
+	if err := p.Ask(1, 0, 10*time.Second, 0); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	read, err := held.Next(ctx)
+	if err != nil {
+		t.Fatalf("the pull never reached the broker: %v", err)
+	}
+	held.Release()
+	if err := nc.PublishMsg(&nats.Msg{Subject: read.Reply(),
+		Header: nats.Header{"Status": {jsapi.StatusHeartbeat}, "Description": {"Idle Heartbeat"}}}); err != nil {
+		t.Fatal(err)
+	}
+	// FENCED: the broker hands this connection its own message before the
+	// flush's answer, which comes behind it on the same connection.
+	if err := nc.FlushWithContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ev, ok, err := p.Ready()
+	if !ok || err != nil || ev.Kind != jsapi.Heartbeat {
+		t.Fatalf("Ready with a heartbeat on the inbox answered (%q, %t, %v), want the heartbeat",
+			ev.Kind, ok, err)
+	}
+	if _, ok, err := p.Ready(); ok || err != nil {
+		t.Errorf("Ready on the inbox it emptied answered (%t, %v), want nothing", ok, err)
+	}
+}
+
 // A DELIVERY IS A LEADER'S REPLY WITHOUT ITS BASE64.
 //
 // A consumer's delivery carries a message as it was stored, where a leader's
