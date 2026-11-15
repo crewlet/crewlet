@@ -489,6 +489,11 @@ const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
     name: /^Steer$/,
     tool: "steer_turn",
   },
+  DeleteViewButton: {
+    props: { view: { id: "v1", name: "Triage", personal: false }, onDeleted: () => {} },
+    name: /^Delete view$/,
+    tool: "delete_work_view",
+  },
   SteerTurnDialog: {
     props: { turnId: "run-1", seat: "SWE", onClose: () => {} },
     name: /^Send note$/,

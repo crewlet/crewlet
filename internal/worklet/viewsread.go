@@ -433,6 +433,9 @@ func implicitViews(container Container) []ViewRow {
 // by a scheme: a row whose owner is set and is not the viewer is not in the
 // answer at all. Filtering in SQL rather than after the fact is what stops a
 // personal view riding a page boundary into somebody else's strip.
+//
+// AND A DELETED VIEW IS IN NOBODY'S STRIP: its row stays only to guard its
+// version ([Writer.DeleteView]).
 func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 	units Units, viewer string, pinned map[string]bool) ([]ViewRow, error) {
 
@@ -460,7 +463,7 @@ func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 		       params_json
 		FROM tracker_views
 		WHERE container_kind = ? AND container_id IN (`+placeholders(len(ids))+`)
-		  AND (owner = ''`+own+`)
+		  AND (owner = ''`+own+`) AND deleted_at IS NULL
 		ORDER BY rank, name`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read %s %s's views: %w",

@@ -38,6 +38,7 @@ func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 		worklet.ChangeProjectUpdated: true,
 		worklet.ChangePolicyChanged:  true,
 		worklet.ChangeViewSaved:      true,
+		worklet.ChangeViewDeleted:    true,
 		worklet.ChangeCatalogue:      true,
 
 		// A person's own bookkeeping — a pin, an inbox mark, a snooze.

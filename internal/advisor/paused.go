@@ -67,8 +67,11 @@ func PausedFailureClass(kind string) (Class, bool) {
 	return f.class, ok
 }
 
-// pausedClasses is every class a paused seat raises.
-func pausedClasses() []Class {
+// PausedClasses is every class a paused seat raises, sorted. The dashboard
+// reads it ([TestTheDashboardKnowsEveryClassAPausedSeatRaises]): a seat the
+// engine paused is said by its failure's finding, which names it and the fix,
+// and not by a second row of its own.
+func PausedClasses() []Class {
 	out := make([]Class, 0, len(pausedFailures))
 	for _, f := range pausedFailures {
 		out = append(out, f.class)

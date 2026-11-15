@@ -201,7 +201,7 @@ func TestOpIDIsOfferedOnlyOnTheOperatorsWrites(t *testing.T) {
 		worklet.MergeWorkItemTool, worklet.MoveWorkItemTool,
 		worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool,
 		worklet.SetPrioritiesTool, worklet.SetPinsTool, worklet.MarkInboxTool,
-		worklet.SaveWorkViewTool,
+		worklet.SaveWorkViewTool, worklet.DeleteWorkViewTool,
 	}
 	offered := map[string]bool{}
 	for _, tool := range operator {

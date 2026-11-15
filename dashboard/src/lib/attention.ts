@@ -45,6 +45,7 @@ import { andList } from "./words.ts";
 import type { AdvisorFinding, AdvisorNotice, AdvisorSubject } from "~/protocol/advisor.ts";
 import { alarmHome, alarmKindTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
 import { HELD_CLASS, heldItem, heldReason, heldSetting } from "./heldConversation.ts";
+import { PAUSED_SEAT_CLASSES } from "~/contract/advisor.ts";
 import { unreadSentences } from "./advisorUnread.ts";
 
 export type Severity = "critical" | "caution" | "info";
@@ -594,6 +595,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     }
   }
 
+  // THE FINDINGS DRAWN FOR SEATS THE ENGINE PAUSED, one per failure, each
+  // naming the agents it holds and the fix: what says those pauses ([seats]).
+  const pauseFindings: AdvisorFinding[] = [];
+
   // --- the platform notices -------------------------------------------------
   // WHAT THE ENGINE SAYS NEEDS AN ADMINISTRATOR, open for as long as it holds.
   // A finding's notice is the finding's own words, its fix previewed on the
@@ -636,6 +641,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       if (n.alarm) out.push(alarmRow(n.alarm, n));
       continue;
     }
+    if ((PAUSED_SEAT_CLASSES as readonly string[]).includes(f.class)) pauseFindings.push(f);
     // AN ALARM'S FINDING IS FIXED WHERE THE ALARM IS: the backup the
     // no-verified-backup finding asks for is taken on Backups & retention.
     const fix = n.alarm ? NOTICE_FIXES[n.alarm] : undefined;
@@ -686,11 +692,21 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // until when: its stop, and the failed turn the limit left on it, are
     // not said twice, once per seat.
     const limited = agent.provider_limit != null;
+    // A SEAT THE ENGINE PAUSED FOR A FAILURE IS SAID BY THAT FAILURE'S
+    // FINDING above, which names it and the fix: its own row beside it said
+    // the one pause twice, the second offering a resume that fails the same
+    // way. A finding about one seat names it in its subject; one about several
+    // names every agent its failure holds, which is every seat the engine
+    // paused for it.
+    const saidByFinding =
+      agent.paused?.by_kind === "system" &&
+      pauseFindings.some((f) => f.subject.kind !== "seat" || f.subject.seat === agent.handle);
     if (
       (state === "paused" || state === "stopped") &&
       agent.stopped_reason !== "budget" &&
       !(limited && agent.stopped_reason === "provider")
     ) {
+      if (saidByFinding) continue;
       out.push({
         // THE SEAT'S OWN ID, whichever condition it is in: a seat moving
         // between "stopped" and "last turn failed" is one row whose words

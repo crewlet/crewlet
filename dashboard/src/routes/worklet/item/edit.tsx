@@ -87,6 +87,13 @@ export interface ItemEdits {
   can: boolean;
   /** Why not, in the sentence every write control uses. */
   reason: string;
+  /**
+   * Why the TASK takes no change whoever reads it ("" when it takes them):
+   * in the trash the engine refuses every field, comment and link on it, so
+   * the page draws it read-only rather than offering edits it will refuse.
+   * The page says it once, beside the state that holds it.
+   */
+  held: string;
   busy: boolean;
   /**
    * Change the task. `conditional` false sends no `if_match` — for a gesture
@@ -121,6 +128,7 @@ export function ItemEditsProvider({
   label,
   version,
   seatName,
+  held = "",
   children,
 }: {
   /**
@@ -134,6 +142,8 @@ export function ItemEditsProvider({
   /** The `task.version` the page is drawn from. */
   version: number;
   seatName?: (handle: string) => string;
+  /** Why the task itself takes no change ([ItemEdits.held]); "" or absent when it does. */
+  held?: string;
   children: ReactNode;
 }) {
   const write = useAct("update_work_item");
@@ -165,8 +175,9 @@ export function ItemEditsProvider({
   }, [write]);
   const value = useMemo<ItemEdits>(
     () => ({
-      can: write.access.can,
-      reason: write.access.can ? "" : write.access.reason,
+      can: write.access.can && !held,
+      reason: held || (write.access.can ? "" : write.access.reason),
+      held,
       busy: write.busy,
       edit,
       write,
@@ -176,7 +187,7 @@ export function ItemEditsProvider({
       forget,
       seatName,
     }),
-    [write, edit, item, label, lost, forget, seatName],
+    [write, edit, item, label, lost, forget, seatName, held],
   );
   return (
     <Ctx.Provider value={value}>
@@ -421,7 +432,8 @@ export function ItemEditNote({ readOnly }: { readOnly?: string }) {
       />
     );
   }
-  if (!edits.can && readOnly) {
+  // A HELD TASK IS SAID ONCE, by the note that names what holds it.
+  if (!edits.can && readOnly && !edits.held) {
     return <p className="t-caption task-readonly">{`${readOnly} ${edits.reason}`}</p>;
   }
   return <RefusalNote write={edits.write} />;

@@ -237,6 +237,7 @@ var domainErrors = map[string]map[string]classRow{
 		"ErrNoChartActivation":      {err: worklet.ErrNoChartActivation, why: "a chart apply's wiring, never a caller's request"},
 		"ErrNoComment":              {err: worklet.ErrNoComment, means: absent},
 		"ErrNoFile":                 {err: worklet.ErrNoFile, means: absent},
+		"ErrNoView":                 {err: worklet.ErrNoView, means: absent},
 		"ErrNoProject":              {err: worklet.ErrNoProject, means: absent},
 		"ErrNoTask":                 {err: worklet.ErrNoTask, means: absent},
 		"ErrNoType":                 {err: worklet.ErrNoType, means: malformed},

@@ -112,6 +112,12 @@ func (s *Service) workRoutes(mount mounter) {
 	// tool's own gate decides the save on what the body says.
 	route("POST /worklet/views", kinded(authz.ActionViewList, authz.KindView).Creating(),
 		(*served).postView)
+	// AND A DELETE'S IS IN THE STORED VIEW, which only the tool reads: the
+	// route admits a reader of the views and the tool decides the delete on
+	// the view's own owner and container, as a save decides the view it
+	// replaces.
+	route("DELETE /worklet/views/{id}", kinded(authz.ActionViewList, authz.KindView),
+		(*served).deleteView)
 	route("PUT /worklet/catalogue", authz.Policy{Action: authz.ActionCatalogueWrite},
 		(*served).putCatalogue)
 	route("PUT /worklet/people/{handle}/inbox", person(authz.ActionInboxMark), (*served).putInbox)
@@ -225,6 +231,14 @@ func (s *served) postView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.call(w, r, worklet.SaveWorkViewTool, args)
+}
+
+func (s *served) deleteView(w http.ResponseWriter, r *http.Request) {
+	args, ok := readArgs(w, r)
+	if !ok || !only(w, args) || !fromPath(w, args, "id", r.PathValue("id")) {
+		return
+	}
+	s.call(w, r, worklet.DeleteWorkViewTool, args)
 }
 
 func (s *served) putCatalogue(w http.ResponseWriter, r *http.Request) {

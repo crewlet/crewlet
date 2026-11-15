@@ -1026,7 +1026,7 @@ view's own, so a seat can open somebody's board and narrow it without editing
 it.
 
 Views are read at `GET /worklet/views?container=project:ENG`, and written through
-the operator MCP surface with `save_work_view` — **not** by a seat. A view is
+the operator MCP surface with `save_work_view` and `delete_work_view`, **not** by a seat. A view is
 furniture, and a seat's job is the work rather than the furniture around it.
 
 **Who may save one follows what the view is**, never who is asking — the
@@ -1054,6 +1054,19 @@ that decision was taken.
 save answered — and a save naming an id no view holds is refused `not_found`
 rather than creating a view under whatever was typed. A new view is saved with
 no `id`: its id is minted from the call and answered back.
+
+**A view is deleted with `delete_work_view`**, naming its `id` (or `DELETE
+/worklet/views/{id}`, or **Delete** on the view's page and in the Saved views
+list). Who may delete a view is who may replace it, decided on the view as it
+is stored now: the table above, by its owner and its container, and a
+protected view only its owner. A deleted view leaves every strip, the Saved
+views list and every pin, its `default` goes with it, and running it by `view`
+is refused rather than answered as an unfiltered list. A pin of a deleted view
+is dropped the next time its person's pins change. The views every container
+has without anybody saving one have no `id` and are never deleted. The view's
+row stays, stamped with who deleted it and when, so a save delivered late
+cannot bring it back, and a save decided on it before the delete is refused as
+a conflict.
 
 `default: true` takes the container's landing tab from whichever view held it,
 which is why a shared view is its container's decision rather than whoever
@@ -1132,7 +1145,7 @@ over the project's [files](#a-projects-files):
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`, with a `decision` when they have to choose) or as the **answer** that closes one (`answers`, with a `choice` naming an option — `body` is then optional) |
 | `request_access` | ask a person for one more kind of access, named from a closed list (watching the engine's health, or any permission the seat's own GitHub App can hold, at any level the Agents tab offers), as a decision on the item that needs it: the grant or declining. The person sees the exact change before it is made, and nothing changes until they apply it ([ADR-0118](../../adr/0118-an-agent-asks-for-access-as-one-grant-a-person-previews-and-sends.md)) |
-| `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. `mode` picks the ranking: `hybrid` (the default) fuses the words and, where the company has an embeddings provider, the meaning; `keyword` ranks by the words alone, for an exact name or error text; `semantic` by meaning alone (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)). Its `text` is at most 400 bytes, the bound every search shares, and a longer one is refused naming the limit rather than cut. The answer says the `mode` it **served**, and carries a `degraded` sentence whenever that is not the one asked for — a hybrid search with nothing to rank by meaning ranks by the words and says so, while a `semantic` one runs nothing at all and says that this tells the seat nothing about whether the work exists. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed, and an answer over part of the fleet carries a `partial` sentence for the same reason |
+| `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A `text` that is exactly one task key, in any case, answers that task first: the current key or one a move or a rename left it, opened as a point read opens it, followed by the ranking without it, because the words index splits a key into pieces that rank every task mentioning it above the task itself. `mode` picks the ranking: `hybrid` (the default) fuses the words and, where the company has an embeddings provider, the meaning; `keyword` ranks by the words alone, for an exact name or error text; `semantic` by meaning alone (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)). Its `text` is at most 400 bytes, the bound every search shares, and a longer one is refused naming the limit rather than cut. The answer says the `mode` it **served**, and carries a `degraded` sentence whenever that is not the one asked for — a hybrid search with nothing to rank by meaning ranks by the words and says so, while a `semantic` one runs nothing at all and says that this tells the seat nothing about whether the work exists. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed, and an answer over part of the fleet carries a `partial` sentence for the same reason |
 | `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. Across two projects the subtasks cannot follow — a subtask lives in its parent's project, and one under an item in another project is drawn under it on neither board — so a merge whose duplicate **has subtasks to carry** into an item in another project is refused before it writes anything unless `move_subtasks` is false: move the duplicate first with `move_work_item` (its subtasks go with it), or merge with `move_subtasks: false`. A duplicate with no subtasks merges across projects either way, since nothing moves. So is one moving the subtasks onto one of them refused, since a subtask would end up under itself, and one moving them while a **cross-project move has not yet carried** the duplicate or the survivor answers **unavailable** — the walk is about to change which project that end is in, and the same call a moment later is decided on where it went. Both items must be live: a merge of an item in the **trash**, or into one, is refused whichever way the subtasks go (restore it first), and a subtask in the trash is frozen, so it stays under the duplicate, where a restore finds it. A merge that stops part-way (its node died, or the stream refused an append) is finished by the `tracker` duty on its first pass (every 15 minutes) after the merge's claim has lapsed — a minute after its holder's last heartbeat — so never beside a merge that is still running. One only a person can unblock waits, named on every tick with what releases it, without holding up the rest: a survivor that went to the trash since (`tracker_merges_waiting_on_the_trash`) until it is restored, a duplicate that did (`tracker_merges_of_items_in_the_trash`) until it is restored — the trash takes no write, so nothing moves on its behalf meanwhile — and a survivor filed under one of the duplicate's subtasks since (`tracker_merges_waiting_on_a_cycle`) until it is filed elsewhere. One whose survivor was purged has nothing left to merge into, so its mark is cleared and the duplicate stays open |
 | `move_work_item` | move a top-level item, with everything under it, to another project: each task in the subtree is re-keyed there (ENG-7 becomes OPS-3) with its old key still resolving, the tags the subtree carries are declared in the new project (a label the new project already gives a different tag refuses the move, naming both, before anything is written), and the people on the item are told. It takes the authority `routing_unit` does — the **lead** of the item's project, or an administrator. A subtask does not move on its own — move its root. A move that stops part-way is finished by the same call, or by the `tracker` duty (see [how a move is carried out](#what-a-project-row-carries-about-its-work)) |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
@@ -1808,13 +1821,13 @@ drawn for everybody and held with that reason for anybody without it.
   served Keyword — …").
 - **Saved views** (`#/worklet/views`) is the inventory of what somebody saved,
   in every project and team as well as company-wide — each row says where the
-  view lives, and each has a **Pin**. A view you **pinned** is in your
+  view lives, and each has a **Pin** and a **Delete**, which asks first. A view you **pinned** is in your
   sidebar, and that row **runs** it; the view running on a board can be pinned
   or unpinned from its own strip too.
 
 **Your own AI assistant** can reach Worklet over MCP too, at
-`/operator/mcp`. It serves the same work tools above, eleven more no seat is
-given — `list_work_views`, `save_work_view`,
+`/operator/mcp`. It serves the same work tools above, twelve more no seat is
+given — `list_work_views`, `save_work_view`, `delete_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`, `mark_inbox`, `set_pins`,
 `set_priorities`, `remove_work_item`, `restore_work_item` and
 `place_work_item`

@@ -558,6 +558,17 @@ test("a person's profile has three tabs and asks nothing a runtime answers", asy
   expect(screen.queryByRole("button", { name: /^Pause/ })).toBeNull();
 });
 
+// "REPORTS TO" IS A WORD IN THE HEAD'S LINE, so it carries the underline
+// register: its ink alone was 1.49:1 against the line around it, which colour
+// alone cannot carry (WCAG 1.4.1). Mutation: drop `.prose-link` from it.
+test("the head's reports-to link is underlined as a link in a sentence", async () => {
+  mount("#/company/org/seats/swe", { answers: { viewer: OPERATOR, config: DOCUMENT } });
+  await settle();
+  const link = screen.getByRole("link", { name: "CTO" });
+  expect(link.closest(".prof-line")).not.toBeNull();
+  expect(link.classList.contains("prose-link")).toBe(true);
+});
+
 // FOUR TABS, EACH A GROUP OF SECTIONS: Work holds Code, Activity its Turns
 // then Memory, Settings its setup then Schedules and Access.
 test("an agent's profile has four tabs, and Work counts the engine's total rather than a page", async () => {

@@ -462,6 +462,20 @@ describe("the figures", () => {
       screen.getAllByText("This didn’t load: the engine failed to answer.").length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(0);
+    // AND EACH FAILED CARD STILL SAYS WHICH WIDGET IT IS: the failed viewer
+    // read drew a bare card holding only the failure, so the board was a
+    // column of identical red boxes. Mutation: draw the viewer's failure in a
+    // card with no header, and a failed card has no heading.
+    const failed = screen
+      .getAllByText("This didn’t load: the engine failed to answer.")
+      .map((line) => line.closest(".home-card"))
+      .filter((card): card is HTMLElement => card !== null);
+    expect(failed.length).toBeGreaterThan(0);
+    for (const card of failed) {
+      expect(within(card).queryByRole("heading", { level: 3 })).not.toBeNull();
+    }
+    expect(screen.getByRole("heading", { name: "Needs your decision" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Live now" })).toBeTruthy();
   });
 
   test("the range a reader chose is the one Home opens on when they come back", async () => {
@@ -918,7 +932,9 @@ describe("the decisions", () => {
 
   // AN ASK WITH NO OPTIONS IS ANSWERED IN WORDS, IN PLACE: Reply opens the
   // field under the question, and Send sends it as the answer to that ask.
-  // The field asks for what the reader wants, never what they want "instead".
+  // The field asks for an answer, never "what you want", which read as an
+  // instruction to the asker; the press is Answer, since Reply on the comment
+  // says something without answering.
   test("an ask with no options is replied to in place, as an answer to that ask", async () => {
     mount({
       answers: {
@@ -932,10 +948,11 @@ describe("the decisions", () => {
     });
     await settle();
     const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
-    expect(within(card).queryByRole("link", { name: "Reply" })).toBeNull();
-    fireEvent.click(within(card).getByRole("button", { name: "Reply" }));
-    const field = within(card).getByRole("textbox", { name: "Reply to CTO" });
-    expect(field.getAttribute("placeholder")).toBe("Tell CTO what you want");
+    expect(within(card).queryByRole("link", { name: "Answer" })).toBeNull();
+    expect(within(card).getByText("Asks for a written answer")).toBeTruthy();
+    fireEvent.click(within(card).getByRole("button", { name: "Answer" }));
+    const field = within(card).getByRole("textbox", { name: "Answer CTO" });
+    expect(field.getAttribute("placeholder")).toBe("Answer CTO");
     fireEvent.change(field, { target: { value: "Use the one we already pay for." } });
     await act(async () => {
       fireEvent.click(within(card).getByRole("button", { name: "Send" }));

@@ -126,6 +126,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
   reloadForTest();
   location.hash = "#/";
 });
@@ -813,12 +814,11 @@ test("clearing typed words lifts the hold and the field says where it lands", as
 });
 
 // THE ENGINE'S MATCH IS READ BY ITS NAME. The kit's hint never shrinks and its
-// label does, so the tier written into the hint ("the engine's match: part of
-// the name matches") drew the seat as "Age…" — or as nothing — in the one case
-// the row is there for. The hint is as short as every other row's; the tier
-// is in the row's accessible name, and on the help line once the seat is
-// taken, and only for the seat it was said about.
-test("the engine's match leads the list by its name, and says why once taken", async () => {
+// label does, so a tier written into the hint drew the seat as "Age…". The
+// hint is as short as every other row's, and once the seat is taken the help
+// line says what choosing it does and nothing of the matcher: "The engine's
+// match for “sw”: part of the name matches" was the resolver talking.
+test("the engine's match leads the list by its name, and its tier is never said", async () => {
   mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />, JANE, {
     colleague: {
       match: { handle: "swe", method: "substring", why: "part of the name matches" },
@@ -832,36 +832,16 @@ test("the engine's match leads the list by its name, and says why once taken", a
   const list = screen.getByRole("listbox", { name: "Assignee suggestions" });
   const first = within(list).getAllByRole("option")[0]!;
   expect(first.querySelector(".crewlet-combobox__label")?.textContent).toBe("Agent SWE");
-  const hint = first.querySelector(".crewlet-listbox__hint")!;
-  // WHAT IS DRAWN is as short as a local row's "@swe · agent"…
-  const drawn = [...hint.childNodes]
-    .filter((n) => !(n instanceof HTMLElement && n.classList.contains("sr-only")))
-    .map((n) => n.textContent)
-    .join("");
-  expect(drawn).toBe("@swe · best match");
-  // …and the tier is still read with the row.
-  expect(first.textContent).toContain("the engine's match: part of the name matches");
+  expect(first.querySelector(".crewlet-listbox__hint")?.textContent).toBe("@swe · best match");
+  expect(first.textContent).not.toContain("part of the name matches");
   fireEvent.mouseDown(first);
   await settle();
   expect(field.value).toBe("Agent SWE");
-  const described = () =>
-    (field.getAttribute("aria-describedby") ?? "")
-      .split(/\s+/)
-      .map((id) => document.getElementById(id)?.textContent ?? "")
-      .join(" ");
-  expect(described()).toBe(
-    "Agent SWE is notified and follows it. The engine's match for “sw”: part of the name matches.",
-  );
-  // A SEAT TAKEN FROM THE CHART'S OWN ROWS is told no engine's tier.
-  fireEvent.change(field, { target: { value: "Jane" } });
-  await settle();
-  fireEvent.mouseDown(
-    within(screen.getByRole("listbox", { name: "Assignee suggestions" })).getByRole("option", {
-      name: /Jane Founder/,
-    }),
-  );
-  await settle();
-  expect(described()).toBe("Jane Founder is notified and follows it.");
+  const described = (field.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+  expect(described).toBe("Agent SWE is notified and follows it.");
 });
 
 // THE CLEAR CONTROL IS INSIDE THE FIELD, so the completion list — anchored to
@@ -950,4 +930,43 @@ test("the sheet opens with focus on its title", async () => {
   mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
   await settle();
   expect(document.activeElement).toBe(screen.getByLabelText("Title"));
+});
+
+// A RELOAD KEEPS WHAT WAS TYPED. The sheet held its fields in memory alone, so
+// a reload mid-title lost them and the sheet reopened empty. Kept for the tab,
+// it comes back when the same door opens the sheet again, and another door
+// (another project, a seat's question) starts from its own preset.
+test("a draft comes back after a reload, from the door it was begun at", async () => {
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
+  await settle();
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Retry PXE boot" } });
+  await settle();
+  cleanup();
+
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
+  await settle();
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Retry PXE boot");
+  cleanup();
+
+  mount(<NewTaskSheet preset={{ project: "OPS" }} onClose={() => {}} />);
+  await settle();
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
+});
+
+// AND A FILED ONE IS GONE: the sheet that filed it keeps nothing, so the next
+// New task starts empty rather than offering the task just filed.
+test("a filed draft is not kept for the next sheet", async () => {
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
+  await settle();
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Retry PXE boot" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+  });
+  await settle();
+  expect(posted).toHaveLength(1);
+  cleanup();
+
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
+  await settle();
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
 });

@@ -264,7 +264,8 @@ func trackerClass(err error) (tools.Refusal, bool) {
 	)
 	switch {
 	case errors.Is(err, worklet.ErrNoTask), errors.Is(err, worklet.ErrNoComment),
-		errors.Is(err, worklet.ErrNoProject), errors.Is(err, worklet.ErrNoFile):
+		errors.Is(err, worklet.ErrNoProject), errors.Is(err, worklet.ErrNoFile),
+		errors.Is(err, worklet.ErrNoView):
 		return tools.RefusalNotFound, true
 	case errors.Is(err, worklet.ErrStaleVersion):
 		return tools.RefusalStaleVersion, true

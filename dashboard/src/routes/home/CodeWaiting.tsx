@@ -28,6 +28,13 @@
  * completed does for Worklet. Until the viewer has answered, neither half is
  * asked and neither says "none": a listing nobody asked found nothing.
  *
+ * NOTHING WAITING IS SAID ONCE. When both halves were asked and both listings
+ * ended with nothing kept, the card draws one empty state in place of the two
+ * halves; otherwise each half that found none says so on one line of its own.
+ * The claim used to belong to the second half alone, so an empty card drew
+ * the same fact two ways: a caption under "Asking your review", then a full
+ * empty state with its glyph under "Waiting on a person".
+ *
  * NO GAP TO SAY: Gitlet's listings carry no flag of what they could
  * not account for, since each is one estate copy's answer at the level it
  * names rather than a gather over nodes, so both halves pass an empty `gaps`
@@ -79,6 +86,10 @@ export function CodeWaiting() {
   // A half not asked (a reader bound to no seat) has nothing more to find.
   const mineEnded = !seated || (mine.data !== null && !mine.data.next);
   const personEnded = person.data !== null && !person.data.next;
+  // BOTH HALVES ASKED AND BOTH ENDED WITH NOTHING: the one fact, said once. A
+  // reader bound to no seat keeps the first half's sentence about why it was
+  // not asked, so for them the halves stay.
+  const nothing = seated && asked.length === 0 && waiting.length === 0 && mineEnded && personEnded;
   return (
     <Card padding="none" className="home-card">
       <Card.Header
@@ -94,6 +105,17 @@ export function CodeWaiting() {
       <Card.Body padding="md" className="col gap-3">
         {locked ? (
           <p className="home-card-note">{needsWords("Seeing Gitlet's changes", [GITLET])}</p>
+        ) : nothing ? (
+          <WidgetQuery
+            error={null}
+            loading={false}
+            gaps={[]}
+            empty={{
+              headingLevel: "none",
+              title: "Nothing waits on a person",
+              hint: "A change asking your review, or one whose approval or blocker only a person can settle, appears here.",
+            }}
+          />
         ) : (
           <>
             <section aria-label="Asking your review" className="col gap-1">
@@ -126,15 +148,6 @@ export function CodeWaiting() {
                 refusal={person.refusal}
                 loading={(person.loading || !reads) && !person.data}
                 gaps={[]}
-                empty={
-                  waiting.length === 0 && asked.length === 0 && personEnded && mineEnded
-                    ? {
-                        headingLevel: "none",
-                        title: "Nothing waits on a person",
-                        hint: "A change whose approval or blocker only a person can settle appears here.",
-                      }
-                    : undefined
-                }
               >
                 <WaitingRows
                   rows={waiting}

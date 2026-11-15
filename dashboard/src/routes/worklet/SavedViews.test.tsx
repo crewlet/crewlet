@@ -221,3 +221,22 @@ test("a mark says what it means wherever it is drawn", async () => {
     "Pinned by you",
   ]);
 });
+
+// A VIEW IS NAMED BY ITS NAME, never by the id its save minted. The page's
+// eyebrow printed "Saved view 1c448b67-…" over the name the reader gave it:
+// an id nobody types or reads, where a task's key is one people use. And the
+// view can be taken away where it is read, and from its row in the list.
+test("a view's page names it without its id and offers Delete, as its list row does", async () => {
+  const id = "1c448b67-7dcc-49cc-b595-20842f0a3c11";
+  serving({ work_saved_views: { views: [view({ id, key: id })], complete: true } });
+  const { container } = mount(id);
+  await screen.findByRole("heading", { name: "My queue" });
+  expect(container.textContent).not.toContain(id);
+  expect(container.textContent).not.toContain("1c448b67");
+  expect(screen.getByRole("button", { name: /^Delete view/ })).toBeTruthy();
+  cleanup();
+
+  mount();
+  await waitFor(() => expect(screen.getByText("My queue")).toBeTruthy());
+  expect(screen.getByRole("button", { name: /^Delete the view “My queue”/ })).toBeTruthy();
+});

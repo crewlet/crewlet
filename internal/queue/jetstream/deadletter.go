@@ -118,7 +118,7 @@ const letterPage = 500
 
 // letterQuiet is how long a reader of a throwaway consumer — a listing, or a
 // copy read ([copyRead]) — hears nothing from its pull before it asks the
-// consumer what it says of itself ([pulling.quiet]); a pull the consumer
+// consumer what it says of itself ([jsapi.Pulls.Quiet]); a pull the consumer
 // says it is answering, a whole message crossing a link among them, is
 // waited on past it.
 //
@@ -254,13 +254,13 @@ func (q *Queue) DeadLettersOn(ctx context.Context, subject string) ([]queue.Kept
 
 // headers is every entry cons delivers, in order, until it says nothing is
 // pending — asked a pull of [letterPage] at a time on one inbox the listing
-// holds throughout ([pulling]), each waited for no longer than [letterQuiet],
+// holds throughout ([jsapi.Pulls]), each waited for no longer than [letterQuiet],
 // so an entry delivered to a pull that has expired still reaches the
 // listing, in its place: the consumer's delivery count guards every entry,
 // and one missing from a listing reads to its reader as one that is gone.
 //
 // THE CONSUMER'S OWN COUNT DECIDES THE END, never a quiet pull: a pull that
-// brought nothing asks the consumer ([pulling.quiet]), which ends the listing
+// brought nothing asks the consumer ([jsapi.Pulls.Quiet]), which ends the listing
 // where it holds nothing more and has delivered nothing this listing has not
 // had, and is pulled again where it still holds entries or has delivered some
 // still on their way — for as long as the server keeps a silence
@@ -275,7 +275,7 @@ func (s letterStream) headers(ctx context.Context, q *Queue, cons jetstream.Cons
 	if err != nil {
 		return nil, err
 	}
-	defer p.stop()
+	defer p.Stop()
 	var (
 		out []queue.Kept
 		// heard is when an entry last arrived.
@@ -283,34 +283,37 @@ func (s letterStream) headers(ctx context.Context, q *Queue, cons jetstream.Cons
 	)
 	for pending > 0 {
 		asked := int(min(pending, letterPage))
-		if err := p.ask(asked, letterQuiet, 0); err != nil {
+		if err := p.Ask(asked, 0, letterQuiet, 0); err != nil {
 			return nil, err
 		}
 		took := 0
 		for took < asked && pending > 0 {
-			d, err := p.within(ctx, letterQuiet)
+			d, err := within(ctx, p, letterQuiet)
 			if errors.Is(err, errQuiet) || errors.Is(err, errExpired) {
 				break
 			}
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, s.kept(d.meta.Sequence.Stream, d.meta.Timestamp, d.msg.Header))
-			pending = d.meta.NumPending
+			out = append(out, s.kept(d.Meta.Sequence.Stream, d.Meta.Timestamp, d.Msg.Header))
+			pending = d.Meta.NumPending
 			took++
 		}
 		if took > 0 {
 			heard = time.Now()
 			continue
 		}
-		says, info, err := p.quiet(ctx)
+		// NO ARRIVAL beyond the read term: a listing's deliveries are
+		// headers, each crossing the link in a fraction of it at the
+		// floor, so its consumer's answer waits behind none longer.
+		says, info, err := p.Quiet(ctx, 0)
 		switch {
 		case err != nil:
 			return nil, err
-		case says == drained:
+		case says == jsapi.Drained:
 			return out, nil
 		}
-		if pending = p.owed(info); time.Since(heard) >= jsprovision.LookupBudget {
+		if pending = p.Owed(info); time.Since(heard) >= jsprovision.LookupBudget {
 			return nil, fmt.Errorf("the listing's consumer delivered nothing for %v while it "+
 				"owed %d entries", jsprovision.LookupBudget, pending)
 		}

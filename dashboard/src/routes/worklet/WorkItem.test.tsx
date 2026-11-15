@@ -1556,6 +1556,31 @@ test.each([
   expect(posted).toEqual([]);
 });
 
+// A PICKER DRAWN AS ITS VALUE IS NAMED BY THAT VALUE FIRST, then by what it
+// changes. Named "Status of ENG-42" while it showed the status, its name did
+// not contain what is on screen (axe label-content-name-mismatch), so a
+// person who says what they see reached nothing.
+test("the rail's pickers are named by the value they show, then by what they change", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  for (const field of ["Status", "Labels"]) {
+    const picker = screen.getByRole("button", { name: new RegExp(`, ${field} of ENG-42$`) });
+    expect(picker.hasAttribute("aria-label"), field).toBe(false);
+    // WHAT THE EYE GETS: the button's words less those only a screen reader hears.
+    const seen = picker.cloneNode(true) as HTMLElement;
+    seen
+      .querySelectorAll(".crewlet-visually-hidden, .sr-only, [aria-hidden='true']")
+      .forEach((node) => node.remove());
+    const shown = (seen.textContent ?? "").trim();
+    // A VALUE DRAWN AS A MARK ALONE (an empty value's dash) shows no words
+    // for its name to start with, and is named by what the mark means.
+    if (!shown) continue;
+    expect(screen.getByRole("button", { name: `${shown}, ${field} of ENG-42` }), field).toBe(
+      picker,
+    );
+  }
+});
+
 // A WRITER'S FIELD IS CHANGED WHERE IT IS READ, conditional on the version the
 // page was drawn from — so a race lost to somebody else is refused, not
 // overwritten.
@@ -1638,7 +1663,7 @@ test("watch follows the task as the person", async () => {
 test("a comment is posted on the task", async () => {
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
-  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment on ENG-42" }), {
     target: { value: "Holding the port for 20s reproduces it." },
   });
   fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
@@ -1678,7 +1703,7 @@ test("a reply sent closes the banner that said who it answers", async () => {
   await settle();
   fireEvent.click(screen.getByRole("button", { name: "Reply" }));
   expect(screen.getByText(/^Replying to/)).toBeTruthy();
-  fireEvent.change(screen.getByRole("combobox", { name: /^Reply to/ }), {
+  fireEvent.change(screen.getByRole("textbox", { name: /^Reply to/ }), {
     target: { value: "Yes, every 20s." },
   });
   fireEvent.click(screen.getByRole("button", { name: /^Send$/ }));
@@ -1762,7 +1787,7 @@ test("an asked person opens the item and answers without Worklet", async () => {
   expect(within(theirs).queryByRole("button", { name: "Accept" })).toBeNull();
   // NO REPLY BOX AND NO COMPOSER: the one write they may make is the answer.
   expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Comment on ENG-42" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Comment on ENG-42" })).toBeNull();
   fireEvent.click(within(mine).getByRole("button", { name: "Accept" }));
   await settle();
   expect(posted).toEqual([
@@ -1775,7 +1800,7 @@ test("an asked person opens the item and answers without Worklet", async () => {
 test("an ask's option past the engine's cap says so under it", async () => {
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
-  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment on ENG-42" }), {
     target: { value: "Which way do we ship?" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
@@ -1805,7 +1830,7 @@ test("an ask's question is prefilled whole and held past the engine's cap", asyn
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
   const opening = `Which ${"region ".repeat(60)}do we ship first?`;
-  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment on ENG-42" }), {
     target: { value: `${opening}\nThe detail.` },
   });
   fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
@@ -1829,7 +1854,7 @@ test("an ask's question is prefilled whole and held past the engine's cap", asyn
 test("an ask's options stop at four, the engine's cap", async () => {
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
-  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment on ENG-42" }), {
     target: { value: "Which region do we ship first?" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
@@ -1891,7 +1916,7 @@ test("a second Enter while the first is out files one sub-task and one comment",
   await settle();
   fireEvent.submit(line.closest("form")!);
   await settle();
-  const comment = screen.getByRole("combobox", { name: "Comment on ENG-42" });
+  const comment = screen.getByRole("textbox", { name: "Comment on ENG-42" });
   fireEvent.change(comment, { target: { value: "Holding the port reproduces it." } });
   fireEvent.keyDown(comment, { key: "Enter", ctrlKey: true });
   await settle();
@@ -2146,7 +2171,7 @@ test("a narrow page leads with the four fields, before the description", async (
   narrowPage();
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
-  const status = screen.getByRole("button", { name: /^Status of ENG-42/ });
+  const status = screen.getByRole("button", { name: /Status of ENG-42$/ });
   const edit = screen.getByRole("button", { name: /description$/i });
   expect(status.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   const lead = status.closest(".task-lead") as HTMLElement;
@@ -2373,9 +2398,9 @@ test("the description keeps its own DOM across a clock tick", async () => {
 // A removed task
 // ---------------------------------------------------------------------------
 
-// A TASK IN THE TRASH IS SAID TO BE IN THE TRASH — the detail read does not
-// filter removed tasks, so without the flag it rendered as an ordinary one.
-test("a removed task is marked, and a live one carries no such mark", () => {
+// A TASK IN THE TRASH HAS ONE MARK, the note: the chip the flags drew above it
+// said "In the trash" a second time.
+test("the trash is not one of a task's flags", () => {
   const { container } = render(
     <>
       {itemFlags(
@@ -2385,10 +2410,7 @@ test("a removed task is marked, and a live one carries no such mark", () => {
       )}
     </>,
   );
-  expect(container.textContent).toContain("In the trash");
-  cleanup();
-  const live = render(<>{itemFlags(detail())}</>);
-  expect(live.container.textContent ?? "").not.toContain("In the trash");
+  expect(container.textContent ?? "").not.toContain("In the trash");
 });
 
 // THE FLAG ON THE PAGE IS THE FLAG ON THE CARD: only open work reads as blocked.
@@ -2404,12 +2426,52 @@ test("a finished task's page carries no Blocked flag, an open one's does", () =>
   expect(finished.container.textContent ?? "").not.toContain("Blocked");
 });
 
-test("the removal note names its author and when", () => {
+// BY NAME, as the feed beside it names every actor: the tombstone's handle and
+// kind printed "jane-founder (human)".
+test("the removal note names who moved it to the trash, when, and the way back", () => {
   const { container } = render(
-    <RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />,
+    <RemovedNote
+      tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }}
+      now={NOW}
+      seatName={(h) => ({ ada: "Ada Okonkwo" })[h] ?? h}
+    />,
   );
-  expect(screen.getByText(/ada/)).toBeTruthy();
-  expect(container.textContent).toMatch(/^In the trash\. Removed by ada \(human\) \S.*\.$/);
+  expect(container.textContent).toMatch(
+    /^In the trash\. Moved to the trash by Ada Okonkwo \S.*\. Restore it to change it\.$/,
+  );
+  expect(container.textContent).not.toContain("(human)");
+});
+
+// THE ENGINE FREEZES A TASK IN THE TRASH (no comment, body, field or relation
+// of it changes until a restore), so its page offers none of them: every edit
+// it drew was one the engine would refuse.
+test("a task in the trash reads only: no editor, no comment box, no reply", async () => {
+  const removed = { by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" };
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_item: detail({ task: task({ removed }) }) },
+  });
+  await settle();
+  expect(screen.getByText(/Moved to the trash by Ada Okonkwo/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Edit the title" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Edit description|Add a description/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Comment" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  // AND A LIVE ONE STILL OFFERS THEM, so the case is about the trash.
+  cleanup();
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  expect(screen.getByRole("button", { name: "Edit the title" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Comment" })).toBeTruthy();
+});
+
+// "CHANGED" GOES BEFORE A FIELD'S DELTA AND NOWHERE ELSE: a removal and a
+// restore have nothing to compare, and the row read "changed Removed it".
+test("a removal and a restore read as what was done to the task", () => {
+  const chrome = { seatName: (h: string) => h };
+  expect(changeSentence(record({ kind: "removed" }), task(), chrome).what).toBe(
+    "moved it to the trash",
+  );
+  expect(changeSentence(record({ kind: "restored" }), task(), chrome).what).toBe("restored it");
 });
 
 test("a task removed alongside its parent names the parent", () => {
@@ -2469,7 +2531,7 @@ test("a duplicate's page writes and reads by its id, and names it by its key", a
       .catch(() => screen.findByRole("menuitem", { name: "In review" })),
   );
   await settle();
-  fireEvent.change(screen.getByRole("combobox", { name: `Comment on ${SHARED_KEY}` }), {
+  fireEvent.change(screen.getByRole("textbox", { name: `Comment on ${SHARED_KEY}` }), {
     target: { value: "Seen on the duplicate." },
   });
   fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
@@ -2847,4 +2909,50 @@ test("a reader without Gitlet is asked no change, and the task draws no Changes 
   expect(codeAsks).toEqual([]);
   expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
   expect(screen.queryByRole("table", { name: "Changes" })).toBeNull();
+});
+
+// AN ASK NOBODY HAS ANSWERED SAYS WHAT IT ASKS FOR, and its card offers one
+// Reply: "Answered in words" under an open question read as though it had
+// been answered, and the answer's own button was a second "Reply" beside the
+// comment's, which says something without answering.
+test("an open ask in words reads as waiting for its answer, with one Reply and one Answer", async () => {
+  const words = {
+    id: "c-9",
+    task: "t-1",
+    author: "ada",
+    author_kind: "agent" as const,
+    body: "Which vendor should we use?",
+    created_at: "2031-04-12T09:00:00Z",
+    ask: "jane",
+  };
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({ comments: [words] }),
+      work_comments: { comments: [words] },
+    },
+  });
+  await settle();
+  const card = screen.getAllByText("Which vendor should we use?")[0]!.closest("article")!;
+  expect(within(card).getByText("Asks for a written answer")).toBeTruthy();
+  expect(card.textContent).not.toContain("Answered in words");
+  expect(within(card).getAllByRole("button", { name: "Reply" })).toHaveLength(1);
+  expect(within(card).getByRole("button", { name: "Answer" })).toBeTruthy();
+});
+
+// THE DESCRIPTION'S HEADINGS NEST UNDER A SECTION: "## Context" renders an h3,
+// which stood straight under the title's h1 (axe heading-order) before the
+// Activity section's h2.
+test("the description's headings sit under a section heading of the page", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_item: detail({ task: task({ body: "## Context\n\nWhy this matters." }) }) },
+  });
+  await settle();
+  const levels = [...document.querySelectorAll("h1, h2, h3, h4")].map((h) => Number(h.tagName[1]));
+  for (let i = 1; i < levels.length; i++) {
+    expect(
+      levels[i]! - levels[i - 1]!,
+      `heading ${i} jumps from h${levels[i - 1]}`,
+    ).toBeLessThanOrEqual(1);
+  }
+  expect(screen.getByRole("heading", { level: 2, name: "Description" })).toBeTruthy();
 });

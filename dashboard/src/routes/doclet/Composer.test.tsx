@@ -267,6 +267,40 @@ test("a title already taken in the space is said, and holds both presses", async
   }
 });
 
+const SPACE_FIRST = "Choose a space first. Save as draft and Publish file the page there.";
+
+// NO SPACE CHOSEN HOLDS BOTH PRESSES, AND THE PAGE SAYS SO beside the space
+// field: the reason reached only the held buttons' tooltip, so a writer met
+// two dead buttons and no word about why. Mutation: drop the line, and the
+// sentence is nowhere on the page; keep it once a space is chosen, and it
+// stays over a page that can be saved.
+test("with no space chosen the page says to choose one first, and both presses wait", async () => {
+  location.hash = "#/doclet/new";
+  mount();
+  await settle();
+  fireEvent.change(title(), { target: { value: "Postmortem template" } });
+  await fill(body(), [{ text: "One line." }]);
+  await settle();
+  // SAID IN THE ROW THAT CLEARS IT, beside the space field.
+  const row = screen.getByRole("group", { name: "File it in" });
+  expect(within(row).getByText(SPACE_FIRST)).toBeTruthy();
+  for (const name of ["Publish", "Save as draft"]) {
+    expect(screen.getByRole("button", { name }).getAttribute("aria-disabled"), name).toBe("true");
+  }
+
+  // CHOSEN IN THE FIELD, the line goes and the presses are free.
+  const picker = document.querySelector<HTMLElement>('[aria-label="The space to file it in"]');
+  expect(picker).not.toBeNull();
+  fireEvent.click(picker!);
+  // THE KIT'S LIST TAKES THE PRESS ON mousedown.
+  fireEvent.mouseDown(await screen.findByRole("option", { name: /Engineering/ }));
+  await settle();
+  expect(within(row).queryByText(SPACE_FIRST)).toBeNull();
+  expect(screen.getByRole("button", { name: "Publish" }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
+});
+
 test("a template starts an empty page, and never replaces what was written", async () => {
   mount();
   await settle();

@@ -521,14 +521,11 @@ function Pick({
     <span className="cell-edit">
       <Menu
         // THE TRIGGER IS THE VALUE: flush, in the rail's own size and ink.
+        // NAMED BY THE VALUE IT SHOWS, then by `label` ("In review, Status
+        // of ENG-42"), which the kit's value trigger says after it.
         valueTrigger
         label={label}
-        trigger={
-          <>
-            <span className="sr-only">{label}: </span>
-            {children}
-          </>
-        }
+        trigger={children}
         items={options.map((option) => ({
           key: option.value || "-",
           label: option.label,
@@ -578,12 +575,7 @@ function LabelsValue({
         // THE TRIGGER IS THE VALUE: flush, in the rail's own size and ink.
         valueTrigger
         label={`Labels of ${itemKey}`}
-        trigger={
-          <>
-            <span className="sr-only">{`Labels of ${itemKey}: `}</span>
-            {chips}
-          </>
-        }
+        trigger={chips}
         items={declared.map((tag) => {
           const on = current.includes(tag.slug);
           return {
