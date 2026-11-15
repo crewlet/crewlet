@@ -8862,7 +8862,9 @@ as they are typed in.
 - **The top bar** holds, on one line and at one height: **Menu**, which slides
   the Rooms panel in from the start edge of the chat area (or hides it while it
   is pinned), its badge the sidebar's own figure of what waits on you; the
-  **Rooms** switcher, named after the open room, listing your rooms (Starred,
+  **Rooms** switcher, named after the open room (the frame's one reading of it,
+  so a team's room read from outside the team and an archived room are named
+  too, though neither is in its list), listing your rooms (Starred,
   Rooms, Team rooms) with Browse rooms and New room at its foot; the
   **Messages** switcher, named after the open conversation or Direct messages,
   listing your conversations and then the people and agents to start one with,
@@ -8877,7 +8879,9 @@ as they are typed in.
   engine would take it, by the room's one reading of its rules; Archive is the
   room's creator's, its team's lead's or an admin's, and held with that
   sentence for anybody else (`routes/chatlet/roomLifecycle.ts`). Ask Crewlet
-  itself is the page bar's button, so the bar has none.
+  itself is the page bar's button, so the bar has none. The room's star is
+  More's, so on a room the page bar draws no star of its own (`useOwnStar`):
+  one star, and on a phone one "…", the room's.
   On a view beside the rooms (Activity, Threads, Drafts and sent, Saved, New
   message, Search, Browse rooms) the bar also carries the view's own tools
   (Activity's Unread only, Browse rooms' New room) before Search, so no view

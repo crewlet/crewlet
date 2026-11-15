@@ -646,25 +646,20 @@
   background: var(--color-surface-background);
 }
 
+/* The list's own tools, on the find field's start line: the Unreads switch,
+   then Mark all as read and New message at the end. */
 .chat-dms-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3) 0 calc(var(--crewlet-chat-pad-x) - var(--spacing-2));
-}
-
-/* The list's title, its words inside the kit's button (a rule on the button
-   itself would lose to the kit's sheet in a built page). */
-.chat-dms-title {
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
+  padding: var(--spacing-2) var(--spacing-3) 0 var(--crewlet-chat-pad-x);
 }
 
 .chat-dms-tools {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-3);
+  gap: var(--spacing-1);
 }
 
 .chat-dms-find {

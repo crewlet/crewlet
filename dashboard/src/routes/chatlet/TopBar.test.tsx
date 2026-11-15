@@ -12,7 +12,9 @@
  */
 
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+import { useOwnStar } from "~/app/Shell.tsx";
 
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADA, actEngine, applied } from "~/test/chat.tsx";
@@ -22,6 +24,13 @@ import { ARCHIVE_HELD } from "./roomLifecycle.ts";
 import { mountInFrame, mountScreen } from "./frameKit.tsx";
 import { RoomScopeProvider } from "./scope.tsx";
 import { ChatTopBar } from "./TopBar.tsx";
+
+// THE FRAME'S OWN HOOK, watched: whether the bar tells the frame that the
+// room's own menu carries the star (and so the page bar draws none).
+vi.mock("~/app/Shell.tsx", async (actual) => ({
+  ...(await actual<typeof import("~/app/Shell.tsx")>()),
+  useOwnStar: vi.fn(),
+}));
 
 const ROOM = "0b0e9a8e-2f4c-4f7e-9d8a-5d1f0c6b7a10";
 
@@ -185,4 +194,96 @@ test("the Messages switcher's foot leads to the Direct messages page", async () 
   const page = await screen.findByRole("option", { name: /All direct messages/ });
   fireEvent.click(page);
   await waitFor(() => expect(location.hash).toBe("#/chatlet/dms"));
+});
+
+// THE SWITCHER NAMES THE ROOM THE READER IS IN, whether or not it is one of
+// the rooms it lists: those are the reader's memberships, unarchived, and a
+// team's room read from outside the team or an archived room is neither. Read
+// off that list, the trigger fell back to "Rooms" in exactly those rooms.
+describe("the Rooms switcher names the open room", () => {
+  const TEAM = "5a1c9e2b-7d3f-4c8e-a1b2-c3d4e5f60718";
+  const ARCHIVED = "6b2d0f3c-8e4a-4d9f-b2c3-d4e5f6071829";
+  const team = {
+    v: 1,
+    id: TEAM,
+    kind: "unit",
+    name: "platform",
+    unit: "Platform",
+    created_at: "2026-01-01T00:00:00Z",
+  };
+  const archived = {
+    ...channel,
+    id: ARCHIVED,
+    name: "old-launch",
+    archived_at: "2026-02-01T00:00:00Z",
+  };
+  const opened = (room: typeof channel, member: boolean, rail: unknown[]) => ({
+    ...answers,
+    chat_channels: { ...answers.chat_channels, channels: rail },
+    chat_channel: {
+      ...answers.chat_channel,
+      channel: room,
+      member,
+      members: member ? answers.chat_channel.members : [],
+    },
+  });
+  // THE FIRST SWITCHER IN THE BAR is Rooms; its trigger's words are the name.
+  const trigger = async () =>
+    waitFor(() => {
+      const button = document.querySelector<HTMLElement>(".chat-switch button");
+      expect(button).not.toBeNull();
+      return button!;
+    });
+
+  test("a team's room the reader is outside of, by its team's name", async () => {
+    mountInFrame(
+      <RoomScopeProvider channelID={TEAM}>
+        <ChatTopBar />
+      </RoomScopeProvider>,
+      {
+        hash: `#/chatlet/${TEAM}`,
+        answers: opened(team as never, false, [{ channel, revision: 1, unread: 0, mentions: 0 }]),
+      },
+    );
+    await waitFor(async () => expect((await trigger()).textContent).toMatch(/platform/i));
+    expect((await trigger()).textContent).not.toMatch(/^Rooms/);
+  });
+
+  test("an archived room, by its name", async () => {
+    mountInFrame(
+      <RoomScopeProvider channelID={ARCHIVED}>
+        <ChatTopBar />
+      </RoomScopeProvider>,
+      {
+        hash: `#/chatlet/${ARCHIVED}`,
+        answers: opened(archived, true, [
+          { channel: archived, revision: 1, unread: 0, mentions: 0 },
+          { channel, revision: 1, unread: 0, mentions: 0 },
+        ]),
+      },
+    );
+    await waitFor(async () => expect((await trigger()).textContent).toMatch(/#old-launch/));
+  });
+});
+
+// ONE STAR, AND SO ONE "…", ON A ROOM: its own More carries the room's star, so
+// the page bar draws none, which on a phone was a "…" of its own stacked over
+// the room's and a page bar of two rows. A view beside the rooms has no More,
+// and keeps the frame's star.
+test("on a room the bar tells the frame its own More carries the star; on a view it does not", async () => {
+  const owns = vi.mocked(useOwnStar);
+  owns.mockClear();
+  mountInFrame(
+    <RoomScopeProvider channelID={ROOM}>
+      <ChatTopBar />
+    </RoomScopeProvider>,
+    { hash: `#/chatlet/${ROOM}`, answers },
+  );
+  await screen.findByRole("button", { name: "More" });
+  expect(owns).toHaveBeenCalled();
+  cleanup();
+  owns.mockClear();
+  mountInFrame(<ChatTopBar />, { hash: "#/chatlet/activity", answers });
+  await screen.findByRole("button", { name: "Search Chatlet" });
+  expect(owns).not.toHaveBeenCalled();
 });
