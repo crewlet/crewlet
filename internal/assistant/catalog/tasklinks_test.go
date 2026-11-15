@@ -13,14 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// A TASK IS READ WITH WHAT IT BELONGS TO AND WHAT IT IS LINKED TO. GET
-// /worklet/{id} answers the parent and both directions of every link beside
-// the task, and the model reads them from the card: the parent by its key,
-// title and status, and each link by its other end's key, title and status,
-// the relation, and which end holds it, a page's by its id. Carded from the
-// task alone, the model could not say what a task waits on or belongs to.
-// Mutation: card the task's record alone, or drop a link's facts, and this
-// fails.
+// get_task hands the model the parent and each link by its other end's key, title
+// and status, its relation and which end holds it; a page link by its id.
 func TestATaskIsReadWithWhatItBelongsToAndIsLinkedTo(t *testing.T) {
 	t.Parallel()
 	body, _ := json.Marshal(map[string]any{

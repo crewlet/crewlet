@@ -142,12 +142,8 @@ func TestAnEntryListNamesWhatToWrite(t *testing.T) {
 	}
 }
 
-// A LINK IS LISTED BY WHAT IT IS WHERE IT HAS NO NAME, AND A FLAG FACT IS WORDS
-// ONLY WHERE IT IS SET: an item reads its label at Else where Label holds
-// nothing (a task's link to a page, which has no title here), and a fact that
-// is a flag reads its words when true and is no fact otherwise, as an item's
-// flag is. Mutation: drop the Else, or keep a false flag as "false", and this
-// fails.
+// An item with no label reads it at Else, and a flag fact is its words where true
+// and absent otherwise.
 func TestALinkWithNoNameIsListedByWhatItIs(t *testing.T) {
 	t.Parallel()
 	spec := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, ID: "task.key",
