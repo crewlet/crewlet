@@ -1670,8 +1670,9 @@ func nakFailure(ctx context.Context, err error) queue.Result {
 //     never by a list of its own; and read off the failure rather than off
 //     its record, so a provider's failure that wraps one (a harness whose
 //     prompt a full disk could not take) is the node's though its record
-//     names the provider's own kind. A deadline, an abandoned wait and a
-//     coding sandbox's class stay the work's.
+//     names the provider's own kind. A deadline, an abandoned wait, a write
+//     the state log refused for what the write itself is and a coding
+//     sandbox's class stay the work's.
 //   - THE COORDINATION STORE'S SILENCE on a step of the sandbox coordinator's
 //     ([sandbox.ErrStoreSilent]).
 //   - A HAND-BACK MADE WHILE NO WAITER CAN ANNOUNCE ITS JOB

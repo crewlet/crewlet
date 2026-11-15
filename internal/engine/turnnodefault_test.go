@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -31,8 +32,9 @@ import (
 // not answer, a busy store, a full disk), the NAK is the node's
 // (queue.NakNode), so a delivery whose budget it spends is kept with the
 // group's unhandled deliveries and never with its poison. Any other failure
-// stays the mail's, a deadline and a coding sandbox's class among them, since
-// what the mail asked can cause either.
+// stays the mail's, a deadline, a write the state log refused for what it is
+// and a coding sandbox's class among them, since what the mail asked can cause
+// each.
 //
 // THE SAME ANSWER THE SEAT'S CONTROL TOPIC NAKS BY (nodesFailure), so the
 // sandbox coordinator's marks for a store that did not answer it
@@ -69,6 +71,10 @@ func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 			"executor's run: %w: sandbox: read run t1: nats: timeout", sandbox.ErrStoreSilent), nodes: true},
 		"a hand-back no waiter announces": {err: fmt.Errorf("runner: resuming t1: %w: its run is not "+
 			"settled", sandbox.ErrUnannounced), nodes: true},
+		"a state log at its byte ceiling": {err: fmt.Errorf("worklet: decide: %w",
+			&statelog.Unavailable{Reason: statelog.ReasonLogFull, OpID: "op-1"}), nodes: true},
+		"a write the state log refused for what it is": {err: fmt.Errorf("worklet: decide: %w",
+			&statelog.Unavailable{Reason: statelog.ReasonRecordTooLarge, OpID: "op-1"})},
 		"a deadline the turn ran past": {
 			err: fmt.Errorf("runner: the harness's run: %w", context.DeadlineExceeded)},
 		"a coding sandbox's class": {err: fmt.Errorf("runner: launching the executor's run: %w",

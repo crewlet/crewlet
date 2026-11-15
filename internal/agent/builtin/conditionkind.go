@@ -11,8 +11,20 @@ import (
 // the environment's, never the engine's own defect. A coding sandbox's class is
 // [SandboxKindPrefix] and the class, a deadline `timeout` and an abandoned wait
 // `canceled`, the provider layer's own words for the two.
+//
+// THE STATE LOG HAS TWO. [KindStateLogUnavailable] is the log, the node or the
+// broker refusing a read or a write (the node evicted, behind or deferring,
+// the log full or wrong, a broker that refused it), which another node, a
+// later attempt or an operator gets past. [KindStateLogWriteRefused] is the
+// log refusing a write for what the write itself is or names
+// ([statelog.Reason.RefusesTheWrite]: a record too large for the broker, an
+// object deleted for good, an operation id that names another write, an
+// operation a later record undid), which every node and every attempt meets
+// alike. One kind for both put a write the work asked for and no node could
+// make beside an outage, on the node's side.
 const (
 	KindStateLogUnavailable     = "state_log_unavailable"
+	KindStateLogWriteRefused    = "state_log_write_refused"
 	KindFileStoreFull           = "file_store_full"
 	KindFileStoreUnavailable    = "file_store_unavailable"
 	KindCoordinationUnavailable = "coordination_unavailable"
@@ -41,20 +53,16 @@ const SandboxKindPrefix = "sandbox_"
 // the node's own (internal/engine's nakFailure), and a delivery it spends is
 // kept with its group's unhandled deliveries rather than with its poison.
 //
-// A KIND IS AS WIDE AS WHAT IT CLASSES. The state log's is every refusal of
-// the log ([statelog.ErrUnavailable]), and among them are refusals of the
-// write itself rather than of the log, such as a record larger than the
-// broker takes, an object deleted for good or an operation id reused. The
-// kind does not tell them apart, so they are the node's with the rest.
-//
-// FALSE FOR THE THREE KINDS LEFT TO THE WORK: a coding sandbox's class
-// ([SandboxKindPrefix]), one of which does not say whether the box failed for
-// what was asked of it or for its provider (a command the box timed out or
-// killed, a provider that did not answer: [sandbox.WhyProviderUnavailable]);
-// and a deadline (`timeout`) and an abandoned wait (`canceled`), the provider
-// layer's words for a call that ran past its own wall clock or that its
-// caller gave up on, which the length of what was asked decides as much as
-// the node does. False for anything that is no kind of a condition.
+// FALSE FOR THE KINDS LEFT TO THE WORK, each one what was asked can cause: a
+// write the state log refused for what the write itself is
+// ([KindStateLogWriteRefused]); a coding sandbox's class ([SandboxKindPrefix]),
+// one of which does not say whether the box failed for what was asked of it
+// or for its provider (a command the box timed out or killed, a provider that
+// did not answer: [sandbox.WhyProviderUnavailable]); and a deadline (`timeout`)
+// and an abandoned wait (`canceled`), the provider layer's words for a call
+// that ran past its own wall clock or that its caller gave up on, which the
+// length of what was asked decides as much as the node does. False for
+// anything that is no kind of a condition.
 //
 // EVERY KIND THIS PACKAGE DECLARES IS NAMED HERE, on one side, and
 // TestEveryConditionKindIsTheNodesOrTheWorks holds each to it: a new kind
@@ -67,6 +75,11 @@ func InfrastructureKind(kind string) bool {
 		KindExecutorUnanswered, KindFleetKeysDiffer, KindFleetBuildsDiffer,
 		KindDiskFull, KindDiskReadOnly, KindDiskFailed, KindOpenFilesExhausted:
 		return true
+	case KindStateLogWriteRefused:
+		// THE WORK'S: no node can make the write it asked for, and no wait
+		// lets one; a different write (a split change, a fresh operation, an
+		// object not deleted) is what gets past it.
+		return false
 	}
 	return false
 }

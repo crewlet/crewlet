@@ -298,20 +298,22 @@ func TestEverySandboxClassIsACondition(t *testing.T) {
 // mail that failed on a condition of the infrastructure is handed back as the
 // failing node's own, and one that failed on anything else as the mail's, by
 // [builtin.InfrastructureKind] over the kind its record carries; so the side
-// of every kind is decided once, here. The work's side is exactly the three
-// kinds a piece of work can cause: a coding sandbox's class, a deadline and an
-// abandoned wait. Every other condition, and every kind the package declares,
-// is the node's.
+// of every kind is decided once, here. The work's side is exactly the kinds a
+// piece of work can cause (worksKinds): a write the state log refused for what
+// it is, a coding sandbox's class, a deadline and an abandoned wait. Every
+// other condition, and every other kind the package declares, is the node's.
+// A state log's refusal of the write itself and its every other refusal are
+// two kinds, one a side each, held for every reason the log names.
 //
 // Mutation: take a declared kind off InfrastructureKind's list and its rows go
-// red; put a sandbox's class, a deadline or an abandoned wait on it and theirs
-// do; declare a kind no condition is recorded under and the declaration's row
+// red; put a kind of the work's on it and theirs do; read every state-log
+// write refusal under one kind and the write rows of the work's reasons do;
+// declare a kind no condition is recorded under and the declaration's row
 // does.
 func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
 	t.Parallel()
 	works := func(kind string) bool {
-		return strings.HasPrefix(kind, builtin.SandboxKindPrefix) ||
-			kind == llm.KindTimeout.String() || kind == llm.KindCancelled.String()
+		return strings.HasPrefix(kind, builtin.SandboxKindPrefix) || worksKinds[kind]
 	}
 	recorded := map[string]bool{}
 	for name, err := range everyCondition() {
@@ -326,12 +328,23 @@ func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
 				name, kind, nodes, works(kind))
 		}
 	}
+	for _, reason := range statelog.Reasons() {
+		err := fmt.Errorf("worklet: decide: %w", &statelog.Unavailable{Reason: reason, OpID: "op-1"})
+		want := builtin.KindStateLogUnavailable
+		if reason.RefusesTheWrite() {
+			want = builtin.KindStateLogWriteRefused
+		}
+		if kind, _ := builtin.ConditionKind(err); kind != want {
+			t.Errorf("a write refused %s is recorded under %q, want %q", reason, kind, want)
+		}
+	}
 	for _, kind := range declaredKinds(t) {
 		if !recorded[kind] {
 			t.Errorf("the declared kind %q is recorded for no condition", kind)
 		}
-		if !builtin.InfrastructureKind(kind) {
-			t.Errorf("the declared kind %q is not the node's", kind)
+		if builtin.InfrastructureKind(kind) == worksKinds[kind] {
+			t.Errorf("the declared kind %q: the node's = %v, want %v", kind,
+				builtin.InfrastructureKind(kind), !worksKinds[kind])
 		}
 	}
 	for _, kind := range []string{"", types.ErrorKindUnclassified, "sandbox"} {
@@ -339,6 +352,14 @@ func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
 			t.Errorf("%q, no kind of a condition, is the node's", kind)
 		}
 	}
+}
+
+// worksKinds is every kind outside a coding sandbox's classes that is the
+// work's rather than the node's: each one what was asked can cause.
+var worksKinds = map[string]bool{
+	builtin.KindStateLogWriteRefused: true,
+	llm.KindTimeout.String():         true,
+	llm.KindCancelled.String():       true,
 }
 
 // declaredKinds is every kind constant conditionkind.go declares, read from
