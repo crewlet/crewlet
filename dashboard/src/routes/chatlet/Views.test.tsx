@@ -18,7 +18,14 @@ import { MAX_DIRECT_PARTICIPANTS } from "~/contract/chat.ts";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
 import { mountView } from "./frameKit.tsx";
-import { ActivityView, DraftsView, NewMessageView, SavedView, ThreadsView } from "./Views.tsx";
+import {
+  ActivityView,
+  DraftsView,
+  EMPTY_ACTIVITY,
+  NewMessageView,
+  SavedView,
+  ThreadsView,
+} from "./Views.tsx";
 
 const ROOM = "room-1";
 
@@ -249,6 +256,19 @@ describe("Activity", () => {
   });
 });
 
+// EACH OF ACTIVITY'S TABS SAYS WHAT IT GATHERS when it holds nothing: Mentions
+// and Reactions once repeated All's sentence about replies and reactions.
+test("Activity's empty tabs each say what they gather, never All's sentence", () => {
+  const lines = Object.values(EMPTY_ACTIVITY).map((empty) => empty.description);
+  expect(new Set(lines).size).toBe(lines.length);
+  expect(EMPTY_ACTIVITY.mention.description).toMatch(/names you/);
+  expect(EMPTY_ACTIVITY.reply.description).toMatch(/thread you follow/);
+  expect(EMPTY_ACTIVITY.reaction.description).toMatch(/reaction/i);
+  for (const tab of ["mention", "reply", "reaction"] as const) {
+    expect(EMPTY_ACTIVITY[tab].description).not.toBe(EMPTY_ACTIVITY.all.description);
+  }
+});
+
 describe("Threads", () => {
   const THREADS = {
     ...SERVED,
@@ -353,6 +373,20 @@ describe("Drafts and sent", () => {
   test("is titled as the Rooms panel and the breadcrumb name it", async () => {
     mount(<DraftsView />, "#/chatlet/drafts", { chat_sent: { ...SERVED, messages: [] } });
     expect(await screen.findByRole("heading", { level: 1, name: "Drafts and sent" })).toBeTruthy();
+  });
+
+  // ONE NAME: the view is "Drafts and sent", so its tabs are Drafts and Sent;
+  // the first read "Drafts and unsent". And its empty line is a person's
+  // sentence, with no "engine" in it.
+  test("its tabs are Drafts and Sent, and the empty line names no engine", async () => {
+    mount(<DraftsView />, "#/chatlet/drafts", { chat_sent: { ...SERVED, messages: [] } });
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent?.replace(/\d+$/, "").trim())).toEqual([
+      "Drafts",
+      "Sent",
+    ]);
+    const empty = (await screen.findByText("Nothing waiting")).parentElement!;
+    expect(empty.textContent).not.toMatch(/engine/i);
   });
 
   test("Sent lists what the reader said, newest first, from the engine", async () => {

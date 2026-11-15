@@ -9009,10 +9009,10 @@ as they are typed in.
   is dated by it.
 - **Threads** (`#/chatlet/threads`) lists the threads you follow, newest reply
   first (`chat_threads`), each its root and newest replies with Unfollow and
-  Reply; **Drafts and sent** (`#/chatlet/drafts`) lists what you have not sent
-  (a message the engine did not confirm, and the words left in a box, kept in
-  the tab and never in the address or the browser's storage) and what you sent
-  (`chat_sent`); **Saved** (`#/chatlet/saved`) lists what you saved, the newest
+  Reply; **Drafts and sent** (`#/chatlet/drafts`) lists, under its Drafts tab,
+  what you have not sent (a message the engine did not confirm, and the words
+  left in a box, kept in the tab and never in the address or the browser's
+  storage) and under its Sent tab what you sent (`chat_sent`); **Saved** (`#/chatlet/saved`) lists what you saved, the newest
   save first (`chat_saved`). A card there quotes its message read-only: its
   actions are a press away in the thread or the room.
 - **New message** (`#/chatlet/new`, `to=`) takes people and agents as chips in
@@ -9033,14 +9033,17 @@ as they are typed in.
   It searches as you type, once the words rest (`lib/useQuiet.ts`), and keeps
   the settled words in the address by replacement. In and From narrow it at
   the engine (`channel_id`, `author`); Who (people or agents) narrows the page
-  the engine ranked, and says so. A phrase past the engine's bound is not sent,
+  the engine ranked, and says so. In, From and Who are the Messages tab's, and
+  before a word is typed each tab says how it searches. A phrase past the engine's bound is not sent,
   and the screen says why. It asks for the engine's own page (forty hits,
   `contract/chat.ts`'s `CHAT_SEARCH_PAGE`, the engine's
   `search.MaxChatSearchLimit`), and the ranking has no next page, so a full
   page says there may be more matches and how to narrow the search, rather
   than reading as everything that matched. Its People tab matches the org
   chart's seats and its Rooms tab every room you can read, on the words each
-  row draws.
+  row draws. Wherever a list offers seats to pick or open (Add people, New
+  message, People) the line under an agent is what it is doing, else its state
+  ("Idle", "Paused"), and the line under a person is their team.
 - **On Home**, Chatlet offers two widgets for the reader's board
   (`routes/chatlet/home.widgets.tsx`; see
   [Home is the reader's board](#home-is-the-readers-board)), each asking what

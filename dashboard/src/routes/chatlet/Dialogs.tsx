@@ -72,7 +72,7 @@ import { MessageBody } from "./Body.tsx";
 import { ChatFace } from "./Face.tsx";
 import { nameRefusal, normalizeName, startable } from "./name.ts";
 import { useChatFrame, useChatNav, type ChatDialog } from "./nav.tsx";
-import { handlesOf, matchesPerson, useChatPeople, type ChatPerson } from "./people.ts";
+import { handlesOf, matchesPerson, seatLine, useChatPeople, type ChatPerson } from "./people.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
@@ -742,7 +742,7 @@ export function SuggestedPerson({
       avatar={<ChatFace person={person} size={32} />}
       name={person.name}
       tag={person.kind === "agent" ? <Tag size="xs">Agent</Tag> : undefined}
-      detail={person.doing || person.team || undefined}
+      detail={seatLine(person) || undefined}
       mark={selected === undefined ? "none" : "toggle"}
       selected={selected}
       onSelect={onSelect}

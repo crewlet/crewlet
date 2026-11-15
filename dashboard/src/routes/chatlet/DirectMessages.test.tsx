@@ -188,7 +188,7 @@ test("Unreads keeps the unread conversations and the open one; the find field na
   fireEvent.click(screen.getByRole("switch", { name: "Unreads" }));
   await waitFor(() => expect(rows()).toEqual([DM_BO, DM_OPS]));
   fireEvent.click(screen.getByRole("switch", { name: "Unreads" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Find a direct message" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Find a conversation" }), {
     target: { value: "ops" },
   });
   await waitFor(() => expect(rows()).toEqual([GROUP, DM_OPS]));

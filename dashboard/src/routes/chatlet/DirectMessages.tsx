@@ -157,8 +157,8 @@ export function DirectMessagesView() {
           <Input
             inputSize="md"
             leading={<SearchGlyph size="sm" />}
-            placeholder="Find a DM"
-            aria-label="Find a direct message"
+            placeholder="Find a conversation"
+            aria-label="Find a conversation"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onClear={() => setQuery("")}

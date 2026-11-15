@@ -12,14 +12,14 @@
  * public room only.
  */
 
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { MAX_TOPIC_CHARS } from "~/contract/chat.ts";
 import { ADA, actEngine, applied, type Pressed } from "~/test/chat.tsx";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
-import { ChatDialogHost, characters, foundingMembers } from "./Dialogs.tsx";
+import { ChatDialogHost, SuggestedPerson, characters, foundingMembers } from "./Dialogs.tsx";
 import { mountInFrame } from "./frameKit.tsx";
 import type { ChatDialog } from "./nav.tsx";
 
@@ -226,6 +226,27 @@ describe("Add people", () => {
     expect(await screen.findByText(/members come from the org chart/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^add$/i })).toBeNull();
   });
+});
+
+// ONE KIND OF LINE UNDER EVERY AGENT a pick list offers (Add people, New
+// message, Search's People): what it is doing, else its state. Its team stood
+// there for an agent that was not working, so one read "Core" among "Working".
+test("a suggested agent's line is its state when it is not working, never its team", () => {
+  const agent = {
+    handle: "qa",
+    name: "QA Agent",
+    kind: "agent" as const,
+    avatar: null,
+    team: "Core",
+    state: "idle" as const,
+    status: undefined,
+    doing: "",
+    known: true,
+  };
+  render(<SuggestedPerson person={agent} onSelect={() => {}} />);
+  const row = screen.getByRole("button", { name: /QA Agent/ });
+  expect(row.textContent).toMatch(/Idle/);
+  expect(row.textContent).not.toMatch(/Core/);
 });
 
 describe("a room's topic and description", () => {
