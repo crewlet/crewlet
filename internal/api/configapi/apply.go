@@ -588,9 +588,11 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		p.base, p.baseUnsealed, p.baseFleet = active, b.unsealed, cur.fleet
 	}
 	if found && !b.unsealed {
-		if p.unchanged, err = sameDocument(b.document, document); err != nil {
-			return nil, err
+		unchanged, compareErr := sameDocument(b.document, document)
+		if compareErr != nil {
+			return nil, compareErr
 		}
+		p.unchanged = unchanged
 	}
 	return p, nil
 }

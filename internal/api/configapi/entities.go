@@ -726,9 +726,9 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 	// AN ENTITY SENT BACK AS IT STANDS stores nothing ([writeUnchanged]),
 	// answered with the tag it already has, as a write that stored would be.
 	if prepared.unchanged {
-		tag, err := storedTag(e.kind, e.id, prepared.document)
-		if err != nil {
-			s.fail(w, r, "tag the entity", err)
+		tag, tagErr := storedTag(e.kind, e.id, prepared.document)
+		if tagErr != nil {
+			s.fail(w, r, "tag the entity", tagErr)
 			return true, nil
 		}
 		w.Header().Set("ETag", tag)
