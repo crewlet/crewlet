@@ -9,18 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/enginedocs"
 )
 
-// THE ENGINE'S OWN DOCUMENTATION AS THE MODEL READS IT: docs/ and the decision
-// records under adr/, as this build ships them (the module root's Docs),
-// searched and read by section (internal/enginedocs). Two docs tools, answered
-// in the turn's own process like describe_api: nothing is sent, nothing leaves
-// the engine, and the text is the engine's own records, which a person reads
-// on the documentation site word for word.
-//
-// They exist because a question about the engine itself (what a setting does,
-// what an agent's tool asks for, how long a grant lasts, why a rule was
-// decided) was answered from the model's memory or not at all: only the API
-// reference was in reach, and an agent's tools, the guides and the decision
-// records were not.
+// The engine's own docs and decision records as two docs tools, answered in
+// process from the embedded tree (internal/enginedocs), like describe_api.
 
 // The two docs tools.
 const (

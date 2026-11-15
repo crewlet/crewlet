@@ -17,21 +17,17 @@ import (
 	"sync"
 )
 
-// APIReference is docs/reference/api-endpoints.md as this build ships it, read
-// from [Docs] once: the page is part of the tree, so it is embedded once.
+// APIReference is docs/reference/api-endpoints.md, read once from [Docs].
 var APIReference = sync.OnceValue(func() string {
 	page, err := Docs.ReadFile("docs/reference/api-endpoints.md")
 	if err != nil {
-		// THE DIRECTIVE BELOW EMBEDS docs/reference WHOLE, so the page is in
-		// every build that compiled; a build without it is a broken tree.
+		// The embed below holds docs/reference whole, so this cannot happen.
 		panic("crewlet: the embedded documentation holds no API reference: " + err.Error())
 	}
 	return string(page)
 })
 
-// Docs is the documentation this build ships, docs/ and the decision records
-// under adr/, by their paths in the tree: every page, and none of the images
-// beside them, which no reader of the text needs.
+// Docs is docs/ and the decision records under adr/, without the images.
 //
 //go:embed docs/*.md docs/concepts docs/getting-started docs/guides docs/integrations
 //go:embed docs/reference adr/*.md

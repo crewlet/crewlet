@@ -37,13 +37,8 @@ func index(t *testing.T) *enginedocs.Index {
 	return ix
 }
 
-// A PAGE IS READ BY ITS SECTIONS. Each heading opens a section, named by its
-// heading or its anchor (GitHub's slug, numbered where a heading repeats), a
-// heading inside a fence is text, and a read hands back the section with what
-// nests under it and stops at the next heading of its level. Named by none, a
-// read is the page's top and lists its sections. Mutation: read headings
-// inside fences, stop at a deeper heading, or hand back the whole page for its
-// top, and this fails.
+// A read is one section with what nests under it, named by heading or anchor;
+// fenced headings are text, and an unnamed read is the page's top.
 func TestAPageIsReadBySection(t *testing.T) {
 	t.Parallel()
 	ix := index(t)
@@ -85,11 +80,8 @@ func TestAPageIsReadBySection(t *testing.T) {
 	}
 }
 
-// A SEARCH FINDS THE SECTION THAT ANSWERS: a section holding the query's terms
-// ranks above one that does not, the page's title and the heading count as
-// what a section is about, and a hit says where it is and quotes the text
-// around the first term. Mutation: rank whole pages, or leave the heading out
-// of what is indexed, and this fails.
+// A search ranks sections, counting the page title and heading, and quotes the
+// text around the first term.
 func TestASearchFindsTheSectionThatAnswers(t *testing.T) {
 	t.Parallel()
 	hits := index(t).Search("how many hours by default", 3)
@@ -110,10 +102,7 @@ func TestASearchFindsTheSectionThatAnswers(t *testing.T) {
 	}
 }
 
-// THE BINARY CARRIES EVERY PAGE THE TREE HAS: every Markdown page under docs/
-// and adr/ is in the embedded documentation and its index, so a page added in
-// a new folder is never missing from what Ask Crewlet can read. Mutation:
-// drop a folder from the module root's embed, and this names its pages.
+// Every Markdown page under docs/ and adr/ is in the embedded tree and its index.
 func TestTheBinaryCarriesEveryPageTheTreeHas(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -159,7 +148,7 @@ func TestTheBinaryCarriesEveryPageTheTreeHas(t *testing.T) {
 	}
 }
 
-// THE SLUG IS GITHUB'S, as the docs gate holds every link in the tree to it.
+// The anchor is GitHub's slug, the rule the docs gate holds links to.
 func TestTheAnchorIsGitHubs(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ heading, want string }{

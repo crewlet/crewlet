@@ -12,13 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// CREWLET'S OWN DOCUMENTATION IS EVERYBODY'S TO READ, from the binary itself.
-// Both docs tools are offered to a person holding no app, as the documentation
-// site is open to anybody; a search answers sections by where they are, best
-// first; a read of one of them answers its text; and a page the tree does not
-// hold is refused naming what to do, before anything is read. Mutation: offer
-// the docs tools by an app, or answer a read of a page the tree lacks, and this
-// fails.
+// The docs tools are offered with no app; a search answers sections by path, a
+// read answers one within a docs answer's bound, and a missing page is refused.
 func TestCrewletsOwnDocumentationIsEverybodysToRead(t *testing.T) {
 	t.Parallel()
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Stage: iam.StageActive}
@@ -39,7 +34,7 @@ func TestCrewletsOwnDocumentationIsEverybodysToRead(t *testing.T) {
 			first = strings.TrimPrefix(line, "1. ")
 		}
 	}
-	if first == "" || !(strings.HasPrefix(first, "docs/") || strings.HasPrefix(first, "adr/")) {
+	if !strings.HasPrefix(first, "docs/") && !strings.HasPrefix(first, "adr/") {
 		t.Fatalf("the search answered no section by its path:\n%s", found)
 	}
 	read := mustTool(t, catalog.ReadEngineDocTool)

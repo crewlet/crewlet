@@ -1,31 +1,6 @@
-// Package enginedocs is the engine's own documentation as Ask Crewlet reads it:
-// the docs/ tree and the decision records under adr/, as this build carries
-// them (the module root's Docs), cut into sections at their headings and
-// searched with the engine's own lexical ranking (internal/textindex).
-//
-// # The running version's words, never a copy
-//
-// The pages are the binary's own, embedded from the tree it was built from, so
-// what Ask Crewlet reads about a setting, a tool or a limit is what this build
-// does, not what some other release's site says. Nothing is fetched: a search
-// and a read are pure functions of the embedded tree, made in the turn's own
-// process, and the text is the engine's records, read as such.
-//
-// # A section is the unit
-//
-// A page is read and ranked by its sections, each heading opening one: a
-// sixty-kilobyte reference page is many answers, and ranked whole it would
-// outrank the one paragraph that answers the question (BM25's length
-// normalisation is what keeps a short section in reach). A read hands back one
-// section with what nests under it, so the reader gets the whole of what the
-// heading covers and no more.
-//
-// # One slug
-//
-// A section is named by its heading or by the anchor GitHub renders for it
-// ([Anchor]), which is also how every link in the tree names one, so a link
-// read in a page opens the section it points at. The docs gate
-// (internal/docsgate) holds every anchor in the tree to this same rule.
+// Package enginedocs searches and reads the engine's own docs/ and adr/ pages,
+// embedded from the build's tree, by section: each heading opens one, named by
+// its heading or GitHub's anchor for it ([Anchor]).
 package enginedocs
 
 import (
@@ -209,11 +184,8 @@ func (ix *Index) Search(query string, limit int) []Hit {
 	return hits
 }
 
-// Read is the section of page p that section names, by its heading or its
-// anchor, with every section nested under it; or, naming none (or the page's
-// title), the page's top: what it says before its first section, with the
-// headings to read next. p may also carry the anchor after a `#`, as
-// [Section.Where] writes it.
+// Read is the named section of page p (by heading or anchor, or p's `#anchor`)
+// with what nests under it; naming none, it is the page's top and its headings.
 func (ix *Index) Read(p, section string) (Read, error) {
 	if before, anchor, cut := strings.Cut(p, "#"); cut && section == "" {
 		p, section = before, anchor
@@ -244,10 +216,8 @@ func (ix *Index) Read(p, section string) (Read, error) {
 				ErrNoSection, p, want, strings.Join(out.Headings, "; "))
 		}
 	}
-	// WHAT NESTS UNDER IT: every section after it until a heading of its own
-	// level or higher. The page's top is what comes before its first section
-	// (a heading below the title), never the whole page: a reference page is
-	// a megabyte, and its headings say where to read next.
+	// Nested sections run to the next heading of its level; the page's top stops
+	// at the first section, since a reference page is a megabyte.
 	top := page[start].Level < 2
 	out.Sections = append(out.Sections, page[start])
 	for _, s := range page[start+1:] {
@@ -327,11 +297,8 @@ var (
 	htmlTagRE = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`<[^>]+>`) })
 )
 
-// Anchor is GitHub's slug of a heading, the anchor its page renders it at: the
-// RENDERED text (a link is its label, a tag is nothing), lower-cased, keeping
-// only letters, marks, digits, connector punctuation, spaces and hyphens, with
-// each space a hyphen. A heading repeated on a page takes `-1`, `-2`, … in
-// order, which [New] numbers.
+// Anchor is GitHub's slug of a heading's rendered text: lower-cased, keeping
+// letters, marks, digits, `_`, spaces as hyphens and hyphens. [New] numbers repeats.
 func Anchor(heading string) string {
 	text := headingLinkRE().ReplaceAllString(heading, "$1")
 	text = htmlTagRE().ReplaceAllString(text, "")
