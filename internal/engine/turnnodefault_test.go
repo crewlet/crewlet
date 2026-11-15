@@ -30,7 +30,8 @@ import (
 // the mail.
 func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 	t.Parallel()
-	ended, end := context.WithCancel(t.Context())
+	live := t.Context()
+	ended, end := context.WithCancel(live)
 	end()
 	failures := map[string]struct {
 		err   error
@@ -70,7 +71,7 @@ func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 		for name, tc := range failures {
 			t.Run(site+"/"+name, func(t *testing.T) {
 				t.Parallel()
-				ctx := t.Context()
+				ctx := live
 				if tc.ended {
 					ctx = ended
 				}
