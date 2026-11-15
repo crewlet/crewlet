@@ -73,8 +73,9 @@ type LimitRow struct {
 	// Default is what it enforces when the document says nothing.
 	Default float64 `json:"default"`
 	// Off is whether Value switches the limit off rather than bounding
-	// anything: a `notification_rate_limit` of 0 is no rate limit, and an
-	// `onboarding_max_tool_rounds` of 0 is no onboarding pass.
+	// anything: a `notification_rate_limit` of 0 is no rate limit, an
+	// `onboarding_max_tool_rounds` of 0 is no onboarding pass, and a token
+	// floor of 0 is no floor.
 	Off bool `json:"off"`
 	// DefaultOff is the same question asked of Default, so a screen that
 	// says which default a set value replaced says Off where the default is
@@ -128,8 +129,13 @@ var limits = []limit{
 		read: func(c *config.Company) float64 {
 			return float64(c.TurnEngine.OnboardingRounds())
 		}},
+	{key: "turn_engine.extension_round_step", group: LimitTurn, unit: LimitCount,
+		read: func(c *config.Company) float64 { return float64(c.TurnEngine.ExtensionRoundStep) }},
 	{key: "turn_engine.delegation_depth_limit", group: LimitTurn, unit: LimitCount,
 		read: func(c *config.Company) float64 { return float64(c.TurnEngine.DelegationDepthLimit) }},
+	{key: "turn_engine.executor_min_budget_tokens", group: LimitTurn, unit: LimitCount,
+		zeroIsOff: true,
+		read:      func(c *config.Company) float64 { return float64(c.TurnEngine.ExecutorFloor()) }},
 	{key: "turn_engine.delegation.max_parallel", group: LimitDelegation, unit: LimitCount,
 		read: func(c *config.Company) float64 { return float64(c.TurnEngine.Delegation.MaxParallel) }},
 	{key: "turn_engine.delegation.max_tasks_per_call", group: LimitDelegation, unit: LimitCount,
@@ -138,6 +144,13 @@ var limits = []limit{
 		}},
 	{key: "turn_engine.delegation.max_turns", group: LimitDelegation, unit: LimitCount,
 		read: func(c *config.Company) float64 { return float64(c.TurnEngine.Delegation.MaxTurns) }},
+	// THE CEILING "Turns per worker" is refused above, drawn beside it so a
+	// person told "can be at most N" can see and raise N.
+	{key: "turn_engine.delegation.max_turns_ceiling", group: LimitDelegation, unit: LimitCount,
+		read: func(c *config.Company) float64 { return float64(c.TurnEngine.Delegation.MaxTurnsCeiling) }},
+	{key: "turn_engine.delegation.min_tokens_per_task", group: LimitDelegation, unit: LimitCount,
+		zeroIsOff: true,
+		read:      func(c *config.Company) float64 { return float64(c.TurnEngine.Delegation.PerTaskFloor()) }},
 	{key: "turn_engine.delegation.budget_fraction", group: LimitDelegation, unit: LimitFraction,
 		read: func(c *config.Company) float64 { return c.TurnEngine.Delegation.BudgetFraction }},
 	{key: "turn_engine.delegation.task_timeout_seconds", group: LimitDelegation, unit: LimitSeconds,

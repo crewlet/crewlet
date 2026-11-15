@@ -10495,7 +10495,9 @@ name is the shell's, and the clock is the company document's.
 The caps the engine holds a turn to are not policies the company writes for
 its agents to read: they are **Settings › Limits** (`#/settings/limits`), in
 the Runtime group, the engine's own answer for each (the turn's guardrails,
-delegation, notifications and a scheduled turn's timeout). Each group is a
+delegation, notifications and a scheduled turn's timeout; a ceiling a cap is
+refused above, such as the most turns a worker may ask for, is a row beside
+it, so a refusal naming it names a value the page shows and changes). Each group is a
 card holding the kit's `SettingsTable` (the shape Settings › Sign-in policy
 takes too): the cap's name with its key in the company document under it, the
 value in tabular figures, and its source, *Default* as a quiet word where the
@@ -10667,7 +10669,10 @@ check names, the first two and a count of the rest, every entry on hover;
 "what the branch requires" where it names none, and "not for commands" for a
 command rule), and the limits
 the engine holds every delegate to, the deadline and the two hourly caps, as a
-settings table, since no document changes them. The rules card's head holds a
+settings table whose rows are the Settings › Limits row (`LimitSetting`): each
+value beside the engine's default, and a pencil that changes its
+`delegated_decisions` key within the range the engine holds it to, so none can
+be switched off. The rules card's head holds a
 switch that turns delegation on or off and **Add a rule**, and each rule's
 row ends in a pencil and a bin; each is drawn for every reader and disabled
 with the reason for one who cannot write the document. The pencil and Add a

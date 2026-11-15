@@ -46,6 +46,10 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 		"turn_engine.max_iterations":                  "5",
 		"turn_engine.onboarding_max_tool_rounds":      "7",
 		"turn_engine.delegation_depth_limit":          "4",
+		"turn_engine.extension_round_step":            "6",
+		"turn_engine.executor_min_budget_tokens":      "30000",
+		"turn_engine.delegation.max_turns_ceiling":    "45",
+		"turn_engine.delegation.min_tokens_per_task":  "800",
 		"turn_engine.delegation.max_parallel":         "2",
 		"turn_engine.delegation.max_tasks_per_call":   "6",
 		"turn_engine.delegation.max_turns":            "17",
@@ -279,10 +283,15 @@ func TestEverySettableLimitReportsTheRangeTheValidatorHolds(t *testing.T) {
 		if r.MinExclusive {
 			inside = row.Default
 		}
+		// A CEILING AT ITS LEAST is below the cap it bounds (max_turns_ceiling
+		// 1 under max_turns 20), a rule about both that carries no range; only
+		// a refusal of the bound itself disagrees with the row.
 		doc := "name: Acme\n" + nest(map[string]string{row.Key: fmt.Sprint(inside)})
 		if _, err := config.ParseCompany([]byte(doc)); err != nil {
-			t.Errorf("%s = %v is inside its reported range %+v, and the validator refuses it: %v",
-				row.Key, inside, r, err)
+			if p, ok := problemAt(config.Problems(err), row.Key); !ok || p.Range != nil {
+				t.Errorf("%s = %v is inside its reported range %+v, and the validator refuses it: %v",
+					row.Key, inside, r, err)
+			}
 		}
 		checked++
 	}
