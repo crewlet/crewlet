@@ -290,16 +290,65 @@ func (r rule) write(b *strings.Builder, replaced string) {
 // for each piece of it between its escaped line breaks, the breaks as they
 // stand ([rule.write]).
 func writeValue(b *strings.Builder, with, replaced string) {
-	for replaced != "" {
-		piece, brk := replaced, ""
-		if i, next := escapedBreak(replaced); i >= 0 {
-			piece, brk = replaced[:i], replaced[i:next]
+	w := valueWriter{with: with}
+	w.write(b, replaced)
+	w.close(b)
+}
+
+// valueWriter writes a value as [writeValue] does, handed to it a stretch at a
+// time: what a reader of a text that arrives in pieces writes of a value whose
+// end it has not read yet, where the whole text writes it at once. writeValue is
+// one handed the whole value, so the two are one implementation.
+type valueWriter struct {
+	with string
+	// marked is whether the piece being written has its marker already, and
+	// pending the end of the stretch handed last that the next can make an
+	// escaped break of: a `\`, or the `\r` a break can open with, and the
+	// `\` after it.
+	marked  bool
+	pending string
+}
+
+// write writes s, the next stretch of the value.
+func (w *valueWriter) write(b *strings.Builder, s string) {
+	if w.pending != "" {
+		s, w.pending = w.pending+s, ""
+	}
+	for {
+		i, next := escapedBreak(s)
+		if i < 0 {
+			break
 		}
-		if piece != "" {
-			b.WriteString(with)
-		}
-		b.WriteString(brk)
-		replaced = replaced[len(piece)+len(brk):]
+		w.piece(b, i > 0)
+		b.WriteString(s[i:next])
+		w.marked = false
+		s = s[next:]
+	}
+	keep := 0
+	switch {
+	case strings.HasSuffix(s, `\r\`):
+		keep = 3
+	case strings.HasSuffix(s, `\r`):
+		keep = 2
+	case strings.HasSuffix(s, `\`):
+		keep = 1
+	}
+	w.piece(b, len(s) > keep)
+	w.pending = strings.Clone(s[len(s)-keep:])
+}
+
+// close writes what is left of the value.
+func (w *valueWriter) close(b *strings.Builder) {
+	w.piece(b, w.pending != "")
+	w.pending = ""
+}
+
+// piece writes the marker of the piece being written where it holds anything
+// and has none yet.
+func (w *valueWriter) piece(b *strings.Builder, holds bool) {
+	if holds && !w.marked {
+		b.WriteString(w.with)
+		w.marked = true
 	}
 }
 
@@ -337,31 +386,52 @@ func escapedBreak(s string) (int, int) {
 // run on into a `-----END` written straight after it — is the pattern's match
 // as if the text ended at the armour.
 func (r rule) next(text string, from int, prior [][2]int) (int, int, bool) {
-	for from <= len(text) {
-		start, end, found := r.find(text, from)
+	for {
+		key, value, found := r.decide(text, from, prior)
 		if !found {
 			return 0, 0, false
 		}
+		if value[1] > value[0] {
+			return value[0], value[1], true
+		}
+		from = beyond(text, key[0])
+	}
+}
+
+// decide is what the rule decides first at or after from, prior being every
+// value it replaced before from: where what decides it begins and ends (the
+// match, which for a rule with a value is its key and the separator after it),
+// what it replaces there, and whether it decides anything more. What it
+// replaces is the match itself for a rule with no value, and for one with a
+// value the value the key names, empty where it names none: [rule.next] goes
+// on past that key, and [claimed] records it as named.
+//
+// ONE DECISION AT A TIME, so a reader of a text that arrives in pieces can
+// decide with the same code as the whole text, and trust each decision only
+// where its window holds all it read.
+func (r rule) decide(text string, from int, prior [][2]int) (key, replaced [2]int, found bool) {
+	for from <= len(text) {
+		start, end, found := r.find(text, from)
+		if !found {
+			return key, replaced, false
+		}
 		if r.value != nil {
-			if valueStart, valueEnd := r.value(text, start, end, prior); valueEnd > valueStart {
-				return valueStart, valueEnd, true
-			}
-			from = beyond(text, start)
-			continue
+			valueStart, valueEnd := r.value(text, start, end, prior)
+			return [2]int{start, end}, [2]int{valueStart, valueEnd}, true
 		}
 		at := armourIn(text, start, end)
 		if at == end {
-			return start, end, true
+			return [2]int{start, end}, [2]int{start, end}, true
 		}
 		// The match as if the text ended at the armour: the rule's first
 		// match there, which no place before start has, since none had
 		// one in the whole text. None, and the search goes on past it.
 		if s, e, found := r.find(text[:at], start); found {
-			return s, e, true
+			return [2]int{s, e}, [2]int{s, e}, true
 		}
 		from = at + pemArmourAt().FindStringIndex(text[at:])[1]
 	}
-	return 0, 0, false
+	return key, replaced, false
 }
 
 // find is the rule's first match at or after from: its pattern's, held to its
@@ -1921,21 +1991,39 @@ func isSpace(c byte) bool { return c == ' ' || c == '\t' }
 // digit follows a break is read only as far as the first one ([wordAfter]).
 func valueEnd(text string, at int) int {
 	for i := at; i < len(text); i++ {
-		switch c := text[i]; {
-		case valueSpace(c):
-			return i
-		case c == '-' && armourAt(text, i), c == '[' && strings.HasPrefix(text[i:], Marker):
-			return i
-		case c == '\\':
-			if n := escapedBreakAt(text, i); n > 0 && (!wordAfter(text, i+n) || keyAfterBreak(text, i+n)) {
-				for i > at && text[i-1] == '\\' {
-					i--
-				}
-				return i
-			}
+		if valueStop(text, i) {
+			return valueBack(text, at, i)
 		}
 	}
 	return len(text)
+}
+
+// valueStop reports whether a password's value read up to i ends at i
+// ([valueEnd]): a space, an armour, a marker, or an escaped break the value
+// does not run on across.
+func valueStop(text string, i int) bool {
+	switch c := text[i]; {
+	case valueSpace(c):
+		return true
+	case c == '-' && armourAt(text, i), c == '[' && strings.HasPrefix(text[i:], Marker):
+		return true
+	case c == '\\':
+		n := escapedBreakAt(text, i)
+		return n > 0 && (!wordAfter(text, i+n) || keyAfterBreak(text, i+n))
+	}
+	return false
+}
+
+// valueBack is where a value that begins at at and stops at i ([valueStop])
+// ends: at i, or before the backslashes written before an escaped break
+// there, which are the string's ([valueEnd]).
+func valueBack(text string, at, i int) int {
+	if text[i] == '\\' {
+		for i > at && text[i-1] == '\\' {
+			i--
+		}
+	}
+	return i
 }
 
 // escapedBreakAt is how long the escaped line break beginning at i is — `\n`,
@@ -2865,50 +2953,84 @@ func readKeys(text string) ([][2]int, int, *claims) {
 	if !strings.Contains(text, keyArmour) {
 		return nil, -1, nil
 	}
-	var spans [][2]int
-	// closed is where each END a BEGIN's block reached begins, in order.
-	var closed []int
-	open := -1
 	c := &claims{text: text}
+	k := keyReading{open: -1}
 	begins := keyBegin.FindAllStringIndex(text, -1)
 	for _, b := range begins {
-		if len(spans) > 0 && b[0] < spans[len(spans)-1][1] {
-			// Inside the block before it. Part of that key, not one of
-			// its own.
-			continue
-		}
-		block := readKey(text, b, c)
-		if block.end > 0 {
-			spans = append(spans, [2]int{b[0], block.end})
-		}
-		if block.closed {
-			closed = append(closed, block.endArmour)
-		}
-		open = -1
-		if block.open {
-			open = b[0]
-		}
+		k.begin(text, b, c)
 	}
-	c.take(spans)
-	// prev is where the last key armour before the END being read ends — a
-	// BEGIN's or an END's — which is as far back as [readBack] has to look
-	// for the start of the END's line.
+	c.take(k.forward)
+	spans := append(slices.Clone(k.forward), k.ends(text, c, begins, keyEnd.FindAllStringIndex(text, -1), 0, len(text))...)
+	return mergeSpans(c.shortOfNames(spans)), k.open, c
+}
+
+// keyReading is a reading of the keys' blocks in a text: every BEGIN's block
+// read forward in order ([keyReading.begin]), and then every END's that no
+// BEGIN's block reached read back ([keyReading.ends]), the claims taken
+// between the two ([claims.take]).
+//
+// ONE ARMOUR AT A TIME, so a reader of a text that arrives in pieces can read
+// each armour's block with the same code as the whole text, in a window that
+// holds all the block reads, and carry from one window to the next what a
+// later armour's reading asks of the earlier ones: the blocks read forward,
+// and the ENDs they reached.
+type keyReading struct {
+	// forward is every block read forward from a BEGIN, in order, and
+	// closed where each END such a block reached begins, in order.
+	forward [][2]int
+	closed  []int
+	// open is where the last BEGIN read begins when its block is still
+	// open at the end of the text, or -1.
+	open int
+}
+
+// begin reads the block of the BEGIN armour at b, forward, c being what the
+// rules claim in text ([readKey]): none where it lies inside the block read
+// before it, which it is part of.
+func (k *keyReading) begin(text string, b []int, c *claims) {
+	if len(k.forward) > 0 && b[0] < k.forward[len(k.forward)-1][1] {
+		// Inside the block before it. Part of that key, not one of
+		// its own.
+		return
+	}
+	block := readKey(text, b, c)
+	if block.end > 0 {
+		k.forward = append(k.forward, [2]int{b[0], block.end})
+	}
+	if block.closed {
+		k.closed = append(k.closed, block.endArmour)
+	}
+	k.open = -1
+	if block.open {
+		k.open = b[0]
+	}
+}
+
+// ends reads back the blocks of the END armours in ends that begin in
+// [from, to) and that no BEGIN's block reached ([readBack]), begins and ends
+// being every key armour of each kind in text, in order. What it asks of the
+// armours before each END is where the last of them ends, prev, which is as
+// far back as readBack has to look for the start of the END's line.
+func (k *keyReading) ends(text string, c *claims, begins, ends [][]int, from, to int) [][2]int {
+	var spans [][2]int
 	prev := 0
-	for _, e := range keyEnd.FindAllStringIndex(text, -1) {
+	for _, e := range ends {
 		for len(begins) > 0 && begins[0][1] <= e[0] {
 			prev, begins = max(prev, begins[0][1]), begins[1:]
 		}
-		for len(closed) > 0 && closed[0] < e[0] {
-			closed = closed[1:]
-		}
-		if len(closed) == 0 || closed[0] != e[0] {
-			if start, ok := readBack(text, e, prev, c); ok {
-				spans = append(spans, [2]int{start, e[1]})
+		if from <= e[0] && e[0] < to {
+			for len(k.closed) > 0 && k.closed[0] < e[0] {
+				k.closed = k.closed[1:]
+			}
+			if len(k.closed) == 0 || k.closed[0] != e[0] {
+				if start, ok := readBack(text, e, prev, c); ok {
+					spans = append(spans, [2]int{start, e[1]})
+				}
 			}
 		}
 		prev = e[1]
 	}
-	return mergeSpans(c.shortOfNames(spans)), open, c
+	return spans
 }
 
 // mergeSpans is spans in order, those that overlap made one: a block read
@@ -4552,18 +4674,19 @@ func claimed(text string) (tokens [][2]int, passwords [][3]int) {
 			passwords, from = append(passwords, [3]int{w.at(start), w.at(end), w.at(end)}), end
 		}
 	}
+	password := rules()[len(rules())-1]
 	var prior [][2]int
 	for from := 0; ; {
-		start, end, ok := passwordRule.next(w.text, from)
+		key, value, ok := password.decide(w.text, from, prior)
 		if !ok {
 			break
 		}
-		if valueStart, valueEnd := passwordValue(w.text, start, end, prior); valueEnd > valueStart {
-			passwords = append(passwords, [3]int{w.at(start), w.at(end), w.at(valueEnd)})
-			prior, from = append(prior, [2]int{valueStart, valueEnd}), valueEnd
+		if value[1] > value[0] {
+			passwords = append(passwords, [3]int{w.at(key[0]), w.at(key[1]), w.at(value[1])})
+			prior, from = append(prior, value), value[1]
 			continue
 		}
-		passwords, from = append(passwords, [3]int{w.at(start), w.at(end), w.at(end)}), beyond(w.text, start)
+		passwords, from = append(passwords, [3]int{w.at(key[0]), w.at(key[1]), w.at(key[1])}), beyond(w.text, key[0])
 	}
 	return tokens, passwords
 }
