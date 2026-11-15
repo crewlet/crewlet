@@ -13817,6 +13817,12 @@ every schedule (`recent_runs`), read from the replicated usage history: every
 data node's fires, each with what became of it, kept 181 days. One schedule's
 own fires are [`schedule_runs`](#queries).
 
+A row's `timeout_seconds` is the cap a run is held to: the schedule's own
+`timeout_seconds`, or the engine's default where it sets none, which
+`timeout_default: true` says. `default_timeout_seconds` is that default (half
+an hour), so a client says what an empty time limit means without keeping a
+copy of it.
+
 ```json
 {
   "schedules": [
@@ -13825,11 +13831,13 @@ own fires are [`schedule_runs`](#queries).
       "name": "daily-standup",
       "cron": "30 9 * * 1-5", "timezone": "Europe/Amsterdam",
       "task": "Post your standup…", "target": "each",
-      "enabled": true, "timeout_seconds": 1800, "catchup": true,
+      "enabled": true, "timeout_seconds": 1800, "timeout_default": true,
+      "catchup": true,
       "runners": ["backend-lead", "backend-dev"],
       "next_run": "2026-06-09T07:30:00+00:00"
     }
   ],
+  "default_timeout_seconds": 1800,
   "recent_runs": [
     {
       "scope_type": "unit", "scope_id": "backend", "scope_name": "backend",

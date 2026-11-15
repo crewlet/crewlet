@@ -181,10 +181,17 @@ type Row struct {
 	// reader to change it and expect something to happen.
 	Target org.ScheduleTarget `json:"target"`
 
-	Enabled        bool     `json:"enabled"`
-	TimeoutSeconds int      `json:"timeout_seconds"`
-	Catchup        bool     `json:"catchup"`
-	Runners        []string `json:"runners"`
+	Enabled bool `json:"enabled"`
+
+	// TimeoutSeconds is the cap a run of this schedule is held to, the
+	// engine's default ([org.DefaultScheduleTimeout]) where it sets none,
+	// and TimeoutDefault says which: a screen states a defaulted cap as the
+	// engine's rather than as one somebody wrote on the schedule.
+	TimeoutSeconds int  `json:"timeout_seconds"`
+	TimeoutDefault bool `json:"timeout_default"`
+
+	Catchup bool     `json:"catchup"`
+	Runners []string `json:"runners"`
 
 	// NextRun is the next UTC fire, zero when there is none: a disabled
 	// schedule, an expression that cannot be parsed, or a date the calendar
@@ -261,6 +268,7 @@ func Describe(o *org.Organization, opts DescribeOptions) []Row {
 			Task:           s.Task,
 			Enabled:        s.IsEnabled(),
 			TimeoutSeconds: int(s.Timeout() / time.Second),
+			TimeoutDefault: s.TimeoutSeconds <= 0,
 			Catchup:        s.CatchesUp(),
 			Runners:        e.runners(leadOf),
 		}
