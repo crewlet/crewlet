@@ -236,3 +236,39 @@ func TestAHeldCallAndAnApprovedOneAreRecordedAsTheCallsTheyAre(t *testing.T) {
 			"third neither", rows[0], rows[1], rows[2])
 	}
 }
+
+// A CALL WHOSE ARGUMENTS ARE NOT KNOWN IS RECORDED AS ONE, with why. Its
+// arguments go on the execute phase's record as `{}` only because no record
+// holds them: the bridge refused what the model wrote as unparsable, or the
+// log's text of them does not read back (ArgsUnread), or the call was still in
+// flight as the round was read and its entry kept its identity alone
+// (Unfinished with no arguments). So the row says which, and a reader draws the
+// arguments as not known rather than as the tool called with none. A call in
+// flight that carries arguments, a withheld one (which says which of its two it
+// is) and a call made with none say nothing of the kind.
+//
+// Mutation: build the execution without argsUnknown, write the row without it,
+// tell the two reasons alike, or mark a withheld or an unfinished call that
+// carries arguments, and this goes red.
+func TestACallWhoseArgumentsAreNotKnownIsRecordedAsOne(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	res := agentRunResult("done", []BridgedCall{
+		{Call: ledger.Call{Name: "slack_post", Failed: true, ArgsUnread: true}, Seq: 1},
+		{Call: ledger.Call{Name: "deploy", Failed: true, Unfinished: true, Digest: "d"}, Seq: 2},
+		{Call: ledger.Call{Name: "deploy", Failed: true, Unfinished: true,
+			Args: map[string]any{"env": "prod"}}, Seq: 3},
+		{Call: ledger.Call{Name: "gh_delete_repo", Failed: true, Withheld: true, Unfinished: true}, Seq: 4,
+			Held: true},
+		{Call: ledger.Call{Name: "list_files"}, Seq: 5},
+	}, nil, RunRecord{Harness: "claude-code"}, at, at.Add(time.Hour))
+	rows := toolExecutions(res.Result.Executions)
+	if len(rows) != 5 {
+		t.Fatalf("%d rows, want the five calls", len(rows))
+	}
+	for i, want := range []any{"unread", "unkept", nil, nil, nil} {
+		if got := rows[i]["arguments_unknown"]; got != want {
+			t.Errorf("%s's row %d: arguments_unknown = %v, want %v", rows[i]["name"], i, got, want)
+		}
+	}
+}

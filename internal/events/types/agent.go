@@ -135,6 +135,18 @@ type PromptSection struct {
 // reader says they are sealed rather than that the call sent none. Absent on
 // every other call.
 //
+// `arguments_unknown` says why no record holds what a call was made with
+// (toolloop.ArgsUnknown): `unread`, a call made with arguments in text that
+// could not be read (what the model wrote did not parse, and the call was
+// answered unrun, or an executor run's record of it does not read back), or
+// `unkept`, an executor run's call still in flight as its round was read,
+// whose entry kept its identity alone. `arguments` on such a row is not what
+// the call sent (`{}`, or an object a harness made of text that was not one),
+// and a reader says the arguments are not known rather than drawing it, since
+// `{}` reads as the tool called with none, a different call. A value a reader
+// does not know is still arguments not known. Absent on every other call, and
+// on a row a build before it wrote.
+//
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely
 // because a hand-maintained field list is how a failed tool call got deleted on
