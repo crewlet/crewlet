@@ -63,7 +63,7 @@ func newSignedIn(t *testing.T) *signedIn {
 	lineage := lineageAt(t, at)
 	cookie, err := signer.Mint(session.Mint{
 		Lineage: lineage, Person: sessionPerson, Epoch: 3, Generation: 1,
-		StartPosition: sessionStart, AbsoluteExpiresAt: at.Add(8 * time.Hour),
+		StartPosition: sessionStart, SignedInAt: at, AbsoluteExpiresAt: at.Add(8 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -283,7 +283,7 @@ func TestASignedInPersonsWritesNameTheirSession(t *testing.T) {
 //
 // The principal's ReauthAt is the instant a step-up surface stops accepting
 // this session's proof: when the session proved who its holder is, plus this
-// node's own `step_up` window. It was read off a person field nothing ever
+// step-up window in force. It was read off a person field nothing ever
 // set, so every session was stale from its first request and no person could
 // reach a step-up surface at all — enrolling a second factor included. A
 // session that proved nothing — a Tier A token's exchanged cookie, or a row
@@ -297,10 +297,10 @@ func TestASessionsProofCountsForTheStepUpWindow(t *testing.T) {
 		t.Fatalf("resolution %v, want resolved", got.how)
 	}
 	proved := rig.dir.identity.Session.ProvedAt
-	want := proved.Add(config.DefaultSessionStepUp)
+	want := proved.Add(config.DefaultStepUp)
 	if !got.principal.ReauthAt.Equal(want) {
 		t.Errorf("reauth deadline %s, want the proof at %s plus the %s window",
-			got.principal.ReauthAt, proved, config.DefaultSessionStepUp)
+			got.principal.ReauthAt, proved, config.DefaultStepUp)
 	}
 	if !got.principal.Fresh(rig.at) {
 		t.Error("a session proved ten minutes ago is stale inside an hour's window")

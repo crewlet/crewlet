@@ -473,7 +473,7 @@ func (s *signedIn) aheadOfTheClock(t *testing.T) string {
 	cookie, err := future.Mint(session.Mint{
 		Lineage: lineageAt(t, s.at.Add(4*time.Hour)), Person: sessionPerson, Epoch: 3,
 		Generation: 1, StartPosition: sessionStart,
-		AbsoluteExpiresAt: s.at.Add(4 * time.Hour),
+		SignedInAt: s.at, AbsoluteExpiresAt: s.at.Add(4 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)

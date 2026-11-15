@@ -32,12 +32,15 @@ const (
 	// LimitChat is Chatlet's company-wide message horizon, which its own
 	// screen changes in place.
 	LimitChat LimitGroup = "chat"
+	// LimitSignIn is the company's sign-in policy, answered on
+	// `sign_in_policy` with each range narrowed to the node's limits.
+	LimitSignIn LimitGroup = "sign_in"
 )
 
 // LimitGroups are every group, in drawing order. Settings › Limits draws the
 // first four; `delegated_decisions` answers the delegated rows.
 var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules, LimitDelegated,
-	LimitInbox, LimitAtlas, LimitCode, LimitChat}
+	LimitInbox, LimitAtlas, LimitCode, LimitChat, LimitSignIn}
 
 // LimitUnit is what a limit's number counts.
 type LimitUnit string

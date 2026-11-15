@@ -540,6 +540,11 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	}
 	derived := config.Derive(company)
 	invalid := d.rules(company, b.prior)
+	// A SIGN-IN VALUE PAST THIS NODE'S LIMITS is refused where it is written;
+	// a reload or an import is held to the limits by every node's sign-ins.
+	if d.authored {
+		invalid = errors.Join(invalid, s.signInLimits.Admit(company, b.prior))
+	}
 	if b.unsealed {
 		if masked := company.UnresolvedMasks(); len(masked) > 0 {
 			invalid = errors.Join(unrestorableMasks(masked),
@@ -578,6 +583,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	// WHAT THIS WRITE MOVES, beside what the document says: a clock moved
 	// is no fault of either revision, only of the change between them.
 	warnings = append(warnings, config.ClockMoves(company, b.prior)...)
+	warnings = append(warnings, config.SignInWeakens(company, b.prior)...)
 	if d.warnings != nil {
 		warnings = append(warnings, d.warnings(company, b.prior)...)
 	}

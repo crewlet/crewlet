@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -384,7 +385,7 @@ func TestClockSkewBetweenNodesNeverEndsASession(t *testing.T) {
 			cookie, err := other.Mint(session.Mint{
 				Lineage: lineageAt(t, elsewhere.now()), Person: personID, Epoch: 3,
 				Generation: 1, StartPosition: startPos,
-				AbsoluteExpiresAt: elsewhere.now().Add(absolute),
+				SignedInAt: elsewhere.now(), AbsoluteExpiresAt: elsewhere.now().Add(absolute),
 			})
 			if err != nil {
 				t.Fatalf("mint on the other node: %v", err)
@@ -684,14 +685,14 @@ func TestADeadlineEndsASessionBeforeAnyRowIsRead(t *testing.T) {
 			// is not: this is the session a person leaves open overnight.
 			cookie, err := s.signer.Mint(session.Mint{
 				Lineage: s.lineage, Person: personID, Epoch: 3, Generation: 1,
-				StartPosition:     startPos,
-				AbsoluteExpiresAt: s.clock.at.Add(30 * 24 * time.Hour),
+				StartPosition: startPos,
+				SignedInAt:    s.clock.at, AbsoluteExpiresAt: s.clock.at.Add(30 * 24 * time.Hour),
 			})
 			if err != nil {
 				s.t.Fatalf("mint: %v", err)
 			}
 			s.cookie = cookie
-			s.clock.advance(session.Idle + time.Minute)
+			s.clock.advance(config.DefaultIdleTimeout + time.Minute)
 		}, "idle"},
 		{"past the absolute lifetime", func(s *signedIn) {
 			s.clock.advance(absolute + time.Minute)
@@ -717,7 +718,7 @@ func TestADeadlineEndsASessionBeforeAnyRowIsRead(t *testing.T) {
 // AN OPEN CONNECTION'S BEARER OUTLIVES ITS IDLE DEADLINE, AND NOTHING ELSE.
 //
 // A socket holds the bearer its handshake presented and can never be handed a
-// re-issue, so its idle deadline is the handshake's plus [session.Idle] however
+// re-issue, so its idle deadline is the handshake's plus the idle limit however
 // busy the tab has been since. [session.Signer.ValidateOpen] sets that one
 // deadline aside. The control is the same bearer through Validate, which the
 // idle deadline ends; a record ending the session and the absolute deadline
@@ -729,16 +730,16 @@ func TestADeadlineEndsASessionBeforeAnyRowIsRead(t *testing.T) {
 func TestAnOpenConnectionsBearerOutlivesOnlyItsIdleDeadline(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
-	lifetime := session.Idle + 12*time.Hour
+	lifetime := config.DefaultIdleTimeout + 12*time.Hour
 	cookie, err := rig.signer.Mint(session.Mint{
 		Lineage: rig.lineage, Person: personID, Epoch: 3, Generation: 1,
-		StartPosition: startPos, AbsoluteExpiresAt: rig.clock.at.Add(lifetime),
+		StartPosition: startPos, SignedInAt: rig.clock.at, AbsoluteExpiresAt: rig.clock.at.Add(lifetime),
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
 	rig.cookie = cookie
-	rig.clock.advance(session.Idle + time.Hour)
+	rig.clock.advance(config.DefaultIdleTimeout + time.Hour)
 	open := func() session.Validation {
 		return rig.signer.ValidateOpen(t.Context(), rig.dir, rig.cookie)
 	}
