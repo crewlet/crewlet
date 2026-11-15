@@ -171,3 +171,75 @@ func TestAFiresTickReachesTheHistory(t *testing.T) {
 			runs[0].ScheduledAt, runs[0].FireLabel, runs[0].FiredAt, due, ran)
 	}
 }
+
+// A RUN A PERSON ASKED FOR READS AS ONE, UNTIL A LATER FIRE RAN IN ITS PLACE.
+//
+// The history keeps the ledger's own word for it, `fired_manually`, so a
+// reader can tell a run somebody asked for from one the cron made. And it
+// waits in the seat's inbox under the schedule's one partition as a tick's
+// fire does, so where a later fire ran in its place it reads as skipped, as a
+// tick's fire would.
+//
+// Mutation: narrow fireOutcomeSQL's supersede back to `fired` alone, and the
+// run nobody ran reads as fired_manually.
+func TestARunAPersonAskedForReadsAsOneUntilALaterFireRanInItsPlace(t *testing.T) {
+	t.Parallel()
+	at := func(h int) time.Time { return time.Date(2026, 9, 23, h, 0, 0, 0, santiago) }
+	estate := openStore(t)
+	ledger := sqlledger.New(estate.SQL())
+	for _, f := range []struct {
+		hour    int
+		label   string
+		outcome schedule.Outcome
+		trace   string
+	}{
+		{8, schedule.ManualFireLabel("ask-8"), schedule.OutcomeFiredManually, "trace-asked-8"},
+		{9, at(9).Format("20060102T1504"), schedule.OutcomeFired, "trace-check-9"},
+		{11, schedule.ManualFireLabel("ask-11"), schedule.OutcomeFiredManually, "trace-asked-11"},
+	} {
+		if _, err := ledger.Claim(t.Context(), schedule.Run{
+			FireKey: schedule.FireKey{Scope: types.ScheduleScopeRole, ScopeID: "Sre",
+				ScheduleName: "health-check", FireLabel: f.label, TargetHandle: "sre"},
+			ScheduledAt: at(f.hour), FiredAt: at(f.hour), Outcome: f.outcome, TraceID: f.trace,
+		}); err != nil {
+			t.Fatalf("record a fire: %v", err)
+		}
+	}
+	body, err := json.Marshal(types.ScheduledFireSuperseded{
+		ScopeType: types.ScheduleScopeRole, ScopeID: "Sre", ScheduleName: "health-check",
+		TargetHandle: "sre", TaskID: "asked-8", SupersededBy: "check-9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := estate.Events().Append(t.Context(), store.EventRecord{
+		ID: "ev-superseded", Type: types.ScheduledFireSuperseded{}.EventType(),
+		Source: "engine.scheduler", Category: "task", Time: at(9).Add(time.Minute),
+		TraceID: "trace-asked-8", Payload: body,
+	}); err != nil {
+		t.Fatalf("append the superseded record: %v", err)
+	}
+	p, _ := newPublisher(t, "node-a", estate, estate, at(23))
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatalf("flush the day: %v", err)
+	}
+	runs, _, err := usage.ScheduleRuns(t.Context(), estate.Replicated(),
+		usage.ScheduleRunsQuery{ScopeType: "role", ScopeID: "Sre", Name: "health-check", Limit: 10})
+	if err != nil {
+		t.Fatalf("ScheduleRuns: %v", err)
+	}
+	outcomes := map[string]string{}
+	for _, run := range runs {
+		outcomes[run.TraceID] = run.Outcome
+	}
+	want := map[string]string{
+		"trace-asked-8":  types.ScheduleOutcomeSuperseded,
+		"trace-check-9":  scheduleFired,
+		"trace-asked-11": string(schedule.OutcomeFiredManually),
+	}
+	for trace, outcome := range want {
+		if outcomes[trace] != outcome {
+			t.Errorf("%s reads %q, want %q (all: %v)", trace, outcomes[trace], outcome, outcomes)
+		}
+	}
+}

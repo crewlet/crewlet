@@ -6,7 +6,7 @@
  */
 
 import { expect, test } from "vitest";
-import { servicesRun } from "./services.ts";
+import { awaitsRestart, servicesRun } from "./services.ts";
 import {
   DESTINATIONS,
   WORKSPACES,
@@ -154,4 +154,32 @@ test("a company on another chat is offered nothing of Chatlet", () => {
   expect(serviceOfPath(["chatlet", "0f0f0f0f-1111-4222-8333-444455556666"])).toBe("chat");
   expect(pathShown(["chatlet", "activity"], elsewhere)).toBe(false);
   expect(pathShown(["doclet"], elsewhere)).toBe(true);
+});
+
+// A SERVICE THE NODE SERVES ONLY ONCE RESTARTED DOES NOT RUN HERE YET: the
+// company runs it, and every read of it on this node is refused until the
+// restart, so its row, its destinations and its controls are not offered, as
+// for a service the company does not run, and only the named one is taken
+// away. Mutation: read what runs off the backend alone, and Chatlet is drawn
+// as a workspace whose every screen is refused.
+test("a service awaiting this node's restart is not offered until it is served", () => {
+  const every = {
+    tracker: "worklet",
+    knowledge: "doclet",
+    chat: "chatlet",
+    code: "gitlet",
+  } as const;
+  expect(servicesRun({ ...every, restart: ["chat"] })).toEqual({
+    tracker: true,
+    knowledge: true,
+    chat: false,
+    code: true,
+  });
+  expect(awaitsRestart({ ...every, restart: ["chat"] }, "chat")).toBe(true);
+  expect(awaitsRestart({ ...every, restart: ["chat"] }, "tracker")).toBe(false);
+  expect(awaitsRestart({ ...every, restart: [] }, "chat")).toBe(false);
+  expect(awaitsRestart(null, "chat")).toBe(false);
+  const chat = WORKSPACES.find((w) => w.key === "chatlet")!;
+  expect(serviceShown(chat, servicesRun({ ...every, restart: ["chat"] }))).toBe(false);
+  expect(serviceShown(chat, servicesRun({ ...every, restart: [] }))).toBe(true);
 });

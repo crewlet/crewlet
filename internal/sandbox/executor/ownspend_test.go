@@ -422,8 +422,10 @@ func TestAContinuedOpenCodeRunReadsItsSessionBeforeTheRun(t *testing.T) {
 	}
 	// OF THE SESSION THE RUN TOOK UP, and only where it did take it up: one
 	// that started a session in its place has no earlier totals to take off.
+	asked := strings.LastIndex(continued[:before], "\n") + 1
 	if !strings.Contains(continued, "sid='ses_"+session+"' k=yes") ||
-		!strings.Contains(continued[:run], `if [ "$k" = yes ]; then before=$(opencode api --server "$url" session.get --param sessionID="$sid"`) {
+		!strings.HasPrefix(continued[asked:], `if [ "$k" = yes ] && bounded before `) ||
+		!strings.Contains(continued[asked:before], `opencode api --server "$url" session.get --param sessionID="$sid" > `) {
 		t.Errorf("the report before is not the continued session's:\n%s", continued[:run])
 	}
 	fresh := scriptOf(t, commandOf(opencode(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""))

@@ -97,12 +97,14 @@ type FormatOptions struct {
 }
 
 // Format is the budgeted form the cross-round ledger uses, and the lists of
-// the calls a run that continues a session, kept or in its job's own box, is
-// told its round made (internal/agent/runner's calledAfter): those after the
-// session's save, which [FormatElided] follows there as it does a round here,
-// and the late ones (those that finished only after their run stopped waiting
-// for them, those nobody waited for, and those still in flight), rendered
-// together under one read cap ([FormatCallGroups]).
+// the calls a run that continues a session, kept or in its job's own box, or
+// starts one of its own carrying a round on, is told its round made
+// (internal/agent/runner's calledAfter): those after the session's save, or
+// every call of the round for a run of its own, which [FormatElided] follows
+// there as it does a round here; the late ones (those that finished only after
+// their run stopped waiting for them, those nobody waited for, and those still
+// in flight); and the reads an earlier brief to the session counted without
+// listing them, rendered together under one read cap ([FormatCallGroups]).
 // The caller fits the pieces it names and sets [FormatOptions.Fitted].
 func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{
@@ -114,15 +116,28 @@ func Format(skip, reads []string) FormatOptions {
 // visible is the calls a render of one list shows: everything but the skipped
 // names, and the reads past MaxReadCalls.
 func visible(calls []Call, opts FormatOptions) []Call {
-	return visibleGroups([][]Call{calls}, opts)[0]
+	return ShownCallGroups([][]Call{calls}, opts)[0]
 }
 
-// visibleGroups is the calls each group of one render shows: everything but
-// the skipped names, and the reads past MaxReadCalls, COUNTED ACROSS THE
-// GROUPS in the order given, so a group shows only the reads the groups before
-// it left of the cap. Of their concatenation, [visible] shows exactly these
-// calls, in the same order.
-func visibleGroups(groups [][]Call, opts FormatOptions) [][]Call {
+// ShownCallGroups is the calls each group of a [FormatCallGroups] render of
+// groups under opts shows: the group's own calls, in its order, with exactly
+// the skipped names and the reads past the one read cap left out, COUNTED
+// ACROSS THE GROUPS in the order given, so a group shows only the reads the
+// groups before it left of the cap. It is the walk the render draws its lines
+// from, so a call is here exactly where its line is printed, and a group whose
+// reads all fall past the cap shows only its writes. Of the groups'
+// concatenation, [visible] shows exactly these calls, in the same order.
+//
+// WHAT A CALLER MAY RELY ON: each group's shown calls are a subsequence of the
+// group, in its order, each the very value given; a write is never left out;
+// and the reads a group leaves out past the cap are the group's LAST reads,
+// after every read of it the render showed. So a caller that must name the
+// calls a render left out (internal/agent/runner's leftOut, which records the
+// reads a brief counted without listing them) walks each group beside its
+// shown calls, in order: a call is shown where it is the next shown call, else
+// it is left out. Read off this walk rather than off a second rule, the calls
+// a caller names left out are never other than the ones the render counted.
+func ShownCallGroups(groups [][]Call, opts FormatOptions) [][]Call {
 	out := make([][]Call, len(groups))
 	reads := 0
 	for i, calls := range groups {
@@ -161,9 +176,10 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 }
 
 // FormatCallGroups renders the lists of calls one brief tells under headings
-// of its own (internal/agent/runner's calledAfter: the calls after a session's
-// save, and the late ones, those still in flight among them),
-// one string per group in the order given, each as [FormatCalls] renders a
+// of its own (internal/agent/runner's calledAfter: the late ones, those still
+// in flight among them; the calls after a session's save; and the reads an
+// earlier brief counted without listing them), one string per group in the
+// order given, each as [FormatCalls] renders a
 // list, "(none)" and its omitted line included, UNDER ONE READ CAP:
 // [FormatOptions.MaxReadCalls] counts the read lines of every group together,
 // spent in the order the groups are given, and each group's omitted line counts
@@ -174,7 +190,7 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 // the reads the cap allows. Fit them with [CallPieces] over the groups'
 // concatenation, which names exactly what this shows.
 func FormatCallGroups(groups [][]Call, opts FormatOptions) []string {
-	shown := visibleGroups(groups, opts)
+	shown := ShownCallGroups(groups, opts)
 	out := make([]string, len(groups))
 	for i, calls := range groups {
 		out[i] = renderCalls(calls, shown[i], opts)
@@ -183,7 +199,7 @@ func FormatCallGroups(groups [][]Call, opts FormatOptions) []string {
 }
 
 // renderCalls is one group's lines: shown, the calls of calls the render shows
-// ([visibleGroups]), and the line counting the reads of calls it leaves out.
+// ([ShownCallGroups]), and the line counting the reads of calls it leaves out.
 func renderCalls(calls, shown []Call, opts FormatOptions) string {
 	var lines []string
 	readsShown := 0

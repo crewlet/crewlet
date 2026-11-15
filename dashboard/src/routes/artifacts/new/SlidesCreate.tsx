@@ -283,7 +283,7 @@ export function SlidesCreate() {
         ) : (
           <div className="slides-create-state" role="alert">
             <h2 className="slides-create-state-title">The themes and layouts did not load</h2>
-            <QueryState error={starters.code} refusal={starters.refusal} loading={false} />
+            <QueryState error={starters.code} refusal={starters.refusal} loading={false} ownRetry />
             <Button size="small" variant="secondary" onClick={() => void starters.reload()}>
               Try again
             </Button>

@@ -102,6 +102,14 @@ type Sources struct {
 	// existed.
 	Company func() (*config.Company, *org.Organization)
 
+	// AwaitingRestart is which of Crewlet's own services the company it is
+	// handed turns on that this node serves only once restarted, by the org
+	// projection's keys for them (`engine.Engine.AwaitingRestart`); nil names
+	// none. Asked of the company the projection is being built from rather
+	// than read beside it, for Company's reason: two reads can straddle a
+	// publish.
+	AwaitingRestart func(*config.Company) []string
+
 	// Delegated is the access log's verdicts, which `delegated_decisions`
 	// reads (ADR-0125); nil serves no such question.
 	Delegated DelegatedReads
@@ -627,6 +635,9 @@ type Sources struct {
 	// DeviceSignIns is the fleet's device sign-in records. Nil leaves
 	// `llm_device_sign_in` unregistered and `device_sign_in` null.
 	DeviceSignIns DeviceSignIns
+	// ModelChecks is each model entry's latest check, as any node reads it.
+	// Nil leaves `llm_check` unregistered.
+	ModelChecks ModelChecks
 
 	// Catalogue is the model catalogue a model step suggests from. Nil
 	// leaves `llm_models` unregistered.
@@ -840,6 +851,12 @@ func Register(r *Registry, s Sources) {
 	// one is.
 	if s.DeviceSignIns != nil {
 		r.Register("llm_device_sign_in", Requires(iam.GrantAdmin), s.llmDeviceSignIn)
+	}
+	// ONE MODEL'S LATEST CHECK WHILE ITS RECORD ANSWERS, the admin's, as
+	// asking for one is: its lines are the doctor's, a vendor's sentences
+	// among them (decision D7).
+	if s.ModelChecks != nil {
+		r.Register("llm_check", Requires(iam.GrantAdmin), s.llmCheck)
 	}
 	if s.Usage != nil {
 		// ONE SCHEDULE'S OWN HISTORY, gated on the USAGE DOMAIN rather

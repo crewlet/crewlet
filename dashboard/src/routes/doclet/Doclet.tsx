@@ -245,7 +245,7 @@ export function Doclet() {
 
 function DocletLanding() {
   const probe = useSearchQuery("knowledge", { q: "", mode: "semantic" });
-  const { spaces, loading } = useSpaces();
+  const { spaces, loading, error, refusal } = useSpaces();
   if (probe.data?.available === false) return <Unavailable answer={probe.data} />;
   if (probe.data && probe.data.backend !== DOCLET_SEARCH_BACKEND && probe.data.backend !== "") {
     // A VENDOR WIKI: nothing on this node to browse, by design. Confluence is
@@ -261,7 +261,11 @@ function DocletLanding() {
   return (
     <div className="knowledge-home">
       <SpacesRow />
-      {!loading && spaces.length === 0 ? (
+      {error !== null && spaces.length === 0 ? (
+        // A FAILED READ IS SAID, with its Try again, never drawn as a company
+        // that has written nothing down.
+        <QueryState error={error} refusal={refusal} loading={false} />
+      ) : !loading && spaces.length === 0 ? (
         <EmptyState
           icon={<BookOpenGlyph size="xl" />}
           title="Nothing has been written down yet"
@@ -1347,7 +1351,7 @@ function ResultPreview({ hit, terms }: { hit: KnowledgeHit; terms: readonly stri
         </Card.Header>
         {body.trim() ? (
           <Document size="sm" measure="none">
-            {renderMarkdown(body, { highlight: terms })}
+            {renderMarkdown(body, { highlight: terms, headingsFrom: 3 })}
           </Document>
         ) : (
           <p className="knowledge-note">

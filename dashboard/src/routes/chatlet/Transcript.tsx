@@ -31,6 +31,20 @@
  * scrollbar describes the whole conversation and a day's pill still pins
  * over the part of the day that is drawn.
  *
+ * # Moving the window moves nothing on screen
+ *
+ * What is not drawn is stood for at exactly the height it is drawn at, or the
+ * page fights the reader: the thread holds the row at the top of the view in
+ * place (`ChatThread`), so every pixel a spacer is off becomes a scroll the
+ * page makes, that scroll moves the window, and the window moves the spacer
+ * back. So a row's height is recorded only while the row is drawn (a row the
+ * window removed is reported once more at no height at all), the observer
+ * lets go of a row in the commit that removes it, heights are kept to the
+ * fraction of a pixel, and the window is laid out in the coordinates the page
+ * draws in: each day's label and rule counted above its first row
+ * (`placedHeights`), and stood for with its rows when the day is not drawn
+ * (`daysInWindow`).
+ *
  * # History is read ahead of the reader
  *
  * A reader scrolling up meets older messages before the top of what is held:
@@ -93,7 +107,15 @@ import { readerDay } from "~/lib/format.ts";
 import type { ChatChannel, ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
 import { packPosition } from "./cursor.ts";
-import { dayOf, isUnread, layoutDays, timeOf, type Day } from "./days.ts";
+import {
+  dayOf,
+  daysInWindow,
+  isUnread,
+  layoutDays,
+  placedHeights,
+  timeOf,
+  type Day,
+} from "./days.ts";
 import { DayJump, type Jumps } from "./DayJump.tsx";
 import { MessageRow } from "./MessageRow.tsx";
 import { windowFor, type Tail } from "./messages.ts";
@@ -189,6 +211,9 @@ export const Transcript = memo(
     // TODAY, which a day's rule reads: the transcript renders when the date
     // changes, not on every tick of the clock.
     const today = useClock(readerDay);
+    // THE HEIGHT OF A DAY'S LABEL AND RULE, as the kit draws them: measured off
+    // a drawn day, since the window places every day's first row under them.
+    const [chrome, setChrome] = useState(0);
 
     // OLDEST AT THE TOP, the order a conversation is read in and the reverse of
     // the order the engine answers in.
@@ -251,24 +276,30 @@ export const Transcript = memo(
 
     const heightOf = (index: number) =>
       heights.current.get(rows[index]?.message.id ?? "") ?? ROW_ESTIMATE;
+    // WHERE THE PAGE DRAWS EACH ROW: its height, and a day's label and rule
+    // above the day's first row.
+    const placed = placedHeights(days, heightOf, chrome);
     // AN OLDER PAGE LANDS ABOVE THE ROW THAT WAS FIRST when the view was last
     // read, and the thread holds the reader's place by that page's height
     // before the paint. The window is drawn where the view will then stand,
     // so the rows the reader is looking at stay drawn through the landing.
     const landedAt = metrics.first ? rows.findIndex((r) => r.message.id === metrics.first) : -1;
     let shift = 0;
-    for (let i = 0; i < landedAt; i++) shift += heightOf(i);
+    for (let i = 0; i < landedAt; i++) shift += placed(i);
     // A ROW BEING LANDED ON IS DRAWN: the window is the one around it.
     const view = windowFor({
       count: rows.length,
-      heightOf,
+      heightOf: placed,
       scrollTop: metrics.scrollTop + shift,
       viewport: metrics.viewport,
       include: landing ? rows.findIndex((r) => r.message.id === landing.id) : undefined,
     });
     // EVERY DRAWN ROW'S HEIGHT, kept as it renders and as it reflows (a
     // narrower window, a preview that loads), since a row renders only when
-    // its message changes.
+    // its message changes. ONLY WHILE IT IS DRAWN: the observer reports a row
+    // the window has just removed once more, at no height at all, and that
+    // is not its height; recorded, the spacer standing for it shrank by the
+    // whole row and the page jumped.
     const rowSizes = useMemo<RowMeasure>(() => {
       const ids = new Map<Element, string>();
       const sizes =
@@ -277,7 +308,8 @@ export const Transcript = memo(
           : new ResizeObserver((entries) => {
               for (const entry of entries) {
                 const id = ids.get(entry.target);
-                if (id) heights.current.set(id, (entry.target as HTMLElement).offsetHeight);
+                if (id && entry.target.isConnected)
+                  heights.current.set(id, drawnHeight(entry.target));
               }
             });
       return {
@@ -441,37 +473,41 @@ export const Transcript = memo(
 
     const first = props.channel ? dayOf(props.channel.created_at) : "";
     const newest = dayOf(rows[rows.length - 1]?.message.created_at);
-    const drawnDays: ReactNode[] = [];
-    for (const day of days) {
-      const inWindow = day.rows.filter((r) => r.index >= view.start && r.index < view.end);
-      if (inWindow.length === 0) continue;
-      const above = day.rows
-        .filter((r) => r.index < view.start)
-        .reduce((sum, r) => sum + heightOf(r.index), 0);
-      const below = day.rows
-        .filter((r) => r.index >= view.end)
-        .reduce((sum, r) => sum + heightOf(r.index), 0);
-      drawnDays.push(
-        <DayBlock
-          key={day.key}
-          day={day}
-          rows={inWindow}
-          above={above}
-          below={below}
-          today={today}
-          newest={newest}
-          first={first}
-          jumps={jumps}
-          measure={rowSizes}
-          working={workingOn}
-          flashed={flashed}
-          line={firstUnread}
-          glowed={glowed}
-        />,
-      );
-    }
-    const insideTop = sumAbove(days, view.start, heightOf);
-    const insideBottom = sumBelow(days, view.end, heightOf);
+    const laid = daysInWindow(days, view.start, view.end, heightOf, chrome);
+    const drawnDays: ReactNode[] = laid.days.map(({ day, rows: inWindow, above, below }) => (
+      <DayBlock
+        key={day.key}
+        day={day}
+        rows={inWindow}
+        above={above}
+        below={below}
+        today={today}
+        newest={newest}
+        first={first}
+        jumps={jumps}
+        measure={rowSizes}
+        working={workingOn}
+        flashed={flashed}
+        line={firstUnread}
+        glowed={glowed}
+      />
+    ));
+
+    // THE DAY'S LABEL AND RULE, measured off the first drawn day: its height
+    // less the rows and spacers this list put in it. Constant while the
+    // stylesheets are, so this settles on the first commit that draws a day.
+    useLayoutEffect(() => {
+      const day = scroller()?.querySelector<HTMLElement>(".crewlet-chat-day");
+      if (!day) return;
+      let inside = 0;
+      for (const child of day.querySelectorAll<HTMLElement>(
+        ":scope > .chat-row, :scope > .chat-spacer",
+      )) {
+        inside += child.getBoundingClientRect().height;
+      }
+      const measured = day.getBoundingClientRect().height - inside;
+      if (Math.abs(measured - chrome) >= 0.5) setChrome(measured);
+    });
 
     const fresh = isNewRoom(rows);
     return (
@@ -527,20 +563,12 @@ export const Transcript = memo(
               )
             )}
           </div>
-          {view.padTop - insideTop > 0 && (
-            <div
-              className="chat-spacer"
-              style={{ height: view.padTop - insideTop }}
-              aria-hidden="true"
-            />
+          {laid.padTop > 0 && (
+            <div className="chat-spacer" style={{ height: laid.padTop }} aria-hidden="true" />
           )}
           {drawnDays}
-          {view.padBottom - insideBottom > 0 && (
-            <div
-              className="chat-spacer"
-              style={{ height: view.padBottom - insideBottom }}
-              aria-hidden="true"
-            />
+          {laid.padBottom > 0 && (
+            <div className="chat-spacer" style={{ height: laid.padBottom }} aria-hidden="true" />
           )}
           {props.pending.map((row) => (
             <PendingRow key={row.opId} row={row} />
@@ -616,18 +644,13 @@ export function useGlowOnce(glowed: MutableRefObject<string>, line: string): boo
   return decided.current.pulse;
 }
 
-/** The height of the rows above the window that sit inside the first drawn day. */
-function sumAbove(days: readonly Day[], start: number, heightOf: (i: number) => number): number {
-  const day = days.find((d) => d.rows.some((r) => r.index >= start));
-  if (!day) return 0;
-  return day.rows.filter((r) => r.index < start).reduce((sum, r) => sum + heightOf(r.index), 0);
-}
-
-/** The height of the rows below the window that sit inside the last drawn day. */
-function sumBelow(days: readonly Day[], end: number, heightOf: (i: number) => number): number {
-  const day = [...days].reverse().find((d) => d.rows.some((r) => r.index < end));
-  if (!day) return 0;
-  return day.rows.filter((r) => r.index >= end).reduce((sum, r) => sum + heightOf(r.index), 0);
+/**
+ * A drawn row's height to the fraction of a pixel, as the page lays it out:
+ * a whole-pixel `offsetHeight` summed over a few hundred rows put the spacers
+ * pixels off the rows they stand for.
+ */
+function drawnHeight(node: Element): number {
+  return node.getBoundingClientRect().height;
 }
 
 /** One day: its rule, its pill as a Jump to menu, and its drawn rows between spacers. */
@@ -724,9 +747,15 @@ const TranscriptRow = memo(function TranscriptRow({
   const id = view.message.id;
   const pulse = useGlowOnce(glowed, newAbove ? id : "");
   useLayoutEffect(() => {
-    if (node.current) measure.keep(id, node.current.offsetHeight);
+    if (node.current) measure.keep(id, drawnHeight(node.current));
   });
-  useEffect(() => (node.current ? measure.watch(id, node.current) : undefined), [id, measure]);
+  // WATCHED FROM THE COMMIT THAT DRAWS IT TO THE ONE THAT REMOVES IT, never a
+  // frame longer: a passive effect let go after the row had left the page,
+  // and the observer reported it in between.
+  useLayoutEffect(
+    () => (node.current ? measure.watch(id, node.current) : undefined),
+    [id, measure],
+  );
   return (
     <div ref={node} className="chat-row">
       {newAbove && <ChatDivider variant="unread" label="New" pulse={pulse} />}

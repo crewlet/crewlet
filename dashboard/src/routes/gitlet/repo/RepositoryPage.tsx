@@ -1,6 +1,10 @@
 /**
- * One repository's page, `#/gitlet/repos/{name}`: what it is, its files at any
- * revision, its branches, its history, its pushes and its settings.
+ * One repository's page, `#/gitlet/repos/{name}`, laid out as a code host
+ * lays one out: its name under its owner's, its marks and its description,
+ * then its CODE — the files at any revision, the latest commit that touched
+ * them, the README and, beside them at the root, what the repository is —
+ * and the changes proposed to it, its history, its branches and tags, its
+ * pushes, its checks and its settings.
  *
  * # Rows, then content read by object id
  *
@@ -21,35 +25,52 @@
  *
  * A declared repository's settings are the company document's (`code.repos`),
  * settled by every activation, so Settings shows them and leads to Settings ›
- * Configuration, where they are changed. One a tool made is changed here —
- * its search mode and its mirrors (`RepoWrites.tsx`, `code_update_repo`) —
- * and any repository's unreachable history is purged here, after a
- * confirmation naming who keeps copies. Every write is confirmed, never
+ * Configuration, where they are changed. One a tool or a person made is
+ * changed here: its search mode and its mirrors (`RepoWrites.tsx`,
+ * `code_update_repo`), its protection rules (`Protect.tsx`,
+ * `code_protect_branch`) and its delete (`RepoLife.tsx`, `code_delete_repo`,
+ * asked once its name is typed). Any repository's unreachable history is
+ * purged here, after a confirmation naming who keeps copies. A deleted repository says so above its tabs and
+ * offers its restore (`code_restore_repo`). Every write is confirmed, never
  * optimistic: the page is redrawn from the read the write's floor brings.
  * The header's state pill says `importing` while an import runs, and the
- * Overview's rail how far it went and where its mirrors stand.
+ * About rail how far it went and where its mirrors stand.
  */
 
 import { useId, type ReactNode } from "react";
 import {
+  AsideLayout,
   ButtonLink,
   Callout,
+  Card,
   EmptyState,
   EmptyValue,
+  Select,
   Skeleton,
   Stack,
   Tabs,
   Tag,
   tabId,
 } from "@crewlethq/ui";
-import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import {
+  CodeGlyph,
+  DiffGlyph,
+  GitBranchGlyph,
+  ListChecksGlyph,
+  RotateCcwClockGlyph,
+  SettingsGlyph,
+  UploadGlyph,
+} from "@crewlethq/icons/glyphs";
+import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
+import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { closedBy } from "~/app/nav.ts";
-import { href } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { isRepoName, repoPath, repoStatusWord, shortOID } from "~/lib/code.ts";
-import { fmtBytes, fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
+import { CHANGE_STATE_FILTERS, isRepoName, repoStatusWord } from "~/lib/code.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import { indexOrg, unitByKey, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
@@ -61,16 +82,20 @@ import {
   purgeStanding,
   pushMirrorStanding,
 } from "~/lib/repoWrites.ts";
-import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import type { CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
+import { ChangeList } from "../ChangeList.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { PushHistory } from "../Pushes.tsx";
 import { RepoChecks } from "../checks/RepoChecks.tsx";
-import { REPO_TABS, compareHref, repoHref, type RepoTab } from "../paths.ts";
-import { Files, Readme } from "./Files.tsx";
+import { REPO_TABS, changesHref, compareHref, repoHref, type RepoTab } from "../paths.ts";
+import { About, managedWord, readByWord, searchWord } from "./About.tsx";
+import { Files } from "./Files.tsx";
 import { Branches, Commits } from "./History.tsx";
+import { ProtectButton, RuleControls } from "./Protect.tsx";
+import { DeleteRepoControl, DeletedNotice } from "./RepoLife.tsx";
 import { MirrorControls, PurgeControl, SearchModeControl } from "./RepoWrites.tsx";
 import { useRevisions } from "./refs.tsx";
+import "~/styles/gitlet.css";
 
 /**
  * How often the repository's row is read again while its page is open: a
@@ -83,13 +108,24 @@ const REPO_POLL_MS = 60_000;
 const CONFIG_PATH: readonly string[] = ["settings", "config"];
 
 const REPO_TAB_LABELS: Readonly<Record<RepoTab, string>> = {
-  overview: "Overview",
-  files: "Files",
-  branches: "Branches",
+  code: "Code",
+  changes: "Changes",
   commits: "Commits",
+  branches: "Branches",
   pushes: "Pushes",
   checks: "Checks",
   settings: "Settings",
+};
+
+/** Each tab's glyph, as a code host marks its sections: decorative, the label names the tab. */
+const REPO_TAB_GLYPHS: Readonly<Record<RepoTab, ReactNode>> = {
+  code: <CodeGlyph size="sm" />,
+  changes: <DiffGlyph size="sm" />,
+  commits: <RotateCcwClockGlyph size="sm" />,
+  branches: <GitBranchGlyph size="sm" />,
+  pushes: <UploadGlyph size="sm" />,
+  checks: <ListChecksGlyph size="sm" />,
+  settings: <SettingsGlyph size="sm" />,
 };
 
 export function RepositoryPage({ repo }: { repo: string }) {
@@ -98,10 +134,10 @@ export function RepositoryPage({ repo }: { repo: string }) {
   const [tab, setTab] = useTab<RepoTab>("tab", REPO_TABS);
   // THE BRANCHES AND TAGS ITS PICKERS LIST, read here — once, under the
   // repository's current name — while a tab that draws a picker is open, so a
-  // move between the root and a path, or between Files and Commits, asks
+  // move between the root and a path, or between Code and Commits, asks
   // neither listing again (`refs.tsx`'s useRevisions).
   const current = read.data?.repo?.name ?? "";
-  const revisions = useRevisions(current, current !== "" && (tab === "files" || tab === "commits"));
+  const revisions = useRevisions(current, current !== "" && (tab === "code" || tab === "commits"));
   const panelId = useId();
   if (!named) {
     return (
@@ -151,11 +187,13 @@ export function RepositoryPage({ repo }: { repo: string }) {
           items={REPO_TABS.map((value) => ({
             value,
             label: REPO_TAB_LABELS[value],
+            icon: REPO_TAB_GLYPHS[value],
             ...(value === "branches" ? { count: detail.branches } : {}),
             ...(value === "pushes" ? { count: detail.pushes } : {}),
           }))}
         />
       </header>
+      {detail.status === "deleted" && <DeletedNotice repo={detail} />}
       {detail.redirect && (
         // A RENAME LEAVES THE OLD NAME REDIRECTING for a while: the page reads
         // the repository it found, and says what it is called now.
@@ -177,10 +215,10 @@ export function RepositoryPage({ repo }: { repo: string }) {
         aria-labelledby={tabId(panelId, tab)}
         tabIndex={0}
       >
-        {tab === "overview" && <Overview repo={detail} />}
-        {tab === "files" && <Files repo={detail} revisions={revisions} />}
-        {tab === "branches" && <Branches repo={detail} />}
+        {tab === "code" && <Code repo={detail} revisions={revisions} />}
+        {tab === "changes" && <RepoChanges repo={detail} />}
         {tab === "commits" && <Commits repo={detail} revisions={revisions} />}
+        {tab === "branches" && <Branches repo={detail} />}
         {tab === "pushes" && <PushHistory repo={detail.name} />}
         {tab === "checks" && <RepoChecks repo={detail.name} />}
         {tab === "settings" && <Settings repo={detail} />}
@@ -200,164 +238,157 @@ function useOwnerName(): (owner: CodeOwner) => string {
       : (unitByKey(index, owner.ref)?.name ?? owner.ref);
 }
 
-/** Which seats read a repository, in words. Every person reads every repository (ADR-0088). */
-function readByWord(visibility: string): string {
-  return visibility === "unit" ? "Its owner's seats" : "Every seat";
+/**
+ * The repository's marks beside its name: its state where it is not active,
+ * what kind it is where it is not a project, a pull mirror, and a repository
+ * only its owner's seats read. Outlined and uncoloured: each is a fact about
+ * the repository, never a state of work.
+ */
+function RepoMarks({ repo }: { repo: CodeRepoDetail }) {
+  const state = repoStatusWord(repo.status);
+  return (
+    <>
+      {state && (
+        <Tag
+          appearance="outline"
+          title={
+            repo.deleted_at
+              ? `Deleted ${fmtDateTime(repo.deleted_at)}`
+              : repo.status === "importing"
+                ? (importStanding(repo) ?? undefined)
+                : undefined
+          }
+        >
+          {state}
+        </Tag>
+      )}
+      {repo.kind === "scratch" && <Tag appearance="outline">Scratch</Tag>}
+      {repo.mirrored && (
+        <Tag appearance="outline" title={pullMirrorStanding(repo) ?? undefined}>
+          Pull mirror
+        </Tag>
+      )}
+      {repo.visibility === "unit" && (
+        <Tag appearance="outline" title="Only its owner's seats read it; every person does.">
+          Unit
+        </Tag>
+      )}
+    </>
+  );
 }
 
-/** The repository's header: its name, its state, and the facts a reader places it by. */
+/**
+ * The repository's header: its name under its owner's, as a code host writes
+ * `owner / name`, its marks, and its description. What it holds and where it
+ * stands are the About rail's, beside its code: a header carrying the same
+ * facts as the rail would be one answer given twice.
+ */
 function RepoHeader({ repo }: { repo: CodeRepoDetail }) {
   const ownerName = useOwnerName();
-  const state = repoStatusWord(repo.status);
-  const facts: Fact[] = [
-    { label: "Owner", value: ownerName(repo.owner) },
-    {
-      label: "Default branch",
-      value: (
-        <span className="mono">
-          {repo.default_branch}
-          {repo.head ? (
-            <span className="muted" title={repo.head}>
-              {" "}
-              {shortOID(repo.head)}
-            </span>
-          ) : (
-            <span className="muted"> empty</span>
-          )}
-        </span>
-      ),
-      path: repoPath(repo.name),
-      query: { tab: "files" },
-      token: true,
-    },
-    {
-      label: "Read by",
-      value: readByWord(repo.visibility),
-      note: "Which seats read it. Every person reads every repository.",
-    },
-    { label: "Last push", value: repo.last_push_at ? fmtDateTime(repo.last_push_at) : "Never" },
-    { label: "Size", value: fmtBytes(repo.live_bytes) },
-  ];
   return (
     <ObjectHeader
       kind="Repository"
       icon="square-code"
-      identifier={repo.name}
-      title={repo.description || repo.name}
-      status={
-        state ? (
-          <Tag
-            appearance="outline"
-            title={
-              repo.deleted_at
-                ? `Deleted ${fmtDateTime(repo.deleted_at)}`
-                : repo.status === "importing"
-                  ? (importStanding(repo) ?? undefined)
-                  : undefined
-            }
-          >
-            {state}
-          </Tag>
-        ) : undefined
-      }
-      facts={facts}
+      within={ownerName(repo.owner)}
+      title={repo.name}
+      status={<RepoMarks repo={repo} />}
+      {...(repo.description ? { description: repo.description } : {})}
     />
   );
 }
 
-/** A label and its value, as the page's fact lists draw them. */
-function FactList({ label, rows }: { label: string; rows: { label: string; value: ReactNode }[] }) {
+/**
+ * The CODE tab: the files at the revision the address names. At the
+ * repository's root they stand beside the About rail, as a code host's
+ * landing does; under a path — a directory or a file, read wide — the files
+ * take the page's width.
+ */
+function Code({
+  repo,
+  revisions,
+}: {
+  repo: CodeRepoDetail;
+  revisions: ReturnType<typeof useRevisions>;
+}) {
+  const ownerName = useOwnerName();
+  const [path] = useParam("path", "", "filter");
+  const files = <Files repo={repo} revisions={revisions} />;
+  if (path !== "") return files;
   return (
-    <dl className="code-facts" aria-label={label}>
-      {rows.map((r) => (
-        <div key={r.label}>
-          <dt>{r.label}</dt>
-          <dd>{r.value}</dd>
-        </div>
-      ))}
-    </dl>
+    <AsideLayout
+      fit="page"
+      asideLabel="About this repository"
+      aside={<About repo={repo} ownerName={ownerName} />}
+    >
+      {files}
+    </AsideLayout>
   );
 }
 
-/** How code search reads a repository, in words. */
-function searchWord(search: string): string {
-  switch (search) {
-    case "indexed":
-      return "Indexed from its default branch";
-    case "grep":
-      return "Searched only by a search naming it";
-  }
-  return search;
-}
+/** The states the repository's Changes tab lists by: the engine's, every state among them. */
+const REPO_CHANGE_STATES = CHANGE_STATE_FILTERS;
 
-/** What decides a repository's settings and its life, in words. */
-function managedWord(managedBy: string): string {
-  switch (managedBy) {
-    case "config":
-      return "The company document";
-    case "tools":
-      return "The code tools";
-  }
-  return managedBy;
+/**
+ * The changes proposed to this repository: Gitlet › Changes narrowed to it,
+ * in the grid every listing of changes draws — open until the reader picks
+ * another state, and every state offered, since the repository narrows the
+ * engine's walk.
+ */
+function RepoChanges({ repo }: { repo: CodeRepoDetail }) {
+  const [state, setState] = useParam("state", "open", "filter");
+  const params = { repo: repo.name, ...(state === "all" ? {} : { state }) };
+  return (
+    <>
+      <PageToolbar>
+        <Select
+          size="sm"
+          width="auto"
+          value={state}
+          onChange={(value) => setState(String(value))}
+          options={REPO_CHANGE_STATES.map((f) => ({ value: f.value, label: f.label }))}
+          ariaLabel="Which changes"
+          active={state !== "open"}
+        />
+        <ButtonLink size="small" variant="ghost" href={changesHref({ repo: repo.name, state })}>
+          Open in Changes
+        </ButtonLink>
+      </PageToolbar>
+      <ChangeList
+        params={params}
+        empty={{
+          title: state === "all" ? "No change yet" : `No ${state} change`,
+          hint: "A change is opened by a seat's code_open_change, or by a push with the change option.",
+        }}
+      />
+    </>
+  );
 }
 
 /**
- * The overview: what the repository holds and what its default branch's
- * README says — the first thing a reader opening a repository looks for.
+ * One section of the Settings tab, as a code host's settings page draws one:
+ * a card titled with what it governs and a line saying so, its controls in
+ * its body and its one way to add beside its title.
  */
-function Overview({ repo }: { repo: CodeRepoDetail }) {
+function SettingsCard({
+  title,
+  description,
+  actions,
+  children,
+}: {
+  title: string;
+  description: string;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <Stack gap={4}>
-      <FactList
-        label="The repository"
-        rows={[
-          {
-            label: "Kind",
-            value: repo.kind === "scratch" ? "A seat's scratch repository" : "Project",
-          },
-          { label: "Managed by", value: managedWord(repo.managed_by) },
-          { label: "Branches", value: fmtCount(repo.branches) },
-          { label: "Tags", value: fmtCount(repo.tags) },
-          { label: "Pushes", value: fmtCount(repo.pushes) },
-          {
-            label: "Stored",
-            value: `${fmtBytes(repo.live_bytes)} in ${plural(repo.live_packs, "pack")}, ${plural(repo.live_objects, "object")}`,
-          },
-          { label: "Declared", value: fmtDateTime(repo.created_at) },
-          {
-            label: "Last activity",
-            value: repo.last_activity_at ? (
-              fmtDateTime(repo.last_activity_at)
-            ) : (
-              <EmptyValue label="None" />
-            ),
-          },
-          ...(repo.access ? [{ label: "Your access", value: repo.access }] : []),
-        ]}
-      />
-      <PropertiesRail
-        headings="sentence"
-        groups={[
-          {
-            name: "Search and other hosts",
-            properties: [
-              { label: "Search", value: searchWord(repo.search) },
-              { label: "Import", value: importStanding(repo) ?? undefined },
-              { label: "Pull mirror", value: pullMirrorStanding(repo) ?? undefined },
-              { label: "Push mirror", value: pushMirrorStanding(repo) ?? undefined },
-            ],
-          },
-        ]}
-      />
-      {repo.head ? (
-        <Readme repo={repo} />
-      ) : (
-        <p className="muted">
-          Nobody has pushed a branch yet: its default branch, {repo.default_branch}, holds no
-          commit.
-        </p>
-      )}
-    </Stack>
+    <Card as="section" aria-label={title}>
+      <Card.Header divided subtitle={description} subtitlePlacement="below" actions={actions}>
+        <Card.Title as="h2">{title}</Card.Title>
+      </Card.Header>
+      <Card.Body>
+        <Stack gap={3}>{children}</Stack>
+      </Card.Body>
+    </Card>
   );
 }
 
@@ -415,47 +446,40 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
         </Callout>
       ) : (
         <Callout variant="neutral">
-          A tool made this repository. Its search mode and its mirrors are changed below, and its
-          other settings by the code tools’ lifecycle requests:{" "}
-          <span className="mono">code_update_repo</span> and{" "}
-          <span className="mono">code_protect_branch</span>, which a seat or your assistant calls.
+          This repository was made here or by a tool, so it is changed here: its search mode, its
+          mirrors, its protection rules and its delete are below. Its description, owner, default
+          branch and path owners are changed by the code tools (
+          <span className="mono">code_update_repo</span>), which a seat or your assistant calls.
         </Callout>
       )}
-      <section aria-label="Search mode">
-        <h3 className="t-label">Search mode</h3>
-        <SearchModeControl repo={repo} />
-      </section>
-      <section aria-label="Other hosts">
-        <h3 className="t-label">Mirrors</h3>
-        <p className="muted">
-          {[pullMirrorStanding(repo), pushMirrorStanding(repo)].filter(Boolean).join(" ") ||
-            "No mirror: it follows no other host and pushes to none."}
-        </p>
-        <MirrorControls repo={repo} />
-      </section>
-      <section aria-label="Unreachable history">
-        <h3 className="t-label">Unreachable history</h3>
-        {purgeStanding(repo) && <p className="muted">{purgeStanding(repo)}</p>}
-        <PurgeControl repo={repo} />
-      </section>
-      <FactList
-        label="Settings"
-        rows={[
-          {
-            label: "Description",
-            value: repo.description || <EmptyValue label="None" />,
-          },
-          { label: "Default branch", value: <span className="mono">{repo.default_branch}</span> },
-          { label: "Owner", value: ownerName(repo.owner) },
-          { label: "Read by", value: readByWord(repo.visibility) },
-          {
-            label: "Search",
-            value: searchWord(repo.search),
-          },
-        ]}
-      />
-      <section aria-label="Protection rules">
-        <h3 className="t-label">Protection rules</h3>
+      <SettingsCard title="Repository" description="What it is and who reads it.">
+        <PropertiesRail
+          headings="sentence"
+          groups={[
+            {
+              properties: [
+                {
+                  label: "Description",
+                  value: repo.description || <EmptyValue label="None" />,
+                },
+                {
+                  label: "Default branch",
+                  value: <span className="mono">{repo.default_branch}</span>,
+                },
+                { label: "Owner", value: ownerName(repo.owner) },
+                { label: "Read by", value: readByWord(repo.visibility) },
+                { label: "Search", value: searchWord(repo.search) },
+                { label: "Managed by", value: managedWord(repo.managed_by) },
+              ],
+            },
+          ]}
+        />
+      </SettingsCard>
+      <SettingsCard
+        title="Protection rules"
+        description="Who pushes to a branch directly, whether a push may force or delete it, and what a merge into it needs."
+        actions={<ProtectButton repo={repo} />}
+      >
         {rules.length === 0 ? (
           <p className="muted">No rule protects a ref: anybody who may write may push to any.</p>
         ) : !full ? (
@@ -469,20 +493,25 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
               const source = sources.get(rule.pattern);
               return (
                 <li key={rule.pattern}>
-                  <span className="mono">{rule.pattern}</span>
-                  <span className="muted">
-                    {pushRuleLine(rule)}
-                    {gate ? `; a merge into it is ${gateLine(gate)}` : ""}
+                  <span className="code-rules__what">
+                    <span className="mono code-rules__pattern">{rule.pattern}</span>
+                    <span className="muted">
+                      {pushRuleLine(rule)}
+                      {gate ? `; a merge into it is ${gateLine(gate)}` : ""}
+                    </span>
+                    {source && <span className="t-caption">{ruleSourceLine(source)}</span>}
                   </span>
-                  {source && <span className="t-caption">{ruleSourceLine(source)}</span>}
+                  <RuleControls repo={repo} held={{ rule, gate }} />
                 </li>
               );
             })}
           </ul>
         )}
-      </section>
-      <section aria-label="Path owners">
-        <h3 className="t-label">Path owners</h3>
+      </SettingsCard>
+      <SettingsCard
+        title="Path owners"
+        description="Whose review a change touching their paths asks for."
+      >
         {!full ? (
           detailState
         ) : owners.length === 0 ? (
@@ -491,13 +520,45 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
           <ul className="code-rules">
             {owners.map((p) => (
               <li key={`${p.owner.kind}:${p.owner.ref}`}>
-                <span>{ownerName(p.owner)}</span>
-                <span className="muted mono">{p.paths.join(", ")}</span>
+                <span className="code-rules__what">
+                  <span>{ownerName(p.owner)}</span>
+                  <span className="muted mono">{p.paths.join(", ")}</span>
+                </span>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </SettingsCard>
+      <SettingsCard
+        title="Search mode"
+        description="How code search reads the repository: from an index of its default branch, or with git grep when a search names it."
+      >
+        <SearchModeControl repo={repo} />
+      </SettingsCard>
+      <SettingsCard
+        title="Mirrors"
+        description="Another host this repository follows, or pushes to."
+      >
+        <p className="muted">
+          {[pullMirrorStanding(repo), pushMirrorStanding(repo)].filter(Boolean).join(" ") ||
+            "No mirror: it follows no other host and pushes to none."}
+        </p>
+        <MirrorControls repo={repo} />
+      </SettingsCard>
+      <SettingsCard
+        title="Unreachable history"
+        description="Objects no ref, change or queue reaches any longer, dropped for good."
+      >
+        {purgeStanding(repo) && <p className="muted">{purgeStanding(repo)}</p>}
+        <PurgeControl repo={repo} />
+      </SettingsCard>
+      {/* LAST, as the one write that takes the repository away. */}
+      <SettingsCard
+        title="Delete repository"
+        description="A deleted repository takes no clone and no push, and is restored as it was until it is purged."
+      >
+        <DeleteRepoControl repo={repo} />
+      </SettingsCard>
     </Stack>
   );
 }

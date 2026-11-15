@@ -93,12 +93,20 @@ func heldAttemptOn(t *testing.T, store *sandbox.CoordStore, seal *sandbox.CallSe
 // never tells the run a call it made was not made. The mark's own answer
 // ([runner.HeldCommit.Begin]) says the same.
 //
+// AND IT IS HANDED THAT RESULT AS THE ROW SEALED IT, which the answer's lead
+// keeps for a later brief to tell again, whether or not it opens here.
+//
+// AND THE ATTEMPT THAT MAKES THE CALL IS ANSWERED THAT RESULT AS ITS RECORD
+// SEALED IT ([runner.HeldCommit.Record]), the usual case, which its lead keeps
+// too.
+//
 // Mutation: have Marked answer false for a claim that read the call marked, or
-// drop its result, and the later attempt is not answered from the mark; open
-// the arguments of a marked call, and they are opened for a call that never
-// runs again; answer a result this node cannot open as no result, or without
-// whether the tool failed, and the run is told the call may never have been
-// made.
+// drop its result, and the later attempt is not answered from the mark; hand it
+// no kept result, or have Record answer none, and a lead telling the call again
+// cannot say what it returned; open the arguments of a marked call, and they
+// are opened for a call that never runs again; answer a result this node
+// cannot open as no result, or without whether the tool failed, and the run is
+// told the call may never have been made.
 func TestALaterAttemptAnswersAHeldCallFromTheMarkItsClaimRead(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -135,10 +143,18 @@ func TestALaterAttemptAnswersAHeldCallFromTheMarkItsClaimRead(t *testing.T) {
 				t.Fatalf("Begin = %+v, %v, want this mark the first", prior, err)
 			}
 			if tc.records {
-				if err := first.Commit.Record(ctx, sandbox.HeldResult{Output: "posted", Failed: tc.failed},
-					toolloop.ToolResult{Output: "posted", Failed: tc.failed, Origin: tools.Origin("vendor"),
-						Server: "vendor", Source: tools.Origin("vendor")}); err != nil {
+				returned := sandbox.HeldResult{Output: "posted", Failed: tc.failed}
+				sealed, err := first.Commit.Record(ctx, returned, toolloop.ToolResult{Output: "posted",
+					Failed: tc.failed, Origin: tools.Origin("vendor"), Server: "vendor", Source: tools.Origin("vendor")})
+				if err != nil {
 					t.Fatalf("Record: %v", err)
+				}
+				// AND THE ATTEMPT THAT MADE THE CALL IS ANSWERED WHAT IT SEALED,
+				// which the answer's lead keeps: it opens to what the call
+				// returned.
+				if result, err := seal.OpenKept("run-1", sealed); err != nil || result != returned {
+					t.Fatalf("Record answers %+v, which opens as %+v, %v; want what the call returned, %+v",
+						sealed, result, err, returned)
 				}
 			}
 			// ITS RELAUNCH REFUSED, and its claim given back.
@@ -152,7 +168,25 @@ func TestALaterAttemptAnswersAHeldCallFromTheMarkItsClaimRead(t *testing.T) {
 				opens = sandbox.NewCallSeal(valueRing(t, "k2"))
 			}
 			again := heldAttemptOn(t, store, opens, "run-1", launch)
-			if prior, marked := again.Commit.Marked(ctx); !marked || prior != tc.want {
+			// AND THE RESULT AS THE ROW SEALED IT, wherever the first attempt
+			// recorded one, which the answer's lead keeps whether or not it
+			// opens here: it opens under the first attempt's key.
+			kept := func(prior runner.HeldPrior) runner.HeldPrior {
+				t.Helper()
+				if (prior.Kept != nil) != tc.records {
+					t.Fatalf("the later attempt is handed the result as the row sealed it %+v, want it %v",
+						prior.Kept, tc.records)
+				}
+				if prior.Kept != nil {
+					if result, err := seal.OpenKept("run-1", *prior.Kept); err != nil || result.Output != "posted" {
+						t.Fatalf("the result kept for the lead opens as %+v, %v; want what the call returned",
+							result, err)
+					}
+				}
+				prior.Kept = nil
+				return prior
+			}
+			if prior, marked := again.Commit.Marked(ctx); !marked || kept(prior) != tc.want {
 				t.Fatalf("the later attempt's claim reads %+v (marked %v), want %+v off the mark",
 					prior, marked, tc.want)
 			}
@@ -160,7 +194,7 @@ func TestALaterAttemptAnswersAHeldCallFromTheMarkItsClaimRead(t *testing.T) {
 				t.Fatalf("the later attempt opened the arguments of a call it never makes: %v (%q)",
 					again.Args, again.Unopened)
 			}
-			if prior, err := again.Commit.Begin(ctx); err != nil || prior != tc.want {
+			if prior, err := again.Commit.Begin(ctx); err != nil || kept(prior) != tc.want {
 				t.Fatalf("the mark answers the later attempt %+v, %v, want %+v", prior, err, tc.want)
 			}
 		})

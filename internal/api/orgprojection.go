@@ -206,16 +206,39 @@ type OrgServices struct {
 	Chat string `json:"chat"`
 	// Code is `gitlet` or `none`.
 	Code string `json:"code"`
+
+	// Restart is which of the four THIS NODE serves only once it restarts,
+	// each by its key here (`tracker`, `knowledge`, `chat`, `code`): the
+	// engine's own services the company turned on while this node's runtime
+	// was already running without them ([engine.Engine.AwaitingRestart]).
+	// Absent where the node serves everything the company runs.
+	//
+	// THE ONE NODE FACT ON A COMPANY'S PROJECTION, and here because it
+	// decides the same thing the four backends do: which of the dashboard's
+	// own surfaces exist FOR THIS READER, who reads through the node that
+	// built the projection. A backend that reads `chatlet` on a node that
+	// cannot serve Chatlet yet drew a workspace whose every screen was
+	// refused, and nothing said why or that a restart brings it. Named by
+	// key rather than as a second set of backends, so a reader still learns
+	// what the company runs and, beside it, what this node is waiting to
+	// serve.
+	Restart []string `json:"restart,omitempty"`
 }
 
-// servicesOf is the company's resolved backends.
-func servicesOf(c *config.Company) *OrgServices {
-	return &OrgServices{
+// servicesOf is the company's resolved backends, and which of them this node
+// serves only once restarted, as awaiting reads them off the same company; a
+// nil awaiting names none.
+func servicesOf(c *config.Company, awaiting func(*config.Company) []string) *OrgServices {
+	services := &OrgServices{
 		Tracker:   string(c.TrackerBackendFor()),
 		Knowledge: string(c.KnowledgeBackendFor()),
 		Chat:      string(c.ChatBackendFor()),
 		Code:      string(c.CodeBackendFor()),
 	}
+	if awaiting != nil {
+		services.Restart = slices.Clone(awaiting(c))
+	}
+	return services
 }
 
 // OrgSeat is the public half of one seat: who it is and what it is for.
@@ -347,12 +370,17 @@ type OrgUnit struct {
 // replaces the company and a projection built at boot would keep showing a
 // seat a revision deleted.
 //
+// awaiting is which services this node serves only once restarted, read off
+// the SAME company the rest is built from ([OrgServices.Restart]).
+//
 // Every slice is COPIED, which the marshal round trip this replaced did
 // implicitly. The projection is handed to the socket hub and to REST callers,
 // while the applied company is shared by every reader of the epoch, so an
 // aliased slice would make the projection only as immutable as every one of
 // those readers is careful.
-func orgProjection(company func() (*config.Company, *org.Organization)) OrgProjection {
+func orgProjection(company func() (*config.Company, *org.Organization),
+	awaiting func(*config.Company) []string) OrgProjection {
+
 	if company == nil {
 		return OrgProjection{}
 	}
@@ -376,7 +404,7 @@ func orgProjection(company func() (*config.Company, *org.Organization)) OrgProje
 		Policies:    slices.Clone(c.Policies),
 		Timezone:    c.Location().String(),
 		TokenBudget: orgTokenBudget(c.TokenBudget),
-		Services:    servicesOf(c),
+		Services:    servicesOf(c, awaiting),
 		Roles:       b.seats(rootSeats(roster)),
 		Units:       b.units(topUnits(roster)),
 		Derived:     &derived,

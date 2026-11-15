@@ -10,9 +10,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/runanswer"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -248,7 +250,11 @@ func (s Sources) executorRows(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, serialiseRun(run, calls, r, s.opened(run)))
+		waiting, err := s.waiting(ctx, run, r.Record)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, serialiseRun(run, calls, r, s.opened(run), waiting))
 	}
 	return map[string]any{"runs": out}, nil
 }
@@ -306,6 +312,52 @@ func (s Sources) runReach(ctx context.Context) func(sandbox.PendingRun) livestat
 func putTo(run sandbox.PendingRun, record string, delegating func(sandbox.PendingRun) bool) bool {
 	return record != "" && run.Ending == nil && slices.Contains(sandbox.Awaiting, run.Status) &&
 		slices.Contains(run.AudienceHandles, record) && !delegating(run)
+}
+
+// waiting is where run stands for the reader in ctx, whose record is record
+// ([runanswer.Waiting]): who it waits on now, whether [putTo] puts it to them,
+// and whether they may answer it, decided by [runanswer.May] — the verb and
+// object the answer's own route decides on, at the read's proof. A run that
+// waits on nobody (running, answered, ending) is put to nobody and answered
+// by nobody.
+//
+// UNDECIDABLE IS AN ERROR, never a "no": a node whose chart is behind cannot
+// say whether a lead may answer, and drawing their run as one they may not
+// would hide exactly what they came to unblock.
+func (s Sources) waiting(ctx context.Context, run sandbox.PendingRun, record string) (runanswer.Waiting, error) {
+	if run.Ending != nil || !slices.Contains(sandbox.Awaiting, run.Status) {
+		return runanswer.Waiting{}, nil
+	}
+	now := s.clock()
+	_, escalated, overdue := runanswer.Delegation(run, now)
+	w := runanswer.Waiting{PutTo: slices.Clone(run.AudienceHandles), PutToYou: putTo(run, record, s.delegating),
+		Escalated: escalated}
+	if s.delegating(run) {
+		w.PutTo, w.Overdue = slices.Clone(run.HeldCall.Delegation.Delegates), overdue
+	}
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved {
+		return w, nil
+	}
+	var company *config.Company
+	if s.Company != nil {
+		company, _ = s.Company()
+	}
+	d, err := runanswer.May(ctx, principal, run, company, s.Chart, now)
+	switch {
+	case errors.Is(err, runanswer.ErrUnreadableSeat):
+		// A ROW NAMING NO SEAT this build can read is answered by nobody:
+		// the answer's own route refuses it the same way.
+		log.WarnContext(ctx, "run_answer_unreadable_seat", "turn_id", run.TurnID, "error", err.Error())
+		return w, nil
+	case err != nil:
+		return runanswer.Waiting{}, err
+	case d.Unknown():
+		return runanswer.Waiting{}, fmt.Errorf("%w: this node cannot decide yet whether the caller may "+
+			"answer %s's run: %w", ErrUnavailable, run.AgentHandle, d.Err)
+	}
+	w.MayAnswer = d.Allowed
+	return w, nil
 }
 
 // delegating reports whether a run's held call still waits on its delegates
@@ -446,6 +498,10 @@ var runKeys = map[string]runShown{
 	"command_id":          runStatus,
 	"delegation_chain":    runStatus,
 	"body_withheld":       runStatus,
+	"put_to":              runStatus, // who it waits on now, by handle: [runanswer.Waiting]
+	"put_to_you":          runStatus, // whether [putTo] puts it to the reader
+	"may_answer":          runStatus, // whether the reader may answer it: [runanswer.May]
+	"needs_you":           runStatus, // whether it waits on the reader: [runanswer.Waiting.NeedsYou]
 }
 
 // serialiseRun is one executor's row as reader r receives it: [runRow],
@@ -458,8 +514,16 @@ var runKeys = map[string]runShown{
 //
 // calls is the run's log as [PendingRuns.BridgeLog] read it, and the zero
 // value for a reader shown no body, whose answer never carries a call.
+//
+// AND WHERE IT STANDS FOR THE READER ([Sources.waiting]): whom it is put to,
+// whether it is put to them, whether they may answer it, and whether it waits
+// on them — the facts `decisions` lists a run by, stated on the row so every
+// screen that draws a parked run reads them rather than deciding "needs you"
+// itself. The board that drew every parked run as the reader's own told a
+// sign-in no question is ever put to that one was, beside a Home and an Inbox
+// that rightly listed none.
 func serialiseRun(run sandbox.PendingRun, calls sandbox.BridgeLog, r livestate.Reach,
-	opened runOpened) map[string]any {
+	opened runOpened, waiting runanswer.Waiting) map[string]any {
 
 	row := runRow(run, calls, opened)
 	asked := r.Record != "" && slices.Contains(run.AudienceHandles, r.Record)
@@ -487,6 +551,10 @@ func serialiseRun(run sandbox.PendingRun, calls sandbox.BridgeLog, r livestate.R
 		}
 	}
 	row["body_withheld"] = !r.Body
+	row["put_to"] = nonNil(waiting.PutTo)
+	row["put_to_you"] = waiting.PutToYou
+	row["may_answer"] = waiting.MayAnswer
+	row["needs_you"] = waiting.NeedsYou()
 	return row
 }
 
@@ -667,6 +735,12 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		// draws "not shown to you" over a run's task rather than a run that
 		// was asked nothing. Set by [serialiseRun].
 		"body_withheld": false,
+		// WHERE IT STANDS FOR THE READER ([runanswer.Waiting]), set by
+		// [serialiseRun] for the reader it serialises the row for.
+		"put_to":     []string{},
+		"put_to_you": false,
+		"may_answer": false,
+		"needs_you":  false,
 	}))
 }
 

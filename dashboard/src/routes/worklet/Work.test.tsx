@@ -13,6 +13,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { afterEach, expect, test, vi } from "vitest";
 import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
@@ -599,6 +600,8 @@ function serving(
 const mountWork = () =>
   render(
     <Router>
+      {/* THE SHELL'S ONE POLITE REGION, which a selection's count is said in. */}
+      <AppAnnouncer />
       <ViewerProvider>
         <Work />
       </ViewerProvider>
@@ -900,7 +903,7 @@ test("a view's own arrangement is what the display controls show", async () => {
     expect(screen.getByRole("combobox", { name: "Group by" }).textContent).toContain("Assignee"),
   );
   await openDisplay();
-  expect(screen.getByRole("combobox", { name: "Then by" }).textContent).toContain("Priority");
+  expect(screen.getByRole("combobox", { name: "Subgroup by" }).textContent).toContain("Priority");
   expect(screen.getByRole("combobox", { name: "Sort" }).textContent).toContain("Due soonest");
 });
 
@@ -983,13 +986,20 @@ test("a column chip takes its name from the effective axis", async () => {
  * list's arrangement.
  */
 /**
- * The words each head DRAWS: a glyph column's name is said to a screen reader
- * (and on hover) rather than drawn, so it is not read here.
+ * The words each FIELD column's head DRAWS: a glyph column's name is said to a
+ * screen reader (and on hover) rather than drawn, so it is not read here. The
+ * row's picking box and its menu are no field and no column set names them:
+ * the box's head holds a checkbox, and the menu's head draws no word and has
+ * no hover title (its name, "More", is read but not seen), where a glyph
+ * column's carries its name on hover.
  */
 const heads = (container: HTMLElement) =>
-  [...container.querySelectorAll(".crewlet-data-grid__th")].map((el) =>
-    (el.querySelector(".crewlet-data-grid__truncate")?.textContent ?? "").trim(),
-  );
+  [...container.querySelectorAll(".crewlet-data-grid__th")]
+    .filter((el) => !el.querySelector('input[type="checkbox"]'))
+    .filter((el) =>
+      Boolean(el.querySelector(".crewlet-data-grid__truncate") || el.getAttribute("title")),
+    )
+    .map((el) => (el.querySelector(".crewlet-data-grid__truncate")?.textContent ?? "").trim());
 
 /** What the list draws with nothing chosen: the compact row, as columns. */
 const LIST_SET = ["", "Key", "Status", "Title", "Due", "Type", "Assignee", "Updated"];
@@ -1027,6 +1037,20 @@ test("the list and the table are the same grid drawn in two column sets", async 
   // ONE GRID, both times: the list is not a hand-rolled panel any more, so it
   // has a head row at all and every column of it is sized by the same tracks.
   expect(asTable.container.querySelectorAll(".crewlet-data-grid").length).toBe(1);
+});
+
+// EVERY ROW CAN BE PICKED AND CARRIES ITS MENU, on both grid shapes: the
+// task's own gestures (move, trash) are a row's, and a selection is what the
+// bar over the grid acts on.
+test("each row of the list can be picked and carries its own menu", async () => {
+  serving({
+    work_items: { items: [row("1"), row("2")], groups: [], total_hint: 2, complete: true },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".crewlet-data-grid")).toBeTruthy());
+  expect(screen.getAllByRole("button", { name: /^More for / })).toHaveLength(2);
+  fireEvent.click(screen.getAllByRole("checkbox", { name: /^Select / })[0]!);
+  expect(await screen.findByRole("toolbar", { name: "Selected tasks" })).toBeTruthy();
 });
 
 // `cols=` SELECTS WITHIN THE ACTIVE SET, and a name that set does not hold is

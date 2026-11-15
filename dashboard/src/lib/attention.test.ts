@@ -925,8 +925,12 @@ test("an alarm that has stood is a condition a person decides", () => {
   );
   const backup = queue.find((a) => a.id === "alarm-backup_age");
   expect(backup?.title).toBe("Backup age has not cleared");
+  // WHERE IT IS FIXED, NOT WHERE IT IS LISTED: the backup it asks for, taken
+  // from Backups & retention's own dialog.
   expect(backup?.path).toEqual(["settings", "backups"]);
-  expect(backup?.query).toEqual({ at: "alarms" });
+  expect(backup?.query).toEqual({ take: "backup" });
+  expect(backup?.action).toBe("Take a backup");
+  expect(backup?.spread).toBe(2);
   expect(backup?.technical).toBe("Standing on node-a, node-b.");
   expect(backup?.at).toBe("2026-01-01T10:00:00Z");
   expect(queue.find((a) => a.id === "alarm-llm_sign_in_refused")?.path).toEqual([

@@ -108,6 +108,29 @@ func TestTheRootRedirectsToTheDashboard(t *testing.T) {
 	}
 }
 
+// TestTheDashboardWithATrailingSlashRedirectsToTheDashboard: the address
+// people type and tools append a slash to is the dashboard, never the mux's
+// JSON 404, and it is reached without a credential as the shell itself is.
+// Only that one spelling: a path under it is still no route.
+func TestTheDashboardWithATrailingSlashRedirectsToTheDashboard(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{Assets: tree()})
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dashboard/", nil))
+	res := rec.Result()
+	if res.StatusCode != http.StatusFound {
+		t.Fatalf("GET /dashboard/ with no credential answered %d, want a redirect", res.StatusCode)
+	}
+	if got := res.Header.Get("Location"); got != "/dashboard" {
+		t.Errorf("location = %q, want /dashboard", got)
+	}
+	under := serve(a, "/dashboard/anything", nil)
+	if under.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /dashboard/anything answered %d, want 404: only the slash form is the dashboard",
+			under.StatusCode)
+	}
+}
+
 func TestTheShellServesWithoutAToken(t *testing.T) {
 	t.Parallel()
 	// The page that prompts for a token cannot itself require one, and it

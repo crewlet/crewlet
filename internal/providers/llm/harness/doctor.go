@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -320,7 +321,8 @@ func (d Diagnosis) executorLines() []string {
 // seat's executor can run on it. Passed in rather than read here, so `doctor`
 // reports the engine's own answers instead of this package's guess at them.
 type DiagnoseOptions struct {
-	// Smoke runs the real completion and the two tool probes.
+	// Smoke runs the real completion and the two tool probes; with Values,
+	// the completion alone.
 	Smoke bool
 
 	// ExecutorSeats are the agent seats whose executor chain holds this
@@ -337,6 +339,13 @@ type DiagnoseOptions struct {
 	// that serves the API dials the node's own listener on loopback; every
 	// other box dials BridgeURL.
 	Cell string
+
+	// RunsAsRoot is whether this engine's effective user is root and its
+	// sandbox is a real one: a box that runs as the engine's user then runs
+	// the harness as uid 0, which Claude Code refuses to start in the
+	// executor's permission mode. A bool, because its zero value is the
+	// ordinary answer.
+	RunsAsRoot bool
 
 	// BridgeURL is CREWLET_MCP_BRIDGE_URL as the engine would read it:
 	// parsed by the one grammar every URL a box dials shares
@@ -373,6 +382,14 @@ type DiagnoseOptions struct {
 	// and removed for it when Home is empty: a candidate tested beside the
 	// entry's login would be tested with that login seeded next to it, and
 	// whichever the harness preferred would be what answered.
+	//
+	// AND IT MAKES ONE CALL, the smoke run, which is what signs the harness
+	// in with the candidate. The shell and web probes read what the ENTRY
+	// lets its harness reach, which a credential changes nothing of: run for
+	// a candidate, they were two or three more real calls on a credential
+	// nothing had stored, inside one person's wait, and a probe that misread
+	// its answer refused a credential the vendor had accepted. The entry's
+	// own check probes them.
 	Values map[string]string
 
 	// Home is a state directory of the diagnosis's own, in place of the
@@ -627,6 +644,12 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 		if outcome.kind != "" {
 			c.fail(CheckSmoke, outcome.kind, outcome.verdict)
 		}
+		if opts.Values != nil {
+			// A CANDIDATE IS TESTED BY ITS ONE CALL ([DiagnoseOptions.Values]).
+			c.set(CheckShell, stance+"; "+candidateProbeSkipped)
+			c.set(CheckWeb, web+"; "+candidateProbeSkipped)
+			break
+		}
 		verdict, problem := p.shellProbe(ctx)
 		if verdict == refusedVerdict {
 			// A refused shell is half the stance: the file tools read
@@ -843,6 +866,15 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 				"its work. Set it to a URL that box reaches the node at",
 			orNone(opts.Cell), bridgeURLVar, p.key))
 	}
+	if opts.RunsAsRoot && p.harness == string(config.HarnessClaudeCode) &&
+		config.RunsAsEngineUser(config.Placement(opts.Cell)) {
+		// ALONGSIDE THE BRIDGE'S VERDICT, not instead of it: both are launches
+		// that fail at a seat's first work. The smoke run cannot show it,
+		// because it runs the deny-local-tools profile, not the executor's
+		// bypassPermissions mode.
+		lines = append(lines, "user: root — Claude Code refuses its executor's permission mode")
+		problems = append(problems, config.RootClaudeCodeProblem(p.key, config.Placement(opts.Cell)))
+	}
 	return lines, problems
 }
 
@@ -908,6 +940,10 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 
 // refusedVerdict is a probe that found its tool refused.
 const refusedVerdict = "probe: refused"
+
+// candidateProbeSkipped is the shell and web lines' verdict on a candidate's
+// diagnosis, which runs the smoke call alone ([DiagnoseOptions.Values]).
+const candidateProbeSkipped = "probe skipped: a candidate credential is tested by its one call"
 
 // fileProbe asks the harness to read a file the doctor has just written on the
 // engine host, outside the seat's home, and reports whether it did, on the

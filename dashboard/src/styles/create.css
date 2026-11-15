@@ -693,7 +693,7 @@
   color: var(--color-text-tertiary);
 }
 /* The editor's own press, said under it: Command+Enter previews from the
-   editor only, so the bar's Update preview does not claim it. */
+   editor only, so the bar's Update draft does not claim it. */
 .html-create-editor-keys {
   align-self: flex-end;
   margin: 0;

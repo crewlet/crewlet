@@ -9,7 +9,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { BrandDocument } from "~/protocol/index.ts";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
+import { HeadingLevelProvider } from "@crewlethq/ui";
 import { LogosBody } from "./BrandCards.tsx";
+import { BrandBoard } from "./BrandBoard.tsx";
 
 const { createObjectURL, revokeObjectURL } = URL;
 
@@ -68,4 +70,33 @@ test("the three logos stand in one aligned group", () => {
   render(<LogosBody document={DOC} assets={ASSETS} />);
   const group = screen.getByRole("group", { name: "Logos" });
   expect(group.querySelectorAll(".crewlet-logo-slot")).toHaveLength(3);
+});
+
+// THE BOARD'S HEADINGS STEP BY ONE from the surface it stands on: its cards
+// were a fixed h3, straight under the h1 on an open brand kit, and the voice
+// lists a fixed h4 under the brand page's h2 cards. Mutation: fix either
+// level again and a case goes red.
+test("the board's cards and the voice's lists take the levels under the surface", () => {
+  const voiced: BrandDocument = {
+    ...DOC,
+    voice: { summary: "Plain.", write_like: ["Short sentences"], avoid: ["Jargon"] },
+  };
+  const levels = () =>
+    [...document.querySelectorAll("h1, h2, h3, h4, h5, h6")].map(
+      (h) => `${h.tagName} ${h.textContent}`,
+    );
+  render(<BrandBoard document={voiced} assets={ASSETS} drawn="brand" />);
+  const top = levels();
+  expect(top.filter((l) => l.startsWith("H2 "))).toContain("H2 Voice and tone");
+  expect(top).toContain("H3 Write like this");
+  expect(top).toContain("H3 Avoid");
+  expect(top.some((l) => /^H[4-6] /.test(l))).toBe(false);
+  cleanup();
+  render(
+    <HeadingLevelProvider level={3}>
+      <BrandBoard document={voiced} assets={ASSETS} drawn="brand" />
+    </HeadingLevelProvider>,
+  );
+  expect(levels()).toContain("H3 Voice and tone");
+  expect(levels()).toContain("H4 Write like this");
 });

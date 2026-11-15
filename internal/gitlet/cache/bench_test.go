@@ -289,6 +289,7 @@ func bundleFiles(tmp, dest string, i int, data []byte, sizes []int, durable bool
 		}
 		files[k] = f
 	}
+	//fixedwait:measure the files' creation time, added to a total the benchmark reports and holds to no bound
 	created.Add(int64(time.Since(began)))
 	for k, f := range files {
 		if _, err := f.Write(data[:sizes[k]]); err != nil {
@@ -966,6 +967,7 @@ func (o *timedObjects) Open(ctx context.Context, obj objstore.Object) (io.ReadCl
 	}
 	return &timedRead{ReadCloser: rc, done: func() {
 		ended := time.Now()
+		//fixedwait:measure a GET's duration, added to a total the benchmark reports and holds to no bound
 		o.took.Add(int64(ended.Sub(began)))
 		o.gets.Add(1)
 		extreme(&o.last, ended.UnixNano(), true)
@@ -1111,6 +1113,7 @@ func BenchmarkColdJoin(b *testing.B) {
 						}
 					}
 					err := g.Wait()
+					//fixedwait:measure the nodes' time to come up, the benchmark's reported figure, held to no bound
 					up += time.Since(began)
 					b.StopTimer()
 					waits = append(waits, stop()...)
@@ -1183,6 +1186,7 @@ func (l *coldLane) RepoState(ctx context.Context, q gitlet.StateQuery) (gitlet.R
 	defer l.answers.Release(1)
 	l.readers.take()
 	defer l.readers.give()
+	//fixedwait:simulated a data node's serve time for one snapshot page (coldPageServe)
 	time.Sleep(coldPageServe)
 	return l.inner.RepoState(ctx, q)
 }
@@ -1215,6 +1219,7 @@ func (l *coldLane) traffic() (stop func() []time.Duration) {
 	)
 	done := make(chan struct{})
 	wg.Go(func() {
+		//fixedwait:simulated the lane's other traffic, a read every coldOtherEvery
 		tick := time.NewTicker(coldOtherEvery)
 		defer tick.Stop()
 		for {
@@ -1229,7 +1234,9 @@ func (l *coldLane) traffic() (stop func() []time.Duration) {
 					return
 				}
 				l.readers.take()
+				//fixedwait:measure how long the other read waited, which the benchmark reports and holds to no bound
 				waited := time.Since(began)
+				//fixedwait:simulated the other read's serve time on its reader (coldOtherServe)
 				time.Sleep(coldOtherServe)
 				l.readers.give()
 				l.answers.Release(1)
@@ -1300,12 +1307,14 @@ type timedLog struct {
 
 func (l *timedLog) RepoState(ctx context.Context, q gitlet.StateQuery) (gitlet.RepoSnapshot, error) {
 	began := time.Now()
+	//fixedwait:measure the fake log's own time, reported so the benchmark can name it, held to no bound
 	defer func() { l.took.Add(int64(time.Since(began))) }()
 	return l.inner.RepoState(ctx, q)
 }
 
 func (l *timedLog) Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	began := time.Now()
+	//fixedwait:measure the fake log's own time, reported so the benchmark can name it, held to no bound
 	defer func() { l.took.Add(int64(time.Since(began))) }()
 	return l.inner.Read(ctx, q)
 }

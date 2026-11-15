@@ -20,7 +20,7 @@ import (
 // site alone, so no package tag is needed. A REVIEWED LIST: a new one is somebody's
 // decision in a diff.
 var apiOwnUnguarded = []string{
-	"GET /health", "GET /ready", "GET /{$}", "GET /dashboard", "GET /favicon.ico", "GET /static/",
+	"GET /health", "GET /ready", "GET /{$}", "GET /dashboard", "GET /dashboard/{$}", "GET /favicon.ico", "GET /static/",
 	"POST /otlp/{token}/v1/{signal}",
 	// Dispatchers to Gitlet, which checks the box's token itself.
 	host.PatternBoxInfoRefs, host.PatternBoxUploadPack, host.PatternBoxReceivePack,

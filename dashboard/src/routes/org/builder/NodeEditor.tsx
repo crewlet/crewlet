@@ -60,7 +60,12 @@ import { isWholeReference } from "~/lib/references.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { sandboxWords } from "~/routes/agents/seat/profile.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { SeatHolding, canManagePeople, useHumanSeats } from "~/components/people.tsx";
+import {
+  SeatHolding,
+  canManagePeople,
+  useHumanSeats,
+  useSeatGesture,
+} from "~/components/people.tsx";
 import { TOOL_TONE, toolRollup } from "~/lib/toolState.ts";
 import type { IntegrationTool } from "~/contract/integrations.ts";
 import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
@@ -1720,6 +1725,7 @@ function SeatHolder({ seat, minted }: { seat: { handle: string; name: string }; 
   const viewer = useViewer();
   const reads = !viewer.asking && !viewer.anonymous;
   const seats = useHumanSeats(reads && !minted);
+  const gesture = useSeatGesture(viewer.grants);
   if (!reads) return null;
   return (
     <EditorSection title="Person">
@@ -1730,10 +1736,11 @@ function SeatHolder({ seat, minted }: { seat: { handle: string; name: string }; 
           seat={seat}
           seats={seats}
           manages={canManagePeople(viewer.grants)}
-          held={viewer.grants}
           you={viewer.handle === seat.handle}
+          onGesture={gesture.open}
         />
       )}
+      {gesture.dialog}
     </EditorSection>
   );
 }

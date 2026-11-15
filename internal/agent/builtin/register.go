@@ -520,12 +520,12 @@ func annotationsFor(name string) tools.Annotations {
 		// read_session would be refused it as a write somebody reads.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
 	case A2AAskTool:
-		// One of the two that leave this process. Not destructive — an ask
-		// is a message, not an edit — but NOT idempotent: asking twice
-		// wakes a colleague twice and spends two of their turns. A worker
-		// is additionally denied it BY NAME, because "one colleague's desk"
-		// is a narrower objection than open-world and deserves its own
-		// sentence; see internal/agent/subagent.
+		// It leaves this process, as every open-world builtin does. Not
+		// destructive — an ask is a message, not an edit — but NOT
+		// idempotent: asking twice wakes a colleague twice and spends two of
+		// their turns. A worker is additionally denied it BY NAME, because
+		// "one colleague's desk" is a narrower objection than open-world and
+		// deserves its own sentence; see internal/agent/subagent.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case MarkOnboardedTool:
 		// A write whose repeat is genuinely free: the marker is a fact
@@ -854,6 +854,13 @@ func annotationsFor(name string) tools.Annotations {
 		// the engine reads a vendor outside itself.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}
+	case RunScheduleTool:
+		// A WRITE SOMEBODY ELSE ACTS ON: the run starts a turn on each seat
+		// the schedule wakes, whose moves reach the company, so OpenWorld is
+		// Yes. It replaces nothing, and NOT idempotent as a tool: a second
+		// call is a second run, unless it is the same request sent again.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.No, OpenWorld: mcp.Yes}
 	case PauseSeatTool:
 		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight, and the
 		// executor it has out with its box, and neither is run again —

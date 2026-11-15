@@ -480,7 +480,7 @@ test("a body edit says so, and bookkeeping is never said", () => {
       }),
       {},
     ),
-  ).toBe("Changed their own bookkeeping");
+  ).toBe("Changed their pins or inbox");
   expect(changeClauses({ body: { from: "9 bytes", to: "11 bytes" } }, {})).toEqual([
     "edited the description",
   ]);
@@ -1996,4 +1996,71 @@ test("only open work reads as blocked", () => {
   expect(readsBlocked({ blocked: true, status: "cancelled" })).toBe(false);
   expect(readsBlocked({ blocked: true, status_group: "closed" })).toBe(false);
   expect(readsBlocked({ status_group: "active" })).toBe(false);
+});
+
+// THE GROUPING IS ONE FAMILY OF KEYS, written whole for every shape. Each shape
+// used to delete the keys it did not draw one at a time, and the ones it forgot
+// rode in from a saved view: the engine refuses a `group_limit` or a `group`
+// with no `group_by`, and a `subgroup` with no `group_by2`, so the whole list
+// answered a refusal.
+test("a view's grouping keys never outlive the axis they qualify", () => {
+  const view = {
+    group_by: "status",
+    group: "todo",
+    group_limit: "20",
+    group_by2: "assignee",
+    subgroup: "ana",
+  };
+  const grouped = ["group_by", "group", "group_limit", "group_by2", "subgroup"];
+  const keys = (params: Record<string, unknown>) =>
+    grouped.filter((key) => params[key] !== undefined);
+  // NO GROUPING on a list: nothing of the family is sent.
+  const off = { ...NO_FILTERS, groupBy: EXPLICIT_NONE };
+  expect(keys(build({ shape: "list", view, filters: off }))).toEqual([]);
+  expect(keys(build({ shape: "timeline", view, filters: off }))).toEqual([]);
+  expect(keys(build({ shape: "calendar", view }))).toEqual([]);
+  // A BOARD draws every column and no lanes.
+  expect(keys(build({ shape: "board", view }))).toEqual(["group_by", "group_limit"]);
+  // A TIMELINE draws one axis: its column, never a lane.
+  expect(keys(build({ shape: "timeline", view }))).toEqual(["group_by", "group", "group_limit"]);
+  // THE LIST keeps the whole family while the axes are the view's own.
+  expect(keys(build({ shape: "list", view }))).toEqual(grouped);
+  // AND A NARROWING BELONGS TO ITS AXIS: regrouped, the view's column and
+  // lane name values the new axes do not have.
+  const regrouped = build({
+    shape: "list",
+    view,
+    filters: { ...NO_FILTERS, groupBy: "priority", groupBy2: "type" },
+  });
+  expect(keys(regrouped)).toEqual(["group_by", "group_limit", "group_by2"]);
+  // THE READER'S OWN COLUMN, including the unset one, is sent on its presence.
+  const unset = build({
+    shape: "list",
+    filters: { ...NO_FILTERS, groupBy: "assignee", group: "" },
+  });
+  expect(unset.group).toBe("");
+});
+
+// A NARROWING A SHAPE DOES NOT SEND SAYS SO on its chip, rather than standing
+// in the row as though it applied: a board draws every column, a calendar's
+// window is its own `due`.
+test("a chip the shape sets aside says why", () => {
+  const filters = { ...NO_FILTERS, groupBy: "status", group: "done", due: "overdue" };
+  const inert = (shape: Shape) =>
+    Object.fromEntries(filterChips(filters, {}, shape).map((c) => [c.param, c.inert]));
+  expect(inert("list")).toEqual({ due: undefined, group: undefined });
+  expect(inert("board")).toEqual({ due: undefined, group: "not on a board" });
+  expect(inert("calendar")).toEqual({ due: "not on the calendar", group: "not on the calendar" });
+});
+
+// AN ARCHIVED PROJECT'S OWN TASKS ARE ITS ANSWER: the engine leaves archived
+// work out unless asked, scoped to that project included, so its Tasks lens
+// drew nothing over a project still counting its tasks.
+test("an archived project's own list asks for its archived work", () => {
+  expect(build({ shape: "list", archivedContainer: true }).archived).toBe("true");
+  expect(build({ shape: "list" }).archived).toBeUndefined();
+  // A VIEW'S OWN CHOICE IS ITS AUTHOR'S.
+  expect(
+    build({ shape: "list", archivedContainer: true, view: { archived: "only" } }).archived,
+  ).toBe("only");
 });

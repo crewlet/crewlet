@@ -27,7 +27,13 @@ import type { GoLiveReviewAnswer } from "./goLive.ts";
 import type { TurnOutcomesAnswer } from "./turnOutcomes.ts";
 import type { InsightsAnswer } from "./insights.ts";
 import type { AccessFixAnswer, AdvisorAnswer } from "./advisor.ts";
-import type { ModelDevice, ModelEntriesAnswer, ModelsAnswer, RunnersAnswer } from "./models.ts";
+import type {
+  ModelCheck,
+  ModelDevice,
+  ModelEntriesAnswer,
+  ModelsAnswer,
+  RunnersAnswer,
+} from "./models.ts";
 import type { LogPosition } from "./session.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
@@ -998,6 +1004,21 @@ export interface ExecutorRow {
   held_arguments?: Record<string, unknown> | null;
 
   /**
+   * WHERE THE RUN STANDS FOR THIS READER, as the engine decides it for every
+   * screen that draws a parked run (`runanswer.Waiting`): who it waits on now
+   * by handle (its delegates while a delegated call waits on them, else the
+   * people its question is put to), whether it is put to the reader, whether
+   * the reader may answer it (the answer route's own authority), and whether
+   * it waits on them: put to them, or theirs to answer and escalated by its
+   * delegates or past their deadline. Empty and false on a run that waits on
+   * nobody; absent on a live entry whose durable row is not read yet.
+   */
+  put_to?: string[];
+  put_to_you?: boolean;
+  may_answer?: boolean;
+  needs_you?: boolean;
+
+  /**
    * What this run called through the MCP bridge, in order.
    *
    * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. Every run's calls are
@@ -1648,6 +1669,12 @@ export interface ConfigWarning {
   message: string;
   /** What an advisory is about, for the setup advisor; absent on most warnings. */
   class?: string;
+  /**
+   * On a dry run's answer only: whether THIS write brings the warning, rather
+   * than the active revision already carrying it (`configapi.checkedWarning`).
+   * A write's own answer and every other reader leave it out.
+   */
+  introduced?: boolean;
 }
 
 /** `200` from `PUT` or `PATCH /config?dry_run=true`: nothing was stored. */
@@ -1963,7 +1990,8 @@ export interface ScheduleRow {
 /** One fire, from the schedules' replicated history: every data node's fires,
  *  each with what became of it.
  *
- *  `outcome` is what the scheduler recorded (`fired`, `skipped_catchup`, or
+ *  `outcome` is what the scheduler recorded (`fired`, `fired_manually` for a
+ *  run a person asked for now, off the cron, `skipped_catchup`, or
  *  `skipped_paused` for a runner seat that was paused when the fire came due),
  *  or `skipped_superseded` for a fire its seat did not run because a later
  *  fire of the same schedule ran in its place. None of them is a turn's
@@ -1982,7 +2010,8 @@ export interface ScheduleRunRow {
   target_handle: string;
   scheduled_at: string;
   fired_at: string;
-  outcome: "fired" | "skipped_catchup" | "skipped_paused" | "skipped_superseded" | "";
+  outcome:
+    "fired" | "fired_manually" | "skipped_catchup" | "skipped_paused" | "skipped_superseded" | "";
   trace_id: string;
 }
 
@@ -6391,15 +6420,26 @@ export interface DecisionItem {
    * change cannot be said line by line; absent once it asks again.
    */
   access_changed?: { lines: string[] };
+  /** Where it stands for the caller: put to them, theirs to answer, and
+   *  waiting on them (a run's are its row's own). */
+  put_to_you: boolean;
+  may_answer: boolean;
+  needs_you: boolean;
 }
 
 /** `decisions`: the open asks put to a person and the executors parked on
- *  a question to them, newest first. */
+ *  a question to them, newest first; and, on the caller's own record, the
+ *  runs they may answer that wait on somebody else. */
 export interface DecisionsAnswer {
   handle: string;
   items: DecisionItem[];
-  /** Every such item, not the page. */
+  /** Everything that waits on the person, not the page: what is put to
+   *  them, and on their own record what they may answer that its delegates
+   *  escalated or left past their deadline. What the badge says. */
   total: number;
+  /** The runs the caller may answer that wait on somebody else in good time:
+   *  listed, and asking nothing of them yet. */
+  answerable: number;
   /** The ask count reached the engine's ceiling, so `total` is a floor. */
   capped: boolean;
   /** When the longest-waiting one began waiting. */
@@ -8094,6 +8134,8 @@ export interface QueryMap {
   llm_models: ModelsAnswer;
   /** One device sign-in (`id`). Admin. */
   llm_device_sign_in: ModelDevice;
+  /** One model's latest test (`key`), running or ended. Admin. */
+  llm_check: ModelCheck;
 }
 
 export type QueryName = keyof QueryMap;

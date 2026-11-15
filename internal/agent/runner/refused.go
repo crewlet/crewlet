@@ -1,6 +1,9 @@
 package runner
 
-import "github.com/crewlet/crewlet/internal/provenance"
+import (
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
 
 // Refused is a run whose job ended on a request its provider refused as built
 // (sandbox.Result.RequestRefused), in a session the job CONTINUED: what a
@@ -41,12 +44,15 @@ func (r Refused) Reseed() string {
 }
 
 // A refused round continues no session, in place or kept: the session is what
-// was refused. Its words are the engine's own, which no fence token touches.
+// was refused. Its words are the engine's own, which no fence token touches,
+// and none a later brief tells again ([carried.lead]): the run they carry on
+// from did no work for a later session to lack.
 func (r *Refused) session() string                         { return "" }
 func (r *Refused) boxKept() bool                           { return r.BoxKept }
 func (r *Refused) continuation(provenance.Boundary) string { return r.Reseed() }
 func (r *Refused) reseed(provenance.Boundary) string       { return r.Reseed() }
 func (r *Refused) tellsHeld() string                       { return "" }
+func (r *Refused) lead() *sandbox.Lead                     { return nil }
 func (r *Refused) keeps() bool                             { return false }
 func (r *Refused) branch() string                          { return "" }
 func (r *Refused) refusal() error                          { return nil }

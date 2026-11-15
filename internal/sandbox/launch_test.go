@@ -778,8 +778,8 @@ func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest
 	r.t.Helper()
 	c, err := NewCoordinator(CoordinatorOptions{
 		Pushes:  &pushSpy{},
-		Answers: rigAnswers(),
-		Queue:   r.queue, Pending: r.pending, Manager: m,
+		Answers: rigAnswers(), Leads: rigLeads(),
+		Queue: r.queue, Pending: r.pending, Manager: m,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
 		Lease: leased(rigLease),
 		Now:   func() time.Time { return r.now },

@@ -114,15 +114,17 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	}
 	bounds := boundsFor(take.MaxBytes)
 	scrub := newScrubber(take.Scrub)
+	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	read, write := io.Pipe()
 	out := &takenBody{PipeReader: read, done: make(chan struct{})}
 	if !out.reading(body) {
 		_ = body.Close()
 	}
 	sum := &cksum{}
-	// WHAT THE SESSION'S LAST REQUEST CARRIED, read off the archive as it is
-	// kept (measure.go), beside the take and never holding it up.
-	meter := newContextMeter(carries.layout(), archive.SessionID)
+	// WHAT THE SESSION'S LAST REQUEST CARRIED, and what Claude Code counts it
+	// at, read off the archive as it is kept (measure.go), beside the take and
+	// within its context, never holding it up.
+	meter := newContextMeter(ctx, carries.layout(), archive.SessionID, archive.Version)
 	go func() {
 		defer close(out.done)
 		reopen := func() (io.ReadCloser, error) {
@@ -156,7 +158,27 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		}
 		return keepDigest(ctx, box, paths, archive.SessionID, digest)
 	}
-	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context}, nil
+	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
+		Count: meter.count}, nil
+}
+
+// keptRunStart is where an archive's run began in its session as the take
+// keeps it ([sandbox.SessionArchive.RunStart]): the message it names spelled as
+// the kept archive spells that message's id — every message's `id` passes the
+// rewrite of a string under a key that is no credential's ([keptString]) — so
+// the kept session holds the message under the id the start names. Where that
+// rewrite leaves no message id ([sandbox.ValidMessageID]: a value the take names
+// in it, a shape of a secret), the start is dropped, never the capture: the
+// capture is kept naming no start, as one whose run recorded none.
+func keptRunStart(scrub scrubber, start sandbox.RunStart) sandbox.RunStart {
+	if start.After == "" {
+		return start
+	}
+	kept := keptString(scrub, start.After)
+	if !sandbox.ValidMessageID(kept) {
+		return sandbox.RunStart{}
+	}
+	return sandbox.RunStart{After: kept}
 }
 
 // errTakeClosed is a scrub whose reader was closed before it reopened the

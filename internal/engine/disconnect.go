@@ -13,13 +13,22 @@ import (
 
 // ConfigWriter removes a block from the company document.
 //
-// The consumer's own interface, one method wide, because that is all a
-// disconnect needs. The implementation is the same `PATCH /config` surface
-// every other write goes through (one merge, one validation, one
-// compare-and-set) rather than a second path onto the document.
+// The consumer's own interface, as wide as a disconnect and the passes need.
+// The implementation is the same config surface every other write goes
+// through (one validation, one compare-and-set) rather than a second path
+// onto the document.
 type ConfigWriter interface {
+	// Disconnect removes kind's block from the active revision and turns
+	// off every seat that was on through the connection it held, as one
+	// revision recorded as by's, and answers the seats it turned off. The
+	// block alone is not a disconnect: the document refuses an agent
+	// turned on at an integration the company has not connected.
+	Disconnect(ctx context.Context, kind integration.Kind, summary string,
+		by iam.Actor) (seatsOff []string, err error)
+
 	// Apply merges patch into the active revision and activates the
-	// result, recording by as its author.
+	// result, recording by as its author: a field a pass discovered and
+	// records on the company's own block.
 	Apply(ctx context.Context, patch []byte, summary string, by iam.Actor) error
 
 	// Seat reads one seat's whole entity as JSON, and SetSeat writes it
@@ -251,12 +260,22 @@ func (e *Engine) dropBlock(
 	if err := vendor(ctx); err != nil {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
-	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
-	if err := writer.Apply(ctx, patch, "disconnect "+string(kind), by); err != nil {
+	// THE BLOCK AND THE AGENTS ON THROUGH IT, in one revision. The vendor
+	// step above turned every agent off at the vendor; the document has to
+	// say the same, or it holds agents turned on at an integration the
+	// company no longer has, which its own rules refuse, and the disconnect
+	// could never finish while one agent was on.
+	seatsOff, err := writer.Disconnect(ctx, kind, "disconnect "+string(kind), by)
+	if err != nil {
 		// The third-party app work IS done and is durable, so a retry re-runs a
 		// teardown with nothing left to remove and then tries the block
 		// again. That is why every teardown is safe to repeat.
-		return fmt.Errorf("engine: remove the %s block: %w", kind, err)
+		return fmt.Errorf("%w: remove the %s block: %w", integration.ErrBlockNotRemoved, kind, err)
+	}
+	if len(seatsOff) > 0 {
+		log.InfoContext(ctx, "disconnect_seats_turned_off",
+			"integration", kind.String(), "seats", seatsOff,
+			"detail", "each keeps what it was given, so connecting again and turning it on restores it")
 	}
 	return nil
 }

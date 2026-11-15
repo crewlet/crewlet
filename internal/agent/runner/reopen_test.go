@@ -3,12 +3,14 @@ package runner_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -80,6 +82,41 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 	if res.Failed {
 		t.Errorf("a submission citing a delivery the run made before the recovery was "+
 			"refused: %s", res.Output)
+	}
+}
+
+// A RUN TAKEN OVER IS REFUSED A NO_ACTION ITS RUN ACTED BEFORE. The node that
+// takes a run over serves its submission tool, and the tool reads the calls
+// the run made before the takeover: a run that asked a colleague and then,
+// served by the new node, said nobody was asking is refused while it can
+// still report what it did, as it would have been on the node that launched
+// it.
+//
+// Mutation: the reopen's submission back to decodeWork, and the no_action is
+// accepted.
+func TestARunTakenOverIsRefusedANoActionItsRunActedBefore(t *testing.T) {
+	t.Parallel()
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{reply: turn.NoReply(), register: asksColleagues, calls: turnctx.NewCallLog()})
+	state := execstate.State{
+		Version: execstate.Version, Round: 1,
+		ActiveTools: []string{toolname.A2AAsk, "lookup_colleague", "reflect", "slack_history", "slack_post"},
+	}
+	reopened, err := r.ReopenAgentRun(context.Background(), state, []runner.BridgedCall{
+		{Call: ledger.Call{Name: toolname.A2AAsk, Args: map[string]any{"to": "cto"}, Result: "asked"}, Seq: 1},
+	}, nil, nil, nil, runner.Bridged{}, false)
+	if err != nil {
+		t.Fatalf("ReopenAgentRun: %v", err)
+	}
+	res, err := reopened.Surface.Execute(context.Background(), llm.ToolCall{
+		Name: runner.SubmitWorkTool, Arguments: map[string]any{"outcome": "no_action", "summary": "not mine"},
+	})
+	if err != nil {
+		t.Fatalf("submit_work: %v", err)
+	}
+	if !res.Failed || !strings.Contains(res.Output, `called "a2a_ask"`) {
+		t.Errorf("failed = %v, output = %q; want the no_action refused, naming the ask the run "+
+			"made before the takeover", res.Failed, res.Output)
 	}
 }
 

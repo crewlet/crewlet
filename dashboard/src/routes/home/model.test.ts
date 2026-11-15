@@ -32,7 +32,7 @@ import {
   troubleParts,
   waitingOf,
 } from "./model.ts";
-import { seatDecisionsFor } from "~/components/DecisionRow.tsx";
+import { seatDecisionsFor } from "~/lib/decisions.ts";
 import { degradationOf } from "~/app/frame/StateBar.tsx";
 
 const base = {
@@ -346,7 +346,14 @@ describe("the figures", () => {
 
   test("what waits is the engine's count plus the stopped seats, oldest of all", () => {
     const waiting = waitingOf(
-      { handle: "jane", items: [], total: 2, capped: false, oldest_at: "2026-09-22T10:00:00Z" },
+      {
+        handle: "jane",
+        items: [],
+        total: 2,
+        answerable: 0,
+        capped: false,
+        oldest_at: "2026-09-22T10:00:00Z",
+      },
       [{ at: "2026-09-22T08:00:00Z" }],
       false,
     );

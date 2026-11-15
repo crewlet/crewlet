@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -47,7 +48,10 @@ func TestEverySurfaceHasADisconnector(t *testing.T) {
 type noopWriter struct{}
 
 func (noopWriter) Apply(context.Context, []byte, string, iam.Actor) error { return nil }
-func (noopWriter) Seat(context.Context, string) ([]byte, error)           { return nil, nil }
+func (noopWriter) Disconnect(context.Context, integration.Kind, string, iam.Actor) ([]string, error) {
+	return nil, nil
+}
+func (noopWriter) Seat(context.Context, string) ([]byte, error) { return nil, nil }
 func (noopWriter) SetSeat(context.Context, string, []byte, string, iam.Actor) error {
 	return nil
 }
@@ -378,5 +382,49 @@ func TestADisconnectIsRecordedAsWhoeverAskedForIt(t *testing.T) {
 				t.Errorf("the block was dropped as %+v, want %+v", documents, tc.want)
 			}
 		})
+	}
+}
+
+// refusingWriter is a config surface whose disconnect the company's settings
+// refuse, as a document one of whose rules the removal breaks.
+type refusingWriter struct {
+	noopWriter
+	err error
+}
+
+func (w refusingWriter) Disconnect(context.Context, integration.Kind, string, iam.Actor) ([]string, error) {
+	return nil, w.err
+}
+
+// A REVISION THE SETTINGS REFUSED IS NOT THE VENDOR'S FAILURE, and the
+// disconnect says which it was: the vendor's half finished, and the error is
+// [integration.ErrBlockNotRemoved] over the settings' own refusal, so the
+// status row records that the settings hold it and a screen never tells a
+// person the third-party app is in the way.
+//
+// Mutation: wrap the refused revision as any other teardown failure and the
+// row reads "vendor", which is what sent people to look at a vendor that had
+// already let go.
+func TestADisconnectTheSettingsRefuseSaysTheSettingsHoldIt(t *testing.T) {
+	e, company := sealingEngine(t, "https://jira.example.com")
+	e.epoch.current.Store(company)
+	refused := errors.New("units[0].roles[0].integrations.mattermost.enabled: conflicting settings")
+	e.UseConfigWriter(refusingWriter{err: refused})
+
+	pass := &removingPass{}
+	d := vendorDisconnect{engine: e, kind: integration.KindAtlassian, pass: pass}
+	_, err := d.Disconnect(t.Context(), integration.TeardownRequest{By: testParty})
+	if !errors.Is(err, integration.ErrBlockNotRemoved) || !errors.Is(err, refused) {
+		t.Fatalf("Disconnect = %v, want the settings' refusal under ErrBlockNotRemoved", err)
+	}
+	state, forget := integration.ObserveTeardown(integration.State{}, integration.KindAtlassian, err, time.Now())
+	if forget || state.TeardownHeldBy != integration.TeardownHeldBySettings {
+		t.Errorf("the row is held by %q (forget %v), want the settings", state.TeardownHeldBy, forget)
+	}
+	// THE CONTROL: the vendor's half failing is the vendor's.
+	state, _ = integration.ObserveTeardown(integration.State{}, integration.KindAtlassian,
+		errors.New("engine: atlassian teardown: 401"), time.Now())
+	if state.TeardownHeldBy != integration.TeardownHeldByVendor {
+		t.Errorf("a vendor failure is recorded as held by %q", state.TeardownHeldBy)
 	}
 }

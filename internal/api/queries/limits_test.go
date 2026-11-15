@@ -73,6 +73,12 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 				t.Errorf("the schedule timeout is %v (default %v), want the engine's %v",
 					row.Value, row.Default, want)
 			}
+			// NO DOCUMENT KEY SETS IT, and the answer says so: a screen
+			// offering to change it would send a patch the parser
+			// refuses as an unknown field.
+			if row.Settable {
+				t.Errorf("%s is reported settable, and no company document carries it", row.Key)
+			}
 			continue
 		}
 		want, ok := written[row.Key]
@@ -85,6 +91,10 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 		}
 		if row.Off {
 			t.Errorf("%s = %v is reported off", row.Key, row.Value)
+		}
+		// A ROW THE DOCUMENT JUST SET IS ONE A WRITE CAN SET.
+		if !row.Settable {
+			t.Errorf("%s is read from the document and reported not settable", row.Key)
 		}
 		// THE DEFAULT IS JUDGED ON ITS OWN, not on the value written over
 		// it: the rate limit's default is still no limit.

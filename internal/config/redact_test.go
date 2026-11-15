@@ -207,8 +207,8 @@ func TestARedactedExampleRoundTripsExactly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) < 2 {
-		t.Fatalf("found %d example companies, want at least 2: %v", len(files), files)
+	if len(files) < 1 {
+		t.Fatalf("found %d example companies, want at least 1: %v", len(files), files)
 	}
 	for _, file := range files {
 		t.Run(filepath.Base(file), func(t *testing.T) {

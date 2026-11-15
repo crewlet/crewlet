@@ -174,7 +174,7 @@ func TestAReplayServedByACopyThatIsBehindIsNeverAShortHydration(t *testing.T) {
 	conn := broker(t)
 	owner := openStore(t)
 	seedMemory(t, owner)
-	if published, err := syncerOn(t, owner, conn).Publish(t.Context(), seat.Handle); err != nil {
+	if published, err := syncerOn(t, owner, conn).PublishOwn(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("publish: %v", err)
 	} else if published.Rows != len(tables) {
 		t.Fatalf("published %d rows, want %d", published.Rows, len(tables))

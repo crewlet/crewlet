@@ -36,6 +36,7 @@ import { useMemo, useState } from "react";
 import { Button, Input, Popover, SegmentedControl, Tag } from "@crewlethq/ui";
 import { CheckGlyph, ChevronLeftGlyph, SearchGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import {
+  DATE_FILTERS,
   DUE_FILTERS,
   PRIORITIES,
   PRIORITY_OPS,
@@ -202,6 +203,10 @@ function useFilterFields({
         options: DUE_FILTERS.map((d) => ({ value: d.value, label: d.label })),
       });
     }
+    // THE OTHER DATES, each with the engine's aliases that ask its question.
+    for (const date of DATE_FILTERS) {
+      out.push({ param: date.param, label: date.label, options: [...date.options] });
+    }
     out.push({ param: "blocked", label: "Blocked", toggle: true });
     out.push({ param: "removed", label: "Removed items", toggle: true });
 
@@ -331,6 +336,9 @@ function FilterPanel({
     if (field.param === "blocked") return filters.blocked ? "true" : "";
     if (field.param === "removed") return filters.removed ? "true" : "";
     if (field.param === "due") return filters.due;
+    if (field.param === "start" || field.param === "created" || field.param === "updated") {
+      return filters[field.param];
+    }
     if (field.param.startsWith("f.")) return filters.fields[field.param] ?? "";
     return (
       {

@@ -220,7 +220,10 @@ node refuses one its peers published unsealed. It **signs** the three per-run to
 base's, and any domain a later build registers. The same material also seals a
 person's answer to a parked executor onto the executor's row, in a key domain of
 its own (`seat.run.answer`), which whichever node resumes the executor opens before
-the turn is handed anything of it, signs every box read one node asks of
+the turn is handed anything of it, signs what carried each session of an executor
+on, kept beside the run's record for the job whose brief told it
+(`seat.run.lead`), an answer's words among it, which a later brief to a session
+that may lack that brief tells again, signs every box read one node asks of
 the node whose host a `direct` or `container` box is on (`sandbox.box_read`),
 and seals each note a person sends a turn whose executor is in its box onto the
 executor's row (`seat.steer.note`) beside an anchor naming the seat it serves

@@ -20,8 +20,9 @@
  * else ([scopeName]): drawn from the id, a role schedule's scope read as a
  * uuid and linked to a page nobody has.
  *
- * AND A FIRE HAS FOUR OUTCOMES. The scheduler records `fired`,
- * `skipped_catchup` or `skipped_paused`, and the history reports a fire its
+ * AND A FIRE HAS FIVE OUTCOMES. The scheduler records `fired`,
+ * `fired_manually` (a person ran it now, off its cron), `skipped_catchup` or
+ * `skipped_paused`, and the history reports a fire its
  * seat did not run, because a later fire of the schedule ran in its place, as
  * `skipped_superseded`. None of them is a turn's outcome, so "recent
  * failures" counted a value the engine cannot emit and read 0 for ever on
@@ -29,6 +30,15 @@
  * the catchup cap doing its job, a node that was down too long, a seat a
  * person had paused, or fires that waited for a seat that could not work and
  * ran once, as the latest.
+ *
+ * AND A SCHEDULE'S TIMES ARE ON ITS OWN CLOCK, named (`scheduleClock.ts`): the
+ * fires after the next, the tick a fire stood for and the next fire's hint are
+ * drawn in the zone the schedule fires in, with the reader's own time beside
+ * them only where the two clocks differ.
+ *
+ * THE SCHEDULE'S CONTROLS ARE `ScheduleControls.tsx`'s: New schedule on the
+ * list, and Run now, Edit, Pause or Resume and Delete on a schedule's page and
+ * its peek.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -87,12 +97,22 @@ import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
 import { closedBy } from "~/app/nav.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { zone as readerZone } from "~/lib/prefs.ts";
 import { NotFound } from "../NotFound.tsx";
+import { NewScheduleButton, ScheduleActions } from "./ScheduleControls.tsx";
+import {
+  clocksDiffer,
+  onClock,
+  onClockNamed,
+  scheduleTimeHint,
+  yourTime,
+  zoneWords,
+} from "./scheduleClock.ts";
 
 /** Where the company document a schedule is written in is read. */
 const CONFIG_PATH = ["settings", "config"];
 
-/** A fire's four outcomes, and nothing else (see the note above).
+/** A fire's five outcomes, and nothing else (see the note above).
  *
  *  NO SKIP IS AMBER. Amber is the one state that asks for a person, and no
  *  skip does: a paused seat's fire follows the decision somebody already
@@ -103,6 +123,7 @@ const CONFIG_PATH = ["settings", "config"];
  *  nothing anybody could act on. */
 const OUTCOME_TONE: Record<string, "success" | "neutral"> = {
   fired: "success",
+  fired_manually: "success",
   skipped_catchup: "neutral",
   skipped_paused: "neutral",
   skipped_superseded: "neutral",
@@ -112,6 +133,7 @@ const OUTCOME_TONE: Record<string, "success" | "neutral"> = {
  *  and `skipped_catchup` in a pill is a column name, not a word. */
 const OUTCOME_LABEL: Record<string, string> = {
   fired: "fired",
+  fired_manually: "fired · run now",
   skipped_catchup: "skipped · missed",
   skipped_paused: "skipped · paused",
   skipped_superseded: "skipped · replaced",
@@ -126,10 +148,11 @@ export function OutcomeTag({ outcome }: { outcome: string }) {
   );
 }
 
-/** Why a fire was skipped, for the badge's title: one sentence per skip, held
- *  to the history's own vocabulary by the type so a new skip cannot arrive
- *  unexplained. */
+/** Why a fire was skipped or run by hand, for the badge's title: one sentence
+ *  per outcome but the cron's own fire, held to the history's own vocabulary
+ *  by the type so a new one cannot arrive unexplained. */
 const OUTCOME_WHY: Record<string, string> = {
+  fired_manually: "A person ran it now, outside its schedule",
   skipped_catchup: "Missed, outside the catchup window",
   skipped_paused: "The seat was paused",
   skipped_superseded: "A later fire of this schedule ran in its place",
@@ -260,7 +283,7 @@ export function scheduleFacts(row: ScheduleRow, now: number, who: Who): Fact[] {
       // opened from draws it — see [CronReading]. WHOLE, because the stack is
       // two lines by construction: clamped, the expression took the first and
       // the sentence under it was cut to "every 20 minutes…".
-      value: <CronReading cron={row.cron} />,
+      value: <CronReading cron={row.cron} timezone={row.timezone} now={now} />,
       whole: true,
     },
     { label: "Timezone", value: row.timezone },
@@ -270,14 +293,18 @@ export function scheduleFacts(row: ScheduleRow, now: number, who: Who): Fact[] {
       // whose timezone was renamed has an empty `next_run` and would read as
       // merely idle — the row says so in its own `problem` field and this is
       // the only place a reader sees it.
+      // ITS HINT ON THE SCHEDULE'S CLOCK, named, and the reader's beside it
+      // where that differs ([scheduleTimeHint]).
       value: row.next_run ? (
-        <span title={fmtDateTime(row.next_run)}>{inTime(row.next_run, now)}</span>
+        <span title={scheduleTimeHint(row.next_run, row.timezone)}>
+          {inTime(row.next_run, now)}
+        </span>
       ) : row.problem ? (
         <Tag variant="danger" title={row.problem}>
           {row.problem}
         </Tag>
       ) : (
-        <span className="muted">{row.enabled ? "never" : "disabled"}</span>
+        <span className="muted">{row.enabled ? "never" : "paused"}</span>
       ),
     },
     {
@@ -317,14 +344,34 @@ type Who = (handle: string) => SeatBadge;
  * it was stretched to the width of the sentence under it, a box round blank
  * space.
  */
-export function CronReading({ cron, timezone }: { cron: string; timezone?: string }) {
+export function CronReading({
+  cron,
+  timezone,
+  now,
+}: {
+  cron: string;
+  /** The zone the schedule fires in, which its sentence's times are on. */
+  timezone?: string;
+  /** The screen's clock, at which the reader's zone is compared with it. */
+  now?: number;
+}) {
   const said = describeCron(cron);
+  // THE SENTENCE'S TIMES ARE THE SCHEDULE'S CLOCK, and say so where the
+  // reader's reads differently: "weekdays at 09:30" under a reader in Los
+  // Angeles was read as their morning, for a standup at 09:30 in Berlin. By
+  // the zone's place ([zoneWords]), which a grid cell has room for, and whole
+  // in the title.
+  const named = said && timezone && now !== undefined && clocksDiffer(now, timezone);
   return (
     <span className="col cron-cell">
       <InlineCode whole title={timezone ? `timezone: ${timezone}` : undefined}>
         {cron}
       </InlineCode>
-      {said && <span className="t-caption">{said}</span>}
+      {said && (
+        <span className="t-caption" title={named ? `${said}, ${timezone} time` : undefined}>
+          {named ? `${said}, ${zoneWords(timezone)} time` : said}
+        </span>
+      )}
     </span>
   );
 }
@@ -394,7 +441,13 @@ function scheduleStatus(row: ScheduleRow | undefined, fired: boolean): ReactNode
       </Tag>
     );
   }
-  if (!row.enabled) return <Tag appearance="outline">disabled</Tag>;
+  if (!row.enabled) {
+    return (
+      <Tag appearance="outline" title="It does not fire until it is resumed">
+        paused
+      </Tag>
+    );
+  }
   return undefined;
 }
 
@@ -528,33 +581,31 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
     <Card>
       <Card.Header
         icon={<CalendarGlyph size="sm" />}
-        subtitle={`next ${upcoming.length} runs, in ${row.timezone}`}
+        subtitle={`next ${upcoming.length} runs, on ${row.timezone} time`}
       >
         <Card.Title>And after that</Card.Title>
       </Card.Header>
       <ol className="fires">
-        {upcoming.map((at) => (
-          <li key={at.toISOString()} className="row gap-2">
-            <span className="mono t-caption">{fmtDateTime(at.toISOString())}</span>
-            <span className="spacer" />
-            {/* TO THE MINUTE, because the rows are read against each other:
-                one unit read "in 1h" beside "in 1h" for two fires twenty
-                minutes apart. */}
-            <span className="t-caption">{inTimeExact(at.toISOString(), now)}</span>
-          </li>
-        ))}
+        {upcoming.map((at) => {
+          // ON THE CLOCK THE HEADING NAMES, the one the expression was worked
+          // out on: the list said "in Europe/Berlin" over times drawn on the
+          // reader's clock, so a reader in Los Angeles read 00:30 for a 09:30
+          // standup. The reader's own time is a second line, labelled theirs,
+          // and only where their clock reads the instant differently.
+          const mine = yourTime(at.getTime(), row.timezone);
+          return (
+            <li key={at.toISOString()} className="row gap-2">
+              <span className="mono t-caption">{onClock(at.getTime(), row.timezone)}</span>
+              {mine && <span className="t-caption muted">{mine}</span>}
+              <span className="spacer" />
+              {/* TO THE MINUTE, because the rows are read against each other:
+                  one unit read "in 1h" beside "in 1h" for two fires twenty
+                  minutes apart. */}
+              <span className="t-caption">{inTimeExact(at.toISOString(), now)}</span>
+            </li>
+          );
+        })}
       </ol>
-      {row.timezone && row.timezone.toUpperCase() !== "UTC" && (
-        // TWO ZONES ARE IN PLAY AND THEY ARE NOT THE SAME ONE. The expression
-        // is worked out in the SCHEDULE's zone — the engine's own, so the list
-        // no longer drifts from it — and each instant is then rendered in the
-        // READER's, like every other timestamp on this screen. Saying which is
-        // which beats a reader working out why `0 9 * * *` in Asia/Tokyo is
-        // listed at midnight.
-        <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
-          Runs on <InlineCode>{row.timezone}</InlineCode> time. Shown in your time zone.
-        </p>
-      )}
     </Card>
   );
 }
@@ -601,7 +652,7 @@ export function scheduleColumns({
       cell: (s) => (
         <span className="row gap-1">
           <TableTextCell>{s.name}</TableTextCell>
-          {!s.enabled && <Tag appearance="outline">disabled</Tag>}
+          {!s.enabled && <Tag appearance="outline">paused</Tag>}
         </span>
       ),
     },
@@ -619,7 +670,7 @@ export function scheduleColumns({
       shrink: true,
       drop: 2,
       sortValue: (s) => s.cron,
-      cell: (s) => <CronReading cron={s.cron} timezone={s.timezone} />,
+      cell: (s) => <CronReading cron={s.cron} timezone={s.timezone} now={now} />,
     },
     {
       key: "task",
@@ -656,7 +707,7 @@ export function scheduleColumns({
       // elapsed one.
       cell: (s) =>
         s.next_run ? (
-          <span className="t-caption" title={fmtDateTime(s.next_run)}>
+          <span className="t-caption" title={scheduleTimeHint(s.next_run, s.timezone)}>
             {inTime(s.next_run, now)}
           </span>
         ) : s.problem ? (
@@ -666,7 +717,7 @@ export function scheduleColumns({
             {s.problem}
           </Tag>
         ) : (
-          <EmptyValue label="Disabled, or the calendar never reaches it" />
+          <EmptyValue label="Paused, or the calendar never reaches it" />
         ),
     },
     {
@@ -761,6 +812,10 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
 
   // The last fire per schedule, from the history.
   const lastFire = lastFires(runs);
+  // THE CLOCK EACH FIRE'S TICK IS DRAWN ON: its schedule's, where the
+  // company still declares it.
+  const zoneByID = new Map(schedules.map((s) => [rowID(s), s.timezone]));
+  const zoneOf = (r: ScheduleRunRow) => zoneByID.get(runID(r));
 
   const chosen = detail
     ? schedules.find(
@@ -813,6 +868,12 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
 
   return (
     <>
+      {/* A NEW SCHEDULE, in the bar where a screen's controls live: a
+          schedule is a line of the seat or team that declares it, written
+          through the company document (`ScheduleControls.tsx`). */}
+      <PageActions>
+        <NewScheduleButton />
+      </PageActions>
       {/* NO COUNT IN THE BAR AND NO INTRODUCTION: the section's tab carries
           the figure ("Schedules 6"), which the bar's "6 schedules defined"
           restated a few pixels above it, and a working screen opens on its
@@ -865,15 +926,20 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             ? undefined
             : {
                 title: "No recurring work is defined",
-                hint: "A schedule is written on a seat or a team in the company document, and imported with crewlet config import.",
-                // WHERE THE DOCUMENT IS READ, for a reader who may open it:
-                // the dashboard writes no new schedule, so the way on is the
-                // document a schedule is added to.
-                action: mayReadConfig ? (
-                  <ButtonLink variant="secondary" size="small" href={href(CONFIG_PATH)}>
-                    Open the configuration
-                  </ButtonLink>
-                ) : undefined,
+                hint: "A schedule wakes a seat, or every agent in a team, on a cron. Add one here, or write it on the seat or team in the company document.",
+                // THE WAY ON IS A NEW SCHEDULE, drawn for everybody and held
+                // with its reason; and the document a schedule is written in,
+                // for a reader who may open it.
+                action: (
+                  <span className="row gap-2">
+                    <NewScheduleButton variant="secondary" />
+                    {mayReadConfig && (
+                      <ButtonLink variant="secondary" size="small" href={href(CONFIG_PATH)}>
+                        Open the configuration
+                      </ButtonLink>
+                    )}
+                  </span>
+                ),
               }
         }
       >
@@ -958,7 +1024,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               OUTCOME_COLUMN,
               // The tick gives way second: beside Fired it differs only on a
               // catchup, and the peek says it too.
-              { ...TICK_COLUMN, drop: 2 },
+              { ...tickColumn(zoneOf), drop: 2 },
             ]}
           />
         </Card>
@@ -1020,26 +1086,57 @@ const OUTCOME_COLUMN: FireColumn = {
  * so it stands at the right edge as every time does, and ABSOLUTE, because two
  * relative times an hour apart read as one fire. Cut with an ellipsis over the
  * tick's own label (the ledger's at-most-once key) in the title.
+ *
+ * ON THE SCHEDULE'S CLOCK, which `zoneOf` names for a fire, with the zone's
+ * name in the cell: the tick is the minute of the schedule's own cron, and its
+ * label, in the title, is that minute on that clock. Drawn on the reader's
+ * clock with no zone said, the cell and its title named two different times.
  */
-const TICK_COLUMN: FireColumn = {
-  key: "due",
-  header: "For the tick",
-  align: "right",
-  shrink: true,
-  sortValue: (r) => tsKey(r.scheduled_at),
-  cell: (r) => <Tick run={r} />,
-};
+function tickColumn(zoneOf: (r: ScheduleRunRow) => string | undefined): FireColumn {
+  return {
+    key: "due",
+    header: "For the tick",
+    align: "right",
+    shrink: true,
+    sortValue: (r) => tsKey(r.scheduled_at),
+    cell: (r) => <Tick run={r} zone={zoneOf(r)} />,
+  };
+}
+
+/** Whether a fire was a run a person asked for, which stood for no tick. */
+function byHand(run: ScheduleRunRow): boolean {
+  // THE LABEL TOO, for a run by hand a later fire superseded: its outcome then
+  // reads as that, and its label is still the ask's own, never a minute.
+  return run.outcome === "fired_manually" || run.fire_label.startsWith("manual-");
+}
 
 /**
- * The tick a fire stood for, or the empty value where the history holds no
- * time for it: an unset tick arrives as the epoch, which `parseUTC` refuses.
+ * The tick a fire stood for, on its schedule's clock with the zone named, or
+ * the empty value where the history holds no time for it: an unset tick
+ * arrives as the epoch, which `parseUTC` refuses. A schedule the company no
+ * longer declares names no clock, and its tick is drawn on the reader's, named
+ * as theirs. A run a person asked for stood for no tick, and says so.
  */
-function Tick({ run, prefix = "" }: { run: ScheduleRunRow; prefix?: string }) {
+function Tick({ run, zone, prefix = "" }: { run: ScheduleRunRow; zone?: string; prefix?: string }) {
+  if (byHand(run)) {
+    return (
+      <span
+        className="t-caption truncate"
+        title={`Run by hand, asked for at ${scheduleTimeHint(run.scheduled_at, zone || readerZone())}`}
+      >
+        {prefix ? "run by hand" : "by hand"}
+      </span>
+    );
+  }
   if (!parseUTC(run.scheduled_at)) return <EmptyValue label="No time recorded" />;
+  const clock = zone || readerZone();
   return (
-    <span className="t-caption truncate" title={run.fire_label}>
+    <span
+      className="t-caption truncate"
+      title={`${scheduleTimeHint(run.scheduled_at, clock)} Its label: ${run.fire_label}.`}
+    >
       {prefix}
-      {fmtDateTime(run.scheduled_at)}
+      {onClockNamed(run.scheduled_at, clock)}
     </span>
   );
 }
@@ -1110,11 +1207,12 @@ function OneSchedule({
   return (
     <>
       <PageActions>
-        {
-          <a className="t-link" href={href(["company", "schedules"])}>
-            All schedules →
-          </a>
-        }
+        {/* THE SCHEDULE'S OWN CONTROLS, once the company declares it: a
+            schedule only its history remembers has nothing to run or edit. */}
+        {row && <ScheduleActions row={row} />}
+        <a className="t-link" href={href(["company", "schedules"])}>
+          All schedules →
+        </a>
       </PageActions>
 
       {/* THE SCOPE, THE CONDITION AND THE THREE TILES ARE THE HEADER'S NOW.
@@ -1187,7 +1285,7 @@ function OneSchedule({
                 floor: WOKE_FLOOR,
               },
               OUTCOME_COLUMN,
-              TICK_COLUMN,
+              tickColumn(() => row?.timezone),
             ]}
           />
         </Card>
@@ -1259,6 +1357,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
         title={name || scope}
         status={answered ? scheduleStatus(row, runs.length > 0) : undefined}
         facts={row ? scheduleFacts(row, now, who) : undefined}
+        actions={row ? <ScheduleActions row={row} compact /> : undefined}
       />
       <div className="col gap-3">
         {loading && !answered && <Skeleton variant="text" rows={6} label="Loading the schedule" />}
@@ -1320,7 +1419,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                           {/* THE TICK BESIDE THE FIRE, which is the only way
                               to see a catchup: this ran now for something
                               that was due earlier. */}
-                          <Tick run={r} prefix="for " />
+                          <Tick run={r} zone={row?.timezone} prefix="for " />
                         </div>
                       </div>
                     ))}

@@ -83,9 +83,9 @@ func (s *crossingWrites) OweEnd(ctx context.Context, turnID string, ending json.
 	return s.PendingStore.OweEnd(ctx, turnID, ending)
 }
 
-func (s *crossingWrites) MarkHarnessEnd(ctx context.Context, turnID, launch string, end HarnessEnd) (bool, error) {
+func (s *crossingWrites) MarkHarnessEnd(ctx context.Context, turnID, launch string, read EndRead) (bool, error) {
 	s.note(ctx, "MarkHarnessEnd")
-	return s.PendingStore.MarkHarnessEnd(ctx, turnID, launch, end)
+	return s.PendingStore.MarkHarnessEnd(ctx, turnID, launch, read)
 }
 
 func (s *crossingWrites) MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error) {
@@ -208,7 +208,7 @@ func TestEveryWriteOfARunsRowIsGivenTheRowsCrossingBesideItsReason(t *testing.T)
 			name: "how a collected job's harness ended", write: "MarkHarnessEnd",
 			want: []time.Duration{discardGrace + crossing},
 			path: func(ctx context.Context, c *Coordinator, run PendingRun) {
-				c.markHarnessEnd(ctx, run, HarnessEndOwnRun)
+				c.markHarnessEnd(ctx, run, EndRead{End: HarnessEndOwnRun})
 			},
 		},
 		{
@@ -216,7 +216,7 @@ func TestEveryWriteOfARunsRowIsGivenTheRowsCrossingBesideItsReason(t *testing.T)
 			want: []time.Duration{discardGrace + crossing},
 			path: func(ctx context.Context, c *Coordinator, run PendingRun) {
 				run.Status, run.ClaimedFrom = StatusResumed, StatusRunning
-				_ = c.unclaimAt(ctx, run, true, "", failure{}, nil)
+				_ = c.unclaimAt(ctx, run, true, "", failure{}, nil, BudgetWindow{})
 			},
 		},
 		{

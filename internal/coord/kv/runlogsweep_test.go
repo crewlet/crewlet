@@ -11,8 +11,8 @@ import (
 )
 
 // A PART LEFT BESIDE A REMOVED RUN IS SWEPT, AND ONLY THAT ONE — every part,
-// its log and its handed set alike. The record and each part are keys of
-// their own and no write spans them, so a node that stops between the
+// its log, its handed set and its leads alike. The record and each part are
+// keys of their own and no write spans them, so a node that stops between the
 // record's removal and a part's leaves a part no record holds, which nothing
 // else would ever remove ([coord.SandboxRuns]). Staged as that crash leaves
 // it — the record purged on the wire and its parts not — beside a live run
@@ -20,8 +20,8 @@ import (
 //
 // Mutation: skip [FleetStore.sweepRunParts] in SweepMarkers, and the orphans
 // survive; match only the log's name in its candidate filter, and the handed
-// set survives. (The live run's parts are kept by the pass itself, which
-// holds its record; the leader's read of the record is held by
+// set and the leads survive. (The live run's parts are kept by the pass
+// itself, which holds its record; the leader's read of the record is held by
 // TestALogWhoseRunIsLaunchedAgainAfterTheSweepsPassIsKept.)
 func TestAPartLeftBesideARemovedRunIsSwept(t *testing.T) {
 	t.Parallel()

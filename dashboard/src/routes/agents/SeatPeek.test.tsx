@@ -13,7 +13,7 @@ import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { ANSWER_SEAT_HELD, OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
+import { OWN_SEAT_MESSAGE, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import {
   LiveSocket,
@@ -142,12 +142,15 @@ async function mount(
     projection = org(),
     agents = [SWE],
     executors = [],
+    durable = [],
     handle = "swe",
     health = healthFrame(),
   }: {
     projection?: OrgProjection;
     agents?: AgentRow[];
     executors?: ExecutorEntry[];
+    /** The engine's durable rows (`executors`), with what it says of each for the reader. */
+    durable?: Record<string, unknown>[];
     handle?: string;
     health?: EngineHealth;
   } = {},
@@ -177,6 +180,7 @@ async function mount(
     if (what === "work_workload") {
       return Promise.resolve({ rows: [{ handle: "swe", open: 4, blocked: 1, overdue: 0 }] });
     }
+    if (what === "executors") return Promise.resolve({ runs: durable });
     if (what === "work_item_turns") {
       return Promise.resolve({
         item: "t-412",
@@ -396,8 +400,10 @@ test.each([
   expect(message.getAttribute("title")).toBe(reason);
 });
 
-test("Message is pressable for a reader who can file", async () => {
-  await mount(OPERATOR);
+// THE COMPANY RUNS CHATLET until the engine says otherwise, and an admin holds
+// it, so Message is the conversation and pressable where the engine opens one.
+test("Message is pressable for a reader who can write to the seat", async () => {
+  await mount({ ...OPERATOR, acts: ["create_work_item", "open_dm"] });
   const message = screen.getByRole("button", { name: /Message/ });
   expect(message.getAttribute("aria-disabled")).not.toBe("true");
 });
@@ -438,11 +444,11 @@ test("your own seat's peek holds Message and points to your Account, and a colle
   expect(document.querySelector('a[href="#/account"]')).toBeNull();
 });
 
-// THE FOOTER KEEPS ONE ROW: Message and Assign task, with Direct
-// message in its "More", as on the seat page. A third button beside Message
-// pushed Assign task onto a row of its own. Mutation: draw the door as a
-// button in the footer.
-test("the footer holds Message and Assign task, and Direct message in its More", async () => {
+// THE FOOTER KEEPS ONE ROW: Message and Assign task, with Ask as a task in
+// its "More" where Message is the conversation, as on the seat page. A third
+// button beside Message pushed Assign task onto a row of its own. Mutation:
+// draw the ask as a button in the footer.
+test("the footer holds Message and Assign task, and Ask as a task in its More", async () => {
   const ada = {
     login: "ada.lovelace",
     grants: ["worklet", "chatlet"],
@@ -451,12 +457,15 @@ test("the footer holds Message and Assign task, and Direct message in its More",
     acts: ["create_work_item", "update_work_item", "open_dm"],
   };
   await mount(ada, {
-    projection: { ...org(), services: { ...org().services, chat: "chatlet" } } as OrgProjection,
+    projection: {
+      ...org(),
+      services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
+    } as OrgProjection,
   });
   const foot = document.querySelector<HTMLElement>(".seat-peek-foot")!;
-  expect(within(foot).queryByRole("button", { name: /Direct message/ })).toBeNull();
+  expect(within(foot).queryByRole("button", { name: /Ask as a task/ })).toBeNull();
   fireEvent.click(within(foot).getByRole("button", { name: "More on SWE" }));
-  expect(screen.getByRole("menuitem", { name: /Direct message/ })).toBeDefined();
+  expect(screen.getByRole("menuitem", { name: /Ask as a task/ })).toBeDefined();
 });
 
 // ONE WAY TO THE PROFILE, the rail's own Open, at every width: the footer's
@@ -558,9 +567,27 @@ function parked(over: Partial<ExecutorEntry> = {}): ExecutorEntry {
 // the approval's own three answers, never Answer, which the engine refuses
 // for a held call. Mutation: draw Answer for a held call and the second half
 // fails.
+/** A parked run's durable row, as the engine answers it for a reader who may or may not answer it. */
+function durableOf(entry: ExecutorEntry, mayAnswer: boolean): Record<string, unknown> {
+  return {
+    ...entry,
+    question_context: entry.question_context ?? "",
+    audience_handles: ["cto"],
+    put_to: ["cto"],
+    put_to_you: false,
+    may_answer: mayAnswer,
+    needs_you: false,
+    placement: "",
+    paused_at: "",
+    pause_ttl_seconds: 0,
+    updated_at: entry.started_at,
+    answerable_in_chat: false,
+  };
+}
+
 test("an executor's question carries Answer, and a held call Allow once, Always allow and Deny", async () => {
   const reader = { ...OPERATOR, acts: ["create_work_item", "answer_executor"] };
-  await mount(reader, { executors: [parked()] });
+  await mount(reader, { executors: [parked()], durable: [durableOf(parked(), true)] });
   const question = (await screen.findByText(/executor is waiting on a question/)).closest(
     ".crewlet-callout",
   ) as HTMLElement;
@@ -569,22 +596,19 @@ test("an executor's question carries Answer, and a held call Allow once, Always 
   expect(within(question).queryByRole("button", { name: "Allow once" })).toBeNull();
   cleanup();
 
-  await mount(reader, {
-    executors: [
-      parked({
-        held_call: {
-          id: "held-1",
-          server: "gitlab",
-          tool: "gitlab.merge",
-          raw: "merge",
-          digest: "sha256:0f",
-          held_at: "2031-05-01T08:05:00Z",
-          act: "other",
-          delegation: null,
-        },
-      }),
-    ],
+  const heldEntry = parked({
+    held_call: {
+      id: "held-1",
+      server: "gitlab",
+      tool: "gitlab.merge",
+      raw: "merge",
+      digest: "sha256:0f",
+      held_at: "2031-05-01T08:05:00Z",
+      act: "other",
+      delegation: null,
+    },
   });
+  await mount(reader, { executors: [heldEntry], durable: [durableOf(heldEntry, true)] });
   const held = (await screen.findByText(/executor asks to call/)).closest(
     ".crewlet-callout",
   ) as HTMLElement;
@@ -597,52 +621,56 @@ test("an executor's question carries Answer, and a held call Allow once, Always 
   expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();
 });
 
-// A READER THE SEAT DOES NOT ADMIT IS SHOWN EVERY ANSWER HELD, with who may:
-// the engine admits an admin or a lead in the seat's line (`tools.approve`),
-// and it refused a reader's Allow once only after the press. The question's
-// Answer is held by the same rule, in the same words, where it said "This
-// can't be changed from here.". Mutation: draw HeldCallButtons without the
-// hold and the held call's answers go red; hold Answer by the act's access
-// alone and its reason does.
-test("a reader the seat does not admit is shown its run's answers held, saying who may answer", async () => {
+// A READER THE ENGINE SAYS MAY NOT ANSWER is offered no answer, and told whom
+// the run waits on: whether a reader may answer is the engine's to say on the
+// run's row (`may_answer`, the answer route's own authority), never a rule
+// the peek keeps. Mutation: draw the answer whatever `may_answer` says, and
+// the buttons come back.
+test("a reader the engine says may not answer is offered no answer, and told whom it waits on", async () => {
   const reader = { login: "fe.dev", grants: ["worklet"], handle: "fe", owner: "fe", acts: [] };
-  const reason = (button: HTMLElement) =>
-    (button.getAttribute("aria-describedby") ?? "")
-      .split(/\s+/)
-      .map((id) => document.getElementById(id)?.textContent ?? "")
-      .join(" ");
-  await mount(reader, { executors: [parked()] });
-  const answer = within(
-    (await screen.findByText(/executor is waiting on a question/)).closest(
-      ".crewlet-callout",
-    ) as HTMLElement,
-  ).getByRole("button", { name: "Answer" });
-  expect(answer.getAttribute("aria-disabled")).toBe("true");
-  expect(reason(answer)).toBe(ANSWER_SEAT_HELD);
+  await mount(reader, { executors: [parked()], durable: [durableOf(parked(), false)] });
+  const question = (await screen.findByText(/executor is waiting on a question/)).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  expect(question.textContent).toMatch(/Waiting on /);
+  expect(within(question).queryByRole("button", { name: "Answer" })).toBeNull();
   cleanup();
 
-  await mount(reader, {
-    executors: [
-      parked({
-        held_call: {
-          id: "held-1",
-          server: "gitlab",
-          tool: "gitlab.merge",
-          raw: "merge",
-          digest: "sha256:0f",
-          held_at: "2031-05-01T08:05:00Z",
-          act: "other",
-          delegation: null,
-        },
-      }),
-    ],
+  const heldEntry = parked({
+    held_call: {
+      id: "held-1",
+      server: "gitlab",
+      tool: "gitlab.merge",
+      raw: "merge",
+      digest: "sha256:0f",
+      held_at: "2031-05-01T08:05:00Z",
+      act: "other",
+      delegation: null,
+    },
   });
+  await mount(reader, { executors: [heldEntry], durable: [durableOf(heldEntry, false)] });
   const held = (await screen.findByText(/executor asks to call/)).closest(
     ".crewlet-callout",
   ) as HTMLElement;
   for (const name of ["Allow once", "Always allow", "Deny"]) {
-    const button = within(held).getByRole("button", { name });
-    expect(button.getAttribute("aria-disabled"), name).toBe("true");
-    expect(reason(button), name).toBe(ANSWER_SEAT_HELD);
+    expect(within(held).queryByRole("button", { name }), name).toBeNull();
   }
+});
+
+// THE SEAT'S RUN IS THE ONE EVERY SCREEN FOLDS (`lib/runs.ts`): the durable
+// row wins over a push that has not caught up. A peek that read the push
+// alone still said the executor asked to call a tool, with the answer beside
+// it, after the call was answered, while Live, reading the durable row, said
+// nobody was waiting. Mutation: draw the peek off the push alone, and the
+// answered run's question comes back.
+test("a run the engine has recorded answered is not drawn as waiting from a push behind it", async () => {
+  const reader = { ...OPERATOR, acts: ["create_work_item", "answer_executor"] };
+  await mount(reader, {
+    executors: [parked()],
+    durable: [{ ...durableOf(parked(), true), status: "answered" }],
+  });
+  await afterMicrotasks();
+  await afterMicrotasks();
+  expect(screen.queryByText(/executor is waiting on a question/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();
 });

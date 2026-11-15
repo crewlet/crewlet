@@ -32,6 +32,7 @@ import {
   NO_SEAT,
   seatGestures,
   SeatHolding,
+  useSeatGesture,
   seatOptions,
   UnboundRemedy,
   useHumanSeats,
@@ -198,8 +199,17 @@ async function reach(
  *  every signed-in reader asks, the engine masking what each may see. */
 function Holding({ seat, grants }: { seat: { handle: string; name: string }; grants: string[] }) {
   const listing = useHumanSeats(true);
+  const gesture = useSeatGesture(grants);
   return (
-    <SeatHolding seat={seat} seats={listing} manages={canManagePeople(grants)} held={grants} />
+    <>
+      <SeatHolding
+        seat={seat}
+        seats={listing}
+        manages={canManagePeople(grants)}
+        onGesture={gesture.open}
+      />
+      {gesture.dialog}
+    </>
   );
 }
 
@@ -338,7 +348,7 @@ describe("a seat's holding", () => {
     failure = json(500, { error: "internal", message: "boom" });
     engine();
     mount(<Holding seat={SAM} grants={ADMIN} />);
-    expect(await screen.findByText(/The engine failed to answer/)).toBeTruthy();
+    expect(await screen.findByText(/the engine failed to answer/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
   });
 
@@ -980,7 +990,7 @@ test("the unbound remedy says where each argument of its command comes from", as
 test("the unbound remedy for a config token says it holds no seat, and how to get one", async () => {
   const remedy = await remedyFor("token:ops");
   expect(remedy.textContent).toMatch(
-    /^To read and write here, sign in as a person, or use a service account/,
+    /^A token from the node’s config can’t hold a seat\. To read and write here, sign in as yourself, or use a service account/,
   );
   expect(remedy.textContent).not.toMatch(/iam people/);
 });

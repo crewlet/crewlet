@@ -24,7 +24,7 @@ schedule that fired it.
 |---|---|
 | A relaunch of a turn whose job before left a kept capture | That capture, in any box ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
 | A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, the ended turn whose row still names a kept session and whose read of the conversation was the latest ([Read once, frozen, held](#read-once-frozen-held)), restored into a box of the launch's own — a session that turn **went on past** included: an earlier capture its row keeps where its last word was not kept (its final capture refused, a stop or a loss whose box was gone, a relaunch that kept nothing), which its run is told ends where it was kept |
-| A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation |
+| A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation, handed after its lead the relaunch's reseed whole: what became of the run before it, and every call the round's runs made so far ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
 | A schedule's **next fire** | The session the schedule's last fire left on the seat: a schedule is a conversation of each seat that runs it ([Schedules](#schedules)) |
 | Any launch, of a session a run [ran out of context](#a-session-that-ran-out-of-context-is-retired) in | Never that session: a session of its own |
 | Anything else | A session of its own, the reason logged as `executor_session_not_continued` |
@@ -365,8 +365,13 @@ session at the window is charged about a million input tokens, most of them
 cache reads ([Schedules](#schedules)).
 
 **Its first launch is held to that context.** The launch needs the larger of
-`turn_engine.executor_min_budget_tokens` and the base's context with the lead
-and the brief beside it. A base no capped window can ever carry starts fresh; a
+`turn_engine.executor_min_budget_tokens` with the turn's fresh brief beside it,
+which its box starts a session of its own on wherever it cannot take the base
+up, held at the floor alone, or at the room below it, where that is past the
+most room a window can leave the launch
+([What a continued launch costs](code-sandbox.md#what-a-continued-launch-costs)),
+and the base's context with the lead and the brief beside it. A base no
+capped window can ever carry starts fresh; a
 first launch refused only because a window is full right now **parks the seat's
 mail on that figure** until a window has room for it, as a held resume does
 ([Budgets and Spend](../guides/budgets-and-spend.md#budget-windows)).

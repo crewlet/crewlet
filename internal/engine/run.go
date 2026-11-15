@@ -365,6 +365,12 @@ type Engine struct {
 	// the window turns over. See budgetpark.go.
 	budgetParks budgetParks
 
+	// floorWaits is every delivery whose launch this node parked its seat
+	// for below its floor, by the seat and the ids of the delivery's events,
+	// with the window the park waited on, for that delivery's next launch to
+	// read. See budgetpark.go.
+	floorWaits floorWaits
+
 	// providerParks is every seat inbox this node holds because every model
 	// of the seat's chain is limited, each with the alarm that lifts it for
 	// a probe when the first is tried again. See providerpark.go.
@@ -426,6 +432,9 @@ type Engine struct {
 	// signIns is the device sign-ins this node runs, and the watch that
 	// hears their cancels ([deviceSignIns]).
 	signIns deviceSignIns
+	// modelChecks is the model checks this node runs on its own time
+	// (modelcheckrun.go).
+	modelChecks modelChecks
 
 	// testNode is the node id an engine built with no node answers for
 	// itself: a case standing up several engines on one coordination store.
@@ -1181,6 +1190,12 @@ type Engine struct {
 	// ([sandbox.CoordinatorOptions.Answers]).
 	answers *sandbox.AnswerSeal
 
+	// leads seals what carried each session of a run on into the run's leads,
+	// kept beside its record, and opens it for a resume that tells it again:
+	// the coordinator's, and the resume's ([sandbox.CoordinatorOptions.Leads],
+	// [runnerResume]).
+	leads *sandbox.LeadSeal
+
 	// dataTurns is this node's tally of each turn segment's datastore ops,
 	// shared by every registry it builds ([builtin.DataTurns]).
 	dataTurns *builtin.DataTurns
@@ -1678,6 +1693,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// AND WHAT CARRIED EACH SESSION OF A RUN ON, kept in the run's leads
+	// beside its record for a later brief to a session that may lack its own
+	// to tell again: an answer's words among it, told as that person's, so
+	// sealed like the answer it was, in a domain of its own (internal/sandbox,
+	// leadseal.go).
+	leads, err := sandbox.NewLeadSeal(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
 	// sandbox: an apply can bring it its first, and the poll starts there.
 	// See [checkSandboxPollInterval].
@@ -1872,6 +1896,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		presenceWire:        presenceWire,
 		relayWire:           relayWire,
 		answers:             answers,
+		leads:               leads,
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
@@ -2614,6 +2639,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE RETRIES PEOPLE ASKED FOR, applied as every node hears them.
 	e.startModelRetries(ctx)
 	e.startDeviceSignIns(ctx)
+	// AND THE MODEL CHECKS PEOPLE ASK FOR, each run on this node's time.
+	e.startModelChecks(ctx)
 	// WHAT THIS NODE'S MCP SERVERS LIST, published, and every node's,
 	// watched: the catalogue a per-agent server's tools reach.
 	e.startMCPListings(ctx)
@@ -2810,6 +2837,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.DeadLettered == nil {
 		d.DeadLettered = e.reportDeadLetter
+	}
+	if d.Gone == nil {
+		d.Gone = e.budgetDeliveryGone
 	}
 	if d.Identify == nil {
 		// Read off the LIVE epoch at the moment of the panic, like the
@@ -3393,6 +3423,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
 	// the person starts again on a node that is up.
 	e.stopDeviceSignIns()
+	// AND A CHECK THIS NODE RUNS ENDS SAYING THE NODE STOPPED, so the
+	// person checks again on a node that is up.
+	e.stopModelChecks()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP THAT PUBLISHES, which is what the
 	// admission says: the key means "this process may be publishing", and
 	// it is the one thing that keeps a capacity coordinator from taking its
@@ -3929,8 +3962,13 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its executor, which hands what the box
-	// still holds to the executor's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told, nil)
+	// still holds to the executor's record (steer.go). WITH THE EVENTS THE
+	// TURN WAS DISPATCHED FOR, under which a park of the seat recorded the
+	// window an earlier try of this delivery's launch was refused below its
+	// floor in, so this launch, and no other delivery's, is held after that
+	// window ([floorWaits]).
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask, conversation, told,
+		deliveryOf(req.Events), nil, nil)
 	box := steer.New()
 	r, err := company.RunnerFor(ctx, req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,

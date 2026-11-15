@@ -130,6 +130,7 @@ func benchPick(b *testing.B, all bool) {
 			}
 			began := time.Now()
 			c.Holds(ids[i%len(ids)])
+			//fixedwait:measure a lookup's duration, the benchmark's reported figure, held to no bound
 			lookups = append(lookups, time.Since(began))
 		}
 	}()
@@ -186,6 +187,7 @@ func benchFold(b *testing.B, bucket string) {
 		b.StartTimer()
 		began := time.Now()
 		s, err = c.Sync(b.Context(), repo, linearizable)
+		//fixedwait:measure a round's duration, the benchmark's reported figure, held to no bound
 		roundNs += int64(time.Since(began))
 		b.StopTimer()
 		if err != nil || s.Kind != cache.SyncDelta {
@@ -315,6 +317,7 @@ func benchBackfill(b *testing.B, pushes int) {
 				if err != nil || q.Kind != gitlet.ReadIntroduced || q.Limit == 1 {
 					return a, err
 				}
+				//fixedwait:measure a page read's duration, the benchmark's reported figure, held to no bound
 				readNs.Add(int64(time.Since(began)))
 				pagesRead.Add(1)
 				if enc, merr := json.Marshal(a); merr == nil {
@@ -361,10 +364,11 @@ func benchBackfill(b *testing.B, pushes int) {
 			if ix, ok := cache.Index(c, repo); ok && ix.Complete {
 				break
 			}
+			//fixedwait:measure the poll's own deadline, whose firing only fails the benchmark
 			if time.Now().After(deadline) {
 				b.Fatalf("the backfill of %d pushes was not complete %s on", pushes, backfillDeadline)
 			}
-			time.Sleep(5 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond) //fixedwait:liveness
 		}
 	}
 	n := float64(pagesRead.Load())

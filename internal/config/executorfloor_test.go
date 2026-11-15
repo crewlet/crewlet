@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+// floorOffFor is what the refusal says turning the floor off does: it holds no
+// launch whose session context is not known, and still holds one continuing a
+// session a capture measured.
+const floorOffFor = "(0 turns the floor off for a launch whose session context is unknown)"
+
 // A CEILING BELOW THE EXECUTOR'S LAUNCH FLOOR IS REFUSED, on every scope a seat
 // that runs an executor is judged by, where the ceiling is written.
 //
@@ -21,8 +26,15 @@ import (
 // model to run an executor on, a floor that is off — nor at a ceiling the
 // floor fits in exactly, which a window's first launch takes.
 //
-// Mutations: compare with <= rather than <, skip the company's ceilings, or
-// judge a company whose seats run no executor, and this goes red.
+// AND "0 TURNS THE FLOOR OFF" SAYS FOR WHICH LAUNCH: one whose session context
+// is not known. A launch continuing a session a capture measured is held to
+// that context with its brief beside it whatever the floor, so the bare remedy
+// promised an operator lowering the floor to nothing that no launch would be
+// held at all.
+//
+// Mutations: compare with <= rather than <, skip the company's ceilings, judge
+// a company whose seats run no executor, or say the floor turned off holds no
+// launch at all, and this goes red.
 func TestACeilingBelowTheExecutorFloorIsRefused(t *testing.T) {
 	t.Parallel()
 	const person = "  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n"
@@ -36,7 +48,8 @@ func TestACeilingBelowTheExecutorFloorIsRefused(t *testing.T) {
 			doc:  executorCompany(ccEntry, "  - name: SWE\n    token_budget: {day: 20000}\n"),
 			path: "roles[0].token_budget.day",
 			says: []string{`seat "swe"`, "token_budget.day (20000)",
-				"turn_engine.executor_min_budget_tokens (25000)", "at least 25000", "at most 20000"},
+				"turn_engine.executor_min_budget_tokens (25000)", "at least 25000", "at most 20000",
+				floorOffFor},
 		},
 		{
 			name: "a unit's seat, at its own path",
@@ -50,7 +63,7 @@ func TestACeilingBelowTheExecutorFloorIsRefused(t *testing.T) {
 				"token_budget: {week: 1000}\n",
 			path: "token_budget.week",
 			says: []string{"token_budget.week (1000)", `seat "ceo" and 2 more seats`,
-				"at least 25000", "at most 1000", "0 turns the floor off"},
+				"at least 25000", "at most 1000", floorOffFor},
 		},
 		{
 			name: "under a floor the company set",

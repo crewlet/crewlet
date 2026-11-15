@@ -26,6 +26,7 @@ import { WORKLET, holds } from "~/lib/access.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useSeatedAccess } from "./access.tsx";
 import { AddEntry } from "./AddEntry.tsx";
 import { AtlasMap } from "./AtlasMap.tsx";
 import { ATTENTION_SHOWN, Band } from "./Band.tsx";
@@ -62,7 +63,7 @@ export function Atlas() {
   // not a place, so it lives here and never in the address.
   const [pointedId, setPointedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const add = useWriteAccess("atlas_add_entry");
+  const add = useSeatedAccess(useWriteAccess("atlas_add_entry"));
   // WHAT WAITS FOR A PERSON, counted by the engine on the read: one item is
   // asked for, since the band says the count and Review lists the rest.
   const waiting = useQuery("atlas_review", ONE, { pollMs: ATLAS_POLL_MS });
@@ -84,8 +85,11 @@ export function Atlas() {
     useMemo(() => ({ ...whole, sort: "health", limit: ATTENTION_SHOWN }), [whole]),
     { pollMs: ATLAS_POLL_MS },
   );
+  // NULL UNTIL THE LIST ANSWERS, never an empty list: the tile's count is
+  // another read's, and "no rows yet" drawn as "no rows" put "Nothing needs
+  // attention." under a count of six.
   const attention = useMemo(
-    () => (urgent.data?.rows ?? []).filter((row) => row.health !== "quiet"),
+    () => (urgent.data ? urgent.data.rows.filter((row) => row.health !== "quiet") : null),
     [urgent.data],
   );
   const empty = company.data !== null && company.data.total === 0;
@@ -107,6 +111,7 @@ export function Atlas() {
         <Band
           facets={company.data}
           attention={attention}
+          unconfirmed={filters.unconfirmed}
           activity={activity}
           waiting={waiting.data ? waiting.data.counts : null}
           onShow={select}
@@ -229,7 +234,15 @@ function MapPart({
     () => (searching && found.data ? new Set(found.data.nodes.map((node) => node.id)) : null),
     [searching, found.data],
   );
-  const fitKey = useMemo(() => JSON.stringify(drawn), [drawn]);
+  // THE MAP FITS AGAIN WHEN THE ANSWER IT DRAWS IS FOR OTHER FILTERS, so its
+  // key is what the answer on screen was read with. A changed filter keeps the
+  // last answer on screen until the new one lands (`useQuery`), and keyed on
+  // the question the fit landed on the map that answer was about to replace.
+  // A poll of the same filters keeps the key, and with it the reader's view.
+  const asked = JSON.stringify(drawn);
+  const [shown, setShown] = useState({ answer: map.data, fitKey: asked });
+  if (shown.answer !== map.data) setShown({ answer: map.data, fitKey: asked });
+  const fitKey = shown.answer === map.data ? shown.fitKey : asked;
 
   if (map.loading && !map.data) {
     return (

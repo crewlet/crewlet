@@ -25,7 +25,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "../useQuery.ts";
 import { versionFile } from "../artifacts/api.ts";
 import { imageType } from "../artifacts/versionImages.ts";
-import type { BrandDocument } from "~/protocol/index.ts";
+import type { BrandDocument, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 import { brandFile } from "./api.ts";
 import {
   BRAND_FACE_ROLES,
@@ -36,10 +37,16 @@ import {
   type LogoDigests,
 } from "./brand.ts";
 
-/** The company's adopted brand: null while none is adopted, undefined while nothing has answered. */
+/**
+ * The company's adopted brand: null while none is adopted, undefined while
+ * nothing has answered or the read failed, which `error` says.
+ */
 export interface BrandRead {
   adoption: Adoption | null | undefined;
   loading: boolean;
+  /** Why the last read failed, with its refusal, for the failed-read state. */
+  error: QueryErrorCode | null;
+  refusal: QueryRefusal | LogRefusal | null;
   refetch: () => void;
 }
 
@@ -51,8 +58,13 @@ export interface BrandRead {
 export function useBrand(options: { enabled?: boolean } = {}): BrandRead {
   const read = useQuery("brand", {}, { refetchOnFocus: true, enabled: options.enabled ?? true });
   return {
-    adoption: read.data ? read.data.brand : read.error ? null : undefined,
+    // A FAILED READ IS NOT "NONE ADOPTED": it answered nothing, so the brand
+    // stays unknown. Read as none, the page told an administrator the company
+    // had no brand and offered to set one up over the one it has.
+    adoption: read.data ? read.data.brand : undefined,
     loading: read.loading,
+    error: read.error,
+    refusal: read.refusal,
     refetch: read.refetch,
   };
 }

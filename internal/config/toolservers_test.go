@@ -138,6 +138,36 @@ func shippedExample(where string) bool {
 	return strings.HasPrefix(filepath.ToSlash(where), "examples/")
 }
 
+// runnerServersOf is how many of the MCP servers the shipped company example
+// name declares are launched through a package runner — what the launch
+// checks below must have read from it, counted from the company as the loader
+// parses it rather than by the walk under test.
+//
+// A COUNT FROM THE DOCUMENT, NOT A FLOOR OF ONE. The guard these feed used to
+// demand that every shipped example launch at least one such server, which
+// held while the example ran Mattermost's and a web-search vendor's servers;
+// an example whose every surface is a builtin declares none, and a floor of
+// one would demand a server it has no use for. What the guard is for is a
+// walk that stops recognising a launch the document still makes, and that is
+// a declared server read as none.
+func runnerServersOf(t *testing.T, name string) int {
+	t.Helper()
+	cfg, err := ParseCompany(readRepoFile(t, "examples", name))
+	if err != nil {
+		t.Fatalf("examples/%s does not load: %v", name, err)
+	}
+	n := 0
+	for _, s := range cfg.MCPServers {
+		for _, command := range commandsOf(append([]string{s.Command}, s.Args...)) {
+			if _, ok := invocationOf(command); ok {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
 func isPinnedToolServer(name string) bool {
 	for _, p := range pinnedToolServers() {
 		if p.name == name {
@@ -892,8 +922,9 @@ func TestEveryDocumentedLaunchNamesAnExactRelease(t *testing.T) {
 		}
 	}
 	for _, name := range shippedCompanies {
-		if launched[filepath.Join("examples", name)] == 0 {
-			t.Errorf("examples/%s launches no server through a package runner — this check was certifying nothing there", name)
+		if want, got := runnerServersOf(t, name), launched[filepath.Join("examples", name)]; got < want {
+			t.Errorf("examples/%s declares %d server(s) launched through a package runner and this walk "+
+				"read %d — it was certifying nothing there", name, want, got)
 		}
 	}
 
@@ -1165,8 +1196,13 @@ func TestTheShippedExamplesRunTheNewestRelease(t *testing.T) {
 			}
 		}
 	}
-	if servers == 0 {
-		t.Fatal("no shipped example launches a server through a package runner — this check was certifying nothing")
+	declared := 0
+	for _, name := range shippedCompanies {
+		declared += runnerServersOf(t, name)
+	}
+	if servers < declared {
+		t.Fatalf("the shipped examples declare %d server(s) launched through a package runner and this "+
+			"walk read %d — this check was certifying nothing", declared, servers)
 	}
 
 	for _, c := range documentedCommands(t) {
@@ -1409,9 +1445,12 @@ var underAnnotatedReads = map[string][]string{
 // The engine reads a tool's hints off the wire and trusts only an explicit
 // one, so an unannotated tool is not proven read-only, and the delivery check
 // counts every such tool as a possible delivery: a turn that only searched the
-// web can pass it as one that reached somebody. The server will not say, so
-// each documented entry for it must, under the tool's own name or with the
-// entry's tool_prefix — the two spellings an override is matched by.
+// web can pass it as one that reached somebody. Every such call counts as
+// having acted too, so a turn nobody asked for that only searched has its
+// no_action sent back, and one that broke after only searching is given up
+// rather than redelivered. The server will not say, so each documented entry
+// for it must, under the tool's own name or with the entry's tool_prefix — the
+// two spellings an override is matched by.
 func TestEveryUnderAnnotatedServerHasItsReadsMarked(t *testing.T) {
 	t.Parallel()
 	entries := 0

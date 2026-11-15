@@ -47,16 +47,11 @@ import { getConfig } from "~/protocol/configWrite.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import type { CheckLine } from "~/protocol/models.ts";
-import {
-  checkModel,
-  storeCredential,
-  testCredential,
-  writeDocument,
-  type ModelAnswer,
-} from "../api.ts";
+import { storeCredential, testCredential, writeDocument, type ModelAnswer } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
 import { failureWords, type SignInFacts } from "../flows/TestDialog.tsx";
 import type { WizardAdd, WizardAt, WizardStep } from "../parts.tsx";
+import { useCheckModel } from "../useCheckModel.ts";
 import { CATEGORY_WORDS } from "../words.ts";
 import {
   METHODS,
@@ -85,7 +80,7 @@ import { MODEL_DRAFT_HELP, modelDraftFields } from "./assistantDraft.ts";
 import { HarnessStep } from "./steps/HarnessStep.tsx";
 import { LimitsStep } from "./steps/LimitsStep.tsx";
 import { ModelStep } from "./steps/ModelStep.tsx";
-import { Review, type ReviewCheck } from "./steps/Review.tsx";
+import { Review, type ReviewCheck, type SaveStage } from "./steps/Review.tsx";
 import { SignInStep, sharedSecret } from "./steps/SignInStep.tsx";
 import { TestStep, routeOf, testWords, type TestState } from "./steps/TestStep.tsx";
 import { UseItFor } from "./steps/UseItFor.tsx";
@@ -268,6 +263,7 @@ export function ModelWizard({
 }) {
   const toast = useToast();
   const nav = useNavigator();
+  const checkModel = useCheckModel();
   // THE CONTROL THAT OPENED THE WIZARD is read while its page is still on screen.
   const [opener] = useState(openerNow);
   const [original] = useState(() => (editing ? draftOf(editing) : null));
@@ -310,7 +306,7 @@ export function ModelWizard({
     before: CompanyDocument;
     next: NextDocument;
   } | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState<SaveStage | false>(false);
   /** The draft whose credential is stored already, so a retried save does not store it twice. */
   const [storedFor, setStoredFor] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
@@ -556,10 +552,11 @@ export function ModelWizard({
     // model's page) is what its lifetime gates: a save that answers after the
     // person left acts for nothing on screen.
     const screen = lifetime();
-    setSaving(true);
+    const storing = names.length > 0 && storedFor !== signature;
+    setSaving(storing ? "credential" : "document");
     try {
       let { etag, next } = prepared;
-      if (names.length > 0 && storedFor !== signature) {
+      if (storing) {
         const draftEntity = entityChanged ? { entity } : {};
         const stored = await storeCredential(
           draft.key,
@@ -600,6 +597,7 @@ export function ModelWizard({
           next = nextDocument(read.document, draft, editingArg);
         }
       }
+      if (!screen.aborted) setSaving("document");
       const outcome = await writeDocument(next.doc, { etag, summary: summary(), dryRun: false });
       if (screen.aborted) return;
       if (outcome.kind === "saved") {
@@ -609,8 +607,19 @@ export function ModelWizard({
           onDevice(draft.key);
           return;
         }
+        if (original) {
+          // AN EDIT RETURNS TO WHERE IT WAS OPENED, as Cancel does: the
+          // list's row menu back to the list (on the lens it was on), the
+          // model's page back to that page. Sending every save to the
+          // model's page took a person who renewed a token from the list
+          // away from the list they were working down. The toast confirms,
+          // and focus goes back to the control that opened the wizard.
+          close();
+          return;
+        }
+        // A NEW MODEL has no place it was opened from but the Add button:
+        // its own page is where it is first seen, and takes focus (design QA M6).
         nav.to(["settings", "models", draft.key]);
-        // AFTER A SAVE the model's own page has focus (design QA M6); the toast already confirms.
         focusWhenShown(pageHeading);
         return;
       }
@@ -705,7 +714,7 @@ export function ModelWizard({
     <Button
       variant="primary"
       onClick={advance}
-      loading={saving || checking}
+      loading={saving !== false || checking}
       disabled={listedProblems.length > 0 || check.kind === "blocked"}
     >
       {checking ? "Checking…" : original ? "Save changes" : "Create model"}
@@ -834,6 +843,7 @@ export function ModelWizard({
               current={signature}
               editing={!!original}
               signIn={signIn}
+              pasted={names.length > 0}
               onRun={() => void runTest()}
             />
           ) : null}
@@ -855,6 +865,7 @@ export function ModelWizard({
               keptCredential={kept.credential}
               problems={check.kind === "checking" ? [] : listedProblems}
               check={check}
+              saving={saving}
               testRow={testRow}
               onGo={(id) => go(id)}
             />

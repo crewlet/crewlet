@@ -134,10 +134,10 @@
 // ([PendingStore.MarkHeldCall]). See heldcall.go.
 //
 // AND A RUN'S VALUES ARE HELD TO A BYTE BUDGET: one value in the coordination
-// store is one broker message, so the run's row and the log beside it are each
-// held to [RowBytes], in the bytes their encoder writes, and every field has a
-// share of its value's. The log's calls have theirs ([BridgeLogBytes]), each
-// call held to its own and the calls it counts without listing kept as
+// store is held to what a key holds, so the run's row and the log beside it are
+// each held to [RowBytes], in the bytes their encoder writes, and every field
+// has a share of its value's. The log's calls have theirs ([BridgeLogBytes]),
+// each call held to its own and the calls it counts without listing kept as
 // identities ([ElidedCall]); on the row, the parked state has its own
 // ([ExecuteStateBytes]), which its park condenses to fit and the store refuses
 // past, and the rest is every other field held by the write that puts it there
@@ -722,6 +722,39 @@ type Result struct {
 	// coordinator, never by a runner; empty from a host of an older build,
 	// which is never read as an own run.
 	HarnessEnd HarnessEnd
+
+	// LastRequest is what the newest request of the session the job's box ran
+	// carried, as the run's own account measured it once the job was over
+	// (internal/sandbox/executor: Claude Code's event stream, OpenCode's
+	// session message list asked as the job ends): recorded on the job's record
+	// with HarnessEnd, in that read's one write ([LaunchRecord.Context]), for a
+	// relaunch that continues the copy the box holds, whose floor is that
+	// context with its brief. Set by a runner's collection, beside its result;
+	// zero where it measured none, and from a host of an older build, whose
+	// collection reads none, which leaves the record the measure carried along
+	// the copy's lineage.
+	LastRequest RequestMeasure
+
+	// ReportedWindow is the least context window the run's harness reported
+	// holding a model to, over every model the process used (Claude Code's
+	// result lines, `contextWindow` of each model they name), 0 where it
+	// reported none: a run that printed no result, a release that writes no
+	// per-run figures, another harness. It only ever lowers the window a
+	// continuation of the copy is judged under ([ExecutorWindow.SendsWhole]),
+	// so a figure a box forged adds telling and removes none. Set by a
+	// runner's collection, beside its result.
+	ReportedWindow int64
+
+	// ResumedCount is what Claude Code counts the copy of the session the
+	// job's box holds at before its next request, as the read that collected
+	// this result found it in one read of the job's main thread
+	// ([Coordinator.readMainThread]), with ReportedWindow beside it: recorded
+	// on the job's record with HarnessEnd, in that read's one write
+	// ([LaunchRecord.ResumedCount]), and carried back for the claim it
+	// collects for. Set by the coordinator, never by a runner; nil where the
+	// read asked nothing (a stop's, a loss's, another harness's job), and from
+	// a host of an older build, which reads as a copy that may compact.
+	ResumedCount *ResumedCount
 
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero

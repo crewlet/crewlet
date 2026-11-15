@@ -13,7 +13,13 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import { withDerived } from "~/test/org.ts";
-import { ServiceNotice, noticeText, noticeTitle } from "./ServiceNotice.tsx";
+import {
+  ServiceNotice,
+  noticeText,
+  noticeTitle,
+  restartText,
+  restartTitle,
+} from "./ServiceNotice.tsx";
 import type { Service } from "./nav.ts";
 
 class InertWebSocket {
@@ -199,4 +205,45 @@ test("an address under Chatlet names where the company talks instead", async () 
     "This company talks on Mattermost and Slack",
   );
   expect(noticeTitle("chat", { ...slack, chat: "none" })).toBe("This company runs no chat");
+});
+
+// A SERVICE THE COMPANY RUNS AND THIS NODE HAS NOT STARTED says so: the company
+// turned it on while the node was running, the node starts it when it
+// restarts, and a reader who may open the nodes' page is sent there while
+// anybody else is told who restarts it. Never "not in use here", which is the
+// opposite of what is true, and never the Integrations link, which would
+// offer to turn on what is already on. Mutation: drop the restart arm of
+// `ServiceNotice` and the company's own Chatlet reads "This company runs no
+// chat"; offer the nodes' link to a reader without Admin and the second case
+// finds it.
+test("a service this node starts on its restart says so, with the step a reader can take", async () => {
+  const waiting: OrgServices = {
+    tracker: "worklet",
+    knowledge: "doclet",
+    chat: "chatlet",
+    code: "none",
+    restart: ["chat"],
+  };
+  mount("chat", ["chatlet", "activity"], waiting, ["admin"]);
+  expect(await screen.findByText("Chatlet starts when this node restarts")).toBeTruthy();
+  expect(screen.getByText(restartText("chat"))).toBeTruthy();
+  expect(screen.queryByText("Chatlet is not in use here.")).toBeNull();
+  expect(screen.queryByRole("link", { name: "See what is built into Crewlet" })).toBeNull();
+  expect(
+    (await screen.findByRole("link", { name: "See the engine’s nodes" })).getAttribute("href"),
+  ).toBe("#/settings/nodes");
+  cleanup();
+
+  mount("chat", ["chatlet", "activity"], waiting, ["chatlet"]);
+  expect(await screen.findByText("Ask whoever runs the engine to restart it.")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "See the engine’s nodes" })).toBeNull();
+});
+
+// EVERY SERVICE HAS THE SENTENCE, in its own name: a tracker, a knowledge base
+// or a git host turned on live waits for the same restart.
+test("the restart notice names the service it is about", () => {
+  expect(restartTitle("tracker")).toBe("Worklet starts when this node restarts");
+  expect(restartTitle("code")).toBe("Gitlet starts when this node restarts");
+  expect(restartText("knowledge")).toMatch(/turned Doclet on while this node was running/);
+  expect(restartText("knowledge")).toMatch(/Restart the engine on each node/);
 });

@@ -301,3 +301,57 @@ roles:
 		t.Fatalf("an engine-provisioned seat with no role: want ErrMissing, got %v", err)
 	}
 }
+
+// A DISCONNECT TURNS OFF THE AGENTS ON THROUGH THE CONNECTION IT REMOVES, and
+// nothing else: each keeps the rest of its block for a reconnect, a seat
+// already off or with no block is left alone, a lane whose connection stays
+// (Slack, which needs no company block) is untouched, and the result is a
+// document the per-seat rules accept. The CONTROL is the same document with
+// the block gone and nothing turned off, which those rules refuse.
+//
+// Mutation: turn off every lane, not only the disconnected ones, and the Slack
+// seat is turned off too; leave the seats on and the document is refused.
+func TestADisconnectTurnsOffOnlyTheAgentsOnThroughIt(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+integrations:
+  mattermost: {enabled: true, url: "https://chat.example.com", team: acme}
+roles:
+  - {name: SRE, handle: sre, integrations: {mattermost: {enabled: true, roles: [system_user], channels: [engineering]}, slack: {enabled: true}}}
+  - {name: Builder, handle: builder, integrations: {mattermost: {enabled: true, roles: [system_user]}}}
+  - {name: Writer, handle: writer, integrations: {mattermost: {enabled: false, roles: [system_user]}}}
+  - {name: Reviewer, handle: reviewer}
+`
+	prior := parsedDoc(t, doc)
+	next := parsedDoc(t, doc)
+	next.Integrations.Mattermost = nil
+	if err := next.validateSeatBlocks(); err == nil {
+		t.Fatal("the block removed with agents still on was accepted, so the case asserts nothing")
+	}
+
+	off := next.TurnOffDisconnected(prior)
+	if !slices.Equal(off, []string{"sre", "builder"}) {
+		t.Errorf("turned off %v, want the two agents that were on", off)
+	}
+	if err := next.validateSeatBlocks(); err != nil {
+		t.Errorf("the disconnected document is still refused: %v", err)
+	}
+	roles := map[string]*Role{}
+	for role := range next.EachRole() {
+		roles[role.Handle] = role
+	}
+	if mm := roles["sre"].Integrations.Mattermost; mm == nil || SeatAccessOn(mm.Enabled) ||
+		!slices.Contains(mm.Channels, "engineering") {
+		t.Errorf("sre's Mattermost block is %+v, want it off with its channels kept", mm)
+	}
+	if !SeatAccessOn(roles["sre"].Integrations.Slack.Enabled) {
+		t.Error("sre was turned off at Slack, whose connection the disconnect did not touch")
+	}
+	if roles["reviewer"].Integrations.Mattermost != nil {
+		t.Error("the reviewer, who had no block, was given one")
+	}
+	if again := next.TurnOffDisconnected(next); len(again) != 0 {
+		t.Errorf("a document with nothing disconnected turned off %v", again)
+	}
+}

@@ -60,6 +60,7 @@ import { subjectOf } from "../repo/History.tsx";
 import { RefPicker, revisionWord, useRevisions } from "../repo/refs.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import "~/styles/gitlet.css";
 
 /** The default branch, as a revision a comparison asks the engine for. */
 const DEFAULT_REV = "HEAD";

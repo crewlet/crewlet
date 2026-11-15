@@ -213,6 +213,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "components/seatControls.tsx": "modal: a pause's reason, in the dialog a seat's Pause opens",
   "routes/account/Account.tsx": "modal: a password, a second factor or a token, in its dialog",
   "routes/artifacts/FolderDialogs.tsx": "modal: naming a folder",
+  "routes/doclet/page/Tidy.tsx":
+    "modal: a page's new title, labels, place, or a purge's typed title and reason, each in its dialog",
   "routes/artifacts/HistoryTab.tsx": "modal: a version's note, in its dialog",
   "routes/artifacts/RenameDialog.tsx": "modal: renaming an artifact",
   "routes/atlas/AddEntry.tsx": "modal: a new atlas entry, in its dialog",
@@ -238,6 +240,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: an agent's robot token pasted in its sheet, a credential and never a draft",
   "routes/worklet/NewProject.tsx": "modal: a new project's owner and key",
   "routes/worklet/NewTask.tsx": "modal: the one sheet every New task opens",
+  "routes/worklet/taskMenu.tsx":
+    "modal: a permanent delete's reason and typed key, a person's own confirmation and never a draft, and a move's project, in their dialogs",
   "routes/settings/SecretDialog.tsx":
     "modal: a sealed secret's value, a credential and never a draft",
   "routes/settings/TakeBackupDialog.tsx": "modal: a backup's note, in its dialog",
@@ -249,6 +253,23 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: which agent a per-agent server is tested as, in its dialog",
   "routes/settings/mcp-tools/flows/ValueDialog.tsx":
     "modal: a header or variable's new value, write-only, in its dialog",
+  "routes/agents/ScheduleControls.tsx":
+    "modal: a new schedule, or a schedule's owner, cron, task and who runs it, in its dialog",
+  "routes/settings/DelegatedRuleDialog.tsx":
+    "modal: a delegated-decision rule's kinds and delegates, in its sheet",
+  "routes/chatlet/RoomAdmin.tsx":
+    "modal: a room's retention in days, or an erase's typed reason, each in its dialog",
+  "routes/gitlet/NewRepo.tsx": "modal: a new repository's name, unit, description and branch",
+  "routes/gitlet/commit/CommitWrites.tsx":
+    "modal: a revert's or a cherry-pick's branch and commit message, in their dialogs",
+  "routes/gitlet/repo/BranchWrites.tsx": "modal: a new branch's name, in its dialog",
+  "routes/gitlet/repo/FileWrites.tsx":
+    "modal: a file's path, content and commit message, or a delete's message, in their dialogs",
+  "routes/gitlet/repo/Protect.tsx": "modal: a branch protection rule, in its dialog",
+  "routes/gitlet/repo/RepoLife.tsx": "modal: a repository delete's reason, in its dialog",
+  "routes/settings/Limits.tsx":
+    "saved per change: one limit's value, in the panel its pencil opens, written by that " +
+    "panel's own Save",
   "components/TitleField.tsx":
     "not an editor: one field; every screen that draws it holds the value and declares the draft",
   "components/ConfigField.tsx":

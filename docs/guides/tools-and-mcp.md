@@ -55,7 +55,7 @@ nineteen in full.
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
 | `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash; a body links another page by id, `[its title](#/doclet/pages/<page id>)`, which is what "Linked from" reads. `status` is `published` (the default) or `draft`, which is listed in its container and returned by no search until it is published, and any other value is refused; an empty body files a folder, a page that only groups the pages under it |
-| `save_page` | Edit one, stating the version you read: there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top. `watch` is `true` to follow the page or `false` to stop, and anything else is refused rather than read as no change |
+| `save_page` | Edit one, stating the version you read: there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top. `watch` is `true` to follow the page or `false` to stop, and anything else is refused rather than read as no change. `status` is `published`, which publishes a draft, or `draft`, which takes a published page back to one; left out, the page keeps its status, so an edit to a draft keeps it a draft. Moving it is the page's creator's, its container's lead's or an administrator's, and a page in the trash comes back by a restore, never by a save |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 
 What `get_page`, `get_work_item` and `read_project_file` hand back that
@@ -138,9 +138,12 @@ a person writes **as the seat they hold** — every person holds one — and so
 does a token the identity directory binds to a seat, with kind `human`, while a
 credential nobody is bound through writes under its own login (`token:<id>`),
 with kind `operator` — the credential
-itself is recorded beside either as the write's `operator_id`. Eight more are a
+itself is recorded beside either as the write's `operator_id`. Nine more are a
 person's decisions about the company rather than its work, and are served only
-there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
+there too: `pause_seat` and `resume_seat`; `run_schedule`, which runs one
+schedule now, off its cron, decided on every seat it wakes
+([Running a schedule now](../concepts/scheduling.md#running-a-schedule-now));
+and `steer_turn` (a note to a
 running turn, decided on the seat its executor's record names once the executor
 is out in its box, and before that once a probe of the fleet names the turn's seat — a
 probe nobody answers is `unavailable`), each for the seat's holder, its lead
@@ -3068,7 +3071,7 @@ configuration writes as an empty string.
 
 ### Tool annotation overrides
 
-The engine derives some behaviour from a tool's [capabilities](../concepts/tool-capabilities.md) — for example, the worker guard denies tools that write to a shared surface, classified from the MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` annotations the server advertises. Most servers advertise these; for one that doesn't, supply them per server via `tool_annotations` (keyed by bare tool name). `tavily-mcp` 0.2.22 advertises none: its five tools only read the web, and unannotated each counts as a possible delivery, so a turn that only searched can pass the [delivery check](../concepts/tool-capabilities.md#the-delivery-check-did-this-answer-reach-anybody):
+The engine derives some behaviour from a tool's [capabilities](../concepts/tool-capabilities.md) — for example, the worker guard denies tools that write to a shared surface, classified from the MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` annotations the server advertises. Most servers advertise these; for one that doesn't, supply them per server via `tool_annotations` (keyed by bare tool name). `tavily-mcp` 0.2.22 advertises none: its five tools only read the web, and unannotated each counts as a possible delivery, so a turn that only searched can pass the [delivery check](../concepts/tool-capabilities.md#the-delivery-check-did-this-answer-reach-anybody), and counts as having [acted](../concepts/tool-capabilities.md#did-this-turn-act-outside-the-engine): its `no_action` is sent back and the turn reviewed, and one that broke is given up rather than redelivered. With the keys below each is a read of the world, which neither delivers nor counts as having acted, so such a turn may end quietly, and one that broke comes back:
 
 ```yaml
 mcp_servers:

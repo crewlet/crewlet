@@ -154,6 +154,10 @@ func TestAbandonIsOneRuleForBothPaths(t *testing.T) {
 	provider := errors.New("provider did not answer")
 	panicked := fmt.Errorf("turn: execute round 1: %w", turn.Recovered(panics.ScopeTurn, "boom"))
 	fatal := fmt.Errorf("turn: execute round 1: %w", &llm.Error{Kind: llm.KindFatal, Err: errors.New("400")})
+	// A REFUSAL EVERY RETRY WOULD MEET AGAIN, as a round lost past its limit
+	// is: the mark wrapped beside the refuser's own error, under the loop's.
+	permanent := fmt.Errorf("turn: resume round 1: %w",
+		fmt.Errorf("lost too often, and %w", turn.ErrPermanent))
 	cases := []struct {
 		name       string
 		res        turn.Result
@@ -162,11 +166,15 @@ func TestAbandonIsOneRuleForBothPaths(t *testing.T) {
 		wantReason string
 	}{
 		{"a turn that did not break", turn.Result{Acted: true}, nil, false, ""},
-		{"a broken turn that proved nothing", turn.Result{}, provider, false, ""},
+		{"a broken turn whose record shows no act", turn.Result{}, provider, false, ""},
 		{"a broken turn that wrote outside", turn.Result{Acted: true}, provider, true, turn.AbandonedActed},
-		{"a panic that proved nothing", turn.Result{}, panicked, true, turn.AbandonedPanicked},
+		{"a panic in a turn whose record shows no act", turn.Result{}, panicked, true, turn.AbandonedPanicked},
 		{"a panic after a write names the panic", turn.Result{Acted: true}, panicked, true, turn.AbandonedPanicked},
-		{"a provider's fatal that proved nothing keeps its retry", turn.Result{}, fatal, false, ""},
+		{"a provider's fatal in a turn whose record shows no act keeps its retry", turn.Result{}, fatal, false, ""},
+		{"a refusal a retry meets again in a turn whose record shows no act", turn.Result{}, permanent, true,
+			turn.AbandonedPermanent},
+		{"a permanent refusal after a write names the refusal", turn.Result{Acted: true}, permanent, true,
+			turn.AbandonedPermanent},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

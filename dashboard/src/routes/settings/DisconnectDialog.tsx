@@ -14,6 +14,14 @@
  * until the third-party app teardown succeeds, because that block carries the
  * credential the teardown authenticates with, so the card goes to
  * Disconnecting and clears when the loop finishes.
+ *
+ * WHAT HOLDS ONE THAT DOES NOT FINISH IS SAID, because the two causes have
+ * different ways out. A third-party app that will not let go is forced past
+ * ("Disconnect anyway"). A revision the company's settings refuse is not the
+ * vendor's doing, and forcing writes the same revision, so the dialog names
+ * the settings (each path a chip), says where they are changed, and offers
+ * Disconnect again: telling a person the vendor was in the way sent them to
+ * look where nothing was wrong.
  */
 
 import { useState } from "react";
@@ -21,6 +29,7 @@ import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { PlugGlyph, ExternalLinkGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
+import { href } from "~/app/router.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 
@@ -83,6 +92,7 @@ export function DisconnectDialog({
   name,
   kinds,
   stuck,
+  stuckOn,
   apps,
   appPath,
   avatarOf,
@@ -112,6 +122,8 @@ export function DisconnectDialog({
    * telling so it can offer the way out.
    */
   stuck?: string;
+  /** What holds [stuck]: the third-party app, or the company's settings. */
+  stuckOn?: "vendor" | "settings";
   /**
    * The per-agent apps this disconnect cannot delete on its own, with the
    * page a person deletes each one from.
@@ -134,6 +146,10 @@ export function DisconnectDialog({
   const [removeSeats, setRemoveSeats] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(stuck ?? null);
+  // WHETHER THE SETTINGS HOLD IT: the loop's word for a stuck disconnect, or a
+  // request the config refused (`validation_error`), which forcing would only
+  // be refused again for.
+  const [bySettings, setBySettings] = useState(stuckOn === "settings");
   /**
    * The credentials the engine has left in the store, once it has answered.
    *
@@ -214,6 +230,7 @@ export function DisconnectDialog({
       // banner never rendered and the button looked like it did nothing.
       // RestError.message already falls back to the status itself.
       setError(err instanceof RestError ? err.message : String(err));
+      setBySettings(err instanceof RestError && err.code === "validation_error");
     } finally {
       setWaitingOn(null);
       setBusy(false);
@@ -301,7 +318,8 @@ export function DisconnectDialog({
       }
     >
       <p className="t-body secondary" style={{ margin: 0 }}>
-        Agents stop working in {name}, and its webhooks are removed.
+        Agents stop working in {name}, and its webhooks are removed. Each agent is turned off there
+        and keeps what it was given, so connecting again and turning it on restores it.
       </p>
 
       {/* THE DESIGN SYSTEM'S, and it fixes two things this row had of its own.
@@ -388,7 +406,26 @@ export function DisconnectDialog({
         </Callout>
       )}
 
-      {error && (
+      {error && bySettings && (
+        <Callout variant="warning" role="alert" title="The company’s settings refused it">
+          <span className="col" style={{ gap: 4 }}>
+            <span>
+              {stuck ? `What ${name} held is removed. ` : ""}The change that removes {name} breaks a
+              rule of the company’s settings:
+            </span>
+            <span>{marked(error)}</span>
+            <span>
+              Change it in{" "}
+              <a className="prose-link" href={href(["settings", "config"])}>
+                Configuration
+              </a>
+              , then disconnect again.
+            </span>
+          </span>
+        </Callout>
+      )}
+
+      {error && !bySettings && (
         <Callout variant="danger" role="alert">
           <span className="col" style={{ gap: 4 }}>
             {stuck && <span>{name} hasn’t let the disconnect finish.</span>}

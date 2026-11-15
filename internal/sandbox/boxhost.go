@@ -158,6 +158,12 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // collection of a turn with none never ends its job, and waits for the take
 // alone.
 //
+// AND A CLAUDE CODE COLLECTION HOLDS THE READ OF ITS JOB'S MAIN THREAD, made once
+// on the host before the take within [MainThreadReadWait] (mainthread.go),
+// counted at the host's share as the take is: fifteen seconds more for the host,
+// twenty for its asker. Another harness's collection, a stop's and a loss's ask
+// the thread nothing, and wait as they did.
+//
 // What that costs is the wait for a host that has truly stopped — about
 // seventy-eight minutes for a collection of a turn with no cap before the
 // asker hands the claim back, where it was one, about eighty-one for a stop's
@@ -177,6 +183,9 @@ func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 	}
 	if read.recordsTheCap(run) {
 		held += discardGrace + coord.MaxValueCrossing
+	}
+	if asksMainThread(run, read) {
+		held += MainThreadReadWait
 	}
 	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)
 }

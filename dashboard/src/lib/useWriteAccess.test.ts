@@ -11,6 +11,7 @@ import {
   WRITE_REASONS,
   answerHold,
   configGuardedReason,
+  configReloadAccess,
   configWriteAccess,
   directSeatAccess,
   linkOf,
@@ -53,6 +54,8 @@ const BOUND: ViewerState = {
   anonymous: false,
   loading: false,
   asking: false,
+  failed: null,
+  failedRefusal: null,
   configWriter: true,
   configManagedBy: [],
   assistant: "disabled",
@@ -462,6 +465,23 @@ describe("changing the company's configuration", () => {
     expect(configWriteAccess(viewer({ configWriter: true, configManagedBy: [] }), "open")).toEqual({
       can: true,
     });
+  });
+
+  // A RELOAD IS THE BREAK-GLASS (ADR-0030): it re-publishes the managed
+  // document's own bytes, so it stays open where every edit is held, and
+  // every other reason holds it as it holds an edit.
+  test("a reload stays open on a managed document and is held for every other reason", () => {
+    const managed = viewer({ configWriter: false, configManagedBy: ["gitops"] });
+    expect(configReloadAccess(managed, "open")).toEqual({ can: true });
+    expect(configReloadAccess(managed, "open", "these are Rui's")).toEqual({
+      can: false,
+      block: "held",
+      reason: "these are Rui's",
+    });
+    expect(configReloadAccess({ ...managed, grants: ["worklet"] }, "open")).toMatchObject({
+      block: "no_grant",
+    });
+    expect(configReloadAccess(managed, "offline")).toMatchObject({ block: "offline" });
   });
 
   // THE STANDING ANSWER agrees with the press-time one about WHO may write,

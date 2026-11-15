@@ -75,6 +75,16 @@ type Dispatcher struct {
 	// the one place that holds both the message's headroom and why it failed.
 	DeadLettered func(ctx context.Context, handle string, result queue.Result)
 
+	// Gone is told the events of a delivery that will not come back to the
+	// seat: every one [Dispatcher.Settled] is told of, less those the dispatch
+	// handed back to the queue as copies of their own (a park's whole
+	// delivery, an unmergeable partition's tail), each copy being the same
+	// event, by its id, still waiting on the inbox ([goneBy]). It drops what
+	// the seat's park recorded for a delivery whose launch was refused below
+	// its floor ([Engine.budgetDeliveryGone]), which that delivery's every try
+	// reads until it is gone and nothing reads after. nil drops nothing.
+	Gone func(ctx context.Context, handle string, gone []*events.Event)
+
 	// running counts the dispatches in progress per seat, which is how
 	// "this seat is busy right now" is answered for a person's message
 	// that reaches it meanwhile ([Dispatcher.Running]).
@@ -107,17 +117,24 @@ type Dispatcher struct {
 	// refusing, or leaves less room than the delivery's launch needs, and
 	// reports the deferral reason naming the window — see budgetpark.go.
 	// refused is the budget refusal the delivery's turn met, nil before any
-	// turn ran: a launch refused below its own floor — one that continues the
-	// session its conversation's last turn left, whose context it sends first
-	// — carries that floor, and the park waits for room for it rather than
-	// for the static floor a fresh launch needs, which the window may already
-	// have ([floorOf]). An error is a park that could not be taken, which
-	// DEFERS the delivery rather than running a turn the counter refuses:
-	// the refusal is the node's, and a deferral keeps the message's place.
+	// turn ran, and delivery the events that turn was dispatched for, nil
+	// with it: a launch refused below its own floor (its brief beside the
+	// static floor; for one that continues the session its conversation's
+	// last turn left, whose context it sends first, that context beside its
+	// brief; or, where its fresh brief's floor is held, the static floor or
+	// the room below it) carries that floor, and the park waits for room for
+	// it rather than for the static floor alone, which a window may have
+	// without room for a larger one ([floorOf]); and the park records the
+	// window it waits on for that delivery, whose next launch, and no other
+	// delivery's, it holds ([floorWaits]). An error is a park that could not
+	// be taken, which DEFERS the delivery rather than running a turn the
+	// counter refuses: the refusal is the node's, and a deferral keeps the
+	// message's place.
 	//
 	// Nil parks nothing, which is a dispatcher with no counters: every
 	// turn then runs, and its own meter, if it has one, is the gate.
-	Budget func(ctx context.Context, handle string, refused error) (reason string, parked bool, err error)
+	Budget func(ctx context.Context, handle string, delivery []*events.Event,
+		refused error) (reason string, parked bool, err error)
 
 	// Provider parks the seat when every member of the chain a turn ran on
 	// refused for a rate limit, until the first is tried again, and reports
@@ -358,8 +375,9 @@ func (r Request) Ask() []*events.Event {
 //     still recorded: the ledger answers "has this trigger been worked", not
 //     "did the work succeed", and re-running a failing turn on every
 //     redelivery is how one bad trigger becomes an infinite loop. A turn whose
-//     PHASE broke is recorded too, but only when its own record proves it had
-//     already reached outside the engine — see [Dispatcher.abandon] for why
+//     PHASE broke is recorded too, but only when [turn.Abandon] gives a
+//     reason — an outward write its own record shows, a panic, or a refusal
+//     every redelivery would meet again — see [Dispatcher.abandon] for why
 //     that is a different question from "did it fail", and why answering it
 //     with `err != nil` alone replayed a turn's external writes up to
 //     twenty-five times.
@@ -391,6 +409,17 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		}
 	}()
 	held := holding{events: evs}
+	// GONE ONCE THE OUTCOME IS FINAL, after the panic recovery below as
+	// Settled is, and less what the dispatch requeued, which it reads off
+	// held: see [goneBy].
+	defer func() {
+		if d.Gone == nil {
+			return
+		}
+		if gone := goneBy(ctx, result, evs, held.requeued); len(gone) > 0 {
+			d.Gone(ctx, handle, gone)
+		}
+	}()
 	defer func() {
 		if panicked := turn.Recovered(panics.ScopeTurn, recover()); panicked != nil {
 			result = d.recoverPanic(ctx, handle, held, panicked)
@@ -446,6 +475,28 @@ func settledBy(ctx context.Context, result queue.Result, evs []*events.Event) []
 		if left, known := queue.DeliveriesLeftFor(ctx, ev.ID); known && left <= 0 {
 			out = append(out, ev.ID.String())
 		}
+	}
+	return out
+}
+
+// goneBy is the events of a delivery that will not come back to its seat
+// ([Dispatcher.Gone]): every one the dispatch has finished with, by
+// [settledBy]'s rule, an acknowledged delivery's every event and a hand-back's
+// dead-lettered ones, less the ones it requeued as copies of their own. A
+// requeue publishes each event again as the event it is, so the copy carries
+// its id and waits on the inbox for the seat, its delivery's next try still to
+// come, though the original is acknowledged.
+func goneBy(ctx context.Context, result queue.Result, evs, requeued []*events.Event) []*events.Event {
+	finished := settledBy(ctx, result, evs)
+	var out []*events.Event
+	for _, ev := range evs {
+		if ev == nil || !slices.Contains(finished, ev.ID.String()) ||
+			slices.ContainsFunc(requeued, func(copied *events.Event) bool {
+				return copied != nil && copied.ID == ev.ID
+			}) {
+			continue
+		}
+		out = append(out, ev)
 	}
 	return out
 }
@@ -506,6 +557,15 @@ func wakeIDsOf(evs []*events.Event) []string {
 type holding struct {
 	events []*events.Event
 	runID  string
+
+	// requeued is what the dispatch handed back to the queue as copies of
+	// their own, a park's whole delivery or an unmergeable partition's tail,
+	// set before the requeue as every narrowing above is: each copy is the
+	// event it was, by its id, waiting on the inbox, so the delivery is not
+	// gone though its original is acknowledged ([goneBy]). A copy a requeue
+	// that failed part-way never published leaves its record to the seat's
+	// release, which drops every one.
+	requeued []*events.Event
 }
 
 // dispatch is [Dispatcher.Dispatch]'s body, separated so the recovery around
@@ -575,7 +635,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	//
 	// AFTER THE SCREENING, whose every non-proceeding outcome already hands
 	// the delivery on without running anything, so it costs those no read.
-	if result, parked := d.parkOnBudget(ctx, handle, nil); parked {
+	if result, parked := d.parkOnBudget(ctx, handle, nil, nil); parked {
 		return result
 	}
 
@@ -731,8 +791,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// published, and they are published one at a time: narrowed
 			// AFTER the call, a panic part-way through it would record a
 			// tail whose copies are already waiting to run. Only the head
-			// is ever this delivery's to settle.
-			held.events = head
+			// is ever this delivery's to settle, and the tail, its copies
+			// waiting for the seat, is never gone with it ([goneBy]).
+			held.events, held.requeued = head, tail
 			if err := d.Park(ctx, handle, tail); err != nil {
 				return queue.Nak(fmt.Errorf("engine: requeue %s: %w", handle, err))
 			}
@@ -849,9 +910,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// lost the right to do.
 			//
 			// BELOW [turn.Abandon] rather than above it: a turn that
-			// panicked or that proved an outward write must not be run
-			// again wherever the seat now lives, and handing it on would
-			// do exactly that.
+			// panicked, or whose record shows an outward write, must not be
+			// run again wherever the seat now lives, and handing it on
+			// would do exactly that.
 			if errors.Is(err, seat.ErrSeatMoved) {
 				if d.NoteDeferred != nil {
 					d.NoteDeferred(handle)
@@ -867,16 +928,22 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// over — rather than by the NAK below, whose redelivery is
 			// refused the same way until the budget of deliveries runs
 			// out. Below [turn.Abandon] for the reason the seat-moved
-			// branch is: a turn that proved an outward write is
+			// branch is: a turn whose record shows an outward write is
 			// recorded, not run again when the window resets.
 			//
 			// ON THE FLOOR THE TURN'S LAUNCH WAS REFUSED BELOW, which the
-			// refusal carries: a first launch that continues its
-			// conversation's session needs that session's context beside
-			// its brief, and parked on the static floor it found the
-			// window not starved, and was NAKed into the same refusal.
+			// refusal carries: its brief beside the static floor, the
+			// context of its conversation's session it continues beside its
+			// brief, or, where its fresh brief's floor is held, the static
+			// floor or the room below it ([launchFloor]). Parked on the
+			// static floor alone, a launch refused below a larger floor
+			// found the window not starved, and was NAKed into the same
+			// refusal. AND FOR THE EVENTS THE TURN WAS DISPATCHED FOR, which
+			// the park records the window it waits on under: their next
+			// launch is the one held in a later window, never the launch of
+			// whatever the park's release hands the seat first ([floorWaits]).
 			if errors.Is(err, toolloop.ErrBudgetExhausted) {
-				if result, parked := d.parkOnBudget(ctx, handle, err); parked {
+				if result, parked := d.parkOnBudget(ctx, handle, req.Events, err); parked {
 					log.InfoContext(ctx, "turn_budget_parked", "seat", handle,
 						"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
 					return result
@@ -938,18 +1005,21 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 
 // parkOnBudget runs the budget stage, reporting the disposition when it parked
 // the seat or could not take the park it decided on. refused is the budget
-// refusal the delivery's turn met, nil before any ran ([Dispatcher.Budget]).
+// refusal the delivery's turn met, nil before any ran, and delivery the events
+// that turn was dispatched for, nil with it ([Dispatcher.Budget]).
 //
 // A PARK IS A DEFERRAL, and noted as one, so the seat host resumes the
 // attachment the deferral quiesces on its next renew — the park's own hold is
 // what keeps the resumed attachment from being handed anything until the
 // window turns over. See budgetpark.go for why the two stops have two owners.
-func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string, refused error) (queue.Result, bool) {
+func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string, delivery []*events.Event,
+	refused error) (queue.Result, bool) {
+
 	if d.Budget == nil {
 		return queue.Result{}, false
 	}
 	return d.parkOn(ctx, handle, "budget park", func(ctx context.Context) (string, bool, error) {
-		return d.Budget(ctx, handle, refused)
+		return d.Budget(ctx, handle, delivery, refused)
 	})
 }
 
@@ -998,15 +1068,20 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 //
 // So the trigger is recorded and acked. That LOSES the rest of the turn, which
 // is the honest price and the reason it needs a reason rather than suspicion:
-// [turn.Abandon] gives one only for a turn whose record proves it reached
-// outside, or for a panic, which runs the same defect again however many times
-// it is delivered. Everything else (a provider that never answered, a runner
-// that could not be built, a refused budget) proves nothing and keeps its
-// retry. A seat handed to another node mid-turn keeps its retry too, but as a
-// DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
-// what detects it. So does a refused budget, whose seat is parked until the
-// refusing window turns over rather than NAKed into the same refusal: see
-// [Dispatcher.parkOnBudget].
+// [turn.Abandon] gives one only for a turn whose record shows it reached
+// outside, for a panic, which runs the same defect again however many times it
+// is delivered, or for a refusal every redelivery would meet again
+// ([turn.ErrPermanent]). Everything else (a provider that never answered, a
+// runner that could not be built, a refused budget) is given none and keeps its
+// retry. A seat handed to another node mid-turn keeps its retry too, but as
+// a DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
+// what detects it. So does a failure a redelivery would meet again until
+// something changes, whose seat is parked or paused until it does rather than
+// NAKed into the same refusal: a refused budget until the refusing window
+// turns over ([Dispatcher.parkOnBudget]), a chain every member of which is at
+// its limit until the first is tried again ([Dispatcher.Provider]), and a
+// failure a retry cannot cure, the second time in a row, until its settings
+// change or a person resumes it ([Dispatcher.Failure]).
 //
 // It is not silent. A turn that ran has already published its own completion
 // marked failed (see [Engine.publishTurnCompleted], which fires on the error
@@ -1511,6 +1586,10 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 		// to the broker, which is the only honest answer.
 		return queue.Nak(fmt.Errorf("engine: %s: no requeue path for a park", handle))
 	}
+	// AND REQUEUED, before the requeue as well: the copies wait for the
+	// seat as the events they are, so the delivery is not gone with the ack
+	// that settles its original ([goneBy]).
+	held.requeued = evs
 	if err := d.Park(ctx, handle, evs); err != nil {
 		return queue.Nak(fmt.Errorf("engine: park %s: %w", handle, err))
 	}

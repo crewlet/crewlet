@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -54,6 +55,9 @@ type Lost struct {
 // ErrRoundLost is a round whose jobs were lost with their hosts more often than
 // a round is carried on after ([Lost.Limit]): a run that keeps taking its own
 // host down, which every relaunch would take down again.
+//
+// ITS REFUSAL ENDS THE TURN: it wraps [turn.ErrPermanent] beside this, since a
+// retry of the resume carries the same losses and is refused the same way.
 var ErrRoundLost = errors.New("the executor's round was lost with its host too often to start again")
 
 // Reseed is what the run carrying a lost job's round on is told beside its
@@ -133,6 +137,13 @@ type carried interface {
 	// it is told there, by the lead of the brief the continuation opens, and
 	// in no list of the round's calls that brief tells ([Runner.calledAfter]).
 	tellsHeld() string
+	// lead is what carries the round on as the run keeps it beside its
+	// record, for a later brief to a session that may lack the one this opens
+	// to tell again (leads.go), nil where the engine's own words carry it on: a
+	// loss's and a replaced sign-in's, which the cut-off section of every
+	// later brief says as well, and a provider's refusal's, whose run did no
+	// work for a later session to lack ([Refused]).
+	lead() *sandbox.Lead
 	// keeps says the round may be carried on in the turn's kept session at
 	// all (continued.go); branch is the work-in-progress branch the run
 	// before pushed, where the engine knows it, for a box that replaced its.
@@ -186,6 +197,7 @@ func (l *Lost) boxKept() bool                           { return l.BoxKept }
 func (l *Lost) continuation(provenance.Boundary) string { return l.Continuation() }
 func (l *Lost) reseed(provenance.Boundary) string       { return l.Reseed() }
 func (l *Lost) tellsHeld() string                       { return "" }
+func (l *Lost) lead() *sandbox.Lead                     { return nil }
 func (l *Lost) keeps() bool                             { return sandbox.KeptAfterLoss(l.Losses) }
 func (l *Lost) branch() string                          { return "" }
 func (l *Lost) what() string                            { return "carrying on the round its host lost" }
@@ -194,6 +206,6 @@ func (l *Lost) refusal() error {
 	if l.Losses <= l.Limit {
 		return nil
 	}
-	return fmt.Errorf("%w: its run was lost %d times in this round, the last when %s, and a "+
-		"round is carried on after at most %d", ErrRoundLost, l.Losses, l.why(), l.Limit)
+	return fmt.Errorf("%w, and %w: its run was lost %d times in this round, the last when %s, and a "+
+		"round is carried on after at most %d", ErrRoundLost, turn.ErrPermanent, l.Losses, l.why(), l.Limit)
 }

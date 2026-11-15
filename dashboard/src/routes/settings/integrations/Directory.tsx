@@ -93,6 +93,10 @@ export function Integrations({ kind }: { kind?: string }) {
   // THE LIST AND THE PANE EACH SCROLL ON THEIR OWN, so the screen takes the
   // window's height above a phone, where the two are one column.
   useFillScreen(!phone);
+  // WHO THE READER IS COULD NOT BE READ: said, with its Try again, never a
+  // skeleton waiting for an answer that is not coming.
+  if (viewer.failed !== null)
+    return <QueryState error={viewer.failed} refusal={viewer.failedRefusal} loading={false} />;
   if (viewer.loading) return <Skeleton variant="text" rows={6} label="Checking your access" />;
   return viewer.admin ? <AdminPage kind={kind} /> : <Directory kind={kind} model={null} />;
 }

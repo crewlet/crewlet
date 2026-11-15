@@ -139,7 +139,9 @@ describe("under a person's message", () => {
     );
   }
 
-  test("says whom it reached, then who answered", async () => {
+  // ONE SENTENCE THAT NAMES THE SEAT ONCE: "Reached pm, who answered", never
+  // "Reached pm · pm answered" with a screen reader's full stop beside the dot.
+  test("says whom it reached and that it answered, naming it once", async () => {
     mount({
       message: said({ reach: { recipients: [{ handle: "pm", reason: "answerer" }] } }),
       channel_seq: 1,
@@ -147,8 +149,28 @@ describe("under a person's message", () => {
       answered: [{ handle: "pm", message_id: "m-2", at: "2026-01-01T00:01:00Z" }],
       delivery: "answered",
     });
-    expect(await screen.findByText("Reached pm")).toBeTruthy();
-    expect(screen.getByText("pm answered")).toBeTruthy();
+    const receipt = await screen.findByText("Reached pm, who answered");
+    expect(receipt.closest(".crewlet-delivery-receipt")!.textContent).toBe(
+      "Reached pm, who answered",
+    );
+  });
+
+  test("names who answered and who it still waits on, each once", async () => {
+    mount({
+      message: said({
+        reach: {
+          recipients: [
+            { handle: "pm", reason: "mention" },
+            { handle: "qa", reason: "mention" },
+          ],
+        },
+      }),
+      channel_seq: 1,
+      position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
+      answered: [{ handle: "qa", message_id: "m-2", at: "2026-01-01T00:01:00Z" }],
+      delivery: "partly_answered",
+    });
+    expect(await screen.findByText("qa answered, waiting on pm")).toBeTruthy();
   });
 
   // A MESSAGE STORED BEFORE MESSAGES RECORDED THEIR REACH says nothing, rather
