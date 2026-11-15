@@ -890,6 +890,7 @@ func readTools() []Tool {
 			Label: func(map[string]any) string { return "Reading integration health" },
 		},
 		seatAccessRead(),
+		grantCatalogueSearch(),
 		{
 			Name: "get_fleet_health", Phrase: "read the fleet's health",
 			Description: "Administrators: the nodes and their configuration rollout, each MCP " +

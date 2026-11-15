@@ -102,6 +102,11 @@ type Access interface {
 	// [seataccess.ErrNoRequest] where it lapsed or was settled.
 	GrantRequest(ctx context.Context, id string) (seataccess.GrantRequest, error)
 
+	// GrantRequests is every agent's open request for a grant at kind's
+	// lanes, oldest first: what one agent's lane view words beside its
+	// grants.
+	GrantRequests(ctx context.Context, kind integration.Kind) ([]seataccess.GrantRequest, error)
+
 	// RecordGrants records what a saved revision did to seats' grants: an
 	// audit event per grant added or removed, as the person who saved it,
 	// and every request a grant answered settled. Never a failure: the

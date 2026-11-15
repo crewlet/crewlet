@@ -107,6 +107,13 @@ var trustDoors = map[string]trustDoor{
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
 		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
 	}},
+	// A permission looked up in an integration's catalogue for one agent:
+	// its name, its group and why the connection cannot grant it are the
+	// vendor's words.
+	"internal/assistant/catalog/seataccess.go:grantCatalogueSearch": {vendor, []string{
+		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
+		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
+	}},
 	"internal/assistant/catalog/api.go:read": {hosted, []string{
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
 	}},

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
@@ -44,5 +45,50 @@ func TestOneAgentsLaneIsReadInWords(t *testing.T) {
 		if want == httpjson.CodeNoSuchSeat && !strings.Contains(res.Body.String(), "sre-lead") {
 			t.Errorf("GET %s names none of the agents listed: %s", path, res.Body)
 		}
+	}
+}
+
+// ONE AGENT'S LANE CARRIES ITS OWN OPEN REQUESTS AND WHAT A LOOKUP FINDS IN THE
+// CATALOGUE: the stored requests of the lane's kind reach the view, which keeps
+// the agent's own, and `permission` looks a permission up by part of its name,
+// saying what the company's connection lacks. A lookup longer than any
+// permission's name is refused as a bad query rather than matched. Mutation:
+// read the view without the stored requests or the lookup, and this fails.
+func TestOneAgentsLaneCarriesItsRequestsAndALookup(t *testing.T) {
+	t.Parallel()
+	s := newCloudflareSurface(t)
+	s.access.requests = map[string]seataccess.GrantRequest{
+		"abcde12345": {ID: "abcde12345", Kind: integration.KindCloudflare, Lane: seataccess.LaneCloudflare,
+			Handle: "sre", Permission: "Origin Write", Scope: []string{"example.com"}, Hours: 4,
+			Reason: "add the origin rule", Item: "OPS-77", Ask: "owner"},
+		"fghij67890": {ID: "fghij67890", Kind: integration.KindCloudflare, Lane: seataccess.LaneCloudflare,
+			Handle: "cto", Permission: "Origin Read", Hours: 4, Reason: "read", Item: "OPS-78", Ask: "owner"},
+	}
+	res := s.do(t, http.MethodGet, "/setup/integrations/cloudflare/access/seats/sre/cloudflare?permission=dns", "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET = %d: %s", res.Code, res.Body)
+	}
+	var view seataccess.LaneView
+	if err := json.Unmarshal(res.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(view.Requests, "request abcde12345 asks for Origin Rules: Edit on example.com") ||
+		!strings.Contains(view.Requests, "grant-rabcde12345-t") || strings.Contains(view.Requests, "fghij67890") {
+		t.Errorf("requests = %q, want the SRE's own request and its options", view.Requests)
+	}
+	if !strings.Contains(view.Permissions, "Origin Rules: Edit (Zone, changes things, in no level)") {
+		t.Errorf("permissions = %q, want the requested permission worded", view.Permissions)
+	}
+	if len(view.Lookup) != 1 || view.Lookup[0].Name != "DNS Write" ||
+		view.Lookup[0].Grantable != "The provisioner token does not hold DNS Write" ||
+		view.Lookup[0].Missing != "DNS Write" {
+		t.Errorf("lookup = %+v, want DNS Write and what the connection lacks", view.Lookup)
+	}
+
+	long := strings.Repeat("x", seataccess.MaxLookupChars+1)
+	res = s.do(t, http.MethodGet, "/setup/integrations/cloudflare/access/seats/sre/cloudflare?permission="+long, "", nil)
+	if res.Code != http.StatusBadRequest || decode(t, res)["error"] != string(httpjson.CodeInvalidQuery) {
+		t.Errorf("a lookup past %d characters = %d %s, want 400 invalid_query", seataccess.MaxLookupChars,
+			res.Code, res.Body)
 	}
 }

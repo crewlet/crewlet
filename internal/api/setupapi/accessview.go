@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -12,7 +14,10 @@ import (
 
 // accessSeatRead serves GET /setup/integrations/{kind}/access/seats/{handle}/{lane}:
 // one agent's lane as its Agents tab row reads, in words ([seataccess.ViewOf]),
-// for a reader that shows one agent's access rather than the whole tab.
+// for a reader that shows one agent's access rather than the whole tab: with
+// its grants beside its level, its open requests for one, and the lane's
+// catalogue counted, each entry they name worded, and those `permission`
+// matches.
 func (s *Service) accessSeatRead(w http.ResponseWriter, r *http.Request) {
 	kind, ok := accessKind(w, r)
 	if !ok {
@@ -36,7 +41,21 @@ func (s *Service) accessSeatRead(w http.ResponseWriter, r *http.Request) {
 		s.accessFault(w, r, kind, "setup_access_unread", err)
 		return
 	}
-	view, found := seataccess.ViewOf(answer, handle, lane)
+	lookup := strings.TrimSpace(r.URL.Query().Get("permission"))
+	if n := utf8.RuneCountInString(lookup); n > seataccess.MaxLookupChars {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery, map[string]string{
+			"detail": "permission is " + strconv.Itoa(n) + " characters; look up at most " +
+				strconv.Itoa(seataccess.MaxLookupChars) + ", part of the permission's name",
+		})
+		return
+	}
+	requests, err := s.access.GrantRequests(r.Context(), kind)
+	if err != nil {
+		s.accessFault(w, r, kind, "setup_access_requests_unread", err)
+		return
+	}
+	view, found := seataccess.ViewOf(answer, handle, lane, seataccess.ViewQuery{Requests: requests,
+		Lookup: lookup, Now: time.Now()})
 	if !found {
 		detail := map[string]string{"detail": "no agent " + strconv.Quote(handle) + " on " +
 			string(kind)}
