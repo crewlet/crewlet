@@ -61,6 +61,9 @@ type Reader struct {
 	// tipWindow bounds the landings one target's tip work reads above its
 	// green: MaxTipLandings, and a test's smaller value (export_test.go).
 	tipWindow int
+	// refsScanned and activeCounted bound a refs listing's scan and its active
+	// count: MaxRefsScanned and MaxActiveBranchesCounted, or a test's.
+	refsScanned, activeCounted int
 }
 
 // ReaderOptions configure a reader.
@@ -97,7 +100,8 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 			"without it every read level is a label rather than a guarantee")
 	}
 	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, now: o.Now, pageRows: MaxSnapshotItems,
-		pageBytes: MaxPageBytes, tipWindow: MaxTipLandings}
+		pageBytes: MaxPageBytes, tipWindow: MaxTipLandings, refsScanned: MaxRefsScanned,
+		activeCounted: MaxActiveBranchesCounted}
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}
@@ -388,6 +392,9 @@ func (p *page) add(bytes int) bool {
 	p.bytes += bytes
 	return p.full()
 }
+
+// charge counts in bytes a page read beside what it sends, and no row.
+func (p *page) charge(bytes int) { p.bytes += bytes }
 
 // full reports a page that takes no more rows.
 func (p *page) full() bool { return p.rows >= p.maxRows || p.bytes >= p.maxB }
@@ -1842,6 +1849,12 @@ func (q ReadQuery) validate() error {
 		}
 	}
 	switch q.Kind {
+	case ReadRefs:
+		if q.RefListing != nil {
+			if err := q.validateRefListing(); err != nil {
+				return err
+			}
+		}
 	case ReadChanges:
 		if err := q.validateChanges(); err != nil {
 			return err
@@ -1911,6 +1924,9 @@ func (q ReadQuery) kindOwnedField() error {
 		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
 		return fmt.Errorf("%w: notice_cards: only a notice_cards read names the changes whose cards it reads",
+			ErrInvalid)
+	case q.RefListing != nil && q.Kind != ReadRefs:
+		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
 			ErrInvalid)
 	}
 	return nil
@@ -2919,11 +2935,11 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 }
 
 // refsListing serves one page of a repository's LIVE refs under a prefix, by
-// name, keyset after the last ref served, to an asker that may read the
-// repository, and whose ceiling may ([JudgeRead]) — and on the first page the
-// repository in detail too, read as kind repo reads it in the same
-// transaction, so what a seat asks first of a repository — what it is, and
-// its branches — is one read and one barrier.
+// name or as a [RefListingQuery] orders them, keyset after the last ref
+// served, to an asker that may read the repository, and whose ceiling may
+// ([JudgeRead]) — and on the first page the repository in detail too, read as
+// kind repo reads it in the same transaction, so what a seat asks first of a
+// repository — what it is, and its branches — is one read and one barrier.
 //
 // OVER THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0082, its
 // predicate repeated verbatim), never code_refs' key: a range of the key
@@ -2940,7 +2956,10 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	cp statelog.Position, out *ReadAnswer) error {
 
 	prefix := cmp.Or(q.Prefix, branchPrefix)
-	after := prefix
+	after, err := q.refsAfter(prefix)
+	if err != nil {
+		return err
+	}
 	var id string
 	if q.Cursor == "" {
 		if err := r.repo(ctx, tx, q, chart, cp, out); err != nil {
@@ -2948,11 +2967,7 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		}
 		id = out.Repo.ID
 	} else {
-		if !strings.HasPrefix(q.Cursor, prefix) {
-			return fmt.Errorf("%w: %q is not a ref under %s", ErrBadCursor, q.Cursor, prefix)
-		}
 		var found bool
-		var err error
 		if id, found, err = claimIn(ctx, tx, q.Repo); err != nil {
 			return err
 		} else if !found {
@@ -2961,29 +2976,12 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		if err = mayReadIn(ctx, tx, id, q.Asker, q.CeilingSeat, chart); err != nil {
 			return err
 		}
-		after = q.Cursor
 	}
-	limit := min(limitOr(q.Limit, defaultRefLimit), r.pageRows)
-	rows, err := tx.QueryContext(ctx, refsUnderSQL, id, after, prefixEnd(prefix), limit)
-	if err != nil {
-		return fmt.Errorf("gitlet: read %s's refs under %s: %w", q.Repo, prefix, err)
+	// THE PAGE IS refslisting.go's, by name where nothing orders it otherwise.
+	if q.RefListing == nil {
+		q.RefListing = &RefListingQuery{}
 	}
-	defer func() { _ = rows.Close() }()
-	pg := page{maxRows: limit, maxB: r.pageBytes}
-	for rows.Next() {
-		var ref RefRow
-		var position int64
-		if err := rows.Scan(&ref.Ref, &ref.OID, &position); err != nil {
-			return fmt.Errorf("gitlet: read %s's refs under %s: %w", q.Repo, prefix, err)
-		}
-		ref.Position = unpacked(position)
-		out.Refs = append(out.Refs, ref)
-		if pg.add(ref.encodedBytes()) {
-			out.Next = ref.Ref
-			break
-		}
-	}
-	return rows.Err()
+	return r.refsListed(ctx, tx, q, chart, cp, id, after, out)
 }
 
 // introduced serves one page of a repository's pushes in LOG ORDER for a Gitlet
@@ -4664,7 +4662,7 @@ const (
 	// refsUnderSQL is a page of the live refs between two names, by name —
 	// over the live refs' partial index, its predicate verbatim
 	// (refsListing).
-	refsUnderSQL = `SELECT ref, target, position FROM code_refs INDEXED BY ` + liveRefsKey + `
+	refsUnderSQL = `SELECT ref, target, position, at FROM code_refs INDEXED BY ` + liveRefsKey + `
 		WHERE repo_id = ? AND ref > ? AND ref < ? AND target != '' ORDER BY ref LIMIT ?`
 	// THE PUSHES IN LOG ORDER, over code_pushes_repo_idx as replicated 0084
 	// orders it: those in (?2, ?3] oldest first — an `introduced` read

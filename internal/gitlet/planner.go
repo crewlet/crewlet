@@ -66,6 +66,16 @@ const (
 	// liveRefsKey is code_refs_live_idx, (repo_id, ref) WHERE target != ''
 	// (replicated migration 0082): the live refs alone, in key order.
 	liveRefsKey = "code_refs_live_idx"
+	// movedRefsKey is code_refs_moved_idx, (repo_id, at, ref) WHERE
+	// [movedRefs] (replicated migration 0171): the live branches by when each
+	// last moved.
+	movedRefsKey = "code_refs_moved_idx"
+	// movedRefs is the predicate code_refs_moved_idx is partial on, which every
+	// statement over it repeats verbatim.
+	movedRefs = `target != '' AND ref >= 'refs/heads/' AND ref < 'refs/heads0'`
+	// changesSourceKey is code_changes_source_idx, (repo_id, source_ref,
+	// number) (replicated migration 0171): the changes from one branch.
+	changesSourceKey = "code_changes_source_idx"
 	// protectedReposKey is code_repos_protected_idx, (name) WHERE
 	// [protectedRepos] (replicated migration 0145): the repositories a rule
 	// protects, in name order.

@@ -8971,10 +8971,54 @@ export interface CodeRefRow {
   position: LogPosition;
 }
 
-/** `code_refs`: a repository's live refs under one prefix — its branches by default — in name order. */
+/** The push that last moved a ref (`gitlet.RefMover`), drawn as a pusher is. */
+export interface CodeRefMover {
+  push_id: string;
+  actor: string;
+  actor_kind: string;
+  actor_seat?: string;
+  via: CodePushRow["via"];
+}
+
+/** The rules matching a ref (`gitlet.RefProtection`), in order, and what they allow together. */
+export interface CodeRefProtection {
+  patterns: string[];
+  allow_force?: boolean;
+  allow_delete?: boolean;
+  direct_push: "persons" | "none" | (string & {});
+}
+
+/** The change a branch heads, else the newest from it (`gitlet.RefChange`). */
+export interface CodeRefChange {
+  number: number;
+  title: string;
+  state: CodeChangeState;
+}
+
+/** One ref read in detail (`gitlet.RefListing`): when and by whom it moved, its rules, its change, and whether the reader may delete it. */
+export interface CodeRefListing {
+  ref: string;
+  oid: string;
+  position: LogPosition;
+  moved_at: string;
+  /** Absent past the push history's 181 days, or where one record moved it there twice. */
+  moved_by?: CodeRefMover;
+  protection?: CodeRefProtection;
+  change?: CodeRefChange;
+  /** Set where the reader may delete it now; otherwise the refusal and its sentence are. */
+  may_delete?: boolean;
+  delete_refusal?: string;
+  delete_detail?: string;
+}
+
+/** `code_refs`: a repository's live refs under one prefix, its branches by default, in name order, or by when each branch moved. */
 export interface CodeRefsAnswer extends CodePage {
-  /** Absent on a page that holds none. */
+  /** Absent on a page that holds none, and on a page read in detail. */
   refs?: CodeRefRow[];
+  /** A page read with `detail=true`, in place of `refs`. */
+  refs_detail?: CodeRefListing[];
+  /** A first page's count of the branches other than the default moved since `active_since`; `more` past 1 000. */
+  active_branches?: { count: number; more?: boolean };
 }
 
 /** Who acts on a repository (`gitlet.Principal`): a seat, or a credential and the seat it acts as. */
