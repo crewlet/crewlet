@@ -222,30 +222,39 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 	" happened, and their outcomes stand: a call marked `→ success` ALREADY RAN, so do NOT issue a" +
 	" write among them again; one marked `→ error` did not take effect."
 
-// shownAgainHeader introduces the calls the session above holds that a brief
-// lists again ([AfterSave.Shown]): each is one a call in another list of the
-// brief could be taken for, the same tool with arguments that read alike in
-// that call's line. That list's words, and the late calls', say a call shown
-// both above and in it is ONE call, made once; so a model that saw the told
-// call's like in the session could take the told call for it and lose it,
-// re-issuing nothing or reading it as a call that never ran.
+// shownAgainHeader introduces the calls the session above may show that a
+// brief lists again ([AfterSave.Shown]): each is one a call in another list of
+// the brief could be taken for. That list's words, and the late calls', say a
+// call shown both above and in it is ONE call, made once; so a model that saw
+// the told call's like in the session could take the told call for it and
+// lose it, re-issuing nothing or reading it as a call that never ran.
 //
-// WHAT IT CLAIMS, OF THE CALLS IT HEADS: each is one the save point holds
-// (internal/agent/runner's heldAt), never the call a person approved that the
-// brief's lead tells, which the engine made on the host and which runner keeps
-// off that side, so it says the session shows them, never that it lacks one;
-// and it says the call in the other list is one of its own, made as well, so
-// the two are never read as one call shown twice. "Shows" is the point's
-// claim, as exact as the point: the calls a Claude Code subagent made through
-// the bridge are held where its session was saved past them, while the main
-// thread a resumed session reads shows only the subagent's report of them. It
-// names neither list, which differ by path (the calls since a save point the
-// session may already show, the late calls), and needs neither: "another list
-// of this message" is true of both.
-const shownAgainHeader = "## Calls the session above shows, listed again" +
-	"\nThe session above shows each of these calls. Each is listed again because a call in another list" +
-	" of this message names the same tool with arguments that read alike here: that one is a call of its" +
-	" own, made as well as this one, never this one shown twice."
+// WHAT IT CLAIMS, OF THE CALLS IT HEADS: that the session MAY show each, never
+// that it shows each, and never that it lacks one. Each is one the save point
+// holds (internal/agent/runner's heldAt), never the call a person approved that
+// the brief's lead tells, which the engine made on the host and which runner
+// keeps off that side; but a point's claim is not what the session reads back:
+// the calls a Claude Code subagent made through the bridge are held where its
+// session was saved past them, while the main thread a resumed session reads
+// shows only the subagent's report of them. "May" is true of both. And it says
+// the call in the other list is one of its own, made as well, so the two are
+// never read as one call shown twice.
+//
+// WHY IT NAMES NO REASON BUT "COULD BE TAKEN FOR": runner lists a held call
+// again wherever it cannot rule out that a model takes the told call for it
+// (internal/agent/runner's readAlike), and that is the one reason true on every
+// path. Two calls' arguments reading alike in the told call's line is one
+// reason among several: a told call in flight, a call sealed for a person's
+// approval, one the record kept less than whole, with no digest or in text that
+// did not read back all read alike whatever their arguments, so words that
+// said the arguments read alike would be false of them. It names neither list,
+// which differ by path (the calls since a save point the session may already
+// show, the late calls), and needs neither: "another list of this message" is
+// true of both.
+const shownAgainHeader = "## Calls the session above may show, listed again" +
+	"\nThe session above may show each of these calls. Each is listed again because a call in another list" +
+	" of this message names the same tool and could be taken for it: that one is a call of its own, made as" +
+	" well as this one, never this one shown twice."
 
 // lateCallsHeader introduces the calls of the round that finished only after
 // the run that made them stopped waiting for them, and the ones still in flight
@@ -421,18 +430,19 @@ type AfterSave struct {
 	Interrupted bool
 
 	// Shown are calls of the round the session holds that a call told in Calls or
-	// Late could be taken for: the same tool, with arguments that read alike in
-	// the told call's line (internal/agent/runner's readAlike), as the prior-work
-	// ledger renders them within its budgets, under one read cap with the other
-	// lists', spent on these after every other (ledger.FormatCallGroups), "" for
-	// none, and "" too where the cap left it no call to list, never a count of
-	// reads alone. Told after Calls and before Late, in a section of their own
-	// ([shownAgainHeader]), whose words say the session shows each and that the
-	// told one is a call of its own: the words above Calls (where the session may
-	// already show them) and above Late say a call shown both in the session and
-	// in the list is ONE call, so a told call whose like the session shows could
-	// be read as that call and lost. Never set for a run that starts a session of
-	// its own ([CalledBefore]), which holds no call of the round.
+	// Late could be taken for (internal/agent/runner's readAlike: the same tool,
+	// and arguments that read alike in the told call's line or are not known
+	// whole), as the prior-work ledger renders them within its budgets, under one
+	// read cap with the other lists', spent on these after every other
+	// (ledger.FormatCallGroups), "" for none, and "" too where the cap left it no
+	// call to list, never a count of reads alone. Told after Calls and before
+	// Late, in a section of their own ([shownAgainHeader]), whose words say the
+	// session may show each and that the told one could be taken for it and is a
+	// call of its own: the words above Calls (where the session may already show
+	// them) and above Late say a call shown both in the session and in the list
+	// is ONE call, so a told call whose like the session shows could be read as
+	// that call and lost. Never set for a run that starts a session of its own
+	// ([CalledBefore]), which holds no call of the round.
 	Shown string
 
 	// Late are the calls of the round that finished only after the run that

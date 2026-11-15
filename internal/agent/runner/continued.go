@@ -704,8 +704,9 @@ func (r *Runner) checkoutName() string {
 // older build's append, which no record can name.
 //
 // AND A CALL THE SESSION HOLDS THAT A TOLD CALL COULD BE TAKEN FOR IS LISTED
-// AGAIN ([prompts.AfterSave.Shown]), under words that say the session shows it
-// and that the told one is a call of its own, made as well. The words over the
+// AGAIN ([prompts.AfterSave.Shown]), under words that say the session may show
+// it and that the told one could be taken for it and is a call of its own,
+// made as well. The words over the
 // calls after a point the session may already show, and over the late calls,
 // say a call shown both in the session and in the list is ONE call, made once:
 // so where a held call and a told call name one tool with arguments that read

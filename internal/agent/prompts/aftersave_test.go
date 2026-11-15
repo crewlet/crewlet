@@ -584,16 +584,21 @@ func TestEveryCountThatSaysTheTallyIsBelowHasItBelow(t *testing.T) {
 	}
 }
 
-// THE CALLS LISTED AGAIN ARE SAID TO BE THE ONES THE SESSION SHOWS. A call the
-// session holds that a told call could be taken for is listed again under words
-// that say the session shows it and that the told call is one of its own, made
-// as well, never that the session lacks it; after the calls since the save and
+// THE CALLS LISTED AGAIN ARE ONES A TOLD CALL COULD BE TAKEN FOR. A call the
+// session holds that a told call could be taken for is listed again under
+// words that say the session may show it, never that it shows it, since a
+// save point's claim is not what a resumed session reads back, and never that
+// the session lacks it; that say the told call could be taken for it, the one
+// reason true wherever runner lists it, never that their arguments read alike,
+// which is false of a told call in flight or a sealed one; and that the told
+// call is one of its own, made as well. After the calls since the save and
 // before the late calls, the owed reads and the held submission's line before
 // them all; and no section at all where none is listed again.
 //
-// Mutation: drop the section, place it anywhere else, or word it as calls the
-// session may lack, and this goes red.
-func TestTheCallsListedAgainAreSaidToBeTheOnesTheSessionShows(t *testing.T) {
+// Mutation: drop the section, place it anywhere else, word it as calls the
+// session may lack, say the session shows each, or say the arguments read
+// alike, and this goes red.
+func TestTheCallsListedAgainAreOnesAToldCallCouldBeTakenFor(t *testing.T) {
 	t.Parallel()
 	const (
 		owed   = "- slack_history({\"channel\":\"C0\"}) → success (read)"
@@ -611,14 +616,15 @@ func TestTheCallsListedAgainAreSaidToBeTheOnesTheSessionShows(t *testing.T) {
 	if got := CalledAfter(AfterSave{Late: late}); strings.Contains(got, shownAgainHeader) {
 		t.Errorf("a session with no call listed again is told the section:\n%s", got)
 	}
-	for _, said := range []string{"The session above shows each of these calls",
-		"names the same tool with arguments that read alike here", "a call of its own, made as well as this one",
-		"never this one shown twice"} {
+	for _, said := range []string{"## Calls the session above may show, listed again",
+		"The session above may show each of these calls", "names the same tool and could be taken for it",
+		"a call of its own, made as well as this one", "never this one shown twice"} {
 		if !strings.Contains(shownAgainHeader, said) {
 			t.Errorf("the heading of the calls listed again does not say %q:\n%s", said, shownAgainHeader)
 		}
 	}
-	for _, unsaid := range []string{"not in it", "may not show", "\u2014"} {
+	for _, unsaid := range []string{"shows each", "session above shows", "read alike", "not in it",
+		"may not show", "\u2014"} {
 		if strings.Contains(shownAgainHeader, unsaid) {
 			t.Errorf("the heading of the calls listed again says %q:\n%s", unsaid, shownAgainHeader)
 		}

@@ -17,12 +17,21 @@ import (
 // Where a call the session holds and a told call name one tool with arguments
 // that read alike in the told call's line, a model reading both can take the
 // told call for the held one and lose it. So the held call is listed again,
-// under words that say the session shows it and that the told call is one of
-// its own (runner's calledAfter, prompts.AfterSave.Shown).
+// under words that say the session may show it and that the told call could
+// be taken for it and is one of its own (runner's calledAfter,
+// prompts.AfterSave.Shown).
 
 // listedAgainHeading heads the calls the session holds that a brief lists
 // again (prompts.AfterSave.Shown).
-const listedAgainHeading = "## Calls the session above shows, listed again"
+const listedAgainHeading = "## Calls the session above may show, listed again"
+
+// listedAgainHeader is the whole header of the calls a brief lists again, its
+// heading and its words (prompts' shownAgainHeader), whatever the reason a
+// call is listed.
+const listedAgainHeader = listedAgainHeading +
+	"\nThe session above may show each of these calls. Each is listed again because a call in another list" +
+	" of this message names the same tool and could be taken for it: that one is a call of its own, made as" +
+	" well as this one, never this one shown twice."
 
 // digested is call as its run's call log admitted it, digested by its whole
 // arguments, as every call this build's log takes is: its arguments known
@@ -39,10 +48,7 @@ var openCodeKept = runner.SessionBasis{LaunchSeq: 1, CaptureSeq: 1, SessionID: "
 
 // listedAgainSection is the section that lists again the one held call
 // slack_post({"channel":"C1","text":"hi"}).
-const listedAgainSection = listedAgainHeading +
-	"\nThe session above shows each of these calls. Each is listed again because a call in another list" +
-	" of this message names the same tool with arguments that read alike here: that one is a call of its" +
-	" own, made as well as this one, never this one shown twice." +
+const listedAgainSection = listedAgainHeader +
 	"\n- slack_post({\"channel\":\"C1\",\"text\":\"hi\"}) → success"
 
 // lateHeadingLine heads the late calls (prompts' lateCallsHeader).
@@ -82,7 +88,7 @@ func post(text string, seq int) runner.BridgedCall {
 // call the session may already show, under words that say a call shown both in
 // the session and in the list is ONE call. So the held call is listed again,
 // after the calls since the save and before the late calls, under words that
-// say the session shows it; and no section of the brief is an empty one.
+// say the session may show it; and no section of the brief is an empty one.
 //
 // Mutation: list nothing again, and the brief tells the call once.
 func TestAHeldCallAToldCallCouldBeTakenForIsListedAgain(t *testing.T) {
@@ -300,6 +306,50 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 		}
 		if again, listed := sectionOf(brief, listedAgainHeading); !listed || !strings.Contains(again, want) {
 			t.Errorf("%s: the held call is not listed again:\n%s", name, brief)
+		}
+	}
+}
+
+// EVERY REASON A CALL IS LISTED AGAIN IS HEADED BY THE SAME WORDS. A held call
+// is listed again wherever the engine cannot rule out that a told call is
+// taken for it (runner's readAlike): their arguments read alike in the told
+// call's line, or either call's arguments are not known whole, in flight,
+// sealed for a person's approval, with no digest or recorded in text that did
+// not read back. The words over the section are one header on every such
+// path, and true on each: that the session may show each call listed, that
+// the told call could be taken for it, and that the told call is one of its
+// own. None says the session shows it, which a point's claim does not make
+// true of a session read back, or that their arguments read alike, which is
+// false of every case but the first.
+//
+// Mutation: word the header as calls the session shows, or as calls whose
+// arguments read alike, and every case goes red.
+func TestEveryReasonACallIsListedAgainIsHeadedByTheSameWords(t *testing.T) {
+	t.Parallel()
+	sealedHeld := post("hi", 1)
+	sealedHeld.Withheld = true
+	sealedTold := post("told", 2)
+	sealedTold.Withheld = true
+	unread := post("told", 2)
+	unread.Args, unread.ArgsUnread = nil, true
+	inFlight := []runner.BridgedCall{{Call: ledger.Call{Name: "slack_post", Result: runner.UnfinishedNote,
+		Failed: true, Digest: post("told", 2).Digest, Unfinished: true}, Seq: 2}}
+	for name, round := range map[string]runner.Resume{
+		"arguments that read alike": {Bridged: []runner.BridgedCall{post("hi", 1), post("hi", 2)}},
+		"a told call in flight":     {Bridged: []runner.BridgedCall{post("hi", 1)}, Unfinished: inFlight},
+		"a held call sealed":        {Bridged: []runner.BridgedCall{sealedHeld, post("told", 2)}},
+		"a told call sealed":        {Bridged: []runner.BridgedCall{post("hi", 1), sealedTold}},
+		"a told call with no digest": {Bridged: []runner.BridgedCall{post("hi", 1),
+			numbered("slack_post", map[string]any{"channel": "C1", "text": "told"}, 2, 2)}},
+		"a told call not read back": {Bridged: []runner.BridgedCall{post("hi", 1), unread}},
+	} {
+		brief := lostRelaunch(t, cutOffKept(1), round).Session.Brief
+		again, listed := sectionOf(brief, listedAgainHeading)
+		if !listed || !strings.HasPrefix(again, listedAgainHeader+"\n- slack_post(") {
+			t.Errorf("%s: the held call is not listed again under the header whole:\n%s", name, brief)
+		}
+		if n := strings.Count(brief, listedAgainHeading); n != 1 {
+			t.Errorf("%s: the brief carries %d sections of calls listed again, want one:\n%s", name, n, brief)
 		}
 	}
 }
