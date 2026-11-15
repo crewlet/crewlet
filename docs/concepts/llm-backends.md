@@ -4109,13 +4109,17 @@ covers:
 | Reviewing and delegations | `llm_review` and `llm_subagent` |
 | Routines and evaluations | `llm_auxiliary` and `llm_judge` |
 | Everything | the seat's `llm`, clearing the four satellites, so every job resolves to it |
-| Ask Crewlet | `assistant.llm`, company-wide, with no seats; the model must deny web tools |
+| Ask Crewlet | the head of `assistant.llm`, company-wide, with no seats, keeping its fallbacks; the model must deny web tools |
 
 The two pairs are paired by the model each wants: reviewing and the delegated
 work take a strong model, and the routines and the onboarding judge, each under
 a fixed deadline, a fast one, so one model chosen serves both jobs it writes.
-Each field is written as one model, never a chain: a fallback the field named
-before is dropped, and the review names every one it drops. Taking a model off
+A seat's field is written as one model, never a chain: a fallback the field
+named before is dropped, and the review names every one it drops. Ask Crewlet
+is the exception, because its chain is the only failover every person's
+questions have: choosing its model replaces the one it answers with first and
+keeps every fallback behind it, in order, and both *By job* and the review say
+which fallbacks stay. Taking a model off
 a job removes it from the field, and a field left empty is deleted, so the job
 resolves as an unset one does (the review shows where it lands). Routines
 and evaluations, whose jobs have a fixed deadline
