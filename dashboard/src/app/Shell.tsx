@@ -885,6 +885,10 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
       </PeekWidthRequest.Provider>
     </FillRequest.Provider>
   );
+  // A SCREEN THAT SCROLLS keeps room at its end for a toast, so its last row
+  // stands above the stack (`toastInset.tsx`); one that fills the window does
+  // not scroll to make room.
+  const room = filling ? null : <ToastRoom />;
 
   return (
     // THE STEPPER'S ORDER, published by whichever list the reader is on, so
@@ -1001,15 +1005,22 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
                   figures={figures}
                   runs={runs}
                 />
-                <SectionFrame.Body>{screen}</SectionFrame.Body>
+                {/* THE ROOM IS THE SECTION'S, inside the frame: the column
+                    sticks only as far as the frame reaches, so a room drawn
+                    after the frame pushed the column up by its height at the
+                    end of every scroll, and its rule stopped short of the
+                    sheet's foot by as much. */}
+                <SectionFrame.Body>
+                  {screen}
+                  {room}
+                </SectionFrame.Body>
               </SectionFrame>
             ) : (
-              screen
+              <>
+                {screen}
+                {room}
+              </>
             )}
-            {/* A SCREEN THAT SCROLLS keeps room at its end for a toast, so
-                its last row stands above the stack (`toastInset.tsx`); one
-                that fills the window does not scroll to make room. */}
-            {!filling && <ToastRoom />}
           </AppShell>
 
           {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
