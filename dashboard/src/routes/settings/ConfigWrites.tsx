@@ -71,6 +71,7 @@ import { DiffView } from "~/components/DiffView.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { configHunks } from "~/lib/configHunks.ts";
 import { configRefusalWords, type RefusalWords } from "~/lib/configRefusal.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { isUnsealedRefusal } from "~/protocol/configAnswer.ts";
 import {
@@ -220,13 +221,16 @@ export function RevertDialog({
   }
 
   const short = id.slice(0, 10);
+  // THE REVISION BY WHEN IT WAS WRITTEN, which the history lists it by: a
+  // clipped id ("1bc1f4ea-9") names nothing a person has seen.
+  const made = fmtDateTime(revision.created_at);
   const total = diff.data?.changes_total ?? 0;
   const shown = diff.data?.changes.length ?? 0;
   return (
     <Modal
       open
       size="lg"
-      title={`Revert to revision ${short}?`}
+      title={`Revert to the revision from ${made}?`}
       subtitle={revision.summary || "No summary was written"}
       icon={<RotateCcwGlyph size="sm" />}
       onClose={onClose}
