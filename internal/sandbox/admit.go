@@ -402,6 +402,13 @@ func (c *Coordinator) refireLocked(kept refusedCompletion) {
 // alone, such a re-fire announced the completion of a run already ended, and
 // a refusal of that announcement was made again on this node's timer with no
 // settle left to drop it.
+//
+// ITS LIFETIME IS THE COORDINATOR'S (c.life, ended by [Coordinator.Stop]),
+// never a caller's: a re-fire runs on a goroutine of its own after the
+// delivery, the signal or the seat's release that started it has returned,
+// so no caller's context reaches it.
+//
+//nolint:contextcheck // the coordinator's own lifetime (c.life), never a caller's; see above
 func (c *Coordinator) refire(kept refusedCompletion) {
 	ctx := c.life
 	if ctx.Err() != nil {
