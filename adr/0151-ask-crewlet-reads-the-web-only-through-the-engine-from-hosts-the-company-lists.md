@@ -27,7 +27,7 @@ does today.
   loopback or link-local target is reached.
 - **Bounds.** A page body of at most 2 MiB, 16 KiB of its text to the model,
   15 seconds, at most 8 fetches and 4 searches a turn, a query of at most 200
-  characters, and a ten-minute company-wide cache keyed by URL.
+  characters, and a ten-minute cache on each node keyed by URL.
 - **Trust.** Every page and result is fenced as external, which taints the
   turn. Each page read is a source record (the engine-built URL, its title,
   when it was read) that the answer cites; a link the model writes stays
@@ -36,8 +36,8 @@ does today.
   proposes changes only on the records the person's question or page
   selection named.
 - **Every call is visible.** Each URL and query is a step the person sees
-  before the answer, and each call's host and query length is recorded in
-  `assistant_turn_completed`.
+  before the answer and the conversation keeps, and `assistant_turn_completed`
+  records each step's tool and route as it does for every read.
 
 ## Why the obvious alternative is wrong
 
