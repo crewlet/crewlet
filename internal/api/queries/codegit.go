@@ -269,15 +269,17 @@ func (g gitAsk) floor(repo gitlet.RepoRef, revs ...*gitRev) statelog.Freshness {
 	return gitlet.RefsFloor(own, refs...)
 }
 
-// read asks q of repo's home Gitlet node as the caller, at the floor of revs —
+// read asks q of repo's home Gitlet node as the caller, at the floor of revs:
 // UNSTAMPED where every revision is a whole object id, and then answered
-// [Immutable] — refused here first where q is one no Gitlet node would take
-// ([ErrBadParams] in the domain's own words), and answered in this surface's
-// vocabulary ([codeRefusal]).
+// [Immutable], unless q reads the node's index of pushes
+// (gitlet.GitQuery.ReadsIndex), which is asked stamped and answered bare. It is
+// refused here first where q is one no Gitlet node would take ([ErrBadParams]
+// in the domain's own words), and answered in this surface's vocabulary
+// ([codeRefusal]).
 func (g gitAsk) read(ctx context.Context, repo gitlet.RepoRef, q gitlet.GitQuery, cursor string,
 	revs ...*gitRev) (CodePage, bool, error) {
 
-	immutable := true
+	immutable := !q.ReadsIndex()
 	for _, r := range revs {
 		immutable = immutable && r.whole()
 	}
@@ -428,7 +430,9 @@ func (s Sources) codeBlob(ctx context.Context, p Params) (any, error) {
 // codeLog answers `code_log`: the commits that changed `path` — or every
 // commit — newest first from `ref`, `limit` a page (1 to gitlet.MaxLogLimit,
 // gitlet.DefaultLogLimit where it names none), kept to those whose message
-// holds `grep` (a literal) and committed at or after `since` (RFC 3339).
+// holds `grep` (a literal), committed at or after `since` and before `until`
+// (each RFC 3339), and brought by a push of the seat `pushed_by` names (its
+// handle), the commits the node's index cannot judge counted as `unjudged`.
 func (s Sources) codeLog(ctx context.Context, p Params) (any, error) {
 	g, err := s.gitAskOf(ctx, p, "code_log")
 	if err != nil {
@@ -448,6 +452,12 @@ func (s Sources) codeLog(ctx context.Context, p Params) (any, error) {
 			return nil, fmt.Errorf("%w: since %q is not an RFC 3339 instant", ErrBadParams, since)
 		}
 	}
+	if until := strings.TrimSpace(p.String("until")); until != "" {
+		if l.Until, err = time.Parse(time.RFC3339Nano, until); err != nil {
+			return nil, fmt.Errorf("%w: until %q is not an RFC 3339 instant", ErrBadParams, until)
+		}
+	}
+	l.PushedBy = strings.TrimSpace(p.String("pushed_by"))
 	if p.Has("limit") {
 		n, whole := p.WholeInt("limit")
 		if !whole || n < 0 {

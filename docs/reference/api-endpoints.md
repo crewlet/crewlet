@@ -6120,7 +6120,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `code_refs` | `{name, prefix, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/refs`. A repository's live refs under a prefix — see [A repository's content](#a-repositorys-content), which says what the eight content questions answer and which answers never change |
 | `code_tree` | `{name, ref, path, path_b64, recursive, cursor, read_level, …}` | `GET /gitlet/repos/{name}/tree`. A directory at a revision, or every file below it |
 | `code_blob` | `{name, ref, path, path_b64, start_line, end_line, cursor, read_level, …}` | `GET /gitlet/repos/{name}/blob`. A file's lines at a revision, or a blob by its id |
-| `code_log` | `{name, ref, path, path_b64, grep, since, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/log`. The commits that changed a path, newest first |
+| `code_log` | `{name, ref, path, path_b64, grep, since, until, pushed_by, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/log`. The commits that changed a path, newest first |
 | `code_blame` | `{name, ref, path, path_b64, start_line, end_line, cursor, read_level, …}` | `GET /gitlet/repos/{name}/blame`. Which commit last changed each line of a file |
 | `code_diff` | `{name, base, head, paths, file, file_b64, renames, cursor, read_level, …}` | `GET /gitlet/repos/{name}/diff`. What changed between two revisions: the stat, or one file's patch |
 | `code_compare` | `{name, base, head, read_level, …}` | `GET /gitlet/repos/{name}/compare`. How two revisions relate, and what merging head into base would do |
@@ -10194,7 +10194,7 @@ implementation:
 | `GET /gitlet/repos/{name}/refs` | `code_refs` | Its live refs under `?prefix=` (`refs/heads/`, the default, `refs/tags/`, or a directory of either ending in `/`), by name, a page at a time (`?limit=` 1–1000, unset or `0` is 200, and `?cursor=`); the first page carries the repository in detail too |
 | `GET /gitlet/repos/{name}/tree` | `code_tree` | A directory's entries at `?ref=` — its root, or `?path=` (`?path_b64=` for a path's exact bytes) — or, with `?recursive=true`, every file below it, a page at a time (`?cursor=`) |
 | `GET /gitlet/repos/{name}/blob` | `code_blob` | A file's lines at `?ref=` and `?path=`, `?start_line=` to `?end_line=`, a page at a time; `?ref=` a blob's own id with no path reads that blob, and a path naming a directory answers its listing |
-| `GET /gitlet/repos/{name}/log` | `code_log` | The commits that changed `?path=` — or every commit — newest first from `?ref=`, each with its parents, its author, its two dates and its subject: `?limit=` a page (1–100, unset or `0` is 25), `?grep=` a literal its message must hold, `?since=` (RFC 3339) the oldest commit date kept |
+| `GET /gitlet/repos/{name}/log` | `code_log` | The commits that changed `?path=` (or every commit) newest first from `?ref=`, each with its parents, its author, its committer, and `engine_committed` where that is the engine's convention, its two dates and its subject: `?limit=` a page (1–100, unset or `0` is 25), `?grep=` a literal its message must hold, `?since=` (RFC 3339) the oldest commit date kept, `?until=` (RFC 3339) the instant every commit kept is before, `?pushed_by=` a seat's handle keeping the commits a push by it brought, with `unjudged` the commits the node's index of pushes could not judge; a history narrowed by `pushed_by` is never immutable, and an `until` that is not after `since` is `bad_params` |
 | `GET /gitlet/repos/{name}/blame` | `code_blame` | Which commit last changed each line of the file `?path=` at `?ref=`, `?start_line=` to `?end_line=` (at most 500 lines a read), a page at a time |
 | `GET /gitlet/repos/{name}/diff` | `code_diff` | What changed from `?base=` to `?head=` (both required): the per-file stat, narrowed to `?paths=` (repeated, at most 64), or one `?file=`'s patch (`?file_b64=`), with renames detected unless `?renames=false`, a page at a time |
 | `GET /gitlet/repos/{name}/compare` | `code_compare` | How `?base=` and `?head=` relate — their merge base, which contains which, how many commits each has that the other lacks, the first page of what head changed since the merge base — and `preview`, what merging head into base would do as the repository's home merges it: `state` `clean`, `conflict` (`conflicts` the paths, `conflicts_omitted` how many more) or `unknown`, a merge its home could not decide in a read's time — the same merge a change's [mergeability](../concepts/gitlet.md#mergeability) is recorded by. Where one commit contains the other (a fast-forward, or a head base already holds) that merge is `clean`, and is answered so from the comparison with no merge asked of the home |
@@ -10228,7 +10228,8 @@ beside the page: `resolved`, each ref by the parameter that named it — its
 whole name, its commit and where it last moved — the answering copy's
 `position`, and `pushed_by`, the push that introduced each commit the page
 names, with `coverage`, what the node's index of pushes holds. A comparison
-whose merge preview is `unknown` is answered bare too, and so is every
+whose merge preview is `unknown` is answered bare too, and so is a history
+narrowed by `pushed_by`, which reads the node's index of pushes, and every
 `code_commit`, whose changes and push move.
 
 A content question adds these refusals to the code reads':

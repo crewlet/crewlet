@@ -110,8 +110,8 @@ func (n historyNode) Run(_ context.Context, c gitproc.Cmd) (gitproc.Result, erro
 			}
 		}
 		for i := skip; i < n.commits; i++ {
-			record := strings.Join([]string{commitID(i), commitID(i + 1), "Ana", "ana@example.com", "1700000000",
-				"1700000000", n.subject}, "\x00") + "\x00\x00"
+			record := strings.Join([]string{commitID(i), commitID(i + 1), "Ana", "ana@example.com", "Crewlet",
+				"engine@seats.example", "1700000000", "1700000000", n.subject}, "\x00") + "\x00\x00"
 			if _, err := c.Stdout.Write([]byte(record)); err != nil {
 				return gitproc.Result{}, fmt.Errorf("%w: git log: %w", gitproc.ErrOutput, err)
 			}
@@ -122,7 +122,9 @@ func (n historyNode) Run(_ context.Context, c gitproc.Cmd) (gitproc.Result, erro
 		last, _ := strconv.Atoi(to)
 		for line := first; line <= min(last, n.lines); line++ {
 			group := fmt.Sprintf("%s %d %d 1\nauthor Ana\nauthor-mail <ana@example.com>\nauthor-time 1700000000\n"+
-				"author-tz +0000\nsummary %s\nfilename f.txt\n\t%s\n", commitID(line), line, line, n.subject, n.text)
+				"author-tz +0000\ncommitter Crewlet\ncommitter-mail <engine@seats.example>\n"+
+				"committer-time 1700000000\ncommitter-tz +0000\nsummary %s\nfilename f.txt\n\t%s\n", commitID(line),
+				line, line, n.subject, n.text)
 			if _, err := c.Stdout.Write([]byte(group)); err != nil {
 				return gitproc.Result{}, fmt.Errorf("%w: git blame: %w", gitproc.ErrOutput, err)
 			}

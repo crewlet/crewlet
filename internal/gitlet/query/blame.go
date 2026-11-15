@@ -44,16 +44,17 @@ import (
 //
 // Each line is a group header — `<id> <line in the commit> <line in the file>`,
 // and the group's length on its first line — then, the first time a commit is
-// named, its details (author, author-mail, author-time, summary, …,
-// filename), and the line itself after a TAB; a commit blamed under more than
-// one path names its `filename` on every group. So the parser keeps each
-// commit's details for the run and the path it was last named under, which is
-// every later line's of that commit. A filename is C-quoted as git quotes a
-// path that needs it, and read back exactly (unquoteC); a summary is the
-// message's first LINE, git's own "(<id>)" for an empty message answered as an
-// empty subject. Every field git leaves unbounded is held no further than the
-// most an answer carries, and described past its bound
-// (gitlet.MaxBlameLineBytes, gitlet.MaxLogSubjectBytes, gitlet.MaxLogPersonBytes).
+// named, its details (author, author-mail, author-time, committer,
+// committer-mail, summary, …, filename), and the line itself after a TAB; a
+// commit blamed under more than one path names its `filename` on every group.
+// So the parser keeps each commit's details for the run and the path it was
+// last named under, which is every later line's of that commit. A filename is
+// C-quoted as git quotes a path that needs it, and read back exactly
+// (unquoteC); a summary is the message's first LINE, git's own "(<id>)" for an
+// empty message answered as an empty subject. Every field git leaves unbounded
+// is held no further than the most an answer carries, and described past its
+// bound (gitlet.MaxBlameLineBytes, gitlet.MaxLogSubjectBytes,
+// gitlet.MaxLogPersonBytes).
 //
 // # Pages, and one run for the range
 //
@@ -411,10 +412,11 @@ func (l *blamedLine) line(path string) (gitlet.BlameLine, int) {
 // blameDetail is a commit's details as the porcelain named them the first
 // time it named the commit, and the path it last named the commit under.
 type blameDetail struct {
-	author, email heldText
-	authored      time.Time
-	summary       heldText
-	path          string
+	author, email             heldText
+	committer, committerEmail heldText
+	authored                  time.Time
+	summary                   heldText
+	path                      string
 	// answered is the commit as a page answers it, made from the details
 	// once their lines have all been read (commit), and growth what a code
 	// tool's sending adds to its encoding.
@@ -435,6 +437,11 @@ func (d *blameDetail) commit() (gitlet.BlameCommit, int) {
 	d.growth += g
 	c.AuthorEmail, c.AuthorEmailBytes, g = d.email.described(gitlet.MaxLogPersonBytes)
 	d.growth += g
+	c.Committer, c.CommitterBytes, g = d.committer.described(gitlet.MaxLogPersonBytes)
+	d.growth += g
+	c.CommitterEmail, c.CommitterEmailBytes, g = d.committerEmail.described(gitlet.MaxLogPersonBytes)
+	d.growth += g
+	c.EngineCommitted = engineCommitted(&d.committer, &d.committerEmail)
 	c.Subject, c.SubjectBytes, g = d.summary.described(gitlet.MaxLogSubjectBytes)
 	d.growth += g
 	if c.Subject != "" {
@@ -443,6 +450,7 @@ func (d *blameDetail) commit() (gitlet.BlameCommit, int) {
 	d.answered = &c
 	// The held bytes are answered for now: only the path is read again.
 	d.author, d.email, d.summary = heldText{}, heldText{}, heldText{}
+	d.committer, d.committerEmail = heldText{}, heldText{}
 	return c, d.growth
 }
 
@@ -584,6 +592,10 @@ func (s *blameStream) token() error {
 		s.value = &d.author
 	case "author-mail":
 		s.value = &d.email
+	case "committer":
+		s.value = &d.committer
+	case "committer-mail":
+		s.value = &d.committerEmail
 	case "summary":
 		s.value = &d.summary
 	}
@@ -594,7 +606,7 @@ func (s *blameStream) token() error {
 		// The address is held with its brackets, two bytes past its bound.
 		s.value.cap = gitlet.MaxLogPersonBytes
 		switch word {
-		case "author-mail":
+		case "author-mail", "committer-mail":
 			s.value.cap += len("<>")
 		case "summary":
 			s.value.cap = gitlet.MaxLogSubjectBytes
@@ -672,25 +684,32 @@ func (s *blameStream) detail() error {
 		}
 		d.path = p
 	case "author-mail":
-		// Git writes the address between angle brackets, which are git's
-		// and no part of it.
-		if h := &d.email; h.n == len(h.buf) && h.n >= 2 && h.buf[0] == '<' && h.buf[h.n-1] == '>' {
-			h.buf = append(h.buf[:0], h.buf[1:h.n-1]...)
-			h.n -= 2
-		} else if h.n == len(h.buf) {
-			return fmt.Errorf("%w: git blame wrote an author-mail %q not between brackets", errUnparsed,
-				truncated(h.buf))
-		} else {
-			// Too long to hold: its size, less the brackets, and none of
-			// its bytes, so it is described by that size alone.
-			h.buf, h.n = h.buf[:0], h.n-2
-		}
+		return unbracket(&d.email, s.key)
+	case "committer-mail":
+		return unbracket(&d.committerEmail, s.key)
 	case "summary":
 		// GIT'S STAND-IN FOR AN EMPTY MESSAGE is the commit's id in
 		// parentheses — never a message's, which could not name its own id.
 		if h := &d.summary; string(h.buf) == "("+s.cur.commit+")" {
 			h.reset()
 		}
+	}
+	return nil
+}
+
+// unbracket takes an address git wrote after key out of the angle brackets it
+// writes it between, which are git's and no part of it.
+func unbracket(h *heldText, key string) error {
+	switch {
+	case h.n == len(h.buf) && h.n >= 2 && h.buf[0] == '<' && h.buf[h.n-1] == '>':
+		h.buf = append(h.buf[:0], h.buf[1:h.n-1]...)
+		h.n -= 2
+	case h.n == len(h.buf):
+		return fmt.Errorf("%w: git blame wrote the %s %q not between brackets", errUnparsed, key, truncated(h.buf))
+	default:
+		// Too long to hold: its size, less the brackets, and none of its
+		// bytes, so it is described by that size alone.
+		h.buf, h.n = h.buf[:0], h.n-2
 	}
 	return nil
 }
