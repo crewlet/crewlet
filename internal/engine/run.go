@@ -2878,10 +2878,42 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 // this node is still running turns on. Two nodes, one seat, arrived at through
 // the graceful path.
 //
-// STOP is what ends an engine. A caller's context bounds how long Start itself
-// may take, not how long the engine runs.
+// STOP is what ends an engine, and a caller's context is not a bound on Start:
+// it is the context whose end is the caller's stop, as `crewlet run` hands it
+// its signal context. A context that ends while the node starts IS that stop
+// (below), so a caller that hands Start a deadline for the start alone stops
+// the engine it is starting when the deadline passes.
+//
+// # A context that ends while the node starts is a stop already decided
+//
+// The seat host's first placement pass runs inside the node's start, and it
+// runs each claimed seat's acquire hook inline, which has no total: MCP
+// children, the seat's memory hydrated, an interrupted executor recovered. A
+// caller's shutdown — and with it the drain — begins only once Start returns,
+// as `crewlet run`'s does on a signal, so a signal during that pass used to
+// cut nothing: the pass claimed the node's whole share onto a node already
+// stopping and ran every hook to its end. So the caller's context ending while
+// the node starts begins the host's drain at once ([node.Node.BeginDrain]): the
+// pass claims nothing more and cuts what it is establishing, on the stop's one
+// allowance ([Engine.stopping]). Start returns as before, once that drain has
+// begun, and the caller's shutdown follows. The loops stay detached: only a
+// context that ends DURING the node's start is read as a stop.
 func (e *Engine) Start(ctx context.Context) error {
-	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
+	cutDone := make(chan struct{})
+	stopCut := context.AfterFunc(ctx, func() {
+		defer close(cutDone)
+		e.node.BeginDrain(seat.WithStopBudget(context.WithoutCancel(ctx), e.stopping()))
+	})
+	err := e.node.Start(context.WithoutCancel(ctx))
+	// A DRAIN ALREADY BEGUN IS WAITED FOR, so a Start that returns after its
+	// context ended returns with the host draining, never a moment before it —
+	// and so the goroutine Start began ends inside Start, as every goroutine
+	// ends inside whatever started it: left running, its presence give-back
+	// could still be asking the store the caller's teardown is closing.
+	if !stopCut() {
+		<-cutDone
+	}
+	if err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
 	// THE ISSUE REPORTER'S SENDER, on every node. No singleton: each node sends
