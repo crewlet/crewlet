@@ -2602,7 +2602,11 @@ const (
 	// Add grant dialog, and the Inbox's grant of an agent's request) added
 	// 8,852 bytes, script and sheet, and took it to 6226.6 KiB (6,376,009
 	// bytes): 6227 KiB.
-	treeBudget = 5<<20 + 1141<<10
+	// The release train of an agent's grants (Cloudflare, then Scaleway, AWS
+	// and Google Cloud) and the settings changed in place, merged with main's
+	// audit follow-ups on kit 0.131.0, measures 6267.7 KiB (6,418,107 bytes),
+	// 11,535 bytes over the 6256.4 KiB of main it was built on: 6268 KiB.
+	treeBudget = 5<<20 + 1148<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
