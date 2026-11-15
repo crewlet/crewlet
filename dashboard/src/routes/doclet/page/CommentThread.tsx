@@ -31,11 +31,19 @@ export function PageCommentThread({
   title,
   comments,
   now,
+  hold,
 }: {
   pageID: string;
   title: string;
   comments: PageComment[];
   now: number;
+  /**
+   * The page's own reason it takes no comment (it is in the trash). The thread
+   * is then read only: no field at all, since the page says above why nothing
+   * changes, and a box anybody can type into and nobody can send is no
+   * answer to a page that is read only for everyone.
+   */
+  hold?: string | undefined;
 }) {
   const write = useAct("comment_on_page");
   const org = useOrg();
@@ -57,15 +65,20 @@ export function PageCommentThread({
       comments={rows}
       subject={title}
       now={now}
-      // ALWAYS GIVEN, so a reader who cannot write sees the field and why it
-      // is closed to them, rather than a thread that silently has no composer.
-      onSubmit={async (body, replyTo) => {
-        const result = await write.run(
-          { page: pageID, body, ...(replyTo ? { reply_to: replyTo.id } : {}) },
-          { done: `Commented on “${title}”` },
-        );
-        return !!result && (result.kind === "applied" || result.kind === "pending");
-      }}
+      // GIVEN WHENEVER THE PAGE TAKES A COMMENT, so a reader who cannot write
+      // sees the field and why it is closed to them, rather than a thread
+      // that silently has no composer. A page in the trash takes none.
+      onSubmit={
+        hold
+          ? undefined
+          : async (body, replyTo) => {
+              const result = await write.run(
+                { page: pageID, body, ...(replyTo ? { reply_to: replyTo.id } : {}) },
+                { done: `Commented on “${title}”` },
+              );
+              return !!result && (result.kind === "applied" || result.kind === "pending");
+            }
+      }
       disabledReason={write.access.can ? undefined : write.access.reason}
       busy={write.busy}
       hint="The page’s watchers are told, and anyone you mention."

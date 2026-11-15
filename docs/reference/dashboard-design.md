@@ -9276,7 +9276,8 @@ as a second `h1` gave a screen reader two page titles, and a body written from
   write as the seat they hold, and anything else is the login of a
   credential bound to no seat.
 - **A draft says so above its body**, in a neutral notice ("This page is a
-  draft": listed in its space, found by no search) with **Publish** beside it,
+  draft. Search leaves it out until it is published."; it is still listed in
+  its space, and its Kind line says "Draft" alone) with **Publish** beside it,
   a `save_page` carrying nothing but `status`. In the editor a draft's Save
   reads **Save draft** and **Publish** sits beside it, saving what is written
   and publishing it in one write; with nothing edited it sends the status
@@ -9295,7 +9296,12 @@ as a second `h1` gave a screen reader two page titles, and a body written from
   page in the trash is still read by its id and says so above its body
   ("This page is in the trash") with **Restore** (`POST …/restore`) and, for an
   administrator, **Delete permanently** (`POST …/purge`, the title typed back
-  and a reason, since nothing undoes it). A space lists what it holds in the
+  and a reason, since nothing undoes it). It READS AND TAKES NO CHANGE: Edit,
+  the watch and New sub-page are held with one reason ("It is in the trash.
+  Restore it first."), its comments read with no field under them, and the
+  engine refuses every write to it but a restore and a purge (a save, a label,
+  a watch, a move, a rename and every comment gesture). It offered all of
+  them, so a deleted page could be rewritten, followed and discussed. A space lists what it holds in the
   trash under its outline, each linking to the page. Who may rename, trash and
   restore (the page's creator, its space's lead, an administrator) is the
   engine's to decide, and its refusal is drawn in the dialog that pressed.

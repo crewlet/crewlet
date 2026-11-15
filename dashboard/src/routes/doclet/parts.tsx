@@ -192,7 +192,11 @@ export function PageTags({
   return (
     <>
       {status === "draft" && (
-        <Tag size="xs" variant="warning" title="Unfinished: listed here and found by no search">
+        <Tag
+          size="xs"
+          variant="warning"
+          title="Unfinished: search leaves it out until it is published"
+        >
           Draft
         </Tag>
       )}

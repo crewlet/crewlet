@@ -192,8 +192,7 @@ export function RenameDialog({ page, onClose }: { page: Page; onClose: () => voi
       }
     >
       <Text as="p" variant="body">
-        The title is the page’s address in its space. Links to the page keep working: they name it
-        by its id.
+        Links to the page keep working. No two pages in a space share a title.
       </Text>
       <FormField label="Title">
         {(field) => (
@@ -401,13 +400,21 @@ function TrashDialog({ page, onClose }: { page: Page; onClose: () => void }) {
       }
     >
       <Text as="p" variant="body">
-        No listing or search finds it until it is restored, from the page itself or its space’s
-        trash. What stays in the trash past the company’s trash term is deleted for good.
+        It leaves its space and search, and can’t be changed until it is restored, from the page or
+        its space’s trash. After the company’s trash term it is deleted for good.
       </Text>
       <KeyedNote answer={write.answer} />
     </Modal>
   );
 }
+
+/**
+ * Why nothing can be changed on a page in the trash: every control that would
+ * change it (Edit, the watch, a comment, a sub-page) is held with these words,
+ * and the engine refuses the write all the same. The trash is a deletion
+ * nobody has made final, so the page reads until it is restored.
+ */
+export const IN_TRASH = "It is in the trash. Restore it first.";
 
 /**
  * A page in the trash, said above its body: Restore, and Delete permanently
@@ -448,7 +455,8 @@ export function TrashedNotice({ page }: { page: Page }) {
           </span>
         }
       >
-        No listing or search finds it. Restore it to put it back where it was filed.
+        Nobody finds it in its space or in search, and it can’t be changed. Restore puts it back
+        where it was filed.
         <KeyedNote answer={restore.answer} />
       </Callout>
       {purging && <PurgeDialog page={page} onClose={() => setPurging(false)} />}

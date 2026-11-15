@@ -564,7 +564,10 @@ test("a draft says it is one and is published by one press, against the version 
   const notice = screen
     .getByText("This page is a draft")
     .closest(".crewlet-callout") as HTMLElement;
-  expect(notice.textContent).toMatch(/no search finds it until it is published/);
+  // IN A READER'S WORDS, said once: the Kind line says "Draft" and the notice
+  // what that means, where both spelled out the search exclusion.
+  expect(notice.textContent).toContain("Search leaves it out until it is published.");
+  expect(document.querySelector(".knowledge-props")!.textContent).toMatch(/KindDraft$/);
   fireEvent.click(within(notice).getByRole("button", { name: "Publish" }));
   await settle();
   expect(posted).toEqual([
@@ -745,6 +748,31 @@ test("a page in the trash offers Restore, and an admin Delete permanently with t
   expect(screen.queryByText("This page is in the trash")).toBeNull();
 });
 
+// A PAGE IN THE TRASH READS AND TAKES NO CHANGE. It offered Edit, the watch
+// eye and a working comment box, so a deleted page could be rewritten,
+// followed and discussed. Every control in the bar that changes it is held
+// with the one reason, the thread reads with no field, Restore stays the way
+// back, and History still reads. Mutation: draw the bar or the thread without
+// the page's hold and this fails.
+test("a page in the trash holds Edit, the watch and a sub-page with one reason, and takes no comment", async () => {
+  mount(<PageView id={ID} />, { page: detail({}, { status: "trashed" }), page_reads: reads() });
+  await settle();
+  const held = (el: HTMLElement) => el.getAttribute("aria-disabled") === "true";
+  const edit = screen.getByRole("button", { name: "Edit" });
+  expect(held(edit)).toBe(true);
+  expect(edit.getAttribute("title")).toBe("It is in the trash. Restore it first.");
+  expect(held(screen.getByRole("button", { name: /watching this page$|^Watch this page/i }))).toBe(
+    true,
+  );
+  // THE THREAD READS, and takes no comment: no field to type into.
+  expect(screen.queryByRole("textbox", { name: /Comment/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Comment" })).toBeNull();
+  expect(held(screen.getByRole("button", { name: /History/ }))).toBe(false);
+  await openMore(/^New sub-page/);
+  expect(posted).toEqual([]);
+  expect(location.hash).not.toContain("doclet/new");
+});
+
 // A MOVE OFFERS EVERY PAGE OF THE SPACE BUT THE PAGE AND WHAT IS UNDER IT,
 // which the engine refuses as a parent, and saves the parent with save_page.
 test("Move files the page under another page of its space, never under itself", async () => {
@@ -837,7 +865,7 @@ test("More stars the page, and offers the sub-page, a draft, History and the add
   ).toEqual([
     "Star this pagePinned on Doclet and kept in the sidebar",
     "New sub-page",
-    "Move back to draftNo search finds a draft",
+    "Move back to draftSearch leaves it out until it is published again",
     "Rename",
     "Labels",
     "MoveUnder another page of its space",
