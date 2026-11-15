@@ -4618,7 +4618,12 @@ An outbound link opens in a new tab with `rel="noopener noreferrer"`, and a
 screen reader is told it does; an in-app `#/` link does neither, because it
 *is* this application. A task
 list's checkboxes are disabled — this surface performs no writes, and a box a
-reader could tick would report a change that never reached the page.
+reader could tick would report a change that never reached the page. Each
+is named by its item's own line, so a screen reader says which item is
+ticked. A table wider than its column scrolls inside a group a keyboard can
+reach, named by its columns ("Table: Step, Owner"): a group rather than a
+region, because a region is a landmark, and a page with two tables of the
+same columns drew two landmarks nobody could tell apart.
 
 **A model's words are markdown too**, and this page used to say they were
 not. A round's speech and an executor's report were a `pre-wrap`

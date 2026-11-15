@@ -56,7 +56,7 @@ import {
 } from "@crewlethq/ui";
 import { ColourCode, InlineToken, LabelledLink, TokenRun } from "~/components/InlineToken.tsx";
 import { codeColour, inlineTokens, type LinkMode } from "./inlineTokens.ts";
-import { inlineText, plainText } from "./markdownText.ts";
+import { inlineText, plainText, taskItemText } from "./markdownText.ts";
 
 // --- sectioning ------------------------------------------------------------
 
@@ -809,6 +809,12 @@ function renderBlock(
                   // reached the page.
                   readOnly: true,
                   disabled: true,
+                  // NAMED BY ITS ITEM'S OWN WORDS, so a screen reader says
+                  // which item is ticked rather than "checkbox, checked" six
+                  // times down a checklist. A label element wrapping the item
+                  // would take its links and sublists inside a label, so the
+                  // name is the item's line as text.
+                  "aria-label": taskItemText(item.blocks) || "Checklist item",
                 }),
             // A TASK ITEM'S CONTENT IS ONE COLUMN beside its box. The box
             // and the content are a flex row, and without this wrapper every
@@ -828,14 +834,19 @@ function renderBlock(
     case "table":
       // THE WRAPPER SCROLLS a table wider than its column, so it is a tab stop
       // with a name: a scroller no keyboard can reach is a table no keyboard
-      // can read to its end, and "region" alone says nothing about which.
+      // can read to its end, and an unnamed group says nothing about which.
+      //
+      // A GROUP, NOT A REGION. A region is a landmark, and a page with two
+      // tables of the same columns (a runbook's two "Element, Text" tables)
+      // drew two landmarks of the same name, which a landmark list cannot
+      // tell apart; nor is a table a section of the page anybody jumps to.
       return createElement(
         "div",
         {
           key,
           className: "md-table",
           tabIndex: 0,
-          role: "region",
+          role: "group",
           "aria-label": `Table: ${block.head.map((cell) => plainText(cell)).join(", ")}`,
         },
         createElement(
