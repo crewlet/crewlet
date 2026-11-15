@@ -779,7 +779,9 @@ test("a seat's cell says its spend in tokens beside its ceiling", async () => {
   const row = screen
     .getAllByRole("row")
     .find((r) => r.textContent?.includes("PM") && r.querySelector(".budget-cell"))!;
-  const cells = [...row.querySelectorAll<HTMLElement>(".budget-cell .ceiling-value")].map((c) => c.textContent);
+  const cells = [...row.querySelectorAll<HTMLElement>(".budget-cell .ceiling-value")].map(
+    (c) => c.textContent,
+  );
   expect(cells[0]).toBe("950 of 1,000 tokens");
   expect(cells[1]).toBe("0 tokens · No ceiling");
 });

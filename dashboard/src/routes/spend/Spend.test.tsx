@@ -1232,7 +1232,8 @@ test("a window whose calls spent no tokens draws one empty state and counts the 
           other: bucket(0),
         },
       ],
-      by_group: p.group === "unit" ? [zero("core", "Core"), zero("devrel", "Developer Relations")] : [],
+      by_group:
+        p.group === "unit" ? [zero("core", "Core"), zero("devrel", "Developer Relations")] : [],
     }),
     viewer: VIEWER,
   });
