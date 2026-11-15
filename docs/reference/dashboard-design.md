@@ -9417,7 +9417,12 @@ as a second `h1` gave a screen reader two page titles, and a body written from
   drawn disabled with that reason (the engine subscribes it to nothing). More
   holds **Star this page**, **New sub-page**, **Publish** on a draft or
   **Move back to draft** on a published page, **Rename**, **Labels**,
-  **Move**, **Move to trash**, **History** and **Copy the page's address**. The star lives in More beside the page's other actions,
+  **Move**, **Move to trash**, **History** and **Copy the page's address**.
+  Move's places are a list inside its dialog (the kit's inline combobox, as
+  Artifacts' Move draws its folders): every page of the space but the page and
+  what is under it, and the space's top, filtered by words from a title or
+  path, the current place marked, so nothing the list draws covers the
+  dialog's Cancel and Move. The star lives in More beside the page's other actions,
   and the page tells the frame to draw none of its own (`useOwnStar`), so the
   action is never in two places at once.
 - **The properties**, minimal by rule: Space (with the pages above this one),
@@ -9517,7 +9522,10 @@ column), with Similar pages and Labels beside it, so a draft's lines are the
 lines its readers will see.
 
 - **File it in** names the space and the page it goes under (or the space's
-  top), and the writer can change either. **Start from** offers a blank page
+  top), and the writer can change either. Until a space is chosen, the row
+  says so beside the space field ("Choose a space first. Save as draft and
+  Publish file the page there."), the one hold nothing else on the page
+  shows. **Start from** offers a blank page
   or a template (a design for a work item, a runbook, a decision record); a
   template takes only an empty page, or one still holding the template it
   started from, so it never replaces writing.

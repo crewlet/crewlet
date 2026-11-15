@@ -747,6 +747,10 @@ test("a page in the trash offers Restore, and an admin Delete permanently with t
 
 // A MOVE OFFERS EVERY PAGE OF THE SPACE BUT THE PAGE AND WHAT IS UNDER IT,
 // which the engine refuses as a parent, and saves the parent with save_page.
+// THE LIST IS THE DIALOG'S BODY, on screen in the dialog under its field, so
+// nothing it draws covers the dialog's own Cancel and Move: a popup picker's
+// panel opened down over the foot. Mutation: put the popup Select back, and
+// no option is in the dialog until a trigger is pressed.
 test("Move files the page under another page of its space, never under itself", async () => {
   const pages = [
     {
@@ -769,13 +773,27 @@ test("Move files the page under another page of its space, never under itself", 
   await settle();
   await openMore(/^Move(?! back| to)/);
   const dialog = screen.getByRole("dialog", { name: "Move “Provisioner runbook”" });
-  // THE PICKER BY ITS NAME, whatever role its searchable trigger takes.
-  fireEvent.click(dialog.querySelector('[aria-label="The page it goes under"]') as HTMLElement);
   await settle();
-  const offered = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+  const list = within(dialog).getByRole("listbox", { name: "The page it goes under" });
+  const offered = within(list)
+    .getAllByRole("option")
+    .map((o) => o.textContent ?? "");
   expect(offered.some((o) => o.includes("Under it"))).toBe(false);
-  // A SEARCHABLE PICKER TAKES THE PRESS ON mousedown, as a combobox does.
-  fireEvent.mouseDown(screen.getByRole("option", { name: /Onboarding/ }));
+  expect(offered.some((o) => o.includes("Top of the space"))).toBe(true);
+  // WHERE IT IS NOW IS MARKED, and is what Move is held on.
+  expect(within(list).getByRole("option", { name: /Runbooks/ }).textContent).toContain("Current");
+  expect(within(dialog).getByRole("button", { name: "Move" }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+  // THE FIELD FILTERS THE LIST by words from a title.
+  fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "onboard" } });
+  await settle();
+  expect(
+    within(list)
+      .getAllByRole("option")
+      .map((o) => o.textContent ?? ""),
+  ).toEqual(["Onboarding"]);
+  fireEvent.click(within(list).getByRole("option", { name: /Onboarding/ }));
   await settle();
   fireEvent.click(within(dialog).getByRole("button", { name: "Move" }));
   await settle();
