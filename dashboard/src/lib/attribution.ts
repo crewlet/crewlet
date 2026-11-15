@@ -54,6 +54,7 @@ import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import type { WorkChange } from "~/protocol/index.ts";
 import { CHANGE_FIELDS } from "~/contract/attribution.ts";
 import { ASSIST_CREDENTIAL_PREFIX } from "~/contract/identity.ts";
+import { tierATokenOf } from "~/lib/login.ts";
 
 /** The author kinds the wire carries, as `SetBy` spells them. */
 const KINDS = new Set(["agent", "human", "operator", "system"]);
@@ -137,16 +138,78 @@ export function authorWords(name: string, operatorId: string | null | undefined)
 }
 
 /**
- * A recorded author and the credential beside it, as one line a person reads:
- * `jane.doe (through pat:…)`, or the author alone where [throughOf] has
- * nothing to add. Empty where no author was recorded, which a caller renders
- * as its own "nobody recorded" rather than as a name.
+ * The credential classes the engine names in `operator_id` (`iam.ActorFor`)
+ * by an id, as the Account page names them: a personal access token
+ * (`pat:<id>`) and a signed-in session (`session:<lineage>`).
  */
-export function authorLabel(author: string, operatorId: string | undefined): string {
-  if (!author) return "";
-  if (assisted(operatorId)) return authorWords(author, operatorId);
+const CREDENTIAL_KINDS: Readonly<Record<string, string>> = {
+  pat: "personal access token",
+  session: "signed-in session",
+};
+
+/**
+ * A credential named by its class and an id, read apart: what KIND it is in
+ * words ("personal access token") and the id, which names nothing a person
+ * knows and is the screen's to give behind a copy control. Null for any
+ * other credential: a Tier A token's login, which is a name, or the
+ * assistant's grant ([credentialWords]).
+ */
+export function credentialOf(operatorId: string): { kind: string; id: string } | null {
+  const colon = operatorId.indexOf(":");
+  const kind = colon > 0 ? CREDENTIAL_KINDS[operatorId.slice(0, colon)] : undefined;
+  return kind ? { kind, id: operatorId.slice(colon + 1) } : null;
+}
+
+/**
+ * A credential as a sentence says it: "a personal access token", "a signed-in
+ * session", never the id (`pat:01a1dc39-…`, `session:01a1dc41-…`), which
+ * names nothing a person knows; a Tier A token by its own name ("the API
+ * token founder"); the assistant as itself.
+ */
+export function credentialWords(operatorId: string): string {
+  if (assisted(operatorId)) return ASSISTANT;
+  const credential = credentialOf(operatorId);
+  if (credential) return `a ${credential.kind}`;
+  const token = tierATokenOf(operatorId);
+  return token ? `the API token ${token}` : operatorId;
+}
+
+/**
+ * A recorded author and the credential beside it, as one line a person reads:
+ * `jane.doe (through a personal access token)`, or the author alone where
+ * [throughOf] has nothing to add. Empty where no author was recorded, which a
+ * caller renders as its own "nobody recorded" rather than as a name.
+ *
+ * `author` is the label the record carries, which is what the credential is
+ * compared with (a Tier A token acting as itself is recorded under its own
+ * login, and is not "through" itself); `name` is what the reader is told it
+ * is, where the caller has a better name for it than the label (a seat's name
+ * on the chart, a login in words, [nameOfIn] in `lib/seats.ts`).
+ */
+export function authorLabel(
+  author: string,
+  operatorId: string | undefined,
+  name: string = author,
+): string {
+  const parts = authorParts(author, operatorId, name);
+  return parts.through ? `${parts.name} (${parts.through})` : parts.name;
+}
+
+/**
+ * [authorLabel]'s two halves apart: who, and the credential they wrote through
+ * ("through a personal access token"), empty where there is none. A table cell
+ * draws the second under the first, where a narrow column cut the one line
+ * at "jane-founder (through s…".
+ */
+export function authorParts(
+  author: string,
+  operatorId: string | undefined,
+  name: string = author,
+): { name: string; through: string } {
+  if (!author) return { name: "", through: "" };
+  if (assisted(operatorId)) return { name: authorWords(name, operatorId), through: "" };
   const through = throughOf(author, operatorId);
-  return through ? `${author} (through ${through})` : author;
+  return { name, through: through ? `through ${credentialWords(through)}` : "" };
 }
 
 /**

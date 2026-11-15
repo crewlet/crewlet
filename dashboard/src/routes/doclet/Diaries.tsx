@@ -13,13 +13,21 @@
  * # A row answers, or says why it cannot
  *
  * A seat's memory is kept current only on the node holding it, so a row is
- * one of three things: counted by its holder ("node-2"), held by nobody (no
- * copy anywhere is current, so nothing is counted), or not answered — the
- * holder was silent, its answer could not be read, or it is still taking the
- * seat — with that reason where the counts would be. A row of zeros for the
- * last would read as an agent that remembers nothing. The answer's
- * `coverage` names every holder that did not answer, in the callout every
- * fleet answer draws.
+ * one of three things: counted by its holder, held by nobody (no copy
+ * anywhere is current, so nothing is counted), or not answered (the holder
+ * was silent, its answer could not be read, or it is still taking the seat),
+ * with that reason where the counts would be. A row of zeros for the last
+ * would read as an agent that remembers nothing. The answer's `coverage`
+ * names every holder that did not answer, in the callout every fleet answer
+ * draws.
+ *
+ * # No node names in a person's table
+ *
+ * Which node holds an agent is the fleet's business (Settings › Nodes and the
+ * seat's own page), not what a reader of diaries is after. A "Runs on" column
+ * of raw node names, the same name on every row of a one-node company, was
+ * the column a narrow screen kept longest while it hid Skills; each diary
+ * opened on "Runs on <node>." too.
  *
  * # One agent's page is its holder's answer
  *
@@ -193,19 +201,6 @@ export function Diaries() {
                 sortValue: (r) => (uncounted(r) ? null : r.skills_total),
                 cell: (r) => count(r, r.skills_total),
               },
-              {
-                key: "held",
-                header: "Runs on",
-                shrink: true,
-                drop: 4,
-                sortValue: (r) => r.held_by,
-                cell: (r) =>
-                  r.held_by === "none" ? (
-                    <span className="muted">No node</span>
-                  ) : (
-                    <span className="mono t-cell">{r.held_by}</span>
-                  ),
-              },
             ]}
           />
         </Card>
@@ -253,18 +248,14 @@ export function Diary({ handle }: { handle: string }) {
   }
   return (
     <div className="col gap-4">
-      {data && data.held_by !== "none" && (
-        <PageNote>
-          {heldWords(data.held_by)}
-          {data.latest_reflection && (
-            <> Last written {relTime(data.latest_reflection.created_at, now)}.</>
-          )}
-        </PageNote>
+      {/* WHEN IT LAST WROTE, and not where it runs: see the module doc. */}
+      {data && data.held_by !== "none" && data.latest_reflection && (
+        <PageNote>Last written {relTime(data.latest_reflection.created_at, now)}.</PageNote>
       )}
       {!seat && org && (
         <Callout variant="info" icon={<CircleAlertGlyph size="md" />}>
-          No agent is called <InlineCode>{handleLabel(handle)}</InlineCode>. Showing memory left
-          under that handle.
+          No agent is called <InlineCode close=".">{handleLabel(handle)}</InlineCode> Showing memory
+          left under that handle.
         </Callout>
       )}
       {/* A DIARY IN FLIGHT IS A SKELETON, drawn beside `QueryState`, which
@@ -285,13 +276,19 @@ export function Diary({ handle }: { handle: string }) {
               <DiaryCard memory={data} heading="h2" />
               <EpisodesCard memory={data} now={now} heading="h2" />
               <p className="t-caption">
-                <a
-                  className="t-link prose-link"
-                  href={href(["company", "org", "seats", handle], { tab: "memory" })}
-                >
-                  {plural(data.skills_total, "learned skill")} and{" "}
-                  {plural(data.counterparties_total, "colleague")} remembered
-                </a>
+                {/* A LINK ONLY TO SOMETHING: with nothing learned and nobody
+                    remembered, the seat's memory has nothing more to show. */}
+                {data.skills_total === 0 && data.counterparties_total === 0 ? (
+                  "No learned skills or remembered colleagues yet."
+                ) : (
+                  <a
+                    className="t-link prose-link"
+                    href={href(["company", "org", "seats", handle], { tab: "memory" })}
+                  >
+                    {plural(data.skills_total, "learned skill")} and{" "}
+                    {plural(data.counterparties_total, "colleague")} remembered
+                  </a>
+                )}
               </p>
             </>
           )

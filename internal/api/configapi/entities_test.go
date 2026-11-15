@@ -486,17 +486,24 @@ func TestAnEntityReadRoundTripsStraightBackIntoTheWrite(t *testing.T) {
 	}
 
 	// STRAIGHT BACK, unmodified and unwrapped, guarded by the tag the read
-	// gave. Anything less than 201 means the two halves still disagree.
+	// gave, and answered as the entity it already is: `200 changed: false`,
+	// storing nothing, under the same tag. A refusal means the two halves
+	// still disagree, and a stored revision that they differ, which for a
+	// read sent back means the mask was taken for a value.
 	back := s.do(t, http.MethodPut, "/config/mcp-servers/notion", res.Body.String(),
 		map[string]string{
 			"X-Summary": "round trip", "If-Match": res.Header().Get("ETag"),
 		})
-	if back.Code != http.StatusCreated {
-		t.Fatalf("the entity a GET returned was refused by its own PUT = %d: %s",
-			back.Code, back.Body.String())
+	if back.Code != http.StatusOK || decode(t, back)["changed"] != false {
+		t.Fatalf("the entity a GET returned, sent back by its own PUT = %d: %s, "+
+			"want 200 changed: false", back.Code, back.Body.String())
+	}
+	if tag := back.Header().Get("ETag"); tag != res.Header().Get("ETag") {
+		t.Errorf("the unchanged entity answered ETag %s, want the read's %s",
+			tag, res.Header().Get("ETag"))
 	}
 	// AND THE CREDENTIAL SURVIVED IT. A round trip that stored the mask
-	// would answer 201 and break the server hours later, naming nothing.
+	// would break the server hours later, naming nothing.
 	if document := s.activeDocument(t); !strings.Contains(document, "notion-literal") {
 		t.Errorf("the round trip replaced the credential with its mask:\n%s", document)
 	}

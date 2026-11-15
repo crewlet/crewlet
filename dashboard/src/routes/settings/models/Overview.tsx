@@ -37,6 +37,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, listed, plural } from "~/lib/format.ts";
+import { UNSPENT_CALLS, callsWords } from "~/lib/spend.ts";
 import { CATEGORY_JOBS, CATEGORY_ORDER, SEAT_JOBS, everythingSeats } from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { Alarms } from "./Alarms.tsx";
@@ -332,9 +333,16 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                 icon={<CoinsGlyph size="xs" />}
                 label="Tokens, 7 days"
                 value={fmtCount(usage.tokens)}
+                // WHICH CALLS: every call made, refused and failed ones included,
+                // as Token spend counts them; said where they spent nothing.
                 sub={
-                  usage.calls === 0 ? "no calls in 7 days" : `over ${plural(usage.calls, "call")}`
+                  usage.calls === 0
+                    ? "no calls in 7 days"
+                    : usage.tokens > 0
+                      ? `over ${plural(usage.calls, "call")}`
+                      : callsWords(usage.calls, usage.tokens)
                 }
+                title={usage.calls > 0 && usage.tokens <= 0 ? UNSPENT_CALLS : undefined}
               />
             ) : null}
           </StatGroup>

@@ -46,7 +46,6 @@ import {
   FormField,
   InlineCode,
   Input,
-  Modal,
   Tag,
   Text,
   type SelectOption,
@@ -58,6 +57,7 @@ import {
   TableDateCell,
   type DataGridColumn,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 
 import { QueryState } from "~/components/common.tsx";
@@ -519,11 +519,17 @@ export function UnboundRemedy({ to = "get work here" }: { to?: string }) {
   return (
     <>
       To {to}, bind this account to an open seat with{" "}
-      <InlineCode whole>{"crewlet iam bind <id> <seat>"}</InlineCode>. Its id is listed by{" "}
-      <InlineCode whole>
+      <InlineCode close="." whole>
+        {"crewlet iam bind <id> <seat>"}
+      </InlineCode>{" "}
+      Its id is listed by{" "}
+      <InlineCode close="," whole>
         {login ? `crewlet iam people -q ${login}` : "crewlet iam people"}
+      </InlineCode>{" "}
+      and the open seats by{" "}
+      <InlineCode close="." whole>
+        crewlet iam seats -unheld
       </InlineCode>
-      , and the open seats by <InlineCode whole>crewlet iam seats -unheld</InlineCode>.
     </>
   );
 }

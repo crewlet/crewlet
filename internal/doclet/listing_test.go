@@ -385,6 +385,49 @@ func TestThePageFeedNarrowsByPageContainerAndKind(t *testing.T) {
 	}
 }
 
+// A CHANGE SAYS WHERE ITS PAGE STANDS NOW, beside its current title: a page
+// in the trash keeps its title, so a reader leading with the newest change
+// cannot tell it from a live one by anything else.
+func TestAPageChangeCarriesItsPagesCurrentStatus(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	live := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "prose"})
+	draft := r.write(author("jane"), doclet.NewPage{
+		Title: "Rotation", Body: "prose", Status: doclet.StatusDraft,
+	})
+	binned := r.write(author("jane"), doclet.NewPage{Title: "Old notes", Body: "prose"})
+	r.drain()
+	if _, err := r.store.Trash(t.Context(), author("jane"), binned.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	r.drain()
+
+	want := map[string]doclet.Status{
+		live.Page.ID:   doclet.StatusPublished,
+		draft.Page.ID:  doclet.StatusDraft,
+		binned.Page.ID: doclet.StatusTrashed,
+	}
+	// Both statements: one arm, and the merge of one arm per author kind.
+	for _, q := range []doclet.PageActivityQuery{{}, {
+		ActorKinds: []doclet.AuthorKind{doclet.AuthorAgent, doclet.AuthorHuman},
+	}} {
+		feed := r.activity(q)
+		seen := map[string]bool{}
+		for _, change := range feed.Changes {
+			seen[change.PageID] = true
+			if got := change.Status; got != want[change.PageID] {
+				t.Errorf("%v: a %s change of %q says status %q, want %q",
+					q.ActorKinds, change.Kind, change.Title, got, want[change.PageID])
+			}
+		}
+		for id := range want {
+			if !seen[id] {
+				t.Fatalf("%v: the feed carries no change of page %s", q.ActorKinds, id)
+			}
+		}
+	}
+}
+
 // AND BY WHO WAS WRITING, which is the fourth narrowing and the one an audit
 // is made of.
 //

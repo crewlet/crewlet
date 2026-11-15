@@ -96,7 +96,7 @@ export function GrantRequired({
       description={
         reader ? (
           <>
-            Signed in as <InlineCode>{reader}</InlineCode>. Ask an admin for access.
+            Signed in as <InlineCode close=".">{reader}</InlineCode> Ask an admin for access.
             {also ? <> {also}</> : null}
           </>
         ) : (

@@ -76,6 +76,7 @@ import {
   CopyGlyph,
   DatabaseGlyph,
   ExternalLinkGlyph,
+  FolderInputGlyph,
   ImageGlyph,
   InfoGlyph,
   PencilGlyph,
@@ -133,6 +134,7 @@ import { HistoryTab } from "./HistoryTab.tsx";
 import { AssetsPanel } from "./AssetsPanel.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { DetailsPanel } from "./DetailsPanel.tsx";
+import { MoveDialog } from "./MoveDialog.tsx";
 import { PurgeControl, SettingsTab, TrashDialog } from "./SettingsTab.tsx";
 import {
   KindControlsSink,
@@ -562,7 +564,10 @@ function Loaded({
   );
   const renameAccess = useArtifactAccess({ role: "editor", held: detail.role });
   const trashAccess = useArtifactAccess({ role: "owner", held: detail.role, person: true });
+  // FILING IT IS THE CARD MENU'S MOVE TO… and Details' Move…, under one rule.
+  const fileAccess = useArtifactAccess({ app: true, role: "editor", held: detail.role });
   const [renaming, setRenaming] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [trashing, setTrashing] = useState(false);
   const [kind, setKind] = useState<KindControls | null>(null);
@@ -679,6 +684,21 @@ function Loaded({
           }
         : { onSelect: () => {}, disabled: true, description: renameAccess.reason }),
     },
+    // THE SAME ROW THE CARD'S MENU OFFERS, so where an artifact is kept is
+    // changed from the artifact itself too, not only from the gallery. A
+    // trashed artifact goes nowhere until it is restored.
+    ...(detail.status === "live"
+      ? [
+          {
+            key: "move",
+            label: "Move to…",
+            icon: <FolderInputGlyph size="sm" />,
+            ...(fileAccess.can
+              ? { onSelect: () => setMoving(true) }
+              : { onSelect: () => {}, disabled: true, description: fileAccess.reason }),
+          },
+        ]
+      : []),
     ...(hasFiles
       ? [
           {
@@ -989,6 +1009,16 @@ function Loaded({
         onChanged={refetch}
       />
       <TrashDialog detail={detail} open={trashing} onClose={() => setTrashing(false)} />
+      {moving && (
+        <MoveDialog
+          subject={{ kind: "artifacts", items: [detail] }}
+          onClose={() => setMoving(false)}
+          onMoved={() => {
+            setMoving(false);
+            refetch();
+          }}
+        />
+      )}
     </div>
   );
 }

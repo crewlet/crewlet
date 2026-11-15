@@ -81,7 +81,7 @@ func catalogue() []events.Payload {
 		IAMPasswordResetIssued{}, IAMPasswordReset{},
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 		// operator.go
-		OperatorActed{}, BackupRequested{}, ModelActed{},
+		OperatorActed{}, OwnRecordMarked{}, BackupRequested{}, ModelActed{},
 		// operatortools.go
 		OperatorToolsChanged{},
 		// mcpservers.go
@@ -162,6 +162,7 @@ var wireTypes = []string{
 	"notification_skipped",
 	"notifications_coalesced",
 	"operator_acted",
+	"own_record_marked",
 	"operator_tools_changed",
 	"org_started",
 	"org_stopped",
@@ -320,7 +321,15 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 			// Every field is populated, so omitempty drops nothing: a key count
 			// below the field count means two fields share a tag, which
 			// encoding/json resolves by silently emitting neither.
-			fields := reflect.TypeOf(prototype).NumField()
+			// AN EMBEDDED RECORD'S FIELDS ARE THE PAYLOAD'S OWN, flattened
+			// on the wire as encoding/json flattens them (OwnRecordMarked
+			// is OperatorActed's fields under its own type).
+			fields := 0
+			for _, f := range reflect.VisibleFields(reflect.TypeOf(prototype)) {
+				if !f.Anonymous {
+					fields++
+				}
+			}
 			if len(keys) != fields {
 				t.Errorf("%d JSON keys for %d fields — a duplicate or missing tag",
 					len(keys), fields)
@@ -365,6 +374,7 @@ var wireTags = map[string][]string{
 	"agent_terminated":          {"agent_handle", "agent_id", "reason", "role"},
 	"config_revision_activated": {"created_by", "created_by_kind", "operator_id", "revision_id", "revision_source", "revision_summary"},
 	"operator_acted":            {"actor", "actor_kind", "assistant", "conversation_id", "failed", "operator_id", "outcome", "position", "refusal", "repo", "request_id", "tool", "transport"},
+	"own_record_marked":         {"actor", "actor_kind", "assistant", "conversation_id", "failed", "operator_id", "outcome", "position", "refusal", "repo", "request_id", "tool", "transport"},
 	"backup_requested":          {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"model_acted": {"action", "actor", "actor_kind", "dry_run", "failed", "names",
 		"operator_id", "outcome", "provider_key", "refusal", "revision_id", "status"},
@@ -376,7 +386,7 @@ var wireTags = map[string][]string{
 	"delegated_review":              {"agent_handle", "agent_id", "at", "held_launch", "held_turn", "kind", "panel", "request", "requester", "rule"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"requested_by", "schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
-	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label", "writer"},
+	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "sender_name", "source_event_type", "subject", "subject_is_label", "writer"},
 	"turn_trigger_skipped":          {"agent_handle", "agent_id", "disposition", "reason", "trigger_id", "trigger_type", "wake"},
 	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},

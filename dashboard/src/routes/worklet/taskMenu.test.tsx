@@ -25,6 +25,7 @@ import type { WorkSummary } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+import { Router } from "~/app/router.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -43,7 +44,13 @@ const JANE = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["remove_work_item", "restore_work_item", "move_work_item"],
+  acts: [
+    "remove_work_item",
+    "restore_work_item",
+    "move_work_item",
+    "merge_work_item",
+    "set_priorities",
+  ],
 };
 
 /** A colleague with Worklet and no admin: the trash is theirs, a purge is not. */
@@ -76,6 +83,8 @@ let asked: { what: string; params: Record<string, unknown> }[];
 let parents: string[];
 /** What each tool answers, by name; the default is an applied write. */
 let replies: Record<string, { status: number; body: unknown }>;
+/** The reader's own stored priorities, and the record's version. */
+let priorities: { ids: string[]; version: number };
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
@@ -83,6 +92,7 @@ beforeEach(() => {
   asked = [];
   parents = [];
   replies = {};
+  priorities = { ids: ["eng-9"], version: 4 };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
@@ -166,6 +176,30 @@ function mount(
       const items = [ENG1, ENG2].filter((r) => parents.includes(r.id));
       return Promise.resolve({ items, complete: true });
     }
+    if (what === "work_person") {
+      return Promise.resolve({
+        handle: "jane",
+        priorities: priorities.ids,
+        version: priorities.version,
+        max_snooze_ahead: 0,
+        held: true,
+      });
+    }
+    if (what === "work_search") {
+      return Promise.resolve({
+        available: true,
+        hits: [ENG1, ENG2].map((r, i) => ({
+          id: r.id,
+          key: r.key,
+          title: r.title,
+          project: r.project,
+          type: r.type,
+          status: r.status,
+          priority: "normal",
+          rank: i + 1,
+        })),
+      });
+    }
     return Promise.resolve({});
   }) as typeof socket.query;
   render(
@@ -174,7 +208,9 @@ function mount(
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
           <ViewerProvider>
-            <Rows rows={props.rows ?? [ENG1]} picked={props.picked} inTrash={props.inTrash} />
+            <Router>
+              <Rows rows={props.rows ?? [ENG1]} picked={props.picked} inTrash={props.inTrash} />
+            </Router>
           </ViewerProvider>
         </ClientContext.Provider>
       </LayerHost>
@@ -416,6 +452,119 @@ describe.each([
     expect(
       screen.getByRole("button", { name: /Move 1 to trash/ }).getAttribute("aria-disabled"),
     ).toBe("true");
+    expect(acts()).toEqual([]);
+  });
+});
+
+describe("merging a task into another", () => {
+  afterEach(() => {
+    location.hash = "#/";
+  });
+
+  test("the survivor is found by search, the subtasks move, and the reader lands on it", async () => {
+    mount();
+    await settle();
+    await press("ENG-1", "Merge into");
+    const merge = () => screen.getByRole("button", { name: /^Merge$/ });
+    expect(merge().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.change(screen.getByRole("combobox", { name: "Find the task it merges into" }), {
+      target: { value: "build keys" },
+    });
+    await settle();
+    // THE TASK ITSELF IS NOT OFFERED: a merge into itself is refused.
+    expect(screen.queryByRole("option", { name: /Retry PXE boot/ })).toBeNull();
+    fireEvent.click(screen.getByRole("option", { name: /Rotate the build keys/ }));
+    await settle();
+    expect(screen.getByRole("checkbox", { name: /Move its subtasks onto ENG-2/ })).toBeTruthy();
+    fireEvent.click(merge());
+    await settle();
+    expect(acts()).toEqual([
+      { tool: "merge_work_item", args: { item: "ENG-1", into: "ENG-2", move_subtasks: true } },
+    ]);
+    expect(await screen.findAllByText("Merged ENG-1 into ENG-2")).not.toHaveLength(0);
+    expect(location.hash).toBe("#/worklet/ENG-2");
+  });
+
+  test("subtasks stay where the reader keeps them, and a refusal stays in the dialog", async () => {
+    replies.merge_work_item = {
+      status: 422,
+      body: {
+        error: "invalid",
+        tool: "merge_work_item",
+        detail: "ENG-1 has a subtask filed in another project than ENG-2.",
+      },
+    };
+    mount();
+    await settle();
+    await press("ENG-1", "Merge into");
+    fireEvent.change(screen.getByRole("combobox", { name: "Find the task it merges into" }), {
+      target: { value: "build keys" },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("option", { name: /Rotate the build keys/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Move its subtasks/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Merge$/ }));
+    await settle();
+    expect(acts()).toEqual([
+      { tool: "merge_work_item", args: { item: "ENG-1", into: "ENG-2", move_subtasks: false } },
+    ]);
+    expect(
+      await screen.findAllByText(/ENG-1 has a subtask filed in another project than ENG-2/),
+    ).not.toHaveLength(0);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+});
+
+describe("the reader's priorities", () => {
+  test("a task is added at the end of the stored list, under its version", async () => {
+    mount();
+    await settle();
+    await press("ENG-1", "Add to my priorities");
+    expect(acts()).toEqual([
+      { tool: "set_priorities", args: { items: ["eng-9", "eng-1"], if_match: 4 } },
+    ]);
+    expect(await screen.findAllByText("Added ENG-1 to your priorities")).not.toHaveLength(0);
+  });
+
+  test("a task already on the list is offered off it, and the rest keep their places", async () => {
+    priorities = { ids: ["eng-9", "eng-1", "eng-3"], version: 6 };
+    mount();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "More for ENG-1" }));
+    expect(screen.queryByRole("menuitem", { name: /^Add to my priorities/ })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Remove from my priorities/ }));
+    await settle();
+    expect(acts()).toEqual([
+      { tool: "set_priorities", args: { items: ["eng-9", "eng-3"], if_match: 6 } },
+    ]);
+  });
+
+  test("a refusal is said in a toast, in the engine's words", async () => {
+    replies.set_priorities = {
+      status: 409,
+      body: {
+        error: "stale_version",
+        tool: "set_priorities",
+        detail: "Your priorities changed since this screen read them.",
+      },
+    };
+    mount();
+    await settle();
+    await press("ENG-1", "Add to my priorities");
+    expect(await screen.findAllByText("Not added to your priorities")).not.toHaveLength(0);
+    expect(
+      screen.getAllByText(/Your priorities changed since this screen read them/),
+    ).not.toHaveLength(0);
+  });
+
+  test("is held for a reader the engine would not let change them", async () => {
+    mount({ ...JANE, acts: ["remove_work_item"] });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "More for ENG-1" }));
+    const entry = screen.getByRole("menuitem", { name: /^Add to my priorities/ });
+    expect(entry.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(entry);
+    await settle();
     expect(acts()).toEqual([]);
   });
 });

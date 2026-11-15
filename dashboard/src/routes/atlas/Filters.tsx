@@ -12,6 +12,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { ListFilterGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
+  Callout,
   Count,
   FilterPill,
   Input,
@@ -32,7 +33,13 @@ import type {
 } from "~/contract/atlas.ts";
 import { plural } from "~/lib/format.ts";
 import { useQuiet } from "~/lib/useQuiet.ts";
-import { FILTER_KEYS, useSetFilter, type AtlasFilters } from "./filters.ts";
+import {
+  FILTER_KEYS,
+  useSetFilter,
+  type AtlasFilters,
+  type ClosedFilterKey,
+  type IgnoredFilter,
+} from "./filters.ts";
 import { VendorLead } from "./parts.tsx";
 import { HEALTH, KINDS, KIND_ORDER, LANES, VENDORS, WORDS, entries } from "./words.ts";
 
@@ -60,6 +67,7 @@ export function chipsOf(
     out.push({ key: "confidence", field: "Confidence", value: WORDS[filters.confidence] });
   }
   if (filters.unconfirmed) out.push({ key: "unconfirmed", field: "Unconfirmed shown" });
+  if (filters.show === "retired") out.push({ key: "show", field: "Retired entries only" });
   return out;
 }
 
@@ -116,8 +124,8 @@ function facetOptions<V extends string>(
 
 /**
  * The one Filter control beside the search: a button that says how many
- * filters are in force, opening the five menus, the unconfirmed switch and
- * the way to clear them all.
+ * filters are in force, opening the five menus, the unconfirmed switch, the
+ * retired switch and the way to clear them all.
  */
 export function FilterControl({
   filters,
@@ -258,6 +266,15 @@ export function FilterControl({
             onCheckedChange={(on) => set("unconfirmed", on ? "true" : "")}
             title={`${entries(hidden)} only an agent reported, with nothing the engine could check. Hidden until a person confirms them.`}
           />
+          {/* WHERE A RETIRED ENTRY IS FOUND AGAIN, and restored from its page:
+              every read leaves the retired out unless asked. */}
+          <Switch
+            size="sm"
+            label="Show retired entries only"
+            checked={filters.show === "retired"}
+            onCheckedChange={(on) => set("show", on ? "retired" : "")}
+            title="The entries a person retired: each one's page restores it."
+          />
           {active > 0 && (
             <Button variant="ghost" size="small" onClick={() => clearKeys(HELD)}>
               Clear all filters
@@ -276,6 +293,48 @@ function FilterRow({ label, children }: { label: string; children: ReactNode }) 
       <Text variant="label">{label}</Text>
       {children}
     </div>
+  );
+}
+
+/** How a sentence names each closed filter. */
+const FILTER_WORDS: Readonly<Record<ClosedFilterKey, string>> = {
+  kind: "the kind",
+  lane: "the lane",
+  vendor: "the vendor",
+  confidence: "the confidence",
+  health: "the health",
+  show: "the view",
+};
+
+/**
+ * What the address asked for that this build does not know (a stale
+ * bookmark, a value from a newer build, a typo), said once above the atlas,
+ * which is drawn without it, with the way to take it out of the address.
+ */
+export function IgnoredFilters({ ignored }: { ignored: readonly IgnoredFilter[] }) {
+  const { clearKeys } = useSetFilter();
+  if (ignored.length === 0) return null;
+  const named = ignored.map((one) => `${FILTER_WORDS[one.key]} “${one.value}”`);
+  const list =
+    named.length === 1 ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+  return (
+    <Callout
+      variant="warning"
+      layout="banner"
+      title="Part of this address is not applied"
+      action={
+        <Button
+          variant="secondary"
+          size="small"
+          onClick={() => clearKeys(ignored.map((one) => one.key))}
+        >
+          Remove it
+        </Button>
+      }
+    >
+      It asks for {list}, which this dashboard does not know, so the atlas is drawn without{" "}
+      {ignored.length === 1 ? "it" : "them"}.
+    </Callout>
   );
 }
 

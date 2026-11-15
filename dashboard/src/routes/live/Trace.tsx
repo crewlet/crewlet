@@ -19,7 +19,16 @@ import { useMemo, type CSSProperties } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { Button, Card, Skeleton, TableTextCell, Tag, type TreeGridColumn } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  Skeleton,
+  TableTextCell,
+  Tag,
+  useScreenBelow,
+  type TreeGridColumn,
+} from "@crewlethq/ui";
+import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { TreeGrid } from "~/app/frame/TreeGrid.tsx";
 import { SplitGlyph, ChartNoAxesGanttGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -175,6 +184,8 @@ function Trace({ traceId }: { traceId: string }) {
   const from = events.length ? Math.min(...events.map((e) => tsKey(e.timestamp))) : 0;
   const to = events.length ? Math.max(...events.map((e) => tsKey(e.timestamp))) : 0;
   const spread = to > from;
+  // A PHONE'S ROW IS TWO LINES OF WORDS (the grid's compact phone rows): no lane.
+  const phone = useScreenBelow(PHONE_BREAKPOINT);
   const spanCount = useMemo(() => new Set(events.map((e) => e.span_id || e.id)).size, [events]);
   // THE ROW'S OWN FIELD, not its payload. `EventLog.Trace` scans through
   // `scanRows`, whose SELECT does not include `payload` — so `e.payload` is
@@ -248,8 +259,10 @@ function Trace({ traceId }: { traceId: string }) {
       sortValue: (id) => byId.get(id)?.actor || "engine",
     },
     // NO LANE where every event shares one instant: there is no window to place
-    // anything in.
-    ...(spread ? [{ key: "lane", header: "In the trace", width: "120px", drop: 1 }] : []),
+    // anything in. NOR ON A PHONE, where a row is two lines of words and the
+    // lane, squeezed between the actor and the time in the second, kept its
+    // mark and lost its rail: a stray bar that placed nothing.
+    ...(spread && !phone ? [{ key: "lane", header: "In the trace", width: "120px", drop: 1 }] : []),
     {
       key: "time",
       header: "Time",

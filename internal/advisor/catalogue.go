@@ -59,6 +59,13 @@ var catalogue = map[Class]entry{
 		},
 		fix: scheduleFix,
 	},
+	ClassDirectBox: {
+		severity: SeverityNote, area: AreaSetup,
+		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
+			return "Agents run directly on the engine's own server.", w.Person
+		},
+		fix: settingFix,
+	},
 	ClassConfigAdvisory: {
 		severity: SeverityNote, area: AreaSetup,
 		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {

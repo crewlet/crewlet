@@ -48,7 +48,6 @@ import {
   Button,
   EmptyState,
   FormField,
-  Modal,
   Skeleton,
   Stack,
   Tabs,
@@ -63,6 +62,7 @@ import {
   RotateCcwClockGlyph,
   ScrollTextGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Modal } from "~/components/Modal.tsx";
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
@@ -608,7 +608,6 @@ function ReviewDialog({
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -705,7 +704,6 @@ function AskDialog({ change, onClose }: { change: CodeChangeDetail; onClose: () 
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -781,7 +779,6 @@ function CloseDialog({
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

@@ -159,13 +159,11 @@ import {
   Button,
   Callout,
   Checkbox,
-  ConfirmModal,
   EmptyState,
   FactList,
   FormField,
   InlineCode,
   ListInput,
-  Modal,
   NODE_HUE_NAMES,
   Tabs,
   Tag,
@@ -175,6 +173,7 @@ import {
   type FactListItem,
   type TabsMarker,
 } from "@crewlethq/ui";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import type { TagsInputOption } from "@crewlethq/ui";
 import { withProblems } from "~/ui/Problems.tsx";
 

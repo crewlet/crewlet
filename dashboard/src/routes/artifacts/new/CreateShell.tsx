@@ -32,9 +32,10 @@
  * the body's side in the open artifact's own workspace, so it is a column
  * where there is room and a drawer where there is not. The body stays mounted
  * as the panel opens and closes, so nothing the reader made is lost. The
- * control sits before Cancel; on a kind only an agent makes, it is the bar's
- * last control and its primary while the panel is closed, and Command+Enter
- * outside the panel opens it (inside, the panel sends).
+ * control sits before Cancel on every kind, and the kind's own action closes
+ * the bar: ONE ORDER, so no kind's bar reads differently from another's (a
+ * design's ended on Ask an agent as its primary, and it had no way to make
+ * the design without the panel).
  *
  * # The body is the kind's
  *
@@ -111,8 +112,6 @@ export interface CreateHandoff {
   tool: ArtifactBarTool;
   /** The panel while it is open (`AskAgentPanel`), else null. */
   panel: ReactNode;
-  /** Opens the panel: what Command+Enter does on a page with no other action. */
-  open: () => void;
 }
 
 /**
@@ -149,16 +148,11 @@ export function CreateShell({
     "create.start": {
       run: (e) => {
         e.preventDefault();
-        if (action) action.onSelect();
-        else handoff?.open();
+        action?.onSelect();
       },
-      when: action ? action.disabledReason === undefined : handoff !== undefined,
+      when: action !== undefined && action.disabledReason === undefined,
     },
   });
-  // THE HAND-OFF IS THE LAST CONTROL where it is the page's only way to make
-  // the kind, and it stays there as its panel opens: a control that moved
-  // when pressed would leave the pointer on Cancel.
-  const last = handoff !== undefined && action === undefined;
   const bar: ArtifactBarTool[] = [
     {
       key: "save-in",
@@ -175,7 +169,7 @@ export function CreateShell({
       labelled: true,
     },
     ...tools,
-    ...(handoff && !last ? [handoff.tool] : []),
+    ...(handoff ? [handoff.tool] : []),
     {
       key: "cancel",
       label: "Cancel",
@@ -184,7 +178,6 @@ export function CreateShell({
       labelled: true,
     },
     ...(action ? [primaryTool(action)] : []),
-    ...(handoff && last ? [handoff.tool] : []),
   ];
   return (
     <div className="artifact-create" data-kind={kind}>

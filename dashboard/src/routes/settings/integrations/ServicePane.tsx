@@ -25,9 +25,18 @@
  *    seat's, never the company's, so its page names no count and no roster,
  *    only what it gives and the way in, which is offered to a holder of Chatlet
  *    as Worklet and Doclet offer theirs to a holder of their apps.
+ *  - GITLET COUNTS NOTHING EITHER, and for the same reason: which
+ *    repositories a reader sees is their own grant's answer (the chart's
+ *    owners and each repository's `visibility`), never the company's count,
+ *    so its page says what it gives and the way in, offered to a holder of
+ *    Gitlet, and an Admin's way to Gitlet's own settings, where the code
+ *    log's retention and the rest of `code` are read.
  *
  * A service the company runs elsewhere says what replaces it and what
  * running it here would mean, with no control: switching is not offered yet.
+ * Gitlet is never run elsewhere: GitHub and GitLab are integrations a seat
+ * calls, never a host the engine runs in its place, so Gitlet off says that
+ * Crewlet hosts none of the company's code rather than naming a replacement.
  */
 
 import { useMemo, useState, type ReactNode } from "react";
@@ -54,7 +63,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useNow } from "~/lib/clock.ts";
-import { CHATLET, DOCLET, WORKLET, needsWords } from "~/lib/access.ts";
+import { CHATLET, DOCLET, GITLET, WORKLET, needsWords } from "~/lib/access.ts";
 import { fmtCount, plural, relTime } from "~/lib/format.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
@@ -80,6 +89,11 @@ const GIVES: Record<BuiltInService["key"], string[]> = {
     "Talk with any agent from inside Crewlet",
     "Keep a conversation beside the work it is about",
     "Nothing to install: your agents are already here",
+  ],
+  gitlet: [
+    "Repositories your people clone and push over HTTPS",
+    "Changes reviewed by people and agents, with checks",
+    "Code your agents read and change without a token",
   ],
 };
 
@@ -124,6 +138,7 @@ const HOLDS: Record<BuiltInService["key"], string> = {
   worklet: "tasks",
   doclet: "pages",
   chat: "conversations",
+  gitlet: "repositories",
 };
 
 /** A replacing app's name on its own line and button. */
@@ -152,6 +167,8 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
   // through the one Atlassian integration, a chat vendor as itself. A vendor
   // nobody named (the `viewer` answer tells the names to a holder of Chatlet) is
   // still a vendor's chat, said in words.
+  // GITLET OFF NAMES NOTHING IN ITS PLACE (see the file's doc).
+  if (service.key === "gitlet") return <GitletOff service={service} />;
   const how =
     service.key === "chat"
       ? `Your agents talk on ${by?.name}`
@@ -171,16 +188,7 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
           ? `${how}, so ${service.name} is not in use. Running both would leave two places for the same ${what}.`
           : `The company document leaves ${service.name} out and names nothing in its place.`}
       </Callout>
-      <section aria-label={`What ${service.name} would give you`}>
-        <h3 className="t-label">Running it here would give you</h3>
-        <List variant="plain" className="int-checks">
-          {GIVES[service.key].map((line) => (
-            <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
-              {line}
-            </List.Item>
-          ))}
-        </List>
-      </section>
+      <Gives service={service} would />
       <p className="t-caption">
         The company document decides which system holds the company&apos;s {what}, so this page
         offers no switch: moving them is a change to plan, not a toggle.
@@ -207,6 +215,47 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * What a service gives the company: what it gives where it is in use, or what
+ * running it here `would` give where it is not.
+ */
+function Gives({ service, would }: { service: BuiltInService; would: boolean }) {
+  return (
+    <section aria-label={`What ${service.name} ${would ? "would give" : "gives"} you`}>
+      <h3 className="t-label">{would ? "Running it here would give you" : "What it gives you"}</h3>
+      <List variant="plain" className="int-checks">
+        {GIVES[service.key].map((line) => (
+          <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
+            {line}
+          </List.Item>
+        ))}
+      </List>
+    </section>
+  );
+}
+
+/**
+ * Gitlet off: Crewlet hosts none of the company's code. NEVER "nothing does
+ * this": a company on GitHub or GitLab keeps its code there, and its agents
+ * reach it through those integrations, with Gitlet on or off.
+ */
+function GitletOff({ service }: { service: BuiltInService }) {
+  return (
+    <div className="int-service-off">
+      <Callout variant="neutral" title="Crewlet hosts none of your company's code">
+        The company document leaves {service.name} off, so its repositories live elsewhere, if
+        anywhere. Your agents reach GitHub and GitLab through their own integrations, with{" "}
+        {service.name} on or off.
+      </Callout>
+      <Gives service={service} would />
+      <p className="t-caption">
+        The company document decides where the company&apos;s {HOLDS[service.key]} are hosted, so
+        this page offers no switch: moving them is a change to plan, not a toggle.
+      </p>
     </div>
   );
 }
@@ -368,6 +417,7 @@ export function ServicePane({ service, model }: { service: BuiltInService; model
     );
   }
   if (service.key === "chat") return <ChatPane service={service} head={head} />;
+  if (service.key === "gitlet") return <GitletPane service={service} head={head} />;
   return service.key === "worklet" ? (
     <WorkletPane service={service} head={head} />
   ) : (
@@ -749,16 +799,41 @@ function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
           {needsWords("Talking with your agents in it", [CHATLET])}
         </Callout>
       )}
-      <section aria-label={`What ${service.name} gives you`}>
-        <h3 className="t-label">What it gives you</h3>
-        <List variant="plain" className="int-checks">
-          {GIVES.chat.map((line) => (
-            <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
-              {line}
-            </List.Item>
-          ))}
-        </List>
-      </section>
+      <Gives service={service} would={false} />
+    </div>
+  );
+}
+
+/**
+ * Gitlet in use: what it gives and the way in, and no count (see the file's
+ * doc). The way in is the Gitlet app's, as Chatlet's is Chatlet's; Gitlet's
+ * settings are an Admin's, as the company document is.
+ */
+function GitletPane({ service, head }: { service: BuiltInService; head: Head }) {
+  const viewer = useViewer();
+  const ways = (
+    <>
+      {viewer.gitlet && service.open && (
+        <ButtonLink size="small" variant="primary" href={href(service.open.path)}>
+          {service.open.label}
+        </ButtonLink>
+      )}
+      {viewer.admin && (
+        <ButtonLink size="small" variant="secondary" href={href(["settings", "gitlet"])}>
+          {service.name} settings
+        </ButtonLink>
+      )}
+    </>
+  );
+  return (
+    <div className="int-detail">
+      {head(service.sentence, (viewer.gitlet && service.open) || viewer.admin ? ways : undefined)}
+      {!viewer.gitlet && (
+        <Callout variant="neutral">
+          {needsWords("Reading and reviewing the company's code in it", [GITLET])}
+        </Callout>
+      )}
+      <Gives service={service} would={false} />
     </div>
   );
 }

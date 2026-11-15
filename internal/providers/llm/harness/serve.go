@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
-	"os/exec"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -37,17 +36,20 @@ var (
 // [harnessprofile.Serve]: started in its own process group, read on stdout for the
 // values it prints once it is up, and stopped with its whole group.
 //
-// ITS STDOUT IS READ FOR THE READY VALUES AND KEPT NOWHERE: a server prints the
-// password it minted there, and its log lines name what it runs. Its stderr is
-// kept, capped, for a failure's detail, as a harness's is.
+// ITS STDOUT IS READ FOR THE READY VALUES AND GIVEN BACK AS IT IS READ: a
+// server prints the password it minted there, and its log lines name what it
+// runs. It is a credential child ([childSpec.credential]), so its output is
+// captured in memory on linux and never reaches a disk; on darwin, which has
+// no file in memory, it is an unlinked file whose blocks keep it until they
+// are reused. Its stderr is kept, to [maxOutput], for a failure's detail, as
+// a harness's is.
 type harnessServer struct {
-	pgid  int
+	child *childRun
 	grace time.Duration
 	want  []harnessprofile.ReadyValue
 
-	mu     sync.Mutex
-	ready  map[string]string
-	stderr lockedBuffer
+	mu    sync.Mutex
+	ready map[string]string
 
 	// up is closed once every ready value has been printed.
 	up     chan struct{}
@@ -58,41 +60,26 @@ type harnessServer struct {
 	marker     chan struct{}
 	markerLine atomic.Pointer[string]
 
-	// exited is closed once the server has exited and its streams were read
-	// to their end; exitCode is its status then.
+	// exited is closed once the server has exited and its end was read
+	// ([childRun.end]): its group gone and its output let go, or the grace out.
+	// exitCode is its status then, and said its stderr as the end kept it.
 	exited   chan struct{}
 	exitCode int
+	said     string
 
 	stopping atomic.Bool
 	stopOnce sync.Once
-}
-
-// lockedBuffer is a capped buffer read while it is still written: a server's
-// stderr is read for a failure that the server outlives.
-type lockedBuffer struct {
-	mu  sync.Mutex
-	buf cappedBuffer
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
+	closed   sync.Once
 }
 
 // startServer starts the server: the profile's binary with args, in dir, with
-// env — never nil, as [run] refuses a nil one — its stdin closed. An error
-// means it did not start at all.
-func startServer(
-	binary string, args []string, dir string, env []string, grace time.Duration,
+// env — never nil, as [run] refuses a nil one — its stdin closed, its output
+// captured as a credential child's. An error means it did not start at all.
+func startServer(ctx context.Context, p *Provider,
+	args []string, dir string, env []string, grace time.Duration,
 	want []harnessprofile.ReadyValue, failOn []string,
 ) (*harnessServer, error) {
+	binary := p.profile.Binary
 	if env == nil {
 		return nil, fmt.Errorf("harness: %s's server was about to run with no environment of "+
 			"its own, which os/exec would fill with the engine's; it was not started", binary)
@@ -101,38 +88,75 @@ func startServer(
 		grace: grace, want: want, ready: map[string]string{},
 		up: make(chan struct{}), marker: make(chan struct{}), exited: make(chan struct{}),
 	}
-	s.stderr.buf.limit = maxOutput
-	// NOT UNDER A CONTEXT: the server lives for the run it serves and is ended
-	// by [harnessServer.stop] — its whole group signalled, a grace, then killed —
-	// which the run's end calls. A context's cancel would kill the leader
-	// alone, leaving what it started (the relay among it) running.
-	cmd := exec.Command(binary, args...) //nolint:gosec,noctx // a validated profile's binary and args; ended by stop
-	cmd.Dir, cmd.Env = dir, env
-	cmd.Stdout = &lineTee{sink: io.Discard, on: s.line, limit: maxOutput, every: true}
-	cmd.Stderr = &s.stderr
+	var onErr func(string)
 	if len(failOn) > 0 {
-		cmd.Stderr = stderrWatch(&s.stderr, failOn, func(line string) {
+		onErr = markerWatch(failOn, func(line string) {
 			s.markerLine.Store(&line)
 			close(s.marker)
 		})
 	}
-	procgroup.Set(cmd)
-	// Bounds how long a stream something the server started still holds
-	// keeps Wait from returning once the server itself has exited.
-	cmd.WaitDelay = grace
-	if err := cmd.Start(); err != nil {
+	// NOT UNDER THE CALL'S CANCELLATION: the server lives for the run it serves
+	// and is ended by [harnessServer.stop] — its whole group signalled, a
+	// grace, then killed — which the run's end calls. A context's cancel would
+	// kill the leader alone, leaving what it started (the relay among it)
+	// running.
+	ch, err := startChild(context.WithoutCancel(ctx), childSpec{
+		binary: binary, args: args, dir: dir, env: env,
+		outDir: dir, setting: p.stateSetting(), credential: true,
+		out:   streamSpec{kind: readToEnd, onLine: s.line},
+		err:   streamSpec{kind: readToEnd, keep: maxOutput, onLine: onErr},
+		grace: grace, hooks: p.hooks, janitor: &p.janitor,
+	})
+	if err != nil {
 		return nil, fmt.Errorf("harness: starting %q's server: %w", binary, err)
 	}
-	s.pgid = cmd.Process.Pid
+	s.child = ch
 	if len(want) == 0 {
 		s.upOnce.Do(func() { close(s.up) })
 	}
 	go func() {
-		_ = cmd.Wait()
-		s.exitCode = cmd.ProcessState.ExitCode()
+		waitErr := <-ch.exited
+		// ITS END, as a call's is: whatever its group left behind, and
+		// whatever still holds its output, are waited for within the grace
+		// and then killed, before its stderr is read whole.
+		ended := ch.end(time.Now().Add(grace))
+		got := ch.collect(ended)
+		s.said = got.errOut
+		if cut := ch.cut.Load(); cut != nil {
+			s.said = joinDetail(cut.Error(), s.said)
+		}
+		s.exitCode = -1
+		if state := ch.cmd.ProcessState; state != nil {
+			s.exitCode = state.ExitCode()
+		} else if waitErr != nil {
+			s.said = joinDetail(waitErr.Error(), s.said)
+		}
 		close(s.exited)
 	}()
 	return s, nil
+}
+
+// stderr is what the server has said on stderr: whole once it has exited, and
+// what its capture holds so far while it runs.
+func (s *harnessServer) stderr() string {
+	select {
+	case <-s.exited:
+		return s.said
+	default:
+	}
+	cp := s.child.capOf("stderr")
+	size, err := cp.size()
+	if err != nil {
+		return ""
+	}
+	return cp.contents(cp.kept(size))
+}
+
+// close lets go of the server's captures, once it has exited: the teardown of
+// the run it served, after its stop.
+func (s *harnessServer) close() {
+	<-s.exited
+	s.closed.Do(s.child.close)
 }
 
 // line reads one line of the server's stdout for the ready values it carries.
@@ -160,20 +184,40 @@ func (s *harnessServer) values() map[string]string {
 // stop ends the server — its group signalled, a grace, then killed — and waits
 // for it. The group is killed whatever the server did, because what it started
 // (the relay among them) is in it. Safe to call more than once.
+//
+// EVERY SIGNAL IS CHECKED against the group recorded at the start
+// ([harnessGroup.signal]): the kill comes after the server may have been
+// reaped, and the first signal may too, since the server can exit between the
+// look at exited and the signal. What the log lines are told is the run's
+// context as the server started under it, never its cancellation, which is
+// often what ended the run.
+//
+// A SIGNAL THE GROUP DID NOT GET GOES TO THE LEADER, through os/exec's own
+// handle on it, which never reaches another process: on linux it signals
+// through the process's pidfd, and once Wait has reaped the server it sends
+// nothing. A server never exits on its own, so a stop whose group signals
+// were withheld (the kernel's record of the group could not be read) and
+// sent nowhere else would wait on exited for ever, and the run's teardown
+// with it, holding the seat's slot. The leader's end bounds the wait: its
+// end ([childRun.end]) returns within the grace, whatever its group still
+// holds.
 func (s *harnessServer) stop() {
 	s.stopOnce.Do(func() {
 		s.stopping.Store(true)
+		leader := s.child.cmd.Process
 		select {
 		case <-s.exited:
 		default:
-			_ = procgroup.Terminate(s.pgid)
+			if !s.child.signal("the run it served ended", "SIGTERM", procgroup.Terminate) {
+				_ = leader.Signal(syscall.SIGTERM)
+			}
 			select {
 			case <-s.exited:
 			case <-time.After(s.grace):
 			}
 		}
-		if err := procgroup.Kill(s.pgid); err != nil && !errors.Is(err, errors.ErrUnsupported) {
-			log.Warn("harness_server_kill_failed", "pgid", s.pgid, "error", err)
+		if !s.child.signal("the run it served ended", "SIGKILL", procgroup.Kill) {
+			_ = leader.Kill()
 		}
 		<-s.exited
 	})
@@ -227,11 +271,13 @@ func (t *toolRun) up(ctx context.Context, p *Provider, in *invocation) (context.
 	for _, arg := range m.Serve.Args {
 		args = append(args, m.Render(arg, t.values))
 	}
-	srv, err := startServer(p.profile.Binary, args, in.dir, slices.Clone(in.env), in.grace,
+	srv, err := startServer(ctx, p, args, in.dir, slices.Clone(in.env), in.grace,
 		m.Serve.Ready, in.failOn)
 	if err != nil {
-		// No server ran: the binary is missing or the host would give it no
-		// process — the one exec failure the next member is no answer to.
+		// No server ran: the binary is missing, the host would give it no
+		// process, or it started with an identity the kernel would not give
+		// and was ended at once — the one exec failure the next member is no
+		// answer to.
 		return nil, false, p.fail(llm.KindFatal, err)
 	}
 	t.server = srv
@@ -272,7 +318,8 @@ func (t *toolRun) up(ctx context.Context, p *Provider, in *invocation) (context.
 		pollEnv := slices.Concat(in.env, readyEnv)
 		last := ""
 		for {
-			out, pollErr := p.runAuxiliary(waitCtx, pollArgs, in.dir, pollEnv, "")
+			out, pollErr := p.runAuxiliary(waitCtx, auxiliary{
+				args: pollArgs, dir: in.dir, outDir: in.dir, env: pollEnv})
 			if pollErr == nil && started(out, poll) {
 				break
 			}
@@ -335,13 +382,13 @@ func (t *toolRun) notUp(
 ) (context.Context, bool, error) {
 	t.server.stop()
 	cause := context.Cause(waitCtx)
-	detail := failureDetail(t.server.stderr.String(), "")
+	detail := failureDetail(t.server.stderr(), "")
 	var marker *failureMarkerError
 	switch {
 	case errors.Is(cause, errHostStopped):
 		return nil, false, nil
 	case errors.As(cause, &marker):
-		return nil, false, p.confinementFailed(marker.line, t.server.stderr.String())
+		return nil, false, p.confinementFailed(marker.line, t.server.stderr())
 	case errors.Is(cause, errServerExited):
 		return nil, false, p.fail(llm.KindServer, fmt.Errorf(
 			"the %s harness's server exited %d before it was up%s", p.harness, t.server.exitCode, detail))
@@ -398,7 +445,7 @@ func (t *toolRun) ran(ctx context.Context, res *rawResult) {
 	if line := srv.markerSeen(); line != "" && res.failureMarker == "" {
 		res.failureMarker = line
 	}
-	if said := srv.stderr.String(); strings.TrimSpace(said) != "" {
+	if said := srv.stderr(); strings.TrimSpace(said) != "" {
 		res.stderr = "[its server]\n" + said + "\n[the run]\n" + res.stderr
 	}
 }

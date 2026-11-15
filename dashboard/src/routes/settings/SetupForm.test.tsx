@@ -35,6 +35,7 @@ import {
 } from "./SetupForm.tsx";
 import type { SetupRequirement, SetupToolState, SetupVerdict } from "~/protocol/index.ts";
 import { eventually } from "~/test/settle.ts";
+import { STILL_WORKING } from "~/lib/waiting.ts";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
   return {
@@ -2613,7 +2614,7 @@ test("a form mid-write refuses Cancel, and otherwise takes it", async () => {
 
   // AND NOW IT DOES NOT, and says why rather than just going grey.
   expect(cancel().getAttribute("aria-disabled")).toBe("true");
-  expect(screen.getByText("Waiting for the engine to finish writing.")).toBeTruthy();
+  expect(screen.getByText(STILL_WORKING)).toBeTruthy();
   fireEvent.click(cancel());
   expect(closed).toHaveBeenCalledTimes(1);
 });

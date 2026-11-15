@@ -31,7 +31,8 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, Callout, FormField, Input, Modal, Skeleton, Stack, Textarea } from "@crewlethq/ui";
+import { Button, Callout, FormField, Input, Skeleton, Stack, Textarea } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { isWholeOID, refName, shortOID } from "~/lib/code.ts";
 import { fmtBytes } from "~/lib/format.ts";
@@ -301,7 +302,6 @@ function CommitDialog({
       title={existing ? `Edit ${path}` : `New file in ${repo.name}`}
       onClose={onClose}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -420,7 +420,6 @@ function DeleteFileDialog({
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

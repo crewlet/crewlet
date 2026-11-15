@@ -54,6 +54,14 @@ type Response struct {
 	// to look at the host while the request is out, or sleeps in it to give
 	// the model's half of the round a duration.
 	Writing func()
+
+	// Seen, when set, is called once the model has written this response,
+	// when the harness's record shows it, and its answer is the
+	// [llm.Turn.Seen] the host is told with the request. A case moves its
+	// clock inside it to put time between the record showing a request and
+	// the host hearing of it, as the end of a run does for a request told
+	// only at its finish.
+	Seen func() time.Time
 }
 
 // Call is one call a response makes.
@@ -391,6 +399,10 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 		if r.Writing != nil {
 			r.Writing()
 		}
+		var seen time.Time
+		if r.Seen != nil {
+			seen = r.Seen()
+		}
 		last = r
 		u := usageOf(r)
 		total.Input += u.Input
@@ -420,7 +432,7 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 			uu := u
 			host.Observe(llm.Turn{
 				ID: id, Text: r.Text, Calls: calls,
-				Model: s.modelOf(r), Usage: &uu,
+				Model: s.modelOf(r), Usage: &uu, Seen: seen,
 			})
 			host.Spent(u)
 		}

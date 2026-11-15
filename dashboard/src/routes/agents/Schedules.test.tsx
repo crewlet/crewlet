@@ -106,6 +106,14 @@ test("each fire is on the schedule's clock, with the reader's time beside it onl
   expect(screen.queryByText(/your time/)).toBeNull();
 });
 
+// A PAUSED SCHEDULE LISTS NO RUNS AHEAD. The card went on listing five times
+// under a header whose Next said paused, as if the switch changed nothing.
+test("a paused schedule's next-runs card says it is paused instead of listing runs", () => {
+  render(<NextFires row={row({ enabled: false, next_run: "" })} now={NOW} count={3} />);
+  expect(screen.queryAllByText(/09:00$/)).toEqual([]);
+  expect(screen.getByText(/Nothing while it is paused/)).toBeTruthy();
+});
+
 // AND A SCHEDULE THAT NAMES NO ZONE ARRIVES ON THE COMPANY'S CLOCK (ADR-0018):
 // the engine resolves it, so the row names the company's zone and the fires are
 // worked out there. The screen defaults nothing — a zone-less row read as UTC

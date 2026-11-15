@@ -72,6 +72,7 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { dutyName } from "~/lib/duties.ts";
 import { usePublishFleet } from "~/app/Shell.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
@@ -468,7 +469,7 @@ function FleetScreen() {
                   .map((n) => (
                     <Callout key={n.id} variant="danger" role="alert">
                       <span>
-                        <InlineCode>{n.id}</InlineCode>: {n.config_error}
+                        <InlineCode close=":">{n.id}</InlineCode> {n.config_error}
                       </span>
                     </Callout>
                   ))}
@@ -564,8 +565,8 @@ function FleetScreen() {
                   {
                     key: "name",
                     header: "Duty",
-                    sortValue: (d) => d.duty,
-                    cell: (d) => <TableKeyCell value={d.duty} />,
+                    sortValue: (d) => dutyName(d.duty),
+                    cell: (d) => <DutyCell duty={d.duty} />,
                   },
                   {
                     key: "node",
@@ -772,7 +773,7 @@ export function NodeScreen({ id }: { id: string }) {
                   </div>
                   {node.owner && (
                     <p className="t-caption">
-                      Fencing token <InlineCode>{node.owner}</InlineCode>.
+                      Fencing token <InlineCode close=".">{node.owner}</InlineCode>
                       {node.protocol != null && ` Seat protocol v${node.protocol}.`}
                     </p>
                   )}
@@ -1107,7 +1108,14 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             <span className="t-label">Up since</span>
             <TableDateCell value={node.started_at} now={now} />
           </div>
-          <p className="t-caption">They differ while the node rebuilds.</p>
+          {/* SAID ONLY WHILE IT IS TRUE, and whole: a bare "They differ while
+              the node rebuilds." stood under "running the active revision ·
+              ok", naming nothing and contradicting the line above it. */}
+          {standing.kind !== "current" && (
+            <p className="t-caption">
+              Its revision and the company&rsquo;s active one differ until it has rebuilt.
+            </p>
+          )}
         </div>
       </Card>
 
@@ -1192,8 +1200,8 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             {
               key: "name",
               header: "Duty",
-              sortValue: (d) => d.duty,
-              cell: (d) => <TableKeyCell value={d.duty} />,
+              sortValue: (d) => dutyName(d.duty),
+              cell: (d) => <DutyCell duty={d.duty} />,
             },
             {
               key: "ttl",
@@ -1233,5 +1241,14 @@ function NoSuchNode({ id, inline }: { id: string; inline?: boolean }) {
       title={`No node called “${id}” holds a lease`}
       description="It may have stopped, or never existed."
     />
+  );
+}
+
+/** A duty by its words, its lease key on the title. */
+function DutyCell({ duty }: { duty: string }) {
+  return (
+    <span className="truncate" title={duty}>
+      {dutyName(duty)}
+    </span>
   );
 }

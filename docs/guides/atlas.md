@@ -73,8 +73,10 @@ and one selection.
   into Quiet, Needs a look and Alerting, each with its count.
 - **Needs attention now**: the two most urgent entries, each with the reason in
   one sentence ("A standing alarm is raised", "Two sources disagree, and nobody
-  has settled it") on up to two lines, the whole of it on hover where it is
-  longer. Pressing a card selects that entry on the map. Beside the title,
+  has settled it"; a second signal is named, more are counted) on up to two
+  lines, the whole of it in a tooltip on hover and on keyboard focus. Pressing
+  a card selects that entry on the map and brings the map into view, which on
+  a phone is below the band. Beside the title,
   how many are **Alerting** and how many **Need a look**, each a link that
   narrows the map and the catalogue to them, so the entries past the two cards
   are one press away. The tile shows a placeholder until its list has been
@@ -126,8 +128,11 @@ its name.
   the entry you stand on.
 - **Selecting an entry lights its whole path**, everything it depends on and
   everything that depends on it, and lets the rest recede. A bar at the foot of
-  the map names the selection and counts both sides ("7 entries depend on it,
-  and it depends on 1"), with **Details** to open the entry beside the page.
+  the map names the selection and counts the path it lights over every hop
+  ("Over every hop, 7 entries rely on it and it relies on 1"), with **Details**
+  to open the entry beside the page. Its sheet and its page count one step out
+  instead, under the same words: what relies on it, what it relies on and
+  what stands around it.
   Press the entry again, the ground or Escape to clear.
 - **Resting the pointer on an entry** lights its neighbours and shows a card
   with its kind, vendor, health and the reason it is not quiet. The same entry
@@ -167,10 +172,14 @@ motion.
 The search takes a name or a key. The catalogue lists what matches, and the
 map keeps its shape and pushes back what does not, so you find an entry where
 it stands. **Filter**, beside the search, opens the filters (Kind, Lane,
-Vendor, Health, Confidence and Show unconfirmed). They narrow the map and the
-catalogue alike, and each menu counts what picking a value would leave. The
-button counts the filters in force, and each one is a chip under the toolbar
-that you remove on its own, with **Clear all** beside them.
+Vendor, Health, Confidence, Show unconfirmed and Show retired entries only).
+They narrow the map and the catalogue alike, and each menu counts what picking
+a value would leave. The button counts the filters in force, and each one is a
+chip under the toolbar that you remove on its own, with **Clear all** beside
+them. A retired entry is found again with **Show retired entries only**, and
+restored from its page. An address that names a filter value this dashboard
+does not know (an old bookmark, a value from a newer version) is not applied:
+the atlas is drawn without it, and a note above it says so, with **Remove it**.
 
 ## The coverage line
 
@@ -223,9 +232,10 @@ page:
 - **Overview**: the same, with the diagram drawn wide, how much the company
   uses it, which agents hold an account there, the keys merged into it, and
   its latest changes.
-- **Relations**: what it depends on, what depends on it, the seats, units and
-  pages it names, and everything that depends on it hop by hop, with the way to
-  show the same on the map.
+- **Relations**: what relies on it, what it relies on and what stands around
+  it (the groups the diagram draws, counted as the sentence over it counts
+  them), the seats, units and pages it names, and everything that relies on it
+  over every hop, with the way to show the same on the map.
 - **Work**: the Worklet tasks that name it ([work on an entry](#work-on-an-entry)).
 - **Sources**: what each source says about it. Where two sources disagree, both
   values are shown first, with which one the atlas shows and why (a person's
@@ -405,8 +415,9 @@ says otherwise), and its card says how the last read went:
   anywhere else.
 - **What it could not read**: each listing the vendor refused, with the
   permission that restores it, and each server it could not reach or whose
-  command failed. What an earlier read found there stands. Why a read failed
-  outright is shown to administrators; everyone else is told that it failed.
+  command failed. What an earlier read found there stands. A read that failed
+  outright says so in a sentence, with the way to the integration it read
+  with; administrators can open what the read said in the engine's own words.
 - **Entries it stopped seeing**: how many entries the last read did not list.
   Nothing is retired on one miss: an entry is retired only when a second whole
   read, a day later, does not list it either.
@@ -417,7 +428,7 @@ says otherwise), and its card says how the last read went:
 
 **Refresh now** asks for a read of that source without waiting for the timer.
 The node that reads for the atlas makes it within a minute, and the card says
-who asked while it waits. The engine reads one source at most once every five
+who asked, by their name, while it waits. The engine reads one source at most once every five
 minutes, whoever asks: inside that time the button is held and says when it
 can be pressed again. Anyone holding Atlas may ask; an agent never does.
 

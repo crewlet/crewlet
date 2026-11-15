@@ -29,7 +29,8 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import { Input, List, ListItem, Modal, FormField } from "@crewlethq/ui";
+import { Input, List, ListItem, FormField } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { FileTextGlyph, LayersGlyph, SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
 import { artifactPath, resolve } from "~/app/routes.ts";
 import { href } from "~/app/router.tsx";

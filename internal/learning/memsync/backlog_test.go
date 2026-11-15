@@ -96,7 +96,7 @@ func (j *roundTripJS) Publish(ctx context.Context, subject string, _ []byte,
 // answers publishes and nothing else, so it publishes and never hydrates: it
 // HOLDS the seat as the node that has held it all along ([heldFromEmpty]).
 func syncerOver(db *store.DB, js jetstream.JetStream) *Syncer {
-	return heldFromEmpty(New(db, js, func(string) string { return seat.AgentID }), seat.Handle)
+	return heldFromEmpty(newSyncer(db, js, func(string) string { return seat.AgentID }), seat.Handle)
 }
 
 // registered is the registry's entry for the table named, so a case says

@@ -34,7 +34,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Button, ConfirmModal, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
+import { Button, SetupWizard, useToast, type StepperStep } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { readOnlyFrom, useAssistantDraft, useDraftState } from "~/app/assistant/draft.ts";
 import type {
   McpAuthMethod,
@@ -303,7 +304,9 @@ export function ServerWizard({
     outcome: ConfigWriteOutcome | { kind: "missing" },
     stage: "check" | "write",
   ) {
-    if (outcome.kind === "valid" || outcome.kind === "saved") {
+    // ALREADY SO is the entry holding: the engine stored nothing because the
+    // server already stands as the wizard wrote it.
+    if (outcome.kind === "valid" || outcome.kind === "saved" || outcome.kind === "unchanged") {
       setCheck({ kind: "accepted" });
     } else if (outcome.kind === "problems") {
       setProblems([...outcome.problems]);
@@ -363,7 +366,7 @@ export function ServerWizard({
           );
         }
         if (screen.aborted) return;
-        if (outcome.kind !== "saved") {
+        if (outcome.kind !== "saved" && outcome.kind !== "unchanged") {
           settleCheck(outcome, "write");
           return;
         }

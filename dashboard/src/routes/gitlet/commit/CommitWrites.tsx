@@ -13,7 +13,8 @@
  */
 
 import { useState } from "react";
-import { Button, FormField, Input, Modal, Select, Stack } from "@crewlethq/ui";
+import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName, shortOID } from "~/lib/code.ts";
 import { branchWriteHeld } from "~/lib/repoWrites.ts";
@@ -165,7 +166,6 @@ function RevertDialog({ repo, sha, subject, onClose }: DialogProps) {
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -224,7 +224,6 @@ function PickDialog({ repo, sha, subject, onClose }: DialogProps) {
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

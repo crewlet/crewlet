@@ -19,6 +19,32 @@ const UNREAD_WORDS: Readonly<Record<string, string>> = {
     "The engine's alarms couldn't be read, as right after a start, so whether a backup is missing can't be said yet.",
 };
 
+/** What each unread source is called in a sentence that names it. */
+const UNREAD_NAMES: Readonly<Record<string, string>> = {
+  integrations: "the integrations' last check",
+  work: "the last 7 days of work",
+  ledger: "the agents' turns",
+  pauses: "the agents' pauses",
+  runs: "the week's failed runs",
+  atlas: "the atlas",
+  atlas_sources: "the atlas's sources",
+  alarms: "the engine's alarms",
+};
+
+/**
+ * What the advisor could not read, named: "The advisor couldn't read the
+ * engine's alarms and the last 7 days of work". "Couldn't read everything"
+ * said nothing a reader could act on or check against what was missing.
+ */
+export function unreadTitle(unread: readonly string[]): string {
+  const names = unread.map((key) => UNREAD_NAMES[key] ?? key);
+  const said =
+    names.length <= 1
+      ? (names[0] ?? "everything")
+      : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `The advisor couldn't read ${said}`;
+}
+
 /** One sentence per unread source, in the answer's order; a source with no words of its own is named. */
 export function unreadSentences(unread: readonly string[]): string[] {
   return unread.map(

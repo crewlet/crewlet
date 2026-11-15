@@ -9,7 +9,8 @@
  */
 
 import { useState } from "react";
-import { Button, FormField, Input, Modal, useToast } from "@crewlethq/ui";
+import { Button, FormField, Input, useToast } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { useKeyedGesture, type KeyedRequest } from "~/lib/keyedWrite.ts";
 
 export function RenameDialog({

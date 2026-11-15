@@ -122,7 +122,7 @@ function UnreadRoomsRead({ viewer }: { viewer: string }) {
       ? `You’re in more rooms than Chatlet lists, so only your ${rail.data.channels.length} most recently active are counted here.`
       : "",
     unreadable > 0
-      ? `${plural(unreadable, "room")} came from a newer version of the engine and ${unreadable === 1 ? "isn’t" : "aren’t"} counted.`
+      ? `${plural(unreadable, "room")} came from a newer version of Crewlet and ${unreadable === 1 ? "isn’t" : "aren’t"} counted.`
       : "",
   ].filter(Boolean);
   return (

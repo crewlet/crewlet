@@ -13,6 +13,7 @@ import { useState } from "react";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { InsetToastProvider } from "~/app/toastInset.tsx";
 import { actEngine } from "~/test/chat.tsx";
 import { CHAT_ORG, SERVED } from "~/test/chatAccess.ts";
 
@@ -101,4 +102,44 @@ test("a pane opened from a menu gives focus back to the menu's trigger", async (
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   await waitFor(() => expect(screen.queryByRole("heading", { name: "Profile" })).toBeNull());
   expect(document.activeElement).toBe(trigger);
+});
+
+// A TOAST NEVER LIES OVER AN OPEN PANE: the stack stands at the window's foot,
+// beside the pane, as far in as the pane's start edge. On Chatlet it stood at
+// the top right under the bar, over a room's details. Mutation: drop the
+// host's ask, and the stack keeps no inline inset.
+test("an open pane keeps the toast stack beside it, and lets go when it closes", async () => {
+  const real = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains("chat-pane")
+      ? ({ left: window.innerWidth - 400, width: 400, height: 700 } as DOMRect)
+      : real.call(this);
+  });
+  actEngine();
+  const mounted = mountInFrame(
+    <InsetToastProvider>
+      <Harness />
+    </InsetToastProvider>,
+    {
+      hash: "#/chatlet",
+      answers: { chat_channels: { ...SERVED, read_state: true, channels: [] } },
+    },
+  );
+  act(() => mounted.store.applyOrg(CHAT_ORG as never));
+  // THE APP HOST'S STACK: the one any inset is published on.
+  const hosted = () =>
+    [...document.querySelectorAll<HTMLElement>(".crewlet-toaster")].find((el) => {
+      const value = el.style.getPropertyValue("--crewlet-toaster-inset-inline");
+      return value !== "" && value !== "0px";
+    });
+  const inline = () => hosted()?.style.getPropertyValue("--crewlet-toaster-inset-inline") ?? "";
+  fireEvent.click(screen.getByRole("button", { name: "Open" }));
+  await screen.findByRole("heading", { name: "Profile" });
+  await waitFor(() => expect(inline()).toBe("400px"));
+  expect(hosted()?.className).toMatch(/bottom-right/);
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(["", "0px"]).toContain(inline()));
+  vi.restoreAllMocks();
 });

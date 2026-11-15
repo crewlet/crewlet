@@ -48,7 +48,6 @@ import { useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
-  ConfirmModal,
   EditingStatus,
   EmptyState,
   Input,
@@ -57,6 +56,7 @@ import {
   VersionCompare,
   markdownWords,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { DiffView } from "~/components/DiffView.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";

@@ -8,7 +8,8 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, FormField, Input, Modal, Select, Stack } from "@crewlethq/ui";
+import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { repoPath } from "~/lib/code.ts";
@@ -76,7 +77,6 @@ function NewRepoDialog({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

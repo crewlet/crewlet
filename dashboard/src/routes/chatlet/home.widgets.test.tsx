@@ -305,7 +305,7 @@ describe("an answer that could not account for everything", () => {
     });
     await afterMicrotasks();
     expect(screen.queryByText("You’re caught up")).toBeNull();
-    expect(screen.getByText(/1 room came from a newer version of the engine/)).toBeTruthy();
+    expect(screen.getByText(/1 room came from a newer version of Crewlet/)).toBeTruthy();
   });
 
   test("the feed says so rather than that nobody named the reader", async () => {

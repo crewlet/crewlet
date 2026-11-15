@@ -179,8 +179,17 @@ export function callMeasured(call: Pick<ToolCall, "startedAt" | "durationMs">): 
 }
 
 export function phaseLabel(p: Pick<PhaseRecord, "phase" | "iteration">): string {
-  const name = p.phase ? p.phase[0]!.toUpperCase() + p.phase.slice(1) : "Phase";
+  const name = phaseWord(p.phase);
   return p.iteration > 1 ? `${name} · iteration ${p.iteration}` : name;
+}
+
+/**
+ * A phase's WORD, as a running turn's steps say it ("Context", "Execute",
+ * "Review") and every surface that names a phase reads it: the engine's id
+ * capitalised, "Phase" for a record that names none.
+ */
+export function phaseWord(phase: string): string {
+  return phase ? phase[0]!.toUpperCase() + phase.slice(1) : "Phase";
 }
 
 function span(over: Partial<Span> & Pick<Span, "id" | "kind" | "label" | "start" | "end">): Span {

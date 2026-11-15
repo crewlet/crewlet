@@ -83,6 +83,14 @@ type LimitRow struct {
 	// A screen offers a change exactly where this is true, rather than
 	// keeping its own list of which keys the document has.
 	Settable bool `json:"settable"`
+	// Range is the values the engine's validator admits for Key
+	// ([config.RangeOf]), so a screen changing the cap says a value outside
+	// it beside the field before anything is sent ("At least 1."), rather
+	// than sending it for the engine to refuse in its operator's words. The
+	// validator reads the same declaration, so the two cannot disagree.
+	// Present on every settable row; absent on a constant, which no write
+	// changes.
+	Range *config.Range `json:"range,omitempty"`
 }
 
 // LimitsAnswer is what `limits` answers.
@@ -154,13 +162,17 @@ func limitsAnswer(c *config.Company) LimitsAnswer {
 	out := LimitsAnswer{Limits: make([]LimitRow, 0, len(limits))}
 	for _, l := range limits {
 		value, def := l.read(c), l.read(&defaults)
-		out.Limits = append(out.Limits, LimitRow{
+		row := LimitRow{
 			Key: l.key, Group: l.group, Unit: l.unit,
 			Value: value, Default: def,
 			Off:        l.zeroIsOff && value == 0,
 			DefaultOff: l.zeroIsOff && def == 0,
 			Settable:   !l.constant,
-		})
+		}
+		if r, ok := config.RangeOf(l.key); ok && row.Settable {
+			row.Range = &r
+		}
+		out.Limits = append(out.Limits, row)
 	}
 	return out
 }

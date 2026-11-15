@@ -35,6 +35,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
+import { session } from "~/protocol/session.ts";
 import type {
   WorkActivityRecord,
   WorkItem,
@@ -312,6 +313,35 @@ test("the due date reads the engine's standing, in the danger tone when late", a
   expect(far.textContent!.split(date).length - 1).toBe(1);
 });
 
+// A DAY PICKED IS THE DAY SHOWN, to every reader. The engine stores a day as
+// the company's midnight; this suite reads in Berlin, west of a Tokyo company,
+// where that midnight is the afternoon before, so the rail read Nov 29 for a
+// due date picked as Nov 30 and opened its editor on the 29th. Mutation: draw
+// the instant on the reader's clock and both read a day early.
+test("a due and a start date read as the company's day, and open their editor on it", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    org: { ...ORG, timezone: "Asia/Tokyo" },
+    answers: {
+      work_item: detail({
+        task: task({
+          due_at: "2026-11-29T15:00:00Z",
+          due_all_day: true,
+          start_at: "2026-11-19T15:00:00Z",
+        }),
+      }),
+    },
+  });
+  await settle();
+  expect(rowValue("Due").textContent).toContain("Nov 30, 2026");
+  expect(rowValue("Due").textContent).not.toContain("Nov 29");
+  expect(rowValue("Start").textContent).toContain("Nov 20, 2026");
+  fireEvent.click(pencil("Change the due date of eng-42"));
+  await settle();
+  expect((screen.getByLabelText("Due date of ENG-42") as HTMLInputElement).value).toBe(
+    "2026-11-30",
+  );
+});
+
 test("a standing reads in whole calendar days, and late only where the engine says so", () => {
   expect(standingWords({ days: 0 })).toBe("today");
   expect(standingWords({ days: 1 })).toBe("tomorrow");
@@ -467,12 +497,12 @@ test("the hand-off warning is at the engine's budget", async () => {
   };
   at(7, 8);
   await settle();
-  expect(screen.getByText(/Hand-offs 7 of 8/)).toBeTruthy();
+  expect(screen.getByText(/Handed over 7 of the 8 times the engine allows/)).toBeTruthy();
   expect(screen.queryByText(/the next hand-off will be refused/)).toBeNull();
 
   at(8, 8);
   await settle();
-  expect(screen.getByText(/Hand-offs 8 of 8/)).toBeTruthy();
+  expect(screen.getByText(/Handed over 8 of the 8 times the engine allows/)).toBeTruthy();
   expect(screen.getByText(/the next hand-off will be refused/)).toBeTruthy();
 
   at(3, 3);
@@ -1795,6 +1825,166 @@ test("an asked person opens the item and answers without Worklet", async () => {
   ]);
 });
 
+/** Every REST write a remark gesture sends, answered as a landed tracker write. */
+function recordRemarkWrites(): {
+  method: string;
+  url: string;
+  body: unknown;
+  key: string | null;
+}[] {
+  const sent: { method: string; url: string; body: unknown; key: string | null }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit = {}) => {
+      sent.push({
+        method: (init.method ?? "GET").toUpperCase(),
+        url: String(url),
+        body: typeof init.body === "string" ? JSON.parse(init.body) : undefined,
+        key: ((init.headers ?? {}) as Record<string, string>)["Idempotency-Key"] ?? null,
+      });
+      return new Response(
+        JSON.stringify({ outcome: "applied", position: "CREWLET_TRACKER_LOG@1:120", op_id: "k" }),
+        { status: 200, headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" } },
+      );
+    }),
+  );
+  return sent;
+}
+
+/** A thread with one remark of the reader's, one of somebody else's, and one question of theirs. */
+const REMARKS = {
+  item: "t-1",
+  key: "ENG-42",
+  title: "Fix the login race",
+  comments: [
+    {
+      id: "c-mine",
+      task: "t-1",
+      author: "jane",
+      author_kind: "human",
+      body: "The race is in the session refresh.",
+      created_at: "2031-04-12T09:00:00Z",
+    },
+    {
+      id: "c-theirs",
+      task: "t-1",
+      author: "ada",
+      author_kind: "agent",
+      body: "I can take the refresh path.",
+      created_at: "2031-04-12T10:00:00Z",
+    },
+    {
+      id: "c-ask",
+      task: "t-1",
+      author: "jane",
+      author_kind: "human",
+      body: "Can you reproduce it on staging?",
+      ask: "ada",
+      created_at: "2031-04-12T11:00:00Z",
+    },
+  ],
+};
+
+// A PERSON EDITS AND DELETES THEIR OWN REMARK, AND NOBODY ELSE'S. The task's
+// thread offered Reply alone: the engine served a remark's rewrite and its
+// take-down and the page reached neither. Edit and Delete sit on the reader's
+// own remarks; a question of theirs takes Edit only, since the engine never
+// takes a question down; somebody else's takes neither. Mutation: offer the
+// controls on every remark, or Delete on a question, and a line here goes red.
+test("Edit and Delete sit on the reader's own remarks only", async () => {
+  mount(<WorkItemPage id="ENG-42" />, { answers: { work_comments: REMARKS } });
+  await settle();
+  const row = (text: string) => screen.getAllByText(text)[0]!.closest("article")!;
+  const mine = row("The race is in the session refresh.");
+  const theirs = row("I can take the refresh path.");
+  const asking = row("Can you reproduce it on staging?");
+  expect(within(mine).getByRole("button", { name: "Edit your comment" })).toBeTruthy();
+  expect(within(mine).getByRole("button", { name: "Delete your comment" })).toBeTruthy();
+  expect(within(theirs).queryByRole("button", { name: /^Edit/ })).toBeNull();
+  expect(within(theirs).queryByRole("button", { name: /^Delete/ })).toBeNull();
+  expect(within(asking).getByRole("button", { name: "Edit your question or answer" })).toBeTruthy();
+  expect(within(asking).queryByRole("button", { name: /^Delete/ })).toBeNull();
+});
+
+// AN EDIT REWRITES THE REMARK IN PLACE through the engine's own route, keyed,
+// and refuses to save words that did not change. Mutation: send the edit
+// through the act route, or unkeyed, and the request below is not the one sent.
+test("Edit rewrites the remark through its PATCH route, keyed", async () => {
+  mount(<WorkItemPage id="ENG-42" />, { answers: { work_comments: REMARKS } });
+  await settle();
+  const sent = recordRemarkWrites();
+  const mine = screen.getAllByText("The race is in the session refresh.")[0]!.closest("article")!;
+  fireEvent.click(within(mine).getByRole("button", { name: "Edit your comment" }));
+  const field = within(mine).getByRole("textbox", { name: "Your comment on ENG-42" });
+  fireEvent.click(within(mine).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(sent.filter((s) => s.method !== "GET")).toEqual([]);
+  fireEvent.change(field, { target: { value: "The race is in the token refresh." } });
+  fireEvent.click(within(mine).getByRole("button", { name: "Save" }));
+  await settle();
+  const edit = sent.find((s) => s.method === "PATCH");
+  expect(new URL(edit!.url, "http://x").pathname).toBe("/worklet/items/t-1/comments/c-mine");
+  expect(edit?.body).toEqual({ body: "The race is in the token refresh." });
+  expect(edit?.key).toMatch(/^[0-9a-f-]{36}$/);
+  expect(within(mine).queryByRole("textbox")).toBeNull();
+});
+
+// A REMOVAL IS CONFIRMED, then sent to the remark's DELETE route, keyed; and a
+// remark taken down reads as removed, with no controls and no "(edited)".
+// Mutation: send the removal on the first press, and nothing is confirmed.
+test("Delete is confirmed, then takes the remark down through its DELETE route", async () => {
+  mount(<WorkItemPage id="ENG-42" />, { answers: { work_comments: REMARKS } });
+  await settle();
+  const sent = recordRemarkWrites();
+  const mine = screen.getAllByText("The race is in the session refresh.")[0]!.closest("article")!;
+  fireEvent.click(within(mine).getByRole("button", { name: "Delete your comment" }));
+  const dialog = await screen.findByRole("dialog", { name: "Delete your comment?" });
+  expect(sent.filter((s) => s.method !== "GET")).toEqual([]);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+  await settle();
+  const removal = sent.find((s) => s.method === "DELETE");
+  expect(new URL(removal!.url, "http://x").pathname).toBe("/worklet/items/t-1/comments/c-mine");
+  expect(removal?.key).toMatch(/^[0-9a-f-]{36}$/);
+  expect(screen.queryByRole("dialog", { name: "Delete your comment?" })).toBeNull();
+});
+
+test("a remark taken down reads as removed and offers nothing", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_comments: {
+        ...REMARKS,
+        comments: [
+          {
+            ...REMARKS.comments[0]!,
+            body: "",
+            removed: true,
+            updated_at: "2031-04-13T09:00:00Z",
+          },
+        ],
+      },
+    },
+  });
+  await settle();
+  const gone = screen.getByText("(this comment was removed)").closest("article")!;
+  expect(within(gone).queryByRole("button")).toBeNull();
+  expect(within(gone).queryByText("(edited)")).toBeNull();
+});
+
+// A TASK IN THE TRASH TAKES NO CHANGE, so its remarks offer neither gesture.
+test("a task in the trash offers no Edit or Delete on its remarks", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({
+        task: task({ removed: { by: "jane", kind: "human", at: "2031-04-15T09:00:00Z" } }),
+      }),
+      work_comments: REMARKS,
+    },
+  });
+  await settle();
+  const mine = screen.getAllByText("The race is in the session refresh.")[0]!.closest("article")!;
+  expect(within(mine).queryByRole("button", { name: /^Edit|^Delete/ })).toBeNull();
+});
+
 // AN OPTION IS HELD TO THE ENGINE'S CAP ON ITS OWN FIELD: past 80 bytes the
 // ask was sent and refused with "Check what was entered", naming no field.
 test("an ask's option past the engine's cap says so under it", async () => {
@@ -2028,6 +2218,24 @@ test("opening one of the rail's editors shuts the last", async () => {
   expect(screen.getByLabelText("Points of ENG-42")).toBeTruthy();
   expect(screen.queryByRole("alertdialog")).toBeNull();
   expect(screen.getAllByRole("button", { name: "Save" })).toHaveLength(1);
+});
+
+// AN ESTIMATE'S FIELDS ARE LABELLED IN SIGHT: they said what they hold only
+// by a placeholder ("points", "minutes"), which goes the moment a number is
+// typed. Each name starts with the word on screen.
+test("the estimate editor labels its two fields where they are seen", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil("Change the estimate of ENG-42"));
+  await settle();
+  for (const [shown, named] of [
+    ["Points", "Points of ENG-42"],
+    ["Minutes", "Minutes estimated for ENG-42"],
+  ] as const) {
+    const field = screen.getByLabelText(named) as HTMLInputElement;
+    expect(field.closest("label")?.textContent).toBe(shown);
+    expect(field.getAttribute("placeholder")).toBeNull();
+  }
 });
 
 test("opening another of the rail's editors asks only if the last one changed", async () => {
@@ -2635,6 +2843,85 @@ test("linking a task under a shared key links the one chosen", async () => {
   ]);
 });
 
+// A LINK IS THE KIND CHOSEN. "Link a task" drew only a plain link, so a task
+// could never be said to block or wait on another from the dashboard, though
+// the engine serves both as deltas of update_work_item.
+test("linking a task as blocking it sends the dependency with its reason", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_search: { hits: collidingHits(), available: true } },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Link a task" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "ENG-42 is" }));
+  fireEvent.mouseDown(await screen.findByRole("option", { name: "Blocking" }));
+  await settle();
+  fireEvent.change(within(dialog).getByLabelText("Find a task"), { target: { value: "ENG-7" } });
+  await settle();
+  fireEvent.click(within(dialog).getAllByRole("radio")[0]!);
+  fireEvent.change(within(dialog).getByLabelText(/^Why/), {
+    target: { value: "the release waits on the fix" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Link" }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: {
+        item: "ENG-42",
+        blocking: { add: [SHARED_KEY] },
+        dependency_note: "the release waits on the fix",
+      },
+    },
+  ]);
+});
+
+// EVERY RELATION COMES OFF THE RAIL, on the end that holds it: a dependency
+// from either end through the argument naming that end, a related link drawn
+// from the other task on that task, a duplicate cleared. Nothing removed one
+// before, so a link made by mistake stayed for good.
+test("each relation in the rail is taken off on the end that holds it", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({
+        links: [
+          { kind: "waiting_on", other: "t-3", key: "ENG-3", title: "the dependent", derived: true },
+          { kind: "linked", other: "t-5", key: "ENG-5", title: "drawn there", derived: true },
+          { kind: "duplicates", other: "t-6", key: "ENG-6", title: "the original" },
+        ],
+      }),
+    },
+  });
+  await settle();
+  const relations = screen.getByRole("region", { name: "Relations" });
+  fireEvent.click(within(relations).getByRole("button", { name: "Unlink ENG-3" }));
+  await settle();
+  fireEvent.click(within(relations).getByRole("button", { name: "Unlink ENG-5" }));
+  await settle();
+  fireEvent.click(within(relations).getByRole("button", { name: "Unlink ENG-6" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "update_work_item", args: { item: "ENG-42", blocking: { remove: ["t-3"] } } },
+    { tool: "update_work_item", args: { item: "ENG-5", linked: { remove: ["t-1"] } } },
+    { tool: "update_work_item", args: { item: "ENG-42", duplicate_of: null } },
+  ]);
+  expect(await screen.findAllByText("ENG-42 no longer blocks ENG-3")).not.toHaveLength(0);
+});
+
+test("a reader who may not change the task is offered no unlink", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    viewer: { ...JANE, acts: [] },
+    answers: {
+      work_item: detail({
+        links: [{ kind: "waiting_on", other: "t-2", key: "ENG-2", title: "the blocker" }],
+      }),
+    },
+  });
+  await settle();
+  expect(screen.getByText("Waiting on")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Unlink ENG-2" })).toBeNull();
+});
+
 // A MISSING TASK IS AN EMPTY STATE WITH A WAY BACK, as a missing project and a
 // missing artifact are: it was a full-width grey callout, the one object page
 // that said so in a different shape. Mutation: leave not_found to the generic
@@ -2650,6 +2937,36 @@ test("a task that does not exist says so, naming the key, with the way back to T
     "#/worklet/tasks",
   );
   expect(screen.queryByText("Not found. It may have been removed.")).toBeNull();
+});
+
+// A TASK DELETED FOR GOOD WHILE ITS PAGE IS OPEN IS GONE FROM IT. The page read
+// a task in the trash, the purge landed, and the next read answered not_found:
+// the last reading stood beside the empty state, so the deleted task was drawn
+// whole under "No task called", Restore and More included. Mutation: keep the
+// last reading through a not_found and the title, Restore and More come back.
+test("a task deleted permanently while its page is open leaves only the not-found state", async () => {
+  location.hash = "#/worklet/ENG-42";
+  let purged = false;
+  const trashed = detail({
+    task: task({ removed: { by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" } }),
+  });
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: () =>
+        purged ? Promise.reject(new QueryError("not_found")) : Promise.resolve(trashed),
+    },
+  });
+  await settle();
+  expect(screen.getAllByRole("button", { name: "Restore ENG-42" }).length).toBeGreaterThan(0);
+  purged = true;
+  await act(async () => {
+    session.written("tracker", null, []);
+  });
+  await settle();
+  expect(screen.getByText("No task called “ENG-42”")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Restore ENG-42" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "More for ENG-42" })).toBeNull();
+  expect(screen.queryByText(trashed.task.title)).toBeNull();
 });
 
 test("the title open in its editor is the assistant's to read and set, and Save sends what it set", async () => {

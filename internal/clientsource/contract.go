@@ -110,8 +110,10 @@ var contract = []Entry{
 	// advisor.ts
 	{"ACCESS_OPTION_PREFIX", ReadScalar, "internal/advisor.TestTheDashboardKnowsAGrantOptionByTheEnginesPrefix"},
 	{"PAUSED_SEAT_CLASSES", ReadLiteral, "internal/advisor.TestTheDashboardKnowsEveryClassAPausedSeatRaises"},
+	{"ADVISOR_PAGES", ReadLiteral, "internal/advisor.TestTheDashboardTakesEveryPageAFixOpens"},
 	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"PROJECT_FILE_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_OPTION_MAX_BYTES", ReadScalar,
@@ -517,11 +519,15 @@ var contract = []Entry{
 	{"MERGE_REFUSALS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
 	{"MERGE_CONFLICT", ReadScalar, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
 
+	// cron.ts
+	{"CRON_FIELDS", ReadLiteral, "internal/cron.TestTheDashboardReadsTheFieldsTheGrammarHas"},
+
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"LimitRow", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"LimitGroup", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 	{"LimitUnit", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+	{"SettingRange", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
 
 	// signin.ts
 	{"SignInPolicyAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},

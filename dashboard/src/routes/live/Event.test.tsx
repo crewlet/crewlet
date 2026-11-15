@@ -80,3 +80,37 @@ test("the actor's button is a short noun, with the seat's name on hover and in i
   act(() => seat.focus());
   expect(screen.getByRole("tooltip").textContent).toBe(NAME);
 });
+
+// THE PAYLOAD WRAPS. Drawn unwrapped, a long value ran past the card's edge
+// and was cut there: at a phone's width the ids and times of every line, and
+// at any width a long summary, with a sideways scroll nobody saw.
+//
+// Mutation: draw the payload with `wrap={false}` again.
+test("the payload's long lines wrap rather than run past the card", async () => {
+  location.hash = "#/live/events/ev-1";
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(
+      what === "event"
+        ? { ...EVENT, payload: { conversation_key: "work:task:" + "2eec2dd5".repeat(12) } }
+        : what === "viewer"
+          ? { login: "founder", owner: "jane", grants: ["admin"] }
+          : {},
+    );
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <EventScreen eventId="ev-1" />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await afterMicrotasks();
+  const block = (await screen.findByLabelText("The event payload, as JSON")).closest(
+    ".crewlet-codeblock",
+  );
+  expect(block).not.toBeNull();
+  expect(block!.classList.contains("crewlet-codeblock--nowrap")).toBe(false);
+});

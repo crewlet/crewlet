@@ -25,7 +25,7 @@
  * with something wrong with it.
  */
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Children, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button, ButtonLink, EmptyState, Input, KeyChip, Menu, Tabs, Tag } from "@crewlethq/ui";
 import {
   ChevronDownGlyph,
@@ -192,7 +192,11 @@ export function PageTags({
   return (
     <>
       {status === "draft" && (
-        <Tag size="xs" variant="warning" title="Unfinished: listed here and found by no search">
+        <Tag
+          size="xs"
+          variant="warning"
+          title="Unfinished: search leaves it out until it is published"
+        >
           Draft
         </Tag>
       )}
@@ -224,10 +228,13 @@ export function useSpaces(): {
   error: QueryErrorCode | null;
   /** Why the read was refused, beside `error`: what `QueryState` names. */
   refusal: QueryRefusal | LogRefusal | null;
+  /** The space tool skills are written in, "" where the company has none. */
+  skills: string;
 } {
   const containers = useQuery("containers", undefined, { pollMs: SPACES_POLL_MS });
   return {
     spaces: containers.data?.containers ?? [],
+    skills: containers.data?.skills ?? "",
     read: containers.data !== null,
     loading: containers.loading,
     error: containers.error,
@@ -288,8 +295,8 @@ export function SpacesRow({ current }: { current?: string | undefined }) {
 }
 
 /**
- * The search, in the page bar of every Doclet screen: a field, and the
- * ranking mode in a menu BESIDE it. A control inside a text box is one a
+ * The search, in the page bar of Doclet's landing, a space and the results: a
+ * field, and the ranking mode in a menu BESIDE it. A control inside a text box is one a
  * pointer reaches by missing the box, so the menu sits next to the field
  * rather than in it.
  *
@@ -397,7 +404,19 @@ export function DocletSearchBar() {
   );
 }
 
-/** The page bar every Doclet screen draws: the search, then the screen's own actions. */
+/**
+ * The page bar of Doclet's LISTS (the landing, a space, the results): the
+ * search, then the screen's own actions.
+ *
+ * NOT A PAGE'S BAR, nor the composer's. A screen that is one page, read or
+ * being written, fills its bar with that page's own actions (the watch,
+ * History, Edit and More; Discard, Save as draft and Publish), and the trail
+ * is the one thing on a bar that gives way: a search field and its ranking
+ * menu beside them took some 360px from it, so at 1440 a page's ancestors fell
+ * to stubs ("D…", "Product Man…"), at 768 the composer's controls wrapped under
+ * the trail, and at 390 a page's bar took three rows with Edit alone on the
+ * last. There, `/` opens the palette, which searches pages as well.
+ */
 export function DocletBar({ children }: { children?: ReactNode }) {
   return (
     <PageActions>
@@ -451,6 +470,33 @@ export function NotInDoclet({
         </ButtonLink>
       }
     />
+  );
+}
+
+/**
+ * A place written as a path ("Core / ADR 1 / Meeting notes"): its first
+ * segment, then each next one behind a "/".
+ *
+ * A SEPARATOR TRAVELS WITH THE SEGMENT IT INTRODUCES. Each "/" and the segment
+ * after it are one unit that never breaks inside (`.knowledge-step`), so a path
+ * too long for its line breaks BEFORE a "/", never after it, and a long
+ * segment wraps its own words beside its "/". Drawn as loose items of one
+ * wrapping row, a page's "Space: Core / ADR 1: …" left the "/" alone on a line
+ * at every width, and the composer's "File it in [space] /" left it dangling
+ * at the end of a phone's line with the select it introduces under it.
+ */
+export function PathSteps({ children }: { children: ReactNode }) {
+  const [head, ...rest] = Children.toArray(children);
+  return (
+    <span className="knowledge-path">
+      {head}
+      {rest.map((step, i) => (
+        <span key={i} className="knowledge-step">
+          <span aria-hidden="true">/</span>
+          {step}
+        </span>
+      ))}
+    </span>
   );
 }
 

@@ -80,6 +80,7 @@ import { withLink, type FieldLink } from "./setupWords.tsx";
 import { SetupStepsAside, SetupStepsSheet } from "./SetupSteps.tsx";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { SERVICE_NAMES } from "~/lib/services.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -513,6 +514,7 @@ export function SetupForm({
    */
   onDone: () => void | Promise<void>;
 }) {
+  const waiting = useWaiting();
   const toast = useToast();
   const headingId = useId();
   // A SURFACE THE DOCUMENT GIVES TO A CREWLET SERVICE IS NOT ON THE FORM: its
@@ -873,7 +875,7 @@ export function SetupForm({
       ),
     ),
     write: writeVia(setValues, (next: Readonly<Record<string, string>>) => ({ ...next })),
-    blocked: () => (busy ? "Waiting for the engine to finish writing." : null),
+    blocked: () => (busy ? waiting.reason : null),
   });
 
   /** Every requirement on the form, with the section it is answered in and its value key. */
@@ -1419,7 +1421,7 @@ export function SetupForm({
         <Button
           variant="ghost"
           onClick={onClose}
-          disabledReason={busy ? "Waiting for the engine to finish writing." : undefined}
+          disabledReason={busy ? waiting.reason : undefined}
         >
           Cancel
         </Button>

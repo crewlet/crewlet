@@ -539,6 +539,11 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-modal__body--fill",
+    why: "uilet's Modal writes it on a body one child fills, and stretches every child of that body. The dashboard's Modal keeps a place for a refused control's refusal inside the body, and styles/screens.css holds that place to its own height there, so a filled body never gives the refusal a share of its height. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-fact-list__row",
     why: "uilet's FactList writes it on each row, and shares the row by content with a value that can shrink to a word, so in the node editor a long value squeezed its label into a narrow wrapped column. styles/screens.css lets the row wrap, so a long value takes the next line. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
@@ -672,6 +677,11 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-inline-code",
     why: "uilet's InlineCode writes it. styles/screens.css draws a model key that is a link (`.prof-chain-model`) in the link ink and underlines it under the pointer, which the chip cannot know it is inside. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-empty-state",
+    why: "uilet's EmptyState writes it, and a DataGrid writes it for its own empty body. styles/screens.css centres it in a Token spend card that its row stretches to a taller neighbour's height (`.spend-card`), where By agent's empty state stood at the top of about 390px of blank. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

@@ -149,8 +149,6 @@ const LITERAL_BOUND: Record<string, string> = {
     "the manifest inside the integration setup Modal, which is portaled outside the page",
   "screens.css .design-opened--actual":
     "a board at its own size inside the opened-board Modal, which is portaled outside the page",
-  "chatlet-panes.css .chat-suggest__list":
-    "the suggestions inside Add people's Modal, which is portaled outside the page",
   "integrations.css .int-subjects":
     "9rem of chips on a finding — shorter than any view it can sit in, so once scrolled to it is wholly on screen",
 };
@@ -340,10 +338,14 @@ describe("the record ceiling", () => {
   test("is the view, capped and floored, on both scrollers a record can sit in", () => {
     const body = rules().get(SCROLLERS);
     expect(body, `the ceiling's rule (${SCROLLERS}) is gone`).toBeDefined();
+    // THE VIEW'S SHARE is declared once (`--record-view`), which a record that
+    // is a lens's whole content takes; the ceiling is it under the cap.
+    const view = decl(body!, "--record-view") ?? "";
+    expect(fromTheView(view), "the record view is the scroller's view").toBe(true);
+    expect(view).toContain("var(--sticky-top)");
     const ceiling = decl(body!, "--record-ceiling") ?? "";
-    expect(fromTheView(ceiling), "the record ceiling is the scroller's view").toBe(true);
     expect(ceiling).toContain("var(--record-max)");
-    expect(ceiling).toContain("var(--sticky-top)");
+    expect(ceiling).toContain("var(--record-view)");
     // The kit's property, which every CodeBlock inside reads.
     expect(decl(body!, "--crewlet-codeblock-max-height")).toBe("var(--record-ceiling)");
     // The cap is declared once, at the root, for the one block outside both.
@@ -390,6 +392,8 @@ describe("the record ceiling", () => {
       "the YAML dialog: a Modal is portaled outside both scrollers, so the inherited ceiling never reaches it",
     "routes/live/trace/Waterfall.tsx":
       "a span's Input and Output, read as a pair: half the ceiling each, derived from it",
+    "routes/settings/Config.tsx":
+      "the active document is the Active lens's whole content: the view's share (`--record-view`), never the cap a record with something under it keeps",
   };
 
   test("is passed at no call but the ones that differ, and derived even there", () => {
@@ -413,7 +417,7 @@ describe("the record ceiling", () => {
     // EVEN THERE, NEVER A NUMBER: a value names the root's cap or derives from
     // the ceiling, so the 460 is written once.
     const numbers = passed
-      .filter((p) => p.value === null || !/var\(--record-(max|ceiling)\)/.test(p.value))
+      .filter((p) => p.value === null || !/var\(--record-(max|ceiling|view)\)/.test(p.value))
       .map((p) => `${p.where} — ${p.value ?? "(not a constant string)"}`);
     expect(numbers).toEqual([]);
   });

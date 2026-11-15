@@ -22,12 +22,12 @@ import {
   Button,
   FormField,
   Input,
-  Modal,
   TableTextCell,
   VersionTimeline,
   useToast,
   type VersionItem,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
 import { ledgerColumns } from "~/components/ledgerGrid.tsx";

@@ -994,6 +994,12 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		writeChecked(w, prepared)
 		return
 	}
+	// NOTHING TO STORE, and no summary asked for, since no revision records
+	// one: see [writeUnchanged].
+	if prepared.unchanged {
+		writeUnchanged(w, prepared)
+		return
+	}
 	if !requireSummary(w, summary, "PATCH /config needs an audit summary: the "+
 		"X-Summary header, or a top-level _summary key in the body. A patch "+
 		"is the change least visible in a diff, so the sentence saying what "+
@@ -1024,7 +1030,7 @@ func writeChecked(w http.ResponseWriter, p *prepared) {
 // more beside it (a server's removal names what it takes with it).
 func checkedAnswer(p *prepared) map[string]any {
 	return map[string]any{
-		"valid": true, "base_revision_id": p.base.ID,
+		"valid": true, "base_revision_id": p.base.ID, "changed": !p.unchanged,
 		"warnings": checkedWarnings(p), "derived": p.derived,
 	}
 }
@@ -1032,6 +1038,31 @@ func checkedAnswer(p *prepared) map[string]any {
 // writeApplied answers a write that stored and activated a revision.
 func writeApplied(w http.ResponseWriter, applied Applied) {
 	writeJSON(w, http.StatusCreated, appliedAnswer(applied))
+}
+
+// writeUnchanged answers a write of PART of the document (PATCH /config, an
+// entity's PUT) that leaves it exactly as it is: `200` with `changed: false`
+// and the revision that already says it, storing and activating nothing.
+//
+// A PATCH OR AN ENTITY'S PUT IS "CHANGE THESE FIELDS", and one that changes
+// none has nothing to apply. Stored, it was a second revision with nothing in
+// it under a summary that says what the first one did ("Add three human seats"
+// twice, a diff of nothing between them), and its activation rebuilt every
+// node's seats for no reason. Re-activating the document unchanged is a
+// gesture of its own, POST /config/reload, which the dashboard's Reload and a
+// rotated credential use. A WHOLE DOCUMENT sent with PUT /config is not
+// answered here: it is the activation a caller who renders the document makes
+// after writing the values it reads (crewlet-operator's), and stays one. The
+// charter answers the same way for the same reason ([Service.writeCharter]).
+//
+// AFTER ADMISSION, which refuses a lead's unchanged write as it always did
+// (admission.go): answering it would tell somebody who may not read a setting
+// whether it already holds a value they guessed.
+func writeUnchanged(w http.ResponseWriter, p *prepared) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"changed": false, "revision_id": p.base.ID,
+		"warnings": checkedWarnings(p), "derived": p.derived,
+	})
 }
 
 // appliedAnswer is [writeApplied]'s body, for a route whose write answers
@@ -1136,10 +1167,13 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 			"the patched document was refused; an unknown key in a "+
 				"patch is refused here rather than ignored", err)
 	case errors.As(err, &invalid):
+		// A SENTENCE A PERSON CAN BE SHOWN: a settings screen draws the hint
+		// under the refusal, and this one was shouted at them in an
+		// operator's terms.
 		refuseDocument(w, httpjson.CodeValidationError, invalid.Err.Error(),
-			"the WHOLE document a write produces is validated, not only "+
-				"the part it changed, so a section that is fine on its own is "+
-				"still refused when the company it leaves is invalid", err)
+			"The whole company is checked on every change, not only the part "+
+				"that changed, so a change that is fine on its own is still "+
+				"refused when it leaves the company unable to run.", err)
 	case errors.As(err, &held):
 		// A REMEDY PER KIND OF HOLDER, because a person is never unbound —
 		// they hold a human seat for as long as they exist (ADR-0032) — so

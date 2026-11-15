@@ -115,15 +115,20 @@ func (p *Provider) loginStatus(ctx context.Context, budget time.Duration) (Login
 		return LoginStatus{}, fmt.Errorf("%w: the %q harness has no status command, so whether it "+
 			"holds a login can only be seen by using it", ErrNoLoginCommand, p.harness)
 	}
+	captures, err := p.ws.capturesDir()
+	if err != nil {
+		return LoginStatus{}, err
+	}
 	var res *rawResult
-	_, err := p.inCredentialHome(ctx, syncRefresh, io.Discard,
+	_, err = p.inCredentialHome(ctx, syncRefresh, io.Discard,
 		func(ctx context.Context, home string, env []string) error {
-			r, err := run(ctx, invocation{
+			r, runErr := run(ctx, invocation{
 				binary: p.profile.Binary, args: p.profile.StatusArgs,
 				dir: home, env: env, timeout: budget, grace: p.termGrace,
+				outDir: captures, setting: p.stateSetting(), hooks: p.hooks, janitor: &p.janitor,
 			})
 			res = r
-			return err
+			return runErr
 		})
 	if err != nil {
 		return LoginStatus{}, err

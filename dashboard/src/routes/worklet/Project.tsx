@@ -37,9 +37,11 @@
  * # What a person can change here
  *
  * The page bar ends with New task, which files into THIS project, and Edit
- * project — the lead's target date, a company write (`write_project`) the
- * engine decides who may make. The work itself is written from the list, as
- * everywhere (`ItemsView.tsx`).
+ * project: the lead's target date, default assignee and archive, a company
+ * write (`write_project`) the engine decides who may make. About edits the
+ * project's labels and its own fields where it lists them
+ * (`ProjectSettings.tsx`), and Files adds and removes its files. The work
+ * itself is written from the list, as everywhere (`ItemsView.tsx`).
  */
 
 import { useMemo, useState, type ReactNode } from "react";
@@ -81,12 +83,16 @@ import {
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { projectEditHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { fmtDateTime, relTime, fmtCount } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { useCompanyZone } from "~/lib/companyDay.ts";
 import {
+  changeActor,
+  changeLabels,
   pageCount,
   pageNote,
   SCOPE_GROUPS,
@@ -103,6 +109,7 @@ import { filed, ProjectCensus } from "./census.tsx";
 import { ItemsView } from "./ItemsView.tsx";
 import { HistoryView } from "./History.tsx";
 import { ProjectFiles } from "./Files.tsx";
+import { ProjectFields, ProjectLabels } from "./ProjectSettings.tsx";
 import { FEED_PAGE } from "./feed.tsx";
 import { statusDot } from "./shapes/group.tsx";
 import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
@@ -164,6 +171,11 @@ export function Project({ projectKey }: { projectKey: string }) {
   // cannot make the change.
   const [editing, setEditing] = useState(false);
   const editAccess = useWriteAccess("write_project");
+  const viewer = useViewer();
+  // AND THE PROJECT'S OWN RULE, as the inline button holds it: its lead or an admin.
+  const editHeld = editAccess.can
+    ? projectEditHold(viewer, detail?.lead.handle)
+    : editAccess.reason;
   usePageMenu(
     detail
       ? [
@@ -172,8 +184,8 @@ export function Project({ projectKey }: { projectKey: string }) {
             label: "Edit project",
             icon: <PencilGlyph size="sm" />,
             onSelect: () => setEditing(true),
-            disabled: !editAccess.can,
-            description: editAccess.can ? undefined : editAccess.reason,
+            disabled: editHeld !== undefined,
+            description: editHeld,
           },
         ]
       : [],
@@ -233,6 +245,9 @@ export function Project({ projectKey }: { projectKey: string }) {
               project={projectKey}
               name={detail.name}
               target={detail.target_date}
+              assignee={detail.default_assignee}
+              archived={detail.archived}
+              lead={detail.lead.handle}
               open={editing}
               onOpenChange={setEditing}
             />
@@ -275,9 +290,10 @@ export function Project({ projectKey }: { projectKey: string }) {
 /**
  * What the CONTAINER is, as against what is in it.
  *
- * Its header first — the facts, the sentence and the census the rail wears
- * too ([ProjectHead]) — then its vocabulary — the statuses, the types and the fields it declares — its
- * labels, and how its open work is distributed. Every one of these is a fact a
+ * Its header first (the facts, the sentence and the census the rail wears
+ * too, [ProjectHead]), then how its open work is distributed, its vocabulary
+ * (the statuses and the types), and the two lists a person edits here: its
+ * labels and its own fields. Every one of these is a fact a
  * board cannot state from its rows, and each was either buried in a rail or
  * reachable nowhere at all: a company that renamed four statuses and declared
  * six fields had no screen that said so.
@@ -358,40 +374,6 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
                 ))}
             </div>
           </div>
-          <div className="col gap-1">
-            <span className="t-label">Labels</span>
-            <div className="row gap-2 wrap">
-              {(detail.tags ?? []).filter((t) => !t.archived).length === 0 ? (
-                <EmptyValue label="This project declares no labels" />
-              ) : (
-                (detail.tags ?? [])
-                  .filter((t) => !t.archived)
-                  .map((t) => (
-                    <Tag key={t.slug} appearance="outline">
-                      {t.label}
-                    </Tag>
-                  ))
-              )}
-            </div>
-          </div>
-          <div className="col gap-1">
-            <span className="t-label">Fields</span>
-            <div className="row gap-2 wrap">
-              {(detail.fields ?? []).flatMap((g) => g.fields).filter((f) => !f.archived).length ===
-              0 ? (
-                <EmptyValue label="This project declares no fields of its own" />
-              ) : (
-                (detail.fields ?? [])
-                  .flatMap((g) => g.fields)
-                  .filter((f) => !f.archived)
-                  .map((f) => (
-                    <Tag key={f.id} appearance="outline" title={f.description || undefined}>
-                      {f.name}
-                    </Tag>
-                  ))
-              )}
-            </div>
-          </div>
           {/* THE STATE A FIELD IN THE MIDDLE OF A MOVE IS IN, which is a
               finding rather than a decoration: a workspace field this project
               redeclares is one whose values are read from two places until the
@@ -404,6 +386,8 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
           ) : null}
         </div>
       </Card>
+      <ProjectLabels detail={detail} />
+      <ProjectFields detail={detail} />
       <ProjectFeed detail={detail} chrome={chrome} />
     </div>
   );
@@ -418,6 +402,13 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
     { pollMs: 60_000 },
   );
   const records = feed.data?.records ?? [];
+  // THE FEED'S OWN LABELS ([changeLabels]): the tasks its deltas name by id,
+  // and the company zone a day field is read in, beside the page's chrome.
+  const zone = useCompanyZone();
+  const labels = useMemo(
+    () => changeLabels(chrome, [feed.data?.keys], zone),
+    [chrome, feed.data, zone],
+  );
   return (
     <Card>
       <Card.Header
@@ -464,7 +455,7 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                       </span>
                     </div>
                     <span className="t-caption truncate">
-                      {describeChange(record, chrome)} · {record.actor || "the engine"}
+                      {describeChange(record, labels)} · {changeActor(record, labels)}
                     </span>
                   </div>
                 );

@@ -29,6 +29,9 @@ func TestMain(m *testing.M) {
 	if path := os.Getenv(helperEnv); path != "" {
 		os.Exit(runLockHelper(path, os.Getenv(helperModeEnv)))
 	}
+	if os.Getenv(holdEnv) != "" {
+		os.Exit(runHoldHelper())
+	}
 	os.Exit(m.Run())
 }
 

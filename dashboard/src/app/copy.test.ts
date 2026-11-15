@@ -67,3 +67,40 @@ test("the dashboard's shipped prose spells colour one way", () => {
   }
   expect(found).toEqual([]);
 });
+
+/*
+ * NOBODY WAITS FOR "THE ENGINE". A dialog whose write is out says why it cannot
+ * close in the words `lib/waiting.ts` holds, which the dashboard's `Modal` and
+ * `ConfirmModal` use unless a dialog waits for something of its own; forty-one
+ * dialogs spelled "Waiting for the engine to answer" instead, naming a part of
+ * the product a reader never sees, and saying it while a step-up was asking
+ * the reader. And Chatlet's own sentences say Crewlet, the product a person
+ * runs, where they said "the engine".
+ */
+test("no shipped sentence says a reader is waiting for the engine", () => {
+  const found: string[] = [];
+  for (const module of modules().filter(
+    (m) => !/\.test\./.test(m.path) && !m.path.startsWith("test/"),
+  )) {
+    for (const { text, line } of shippedText(module)) {
+      if (/waiting for the engine/i.test(text)) found.push(`${module.path}:${line} ${text.trim()}`);
+    }
+  }
+  expect(found).toEqual([]);
+});
+
+test("Chatlet's shipped prose never calls Crewlet the engine", () => {
+  const chat = modules().filter(
+    (m) => m.path.startsWith("routes/chatlet/") && !/\.test\./.test(m.path),
+  );
+  expect(chat.length, "the gate read too few of Chatlet's modules").toBeGreaterThan(30);
+  const found: string[] = [];
+  for (const module of chat) {
+    for (const { text, line } of shippedText(module)) {
+      const prose = text.trim();
+      if (/\s/.test(prose) && /\bengine\b/i.test(prose))
+        found.push(`${module.path}:${line} ${prose}`);
+    }
+  }
+  expect(found).toEqual([]);
+});

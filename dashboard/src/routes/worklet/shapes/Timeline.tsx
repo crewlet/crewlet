@@ -29,6 +29,7 @@ import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "~/components/w
 import { Button, EmptyState, Tag, cx } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { plural } from "~/lib/format.ts";
+import { useCompanyZone } from "~/lib/companyDay.ts";
 import { itemAddress, readsBlocked } from "~/lib/work.ts";
 
 /** How wide one day is, in pixels. */
@@ -207,7 +208,8 @@ function Band({
   inTrash: boolean;
 }) {
   const hidden = count !== undefined ? count - rows.length : 0;
-  const line = useMemo(() => timelineOf(rows, { now }), [rows, now]);
+  const zone = useCompanyZone();
+  const line = useMemo(() => timelineOf(rows, { now, zone }), [rows, now, zone]);
   const ticks = useMemo(() => weekTicks(line), [line]);
   const height = line.bars.length * ROW_PX;
 

@@ -14,6 +14,7 @@ import { graphItemKey } from "@crewlethq/ui";
 import { Atlas } from "./Atlas.tsx";
 import { InertWebSocket, LayoutClient, sidewaysScrollers } from "~/test/layout.tsx";
 import { eventually } from "~/test/settle.ts";
+import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import {
   activityAnswer,
@@ -23,6 +24,7 @@ import {
   grownCompany,
   mapAnswer,
   sparseCompany,
+  summary,
   type AtlasFixture,
 } from "~/test/atlas.ts";
 
@@ -85,11 +87,12 @@ async function mount(
   fixture: AtlasFixture,
   hash = "#/company/atlas",
   narrow: (params: Record<string, unknown>) => AtlasFixture = () => fixture,
+  gutter = 0,
 ) {
   location.hash = hash;
   await page.viewport(width, 900);
   host = document.createElement("div");
-  host.style.cssText = `width: ${width}px; height: 900px; display: flex; flex-direction: column;`;
+  host.style.cssText = `width: ${width}px; height: 900px; display: flex; flex-direction: column; padding-inline: ${gutter}px; box-sizing: border-box;`;
   document.body.append(host);
   root = createRoot(host);
   const ask = (what: string, params: Record<string, unknown>) =>
@@ -228,7 +231,10 @@ test("a filter fits the map to the answer it narrows to, not the one it replaces
   const company = generatedCompany(120);
   const alerting = {
     ...company,
-    nodes: company.nodes.filter((node) => node.health === "alerting"),
+    // What a filter leaves: a few alerting entries, in two of the eight lanes.
+    nodes: company.nodes.filter(
+      (node) => node.health === "alerting" && (node.lane === "services" || node.lane === "data"),
+    ),
   };
   await mount(1440, company, "#/company/atlas", (params) =>
     params.health === "alerting" ? alerting : company,
@@ -243,13 +249,102 @@ test("a filter fits the map to the answer it narrows to, not the one it replaces
       drawn(".crewlet-graph-canvas__items .crewlet-graph-canvas__card").length,
     ).toBeLessThanOrEqual(alerting.nodes.length),
   );
-  await eventually(() => expect(filling(canvas)).toBeGreaterThan(0.9));
+  // Fitted to the new answer: it fills the canvas along one side, or a map
+  // that small is drawn at actual size, the most a fit takes.
+  await eventually(() =>
+    expect(
+      filling(canvas) > 0.9 ||
+        document.querySelector("[aria-label^='Zoom is 100 percent']") !== null,
+    ).toBe(true),
+  );
   expect(
     document.querySelector(".crewlet-graph-canvas__world")!.getBoundingClientRect().width,
   ).not.toBe(whole);
   for (const lane of drawn(".crewlet-graph-canvas__lane")) {
     expect(inside(lane.getBoundingClientRect(), canvas)).toBe(true);
   }
+});
+
+// SERVICES ON NO CALL CHAIN FLOW ACROSS THEIR LANE: seventy-eight services
+// read from a cluster before any call is known stood in one column, so the
+// lane alone set the fit and no name read. Mutation: name every service's
+// depth again and the lane is one column of 78, the map marks.
+test("seventy-eight services nothing calls open across their lane, at a size their cards draw", async () => {
+  const services = Array.from({ length: 78 }, (_, i) =>
+    summary("service", `svc-${String(i + 1).padStart(2, "0")}`),
+  );
+  const company = { nodes: services, edges: [] };
+  await mount(1440, company, "#/company/atlas?lane=services");
+  await shownMap();
+  const detail = document.querySelector<HTMLElement>(".crewlet-graph-canvas__world")!.dataset
+    .detail;
+  expect(detail).not.toBe("marks");
+  const lefts = new Set(
+    drawn(".crewlet-graph-canvas__items .crewlet-graph-canvas__card").map((card) =>
+      Math.round(card.getBoundingClientRect().left),
+    ),
+  );
+  expect(lefts.size).toBeGreaterThan(1);
+});
+
+// A CARD IN THE BAND SHOWS ITS ENTRY ON THE MAP, and on a phone the map is
+// below the fold: the press selected the entry where nobody could see it.
+// Mutation: select without bringing the map into view.
+test("a Needs attention card brings the map, with its selection, into view on a phone", async () => {
+  const company = grownCompany();
+  await mount(390, company);
+  // THE SHELL'S SCROLLER, which the page scrolls in: a bare screen has none.
+  host!.id = SCREEN_SCROLL_ID;
+  host!.style.overflowY = "auto";
+  await shownMap();
+  const card = await eventually(() => {
+    const found = [...document.querySelectorAll<HTMLElement>(".atlas-band__entry")].find((one) =>
+      one.textContent?.startsWith("orders-db"),
+    );
+    expect(found).toBeDefined();
+    return found!;
+  });
+  // Below the fold: most of the map, and its dock at the foot, out of view.
+  const view = host!.getBoundingClientRect();
+  const before = document.querySelector(".atlas-map")!.getBoundingClientRect();
+  expect(before.bottom).toBeGreaterThan(view.bottom + before.height / 2);
+  card.click();
+  await eventually(() => {
+    const box = document.querySelector(".atlas-map")!.getBoundingClientRect();
+    expect(box.top).toBeGreaterThanOrEqual(view.top - 1);
+    expect(box.bottom).toBeLessThanOrEqual(view.bottom + 1);
+  });
+  expect(location.hash).toContain(`sel=${company.ordersDb.id}`);
+});
+
+// A NARROWED MAP DRAWS WHAT MATCHED: all eight lanes at their full width set
+// the fit, so on a phone the alerting entries the band's link leads to were
+// marks with no name. Mutation: draw every lane on a narrowed map again, or
+// give a lane of two matches its full width of columns.
+test("on a phone, a filter's few matches open in their own lanes at a size their names read", async () => {
+  const company = generatedCompany(120);
+  const alerting = {
+    ...company,
+    // What a filter leaves: a few alerting entries, in two of the eight lanes.
+    nodes: company.nodes.filter(
+      (node) => node.health === "alerting" && (node.lane === "services" || node.lane === "data"),
+    ),
+  };
+  // Inside the phone's 16px gutter, as the app draws the page, not edge to edge.
+  await mount(
+    390,
+    company,
+    "#/company/atlas?health=alerting",
+    (params) => (params.health === "alerting" ? alerting : company),
+    16,
+  );
+  await shownMap();
+  const lanes = new Set(alerting.nodes.map((node) => node.lane));
+  await eventually(() => expect(drawn(".crewlet-graph-canvas__lane")).toHaveLength(lanes.size));
+  expect(lanes.size).toBeLessThan(LANES.length);
+  expect(
+    document.querySelector<HTMLElement>(".crewlet-graph-canvas__world")!.dataset.detail,
+  ).not.toBe("marks");
 });
 
 // A LINK TO ONE ENTRY (its sheet, or "Show it on the map") opens the map on
@@ -328,6 +423,12 @@ test("three hundred entries open with their groups closed, each one card saying 
   // Mutation: raise ATLAS_OPEN_MAX past 300 and the groups open.
   expect(drawn(".crewlet-graph-canvas__card:not(.crewlet-graph-canvas__card--group)")).toEqual([]);
   expect(texts(".crewlet-graph-canvas__card--group").join(" ")).toMatch(/\d+ entries/);
+  // NEVER A BLANK CELL: a group whose vendor has no mark (or no vendor at all)
+  // draws the card's own glyph there. Mutation: pass a lead that draws nothing.
+  const cells = drawn(".crewlet-graph-canvas__card--group .crewlet-graph-canvas__cell");
+  expect(cells.length).toBeGreaterThan(0);
+  for (const cell of cells)
+    expect(cell.querySelector("svg"), cell.textContent ?? "").not.toBeNull();
   expect(sidewaysScrollers(host!)).toEqual([]);
 });
 

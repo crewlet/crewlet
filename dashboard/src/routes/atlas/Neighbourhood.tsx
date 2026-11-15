@@ -15,11 +15,12 @@ import {
 } from "@crewlethq/ui";
 import type { AtlasMapEdge, AtlasSummary, AtlasTraceAnswer } from "~/contract/atlas.ts";
 import { MAP_LABELS, cardOf, lineOf } from "./graph.tsx";
+import { RELATIONS } from "./words.ts";
 
 type Cluster = "used" | "self" | "uses" | "runs" | "around";
 
 const CLUSTERS: Readonly<Record<Cluster, GraphLane>> = {
-  used: { id: "used", label: "Used by" },
+  used: { id: "used", label: "Relies on it" },
   self: { id: "self", label: "This entry" },
   uses: { id: "uses", label: "Depends on" },
   runs: { id: "runs", label: "Runs on", columns: 2 },
@@ -67,6 +68,83 @@ export function touching(nodes: readonly GraphNode[]): Touching {
 /** The diagram of one entry: its cards and its lines. */
 export type Near = ReturnType<typeof neighbourhood>;
 
+/** One related entry and how it relates, from either side: "Runs on", "Depends on it". */
+export interface Related {
+  relation: string;
+  entry: AtlasSummary;
+}
+
+/**
+ * WHAT ONE ENTRY TOUCHES, ONE STEP OUT, IN ONE GROUPING: what relies on it,
+ * what it relies on (what it calls and what it runs on) and what stands around
+ * it, each neighbour once, in the group of its first relation (the path's,
+ * before what it runs on, before what stands around). The diagram draws these
+ * clusters, the sentence over it counts them, and the sheet's and the page's
+ * lists list them, so one entry never reports two counts of one thing. Every
+ * hop is another question, and says so ([AtlasMap]'s dock, the page's trace).
+ */
+function placed(
+  self: string,
+  down: AtlasTraceAnswer | null,
+  up: AtlasTraceAnswer | null,
+): {
+  summaries: Map<string, AtlasSummary>;
+  lines: Map<string, AtlasMapEdge>;
+  chosen: Map<string, { cluster: Cluster; edge: AtlasMapEdge }>;
+} {
+  const summaries = new Map<string, AtlasSummary>();
+  const lines = new Map<string, AtlasMapEdge>();
+  for (const trace of [down, up]) {
+    for (const summary of trace?.hops[0]?.entries ?? []) summaries.set(summary.id, summary);
+    for (const edge of trace?.edges ?? []) {
+      if (edge.from !== self && edge.to !== self) continue;
+      lines.set(`${edge.from}>${edge.to}:${edge.relation}`, edge);
+    }
+  }
+  const rank: Cluster[] = ["used", "uses", "runs", "around"];
+  const chosen = new Map<string, { cluster: Cluster; edge: AtlasMapEdge }>();
+  for (const edge of lines.values()) {
+    const other = edge.from === self ? edge.to : edge.from;
+    if (!summaries.has(other)) continue;
+    const cluster = clusterOf(edge, self);
+    const held = chosen.get(other);
+    if (!held || rank.indexOf(cluster) < rank.indexOf(held.cluster))
+      chosen.set(other, { cluster, edge });
+  }
+  return { summaries, lines, chosen };
+}
+
+/** What one entry touches, one step out: see [placed]. */
+export interface RelatedGroups {
+  /** The entries that rely on it: "Depends on it". */
+  reliedOnBy: Related[];
+  /** What it relies on: what it calls, then what it runs on. */
+  reliesOn: Related[];
+  /** Its account, its monitors, what it is built and deployed from. */
+  around: Related[];
+}
+
+export function relatedOf(
+  self: string,
+  down: AtlasTraceAnswer | null,
+  up: AtlasTraceAnswer | null,
+): RelatedGroups {
+  const { summaries, chosen } = placed(self, down, up);
+  const out: RelatedGroups = { reliedOnBy: [], reliesOn: [], around: [] };
+  const runs: Related[] = [];
+  for (const [id, { cluster, edge }] of chosen) {
+    const entry = summaries.get(id)!;
+    const words = RELATIONS[edge.relation];
+    const related = { relation: edge.from === self ? words : `${words} it`, entry };
+    if (cluster === "used") out.reliedOnBy.push(related);
+    else if (cluster === "around") out.around.push(related);
+    else if (cluster === "runs") runs.push(related);
+    else out.reliesOn.push(related);
+  }
+  out.reliesOn.push(...runs);
+  return out;
+}
+
 /** The entry and everything one step from it as the diagram's cards and lines. */
 export function neighbourhood(
   self: AtlasSummary,
@@ -74,35 +152,16 @@ export function neighbourhood(
   up: AtlasTraceAnswer | null,
   now: number,
 ): { nodes: GraphNode[]; edges: GraphEdge[] } {
-  const summaries = new Map<string, AtlasSummary>();
-  const lines = new Map<string, AtlasMapEdge>();
-  for (const trace of [down, up]) {
-    for (const summary of trace?.hops[0]?.entries ?? []) summaries.set(summary.id, summary);
-    for (const edge of trace?.edges ?? []) {
-      if (edge.from !== self.id && edge.to !== self.id) continue;
-      lines.set(`${edge.from}>${edge.to}:${edge.relation}`, edge);
-    }
-  }
-  // A NEIGHBOUR STANDS IN ONE CLUSTER, the one of its first relation: the
-  // path's before what it runs on, before what stands around.
-  const rank: Cluster[] = ["used", "uses", "runs", "around"];
-  const placed = new Map<string, Cluster>();
-  for (const edge of lines.values()) {
-    const other = edge.from === self.id ? edge.to : edge.from;
-    if (!summaries.has(other)) continue;
-    const cluster = clusterOf(edge, self.id);
-    const held = placed.get(other);
-    if (!held || rank.indexOf(cluster) < rank.indexOf(held)) placed.set(other, cluster);
-  }
+  const { summaries, lines, chosen } = placed(self.id, down, up);
   const nodes: GraphNode[] = [{ ...cardOf(self, now), lane: "self" }];
-  for (const [id, cluster] of placed) {
+  for (const [id, { cluster }] of chosen) {
     const summary = summaries.get(id);
     if (summary) nodes.push({ ...cardOf(summary, now), lane: cluster });
   }
   return {
     nodes,
     edges: [...lines.values()]
-      .filter((edge) => placed.has(edge.from === self.id ? edge.to : edge.from))
+      .filter((edge) => chosen.has(edge.from === self.id ? edge.to : edge.from))
       .map(lineOf),
   };
 }

@@ -64,7 +64,8 @@ import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { authorLabel, throughOf } from "~/lib/attribution.ts";
+import { throughOf } from "~/lib/attribution.ts";
+import { AuthorCell, Credential } from "~/components/Credential.tsx";
 import { authorityWords } from "~/lib/refusal.ts";
 import { isAbort, rest, RestError } from "~/protocol/index.ts";
 import { restErrorCode, useRest } from "~/lib/useRest.ts";
@@ -367,7 +368,7 @@ function CredentialBody({
                   // incident asks of this row.
                   label: "Through",
                   value: throughOf(row.updated_by, row.operator_id) ? (
-                    <span className="mono">{throughOf(row.updated_by, row.operator_id)}</span>
+                    <Credential through={throughOf(row.updated_by, row.operator_id)} />
                   ) : undefined,
                 },
                 { label: "Updated", value: fmtDateTime(row.updated_at) },
@@ -556,25 +557,7 @@ export function Secrets({ name }: { name?: string }) {
       )}
 
       {loading && rows === null && <Skeleton variant="text" rows={4} label="Loading" />}
-      <QueryState
-        error={error}
-        refusal={refusal}
-        loading={loading}
-        empty={
-          list.length
-            ? undefined
-            : {
-                title: "No secrets are stored",
-                // A COMMAND IS CODE: in prose it read as three words of the
-                // sentence.
-                hint: (
-                  <>
-                    Add one here or with <InlineCode>crewlet secrets set</InlineCode>.
-                  </>
-                ),
-              }
-        }
-      >
+      <QueryState error={error} refusal={refusal} loading={loading}>
         <Card padding="none">
           <DataGrid<SecretRow>
             rows={list}
@@ -586,6 +569,20 @@ export function Secrets({ name }: { name?: string }) {
             onRowActivate={openCredential}
             isSelected={(s) => s.name === addressed}
             defaultSort="name"
+            // THE EMPTY STATE IN ITS CARD, as MCP & tools and Service
+            // accounts draw theirs: drawn by the page's query it floated on
+            // the page's ground beside screens that card theirs. The page's
+            // own gesture first, and the command, as code, after it.
+            empty={{
+              icon: "key",
+              title: "No secrets are stored",
+              hint: (
+                <>
+                  Store one with Store a secret, or from the command line with{" "}
+                  <InlineCode close=".">crewlet secrets set</InlineCode>
+                </>
+              ),
+            }}
             columns={[
               {
                 key: "name",
@@ -655,7 +652,7 @@ export function Secrets({ name }: { name?: string }) {
                 // for an empty string the reader would read as a name.
                 cell: (s) =>
                   s.updated_by ? (
-                    <TableTextCell>{authorLabel(s.updated_by, s.operator_id)}</TableTextCell>
+                    <AuthorCell author={s.updated_by} operatorId={s.operator_id} />
                   ) : (
                     <EmptyValue label="Nobody recorded" />
                   ),

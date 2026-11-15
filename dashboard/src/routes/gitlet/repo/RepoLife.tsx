@@ -18,10 +18,10 @@ import {
   ConfirmField,
   FormField,
   Input,
-  Modal,
   Stack,
   confirmMatches,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { fmtDateTime } from "~/lib/format.ts";
 import { deleteHeld, restoreHeld } from "~/lib/repoWrites.ts";
@@ -71,7 +71,6 @@ function DeleteDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () => 
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

@@ -105,26 +105,35 @@ describe("a wall-clock reading and the instant it names", () => {
 });
 
 /**
- * A DAY is filed in the zone every timestamp is drawn in.
+ * An INSTANT is filed under the reader's day, and a DAY FIELD under its own.
  *
- * The calendar's cells and the timeline's columns used to be keyed in the
- * browser's own calendar while every spelling followed the chosen zone, which
- * was harmless only while no control could choose one. Now one can, so a task
- * stamped in the evening UTC is on the NEXT day for a reader who chose Tokyo —
- * in its cell as well as in its label.
+ * A timestamp (when a change was made) is drawn in the zone the reader chose,
+ * so one stamped in the evening UTC is on the NEXT day for a reader who chose
+ * Tokyo. A due or start date is not a timestamp: it is a day on the company's
+ * calendar, stored as the company's midnight, and keyed on the reader's clock
+ * it sat in the cell before its own for every reader west of the company.
  */
-describe("a day is the reader's day", () => {
+describe("a day is the reader's day, and a day field the company's", () => {
   it("files an instant under the zone in effect's date", () => {
     const at = "2026-09-22T20:00:00Z";
     inZone("Asia/Tokyo");
     expect(readerDay(Date.parse(at))).toBe("2026-09-23");
-    expect(dayKey(at)).toBe("2026-09-23");
-    expect(dayOf(at)).toBe("2026-09-23");
     // The browser is in Berlin, where it is still the 22nd.
     inZone("");
-    expect(dayKey(at)).toBe("2026-09-22");
-    inZone("America/Los_Angeles");
-    expect(dayKey("2026-09-23T03:00:00Z")).toBe("2026-09-22");
+    expect(readerDay(Date.parse(at))).toBe("2026-09-22");
+  });
+
+  // Mutation: key a due date on `readerDay` again and every zone west of
+  // Berlin files Nov 30 under Nov 29.
+  it("files a due or start date under the company's date, in every reader's zone", () => {
+    const picked = "2026-11-29T23:00:00Z"; // 30 November, at a Berlin company's midnight
+    for (const zone of ["", "Asia/Tokyo", "America/Los_Angeles", "UTC", "Pacific/Kiritimati"]) {
+      inZone(zone);
+      expect(dayKey(picked, "Europe/Berlin"), zone).toBe("2026-11-30");
+      expect(dayOf(picked, "Europe/Berlin"), zone).toBe("2026-11-30");
+      // A bare date is its own day for every reader.
+      expect(dayKey("2026-11-30", "Europe/Berlin"), zone).toBe("2026-11-30");
+    }
   });
 
   it("lays a grid out the same in every zone, because a day key is a civil date", () => {

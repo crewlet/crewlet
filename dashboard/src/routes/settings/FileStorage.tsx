@@ -41,6 +41,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { FLEET_POLL_MS } from "./Fleet.tsx";
 
 import { fmtBytes, fmtCount, plural, tsKey } from "~/lib/format.ts";
+import { FROM_NODE_FILE } from "~/lib/nodeFile.ts";
 import type {
   FleetObjects,
   ObjectAudit,
@@ -56,17 +57,29 @@ import type {
 export function backendSummary(backend: string): string {
   // REPLICATED LIKE THE STREAM: the bucket is a stream of the fleet's broker,
   // kept in as many copies as every other one (`stream.replicas`). Named by
-  // what it is; the key that sets it is drawn beside it.
-  if (backend === "nats") return "The fleet's own NATS object bucket, replicated like the stream";
+  // what it does for the reader, never by the broker it is built on; the key
+  // that sets it is behind the row's copy control.
+  if (backend === "nats") return "Inside the fleet, copied like the rest of its data";
   if (backend.startsWith("s3:")) return `S3 bucket ${backend.slice("s3:".length)}`;
   // A store a newer engine names: shown as it is rather than guessed at.
   return backend;
 }
 
-/** What a collection did, in a line. */
+/**
+ * What a collection did, in a line.
+ *
+ * AN EMPTY PASS SAYS SO in a sentence of its own: "Deleted 0 objects that no
+ * file names, of 0 stored" counted nothing twice in a clause a reader had to
+ * parse to learn that nothing happened.
+ */
 export function collectSummary(c: ObjectCollect): string {
   if (c.error) return `Stopped: ${c.error}`;
-  const deleted = `Deleted ${plural(c.deleted, "object")} that no file names`;
+  if (c.completed && !c.skipped && c.deleted === 0 && c.abandoned === 0) {
+    return c.listed === 0
+      ? "Nothing is stored yet, so there was nothing to remove"
+      : `Nothing to remove among ${plural(c.listed, "stored object")}`;
+  }
+  const deleted = `Removed ${plural(c.deleted, "object")} no file uses`;
   const of = `of ${fmtCount(c.listed)} stored (${fmtCount(c.aged)} past the day's grace)`;
   // A PASS THAT STOPPED JUDGING KEEPS ITS COUNTS: what it deleted before it
   // met an estate it could not read whole is gone, and saying "deleted
@@ -319,15 +332,19 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
   return (
     <div className="col gap-4">
       {/* THE STORE IS A SETTING, so it is drawn as Limits and Sign-in policy
-          draw theirs: the kit's settings table, its key in the node's file.
-          Which node ran the last pass is a fact about the passes, and heads
-          their card. */}
+          draw theirs: the kit's settings table, its key behind the row's copy
+          control. Which node ran the last pass is a fact about the passes, and
+          heads their card. */}
       <Card padding="none">
         <Card.Header icon={<FolderGlyph size="sm" />}>
           <Card.Title id="file-storage-store">Where files are kept</Card.Title>
         </Card.Header>
         <SettingsTable aria-labelledby="file-storage-store">
-          <SettingsTable.Row label="Store" settingKey="store.objects.backend" source="crewlet.yaml">
+          <SettingsTable.Row
+            label="Store"
+            settingKey="store.objects.backend"
+            source={FROM_NODE_FILE}
+          >
             {backendSummary(reported.backend)}
           </SettingsTable.Row>
         </SettingsTable>
@@ -362,7 +379,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
               <span>
                 Unfinished uploads couldn’t be cleared: {reported.collect.sweep_error}. On S3, grant{" "}
                 <InlineCode>s3:ListBucketMultipartUploads</InlineCode> and{" "}
-                <InlineCode>s3:AbortMultipartUpload</InlineCode>.
+                <InlineCode close=".">s3:AbortMultipartUpload</InlineCode>
               </span>
             </Callout>
           </Card.Body>

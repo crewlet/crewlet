@@ -41,6 +41,7 @@ import type { LogPosition } from "./session.ts";
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
+import type { SettingRange } from "../contract/limits.ts";
 import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
@@ -786,8 +787,9 @@ export interface Overlay {
   waiting?: InboxWaiting | null;
 }
 
-/** What waits in a seat's inbox, per mailbox: `priority` is people waiting on
- *  the seat (the priority lane), `background` the rest of its work. */
+/** What waits in a seat's inbox, per mailbox: `priority` counts the messages
+ *  in its priority lane, each one a person wrote that the seat owes an answer
+ *  to (a count of messages, not of people), `background` the rest of its work. */
 export interface InboxWaiting {
   priority: number;
   background: number;
@@ -1647,6 +1649,18 @@ export interface ConfigProblem {
   unit?: string;
   /** 1-based line in the submitted text, for parse failures only. */
   line?: number;
+  /**
+   * The bound a value outside its setting's declared range broke
+   * (`config.Range`), for a screen to say in its own words and the setting's
+   * unit: `message` is the engine's line for an operator, path and all.
+   */
+  range?: SettingRange;
+  /**
+   * The problem in a person's words, where the engine's rule wrote them: no
+   * key, no path. Absent where it wrote none, and `message` is then the only
+   * wording there is.
+   */
+  said?: string;
 }
 
 /**
@@ -1670,6 +1684,15 @@ export interface ConfigWarning {
   /** What an advisory is about, for the setup advisor; absent on most warnings. */
   class?: string;
   /**
+   * The warning in the words of the person who owns the company, beside
+   * `message`, which is the operator's: what it risks and what to do, naming
+   * no document key. Every classed advisory carries it and no other warning
+   * does; it is the same for every warning of one class about another seat
+   * (`seat` names which), so a screen says it once. Read through
+   * `warningWords`.
+   */
+  person?: string;
+  /**
    * On a dry run's answer only: whether THIS write brings the warning, rather
    * than the active revision already carrying it (`configapi.checkedWarning`).
    * A write's own answer and every other reader leave it out.
@@ -1682,6 +1705,20 @@ export interface DryRunResult {
   valid: true;
   /** The revision the draft was validated against. */
   base_revision_id: string;
+  /** Whether the write would change the document at all. */
+  changed: boolean;
+  warnings: ConfigWarning[] | null;
+  derived: Derived;
+}
+
+/**
+ * `200` from `PATCH /config` or `PUT /config/{kind}/{id}` that left the
+ * document exactly as it was: nothing was stored or activated, and
+ * `revision_id` is the revision that already says it.
+ */
+export interface UnchangedResult {
+  changed: false;
+  revision_id: string;
   warnings: ConfigWarning[] | null;
   derived: Derived;
 }
@@ -2996,6 +3033,11 @@ export interface WorkBlocker {
   /** The blocking task's ID, never its key: an edge is drawn between two rows
    *  on one page and `WorkSummary.id` is what they are matched on. */
   id: string;
+  /** The blocking task's key, so a page that holds no row for the blocker
+   *  can still name it; absent for an edge to something that is not a task. */
+  key?: string;
+  /** The blocker's key is one another task claimed first. */
+  key_collision?: boolean;
   /** Whether the blocker is still holding this task up. `false` is a settled
    *  fact rather than a missing one — the blocker has finished. */
   open?: boolean;
@@ -3320,7 +3362,13 @@ export interface WorkProjectDetail extends WorkProjectRow {
   /** The workspace field ids this project redeclares — the state a field in
    *  the middle of a move between scopes is in. */
   shadowed?: string[];
+  /** The project's OWN field declarations as stored, archived ones included:
+   *  the whole set a `fields` write on `write_project` replaces. `fields`
+   *  above is the effective set a task files against. */
+  own_fields?: WorkFieldDef[];
   tags?: WorkProjectTag[];
+  /** The labels that take no new work, which `tags` leaves out. */
+  archived_tags?: WorkProjectTag[];
   policy_stamp: number;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -3953,6 +4001,9 @@ export interface PageChange {
    *  entries are the record it ever existed. */
   title?: string;
   container?: string;
+  /** The page's CURRENT status, read with its title: a page in the trash keeps
+   *  its title, and this is how a reader tells it from a live one. */
+  status?: PageStatus;
   kind: string;
   actor?: string;
   actor_kind?: string;
@@ -5295,6 +5346,12 @@ export interface SetupListing {
   external_url: {
     value: string;
     config_path: string;
+    /**
+     * The address names a loopback host, which only the engine's own machine
+     * reaches, so no third-party app can deliver to it: the engine's rule
+     * (`config.LoopbackURL`), answered rather than re-derived here.
+     */
+    loopback: boolean;
   };
 }
 
@@ -5621,8 +5678,10 @@ export interface WorkHoldingRow extends WorkSummary {
   blocks_capped?: boolean;
   /** Who holds the waiting work, the person left out, sorted, at most eight. */
   holders: string[];
-  /** When it was last assigned, or filed already assigned. */
-  held_since: string;
+  /** When the person came to hold it: when it was last assigned (or filed
+   *  already assigned), or when the question it is held by was put. Absent
+   *  where neither is recorded. */
+  held_since?: string;
   /** The open question to the person this row is held by, its comment id,
    *  where they hold the item by being asked: the item itself waits on them. */
   asked?: string;
@@ -8096,7 +8155,9 @@ export interface QueryMap {
   chat_search: ChatSearchAnswer;
   pages: PagesAnswer;
   page: PageDetail;
-  containers: { containers: PageContainer[] };
+  /* `skills` NAMES THE SPACE TOOL SKILLS ARE WRITTEN IN, absent on a company
+     that turned tool skills off: Agent skills points at it when it holds none. */
+  containers: { containers: PageContainer[]; skills?: string };
   page_activity: PageActivityAnswer;
   page_reads: PageReadsAnswer;
   page_revision: PageRevisionBody;

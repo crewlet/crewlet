@@ -1196,6 +1196,8 @@ everything in one pass:
 | `message` | The full line, exactly as the prose output prints it. |
 | `seat` / `unit` | The handle of the seat, or the name of the unit, it is about. Omitted when neither. |
 | `line` | The line in the file, for a failure the parser found (an unknown key, a value of the wrong shape). Omitted otherwise. |
+| `range` | For a value outside the range its setting admits, that range: `{min, min_exclusive, max}`, the last two omitted when false or unbounded. Omitted otherwise. |
+| `said` | The problem in a person's words, without a path, for a rule that writes them. Omitted otherwise. |
 
 A rule that several seats or units break together, such as two seats sharing a
 name, is one message and one problem beside each of them, so `problems` can

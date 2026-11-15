@@ -161,7 +161,7 @@ afterEach(() => {
 test("a complete gesture reopens as itself until the report shows it", async () => {
   const refetch = vi.fn();
   query.refetch = refetch;
-  query.data = report([node()]);
+  query.data = report([node(), node({ node_id: "node-1" })]);
   const sent: string[] = [];
   vi.stubGlobal(
     "fetch",
@@ -179,7 +179,8 @@ test("a complete gesture reopens as itself until the report shows it", async () 
     </Router>,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "Evict…" }));
+  // A FLEET OF TWO: the only node of a fleet is held from eviction.
+  fireEvent.click(rowButton("node-4", "Evict…"));
   fireEvent.change(screen.getByLabelText("Type node-4 to confirm"), {
     target: { value: "node-4" },
   });

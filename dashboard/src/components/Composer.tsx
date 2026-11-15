@@ -33,13 +33,13 @@ import {
   FormField,
   IconButton,
   Input,
-  Modal,
   Select,
   Text,
   Textarea,
   useSendOnEnter,
   type SelectOption,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import {
   CircleQuestionMarkGlyph,
   FileTextGlyph,
@@ -66,6 +66,7 @@ import {
   DECISION_QUESTION_MAX_BYTES,
 } from "~/contract/work.ts";
 import { itemAddress } from "~/lib/work.ts";
+import { LINK_KINDS, linkArgs, linkedSentence, type LinkKind } from "~/lib/taskRelations.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
 
@@ -423,7 +424,6 @@ function AskDialog({
       icon={<CircleQuestionMarkGlyph />}
       onClose={() => onClose(false)}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={() => onClose(false)} disabled={write.busy}>
@@ -561,7 +561,8 @@ function AskDialog({
 }
 
 /**
- * Link another task to this one — a `linked` relation on the item.
+ * Link another task to this one: related, blocking it, or waiting on it
+ * (`lib/taskRelations.ts`), a delta on that one relation of the item.
  *
  * A HIT IS CHOSEN BY ITS ID AND LINKED BY ITS ADDRESS ([itemAddress]): two
  * tasks a search finds under one key are two hits, and linking the one the
@@ -584,6 +585,8 @@ function LinkTaskDialog({
   const keyHint = useTaskKeyHint();
   const [q, setQ] = useState("");
   const [chosen, setChosen] = useState<WorkRanked | null>(null);
+  const [kind, setKind] = useState<LinkKind>("linked");
+  const [note, setNote] = useState("");
   // THE BOUND IS THE HOOK'S: a phrase past it is not sent, and the list's
   // place says why (`useSearchQuery`).
   const search = useSearchQuery(
@@ -602,8 +605,8 @@ function LinkTaskDialog({
     // on Enter.
     if (!chosen || !pressable(write, blocked)) return;
     const result = await write.run(
-      { item, linked: { add: [itemAddress(chosen)] } },
-      { done: `Linked ${chosen.key} to ${named}` },
+      { item, ...linkArgs(kind, itemAddress(chosen), note) },
+      { done: linkedSentence(kind, named, chosen.key) },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -615,7 +618,6 @@ function LinkTaskDialog({
       icon={<HashGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -634,6 +636,15 @@ function LinkTaskDialog({
       }
     >
       <div className="col gap-3">
+        <FormField label={`${named} is`} htmlFor="composer-link-kind">
+          <Select
+            id="composer-link-kind"
+            ariaLabel={`${named} is`}
+            value={kind}
+            options={LINK_KINDS.map(({ value, label }) => ({ value, label }))}
+            onChange={(next) => setKind(next as LinkKind)}
+          />
+        </FormField>
         <FormField label="Find a task" htmlFor="composer-link-q" helper={keyHint}>
           <Input id="composer-link-q" value={q} onChange={(event) => setQ(event.target.value)} />
         </FormField>
@@ -665,6 +676,15 @@ function LinkTaskDialog({
                   : "No task matches."
             }
           />
+        )}
+        {kind !== "linked" && (
+          <FormField label="Why" htmlFor="composer-link-note" helper="Optional, one line.">
+            <Input
+              id="composer-link-note"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+            />
+          </FormField>
         )}
         <RefusalNote write={write} />
       </div>
@@ -735,7 +755,6 @@ function AttachPageDialog({
       title={`Attach a page to ${named}`}
       icon={<PaperclipGlyph />}
       onClose={onClose}
-      closeDisabledReason={busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>

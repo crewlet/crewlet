@@ -66,9 +66,9 @@ import {
   CopyButton,
   IconButton,
   InlineCode,
-  Modal,
   Skeleton,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 
 /**
  * How often the fleet is read while the apply is still moving. This node's own
@@ -538,8 +538,10 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
           {state.revision !== null && state.revision !== savedRevision && (
             <Callout variant="warning">
               Showing active revision{" "}
-              <InlineCode tone="inherit">{shortRevision(state.revision)}</InlineCode>, not the one
-              you saved.
+              <InlineCode close="," tone="inherit">
+                {shortRevision(state.revision)}
+              </InlineCode>{" "}
+              not the one you saved.
             </Callout>
           )}
           <p className="t-caption">Credentials are hidden.</p>

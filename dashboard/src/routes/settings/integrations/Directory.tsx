@@ -5,7 +5,7 @@
  * # Grouped by need, Crewlet's own service first
  *
  * Chat, Work tracking, Docs and knowledge, Code and Observability. Each of
- * Crewlet's own services opens its group (Chatlet, Worklet, Doclet), so
+ * Crewlet's own services opens its group (Chatlet, Worklet, Doclet, Gitlet), so
  * the built-in answer to a need sits beside the apps that answer it in its
  * place, with In use or Not in use on its line. Each names Crewlet beside
  * it as its maker, the way Jira names Atlassian. ATLASSIAN IS LISTED BY
@@ -18,7 +18,8 @@
  *
  * `#/company/integrations/{kind}` selects a line: an app's key, a surface
  * (`jira`, `confluence`, the `forge` relay and `atlassian` select Jira's
- * line, on the Atlassian page), or a service (`worklet`, `doclet`, `chat`).
+ * line, on the Atlassian page), or a service (`worklet`, `doclet`, `chat`,
+ * `gitlet`).
  * The bare address shows what the company has active.
  *
  * # Who reads it
@@ -62,7 +63,7 @@ import { needsWords } from "~/lib/access.ts";
 import { authorityWords } from "~/lib/refusal.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { goSignIn } from "~/lib/session.ts";
-import { CATALOG, type Entry } from "./catalogue.tsx";
+import { CATALOG, appHeading, type Entry } from "./catalogue.tsx";
 import {
   BUCKET_WORDS,
   useBuiltIns,
@@ -294,14 +295,7 @@ function AdminNote() {
 function HeldPane({ entry }: { entry: Entry }) {
   return (
     <>
-      <ObjectHeader
-        kind="Integration"
-        icon="plug"
-        identifier={entry.key}
-        mark={<VendorMark vendor={entry.vendor} size={36} />}
-        title={entry.name}
-        description={entry.description}
-      />
+      <ObjectHeader {...appHeading(entry, 36)} description={entry.description} />
       <AdminNote />
     </>
   );

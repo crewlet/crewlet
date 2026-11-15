@@ -142,7 +142,8 @@ import { runningTarget } from "~/lib/turns.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
 import { FillRequest, type FillShape } from "./fill.tsx";
-import { OwnHeaderRequest, OwnHeaderSlot } from "./frame/OwnHeader.tsx";
+import { OwnHeaderRequest, OwnHeaderSlot, PageRefusals } from "./frame/OwnHeader.tsx";
+import { useRefusalPlace } from "~/components/WriteButton.tsx";
 import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 
 /**
@@ -369,8 +370,9 @@ export function usePageMenu(entries: readonly PageMenuEntry[]): void {
  * star with its other page actions (Doclet's page) would otherwise show it
  * twice. Doclet's landing says the same, because its design keeps the star
  * in each page's own menu and none in its bar, where the frame's would offer
- * the workspace the sidebar already lists. Cleared when the screen goes, for
- * the reason [usePageLabels] gives.
+ * the workspace the sidebar already lists; and so does a Chatlet room, whose
+ * More carries the room's star. Cleared when the screen goes, for the reason
+ * [usePageLabels] gives.
  */
 export function useOwnStar(): void {
   const { setOwnStar } = usePageContext();
@@ -622,6 +624,9 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
   // slot it lands in instead of its bar. See `frame/OwnHeader.tsx`.
   const [ownHeader, setOwnHeader] = useState(false);
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  // WHAT THE BAR'S CONTROLS WERE REFUSED, on a line of the head under the
+  // bar (`PageActions`), so a refusal never breaks the bar itself.
+  const pageRefusals = useRefusalPlace("page-refusals");
 
   // WATCH THE VIEWER'S OWN RECORD, which is what asks the engine for its
   // `inbox_changed` frames. The shell owns it because the shell outlives every
@@ -868,23 +873,29 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
       <PeekWidthRequest.Provider value={setRestingPeek}>
         <OwnHeaderRequest.Provider value={setOwnHeader}>
           <OwnHeaderSlot.Provider value={ownHeader ? headerSlot : null}>
-            <PageContextValue.Provider value={page}>
-              <PageCover
-                over={assistantOver}
-                coverEnd={
-                  assistantOpen
-                    ? assistantCoverEnd(assistantShape, assistantDrawn, viewport, scale)
-                    : 0
-                }
-              >
-                {children}
-              </PageCover>
-            </PageContextValue.Provider>
+            <PageRefusals.Provider value={pageRefusals.element}>
+              <PageContextValue.Provider value={page}>
+                <PageCover
+                  over={assistantOver}
+                  coverEnd={
+                    assistantOpen
+                      ? assistantCoverEnd(assistantShape, assistantDrawn, viewport, scale)
+                      : 0
+                  }
+                >
+                  {children}
+                </PageCover>
+              </PageContextValue.Provider>
+            </PageRefusals.Provider>
           </OwnHeaderSlot.Provider>
         </OwnHeaderRequest.Provider>
       </PeekWidthRequest.Provider>
     </FillRequest.Provider>
   );
+  // A SCREEN THAT SCROLLS keeps room at its end for a toast, so its last row
+  // stands above the stack (`toastInset.tsx`); one that fills the window does
+  // not scroll to make room.
+  const room = filling ? null : <ToastRoom />;
 
   return (
     // THE STEPPER'S ORDER, published by whichever list the reader is on, so
@@ -964,6 +975,7 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
               ownHeader ? (
                 <div className="page-head">
                   <div ref={setHeaderSlot} />
+                  {pageRefusals.place}
                   <StateBar degraded={degraded} coverage={coverage} />
                 </div>
               ) : (
@@ -980,6 +992,7 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
                   runs={runs}
                   grants={held}
                 >
+                  {pageRefusals.place}
                   {/* THE FIRST DIAL IS THE BAR'S, said above as a chip. */}
                   <StateBar degraded={degraded?.firstDial ? null : degraded} coverage={coverage} />
                 </PageHeader>
@@ -1001,15 +1014,22 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
                   figures={figures}
                   runs={runs}
                 />
-                <SectionFrame.Body>{screen}</SectionFrame.Body>
+                {/* THE ROOM IS THE SECTION'S, inside the frame: the column
+                    sticks only as far as the frame reaches, so a room drawn
+                    after the frame pushed the column up by its height at the
+                    end of every scroll, and its rule stopped short of the
+                    sheet's foot by as much. */}
+                <SectionFrame.Body>
+                  {screen}
+                  {room}
+                </SectionFrame.Body>
               </SectionFrame>
             ) : (
-              screen
+              <>
+                {screen}
+                {room}
+              </>
             )}
-            {/* A SCREEN THAT SCROLLS keeps room at its end for a toast, so
-                its last row stands above the stack (`toastInset.tsx`); one
-                that fills the window does not scroll to make room. */}
-            {!filling && <ToastRoom />}
           </AppShell>
 
           {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while

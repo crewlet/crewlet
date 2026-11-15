@@ -811,22 +811,35 @@ function MarkAllRead({ through }: { through: ReadThrough }) {
         variant="ghost"
         leadingIcon={<CheckGlyph size="sm" />}
         showRefusal={false}
-        blocked={nothing ? "Nothing on this page is unread." : undefined}
+        // WHY THE COUNT STAYS, where nothing is left to read: the figure
+        // counts the asks waiting on the reader, which an answer clears and a
+        // read never does, so "nothing is unread" beside a figure that did
+        // not move left the reader guessing.
+        blocked={
+          nothing
+            ? "Nothing on this page is unread. Asks stay in Needs you until they are answered."
+            : undefined
+        }
         onPress={() => {
           // EACH WRITE WAITS FOR WHAT IT READS THROUGH: the newest notice
           // loaded from a domain is how far this page read that domain's
           // log, so the node that decides the mark is held to having
           // applied it.
+          //
+          // ONE GESTURE, ONE TOAST: the write the button stands for says
+          // "Marked all read", and the other source's runs quiet, its
+          // refusal still drawn beside the button. Each raised its own, two
+          // identical toasts for one press.
           if (through.tracker) {
             void tracker.run(
               { read_through: through.tracker, seen: through.tracker },
-              { done: "Marked all read" },
+              { done: "Marked all read", quiet: lead !== tracker },
             );
           }
           if (through.code) {
             void code.run(
               { read_through: through.code, seen: through.code },
-              { done: "Marked all read" },
+              { done: "Marked all read", quiet: lead !== code },
             );
           }
         }}

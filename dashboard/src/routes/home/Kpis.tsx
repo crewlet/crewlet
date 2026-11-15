@@ -416,10 +416,12 @@ function Parts({ parts }: { parts: readonly string[] }) {
   return (
     <>
       {parts.map((part, i) => (
-        // THE SPACE IS OUTSIDE THE PART, where it is a place to break.
+        // THE SPACE IS OUTSIDE THE PART, where it is a place to break, and the
+        // dot ENDS the part before it: carried at the start of the next, a
+        // wrapped line began "· 7 blocked".
         <Fragment key={i}>
           {i > 0 && " "}
-          <span className="home-kpi-part">{i > 0 ? `· ${part}` : part}</span>
+          <span className="home-kpi-part">{i < parts.length - 1 ? `${part} ·` : part}</span>
         </Fragment>
       ))}
     </>

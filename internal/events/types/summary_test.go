@@ -62,6 +62,29 @@ func TestSummaries(t *testing.T) {
 		},
 		want: "CTO execute prompt ~5400 tokens (0 tool definitions, 0 bytes)",
 	}, {
+		// A TURN'S END IN WORDS: it read "completed turn (failed)", a turn
+		// called completed and failed in one line, with the outcome's wire
+		// value in brackets.
+		name:    "a failed turn is said to have failed, not to have completed",
+		payload: TurnCompleted{RoleName: "Agent DevRel", ReviewOutcome: "failed"},
+		want:    "Agent DevRel's turn failed",
+	}, {
+		name:    "a turn that is done is finished",
+		payload: TurnCompleted{RoleName: "Agent DevRel", ReviewOutcome: "done"},
+		want:    "Agent DevRel finished a turn",
+	}, {
+		name:    "a turn that goes again says so",
+		payload: TurnCompleted{RoleName: "Agent DevRel", ReviewOutcome: "self_iterate"},
+		want:    "Agent DevRel finished a turn and goes again",
+	}, {
+		name:    "a skipped turn says nothing was asked of it",
+		payload: TurnCompleted{RoleName: "Agent DevRel", ReviewOutcome: "skipped"},
+		want:    "Agent DevRel skipped a turn that asked nothing of it",
+	}, {
+		name:    "an outcome this build does not know is a finished turn, never its value",
+		payload: TurnCompleted{RoleName: "Agent DevRel", ReviewOutcome: "newer_outcome"},
+		want:    "Agent DevRel finished a turn",
+	}, {
 		name: "a failed turn says why it stopped",
 		payload: AgentTurnCompleted{
 			RoleName: "CTO", Failed: true, ErrorKind: "rate_limit",
@@ -103,6 +126,22 @@ func TestSummaries(t *testing.T) {
 		name:    "an inbound message leads with sender and subject",
 		payload: ExternalNotification{NotificationSource: "slack", Sender: "alice", Subject: "Need a hand"},
 		want:    "Message from alice: Need a hand",
+	}, {
+		// A first-party sender is a seat's handle; the name the company knows
+		// it by is what a turn's title says.
+		name: "an inbound message leads with its sender's name where it has one",
+		payload: ExternalNotification{
+			NotificationSource: "tracker", Sender: "riley-ops", SenderName: "Riley Chen",
+			Subject: "ENG-1 created",
+		},
+		want: "Message from Riley Chen: ENG-1 created",
+	}, {
+		name: "a coalesced digest leads with its latest sender's name",
+		payload: ExternalNotification{
+			NotificationSource: "chat", Sender: "riley-ops", SenderName: "Riley Chen",
+			Messages: []CoalescedMessage{{Sender: "max-k"}, {Sender: "riley-ops"}},
+		},
+		want: "2 messages from Riley Chen",
 	}, {
 		name:    "a senderless notification still renders",
 		payload: ExternalNotification{NotificationSource: "jira"},

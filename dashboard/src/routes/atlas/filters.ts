@@ -15,6 +15,7 @@ import type {
   AtlasVendor,
   AtlasWord,
 } from "~/contract/atlas.ts";
+import { HEALTH, KINDS, LANES, VENDORS, WORDS } from "./words.ts";
 
 /**
  * How often an open atlas screen asks again: thirty seconds, the cadence of a
@@ -36,6 +37,11 @@ export interface AtlasFilters {
   health: AtlasHealth | "";
   /** The unconfirmed entries are taken in, which a read leaves out unless asked. */
   unconfirmed: boolean;
+  /**
+   * The retired entries alone (`show=retired`): where a retired entry is found
+   * again, and restored from its page. Every read leaves them out unless asked.
+   */
+  show: "retired" | "";
 }
 
 /** The address keys a filter lives at, every one replacing the history entry. */
@@ -47,23 +53,74 @@ export const FILTER_KEYS = [
   "confidence",
   "health",
   "unconfirmed",
+  "show",
 ] as const;
 
-/** The filters the address holds. */
-export function useAtlasFilters(): AtlasFilters {
+/** The filters whose value is one of a closed set the engine owns. */
+export type ClosedFilterKey = "kind" | "lane" | "vendor" | "confidence" | "health" | "show";
+
+/** The views of the atlas a read can ask for beside the current one. */
+const SHOWS: Readonly<Record<"retired", true>> = { retired: true };
+
+/** A value the address named for a closed filter that this build does not know. */
+export interface IgnoredFilter {
+  key: ClosedFilterKey;
+  value: string;
+}
+
+/** Whether `value` is one of `table`'s keys: the closed set the table names, word for word. */
+export function knownIn<K extends string>(
+  table: Readonly<Record<K, unknown>>,
+  value: string,
+): value is K {
+  return Object.hasOwn(table, value);
+}
+
+/**
+ * The filters an address holds, each closed one kept only where this build
+ * knows its value. The address is a reader's to type, keep and share: a stale
+ * bookmark, a value from a newer build or a typo used to reach the chips,
+ * which index the word tables with it, and took the whole screen down; and
+ * the engine, which refused the map and the catalogue with its own words. An
+ * unknown value is now left out, the atlas drawn without it, and named in
+ * `ignored` so the screen can say so.
+ */
+export function parseFilters(query: URLSearchParams): {
+  filters: AtlasFilters;
+  ignored: IgnoredFilter[];
+} {
+  const ignored: IgnoredFilter[] = [];
+  const closed = <K extends string>(key: ClosedFilterKey, table: Readonly<Record<K, unknown>>) => {
+    const value = query.get(key) ?? "";
+    if (value === "") return "";
+    if (knownIn(table, value)) return value;
+    ignored.push({ key, value });
+    return "";
+  };
+  return {
+    filters: {
+      q: query.get("q") ?? "",
+      kind: closed("kind", KINDS),
+      lane: closed("lane", LANES),
+      vendor: closed("vendor", VENDORS),
+      confidence: closed("confidence", WORDS),
+      health: closed("health", HEALTH),
+      unconfirmed: query.get("unconfirmed") === "true",
+      show: closed("show", SHOWS),
+    },
+    ignored,
+  };
+}
+
+/** The filters the address holds, and the values it named that this build does not know. */
+export function useAtlasAddress(): { filters: AtlasFilters; ignored: IgnoredFilter[] } {
   const route = useRoute();
-  return useMemo(() => {
-    const get = (key: (typeof FILTER_KEYS)[number]) => route.query.get(key) ?? "";
-    return {
-      q: get("q"),
-      kind: get("kind") as AtlasFilters["kind"],
-      lane: get("lane") as AtlasFilters["lane"],
-      vendor: get("vendor") as AtlasFilters["vendor"],
-      confidence: get("confidence") as AtlasFilters["confidence"],
-      health: get("health") as AtlasFilters["health"],
-      unconfirmed: get("unconfirmed") === "true",
-    };
-  }, [route]);
+  return useMemo(() => parseFilters(route.query), [route]);
+}
+
+/** The filters the address holds: see [parseFilters]. */
+export function useAtlasFilters(): AtlasFilters {
+  return useAtlasAddress().filters;
 }
 
 /** Set one filter, or clear the ones named. */

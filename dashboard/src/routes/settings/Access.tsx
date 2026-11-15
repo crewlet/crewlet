@@ -111,7 +111,6 @@ import {
   EmptyValue,
   InlineCode,
   Menu,
-  Modal,
   Skeleton,
   StatCard,
   StatGroup,
@@ -125,9 +124,12 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  TableTwoLineCell,
   PageNote,
   peekRowActivation,
+  type DataGridColumn,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   EllipsisGlyph,
   KeyGlyph,
@@ -168,23 +170,21 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { asSentence, fmtDate, tsKey } from "~/lib/format.ts";
+import { asSentence, fmtDate, plural, tsKey } from "~/lib/format.ts";
+import { NODE_FILE_CHANGE } from "~/lib/nodeFile.ts";
 import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
 import { documentUnits, handleLabel, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
+import { SessionDevice } from "~/components/SessionDevice.tsx";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
+import { deviceOf } from "~/lib/userAgent.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { pathSegment, rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
-import {
-  EditPersonDialog,
-  InvitePersonDialog,
-  OnYourself,
-  ServiceAccountDialog,
-} from "./AccessDialogs.tsx";
+import { EditPersonDialog, InvitePersonDialog, ServiceAccountDialog } from "./AccessDialogs.tsx";
 
 // ---------------------------------------------------------------------------
 // The wire, as internal/api/iamapi writes it
@@ -246,6 +246,10 @@ export interface SessionRow {
   ended_reason?: string;
   live: boolean;
   enrolment_only?: boolean;
+  /** The browser that opened the session, as its User-Agent named it. */
+  user_agent?: string;
+  /** The address it opened from, through the deployment's trusted proxies. */
+  remote?: string;
 }
 
 /**
@@ -473,6 +477,21 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
       {words?.label ?? fallback}
     </Tag>
   );
+}
+
+/**
+ * What the open-seats figure is out of, in a sentence: "0" over "4 total" read
+ * as a fraction with its slash missing ("Open seats 0 / 4 total"), and a
+ * figure of none said nothing about the seats that are held.
+ */
+export function openSeatsWords(vacant: number, invited: number, total: number): string {
+  const of =
+    vacant === 0 && invited === 0
+      ? total === 1
+        ? "the one human seat is held"
+        : `all ${total} human seats are held`
+      : `of ${plural(total, "human seat")}`;
+  return invited > 0 ? `${of} · ${invited} invited` : of;
 }
 
 /**
@@ -869,7 +888,7 @@ export function People() {
                   value={seats.data ? vacant : EMPTY_VALUE}
                   sub={
                     seats.data
-                      ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
+                      ? openSeatsWords(vacant, invited, seatRows.length)
                       : listsNoCompany(seats)
                         ? "no company yet"
                         : "not read"
@@ -908,68 +927,7 @@ export function People() {
                       hint: "A person is listed once they accept their invitation, or are created on their seat.",
                     }
               }
-              columns={[
-                {
-                  key: "person",
-                  header: "Name",
-                  floor: "12rem",
-                  sortValue: (p) => p.name || p.login || p.id,
-                  cell: (p) => <PersonName row={p} />,
-                },
-                {
-                  key: "login",
-                  header: "Login",
-                  shrink: true,
-                  // LAST TO GO, and it does go: the name column draws the
-                  // login of anybody with no name, and the peek beside the
-                  // list leads with it.
-                  drop: 3,
-                  sortValue: (p) => p.login ?? "",
-                  cell: (p) =>
-                    p.login ? <TableKeyCell value={p.login} /> : <EmptyValue label="No login" />,
-                },
-                {
-                  key: "kind",
-                  header: "Kind",
-                  shrink: true,
-                  drop: 2,
-                  sortValue: (p) => p.kind,
-                  cell: (p) => <TableTextCell>{KIND_WORDS[p.kind] ?? p.kind}</TableTextCell>,
-                },
-                {
-                  key: "stage",
-                  header: "Stage",
-                  shrink: true,
-                  sortValue: (p) => p.stage,
-                  cell: (p) => (
-                    <StateCell
-                      words={STAGE_WORDS[p.stage]}
-                      fallback={p.stage}
-                      resting={p.stage === "active"}
-                    />
-                  ),
-                },
-                {
-                  key: "seat",
-                  header: "Seat",
-                  // A FLOOR, AS EVERY COLUMN THIS LIST KEEPS HAS ONE: beside
-                  // the person peek the list is a column of the sheet, and a
-                  // flexible track at zero gave way to every content-sized
-                  // one. With floors the tracks overrun instead, and the grid
-                  // drops by `drop`.
-                  floor: "8rem",
-                  sortValue: (p) => p.seat ?? "",
-                  cell: (p) => <SeatHandle seat={p.seat} index={index} />,
-                },
-                {
-                  key: "grants",
-                  header: "Access",
-                  floor: "8rem",
-                  drop: 1,
-                  sortValue: (p) => accessLine(p.grants ?? []),
-                  cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
-                },
-              ]}
+              columns={peopleColumns(index)}
             />
           </Card>
 
@@ -1002,6 +960,7 @@ export function People() {
                 loading={seats.loading && !seats.data}
               >
                 <DataGrid<HumanSeat>
+                  name="seats"
                   rows={seatRows}
                   rowKey={(s) => s.handle}
                   defaultSort="seat"
@@ -1151,15 +1110,6 @@ export function ServiceAccounts() {
                   cell: (p) => <PersonName row={p} />,
                 },
                 {
-                  key: "login",
-                  header: "Login",
-                  shrink: true,
-                  drop: 2,
-                  sortValue: (p) => p.login ?? "",
-                  cell: (p) =>
-                    p.login ? <TableKeyCell value={p.login} /> : <EmptyValue label="No login" />,
-                },
-                {
                   key: "stage",
                   header: "Stage",
                   shrink: true,
@@ -1179,6 +1129,9 @@ export function ServiceAccounts() {
                   key: "seat",
                   header: "Acts as",
                   shrink: true,
+                  // The peek beside the list names the seat it is open on;
+                  // Access, what this page is for, never goes.
+                  drop: 1,
                   sortValue: (p) => p.seat ?? "",
                   cell: (p) => <SeatHandle seat={p.seat} index={index} />,
                 },
@@ -1186,7 +1139,6 @@ export function ServiceAccounts() {
                   key: "grants",
                   header: "Access",
                   shrink: true,
-                  drop: 1,
                   sortValue: (p) => accessLine(p.grants ?? []),
                   cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
                 },
@@ -1215,8 +1167,8 @@ export function ApiTokens() {
   return (
     <>
       <PageNote>
-        Declared under <InlineCode>api.auth.tokens</InlineCode> in this node&rsquo;s bootstrap file,
-        and changed with a restart. A person&rsquo;s own tokens are on their Account.
+        The tokens this node accepts, set in its configuration file and {NODE_FILE_CHANGE}. A
+        person&rsquo;s own tokens are on their Account.
       </PageNote>
       <Card padding="none">
         <Card.Header
@@ -1242,7 +1194,7 @@ export function ApiTokens() {
             defaultSort="id"
             empty={{
               title: "This node declares no API token",
-              hint: "Tokens are set in api.auth.tokens in the bootstrap file and change with a restart.",
+              hint: `Tokens are set in the node's configuration file and ${NODE_FILE_CHANGE}.`,
             }}
             columns={[
               // IDENTIFIERS ARE NEVER CUT: a token's label and the login it
@@ -1345,6 +1297,68 @@ function contactsByHandle(
 }
 
 /**
+ * The People list's columns, and the order they give way in beside the person
+ * peek (`drop`): what the list is read for there stays.
+ */
+export function peopleColumns(index: ReturnType<typeof indexOrg>): DataGridColumn<DirectoryRow>[] {
+  return [
+    // THE LOGIN IS THE NAME'S SECOND LINE ([PersonName]), so a
+    // list narrowed beside the person peek keeps it: as a column
+    // of its own it gave way with Kind and Access.
+    {
+      key: "person",
+      header: "Name",
+      floor: "12rem",
+      sortValue: (p) => p.name || p.login || p.id,
+      cell: (p) => <PersonName row={p} />,
+    },
+    {
+      key: "kind",
+      header: "Kind",
+      shrink: true,
+      // FIRST TO GO: nearly every row is a person, and a row that
+      // is not wears a key in place of initials beside its name.
+      drop: 1,
+      sortValue: (p) => p.kind,
+      cell: (p) => <TableTextCell>{KIND_WORDS[p.kind] ?? p.kind}</TableTextCell>,
+    },
+    {
+      key: "stage",
+      header: "Stage",
+      shrink: true,
+      sortValue: (p) => p.stage,
+      cell: (p) => (
+        <StateCell words={STAGE_WORDS[p.stage]} fallback={p.stage} resting={p.stage === "active"} />
+      ),
+    },
+    {
+      key: "seat",
+      header: "Seat",
+      // A FLOOR, AS EVERY COLUMN THIS LIST KEEPS HAS ONE: beside
+      // the person peek the list is a column of the sheet, and a
+      // flexible track at zero gave way to every content-sized
+      // one. With floors the tracks overrun instead, and the grid
+      // drops by `drop`. It goes before Access: the peek beside
+      // the list names the seat it is open on.
+      floor: "8rem",
+      drop: 2,
+      sortValue: (p) => p.seat ?? "",
+      cell: (p) => <SeatHandle seat={p.seat} index={index} />,
+    },
+    {
+      key: "grants",
+      header: "Access",
+      // NEVER GOES: what each person may reach is what this page
+      // is for, and the list beside the peek is where they are
+      // compared.
+      floor: "8rem",
+      sortValue: (p) => accessLine(p.grants ?? []),
+      cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
+    },
+  ];
+}
+
+/**
  * A principal's name. A SEALED value is a state the operator can end by
  * putting a key back, never a blank — a blank reads as somebody who never
  * gave a name.
@@ -1355,17 +1369,22 @@ function PersonName({ row }: { row: DirectoryRow }) {
   // THE BADGE IS THE PERSON'S, beside their name: in the Seat column it
   // repeated the name a cell over ("Lee Park  LP Lee Park"). A service account
   // wears a key, since the initials of a credential's label mean nothing.
+  // THE LOGIN IS THE SECOND LINE, where the name is not the login already.
   return (
-    <Inline gap={2}>
-      <SeatAvatar
-        name={name}
-        size="xs"
-        kind="human"
-        icon={row.kind === "person" ? undefined : <KeyGlyph size="sm" />}
-        decorative
-      />
-      <TableTextCell>{name}</TableTextCell>
-    </Inline>
+    <TableTwoLineCell
+      value={name}
+      detail={row.name && row.login ? row.login : undefined}
+      mono="detail"
+      mark={
+        <SeatAvatar
+          name={name}
+          size="xs"
+          kind="human"
+          icon={row.kind === "person" ? undefined : <KeyGlyph size="sm" />}
+          decorative
+        />
+      }
+    />
   );
 }
 
@@ -1636,7 +1655,11 @@ function Invitations({
       <Card.Header
         icon={<SendGlyph size="sm" />}
         count={rows.length}
-        actions={<Checkbox label="Show used and expired" checked={all} onCheckedChange={onAll} />}
+        // THE HEAD'S CONTROLS' STEP: a body-step label here stood larger than
+        // the card's own title beside it.
+        actions={
+          <Checkbox size="sm" label="Show used and expired" checked={all} onCheckedChange={onAll} />
+        }
       >
         <Card.Title>Invitations</Card.Title>
       </Card.Header>
@@ -1647,6 +1670,7 @@ function Invitations({
         loading={invitations.loading && !invitations.data}
       >
         <DataGrid<InvitationRow>
+          name="invitations"
           rows={rows}
           rowKey={(i) => i.id}
           defaultSort="expires"
@@ -1941,6 +1965,13 @@ export function PersonPeek({ id }: { id: string }) {
  * SECTIONS, NOT CARDS: the rail is the panel already, so they run on as plain
  * blocks rather than growing a second frame inside the first.
  */
+/**
+ * Why your own row holds Suspend and Remove: a person who suspends or removes
+ * themself is signed out with no way back of their own, and the panel offered
+ * both beside "This is you".
+ */
+export const SELF_HELD = "You can't suspend or remove yourself. Another administrator can.";
+
 function Principal({
   row,
   who,
@@ -2017,6 +2048,8 @@ function Principal({
             <Button
               size="small"
               variant="secondary"
+              disabledReason={you && !suspended ? SELF_HELD : undefined}
+              title={you && !suspended ? SELF_HELD : undefined}
               onClick={() => setGesture(suspended ? "reactivate" : "suspend")}
             >
               {suspended ? "Reactivate" : "Suspend"}
@@ -2029,39 +2062,48 @@ function Principal({
             items={[
               ...(machine
                 ? [{ key: "mint", label: "Create token", onSelect: () => setGesture("mint") }]
-                : [
-                    // NOT FOR A STOPPED PERSON: a link would hand back an
-                    // account somebody stopped, and the engine refuses it
-                    // naming the stage.
-                    ...(!suspended && row.stage !== "retired"
-                      ? [
-                          {
-                            key: "reset",
-                            label: "Get reset link",
-                            onSelect: () => setGesture("reset"),
-                          },
-                        ]
-                      : []),
-                    ...(holdsFactor
-                      ? [
-                          {
-                            key: "mfa",
-                            label: "Reset two-step verification",
-                            onSelect: () => setGesture("mfa"),
-                          },
-                        ]
-                      : []),
-                    {
-                      key: "sessions",
-                      label: "Sign out everywhere",
-                      onSelect: () => setGesture("sessions"),
-                    },
-                  ]),
+                : you
+                  ? // YOUR OWN SIGN-IN IS CHANGED ON YOUR ACCOUNT, where every
+                    // one of these is: here they were a second set of the
+                    // same gestures, reached through the administrators'
+                    // panel and worded for somebody else.
+                    []
+                  : [
+                      // NOT FOR A STOPPED PERSON: a link would hand back an
+                      // account somebody stopped, and the engine refuses it
+                      // naming the stage.
+                      ...(!suspended && row.stage !== "retired"
+                        ? [
+                            {
+                              key: "reset",
+                              label: "Get reset link",
+                              onSelect: () => setGesture("reset"),
+                            },
+                          ]
+                        : []),
+                      ...(holdsFactor
+                        ? [
+                            {
+                              key: "mfa",
+                              label: "Reset two-step verification",
+                              onSelect: () => setGesture("mfa"),
+                            },
+                          ]
+                        : []),
+                      {
+                        key: "sessions",
+                        label: "Sign out everywhere",
+                        onSelect: () => setGesture("sessions"),
+                      },
+                    ]),
               { kind: "separator" as const, key: "before-remove" },
               {
                 key: "remove",
                 label: "Remove",
                 danger: true,
+                // HELD ON YOURSELF, as Suspend is, with the same reason.
+                disabled: you,
+                description: you ? SELF_HELD : undefined,
                 onSelect: () => setGesture("remove"),
               },
             ]}
@@ -2108,9 +2150,7 @@ function Principal({
       )}
       {(gesture === "suspend" || gesture === "reactivate") && (
         <PersonWrite
-          title={
-            gesture === "reactivate" ? `Reactivate ${who}?` : `Suspend ${you ? "yourself" : who}?`
-          }
+          title={gesture === "reactivate" ? `Reactivate ${who}?` : `Suspend ${who}?`}
           confirm={gesture === "reactivate" ? "Reactivate" : "Suspend"}
           danger={gesture === "suspend"}
           request={{
@@ -2121,7 +2161,6 @@ function Principal({
           onClose={close}
           onDone={changed}
         >
-          {gesture === "suspend" && you && <OnYourself alone={alone} />}
           {/* WHAT THIS PERSON HOLDS, said: a seat they do not hold is not
               withheld, and the sessions a suspension ends stay ended — a
               password reset link among them, which a reactivation does not
@@ -2129,46 +2168,36 @@ function Principal({
               withheld, never freed, so nobody else is put on it meanwhile. */}
           {gesture === "reactivate"
             ? `${who} can sign in again.`
-            : you
-              ? "You can’t sign in until another admin reactivates you."
-              : "They can’t sign in until reactivated."}
+            : "They can’t sign in until reactivated."}
         </PersonWrite>
       )}
       {gesture === "mfa" && (
         <PersonWrite
-          title={
-            you ? "Reset your two-step verification?" : `Reset ${who}’s two-step verification?`
-          }
+          title={`Reset ${who}’s two-step verification?`}
           confirm="Reset two-step verification"
           danger
           request={{ method: "POST", path: `/iam/people/${pathSegment(row.id)}/mfa/reset` }}
           onClose={close}
           onDone={changed}
         >
-          {you && <OnYourself />}
-          {you
-            ? "Your app and recovery codes stop working."
-            : "Their app and recovery codes stop working."}
+          Their app and recovery codes stop working.
         </PersonWrite>
       )}
       {gesture === "sessions" && (
         <PersonWrite
-          title={you ? "Sign out everywhere?" : `Sign ${who} out everywhere?`}
+          title={`Sign ${who} out everywhere?`}
           confirm="Sign out everywhere"
           danger
           request={{ method: "DELETE", path: `/iam/people/${pathSegment(row.id)}/sessions` }}
           onClose={close}
           onDone={changed}
         >
-          {you && <OnYourself />}
-          {you
-            ? "Your sessions, tokens and reset link stop working."
-            : "Their sessions, tokens and reset link stop working."}
+          Their sessions, tokens and reset link stop working.
         </PersonWrite>
       )}
       {gesture === "remove" && (
         <PersonWrite
-          title={`Remove ${you ? "yourself" : who}?`}
+          title={`Remove ${who}?`}
           confirm="Remove"
           danger
           typeToConfirm={row.login || row.id}
@@ -2177,12 +2206,9 @@ function Principal({
           onDone={changed}
           onLanded={onRemoved}
         >
-          {you && <OnYourself alone={alone} what="" />}
-          {you
-            ? "Can’t be undone."
-            : machine
-              ? "Deletes the service account and its tokens. Can’t be undone."
-              : "Their account is deleted and their seat opens up. Can’t be undone."}
+          {machine
+            ? "Deletes the service account and its tokens. Can’t be undone."
+            : "Their account is deleted and their seat opens up. Can’t be undone."}
         </PersonWrite>
       )}
       <Stack as="section" gap={2}>
@@ -2196,6 +2222,7 @@ function Principal({
           loading={credentials.loading && !credentials.data}
         >
           <DataGrid<CredentialRow>
+            name="credentials"
             rows={credentials.data ?? []}
             rowKey={(c) => c.id}
             defaultSort="method"
@@ -2254,7 +2281,10 @@ function Principal({
                     <EmptyValue label={c.method === "reset" ? "One-time" : "Same as owner"} />
                   ),
               },
-              ...(manages
+              // YOUR OWN CREDENTIALS ARE REVOKED ON YOUR ACCOUNT, which the
+              // callout above opens: listed here they are what an
+              // administrator reads about you, not a second place to act.
+              ...(manages && !you
                 ? [
                     {
                       key: "revoke",
@@ -2291,6 +2321,7 @@ function Principal({
             loading={sessions.loading && !sessions.data}
           >
             <DataGrid<SessionRow>
+              name="sessions"
               rows={sessions.data ?? []}
               rowKey={(s) => s.lineage}
               defaultSort="started"
@@ -2304,6 +2335,17 @@ function Principal({
                   // the rest. ITS OWN WIDTH, EXACTLY, rather than capped: a
                   // relative time is short, and the cap — a fifth of the
                   // peek's column — cut its own header to "SESS…".
+                  // WHICH DEVICE: what tells an administrator one of a
+                  // person's sessions from another ([SessionDevice]).
+                  key: "device",
+                  header: "Device",
+                  // A FLOOR, as every flexible column in the peek keeps one:
+                  // "Firefox on macOS" over its address reads whole at it.
+                  floor: "8rem",
+                  sortValue: (s) => deviceOf(s.user_agent),
+                  cell: (s) => <SessionDevice row={s} />,
+                },
+                {
                   key: "started",
                   header: "Session",
                   // A TIME: right-aligned, as the same session start is on the

@@ -34,13 +34,13 @@ import {
   FormField,
   Input,
   Kbd,
-  Modal,
   PersonRow,
   Switch,
   Tag,
   Textarea,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   AtSignGlyph,
   CalendarClockGlyph,
@@ -72,16 +72,13 @@ import { MessageBody } from "./Body.tsx";
 import { ChatFace } from "./Face.tsx";
 import { nameRefusal, normalizeName, startable } from "./name.ts";
 import { useChatFrame, useChatNav, type ChatDialog } from "./nav.tsx";
-import { handlesOf, matchesPerson, useChatPeople, type ChatPerson } from "./people.ts";
+import { handlesOf, matchesPerson, seatLine, useChatPeople, type ChatPerson } from "./people.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { ROOM_TEMPLATES, templateNamed, type RoomTemplate } from "./templates.ts";
 import { ArchiveDialog, EraseDialog, PruneDialog, RetentionDialog } from "./RoomAdmin.tsx";
-
-/** What a dialog says while the engine has not answered. */
-const WAITING = "Waiting for the engine to answer.";
 
 /** The open dialog, drawn by the frame. */
 export function ChatDialogHost({
@@ -183,7 +180,6 @@ export function DeleteDialog({
       icon={<TrashGlyph size="md" />}
       title="Delete this message?"
       dismissable={!remove.busy}
-      closeDisabledReason={WAITING}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={remove.busy}>
@@ -313,7 +309,6 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
       title="New room"
       subtitle="A room is where a topic or a project is talked about. A team’s own room comes from the org chart."
       dismissable={!create.busy}
-      closeDisabledReason={WAITING}
       onSubmit={() => void submit()}
       footer={
         <>
@@ -620,11 +615,14 @@ export function AddPeopleDialog({ room, onClose }: { room: string; onClose: () =
       onClose={leave}
       size="md"
       phoneSheet
+      // THE LIST TAKES THE ROOM THE DIALOG HAS (`.chat-suggest__list`): the
+      // body is a column its one child fills, and the suggestions are what
+      // grows into it and scrolls, under a field and over a foot that stay.
+      fill
       icon={<UserPlusGlyph size="md" />}
       title={`Add people to ${name}`}
       subtitle="Add people and agents from the company. Everyone you add sees the room’s history."
       dismissable={!busy}
-      closeDisabledReason={WAITING}
       footer={
         <>
           <Button variant="ghost" onClick={leave} disabled={busy}>
@@ -644,7 +642,7 @@ export function AddPeopleDialog({ room, onClose }: { room: string; onClose: () =
         </>
       }
     >
-      <div className="chat-form">
+      <div className="chat-form chat-form--fills">
         {unit ? (
           <p className="chat-dialog-note">
             A team room&rsquo;s members come from the org chart. Change the team there to change who
@@ -738,7 +736,7 @@ export function SuggestedPerson({
       avatar={<ChatFace person={person} size={32} />}
       name={person.name}
       tag={person.kind === "agent" ? <Tag size="xs">Agent</Tag> : undefined}
-      detail={person.doing || person.team || undefined}
+      detail={seatLine(person) || undefined}
       mark={selected === undefined ? "none" : "toggle"}
       selected={selected}
       onSelect={onSelect}
@@ -843,7 +841,6 @@ export function RoomTextDialog({
       title={was ? copy.edit : copy.add}
       subtitle={<RoomLabel channel={channel} />}
       dismissable={!update.busy}
-      closeDisabledReason={WAITING}
       onSubmit={() => void submit()}
       footer={
         <>
@@ -953,7 +950,6 @@ export function TemplateDialog({ room, onClose }: { room: string; onClose: () =>
       title="Start from a template"
       subtitle="Sets the room’s topic and description. You can change both later."
       dismissable={!update.busy}
-      closeDisabledReason={WAITING}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={update.busy}>

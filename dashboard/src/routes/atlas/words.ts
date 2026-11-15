@@ -32,6 +32,21 @@ export function entries(count: number): string {
   return plural(count, "entry", "entries");
 }
 
+/**
+ * How many entries rely on one, in the words every count of the atlas uses.
+ * NONE IS SAID AS NOTHING, never "0 entries rely on it".
+ */
+export function reliedOnBy(count: number): string {
+  return count === 0
+    ? "nothing relies on it"
+    : `${entries(count)} ${count === 1 ? "relies" : "rely"} on it`;
+}
+
+/** How many entries one relies on, as the object of "it relies on": "nothing" for none. */
+export function reliedOn(count: number): string {
+  return count === 0 ? "nothing" : count.toLocaleString();
+}
+
 /** What the map's key calls an entry that open tasks name. */
 export const WORKED_ON = "Being worked on";
 

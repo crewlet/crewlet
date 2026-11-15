@@ -22,6 +22,11 @@ const (
 	// FixExternalStep is a step only a person can take outside the engine
 	// (approve an app, replace a credential), with where to take it.
 	FixExternalStep FixKind = "external_step"
+	// FixOpenPage is a step a person takes on a page of the dashboard, which
+	// holds the gesture itself: Page names it. Not an external step, whose
+	// sentence had to say how to do it by hand and sent a person to a
+	// command for what the dashboard does with one press.
+	FixOpenPage FixKind = "open_page"
 	// FixNone is the engine's or a vendor's own work: nothing for a person.
 	FixNone FixKind = "none"
 	// FixDraftWithAssistant is prose the engine cannot build (a policy):
@@ -45,12 +50,27 @@ type Fix struct {
 	Setting string `json:"setting,omitempty"`
 	// URL is where an external_step is taken, where the vendor named one.
 	URL string `json:"url,omitempty"`
+	// Page is the dashboard page an open_page fix is taken on.
+	Page Page `json:"page,omitempty"`
 	// Prompt is the question a draft_with_assistant fix asks Ask Crewlet, in
 	// the engine's words: the evidence and the change to draft, nothing more.
 	Prompt string `json:"prompt,omitempty"`
 	// Act is the atlas tool call an atlas_act fix sends, once per entry.
 	Act *AtlasAct `json:"act,omitempty"`
 }
+
+// Page is a dashboard page an open_page fix is taken on, by the name the
+// dashboard knows it by (`ADVISOR_PAGES` in its contract, held to [Pages]).
+type Page string
+
+// PageBackups is Backups & retention, whose Take a backup takes one now.
+const PageBackups Page = "backups"
+
+// Pages is every page an open_page fix may name.
+func Pages() []Page { return []Page{PageBackups} }
+
+// Valid reports whether p is a page this build names.
+func (p Page) Valid() bool { return slices.Contains(Pages(), p) }
 
 // Option is one choice of a config change.
 type Option struct {

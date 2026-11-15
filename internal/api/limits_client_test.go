@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // THE DASHBOARD READS EXACTLY THE LIMITS THE ENGINE SENDS: both interfaces
@@ -17,7 +18,8 @@ import (
 func TestTheDashboardReadsExactlyTheLimitsTheEngineSends(t *testing.T) {
 	t.Parallel()
 	heldBothWays(t, "LimitsAnswer", reflect.TypeFor[queries.LimitsAnswer](), 1)
-	heldBothWays(t, "LimitRow", reflect.TypeFor[queries.LimitRow](), 8)
+	heldBothWays(t, "LimitRow", reflect.TypeFor[queries.LimitRow](), 9)
+	heldBothWays(t, "SettingRange", reflect.TypeFor[config.Range](), 3)
 	for _, tc := range []struct {
 		union  string
 		engine []string

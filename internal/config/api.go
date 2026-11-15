@@ -354,6 +354,15 @@ func (a API) externalLoopback() bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// LoopbackURL reports whether an address names a loopback host, one only the
+// machine it runs on reaches, by the rule [API.externalLoopback] judges the
+// person's address with: the setup listing says by it whether the address
+// third-party apps are given is one none of them can deliver to.
+//
+// THE RULE ITSELF, NOT A SECOND COPY: the address is judged as an
+// `api.external_url` is, so the two answers cannot drift apart.
+func LoopbackURL(raw string) bool { return API{ExternalURL: raw}.externalLoopback() }
+
 // validate checks the API block. serving is [Bootstrap.ServesAPI] and ingress
 // whether the node holds the ingress role: both are the node block's to say,
 // which this block cannot see.

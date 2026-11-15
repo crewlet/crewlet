@@ -31,7 +31,6 @@ import {
   Callout,
   Checkbox,
   ChoiceList,
-  ConfirmModal,
   DocumentTitleField,
   FileDrop,
   FilePickButton,
@@ -44,6 +43,7 @@ import {
   type SheetColumn,
   type SheetColumnType,
 } from "@crewlethq/ui";
+import { ConfirmModal } from "~/components/Modal.tsx";
 import { Columns3Glyph, FileTextGlyph, PlusGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { COLLECTION_PRESETS } from "~/contract/artifactsworkspace.ts";
@@ -523,7 +523,6 @@ export function SheetCreate() {
       }}
       handoff={{
         tool: askTool(who, panel),
-        open: () => panel.setOpen(true),
         panel: panel.open ? (
           <AskAgentPanel
             panel={panel}

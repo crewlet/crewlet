@@ -460,6 +460,27 @@ var subjectOf = map[string]subject{
 	chatlet.MarkChatReadTool: {kind: authz.KindPerson},
 }
 
+// ownBookkeeping are the tools whose every write is the CALLER'S OWN
+// BOOKKEEPING and nothing else: a room's read cursor, an inbox's read and
+// snooze marks on either log, the pins on their own strip. Each is one of the
+// personal tools that take no name ([subjectOf]), so it can only ever act for
+// whoever called it, and what it writes is read by no one else's work.
+//
+// DECLARED HERE, beside the table that says whose record each tool is about,
+// because the runtime audit files a call to one under a type of its own that
+// the company's activity feed leaves out (internal/api/operator): a person
+// reading their rooms is not something the company did.
+var ownBookkeeping = map[string]bool{
+	worklet.MarkInboxTool:    true,
+	worklet.SetPinsTool:      true,
+	CodeMarkInboxTool:        true,
+	chatlet.MarkChatReadTool: true,
+}
+
+// OwnBookkeeping reports whether every write a tool makes is the caller's own
+// bookkeeping (see [ownBookkeeping]).
+func OwnBookkeeping(name string) bool { return ownBookkeeping[name] }
+
 // subject is what one tool is about, as the names of its own arguments.
 type subject struct {
 	// kind is what sort of thing the call acts on.

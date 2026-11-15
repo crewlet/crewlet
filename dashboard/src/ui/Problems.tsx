@@ -29,7 +29,8 @@
  */
 
 import type { ReactNode } from "react";
-import { InlineCode, type InlineCodeTone } from "@crewlethq/ui";
+import { InlineCode, peelPunctuation, type InlineCodeTone } from "@crewlethq/ui";
+import { fmtDateTime, fmtDateTimeFull } from "~/lib/format.ts";
 
 /** One problem: where it is, and what to do about it. */
 export interface Problem {
@@ -134,10 +135,17 @@ const inlinePath = new RegExp(INLINE_PATH, "g");
 // A NAMED LINK AND A BACKTICK COME FIRST, because they are what an author
 // wrote deliberately and every other pattern would claim a piece of what is
 // inside them. Then a bare URL, which contains characters the rest would
-// split. The last four are recognised rather than marked up: a config path,
-// a route, a quoted value and a variable's name are what the engine's own
-// sentences are full of, and asking every message to annotate them would be
-// asking every author to remember.
+// split. The rest are recognised rather than marked up: an instant, a config
+// path, a route, a quoted value and a variable's name are what the engine's
+// own sentences are full of, and asking every message to annotate them would
+// be asking every author to remember.
+//
+// AN INSTANT IS THE ENGINE'S RFC 3339 STAMP (`2026-11-14T22:58:34Z`), which
+// its sentences carry because they are log lines too. Drawn as written it was
+// the one machine string left in a sentence a person reads, in UTC rather
+// than their own zone; it is drawn as every other recorded instant on a screen
+// is ([fmtDateTime]), with the whole of it in its title. Tried before a route,
+// which never starts with a digit, and after a URL, which may carry one.
 //
 // A VARIABLE'S NAME IS UPPER SNAKE CASE WITH AN UNDERSCORE
 // (`CLOUDFLARE_API_TOKEN_SRE`), so an acronym ("API") stays prose. It is tried
@@ -146,7 +154,9 @@ const inlinePath = new RegExp(INLINE_PATH, "g");
 const token = new RegExp(
   String.raw`\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|` +
     "`([^`]+)`|" +
-    String.raw`(https?:\/\/[^\s,)]+[^\s,.)])|(\$\{[A-Za-z0-9_]+\})|(\/[a-z0-9-]+(?:\/[a-z0-9{}_-]+)+)|("[^"]*")|` +
+    String.raw`(https?:\/\/[^\s,)]+[^\s,.)])|` +
+    String.raw`\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))|` +
+    String.raw`(\$\{[A-Za-z0-9_]+\})|(\/[a-z0-9-]+(?:\/[a-z0-9{}_-]+)+)|("[^"]*")|` +
     `(${INLINE_PATH})|` +
     String.raw`(\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+)+\b)`,
   "g",
@@ -155,13 +165,15 @@ const token = new RegExp(
 /**
  * marked renders a sentence with its values, paths and links picked out.
  *
- * TWO THINGS AN AUTHOR MARKS and six the renderer recognises. A link the
+ * TWO THINGS AN AUTHOR MARKS and seven the renderer recognises. A link the
  * words carry, `[Create a token](https://…)`, and a literal in backticks are
  * written deliberately, because only the person writing the sentence knows
  * where the link belongs in it and which word is a value. Everything else is
- * found: a config path, a route, a `${VAR}`, a variable's bare name and a
- * quoted value are what these sentences are full of, and asking every one of
- * them to annotate those would be asking every author to remember.
+ * found: a bare URL, an instant, a config path, a route, a `${VAR}`, a
+ * variable's bare name and a quoted value are what these sentences are full
+ * of, and asking every one of them to annotate those would be asking every
+ * author to remember. An instant is drawn in the reader's zone as a <time>
+ * whose title is the whole of it, the rest as code or links.
  *
  * `tone` is which ink the chips take, and it is a fact about WHERE the
  * sentence is drawn rather than about the sentence. In ordinary prose — a
@@ -177,8 +189,21 @@ export function marked(text: string, tone: InlineCodeTone = "default"): ReactNod
   let key = 0;
   for (const m of text.matchAll(token)) {
     const at = m.index ?? 0;
-    if (at > last) out.push(text.slice(last, at));
-    const [whole, linked, href, ticked, url, ref, route, quoted, path, name] = m;
+    // A match inside the punctuation the last chip took is part of that chip's sentence.
+    if (at < last) continue;
+    const [whole, linked, href, ticked, url, instant, ref, route, quoted, path, name] = m;
+    // A CHIP TAKES THE PUNCTUATION AROUND IT (`peelPunctuation`), as a
+    // markdown code span does: the kit then keeps the full stop or comma on
+    // the chip's line and its ground hugs it, where the chip's inset beside a
+    // bare "," read as a space before it ("backup_floor: operator ,"). A link
+    // and an instant are not chips, so the words around them stay as written.
+    const peeled =
+      (linked && href) || url || instant
+        ? null
+        : peelPunctuation(text.slice(last, at), text.slice(at + whole.length));
+    const lead = peeled ? peeled.before : text.slice(last, at);
+    if (lead) out.push(lead);
+    const edges = { open: peeled?.open ?? "", close: peeled?.close ?? "" };
     // A NEW TAB, on every anchor here: this sits in a dialog holding a
     // half-filled form, and following a link in place would throw the form
     // away to read a page about how to fill it in.
@@ -190,7 +215,7 @@ export function marked(text: string, tone: InlineCodeTone = "default"): ReactNod
       );
     } else if (ticked) {
       out.push(
-        <InlineCode key={key++} tone={tone}>
+        <InlineCode key={key++} tone={tone} {...edges}>
           {ticked}
         </InlineCode>,
       );
@@ -200,23 +225,29 @@ export function marked(text: string, tone: InlineCodeTone = "default"): ReactNod
           {url}
         </a>,
       );
+    } else if (instant) {
+      out.push(
+        <time key={key++} dateTime={instant} title={fmtDateTimeFull(instant)}>
+          {fmtDateTime(instant)}
+        </time>,
+      );
     } else if (ref || name) {
       out.push(
         // A SEALED ENTRY'S NAME, which is one token a reader copies back: the
         // `reference` variant is what keeps its braces together, because a
         // pointer broken across a line names nothing.
-        <InlineCode key={key++} variant="reference" tone={tone}>
+        <InlineCode key={key++} variant="reference" tone={tone} {...edges}>
           {ref ?? name}
         </InlineCode>,
       );
     } else {
       out.push(
-        <InlineCode key={key++} tone={tone}>
+        <InlineCode key={key++} tone={tone} {...edges}>
           {route ?? quoted ?? path}
         </InlineCode>,
       );
     }
-    last = at + whole.length;
+    last = at + whole.length + edges.close.length;
   }
   if (last < text.length) out.push(text.slice(last));
   return out;

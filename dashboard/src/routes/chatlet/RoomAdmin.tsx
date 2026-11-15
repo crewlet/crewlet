@@ -23,11 +23,11 @@ import {
   ConfirmField,
   FormField,
   Input,
-  Modal,
   Textarea,
   confirmMatches,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   CalendarClockGlyph,
   ClockGlyph,
@@ -67,9 +67,6 @@ import {
 } from "./roomLifecycle.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
-
-/** What a dialog says while the engine has not answered. */
-const WAITING = "Waiting for the engine to answer.";
 
 /** The room's name as a sentence names it, once its answer has come. */
 function useRoomName(room: string): { where: string; name: string } {
@@ -178,7 +175,6 @@ export function ArchiveDialog({
       icon={archive ? <PackageGlyph size="md" /> : <RotateCcwGlyph size="md" />}
       title={archive ? `Archive ${where}?` : `Reopen ${where}?`}
       dismissable={!update.busy}
-      closeDisabledReason={WAITING}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={update.busy}>

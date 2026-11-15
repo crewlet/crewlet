@@ -12,7 +12,8 @@
  */
 
 import { Fragment } from "react";
-import { Kbd, Modal, Text } from "@crewlethq/ui";
+import { Kbd, Text } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { KEY_SCOPES, KEYMAP, capsOf, keyShown, type KeyRow } from "./keymap.ts";
 import type { ServicesRun } from "~/lib/services.ts";
 

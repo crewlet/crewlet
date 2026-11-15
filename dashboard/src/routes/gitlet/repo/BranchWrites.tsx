@@ -24,7 +24,8 @@
  */
 
 import { useState } from "react";
-import { Button, ConfirmModal, FormField, Input, Modal, Stack } from "@crewlethq/ui";
+import { Button, FormField, Input, Stack } from "@crewlethq/ui";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName, shortOID } from "~/lib/code.ts";
 import { branchDeleteHeld, branchFormHeld, branchWriteHeld } from "~/lib/repoWrites.ts";
@@ -86,7 +87,6 @@ function NewBranchDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () 
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -186,7 +186,6 @@ function DeleteBranch({
         confirmLabel="Delete branch"
         onClose={() => setConfirming(false)}
         submitting={write.busy}
-        busyReason="Waiting for the engine to answer"
         onConfirm={async () => {
           await write.run(
             { repo: repo.name, branch: name, expected_head: row.oid ?? "" },

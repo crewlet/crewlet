@@ -16,6 +16,14 @@ vi.mock("~/lib/store-hooks.ts", () => ({ useConnection: () => ({ connected: true
 vi.mock("~/lib/useQuery.ts", () => ({
   useQuery: () => ({ data: null, loading: false, error: null }),
 }));
+const schemaWrite = vi.fn();
+vi.mock("~/lib/keyedWrite.ts", async () => {
+  const actual = await vi.importActual<typeof import("~/lib/keyedWrite.ts")>("~/lib/keyedWrite.ts");
+  return {
+    ...actual,
+    useKeyedGesture: () => ({ run: schemaWrite, busy: false, answer: null, reset: () => {} }),
+  };
+});
 vi.mock("~/lib/artifacts/people.ts", () => ({
   useArtifactPeople: () => ({ sheetPeople: [] }),
   cellPresence: () => [],
@@ -110,5 +118,67 @@ describe("Add row", () => {
     act(() => fireEvent.click(screen.getByRole("button", { name: "Dismiss" })));
     expect(store.addRefusal).toBeNull();
     expect(await screen.findByText("Saved")).toBeTruthy();
+  });
+});
+
+describe("an empty sheet", () => {
+  // A SHEET IS ONE TABLE: its editor names the columns in the sheet itself,
+  // in words, and the one collection behind them is written for them. Set up
+  // columns opened the Data panel's schema editor, which asked for a
+  // lowercase collection name before a single column.
+  test("names its columns in place and saves them as the sheet's one table", async () => {
+    schemaWrite.mockReset();
+    schemaWrite.mockResolvedValue({ kind: "done", pending: false, body: {} });
+    const write = vi.fn(async (): Promise<KeyedAnswer> => {
+      throw new Error("no row is written");
+    });
+    draw({ role: "editor", collections: [] }, write);
+    expect(await screen.findByText("No columns yet")).toBeTruthy();
+    expect(screen.queryByText(/collection/i)).toBeNull();
+    const save = screen.getByRole("button", { name: "Save columns" });
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.change(screen.getByRole("textbox", { name: "Column 1" }), {
+      target: { value: "Team" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add a column" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Column 2" }), {
+      target: { value: "Due date" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save columns" }));
+    });
+    expect(schemaWrite).toHaveBeenCalledOnce();
+    const req = schemaWrite.mock.calls[0]![0];
+    expect(req).toMatchObject({ method: "PUT", path: "/artifacts/a1/data/schema" });
+    expect(req.body.collections).toHaveLength(1);
+    expect(req.body.collections[0]).toMatchObject({ name: "rows", preset: "shared" });
+    expect(req.body.collections[0].columns).toEqual([
+      { key: "team", type: "text", label: "Team", primary: true },
+      { key: "due_date", type: "text", label: "Due date" },
+    ]);
+  });
+
+  test("two names that would be one column are held, said in the names typed", async () => {
+    draw({ role: "editor", collections: [] }, vi.fn());
+    fireEvent.change(await screen.findByRole("textbox", { name: "Column 1" }), {
+      target: { value: "Due date" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add a column" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Column 2" }), {
+      target: { value: "Due-date" },
+    });
+    const save = screen.getByRole("button", { name: "Save columns" });
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(save.getAttribute("aria-describedby")!)?.textContent).toBe(
+      "“Due date” and “Due-date” would be the same column. Rename one.",
+    );
+  });
+
+  test("a reader who cannot edit is told who sets the columns up", async () => {
+    draw({ role: "viewer", collections: [] }, vi.fn());
+    expect(
+      await screen.findByText("The people who can edit this sheet set up its columns."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save columns" })).toBeNull();
   });
 });

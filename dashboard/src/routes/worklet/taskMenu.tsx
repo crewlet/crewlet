@@ -1,6 +1,20 @@
 /**
- * What a task's own menu does to it: moved to another project, into the
- * trash, back out of it, and out of the company for good.
+ * What a task's own menu does to it: moved to another project, merged into
+ * the task it duplicates, put on the reader's priorities or taken off them,
+ * into the trash, back out of it, and out of the company for good.
+ *
+ * # Merge into, and the reader's priorities
+ *
+ * A merge is `merge_work_item`: the task is linked to the one that survives
+ * as its duplicate, its subtasks move onto that one unless the reader keeps
+ * them where they are, and it is closed as cancelled. Nothing is destroyed,
+ * so the dialog says what moves and the engine's refusal is drawn in it; once
+ * it lands the reader is taken to the task that carries the work on.
+ *
+ * "Add to my priorities" is `set_priorities` on the reader's own record: the
+ * stored list (`work_person.priorities`, read once by the hook) with the task
+ * put at its end, or taken out of it, conditional on the record's version as
+ * My work's reorder is. The order itself is set on My work.
  *
  * # Four gestures, two surfaces
  *
@@ -57,10 +71,11 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode
 import {
   Button,
   Callout,
+  Checkbox,
+  Combobox,
   ConfirmField,
   FormField,
   Menu,
-  Modal,
   Select,
   SelectionBar,
   Textarea,
@@ -69,10 +84,21 @@ import {
   type MenuEntry,
   type MenuItem,
 } from "@crewlethq/ui";
-import { EllipsisGlyph, FolderInputGlyph, TrashGlyph, UndoGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "~/components/Modal.tsx";
+import {
+  EllipsisGlyph,
+  FoldVerticalGlyph,
+  FolderInputGlyph,
+  ListOrderedGlyph,
+  SearchGlyph,
+  TrashGlyph,
+  UndoGlyph,
+} from "@crewlethq/icons/glyphs";
 import { UNKNOWN_TITLE, useAct, type Act } from "~/lib/useAct.ts";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
+import { useNavigator } from "~/app/router.tsx";
 import { projectOptions } from "~/lib/startingProject.ts";
 import { PROJECT_PAGE } from "~/contract/work.ts";
 import { accessToAsk } from "~/lib/authorityRemedy.ts";
@@ -85,7 +111,7 @@ import { itemAddress } from "~/lib/work.ts";
 import { pathSegment } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
 import type { ActResult } from "~/protocol/act.ts";
-import type { WorkSummary } from "~/protocol/index.ts";
+import type { WorkRanked, WorkSummary } from "~/protocol/index.ts";
 
 /** A task one of the gestures names. */
 export interface TaskTarget {
@@ -115,6 +141,16 @@ export function taskTargetOf(
     ...(row.parent ? { parent: row.parent } : {}),
   };
 }
+
+/** Why a reader with no record of their own has no priorities to change. */
+const PRIORITIES_NEED_A_RECORD =
+  "You have no work record of your own, so there is no list to change.";
+
+/** Why the priorities entry is held until the reader's own record has answered. */
+const PRIORITIES_READING = "Reading your priorities first.";
+
+/** Why the priorities entry is held while the reader's own record could not be read. */
+const PRIORITIES_UNREAD = "Your priorities could not be read, so they cannot be changed just now.";
 
 /** Why a subtask's Move is held: the tool moves a top-level item and its subtree. */
 export const SUBTASK_MOVES_WITH_PARENT =
@@ -216,6 +252,15 @@ export interface TaskActions {
   /** Opens the move to another project for one top-level task. */
   move: (target: TaskTarget) => void;
   moveHeld: string | undefined;
+  /** Opens the merge into another task for one task. */
+  merge: (target: TaskTarget) => void;
+  mergeHeld: string | undefined;
+  /** Puts the task at the end of the reader's priorities, or takes it off them. */
+  prioritise: (target: TaskTarget, add: boolean) => void;
+  /** Whether the task is on the reader's priorities. */
+  prioritised: (target: TaskTarget) => boolean;
+  /** Why the reader's priorities cannot be changed from here, or undefined. */
+  prioritiesHeld: string | undefined;
   /** Why a removal cannot be made from this browser, or undefined. */
   removeHeld: string | undefined;
   restoreHeld: string | undefined;
@@ -234,8 +279,20 @@ export function useTaskActions(): TaskActions {
   const removeWrite = useAct("remove_work_item");
   const restoreWrite = useAct("restore_work_item");
   const moveWrite = useAct("move_work_item");
+  const mergeWrite = useAct("merge_work_item");
+  const prioritiesWrite = useAct("set_priorities");
   const [moving, setMoving] = useState<TaskTarget | null>(null);
+  const [merging, setMerging] = useState<TaskTarget | null>(null);
   const viewer = useViewer();
+  // THE READER'S OWN RECORD, read once for every row the hook serves: its
+  // stored list is what an add or a removal is made from, and its version
+  // what the write is conditional on.
+  const owner = viewer.owner;
+  const person = useQuery("work_person", owner ? { handle: owner } : undefined, {
+    enabled: viewer.worklet && owner !== "",
+    pollMs: 60_000,
+    refetchOnInboxOf: owner,
+  });
   const link = linkOf(useConnection());
   const { socket } = useClient();
   const toast = useToast();
@@ -420,6 +477,35 @@ export function useTaskActions(): TaskActions {
     [socket, removeNow],
   );
 
+  const stored = person.data;
+  const listed = useMemo(() => new Set(stored?.priorities ?? []), [stored]);
+  const prioritise = useCallback(
+    async (target: TaskTarget, add: boolean) => {
+      if (!stored) return;
+      const ids = (stored.priorities ?? []).filter((id) => id !== target.id);
+      const result = await prioritiesWrite.run(
+        { items: add ? [...ids, target.id] : ids, if_match: stored.version },
+        {
+          done: add
+            ? `Added ${target.key} to your priorities`
+            : `Removed ${target.key} from your priorities`,
+        },
+      );
+      // A REFUSAL IS SAID IN A TOAST: the press came from a menu, and nothing
+      // stays beside it to draw the sentence.
+      if (result?.kind === "refused") {
+        prioritiesWrite.dismiss();
+        toast.show({
+          variant: "danger",
+          title: add ? "Not added to your priorities" : "Not removed from your priorities",
+          message: refusalWords(result),
+          duration: 0,
+        });
+      }
+    },
+    [stored, prioritiesWrite, toast],
+  );
+
   const dialog = (
     <>
       {asking && (
@@ -444,6 +530,17 @@ export function useTaskActions(): TaskActions {
           }}
         />
       )}
+      {merging && (
+        <MergeDialog
+          key={merging.id}
+          target={merging}
+          write={mergeWrite}
+          onClose={() => {
+            mergeWrite.dismiss();
+            setMerging(null);
+          }}
+        />
+      )}
       {purging && (
         <PurgeDialog
           key={purging.id}
@@ -464,10 +561,18 @@ export function useTaskActions(): TaskActions {
     purge: setPurging,
     move: setMoving,
     moveHeld: heldBy(moveWrite.access),
+    merge: setMerging,
+    mergeHeld: heldBy(mergeWrite.access),
+    prioritise: (target, add) => void prioritise(target, add),
+    prioritised: (target) => listed.has(target.id),
+    prioritiesHeld:
+      heldBy(prioritiesWrite.access) ??
+      (owner === "" && !viewer.loading ? PRIORITIES_NEED_A_RECORD : undefined) ??
+      (stored ? undefined : person.error ? PRIORITIES_UNREAD : PRIORITIES_READING),
     removeHeld: heldBy(removeWrite.access),
     restoreHeld: heldBy(restoreWrite.access),
     purgeHeld: purgeHold(viewer, link),
-    busy: busy || removeWrite.busy || restoreWrite.busy,
+    busy: busy || removeWrite.busy || restoreWrite.busy || prioritiesWrite.busy,
     dialog,
   };
 }
@@ -479,8 +584,9 @@ export function useTaskActions(): TaskActions {
 export type TaskMenuItem = MenuItem & { description?: string };
 
 /**
- * The menu entries for the tasks named: Move to project and Move to trash for
- * live work, and Restore and Delete permanently in the trash. Each is drawn for
+ * The menu entries for the tasks named: for one live task, Move to project,
+ * Merge into and its place on the reader's priorities; Move to trash for live
+ * work; and Restore and Delete permanently in the trash. Each is drawn for
  * every reader and held with the sentence that says why it cannot act.
  */
 export function taskEntries(
@@ -502,6 +608,28 @@ export function taskEntries(
               onSelect: () => actions.move(one),
               ...held(one.parent ? SUBTASK_MOVES_WITH_PARENT : actions.moveHeld),
             },
+            {
+              key: "merge",
+              label: "Merge into…",
+              icon: <FoldVerticalGlyph size="sm" />,
+              onSelect: () => actions.merge(one),
+              ...held(actions.mergeHeld),
+            },
+            actions.prioritised(one)
+              ? {
+                  key: "priorities",
+                  label: "Remove from my priorities",
+                  icon: <ListOrderedGlyph size="sm" />,
+                  onSelect: () => actions.prioritise(one, false),
+                  ...held(actions.prioritiesHeld),
+                }
+              : {
+                  key: "priorities",
+                  label: "Add to my priorities",
+                  icon: <ListOrderedGlyph size="sm" />,
+                  onSelect: () => actions.prioritise(one, true),
+                  ...held(actions.prioritiesHeld),
+                },
           ]
         : []),
       {
@@ -767,6 +895,126 @@ function MoveDialog({
             }}
           />
         </FormField>
+        <RefusalNote write={write} />
+      </div>
+    </Modal>
+  );
+}
+
+/** How many tasks the merge dialog's search offers at once. */
+const MERGE_HITS = 8;
+
+/**
+ * Merging one task into another: the task that survives found by its key or
+ * its words, what the merge does said before it is made, and the subtasks
+ * moved onto the survivor unless the reader keeps them.
+ *
+ * THE ENGINE DECIDES WHETHER IT MAY (a task folded into itself, a subtask
+ * moved across projects, a reader who may not change the task), and its
+ * refusal is drawn under the choice, naming the way out it offers. Once it
+ * lands the reader is taken to the task that carries the work on.
+ */
+function MergeDialog({
+  target,
+  write,
+  onClose,
+}: {
+  target: TaskTarget;
+  write: Act<"merge_work_item">;
+  onClose: () => void;
+}) {
+  const nav = useNavigator();
+  const [q, setQ] = useState("");
+  const [chosen, setChosen] = useState<WorkRanked | null>(null);
+  const [moveSubtasks, setMoveSubtasks] = useState(true);
+  const search = useSearchQuery(
+    "work_search",
+    { q: q.trim(), mode: "hybrid", limit: MERGE_HITS },
+    { enabled: q.trim().length >= 2 },
+  );
+  // NOT THIS TASK, matched by id; and nothing from a refused search, whose
+  // last answer is the hits of a phrase the field no longer holds.
+  const hits = search.error ? [] : (search.data?.hits ?? []).filter((h) => h.id !== target.id);
+  const merge = async () => {
+    if (!chosen) return;
+    const into = itemAddress(chosen);
+    const result = await write.run(
+      { item: target.address, into, move_subtasks: moveSubtasks },
+      { done: `Merged ${target.key} into ${chosen.key}` },
+    );
+    if (result?.kind === "applied" || result?.kind === "pending") {
+      onClose();
+      nav.to(["worklet", into]);
+    }
+  };
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Merge ${target.key} into another task`}
+      placement="top"
+      footer={
+        <>
+          <Button size="small" variant="ghost" onClick={onClose} disabled={write.busy}>
+            Cancel
+          </Button>
+          <WriteButton
+            write={write}
+            size="small"
+            variant="primary"
+            showRefusal={false}
+            blocked={chosen ? undefined : "Choose the task it merges into."}
+            onPress={() => void merge()}
+          >
+            Merge
+          </WriteButton>
+        </>
+      }
+    >
+      <div className="col gap-3">
+        <p>
+          <strong>{target.title}</strong> is closed as cancelled and linked to the task you choose
+          as its duplicate. Nothing is deleted: it stays readable, with its comments and history.
+        </p>
+        <Combobox
+          label="Tasks"
+          placeholder="A key like ENG-1, or words from its title"
+          aria-label="Find the task it merges into"
+          leading={<SearchGlyph size="sm" />}
+          width="full"
+          autoFocus
+          value={q}
+          onValueChange={(next) => {
+            write.dismiss();
+            setQ(next);
+          }}
+          inline
+          rows={5}
+          chosen={chosen?.id}
+          options={hits.map((h) => ({ value: h.id, label: h.title, hint: h.key }))}
+          onCommit={(option) => {
+            write.dismiss();
+            setChosen(hits.find((h) => h.id === option.value) ?? null);
+          }}
+          commitOn="click"
+          emptyMessage={
+            q.trim().length < 2
+              ? "Type two characters to search."
+              : search.loading
+                ? "Searching…"
+                : (search.tooLong ?? search.withheld ?? search.detail ?? "No task matches.")
+          }
+        />
+        <Checkbox
+          checked={moveSubtasks}
+          onCheckedChange={setMoveSubtasks}
+          label={
+            chosen
+              ? `Move its subtasks onto ${chosen.key}`
+              : "Move its subtasks onto the task it merges into"
+          }
+          description="Left where they are, they stay under a cancelled task."
+        />
         <RefusalNote write={write} />
       </div>
     </Modal>

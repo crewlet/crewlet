@@ -16,12 +16,12 @@ import {
   ConfirmField,
   FormField,
   Input,
-  Modal,
   Select,
   Textarea,
   confirmMatches,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { artifactSectionPath } from "~/app/routes.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";

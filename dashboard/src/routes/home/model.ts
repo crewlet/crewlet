@@ -28,7 +28,7 @@ import type {
 } from "~/protocol/index.ts";
 import { plural } from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
-import { companyZone } from "~/lib/range.ts";
+import { companyZone } from "~/lib/companyDay.ts";
 import { shownStateOf } from "~/lib/seats.ts";
 
 /** The three windows the screen reads over, and what each is called. */

@@ -572,7 +572,10 @@ describe("the lease tables", () => {
           expires_in: 33,
         },
       ],
-      duties: [{ duty: "integration-reconciler", node: "harness-0", expires_in: 60 }],
+      duties: [
+        { duty: "integration-reconciler", node: "harness-0", expires_in: 60 },
+        { duty: "iam_sweep", node: "harness-0", expires_in: 60 },
+      ],
       unplaceable: [],
       unmanned_roles: [],
       this_node: "harness-0",
@@ -594,6 +597,12 @@ describe("the lease tables", () => {
       </ClientContext.Provider>,
     );
     expect(await screen.findByText("integration-reconciler")).toBeDefined();
+    // A DUTY BY WHAT IT DOES, its lease key on the title: `iam_sweep` read as
+    // the engine's source. A key this build has no words for is itself (the
+    // reconciler above). Mutation: draw `d.duty` and the key is the cell.
+    const sweep = screen.getByText("Sign-in cleanup");
+    expect(sweep.getAttribute("title")).toBe("iam_sweep");
+    expect(screen.queryByText("iam_sweep")).toBeNull();
     const leaseGrids = [
       ...view.container.querySelectorAll<HTMLElement>(".crewlet-data-grid"),
     ].filter((g) => /Held by/i.test(g.textContent ?? ""));

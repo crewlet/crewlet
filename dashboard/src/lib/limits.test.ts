@@ -9,7 +9,10 @@ import {
   documentLimit,
   limitPatch,
   limitPlan,
+  limitRefusal,
   limitText,
+  limitUnchanged,
+  rangeWords,
   readLimit,
   type LimitRow,
 } from "./limits.ts";
@@ -42,11 +45,11 @@ test("a share is typed and shown as a percentage", () => {
 });
 
 test("a count takes a whole number and a duration any number of seconds", () => {
-  const count = row({ key: "turn_engine.max_iterations" });
+  const count = row({ key: "turn_engine.max_iterations", range: { min: 1 } });
   expect(readLimit(count, "5")).toEqual({ ok: true, value: 5 });
-  expect(readLimit(count, "2.5").ok).toBe(false);
-  expect(readLimit(count, "-1").ok).toBe(false);
-  expect(readLimit(count, "five").ok).toBe(false);
+  expect(readLimit(count, "2.5")).toEqual({ ok: false, error: "“2.5” is not a whole number." });
+  expect(readLimit(count, "-1")).toEqual({ ok: false, error: "At least 1." });
+  expect(readLimit(count, "five")).toEqual({ ok: false, error: "“five” is not a whole number." });
   const seconds = row({ key: "turn_engine.delegation.task_timeout_seconds", unit: "seconds" });
   expect(readLimit(seconds, "90.5")).toEqual({ ok: true, value: 90.5 });
 });
@@ -86,4 +89,66 @@ test("a change is worked out against the document as it is now", () => {
     summary:
       "Limits: Share of the budget a call may spend set to 35% (turn_engine.delegation.budget_fraction)",
   });
+});
+
+// THE ENGINE'S RANGE, IN THE CAP'S OWN WORDS. The row carries the bound the
+// validator holds the cap to, and a value outside it is said beside the field
+// before anything is sent: 0, -2 and 999999 used to reach the engine and come
+// back as its operator's line.
+test("a value outside the cap's range is refused in the cap's unit", () => {
+  const rounds = row({ key: "turn_engine.max_iterations", range: { min: 1 } });
+  expect(readLimit(rounds, "0")).toEqual({ ok: false, error: "At least 1." });
+  expect(readLimit(rounds, "999999")).toEqual({ ok: true, value: 999999 });
+  const batch = row({ key: "notification_coalesce_max_batch", range: { min: 1, max: 100 } });
+  expect(readLimit(batch, "999999")).toEqual({ ok: false, error: "From 1 to 100." });
+  const share = { ...SHARE, range: { min: 0, min_exclusive: true, max: 1 } };
+  expect(readLimit(share, "0")).toEqual({ ok: false, error: "More than 0%, and at most 100%." });
+  expect(readLimit(share, "150")).toEqual({
+    ok: false,
+    error: "More than 0%, and at most 100%.",
+  });
+  expect(readLimit(share, "100")).toEqual({ ok: true, value: 1 });
+  const timeout = row({
+    key: "turn_engine.delegation.task_timeout_seconds",
+    unit: "seconds",
+    range: { min: 0, min_exclusive: true },
+  });
+  expect(rangeWords(timeout, timeout.range!)).toBe("More than 0 seconds.");
+  expect(readLimit(timeout, "0")).toEqual({ ok: false, error: "More than 0 seconds." });
+  // THE DEFAULT IS ALWAYS ADMITTED: it is the key removed.
+  expect(readLimit(rounds, "")).toEqual({ ok: true, value: null });
+});
+
+test("a value is unchanged when it is the one in force, the default for an empty field", () => {
+  const rounds = row({ key: "turn_engine.max_iterations", value: 3, default: 3 });
+  expect(limitUnchanged(rounds, 3)).toBe(true);
+  expect(limitUnchanged(rounds, null)).toBe(true);
+  expect(limitUnchanged(rounds, 4)).toBe(false);
+  const set = row({ key: "turn_engine.max_iterations", value: 5, default: 3 });
+  expect(limitUnchanged(set, null)).toBe(false);
+  expect(limitUnchanged({ ...SHARE, value: 0.2 }, 0.2)).toBe(true);
+});
+
+// A PERSON'S WORDS, NEVER THE DOCUMENT'S: a range at this cap as the field
+// says it, a rule's own words where it wrote them, and anything else plainly.
+test("the engine's refusal of a cap is said without the document's keys", () => {
+  const rounds = row({ key: "turn_engine.max_iterations" });
+  const at = (path: string, extra: object = {}) => ({
+    path,
+    segments: path.split("."),
+    kind: "out_of_range" as const,
+    message: `${path}: value out of range: must be at least 1, got 0`,
+    ...extra,
+  });
+  expect(limitRefusal(rounds, [at("turn_engine.max_iterations", { range: { min: 1 } })])).toBe(
+    "At least 1.",
+  );
+  expect(
+    limitRefusal(rounds, [
+      at("turn_engine.onboarding_max_tool_rounds_ceiling", { said: "Rounds can be at most 20." }),
+    ]),
+  ).toBe("Rounds can be at most 20.");
+  expect(limitRefusal(rounds, [at("mcp_servers.0.name")])).toBe(
+    "This value does not fit the rest of the company’s configuration.",
+  );
 });

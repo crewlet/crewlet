@@ -260,6 +260,21 @@ type Session struct {
 	// both.
 	EnrolmentOnly bool `json:"enrolment_only,omitempty"`
 
+	// UserAgent is the browser that opened the session, as its User-Agent
+	// header named it, clipped to [MaxSessionUserAgent] bytes; and Remote is
+	// the address it opened from, resolved through `api.trusted_proxies`
+	// ([auth.Clients]) as the sign-in's own audit row names it. Both are
+	// written once, at the start, and never moved.
+	//
+	// WHAT LETS A PERSON TELL THEIR SESSIONS APART. A listing of sessions
+	// that said only when each began and when it ends offered "Sign out" on
+	// rows nobody could match to a device, so the one session on a lost
+	// laptop could only be ended with every other. Empty on a session a
+	// Tier A token's exchange opened with no browser behind it, and on one
+	// an earlier build wrote.
+	UserAgent string `json:"user_agent,omitempty"`
+	Remote    string `json:"remote,omitempty"`
+
 	// EndedReason is why a session stopped, on the CLOSE record: signed
 	// out, revoked or expired. "This
 	// session was revoked, and why" is the sentence an investigation is

@@ -399,6 +399,36 @@ test("an edit writes the entry back, every field it does not draw kept", async (
   expect(storeValue).not.toHaveBeenCalled();
 });
 
+// AN EDIT THE ENGINE FINDS ALREADY SO is the entry holding. The engine
+// answers an entity's PUT that leaves the document as it stands `200
+// changed: false`, storing nothing; the wizard read every answer but a stored
+// revision as a refusal and held the save on a blank one. Mutation: read only
+// `saved` as written and the save stops at the review.
+test("an edit the engine finds already so is saved, not refused", async () => {
+  vi.mocked(putEntity).mockResolvedValue({
+    kind: "unchanged",
+    revisionId: "r1",
+    warnings: [],
+    derived: null,
+  });
+  mount(
+    {
+      server: mcpData("admin").server("linear")!,
+      entity: { name: "linear", transport: "http", url: "https://mcp.linear.app/mcp" },
+      values: [],
+      entry: LINEAR,
+      signIn: "none",
+    },
+    "connection",
+  );
+  await settle();
+  fireEvent.change(screen.getByLabelText("Tool prefix"), { target: { value: "lin_" } });
+  await press("Review changes");
+  await press("Save changes");
+  expect(putEntity).toHaveBeenCalledTimes(1);
+  expect(onSaved).toHaveBeenCalled();
+});
+
 // AN OAUTH SERVER'S EDIT draws its sign-in as its entry says it (the method
 // and the client), and writes the oauth block and its other headers back as
 // they are. Mutation: start an OAuth server's edit on another method, or

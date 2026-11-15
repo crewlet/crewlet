@@ -25,11 +25,11 @@ import {
   IconButton,
   Input,
   Menu,
-  Modal,
   NavDivider,
   SidebarNav,
   Tooltip,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import {
   CompassGlyph,
   PinGlyph,

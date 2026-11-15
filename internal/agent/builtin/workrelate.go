@@ -289,15 +289,34 @@ func (d WorkDeps) inertRelations(ctx context.Context, turn *turnctx.Turn, tool s
 	// A SCALAR rather than the `set` grammar the two above use: an item is
 	// a duplicate of ONE other item, and offering a list would invite one
 	// nothing downstream means.
-	if ref := strings.TrimSpace(argString(args, "duplicate_of")); ref != "" {
-		id, refusal := d.resolveRef(ctx, tool, "`duplicate_of`", ref)
-		if refusal != nil {
-			return nil, refusal
+	//
+	// AND IT IS TAKEN OFF THE WAY `assignee` IS: null or "" clears it. A
+	// link drawn by mistake was otherwise there for good, since no argument
+	// named the edge to remove; the item's own duplicate edges are what it
+	// clears, and an item that marks nothing a duplicate clears nothing.
+	if raw, held := args["duplicate_of"]; held {
+		// READ AS EVERY STRING ARGUMENT IS ([argval.String]): null and "" are
+		// the clear, and an object or a list is no reference and no clear,
+		// left to the schema check that names it.
+		text, readable := argval.String(raw)
+		switch ref := strings.TrimSpace(text); {
+		case ref != "":
+			id, refusal := d.resolveRef(ctx, tool, "`duplicate_of`", ref)
+			if refusal != nil {
+				return nil, refusal
+			}
+			touched = true
+			intent.Add = append(intent.Add, worklet.Relation{
+				Kind: worklet.RelationDuplicates, Other: id,
+			})
+		case readable:
+			touched = true
+			for _, id := range othersOfKind(task, worklet.RelationDuplicates) {
+				intent.Remove = append(intent.Remove, worklet.Relation{
+					Kind: worklet.RelationDuplicates, Other: id,
+				})
+			}
 		}
-		touched = true
-		intent.Add = append(intent.Add, worklet.Relation{
-			Kind: worklet.RelationDuplicates, Other: id,
-		})
 	}
 	if !touched || (len(intent.Add) == 0 && len(intent.Remove) == 0) {
 		return nil, nil

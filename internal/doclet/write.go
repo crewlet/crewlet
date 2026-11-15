@@ -296,18 +296,19 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 				if err := s.refuseReserved(actor, head.Container, false); err != nil {
 					return statelog.Decision{}, err
 				}
+				// BEFORE THE VERSION: a page in the trash takes no save
+				// whatever version it was read at, and its status in
+				// particular comes back only by a restore, which clears
+				// when it was trashed. A save that published it would
+				// leave that instant on a page every reader finds again,
+				// and the reaper would purge it on schedule.
+				if refused := refuseTrashed(head); refused != nil {
+					return statelog.Decision{}, refused
+				}
 				if head.Version != save.BaseVersion {
 					return statelog.Decision{}, fmt.Errorf(
 						"%w: this edit is against version %d and the page is at %d",
 						ErrStaleVersion, save.BaseVersion, head.Version)
-				}
-				if save.Status != nil && head.Status == StatusTrashed {
-					// A TRASHED PAGE COMES BACK BY A RESTORE, which clears
-					// when it was trashed. A save that published it would
-					// leave that instant on a page every reader finds
-					// again, and the reaper would purge it on schedule.
-					return statelog.Decision{}, invalid("status", "the page is in the "+
-						"trash. Restore it first, then set its status")
 				}
 				if save.ParentID != nil && *save.ParentID != head.ParentID {
 					// A MOVE IS JUDGED IN THE SNAPSHOT IT IS DECIDED IN,
@@ -441,6 +442,9 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			if refused := refuseTrashed(current); refused != nil {
+				return statelog.Decision{}, refused
+			}
 			out = current
 			out.Title = title
 			out.UpdatedAt = at
@@ -520,6 +524,9 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 				if moved := inContainer(current, container); moved != nil {
 					return statelog.Decision{}, moved
 				}
+				if refused := refuseTrashed(current); refused != nil {
+					return statelog.Decision{}, refused
+				}
 				out, read = current, revision
 				if current.Title == title {
 					// THE TRUE NO-OP: the same displayed title at the
@@ -571,6 +578,24 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 		Page: out, Revision: writtenRevision(result, read), ChangeID: opID,
 		Outcome: result,
 	}, nil
+}
+
+// refuseTrashed refuses a change to a page in the trash.
+//
+// A PAGE IN THE TRASH TAKES NO CHANGE BUT A RESTORE OR A PURGE ([Store.Restore],
+// [Store.Purge]): no save, label, watch or move, no rename and no comment
+// gesture. It is deleted as far as any reader is concerned ([StatusTrashed])
+// and still recoverable, so it is kept as it was trashed: a page rewritten,
+// relabelled and discussed while nobody could find it came back from the
+// trash as something nobody had read. Only a status was refused here once,
+// and the rest landed on the deleted page. Decided in each write's own
+// snapshot, where a restore that lands first is seen.
+func refuseTrashed(head Page) error {
+	if head.Status != StatusTrashed {
+		return nil
+	}
+	return invalid("page", "the page is in the trash, where nothing changes it. "+
+		"Restore it first")
 }
 
 // Trash moves a page out of every reader's way, reversibly, until the trash

@@ -275,10 +275,12 @@ test("the chart's subtitle is its count and span, with no hint", async () => {
 });
 
 // A FAILED TURN WEARS THE DANGER TONE. It wore amber — the one state that asks
-// a person for a decision — which a failed turn does not.
-test("a turn that carried a failure is marked in the danger tone", async () => {
+// a person for a decision, which a failed turn does not. AND ITS WORD IS
+// "failed", the one the seat's page and the executors say: "failure" here
+// read as a state of its own. Mutation: say "failure" again.
+test("a turn that carried a failure is marked failed, in the danger tone", async () => {
   mount([row("t-bad", "the failed one", { complete: true, failed: true })]);
-  const tag = (await screen.findByText("failure")).closest(".crewlet-tag");
+  const tag = (await screen.findByText("failed")).closest(".crewlet-tag");
   expect(tag?.classList.contains("crewlet-tag--danger")).toBe(true);
 });
 

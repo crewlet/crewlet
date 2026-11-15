@@ -122,8 +122,8 @@ type TrackerWriter interface {
 	RecordTurn(ctx context.Context, opID string, turn worklet.TurnRecord) (worklet.WriteResult, error)
 
 	// The operator's writes, which no seat is handed: saved views, the
-	// catalogue, a person's own state, rewriting one's own remark, the
-	// trash and the purge.
+	// catalogue, a person's own state, rewriting or taking down a remark,
+	// the trash and the purge.
 	//
 	// ViewPrior is the READ a save is decided on — a save replaces a view
 	// whole by id, so who may make one is a question about the view it
@@ -145,6 +145,8 @@ type TrackerWriter interface {
 		notify *worklet.Notify) (worklet.WriteResult, error)
 	ResolveComment(ctx context.Context, opID, taskID, project, commentID string,
 		withdrawal *worklet.Withdrawal, notify *worklet.Notify) (worklet.WriteResult, error)
+	RemoveComment(ctx context.Context, opID, taskID, project, commentID string,
+		authority worklet.CommentAuthority) (worklet.WriteResult, error)
 	WritePriorities(ctx context.Context, opID, handle string, priorities []string,
 		ifMatch *uint64, authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
@@ -1642,6 +1644,26 @@ var opResolveTaskComment = define("tracker.resolve_comment", opIdempotentWrite, 
 			return worklet.WriteResult{}, err
 		}
 		return w.ResolveComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Withdrawal, a.Notify)
+	})
+
+type removeCommentOnTaskArgs struct {
+	OpID      string
+	TaskID    string
+	Project   string
+	CommentID string
+	Authority worklet.CommentAuthority
+}
+
+// TAKING A REMARK DOWN on a work item: its author, or a moderator the caller's
+// table admitted, decided against the SIGNED actor ([worklet.ErrNotAuthor]),
+// as an edit's author is.
+var opRemoveTaskComment = define("tracker.remove_comment", opIdempotentWrite, trackerDomain, true,
+	func(ctx context.Context, b Backend, actor *Actor, a removeCommentOnTaskArgs) (worklet.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return worklet.WriteResult{}, err
+		}
+		return w.RemoveComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Authority)
 	})
 
 type removeTaskArgs struct {

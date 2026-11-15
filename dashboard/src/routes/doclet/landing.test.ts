@@ -10,11 +10,12 @@
  *    found by the instant both carry, and nothing is guessed where this node
  *    no longer holds either.
  *  - A ROW'S DAY IS THE COMPANY'S.
+ *  - RECENT ACTIVITY IS ONE ROW PER PAGE, never the page the landing leads with.
  */
 
 import { describe, expect, test } from "vitest";
 import type { PageChange, PageRevision } from "~/protocol/index.ts";
-import { byDay, dayOf, foldRuns, leadOf, runPhrase, saveRevisions } from "./landing.ts";
+import { byDay, dayOf, foldRuns, leadOf, pageRows, runPhrase, saveRevisions } from "./landing.ts";
 
 /** A change on page `page`, at `at`, by `actor`, of `kind`. */
 function change(id: string, at: string, over: Partial<PageChange> = {}): PageChange {
@@ -143,6 +144,18 @@ describe("the row the landing leads with", () => {
     expect(leadOf(runs)).toBe(1);
   });
 
+  // A PAGE IN THE TRASH KEEPS ITS TITLE, so the title alone led with it.
+  test("is never a page in the trash, whose title is still there", () => {
+    const runs = foldRuns(
+      [
+        change("c-3", "2026-10-11T06:52:00Z", { page_id: "binned", status: "trashed" }),
+        change("c-2", "2026-10-11T06:10:00Z", { page_id: "p-2", status: "published" }),
+      ],
+      TOKYO,
+    );
+    expect(leadOf(runs)).toBe(1);
+  });
+
   test("is none when no row has a page to open", () => {
     expect(leadOf([])).toBe(-1);
     expect(leadOf(foldRuns([change("c", "2026-10-11T06:10:00Z", { title: "" })], TOKYO))).toBe(-1);
@@ -203,5 +216,38 @@ describe("the day a row is drawn under", () => {
       ["Today", 1],
       ["Yesterday", 2],
     ]);
+  });
+});
+
+describe("recent activity's rows", () => {
+  test("each page is one row, its newest, and the featured page is never one", () => {
+    const runs = foldRuns(
+      [
+        change("c-6", "2026-10-11T06:52:00Z", { kind: "comment" }),
+        change("c-5", "2026-10-11T06:50:00Z", { page_id: "p-2", kind: "comment" }),
+        change("c-4", "2026-10-11T06:40:00Z", { page_id: "p-2", kind: "comment", actor: "jane" }),
+        change("c-3", "2026-10-11T06:30:00Z", { kind: "comment", actor: "jane" }),
+        change("c-2", "2026-10-11T06:20:00Z", { page_id: "p-3" }),
+        change("c-1", "2026-10-11T06:10:00Z", { page_id: "p-2" }),
+      ],
+      TOKYO,
+    );
+    const rows = pageRows(runs, leadOf(runs), 10);
+    expect(rows.map((run) => run[0].id)).toEqual(["c-5", "c-2"]);
+    // WITH NO LEAD every page is listed, and the cap holds.
+    expect(pageRows(runs, -1, 10).map((run) => run[0].id)).toEqual(["c-6", "c-5", "c-2"]);
+    expect(pageRows(runs, -1, 2).map((run) => run[0].id)).toEqual(["c-6", "c-5"]);
+  });
+
+  test("a page that is gone is one row, keeping its record once", () => {
+    const runs = foldRuns(
+      [
+        change("c-3", "2026-10-11T06:52:00Z", { page_id: "gone", title: "" }),
+        change("c-2", "2026-10-11T06:50:00Z", { page_id: "gone", title: "", kind: "comment" }),
+        change("c-1", "2026-10-11T06:10:00Z"),
+      ],
+      TOKYO,
+    );
+    expect(pageRows(runs, leadOf(runs), 10).map((run) => run[0].id)).toEqual(["c-3"]);
   });
 });

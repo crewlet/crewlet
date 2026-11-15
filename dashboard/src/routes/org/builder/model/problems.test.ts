@@ -198,4 +198,55 @@ describe("placeProblems", () => {
     expect(problemCountOf(index, "seat:account-executive")).toBe(1);
     expect(problemCountOf(index, "unit:sales")).toBe(0);
   });
+
+  // A WARNING IS SAID IN THE WORDS THE ENGINE WROTE FOR A PERSON, where it
+  // wrote some, on every surface the builder draws it: the banner, the review
+  // and the node's own editor. The operator's sentence named
+  // `providers.llm.default` and `llm_auxiliary` to a founder. A problem has no
+  // such words and keeps its own. Mutation: place `source.message` for a
+  // warning, and the first expectation goes red.
+  test("a warning reads in the engine's words for a person, beside the operator's on its source", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
+      problems: [problem(["units", 1, "roles", 0, "goal"])],
+      warnings: [
+        {
+          ...warning(["units", 1, "roles", 0, "llm_auxiliary"]),
+          message: "account-executive's reflection runs on providers.llm.default",
+          class: "learning.auxiliary_model",
+          person: "Reflection and summaries run on the same model as the agent's own work.",
+        },
+        warning(["units", 1]),
+      ],
+    });
+    const seat = index.byNode.get("seat:account-executive")!;
+    expect(seat.map((p) => p.message)).toEqual([
+      'problem at ["units",1,"roles",0,"goal"]',
+      "Reflection and summaries run on the same model as the agent's own work.",
+    ]);
+    expect(seat[1]!.source.message).toBe(
+      "account-executive's reflection runs on providers.llm.default",
+    );
+    expect(index.byNode.get("unit:sales")!.map((p) => p.message)).toEqual(["a warning"]);
+  });
+
+  // A SEAT'S MODEL FOR ITS ROUTINES, REVIEWS, DELEGATED WORK AND JUDGE is
+  // chosen on Settings › Models, by what each model is for; the builder edits
+  // the seat's own chain only. So a warning there stays on the seat and
+  // links to where it is changed. Mutation: link only a node's schedules.
+  test("a seat's model for a job beside its own work links to Settings › Models", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
+      warnings: [
+        warning(["units", 1, "roles", 0, "llm_auxiliary"]),
+        warning(["units", 1, "roles", 0, "llm_review"]),
+        warning(["units", 1, "roles", 0, "llm"]),
+      ],
+    });
+    expect(index.byNode.get("seat:account-executive")?.map((p) => p.link)).toEqual([
+      "models",
+      "models",
+      null,
+    ]);
+  });
 });

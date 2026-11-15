@@ -477,6 +477,7 @@ export function writeRefusalWords(
   switch (outcome.kind) {
     case "valid":
     case "saved":
+    case "unchanged":
       return "";
     case "missing":
       return `The configuration no longer has a server called ${name}.`;

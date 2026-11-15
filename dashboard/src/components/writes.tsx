@@ -18,21 +18,23 @@ import { usePresentedDialog } from "./dialogPresenter.tsx";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   Button,
+  Callout,
   Checkbox,
   ChoiceList,
   Combobox,
   Composer,
   FormField,
   Input,
-  Modal,
   Prose,
   ReadingPaneReasoning,
   Select,
   Stack,
+  Switch,
   Textarea,
   type ComboboxOption,
   type SelectOption,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import {
   UndoGlyph,
   PinGlyph,
@@ -52,11 +54,12 @@ import { isAccessOption } from "~/lib/grants.ts";
 import { AccessGrantDialog } from "~/components/advisorFix.tsx";
 import { AnswerChoices } from "./AnswerChoices.tsx";
 import { Recommendation } from "./Recommendation.tsx";
-import { useAnswerHold } from "~/lib/useWriteAccess.ts";
+import { projectEditHold, useAnswerHold } from "~/lib/useWriteAccess.ts";
 import { useSeatMessage } from "~/lib/seatMessage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { itemAddress, targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
@@ -204,7 +207,6 @@ function AssignDialog({
       icon={<UserPlusGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -318,20 +320,29 @@ export function PinButton({ view, name, pinned }: { view: string; name: string; 
 }
 
 /**
- * "Edit project": the lead's target date, set or cleared.
+ * "Edit project": a project's own policy, the facets a person sets in one
+ * press: its target date, who unassigned work lands on, and whether it takes
+ * new work at all. Its labels and its fields are edited where About lists
+ * them (`routes/worklet/ProjectSettings.tsx`), since each is a list rather
+ * than a value.
  *
  * A COMPANY WRITE (`contract/actions.ts` scope `company`): a project's
  * settings are what every seat's tracker reads, so it is offered on the
- * project's own page and nowhere else. WHO MAY is the engine's rule, not this
- * control's — the project's lead, or a person acting as themselves — and a
- * refusal says so in the engine's sentence.
+ * project's own page and nowhere else. WHO MAY is the engine's rule, read here
+ * before anything is filled ([projectEditHold]): the project's lead or an
+ * admin, and for archiving a person, not an agent. Anybody else sees the
+ * control held with that sentence rather than a dialog whose Save is refused;
+ * a refusal that still comes back is said in the engine's words.
  *
- * ONE FIELD, because it is the one project setting that is a person's
- * judgement rather than the company configuration's: a project's name,
- * purpose, unit and lead come from the org chart and are edited there. An
- * empty date CLEARS the target, which the tool reads as `null`; the button is
- * blocked while the date is the one already set, so a press always changes
- * something.
+ * ONLY WHAT MOVED IS SENT, because each facet is decided on its own: a lead
+ * who changed the date is not asked about the archive, and an empty date
+ * CLEARS the target, which the tool reads as `null`. The button is blocked
+ * while nothing differs from what is set, so a press always changes something.
+ *
+ * ARCHIVING IS ITS OWN STEP INSIDE THE DIALOG: the switch alone changes
+ * nothing, and while it is on the Save button says "Archive project" under a
+ * callout that says what that does, so the press that takes a project out of
+ * circulation is one somebody read.
  *
  * THE PROJECT IS CALLED BY ITS NAME, in the dialog's title and in the toast
  * that confirms it — the key is what a person types, the name is what the
@@ -343,6 +354,9 @@ export function EditProjectButton({
   project,
   name,
   target,
+  assignee,
+  archived,
+  lead,
   open: held,
   onOpenChange,
 }: {
@@ -350,6 +364,11 @@ export function EditProjectButton({
   /** The project's name, as its page is headed; the key when it has none. */
   name?: string;
   target?: string;
+  /** Who unassigned work lands on now, a seat's handle, or "" for triage. */
+  assignee?: string;
+  archived?: boolean;
+  /** Who leads the project (its record's `lead.handle`), who may edit it beside an admin. */
+  lead?: string | undefined;
   /**
    * Whether the dialog is open, for a page that also opens it from somewhere
    * other than this button — the page bar's "More" on a phone, where the
@@ -359,6 +378,7 @@ export function EditProjectButton({
   onOpenChange?: (open: boolean) => void;
 }) {
   const write = useAct("write_project");
+  const ruled = projectEditHold(useViewer(), lead);
   const [own, setOwn] = useState(false);
   const open = held ?? own;
   const setOpen = (next: boolean) => {
@@ -373,6 +393,7 @@ export function EditProjectButton({
         variant="secondary"
         leadingIcon={<PencilGlyph />}
         showRefusal={false}
+        blocked={ruled}
         onPress={() => setOpen(true)}
       >
         Edit project
@@ -381,7 +402,7 @@ export function EditProjectButton({
         <EditProjectDialog
           project={project}
           name={name || project}
-          target={target ?? ""}
+          now={{ target: target ?? "", assignee: assignee ?? "", archived: archived ?? false }}
           write={write}
           onClose={() => {
             write.dismiss();
@@ -393,36 +414,91 @@ export function EditProjectButton({
   );
 }
 
+/** A project's policy as the dialog edits it. */
+export interface ProjectPolicy {
+  target: string;
+  assignee: string;
+  archived: boolean;
+}
+
+/**
+ * The `write_project` arguments for what moved between `was` and `now`, or
+ * null when nothing did.
+ */
+function policyArgs(
+  project: string,
+  was: ProjectPolicy,
+  now: ProjectPolicy,
+): Record<string, unknown> | null {
+  const args: Record<string, unknown> = {};
+  if (now.target !== was.target) args.target_date = now.target || null;
+  if (now.assignee !== was.assignee) args.default_assignee = now.assignee;
+  if (now.archived !== was.archived) args.archived = now.archived;
+  return Object.keys(args).length === 0 ? null : { project, ...args };
+}
+
+/** The toast for a policy write: the one change in its own words, else a summary. */
+function policyDone(name: string, was: ProjectPolicy, now: ProjectPolicy, seat: string): string {
+  const moved = [
+    now.target !== was.target,
+    now.assignee !== was.assignee,
+    now.archived !== was.archived,
+  ].filter(Boolean).length;
+  if (moved > 1) return `Saved ${possessive(name)} settings`;
+  if (now.archived !== was.archived) return `${now.archived ? "Archived" : "Unarchived"} ${name}`;
+  if (now.assignee !== was.assignee) {
+    return now.assignee
+      ? `New work in ${name} now lands on ${seat}`
+      : `New work in ${name} now goes to triage`;
+  }
+  return now.target
+    ? `Set ${possessive(name)} target to ${targetLabel(now.target)}`
+    : `Cleared ${possessive(name)} target date`;
+}
+
 function EditProjectDialog({
   project,
   name,
-  target,
+  now: was,
   write,
   onClose,
 }: {
   project: string;
   name: string;
-  target: string;
+  now: ProjectPolicy;
   write: ReturnType<typeof useAct<"write_project">>;
   onClose: () => void;
 }) {
-  const [day, setDay] = useState(target);
-  const blocked = day === target ? "Choose a different date, or clear the one set." : undefined;
+  const org = useOrg();
+  const seats = useMemo(() => indexOrg(org).seats, [org]);
+  const [policy, setPolicy] = useState<ProjectPolicy>(was);
+  const args = policyArgs(project, was, policy);
+  const blocked = args ? undefined : "Change something first.";
+  const seatName = (handle: string) => seats.find((s) => s.handle === handle)?.name ?? handle;
+  const archiving = policy.archived && !was.archived;
   const submit = async () => {
-    // THE BUTTON'S OWN GATE: the dialog is a form whose one date field
-    // submits it on Enter, and a second Enter while the first answer was out
-    // wrote the same day again.
-    if (!pressable(write, blocked)) return;
-    const result = await write.run(
-      { project, target_date: day || null },
-      {
-        done: day
-          ? `Set ${possessive(name)} target to ${targetLabel(day)}`
-          : `Cleared ${possessive(name)} target date`,
-      },
-    );
+    // THE BUTTON'S OWN GATE: the dialog is a form whose date field submits
+    // it on Enter, and a second Enter while the first answer was out wrote
+    // the same change again.
+    if (!args || !pressable(write, blocked)) return;
+    const result = await write.run(args, {
+      done: policyDone(name, was, policy, seatName(policy.assignee)),
+    });
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
+  // THE SEAT HELD NOW STAYS A CHOICE even where the chart no longer has it,
+  // under its handle, so opening the dialog never reads as a change of it.
+  const assigneeOptions: SelectOption[] = [
+    { value: "", label: "Nobody: the lead triages it" },
+    ...(was.assignee && !seats.some((s) => s.handle === was.assignee)
+      ? [{ value: was.assignee, label: handleLabel(was.assignee) }]
+      : []),
+    ...seats.map((s) => ({
+      value: s.handle,
+      label: s.name,
+      hint: `${handleLabel(s.handle)} · ${s.kind === "human" ? "person" : "agent"}`,
+    })),
+  ];
   return (
     <Modal
       open
@@ -433,7 +509,6 @@ function EditProjectDialog({
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -441,12 +516,12 @@ function EditProjectDialog({
           </Button>
           <WriteButton
             write={write}
-            variant="primary"
+            variant={archiving ? "danger" : "primary"}
             showRefusal={false}
             onPress={() => void submit()}
             blocked={blocked}
           >
-            Save
+            {archiving ? "Archive project" : "Save"}
           </WriteButton>
         </>
       }
@@ -462,22 +537,49 @@ function EditProjectDialog({
             <Input
               id="project-target"
               type="date"
-              value={day}
-              onChange={(event) => setDay(event.target.value)}
+              value={policy.target}
+              onChange={(event) => setPolicy((p) => ({ ...p, target: event.target.value }))}
             />
-            {day && (
+            {policy.target && (
               <Button
                 size="small"
                 variant="ghost"
                 // WHAT IT CLEARS, for a reader who reaches it by name.
                 aria-label="Clear target date"
-                onClick={() => setDay("")}
+                onClick={() => setPolicy((p) => ({ ...p, target: "" }))}
               >
                 Clear
               </Button>
             )}
           </div>
         </FormField>
+        <FormField
+          label="Default assignee"
+          htmlFor="project-assignee"
+          helper="Who a task filed here with nobody named lands on."
+        >
+          <Select
+            id="project-assignee"
+            ariaLabel="Default assignee"
+            searchable
+            searchPlaceholder="Find a seat"
+            value={policy.assignee}
+            options={assigneeOptions}
+            onChange={(next) => setPolicy((p) => ({ ...p, assignee: String(next) }))}
+          />
+        </FormField>
+        <Switch
+          label="Archived"
+          description="An archived project takes no new work. Its tasks stay as they are."
+          checked={policy.archived}
+          onCheckedChange={(archived) => setPolicy((p) => ({ ...p, archived }))}
+        />
+        {archiving && (
+          <Callout variant="warning">
+            Nobody can file new work in {name} once it is archived, and it leaves the active
+            projects list. Unarchive it here to take work again.
+          </Callout>
+        )}
         <RefusalNote write={write} />
       </div>
     </Modal>
@@ -696,7 +798,6 @@ function DeleteViewDialog({
       icon={<TrashGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -779,7 +880,6 @@ function SaveViewDialog({
       icon={editing ? <PencilGlyph /> : <PinGlyph />}
       onClose={() => onClose()}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={() => onClose()} disabled={write.busy}>
@@ -1355,7 +1455,6 @@ function AnswerRunDialog({
       icon={<CornerDownLeftGlyph />}
       onClose={onClose}
       onSubmit={inWords ? submit : undefined}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
@@ -1671,7 +1770,6 @@ function AssignToSeatDialog({
       icon={<PlusGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footerStart={
         <Button
           variant="ghost"
@@ -1903,7 +2001,6 @@ export function SteerTurnDialog({
       icon={<CompassGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

@@ -50,12 +50,12 @@ import {
   EmptyValue,
   InlineCode,
   Input,
-  Modal,
   Tag,
   TableKeyCell,
   TableTagsCell,
   type DataGridColumn,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { NetworkGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
@@ -295,7 +295,7 @@ export function BrokerMembership({
                 <span className="row wrap gap-2 baseline">
                   <span>
                     <strong>{FINDING_TITLE[f.kind] ?? f.kind}</strong>{" "}
-                    <InlineCode>{voterLabel(f.node, f.peer)}</InlineCode>: {f.detail}.
+                    <InlineCode close=":">{voterLabel(f.node, f.peer)}</InlineCode> {f.detail}.
                   </span>
                   {f.kind === "dead_member" && (
                     <Button

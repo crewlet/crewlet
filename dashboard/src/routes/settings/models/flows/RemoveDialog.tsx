@@ -23,13 +23,13 @@ import {
   Callout,
   ConfirmField,
   Disclosure,
-  Modal,
   Select,
   Skeleton,
   Text,
   useToast,
   type SelectOption,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
@@ -212,6 +212,7 @@ function refusalWords(
   switch (refusal.kind) {
     case "valid":
     case "saved":
+    case "unchanged":
       return "";
     case "guarded":
       return configGuardedReason(refusal.code);

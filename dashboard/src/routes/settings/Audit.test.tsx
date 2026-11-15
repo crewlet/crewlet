@@ -19,11 +19,18 @@
  *     screen silent about that is claiming those rows do not exist.
  */
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { toCsv } from "@crewlethq/ui";
-import { Audit, artifactDetail, auditCsv, writerOf } from "./Audit.tsx";
+import {
+  Audit,
+  artifactDetail,
+  auditCsv,
+  runtimeDetail,
+  runtimeWhere,
+  writerOf,
+} from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -277,7 +284,9 @@ test("a source whose page stops inside the window says so", async () => {
   // AND IT NAMES WHICH SOURCE. "Some of this may be missing" is a caption
   // nobody can act on; "Doclet shows only its newest rows" says where to
   // look.
-  expect(screen.getByText(/newest rows/).textContent).toBe("Doclet shows only its newest rows.");
+  expect(screen.getByText(/newest rows/).textContent).toBe(
+    "Only the newest rows of Doclet are shown.",
+  );
 });
 
 // THE EXPORT IS WHAT IS ON SCREEN.
@@ -390,7 +399,11 @@ test("a bound person is drawn as their seat, and a login as plain text", async (
   // in its own column.
   const bound = screen.getByRole("link", { name: /Jane Founder/ });
   expect(bound.getAttribute("href")).toBe("#/company/org/seats/jane");
-  expect(screen.getByText("pat:0192f00d")).toBeTruthy();
+  // IN WORDS, its id behind the copy control rather than cut on the row.
+  expect(
+    screen.getByRole("button", { name: "Copy the personal access token's id, 0192f00d" }),
+  ).toBeTruthy();
+  expect(screen.queryByText("pat:0192f00d")).toBeNull();
   // ALL THREE ARE CIRCLES: the kit's outline for a person.
   expect(container.querySelectorAll(".crewlet-avatar--human").length).toBe(3);
   expect(container.querySelectorAll(".crewlet-avatar--agent").length).toBe(0);
@@ -533,7 +546,16 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
     },
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/ran update_work_item/)).toBeTruthy());
+  // THE OUTCOME, the author and the tool left to the cells beside it: the
+  // summary's "jane ran update_work_item: refused (conflict)" said both again,
+  // the author by a handle.
+  await waitFor(() => expect(screen.getByText("Refused (conflict).")).toBeTruthy());
+  expect(screen.queryByText(/ran update_work_item/)).toBeNull();
+  // WHERE IT WAS MADE: the tool's own place, never "Runtime".
+  const call = screen
+    .getByText("Refused (conflict).")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
+  expect(within(call).getByText("Worklet")).toBeTruthy();
   expect(asked(query, "events").source).toBe("operator");
   expect(asked(query, "events").since).toBeTruthy();
   expect(asked(query, "events").until).toBeTruthy();
@@ -552,19 +574,75 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
   // WHO: the seat the person wrote as, with the KIND and the CREDENTIAL the
   // engine recorded on the row — never "operator" for a bound person's call.
   expect(screen.getAllByRole("link", { name: /Jane Founder/ }).length).toBe(2);
-  expect(screen.getAllByText("session:0192f00e").length).toBe(2);
+  expect(
+    screen.getAllByRole("button", { name: "Copy the signed-in session's id, 0192f00e" }).length,
+  ).toBe(2);
   expect(screen.getByText("took it off the board")).toBeTruthy();
 
-  // AND `kind=runtime` IS THE RUNTIME ROWS ALONE.
+  // AND A CALL'S PLACE IS A WHERE OF ITS OWN: `kind=backups` is the backup
+  // call alone, not the tracker's record nor the Worklet call.
   cleanup();
-  location.hash = "#/settings/audit?kind=runtime";
+  location.hash = "#/settings/audit?kind=backups";
   serving({
     work_activity: { records: [commit()], complete: true },
-    events: { events: [runtimeEvent()], next: null, exhausted: true },
+    events: {
+      events: [
+        runtimeEvent(),
+        runtimeEvent({
+          id: "ev-2",
+          type: "backup_requested",
+          failed: false,
+          summary: "jane backed up to /var/backups/one (12 streams)",
+          tags: { node: "node-a", actor_kind: "human", dir: "/var/backups/one" },
+        }),
+      ],
+      next: null,
+      exhausted: true,
+    },
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/ran update_work_item/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText("Backed up to /var/backups/one (12 streams).")).toBeTruthy(),
+  );
   expect(screen.queryByText("took it off the board")).toBeNull();
+  expect(screen.queryByText("Refused (conflict).")).toBeNull();
+});
+
+// A CALL MADE IN CHATLET OR GITLET SAYS SO, and the filter offers both: every
+// call was "Runtime", and the filter had no Chatlet or Gitlet to pick.
+// EXPORT FOLDS INTO "MORE" ON A PHONE: beside the window's five choices, the
+// bar's menu and Ask, it was cut to a faded "Expo" at 390px. The bar hides
+// what a screen marks `page-action-folds` at that width (frame.css), and the
+// screen publishes the same gesture to the menu. Mutation: drop the mark and
+// the button stays on the phone's one line.
+test("the export folds into the phone's More menu", async () => {
+  serving({ events: { events: [runtimeEvent()], next: null, exhausted: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("Refused (conflict).")).toBeTruthy());
+  const exportButton = screen.getByRole("button", { name: /Export CSV/ });
+  expect(exportButton.closest(".page-action-folds")).not.toBeNull();
+});
+
+test("a call says the part of the product it was made in", () => {
+  expect(runtimeWhere({ type: "operator_acted", tags: { tool: "mark_chat_read" } })).toBe(
+    "chatlet",
+  );
+  expect(runtimeWhere({ type: "operator_acted", tags: { tool: "code_open_change" } })).toBe(
+    "gitlet",
+  );
+  expect(runtimeWhere({ type: "operator_acted", tags: { tool: "git_push", repo: "web" } })).toBe(
+    "gitlet",
+  );
+  expect(runtimeWhere({ type: "model_acted", tags: {} })).toBe("models");
+  expect(runtimeWhere({ type: "operator_acted", tags: { tool: "no_such_tool" } })).toBe("runtime");
+  expect(
+    runtimeDetail({
+      type: "operator_acted",
+      actor: "jane-founder",
+      summary: "jane-founder ran mark_chat_read: applied",
+      tags: { tool: "mark_chat_read" },
+    }),
+  ).toBe("Applied.");
 });
 
 // A GIT PUSH IS DRAWN AGAINST ITS REPOSITORY. A refused push writes no row in
@@ -600,7 +678,9 @@ test("a git push names its repository as what it was done to", async () => {
   expect(screen.queryByText("Not recorded")).toBeNull();
   // WHO: the seat, and the token the push came through.
   expect(screen.getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
-  expect(screen.getByText("pat:0192f0a1")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Copy the personal access token's id, 0192f0a1" }),
+  ).toBeTruthy();
 });
 
 // A MODEL GESTURE IS DRAWN AS WHAT WAS DONE TO WHICH MODEL, linked to the
@@ -776,7 +856,7 @@ test("a windowed source whose page filled says so", async () => {
   // A NOTICE OF ITS OWN, never the card header's one line, which cut an
   // earlier sentence short at every width.
   const note = screen.getByText(/newest rows/);
-  expect(note.textContent).toBe("Runtime shows only its newest rows.");
+  expect(note.textContent).toBe("Only the newest rows of Tool calls are shown.");
   expect(note.closest(".crewlet-card")).toBeNull();
 });
 
@@ -812,7 +892,7 @@ test("two sources whose pages filled are named together", async () => {
   mount();
   await waitFor(() => expect(screen.getByText(/newest rows/)).toBeTruthy());
   expect(screen.getByText(/newest rows/).textContent).toBe(
-    "Doclet and Configuration show only their newest rows.",
+    "Only the newest rows of Doclet and Configuration are shown.",
   );
 });
 
@@ -878,7 +958,9 @@ test("the identity trail is merged in, asked from the window's start", async () 
   // ITS AUTHOR drawn as the seat the chart holds by that address, and the
   // credential it came through beside it.
   expect(screen.getAllByRole("link", { name: /Jane Founder/ }).length).toBeGreaterThan(0);
-  expect(screen.getAllByText("session:0192f00e").length).toBeGreaterThan(0);
+  expect(
+    screen.getAllByRole("button", { name: "Copy the signed-in session's id, 0192f00e" }).length,
+  ).toBeGreaterThan(0);
   // AND THE REST STAND beside it.
   expect(screen.getByText("took it off the board")).toBeTruthy();
 });

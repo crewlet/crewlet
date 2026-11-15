@@ -17,7 +17,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
@@ -120,6 +119,11 @@ func (p *Provider) loginLeftNothing() error {
 // Preferred wherever a vendor offers it: a headless token has no credential
 // files to sync, no refresh-token rotation to race, and it survives an
 // ephemeral container with no persistent volume.
+//
+// WHERE THE TOKEN PASSES: the command is a credential child, so on linux its
+// output is captured in memory and the token reaches no disk; on darwin, which
+// has no file in memory, it passes through an unlinked file in the
+// workspace's captures directory, whose blocks keep it until they are reused.
 func (p *Provider) CaptureToken(ctx context.Context, in io.Reader, errOut io.Writer) (string, error) {
 	if len(p.profile.CaptureTokenArgs) == 0 {
 		// The login route this harness has ([Provider.loginRemedy]): Gemini CLI,
@@ -134,52 +138,73 @@ func (p *Provider) CaptureToken(ctx context.Context, in io.Reader, errOut io.Wri
 	// to complete a browser sign-in — and it writes every byte of that UI to
 	// STDOUT: the sign-in URL, the "paste code here" prompt, all of it.
 	// Measured against Claude Code 2.1.263 with a tty on stdin and a pipe on
-	// stdout: 1512 bytes to stdout, ZERO to stderr. So capturing stdout into a
-	// buffer alone handed the operator a blank terminal that then sat waiting
-	// for a code from a URL they were never shown.
+	// stdout: 1512 bytes to stdout, ZERO to stderr; and against 2.1.325
+	// (native) and 2.1.112 (Node) with stdout a memfd, a pipe and a regular
+	// file, the same UI, byte for byte but for its random parts, in all
+	// three. So capturing stdout alone handed the operator a blank terminal
+	// that then sat waiting for a code from a URL they were never shown.
 	//
 	// The mirror goes to errOut rather than stdout because `-print-token`
 	// writes the token itself to stdout, and a vendor's UI in that stream
 	// would corrupt what the operator is piping into their secret manager.
-	//
-	// GUARDED, because os/exec promises at most one Write at a time only when
-	// Stdout and Stderr are the SAME comparable value. A mirror makes them two
-	// different writers over one destination, which is two copier goroutines
-	// racing on it — and the loss is silent: measured, the mirrored bytes
-	// simply vanished and the operator's terminal went blank again, which is
-	// the very bug this is fixing. One mutex, shared by both, restores the
-	// guarantee without folding stderr into the buffer the token is read from.
+	// EVERY BYTE AS IT IS READ, not every line: the prompt ends without a
+	// line break. ONE READER writes both streams' mirror, so the two never
+	// interleave mid-write.
 	//
 	// A LOGIN COMMAND for the sync that follows it (syncLogin): a minting
 	// command is the vendor's sign-in, and one that also leaves a credential
 	// file behind has left the operator's own new login. Not one that must
 	// leave a login, though — what it is FOR is the token it prints.
-	var out bytes.Buffer
-	mirror := lockedWriter{mu: new(sync.Mutex), w: errOut}
-	if _, err := p.runInCredentialHome(
-		ctx, syncLogin, p.profile.CaptureTokenArgs, in, io.MultiWriter(&out, mirror), mirror,
-	); err != nil {
+	captures, err := p.ws.capturesDir()
+	if err != nil {
 		return "", err
 	}
-	token := lastPrintedLine(out.String())
+	command := string(p.profile.Binary) + " " + strings.Join(p.profile.CaptureTokenArgs, " ")
+	var printed string
+	if _, err := p.inCredentialHome(ctx, syncLogin, errOut,
+		func(ctx context.Context, home string, env []string) error {
+			// IN THE FOREGROUND, the operator's terminal on its stdin: it
+			// reads the operator's keys, so it cannot be in a group of its
+			// own ([Provider.runInCredentialHome] says why). Only its own
+			// process is ever signalled.
+			ch, err := startChild(ctx, childSpec{
+				binary: p.profile.Binary, args: p.profile.CaptureTokenArgs, dir: home, env: env,
+				stdin: in, outDir: captures, setting: p.stateSetting(),
+				credential: true, foreground: true,
+				out:   streamSpec{kind: oneAnswer, mirror: errOut},
+				err:   streamSpec{kind: readToEnd, mirror: errOut},
+				grace: p.termGrace, hooks: p.hooks, janitor: &p.janitor,
+			})
+			if err != nil {
+				return fmt.Errorf("harness: %s: %w", command, err)
+			}
+			waitErr := <-ch.exited
+			res := &rawResult{grace: p.termGrace}
+			ended := ch.end(time.Now().Add(p.termGrace))
+			got := ch.collect(ended)
+			ch.close()
+			res.heldStdout, res.cut = ended.held[0], ch.cut.Load()
+			if s := ch.shrunk.Load(); s != nil {
+				res.shrunk = *s
+			}
+			switch {
+			case res.cut != nil:
+				return fmt.Errorf("harness: %s: %s", command, res.unfinished())
+			case waitErr != nil:
+				return fmt.Errorf("harness: %s: %w", command, waitErr)
+			case res.unfinished() != "":
+				return fmt.Errorf("harness: %s exited 0, but %s", command, res.unfinished())
+			}
+			printed = got.out
+			return nil
+		}); err != nil {
+		return "", err
+	}
+	token := lastPrintedLine(printed)
 	if token == "" {
 		return "", fmt.Errorf("harness: %q printed no token", p.harness)
 	}
 	return token, nil
-}
-
-// lockedWriter serialises the two copier goroutines os/exec runs when neither
-// of a child's output streams is a plain file. Copies share the mutex by
-// holding the same pointer, so one value guards one destination.
-type lockedWriter struct {
-	mu *sync.Mutex
-	w  io.Writer
-}
-
-func (l lockedWriter) Write(b []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.w.Write(b)
 }
 
 // ansiEscape matches the control sequences a terminal UI writes between its
@@ -1308,19 +1333,30 @@ func (p *Provider) declineAfterLogout(operator bool) error {
 // kept seat home — for a home kept because its export keeps failing, up to
 // [auxiliaryTimeout] each, on every `crewlet llm status` — for a seed whose only
 // readers are a login, which replaces it, and a status, which reads it.
+//
+// THE ONE CHILD WHOSE OUTPUT THE ENGINE DOES NOT CAPTURE, and the one place
+// besides [startChild] that starts a harness: the vendor's interactive login, a
+// credential login, a vendor's logout and the status shown to the operator.
+// Their stdout and stderr are the operator's terminal, handed down from the
+// CLI, and the engine reads neither, so nothing of theirs can be cut short in
+// its hands, and a vendor's sign-in UI needs a terminal to draw on. os/exec
+// hands an *os.File to the child as it is, so the engine makes no pipe; when
+// the operator's own stdout is a pipe (`crewlet llm status | less`), the pipe
+// is the operator's. The gates in childoutput_gate_test.go name this function
+// as that exception. [Provider.CaptureToken], which reads the token its
+// command prints, captures instead.
 func (p *Provider) runInCredentialHome(
 	ctx context.Context, mode syncMode, args []string,
 	in io.Reader, out, errOut io.Writer, extra ...map[string]string,
 ) (bool, error) {
 	return p.inCredentialHome(ctx, mode, errOut, func(ctx context.Context, home string, env []string) error {
-		cmd := exec.CommandContext(ctx, p.profile.Binary, args...) //nolint:gosec // args come from a validated profile
+		cmd := exec.CommandContext(ctx, string(p.profile.Binary), args...) //nolint:gosec // args come from a validated profile
 		cmd.Dir = home
 		cmd.Env = env
 		cmd.Stdin = in
 		cmd.Stdout = out
 		cmd.Stderr = errOut
-		// NO procgroup.Set HERE, deliberately, and it is the one child in this
-		// package that does without: an interactive login has to read the
+		// NO procgroup.Set HERE, deliberately: an interactive login has to read the
 		// operator's terminal, and a process in its own group is not in the
 		// tty's FOREGROUND group, so it cannot read stdin and would be stopped
 		// with SIGTTIN the moment it tried. The prompt is the whole point of

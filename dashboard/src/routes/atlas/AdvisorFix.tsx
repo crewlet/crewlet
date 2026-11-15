@@ -8,7 +8,8 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, Callout, Link, List, ListItem, Modal, Text } from "@crewlethq/ui";
+import { Button, Callout, Link, List, ListItem, Text } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";

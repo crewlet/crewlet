@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -830,6 +831,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		RecipientEmail:       r.To.Email,
 		Agent:                party.AgentID.String(),
 		Sender:               r.Sender,
+		SenderName:           senderName(reg, r.Inbound),
 		Writer:               r.Writer,
 		Subject:              r.Subject,
 		Body:                 Render(prompt, r.Inbound, reg),
@@ -1149,4 +1151,18 @@ func (s *Service) skip(ctx context.Context, source, handle string, reason SkipRe
 		log.WarnContext(ctx, "notification_skip_unrecorded", "source", source,
 			"handle", handle, "reason", string(reason), "detail", detail, "error", err.Error())
 	}
+}
+
+// senderName is the name the company knows a wake's sender by, the party the
+// registry resolves it to, and "" for a sender nobody in the company is. It
+// titles the turn the wake starts ([types.ExternalNotification.Summary]).
+func senderName(reg *Registry, in Inbound) string {
+	if reg == nil {
+		return ""
+	}
+	party, ok := reg.ByExternalID(in.Source, strings.TrimSpace(in.Sender))
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(party.Name)
 }

@@ -29,10 +29,10 @@ import {
   IconButton,
   Input,
   Menu,
-  Modal,
   SelectionBar,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "./Modal.tsx";
 import {
   CircleStopGlyph,
   CompassGlyph,
@@ -231,7 +231,6 @@ export function SeatControlDialog({
       }
       onClose={onClose}
       onSubmit={() => void submit()}
-      closeDisabledReason={busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>

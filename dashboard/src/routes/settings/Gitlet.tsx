@@ -36,6 +36,7 @@ import { Button, Card, Disclosure, EmptyState, EmptyValue, InlineCode } from "@c
 import { BellGlyph, CodeGlyph, SettingsGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
+import { alarmKindTitle } from "~/lib/alarms.ts";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import {
   CODE_ALARM_KINDS,
@@ -221,7 +222,10 @@ export function RepoProtection({ repo }: { repo: CodeRepoSummary }) {
           </>
         ) : (
           <>
-            the code tools’ lifecycle requests (<InlineCode>code_protect_branch</InlineCode>)
+            the code tools’ lifecycle requests{" "}
+            <InlineCode open="(" close=")">
+              code_protect_branch
+            </InlineCode>
           </>
         )}
         .
@@ -324,6 +328,16 @@ export function codeAlarmsOf(fleet: FleetAnswer): { firing: NodeAlarm[]; silent:
   return { firing, silent };
 }
 
+/**
+ * Nothing firing, said of the nodes it is true of: every node, or those that
+ * have evaluated their table (the rest are named under it).
+ */
+export function quietWords(silent: readonly string[]): string {
+  return silent.length === 0
+    ? "No code alarm is firing on any node."
+    : "No code alarm is firing on the nodes that have reported.";
+}
+
 function CodeAlarms({ fleet }: { fleet: FleetAnswer }) {
   const now = useNow();
   const { firing, silent } = codeAlarmsOf(fleet);
@@ -343,12 +357,14 @@ function CodeAlarms({ fleet }: { fleet: FleetAnswer }) {
       </Card.Header>
       <Card.Body padding="md" className="col gap-2">
         {firing.length === 0 ? (
-          <span className="t-caption">No code alarm is firing on any node that said.</span>
+          // A WHOLE SENTENCE, and one that is true of the nodes it covers:
+          // "on any node that said" left its reader to work out which ones.
+          <span className="t-caption">{quietWords(silent)}</span>
         ) : (
           <ul className="col gap-1" aria-label="Code alarms firing">
             {firing.map((a) => (
               <li key={`${a.node}\u0000${a.kind}`}>
-                <InlineCode>{a.kind}</InlineCode> on{" "}
+                {alarmKindTitle(a.kind)} on{" "}
                 <a className="t-link prose-link mono" href={href(["settings", "nodes", a.node])}>
                   {a.node}
                 </a>

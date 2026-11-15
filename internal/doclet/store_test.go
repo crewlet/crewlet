@@ -1248,7 +1248,14 @@ func TestAGestureRetriedUnderOneKeyIsOneOperation(t *testing.T) {
 		}
 	}
 
-	// THE CONTROL: no key, and the retry is a second comment.
+	// THE CONTROL: no key, and the retry is a second comment. On the page
+	// restored, since a page in the trash takes no comment at all; the keyed
+	// retries above were answered from the ledger before any decision ran,
+	// which is why the trash did not refuse them.
+	if _, err = r.store.Restore(t.Context(), author("jane"), page.Page.ID); err != nil {
+		t.Fatalf("restore before the control: %v", err)
+	}
+	r.drain()
 	unkeyed := author("bo")
 	for range 2 {
 		if _, _, err := r.store.Comment(t.Context(), unkeyed, page.Page.ID,

@@ -105,9 +105,11 @@ import {
 } from "~/lib/format.ts";
 import { reasonAbout } from "~/lib/reasons.ts";
 import { activityOf, doingWords, statusOf, type OrgIndex } from "~/lib/seats.ts";
+import { useCompanyZone } from "~/lib/companyDay.ts";
 import {
   changeClauses,
   changeLabel,
+  changeLabels,
   changeMark,
   changePhrase,
   describeChange,
@@ -123,6 +125,7 @@ import type {
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
 import { ACTIVITY_TABS, timeline, type ActivityTab, type Entry, type Source } from "./timeline.ts";
+import { useOwnRemark } from "./remark.tsx";
 import { usePaged } from "~/lib/usePaged.ts";
 
 /** How often the newest page of each history is asked again: nothing pushes them. */
@@ -269,11 +272,16 @@ export function Activity({
 
   // WHAT A DELTA'S OTHER END IS CALLED, from every page of the change feed —
   // a relation, a re-parent and a cascade name the other task by its id.
-  const labels = useMemo<RowChrome & LabelContext>(() => {
-    const keys: Record<string, string> = {};
-    for (const answer of changes.answers) Object.assign(keys, answer.keys ?? {});
-    return { ...chrome, taskKey: (id: string) => keys[id] ?? "" };
-  }, [chrome, changes.answers]);
+  const zone = useCompanyZone();
+  const labels = useMemo<RowChrome & LabelContext>(
+    () =>
+      changeLabels(
+        chrome,
+        changes.answers.map((answer) => answer.keys),
+        zone,
+      ),
+    [chrome, changes.answers, zone],
+  );
 
   // THE THREAD THIS READER IS SHOWN: the paged one, or (asked without
   // Worklet) the one the task's answer carried, with nothing beside it.
@@ -540,6 +548,7 @@ function FeedEntry({
       return (
         <CommentRow
           comment={entry.comment}
+          item={item}
           chrome={chrome}
           index={index}
           now={now}
@@ -598,7 +607,7 @@ export function changeSentence(
   // Acceptance", so each move is a clause with a verb ([changeClauses]); a
   // record whose fields say nothing this build can phrase falls back to the
   // label the other change feeds draw, and then to its kind.
-  const clauses = changeClauses(record.fields, chrome);
+  const clauses = changeClauses(record.fields, chrome, record.actor);
   if (clauses.length > 0) return { what: andList(clauses), why: "" };
   // "CHANGED" GOES BEFORE WHAT MOVED, a field's delta ("changed Due: Nov 3 →
   // Nov 5"), and nowhere else. A kind with nothing to compare (a removal, a
@@ -670,9 +679,13 @@ function ChangeRow({
   );
 }
 
-/** A comment on the task: who said it, when, what, and what it asks. */
+/**
+ * A comment on the task: who said it, when, what, and what it asks; and, on
+ * the reader's own, its Edit and Delete ([useOwnRemark]).
+ */
 function CommentRow({
   comment,
+  item,
   chrome,
   index,
   now,
@@ -681,6 +694,7 @@ function CommentRow({
   newest,
 }: {
   comment: WorkComment;
+  item: WorkItem;
   chrome: RowChrome;
   index: OrgIndex;
   now: number;
@@ -699,6 +713,7 @@ function CommentRow({
   const chosen = comment.choice
     ? (comment.decision?.options.find((o) => o.id === comment.choice)?.label ?? comment.choice)
     : "";
+  const own = useOwnRemark(comment, item);
   return (
     <li className="task-entry" data-kind="comment">
       <span className="task-entry-avatar">
@@ -724,7 +739,7 @@ function CommentRow({
           >
             {fmtAt(comment.created_at, now)}
           </time>
-          {comment.updated_at && <span className="task-when">(edited)</span>}
+          {comment.updated_at && !comment.removed && <span className="task-when">(edited)</span>}
           {comment.ask && (
             <Tag variant="warning" leadingIcon={<CircleQuestionMarkGlyph size="xs" />}>
               {`asked ${chrome.seatName?.(comment.ask) ?? comment.ask}`}
@@ -742,18 +757,22 @@ function CommentRow({
               Reply
             </Button>
           )}
+          {own.controls}
         </header>
-        <Clamp className="task-comment-fold" height={COMMENT_FOLD} defaultOpen={newest}>
-          <div className="prose md task-comment-body">
-            {comment.removed ? (
-              <span className="muted">(this comment was removed)</span>
-            ) : comment.body.trim() ? (
-              renderMarkdown(comment.body)
-            ) : chosen ? (
-              <p>{`Chose “${chosen}”.`}</p>
-            ) : null}
-          </div>
-        </Clamp>
+        {own.dialog}
+        {own.editor ?? (
+          <Clamp className="task-comment-fold" height={COMMENT_FOLD} defaultOpen={newest}>
+            <div className="prose md task-comment-body">
+              {comment.removed ? (
+                <span className="muted">(this comment was removed)</span>
+              ) : comment.body.trim() ? (
+                renderMarkdown(comment.body)
+              ) : chosen ? (
+                <p>{`Chose “${chosen}”.`}</p>
+              ) : null}
+            </div>
+          </Clamp>
+        )}
         {comment.decision && (
           <div className="task-comment-decision">
             <span className="task-lbl">{comment.decision.question}</span>

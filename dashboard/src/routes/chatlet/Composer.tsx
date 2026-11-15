@@ -107,6 +107,7 @@ import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { storeWrite } from "~/app/assistant/draft.ts";
 import { useAssistantControl } from "~/app/assistant/control.ts";
 import { matchesRow } from "~/app/keymap.ts";
+import { useToastClearOf } from "~/app/toastInset.tsx";
 import { MAX_BODY_BYTES } from "~/contract/chat.ts";
 import { textBudget, type TextBudget } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -281,6 +282,11 @@ export function Composer({
     [drafts, key, channelID, threadRoot],
   );
   const field = useRef<HTMLTextAreaElement | null>(null);
+  // A BOX DOCKED AT THE WINDOW'S FOOT (a thread's, Activity's reply box) KEEPS
+  // THE TOAST STACK ABOVE IT as it grows; one following a short thread up the
+  // pane asks nothing (`toastInset.tsx`'s `clearOf`).
+  const box = useRef<HTMLDivElement | null>(null);
+  useToastClearOf(() => box.current, true);
   const access = threadRoot ? scope.outbox.reply : scope.outbox.post;
   const held = access.can ? "" : access.reason;
   const budget = bodyBudget(value);
@@ -357,7 +363,7 @@ export function Composer({
     );
 
   return (
-    <div className="chat-composer">
+    <div ref={box} className="chat-composer">
       <MessageBox
         fieldRef={field}
         value={value}

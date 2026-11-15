@@ -27,16 +27,8 @@
  */
 
 import { useState } from "react";
-import {
-  Button,
-  Checkbox,
-  ConfirmModal,
-  FormField,
-  Input,
-  Modal,
-  Select,
-  Stack,
-} from "@crewlethq/ui";
+import { Button, Checkbox, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { protectFormHeld, protectHeld, protectionPattern } from "~/lib/repoWrites.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -187,7 +179,6 @@ export function RuleControls({ repo, held }: { repo: CodeRepoSummary; held: Held
         confirmLabel="Remove protection"
         onClose={() => setRemoving(false)}
         submitting={write.busy}
-        busyReason="Waiting for the engine to answer"
         onConfirm={async () => {
           await write.run(
             { repo: repo.name, pattern, remove: true },
@@ -254,7 +245,6 @@ function ProtectDialog({
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

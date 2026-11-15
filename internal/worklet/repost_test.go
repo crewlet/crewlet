@@ -374,12 +374,11 @@ func TestAPostUnderAnIdAnotherAuthorsRemarkHoldsIsRefused(t *testing.T) {
 
 // A REMARK IS TAKEN DOWN BY NO PATCH.
 //
-// No gesture takes a tracker comment down, so nothing forms the removal kind,
-// and the applier writes nothing for a record of it. A patch carrying a
-// comment under that kind was taken for a post, as a comment under any kind
-// but the edit and the resolve is: it posted the remark it said it took down,
-// and answered one already on the thread as applied while the remark stood.
-// It is refused before anything is published, its author's own included.
+// RemoveComment is the one door that forms the removal kind, from the stored
+// row inside the decide and under the author rule. A patch carrying a comment
+// under that kind is a removal stating a remark read in another transaction,
+// under no rule at all, so it is refused before anything is published, its
+// author's own included.
 //
 // Mutation: drop UpdateTask's refusal of the kind and the removal of a remark
 // nobody posted posts it, and the removal of a posted one answers applied.

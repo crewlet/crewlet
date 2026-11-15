@@ -10,7 +10,8 @@
  */
 
 import { useState, type ReactNode } from "react";
-import { Button, FormField, Input, Modal, Select, type SelectOption } from "@crewlethq/ui";
+import { Button, FormField, Input, Select, type SelectOption } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
@@ -25,9 +26,6 @@ import { ADDABLE_KINDS, KEY_HINTS, addArgs, belongs, draftKey, type AddDraft } f
 
 /** The longest name or purpose the engine keeps: `atlas.MaxLabelRunes`. */
 export const LABEL_MAX = 120;
-
-/** What a dialog says while its press is out. */
-export const WAITING = "Waiting for the engine to answer";
 
 const KIND_OPTIONS: SelectOption[] = ADDABLE_KINDS.map((kind) => ({
   value: kind,
@@ -115,7 +113,6 @@ export function WriteDialog<T extends ActionTool>({
       icon={icon}
       onClose={onClose}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? WAITING : undefined}
       onSubmit={() => void submit()}
       footer={
         <>

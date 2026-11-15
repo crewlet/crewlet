@@ -17,7 +17,7 @@ import { Meter, Skeleton } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { windowOf } from "~/lib/budget.ts";
 import { companyDateLabel, fmtCount, fmtExact } from "~/lib/format.ts";
-import { dayLabelIn } from "~/lib/range.ts";
+import { dayLabelIn } from "~/lib/companyDay.ts";
 import type { OrgBudget } from "~/protocol/types.ts";
 
 export function BudgetTile({
@@ -47,7 +47,7 @@ export function BudgetTile({
       >
         <span className="spend-label">This month</span>
         <Skeleton variant="box" width="100%" height="0.5rem" marginTop={0} borderRadius={4} />
-        <span className="spend-caption spend-muted">Waiting for the engine's first reading</span>
+        <span className="spend-caption spend-muted">No reading yet</span>
       </div>
     );
   }

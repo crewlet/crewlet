@@ -482,6 +482,13 @@ export function refusedSentence(entry: Record<string, unknown>): string {
  * unbound, which the engine refuses for a person; a service account is
  * unbound; an open invitation is cancelled. One remedy for all of them told
  * an administrator to unbind a person, which could never clear the refusal.
+ *
+ * IN THE DASHBOARD'S OWN WORDS, AT THE SCREEN THAT DOES IT: every one of
+ * those remedies is a control in Settings › People (move, remove, unbind,
+ * and Cancel on an open invitation), so the sentence names that screen and
+ * never a command line or a raw id. It used to print `crewlet iam
+ * cancel-invite <uuid>`, which sent a person who had the button one screen
+ * away to a terminal, holding an id they had no use for.
  */
 function heldSeatProblems(held: unknown, detail: string): ConfigProblem[] {
   const seats = isRecord(held) ? Object.entries(held).sort(([a], [b]) => a.localeCompare(b)) : [];
@@ -500,18 +507,17 @@ function heldSeatProblems(held: unknown, detail: string): ConfigProblem[] {
 /** What holds one seat and how it is freed, as the middle of a sentence. */
 function heldBy(claim: SeatHeldHolder): string {
   const id = text(claim.person);
-  const who = text(claim.login) || id;
+  const login = text(claim.login);
   if (id && text(claim.kind) === "machine") {
-    return `is held by the service account ${who}: unbind it first (crewlet iam unbind ${id})`;
+    return `is held by the service account ${login || "with no login"}: unbind it in Settings › People first`;
   }
   if (id) {
-    return `is held by ${who}: move them to another human seat (crewlet iam bind ${id} SEAT) or remove them (crewlet iam remove ${id}) first`;
+    return `is held by ${login || "a person who has not signed in yet"}: move them to another human seat or remove them in Settings › People first`;
   }
-  const invitation = text(claim.invitation);
-  if (invitation) {
-    return `is held by the open invitation ${invitation}: cancel it first (crewlet iam cancel-invite ${invitation})`;
+  if (text(claim.invitation)) {
+    return "is held by an invitation nobody has accepted yet: cancel it under Invitations in Settings › People first";
   }
-  return "is held: free it first";
+  return "is held: free it in Settings › People first";
 }
 
 /**
@@ -531,4 +537,19 @@ export function introducedWarnings(
 ): ConfigWarning[] {
   const had = new Set(before.map((w) => `${w.path}\u0000${w.message}`));
   return after.filter((w) => !had.has(`${w.path}\u0000${w.message}`));
+}
+
+/**
+ * A warning as the person who owns the company reads it: the engine's words
+ * for them where it wrote some (`person`, which every advisory the setup
+ * advisor acts on carries), and its own sentence where it did not.
+ *
+ * ONE READING FOR EVERY SCREEN THAT DRAWS A WARNING. `message` is the
+ * operator's, the sentence `crewlet validate` prints, naming the document key
+ * to change (`providers.llm.default`, `llm_auxiliary`); drawn on a screen it
+ * put config paths in front of somebody who never sees the document. The
+ * engine writes both, so a screen never words a warning by itself (ADR-0060).
+ */
+export function warningWords(w: Pick<ConfigWarning, "message" | "person">): string {
+  return w.person || w.message;
 }

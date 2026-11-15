@@ -1029,6 +1029,8 @@ interface McpCleared {
 export interface McpRemovalCheck {
   valid: boolean;
   base_revision_id: string;
+  /** Whether the removal would change the document: always, for a server it holds. */
+  changed: boolean;
   warnings: unknown[];
   derived: unknown;
   dependants: McpDependants;

@@ -935,7 +935,17 @@ func (s Sources) containers(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"containers": list}, nil
+	out := map[string]any{"containers": list}
+	// WHICH OF THEM HOLDS THE TOOL SKILLS, so a screen with none to list can
+	// point at the space they are written in: its name is a page of prose
+	// like any other, and nothing else in the list says which one it is.
+	// Absent on a company that turned tool skills off.
+	if company := s.company(); company != nil {
+		if skills := company.SkillsContainerKey(); skills != "" {
+			out["skills"] = skills
+		}
+	}
+	return out, nil
 }
 
 // ---- shared ------------------------------------------------------------ //

@@ -52,6 +52,7 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import {
   shownStateOf,
   stateLine,
+  stateWord,
   statusOf,
   useOrgIndex,
   type Seat,
@@ -302,4 +303,16 @@ export function matchesPerson(person: ChatPerson, query: string): boolean {
 /** The handles, as the write path takes them: trimmed, deduplicated, ordered. */
 export function handlesOf(chosen: readonly string[]): string[] {
   return [...new Set(chosen.map((handle) => handle.trim()).filter(Boolean))];
+}
+
+/**
+ * The line under a seat's name where a list offers it to pick or to open (Add
+ * people, New message, Search's People): ONE KIND OF LINE FOR EACH KIND OF
+ * SEAT. An agent's is what it is doing, in the engine's word ("Working on
+ * ENG-412", else its state: "Idle", "Paused"); a person's is their team. An
+ * agent's line was its work while it worked and its team otherwise, so one
+ * idle agent read "Core" among others reading "Working".
+ */
+export function seatLine(person: ChatPerson): string {
+  return person.kind === "agent" ? person.doing || stateWord(person.state) : person.team;
 }

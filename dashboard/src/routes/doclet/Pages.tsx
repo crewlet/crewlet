@@ -80,7 +80,13 @@ import {
   NotInDoclet,
 } from "./parts.tsx";
 import { SpaceTrash } from "./page/Tidy.tsx";
-import { otherProjects, ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
+import {
+  otherFilers,
+  otherProjects,
+  ownerSentence,
+  useSpaceOwners,
+  type SpaceOwners,
+} from "./spaceOwners.ts";
 import { usePagedPages } from "./usePagedPages.ts";
 
 /**
@@ -202,13 +208,18 @@ export function Pages({ container }: { container: string }) {
 // The head
 // ---------------------------------------------------------------------------
 
-/** Who files into a space, as the phrase its facts read. */
-function filedBy(owners: SpaceOwners): ReactNode {
-  if (owners.state !== "read") return ownerSentence(owners);
-  if (owners.units.length === 0) return "No unit names this space";
+/**
+ * Who files into a space, as the phrase its facts read, or null where the
+ * space's own name already says it: a team's space is named after the team
+ * (`otherFilers`).
+ */
+function filedBy(owners: SpaceOwners, spaceName: string): ReactNode {
+  if (owners.state !== "read" || owners.units.length === 0) return ownerSentence(owners);
+  const { names, namesake } = otherFilers(owners, spaceName);
+  if (names.length === 0) return null;
   return (
     <>
-      Filed by <b>{owners.units.map((u) => u.name).join(", ")}</b>
+      {namesake ? "Also filed by" : "Filed by"} <b>{names.join(", ")}</b>
     </>
   );
 }
@@ -244,6 +255,7 @@ function SpaceHead({ space }: { space: PageContainer }) {
   );
   const last = written.data?.changes?.[0]?.at;
   const named = space.name || space.key;
+  const filer = filedBy(owners, named);
   return (
     <header className="knowledge-space-head">
       <Eyebrow as="p">Space</Eyebrow>
@@ -266,7 +278,7 @@ function SpaceHead({ space }: { space: PageContainer }) {
             <b>{neverWritten(space, written.data !== undefined && written.data !== null)}</b>
           )}
         </li>
-        <li>{filedBy(owners)}</li>
+        {filer !== null && <li>{filer}</li>}
         {otherProjects(owners, space.key).map((project) => (
           <li key={project}>
             Work in <KeyChip>{project}</KeyChip>

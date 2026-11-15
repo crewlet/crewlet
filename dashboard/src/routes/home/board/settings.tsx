@@ -22,11 +22,11 @@ import {
   IconButton,
   Input,
   MarkdownEditor,
-  Modal,
   SegmentedControl,
   Select,
   Skeleton,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { PlusGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import type { WidgetParam } from "./kit.tsx";

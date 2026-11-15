@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -157,10 +158,32 @@ func AuditRefusal(ctx context.Context, pub AuditPublisher, transport, verb,
 // changes nothing, and a row per question an assistant asked would bury the
 // writes an audit is read for. A tool whose read-only hint is unknown is
 // audited as the write it may be.
+//
+// A CALL THAT KEPT THE CALLER'S OWN BOOKKEEPING (a read cursor, an inbox's
+// marks, their pins: [builtin.OwnBookkeeping], tools that take no name and so
+// act for the caller alone) is the same record under a type of its own,
+// [types.OwnRecordMarked], which the company's activity feed leaves out: a
+// person reading their rooms filled Live's Activity card with "ran
+// mark_chat_read: applied", pushing out what the company did.
 func (s *Server) auditCall(ctx context.Context, c Call, result tools.Result, err error) {
+	s.audited(ctx, c, result, err, builtin.OwnBookkeeping(c.Tool))
+}
+
+// audited publishes one call's record: [types.OwnRecordMarked] where the call
+// kept the caller's own bookkeeping, [types.OperatorActed] otherwise.
+//
+// A WRITE BY NAME ([Server.DispatchRecord]) IS NEVER "OWN": it names whose
+// record it writes, and the person routes take somebody else's (an admin
+// clearing a departed person's queue) as readily as the caller's, which is a
+// gesture on a colleague's record and the company's to see.
+func (s *Server) audited(ctx context.Context, c Call, result tools.Result, err error, own bool) {
 	outcome, position, refusal := auditOutcome(c.Tool, result, err)
-	Audit(ctx, s.audit, Acted(ctx, c.Transport, c.Tool, c.Key, outcome,
-		position, refusal))
+	acted := Acted(ctx, c.Transport, c.Tool, c.Key, outcome, position, refusal)
+	if own {
+		Audit(ctx, s.audit, types.NewOwnRecordMarked(types.OwnRecordMarked{OperatorActed: acted}))
+		return
+	}
+	Audit(ctx, s.audit, acted)
 }
 
 // auditOutcome reads what became of one call, in the audit's vocabulary.

@@ -1,0 +1,1 @@
+import{mr as e,v as t}from"./chunk-NN44J7BP-CSL_mjCo.js";import{Kn as n}from"./index-_bTZ1Rdf.js";import{Di as r}from"./Modal-CPzP76Y_.js";import{t as i}from"./react-C1iE8mnY.js";var a=i();function o({preset:i}){let o=n();return r().tracker?(0,a.jsx)(t,{size:`small`,variant:`primary`,leadingIcon:(0,a.jsx)(e,{size:`sm`}),onClick:()=>o(i),children:`New task`}):null}export{o as t};

@@ -317,23 +317,6 @@ func TestAToolsPromptIsChargedAsInput(t *testing.T) {
 	}
 }
 
-// The cap exists so one runaway harness cannot put the engine under memory
-// pressure; dropping past it must not lose what came before.
-func TestOutputIsCappedWithoutLosingTheStart(t *testing.T) {
-	t.Parallel()
-	var buf cappedBuffer
-	buf.limit = 10
-	if _, err := buf.Write([]byte("0123456789abcdef")); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if buf.String() != "0123456789" {
-		t.Errorf("kept %q", buf.String())
-	}
-	if buf.Truncated() != 6 {
-		t.Errorf("Truncated = %d, want 6", buf.Truncated())
-	}
-}
-
 // A stderr tail must say that it is a tail, or an operator reads the last
 // fifty lines as the whole story.
 func TestTheStderrTailSaysWhatItDropped(t *testing.T) {
@@ -355,31 +338,28 @@ func TestTheStderrTailSaysWhatItDropped(t *testing.T) {
 	}
 }
 
-// A CLIPPED ANSWER IS NOT AN ANSWER. stdout past the cap is dropped by the
-// capped buffer, and the completion path used to parse whatever survived and
-// return it — a half-written envelope, a report cut mid-sentence — with
-// nothing downstream able to tell it from a model that stopped there.
-func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
+// AN ANSWER PAST ITS BOUND IS REFUSED RATHER THAN PARSED. The engine ended the
+// run at maxOutput, and the completion path used to parse whatever survived
+// and return it — a half-written envelope, a report cut mid-sentence — with
+// nothing downstream able to tell it from a model that stopped there. It is
+// refused BEFORE the exit status, which is the engine's own SIGKILL.
+//
+// Mutation: drop the cut's refusal from completion, and the kept bytes come
+// back as an answer, or the kill's exit is read as the harness failing.
+func TestAnAnswerPastItsBoundIsRefusedRatherThanParsed(t *testing.T) {
 	t.Parallel()
-	var buf cappedBuffer
-	buf.limit = 64
-	body := strings.Repeat("x", 200)
-	if _, err := buf.Write([]byte(body)); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if buf.Truncated() != len(body)-64 {
-		t.Fatalf("Truncated = %d, want %d", buf.Truncated(), len(body)-64)
-	}
-
 	p := &Provider{profile: harnessprofile.Profile{}, model: "m", now: time.Now}
 	_, err := p.completion(t.Context(), "prompt", &rawResult{
-		stdout: buf.String(), droppedStdout: buf.Truncated(),
+		stdout: strings.Repeat("x", 64), exitCode: -1,
+		cut: &outputCut{stream: "stdout", why: cutBound, size: maxOutput + 1},
 	}, "")
 	if err == nil {
-		t.Fatal("a clipped stdout was parsed and returned as a completion")
+		t.Fatal("an answer past its bound was parsed and returned as a completion")
 	}
-	if !strings.Contains(err.Error(), "incomplete") {
-		t.Errorf("the refusal does not say the answer is incomplete: %v", err)
+	for _, want := range []string{"incomplete", "stdout", "bound", "No completion comes near"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
 	}
 	// A SERVER failure, so the fallback chain may try another member and the
 	// credential is not benched: nothing about the prompt was rejected.
@@ -389,18 +369,25 @@ func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
 	}
 }
 
-// stderr overrunning costs diagnosis, not correctness, so it must NOT refuse.
-func TestAClippedStderrStillReturnsTheAnswer(t *testing.T) {
+// A RUN CUT FOR ITS ROOM IS NOT BLAMED ON WHAT IT PRINTED. A volume under
+// state_dir that refused the room ahead of stderr ended the run: the refusal
+// names the volume and state_dir, as the cut does, and never sends the
+// operator to a model that streams less, which is the bound's remedy alone.
+//
+// Mutation: tell every cut what the bound's refusal says.
+func TestARunCutForItsRoomIsNotBlamedOnWhatItPrinted(t *testing.T) {
 	t.Parallel()
 	p := &Provider{profile: harnessprofile.Profile{}, model: "m", now: time.Now}
-	comp, err := p.completion(t.Context(), "prompt", &rawResult{
-		stdout: "the answer", stderr: "noise", droppedStderr: 4096,
+	_, err := p.completion(t.Context(), "prompt", &rawResult{
+		stdout: "the answer", exitCode: -1,
+		cut: &outputCut{stream: "stderr", why: cutRoom, size: maxOutput + 1, dir: "/state/sub",
+			err: errors.New("no space left on device")},
 	}, "")
-	if err != nil {
-		t.Fatalf("a clipped stderr refused a good answer: %v", err)
+	if err == nil {
+		t.Fatal("a run cut for its room was answered")
 	}
-	if comp.Content != "the answer" {
-		t.Errorf("content = %q", comp.Content)
+	if !strings.Contains(err.Error(), "state_dir") || strings.Contains(err.Error(), "No completion comes near") {
+		t.Errorf("the refusal = %v, want the room's remedy and not the bound's", err)
 	}
 }
 

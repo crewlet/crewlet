@@ -259,11 +259,29 @@ function PageFoot({
 
 type ActivityFilter = "all" | ChatActivityKind;
 
-const EMPTY_ACTIVITY: Record<ActivityFilter, string> = {
-  all: "Nothing here yet",
-  mention: "No mentions yet",
-  reply: "No replies yet",
-  reaction: "No reactions yet",
+/**
+ * What each of Activity's tabs says while it holds nothing: ITS OWN LINE, about
+ * what that tab gathers. Every tab once said All's sentence, so Mentions,
+ * empty, still promised replies and reactions.
+ */
+export const EMPTY_ACTIVITY: Record<ActivityFilter, { title: string; description: string }> = {
+  all: {
+    title: "Nothing here yet",
+    description:
+      "Mentions, replies in threads you follow and reactions to your messages show here.",
+  },
+  mention: {
+    title: "No mentions yet",
+    description: "A message that names you, in any room, shows here.",
+  },
+  reply: {
+    title: "No replies yet",
+    description: "A reply in a thread you follow shows here.",
+  },
+  reaction: {
+    title: "No reactions yet",
+    description: "A reaction to one of your messages shows here.",
+  },
 };
 
 /** What reached the reader, as the context line names it. */
@@ -376,11 +394,7 @@ export function ActivityView() {
             </Button>
           ),
         }
-      : {
-          title: EMPTY_ACTIVITY[filter],
-          description:
-            "Mentions, replies in threads you follow and reactions to your messages show here.",
-        };
+      : EMPTY_ACTIVITY[filter];
 
   const days = byDay(items, today);
   const list = (
@@ -876,8 +890,10 @@ export function DraftsView() {
         onValueChange={(value) => setTab(value as "drafts" | "sent")}
         items={[
           {
+            // "DRAFTS", AND THE VIEW IS "DRAFTS AND SENT": its trail, its row
+            // and its two tabs say one name. The tab read "Drafts and unsent".
             value: "drafts",
-            label: "Drafts and unsent",
+            label: "Drafts",
             count: kept.length + unsent.length || null,
           },
           { value: "sent", label: "Sent" },
@@ -918,7 +934,7 @@ export function DraftsView() {
               {unsent.length + kept.length === 0 && (
                 <EmptyState
                   title="Nothing waiting"
-                  description="A message you start and leave is kept here per room, and a message the engine didn’t confirm waits here with Retry."
+                  description="A message you start and leave is kept here for its room, and one that didn’t send waits here to try again."
                 />
               )}
             </>

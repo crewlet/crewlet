@@ -45,12 +45,12 @@ import {
   Button,
   Callout,
   DescriptionList,
-  Modal,
   RailList,
   Skeleton,
   Text,
   useToast,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import type {
   McpChangesPartial,

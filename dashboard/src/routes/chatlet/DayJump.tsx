@@ -17,12 +17,12 @@ import {
   ChatDayPill,
   IconButton,
   Menu,
-  Modal,
   compareDays,
   shiftMonth,
   type CalendarDate,
   type MenuEntry,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { CalendarGlyph, ChevronLeftGlyph, ChevronRightGlyph } from "@crewlethq/icons/glyphs";
 import { civilAt, civilKey } from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";

@@ -128,6 +128,30 @@ test("the list comes from GET /secrets, on the browser's own session", async () 
   expect(headers.Authorization).toBeUndefined();
 });
 
+// SET BY IS THE AUTHOR, AND THE CREDENTIAL A LINE UNDER IT: one line read
+// "jane.doe (through s…" in the narrow column. Mutation: draw `authorLabel`
+// in a one-line cell again and the credential is no element of its own.
+test("a secret set through a token names its author, the credential under them", async () => {
+  stubFetch((path) =>
+    path === "/secrets"
+      ? ok({
+          secrets: [
+            {
+              ...body.secrets[0]!,
+              updated_by: "jane.doe",
+              operator_id: "pat:01a1dc39-0000-4000-8000-000000000000",
+            },
+          ],
+        })
+      : ok({}),
+  );
+  render(<Secrets />);
+  const through = await screen.findByText("through a personal access token");
+  const row = through.closest<HTMLElement>('[role="row"]')!;
+  expect(row.textContent).toContain("jane.doe");
+  expect(row.textContent).not.toContain("jane.doe (through");
+});
+
 // NO VALUE, EVER. The one route that returns one needs an explicit flag and
 // logs the access; a dashboard that anyone holding the token can open is not
 // where that trade gets made. This asserts the screen never asks.
@@ -467,6 +491,10 @@ test("an empty store names the command that fills it as code", async () => {
   expect(await screen.findByText("No secrets are stored")).toBeDefined();
   const command = screen.getByText("crewlet secrets set");
   expect(command.tagName).toBe("CODE");
+  // IN ITS CARD, as MCP & tools and Service accounts draw theirs: drawn by
+  // the page's query it floated on the page's ground. Mutation: hand the
+  // empty state back to the query and it has no card around it.
+  expect(screen.getByText("No secrets are stored").closest(".crewlet-card")).not.toBeNull();
 });
 
 // AN EMPTY STORE LEADS WITH ITS EMPTY STATE, not three zero tiles whose

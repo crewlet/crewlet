@@ -15,7 +15,7 @@
  * value.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { ConfigScreen } from "./Config.tsx";
@@ -147,8 +147,9 @@ test("the bare revisions address lands on the history", async () => {
   await settle();
 
   expect(here()?.textContent).toBe("Revisions");
-  const lens = screen.getByRole("radiogroup", { name: "Configuration view" });
-  expect(lens.querySelector("[aria-checked='true']")?.textContent).toBe("History");
+  // THE LENSES ARE THE FRAME'S CHIPS (`PageLenses`), a tab list.
+  const lens = screen.getByRole("tablist", { name: "Configuration view" });
+  expect(within(lens).getByRole("tab", { selected: true }).textContent).toBe("History");
   expect(await screen.findByText("connect datadog")).toBeDefined();
   expect(asked, "the running document asked for on the history's address").not.toContain("config");
   expect(location.hash, "the landing lens is the one the URL need not spell").not.toContain(
@@ -165,7 +166,7 @@ test("a revision's page draws no lens and reads its changes against its parent",
   mount(NAMED);
   await settle();
 
-  expect(screen.queryByRole("radiogroup", { name: "Configuration view" })).toBeNull();
+  expect(screen.queryByRole("tablist", { name: "Configuration view" })).toBeNull();
   expect(asked).not.toContain("config");
   const changes = screen.getByRole("link", { name: "See its changes" });
   const target = new URLSearchParams(changes.getAttribute("href")!.split("?")[1]);

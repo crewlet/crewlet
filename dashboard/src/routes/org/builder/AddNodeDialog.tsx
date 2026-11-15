@@ -52,12 +52,12 @@ import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
   focusables,
-  Modal,
   OrgNodeLabel,
   Popover,
   SegmentedControl,
   type OrgLabelMark,
 } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { NodeGlyph, seatMark } from "~/ui/orgNodes.tsx";
 
 const KINDS: { value: AddKind; label: string }[] = [

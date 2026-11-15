@@ -7,7 +7,8 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, Checkbox, FormField, Input, Modal, Select, Stack } from "@crewlethq/ui";
+import { Button, Checkbox, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { importFormHeld, importHeld } from "~/lib/repoWrites.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -68,7 +69,6 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       onSubmit={() => void submit()}
       dismissable={!write.busy}
-      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>

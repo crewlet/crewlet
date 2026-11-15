@@ -196,7 +196,7 @@ func TestARowAtTheTransportsLimitHydratesAcrossALeafLink(t *testing.T) {
 			publishOn(t, member, registered(t, "agent_diary").subject(seat.AgentID, note.Values), note)
 
 			fresh := openStore(t)
-			satellite := New(fresh, embeddedOn(t, leaf), func(string) string { return seat.AgentID })
+			satellite := newSyncerAcross(fresh, embeddedOn(t, leaf), func(string) string { return seat.AgentID })
 			carried, err := satellite.Hydrate(t.Context(), seat.Handle)
 			if err != nil {
 				t.Fatalf("a row at the transport's limit refused the seat across a leaf link: %v", err)
@@ -239,7 +239,7 @@ func TestARowLargerThanThisNodesConnectionCarriesIsRefusedAsThat(t *testing.T) {
 	note := noteOfSize(t, "past-the-leaf", 96<<10)
 	publishOn(t, member, registered(t, "agent_diary").subject(seat.AgentID, note.Values), note)
 
-	satellite := New(openStore(t), embeddedOn(t, leaf), func(string) string { return seat.AgentID })
+	satellite := newSyncerAcross(openStore(t), embeddedOn(t, leaf), func(string) string { return seat.AgentID })
 	carried, err := satellite.Hydrate(t.Context(), seat.Handle)
 	if !errors.Is(err, errRowPastPull) {
 		t.Fatalf("a row larger than the satellite's connection carries answered (%d, %v), want "+
@@ -262,10 +262,13 @@ func TestARowLargerThanThisNodesConnectionCarriesIsRefusedAsThat(t *testing.T) {
 // through that read). A replay ends at a barrier it reads through its own
 // consumer instead, so a row crosses the link only in a pull, raw. Here the
 // fleet is a member and a leaf each carrying the embedded fleet's 8 MiB, and
-// the replay's copy of the diary lacks its newest note, of 7 MiB, and the
-// hydration's barrier until it has handed over what it holds. The hydration
-// carries both notes, the large one whole, and the member's connection to the
-// leaf is the one it had before.
+// the first copy the diary's replay is placed on lacks its newest note, of
+// 7 MiB, and the hydration's barrier, and never catches up: the replay is
+// placed again past the note it received, and the copy it lands on hands the
+// large note over, alone in a pull at the transport's bound since it is past
+// the window a pull across the link carries. The hydration carries both
+// notes, the large one whole, and the member's connection to the leaf is the
+// one it had before.
 //
 // Red on the end check this replaced: the leader's answer closed the link
 // (the member's connection to the leaf went from one id to another) and the
@@ -287,16 +290,23 @@ func TestACopyBehindAcrossALeafHandsOverARowPastWhatALeaderReadCarries(t *testin
 	}
 
 	fresh := openStore(t)
-	satellite := New(fresh, embeddedOn(t, leaf), func(string) string { return seat.AgentID })
-	satellite.js = laggingJS{JetStream: satellite.js, behind: 2, catchesUp: true}
+	satellite := newSyncerAcross(fresh, embeddedOn(t, leaf), func(string) string { return seat.AgentID })
+	keptAt := sequenceOf(t, member, diary.subject(seat.AgentID, kept.Values))
+	spy := newSpyCopies(satellite)
+	spy.behindThrough = keptAt
 	carried, err := satellite.Hydrate(t.Context(), seat.Handle)
 	if now := leafLink(t, hub); now != link {
 		t.Errorf("the member's connection to the leaf was %d before the hydration and is %d after "+
 			"it: the leaf closed its link to the fleet while the hydration ran", link, now)
 	}
 	if err != nil || carried != 2 {
-		t.Fatalf("Hydrate = (%d, %v), want both notes: the copy caught up, so the note it lacked "+
-			"is there to be pulled", carried, err)
+		t.Fatalf("Hydrate = (%d, %v), want both notes: the replay was placed again on a copy "+
+			"that holds the note the first lacked", carried, err)
+	}
+	if placed := spy.configsOf(tableFilter(seat.AgentID, "agent_diary")); len(placed) < 2 ||
+		placed[1].OptStartSeq != keptAt+1 {
+		t.Errorf("the diary's replay was placed %d times, want again at sequence %d, one past the "+
+			"note its first copy held", len(placed), keptAt+1)
 	}
 	var length int
 	if err := fresh.SQL().QueryRowContext(t.Context(),

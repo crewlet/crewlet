@@ -1063,7 +1063,7 @@ export function PhaseCard({
           </span>
         ) : (
           <span className="phase-meta t-num" title="tool rounds used">
-            {`${Math.max(ledger.length, record.roundsUsed)}r`}
+            {plural(Math.max(ledger.length, record.roundsUsed), "round")}
           </span>
         )}
         {/* ZERO IS A NUMBER, AND ONLY A LIVE PHASE'S ZERO IS AN ABSENCE. This
@@ -1084,7 +1084,7 @@ export function PhaseCard({
             className="phase-meta t-num"
             title={launches?.length ? "total tokens, its launches included" : "total tokens"}
           >
-            {fmtCount(spent)}
+            {`${fmtCount(spent)} tokens`}
           </span>
         )}
         {/* HOW LONG THIS PHASE TOOK, straight off `duration_ms` — the

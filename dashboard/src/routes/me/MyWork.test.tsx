@@ -878,6 +878,34 @@ test("held work that others wait on says how much waits and on whom", async () =
   expect((await counts())["holding-up"]).toBe("2");
 });
 
+// A HOLD WITH NO RECORDED START SAYS SO: the engine sent the zero instant for
+// an item held by a question nobody assigned, and the column read "739,933
+// days". Absent now, the cell says it is not recorded and counts nothing.
+test("a hold with no recorded start says so rather than counting from year 1", async () => {
+  location.hash = "#/me/holding-up";
+  serving({
+    viewer: ada,
+    work_items: noWork,
+    work_my_work: {
+      ...emptyDay,
+      holding_up: [
+        {
+          ...task({ key: "ENG-9", title: "Merge the release" }),
+          blocks: 1,
+          holders: [],
+          asked: "c-1",
+        },
+      ],
+      totals: { ...emptyDay.totals, holding_up: { total: 1 } },
+    },
+  });
+  mount("holding-up");
+  await waitFor(() => expect(screen.getByText("Merge the release")).toBeTruthy());
+  const row = screen.getAllByRole("row").find((r) => r.textContent?.includes("Merge the release"));
+  expect(row?.textContent).toContain("Not recorded");
+  expect(row?.textContent).not.toMatch(/\d+ days/);
+});
+
 test("nothing held up says what would be there", async () => {
   location.hash = "#/me/holding-up";
   serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });

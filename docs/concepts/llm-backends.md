@@ -320,7 +320,12 @@ providers:
       # ephemeral container. A LITERAL PATH — unlike the credential fields
       # it is not ${VAR}-expanded, because it names where the engine keeps
       # files rather than a secret (the same reason the store path is a
-      # Tier A field).
+      # Tier A field). Every harness child's output is captured into files
+      # here too, so it must be a LOCAL filesystem that keeps a lock per
+      # open file description, reserves room with the size kept, and
+      # punches holes: ext4, xfs, btrfs, tmpfs or APFS. Each running call
+      # takes 64 MiB of room as it starts, and up to 128 MiB — see "A
+      # helper that outlives the harness".
 
       timeout_seconds: 600           # one stretch of a harness run on this host, wall clock (default 600);
                                      #   an executor run is not on this clock
@@ -673,10 +678,14 @@ output this build can no longer read (`profile_drift`), which is no outage of th
 vendor's and gets the same treatment. Only a
 `fatal` failure stops it, and that is a call the engine itself cannot make: a
 prompt it cannot render, a file of the call's it cannot write, a harness it cannot
-start on this host — the binary missing or not executable there, or no pipe or
-process for it, refused before any harness exists. Those are yours to fix, and
-walking past one would only carry every call to the next entry, and its bill,
-until somebody read why. A harness that started is never `fatal`, however it ended.
+start on this host — the binary missing or not executable there; no output
+file or process for it, refused before any harness exists; a `state_dir` whose
+filesystem keeps no lock per open file, or whose volume could not reserve room
+for the harness's output; or a process whose identity the engine could not read
+as it started, ended at once. Those are yours to fix,
+and walking past one would only carry every call to the next entry, and its bill,
+until somebody read why. Apart from that last one, a harness that started is
+never `fatal`, however it ended.
 
 A call its caller **cancelled** (`canceled`) stops the walk too: a person
 pressed Stop, a seat's turn was stopped, a node began to drain. The harness was
@@ -977,11 +986,14 @@ its own place to run:
     ├── credentials.lock              # taken by every writer and reader of it
     ├── credentials.pending           # a write of the login, while one is in progress
     ├── credentials.pending.tmp       # that write's journal, before it lands
+    ├── captures/                     # the output of a child no call owns, unlinked
     ├── seats/                        # where a call signed in with the login runs
     │   ├── sarah-chen/
     │   │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
     │   │   ├── home/                 # HOME + XDG config/data/state + vendor dirs
-    │   │   └── work/<call-id>/       # cwd for one call, then deleted
+    │   │   └── work/<call-id>/       # cwd for one call, then deleted; its output
+    │   │                             #   files are made here and unlinked before
+    │   │                             #   the harness starts
     │   └── marcus-rivera/
     │       └── …
     └── key-seats/                    # where a call signed in with a key runs
@@ -2430,6 +2442,14 @@ that shows a request's calls only once they have run (`late_calls`: Gemini CLI,
 OpenCode) each call is placed at once and joined to its request when the record
 catches up.
 
+**A round is dated by its record.** Its duration runs from when the model had
+everything it needed to ask to when the record last showed the request, not to
+when the loop heard of it. A record that closes a request only when the run ends
+(`late_calls`, a final request no later event follows) tells the loop of it after
+everything the run's end waited for, and that wait is not the model's time. The
+record's instant is held within the round's own span: never before the model
+began, never after the loop heard of the request.
+
 **A call is joined to the request that asked for it** by the id the harness hands
 the server with the call, under the `_meta` key the profile names
 (`call_id_meta`: Claude Code's `claudecode/toolUseId`, Codex's `callId`, Muse
@@ -2616,6 +2636,17 @@ one — and only two of them are failures:
 | **No** text path resolved at all | The profile no longer matches the installed harness. A retryable `profile_drift` failure that names `text_paths`, points at `crewlet llm doctor`, and prints the **tail** of what the harness output so you can write the override. |
 | The harness printed **nothing at all** on a zero exit | Its own message, because neither of the two above can say anything true about output that does not exist. A retryable `server` failure carrying whatever it wrote on stderr, which is the only clue there is. |
 
+Four more come before any of those, from how the engine read the output rather
+than from what it says, and each is a retryable `server` failure naming the
+stream (see [a helper that outlives the harness](#a-helper-that-outlives-the-harness)):
+
+| What happened | Why it is refused |
+|---|---|
+| A JSONL stdout **ends inside an event**: its last bytes begin an event and do not decode | The stream was cut there, so no reading of it can be shown to be whole. A whole last event written without its line break is read as a line. |
+| An answer passed **32 MiB** | The engine killed the harness at the bound; what was kept is not the answer. |
+| A stream ran **32 MiB ahead** of the engine's reading of it | Nothing held the writer back, as a pipe would have, and the engine ended the run rather than fall further behind. |
+| The volume under `state_dir` **could not keep the room** ahead of a stream | A write it then refused could cut the answer silently. |
+
 Output that is not JSON at all is still an answer: a harness that printed a
 banner, a warning, or the vendor's own sentence about a spent plan is
 read as prose rather than refused, which is what lets the
@@ -2675,11 +2706,60 @@ takes neither, and its own configuration of the model is the harness's (see
 
 ### A helper that outlives the harness
 
-A harness that exits while something it started still holds its output open — a
-helper forked with the harness's standard output or error inherited — is waited for
-five seconds. Then whatever still holds it is ended with the harness's process
-group, as on a timeout, since closing the pipe under a Node runtime ends nothing,
-and the stream is read as far as it got. Which stream decides the call:
+**A harness's output is never a pipe.** Every child the engine host starts for a
+harness — a call, its usage report, a serve lifecycle's server and its readiness
+poll, the version probe, the login status, the credential store's import and
+exports, the device sign-in and the token-minting command — writes its standard
+output and error into files of its own. The one exception is the vendor's own
+sign-in, logout and status that `crewlet llm login`, `crewlet llm logout` and
+`crewlet llm status` run at your terminal: their output is your terminal, which
+the engine reads none of, and piped (`crewlet llm status | less`) the pipe is
+yours. Each file is made `0600` in the call's own directory (or
+`<state_dir>/<harness>/captures/` for a child no call owns), given 32 MiB of
+room on the volume, and unlinked before the harness starts, so nothing can open
+it by name, no later call can find it, and a crash leaves none behind. Why: Node
+writes to a pipe asynchronously on Linux and macOS and may leave a write "not
+written at all if `process.exit()` is called before an asynchronous write
+completes", while it writes to a file at once; OpenCode 2.0.32 and 2.1.4 were
+measured cutting a run's answer at a pipe's 64 KiB, and writing it whole into a
+file every time. Measured on every harness the profiles ship that could be run,
+a line reaches a file within a few milliseconds of when it would reach a pipe,
+and the engine reads each file a tenth of a second at the latest after a line
+lands.
+
+A child **handed or printing a credential** — a serve lifecycle's server, which
+prints the password it minted; the token-minting command; the credential
+store's import and exports, the doctor's host-login check among them — writes
+into a file in memory on Linux (`memfd_create`), so none of it reaches a disk.
+macOS has no such file, so there it is an unlinked file like the rest, whose
+bytes stay in the volume's freed blocks until they are reused.
+
+**Two kinds of stream.** One kind is read as **one answer** at the end: a text
+function's stdout, an auxiliary command's. It is kept whole up to 32 MiB, and
+past that the engine kills the harness's process group at once and refuses the
+call, the verdict a clipped answer always got. The other is **read to its end**,
+every line handed on as it arrives: a run's JSONL record on stdout, every
+stderr, a server's stdout. Its first 32 MiB are kept for the end, and what the
+engine has read past them is given back to the volume (a hole punched), so a
+long record still reads whole, as it did. Such a stream ends the run only when
+it gets 32 MiB ahead of the engine's reading of it, or when its volume refuses
+the room ahead. **Room**: every file is given 32 MiB of room when its child
+starts, and a stream read to its end is kept 32 MiB of room ahead of the
+reading, because a Node harness drops what a full volume refuses of a write and
+exits 0 with its answer's tail gone. So each running call takes 64 MiB as it
+starts and up to 128 MiB; a volume that cannot give it refuses the call as
+`fatal` before the harness starts, and one that cannot keep the room ahead ends
+the run as `server`, each naming `state_dir`.
+
+**The end** is three things at once: the harness exited, nothing of its process
+group is alive, and nothing still holds either of its output files. It is waited
+for five seconds after the harness exits, or after the call ends if that came
+first. Then what still lives of the group is killed — a helper holding none of
+its output included, which used to be left running — and each file is read up to
+the size it had at that instant and never again: nothing written after the end
+is read. Measured, nothing of a group was alive when its harness exited but
+Claude Code on Node's relay, gone within 22 ms. Which stream was still held
+decides the call:
 
 - **standard error held**: the answer on standard output is whole, so it
   stands; the cut costs only the harness's own commentary, and
@@ -2690,10 +2770,35 @@ and the stream is read as far as it got. Which stream decides the call:
   and the entry is not sat out. `harness_output_held` is logged with
   `stream: stdout`.
 
-A harness whose wait fails another way after it started is `server` too. A helper
-that holds standard input with the prompt unread is one such case, and it is
-ended the same way. A harness that exits 0 when its deadline's signal arrives is a
-`timeout`.
+A harness whose wait fails another way after it started is `server` too. A
+helper that holds standard input with the prompt unread is one such case, and it
+is ended the same way, five seconds after the harness exits like any other. A
+harness that exits 0 when its deadline's signal arrives is a `timeout`.
+
+**A helper that escaped the group** (started with `setsid`) is not killed: the
+engine signals process groups, and it left the one recorded. Its stream is held,
+`harness_output_held` says `escaped: true`, and its file goes to the entry's
+janitor, which empties it every tenth of a second until the helper lets go, so
+an escaped writer holds at most a tenth of a second of its writes on the volume
+(`harness_capture_released`, with what it discarded, says when it let go).
+
+The harness's process group is signalled after the harness itself has exited
+only while it is still the group recorded when the harness started: the engine
+reads the group's leader and its start time from the kernel then, and asks
+again before each such signal, because once every member is gone the kernel may
+hand the group's id to another program's processes. When the kernel's record
+cannot be read (a `/proc` mounted with `hidepid`, for example), the end waits out
+its five seconds rather than read a group it cannot see as gone, the signal is
+withheld and `harness_group_signal_withheld` is logged. A harness whose identity
+cannot be read as it starts is ended at once and the call fails as `fatal`, since
+no later signal to its group could be checked.
+
+The log lines: `harness_output_bounded` (an answer past its bound),
+`harness_output_behind` (a stream that ran 32 MiB ahead of the reading),
+`harness_output_room` (a volume that refused the room ahead),
+`harness_output_held`, `harness_output_shrank` (a file something truncated under
+the reading, refused as `server`), `harness_group_signal_withheld` and
+`harness_capture_released`.
 
 ### Token accounting
 
@@ -2705,8 +2810,13 @@ run ends — on every outcome, a failure, a timeout and a run the engine stopped
 included — whatever it spent beyond what was charged is charged too: the harness's
 own total for the run where it reports one (Muse Code's record carries counts
 only for the whole run, so each of its requests is estimated as it is read and
-the total settles them; OpenCode's last step prints none, and the server's
-session holds them), and an estimate where nothing reports.
+the total settles them; OpenCode 2.0.32 and 2.1.4 often drop the final step's
+counts, and the server's session holds them), and an estimate where nothing
+reports. **Where exactly one request read no counts of its own** in a record
+that carries each request's, the remainder is that request's: it is told again
+with those counts, so its round shows what it cost rather than nothing. Two or
+more without counts split nothing honestly, and an estimate is never a
+request's: then the remainder is the run's alone.
 
 A text function's `Completion.InputTokens` / `OutputTokens` come from the harness's
 own usage report where the profile can find one: on stdout (Claude Code, Codex,
@@ -2813,12 +2923,15 @@ declaring one means every call quietly falls back to an estimate while
 what that line exists to settle.
 
 **Or record them and only ask afterwards.** OpenCode 2's `run --format json`
-emits each step's counts in a `step_finish` event — and drops the *final*
-step's: measured on 2.0.32, a text-only call printed no `step_finish` in six
-runs of six, and a call that used a tool printed the tool step's counts and
-not the answer's. Read from stdout, every call would be charged for nothing
-or for its first step. The session the call ran in holds the whole total, so
-the profile names the call's session and asks about it once the call has
+emits each step's counts in a `step_finish` event — and on 2.0.32 and 2.1.4
+drops some of them: measured over twenty runs with tools per release, each of
+four steps of three calls and a final answer, every `tool_use` and every
+intermediate `step_finish` arrived, but the *final* step's `step_finish` was
+missing in 13 of 20 runs on 2.0.32 and 12 of 20 on 2.1.4, and in none on 2.2.7
+and 2.3.0; a one-step run printed it in 10 of 36 whole captures on 2.0.32 and 3
+of 41 on 2.1.4. Read from stdout alone, a call would be charged for nothing, or
+for its steps but the last. The session the call ran in holds the whole total,
+so the profile names the call's session and asks about it once the call has
 ended:
 
 ```yaml

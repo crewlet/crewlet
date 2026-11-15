@@ -3,10 +3,18 @@
  * on: the one wording every settings screen that writes `/config` shows.
  *
  * THE ENGINE'S OWN WORDS WHERE IT WROTE ANY. A refusal of the document names
- * each failure in a sentence of its own (`problems`), a node that is draining
- * or starting says so, and a managed document names who manages it; this
- * adds only what the answer cannot know: that a conflict is cleared by
- * reading again, and that a write nobody answered may have landed.
+ * each failure in a sentence of its own (`problems`, in a person's words
+ * where the rule wrote them), a node that is draining or starting says so,
+ * and a managed document names who manages it; this adds only what the
+ * answer cannot know: that a conflict is cleared by reading again, and that a
+ * write nobody answered may have landed.
+ *
+ * NEVER THE ANSWER'S `hint`. That is the engine's advice to a program calling
+ * the API: a route to send ("PATCH /iam/people/{person} with seat"), a header
+ * to set, a CLI command. Drawn after the message it told a person who
+ * pressed Save to send a request they cannot send, and once shouted "the
+ * WHOLE document a write produces is validated" at them. What a person can do
+ * is in the problems' own words and in the screen around them.
  */
 
 import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
@@ -17,8 +25,6 @@ export interface RefusalWords {
   readonly message: string;
   /** Reading the document again is the way forward. */
   readonly reload: boolean;
-  /** The engine's own advice beside the refusal, "" where it gave none. */
-  readonly hint: string;
 }
 
 /**
@@ -32,31 +38,28 @@ export function configRefusalWords(
 ): RefusalWords {
   switch (refusal.kind) {
     case "guarded":
-      return { message: configGuardedReason(refusal.code), reload: false, hint: "" };
+      return { message: configGuardedReason(refusal.code), reload: false };
     case "managed":
-      return { message: managedSentence(refusal.managedBy), reload: false, hint: "" };
+      return { message: managedSentence(refusal.managedBy), reload: false };
     case "conflict":
       return {
         message: `The company's configuration changed since this was read, so nothing was saved. ${reread}`,
         reload: true,
-        hint: "",
       };
     case "draining":
       return {
         message: `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
         reload: false,
-        hint: "",
       };
     case "starting":
       return {
         message: `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
         reload: false,
-        hint: "",
       };
     case "unavailable":
       // The engine's own sentence: what stopped it, that nothing was
       // stored, and that waiting clears it.
-      return { message: refusal.detail, reload: false, hint: "" };
+      return { message: refusal.detail, reload: false };
     case "unsettled":
       // A WRITE THAT STORED ITS REVISION and lost the answer to its
       // activation names it: sending the change again would make a second
@@ -65,21 +68,21 @@ export function configRefusalWords(
         return {
           message: storedUnconfirmedSentence(refusal.storedRevisionId, refusal.node ?? ""),
           reload: true,
-          hint: "",
         };
       }
       return {
         message: `${unsettledSentence(refusal)} The change may or may not have landed. Reload before trying again.`,
         reload: true,
-        hint: "",
       };
     case "none":
-      return { message: "No company is configured yet.", reload: false, hint: "" };
+      return { message: "No company is configured yet.", reload: false };
     case "problems":
       return {
-        message: refusal.problems.map((p) => p.message).join(" ") || "The engine refused it.",
+        // A PERSON'S WORDS where the rule wrote them (`said`), the
+        // operator's line otherwise.
+        message:
+          refusal.problems.map((p) => p.said || p.message).join(" ") || "The engine refused it.",
         reload: false,
-        hint: refusal.hint,
       };
   }
 }

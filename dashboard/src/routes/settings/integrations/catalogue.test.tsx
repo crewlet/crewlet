@@ -29,6 +29,7 @@ import {
 } from "~/contract/integrations.ts";
 import { headingAnchors, repoRoot } from "~/test/engineFiles.ts";
 import { LANE_WORDS } from "./access/words.ts";
+import { STORIES } from "./model.ts";
 
 afterEach(cleanup);
 
@@ -433,6 +434,20 @@ test("a tool with no form behind it is learned about, not connected", () => {
   );
   expect(formBlocked([], false)).toMatch(/no form to open/);
   expect(formBlocked([{}], true)).toBeUndefined();
+});
+
+// A TOOL'S LINE SAYS WHAT IT COVERS, AND ITS STORY HOW EACH AGENT GETS IN. The
+// page draws both, the line under the tool's name and the story's identity
+// under "Each agent", so a line that said how agents get in said it twice:
+// Slack's page read "Each agent posts as its own bot." over "Each agent posts
+// as its own Slack app.". Mutation: put "a token per agent" back on a line.
+test("a tool's one line never says how each agent gets in", () => {
+  const identity = /\b(each agent|per agent|its own)\b/i;
+  for (const entry of CATALOG) {
+    expect(entry.description, entry.key).not.toMatch(identity);
+    expect(entry.description, entry.key).not.toBe(STORIES[entry.key]?.identity);
+    expect(entry.description, entry.key).toMatch(/^[A-Z].*\.$/);
+  }
 });
 
 // THE ENGINE'S REASONS ARE WRITTEN TO BE EMBEDDED, lower-case and without a

@@ -22,6 +22,7 @@ import {
   stringValue,
   walk,
 } from "../test/source.ts";
+import { peelPunctuation } from "@crewlethq/ui";
 import { ACTIONS } from "~/contract/actions.ts";
 import { AGENT_TABS, SECTION_TABS } from "~/routes/agents/seat/profile.ts";
 import { FRAMELESS, WORKSPACES } from "./nav.ts";
@@ -1266,4 +1267,110 @@ test("the formatter reading sees every way to build one, and nothing that builds
     "x.ts:6 Intl.Collator",
     "x.ts:7 localeCompare(…)",
   ]);
+});
+
+/**
+ * EVERY DIALOG OPENS THROUGH THE DASHBOARD'S `Modal` (`components/Modal.tsx`).
+ *
+ * A dialog's head and foot are rows of controls, and the dashboard's `Modal`
+ * keeps the place above the foot where a write control there draws what it
+ * was refused. A dialog opened on the kit's `Modal` itself has no such place,
+ * and the first refusal of a control in its foot breaks the foot: the primary
+ * action and the refusal dropped onto lines of their own, Cancel left alone.
+ *
+ * Mutation: import `Modal` from "@crewlethq/ui" in any screen.
+ */
+function kitModalImports(path: string, text: string, lang: Lang): string[] {
+  const line = lineOf(text);
+  const found: string[] = [];
+  for (const statement of parse(text, lang).body as Node[]) {
+    if (statement.type !== "ImportDeclaration") continue;
+    if ((statement.source as Node).value !== "@crewlethq/ui") continue;
+    for (const spec of statement.specifiers as Node[]) {
+      if (spec.type !== "ImportSpecifier") continue;
+      const imported = spec.imported as Node;
+      const name = String(imported.type === "Identifier" ? imported.name : imported.value);
+      if (name === "Modal" || name === "ConfirmModal") found.push(`${path}:${line(spec.start)}`);
+    }
+  }
+  return found;
+}
+
+const MODAL_SOURCE = modules().find(({ path }) => path === "components/Modal.tsx")?.text ?? "";
+
+test("every dialog opens through the dashboard's Modal, never the kit's", () => {
+  const offenders = modules()
+    .filter(({ path }) => path !== "components/Modal.tsx")
+    .flatMap(({ path, text, lang }) => kitModalImports(path, text, lang));
+  expect(
+    offenders,
+    'import Modal from "~/components/Modal.tsx": it keeps the place where a write control in the dialog\'s foot draws its refusal',
+  ).toEqual([]);
+  // AND THE RULE READS THE TREE: the dashboard's Modal itself opens the kit's two.
+  expect(kitModalImports("components/Modal.tsx", MODAL_SOURCE, "tsx")).toHaveLength(2);
+});
+
+/** A run of JSX text as React renders it: each line trimmed where it meets a break. */
+function jsxText(raw: string): string {
+  const lines = raw.split(/\r\n|\n|\r/);
+  return lines
+    .map((line, i) => {
+      let t = line.replace(/\t/g, " ");
+      if (i > 0) t = t.replace(/^ +/, "");
+      if (i < lines.length - 1) t = t.replace(/ +$/, "");
+      return t;
+    })
+    .filter((t) => t !== "")
+    .join(" ");
+}
+
+/**
+ * Every code chip in a sentence whose punctuation is written beside it as
+ * text, with what the kit peels off either side (`peelPunctuation`).
+ */
+function loosePunctuation(path: string, text: string, lang: Lang): string[] {
+  const line = lineOf(text);
+  const found: string[] = [];
+  walk(parse(text, lang), (node) => {
+    if (node.type !== "JSXElement" && node.type !== "JSXFragment") return;
+    const kids = node.children as Node[];
+    kids.forEach((kid, i) => {
+      if (kid.type !== "JSXElement") return;
+      const name = (kid.openingElement as Node).name as Node;
+      if (name.type !== "JSXIdentifier" || name.name !== "InlineCode") return;
+      const side = (at: Node | undefined) =>
+        at?.type === "JSXText" ? jsxText(text.slice(at.start, at.end)) : "";
+      const { open, close } = peelPunctuation(side(kids[i - 1]), side(kids[i + 1]));
+      if (open || close) found.push(`${path}:${line(kid.start)} ${open}…${close}`);
+    });
+  });
+  return found;
+}
+
+/*
+ * A CODE CHIP TAKES THE PUNCTUATION AROUND IT AS `open` AND `close`, the kit's
+ * own props: its ground then gives up its inset on that side and the marks stay
+ * on its line. Written as the text beside it ("<InlineCode>…</InlineCode>."),
+ * the chip's inset read as a space before the full stop ("crewlet secrets set
+ * .") and a line could break between the two. `marked()` peels a sentence's
+ * marks for its chips at run time; this holds the written ones to the same
+ * rule, read with the same function.
+ *
+ * Mutation: write `<InlineCode>x</InlineCode>.` in any screen.
+ */
+test("a code chip in a sentence takes the punctuation around it as open and close", () => {
+  const offenders = modules()
+    .filter(({ path, lang }) => lang === "tsx" && !/\.test\./.test(path))
+    .flatMap(({ path, text, lang }) => loosePunctuation(path, text, lang));
+  expect(offenders, 'pass it as <InlineCode open="(" close=").">').toEqual([]);
+});
+
+test("the punctuation reading sees text on either side, across a line break, and no apostrophe", () => {
+  const read = (jsx: string) => loosePunctuation("x.tsx", `const x = <p>${jsx}</p>;`, "tsx");
+  expect(read("Run <InlineCode>a</InlineCode>.")).toHaveLength(1);
+  expect(read("Run (\n  <InlineCode>a</InlineCode>\n  ) now")).toHaveLength(1);
+  expect(read("Run <InlineCode>a</InlineCode>\n  , then b")).toHaveLength(1);
+  expect(read("Run <InlineCode>a</InlineCode>'s owner")).toEqual([]);
+  expect(read('Run <InlineCode close=".">a</InlineCode> Then b')).toEqual([]);
+  expect(read("Run <InlineCode>a</InlineCode> . b")).toEqual([]);
 });

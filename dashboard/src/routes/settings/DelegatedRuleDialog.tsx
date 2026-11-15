@@ -20,15 +20,14 @@ import {
   Button,
   Callout,
   Checkbox,
-  ConfirmModal,
   FormField,
   IconButton,
   Input,
-  Modal,
   Skeleton,
   TagsInput,
   type TagsInputOption,
 } from "@crewlethq/ui";
+import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { PlusGlyph, ShieldCheckGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { SettingWriteStatus } from "~/components/SettingWriteStatus.tsx";
 import { configRefusalWords } from "~/lib/configRefusal.ts";

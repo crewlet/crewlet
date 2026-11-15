@@ -9,6 +9,7 @@ import { useCallback, useId, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
+  Callout,
   Copyable,
   DescriptionList,
   EmptyValue,
@@ -320,11 +321,17 @@ function SettingValue({ r, value }: { r: SetupRequirement; value: string }) {
 }
 
 /**
- * What connecting gives the agents, how each gets in, and what to have ready.
+ * What connecting gives the agents, how each gets in, what to have ready, and
+ * what is done by hand.
  *
  * NOTHING THE HEADER ABOVE IT SAYS: the tool's mark, name and one-line
  * description are the header's, and the engine's address is said once, at
  * the foot of the directory.
+ *
+ * WHAT TO HAVE AND WHAT TO DO ARE TWO LISTS. The step a person takes by hand
+ * ("Create one Slack app per agent from the manifest Crewlet writes") was the
+ * last item of the numbered list of values to have ready, which read as one
+ * more thing to fetch; it is its own section, a sentence rather than an item.
  */
 export function BeforeYouStart({ tool }: { tool: Tool }) {
   return (
@@ -349,12 +356,19 @@ export function BeforeYouStart({ tool }: { tool: Tool }) {
           {tool.asks.map((r) => (
             <List.Item key={r.field}>{r.label}</List.Item>
           ))}
-          {tool.story.byHand && <List.Item>{tool.story.byHand}</List.Item>}
-          {tool.asks.length === 0 && !tool.story.byHand && (
-            <List.Item>Nothing. Crewlet fills in the rest.</List.Item>
+          {tool.asks.length === 0 && (
+            <List.Item>
+              {tool.story.byHand ? "Nothing." : "Nothing. Crewlet fills in the rest."}
+            </List.Item>
           )}
         </List>
       </section>
+      {tool.story.byHand && (
+        <section aria-label="What you do by hand">
+          <h3 className="t-label">You do by hand</h3>
+          <p className="t-body">{tool.story.byHand}</p>
+        </section>
+      )}
     </div>
   );
 }
@@ -372,8 +386,13 @@ export function DocsLink({ tool }: { tool: Tool }) {
  * The address apps deliver to, said once, at the foot of the directory: a
  * small label over the address, cut to fit with the whole of it in its title,
  * copied with a press.
+ *
+ * A LOOPBACK ADDRESS SAYS WHAT IT MEANS. Only this machine reaches one, so no
+ * app can deliver to it, and drawn bare it read as the address every app was
+ * set up on. Whether it is one is the engine's answer, by the rule its
+ * configuration judges the person's address with.
  */
-export function EngineAddress({ value }: { value: string }) {
+export function EngineAddress({ value, loopback }: { value: string; loopback: boolean }) {
   return (
     <div className="int-engine-address">
       <span className="t-caption">Apps reach this engine at</span>
@@ -385,6 +404,12 @@ export function EngineAddress({ value }: { value: string }) {
         title={value}
         ariaLabel={`Copy the engine's address, ${value}`}
       />
+      {loopback && (
+        <Callout variant="warning" title="Only this machine can reach this address">
+          Apps outside it, such as Slack or GitHub, cannot deliver to it. Give the engine the
+          address the internet reaches it on before you connect an app that sends it events.
+        </Callout>
+      )}
     </div>
   );
 }

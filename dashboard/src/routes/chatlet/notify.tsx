@@ -117,7 +117,7 @@ export function NotifyLevels({ channelID }: { channelID: string }) {
       <p className="chat-pane-note chat-pane-note--lead">
         <BellGlyph size="xs" />
         <span>
-          The engine sends no email, push or text message. Activity is where everything that reaches
+          Crewlet sends no email, push or text message. Activity is where everything that reaches
           you is listed.
         </span>
       </p>

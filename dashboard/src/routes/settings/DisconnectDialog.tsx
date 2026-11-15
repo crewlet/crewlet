@@ -25,7 +25,8 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, InlineCode } from "@crewlethq/ui";
+import { Modal } from "~/components/Modal.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { PlugGlyph, ExternalLinkGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
@@ -281,12 +282,12 @@ export function DisconnectDialog({
         {owed ? (
           <p className="t-body secondary" style={{ margin: 0 }}>
             <strong>Wait until the card stops showing Disconnecting</strong>, then revoke each one
-            and remove it with <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
+            and remove it with <InlineCode close=".">crewlet secrets unset &lt;name&gt;</InlineCode>
           </p>
         ) : (
           <p className="t-body secondary" style={{ margin: 0 }}>
             Revoke each one at the app, then remove it with{" "}
-            <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
+            <InlineCode close=".">crewlet secrets unset &lt;name&gt;</InlineCode>
           </p>
         )}
       </Modal>
@@ -303,7 +304,6 @@ export function DisconnectDialog({
       // sitting out a busy vendor for up to forty-five seconds. Dismissing
       // part-way is how a tool ends up half disconnected with nobody told.
       dismissable={!busy}
-      closeDisabledReason="Waiting for the engine to finish disconnecting."
       size="md"
       stackBody
       footer={
