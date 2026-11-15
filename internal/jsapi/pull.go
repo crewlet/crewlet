@@ -18,7 +18,8 @@ import (
 // A CONSUMER'S PULLS, ASKED BY HAND ON ONE INBOX THE READER HOLDS.
 //
 // A reader of a consumer it made for one read — internal/queue/jetstream's
-// copy reads and its dead-letter listings — asks the consumer's pulls itself
+// copy reads and its dead-letter listings, and internal/learning/memsync's
+// replays of a seat's tables — asks the consumer's pulls itself
 // (`CONSUMER.MSG.NEXT`), every one of them on ONE INBOX it holds until it is
 // done ([Pulls]), rather than through the client's fetch, which subscribes an
 // inbox for one pull and drops it when the CLIENT decides the pull is over: a
@@ -299,6 +300,29 @@ func (p *Pulls) Next(ctx context.Context) (Event, error) {
 	return p.read(msg)
 }
 
+// Ready is the next word already on the reader's inbox, as [Pulls.Next] reads
+// it, without waiting for one: false where the inbox holds none.
+//
+// FOR A READER WHOSE OWN REQUESTS HELD IT FROM ITS INBOX — a publish, a probe
+// of the consumer — and whose clock has run out meanwhile: what arrived while
+// it was not reading is heard before the reader calls the consumer silent.
+// [Pulls.Next] cannot answer that, since it fails at once on a context already
+// over, whatever the inbox holds (nats.go's nextMsgWithContext).
+func (p *Pulls) Ready() (Event, bool, error) {
+	// A TIMEOUT OF NONE: the client takes a message already queued on the
+	// subscription first, and otherwise answers its timeout at once
+	// (nats.go's Subscription.NextMsg).
+	msg, err := p.sub.NextMsg(0)
+	switch {
+	case errors.Is(err, nats.ErrTimeout):
+		return Event{}, false, nil
+	case err != nil:
+		return Event{}, false, err
+	}
+	ev, err := p.read(msg)
+	return ev, err == nil, err
+}
+
 // read is msg, the next word on the reader's inbox, as an [Event], counted
 // against the open pull.
 func (p *Pulls) read(msg *nats.Msg) (Event, error) {
@@ -441,8 +465,11 @@ func (p *Pulls) Owed(info *jetstream.ConsumerInfo) uint64 {
 // FirstPullRemakes is how many times a reader makes its consumer again after
 // one never got its first pull ([Unpulled]), before it waits for that
 // consumer's delivery like any other — this package's readers, on the same
-// inbox, and internal/objstore/natsobj's gets and walks alike, since the drop
-// is the cluster's whoever reads.
+// inbox (internal/queue/jetstream's copy reads, which ask their one pull once
+// more there, and internal/learning/memsync's replays, which ask nothing more
+// of it, since a replay keeps one pull out at a time), and
+// internal/objstore/natsobj's gets and walks alike, since the drop is the
+// cluster's whoever reads.
 //
 // THREE: a cluster dropped a first pull one read in twenty-five at the worst
 // measured, and a pull made again was dropped as often as a first one, so
