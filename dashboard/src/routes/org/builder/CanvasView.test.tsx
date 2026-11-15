@@ -227,6 +227,23 @@ describe("the tree", () => {
     ]);
   });
 
+  /*
+   * ONE COMPANY, ONE COUNT. A card counted only the seats placed directly in
+   * it, so a department whose seats sit in its teams read "Department · 0
+   * seats" on the chart and "department · 2 seats" on the Table. A card counts
+   * what the Table counts: the seats in it and in every unit under it, and the
+   * company every seat and unit it holds. Mutation: count a card's own seats.
+   */
+  test("a card counts the seats in it and every unit under it, as the Table does", () => {
+    mount();
+    const caption = (name: string) => item(name).textContent ?? "";
+    // VP Engineering, Dev, SRE (in Platform) and Designer (placed by reference).
+    expect(caption("Engineering")).toContain("Department · 4 seats");
+    expect(caption("Platform")).toContain("Team · 2 seats");
+    expect(caption("Sales")).toContain("· 1 seat");
+    expect(caption("Acme")).toContain("6 seats, 3 units");
+  });
+
   test("a treeitem holds nothing focusable, and the pointer's buttons are hidden beside it", () => {
     mount();
     for (const el of screen.getAllByRole("treeitem")) {

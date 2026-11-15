@@ -120,7 +120,7 @@ import {
 } from "../structureLive.tsx";
 import { addLabel } from "./AddNodeDialog.tsx";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
-import type { NodeView, SeatView } from "./chartModel.ts";
+import { seatsUnder, type NodeView, type SeatView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
 import {
   addSections,
@@ -233,19 +233,8 @@ export function TableView() {
   const index = useLiveValue((live) => live?.index ?? null);
   const kept = useLiveHandles((s) => show !== "all" && matches(s, show));
   const controllable = useLiveHandles((s) => s.controllable);
-  /** Every seat under a row, the row itself for a seat, by the tree the table draws. */
-  const seatsUnder = useMemo(() => {
-    const under = new Map<string, SeatView[]>();
-    const walk = (node: TreeInput): SeatView[] => {
-      const view = structure.nodes.get(node.id as NodeKey);
-      const own = view?.type === "seat" ? [view] : [];
-      const all = [...own, ...(node.children ?? []).flatMap(walk)];
-      under.set(node.id, all);
-      return all;
-    };
-    structure.tree.forEach(walk);
-    return under;
-  }, [structure]);
+  /** Every seat under a row, the row itself for a seat, as the chart counts them too. */
+  const seatsOf = seatsUnder(structure);
   // A CHIP PRUNES THE TREE to the seats it keeps, a team kept while it holds one.
   const rows = useMemo(() => {
     if (show === "all") return structure.tree;
@@ -274,7 +263,7 @@ export function TableView() {
     });
   /** What a row's box picks: a seat, or what the chip keeps of a team's, that the reader controls. */
   const pickableUnder = (id: string): string[] => {
-    const handles = (seatsUnder.get(id) ?? []).map(liveHandleOf).filter((h) => controllable.has(h));
+    const handles = (seatsOf.get(id) ?? []).map(liveHandleOf).filter((h) => controllable.has(h));
     const view = structure.nodes.get(id as NodeKey);
     return view?.type === "seat" || show === "all" ? handles : handles.filter((h) => kept.has(h));
   };
@@ -290,7 +279,7 @@ export function TableView() {
         return s ? stateRank(s) : null;
       }
       // A TEAM SORTS BY ITS AGENT THAT MOST NEEDS A PERSON.
-      const ranks = agentsIn(live, seatsUnder.get(id) ?? [], show).map(stateRank);
+      const ranks = agentsIn(live, seatsOf.get(id) ?? [], show).map(stateRank);
       return ranks.length > 0 ? Math.min(...ranks) : null;
     },
     lead: (id) => {
@@ -307,7 +296,7 @@ export function TableView() {
       const agents =
         view.type === "seat"
           ? 0
-          : agentsIn(live, seatsUnder.get(id) ?? [], show).filter((a) => a.problems.length).length;
+          : agentsIn(live, seatsOf.get(id) ?? [], show).filter((a) => a.problems.length).length;
       return own + agents + api.problemsFor(view.key).length;
     },
   };
@@ -322,7 +311,7 @@ export function TableView() {
   const cell = (id: string, column: number, context: TreeGridContext) => {
     const view = structure.nodes.get(id as NodeKey);
     if (!view) return null;
-    const seats = seatsUnder.get(id) ?? [];
+    const seats = seatsOf.get(id) ?? [];
     const problemsShown = context.shown("problems");
     switch (context.columnKey(column)) {
       case "name":
