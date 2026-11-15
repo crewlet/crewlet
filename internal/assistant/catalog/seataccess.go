@@ -422,6 +422,11 @@ func seatAccessRead() Tool {
 			fact("App holds", "app_holds", tText),
 			fact("Grant leaves unused", "unused", tText),
 			fact("Scope", "scope", tText),
+			fact("Grants beside its level", "grants", tText),
+			fact("Open requests", "requests", tText),
+			fact("Can be granted", "grantable", tText),
+			fact("In the catalogue", "permissions", tText),
+			fact("Catalogue read", "catalogue_read_at", tDatetime),
 			fact("Account", "account", tText),
 			fact("Tool", "tool", tLabel),
 			fact("Last check", "checked_at", tDatetime),
@@ -446,8 +451,17 @@ func seatAccessRead() Tool {
 			"that its grant leaves unused (never drift: every token is narrowed to the grant), " +
 			"its scope, its status, what the next sync will do, and two clocks: when a pass " +
 			"last checked the vendor (every pass, Check now included) and when a sync last " +
-			"applied the grant. Read this whenever an agent says it lacks access, or somebody " +
-			"asks whether an integration is set up right for an agent.",
+			"applied the grant. On an integration that grants single permissions beside a " +
+			"level, such as Cloudflare, also each such grant the agent holds (where, until " +
+			"when, for which of its requests), each request it has open for one with the two " +
+			"options of its question that grant it, how many more permissions the catalogue " +
+			"offers it, and for each permission its grants and requests name: whether its " +
+			"level holds it, whether it changes things, and whether the company's own " +
+			"connection can grant it, or what a person must add to that connection at the " +
+			"vendor first and where. Look any other permission up with " +
+			grantCatalogueTool + ". Read this whenever an agent says it lacks access, asks " +
+			"for a permission, or somebody asks whether an integration is set up right for " +
+			"an agent.",
 		schema: object([]string{"handle", "integration"}, map[string]*schema{
 			"handle": text("The agent's handle or name.", nameBytes),
 			"integration": oneOf("The integration. Jira and Confluence are read "+
@@ -478,6 +492,78 @@ func seatAccessRead() Tool {
 				return "Reading " + handle + "'s " + title + " access"
 			}
 			return "Reading an agent's access"
+		},
+	}
+}
+
+// grantCatalogueTool looks a permission up in a lane's catalogue for one agent.
+const grantCatalogueTool = "search_grant_catalogue"
+
+// grantCatalogueSearch is search_grant_catalogue: the seat read with a lookup, as
+// a table. Its own tool, since the drawer keeps one card per record and two
+// lookups on one agent would leave only the second.
+func grantCatalogueSearch() Tool {
+	lanes := make([]string, 0, len(seataccess.Lanes()))
+	for _, lane := range seataccess.Lanes() {
+		lanes = append(lanes, string(lane))
+	}
+	return Tool{
+		Name: grantCatalogueTool, Phrase: "look a permission up in an integration's catalogue",
+		Description: "Administrators: look a permission up by part of its name (Origin Rules) " +
+			"in an integration's live catalogue of single permissions an agent can be " +
+			"granted beside its level, such as Cloudflare's. Each match says which level " +
+			"already holds it, whether it changes things, and whether the company's own " +
+			"connection to the vendor can grant it now or what a person must add to that " +
+			"connection at the vendor first and where. Read this before saying whether an " +
+			"agent needs a higher level or a grant of one permission, or what to add at the " +
+			"vendor. The catalogue is at most a minute old. An agent's own grants and " +
+			"requests are on get_seat_access.",
+		schema: object([]string{"handle", "integration", "q"}, map[string]*schema{
+			"handle": text("The agent's handle or name, whose level the matches are judged "+
+				"against.", nameBytes),
+			"integration": oneOf("The integration.", lanes...),
+			"q": chars("Part of the permission's name, as the vendor shows it.",
+				seataccess.MaxLookupChars),
+		}),
+		Names:  map[string]Directory{"handle": DirSeat},
+		Routes: []string{accessSeatRoute}, Apps: adminOnly,
+		// The vendor's words (names, why the connection cannot grant) reach the model.
+		Fence: true, Trust: provenance.TrustExternal,
+		Build: func(a map[string]any) (exec.Request, error) {
+			args := Args(a)
+			lane := seataccess.Lane(args.String("integration"))
+			if !lane.Valid() {
+				return exec.Request{}, fmt.Errorf("%w: no integration %q", ErrInvalidArguments,
+					lane)
+			}
+			return get(accessSeatRoute, map[string]string{"kind": string(lane.Kind()),
+				"handle": args.String("handle"), "lane": string(lane)},
+				query(args).str("q", "permission").values())
+		},
+		Cards: one(cards.Spec{Note: "lookup_note", Table: &cards.Table{
+			Title: "Permissions in the catalogue", Rows: "lookup", More: "lookup_more",
+			Brief: []string{"name", "level", "grantable", "missing"},
+			Columns: []cards.Column{col("name", "Permission", "name", tText),
+				col("level", "Held by", "level", tText),
+				col("grantable", "Can be granted", "grantable", tText),
+				col("missing", "Add at the vendor", "missing", tText),
+				col("where", "Where", "action_url", tText),
+				col("group", "Group", "group", tText),
+				col("write", "Changes things", "write", tText),
+				col("id", "Vendor name", "id", tText)},
+			Open: &cards.Open{Screen: "integrations"}}}),
+		// One lookup for two agents, or at two integrations, is two reads.
+		Scope: func(a Args) string {
+			return scopeOf(quoted(a), labelled(a, "handle", "for"),
+				laneTitle(seataccess.Lane(a.String("integration"))))
+		},
+		Label: func(a map[string]any) string {
+			args := Args(a)
+			title := laneTitle(seataccess.Lane(args.String("integration")))
+			if q := args.String("q"); q != "" && len(q) <= nameBytes && title != "" {
+				return "Looking up " + q + " in " + title + "'s catalogue"
+			}
+			return "Looking a permission up"
 		},
 	}
 }

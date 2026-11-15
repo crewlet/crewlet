@@ -124,7 +124,27 @@ asks whether an integration is set up right for an agent, and proposes the
 change with `set_seat_access`. Crewlet narrows every agent's credential to its
 grant in Crewlet, so a permission the agent's GitHub App holds and its grant
 leaves out is changed in Crewlet, never at GitHub; "In sync" compares only the
-grant's own permissions, so such a gap is not drift. The integration's
+grant's own permissions, so such a gap is not drift.
+
+On an integration that grants single permissions beside a level (Cloudflare,
+AWS, Google Cloud, Scaleway), the same read also gives each such grant the
+agent holds (where it applies, until when, who granted it and for which of the
+agent's requests, and whether its credential holds it yet), each request the
+agent has open for one with the two options of its question that grant it, how
+many more permissions the catalogue offers the agent beside its level and how
+many of those the company's own connection lacks, and, for each permission its
+grants and requests name, whether the company's connection can grant it. Any
+other permission is looked up by part of its name with
+`search_grant_catalogue`, which answers which level already holds it, whether
+it changes things, and whether the connection can grant it. Crewlet grants
+only what the company's own connection to the vendor holds: where that
+connection lacks a permission (Cloudflare's provisioner token without
+Origin Rules: Edit, say), the read names what a person adds to it at the vendor
+and where, and Ask Crewlet says so. Adding it is a person's step at the vendor;
+the catalogue is read again within a minute, and the permission can then be
+granted to the agent in Crewlet.
+
+The integration's
 **Last check** (`list_integrations`, and the Integrations header) moves on
 every pass, Check now included, which reads the vendor and changes nothing; an
 agent's **last applied** moves only when a sync writes its grant, and its own
@@ -487,12 +507,16 @@ whether this model, given an instruction hidden in a task, declines it. The
 needs the engine checks and counts, an all-clear page that nothing needs, an instruction injected in a task, a
 record gone before the brief, an over-long first answer whose one rewrite is
 drawn, and an answer written exactly at its caps that is accepted first time.
-Three cases measure the access questions: an agent saying it lacks a GitHub
+Four cases measure the access questions: an agent saying it lacks a GitHub
 permission (`agent-lacks-a-github-permission`, which reads the agent's access
 and proposes the grant in Crewlet), whether an integration is set up right
-for one agent (`integration-set-up-for-an-agent`), and why an integration's
+for one agent (`integration-set-up-for-an-agent`), why an integration's
 last check and an agent's last applied differ (`two-access-clocks`, which
-proposes nothing). The flags and the suite format are in the
+proposes nothing), and whether an agent needs a higher Cloudflare level or a
+grant of one permission the company's own connection lacks
+(`a-permission-the-connection-lacks`, which reads the agent's grants and its
+open request, looks the permission up in the catalogue, and proposes nothing,
+since the first step is a person's at Cloudflare). The flags and the suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 

@@ -44,3 +44,34 @@ func TestTheSeatAccessCardReadsItsRoutesOwnAnswer(t *testing.T) {
 		t.Errorf("the seat access card held %d paths; the walk is not reading its spec", held)
 	}
 }
+
+// THE CATALOGUE LOOKUP'S TABLE READS ITS ROUTE'S OWN ANSWER. Mutation: read a
+// column from `available` and this names the path.
+func TestTheCatalogueLookupReadsItsRoutesOwnAnswer(t *testing.T) {
+	t.Parallel()
+	tool, ok := catalog.Lookup("search_grant_catalogue")
+	if !ok {
+		t.Fatal("the catalogue holds no search_grant_catalogue")
+	}
+	req, err := tool.Request(map[string]any{"handle": "sre", "integration": "cloudflare", "q": "origin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Query.Get("permission") != "origin" {
+		t.Fatalf("the lookup asks %s?%s, without the permission it looks up", req.Path, req.Query.Encode())
+	}
+	s := newCloudflareSurface(t)
+	res := s.do(t, req.Method, req.Path+"?"+req.Query.Encode(), "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("%s %s answered %d %s", req.Method, req.Path, res.Code, res.Body)
+	}
+	var answer any
+	if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	held, _ := assistanttest.HoldCard(t, "search_grant_catalogue", tool.Cards[""], answer,
+		assistanttest.ValueTypes{"row": reflect.TypeFor[seataccess.LookupEntry]()})
+	if held < 8 {
+		t.Errorf("the lookup's table held %d paths; the walk is not reading its spec", held)
+	}
+}
