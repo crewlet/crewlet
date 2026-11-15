@@ -97,7 +97,8 @@ import { mergeRuns } from "~/lib/runs.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { firstBlockText, plainText } from "~/lib/markdownText.ts";
 import { droppedWords } from "~/lib/dropped.ts";
-import { HELD_ARGUMENTS, SEALED_ARGUMENTS, SEALED_RESULT } from "~/lib/withheld.ts";
+import { argumentsInPlace, SEALED_RESULT } from "~/lib/withheld.ts";
+import type { ArgumentsUnknown } from "~/contract/calls.ts";
 import type {
   BridgeCall,
   EventRecord,
@@ -1364,6 +1365,16 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
   // compactly (`tools.RecordArgs`), so without it the whole call is one line
   // however many arguments it had.
   const args = useMemo(() => indentJSON(call.args ?? ""), [call.args]);
+  // WHAT IS SAID IN THEIR PLACE where the log holds no arguments of the call:
+  // sealed (a call held for a person's approval, and the one they approved),
+  // or not known (arguments the bridge could not parse, `args_unparsed`, which
+  // it answered unrun). Each is a call made WITH arguments, so "(none)", what
+  // a call made with none is drawn as, is a different call.
+  const said = argumentsInPlace({
+    held: call.held,
+    approved: call.approved,
+    argsUnknown: call.args_unparsed ? ("unread" satisfies ArgumentsUnknown) : undefined,
+  });
   // A BRIDGED TOOL'S ANSWER is a JSON document as often as the call was, and
   // what is not one comes back untouched.
   const output = useMemo(() => indentJSON(call.output ?? ""), [call.output]);
@@ -1403,7 +1414,7 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
           plain
           focusWhenScrollable
           label={`${call.name} arguments`}
-          code={args || (call.approved ? SEALED_ARGUMENTS : call.held ? HELD_ARGUMENTS : "(none)")}
+          code={said || args || "(none)"}
         />
       </div>
       <div className="col gap-1">

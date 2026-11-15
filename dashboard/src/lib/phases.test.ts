@@ -432,6 +432,32 @@ describe("the round ledger", () => {
     expect([plain?.held, plain?.approved]).toEqual([undefined, undefined]);
   });
 
+  test("a call whose arguments are not known is read with why, whatever the reason", () => {
+    // A call made with arguments in text that could not be read, and an
+    // executor's call still in flight as its round was read, carry `{}` as
+    // their arguments only because no record holds what they were made with,
+    // and say why (`arguments_unknown`). A reason a newer engine records is
+    // read as itself, still a call whose arguments are not known; a call made
+    // with none says nothing of the kind. Mutation: drop the mark, keep only
+    // the reasons this build knows, or read an empty one as a reason, and the
+    // card draws such a call as the tool called with none.
+    const [unread, unkept, newer, empty, plain] = toolCalls([
+      {
+        name: "slack_post",
+        arguments: "{}",
+        result: "x",
+        success: false,
+        arguments_unknown: "unread",
+      },
+      { name: "deploy", arguments: "{}", result: "x", success: false, arguments_unknown: "unkept" },
+      { name: "deploy", arguments: "{}", result: "x", success: false, arguments_unknown: "cut" },
+      { name: "deploy", arguments: "{}", result: "x", success: false, arguments_unknown: "" },
+      { name: "list_files", arguments: "{}", result: "", success: true },
+    ]);
+    expect([unread, unkept, newer].map((c) => c?.argsUnknown)).toEqual(["unread", "unkept", "cut"]);
+    expect([empty?.argsUnknown, plain?.argsUnknown]).toEqual([undefined, undefined]);
+  });
+
   test("a call the engine timed and attributed is read as it was written", () => {
     // The row the tool loop and the surface now write: when, how long, and
     // who answered.
