@@ -3184,7 +3184,7 @@ one the log no longer lists one by one, and a worker's under a delegation.
 Three mechanisms answer it, chosen by what the engine can know of the other
 call: listed again where it holds the call and the session may show it, a told
 line marked where the same message tells the other call, and a section that
-names the calls no list can name where it holds no line of them.
+names the calls no list holds one by one where it holds no line of them.
 
 **Listed again.** `runner.calledAfter` keeps the calls the session may show
 and lists again each one a told call could be taken for (`listedAgain`), in a
@@ -3290,40 +3290,41 @@ the round whose calls are told, and the lead's own held call is spared), and
 the engine could not rule out that one is taken for the other. A lead whose
 held call names no id still counts by its tool (`runner.leadsHeld`).
 
-**Calls no list can name** (`runner.otherCalls`, `prompts.AfterSave.Other`,
-`prompts.OtherCalls`). A section before every list, after the held
-submission, says the session may also show calls no list below names, a
-bullet per part, and that however alike one of them reads to a listed call it
-is a call of its own, never that one shown twice. Each part names, of the
-tools its calls were made to, the ones a told call names (the shown calls of
-the late list, and of the list after the point where it is told as calls the
-session may already show), each defused, and "tools the record does not name"
-where a count names no tool: never a count, which is no figure of what the
-session shows, and never a tool no told call names, which no told call could
-be taken for. The parts: the conversation's earlier turns
-(`Resume.Base` set: the turn continued the session its conversation's last
-turn left, of whose turns the engine keeps no call, their ends carrying
-outcomes); the turn's earlier rounds where the session may hold them only in
-a summary's words (`toldAs.summed`), the told tools of every closed round's
-calls but the ones listed again, the rounds a task told again renders above
-it included, and of every closed tally; the calls the log no longer lists one
-by one, of the round where some of them may be in the session
-(`runner.droppedMayShow`: never where the log this build numbered puts every
-dropped call past a point the session ends at, under words that say its calls
-are not in it) and of every closed tally where the closed rounds are not told
-as a summary's; and the workers' calls under a delegation, the round's and
-every closed round's (`roundCalls.absorbed`, `ledger.Iteration.Absorbed`),
-which reach the session only in a worker's report. Told only beside words that
-say a told call may be shown twice (the late section, listed or holding only a
-count of dropped late calls, and the calls after the point told as calls the
-session may already show), and never on a run of its own or its base form:
-their lists name no session above, and the base form's session holds only
-earlier turns, every one of them above the boundary its own lead draws at the
-top of the same message. A schedule's conversation says it of its fires. True
-of every part: the record lists a call or counts it, never both; an earlier
-turn's call is never this turn's; a worker's call is never one of the run's
-own; and an earlier round's call alike a told one is listed again, so the part
-names only the rest.
+**Calls no list holds one by one** (`runner.otherCalls`,
+`prompts.AfterSave.Other`, `prompts.OtherCalls`). A section before every list,
+after the held submission, says the session may also show calls no list below
+holds one by one (never "names": the tally of the calls the record no longer
+lists prints below and names them by tool), a bullet per part, and that
+however alike one of them reads to a listed call it is a call of its own,
+never that one shown twice. Each part names, of the tools its calls were made
+to, the ones a told call names (the shown calls of the late list, and of the
+list after the point where it is told as calls the session may already show),
+each defused, and "tools the record does not name" where a count names no
+tool: never a count, which is no figure of what the session shows, and never a
+tool no told call names, which no told call could be taken for. The parts: the
+conversation's earlier turns (`Resume.Base` set: the turn continued the
+session its conversation's last turn left, of whose turns the engine keeps no
+call, their ends carrying outcomes); the turn's earlier rounds where the
+session may hold them only in a summary's words (`toldAs.summed`), the told
+tools of every closed round's calls but the ones listed again, the rounds a
+task told again renders above it included, and of every closed tally; the
+calls the log no longer lists one by one, of the round where some of them may
+be in the session (`runner.droppedMayShow`: never where the log this build
+numbered puts every dropped call past a point the session ends at, under words
+that say its calls are not in it) and of every closed tally where the closed
+rounds are not told as a summary's; and the workers' calls under a delegation,
+the round's and every closed round's (`roundCalls.absorbed`,
+`ledger.Iteration.Absorbed`), which reach the session only in a worker's
+report. Told only beside words that say a told call may be shown twice (the
+late section, listed or holding only a count of dropped late calls, and the
+calls after the point told as calls the session may already show), and never
+on a run of its own or its base form: their lists name no session above, and
+the base form's session holds only earlier turns, every one of them above the
+boundary its own lead draws at the top of the same message. A schedule's
+conversation says it of its fires. True of every part: the record lists a call
+or counts it, never both; an earlier turn's call is never this turn's; a
+worker's call is never one of the run's own; and an earlier round's call alike
+a told one is listed again, so the part names only the rest.
 
 **A summary's words, read from the session's restarts**
 (`runner.sessionHolds.restarted`, `closedSummarized`, `restartedAnywhere`). A
@@ -3355,13 +3356,13 @@ brief carries an empty one.
 
 **What it costs.** A line per held or closed call that a told call reads alike,
 a closed one 40 bytes more for its note, 75 bytes for each told call
-another call of the brief could be taken for, and for the calls no list can
-name 209 bytes and 69 to 110 for each part with the tools' names, in the brief
-and so in its launch's floor and any rewrite of a long value. A brief is byte
-for byte what it was only where its held, closed and told calls, the leads'
-held calls and the work already done it renders read apart, and no part of
-the calls no list can name is told: no earlier turn's session under it, no
-dropped, tallied or delegated call of a told tool the session may show, and no
+another call of the brief could be taken for, and for the calls no list holds
+one by one 220 bytes and 69 to 110 for each part with the tools' names, in the
+brief and so in its launch's floor and any rewrite of a long value. A brief is
+byte for byte what it was only where its held, closed and told calls, the
+leads' held calls and the work already done it renders read apart, and no
+part of the calls no list holds one by one is told: no earlier turn's session
+under it, no dropped, tallied or delegated call of a told tool the session may show, and no
 closed round under a summary's words, OpenCode's among them. The earlier-turns
 part alone prints on every continuation of a turn that continued its
 conversation's session, with a late call or a list of calls the session may

@@ -22,13 +22,14 @@ import (
 // before the lists names them by the tools the told calls name, and says none
 // of them is a listed call (runner's otherCalls, prompts.AfterSave.Other).
 
-// otherCallsHeading heads the calls the session may show that no list names.
+// otherCallsHeading heads the calls the session may show that no list holds one
+// by one.
 const otherCallsHeading = "## Other calls the session above may show"
 
 // otherCallsOpening is the line under otherCallsHeading, and otherCallsClosing
 // the line after the parts.
 const (
-	otherCallsOpening = "\nThe session above may also show calls no list below names:\n"
+	otherCallsOpening = "\nThe session above may also show calls no list below holds one by one:\n"
 	otherCallsClosing = "\nHowever alike one of them reads to a call listed below, it is a call of its own, never" +
 		" that one shown twice."
 )
@@ -206,6 +207,36 @@ func TestCallsTheRecordNoLongerListsAreNamedByTheToolsTold(t *testing.T) {
 	}
 	if strings.Contains(brief, otherCallsHeading) {
 		t.Errorf("calls dropped past the point a session ends at are named as ones it may show:\n%s", brief)
+	}
+}
+
+// A PART BESIDE THE TALLY OF ITS CALLS IS NEVER SAID TO BE NAMED BY NO LIST. A
+// cut-off capture may show the calls the round's log dropped from its middle,
+// so the section names their told tool; and the late section below prints the
+// record's tally of those same calls, by tool. Words saying no list below
+// NAMES them would be false two lines on, and a model trusting them would read
+// the named calls as others than the tallied ones and count the posts twice.
+// So the section says no list below holds them one by one, which a tally,
+// counting them, leaves true.
+//
+// Mutation: open the section with "no list below names" again, and the case
+// goes red.
+func TestAPartBesideTheTallyOfItsCallsIsNeverSaidToBeNamedByNoList(t *testing.T) {
+	t.Parallel()
+	brief := lostRelaunch(t, cutOffKept(1), runner.Resume{
+		Bridged: []runner.BridgedCall{heldIssue, latePost("bye", 6)},
+		Elided:  []ledger.Elided{{Name: "slack_post", Calls: 3}, {Name: "jira_get", Calls: 1}}}).Session.Brief
+	other := otherCallsIn(brief)
+	if got, want := other, otherCallsOf(unlistedPart); got != want {
+		t.Errorf("the brief tells:\n%s\nwant:\n%s\nin:\n%s", got, want, brief)
+	}
+	below := brief[strings.Index(brief, otherCallsHeading)+len(other):]
+	const tally = "(+4 further call(s) the run made, which its record did not keep: jira_get ×1, slack_post ×3)"
+	if !strings.Contains(below, tally) {
+		t.Fatalf("no tally below names the dropped posts, so the case tests nothing:\n%s", brief)
+	}
+	if strings.Contains(other, "names:") {
+		t.Errorf("the section says no list below names the calls its tally names:\n%s", brief)
 	}
 }
 

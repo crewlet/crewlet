@@ -316,14 +316,19 @@ const ToldApartNote = "(a call of its own: another call this message tells could
 //
 // TRUE OF EVERY PART IT PRINTS: "may" of each (internal/agent/runner's
 // otherCalls decides each part only where its calls may be in the session),
-// and "no list below names" and the closing of all: the record lists a call or
-// counts it, never both; an earlier turn's call is never this turn's; a
-// worker's call is never one of the run's own, which are the only calls a list
-// below holds; and an earlier round's call alike a told one is listed again,
-// so the part names only the tools of the ones that are not.
+// and "no list below holds one by one" and the closing of all: the record
+// lists a call or counts it, never both; an earlier turn's call is never this
+// turn's; a worker's call is never one of the run's own, which are the only
+// calls a list below holds; and an earlier round's call alike a told one is
+// listed again, so the part names only the tools of the ones that are not.
+// NEVER "NO LIST BELOW NAMES": the record's tally of the calls it no longer
+// lists prints below (AfterSave.Tally), and it names the same calls by tool
+// that a part names, so a model trusting such words would read the part's
+// calls as others than the tallied ones and count them twice. A tally counts
+// calls and holds none of them one by one, so the words stay true beside it.
 const (
 	otherCallsHeader  = "## Other calls the session above may show"
-	otherCallsOpening = "The session above may also show calls no list below names:"
+	otherCallsOpening = "The session above may also show calls no list below holds one by one:"
 	otherCallsClosing = "However alike one of them reads to a call listed below, it is a call of its own, never that" +
 		" one shown twice."
 )

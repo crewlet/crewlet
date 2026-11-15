@@ -1321,7 +1321,8 @@ type toldAs struct {
 	// summed says the session may hold the closed rounds only in a summary's
 	// words ([sessionHolds.closedSummarized]): their calls are still listed
 	// again where a told call could be taken for one, and the rest are named
-	// by tool as calls it may show that no list names ([Runner.otherCalls]).
+	// by tool as calls it may show that no list holds one by one
+	// ([Runner.otherCalls]).
 	summed bool
 }
 

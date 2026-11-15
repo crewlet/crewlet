@@ -666,7 +666,7 @@ func TestAnEarlierRoundsCallIsSaidToBeOfAnEarlierRoundOfTheTurnOrFire(t *testing
 func TestOtherCallsAreSaidToBeNoneOfTheListedOnes(t *testing.T) {
 	t.Parallel()
 	const (
-		head    = "## Other calls the session above may show\nThe session above may also show calls no list below names:\n"
+		head    = "## Other calls the session above may show\nThe session above may also show calls no list below holds one by one:\n"
 		closing = "\nHowever alike one of them reads to a call listed below, it is a call of its own, never that one" +
 			" shown twice."
 		turns   = "- calls of this conversation's earlier turns, made before this turn began"
