@@ -126,7 +126,7 @@ const NO_REVISION = {
   // prose here would read as words rather than as something to type.
   hint: (
     <>
-      Import one with <InlineCode>crewlet config import</InlineCode>.
+      Import one with <InlineCode close=".">crewlet config import</InlineCode>
     </>
   ),
 };

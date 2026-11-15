@@ -254,8 +254,8 @@ export function Diary({ handle }: { handle: string }) {
       )}
       {!seat && org && (
         <Callout variant="info" icon={<CircleAlertGlyph size="md" />}>
-          No agent is called <InlineCode>{handleLabel(handle)}</InlineCode>. Showing memory left
-          under that handle.
+          No agent is called <InlineCode close=".">{handleLabel(handle)}</InlineCode> Showing memory
+          left under that handle.
         </Callout>
       )}
       {/* A DIARY IN FLIGHT IS A SKELETON, drawn beside `QueryState`, which

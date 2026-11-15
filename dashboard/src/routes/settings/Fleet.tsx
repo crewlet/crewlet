@@ -469,7 +469,7 @@ function FleetScreen() {
                   .map((n) => (
                     <Callout key={n.id} variant="danger" role="alert">
                       <span>
-                        <InlineCode>{n.id}</InlineCode>: {n.config_error}
+                        <InlineCode close=":">{n.id}</InlineCode> {n.config_error}
                       </span>
                     </Callout>
                   ))}
@@ -773,7 +773,7 @@ export function NodeScreen({ id }: { id: string }) {
                   </div>
                   {node.owner && (
                     <p className="t-caption">
-                      Fencing token <InlineCode>{node.owner}</InlineCode>.
+                      Fencing token <InlineCode close=".">{node.owner}</InlineCode>
                       {node.protocol != null && ` Seat protocol v${node.protocol}.`}
                     </p>
                   )}

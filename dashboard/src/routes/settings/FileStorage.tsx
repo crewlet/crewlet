@@ -379,7 +379,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
               <span>
                 Unfinished uploads couldn’t be cleared: {reported.collect.sweep_error}. On S3, grant{" "}
                 <InlineCode>s3:ListBucketMultipartUploads</InlineCode> and{" "}
-                <InlineCode>s3:AbortMultipartUpload</InlineCode>.
+                <InlineCode close=".">s3:AbortMultipartUpload</InlineCode>
               </span>
             </Callout>
           </Card.Body>

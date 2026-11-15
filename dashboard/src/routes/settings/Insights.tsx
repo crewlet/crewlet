@@ -263,7 +263,8 @@ function Consent({
           <div className="col gap-2">
             <Text as="p">
               Every record is a fixed form with no free text, sent to{" "}
-              <InlineCode>{answer.relay}</InlineCode>, and only from a public release or image.
+              <InlineCode close=",">{answer.relay}</InlineCode> and only from a public release or
+              image.
             </Text>
             <Text as="h3" variant="label">
               A record holds

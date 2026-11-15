@@ -371,8 +371,8 @@ export function GateDialog({
           <p className="t-body secondary" style={{ margin: 0 }}>
             {evict ? (
               <>
-                The trim stops waiting for <InlineCode>{node}</InlineCode>, so records it never
-                applied may be deleted. Evict a node once it has stopped: the engine refuses a
+                The trim stops waiting for <InlineCode close=",">{node}</InlineCode> so records it
+                never applied may be deleted. Evict a node once it has stopped: the engine refuses a
                 running one unless you force it.
               </>
             ) : (

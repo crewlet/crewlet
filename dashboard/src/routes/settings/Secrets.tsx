@@ -579,7 +579,7 @@ export function Secrets({ name }: { name?: string }) {
               hint: (
                 <>
                   Store one with Store a secret, or from the command line with{" "}
-                  <InlineCode>crewlet secrets set</InlineCode>.
+                  <InlineCode close=".">crewlet secrets set</InlineCode>
                 </>
               ),
             }}

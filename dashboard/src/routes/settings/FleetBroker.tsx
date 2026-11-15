@@ -295,7 +295,7 @@ export function BrokerMembership({
                 <span className="row wrap gap-2 baseline">
                   <span>
                     <strong>{FINDING_TITLE[f.kind] ?? f.kind}</strong>{" "}
-                    <InlineCode>{voterLabel(f.node, f.peer)}</InlineCode>: {f.detail}.
+                    <InlineCode close=":">{voterLabel(f.node, f.peer)}</InlineCode> {f.detail}.
                   </span>
                   {f.kind === "dead_member" && (
                     <Button

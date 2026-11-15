@@ -282,12 +282,12 @@ export function DisconnectDialog({
         {owed ? (
           <p className="t-body secondary" style={{ margin: 0 }}>
             <strong>Wait until the card stops showing Disconnecting</strong>, then revoke each one
-            and remove it with <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
+            and remove it with <InlineCode close=".">crewlet secrets unset &lt;name&gt;</InlineCode>
           </p>
         ) : (
           <p className="t-body secondary" style={{ margin: 0 }}>
             Revoke each one at the app, then remove it with{" "}
-            <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
+            <InlineCode close=".">crewlet secrets unset &lt;name&gt;</InlineCode>
           </p>
         )}
       </Modal>

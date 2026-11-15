@@ -996,13 +996,13 @@ export function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
             <>
               {" "}
               Set <InlineCode>knowledge.backend</InlineCode> to <InlineCode>doclet</InlineCode> or{" "}
-              <InlineCode>confluence</InlineCode>.
+              <InlineCode close=".">confluence</InlineCode>
             </>
           )}
           {answer.reason === "no_scope" && (
             <>
               {" "}
-              Add spaces to <InlineCode>knowledge.scope</InlineCode>.
+              Add spaces to <InlineCode close=".">knowledge.scope</InlineCode>
             </>
           )}
         </span>

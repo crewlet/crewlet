@@ -186,8 +186,8 @@ function ChatAs({ id, view, seat }: ChatAddress & { seat: RefObject<string> }) {
         title="Chatlet is read as the seat you hold"
         description={
           <>
-            You&rsquo;re signed in as <InlineCode>{viewer.login}</InlineCode>, which holds no seat.
-            Chatlet needs a seat, so no room is open to you.{" "}
+            You&rsquo;re signed in as <InlineCode close=",">{viewer.login}</InlineCode> which holds
+            no seat. Chatlet needs a seat, so no room is open to you.{" "}
             <UnboundRemedy to="read and write here" />
           </>
         }

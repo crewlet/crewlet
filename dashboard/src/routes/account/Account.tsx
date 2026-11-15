@@ -194,11 +194,12 @@ function NotAPerson({ session }: { session: SessionAnswer }) {
         <Text as="p" variant="body">
           {token ? (
             <>
-              You’re signed in with the API token <InlineCode>{token}</InlineCode>.
+              You’re signed in with the API token <InlineCode close=".">{token}</InlineCode>
             </>
           ) : (
             <>
-              You’re signed in as <InlineCode>{session.login}</InlineCode>, which isn’t a person.
+              You’re signed in as <InlineCode close=",">{session.login}</InlineCode> which isn’t a
+              person.
             </>
           )}
         </Text>
