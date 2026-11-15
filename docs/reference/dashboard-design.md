@@ -2008,6 +2008,18 @@ styles `.crewlet-select__menu`, `.crewlet-listbox__option` or
 keeps that true: a rule on a package class has to earn an `ALLOWED` entry with
 a reason, so the next one cannot arrive quietly or outlive its cause.
 
+A screen's own class on the panel is no way round it either. An integration's
+Agents tab widened its level picker's list with `menuClassName` and a
+`min-width`, one class against the package's `.crewlet-select__menu`, and the
+built page links the app's sheet, the package's rules among it, after a
+screen's (`vite.config.ts`, `appSheetsToBodyEnd`), so the screen's rule lost
+and every level picker opened at its cell's 120px, each level's sentence a
+word or two to a line. The width a list is read at is the package's to set:
+`@crewlethq/ui` sets a list whose options carry a description at a reading
+width (a floor of 22rem and a measure of 28rem, never wider than the window)
+and never over the field it was opened from, so the Agents tab and Settings ›
+Models › By job keep no width rule of their own.
+
 ### An object's own facts
 
 `PropertiesRail` is the rail beside an object — its state, its people, its
