@@ -899,6 +899,20 @@ func (p Profile) AuthMeaning(said string) AuthMeaning {
 	return AuthRefused
 }
 
+// Binary is the executable a profile names for its harness: a name resolved on
+// PATH, or a path.
+//
+// A TYPE OF ITS OWN, rather than a string, so that a harness started anywhere
+// in the module can be found by what it runs. The value keeps this type
+// through every field and variable that carries it to a process (the
+// invocation an engine-host call is run from, a serve lifecycle's server, a
+// sign-in), and a conversion to string is written only where the process is
+// built, a path is looked up or the name is printed. A gate that follows the
+// type therefore sees each place a harness is started, whatever the place's
+// own names say. The YAML, the schema and an operator's override are
+// unchanged: it is a string on the wire.
+type Binary string
+
 // Profile is everything the engine needs to drive one harness.
 //
 // It is DATA, not code, and every field is replaceable from YAML
@@ -908,7 +922,7 @@ func (p Profile) AuthMeaning(said string) AuthMeaning {
 // switch statement makes it the latter.
 type Profile struct {
 	// Binary is the executable, resolved on PATH unless it is a path.
-	Binary string `yaml:"binary,omitempty"`
+	Binary Binary `yaml:"binary,omitempty"`
 
 	// WrittenFor is the harness version this profile was written against,
 	// printed by `crewlet llm doctor` beside the version actually
@@ -1985,7 +1999,7 @@ func (p *Profile) problems() []string {
 		bad = append(bad, fmt.Sprintf(format, args...))
 	}
 
-	if strings.TrimSpace(p.Binary) == "" {
+	if strings.TrimSpace(string(p.Binary)) == "" {
 		add("binary is empty — set overrides.binary")
 	}
 	if len(p.CompleteArgs) == 0 && p.EffectivePromptMode() == PromptStdin {

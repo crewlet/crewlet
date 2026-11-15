@@ -59,7 +59,7 @@ const maxOutput = 32 << 20
 // required: [run] refuses a nil one, because os/exec reads a nil Cmd.Env as
 // "inherit the engine's".
 type invocation struct {
-	binary  string
+	binary  harnessprofile.Binary
 	args    []string
 	stdin   string
 	dir     string
@@ -294,7 +294,7 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	callCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	cmd := exec.CommandContext(callCtx, in.binary, in.args...) //nolint:gosec // binary and args come from a validated profile
+	cmd := exec.CommandContext(callCtx, string(in.binary), in.args...) //nolint:gosec // binary and args come from a validated profile
 	cmd.Dir = in.dir
 	cmd.Env = in.env
 	if in.stdin != "" {

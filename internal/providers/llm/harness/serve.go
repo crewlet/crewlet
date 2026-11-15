@@ -95,7 +95,7 @@ func (b *lockedBuffer) String() string {
 // env — never nil, as [run] refuses a nil one — its stdin closed. An error
 // means it did not start at all.
 func startServer(
-	binary string, args []string, dir string, env []string, grace time.Duration,
+	binary harnessprofile.Binary, args []string, dir string, env []string, grace time.Duration,
 	want []harnessprofile.ReadyValue, failOn []string,
 ) (*harnessServer, error) {
 	if env == nil {
@@ -111,7 +111,7 @@ func startServer(
 	// by [harnessServer.stop] — its whole group signalled, a grace, then killed —
 	// which the run's end calls. A context's cancel would kill the leader
 	// alone, leaving what it started (the relay among it) running.
-	cmd := exec.Command(binary, args...) //nolint:gosec,noctx // a validated profile's binary and args; ended by stop
+	cmd := exec.Command(string(binary), args...) //nolint:gosec,noctx // a validated profile's binary and args; ended by stop
 	cmd.Dir, cmd.Env = dir, env
 	cmd.Stdout = &lineTee{sink: io.Discard, on: s.line, limit: maxOutput, every: true}
 	cmd.Stderr = &s.stderr

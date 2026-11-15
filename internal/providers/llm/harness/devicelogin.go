@@ -241,14 +241,14 @@ func (d *deviceReading) said() string {
 func (p *Provider) runDeviceLogin(
 	ctx context.Context, home string, env []string, rx devicePatterns, timing deviceTiming, out func(DeviceCode),
 ) error {
-	command := p.profile.Binary + " " + strings.Join(p.profile.DeviceLoginArgs, " ")
+	command := string(p.profile.Binary) + " " + strings.Join(p.profile.DeviceLoginArgs, " ")
 	r, w, err := os.Pipe()
 	if err != nil {
 		return fmt.Errorf("harness: starting %s: %w", command, err)
 	}
 	runCtx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	cmd := exec.CommandContext(runCtx, p.profile.Binary, p.profile.DeviceLoginArgs...) //nolint:gosec // args come from a validated profile
+	cmd := exec.CommandContext(runCtx, string(p.profile.Binary), p.profile.DeviceLoginArgs...) //nolint:gosec // args come from a validated profile
 	cmd.Dir = home
 	cmd.Env = env
 	// ONE PIPE FOR BOTH STREAMS, the same file for each, so the harness's

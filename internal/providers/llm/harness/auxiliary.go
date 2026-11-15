@@ -62,7 +62,7 @@ const auxiliaryTimeout = 30 * time.Second
 func (p *Provider) runAuxiliary(
 	ctx context.Context, args []string, dir string, env []string, stdin string,
 ) (string, error) {
-	command := p.profile.Binary + " " + strings.Join(args, " ")
+	command := string(p.profile.Binary) + " " + strings.Join(args, " ")
 	res, err := run(ctx, invocation{
 		binary:  p.profile.Binary,
 		args:    args,

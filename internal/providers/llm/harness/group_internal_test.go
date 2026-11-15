@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // A harness's group is signalled after its leader was reaped in three places
@@ -120,7 +121,7 @@ func TestAServerWhoseGroupCannotBeReadIsStillStopped(t *testing.T) {
 	for k, v := range fakeChildEnv(map[string]string{"FAKE_STUBBORN": "1", "FAKE_PIDFILE": pidFile}) {
 		env = append(env, k+"="+v)
 	}
-	srv, err := startServer(os.Args[0], []string{"-test.run=TestFakeHarness"}, t.TempDir(), env,
+	srv, err := startServer(harnessprofile.Binary(os.Args[0]), []string{"-test.run=TestFakeHarness"}, t.TempDir(), env,
 		witnessGrace, nil, nil)
 	if err != nil {
 		t.Fatalf("startServer: %v", err)

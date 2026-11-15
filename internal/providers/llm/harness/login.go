@@ -1313,7 +1313,7 @@ func (p *Provider) runInCredentialHome(
 	in io.Reader, out, errOut io.Writer, extra ...map[string]string,
 ) (bool, error) {
 	return p.inCredentialHome(ctx, mode, errOut, func(ctx context.Context, home string, env []string) error {
-		cmd := exec.CommandContext(ctx, p.profile.Binary, args...) //nolint:gosec // args come from a validated profile
+		cmd := exec.CommandContext(ctx, string(p.profile.Binary), args...) //nolint:gosec // args come from a validated profile
 		cmd.Dir = home
 		cmd.Env = env
 		cmd.Stdin = in

@@ -1032,7 +1032,7 @@ func TestAnInvocationWithNoGraceIsRefused(t *testing.T) {
 		env = append(env, k+"="+v)
 	}
 	res, err := run(t.Context(), invocation{
-		binary: os.Args[0], args: []string{"-test.run=TestFakeHarness"},
+		binary: harnessprofile.Binary(os.Args[0]), args: []string{"-test.run=TestFakeHarness"},
 		env: env, timeout: 20 * time.Second,
 	})
 	if err == nil {

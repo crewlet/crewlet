@@ -443,7 +443,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 // the entry's login and write what the harness refreshed back over it.
 func (p *Provider) unisolated(err error) Diagnosis {
 	d := Diagnosis{Provider: p.key, Harness: p.harness, Model: p.model,
-		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor}
+		Binary: string(p.profile.Binary), WrittenFor: p.profile.WrittenFor}
 	c := checks{}
 	c.set(CheckSignIn, "not tested")
 	c.fail(CheckSignIn, llm.KindFatal.String(), fmt.Sprintf("the candidate credentials for %q "+
@@ -529,7 +529,7 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 	smoke := opts.Smoke
 	d := Diagnosis{
 		Provider: p.key, Harness: p.harness, Model: p.model,
-		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor,
+		Binary: string(p.profile.Binary), WrittenFor: p.profile.WrittenFor,
 		StateDir: p.ws.StateDir(),
 	}
 	c := checks{}
@@ -540,7 +540,7 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 		}
 	}
 
-	path, err := exec.LookPath(p.profile.Binary)
+	path, err := exec.LookPath(string(p.profile.Binary))
 	switch {
 	case err != nil:
 		c.set(CheckBinary, "not on PATH")
