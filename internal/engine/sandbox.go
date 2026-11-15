@@ -4429,8 +4429,9 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	e.stopSeatServers(ctx, handle)
 	// The seat's parks die with it too: a budget park's alarm and a
 	// provider park's probe would only fire into a seat a peer now serves.
-	// The detach that released the inbox dropped their holds, all but the
-	// hold of a park a turn took after it, which goes here with its park
+	// The detach that released the inbox dropped their holds and ended the
+	// attachment each was taken for, so a park a turn asks for after it is
+	// refused and records nothing, and this drops only the records
 	// ([seatParks.forget]).
 	e.forgetBudgetPark(seat.ID)
 	e.forgetProviderPark(ctx, seat.ID)
