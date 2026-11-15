@@ -31,6 +31,7 @@
  */
 
 import type { ConfigProblem, ConfigWarning, Derived } from "~/protocol/index.ts";
+import { warningWords } from "~/protocol/configAnswer.ts";
 import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./keys.ts";
 import {
   COMPANY_FIELDS,
@@ -49,6 +50,12 @@ export interface PlacedProblem {
   readonly severity: "problem" | "warning";
   /** The engine's kind: a problem kind, or a warning kind. */
   readonly kind: string;
+  /**
+   * What the builder says about it: a warning's words for the person who owns
+   * the company where the engine wrote them (`person`, see [warningWords]),
+   * and the engine's own sentence otherwise. The operator's sentence stays on
+   * `source.message`.
+   */
   readonly message: string;
   /** The node it is about; `null` at document level. */
   readonly node: NodeKey | null;
@@ -106,7 +113,7 @@ export function placeProblems(sent: IndexedDocument, findings: Findings): Proble
     const placed: PlacedProblem = {
       severity,
       kind: source.kind,
-      message: source.message,
+      message: severity === "warning" ? warningWords(source as ConfigWarning) : source.message,
       node,
       field,
       link: linkFor(segments, node, field),

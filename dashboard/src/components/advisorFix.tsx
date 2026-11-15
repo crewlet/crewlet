@@ -12,7 +12,7 @@ import { DiffView } from "~/components/DiffView.tsx";
 import { refusalWords } from "~/lib/ceilings.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { introducedWarnings } from "~/protocol/configAnswer.ts";
+import { introducedWarnings, warningWords } from "~/protocol/configAnswer.ts";
 import { dryRunEntity, getEntity, putEntity } from "~/protocol/configWrite.ts";
 import type { AdvisorFinding, AdvisorOption } from "~/protocol/advisor.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
@@ -151,7 +151,7 @@ export function FixDialog({
               <Callout variant="warning" title="The engine would also say">
                 {check.introduced.map((w) => (
                   <Text as="p" key={`${w.path}\u0000${w.message}`}>
-                    {w.message}
+                    {warningWords(w)}
                   </Text>
                 ))}
               </Callout>

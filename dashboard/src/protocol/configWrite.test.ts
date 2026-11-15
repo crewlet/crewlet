@@ -11,6 +11,7 @@ import {
   introducedWarnings,
   isUnsealedRefusal,
   unsettledSentence,
+  warningWords,
 } from "./configAnswer.ts";
 import {
   configTransport,
@@ -225,6 +226,24 @@ describe("the warnings a change introduces", () => {
     const idle = w("roles[0].token_budget.day", "idle");
     expect(introducedWarnings([old], [old, idle])).toEqual([idle]);
     expect(introducedWarnings([old], [old])).toEqual([]);
+  });
+
+  /*
+   * A WARNING IS READ IN ITS OWNER'S WORDS where the engine wrote them, on
+   * every screen that draws one: the operator's sentence named
+   * `providers.llm.default` and a Tier A keyring to somebody who never sees
+   * the document. A warning the engine wrote no such words for keeps its own.
+   * Mutation: read `message` alone, and the first expectation goes red.
+   */
+  test("are read in the words the engine wrote for a person, and in its own where it wrote none", () => {
+    const advisory = {
+      ...w("providers.sandbox.default_run_in", "a `direct` box runs as the engine's own user"),
+      person: "Agents run their work directly on the engine's own server.",
+    };
+    expect(warningWords(advisory)).toBe(
+      "Agents run their work directly on the engine's own server.",
+    );
+    expect(warningWords(w("roles[3].manages[0]", "ceo manages ghost"))).toBe("ceo manages ghost");
   });
 });
 

@@ -1683,6 +1683,15 @@ export interface ConfigWarning {
   /** What an advisory is about, for the setup advisor; absent on most warnings. */
   class?: string;
   /**
+   * The warning in the words of the person who owns the company, beside
+   * `message`, which is the operator's: what it risks and what to do, naming
+   * no document key. Every classed advisory carries it and no other warning
+   * does; it is the same for every warning of one class about another seat
+   * (`seat` names which), so a screen says it once. Read through
+   * `warningWords`.
+   */
+  person?: string;
+  /**
    * On a dry run's answer only: whether THIS write brings the warning, rather
    * than the active revision already carrying it (`configapi.checkedWarning`).
    * A write's own answer and every other reader leave it out.

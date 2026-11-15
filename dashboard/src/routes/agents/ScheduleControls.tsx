@@ -59,6 +59,7 @@ import {
 } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { getEntity } from "~/protocol/configWrite.ts";
+import { warningWords } from "~/protocol/configAnswer.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import {
@@ -363,7 +364,7 @@ function WriteOutcome({ write }: { write: ScheduleWrite }) {
           </Button>
         }
       >
-        {state.warnings.map((w) => w.message).join(" ")}
+        {state.warnings.map(warningWords).join(" ")}
       </Callout>
     );
   }
@@ -808,7 +809,7 @@ function DialogOutcome({ write }: { write: ScheduleWrite }): ReactNode {
   if (state.kind === "warned") {
     return (
       <Callout variant="warning" title="The engine would also say">
-        {state.warnings.map((w) => w.message).join(" ")}
+        {state.warnings.map(warningWords).join(" ")}
       </Callout>
     );
   }

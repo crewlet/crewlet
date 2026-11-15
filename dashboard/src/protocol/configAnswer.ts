@@ -538,3 +538,18 @@ export function introducedWarnings(
   const had = new Set(before.map((w) => `${w.path}\u0000${w.message}`));
   return after.filter((w) => !had.has(`${w.path}\u0000${w.message}`));
 }
+
+/**
+ * A warning as the person who owns the company reads it: the engine's words
+ * for them where it wrote some (`person`, which every advisory the setup
+ * advisor acts on carries), and its own sentence where it did not.
+ *
+ * ONE READING FOR EVERY SCREEN THAT DRAWS A WARNING. `message` is the
+ * operator's, the sentence `crewlet validate` prints, naming the document key
+ * to change (`providers.llm.default`, `llm_auxiliary`); drawn on a screen it
+ * put config paths in front of somebody who never sees the document. The
+ * engine writes both, so a screen never words a warning by itself (ADR-0060).
+ */
+export function warningWords(w: Pick<ConfigWarning, "message" | "person">): string {
+  return w.person || w.message;
+}
