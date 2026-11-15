@@ -32,6 +32,22 @@ import (
 // setting an operator already reaches for when a host is slow.
 const auxiliaryTimeout = 30 * time.Second
 
+// auxiliary is one auxiliary command: its arguments, where it runs and with
+// what, and where its output files are made.
+type auxiliary struct {
+	args []string
+	dir  string
+	// outDir is where its output files are made: the call's directory for
+	// the usage report and the serve poll, the workspace's captures
+	// directory for a command no call owns.
+	outDir string
+	env    []string
+	stdin  string
+	// credential is a command handed or printing a credential — the
+	// credential store's import and exports — captured in memory on linux.
+	credential bool
+}
+
 // runAuxiliary runs one auxiliary command and returns its stdout.
 //
 // NOTHING IT WAS HANDED OR PRINTED IS EVER PART OF AN ERROR. A credential
@@ -53,41 +69,46 @@ const auxiliaryTimeout = 30 * time.Second
 //     stopped in under a second;
 //   - running out of [auxiliaryTimeout] is an [auxiliaryTimeoutError], which
 //     is a [context.DeadlineExceeded] to errors.Is;
+//   - the engine ending it over its output — a stdout past [maxOutput], a
+//     stream that ran that far ahead of the reading — is an
+//     [auxiliaryUnfinishedError] saying so, checked before its exit, which
+//     the engine's kill made: read second, it would be the harness refusing a
+//     login;
 //   - exiting non-zero is an [auxiliaryExitError];
 //   - exiting 0 without being seen to its end — a stdout something it left
 //     running still held, a wait that failed — is an
 //     [auxiliaryUnfinishedError], because what it printed may be a login
 //     with its end missing;
 //   - a child that could not be started at all is the error [run] gave.
-func (p *Provider) runAuxiliary(
-	ctx context.Context, args []string, dir string, env []string, stdin string,
-) (string, error) {
-	command := string(p.profile.Binary) + " " + strings.Join(args, " ")
+func (p *Provider) runAuxiliary(ctx context.Context, a auxiliary) (string, error) {
+	command := string(p.profile.Binary) + " " + strings.Join(a.args, " ")
 	res, err := run(ctx, invocation{
-		binary:  p.profile.Binary,
-		args:    args,
-		stdin:   stdin,
-		dir:     dir,
-		env:     env,
-		timeout: auxiliaryTimeout,
-		grace:   p.termGrace,
+		binary:     p.profile.Binary,
+		args:       a.args,
+		stdin:      a.stdin,
+		dir:        a.dir,
+		env:        a.env,
+		timeout:    auxiliaryTimeout,
+		grace:      p.termGrace,
+		outDir:     a.outDir,
+		setting:    p.stateSetting(),
+		credential: a.credential,
+		hooks:      p.hooks,
+		janitor:    &p.janitor,
 	})
 	switch {
 	case err == nil && !res.timedOut && res.exitCode == 0 && res.unfinished() == "":
 		// Ran to the end — whatever the caller's context did meanwhile,
-		// since what it was waiting for is done.
+		// since what it was waiting for is done. A document past the
+		// bound is not here: the cut is among unfinished's reasons, and a
+		// clipped document is a login with its end missing, or a report
+		// with its counts cut off, either of which read as whole is wrong.
 	case ctx.Err() != nil:
 		return "", fmt.Errorf("%s was stopped by its caller before it finished: %w", command, ctx.Err())
 	case err != nil:
 		return "", err
 	default:
-		return "", auxiliaryFailure(command, res, stdin)
-	}
-	if res.droppedStdout > 0 {
-		// A clipped document is a login with its end missing, or a report
-		// with its counts cut off, and either read as whole is wrong.
-		return "", fmt.Errorf("%s printed more than %d bytes, so what it printed is "+
-			"incomplete", command, maxOutput)
+		return "", auxiliaryFailure(command, res, a.stdin)
 	}
 	return res.stdout, nil
 }
@@ -99,6 +120,8 @@ func (p *Provider) runAuxiliary(
 func auxiliaryFailure(command string, res *rawResult, stdin string) error {
 	stderr := scrubAuxiliary(res.stderr, stdin, res.stdout)
 	switch {
+	case res.cut != nil:
+		return &auxiliaryUnfinishedError{command: command, why: res.unfinished(), stderr: stderr}
 	case res.timedOut:
 		return &auxiliaryTimeoutError{command: command, stderr: stderr}
 	case res.exitCode != 0:
@@ -137,9 +160,10 @@ func (e *auxiliaryExitError) Error() string {
 	return fmt.Sprintf("%s exited %d%s", e.command, e.code, stderrDetail(e.stderr))
 }
 
-// auxiliaryUnfinishedError is an auxiliary command that exited 0 and still
-// cannot be taken as done: something it left running held its stdout past the
-// grace, so what it printed was cut there, or waiting for it failed.
+// auxiliaryUnfinishedError is an auxiliary command that cannot be taken as
+// done: the engine ended it over its output, something it left running held
+// its stdout past the grace, so what it printed was cut there, or waiting for
+// it failed.
 //
 // NOT an [auxiliaryExitError], which an import reads as the harness refusing the
 // login ([loginRefusedError]): this harness refused nothing, and the next call
@@ -155,7 +179,7 @@ type auxiliaryUnfinishedError struct {
 }
 
 func (e *auxiliaryUnfinishedError) Error() string {
-	return fmt.Sprintf("%s exited 0, but %s%s", e.command, e.why, stderrDetail(e.stderr))
+	return fmt.Sprintf("%s did not finish as one: %s%s", e.command, e.why, stderrDetail(e.stderr))
 }
 
 // scrubMarker replaces what [scrubAuxiliary] takes out, in [redact]'s marker

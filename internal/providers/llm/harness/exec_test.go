@@ -65,6 +65,11 @@ const helperEnv = "CREWLET_HARNESS_FAKE"
 func TestMain(m *testing.M) {
 	mcprelay.DispatchIfRelay()
 	if os.Getenv(helperEnv) == "1" {
+		if dir := os.Getenv("FAKE_REPORT_STDIO"); dir != "" {
+			// Not a mode: what this invocation's stdout and stderr ARE, kept
+			// before whichever role answers — see capture_unix_test.go.
+			fakeReportStdio(dir)
+		}
 		if os.Getenv(fakeMCPEnv) != "" {
 			runFakeMCPHarness()
 		}
@@ -122,6 +127,18 @@ func runFakeHarness() {
 		fakeStubborn()
 	case os.Getenv("FAKE_GRANDCHILD") == "1":
 		fakeGrandchild()
+	case os.Getenv("FAKE_LATE_GRANDCHILD") != "":
+		// A launcher that exits before the runtime it started has written
+		// the answer — see capture_unix_test.go.
+		fakeLateGrandchild()
+	case os.Getenv("FAKE_IDLE_HELPER") == "1":
+		// A harness that leaves a helper in its group holding none of its
+		// streams — see capture_unix_test.go.
+		fakeIdleHelper()
+	case os.Getenv("FAKE_FLOOD") != "":
+		// A harness that writes more than a stream's bound — see
+		// capture_unix_test.go.
+		fakeFlood()
 	case os.Getenv("FAKE_HOLD_STREAM") != "":
 		// A harness that answers and exits 0, leaving a helper behind that holds
 		// one of its streams — see exec_unix_test.go.
@@ -341,7 +358,7 @@ func runFakeHarness() {
 			fmt.Print(os.Getenv("FAKE_STDOUT"))
 		}
 	default:
-		fmt.Print(os.Getenv("FAKE_STDOUT"))
+		fakePrint(os.Getenv("FAKE_STDOUT"))
 	}
 	if s := os.Getenv("FAKE_STDERR"); s != "" {
 		fmt.Fprint(os.Stderr, s)
@@ -846,8 +863,8 @@ func TestEveryCommandFindsTheTemporaryDirectoryItIsHanded(t *testing.T) {
 	if got := strings.TrimSpace(out.String()); got != want {
 		t.Errorf("a login command's child reported %q, want %q", got, want)
 	}
-	if got := p.probeVersion(t.Context()); got != want {
-		t.Errorf("the version probe's child reported %q, want %q", got, want)
+	if got, err := p.probeVersion(t.Context()); err != nil || got != want {
+		t.Errorf("the version probe's child reported %q (%v), want %q", got, err, want)
 	}
 }
 

@@ -182,6 +182,13 @@ type Provider struct {
 	// of its own is read in.
 	zone *time.Location
 
+	// janitor empties the captures something still held at their child's
+	// end until it lets go ([janitor]): one per provider, ready as it is.
+	janitor janitor
+	// hooks are the captures' seams ([captureHooks]); nil is the platform.
+	// The suite's alone.
+	hooks *captureHooks
+
 	// now is the clock the bench is read against — time.Now, and a fixed
 	// clock in the suite, which has to watch a window end without waiting
 	// a minute for it — and the one a run's record reader dates each
@@ -190,6 +197,12 @@ type Provider struct {
 }
 
 var _ llm.Provider = (*Provider)(nil)
+
+// stateSetting names what an operator sets to move where this provider's
+// children write their output, for an error that has to say it.
+func (p *Provider) stateSetting() string {
+	return fmt.Sprintf("providers.llm.%s.state_dir", p.key)
+}
 
 // New builds a harness provider.
 //
@@ -338,7 +351,7 @@ func (p *Provider) routeFor(req llm.Request) harnessprofile.Route {
 // What the call met is remembered for [Provider.Unready].
 //
 // A CALL ITS CALLER CANCELLED FAILED AS A CANCELLATION, however it surfaced:
-// a harness signalled with the call that exited 143 or held its pipes, a slot or
+// a harness signalled with the call that exited 143 or held its output, a slot or
 // a home the call stopped waiting for. Decided here, once, from the caller's
 // context rather than from the process, which a cancellation and a crash
 // end identically, so no path below can report a person's Stop as the
@@ -444,6 +457,16 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		timeout: p.timeout,
 		grace:   p.termGrace,
 		failOn:  p.profile.FailureMarkers,
+		// THE CALL'S OWN DIRECTORY, whose output files are unlinked before
+		// the harness starts, so its listing — the harness's project root —
+		// still holds nothing but its marker.
+		outDir:  checkout.Work,
+		setting: p.stateSetting(),
+		// A text function's stdout is a line stream when its profile prints
+		// JSONL; a run with tools is told its route's by serveTools.
+		lineStream: p.profile.EffectiveOutput() == harnessprofile.OutputJSONL,
+		hooks:      p.hooks,
+		janitor:    &p.janitor,
 	}
 	// Streamed only for a JSONL profile, where each event's text IS a
 	// fragment of the answer. The other two output modes are extracted
@@ -507,7 +530,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		if err != nil {
 			return nil, err
 		}
-		defer tools.close(ctx)
+		defer tools.close()
 	}
 	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
 	// have something to put in it — see [harnessprofile.SystemPromptFile]. A
@@ -585,8 +608,9 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	res, err := run(runCtx, in)
 	if err != nil {
 		// NO HARNESS RAN, which is all run's error ever says: the binary is
-		// missing or not executable here, or the host would not give it a
-		// pipe or a process. That is this host's fault, the one exec failure
+		// missing or not executable here, the host would not give it output
+		// files (no room on state_dir's volume, a filesystem without locks per
+		// open file) or a process. That is this host's fault, the one exec failure
 		// the next member is no answer to, so it is fatal. A harness that DID run
 		// comes back as a result whatever happened to it, and [completion]
 		// classifies it by what that was.
@@ -662,7 +686,8 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 			}
 		}
 		if ask {
-			report, reportErr := p.runAuxiliary(reportCtx, args, checkout.Work, env, "")
+			report, reportErr := p.runAuxiliary(reportCtx, auxiliary{
+				args: args, dir: checkout.Work, outDir: checkout.Work, env: env})
 			switch {
 			case reportErr != nil:
 				log.WarnContext(ctx, "harness_usage_report_failed", "provider", p.key,
@@ -745,21 +770,28 @@ func (p *Provider) completion(
 				"legitimately reasons for longer:\n%s", p.timeout, tail(res.stderr)))
 	}
 
-	// A CLIPPED ANSWER IS NOT AN ANSWER. stdout past maxOutput is dropped by
-	// the capped buffer, and everything below would then parse whatever
-	// survived and hand it back as a completion — a half-written envelope, a
-	// JSON body missing its close, a report cut mid-sentence — with nothing
-	// downstream able to tell it from a model that simply stopped there.
-	// Refused as a SERVER failure so the fallback chain may try another
-	// member and the credential is not benched: nothing about the prompt was
-	// rejected.
-	if res.droppedStdout > 0 {
-		return nil, p.fail(llm.KindServer, fmt.Errorf(
-			"the harness wrote more than %d bytes to stdout and %d were dropped, so "+
-				"the answer is incomplete. No completion comes near that size, so "+
-				"the harness printed something besides one: run `crewlet llm doctor %s` "+
-				"to see what, or point this provider at a model that streams less",
-			maxOutput, res.droppedStdout, p.key))
+	// A RUN THE ENGINE ENDED OVER ITS OUTPUT IS NOT AN ANSWER. Its stdout past
+	// maxOutput, or either stream that ran that far ahead of the engine's
+	// reading, ended the run where it stood, and everything below would then
+	// parse whatever was kept and hand it back as a completion — a
+	// half-written envelope, a JSON body missing its close, a report cut
+	// mid-sentence — with nothing downstream able to tell it from a model
+	// that simply stopped there. BEFORE the markers and the exit status: the
+	// engine's SIGKILL is the exit, and read as the harness's own it would be
+	// a failure the harness never had. Refused as a SERVER failure so the
+	// fallback chain may try another member and the credential is not
+	// benched: nothing about the prompt was rejected.
+	if res.cut != nil {
+		err := fmt.Errorf("the %s harness's output is incomplete: %w", p.harness, res.cut)
+		// ONLY AN ANSWER PAST ITS BOUND says what the harness printed. A
+		// volume that refused the room ahead, or a reading that fell behind,
+		// says nothing about it, and the cut's own words name the remedy.
+		if res.cut.why == cutBound {
+			err = fmt.Errorf("%w. No completion comes near %d bytes, so the harness printed "+
+				"something besides one: run `crewlet llm doctor %s` to see what, or point this "+
+				"provider at a model that streams less", err, maxOutput, p.key)
+		}
+		return nil, p.fail(llm.KindServer, err)
 	}
 
 	out := extract(p.profile, res.stdout)

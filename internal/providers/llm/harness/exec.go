@@ -1,13 +1,11 @@
 package harness
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -21,14 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// termGrace is how long a terminated harness has to exit before it is killed.
+// termGrace is how long a terminated harness has to exit before it is killed,
+// and how long the end of a call waits for its harness's group and for every
+// holder of its output to let go.
 //
 // The timeout has already fired, so the call is lost either way; this decides
 // only whether the tree gets to flush. Five seconds is enough for a Node
 // runtime to run its exit handlers and close its sockets, and short enough
 // that a wedged child does not hold the seat's concurrency slot for a
 // meaningful fraction of the next call. Same figure the sandbox uses for the
-// same reason.
+// same reason. It is the end's bound for the same reason it was WaitDelay's
+// for the pipes: one figure governs a holder's grace, so nothing about a held
+// stream's timing changed when the pipes went.
 //
 // Every provider [New] builds carries it as [Provider.termGrace], which is
 // what every child this package starts is given — a seat's call, the doctor's
@@ -45,19 +47,35 @@ const termGrace = 5 * time.Second
 // of the log budget for every other seat. Same figure the MCP supervisor uses.
 const stderrTail = 50
 
-// maxOutput bounds what is read from a child's stdout and stderr.
+// maxOutput is how much of one stream of a child the engine answers for.
 //
-// A harness told to stream JSONL can emit tens of megabytes for a long run, and
-// all of it is held in memory to be parsed. 32 MiB is far above any real
-// completion — the largest observed is under 2 MiB — and far below what would
-// put the engine under memory pressure with max_concurrent processes running.
+// Every place it counts is that one question, so it is one figure: two would
+// let the room and the bound disagree.
+//
+//   - The bound on ONE ANSWER ([oneAnswer]): past it the run is ended and
+//     refused. 32 MiB is far above any real completion — the largest observed
+//     is under 2 MiB — and far below what would put the engine under memory
+//     pressure with max_concurrent processes running, since the end reads it
+//     whole.
+//   - What a stream READ TO ITS END keeps ([readToEnd]): the first 32 MiB of
+//     a run's record and of every stderr, which is what is classified at the
+//     end, as the capped buffers before the captures kept. The record itself
+//     is read past it: it can be tens of megabytes for a long run, and no cap
+//     in the engine bounds a legitimate one.
+//   - The room every file capture is given on its volume at its start, and
+//     kept ahead of the reader, so that no write within the bound fails for
+//     room: a Node runtime drops the count a short write to a file returns,
+//     and would lose the tail of an answer to a full volume silently.
+//   - How far a writer may run ahead of the engine's reading before the run
+//     is ended: a pipe held the writer back, and a file does not.
 const maxOutput = 32 << 20
 
 // invocation is one harness call, fully resolved.
 //
 // Its env is the child's WHOLE environment, from [buildEnv], and it is
 // required: [run] refuses a nil one, because os/exec reads a nil Cmd.Env as
-// "inherit the engine's".
+// "inherit the engine's". Its outDir is required for the same kind of reason:
+// [run] refuses "" rather than make the child's output files anywhere else.
 type invocation struct {
 	binary  harnessprofile.Binary
 	args    []string
@@ -66,6 +84,17 @@ type invocation struct {
 	env     []string
 	timeout time.Duration
 
+	// outDir is where the child's output files are made ([startChild]): the
+	// call's directory for a call and what runs inside it, the workspace's
+	// captures directory for a child no call owns.
+	outDir string
+	// setting names what an operator sets to move outDir —
+	// providers.llm.<key>.state_dir — for an error that has to say it.
+	setting string
+	// credential is a child handed or printing a credential, captured in
+	// memory on linux ([childSpec.credential]).
+	credential bool
+
 	// grace is how long a child signalled to stop has before it is killed —
 	// the provider's [Provider.termGrace]. Zero is refused by [run] rather
 	// than read as os/exec's own zero, which is no bound at all: a child
@@ -73,18 +102,25 @@ type invocation struct {
 	grace time.Duration
 
 	// onLine, when set, receives each COMPLETE line of stdout as the child
-	// writes it, before the call returns. Nil takes the ordinary path where
-	// stdout is only read after the process exits.
+	// writes it, before the call returns. Nil reads stdout only once the
+	// child is done.
 	//
-	// Called from the goroutine [run] copies stdout on — one goroutine, in
+	// Called from the capture's reader ([childRun.read]) — one goroutine, in
 	// order, and run does not return until it has finished, so it never runs
 	// concurrently with the caller's own use of the result.
 	onLine func(string)
 
-	// everyLine forwards every line to onLine, past the stdout cap too —
-	// for a run whose record is read line by line as it goes, where each
-	// line is the record rather than part of an answer the cap would refuse.
-	everyLine bool
+	// lineStream is a stdout of JSONL events: the profile's output for a
+	// text function, its route's for a run with tools. A line stream that
+	// ends inside an event is refused ([rawResult.cutLine]), and a whole last
+	// event written without its line break is read as a line.
+	lineStream bool
+
+	// readToEnd reads stdout to its end, every line delivered past
+	// [maxOutput] too, keeping its first maxOutput: a run whose record is its
+	// stdout, read as it goes. Otherwise stdout is one answer, ended at
+	// maxOutput.
+	readToEnd bool
 
 	// clock bounds the child by stretches of model work — see [stretch].
 	// Nil: timeout bounds the whole run, as one stretch nothing pauses.
@@ -101,64 +137,11 @@ type invocation struct {
 	// carrying one stops the run at once — see
 	// [harnessprofile.Profile.FailureMarkers].
 	failOn []string
-}
 
-// lineTee forwards complete lines to a callback while passing every byte
-// through to the real sink.
-//
-// A harness's stdout arrives in whatever chunks the pipe hands over, which split
-// mid-line, so a consumer that wants JSONL events has to reassemble them. The
-// tail after the last newline is deliberately NOT delivered: a partial JSON
-// object is not parseable, and the buffered copy is what the extractor reads
-// once the process exits, so nothing is lost by waiting.
-//
-// BOUNDED BY THE SINK'S OWN CAP, which it used not to be: the sink drops past
-// [maxOutput] and still reports every byte written, so this kept appending a
-// line with no newline in it for as long as the child printed one — the very
-// memory the cap exists to protect. Past the cap it forwards nothing more,
-// because the answer it would be streaming is refused as clipped anyway.
-//
-// UNLESS every line is the point ([invocation.everyLine]): a run whose record
-// is read as it goes needs the lines past the cap as much as the ones before
-// it, and holds none of them. Then only ONE line is bounded — a line longer
-// than the cap is skipped to its end rather than held.
-type lineTee struct {
-	sink  io.Writer
-	on    func(string)
-	buf   []byte
-	limit int
-	seen  int
-	// every forwards past limit, which then bounds one line instead.
-	every bool
-	// skipping is a line past the bound, dropped up to its newline.
-	skipping bool
-}
-
-func (t *lineTee) Write(b []byte) (int, error) {
-	n, err := t.sink.Write(b)
-	if t.seen += n; t.seen > t.limit && !t.every {
-		t.buf = nil
-		return n, err
-	}
-	rest := b[:n]
-	for len(rest) > 0 {
-		i := bytes.IndexByte(rest, '\n')
-		if i < 0 {
-			if !t.skipping {
-				t.buf = append(t.buf, rest...)
-			}
-			if len(t.buf) > t.limit {
-				t.buf, t.skipping = nil, true
-			}
-			break
-		}
-		if !t.skipping {
-			t.on(string(append(t.buf, rest[:i]...)))
-		}
-		t.buf, t.skipping = t.buf[:0], false
-		rest = rest[i+1:]
-	}
-	return n, err
+	// hooks and janitor are the provider's: the capture's seams, and where a
+	// capture something still holds at the end goes.
+	hooks   *captureHooks
+	janitor *janitor
 }
 
 // errHostStopped is the cause a run's context is cancelled with when whoever
@@ -173,18 +156,20 @@ func (e *failureMarkerError) Error() string {
 	return "the harness reported its confinement failed to load: " + e.line
 }
 
-// stderrWatch forwards stderr to its sink and calls stop with the first line
-// carrying one of the markers, once.
-func stderrWatch(sink io.Writer, markers []string, stop func(line string)) io.Writer {
+// markerWatch is the line callback of a stderr read for failure markers: it
+// calls stop with the first line carrying one of the markers, once. Every
+// line is delivered to it, past what the stream keeps too, so a marker
+// written late in a long stderr still stops the run.
+func markerWatch(markers []string, stop func(line string)) func(string) {
 	var once sync.Once
-	return &lineTee{sink: sink, limit: maxOutput, every: true, on: func(line string) {
+	return func(line string) {
 		for _, m := range markers {
 			if strings.Contains(line, m) {
 				once.Do(func() { stop(strings.TrimSpace(line)) })
 				return
 			}
 		}
-	}}
+	}
 }
 
 // rawResult is what a child produced.
@@ -204,17 +189,24 @@ type rawResult struct {
 	// [invocation.failOn], which stopped the run; "" for none.
 	failureMarker string
 
-	// droppedStdout and droppedStderr are the bytes each stream lost past
-	// maxOutput. SEPARATE, because the two mean different things: a clipped
-	// stdout is a clipped ANSWER and the caller must refuse it, while a
-	// clipped stderr costs only diagnosis. Summing them, as this used to,
-	// produced a warning that could not say which had happened.
-	droppedStdout, droppedStderr int
+	// cut is a run the engine ended over its output: a one-answer stream past
+	// [maxOutput], a stream that ran maxOutput ahead of the engine's reading,
+	// or a volume that would not keep the room ahead. Nil for none. Every
+	// reader of a child's output refuses it, first ([rawResult.unfinished]).
+	cut *outputCut
+
+	// cutLine is a line stream whose stdout ended inside an event: cut there,
+	// so no reading of it can be shown to be whole.
+	cutLine bool
+
+	// shrunk names the stream whose file shrank under the reader, "" for
+	// none: something truncated what the harness wrote.
+	shrunk string
 
 	// heldStdout and heldStderr report a stream that something the harness
 	// started still held open [invocation.grace] after the harness was done —
 	// exited, or its call ended, whichever came first — so its read was cut
-	// there. Separate for the reason the dropped counts are: a held stdout
+	// there. Separate because the two mean different things: a held stdout
 	// is an answer nobody can show is whole, and a held stderr costs only
 	// diagnosis.
 	heldStdout, heldStderr bool
@@ -237,11 +229,23 @@ type rawResult struct {
 // every caller already tells those apart and classifies each as itself. A held
 // stderr is not among them either: what it cost is diagnosis, and what was
 // printed on stdout stands.
+//
+// THE CUT FIRST, so that every reader of a child's output refuses it by one
+// rule: the version probe and the login status ask only this, and a status
+// command the engine ended at its bound would otherwise read as one that
+// "exited -1".
 func (r *rawResult) unfinished() string {
 	switch {
+	case r.cut != nil:
+		return r.cut.Error()
+	case r.shrunk != "":
+		return fmt.Sprintf("its %s file shrank under the engine's reading of it, so what it "+
+			"printed cannot be shown to be whole", r.shrunk)
 	case r.heldStdout:
 		return fmt.Sprintf("something it started still held its stdout open %s after "+
 			"the harness was done, so what it printed cannot be shown to be whole", r.grace)
+	case r.cutLine:
+		return "its stdout ended inside a line, so what it printed cannot be shown to be whole"
 	case r.waitErr != nil:
 		return fmt.Sprintf("waiting for it to finish failed: %v", r.waitErr)
 	default:
@@ -249,23 +253,26 @@ func (r *rawResult) unfinished() string {
 	}
 }
 
-// run executes one invocation, terminating the whole process TREE when its
-// call ends first, and when something the harness left behind holds the call's
-// pipes past the grace.
+// run executes one invocation, its output captured into files of its own
+// ([startChild]), terminating the whole process TREE when its call ends
+// first, and when something the harness left behind outlives it past the
+// grace.
 //
 // The tree, not the process: a harness is a launcher over a Node or Bun
 // runtime that forks helpers, and signalling only the process Go started
 // leaves those holding the seat's memory and its network sockets.
 //
-// AN ERROR MEANS NO CHILD RAN: an invocation refused before the fork, a pipe
-// the host would not give, a binary exec could not start, or a child whose
-// process identity could not be read, ended as it started ([recordGroup]),
-// with nothing of its run read. Everything that
-// happened to a child that did start — its exit, the deadline, a stream
-// something it left behind still held, a wait that failed — is in the result,
-// because only the caller can say what each means, and a caller that read
-// every error as "could not start" stopped a seat's fallback chain on a harness
-// that had printed a whole answer and exited 0 ([Provider.Complete]).
+// AN ERROR MEANS NO CHILD RAN: an invocation refused before the fork, output
+// files the host would not give (a volume with no room for them, a filesystem
+// without locks per open file), a binary exec could not start, or a child
+// whose process identity could not be read, ended as it started
+// ([recordGroup]), with nothing of its run read. Everything that happened to
+// a child that did start — its exit, the deadline, its output past its bound,
+// a stream something it left behind still held, a wait that failed — is in
+// the result, because only the caller can say what each means, and a caller
+// that read every error as "could not start" stopped a seat's fallback chain
+// on a harness that had printed a whole answer and exited 0
+// ([Provider.Complete]).
 func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec hands a child whose
 	// Env is nil the ENGINE's own environment — its keyring, its Tier A
@@ -284,6 +291,11 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 			"a child that ignored SIGTERM would hold the call open for ever; "+
 			"an invocation takes its provider's termGrace", in.binary)
 	}
+	if in.outDir == "" {
+		return nil, fmt.Errorf("harness: starting %q with no directory for its output "+
+			"files; an invocation names the call's directory or the workspace's "+
+			"captures directory", in.binary)
+	}
 	// ONE CLOCK FOR EVERY RUN: a text call's is never paused, so its one
 	// stretch is the whole call — see [stretch].
 	clock := in.clock
@@ -294,71 +306,36 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	callCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	cmd := exec.CommandContext(callCtx, string(in.binary), in.args...) //nolint:gosec // binary and args come from a validated profile
-	cmd.Dir = in.dir
-	cmd.Env = in.env
-	if in.stdin != "" {
-		cmd.Stdin = strings.NewReader(in.stdin)
-	}
-	var stdout, stderr cappedBuffer
-	stdout.limit = maxOutput
-	stderr.limit = maxOutput
-	sink := io.Writer(&stdout)
-	if in.onLine != nil {
-		sink = &lineTee{sink: &stdout, on: in.onLine, limit: maxOutput, every: in.everyLine}
-	}
-	errSink := io.Writer(&stderr)
 	var marker atomic.Pointer[string]
+	var onErr func(string)
 	if len(in.failOn) > 0 {
-		errSink = stderrWatch(&stderr, in.failOn, func(line string) {
+		onErr = markerWatch(in.failOn, func(line string) {
 			marker.Store(&line)
 			cancel(&failureMarkerError{line: line})
 		})
 	}
-
-	// THE OUTPUT ON PIPES OF OUR OWN, handed to the child as files. Given
-	// any other io.Writer, os/exec makes the pipe itself and copies it on a
-	// goroutine its Wait waits for, and when something the harness started still
-	// holds a pipe after the harness has exited, it closes both once WaitDelay is
-	// out and reports one [exec.ErrWaitDelay] for the pair. Which stream was
-	// held is the whole question: a held stderr costs only diagnosis and the
-	// answer stands, while a held stdout is an answer nobody can show is
-	// whole. Owning the read ends is what lets [outputPipe] say which.
-	outPipe, err := newOutputPipe()
+	out := streamSpec{kind: oneAnswer, onLine: in.onLine}
+	if in.readToEnd {
+		out.kind, out.keep = readToEnd, maxOutput
+	}
+	if in.lineStream {
+		out.last = lastLineEvent
+	}
+	var stdin io.Reader
+	if in.stdin != "" {
+		stdin = strings.NewReader(in.stdin)
+	}
+	ch, err := startChild(callCtx, childSpec{
+		binary: in.binary, args: in.args, dir: in.dir, env: in.env, stdin: stdin,
+		outDir: in.outDir, setting: in.setting, credential: in.credential,
+		out:   out,
+		err:   streamSpec{kind: readToEnd, keep: maxOutput, onLine: onErr},
+		grace: in.grace, cancel: func(cause error) { cancel(cause) },
+		hooks: in.hooks, janitor: in.janitor,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("harness: starting %q: %w", in.binary, err)
 	}
-	errPipe, err := newOutputPipe()
-	if err != nil {
-		outPipe.abandon()
-		return nil, fmt.Errorf("harness: starting %q: %w", in.binary, err)
-	}
-	cmd.Stdout, cmd.Stderr = outPipe.w, errPipe.w
-	procgroup.Set(cmd)
-
-	// Cancel signals the GROUP rather than letting os/exec signal the one
-	// process it knows about, and WaitDelay bounds how long a child that
-	// ignored SIGTERM can hold the call open.
-	cmd.Cancel = func() error { return procgroup.Terminate(cmd.Process.Pid) }
-	cmd.WaitDelay = in.grace
-
-	if err := cmd.Start(); err != nil {
-		outPipe.abandon()
-		errPipe.abandon()
-		return nil, fmt.Errorf("harness: starting %q: %w", in.binary, err)
-	}
-	group, idErr := recordGroup(cmd)
-	if idErr != nil {
-		// Killed and reaped already: no harness ran that anything could
-		// later signal safely.
-		outPipe.abandon()
-		errPipe.abandon()
-		return nil, fmt.Errorf("harness: %q started, but its process identity could not be "+
-			"read, so it was ended at once (no later signal to its group could be "+
-			"checked): %w", in.binary, idErr)
-	}
-	outPipe.drainInto(sink)
-	errPipe.drainInto(errSink)
 	clock.start()
 	go func() {
 		// The clock running out and the caller ending the run end it the
@@ -378,13 +355,11 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// ending, which is os/exec's own rule for WaitDelay: a call stopped under
 	// a stubborn tree is then let go one grace after it ended rather than
 	// two, the first spent waiting for the harness to exit and the second for
-	// its pipes.
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	// what it left behind.
 	var waitErr error
 	waited := false
 	select {
-	case waitErr = <-exited:
+	case waitErr = <-ch.exited:
 		waited = true
 	case <-callCtx.Done():
 	}
@@ -392,8 +367,12 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	if !waited {
 		// Bounded: Cancel has signalled the group, and os/exec kills the
 		// harness once WaitDelay is out.
-		waitErr = <-exited
+		waitErr = <-ch.exited
 	}
+	// ONE GRACE, NOT TWO: a prompt a helper held unread kept Wait from
+	// returning until os/exec cut its copy, a grace after the harness exited,
+	// and that grace is the end's.
+	letGoBy = ch.letGoBy(letGoBy)
 
 	// GATED ON THE CONTEXT ENDING, not on the deadline specifically.
 	// cmd.Cancel and WaitDelay fire on cancellation exactly as they do on a
@@ -408,15 +387,11 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	//
 	// AFTER WAIT HAS REAPED THE HARNESS, so the group is killed only while it
 	// is still the one recorded at the start: see [harnessGroup.signal].
-	reap := func(reason error) {
-		group.signal(ctx, reason.Error(), "SIGKILL", procgroup.Kill)
-	}
 	if err := callCtx.Err(); err != nil {
 		// The group was signalled by Cancel and given WaitDelay to go;
 		// anything still alive after Wait returned is a survivor that
 		// ignored SIGTERM, and it holds a concurrency slot until killed.
-		// Before the pipes are drained, so the tree's last words arrive.
-		reap(err)
+		ch.signal(context.Cause(callCtx).Error(), "SIGKILL", procgroup.Kill)
 	}
 
 	cause := context.Cause(callCtx)
@@ -429,52 +404,38 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		stopped: !waited && errors.Is(cause, errHostStopped),
 		grace:   in.grace,
 	}
+	// THE END: the harness's group gone and every holder of its output let
+	// go, or the grace out — and at the grace, what still holds a stream is
+	// decided BEFORE what lives of the group is killed, since a stream that
+	// reached its end only because of the kill was cut. What was read is
+	// read up to the size each file had then, and never past it.
+	ended := ch.end(letGoBy)
+	got := ch.collect(ended)
+	ch.close()
+	res.stdout, res.stderr = got.out, got.errOut
+	// AFTER THE LAST READ, which may be where the marker line was read: a
+	// harness that wrote it and exited at once is read to its end only now.
 	if line := marker.Load(); line != nil {
 		res.failureMarker = *line
 	}
-	// Decided AT THE DEADLINE, before its holder is killed or the read ends
-	// are closed: a stream that reached its end only because of either is
-	// one that was cut.
-	res.heldStdout = !outPipe.endedBy(letGoBy)
-	res.heldStderr = !errPipe.endedBy(letGoBy)
-	// A HOLDER IS A SURVIVOR, and it goes with the group. Something the harness
-	// started that still held one of the call's pipes a grace after the harness
-	// was done — its stdout or stderr, or its stdin with the prompt unread,
-	// which os/exec reports as ErrWaitDelay — is attached to a call that is
-	// over, and closing the pipe under it ends none of it: a Node runtime
-	// ignores the SIGPIPE its next write raises and holds the seat's memory
-	// and sockets for as long as it likes. Killed BEFORE the pipes are
-	// closed, which is os/exec's own order, so it dies of the SIGKILL rather
-	// than of the pipe.
-	if callCtx.Err() == nil && (res.heldStdout || res.heldStderr || errors.Is(waitErr, exec.ErrWaitDelay)) {
-		reap(errors.New("it held the call's output past the grace"))
+	res.heldStdout, res.heldStderr = ended.held[0], ended.held[1]
+	res.cut = ch.cut.Load()
+	res.cutLine = got.cutLine
+	if s := ch.shrunk.Load(); s != nil {
+		res.shrunk = *s
+		log.WarnContext(ctx, "harness_output_shrank", "binary", in.binary, "stream", *s)
 	}
-	outPipe.release()
-	errPipe.release()
-
-	// Read only now that both copiers have returned: they write these
-	// buffers, and release is what waits for them.
-	res.stdout, res.stderr = stdout.String(), stderr.String()
-	res.droppedStdout, res.droppedStderr = stdout.Truncated(), stderr.Truncated()
 	for _, s := range []struct {
-		stream  string
-		dropped int
-		held    bool
-	}{{"stdout", res.droppedStdout, res.heldStdout}, {"stderr", res.droppedStderr, res.heldStderr}} {
-		// NAMES THE STREAM. A truncated stream is how a usage figure or a
-		// closing fence goes missing, and an operator debugging a mangled
-		// answer needs to know which half was cut — the caller refuses on
-		// stdout and carries on for stderr.
-		if s.dropped > 0 {
-			log.WarnContext(ctx, "harness_output_truncated", "binary", in.binary,
-				"stream", s.stream, "dropped_bytes", s.dropped, "limit_bytes", maxOutput)
-		}
-		// And for the same reason a held one: the caller refuses an answer
-		// on a held stdout, and only this line says that a held stderr cut
-		// the diagnosis of a call that otherwise answered.
+		stream string
+		held   bool
+	}{{"stdout", res.heldStdout}, {"stderr", res.heldStderr}} {
+		// NAMES THE STREAM: the caller refuses an answer on a held stdout,
+		// and only this line says that a held stderr cut the diagnosis of a
+		// call that otherwise answered, or that the holder escaped the
+		// harness's group, so nothing could end it.
 		if s.held {
 			log.WarnContext(ctx, "harness_output_held", "binary", in.binary,
-				"stream", s.stream, "grace", in.grace)
+				"stream", s.stream, "grace", in.grace, "escaped", ended.escaped)
 		}
 	}
 
@@ -490,105 +451,6 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	}
 	return res, nil
 }
-
-// outputPipe is one of a child's output streams, on a pipe [run] owns both
-// ends of: the write end handed to the child as a file, and the read end a
-// copier drains into the stream's sink.
-type outputPipe struct {
-	r, w *os.File
-	// done is closed when the copier has returned, and eof — written before
-	// that — says whether it returned because every holder of the write end
-	// let go, rather than because the read end was closed under it.
-	done chan struct{}
-	eof  bool
-}
-
-func newOutputPipe() (*outputPipe, error) {
-	r, w, err := os.Pipe()
-	if err != nil {
-		return nil, fmt.Errorf("making a pipe for its output: %w", err)
-	}
-	return &outputPipe{r: r, w: w, done: make(chan struct{})}, nil
-}
-
-// abandon closes both ends of a pipe no child was given, its copier never
-// started.
-func (p *outputPipe) abandon() {
-	_ = p.r.Close()
-	_ = p.w.Close()
-}
-
-// drainInto drops the parent's copy of the write end, which the child now has
-// its own of, and starts copying what the child writes into sink.
-//
-// The write end goes FIRST: while the parent holds it the pipe never reaches
-// its end, whoever else lets go.
-func (p *outputPipe) drainInto(sink io.Writer) {
-	_ = p.w.Close()
-	go func() {
-		defer close(p.done)
-		_, err := io.Copy(sink, p.r)
-		p.eof = err == nil
-	}()
-}
-
-// endedBy waits until the stream reaches its end or the deadline passes, and
-// reports whether it reached its end first.
-func (p *outputPipe) endedBy(deadline time.Time) bool {
-	select {
-	case <-p.done:
-		return p.eof
-	default:
-	}
-	timer := time.NewTimer(time.Until(deadline))
-	defer timer.Stop()
-	select {
-	case <-p.done:
-		return p.eof
-	case <-timer.C:
-		return false
-	}
-}
-
-// release closes the read end, which ends a copy still blocked on a holder
-// that has not let go, and waits for the copier to return, so nothing writes
-// into the sink after it.
-func (p *outputPipe) release() {
-	_ = p.r.Close()
-	<-p.done
-}
-
-// cappedBuffer accumulates output up to a limit and then drops the rest.
-//
-// Dropping rather than failing the call: a harness whose output overran the cap
-// has almost certainly already emitted its answer, and turning that into an
-// error would lose a completion the operator paid for. The overrun is
-// reported by [cappedBuffer.Truncated] so the caller can say so.
-type cappedBuffer struct {
-	buf     bytes.Buffer
-	limit   int
-	dropped int
-}
-
-func (c *cappedBuffer) Write(p []byte) (int, error) {
-	room := c.limit - c.buf.Len()
-	if room <= 0 {
-		c.dropped += len(p)
-		return len(p), nil
-	}
-	if len(p) > room {
-		c.buf.Write(p[:room])
-		c.dropped += len(p) - room
-		return len(p), nil
-	}
-	c.buf.Write(p)
-	return len(p), nil
-}
-
-func (c *cappedBuffer) String() string { return c.buf.String() }
-
-// Truncated is how many bytes were dropped past the cap.
-func (c *cappedBuffer) Truncated() int { return c.dropped }
 
 // tail returns the last [stderrTail] lines of s, with a marker when lines
 // were dropped.

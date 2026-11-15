@@ -62,11 +62,22 @@ func fakeStubborn() {
 // path that reaps from the path that does not.
 func fakeGrandchild() {
 	signal.Ignore(syscall.SIGTERM)
+	// Listening before it announces itself, so no SIGUSR1 a case sends
+	// once it has can find the default action, which ends it.
+	var usr1 chan os.Signal
+	if os.Getenv("FAKE_HOLD_WRITES") != "" {
+		usr1 = make(chan os.Signal, 1)
+		signal.Notify(usr1, syscall.SIGUSR1)
+	}
 	// The pid goes to a FILE rather than to stderr: the engine captures a
 	// child's stderr into a capped buffer it returns only once the call
 	// completes, and the call this witnesses is cancelled — so nothing ever
 	// reads it.
 	_ = os.WriteFile(os.Getenv("FAKE_PIDFILE"), fmt.Appendf(nil, "%d", os.Getpid()), 0o600)
+	fakeSignalReady()
+	if usr1 != nil {
+		fakeWriteOnSignal(os.Getenv("FAKE_HOLD_WRITES"), usr1)
+	}
 	procgrouptest.Hold()
 }
 
@@ -224,9 +235,9 @@ func reapTree(grandchild int) {
 // what the version probe once did. The refusal has to come before the fork,
 // so the proof is that the child never ran at all.
 //
-// WITH A GRACE, so the environment is the one thing missing: [run] refuses a
-// call with no termination grace too, and a case missing both would pass on
-// that refusal with the environment check deleted.
+// WITH A GRACE AND AN OUTPUT DIRECTORY, so the environment is the one thing
+// missing: [run] refuses a call with neither of those too, and a case missing
+// them would pass on that refusal with the environment check deleted.
 func TestACallWithNoEnvironmentIsNotStarted(t *testing.T) {
 	t.Parallel()
 	marker := filepath.Join(t.TempDir(), "ran")
@@ -235,6 +246,7 @@ func TestACallWithNoEnvironmentIsNotStarted(t *testing.T) {
 		args:    []string{"-c", `: > "$0"`, marker},
 		timeout: 10 * time.Second,
 		grace:   witnessGrace,
+		outDir:  t.TempDir(),
 	})
 	if err == nil {
 		t.Fatal("a call with no environment of its own was run")
@@ -266,6 +278,12 @@ func TestACallWithNoEnvironmentIsNotStarted(t *testing.T) {
 func fakeLeaveHolder(stream string) {
 	holder := exec.Command(os.Args[0], "-test.run=TestFakeHarness")
 	holder.Env = append(os.Environ(), "FAKE_HOLD_STREAM=", "FAKE_GRANDCHILD=1")
+	if os.Getenv("FAKE_HOLD_ESCAPE") == "1" {
+		// A helper that LEFT the harness's group, as one started with setsid
+		// does: invisible to the group's end, visible only as a holder of
+		// the stream.
+		holder.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	}
 	switch stream {
 	case "stdout":
 		holder.Stdout = os.Stdout
@@ -476,8 +494,9 @@ func TestAnAuxiliaryCommandWhoseStdoutAHelperHeldIsNotRead(t *testing.T) {
 	p.termGrace = witnessGrace
 	holderOf(t, pidFile)
 
-	out, err := p.runAuxiliary(t.Context(), []string{"-test.run=TestFakeHarness"},
-		t.TempDir(), p.probeEnv(), "")
+	dir := t.TempDir()
+	out, err := p.runAuxiliary(t.Context(), auxiliary{args: []string{"-test.run=TestFakeHarness"},
+		dir: dir, outDir: dir, env: p.probeEnv()})
 	if err == nil {
 		t.Fatalf("an export whose stdout a helper held was read (%d bytes)", len(out))
 	}
@@ -505,23 +524,23 @@ func TestTheVersionProbeReadsNoHeldStdout(t *testing.T) {
 	p.termGrace = witnessGrace
 	holderOf(t, pidFile)
 
-	if got := p.probeVersion(t.Context()); got != "" {
-		t.Errorf("version = %q, want none from a stdout a helper held", got)
+	if got, err := p.probeVersion(t.Context()); err != nil || got != "" {
+		t.Errorf("version = %q (%v), want none from a stdout a helper held", got, err)
 	}
 }
 
-// A HELPER THAT HELD THE CALL'S PIPES PAST THE GRACE IS ENDED WITH THE CALL.
+// A HELPER THAT HELD THE CALL'S OUTPUT PAST THE GRACE IS ENDED WITH THE CALL.
 //
-// Closing a pipe under it ends nothing: the helper is attached to a call that
-// is over, and a Node runtime ignores the SIGPIPE its next write raises, so it
-// held the seat's memory and sockets for as long as it liked — the leak the
-// group kill on a timeout exists to prevent, reached by a harness that exited 0.
-// Every stream a helper can hold is a case, stdin among them: os/exec reports
-// that one as a failed wait rather than as a held stream.
+// Letting go of its output ends nothing: the helper is attached to a call that
+// is over, and into a file every write succeeds, so it would hold the seat's
+// memory and sockets for as long as it liked — the leak the group kill on a
+// timeout exists to prevent, reached by a harness that exited 0. Every stream
+// a helper can hold is a case, stdin among them: os/exec reports that one as a
+// failed wait rather than as a held stream.
 //
-// Mutation: drop the reap after a held stream, and each holder outlives the
-// call.
-func TestAHelperThatHeldTheCallsPipesIsReapedWithIt(t *testing.T) {
+// Mutation: drop the kill of the group still living at the end's deadline, and
+// each holder outlives the call.
+func TestAHelperThatHeldTheCallsOutputIsEndedWithIt(t *testing.T) {
 	t.Parallel()
 	for _, stream := range []string{"stdout", "stderr", "stdin"} {
 		t.Run(stream, func(t *testing.T) {

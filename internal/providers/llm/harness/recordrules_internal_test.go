@@ -351,9 +351,9 @@ func TestAFileRecordIsTakenByAFirstLineNamingTheRun(t *testing.T) {
 	// Another run's record, then ours begun but its first line unfinished.
 	write("a-other.jsonl", `{"cwd":"/elsewhere"}`+"\n"+`{"line":"OTHER"}`+"\n")
 	write("b-ours.jsonl", `{"cwd":`)
-	time.Sleep(3 * recordPoll)
+	time.Sleep(3 * tailPoll)
 	write("b-ours.jsonl", `{"cwd":`+jsonString(work)+`}`+"\n"+`{"line":"OURS"}`+"\n")
-	time.Sleep(3 * recordPoll)
+	time.Sleep(3 * tailPoll)
 	close(stop)
 	wait()
 	mu.Lock()
@@ -406,9 +406,9 @@ func TestAFileRecordIsTakenByTheEventThatNamesTheRun(t *testing.T) {
 	}
 	write("a-other.jsonl", header+bind("/elsewhere")+`{"line":"OTHER"}`+"\n")
 	write("b-ours.jsonl", header)
-	time.Sleep(3 * recordPoll)
+	time.Sleep(3 * tailPoll)
 	write("b-ours.jsonl", header+bind(work)+`{"line":"OURS"}`+"\n")
-	time.Sleep(3 * recordPoll)
+	time.Sleep(3 * tailPoll)
 	close(stop)
 	wait()
 	mu.Lock()

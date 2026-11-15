@@ -909,8 +909,10 @@ func (p Profile) AuthMeaning(said string) AuthMeaning {
 // sign-in), and a conversion to string is written only where the process is
 // built, a path is looked up or the name is printed. A gate that follows the
 // type therefore sees each place a harness is started, whatever the place's
-// own names say. The YAML, the schema and an operator's override are
-// unchanged: it is a string on the wire.
+// own names say: the harness package's TestOnlyStartChildStartsAHarness holds
+// the whole module to one starter of a harness on the engine host, the one
+// that captures its output into files, never a pipe. The YAML, the schema and
+// an operator's override are unchanged: it is a string on the wire.
 type Binary string
 
 // Profile is everything the engine needs to drive one harness.

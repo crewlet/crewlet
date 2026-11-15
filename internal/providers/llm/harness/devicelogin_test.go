@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -203,6 +205,78 @@ func TestADeviceCodeThatLapsesStopsTheSignIn(t *testing.T) {
 	assertGone(t, pidFile)
 	if creds := readCreds(t, p); creds != "" {
 		t.Errorf("a lapsed sign-in left a login: %q", creds)
+	}
+}
+
+// A CODE RELAYED AS THE WAIT FOR IT RUNS OUT IS NOT AN EXPIRED ONE. The relay
+// is slow (in the engine, a write to the coordination store), and the minute
+// the harness has to print its code runs out while it is relayed: the code is
+// fresh, with its whole lifetime ahead, so the sign-in waits for its approval
+// until that lifetime and the grace are out, and the approval signs the
+// entry in.
+//
+// Mutation: read a code as expired whenever the wait for one runs out once it
+// was read, and the sign-in fails as expired.
+func TestACodeRelayedAsTheWaitForItRunsOutIsNotExpired(t *testing.T) {
+	t.Parallel()
+	p := deviceProvider(t, map[string]string{"FAKE_LOGIN_KEY": "k-device"})
+	codeWait, rearmed := make(chan time.Time), make(chan time.Time, 4)
+	var asked atomic.Int32
+	timing := deviceLoginTimingDefault
+	timing.after = func(at time.Time) <-chan time.Time {
+		if asked.Add(1) == 1 {
+			return codeWait
+		}
+		rearmed <- at
+		return nil
+	}
+	var relayed codes
+	var by time.Time
+	err := deviceLogin(t.Context(), p, relayed.relay(func(DeviceCode) {
+		close(codeWait)
+		select {
+		case by = <-rearmed:
+		case <-time.After(30 * time.Second): //fixedwait:liveness
+			t.Error("the sign-in never waited on the relayed code's own lifetime")
+		}
+		approve(t, p)
+	}), timing)
+	if err != nil {
+		t.Fatalf("DeviceLogin: %v", err)
+	}
+	if got := relayed.all(); len(got) != 1 || !by.Equal(got[0].ExpiresAt.Add(timing.grace)) {
+		t.Errorf("relayed %+v and waited until %v, want one code waited for until its lapse and the grace",
+			got, by)
+	}
+}
+
+// A SIGN-IN THE ENGINE ENDED OVER ITS OUTPUT SAYS SO. The volume under
+// state_dir refuses the room kept ahead of the sign-in's output once it has
+// printed its code: the engine kills the harness, and the failure names the
+// room and state_dir, never a harness that was killed.
+//
+// Mutation: read the wait's status before the cut, and the sign-in "did not
+// finish (signal: killed)".
+func TestADeviceSignInEndedOverItsOutputSaysSo(t *testing.T) {
+	t.Parallel()
+	p := deviceProvider(t, nil)
+	p.hooks = &captureHooks{reserve: func(f *os.File, off, n int64) error {
+		if off > 0 {
+			return syscall.ENOSPC
+		}
+		return reserveRoom(f, off, n)
+	}}
+	err := DeviceLogin(t.Context(), p, func(DeviceCode) {})
+	if err == nil {
+		t.Fatal("a sign-in whose room was refused succeeded")
+	}
+	for _, want := range []string{"room", "state_dir"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want it to name %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "signal: killed") {
+		t.Errorf("err = %v, which reads the engine's own kill as the harness's failure", err)
 	}
 }
 

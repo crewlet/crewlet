@@ -1,15 +1,13 @@
 package harness
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -44,6 +42,9 @@ type deviceTiming struct {
 	// an approval made in the code's last second still has to reach the harness
 	// on its next poll and be written.
 	grace time.Duration
+	// after, where set, is the suite's clock for the sign-in's deadlines: a
+	// channel that fires at the instant given. Nil is the wall clock's.
+	after func(at time.Time) <-chan time.Time
 }
 
 // deviceLoginTimingDefault is every device sign-in's timing.
@@ -81,7 +82,7 @@ const deviceTailLines = 5
 // the credential directory. That is the whole reason this flow, and no
 // browser or terminal relay, is how a sign-in starts from the dashboard.
 //
-// NO TERMINAL: stdout and stderr are ONE pipe the engine reads, in the order
+// NO TERMINAL: stdout and stderr are ONE capture the engine reads, in the order
 // the harness wrote them, with ANSI colour stripped ([ansiEscape]) before the
 // profile's device_code_patterns read the address, the code and the lifetime
 // out of each line. So the harness runs in a process group of its own
@@ -180,8 +181,10 @@ type deviceReading struct {
 	url      string
 	code     string
 	lifetime time.Duration
-	// sent is whether the code has been relayed.
+	// sent is whether the code has been read to be relayed.
 	sent bool
+	// expires is when that code lapses: the lifetime from when it was read.
+	expires time.Time
 	// tail is the last lines printed, for a failure's message.
 	tail []string
 }
@@ -225,7 +228,8 @@ func (d *deviceReading) read(line string) (DeviceCode, bool) {
 	if life == 0 {
 		life = d.timing.lifetime
 	}
-	return DeviceCode{URL: d.url, Code: d.code, ExpiresAt: time.Now().Add(life).UTC()}, true
+	d.expires = time.Now().Add(life)
+	return DeviceCode{URL: d.url, Code: d.code, ExpiresAt: d.expires.UTC()}, true
 }
 
 // said is the last lines the harness printed, scrubbed, for a failure's message.
@@ -238,123 +242,114 @@ func (d *deviceReading) said() string {
 
 // runDeviceLogin runs the device sign-in's harness in home and reads what it
 // prints until it exits: see [DeviceLogin].
+//
+// ITS TWO STREAMS ARE ONE CAPTURE, in the workspace's captures directory, read
+// to its end and kept nowhere ([childSpec.merged]): each line is handed to the
+// reading as the reader reads it, the last one too, whether or not it ended in
+// a line break. Its end is a call's: the harness exited, its group gone and
+// nothing holding the capture, within the grace ([childRun.end]).
 func (p *Provider) runDeviceLogin(
 	ctx context.Context, home string, env []string, rx devicePatterns, timing deviceTiming, out func(DeviceCode),
 ) error {
 	command := string(p.profile.Binary) + " " + strings.Join(p.profile.DeviceLoginArgs, " ")
-	r, w, err := os.Pipe()
+	captures, err := p.ws.capturesDir()
 	if err != nil {
-		return fmt.Errorf("harness: starting %s: %w", command, err)
+		return err
 	}
 	runCtx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	cmd := exec.CommandContext(runCtx, string(p.profile.Binary), p.profile.DeviceLoginArgs...) //nolint:gosec // args come from a validated profile
-	cmd.Dir = home
-	cmd.Env = env
-	// ONE PIPE FOR BOTH STREAMS, the same file for each, so the harness's
-	// lines arrive in the order it wrote them whichever stream it chose for
-	// the code; no stdin, since nobody types into a device sign-in.
-	cmd.Stdout, cmd.Stderr = w, w
-	procgroup.Set(cmd)
-	cmd.Cancel = func() error { return procgroup.Terminate(cmd.Process.Pid) }
-	cmd.WaitDelay = p.termGrace
-	if err := cmd.Start(); err != nil {
-		_ = r.Close()
-		_ = w.Close()
+
+	// THE READING IS THE READER'S, guarded for the one question the loop
+	// below asks of it: whether the code is out, which moves the deadline.
+	var mu sync.Mutex
+	reading := &deviceReading{rx: rx, timing: timing}
+	// relayed carries the instant the relayed code's approval is waited
+	// until: its lapse, and the grace.
+	relayed := make(chan time.Time, 1)
+	read := func(line string) {
+		mu.Lock()
+		code, ok := reading.read(line)
+		by := reading.expires.Add(timing.grace)
+		mu.Unlock()
+		if !ok {
+			return
+		}
+		out(code)
+		relayed <- by
+	}
+	ch, err := startChild(runCtx, childSpec{
+		binary: p.profile.Binary, args: p.profile.DeviceLoginArgs, dir: home, env: env,
+		outDir: captures, setting: p.stateSetting(), merged: true,
+		// No stdin: nobody types into a device sign-in.
+		out:   streamSpec{kind: readToEnd, onLine: read, last: lastLineHanded},
+		grace: p.termGrace, hooks: p.hooks, janitor: &p.janitor,
+	})
+	if err != nil {
 		return fmt.Errorf("harness: starting %s: %w", command, err)
 	}
-	// The child holds its own copy; this one would keep the pipe open past
-	// the child, and the read below would never end.
-	_ = w.Close()
-	group, idErr := recordGroup(cmd)
-	if idErr != nil {
-		_ = r.Close()
-		return fmt.Errorf("harness: %s started, but its process identity could not be read, "+
-			"so it was ended at once (no later signal to its group could be checked): %w", command, idErr)
-	}
 
-	lines := make(chan string)
-	go func() {
-		defer close(lines)
-		scan := bufio.NewScanner(r)
-		scan.Buffer(make([]byte, 0, 4096), maxOutput)
-		for scan.Scan() {
-			lines <- scan.Text()
-		}
-	}()
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
-
-	reading := &deviceReading{rx: rx, timing: timing}
-	read := func(line string) {
-		if code, ok := reading.read(line); ok {
-			out(code)
-		}
+	after := timing.after
+	if after == nil {
+		after = func(at time.Time) <-chan time.Time { return time.After(time.Until(at)) }
 	}
-	deadline := time.NewTimer(timing.codeWait)
-	defer deadline.Stop()
+	deadline := after(time.Now().Add(timing.codeWait))
 	cancelled := runCtx.Done()
 	var waitErr error
-	for running := true; running; {
+	waited := false
+	for !waited {
 		select {
-		case line, ok := <-lines:
-			if !ok {
-				lines = nil
-				continue
-			}
-			sent := reading.sent
-			read(line)
-			if !sent && reading.sent {
-				// The code is out: the harness now has its lifetime, and the
-				// grace, to be approved.
-				life := reading.lifetime
-				if life == 0 {
-					life = timing.lifetime
-				}
-				deadline.Reset(life + timing.grace)
-			}
-		case <-deadline.C:
-			if reading.sent {
-				stop(ErrDeviceCodeExpired)
-			} else {
+		case by := <-relayed:
+			// The code is out: the harness now has its lifetime, and the
+			// grace, to be approved.
+			deadline = after(by)
+		case <-deadline:
+			mu.Lock()
+			wasSent, by, said := reading.sent, reading.expires.Add(timing.grace), reading.said()
+			mu.Unlock()
+			switch {
+			case !wasSent:
+				deadline = nil
 				stop(fmt.Errorf("harness: %s printed no device code within %s, so it was stopped; %s",
-					command, timing.codeWait, reading.said()))
+					command, timing.codeWait, said))
+			case time.Now().Before(by):
+				// READ AS THE WAIT FOR IT RAN OUT, and still being relayed
+				// (in the engine, a write to the coordination store): the
+				// code is fresh, and its own lifetime decides.
+				deadline = after(by)
+			default:
+				deadline = nil
+				stop(ErrDeviceCodeExpired)
 			}
 		case <-cancelled:
 			cancelled = nil
-		case waitErr = <-exited:
-			running = false
+		case waitErr = <-ch.exited:
+			waited = true
 		}
 	}
+	letGoBy := time.Now().Add(p.termGrace)
 	if runCtx.Err() != nil {
 		// Stopped: Cancel signalled the group and WaitDelay killed the harness
 		// if it would not go; whatever it started that survived goes now, so
-		// nothing holding the pipe outlives the sign-in. After the harness
+		// nothing holding the capture outlives the sign-in. After the harness
 		// was reaped, so only while the group is still the one recorded
 		// ([harnessGroup.signal]).
-		group.signal(ctx, "device sign-in stopped", "SIGKILL", procgroup.Kill)
+		ch.signal("device sign-in stopped", "SIGKILL", procgroup.Kill)
 	}
-	// What the harness printed before it exited is still in the pipe: read to its
-	// end, bounded by the grace in case something it left behind holds it.
-	drain := time.NewTimer(p.termGrace)
-	defer drain.Stop()
-	for lines != nil {
-		select {
-		case line, ok := <-lines:
-			if !ok {
-				lines = nil
-				continue
-			}
-			read(line)
-		case <-drain.C:
-			_ = r.Close()
-		}
-	}
-	_ = r.Close()
+	// What the harness printed before it exited is read to the end the end
+	// measured, its last line included.
+	ch.collect(ch.end(letGoBy))
+	ch.close()
+	mu.Lock()
+	defer mu.Unlock()
 
-	switch cause := context.Cause(runCtx); {
+	switch cause, cut := context.Cause(runCtx), ch.cut.Load(); {
 	case ctx.Err() != nil:
 		return fmt.Errorf("harness: the device sign-in was stopped before it was approved: %w", ctx.Err())
+	case cut != nil:
+		// THE ENGINE ENDED IT OVER ITS OUTPUT, so the kill its wait reports
+		// is the engine's own, and the cut says why: a state_dir whose
+		// volume refused the room ahead, or a reading that fell behind.
+		return fmt.Errorf("harness: %s: %w; %s", command, cut, reading.said())
 	case errors.Is(cause, ErrDeviceCodeExpired):
 		return fmt.Errorf("%w (%s, at %s); start the sign-in again for a new code",
 			ErrDeviceCodeExpired, command, reading.code)

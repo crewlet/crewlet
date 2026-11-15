@@ -113,7 +113,7 @@ func (p *Provider) serveTools(
 	}
 	for _, f := range m.Seed {
 		if err := writeSeed(checkout.Work, f.Path, m.Render(f.Content, t.values)); err != nil {
-			t.close(ctx)
+			t.close()
 			return nil, p.fail(llm.KindFatal, err)
 		}
 	}
@@ -149,7 +149,13 @@ func (p *Provider) serveTools(
 	}
 	in.clock = t.clock
 	in.stop = req.Tools.Done()
-	in.onLine, in.everyLine = t.reader.stdoutLine, true
+	// THE RECORD IS READ AS IT GOES, every line of it past maxOutput too,
+	// where the route prints its record on stdout as JSONL: such a run's
+	// stdout is read to its end, keeping its first maxOutput. Any other
+	// stdout (one JSON document, a text answer) is one answer.
+	in.onLine = t.reader.stdoutLine
+	in.lineStream = p.profile.RouteOutput() == harnessprofile.OutputJSONL
+	in.readToEnd = in.lineStream
 	if r := p.profile.Requests; r != nil && r.Source == harnessprofile.SourceFile {
 		root := checkout.Work
 		if r.In == harnessprofile.SeedHome {
@@ -258,9 +264,8 @@ func (t *toolRun) release() bool {
 // close is the run's teardown on every way out: the tail stopped, the host's
 // server released, a serve lifecycle's own server stopped, the carry stopped
 // and waited for — before the checkout is released, which the carry works in
-// and the harness's server runs in. ctx is the run's, for what its teardown
-// logs.
-func (t *toolRun) close(ctx context.Context) {
+// and the harness's server runs in.
+func (t *toolRun) close() {
 	if t.waitTail != nil {
 		close(t.stopTail)
 		t.waitTail()
@@ -272,7 +277,8 @@ func (t *toolRun) close(ctx context.Context) {
 		t.watchStop = nil
 	}
 	if t.server != nil {
-		t.server.stop(ctx)
+		t.server.stop()
+		t.server.close()
 	}
 	if t.abort != nil {
 		t.abort(nil)

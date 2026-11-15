@@ -12,7 +12,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
-	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // A harness's group is signalled after its leader was reaped in three places
@@ -117,25 +116,25 @@ func TestASignalToAGroupThatCannotBeReadIsWithheld(t *testing.T) {
 func TestAServerWhoseGroupCannotBeReadIsStillStopped(t *testing.T) {
 	t.Parallel()
 	pidFile := filepath.Join(t.TempDir(), "helper.pid")
-	var env []string
-	for k, v := range fakeChildEnv(map[string]string{"FAKE_STUBBORN": "1", "FAKE_PIDFILE": pidFile}) {
-		env = append(env, k+"="+v)
-	}
-	srv, err := startServer(harnessprofile.Binary(os.Args[0]), []string{"-test.run=TestFakeHarness"}, t.TempDir(), env,
-		witnessGrace, nil, nil)
+	extra := map[string]string{"FAKE_STUBBORN": "1", "FAKE_PIDFILE": pidFile}
+	p := fakeProvider(t, extra, nil)
+	p.hooks = &captureHooks{current: func(procgroup.Leader) (bool, error) {
+		return false, errors.New("the process table could not be read")
+	}}
+	srv, err := startServer(t.Context(), p, []string{"-test.run=TestFakeHarness"}, t.TempDir(),
+		fakeRunEnv(extra), witnessGrace, nil, nil)
 	if err != nil {
 		t.Fatalf("startServer: %v", err)
 	}
 	helper := awaitPidFile(t, pidFile)
 	t.Cleanup(func() {
-		_ = srv.leader.Kill()
+		_ = srv.child.cmd.Process.Kill()
 		reapTree(helper)
 	})
-	srv.group.current = func() (bool, error) { return false, errors.New("the process table could not be read") }
 
 	stopped := make(chan struct{})
 	go func() {
-		srv.stop(t.Context())
+		srv.stop()
 		close(stopped)
 	}()
 	select {
