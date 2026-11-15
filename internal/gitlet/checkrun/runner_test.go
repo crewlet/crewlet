@@ -413,6 +413,37 @@ func TestACheckInACellNotAllowedEndsUnrun(t *testing.T) {
 	}
 }
 
+// A CHECK WHOSE BOX'S CREDENTIAL CANNOT BE MINTED RUNS NOWHERE: the node ends
+// it `errored box_failed`, saying why the minter refused, and makes no box.
+// The minter answered an empty token once, and the ending could say only that
+// none was minted.
+//
+// Mutation: end the attempt without the minter's reason, and its summary
+// names none.
+func TestACheckWhoseCredentialIsRefusedEndsUnrun(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	opts := f.options("git-a", 1, &order{nodes: []string{"git-a"}})
+	opts.Tokens = refusing{}
+	f.runner(opts)
+	key := f.queue(oidOf("9"), def("unit", time.Minute))
+	row := f.ended(key)
+	if row.State != gitlet.CheckStateErrored || row.Reason != gitlet.CheckReasonBoxFailed ||
+		!strings.Contains(row.Summary, "no credential for this check") {
+		t.Fatalf("a check whose credential was refused = %+v, want errored box_failed saying why", row)
+	}
+	if n := f.e2b.count() + f.container.count(); n != 0 {
+		t.Errorf("%d boxes were made for a check no credential admits", n)
+	}
+}
+
+// refusing mints no check's token, saying why.
+type refusing struct{}
+
+func (refusing) Mint(gitlet.CheckKey, string, time.Duration) (string, error) {
+	return "", errors.New("no credential for this check")
+}
+
 // A RUNNER RANKS AN ATTEMPT BY ITS REPOSITORY'S GIT ORDER: the node at rank
 // one claims only once the attempt has waited a stagger, so the home — rank
 // zero — claims first wherever it can; and a home with no free cell leaves

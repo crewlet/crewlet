@@ -360,16 +360,23 @@ func (e *Engine) StartMCPSignIn(ctx context.Context, name string, by iam.Actor) 
 	if record.Sealed, err = e.cipher.Encrypt(string(sealed), signInAAD(record.ID)); err != nil {
 		return MCPSignInStarted{}, fmt.Errorf("engine: seal a sign-in: %w", err)
 	}
-	stored, err := e.replaceSignIn(ctx, record)
+	// THE LINK IS MADE BEFORE THE SIGN-IN IS STORED, from the id the store
+	// keeps, so a refusal of either leaves the server's sign-in as it was:
+	// stored first, a state or an authorize URL refused after it left a
+	// pending sign-in nobody could finish in place of the one it replaced.
+	state, err := signer.Mint(name+stateSep+record.ID.String(), MCPSignInTTL)
 	if err != nil {
-		return MCPSignInStarted{}, err
+		return MCPSignInStarted{}, fmt.Errorf("engine: the state of server %s's sign-in: %w", name, err)
 	}
-	state := signer.Mint(name+stateSep+stored.ID.String(), MCPSignInTTL)
 	authorize, err := oauth.AuthorizeURL(ep, oauth.Client{Kind: client.Kind, ID: client.ID},
 		redirect, state, key.Challenge, scopes)
 	if err != nil {
 		return MCPSignInStarted{}, &MCPSignInRefusal{Status: http.StatusConflict,
 			Reason: err.Error(), Remedy: "Ask the server's vendor; nothing was signed in"}
+	}
+	stored, err := e.replaceSignIn(ctx, record)
+	if err != nil {
+		return MCPSignInStarted{}, err
 	}
 	log.InfoContext(ctx, "mcp_sign_in_started", "server", name, "sign_in", stored.ID.String(),
 		"client", string(client.Kind), "issuer", redact.URL(ep.Issuer), "by", by.Name)

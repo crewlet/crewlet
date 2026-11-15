@@ -3,6 +3,7 @@ package runtoken_test
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,17 @@ func signer(t *testing.T, domain string, m runtoken.Material) *runtoken.Signer {
 	return s
 }
 
+// mint is s's token for subject, valid for ttl, failing t where s refuses to
+// mint one.
+func mint(t *testing.T, s *runtoken.Signer, subject string, ttl time.Duration) string {
+	t.Helper()
+	token, err := s.Mint(subject, ttl)
+	if err != nil {
+		t.Fatalf("Mint(%q): %v", subject, err)
+	}
+	return token
+}
+
 // TestARotationDoesNotInvalidateAnOutstandingToken is the whole point.
 //
 // A detached executor holds its endpoint's token for as long as it runs,
@@ -44,7 +56,7 @@ func TestARotationDoesNotInvalidateAnOutstandingToken(t *testing.T) {
 	t.Parallel()
 	const domain = "crewlet.test.v1"
 	before := signer(t, domain, ring("k1", k1))
-	token := before.Mint("run-abc", time.Hour)
+	token := mint(t, before, "run-abc", time.Hour)
 
 	// Step one: k2 joins the ring, k1 still active. A node that has
 	// restarted and one that has not both validate.
@@ -61,7 +73,7 @@ func TestARotationDoesNotInvalidateAnOutstandingToken(t *testing.T) {
 	// And the other direction, which is what splits a fleet mid-rollout:
 	// a token minted by the flipped node validates at one that has not
 	// flipped yet, because k2 is on both rings.
-	fresh := flipped.Mint("run-def", time.Hour)
+	fresh := mint(t, flipped, "run-def", time.Hour)
 	if got := added.Validate(fresh); got != "run-def" {
 		t.Fatalf("a node that had not flipped refused a peer's token: %q", got)
 	}
@@ -85,7 +97,7 @@ func TestTheKeyringsOrderDoesNotChangeAToken(t *testing.T) {
 	const domain = "crewlet.test.v1"
 	one := signer(t, domain, ring("k1", k1, k2, k3))
 	two := signer(t, domain, ring("k1", k3, k2, k1))
-	if got := two.Validate(one.Mint("subject", time.Hour)); got != "subject" {
+	if got := two.Validate(mint(t, one, "subject", time.Hour)); got != "subject" {
 		t.Errorf("the token depends on the keyring's order: %q", got)
 	}
 }
@@ -98,7 +110,7 @@ func TestADomainSeparatesTheIssuers(t *testing.T) {
 	material := ring("k1", k1)
 	otlp := signer(t, "crewlet.otlp.v1", material)
 	bridge := signer(t, "crewlet.mcp.v1", material)
-	token := otlp.Mint("trace-1", time.Hour)
+	token := mint(t, otlp, "trace-1", time.Hour)
 	if got := bridge.Validate(token); got != "" {
 		t.Errorf("one issuer's token validated at another: %q", got)
 	}
@@ -107,7 +119,7 @@ func TestADomainSeparatesTheIssuers(t *testing.T) {
 	}
 	// The tag differs too, so the two issuers' tokens are not even
 	// confusable before the signature is compared.
-	if tagOf(otlp.Mint("x", time.Hour)) == tagOf(bridge.Mint("x", time.Hour)) {
+	if tagOf(mint(t, otlp, "x", time.Hour)) == tagOf(mint(t, bridge, "x", time.Hour)) {
 		t.Error("two domains produced the same key tag")
 	}
 }
@@ -117,7 +129,7 @@ func TestADomainSeparatesTheIssuers(t *testing.T) {
 func TestAnUnknownKeyTagIsRefused(t *testing.T) {
 	t.Parallel()
 	const domain = "crewlet.test.v1"
-	token := signer(t, domain, ring("k1", k1)).Mint("subject", time.Hour)
+	token := mint(t, signer(t, domain, ring("k1", k1)), "subject", time.Hour)
 	other := signer(t, domain, ring("k2", k2))
 	if got := other.Validate(token); got != "" {
 		t.Errorf("a token naming an unheld key validated: %q", got)
@@ -142,7 +154,7 @@ func TestAForgedMalformedOrExpiredTokenIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	valid := s.Mint("subject", time.Hour)
+	valid := mint(t, s, "subject", time.Hour)
 	if got := s.Validate(valid); got != "subject" {
 		t.Fatalf("a freshly minted token did not validate: %q", got)
 	}
@@ -175,10 +187,10 @@ func TestAForgedMalformedOrExpiredTokenIsRefused(t *testing.T) {
 func TestAMintIsFlooredAwayFromZero(t *testing.T) {
 	t.Parallel()
 	s := signer(t, "crewlet.test.v1", ring("k1", k1))
-	if got := s.Validate(s.Mint("subject", 0)); got != "subject" {
+	if got := s.Validate(mint(t, s, "subject", 0)); got != "subject" {
 		t.Errorf("a zero ttl minted a token that was already invalid: %q", got)
 	}
-	if got := s.Validate(s.Mint("subject", -time.Hour)); got != "subject" {
+	if got := s.Validate(mint(t, s, "subject", -time.Hour)); got != "subject" {
 		t.Errorf("a negative ttl minted a token that was already invalid: %q", got)
 	}
 }
@@ -238,7 +250,7 @@ func TestASubjectSurvivesTheRoundTrip(t *testing.T) {
 		"019948a2-7c1e-7000-8000-0123456789ab",
 		"",
 	} {
-		if got := s.Validate(s.Mint(subject, time.Hour)); got != subject {
+		if got := s.Validate(mint(t, s, subject, time.Hour)); got != subject {
 			t.Errorf("subject %q round-tripped as %q", subject, got)
 		}
 	}
@@ -263,13 +275,49 @@ func TestASubjectSurvivesTheRoundTrip(t *testing.T) {
 // whole, the vendor's piece with it, rather than cut where that piece was and
 // the rest of it, its signature among it, left in the text.
 //
+// AND A SUBJECT WHOSE TOKEN WOULD NOT BE IS NEVER MINTED: the two hold each
+// other in both directions. A subject holding any one byte Mint takes is
+// minted and its token redacted whole, and one holding a byte it refuses is
+// refused, a token's shape over it published as written; a subject of
+// redact.MaxReach bytes is minted and redacted, and one a byte longer refused
+// and published. Mint spells the rule apart from redaction's pattern, so this
+// is what keeps the two one rule.
+//
 // Mutation: drop the run-token rule from redact's table, or open a token with
 // the bare `v2` this one replaced, and every row fails; take the run token
 // after the vendors' rules, and the ticket's rows do; require a subject of at
-// least one character, and the empty subject's do.
+// least one character, and the empty subject's do; let Mint take a backslash,
+// a dot or a subject past redact.MaxReach, and its row is minted and
+// published; let it refuse a vertical tab, which redaction reads as a
+// subject's, and that row is refused and redacted.
 func TestAMintedTokenIsRedacted(t *testing.T) {
 	t.Parallel()
 	marker := redact.Marker + "run-token]"
+	s := signer(t, "crewlet.test.v1", ring("k1", k1))
+	// A token's shape over subject as Mint would write it, its signature
+	// another subject's, which redaction does not read: what a refused
+	// subject's token would have been.
+	shape := func(subject string) string {
+		return strings.Replace(mint(t, s, "x", time.Hour), ".x.", "."+subject+".", 1)
+	}
+	held := func(name, subject string) {
+		t.Helper()
+		token, err := s.Mint(subject, time.Hour)
+		switch {
+		case err == nil && redact.Secrets(token) != marker:
+			t.Errorf("%s was minted, and its token redacted to %q", name, redact.Secrets(token))
+		case err != nil && !errors.Is(err, runtoken.ErrSubject):
+			t.Errorf("%s was refused as %v, want runtoken.ErrSubject", name, err)
+		case err != nil && strings.Contains(redact.Secrets(shape(subject)), marker):
+			t.Errorf("%s was refused (%v), and a token's shape over it is redacted", name, err)
+		}
+	}
+	for b := range 256 {
+		held(fmt.Sprintf("a subject holding byte %#02x", b), "a"+string([]byte{byte(b)})+"b")
+	}
+	held("a subject of redact.MaxReach bytes", strings.Repeat("s", redact.MaxReach))
+	held("a subject of a byte more", strings.Repeat("s", redact.MaxReach+1))
+
 	claims := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat(
 		`{"artifact":"019948a2-7c1e-7000-8000-0123456789ab","purpose":"view",`+
 			`"capabilities":["read"],"lineage":"session:4f1c2a"}`, 20)))
@@ -286,7 +334,7 @@ func TestAMintedTokenIsRedacted(t *testing.T) {
 		// answers it like any other (TestASubjectSurvivesTheRoundTrip).
 		{"empty subject", "crewlet.test.v1", ""},
 	} {
-		token := signer(t, issuer.domain, ring("k1", k1)).Mint(issuer.subject, time.Hour)
+		token := mint(t, signer(t, issuer.domain, ring("k1", k1)), issuer.subject, time.Hour)
 		for _, printed := range []string{
 			token,
 			"OTEL_EXPORTER_OTLP_ENDPOINT=https://engine.example.com/otlp/" + token + "/v1/traces",

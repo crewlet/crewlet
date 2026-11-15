@@ -164,6 +164,38 @@ func boxTokens(t *testing.T, m runtoken.Material) *host.BoxTokens {
 	return tokens
 }
 
+// mintedBox is tokens' credential for ref, failing t where none is minted.
+func mintedBox(t testing.TB, tokens *host.BoxTokens, ref host.BoxRunRef) string {
+	t.Helper()
+	token, err := tokens.Mint(ref)
+	if err != nil {
+		t.Fatalf("minting launch %s's credential: %v", ref.LaunchID, err)
+	}
+	return token
+}
+
+// mintedCheck is tokens' credential for ref, valid for timeout, failing t where
+// none is minted.
+func mintedCheck(t testing.TB, tokens *host.CheckTokens, ref host.CheckRunRef, timeout time.Duration) string {
+	t.Helper()
+	token, err := tokens.Mint(ref, timeout)
+	if err != nil {
+		t.Fatalf("minting check %s's credential: %v", ref.Attempt.Name, err)
+	}
+	return token
+}
+
+// minted is signer's token for subject, valid for ttl, failing t where none is
+// minted.
+func minted(t testing.TB, signer *runtoken.Signer, subject string, ttl time.Duration) string {
+	t.Helper()
+	token, err := signer.Mint(subject, ttl)
+	if err != nil {
+		t.Fatalf("minting a token for %q: %v", subject, err)
+	}
+	return token
+}
+
 // aRunRef is a run's job as a launch names one.
 func aRunRef() host.BoxRunRef {
 	return host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
@@ -172,24 +204,25 @@ func aRunRef() host.BoxRunRef {
 // A BOX TOKEN NAMES ITS LAUNCH: it verifies back to the run's turn and the
 // launch it was minted for, a token of another per-run domain over the same
 // keyring is a signature under another key, and a turn id that would break
-// the subject's one cut is a caller's bug, answered no token at all.
+// the subject's one cut is a caller's bug, refused by name and no token at all.
 func TestABoxTokenNamesItsLaunch(t *testing.T) {
 	t.Parallel()
 	k := runtoken.KeyMaterial{ID: "k1", Material: "a fleet's key"}
 	tokens := boxTokens(t, boxRing("k1", k))
 	ref := aRunRef()
-	if got, ok := tokens.Verify(tokens.Mint(ref)); !ok || got != ref {
+	if got, ok := tokens.Verify(mintedBox(t, tokens, ref)); !ok || got != ref {
 		t.Fatalf("a minted box token verifies to %+v %v, want %+v", got, ok, ref)
 	}
 	bridge, err := runtoken.New(runtoken.Options{Domain: "crewlet.mcp.v1", Material: boxRing("k1", k)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := tokens.Verify(bridge.Mint(ref.LaunchID+"~"+ref.TurnID, time.Hour)); ok {
+	if got, ok := tokens.Verify(minted(t, bridge, ref.LaunchID+"~"+ref.TurnID, time.Hour)); ok {
 		t.Errorf("a bridge token over the same keyring was admitted as a box's: %+v", got)
 	}
-	if got := tokens.Mint(host.BoxRunRef{TurnID: "a~b", LaunchID: uuid.NewString()}); got != "" {
-		t.Errorf("a turn id holding the subject's separator was minted %q, want no token", got)
+	if got, err := tokens.Mint(host.BoxRunRef{TurnID: "a~b", LaunchID: uuid.NewString()}); !errors.Is(err,
+		host.ErrNoBoxRun) || got != "" {
+		t.Errorf("a turn id holding the subject's separator was minted %q (%v), want host.ErrNoBoxRun", got, err)
 	}
 }
 
@@ -207,15 +240,15 @@ func TestTheBoxTokenIsSignedFromTheKeyring(t *testing.T) {
 	k2 := runtoken.KeyMaterial{ID: "k2", Material: "the new key"}
 	ref := aRunRef()
 	a, b := boxTokens(t, boxRing("k1", k1)), boxTokens(t, boxRing("k1", k1))
-	if _, ok := b.Verify(a.Mint(ref)); !ok {
+	if _, ok := b.Verify(mintedBox(t, a, ref)); !ok {
 		t.Error("two nodes over one keyring refuse each other's box tokens")
 	}
 	other := boxTokens(t, boxRing("k2", k2))
-	if _, ok := other.Verify(a.Mint(ref)); ok {
+	if _, ok := other.Verify(mintedBox(t, a, ref)); ok {
 		t.Error("a node over another keyring admitted a box token")
 	}
 	rotating := boxTokens(t, boxRing("k2", k1, k2))
-	if _, ok := rotating.Verify(a.Mint(ref)); !ok {
+	if _, ok := rotating.Verify(mintedBox(t, a, ref)); !ok {
 		t.Error("a node mid-rotation refuses a token signed under the key it still holds")
 	}
 	if _, err := host.NewBoxTokens(runtoken.Material{}, nil); !errors.Is(err, runtoken.ErrNoKeyring) {
@@ -227,7 +260,7 @@ func TestTheBoxTokenIsSignedFromTheKeyring(t *testing.T) {
 // as the box's environment holds it, nothing of it survives redact.Secrets.
 func TestABoxTokenIsRedacted(t *testing.T) {
 	t.Parallel()
-	token := boxTokens(t, boxRing("k1", runtoken.KeyMaterial{ID: "k1", Material: "a fleet's key"})).Mint(aRunRef())
+	token := mintedBox(t, boxTokens(t, boxRing("k1", runtoken.KeyMaterial{ID: "k1", Material: "a fleet's key"})), aRunRef())
 	marker := redact.Marker + "run-token]"
 	for _, printed := range []string{token, "CREWLET_GIT_TOKEN=" + token} {
 		if got, want := redact.Secrets(printed), strings.Replace(printed, token, marker, 1); got != want {
@@ -256,7 +289,7 @@ func TestARunTokenOfAnEndedRunIsRefused(t *testing.T) {
 	gone, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
 	runs.Remove(gone)
 	first, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
-	firstToken := runs.Token(first)
+	firstToken := runs.Token(t, first)
 	runs.Relaunch(first)
 
 	for _, row := range []struct {
@@ -269,20 +302,20 @@ func TestARunTokenOfAnEndedRunIsRefused(t *testing.T) {
 	}{
 		{name: "no credential", status: http.StatusUnauthorized,
 			says: []string{"authenticates as `run` with its run token", "$CREWLET_GIT_TOKEN"}, reason: "none"},
-		{name: "a person's user name", user: "crewlet", pass: runs.Token(live), status: http.StatusUnauthorized,
+		{name: "a person's user name", user: "crewlet", pass: runs.Token(t, live), status: http.StatusUnauthorized,
 			says: []string{"a coding box authenticates as `run` with its run token"}, reason: "user"},
 		{name: "a forged token", user: host.BoxUser, pass: "crewlet_rt1.x.y.1.z", status: http.StatusUnauthorized,
 			says: []string{"this run token is not valid here"}, reason: "token"},
-		{name: "the run store unreachable", user: host.BoxUser, pass: runs.Token(live),
+		{name: "the run store unreachable", user: host.BoxUser, pass: runs.Token(t, live),
 			fail: errors.New("the coordination store is gone"), status: http.StatusServiceUnavailable,
 			says: []string{"the run store could not be read here", "retry in"}, reason: "run_unread"},
-		{name: "an unknown run", user: host.BoxUser, pass: runs.Token(gone), status: http.StatusForbidden,
+		{name: "an unknown run", user: host.BoxUser, pass: runs.Token(t, gone), status: http.StatusForbidden,
 			says: []string{"is unknown here"}, reason: "run_unknown"},
 		{name: "a superseded launch", user: host.BoxUser, pass: firstToken, status: http.StatusForbidden,
 			says: []string{"has launched again since"}, reason: "run_superseded"},
-		{name: "an ended run", user: host.BoxUser, pass: runs.Token(ended), status: http.StatusForbidden,
+		{name: "an ended run", user: host.BoxUser, pass: runs.Token(t, ended), status: http.StatusForbidden,
 			says: []string{"has ended (resumed)"}, reason: "run_ended"},
-		{name: "a live run", user: host.BoxUser, pass: runs.Token(live), status: http.StatusOK},
+		{name: "a live run", user: host.BoxUser, pass: runs.Token(t, live), status: http.StatusOK},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			runs.Fail(row.fail)
@@ -341,7 +374,7 @@ func TestAnUnsignedBoxRequestIsLoggedAtDebug(t *testing.T) {
 	}) {
 		t.Errorf("an unsigned request logged at INFO: %q", info)
 	}
-	boxDo(t, c, 0, gitlettest.RepoName, boxFetchAdvert, host.BoxUser, c.Fleet.Runs().Token(ended), "", "")
+	boxDo(t, c, 0, gitlettest.RepoName, boxFetchAdvert, host.BoxUser, c.Fleet.Runs().Token(t, ended), "", "")
 	if n := lines.count("code_box_refused", `"level":"INFO"`, `"reason":"run_ended"`); n != 1 {
 		t.Errorf("an ended run's signed token was refused at INFO %d times, want once: %q", n,
 			lines.lines("code_box_refused"))
@@ -397,7 +430,7 @@ func TestABoxIsGivenOnlyItsGrants(t *testing.T) {
 		current.Store(false)
 		defer current.Store(true)
 		for _, tail := range []string{boxFetchAdvert, boxPushAdvert} {
-			resp, answer := boxDo(t, c, 0, gitlettest.RepoName, tail, host.BoxUser, runs.Token(ref), "", "")
+			resp, answer := boxDo(t, c, 0, gitlettest.RepoName, tail, host.BoxUser, runs.Token(t, ref), "", "")
 			if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(answer,
 				"behind the company's configuration") {
 				t.Errorf("%s on a node behind the configuration answered %d %q", tail, resp.StatusCode, answer)
@@ -406,7 +439,7 @@ func TestABoxIsGivenOnlyItsGrants(t *testing.T) {
 	})
 	t.Run("a repository the run was not given", func(t *testing.T) {
 		ref, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
-		resp, answer := boxDo(t, c, 0, "secret", boxFetchAdvert, host.BoxUser, runs.Token(ref), "", "")
+		resp, answer := boxDo(t, c, 0, "secret", boxFetchAdvert, host.BoxUser, runs.Token(t, ref), "", "")
 		if resp.StatusCode != http.StatusForbidden || !strings.Contains(answer, `this run was not given "secret"`) {
 			t.Errorf("an ungranted repository answered %d %q", resp.StatusCode, answer)
 		}
@@ -414,7 +447,7 @@ func TestABoxIsGivenOnlyItsGrants(t *testing.T) {
 	t.Run("a read grant's push", func(t *testing.T) {
 		ref, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessRead)
 		for _, tail := range []string{boxPushAdvert, boxReceivePack} {
-			resp, answer := boxDo(t, c, 0, gitlettest.RepoName, tail, host.BoxUser, runs.Token(ref), "", "")
+			resp, answer := boxDo(t, c, 0, gitlettest.RepoName, tail, host.BoxUser, runs.Token(t, ref), "", "")
 			if resp.StatusCode != http.StatusForbidden || !strings.Contains(answer, "to read: a push needs access: write") {
 				t.Errorf("a read grant's %s answered %d %q", tail, resp.StatusCode, answer)
 			}
@@ -427,7 +460,7 @@ func TestABoxIsGivenOnlyItsGrants(t *testing.T) {
 		}
 		ref := runs.Launch("eve", secret.Position, host.BoxGrant{RepoID: secret.Repo.ID, Name: "secret",
 			Access: gitlet.AccessWrite})
-		resp, answer := boxDo(t, c, 0, "secret", boxFetchAdvert, host.BoxUser, runs.Token(ref), "", "")
+		resp, answer := boxDo(t, c, 0, "secret", boxFetchAdvert, host.BoxUser, runs.Token(t, ref), "", "")
 		if resp.StatusCode != http.StatusForbidden || !strings.Contains(answer, `seat "eve" holds no access`) {
 			t.Errorf("eve's box read a unit repository of ENG: %d %q", resp.StatusCode, answer)
 		}
@@ -511,7 +544,7 @@ func TestABoxWorksForWhoeverWokeItsTurn(t *testing.T) {
 	hidden := runs.Launch(gitlettest.FixtureAlice, secret.Position, host.BoxGrant{RepoID: secret.Repo.ID,
 		Name: "secret", Access: gitlet.AccessWrite})
 	runs.WorkFor(hidden, "eve")
-	resp, answer := boxDo(t, c, 0, "secret", boxFetchAdvert, host.BoxUser, runs.Token(hidden), "", "")
+	resp, answer := boxDo(t, c, 0, "secret", boxFetchAdvert, host.BoxUser, runs.Token(t, hidden), "", "")
 	if resp.StatusCode != http.StatusForbidden || !strings.Contains(answer, `seat "eve" holds no access`) {
 		t.Errorf("alice's box fetched a unit repository of ENG for eve: %d %q", resp.StatusCode, answer)
 	}
@@ -601,7 +634,7 @@ func TestABoxACredentialsTurnLaunchedPushesOnlyItsSeatsOwnWork(t *testing.T) {
 	} {
 		other, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
 		runs.MadeFor(other, tc.w)
-		resp, answer := boxDo(t, c, 0, gitlettest.RepoName, tc.path, host.BoxUser, runs.Token(other), "", "")
+		resp, answer := boxDo(t, c, 0, gitlettest.RepoName, tc.path, host.BoxUser, runs.Token(t, other), "", "")
 		if resp.StatusCode != tc.status || !strings.Contains(answer, tc.says) {
 			t.Errorf("a box whose run works for %s answered %d %q, want %d saying %q", tc.name, resp.StatusCode,
 				short(answer), tc.status, tc.says)
@@ -735,7 +768,7 @@ func TestAnUngrantedNameCostsTheLogNothing(t *testing.T) {
 	c, _ := boxCase(t, gitlettest.SoloOptions{Shape: gitlettest.Shape{WrapEstate: rec.wrap}})
 	c.Fleet.Declare(t, gitlet.Declared{Name: "api", Settings: gitlettest.Settings()})
 	ref, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
-	token := c.Fleet.Runs().Token(ref)
+	token := c.Fleet.Runs().Token(t, ref)
 	before := len(rec.seen("resolve"))
 	for _, name := range []string{"api", "nothing-here"} {
 		resp, answer := boxDo(t, c, 0, name, boxFetchAdvert, host.BoxUser, token, "", "")
@@ -803,7 +836,7 @@ func TestABoxKeepsTheNameItWasGiven(t *testing.T) {
 
 	t.Run("a name a rename left redirecting", func(t *testing.T) {
 		ref := given("old-name")
-		resp, answer := boxDo(t, c, 0, "old-name", boxFetchAdvert, host.BoxUser, runs.Token(ref), "", "")
+		resp, answer := boxDo(t, c, 0, "old-name", boxFetchAdvert, host.BoxUser, runs.Token(t, ref), "", "")
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("the old name's advertisement answered %d %q, want 200", resp.StatusCode, short(answer))
 		}
@@ -825,7 +858,7 @@ func TestABoxKeepsTheNameItWasGiven(t *testing.T) {
 	t.Run("a name another repository now holds", func(t *testing.T) {
 		ref := given("taken")
 		before := len(rec.seen("resolve"))
-		resp, answer := boxDo(t, c, 0, "taken", boxFetchAdvert, host.BoxUser, runs.Token(ref), "", "")
+		resp, answer := boxDo(t, c, 0, "taken", boxFetchAdvert, host.BoxUser, runs.Token(t, ref), "", "")
 		if resp.StatusCode != http.StatusForbidden ||
 			!strings.Contains(answer, `"taken" is no longer the repository this run was given`) {
 			t.Errorf("a name another repository holds answered %d %q, want 403 not_granted", resp.StatusCode,
@@ -838,7 +871,7 @@ func TestABoxKeepsTheNameItWasGiven(t *testing.T) {
 	})
 	t.Run("a session read behind the barrier", func(t *testing.T) {
 		ref := given("lagging")
-		resp, answer := boxDo(t, c, 0, "lagging", boxFetchAdvert, host.BoxUser, runs.Token(ref), "", "")
+		resp, answer := boxDo(t, c, 0, "lagging", boxFetchAdvert, host.BoxUser, runs.Token(t, ref), "", "")
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("a box whose session read named another repository answered %d %q, want the barrier's "+
 				"answer, 200", resp.StatusCode, short(answer))
@@ -859,7 +892,7 @@ func TestAStoppedSeatsBoxPushesNothing(t *testing.T) {
 	c, _ := boxCase(t, gitlettest.SoloOptions{})
 	runs := c.Fleet.Runs()
 	ref, box := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
-	token := runs.Token(ref)
+	token := runs.Token(t, ref)
 	clone := box.Clone(c.BoxURL(0))
 	box.Commit(clone, map[string]string{"a.txt": "a\n"}, "a")
 	branch := gitlet.SeatNamespace(gitlettest.FixtureAlice) + "work"
@@ -981,7 +1014,7 @@ func TestABoxIsShownNothingItsFloorDoesNotHold(t *testing.T) {
 		return nil
 	})
 	answered := make(chan reply, 1)
-	req := boxRequest(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(ref), v2, lsRefs())
+	req := boxRequest(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(t, ref), v2, lsRefs())
 	client := c.Fleet.Nodes()[0].Client()
 	served := uploadPacks(ran())
 	go func() { answered <- boxSend(req, client) }()
@@ -1010,7 +1043,7 @@ func TestABoxIsShownNothingItsFloorDoesNotHold(t *testing.T) {
 	p.Commit(work, map[string]string{"README.md": "three\n"}, "three")
 	c.MustPush(p, work, "main")
 	_ = p.LsRemote(c.URL(0), 0)
-	resp, answer := boxDo(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(again), v2, lsRefs())
+	resp, answer := boxDo(t, c, 0, gitlettest.RepoName, boxUploadPack, host.BoxUser, runs.Token(t, again), v2, lsRefs())
 	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" ||
 		!strings.Contains(answer, "the run store could not be written here") {
 		t.Errorf("an ls-refs whose raise failed answered %d %q (Retry-After %q)", resp.StatusCode, answer,
@@ -1588,7 +1621,7 @@ func TestNeitherTransportTakesTheOthersCredential(t *testing.T) {
 	c, _ := boxCase(t, gitlettest.SoloOptions{Shape: gitlettest.Shape{WrapEstate: rec.wrap}})
 	runs := c.Fleet.Runs()
 	ref, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessWrite)
-	runToken, operator := runs.Token(ref), c.Fleet.Token(t, "ceo")
+	runToken, operator := runs.Token(t, ref), c.Fleet.Token(t, "ceo")
 	n := c.Fleet.Nodes()[0]
 
 	// A PERSON THE GUARD RESOLVED: gitlettest's guard holds Tier A tokens and
@@ -1698,7 +1731,7 @@ func TestEveryBoxIsOneSpoolCredential(t *testing.T) {
 	var tokens []string
 	for range 2 {
 		ref, _ := c.LaunchBox(gitlettest.FixtureAlice, gitlet.AccessRead)
-		tokens = append(tokens, runs.Token(ref))
+		tokens = append(tokens, runs.Token(t, ref))
 	}
 	boxFetch := func(token string) <-chan reply {
 		out := make(chan reply, 1)
