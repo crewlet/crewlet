@@ -427,7 +427,8 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 // as poison.
 func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 	t.Parallel()
-	stopped, stop := context.WithCancel(t.Context())
+	live := t.Context()
+	stopped, stop := context.WithCancel(live)
 	stop()
 	silent := fmt.Errorf("sandbox: collecting t1: %w: sandbox: read run t1: nats: timeout", sandbox.ErrStoreSilent)
 	unannounced := func(err error) error { return fmt.Errorf("%w: %w", sandbox.ErrUnannounced, err) }
@@ -460,7 +461,7 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			ctx := t.Context()
+			ctx := live
 			if tc.stopped {
 				ctx = stopped
 			}
