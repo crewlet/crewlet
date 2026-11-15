@@ -147,8 +147,9 @@ type Cluster interface {
 	ConverseThrough(ctx context.Context, node string, w gitlet.ConversationWrite) (gitlet.ConversationResult, error)
 }
 
-// RunFleet runs every case only a fleet of data nodes can make, IN ORDER ON
-// ONE CLUSTER: a three-member start is seconds to tens of seconds on a loaded
+// RunFleet runs every case only a fleet of data nodes can make — or, with
+// [StoreFleetCases], those of them whose claim the object store's backend can
+// change — IN ORDER ON ONE CLUSTER: a three-member start is seconds to tens of seconds on a loaded
 // runner, a fresh cluster per case and per crash point would be minutes of
 // starts, and what a case changes is a repository of its own — so each case
 // declares its own, and a member it kills or pauses it brings back before it
@@ -172,14 +173,20 @@ type Cluster interface {
 //
 // A cluster of fewer than three members is refused: two members have no
 // quorum without each other.
-func RunFleet(t *testing.T, newCluster func(t *testing.T) Cluster) {
+func RunFleet(t *testing.T, cases FleetCases, newCluster func(t *testing.T) Cluster) {
 	t.Helper()
+	if !cases.Valid() {
+		t.Fatalf("gitlettest: RunFleet was asked for %q cases; want EveryFleetCase or StoreFleetCases", cases)
+	}
 	c := newCluster(t)
 	if err := quorum(c); err != nil {
 		t.Fatal(err)
 	}
 	dueThroughout(t, c)
 	for _, fc := range fleetCases() {
+		if cases == StoreFleetCases && !fc.store {
+			continue
+		}
 		broken := false
 		t.Run(fc.name, func(t *testing.T) {
 			c.ConfineMaintenance(t)
@@ -246,44 +253,79 @@ func settled(ctx context.Context, c Cluster) error {
 type fleetCase struct {
 	name string
 	run  func(t *testing.T, c Cluster)
+	// store is whether the case's claim reads or writes the object store's
+	// bytes in a way a backend can change: a pack bundle uploaded or
+	// downloaded, a cache filled or synced from it, a part read in a range, an
+	// object the collector lists or deletes. A case whose claim is the
+	// routing, the committer, the ledger or a recovery is false: its pushes
+	// reach the store too, but what it holds the fleet to is decided before
+	// or after the bytes, the same on every backend.
+	store bool
 }
+
+// FleetCases names which of [RunFleet]'s cases a run makes.
+type FleetCases string
+
+const (
+	// EveryFleetCase is the whole suite: the run on the backend a fleet is
+	// held to first.
+	EveryFleetCase FleetCases = "every"
+	// StoreFleetCases is the cases whose claim a backend can change
+	// (fleetCase.store), for the run on a second backend. The rest wait out
+	// a dead member's write attempt — 45 s for F1, F31 and F39, 82 s for F41
+	// — to prove what the backend has no part in, and ran on both: a third
+	// of internal/gitlet/gitletcluster's twelve minutes on CI, every run, for
+	// nothing the first run had not already shown.
+	StoreFleetCases FleetCases = "store"
+)
+
+// Valid reports whether c is one of the runs [RunFleet] makes.
+func (c FleetCases) Valid() bool { return c == EveryFleetCase || c == StoreFleetCases }
 
 // fleetCases is RunFleet's cases, in the order they run.
 func fleetCases() []fleetCase {
 	return []fleetCase{
-		{"F12_APushIsVisibleThroughEveryNodeAtOnce", aPushIsVisibleThroughEveryMember},
-		{"F13_AFetchFromABehindNodeFindsItsWants", aFetchFromABehindMemberFindsItsWants},
-		{"F22_ABloblessCloneChecksOut", aBloblessCloneChecksOutOnAFleet},
-		{"F23_AFilterABitmapCannotAnswerIsRefused", aFilterABitmapCannotAnswerIsRefusedOnAFleet},
-		{"F4_TwoPushesToOneRefLandOnce", twoPushesThroughTwoMembersLandOnce},
-		{"F19_PushesThroughEveryNodeMeetAtOneCommitter", pushesThroughEveryNodeMeetAtOneCommitter},
-		{"F27_AHomesDeathFillsOneCopy", aHomesDeathFillsOneCopy},
-		{"F1_ACommitterThatDiesAfterAppendingStillAnswersOk", aCommitterThatDiesAfterAppendingStillAnswersOk},
-		{"F3_AGateDroppedPushIsNotApplied", aGateDroppedPushIsNotApplied},
-		{"F20_AStoppingCommitterHandsItsRepositoriesOn", aStoppingCommitterHandsItsRepositoriesOn},
-		{"F55_ACommitterThatCannotReadTheLogsUsageHandsThePushOn",
-			aCommitterThatCannotReadTheLogsUsageHandsThePushOn},
-		{"R7_AnEvictedCommittersRepositoriesAreCommittedByTheirRunnerUp",
-			anEvictedCommittersRepositoriesAreCommittedByTheirRunnerUp},
-		{"F21_ACrashAtEveryPushStepLeavesATruthfulStateOnAFleet", aCrashAtEveryPushStepOnAFleet},
-		{"F28_TwoMaintainersLandOneCompaction", twoMaintainersLandOneCompaction},
-		{"F29_ACompactionFailsOverToTheRunnerUpCommitter", aCompactionFailsOverToTheRunnerUpCommitter},
-		{"F30_ACompactionAnsweredLateIsCollapsed", aCompactionAnsweredLateIsCollapsed},
-		{"F31_AChangeOpenSurvivesItsCommitter", aChangeOpenSurvivesItsCommitter},
-		{"F39_AConversationSurvivesItsWriter", aConversationSurvivesItsWriter},
-		{"F40_EveryMemberRoutesAnEngineWriteToTheHome", everyMemberRoutesAnEngineWriteToTheHome},
-		{"F41_AnEngineWriteWhoseHomeDiesAfterAppendIsOnePush", anEngineWriteWhoseHomeDiesAfterAppendIsOnePush},
-		{"F42_ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds", aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds},
-		{"F45_ABoxReadsItsOwnPushThroughAnotherNode", aBoxReadsItsOwnPushThroughAnotherMember},
-		{"F46_ABoxPushesOnTopOfWhatAnotherNodeShowedIt", aBoxPushesOnTopOfWhatAnotherMemberShowedIt},
-		{"F47_ABoxNeverSeesABranchGoBack", aBoxNeverSeesABranchGoBackAcrossMembers},
-		{"LY8_ALargeNodePublishesForEveryNode", aLargeNodePublishesForEveryNode},
-		{"LY9_TwoMaintainersLandOnePublication", twoMaintainersLandOnePublication},
-		{"F48_ExpungeVsAPushCheckedBeforeIt", expungeVsAPushCheckedBeforeItOnAFleet},
-		{"F49_ExpungeUnderAPushEvery100ms", expungeUnderAPushEvery100msOnAFleet},
+		{name: "F12_APushIsVisibleThroughEveryNodeAtOnce", run: aPushIsVisibleThroughEveryMember, store: true},
+		{name: "F13_AFetchFromABehindNodeFindsItsWants", run: aFetchFromABehindMemberFindsItsWants, store: true},
+		{name: "F22_ABloblessCloneChecksOut", run: aBloblessCloneChecksOutOnAFleet, store: true},
+		{name: "F23_AFilterABitmapCannotAnswerIsRefused",
+			run: aFilterABitmapCannotAnswerIsRefusedOnAFleet, store: true},
+		{name: "F4_TwoPushesToOneRefLandOnce", run: twoPushesThroughTwoMembersLandOnce},
+		{name: "F19_PushesThroughEveryNodeMeetAtOneCommitter", run: pushesThroughEveryNodeMeetAtOneCommitter},
+		{name: "F27_AHomesDeathFillsOneCopy", run: aHomesDeathFillsOneCopy, store: true},
+		{name: "F1_ACommitterThatDiesAfterAppendingStillAnswersOk",
+			run: aCommitterThatDiesAfterAppendingStillAnswersOk},
+		{name: "F3_AGateDroppedPushIsNotApplied", run: aGateDroppedPushIsNotApplied},
+		{name: "F20_AStoppingCommitterHandsItsRepositoriesOn", run: aStoppingCommitterHandsItsRepositoriesOn},
+		{name: "F55_ACommitterThatCannotReadTheLogsUsageHandsThePushOn",
+			run: aCommitterThatCannotReadTheLogsUsageHandsThePushOn},
+		{name: "R7_AnEvictedCommittersRepositoriesAreCommittedByTheirRunnerUp",
+			run: anEvictedCommittersRepositoriesAreCommittedByTheirRunnerUp},
+		{name: "F21_ACrashAtEveryPushStepLeavesATruthfulStateOnAFleet",
+			run: aCrashAtEveryPushStepOnAFleet, store: true},
+		{name: "F28_TwoMaintainersLandOneCompaction", run: twoMaintainersLandOneCompaction, store: true},
+		{name: "F29_ACompactionFailsOverToTheRunnerUpCommitter", run: aCompactionFailsOverToTheRunnerUpCommitter},
+		{name: "F30_ACompactionAnsweredLateIsCollapsed", run: aCompactionAnsweredLateIsCollapsed},
+		{name: "F31_AChangeOpenSurvivesItsCommitter", run: aChangeOpenSurvivesItsCommitter},
+		{name: "F39_AConversationSurvivesItsWriter", run: aConversationSurvivesItsWriter},
+		{name: "F40_EveryMemberRoutesAnEngineWriteToTheHome", run: everyMemberRoutesAnEngineWriteToTheHome},
+		{name: "F41_AnEngineWriteWhoseHomeDiesAfterAppendIsOnePush",
+			run: anEngineWriteWhoseHomeDiesAfterAppendIsOnePush},
+		{name: "F42_ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds",
+			run: aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds},
+		{name: "F45_ABoxReadsItsOwnPushThroughAnotherNode",
+			run: aBoxReadsItsOwnPushThroughAnotherMember, store: true},
+		{name: "F46_ABoxPushesOnTopOfWhatAnotherNodeShowedIt",
+			run: aBoxPushesOnTopOfWhatAnotherMemberShowedIt, store: true},
+		{name: "F47_ABoxNeverSeesABranchGoBack", run: aBoxNeverSeesABranchGoBackAcrossMembers, store: true},
+		{name: "LY8_ALargeNodePublishesForEveryNode", run: aLargeNodePublishesForEveryNode, store: true},
+		{name: "LY9_TwoMaintainersLandOnePublication", run: twoMaintainersLandOnePublication, store: true},
+		{name: "F48_ExpungeVsAPushCheckedBeforeIt", run: expungeVsAPushCheckedBeforeItOnAFleet, store: true},
+		{name: "F49_ExpungeUnderAPushEvery100ms", run: expungeUnderAPushEvery100msOnAFleet, store: true},
 		// LAST: its retention and collection run a day on, for every
 		// repository the cluster holds.
-		{"F50_ExpungeRetiredPackOutlivesItsLongestRead", expungeRetiredPackOutlivesItsLongestReadOnAFleet},
+		{name: "F50_ExpungeRetiredPackOutlivesItsLongestRead",
+			run: expungeRetiredPackOutlivesItsLongestReadOnAFleet, store: true},
 	}
 }
 

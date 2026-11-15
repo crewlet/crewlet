@@ -435,6 +435,14 @@ func wireAPI(
 	srv.Listener = ln
 	srv.Start()
 	stops = append(stops, srv.Close)
+	// AND THE TOOL BRIDGE SHUT DOWN BEFORE THE LISTENER CLOSES, as
+	// `crewlet run`'s surface does ([mcpbridge.Bridge.Shutdown]): a box's
+	// call waiting for a seat holder, or a poll for its notes, is a request
+	// the close would otherwise wait out. A box whose node stopped goes on
+	// calling the fleet's address, here this node, and the close waited for
+	// the call's whole holder wait — two seat-lease lifetimes, ninety seconds
+	// of every stateless case's cleanup.
+	stops = append(stops, e.Bridge().Shutdown)
 
 	// AND THE RECONCILE LOOP, as `crewlet run` starts it once the node is
 	// serving: what applies a configuration write. Without it a PUT /config

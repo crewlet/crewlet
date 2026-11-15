@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -68,6 +69,23 @@ func CodeReadingForTest(ctx context.Context, e *Engine) statelog.Reading {
 	var r statelog.Reading
 	e.codeReading(ctx, time.Now().UTC(), &r)
 	return r
+}
+
+// PollHomeForTest runs one backstop pass of e's Gitlet home loop now, read at
+// a stale floor ([gitlethome.Loop.Poll]), for a case outside the package whose
+// subject is what a running node's home work raises — a mirror dialed, a
+// train priced — rather than the [gitlethome.Backstop] its ticker waits
+// between passes, which a case waiting on it sat out two or three times. The
+// loop keeps its own ticker and nudges beside it; a pass is the same pass
+// either way. A node with no home loop (no Gitlet role, or not started) is
+// the case's mistake, and says so.
+func PollHomeForTest(ctx context.Context, e *Engine) error {
+	n := e.native.Load()
+	if n == nil || n.home == nil {
+		return errors.New("engine: PollHomeForTest: this engine runs no Gitlet home loop; start a Gitlet node first")
+	}
+	_, err := n.home.Poll(ctx, statelog.Position{})
+	return err
 }
 
 // WithCommitterPublisher is opts with wrap standing between a data node's
