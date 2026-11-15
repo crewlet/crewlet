@@ -73,8 +73,9 @@ concurrency:
 # Measured from that run's saves, as stored (compressed), an entry is now kept
 # only where it shortens the run's longest wait, or where a second job shares
 # it:
-#   - the race shards (4, 2.20 GB) and the end-to-end shards (2, 0.63 GB),
-#     the run's longest jobs at 7-15 minutes each;
+#   - the race shards (4, 2.20 GB) and the end-to-end shards (then 2, 0.63
+#     GB; the third, added for the reason THE SHARD COUNTS gives, adds about
+#     one shard's 0.25-0.37 GB), the run's longest jobs at 7-15 minutes each;
 #   - `build + vet` (1.15 GB), which `golangci-lint` restores too: loading the
 #     packages for the linter compiles what that job's `go build` and `go vet`
 #     compile, and a cold lint took 370-610 s against 110-150 s warm;
@@ -95,7 +96,8 @@ concurrency:
 # the repository holds one set, 3.36 GB in 15 entries after that run and 3.66
 # GB in 16 with the Chromiums', and a push's saves take it to about 6.6 GB
 # until that job runs, 6.9 GB on the push that moves a Chromium pin or the
-# layout of its recipe.
+# layout of its recipe; the third end-to-end shard puts both about 0.3 GB
+# higher, still clear of the 10 GB.
 #
 # Nothing here can make a test pass that should fail. A build-cache entry is
 # keyed by an action ID that hashes the inputs, the flags (-race), the
@@ -461,13 +463,18 @@ jobs:
   # about a minute of setup (checkout, the Go caches, the pinned gits, node)
   # before its first test.
   #
-  # Two for the solo half, whose shards run at -p 1 and so take the SUM of
-  # their packages. internal/gitlet/gitletcluster alone is 738 to 861 of its 1,266
-  # to 1,527 seconds (main's runs 41714027577 to 41745668479), so two shards
-  # put it on one runner and the other nine on the other, and a third would
-  # leave gitletcluster's shard the floor and buy nothing. Each shard is a runner
-  # of its own, so no two of these packages ever share a machine: sharding
-  # takes contention away rather than adding any (`go doc ./internal/solo`).
+  # Three for the solo half, whose shards run at -p 1 and so take the SUM of
+  # their packages. internal/gitlet/gitletcluster is a steady 766 to 780
+  # seconds, and the other nine together are NOT: 660 on main's run
+  # 43714008949 and 930 on 43716728680, the swing almost all internal/coord/kv
+  # (266 to 382) and internal/e2e (205 to 298). With two shards the nine
+  # share one runner, which ended the half on the second run (17.9 minutes
+  # against gitletcluster's 14.2). Three put gitletcluster alone, kv and e2e
+  # each at the head of one of the other two, and leave gitletcluster's shard
+  # the floor on every run; a fourth would split nothing heavier than kv. Each
+  # shard is a runner of its own, so no two of these packages ever share a
+  # machine: sharding takes contention away rather than adding any (`go doc
+  # ./internal/solo`).
   #
   # THE PLAN DEALS ONCE, for every runner. The partition is a function of the
   # commit and the weights file, and a weights file restored by each shard
@@ -490,7 +497,7 @@ jobs:
     runs-on: *linux
     env:
       RACE_SHARDS: 4
-      SOLO_SHARDS: 2
+      SOLO_SHARDS: 3
     outputs:
       race: ${{ steps.legs.outputs.race }}
       solo: ${{ steps.legs.outputs.solo }}
