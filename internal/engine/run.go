@@ -402,7 +402,7 @@ type Engine struct {
 	pauses seatPauses
 
 	// runners is this node's executor-cell readiness and the loop that
-	// keeps it ([runnerProbe]), published on the heartbeat.
+	// keeps it ([runnerProbe]), published on the node's status record.
 	runners runnerProbe
 
 	// hostLogins is what each model entry's harness says of its login on this
@@ -424,6 +424,11 @@ type Engine struct {
 	// listings is this node's published MCP listings and its watched copy
 	// of every node's ([mcpListings]).
 	listings mcpListings
+
+	// statusRecords is this node's status record writer: its MCP, model and
+	// runner rows and its infra summary, beside its presence
+	// (nodestatusrecord.go).
+	statusRecords statusRecords
 
 	// reviews is this node's watched copy of the definitions the fleet's
 	// MCP tools' levels were decided on ([mcpReviews]).
@@ -982,8 +987,9 @@ type Engine struct {
 	//
 	// mcpShared and mcpSeats are what each start of a server concluded —
 	// the shared servers per apply, the per-role children per pass over a
-	// seat — for the heartbeat's [coord.NodeStatus.MCP]. Under mcpMu too,
-	// because a seat's outcomes are replaced and forgotten with its bridge.
+	// seat — for the node's status record ([coord.NodeStatusRecord.MCP]).
+	// Under mcpMu too, because a seat's outcomes are replaced and forgotten
+	// with its bridge.
 	mcpMu     sync.Mutex
 	seatMCP   map[string]*seatChildren
 	seatTools map[string]*tools.Registry
@@ -2453,9 +2459,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// so a beat whose status read overran must still say it — and,
 		// from memory, nothing can overrun it ([Engine.gitBackground]).
 		GitBackground: e.gitBackground(),
-		// AND WHAT THIS NODE RUNS ON, hosts and names read once from its own
-		// file, which the atlas draws the fleet from ([NodeInfra]).
-		Infra: NodeInfra(e.boot).Meta(),
 		// WHICH ROLES THE COMPANY NEEDS, off the current epoch: git only
 		// where it hosts code, so a fleet that declared its roles without
 		// git is never told nobody serves it until it would matter.
@@ -2670,6 +2673,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// WHAT THIS NODE'S MCP SERVERS LIST, published, and every node's,
 	// watched: the catalogue a per-agent server's tools reach.
 	e.startMCPListings(ctx)
+	// AND WHAT THIS NODE SAYS OF ITS SERVERS, ITS MODELS, ITS RUNNERS AND
+	// WHAT IT RUNS ON, its status record beside its presence.
+	e.startStatusRecords(ctx)
 	// AND HOW EACH OF THEM IS, answered to a server's page on any node; and
 	// THE RESTARTS PEOPLE ASKED FOR, applied as every node hears them.
 	e.startMCPInstances(ctx)
@@ -3473,8 +3479,11 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopHostLogins()
 	e.stopModelRetries()
 	// AND THIS NODE'S MCP LISTINGS, removed now that its servers are down,
-	// and its instances no longer answered.
+	// and its instances no longer answered; and its STATUS RECORD, whose
+	// rows describe those servers, removed beside them rather than after.
+	recordRemoved := e.stopStatusRecords(ctx)
 	e.stopMCPListings(ctx)
+	recordRemoved()
 	e.stopMCPInstances(ctx)
 	e.stopMCPChecks(ctx)
 	e.stopMCPRestarts()
@@ -4256,7 +4265,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 	return res, err
 }
 
-// nodeStatus is what this node advertises about itself on every heartbeat.
+// nodeStatus is what this node advertises about itself on every heartbeat:
+// the live core its presence carries. Its MCP, model and runner rows and what
+// it runs on ride its status record instead ([Engine.statusRecordRows]).
 //
 // Read LIVE, per beat, rather than cached: a cached in-flight count is a
 // node reporting work it finished a minute ago, and the whole value of
@@ -4268,12 +4279,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (_ turn.Result, err e
 // rather than by the beat's clock after this returns: only this frame knows
 // which of its reads a dead context could have cut short.
 func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
-	// The MCP rows are this process's own record of what it started, read
-	// under a lock and never from a child.
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture, Build: version.String(),
-		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
-		Models: e.modelStatus(ctx), ParkedStateVersion: execstate.Version,
+		ParkedStateVersion: execstate.Version,
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

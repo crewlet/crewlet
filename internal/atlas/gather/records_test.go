@@ -32,6 +32,7 @@ var (
 	_ gather.ToolServers       = (*kv.FleetStore)(nil)
 	_ gather.ServerTests       = (*kv.FleetStore)(nil)
 	_ gather.Nodes             = (*kv.Store)(nil)
+	_ gather.NodeStatuses      = (*kv.FleetStore)(nil)
 	_ gather.AccessLog         = (*accessdomain.Reader)(nil)
 	_ gather.Usage             = usage.Reader{}
 )
@@ -58,22 +59,34 @@ func (f fakeTools) ListMCPListings(context.Context) ([]coord.MCPListing, error) 
 }
 func (f fakeTools) ListMCPGrants(context.Context) ([]coord.MCPGrant, error) { return f.grants, nil }
 
-type fakeNodes []coord.NodeStatus
+// fakeNodes is live nodes n0, n1, … at presence epoch 1, each with the status
+// record given at that epoch.
+type fakeNodes []coord.NodeStatusRecord
 
-// ListLive answers each status as a lease carries it: under the status key,
-// through the JSON the broker stores it as.
+// ListLive answers each node's presence lease.
 func (f fakeNodes) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
 	out := make([]coord.Lease, 0, len(f))
-	for i, s := range f {
-		raw, err := json.Marshal(map[string]any{coord.StatusKey: s.Meta()})
+	for i := range f {
+		out = append(out, coord.Lease{Resource: coord.NodeResource(fmt.Sprintf("n%d", i)), Epoch: 1})
+	}
+	return out, nil
+}
+
+// NodeStatusRecords answers each node's record through the bytes a store keeps
+// it as.
+func (f fakeNodes) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+	out := make([]coord.NodeStatusRecord, 0, len(f))
+	for i, r := range f {
+		r.Node, r.Epoch = fmt.Sprintf("n%d", i), 1
+		raw, err := r.Encode()
 		if err != nil {
 			return nil, err
 		}
-		var meta map[string]any
-		if err := json.Unmarshal(raw, &meta); err != nil {
+		stored, err := coord.DecodeNodeStatusRecord(r.Node, raw)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, coord.Lease{Resource: coord.NodeResource(fmt.Sprintf("n%d", i)), Epoch: 1, Meta: meta})
+		out = append(out, stored)
 	}
 	return out, nil
 }
@@ -137,6 +150,12 @@ func hostDigest(t *testing.T, c *config.Company, id string) string {
 // email address where the real record can, to prove none is read.
 func records(t *testing.T, c *config.Company) gather.Sources {
 	expiry, failed := now.Add(3*24*time.Hour), now.Add(-time.Hour)
+	nodes := fakeNodes{{
+		MCP: []coord.MCPServerStatus{{Server: "files", Failed: 1, DownSince: failed, Error: "atlas-error-canary"}},
+		Models: []coord.ModelStatus{{Key: "main", LastAnswer: now.Add(-2 * time.Hour),
+			LastFailure: &coord.ModelFailure{At: failed, Said: "atlas-said-canary"},
+			HostLogin:   &coord.HostLogin{Account: "owner@acme.example"}}},
+	}}
 	return gather.Sources{
 		Log:    fakeLog{},
 		Gitlet: &fakeGitlet{page: 10},
@@ -161,12 +180,7 @@ func records(t *testing.T, c *config.Company) gather.Sources {
 			grants: []coord.MCPGrant{{Server: "tickets", Issuer: "https://auth.tickets.example", Expiry: &expiry,
 				By: "ops@acme.example"}},
 		},
-		Nodes: fakeNodes{{
-			MCP: []coord.MCPServerStatus{{Server: "files", Failed: 1, DownSince: failed, Error: "atlas-error-canary"}},
-			Models: []coord.ModelStatus{{Key: "main", LastAnswer: now.Add(-2 * time.Hour),
-				LastFailure: &coord.ModelFailure{At: failed, Said: "atlas-said-canary"},
-				HostLogin:   &coord.HostLogin{Account: "owner@acme.example"}}},
-		}},
+		Nodes: nodes, NodeStatuses: nodes,
 		ServerTests: fakeTests{
 			{Host: "db-1", HostDigest: hostDigest(t, c, "db-1"), At: failed, OK: false, By: "ops@acme.example"},
 			{Host: "web-1", HostDigest: "a-digest-of-settings-since-changed", At: failed, OK: false},
@@ -400,8 +414,8 @@ func realistic(tb testing.TB) (*config.Company, gather.Sources) {
 	}
 	source := &fakeGitlet{repos: repos, page: 500, checksPerRepo: 4}
 	return c, gather.Sources{Gitlet: source, Integrations: fakeIntegrations{}, SeatAccess: ledger, ToolServers: tools,
-		Nodes: fakeNodes{{MCP: health}}, ServerTests: fakeTests{}, AccessLog: fakeAccess{use: hostUse},
-		Usage: fakeUsage{spend: spend, calls: calls}}
+		Nodes: fakeNodes{{MCP: health}}, NodeStatuses: fakeNodes{{MCP: health}}, ServerTests: fakeTests{},
+		AccessLog: fakeAccess{use: hostUse}, Usage: fakeUsage{spend: spend, calls: calls}}
 }
 
 // fakeLog is the atlas's own log: the claims it answers, or its error.

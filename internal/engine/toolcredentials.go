@@ -635,14 +635,15 @@ func (m *credentialMissing) mintingKinds() []integration.Kind {
 // judged is m weighed against what each integration minting one of its
 // variables last recorded, keyed by integration, as the fleet holds it.
 //
-// A FRESH VALUE, never m changed in place: the heartbeat judges the outcome a
-// pass filed, on every beat, while the next pass may be filing another. Nil
+// A FRESH VALUE, never m changed in place: the status record's writer judges
+// the outcome a pass filed, on every reading, while the next pass may be
+// filing another. Nil
 // states is "this node could not read the record", and m is then returned
 // with the judgement its pass stored rather than cleared — the record not
 // answering for a moment is no evidence that a person has acted. That is the
-// pass's judgement and not the previous beat's, so for the one beat that
-// cannot read a wait the last beat judged stopped can read as waiting again,
-// and the reverse, until the next beat reads the record.
+// pass's judgement and not the previous reading's, so for the one reading that
+// cannot read a wait the last reading judged stopped can read as waiting again,
+// and the reverse, until the next reading reads the record.
 func (m *credentialMissing) judged(states map[integration.Kind]integration.State) *credentialMissing {
 	if m == nil || states == nil || len(m.minting) == 0 {
 		return m

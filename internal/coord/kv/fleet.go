@@ -402,7 +402,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why TWENTY-THREE buckets and not one
+// # Why TWENTY-FOUR buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -426,6 +426,12 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           redelivery horizon and the scheduler's catchup floor
 //	status     peer freshness, a minute: a node that STOPS reporting must
 //	           vanish from the fleet view, which the bucket does for free
+//	nodeStatus the same minute, for the same reason: a node's status record
+//	           (its MCP, model and runner rows and its infra summary) is
+//	           rewritten at least every reconcile interval, four times inside
+//	           the age, so a live node's never ages out and a dead node's
+//	           goes with no sweep — and readers stopped counting it a minute
+//	           earlier, when its presence lapsed (coord's nodestatusrecord.go)
 //	config     none at all: the activation pointer is the fencing sequence,
 //	           and a pointer that expired would restart the epoch
 //	budgets    the longest calendar window and a day, thirty-two days: a
@@ -551,6 +557,7 @@ const (
 	objectsSuffix      = "_objects"
 	custodySuffix      = "_custody"
 	uploadsSuffix      = "_uploads"
+	nodeStatusSuffix   = "_node_status"
 	// activationKey holds the pointer AND the current revision's sealed
 	// body, in one record — see [coord.ActivationRecord].
 	activationKey = "activation"
@@ -599,7 +606,8 @@ type FleetConfig struct {
 	// while the month still counted it — see [coord.BudgetRetention].
 	BudgetRetention time.Duration
 
-	// StatusFreshness is how long a node's apply status counts as current.
+	// StatusFreshness is how long a node's apply status, and its status
+	// record, count as current: the age of both buckets.
 	StatusFreshness time.Duration
 
 	// CustodyRetention is how long the record of which data node keeps a
@@ -707,6 +715,7 @@ type FleetStore struct {
 	objects      jetstream.KeyValue
 	custody      jetstream.KeyValue
 	uploads      jetstream.KeyValue
+	nodeStatus   jetstream.KeyValue
 
 	// positions is the register the ageless key classes the fleet still
 	// composes share: a node's log positions, a trim hold, a backup point,
@@ -786,7 +795,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, twenty-three buckets in a row, and a boot that nobody meant to allow ten
+// bucket, twenty-four buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -865,6 +874,9 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			cfg.LedgerRetention},
 		{&store.status, statusSuffix,
 			"Crewlet per-node config-apply status; a node that stops reporting ages out",
+			cfg.StatusFreshness},
+		{&store.nodeStatus, nodeStatusSuffix,
+			"Crewlet per-node status records (MCP, models, runners, infra); a node that stops writing ages out",
 			cfg.StatusFreshness},
 		{&store.config, configSuffix,
 			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0},
@@ -1024,7 +1036,7 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	}
 	// THE BUCKET WHOSE AGE OUTLASTS THE WINDOW, and no longer than it must:
 	// the valve's windows in rate, aged a few of them, and a window up to a
-	// day in windows, aged a few days (see "Why TWENTY-THREE buckets"). A window
+	// day in windows, aged a few days (see "Why TWENTY-FOUR buckets"). A window
 	// in a bucket that reaped it before it closed would restart its count
 	// mid-window and pass far more than its caller asked for, so a longer
 	// one is refused loudly rather than counted.

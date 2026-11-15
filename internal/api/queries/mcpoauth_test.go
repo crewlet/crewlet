@@ -80,7 +80,7 @@ func oauthSources(t *testing.T) queries.Sources {
 		t.Fatal(err)
 	}
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
 		{Server: "linear", Shared: true, Started: 1, Tools: 12},
 		{Server: "notion", Shared: true, Failed: 1, ErrorClass: "needs_sign_in"},
 		{Server: "moved", Shared: true, Failed: 1, ErrorClass: "needs_sign_in",
@@ -99,7 +99,7 @@ func oauthSources(t *testing.T) queries.Sources {
 	notion.Failure, notion.FailedAt = "the vendor refused to renew the sign-in: invalid_grant", &failedAt
 	stripe.Expiry = &past
 	return queries.Sources{
-		Coord: backend, Company: companySource(t, cfg),
+		Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg),
 		Builtins:  catalogueOffer,
 		MCPGrants: grantsReader{grants: []coord.MCPGrant{linear, moved, notion, stripe}},
 		Now:       func() time.Time { return oauthNow },

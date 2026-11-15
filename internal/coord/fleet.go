@@ -2118,6 +2118,7 @@ type Fleet interface {
 	DeviceSignIns
 	ModelChecks
 	MCPListings
+	NodeStatusRecords
 	MCPRestarts
 	MCPChecks
 	SSHTests
