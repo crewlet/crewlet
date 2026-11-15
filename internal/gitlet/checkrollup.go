@@ -270,9 +270,9 @@ func rollupOfTarget(ctx context.Context, tx *sql.Tx, repoID, commit, target stri
 		return nil, fmt.Errorf("gitlet: read the checks of %s for %s: %w", commit, target, err)
 	}
 	var read []rollupRow
-	err = eachRow(rows, func(s scanner) error {
-		r, err := scanRollupRow(s)
-		if err == nil {
+	err = eachRow(rows, func(s scanner) (err error) {
+		var r rollupRow
+		if r, err = scanRollupRow(s); err == nil {
 			read = append(read, r)
 		}
 		return err

@@ -203,9 +203,9 @@ func commitMerged(ctx context.Context, tx *sql.Tx, repo RepoRef, commit string, 
 		return nil, fmt.Errorf("gitlet: read the changes %s merged in %s: %w", commit, repo.Name, err)
 	}
 	var out []belonging
-	err = eachRow(rows, func(s scanner) error {
-		l, err := scanLanding(s, repo)
-		if err == nil {
+	err = eachRow(rows, func(s scanner) (err error) {
+		var l belonging
+		if l, err = scanLanding(s, repo); err == nil {
 			out = append(out, l)
 		}
 		return err
@@ -223,10 +223,12 @@ func commitHeads(ctx context.Context, tx *sql.Tx, repo RepoRef, commit string, l
 		return nil, fmt.Errorf("gitlet: read the revisions %s heads in %s: %w", commit, repo.Name, err)
 	}
 	var out []headed
-	err = eachRow(rows, func(s scanner) error {
-		var h headed
-		l, err := scanLanding(s, repo, &h.n)
-		if err == nil {
+	err = eachRow(rows, func(s scanner) (err error) {
+		var (
+			h headed
+			l belonging
+		)
+		if l, err = scanLanding(s, repo, &h.n); err == nil {
 			h.change = l
 			out = append(out, h)
 		}
@@ -304,12 +306,12 @@ func (r *Reader) gateOf(ctx context.Context, tx *sql.Tx, repoID string, l belong
 	if err != nil {
 		return nil, fmt.Errorf("gitlet: read the approvals of %s: %w", l.Ref, err)
 	}
-	err = eachRow(rows, func(s scanner) error {
+	err = eachRow(rows, func(s scanner) (err error) {
 		var (
 			a    GateApproval
 			kind string
 		)
-		if err := s.Scan(&a.Handle, &kind, &a.Revision); err != nil {
+		if err = s.Scan(&a.Handle, &kind, &a.Revision); err != nil {
 			return err
 		}
 		a.Kind = PartyKind(kind)

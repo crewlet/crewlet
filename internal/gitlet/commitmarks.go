@@ -141,10 +141,12 @@ func commitChecks(ctx context.Context, tx *sql.Tx, repoID, commit string) ([]Tar
 		read     int
 		more     bool
 	)
-	err = eachRow(rows, func(s scanner) error {
-		var target string
-		row, err := scanRollupRow(s, &target)
-		if err != nil {
+	err = eachRow(rows, func(s scanner) (err error) {
+		var (
+			target string
+			row    rollupRow
+		)
+		if row, err = scanRollupRow(s, &target); err != nil {
 			return err
 		}
 		read++
