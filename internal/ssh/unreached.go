@@ -7,6 +7,8 @@ import (
 	"net"
 	"strconv"
 	"syscall"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Why a server could not be reached, in a person's words with the remedy for
@@ -50,8 +52,8 @@ func unreachedWords(addr string, err error) string {
 			"or a firewall turns the engine away. Check the port.", host, port)
 	}
 	if ne, ok := errors.AsType[net.Error](err); (ok && ne.Timeout()) || errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Sprintf("Nothing answered at %s on port %s within %d seconds. Check the address and port, "+
-			"and let the engine's address through the server's firewall.", host, port, int(DialTimeout.Seconds()))
+		return fmt.Sprintf("Nothing answered at %s on port %s within %s. Check the address and port, "+
+			"and let the engine's address through the server's firewall.", host, port, statelog.Spoken(DialTimeout))
 	}
 	return fmt.Sprintf("%s could not be reached on port %s. Check the address and port, "+
 		"and let the engine's address through the server's firewall.", host, port)

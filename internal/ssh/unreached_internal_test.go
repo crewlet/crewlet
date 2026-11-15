@@ -54,7 +54,7 @@ var dialFailures = []struct {
 	{
 		name:     "a server that never answers",
 		err:      &net.OpError{Op: "dial", Net: "tcp", Err: timedOut{}},
-		said:     []string{"Nothing answered at web-1.example.com on port 2222 within 10 seconds", "firewall"},
+		said:     []string{"Nothing answered at web-1.example.com on port 2222 within 10s", "firewall"},
 		operator: []string{"i/o timeout", "dial tcp"},
 	},
 	{
