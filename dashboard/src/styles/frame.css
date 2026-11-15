@@ -704,6 +704,14 @@
     flex: none;
   }
 
+  /* WHO IS WORKING FOLDS AWAY ON A PHONE: it is a figure, not an action, and
+     beside the screen's own run (which shrinks and scrolls while the pill
+     does not) it cut Home's New task to "New tas" behind the fade. Home's
+     greeting and figures already say how many agents work. */
+  .page-controls .working-now {
+    display: none;
+  }
+
   .page-controls .page-actions > :not(.page-find) {
     flex: none;
   }

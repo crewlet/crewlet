@@ -2487,7 +2487,9 @@ must not also open the grid row behind the field.
 The bar holds the trail, who is working now (on Home's bar only, as the Main
 artboard draws it — the sidebar's Live row carries the same count on every
 other page, and a chip in every bar sat between a task's trail and its actions
-and pushed a profile's controls past a phone's edge), the star, and LAST
+and pushed a profile's controls past a phone's edge; on a phone it folds away
+too, since beside the screen's scrolling run it cut Home's "New task" to "New
+tas", and Home's greeting and figures already say who is working), the star, and LAST
 the screen's own controls (portalled in by `PageActions`), so a screen's
 primary action ("New task") ends the row where the approved designs put it.
 A SCOPE's lenses (a project's Tasks, About, History and Files, portalled in by
