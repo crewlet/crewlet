@@ -29,12 +29,12 @@ import (
 // broker that did not answer, a queue no longer live, a delivery whose context
 // this node's stop or drain ended), or a condition of the infrastructure the
 // engine runs on (builtin.InfrastructureKind: a coordination store that did
-// not answer, a busy store, a full disk), the NAK is the node's
+// not answer, a busy store, a full disk, a sandbox provider that did not
+// answer), the NAK is the node's
 // (queue.NakNode), so a delivery whose budget it spends is kept with the
 // group's unhandled deliveries and never with its poison. Any other failure
 // stays the mail's, a deadline, a write the state log refused for what it is
-// and a coding sandbox's class among them, since what the mail asked can cause
-// each.
+// and a sandbox provider refusing the company's credentials among them.
 //
 // THE SAME ANSWER THE SEAT'S CONTROL TOPIC NAKS BY (nodesFailure), so the
 // sandbox coordinator's marks for a store that did not answer it
@@ -77,7 +77,9 @@ func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 			&statelog.Unavailable{Reason: statelog.ReasonRecordTooLarge, OpID: "op-1"})},
 		"a deadline the turn ran past": {
 			err: fmt.Errorf("runner: the harness's run: %w", context.DeadlineExceeded)},
-		"a coding sandbox's class": {err: fmt.Errorf("runner: launching the executor's run: %w",
+		"a sandbox provider that did not answer": {err: fmt.Errorf("runner: launching the executor's "+
+			"run: %w", sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("e2b: 503"))), nodes: true},
+		"a sandbox provider refusing the company's key": {err: fmt.Errorf("runner: launching the executor's run: %w",
 			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401")))},
 		"the mail's own": {err: errors.New("the payload is larger than the broker takes")},
 	}

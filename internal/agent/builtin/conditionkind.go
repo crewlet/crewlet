@@ -2,8 +2,10 @@ package builtin
 
 import (
 	"errors"
+	"strings"
 	"syscall"
 
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -55,19 +57,25 @@ const SandboxKindPrefix = "sandbox_"
 //
 // FALSE FOR THE KINDS LEFT TO THE WORK, each one what was asked can cause: a
 // write the state log refused for what the write itself is
-// ([KindStateLogWriteRefused]); a coding sandbox's class ([SandboxKindPrefix]),
-// one of which does not say whether the box failed for what was asked of it
-// or for its provider (a command the box timed out or killed, a provider that
-// did not answer: [sandbox.WhyProviderUnavailable]); and a deadline (`timeout`)
-// and an abandoned wait (`canceled`), the provider layer's words for a call
-// that ran past its own wall clock or that its caller gave up on, which the
-// length of what was asked decides as much as the node does. False for
-// anything that is no kind of a condition.
+// ([KindStateLogWriteRefused]); and a deadline (`timeout`) and an abandoned
+// wait (`canceled`), the provider layer's words for a call that ran past its
+// own wall clock or that its caller gave up on, which the length of what was
+// asked decides as much as the node does. False for anything that is no kind
+// of a condition.
 //
-// EVERY KIND THIS PACKAGE DECLARES IS NAMED HERE, on one side, and
-// TestEveryConditionKindIsTheNodesOrTheWorks holds each to it: a new kind
-// lands on the side its author chose rather than on a default.
+// A CODING SANDBOX'S CLASS ([SandboxKindPrefix]) IS PUT ON A SIDE BY WHETHER A
+// MAIL CAN CAUSE IT, class by class ([sandboxClassIsTheNodes]), never as a
+// block: a provider that did not answer or is at its account's limit spent a
+// seat's backlog into its poison when every class was the work's.
+//
+// EVERY KIND THIS PACKAGE DECLARES, AND EVERY CLASS THE SANDBOX NAMES, IS
+// NAMED HERE, on one side, and TestEveryConditionKindIsTheNodesOrTheWorks
+// holds each to it: a new kind or class lands on the side its author chose
+// rather than on a default.
 func InfrastructureKind(kind string) bool {
+	if class, ok := strings.CutPrefix(kind, SandboxKindPrefix); ok {
+		return sandboxClassIsTheNodes(sandbox.Why(class))
+	}
 	switch kind {
 	case KindStateLogUnavailable, KindFileStoreFull, KindFileStoreUnavailable,
 		KindCoordinationUnavailable, KindNoDataNode, KindEstateClosed,
@@ -79,6 +87,55 @@ func InfrastructureKind(kind string) bool {
 		// THE WORK'S: no node can make the write it asked for, and no wait
 		// lets one; a different write (a split change, a fresh operation, an
 		// object not deleted) is what gets past it.
+		return false
+	}
+	return false
+}
+
+// sandboxClassIsTheNodes reports whether a coding sandbox's class is a
+// condition of the infrastructure rather than something a mail can cause.
+// Every class a turn or a resume fails on is met where the engine starts a
+// box for the seat (the provider's create, the company's setup recipe, the
+// engine's probes of the box, a relaunch): every request and command there is
+// the deployment's or the engine's own, and a command the seat's executor runs
+// in its box ends with its own exit status (a timeout's 124, a signal's), never
+// with a class (internal/sandbox's e2b.go). False for a class this build does
+// not name.
+func sandboxClassIsTheNodes(why sandbox.Why) bool {
+	switch why {
+	case sandbox.WhyProviderUnavailable:
+		// THE NODE'S: the provider, or the box it runs, did not answer or
+		// failed on its side, or the way to it did; it clears when the
+		// provider answers again, whatever the mail asked.
+		return true
+	case sandbox.WhySetupUnavailable:
+		// THE NODE'S: a download the company's setup recipe makes is failing
+		// on the far side (its command exited 75); the recipe is the
+		// deployment's, and it clears when that service answers again.
+		return true
+	case sandbox.WhyProviderLimit:
+		// THE NODE'S: the company's account with the provider is at a limit
+		// (too many boxes, too many requests), set by the account and spent
+		// by every seat alike; it clears when a box ends or the window passes.
+		return true
+	case sandbox.WhyProviderBilling:
+		// THE NODE'S: the provider wants the company's account paid for
+		// before it starts anything, a billing state a person settles.
+		return true
+	case sandbox.WhyConfiguration:
+		// THE NODE'S: the deployment's configuration cannot start the run
+		// (this node with no sandbox runtime for the company or no tool
+		// bridge its box can dial, a cell no backend serves, an executor
+		// chain with no member a box runs, the company's setup step exiting,
+		// a template or image the provider or the runtime refuses), which a
+		// person's edit changes and nothing in a mail reaches.
+		return true
+	case sandbox.WhyProviderRefused:
+		// THE WORK'S: the provider refused the company's credentials (a 401
+		// or 403 from its control plane). A person changes the key, and the
+		// failure hold pauses the seat on its second time in a row and parks
+		// its mail (internal/engine's failurehold.go, ADR-0117), so a delivery
+		// spends no more than one attempt on it either way.
 		return false
 	}
 	return false

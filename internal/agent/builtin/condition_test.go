@@ -300,20 +300,38 @@ func TestEverySandboxClassIsACondition(t *testing.T) {
 // [builtin.InfrastructureKind] over the kind its record carries; so the side
 // of every kind is decided once, here. The work's side is exactly the kinds a
 // piece of work can cause (worksKinds): a write the state log refused for what
-// it is, a coding sandbox's class, a deadline and an abandoned wait. Every
-// other condition, and every other kind the package declares, is the node's.
-// A state log's refusal of the write itself and its every other refusal are
-// two kinds, one a side each, held for every reason the log names.
+// it is, a deadline, an abandoned wait, and of a coding sandbox's classes the
+// one ruled the work's (sandboxClassSides). Every other condition, and every
+// other kind the package declares, is the node's. A state log's refusal of
+// the write itself and its every other refusal are two kinds, one a side
+// each, held for every reason the log names; and every class the sandbox
+// names has a side decided here, so a class added there fails until one is.
 //
 // Mutation: take a declared kind off InfrastructureKind's list and its rows go
 // red; put a kind of the work's on it and theirs do; read every state-log
 // write refusal under one kind and the write rows of the work's reasons do;
-// declare a kind no condition is recorded under and the declaration's row
-// does.
+// move a sandbox class to the other side, or read every class as one side,
+// and its rows do; declare a kind no condition is recorded under and the
+// declaration's row does.
 func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
 	t.Parallel()
 	works := func(kind string) bool {
-		return strings.HasPrefix(kind, builtin.SandboxKindPrefix) || worksKinds[kind]
+		if class, ok := strings.CutPrefix(kind, builtin.SandboxKindPrefix); ok {
+			nodes, decided := sandboxClassSides[sandbox.Why(class)]
+			return decided && !nodes
+		}
+		return worksKinds[kind]
+	}
+	for _, why := range sandbox.Whys {
+		if _, decided := sandboxClassSides[why]; !decided {
+			t.Errorf("the sandbox class %q has no side decided here: say whether a mail can "+
+				"cause it, here and in builtin's sandboxClassIsTheNodes", why)
+		}
+	}
+	for why := range sandboxClassSides {
+		if !why.Valid() {
+			t.Errorf("%q is decided here and is not a class the sandbox names", why)
+		}
 	}
 	recorded := map[string]bool{}
 	for name, err := range everyCondition() {
@@ -352,6 +370,20 @@ func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
 			t.Errorf("%q, no kind of a condition, is the node's", kind)
 		}
 	}
+}
+
+// sandboxClassSides is every coding sandbox class's side, true for the node's:
+// a provider that did not answer, at its account's limit or wanting it paid
+// for, a setup download failing on the far side and a configuration the
+// deployment cannot start are no mail's doing, and a refused credential is
+// left with the work.
+var sandboxClassSides = map[sandbox.Why]bool{
+	sandbox.WhyProviderUnavailable: true,
+	sandbox.WhySetupUnavailable:    true,
+	sandbox.WhyProviderLimit:       true,
+	sandbox.WhyProviderBilling:     true,
+	sandbox.WhyConfiguration:       true,
+	sandbox.WhyProviderRefused:     false,
 }
 
 // worksKinds is every kind outside a coding sandbox's classes that is the

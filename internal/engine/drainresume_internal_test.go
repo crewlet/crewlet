@@ -484,6 +484,10 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 		"a resume that failed": {err: errors.New("sandbox: resuming t1: the model provider did not answer")},
 		"a resume that ran past its deadline": {err: fmt.Errorf("sandbox: resuming t1: runner: %w",
 			context.DeadlineExceeded)},
+		"a relaunch a sandbox provider did not answer": {err: fmt.Errorf("sandbox: resuming t1: %w",
+			sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("e2b: 503"))), nodes: true},
+		"a relaunch a sandbox provider refused the key of": {err: fmt.Errorf("sandbox: resuming t1: %w",
+			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401")))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
