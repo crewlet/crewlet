@@ -521,25 +521,28 @@ func (h *holdStep) Hold(ctx context.Context, handle string) error {
 }
 
 // AN OWED RUN HOLDS ITS SEAT'S MAIL ONLY BEHIND A SERIES RECORDED AND ARMED TO
-// DRIVE IT. Each way this node keeps a run's series for its retry records the
-// series, owes the seat's run and arms the series' attempt in one step of the
-// coordinator's lock: an answer by turn or a recovered seat's owed answer
-// ([Coordinator.queueOwed]), an ending that did not finish
-// ([Coordinator.oweEndingAfter]), a dead claim's revival that did not land
-// ([Coordinator.oweRevival]) and an answer left to its job's owed release
-// ([Coordinator.leaveToRelease]). A seat's release ([Coordinator.ReleaseSeat])
-// drops the series, its attempt and the seat's owed runs, and a run owed in a
-// step of its own after the one that recorded its series was owed again with
-// nothing to drive it: the seat's mail held on this node until a settle of that
-// run or the seat's next release. The hold is taken once the step is over, so
-// it reads the series as the step left it.
+// DRIVE IT. Each way this node owes a seat's run for a series' retry records the
+// series, owes the run and arms the series' attempt in one step of the lock: an
+// answer by turn or a recovered seat's owed answer ([Coordinator.queueOwed]), an
+// ending that did not finish ([Coordinator.oweEndingAfter]), a dead claim's
+// revival that did not land ([Coordinator.oweRevival]) and an answer left to its
+// job's owed release ([Coordinator.leaveToRelease]). A seat's release
+// ([Coordinator.ReleaseSeat]) drops the series, its attempt and the seat's owed
+// runs, and a run owed in a step of its own after the one that recorded its
+// series was owed again with nothing to drive it: the seat's mail held on this
+// node until a settle of that run or the seat's next release. The attempt is
+// armed under the lock, so the case reads, as it is armed, whether the run is
+// owed yet; and the hold is taken once the step is over, so it reads the series
+// as the step left it.
 //
-// Mutation: in queueOwed, oweEndingAfter or oweRevival, owe the seat's run and
-// arm the series in steps after the one that records it; the hold is taken
-// behind a series nothing has armed. (leaveToRelease armed its series in the
-// recording step and owed after it:
-// [TestASeatReleasedAsAnAnswerIsLeftToItsReleaseOwesItNothing] releases the
-// seat between the two.)
+// Mutation: owe the seat's run in a step after the one that records the series
+// and arms its attempt, as leaveToRelease did, and the run is not owed yet when
+// its series is armed; owe it and arm the series in steps after the one that
+// records it, as queueOwed, oweEndingAfter and oweRevival did, and the hold is
+// taken behind a series nothing has armed. Either split, at any of the four,
+// turns that one's case red.
+// ([TestASeatReleasedAsAnAnswerIsLeftToItsReleaseOwesItNothing] releases the
+// seat between leaveToRelease's two steps.)
 func TestAnOwedRunIsHeldBehindOnlyASeriesRecordedAndArmed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -580,30 +583,41 @@ func TestAnOwedRunIsHeldBehindOnlyASeriesRecordedAndArmed(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig := newCoordRig(t)
-			run := rig.launch("t1")
 			var mu sync.Mutex
-			var holds []string
-			hold := &holdStep{at: func(handle string) {
+			var steps []string
+			note := func(step string) {
+				mu.Lock()
+				defer mu.Unlock()
+				steps = append(steps, step)
+			}
+			var rig *coordRig
+			rig = newCoordRigWith(t, func(o *CoordinatorOptions) {
+				// ARMED UNDER THE LOCK THE ARMING STEP HOLDS
+				// ([Coordinator.scheduleOwedLocked]): what the seat owes
+				// is read as that step has left it so far.
+				o.After = func(delay time.Duration, f func()) func() bool {
+					_, owed := rig.coordinator.owed["swe"]["t1"]
+					note(fmt.Sprintf("armed: owed %v", owed))
+					return rig.retries.after(delay, f)
+				}
+			})
+			run := rig.launch("t1")
+			rig.coordinator.hold = &holdStep{at: func(handle string) {
 				rig.coordinator.mu.Lock()
 				r := rig.coordinator.retries["t1"]
 				_, owed := rig.coordinator.owed[handle]["t1"]
 				recorded := r != nil && tc.records(r)
 				armed := r != nil && r.stop != nil
 				rig.coordinator.mu.Unlock()
-				mu.Lock()
-				defer mu.Unlock()
-				holds = append(holds, fmt.Sprintf("%s: owed %v, series recorded %v, armed %v",
-					handle, owed, recorded, armed))
+				note(fmt.Sprintf("%s held: owed %v, series recorded %v, armed %v", handle, owed, recorded, armed))
 			}}
-			rig.coordinator.hold = hold
 			tc.keep(t, rig, run)
 
 			mu.Lock()
 			defer mu.Unlock()
-			want := []string{"swe: owed true, series recorded true, armed true"}
-			if !slices.Equal(holds, want) {
-				t.Fatalf("the seat's mail held as %q; want %q", holds, want)
+			want := []string{"armed: owed true", "swe held: owed true, series recorded true, armed true"}
+			if !slices.Equal(steps, want) {
+				t.Fatalf("the series armed and the seat's mail held as %q; want %q", steps, want)
 			}
 		})
 	}
