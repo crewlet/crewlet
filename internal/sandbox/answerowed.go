@@ -68,15 +68,19 @@ import (
 // count intact, where a park would republish it in a loop for the whole
 // backoff.
 //
-// AN OWED RUN HOLDS THE SEAT ONLY BEHIND A SERIES ARMED TO DRIVE IT: every way
-// this node keeps a run's series for its retry records the series, owes the
-// seat's run and arms its attempt in one step of the lock
-// ([Coordinator.keepSeriesLocked], [Coordinator.oweRelease],
-// [Coordinator.leaveToRelease]), since a seat's release drops all three
-// together ([Coordinator.releaseOwed]). Owed in a step after the series, a run
-// whose seat was released between the two was owed again with nothing to
-// drive it, and held the seat's mail on this node until a settle of that run
-// or the seat's next release.
+// AN OWED RUN HOLDS THE SEAT ONLY WHILE SOMETHING DRIVES IT. Every step that
+// owes a seat's run for a series' retry records that series and arms its
+// attempt in the same step of the lock ([Coordinator.keepSeriesLocked],
+// [Coordinator.oweRelease], [Coordinator.leaveToRelease]), since a seat's
+// release drops all three together ([Coordinator.releaseOwed]). Owed in a step
+// after the series, a run whose seat was released between the two was owed
+// again with nothing to drive it, and held the seat's mail on this node until
+// a settle of that run or the seat's next release. Only the inline attempt
+// owes outside such a step ([Coordinator.resumeOwed]): it drives the run
+// itself, and reads the seat's lease before it acts. A step that keeps or arms
+// a series again without owing anew (a failed attempt's next, a refusal's wait)
+// owes nothing, and what a seat's release leaves of that series is dropped by
+// the attempt it arms, which finds the seat not held.
 //
 // # What ends an answer that cannot be resumed
 //
@@ -2384,11 +2388,11 @@ func (c *Coordinator) queueOwed(ctx context.Context, run PendingRun) {
 	c.reconcileHold(ctx, run.AgentHandle)
 }
 
-// keepSeriesLocked owes the seat run ([Coordinator.oweLocked]) and arms the next
-// attempt of run's series after delay ([Coordinator.scheduleOwedLocked]), in the
-// step of the lock that recorded the series and what it keeps; the caller
-// brings the seat's inbox hold into line ([Coordinator.reconcileHold]) once it
-// lets go of c.mu.
+// keepSeriesLocked owes the seat's run ([Coordinator.oweLocked]) and arms the
+// next attempt of run's series after delay ([Coordinator.scheduleOwedLocked]),
+// in the step of the lock that recorded the series and what it keeps; the
+// caller brings the seat's inbox hold into line ([Coordinator.reconcileHold])
+// once it lets go of c.mu.
 //
 // IN THE ONE STEP, because a seat's release ([Coordinator.releaseOwed]) drops
 // the seat's series, their attempts and its owed runs together. A run owed in a
