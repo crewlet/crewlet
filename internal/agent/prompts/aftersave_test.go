@@ -585,7 +585,7 @@ func TestEveryCountThatSaysTheTallyIsBelowHasItBelow(t *testing.T) {
 }
 
 // THE CALLS LISTED AGAIN ARE ONES A TOLD CALL COULD BE TAKEN FOR. A call the
-// session holds that a told call could be taken for is listed again under
+// session may show that a told call could be taken for is listed again under
 // words that say the session may show it, never that it shows it, since a
 // save point's claim is not what a resumed session reads back, and never that
 // the session lacks it; that say the told call could be taken for it, the one

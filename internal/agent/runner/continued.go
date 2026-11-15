@@ -712,10 +712,11 @@ func (r *Runner) checkoutName() string {
 // first, could leave out every late read. The owed reads are the session's
 // already as a count, so they take what the cap leaves, and what they cannot
 // take is owed again. The calls listed again take what is left after that:
-// the session may show each of them, the closed rounds' as much as the round's,
-// so a read among them left out is one it may show already. A read's line carries nothing the read returned, so a
-// read listed and a read counted are alike one the session may run again. The
-// fit is over the lists together, which names exactly what the one cap shows.
+// the session may show each of them, the closed rounds' as much as the
+// round's, so a read among them left out is one it may show already. A read's
+// line carries nothing the read returned, so a read listed and a read counted
+// are alike one the session may run again. The fit is over the lists
+// together, which names exactly what the one cap shows.
 //
 // AND IT ANSWERS WHICH READS IT LEFT OUT (omitted), by their places in the
 // round's log: the reads of the calls after the point and of the owed ones that
@@ -723,7 +724,7 @@ func (r *Runner) checkoutName() string {
 // ([ledger.ShownCallGroups], [leftOut]) and never off a rule of this package's,
 // so what the launch records its brief left out ([sandbox.BriefTold]) is what
 // the brief counted. Never a late call, which every continuation tells again,
-// nor one listed again, which the session holds, nor one with no place, an
+// nor one listed again, which the session may show, nor one with no place, an
 // older build's append, which no record can name.
 //
 // AND A CALL THE SESSION MAY SHOW THAT A TOLD CALL COULD BE TAKEN FOR IS
@@ -911,7 +912,7 @@ func (r *Runner) calledAfter(ctx context.Context, round roundCalls, through *int
 		// calls listed again that lists none, its reads all counted as
 		// omitted, names no call a told one could be taken for, and the words
 		// over it would head a count. Nothing is lost by it: each is a read
-		// the session holds.
+		// the session may show.
 		if len(shown[3]) > 0 {
 			out.Shown = provenance.Neutralise(b, rendered[3])
 		}

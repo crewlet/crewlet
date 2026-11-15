@@ -15,14 +15,14 @@ import (
 // A HELD CALL A TOLD CALL COULD BE TAKEN FOR IS LISTED AGAIN. A brief tells a
 // session that may already show some of its told calls, and every late call,
 // that a call shown both in the session and in a list is ONE call, made once.
-// Where a call the session holds and a told call name one tool with arguments
-// that read alike in the told call's line, a model reading both can take the
-// told call for the held one and lose it. So the held call is listed again,
+// Where a call the session may show and a told call name one tool with
+// arguments neither line tells apart, value by value, a model reading both can
+// take the told call for the held one and lose it. So the held call is listed again,
 // under words that say the session may show it and that the told call could
 // be taken for it and is one of its own (runner's calledAfter,
 // prompts.AfterSave.Shown).
 
-// listedAgainHeading heads the calls the session holds that a brief lists
+// listedAgainHeading heads the calls the session may show that a brief lists
 // again (prompts.AfterSave.Shown).
 const listedAgainHeading = "## Calls the session above may show, listed again"
 
