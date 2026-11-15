@@ -4236,6 +4236,13 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	delete_work_view: {
+		args: ["id"],
+		domain: "tracker",
+		apps: ["worklet"],
+		refreshes: [],
+		scope: "person"
+	},
 	mark_inbox: {
 		args: [
 			"read",
