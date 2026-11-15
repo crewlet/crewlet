@@ -439,6 +439,13 @@ export function ServerWizard({
   /** On to the next step when this one has what it needs; otherwise say what, and focus it. */
   function advance() {
     if (step === "review") {
+      // A step left short (reached through the stepper) is said on its field first.
+      const short = steps.find((s) => s !== "review" && !isComplete(missingIn(draft, s)));
+      if (short) {
+        go(short);
+        focusWhenShown(() => firstInvalid(root.current));
+        return;
+      }
       if (check.kind === "accepted") void save();
       else if (check.kind === "idle") void runCheck();
       return;
@@ -479,7 +486,10 @@ export function ServerWizard({
     }
   }
 
-  const attention = new Set(problems.map((p) => stepOf(p, draft.transport)));
+  const attention = new Set([
+    ...problems.map((p) => stepOf(p, draft.transport)),
+    ...steps.filter((s) => attempted.has(s) && !isComplete(missingIn(draft, s))),
+  ]);
   const stepList: StepperStep[] = steps.map((id) => ({
     id,
     label: LABELS[id],

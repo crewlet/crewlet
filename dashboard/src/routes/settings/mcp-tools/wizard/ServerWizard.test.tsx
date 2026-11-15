@@ -343,6 +343,48 @@ test("an engine problem lands on its field and holds the save", async () => {
   expect(createEntity).not.toHaveBeenCalled();
 });
 
+// A negative timeout is said under its field at Continue, before the engine sees it.
+test("a negative call timeout stops Connection with the reason under its field", async () => {
+  mount();
+  await settle();
+  fireEvent.click(screen.getByRole("radio", { name: /Sentry/ }));
+  await press("Continue"); // Name
+  await press("Continue"); // Connection
+  fireEvent.change(screen.getByLabelText(/Call timeout, in seconds/), { target: { value: "-5" } });
+  await press("Continue"); // held on Connection
+  const field = screen.getByLabelText(/Call timeout, in seconds/);
+  expect(field.getAttribute("aria-invalid")).toBe("true");
+  expect(
+    screen.getByText(
+      "The call timeout is a number of seconds, 0 or more. Leave it empty for the default.",
+    ),
+  ).toBeDefined();
+  expect(dryRunCreate).not.toHaveBeenCalled();
+});
+
+// The engine's words for a person are said in place of its line for an operator.
+test("an engine problem with a person's words says those, not the document path", async () => {
+  vi.mocked(dryRunCreate).mockResolvedValue({
+    kind: "problems",
+    problems: [
+      {
+        path: "mcp_servers[0].request_timeout_seconds",
+        segments: ["mcp_servers", 0, "request_timeout_seconds"],
+        kind: "out_of_range",
+        message:
+          "mcp_servers[0].request_timeout_seconds: value out of range: must be 0 (the default) or positive, got -5",
+        said: "The call timeout can't be negative. Give a number of seconds, or leave it empty for the default.",
+      },
+    ],
+    derived: null,
+    code: "",
+    hint: "",
+  });
+  await walkSentry();
+  expect(screen.queryByText(/mcp_servers\[0\]/)).toBeNull();
+  expect(screen.getByText(/The call timeout can't be negative/)).toBeDefined();
+});
+
 // AN EDIT KEEPS ITS NAME and writes the entry back against the revision it
 // lands on, with nothing it does not draw dropped. Mutation: create on an
 // edit, or rebuild the entry from the draft alone, and this is red.
