@@ -8,9 +8,10 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { fileKind, fileName, ProjectFiles, tooLarge, uploadRequest } from "./Files.tsx";
 import { Router } from "~/app/router.tsx";
-import { useClient, useConnection } from "~/lib/store-hooks.ts";
+import { ClientContext, useClient, useConnection } from "~/lib/store-hooks.ts";
 import { rest, RestError } from "~/protocol/rest.ts";
-import type { WorkFilesAnswer } from "~/protocol/index.ts";
+import { Store, type WorkFilesAnswer } from "~/protocol/index.ts";
+import { withDerived } from "~/test/org.ts";
 
 const access = vi.hoisted(() => ({ can: true }));
 vi.mock("~/lib/useWriteAccess.ts", () => ({
@@ -30,11 +31,24 @@ afterEach(() => {
   access.can = true;
 });
 
+/** The client the last [serving] built, which [mount] provides to the tree. */
+let client: { socket: { query: unknown }; store: Store } | null = null;
+
 function serving(pages: Record<string, WorkFilesAnswer>) {
   const query = vi.fn(async (_what: string, params: Record<string, unknown>) => {
     return pages[String(params.after ?? "")] ?? { project: "ENG", files: [], complete: true };
   });
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  // THE CHART, which names a file's writer.
+  const store = new Store();
+  store.applyOrg(
+    withDerived({
+      name: "Acme",
+      roles: [{ name: "Ada Okonkwo", handle: "ada", kind: "agent" }],
+      units: [],
+    }) as never,
+  );
+  client = { socket: { query }, store };
+  vi.mocked(useClient).mockReturnValue(client as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   return query;
 }
@@ -52,9 +66,11 @@ const file = (path: string) => ({
 
 const mount = () =>
   render(
-    <Router>
-      <ProjectFiles project="ENG" />
-    </Router>,
+    <ClientContext.Provider value={client as never}>
+      <Router>
+        <ProjectFiles project="ENG" />
+      </Router>
+    </ClientContext.Provider>,
   );
 
 test("an empty project says so rather than drawing an empty table", async () => {
@@ -81,6 +97,16 @@ test("a page of files is listed, and the next page is the engine's own cursor", 
   expect(calls.at(-1)?.[1]).toEqual({ project: "ENG", after: "reports/b.md" });
   fireEvent.click(screen.getByText("First page"));
   expect(await screen.findByText("a.md")).toBeTruthy();
+});
+
+// A FILE'S WRITER IS NAMED AS THE CHART NAMES THEM: the row records the seat's
+// handle, and the By column printed it ("ada") beside rows elsewhere that say
+// "Ada Okonkwo". Mutation: print `updated_by` as it came and the handle is back.
+test("the By column names who wrote a file, not their handle", async () => {
+  serving({ "": { project: "ENG", files: [file("a.md")], complete: true } });
+  mount();
+  expect(await screen.findByText("Ada Okonkwo")).toBeTruthy();
+  expect(screen.queryByText("ada")).toBeNull();
 });
 
 test("a download fetches the bytes over the session, and a refusal is said on the row", async () => {

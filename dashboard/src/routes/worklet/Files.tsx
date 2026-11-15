@@ -69,6 +69,7 @@ import { session } from "~/protocol/session.ts";
 import { PROJECT_FILE_MAX_BYTES } from "~/contract/work.ts";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "~/lib/keyedWrite.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { seatResolvers, useOrgIndex } from "~/lib/seats.ts";
 
 /** The name a download is saved under: the path's last segment. */
 export function fileName(path: string): string {
@@ -285,6 +286,10 @@ function FileGrid({
 }) {
   const now = useNow();
   const toast = useToast();
+  // WHO WROTE A FILE BY THE NAME THE CHART GIVES THEM: the row records the
+  // seat's handle, which printed "jane-founder" beside rows elsewhere that say
+  // "Jane Founder".
+  const { seatName } = seatResolvers(useOrgIndex());
   const [busy, setBusy] = useState("");
   const [refusals, setRefusals] = useState<Record<string, string>>({});
   const [removing, setRemoving] = useState<WorkFile | null>(null);
@@ -394,7 +399,7 @@ function FileGrid({
             drop: 1,
             cell: (file) =>
               file.updated_by ? (
-                <TableTextCell>{file.updated_by}</TableTextCell>
+                <TableTextCell>{seatName(file.updated_by)}</TableTextCell>
               ) : (
                 <EmptyValue label="Nobody recorded" />
               ),
