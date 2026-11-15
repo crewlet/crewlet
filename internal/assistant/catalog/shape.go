@@ -220,7 +220,11 @@ func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 		return Result{}, err
 	}
 	out := Result{Model: model, Trust: trust}
-	if spec, rows, ok := cards.Infer(doc, callTitle(args)); ok {
+	title := callTitle(args)
+	if t.Title != nil {
+		title = t.Title(args)
+	}
+	if spec, rows, ok := cards.Infer(doc, title); ok {
 		encoded, err := json.Marshal(rows)
 		if err != nil {
 			return Result{}, fmt.Errorf("catalog: encode %s's rows: %w", t.Name, err)

@@ -2004,7 +2004,7 @@ which is not sent again — see [Status codes](#status-codes).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/config` | The active revision — the fleet's — redacted (full JSON; `?format=yaml` for YAML) |
+| `GET` | `/config` | The active revision — the fleet's — redacted (full JSON; `?format=yaml` for YAML). `?section=<key>` answers one top-level section's own value (`assistant`, `integrations`, ...), `400 bad_params` naming the sections for any other key and `404 no_such_entity` for one the document leaves unset |
 | `GET` | `/config/revisions` | Paginated history of the revisions this node holds (newest first), metadata only; the fleet's revision is marked `is_active` |
 | `GET` | `/config/revisions/{id}` | Single revision including its payload |
 | `GET` | `/config/revisions/{id}/diff?against=<uuid\|active>` | Structural diff |
