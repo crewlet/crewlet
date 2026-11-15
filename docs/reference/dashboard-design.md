@@ -8344,7 +8344,15 @@ it, so a link to one run landed on a board with the run below the fold.
   in this window matches these filters" under a filter, "That is the oldest
   event in this window" without — never the store's retention, which a
   24-hour window over a thirty-day store does not reach. A node that did not
-  answer is named above the list.
+  answer is named above the list. The list draws A PAGE AT A TIME: the newest
+  hundred rows, and "Load 100 older" draws the next hundred from what the tab
+  already holds (the live rows and every page fetched) before it asks the
+  engine for more, so the end of the pages is said only once every row held
+  is drawn. A row is drawn again only when it changes: a pushed event draws
+  its own row, and a passing second draws only the relative times whose
+  words moved. Drawn whole and redrawn on every push and every tick, the
+  five hundred rows a busy log holds kept the browser busy for seconds at a
+  time.
 - **An identifier in a header** — an event's wire type, its trace id — is a
   TOKEN fact (`Fact.token`): it takes two of the fact line's tracks on one line
   and is cut with an ellipsis, its whole value in the title, only where two
