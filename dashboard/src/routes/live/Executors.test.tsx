@@ -28,7 +28,14 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { overflowing } from "~/testing.tsx";
-import { BridgeLog, BridgeSummary, ExecutorScreen, doingLine } from "./Executors.tsx";
+import {
+  BridgeLog,
+  BridgeSummary,
+  ExecutorScreen,
+  doingLine,
+  runTitle,
+  taskTitle,
+} from "./Executors.tsx";
 import type { ExecutorRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
@@ -1293,4 +1300,44 @@ test("an executor a delegate answered is marked as decided under delegation", as
   });
   await settle();
   expect(screen.queryByText(/Decided under delegation/)).toBeNull();
+});
+
+/** A task as a trigger hands it to a seat: a line naming the work, then its body in markdown. */
+const MARKDOWN_TASK = [
+  "PROD-4 created: Add dark mode to the **console**",
+  "",
+  "## Context",
+  "",
+  "This is task 16. It needs **care**.",
+  "",
+  "- step one",
+  "- step two",
+].join("\n");
+
+// AN EXECUTOR'S TASK IS ONE LINE OF PLAIN WORDS wherever it is a title: the
+// Task column, In a box, the page's header and its breadcrumb. Drawn whole,
+// the trigger's first line, its body's headings, bold marks and list ran
+// together in one cell: "PROD-4 created: Add dark mode to the console ##
+// Context This is task 16. It needs **care**. - step one".
+//
+// Mutation: return `task_description` as it comes from `runTitle`.
+test("an executor's task is its first line, in plain words", () => {
+  expect(runTitle(run({ task_description: MARKDOWN_TASK }))).toBe(
+    "PROD-4 created: Add dark mode to the console",
+  );
+  expect(taskTitle("## Fix the `login` page\n\nIt breaks on Safari.")).toBe("Fix the login page");
+  // NO TASK IS STILL SAID, and withheld is not "none".
+  expect(runTitle(run({ task_description: "" }))).toBe("No task was recorded");
+});
+
+// AND THE PAGE'S HEADER IS THAT LINE: the body is the turn's to show.
+test("an executor's page is headed by its task's first line", async () => {
+  mountPage({
+    executors: { runs: [run({ task_description: MARKDOWN_TASK })] },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  const heading = document.querySelector(".crewlet-object-header__title");
+  expect(heading?.textContent).toBe("PROD-4 created: Add dark mode to the console");
+  expect(document.body.textContent).not.toContain("## Context");
 });
