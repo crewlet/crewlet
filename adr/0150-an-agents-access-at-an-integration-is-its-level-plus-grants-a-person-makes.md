@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/seataccess`
-- **Enforced-by:** `internal/seataccess.TestALapsingGrantLeavesThePlanBeforeItsExpiry`, `internal/seataccess.TestAWriteGrantNeedsTheStepUpTheAdministeringLevelDoes`, `internal/seataccess.TestAGrantIsAddedOrRemovedNeverEdited`, `internal/seataccess.TestAGrantIsCheckedAgainstTheLiveCatalogue`, `internal/seataccess.TestARequestsOptionsCarryItsID`, `internal/cloudflare.TestAGrantRidesTheTokenBesideItsLevel`, `internal/cloudflare.TestAGrantLeavesTheTokenBeforeItsExpiry`, `internal/cloudflare.TestAGrantTheProvisionerLacksIsReportedNamingTheGroup`, `internal/cloudflare.TestGrantsThatMakeUpAHigherLevelAreReadAsGranted`, `internal/cloudflare.TestTheGrantCatalogueIsWhatTheProvisionerCanMint`, `internal/api/setupapi.TestAGrantIsStampedByTheEngineNeverByTheBody`, `internal/api/setupapi.TestAGrantTheCatalogueCannotGiveIsRefused`, `internal/api/setupapi.TestAWriteGrantIsAskedOfAPerson`, `internal/api/setupapi.TestARequestsGrantIsBuiltFromTheRequest`, `internal/agent/builtin.TestAPermissionRequestIsTheEnginesDecision`, `internal/agent/builtin.TestAPermissionRequestNobodyCouldGrantIsRefused`, `internal/agent/builtin.TestAPermissionIsAnsweredOnlyOnceItsAgentHoldsIt`, `internal/integration.TestASurfaceHoldingALapseIsDueAtIt`, `internal/capability.TestASeatIsToldTheGrantsItsCredentialHolds`
+- **Enforced-by:** `internal/seataccess.TestALapsingGrantLeavesThePlanBeforeItsExpiry`, `internal/seataccess.TestAWriteGrantNeedsTheStepUpTheAdministeringLevelDoes`, `internal/seataccess.TestAGrantIsAddedOrRemovedNeverEdited`, `internal/seataccess.TestAGrantIsCheckedAgainstTheLiveCatalogue`, `internal/seataccess.TestARequestsOptionsCarryItsID`, `internal/cloudflare.TestAGrantRidesTheTokenBesideItsLevel`, `internal/cloudflare.TestAGrantLeavesTheTokenBeforeItsExpiry`, `internal/cloudflare.TestAGrantTheProvisionerLacksIsReportedNamingTheGroup`, `internal/cloudflare.TestGrantsThatMakeUpAHigherLevelAreReadAsGranted`, `internal/cloudflare.TestTheGrantCatalogueIsWhatTheProvisionerCanMint`, `internal/api/setupapi.TestAGrantIsStampedByTheEngineNeverByTheBody`, `internal/api/setupapi.TestAGrantTheCatalogueCannotGiveIsRefused`, `internal/api/setupapi.TestAWriteGrantIsAskedOfAPerson`, `internal/api/setupapi.TestARequestsGrantIsBuiltFromTheRequest`, `internal/agent/builtin.TestAPermissionRequestIsTheEnginesDecision`, `internal/agent/builtin.TestAPermissionRequestNobodyCouldGrantIsRefused`, `internal/agent/builtin.TestAPermissionIsAnsweredOnlyOnceItsAgentHoldsIt`, `internal/integration.TestASurfaceHoldingALapseIsDueAtIt`, `internal/capability.TestASeatIsToldTheGrantsItsCredentialHolds`, `internal/seataccess.TestEveryGrantLaneSaysHowAnAgentReadsItsGrants`, `internal/agent/builtin.TestRequestAccessNamesEveryGrantLanesRefusalAndPermission`, `internal/scaleway.TestAGrantRidesThePolicyBesideItsLevel`, `internal/scaleway.TestAGrantLeavesThePolicyBeforeItsExpiry`, `internal/aws.TestAGrantAttachesBesideTheLevelAndLapsesAlone`, `internal/aws.TestARefusedPolicyIsNeverAttached`, `internal/googlecloud.TestAGrantBindsBesideTheLevel`, `internal/googlecloud.TestAGrantOutsideTheGrantsListIsRefusedNamingIt`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -68,7 +68,13 @@ leave the agent told yes with nothing changed (ADR-0118's reasoning).
 
 ## What this does not decide
 
-Which other integrations take grants: each adds them as Cloudflare did, by
-setting `LaneSpec.Grants` and implementing `Granter`, reading its grants back
-in `Observe` and taking `OpGrants`. An operator-managed company's document is
+Which integrations take grants beyond these: Cloudflare, Scaleway (a
+permission set in the seat's own policy), AWS (an AWS managed policy under the
+seat boundary) and Google Cloud (a role a project's grants list names) do,
+each by setting `LaneSpec.Grants` and its `GrantTerms`, implementing
+`Granter`, reading its grants back in `Observe` and taking `OpGrants`; another
+adds them the same way. DigitalOcean and Expo take none, since a person makes
+each of their credentials by hand and no grant could lapse without one;
+GitHub's access already is a set of permissions `request_access` edits, and
+its tokens outlive an hour's expiry; SSH narrows no credential. An operator-managed company's document is
 the operator's, which renders no grants, so its seats keep their levels.

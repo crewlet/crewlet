@@ -42,6 +42,7 @@ import {
   awsAnswer,
   cloudflareAnswer,
   cloudflareGrantsAnswer,
+  scalewayGrantsAnswer,
   confluenceAnswer,
   datadogAnswer,
   digitaloceanAnswer,
@@ -2155,6 +2156,40 @@ test("an agent's grants show beside its level, and removing one is a change the 
       seats: { sre: { cloudflare: { enabled: true, level: "operate", grants: [] } } },
     },
   ]);
+});
+
+// A GRANT SPEAKS ITS LANE'S WORDS: on Scaleway a grant naming no project is
+// the agent's own projects, the picker labels its entries Projects by the names
+// Scaleway gives them, and says where none chosen applies. Mutation: word the
+// dialog for zones and the Scaleway picker asks for zones.
+test("a Scaleway grant is worded by projects, by name, and its whole reach is the agent's own", async () => {
+  draw(scalewayGrantsAnswer());
+  expect(
+    screen.getByText("KubernetesFullAccess · The agent's own projects · Permanent"),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Add grant" }));
+  const dialog = screen.getByRole("dialog", { name: "Add a grant for SRE" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "SRE's new Scaleway permission" }));
+  fireEvent.mouseDown(
+    screen.getAllByRole("option").find((o) => o.textContent?.startsWith("KubernetesFullAccess"))!,
+  );
+  const projects = within(dialog).getByRole("group", { name: "Projects" });
+  expect(within(projects).getByText("None chosen is the agent's own projects.")).toBeTruthy();
+  expect(within(dialog).queryByText(/zone/i)).toBeNull();
+  fireEvent.click(within(projects).getByRole("checkbox", { name: "acme-staging" }));
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Why SRE needs it" }), {
+    target: { value: "the staging cluster too" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add grant" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByRole("dialog", { name: "Review changes to Scaleway" });
+  const seats = calls.plan[0] as {
+    seats: { sre: { scaleway: { grants: Record<string, unknown>[] } } };
+  };
+  expect(seats.seats.sre.scaleway.grants[1]).toMatchObject({
+    permission: "KubernetesFullAccess",
+    scope: ["22222222-2222-4222-8222-222222222222"],
+  });
 });
 
 // ADD GRANT PICKS ONE PERMISSION FROM THE LIVE CATALOGUE, a write marked as

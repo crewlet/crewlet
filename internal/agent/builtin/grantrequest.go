@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -173,7 +174,7 @@ func askable(turn *turnctx.Turn, person, why string) *tools.Result {
 func grantDecision(seat *org.Role, req seataccess.GrantRequest, entry seataccess.GrantEntry,
 	vendor string) map[string]any {
 
-	reach := grantReach(entry, req.Scope)
+	reach := grantReach(entry, req.Scope, seataccess.GrantTermsOf(req.Lane))
 	question := fmt.Sprintf("Grant %s %s on %s at %s?", seat.Name, entry.Name, reach, vendor)
 	note := ""
 	if entry.Write {
@@ -204,16 +205,30 @@ func grantDecision(seat *org.Role, req seataccess.GrantRequest, entry seataccess
 	}
 }
 
-// grantReach is where a grant would apply, as the question says it.
-func grantReach(entry seataccess.GrantEntry, scope []string) string {
+// grantReach is where a grant would apply, as the question says it: its
+// entries, or what the lane's grant reaches naming none ([seataccess.GrantTerms]).
+func grantReach(entry seataccess.GrantEntry, scope []string, w seataccess.GrantTerms) string {
 	switch {
 	case len(scope) > 0:
 		return strings.Join(scope, ", ")
 	case entry.ScopeKind == seataccess.GrantScopeAccount:
-		return "the account"
+		return cmp.Or(w.Account, "the account")
 	default:
-		return "every " + string(entry.ScopeKind) + " the company's agents reach"
+		return cmp.Or(w.Whole, "every "+string(entry.ScopeKind)+" the company's agents reach")
 	}
+}
+
+// grantLaneTerms is one sentence part per lane an agent may ask a grant on:
+// the lane's name and what of its [seataccess.GrantTerms] part picks, each
+// lane whose part is empty left out.
+func grantLaneTerms(part func(seataccess.GrantTerms) string) string {
+	var out []string
+	for _, lane := range seataccess.GrantLanes() {
+		if text := part(seataccess.GrantTermsOf(lane)); text != "" {
+			out = append(out, seataccess.LaneName(lane)+": "+text)
+		}
+	}
+	return strings.Join(out, "; ")
 }
 
 // grantLaneList is the lanes an agent may ask a grant on, for a sentence.

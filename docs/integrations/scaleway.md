@@ -87,6 +87,7 @@ Each agent seat is turned on or off, and given its level and projects, on the in
 | `enabled` | Whether the agent has a Scaleway application at all. Required in every block. A seat with no block is off, and a new agent seat is off until somebody turns it on. |
 | `level` | `read`, `operate` or `administer`. Unset is `read`. Choosing `administer` needs a fresh sign-in. |
 | `projects` | The Scaleway project IDs its policy grants its level on. Required while the agent is on: an agent in no project can reach nothing. Each must be a project of the Organization. |
+| `grants` | Permission sets its policy holds beside its level ([granting one more permission set](#granting-one-more-permission-set)). Written by the Agents tab and by approving the agent's request, never typed. |
 
 ```yaml
 roles:
@@ -130,11 +131,42 @@ Granting it needs a fresh sign-in. When you move an agent off `administer`, or t
 | You do | Crewlet does at Scaleway |
 |---|---|
 | Turn a seat on | Creates an application named `crewlet-<company>-<handle>` (the company name in lowercase, with anything that is not a letter or digit turned into `-`) (`POST /iam/v1alpha1/applications`) and one policy of the same name granting its level on its projects (`POST /iam/v1alpha1/policies`), then mints an API key expiring in 90 days with its first project by ID as its default (`POST /iam/v1alpha1/api-keys`), and seals the secret and the access key. A policy Scaleway refuses takes its application back with it. |
-| Change its level or projects | Rewrites the policy's rules in place (`PUT /iam/v1alpha1/rules`), and moves the key's default project where the seat no longer names it (`PATCH /iam/v1alpha1/api-keys/{access_key}`). The key does not change, so the agent's tools keep working. |
+| Change its level, projects or grants | Rewrites the policy's rules in place (`PUT /iam/v1alpha1/rules`), and moves the key's default project where the seat no longer names it (`PATCH /iam/v1alpha1/api-keys/{access_key}`). The key does not change, so the agent's tools keep working. |
 | Turn it off | Deletes every key on the application, so the agent stops at once, and its policy, then the application (`DELETE` on each), and clears the sealed values. If the application's delete fails, the next pass deletes it. |
 | Turn it back on | Makes a new application, policy and key. No person is needed. |
 | Remove it (only while off) | Deletes whatever off left, and stops tracking it. |
 | Rotate its key | Mints a new key, seals it, then deletes the old one. |
+
+### Granting one more permission set
+
+A level is the safe default. When an agent needs one permission set no level holds, give it that set alone, beside its level, instead of a higher level:
+
+- **On the Agents tab:** open the agent's row, choose **Add grant**, pick the set from the Organization's own list, choose its projects (none is the agent's own projects; an Organization-scoped set takes none), and how long: 4 hours, 24 hours, 7 days, or permanent.
+- **From the agent's request:** when Scaleway refuses a call with `permissions_denied`, the agent asks with `request_access`, naming the set and why. You answer in your Inbox: **Grant for this change** (it lapses after the hours shown), **Add to this agent permanently**, or **Not now**. Either grant opens the exact change for you to apply first.
+
+What Crewlet does:
+
+- **The catalogue is Scaleway's.** It lists every permission set the Organization offers (`GET /iam/v1alpha1/permission-sets`), by category, less the sets no agent is ever given: IAM, billing, the Organization's and projects' managers, secrets and keys, SSH keys, object contents and the all-products bundles. A set a level already holds is shown with that level, so you raise the level instead.
+- **The grant rides the agent's one policy.** A project set joins the level's rule where it applies to the agent's own projects, or gets a rule of its own on the projects it names; an Organization set joins the Organization rule. The rules are rewritten in place (`PUT /iam/v1alpha1/rules`), so the key does not change.
+- **A grant never outlives its expiry.** A pass runs a minute before a grant lapses and rewrites the policy without it, and a set somebody adds to the policy at Scaleway is taken off and reported, as any other change there is.
+- **A set that changes anything needs a fresh sign-in.** Every set whose name does not end in `Read` or `ReadOnly` is a write, as `administer` is.
+
+```yaml
+roles:
+  - handle: sre
+    integrations:
+      scaleway:
+        enabled: true
+        level: read
+        projects: [aaaaaaaa-0000-4000-8000-000000000001]
+        grants:
+          - id: g4k2m9q1x7z
+            permission: KubernetesFullAccess
+            expires_at: 2026-11-15T18:00:00Z
+            granted_by: ada@example.com
+            granted_at: 2026-11-15T14:00:00Z
+            reason: Upgrade the staging cluster's node pool
+```
 
 ### Only what the ledger recorded is the engine's
 

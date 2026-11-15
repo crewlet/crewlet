@@ -39,11 +39,11 @@ func (t *requestAccess) Description() string {
 	return "Ask a person for one more kind of access your work needs, on the work item " +
 		"that needs it: " + accessList() + " with `access`; or, with `integration` and " +
 		"`permission`, one permission at an integration beside your level there, as its " +
-		"catalogue names it (a Cloudflare permission group such as `Origin Write`, on the " +
-		"zones in `scope` or all of them), granted for `hours` or for good. When an " +
-		"integration's API refuses you for a permission your token lacks (Cloudflare: 403, " +
-		"\"request is not authorized\"), ask for that permission here; never ask a person to " +
-		"change your token at the vendor by hand. Your access is your Crewlet grant, which an " +
+		"catalogue names it, on the entries in `scope` or its whole reach, granted for `hours` " +
+		"or for good. When an integration refuses you for a permission your credential lacks (" +
+		grantLaneTerms(func(w seataccess.GrantTerms) string { return w.Refusal }) + "), ask for " +
+		"that permission here; never ask a person to change your credential at the vendor by " +
+		"hand. Your access is your Crewlet grant, which an " +
 		"administrator sets in Crewlet, never at the vendor. The person sees the exact " +
 		"change to your access and decides; nothing changes until they apply it, and you " +
 		"are told your new access on your next turn. Ask an administrator, who can grant " +
@@ -72,11 +72,12 @@ func (t *requestAccess) Parameters() map[string]any {
 			"integration": map[string]any{"type": "string",
 				"description": "The integration whose permission you lack: one of " + grantLaneList() + "."},
 			"permission": map[string]any{"type": "string",
-				"description": "The one permission to ask for at `integration`, as its catalogue names it " +
-					"(for Cloudflare, the permission group's API name: `Origin Write`, `DNS Write`)."},
+				"description": "The one permission to ask for at `integration`, as its catalogue names it: " +
+					grantLaneTerms(func(w seataccess.GrantTerms) string { return w.Permission }) + "."},
 			"scope": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
-				"description": "Where the permission applies (Cloudflare zone names). Leave it out for " +
-					"every zone the company's agents reach, or for an account permission."},
+				"description": "Where the permission applies: " +
+					grantLaneTerms(func(w seataccess.GrantTerms) string { return w.Scope }) +
+					". Leave it out for the permission's whole reach."},
 			"hours": map[string]any{"type": "integer", "minimum": seataccess.MinGrantHours,
 				"maximum": seataccess.MaxGrantHours,
 				"description": fmt.Sprintf("How long the change needs it, %d to %d hours; %d when left out. "+

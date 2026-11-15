@@ -26,7 +26,16 @@ import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import type { AccessDesired, AccessGrant, AccessSeat } from "~/contract/access.ts";
 import { Modal } from "~/components/Modal.tsx";
 import { useClock } from "~/lib/clock.ts";
-import { GRANT_HOURS, grantEntry, grantReach, hoursWords, newGrant } from "~/lib/grants.ts";
+import {
+  GRANT_HOURS,
+  grantEntry,
+  grantReach,
+  grantScopeLabel,
+  grantWhole,
+  hoursWords,
+  newGrant,
+  scopeKindLabel,
+} from "~/lib/grants.ts";
 import { grantExpiry, grantLapsed, levelName, type Lane } from "./logic.ts";
 
 /** The longest note a person gives a grant: the engine's own bound on a grant's reason. */
@@ -110,8 +119,9 @@ export function GrantsCell({
 /**
  * Add grant: one permission from the lane's live catalogue, grouped as the
  * vendor groups them, a write marked as one and an unavailable one offered
- * disabled with why; the zones it applies to (none chosen is every zone the
- * company's agents reach); how long; and why, which the grant keeps.
+ * disabled with why; the entries it applies to, labelled by its scope's kind
+ * (none chosen is the lane's whole reach, in its own words); how long; and
+ * why, which the grant keeps.
  */
 export function AddGrantDialog({
   seat,
@@ -203,17 +213,17 @@ export function AddGrantDialog({
             {`${entry.name} can change things at ${lane.name}, so saving it asks you to sign in again, as the most trusted level does.`}
           </Callout>
         )}
-        {scoped && (lane.grant_scope ?? []).length > 0 && (
+        {scoped && entry && (lane.grant_scope ?? []).length > 0 && (
           <FormField
             as="fieldset"
-            label="Zones"
-            helper="None chosen is every zone the company's agents reach."
+            label={scopeKindLabel(entry.scope_kind)}
+            helper={`None chosen is ${grantWhole(lane, entry)}.`}
           >
             <Stack gap={1}>
               {(lane.grant_scope ?? []).map((z) => (
                 <Checkbox
                   key={z}
-                  label={z}
+                  label={grantScopeLabel(lane, z)}
                   checked={zones.includes(z)}
                   onCheckedChange={(on) =>
                     setZones(on ? [...zones, z] : zones.filter((x) => x !== z))

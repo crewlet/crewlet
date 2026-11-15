@@ -46,6 +46,7 @@ func (accessVendor) Catalog() seataccess.Catalog {
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneGoogleCloud, Levels: true, Scoped: true, ScopeRequired: true,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, Issued: AccessTokenField,
+			Grants: true, GrantTerms: grantTerms,
 		}},
 	}
 }
@@ -55,17 +56,25 @@ const leftBehind = "Administer could leave access behind on what it reached: SSH
 	"on VMs, database users and certificates, and bucket or DNS zone policies. Review and remove those."
 
 // Steps is each op as Google takes it, in the order Apply takes it. Pure.
-func (accessVendor) Steps(
-	_ seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
+func (v accessVendor) Steps(
+	seat seataccess.SeatRef, lane seataccess.Lane, op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	out := googleSteps(op, want, have)
+	return v.StepsFor(seataccess.StepsInput{Seat: seat, Lane: lane, Op: op, Want: want, Have: have})
+}
+
+// StepsFor is [accessVendor.Steps] naming a grant's projects from the lane's
+// offer where the caller read it ([seataccess.NamedSteps]).
+func (accessVendor) StepsFor(in seataccess.StepsInput) []seataccess.Step {
+	out := googleSteps(in.Op, in.Want, in.Have, in.Options)
 	for i := range out {
 		out[i].Index = i
 	}
 	return out
 }
 
-func googleSteps(op seataccess.Op, want seataccess.Desired, have seataccess.Observed) []seataccess.Step {
+func googleSteps(
+	op seataccess.Op, want seataccess.Desired, have seataccess.Observed, opts seataccess.Options,
+) []seataccess.Step {
 	step := func(verb seataccess.StepVerb, text string) seataccess.Step {
 		return seataccess.Step{Op: op, Verb: verb, By: seataccess.ByCrewlet, Text: text}
 	}
@@ -94,6 +103,8 @@ func googleSteps(op seataccess.Op, want seataccess.Desired, have seataccess.Obse
 			s.Note = leftBehind
 		}
 		return []seataccess.Step{s}
+	case seataccess.OpGrants:
+		return grantSteps(want, have, opts)
 	case seataccess.OpDisable:
 		off := step(seataccess.VerbDisable, "Disable its service account, so it stops at once")
 		if have.Level == config.GoogleCloudLevelAdminister {
@@ -357,7 +368,8 @@ func agrees(rec seataccess.Record, got seataccess.Observed) bool {
 	if !lr.Applied.Enabled {
 		return got.Exists && !got.Enabled && len(got.Scope) == 0
 	}
-	return got.Exists && got.Enabled && got.Level == lr.Applied.Level && got.Access().SameScope(*lr.Applied)
+	return got.Exists && got.Enabled && got.Level == lr.Applied.Level && got.Access().SameScope(*lr.Applied) &&
+		got.Access().SameGrants(*lr.Applied)
 }
 
 // read is one seat's account as Google holds it now: absent where Google no
@@ -383,22 +395,16 @@ func (s *accessSession) read(ctx context.Context, rec seataccess.Record) (seatac
 	if err != nil {
 		return seataccess.Observed{}, err
 	}
-	level, mixed := "", false
-	for _, project := range slices.Sorted(mapKeysOf(bound)) {
-		out.Scope = append(out.Scope, project)
-		switch held := levelHeld(bound[project], project); {
-		case held == "":
-			mixed = true
-		case level == "":
-			level = held
-		case held != level:
-			mixed = true
-		}
+	var applied *seataccess.Desired
+	if lr, ok := rec.Lanes[seataccess.LaneGoogleCloud]; ok {
+		applied = lr.Applied
 	}
+	level, scope, grants := accessOf(bound, applied)
+	out.Scope, out.Grants = scope, grants
 	// THE PROVISIONER'S GRANT IS PART OF THE LEVEL: without Token Creator on
 	// the account no token can be issued, so it holds no level in effect,
 	// and the next level step grants it again.
-	if delegated && !mixed {
+	if delegated {
 		out.Level = level
 	}
 	return out, nil
@@ -421,9 +427,10 @@ const tokenCreator = "roles/iam.serviceAccountTokenCreator"
 // recordedScope is every project the ledger last saw or applied for a seat.
 func recordedScope(rec seataccess.Record) []string {
 	lr := rec.Lanes[seataccess.LaneGoogleCloud]
-	out := slices.Clone(lr.Observed.Scope)
+	out := slices.Concat(lr.Observed.Scope, grantProjects(lr.Observed.Grants))
 	if lr.Applied != nil {
 		out = append(out, lr.Applied.Scope...)
+		out = append(out, grantProjects(lr.Applied.Grants)...)
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
@@ -457,16 +464,6 @@ func (s *accessSession) bound(ctx context.Context, email string, recorded []stri
 		}
 	}
 	return out, nil
-}
-
-func mapKeysOf[V any](m map[string]V) func(func(string) bool) {
-	return func(yield func(string) bool) {
-		for k := range m {
-			if !yield(k) {
-				return
-			}
-		}
-	}
 }
 
 // writes is what one step wrote at Google, which decides what the seat's tool
@@ -527,6 +524,13 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 	case seataccess.OpEnable:
 		return s.enable(ctx, in)
 	case seataccess.OpLevel, seataccess.OpScope:
+		return s.grantLevel(ctx, in)
+	case seataccess.OpGrants:
+		// EVERY GRANT AT ONCE: the op's first step writes them all on every
+		// project, and the rest have nothing left to write.
+		if len(in.Prior) > 0 {
+			return seataccess.StepResult{}, nil
+		}
 		return s.grantLevel(ctx, in)
 	case seataccess.OpDisable:
 		if in.Step.Index == 0 {
@@ -650,7 +654,7 @@ func (s *accessSession) grantable(ctx context.Context, level string) error {
 // known is every project a step may find the seat bound on: the document's,
 // what the pass observed, and what the ledger last applied.
 func known(in seataccess.ApplyInput) []string {
-	out := slices.Concat(in.Want.Scope, in.Have.Scope)
+	out := slices.Concat(in.Want.Scope, in.Have.Scope, grantProjects(in.Want.Grants), grantProjects(in.Have.Grants))
 	if in.Record != nil {
 		out = append(out, recordedScope(*in.Record)...)
 	}
@@ -658,21 +662,29 @@ func known(in seataccess.ApplyInput) []string {
 	return slices.Compact(out)
 }
 
-// converge makes email hold want's level on want's projects and nothing on
-// every other of projects, one write per level list a project crosses: on each
-// project the lists it holds go first, least access first, then the lists it
-// no longer holds, most access first, so no moment holds a level below the
-// one it is moving to. A new account Google does not know on a project yet is
-// waited out, and every project's roles are read back as written.
+// converge makes email hold want's level on want's projects, its live grants
+// on theirs, and nothing on every other of projects, one write per level list
+// a project crosses: on each project the lists it holds go first, least access
+// first, then the lists it no longer holds, most access first, so no moment
+// holds a level below the one it is moving to; then each grant's role, one
+// write per role, which exactly one of the provisioner's conditions allows. A
+// level list taken off never takes a role a live grant holds. A new account
+// Google does not know on a project yet is waited out, and every project's
+// roles are read back as written.
 //
-// A ROLE NO LEVEL GRANTS IS NOT CREWLET'S TO TAKE: the provisioner's
-// conditions refuse revoking it, so it is left and named after the rest.
+// A ROLE NO LEVEL OR GRANTS LIST NAMES IS NOT CREWLET'S TO TAKE: the
+// provisioner's conditions refuse revoking it, so it is left and named after
+// the rest.
 //
 // Each write is noted in w: a list granted, or a list taken off.
 func (s *accessSession) converge(
 	ctx context.Context, email string, want seataccess.Desired, projects []string, w *writes,
 ) error {
 	who := member(email)
+	d, err := s.discovered(ctx)
+	if err != nil {
+		return err
+	}
 	var foreign []string
 	for _, project := range projects {
 		pol, err := s.client.ProjectPolicy(ctx, project)
@@ -685,8 +697,23 @@ func (s *accessSession) converge(
 			target, _ = LevelRoles(want.Level, project)
 			_, top, _ = levelOf(want.Level)
 		}
+		granted := []string{}
+		if want.Enabled {
+			granted = grantRolesOn(want.Grants, want.Scope, project)
+		}
+		for _, role := range granted {
+			if !levelRole(role, project) && !d.lists(project, role) {
+				return &seataccess.Refusal{
+					Said: "Google Cloud: " + project + "'s grants list does not name " + role +
+						", so Crewlet's provisioner cannot grant it there",
+					Remedy: "Add " + role + " to the provisioner's grants condition on " + project +
+						", or remove the grant on the Agents tab",
+					Actor: seataccess.ByYou, ActionURL: IAMURL,
+				}
+			}
+		}
 		for _, role := range heldBy(pol, who).all() {
-			if !levelRole(role, project) {
+			if !levelRole(role, project) && !d.lists(project, role) {
 				foreign = append(foreign, project+": "+role)
 			}
 		}
@@ -700,24 +727,41 @@ func (s *accessSession) converge(
 			}
 		}
 		for i := len(lists) - 1; i > top; i-- {
-			if err := s.writeList(ctx, project, email, lists[i], false, w); err != nil {
+			off := slices.DeleteFunc(slices.Clone(lists[i]), func(r string) bool { return slices.Contains(granted, r) })
+			if err := s.writeList(ctx, project, email, off, false, w); err != nil {
 				return err
 			}
 		}
+		for _, role := range granted {
+			if err := s.writeList(ctx, project, email, []string{role}, true, w); err != nil {
+				return err
+			}
+		}
+		for _, role := range heldBy(pol, who).all() {
+			if levelRole(role, project) || !d.lists(project, role) || slices.Contains(granted, role) {
+				continue
+			}
+			if err := s.writeList(ctx, project, email, []string{role}, false, w); err != nil {
+				return err
+			}
+		}
+		target = append(target, granted...)
+		slices.Sort(target)
+		target = slices.Compact(target)
 		if _, err := s.client.clock.awaitObserved(ctx, readBindings, func() (bool, error) {
 			pol, err := s.client.ProjectPolicy(ctx, project)
 			if err != nil {
 				return true, err
 			}
 			h := heldBy(pol, who)
-			var levelHeld []string
+			var ours []string
 			for _, role := range h.plain {
-				if levelRole(role, project) {
-					levelHeld = append(levelHeld, role)
+				if levelRole(role, project) || d.lists(project, role) {
+					ours = append(ours, role)
 				}
 			}
-			return slices.Equal(levelHeld, target) && !slices.ContainsFunc(h.conditional, func(r string) bool {
-				return levelRole(r, project)
+			return slices.Equal(ours, target) && !slices.ContainsFunc(h.conditional, func(r string) bool {
+				return levelRole(r, project) || d.lists(project, r)
 			}), nil
 		}); err != nil {
 			return s.refused(err, project)

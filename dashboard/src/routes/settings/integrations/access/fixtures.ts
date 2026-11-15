@@ -595,6 +595,8 @@ export function cloudflareGrantsAnswer(): AccessAnswer {
         },
       ],
       grant_scope: ["example.com"],
+      grant_whole: "every zone the company's agents reach",
+      grant_account: "the account",
     },
   ];
   const sre = answer.seats.find((s) => s.handle === "sre")!.lanes.cloudflare!;
@@ -608,6 +610,53 @@ export function cloudflareGrantsAnswer(): AccessAnswer {
         granted_by: "Ada",
         granted_at: ago(DAY),
         reason: "an origin rule for the new backend",
+      },
+    ],
+  };
+  return answer;
+}
+
+/**
+ * Scaleway whose catalogue offers grants beside a level: Kubernetes full
+ * access on projects, and support tickets on the Organization; SRE holds
+ * Kubernetes full access on its own projects for good.
+ */
+export function scalewayGrantsAnswer(): AccessAnswer {
+  const answer = scalewayAnswer();
+  answer.options = [
+    {
+      ...SCALEWAY_OPTIONS,
+      grants: [
+        {
+          id: "KubernetesFullAccess",
+          name: "KubernetesFullAccess",
+          group: "Kubernetes",
+          scope_kind: "project",
+          write: true,
+          in_level: "administer",
+        },
+        {
+          id: "SupportTicketsReadOnly",
+          name: "SupportTicketsReadOnly",
+          group: "Support",
+          scope_kind: "account",
+        },
+      ],
+      grant_scope: [SCW_PROD, SCW_STAGING],
+      grant_whole: "the agent's own projects",
+      grant_account: "the Organization",
+    },
+  ];
+  const sre = answer.seats.find((s) => s.handle === "sre")!.lanes.scaleway!;
+  sre.desired = {
+    ...sre.desired,
+    grants: [
+      {
+        id: "gbbbbbbbbbb",
+        permission: "KubernetesFullAccess",
+        granted_by: "Ada",
+        granted_at: ago(DAY),
+        reason: "upgrade the cluster's node pool",
       },
     ],
   };

@@ -16,8 +16,8 @@ import (
 // provisioner can read, less the identity project, where the owner granted
 // the provisioner something that administers it. One is offered to agents
 // only when all three level conditions are there with exactly their lists, no
-// admin role is held without a condition, and crewletOperator holds exactly
-// its permissions. The owner's grant is the boundary, and nothing in the
+// admin role is held without a condition, crewletOperator holds exactly its
+// permissions, and every role a grants list names may be granted (grants.go). The owner's grant is the boundary, and nothing in the
 // document can drift from it.
 
 // discoverReads bounds the policy and role reads one discovery makes at once:
@@ -35,6 +35,9 @@ type projectSetup struct {
 	// Problems are why the project is not offered; none on a project agents
 	// may be given.
 	Problems []problem
+	// Grantable is the roles its grants lists hold that a seat may be
+	// granted on it, as Google describes them.
+	Grantable []Role
 }
 
 // problem is one reason a project is not offered, and what fixes it, kept
@@ -82,12 +85,13 @@ func discover(ctx context.Context, c *Client) (discovery, error) {
 	out := make([]*projectSetup, len(candidates))
 	errs := make([]error, len(candidates))
 	gate := make(chan struct{}, discoverReads)
+	reads := &roleReads{}
 	var wg sync.WaitGroup
 	for i, p := range candidates {
 		wg.Go(func() {
 			gate <- struct{}{}
 			defer func() { <-gate }()
-			out[i], errs[i] = setupOf(ctx, c, p)
+			out[i], errs[i] = setupOf(ctx, c, reads, p)
 		})
 	}
 	wg.Wait()
@@ -107,7 +111,7 @@ func discover(ctx context.Context, c *Client) (discovery, error) {
 // setupOf is one project's setup, nil where the provisioner holds nothing
 // there that administers it. Only a provisioner refused outright is an error:
 // one project's unreadable policy or role is that project's problem.
-func setupOf(ctx context.Context, c *Client, p Project) (*projectSetup, error) {
+func setupOf(ctx context.Context, c *Client, reads *roleReads, p Project) (*projectSetup, error) {
 	out := &projectSetup{ID: p.ProjectID, Name: p.DisplayName, Parent: p.Parent}
 	pol, err := c.ProjectPolicy(ctx, p.ProjectID)
 	if isStage(err) {
@@ -125,6 +129,9 @@ func setupOf(ctx context.Context, c *Client, p Project) (*projectSetup, error) {
 		return nil, nil
 	}
 	out.Problems = append(out.Problems, cont.problems(p.ProjectID)...)
+	if err := grantProblems(ctx, c, reads, out, cont.grantRoles(p.ProjectID)); err != nil {
+		return nil, err
+	}
 	switch role, found, err := c.Role(ctx, CustomRole(p.ProjectID)); {
 	case isStage(err):
 		return nil, err
@@ -158,8 +165,9 @@ func isStage(err error) bool {
 }
 
 // problems is why the provisioner's grants on project keep it from agents:
-// each level whose exact condition is missing, a condition that is no level's,
-// and an admin role it holds with no condition.
+// each level whose exact condition is missing, a condition of any other shape
+// than a hasOnly list, and an admin role it holds with no condition. A list
+// that is no level's is the grants list, whose roles [grantProblems] reads.
 func (c containment) problems(project string) []problem {
 	const replace = "Replace it with the Prepare a project block's conditions"
 	var out []problem
@@ -172,13 +180,6 @@ func (c containment) problems(project string) []problem {
 			"could grant more than a level", replace})
 	}
 	lists := Lists(project)
-	for _, l := range c.lists {
-		if !slices.ContainsFunc(lists, func(want []string) bool {
-			return slices.Equal(l, slices.Sorted(slices.Values(want)))
-		}) {
-			out = append(out, problem{"a condition lists " + words.And(l) + ", which is no level's list", replace})
-		}
-	}
 	var missing []words.Said
 	for i, list := range lists {
 		if !c.holds(list) {

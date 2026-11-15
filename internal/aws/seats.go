@@ -65,6 +65,14 @@ type Access struct {
 	// Off is AWS's deny-all policy attached: no session of the role, issued
 	// before or after, can do anything.
 	Off bool
+	// Grants are the AWS managed policies attached beside the level, by ARN
+	// and sorted: a seat's extra grants, each still held to the boundary.
+	Grants []string
+}
+
+// Equal reports whether two accesses grant the same.
+func (a Access) Equal(b Access) bool {
+	return a.Level == b.Level && a.IAMRead == b.IAMRead && a.Off == b.Off && slices.Equal(a.Grants, b.Grants)
 }
 
 // levelPolicies is the level policies a level attaches: its own and every
@@ -95,11 +103,12 @@ func (conn *Connection) Policies(a Access) []string {
 	if a.IAMRead {
 		out = append(out, conn.resolve(policyARN(levelIAMRead)))
 	}
-	return out
+	return append(out, a.Grants...)
 }
 
-// AccessOf reads attached, by ARN, as an Access. Foreign reports a policy
-// that is none of Crewlet's or AWS's deny-all: a grant made outside Crewlet.
+// AccessOf reads attached, by ARN, as an Access. An AWS managed policy other
+// than the deny-all is a grant; foreign reports any other policy that is none
+// of Crewlet's: a customer policy attached outside Crewlet.
 func (conn *Connection) AccessOf(attached []string) (a Access, foreign []string) {
 	names := map[string]bool{}
 	for _, arn := range attached {
@@ -108,6 +117,8 @@ func (conn *Connection) AccessOf(attached []string) (a Access, foreign []string)
 			a.Off = true
 		case arn == conn.resolve(policyARN(levelIAMRead)):
 			a.IAMRead = true
+		case conn.awsManaged(arn):
+			a.Grants = append(a.Grants, arn)
 		default:
 			name, ok := conn.levelName(arn)
 			if !ok {
@@ -123,7 +134,16 @@ func (conn *Connection) AccessOf(attached []string) (a Access, foreign []string)
 			a.Level = level
 		}
 	}
+	slices.Sort(a.Grants)
+	a.Grants = slices.Compact(a.Grants)
 	return a, foreign
+}
+
+// awsManaged reports an AWS managed policy in the connection's partition
+// other than the deny-all: what a grant attaches.
+func (conn *Connection) awsManaged(arn string) bool {
+	rest, ok := strings.CutPrefix(arn, conn.resolve(awsManagedPrefix))
+	return ok && rest != "" && arn != conn.resolve(denyAllARN)
 }
 
 // levelName is the level policy arn names, false for any other.
@@ -146,7 +166,9 @@ type Change struct {
 // ARN, to grant want, in the one safe order: every attach first, then every
 // detach, AWS's deny-all last of all. So turning off denies before it detaches,
 // turning on grants before it lifts the deny, and a level never lapses mid-way.
-// A foreign policy is left alone: the engine only reports it.
+// An AWS managed policy want does not grant is detached, a lapsed grant or one
+// attached by hand alike; a foreign policy is left alone: the engine only
+// reports it.
 func (conn *Connection) Changes(have []string, want Access) []Change {
 	target := conn.Policies(want)
 	var attach, detach []Change
@@ -157,7 +179,7 @@ func (conn *Connection) Changes(have []string, want Access) []Change {
 	}
 	ours := append(conn.Policies(Access{Level: config.AWSLevelAdminister, IAMRead: true}), conn.resolve(denyAllARN))
 	for _, arn := range have {
-		if slices.Contains(ours, arn) && !slices.Contains(target, arn) {
+		if (slices.Contains(ours, arn) || conn.awsManaged(arn)) && !slices.Contains(target, arn) {
 			detach = append(detach, Change{PolicyARN: arn})
 		}
 	}
