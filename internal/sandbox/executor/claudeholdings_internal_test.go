@@ -321,12 +321,16 @@ func TestAMainThreadLineThatIsNoRecordLeavesTheSessionUnread(t *testing.T) {
 // naming a release this code cannot read (two numbers, or a number past what
 // an int holds), and one whose `version` is no string each make the session
 // no reading, wherever it lies: the brief, the call's use, its result, or an
-// attachment after it. A later writer reads, and so does a record of the
-// harness's bookkeeping that names no release or an old one, which no rule
-// reads.
+// attachment after it; and so does the brief or the call's use of 2.1.305
+// that carries no `parentUuid`, which Claude Code's resume reads as in a chain
+// as it reads any user or assistant record. A later writer reads, and so does
+// a record of the harness's bookkeeping that names no release or an old one,
+// which no rule reads.
 //
 // Mutation: skip the check, and each such session holds its call; read an
-// absent `version` as the floor's, and the record naming none is read.
+// absent `version` as the floor's, and the record naming none is read; hold
+// only a record that carries a `parentUuid`, and the two that carry none are
+// read.
 func TestARecordWrittenBelowTheFloorEndsTheReading(t *testing.T) {
 	t.Parallel()
 	const id, out = "toolu_floor", "floor done"
@@ -341,6 +345,7 @@ func TestARecordWrittenBelowTheFloorEndsTheReading(t *testing.T) {
 		return ctReplace(t, record, release, `"version":`+version)
 	}
 	shape := ctReplace(t, ctRequestShape, release, `"version":"2.1.118"`)
+	unparented := func(record, parent string) string { return ctReplace(t, record, parent, "") }
 	for name, tc := range map[string]struct {
 		lines []string
 		read  bool
@@ -351,7 +356,11 @@ func TestARecordWrittenBelowTheFloorEndsTheReading(t *testing.T) {
 			true},
 		"the brief written by 2.1.305":      {[]string{writtenBy(brief, `"2.1.305"`), pair[0], pair[1]}, false},
 		"the call's use written by 2.1.305": {[]string{brief, writtenBy(pair[0], `"2.1.305"`), pair[1]}, false},
-		"its result naming no release":      {[]string{brief, pair[0], writtenBy(pair[1], "")}, false},
+		"the brief written by 2.1.305, with no parentUuid": {[]string{
+			unparented(writtenBy(brief, `"2.1.305"`), `"parentUuid":null,`), pair[0], pair[1]}, false},
+		"the call's use written by 2.1.305, with no parentUuid": {[]string{brief,
+			unparented(writtenBy(pair[0], `"2.1.305"`), `"parentUuid":"`+ctUUID(1)+`",`), pair[1]}, false},
+		"its result naming no release": {[]string{brief, pair[0], writtenBy(pair[1], "")}, false},
 		"an attachment after it naming no release": {[]string{brief, pair[0], pair[1], writtenBy(note, "")},
 			false},
 		"its result of two numbers": {[]string{brief, pair[0], writtenBy(pair[1], `"2.1"`)}, false},
@@ -382,23 +391,29 @@ func TestARecordWrittenBelowTheFloorEndsTheReading(t *testing.T) {
 // (its prompt, its call's use, its call's result, its finished reply) leaves
 // the subagent unreported, its thread not whole for that line, and its call
 // told under it; the main thread is read, and the session's other facts stand.
-// A thread whose every record is of a later release reports it.
+// So does its prompt of 2.1.305 carrying no `parentUuid`, a root of its thread
+// as Claude Code reads one. A thread whose every record is of a later release
+// reports it.
 //
 // Mutation: hold only the main thread's records to the floor, and the
-// subagent is reported and its call held.
+// subagent is reported and its call held; hold only a record that carries a
+// `parentUuid`, and the prompt that carries none is read.
 func TestASubagentRecordWrittenBelowTheFloorLeavesItUnreported(t *testing.T) {
 	t.Parallel()
 	release := `"version":"2.1.310"`
 	for name, tc := range map[string]struct {
-		line    int
-		version string
-		why     string
+		line       int
+		version    string
+		why        string
+		unparented bool
 	}{
-		"its prompt written by 2.1.305":         {0, `"version":"2.1.305"`, "line 1 of its thread is a record of"},
-		"its call's use written by 2.1.305":     {1, `"version":"2.1.305"`, "line 2 of its thread is a record of"},
-		"its call's result naming no release":   {2, "", "line 3 of its thread is a record that names no writer"},
-		"its finished reply naming it oddly":    {3, `"version":7`, "line 4 of its thread is a record that names"},
-		"its finished reply of a later release": {3, `"version":"2.1.322"`, ""},
+		"its prompt written by 2.1.305": {0, `"version":"2.1.305"`, "line 1 of its thread is a record of", false},
+		"its prompt written by 2.1.305, with no parentUuid": {0, `"version":"2.1.305"`,
+			"line 1 of its thread is a record of", true},
+		"its call's use written by 2.1.305":     {1, `"version":"2.1.305"`, "line 2 of its thread is a record of", false},
+		"its call's result naming no release":   {2, "", "line 3 of its thread is a record that names no writer", false},
+		"its finished reply naming it oddly":    {3, `"version":7`, "line 4 of its thread is a record that names", false},
+		"its finished reply of a later release": {3, `"version":"2.1.322"`, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -408,6 +423,9 @@ func TestASubagentRecordWrittenBelowTheFloorLeavesItUnreported(t *testing.T) {
 				from = "," + release
 			}
 			s.thread[tc.line] = ctReplace(t, s.thread[tc.line], from, to)
+			if tc.unparented {
+				s.thread[tc.line] = ctReplace(t, s.thread[tc.line], `"parentUuid":null,`, "")
+			}
 			if tc.why != "" {
 				tc.why = hsNotWhole + ": " + tc.why
 			}

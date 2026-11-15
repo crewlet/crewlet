@@ -778,9 +778,31 @@ type threadHead struct {
 	ReplacesSpan bool
 }
 
-// Chained reports whether the record is in a chain: `parentUuid` present,
-// null or not.
-func (h threadHead) Chained() bool { return h.Parent != nil }
+// Chained reports whether the record is in a chain AS CLAUDE CODE'S RESUME
+// READS ONE: a user, assistant, attachment or system record, whatever
+// `parentUuid` it carries or lacks, or a record of any other type that
+// carries one, null or not. Its resume loads every record of those four types
+// into the one map it walks, whatever its `parentUuid` (2.1.310's and
+// 2.1.322's test of a record is its type alone), and a parentless one of them
+// roots a chain ([threadRestarts.See]); a record of another type is the
+// harness's bookkeeping, which carries no `parentUuid` (every kind measured,
+// at [threadHead.Parent]), and one that carries one is read as written.
+//
+// THE ONE PREDICATE every reader asks, so none of them parts from another:
+// the restart rule ([threadRestarts.See]), the writer floor a reading holds
+// each record to ([writerBelowFloor]) and the resumed count's charge
+// ([resumedReading.line]). Read by `parentUuid` alone, a parentless record of
+// those four types is read and walked by the resume, and by the reading, and
+// no floor held it or count charged it. No release measured writes one (none
+// of the 11,727 such records of the 521 thread files the probes kept lacks a
+// `parentUuid`), so nothing measured moves.
+func (h threadHead) Chained() bool {
+	switch h.Type {
+	case recordUser, recordAssistant, recordAttachment, recordSystem:
+		return true
+	}
+	return h.Parent != nil
+}
 
 // Parentless reports whether the record names no parent AS CLAUDE CODE'S
 // RESUME READS ONE: its `parentUuid` absent, null or the empty string, each
@@ -3392,7 +3414,8 @@ type threadRestarts struct {
 // test of a record is its type alone), and walks a chain back from a record,
 // parent by parent, to the first that is parentless ([threadHead.Parentless]):
 // its `parentUuid` null, the empty string or absent, each falsy to it alike.
-// So such a record is in a chain, and roots one, whichever of the three it
+// So such a record is in a chain ([threadHead.Chained]), and roots one,
+// whichever of the three it
 // carries, and what lies before it is in no chain a resume walks through it. A
 // record of another type is the harness's bookkeeping, in no chain, where it
 // carries no `parentUuid` (every kind measured, at [threadHead.Parent]); one
@@ -3419,10 +3442,6 @@ type threadRestarts struct {
 // start over, and what that means is its reader's to say.
 func (r *threadRestarts) See(h threadHead) bool {
 	chained := h.Chained()
-	switch h.Type {
-	case recordUser, recordAssistant, recordAttachment, recordSystem:
-		chained = true
-	}
 	root := chained && h.Parentless()
 	first := chained && !r.chained
 	r.chained = r.chained || chained

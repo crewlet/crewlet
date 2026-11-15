@@ -384,9 +384,10 @@ import (
 // continued across releases carries the records of each, and the reason above
 // is about the shape of what each release recorded. So the session's last
 // writer, as its row records it, is held to it before anything is opened
-// ([Runner.ReadHoldings]), and every chained record a reading reads by the
-// release it names ([writerBelowFloor]): in the main thread no reading, in a
-// subagent's thread not whole.
+// ([Runner.ReadHoldings]), and every record in a chain a reading reads, as
+// Claude Code's resume reads one ([threadHead.Chained]), by the release it
+// names ([writerBelowFloor]): in the main thread no reading, in a subagent's
+// thread not whole.
 const holdingsWriterFloor = "2.1.310"
 
 // holdingsMaxAgents is the most subagents a reading reads the members of.
@@ -864,11 +865,17 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 }
 
 // writerBelowFloor is why line, a whole line of a thread the reading reads, is
-// a chained record ([threadHead.Chained]) no release at or after
+// a record in a chain ([threadHead.Chained]) no release at or after
 // [holdingsWriterFloor] wrote, and what gave it where something did; "" where
 // the record is in no chain, or a release at or after the floor wrote it. Its
 // `version` absent, no string, or a release this code cannot read or older
 // than the floor ([readsRelease]) is each below it.
+//
+// IN A CHAIN AS CLAUDE CODE'S RESUME READS ONE, never by `parentUuid` alone: a
+// user, assistant, attachment or system record that carries none roots a
+// chain the resume walks ([threadRestarts.See]), and the reading reads it (a
+// thread's brief, a call's use or result, a subagent's prompt), so it is held
+// to the floor as any other record the reading reads.
 //
 // EVERY CHAINED RECORD, NOT THE LAST WRITER ALONE: a box at the carry's floor
 // or after it continues a session an older release wrote
@@ -877,7 +884,8 @@ func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 // records, the floor's reason holds of every one of them
 // ([holdingsWriterFloor]), and each names its own writer ([threadLine.Version]).
 // In the main thread no reading; in a subagent's thread not whole, so its calls
-// are told under it. The bookkeeping is held to nothing: no rule reads it.
+// are told under it. The bookkeeping, a record of no other type that carries
+// no `parentUuid`, is held to nothing: no rule reads it.
 func writerBelowFloor(line threadLine) (string, error) {
 	if !line.Head.Chained() {
 		return "", nil

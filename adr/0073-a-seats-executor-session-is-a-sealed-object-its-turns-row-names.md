@@ -2940,7 +2940,9 @@ sparse member's holes cannot pass; a line to `threadLineMax` (8 MiB); the
 writer to `holdingsWriterFloor` (2.1.310, the oldest release its rules were
 measured on; a writer below it, unknown or unreadable, is no reading), the
 session's last as its row records it and every chained record's own as its
-`version` names it, since a box continues a session an older release wrote
+`version` names it (in a chain as Claude Code's resume reads one: a user,
+assistant, attachment or system record whatever its `parentUuid`, or another
+that carries one), since a box continues a session an older release wrote
 and so holds the records of each (every chained record of the 432 main and 89
 subagent threads the probes kept names its own writer): in the main thread
 such a record is no reading, and in a subagent's thread it leaves that
