@@ -840,6 +840,13 @@ on failed (a coordination store, a state log, a store or a disk that did not
 answer, a queue no longer live, a stop that cut it short) counts nothing toward
 that, by the same answer that hands such a failure back as the node's rather
 than the message's, so an outage ends no run whose job finished during it.
+Nor does a resume another node or build can make (a parked state or a reply
+kind a newer build wrote, met by an older node still holding the seat through
+a roll, or a seat or a company that is not the node's) while a live node reads
+the version of the run's parked state: the run is resumed once a node that
+can holds the seat. Once no live node reads it, as after a rollback, it counts
+like the run's own, so a state nobody running can read holds the seat no longer
+than the give-up does.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:
 two nodes that both run one partition — possible if a turn outlives the

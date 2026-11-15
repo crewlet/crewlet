@@ -951,9 +951,13 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		if unresumable != nil {
 			return unresumable
 		}
-		// Any other state this build cannot read is a ROUTING failure, not a
-		// run failure: a peer on the version that wrote it can resume this,
-		// so the completion must go back rather than be settled here.
+		// A VERSION THIS BUILD DOES NOT READ is a ROUTING failure, not a run
+		// failure: a peer on the version that wrote it can resume this, so
+		// the completion must go back rather than be settled here. Bytes
+		// that are no state at all are met again on every node.
+		if errors.Is(err, execstate.ErrUnknownVersion) {
+			return fmt.Errorf("%w: %w", sandbox.ErrResumeElsewhere, err)
+		}
 		return fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable, err)
 	}
 	if !ok {
@@ -983,7 +987,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		// a peer that has one can. Read through a nil company this was a
 		// nil dereference.
 		return fmt.Errorf("%w: this node has no applied company to resume run %s into",
-			sandbox.ErrResumeUnavailable, req.Run.TurnID)
+			sandbox.ErrResumeElsewhere, req.Run.TurnID)
 	}
 	seat := company.Org.AgentSeatByHandle(req.Run.AgentHandle)
 	if seat == nil {
@@ -991,7 +995,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		// is on a revision that never had it. Either way the resume belongs
 		// somewhere else.
 		return fmt.Errorf("%w: seat %q is not in this node's company",
-			sandbox.ErrResumeUnavailable, req.Run.AgentHandle)
+			sandbox.ErrResumeElsewhere, req.Run.AgentHandle)
 	}
 	return r.engine.resumeTurn(ctx, resumeInput{
 		Company:      company,
@@ -2280,15 +2284,20 @@ func resumeInputFor(in resumeInput, reply turn.Reply) turn.Input {
 // was written by a build that knows a kind this one does not, and guessing at
 // who is waiting is the half of the delivery question this engine exists to get
 // right. The refusal is a ROUTING failure, like a state this build cannot
-// decode, so the completion goes back for a peer that can read it. An absent
-// value is no kind at all — every launch writes one, `none` included — and is
-// refused the same way.
+// decode, so the completion goes back for a peer that can read it
+// ([sandbox.ErrResumeElsewhere]). An absent value is no kind at all — every
+// launch writes one, `none` included — and is refused too, but as one no peer
+// gets past ([sandbox.ErrResumeUnavailable]): no build writes it.
 func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 	reply := turn.ParseReply(run.Reply)
 	if !reply.Valid() {
+		routed := sandbox.ErrResumeElsewhere
+		if run.Reply == "" {
+			routed = sandbox.ErrResumeUnavailable
+		}
 		return turn.Reply{}, fmt.Errorf(
 			"%w: run %s carries reply %q, which is not one of %q, %q or %q",
-			sandbox.ErrResumeUnavailable, run.TurnID, run.Reply,
+			routed, run.TurnID, run.Reply,
 			turn.ReplyNone, turn.ReplyTool, turn.ReplyEngine)
 	}
 	return reply, nil
@@ -3078,9 +3087,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// A resume this node or its infrastructure failed is handed back
 		// uncounted toward the give-up that ends a run, by the answer the
 		// seat's deliveries are NAKed by ([nodesFailure]).
-		NodesFailure: nodesFailure,
-		Resume:       &resumer{engine: e},
-		Account:      e.sandboxAccountant(),
+		NodesFailure:       nodesFailure,
+		ResumableElsewhere: e.resumableElsewhere,
+		Resume:             &resumer{engine: e},
+		Account:            e.sandboxAccountant(),
 		// Who a parked question is put to, resolved against the live
 		// chart at the park — see audience.go.
 		Audience: audienceResolver{engine: e},
@@ -4231,10 +4241,16 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // the engine runs on: a resumed turn that could not read where its writes are
 // minted from a coordination store that did not answer ([rebaseFor]) is the
 // same failure the seat's mailbox hands back as the node's, and one answer
-// decides both ([nodesFailure]). A DRAIN'S CUT IS NOT ONE: it ends only the turn's
-// admission context (internal/node's cut), never the delivery's, so a hand-back
-// it interrupted reads as no failure of this node's here and is NAK'd as the
-// message's. Nothing turns on it: the cut fires only once the queue's own
+// decides both ([nodesFailure]). AND SO IS A RESUME ANOTHER NODE OR BUILD CAN
+// MAKE ([sandbox.ErrResumeElsewhere]: a parked state of a version this build
+// does not read, a reply kind it does not know, a seat or a company that is
+// not this node's): the completion waits for a node that can resume it, which
+// says nothing of the message, and NAK'd as the message's, a roll that kept an
+// older node holding the seat sent it to the poison. A refusal that names
+// nothing to wait on is not one: it stays the message's (below). A DRAIN'S
+// CUT IS NOT ONE: it ends only the turn's admission context (internal/node's
+// cut), never the delivery's, so a hand-back it interrupted reads as no
+// failure of this node's here and is NAK'd as the message's. Nothing turns on it: the cut fires only once the queue's own
 // broker connection is closed for good, so no outcome of that delivery reaches
 // the broker, and the message comes back to the seat's next holder when its
 // ack wait lapses, as every delivery a lost connection held does. A refusal
@@ -4284,7 +4300,7 @@ func controlOutcome(ctx context.Context, err error) queue.Result {
 		return queue.Defer(queue.DeferSeatMoved, err.Error())
 	case waits && !storeUnheard(err):
 		return queue.Ack()
-	case nodesFailure(ctx, err):
+	case nodesFailure(ctx, err), errors.Is(err, sandbox.ErrResumeElsewhere):
 		return queue.NakNode(err)
 	}
 	return queue.Nak(err)

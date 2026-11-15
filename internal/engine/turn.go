@@ -1688,6 +1688,13 @@ func nakFailure(ctx context.Context, err error) queue.Result {
 // the coordinator, its executor's launch ([sandbox.Coordinator.Launch]),
 // makes either. The mailbox reads them as the node's all the same, so the
 // two handlers cannot come to disagree on one.
+//
+// NOT A RESUME ANOTHER NODE OR BUILD CAN MAKE ([sandbox.ErrResumeElsewhere]):
+// the control topic hands that back as the node's as well ([controlOutcome]),
+// but it is no failure of this node's, and the give-up counts it by its own
+// read of the live nodes' builds ([sandbox.CoordinatorOptions.ResumableElsewhere])
+// rather than never, which this answer would make it. A mailbox's turn never
+// meets it.
 func nodesFailure(ctx context.Context, err error) bool {
 	return storeUnheard(err) || queue.NodeFault(ctx, err) || infrastructureFailure(err)
 }

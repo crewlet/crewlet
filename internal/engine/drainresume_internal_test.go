@@ -3,6 +3,7 @@ package engine
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/node"
@@ -508,6 +510,80 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A RESUME ANOTHER NODE OR BUILD CAN MAKE IS THIS NODE'S FAILURE ON THE
+// CONTROL TOPIC, CAUSE BY CAUSE, and one no node gets past stays the
+// message's. Each failure is the one the engine's own resumer answers: a
+// parked state a newer build wrote, a reply kind this build does not know, a
+// node with no applied company and a seat not in this node's company are each
+// the node's (queue.NakNode), so a delivery a roll spends while the
+// completion waits for a node that can resume it is kept with the unhandled
+// deliveries; a refusal that names nothing to wait on, a parked state that is
+// no state, a run with no reply kind and one with no parked state at all are
+// the message's (queue.Nak), as controlOutcome's doc keeps them. (A seat this
+// node does not hold reaches the control topic deferred as one let go of,
+// sandbox.SeatLost, which TestARefusedCompletionIsHandedBackByItsCondition
+// holds.)
+//
+// Mutation: drop sandbox.ErrResumeElsewhere from controlOutcome and the
+// node's rows count against the message; hand every sandbox.ErrResumeUnavailable
+// back as the node's and the message's rows do not; mark any one cause's
+// failure as the plain sandbox.ErrResumeUnavailable, or the plain ones as
+// sandbox.ErrResumeElsewhere, and its row goes red.
+func TestAResumeAnotherNodeCanMakeIsTheNodesOnTheControlTopic(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	parked := func(blob string) sandbox.PendingRun {
+		return sandbox.PendingRun{TurnID: "t1", AgentHandle: "app", Status: sandbox.StatusRunning,
+			ExecuteState: json.RawMessage(blob)}
+	}
+	alone := &resumer{engine: &Engine{backends: &Backends{Coord: coordmem.New()}}}
+	acme := &org.Organization{Name: "Acme"}
+	acme.Normalize()
+	elsewhere := &Engine{backends: &Backends{Coord: coordmem.New()}}
+	elsewhere.epoch.current.Store(&Company{Org: acme})
+	current := runParkedAtVersion(t, execstate.Version)
+	resume := func(r *resumer, run sandbox.PendingRun) error {
+		return r.resume(ctx, sandbox.ResumeRequest{Run: run})
+	}
+	for name, tc := range map[string]struct {
+		err   error
+		nodes bool
+	}{
+		"a parked state a newer build wrote": {
+			err: resume(alone, runParkedAtVersion(t, execstate.Version+1)), nodes: true},
+		"a reply kind this build does not know": {
+			err: replyErr(sandbox.PendingRun{TurnID: "t1", Reply: "later"}), nodes: true},
+		"a node with no applied company":    {err: resume(alone, current), nodes: true},
+		"a seat not in this node's company": {err: resume(&resumer{engine: elsewhere}, current), nodes: true},
+		"a refusal that names nothing to wait on": {err: fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable,
+			&sandbox.TurnRefused{Cause: errors.New("refused"), Refusal: sandbox.Refusal{Reason: "refused"}})},
+		"a parked state that is no state": {err: resume(alone, parked(`[1, 2]`))},
+		"a run with no reply kind":        {err: replyErr(sandbox.PendingRun{TurnID: "t1"})},
+		"a run with no parked state":      {err: resume(alone, parked(``))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if !errors.Is(tc.err, sandbox.ErrResumeUnavailable) {
+				t.Fatalf("the premise: %v is a resume this node cannot make", tc.err)
+			}
+			got := controlOutcome(ctx, tc.err)
+			if got.Outcome != queue.OutcomeNak {
+				t.Fatalf("controlOutcome(%v) = %s; want it handed back for a retry", tc.err, got.Outcome)
+			}
+			if got.FailsMessage() == tc.nodes {
+				t.Fatalf("controlOutcome(%v) counts it as the message's own failure: %v; want %v",
+					tc.err, got.FailsMessage(), !tc.nodes)
+			}
+		})
+	}
+}
+
+// replyErr is the failure resumeReply answers a run's reply kind with.
+func replyErr(run sandbox.PendingRun) error {
+	_, err := resumeReply(run)
+	return err
 }
 
 // A COMPLETION REFUSED ON A CONDITION THAT CLEARS BY WAITING RESUMES ONCE IT

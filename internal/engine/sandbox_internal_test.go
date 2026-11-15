@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1074,6 +1075,68 @@ func TestTheEnginesCoordinatorCountsOnlyTheRunsOwnFailures(t *testing.T) {
 			if got := opts.NodesFailure(ctx, tc.err); got != tc.nodes || got != nodesFailure(ctx, tc.err) {
 				t.Errorf("the coordinator reads %v as the node's = %v, want %v, as nodesFailure does",
 					tc.err, got, tc.nodes)
+			}
+		})
+	}
+}
+
+// THE ENGINE'S COORDINATOR BOUNDS A RESUME ANOTHER BUILD CAN MAKE BY THE LIVE
+// NODES' BUILDS: a parked state a newer build wrote is resumable elsewhere
+// while a node that reads its version is live, so the give-up counts nothing,
+// and not once none is, so it counts; a state of this build's version is
+// resumable elsewhere only where another node reads it, and a run with no
+// parked state, or bytes that are no state, nowhere. The resumer answers the
+// newer state with sandbox.ErrResumeElsewhere, which the bound reads.
+//
+// Mutation: leave ResumableElsewhere off the coordinator's options, read a
+// state this build does not decode as this build's version, or mark the newer
+// state's resume as the plain sandbox.ErrResumeUnavailable, and a row goes red.
+func TestTheEnginesCoordinatorCountsAResumeAnotherBuildCanMakeOnlyOnceNoneIsLive(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	newer := execstate.Version + 1
+	err := (&resumer{engine: &Engine{backends: &Backends{Coord: memory.New()}}}).resume(ctx,
+		sandbox.ResumeRequest{Run: runParkedAtVersion(t, newer)})
+	if !errors.Is(err, sandbox.ErrResumeElsewhere) {
+		t.Fatalf("the resume of a newer state = %v, want it marked as one another build can make", err)
+	}
+	for name, tc := range map[string]struct {
+		run       sandbox.PendingRun
+		live      []int
+		elsewhere bool
+	}{
+		"a newer state, a node of its build live": {run: runParkedAtVersion(t, newer),
+			live: []int{execstate.Version, newer}, elsewhere: true},
+		"a newer state, none of its build live": {run: runParkedAtVersion(t, newer),
+			live: []int{execstate.Version}},
+		"a newer state, no other node live": {run: runParkedAtVersion(t, newer)},
+		"this build's state, another of it live": {run: runParkedAtVersion(t, execstate.Version),
+			live: []int{execstate.Version}, elsewhere: true},
+		"this build's state, alone": {run: runParkedAtVersion(t, execstate.Version)},
+		"no parked state": {run: sandbox.PendingRun{TurnID: "t1"},
+			live: []int{execstate.Version, newer}},
+		"bytes that are no state": {run: sandbox.PendingRun{TurnID: "t1", ExecuteState: json.RawMessage(`[1]`)},
+			live: []int{execstate.Version, newer}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := memory.New()
+			present(ctx, t, backend, "node-self", execstate.Version)
+			for i, v := range tc.live {
+				present(ctx, t, backend, "node-"+strconv.Itoa(i), v)
+			}
+			e := &Engine{backends: &Backends{Queue: queuememory.New(), Coord: backend},
+				answers: testAnswers(), testNode: "node-self"}
+			opts := e.coordinatorOptions(nil, nil)
+			if opts.ResumableElsewhere == nil {
+				t.Fatal("the coordinator is built with no bound on a resume another build can make")
+			}
+			got, err := opts.ResumableElsewhere(ctx, tc.run)
+			if err != nil {
+				t.Fatalf("the fleet's answer: %v", err)
+			}
+			if got != tc.elsewhere {
+				t.Errorf("resumable elsewhere = %v, want %v", got, tc.elsewhere)
 			}
 		})
 	}

@@ -456,7 +456,7 @@ func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished,
 	}
 	fence, held := c.leaseOf(ev.AgentHandle)
 	if !held {
-		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
+		return fmt.Errorf("%w: %w", ErrResumeElsewhere,
 			notHeld(ctx, ev.AgentHandle, ev.TurnID, "recording a refused completion"))
 	}
 	since := c.now().UTC()

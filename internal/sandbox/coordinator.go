@@ -37,7 +37,29 @@ import (
 // The per-seat control topic makes this rare rather than routine — a
 // completion reaches its seat's owner by construction — but "rare" is not
 // "never": a lease can move between the publish and the receive.
+//
+// One another node or build can get past is [ErrResumeElsewhere]; any other
+// (a run with no parked state, a state that is no state, a refusal that names
+// nothing to wait on) is met again wherever the run goes.
 var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run")
+
+// ErrResumeElsewhere is an [ErrResumeUnavailable] another node or build can
+// get past: a seat this node does not hold, a parked state of a version this
+// build does not read, a reply kind it does not know, a seat or a company
+// that is not this node's. An error wrapping it matches both.
+//
+// NOT THE RUN'S FAILURE, AND NOT ITS MESSAGE'S. It is the node's on the seat's
+// control topic (internal/engine's controlOutcome), so a delivery a roll
+// spends waiting for a node that can resume the run is kept with the group's
+// unhandled deliveries rather than with its poison. And it counts nothing
+// toward the resume give-up WHILE A LIVE NODE MAY RESUME THE RUN
+// ([CoordinatorOptions.ResumableElsewhere], [Coordinator.runsOwnFailure]):
+// counted, a roll that kept an older node holding the seat for half an hour
+// ended a run a newer node had parked, and the engine's issue report filed it
+// as the engine's own defect. Once no live node may, it counts, so a rollback
+// that leaves no node of the build that wrote the state holds the seat no
+// longer than the give-up does.
+var ErrResumeElsewhere = fmt.Errorf("%w; another node or build may", ErrResumeUnavailable)
 
 // ErrResumeAbandoned reports a resumed turn that broke and must not be resumed
 // again from the same completion.
@@ -446,6 +468,16 @@ type CoordinatorOptions struct {
 	// above this package (internal/engine's nodesFailure, the one its seat's
 	// deliveries are NAKed by); nil counts every failure as the run's.
 	NodesFailure func(context.Context, error) bool
+
+	// ResumableElsewhere reports whether a live node other than this one may
+	// resume run: one whose build reads the version of the run's parked
+	// state. A resume that failed on [ErrResumeElsewhere] is not counted
+	// toward the give-up while one may, nor while the answer cannot be read
+	// (the next failure asks again); once none may, it is, so a rollback
+	// cannot hold the seat for ever ([Coordinator.runsOwnFailure]). The fleet
+	// it reads sits above this package (internal/engine's
+	// fleetReadsParkedState); nil counts every such failure as the run's.
+	ResumableElsewhere func(ctx context.Context, run PendingRun) (bool, error)
 
 	// Resume re-enters a suspended turn. Required: every node that builds a
 	// coordinator runs the engine whose seats a completion resumes into,
@@ -999,6 +1031,8 @@ type Coordinator struct {
 	failureKind func(error) string
 	// nodesFailure is [CoordinatorOptions.NodesFailure].
 	nodesFailure func(context.Context, error) bool
+	// resumableElsewhere is [CoordinatorOptions.ResumableElsewhere].
+	resumableElsewhere func(ctx context.Context, run PendingRun) (bool, error)
 
 	queue   Publisher
 	pending PendingStore
@@ -1282,29 +1316,30 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
-		nodesFailure: opts.NodesFailure,
-		answers:      opts.Answers,
-		leads:        opts.Leads,
-		condense:     opts.Condense,
-		ended:        opts.Ended,
-		recovered:    opts.Recovered,
-		unresumable:  opts.Unresumable,
-		stopped:      opts.Stopped,
-		parked:       opts.Parked,
-		closeStopped: opts.CloseStopped,
-		turnLost:     opts.TurnLost,
-		steersEnded:  opts.SteersEnded,
-		node:         opts.Node,
-		boxes:        opts.Boxes,
-		nudge:        opts.Nudge,
-		refresh:      opts.Refresh,
-		sessions:     opts.Sessions,
-		keep:         opts.Keep,
-		restore:      opts.Restore,
-		relaunchWait: relaunchCaptureWait,
-		holdingsWait: holdingsReadWait,
-		endWait:      JobEndWait,
-		endPoll:      jobEndPoll,
+		nodesFailure:       opts.NodesFailure,
+		resumableElsewhere: opts.ResumableElsewhere,
+		answers:            opts.Answers,
+		leads:              opts.Leads,
+		condense:           opts.Condense,
+		ended:              opts.Ended,
+		recovered:          opts.Recovered,
+		unresumable:        opts.Unresumable,
+		stopped:            opts.Stopped,
+		parked:             opts.Parked,
+		closeStopped:       opts.CloseStopped,
+		turnLost:           opts.TurnLost,
+		steersEnded:        opts.SteersEnded,
+		node:               opts.Node,
+		boxes:              opts.Boxes,
+		nudge:              opts.Nudge,
+		refresh:            opts.Refresh,
+		sessions:           opts.Sessions,
+		keep:               opts.Keep,
+		restore:            opts.Restore,
+		relaunchWait:       relaunchCaptureWait,
+		holdingsWait:       holdingsReadWait,
+		endWait:            JobEndWait,
+		endPoll:            jobEndPoll,
 
 		// THE ONE WAIT every reading of a job's main thread shares.
 		mainThreadWait: MainThreadReadWait,
@@ -1808,7 +1843,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 		// completion is a ROUTING failure — handed back, so it reaches the
 		// holder, and the poll fires it again for as long as the job's row
 		// is running.
-		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
+		return fmt.Errorf("%w: %w", ErrResumeElsewhere,
 			notHeld(ctx, ev.AgentHandle, ev.TurnID, "claiming a completion"))
 	}
 	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
@@ -4386,10 +4421,11 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 				"attempt", run.Launch.ResumeFailures+1, "error", err.Error())
 		}
 		// A FAILURE IS COUNTED AND BOUNDED, a wait is not, and nor is a
-		// failure of the node's own: see [Coordinator.resumeGivenUp]. A
-		// completion's only, for the reason the deadline above gives.
+		// failure of the node's own, or one another node can get past while
+		// one may: see [Coordinator.resumeGivenUp]. A completion's only, for
+		// the reason the deadline above gives.
 		var failed failure
-		if !refused && !claimedAnswer(run) && c.runsOwnFailure(ctx, err) {
+		if !refused && !claimedAnswer(run) && c.runsOwnFailure(ctx, run, err) {
 			now := c.now()
 			if c.resumeGivenUp(ctx, run, now, err) {
 				return AnswerConsumed, nil
