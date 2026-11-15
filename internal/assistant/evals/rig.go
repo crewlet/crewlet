@@ -230,12 +230,22 @@ func (r *Rig) Await(ctx context.Context, turn uuid.UUID, after uint64, patience 
 
 	ctx, cancel := context.WithTimeout(ctx, patience)
 	defer cancel()
+	frames, err := r.Read(ctx, turn, after)
+	if err != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("the stream never ended within %s", patience)
+	}
+	return frames, err
+}
+
+// Read reads a turn's stream from after seq after until it ends, or fails
+// once ctx ends first.
+func (r *Rig) Read(ctx context.Context, turn uuid.UUID, after uint64) ([]wire.Frame, error) {
 	c := &Collector{}
 	if err := r.Svc.Stream(ctx, r.Person.ID, r.Conversation, turn, after, c); err != nil {
 		return nil, fmt.Errorf("stream: %w", err)
 	}
 	if ctx.Err() != nil {
-		return nil, fmt.Errorf("the stream never ended within %s", patience)
+		return nil, fmt.Errorf("the stream never ended: %w", context.Cause(ctx))
 	}
 	return c.Frames(), nil
 }
