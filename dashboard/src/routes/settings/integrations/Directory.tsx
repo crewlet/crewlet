@@ -62,7 +62,7 @@ import { needsWords } from "~/lib/access.ts";
 import { authorityWords } from "~/lib/refusal.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { goSignIn } from "~/lib/session.ts";
-import { CATALOG, type Entry } from "./catalogue.tsx";
+import { CATALOG, appHeading, type Entry } from "./catalogue.tsx";
 import {
   BUCKET_WORDS,
   useBuiltIns,
@@ -294,14 +294,7 @@ function AdminNote() {
 function HeldPane({ entry }: { entry: Entry }) {
   return (
     <>
-      <ObjectHeader
-        kind="Integration"
-        icon="plug"
-        identifier={entry.key}
-        mark={<VendorMark vendor={entry.vendor} size={36} />}
-        title={entry.name}
-        description={entry.description}
-      />
+      <ObjectHeader {...appHeading(entry, 36)} description={entry.description} />
       <AdminNote />
     </>
   );

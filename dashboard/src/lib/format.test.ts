@@ -14,6 +14,7 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  companyDateLabel,
   charactersOver,
   listed,
   fmtSetting,
@@ -615,4 +616,12 @@ describe("a text past its cap is said in characters, however it is measured", ()
     expect(textBudget("x".repeat(70), 80, "a folder's name").line).toBe("10 characters left");
     expect(textBudget("hello", 80, "a folder's name").line).toBeUndefined();
   });
+});
+
+// A COMPANY DATE IS ONE WORD TO THE LINE BREAKER: "the month on Dec 1." broke
+// inside the date at a tablet's width and left "1." alone on the next line.
+// Mutation: join the parts with an ordinary space again.
+test("a company date never breaks inside itself", () => {
+  expect(companyDateLabel("2026-12-01")).toBe("Dec\u00a01");
+  expect(companyDateLabel("not a date")).toBe("not a date");
 });

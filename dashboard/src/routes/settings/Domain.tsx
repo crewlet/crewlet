@@ -150,17 +150,17 @@ export function DomainScreen({ name }: { name: string }) {
     <>
       <PageActions>
         <a className="t-link" href={href(["settings", "backups"])}>
-          Every domain →
+          Every log →
         </a>
       </PageActions>
 
-      {loading && !data && <Skeleton variant="text" rows={6} label="Loading the domain" />}
+      {loading && !data && <Skeleton variant="text" rows={6} label="Loading the log" />}
       <QueryState error={error} refusal={refusal} loading={loading}>
         {data &&
           (domain ? (
             <>
               <ObjectHeader
-                kind="Domain"
+                kind="Log"
                 icon="layers"
                 title={domain.domain}
                 status={<TrimStatus domain={domain} />}
@@ -213,7 +213,7 @@ export function DomainScreen({ name }: { name: string }) {
                         p.seq < 0 ? (
                           // COUNTED AND SILENT, which is the state that pins a
                           // log: the trim waits for a node it cannot see.
-                          <EmptyValue label="This node has published no position for this domain" />
+                          <EmptyValue label="This node has published no position for this log" />
                         ) : (
                           <span className="t-num">
                             {p.seq}
@@ -235,7 +235,7 @@ export function DomainScreen({ name }: { name: string }) {
                       // current generation".
                       cell: (p) =>
                         p.seq < 0 ? (
-                          <EmptyValue label="This node has published no position for this domain" />
+                          <EmptyValue label="This node has published no position for this log" />
                         ) : (
                           <span className="t-num">{p.generation}</span>
                         ),
@@ -286,14 +286,14 @@ export function DomainScreen({ name }: { name: string }) {
             // run.
             <Card>
               <Card.Header icon={<LayersGlyph size="sm" />}>
-                <Card.Title>No such domain</Card.Title>
+                <Card.Title>No such log</Card.Title>
               </Card.Header>
               <p className="t-body">
-                This node reports no domain <InlineCode>{name}</InlineCode>.
+                This node reports no log <InlineCode>{name}</InlineCode>.
                 {(data.domains ?? []).length > 0 && (
                   <>
                     {" "}
-                    The domains it does report are{" "}
+                    The logs it does report are{" "}
                     {(data.domains ?? []).map((d, i) => (
                       <span key={d.domain}>
                         {i > 0 && ", "}

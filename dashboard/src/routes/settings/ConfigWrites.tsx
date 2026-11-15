@@ -81,7 +81,7 @@ import {
   revertRevision,
   revisionTag,
   saveDocument,
-  type ConfigWriteOutcome,
+  type ConfigCheckOutcome,
 } from "~/protocol/configWrite.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
 import { isAbort } from "~/protocol/rest.ts";
@@ -116,7 +116,7 @@ type Sent =
  * The words of an outcome that is not a stored revision. A `200` to a write
  * is a check the engine took for one, which stored nothing.
  */
-function notSaved(outcome: Exclude<ConfigWriteOutcome, { kind: "saved" }>): RefusalWords {
+function notSaved(outcome: Exclude<ConfigCheckOutcome, { kind: "saved" }>): RefusalWords {
   if (outcome.kind === "valid") {
     return {
       message: "The engine checked the change but stored nothing. Try again.",
@@ -417,7 +417,7 @@ type Checked =
   | { readonly kind: "refused"; readonly words: RefusalWords };
 
 /** The warnings a dry run of a whole document says it introduces. */
-function introduced(outcome: Extract<ConfigWriteOutcome, { kind: "valid" }>): ConfigWarning[] {
+function introduced(outcome: Extract<ConfigCheckOutcome, { kind: "valid" }>): ConfigWarning[] {
   return outcome.warnings.filter((w) => w.introduced === true);
 }
 

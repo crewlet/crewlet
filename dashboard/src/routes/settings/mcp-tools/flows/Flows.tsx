@@ -179,7 +179,8 @@ function DisableDialog({
       `${enabling ? "Enabled" : "Disabled"} the MCP server ${server.name}`,
       unbounded(),
     );
-    if (outcome.kind === "saved") {
+    // ALREADY SO is what was asked for: the server already stood that way.
+    if (outcome.kind === "saved" || outcome.kind === "unchanged") {
       toast.show({
         variant: "success",
         title: enabling ? `${server.title} enabled` : `${server.title} disabled`,

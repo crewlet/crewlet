@@ -641,8 +641,8 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 	}
 	if recipients < 1 {
 		return &ErrSkipped{Reason: SkipSoleNode, Detail: "the fleet counts no node " +
-			"on the estate's logs but this one, so there is nobody to donate to — a " +
-			"single node's recovery artefact is a backup, which the trim's own " +
+			"on the estate's logs but this one, so there is nobody to donate to: a " +
+			"single node is recovered from a backup, which the trim's own " +
 			"backup term gates"}
 	}
 

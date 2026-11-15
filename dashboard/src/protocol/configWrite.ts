@@ -126,6 +126,26 @@ export type ConfigRead =
 
 /** What a write or a dry run came to. */
 export type ConfigWriteOutcome =
+  | ConfigCheckOutcome
+  /**
+   * A save of part of the document ([savePatch], [putEntity]) that left it
+   * exactly as it was (`UnchangedResult`): nothing stored or activated, and
+   * `revisionId` is the revision that already says it.
+   */
+  | {
+      readonly kind: "unchanged";
+      readonly revisionId: string;
+      readonly warnings: readonly ConfigWarning[];
+      readonly derived: Derived | null;
+    };
+
+/**
+ * What a check or a write of the WHOLE document answers: never "unchanged",
+ * which only a write of part of it is answered with (`writeUnchanged` in the
+ * engine). A whole document sent back as it stands is published again, as a
+ * reload is.
+ */
+export type ConfigCheckOutcome =
   /** A dry run: valid against `baseRevisionId`, stored nowhere. */
   | {
       readonly kind: "valid";
@@ -181,7 +201,7 @@ export async function dryRunPatch(
   patch: Record<string, unknown>,
   etag: string,
   signal: AbortSignal,
-): Promise<ConfigWriteOutcome> {
+): Promise<ConfigCheckOutcome> {
   // A check carries no summary: a dry run stores nothing, so there is nothing
   // to attribute, and the engine does not ask for one.
   return outcomeOf(
@@ -218,6 +238,7 @@ export async function savePatch(
       },
       signal,
     ),
+    "partial",
   );
 }
 
@@ -290,7 +311,7 @@ export async function dryRunEntity(
   entity: Record<string, unknown>,
   etag: string,
   signal: AbortSignal,
-): Promise<ConfigWriteOutcome> {
+): Promise<ConfigCheckOutcome> {
   return outcomeOf(
     await answerOf(
       rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
@@ -324,6 +345,7 @@ export async function putEntity(
         signal,
       }),
     ),
+    "partial",
   );
 }
 
@@ -351,7 +373,7 @@ export async function dryRunCreate(
   id: string,
   entity: Record<string, unknown>,
   signal: AbortSignal,
-): Promise<ConfigWriteOutcome> {
+): Promise<ConfigCheckOutcome> {
   return outcomeOf(
     await answerOf(
       rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
@@ -371,7 +393,7 @@ export async function createEntity(
   entity: Record<string, unknown>,
   summary: string,
   signal: AbortSignal,
-): Promise<ConfigWriteOutcome> {
+): Promise<ConfigCheckOutcome> {
   return outcomeOf(
     await answerOf(
       rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
@@ -394,7 +416,7 @@ export async function createEntity(
 export async function reloadConfig(
   summary: string,
   signal: AbortSignal,
-): Promise<ConfigWriteOutcome> {
+): Promise<ConfigCheckOutcome> {
   return outcomeOf(
     await answerOf(
       rest.request("POST", "/config/reload", { headers: summaryHeader(summary), signal }),
@@ -411,7 +433,7 @@ export async function revertRevision(
   id: string,
   summary: string,
   signal: AbortSignal,
-): Promise<ConfigWriteOutcome> {
+): Promise<ConfigCheckOutcome> {
   return outcomeOf(
     await answerOf(
       rest.request("POST", `/config/revisions/${pathSegment(id)}/revert`, {
@@ -497,7 +519,7 @@ export async function dryRunDocument(
   text: string,
   etag: string,
   signal: AbortSignal,
-): Promise<ConfigWriteOutcome> {
+): Promise<ConfigCheckOutcome> {
   return outcomeOf(
     await answerOf(
       rest.request("PUT", "/config", {
@@ -521,7 +543,7 @@ export async function saveDocument(
   etag: string,
   summary: string,
   signal: AbortSignal,
-): Promise<ConfigWriteOutcome> {
+): Promise<ConfigCheckOutcome> {
   return outcomeOf(
     await answerOf(
       rest.request("PUT", "/config", {
@@ -534,8 +556,15 @@ export async function saveDocument(
   );
 }
 
-/** What one answer to a write or a dry run means. */
-export function outcomeOf(answer: ConfigAnswer): ConfigWriteOutcome {
+/**
+ * What one answer to a write or a dry run means. `partial` is a write of PART
+ * of the document (a merge patch, one entity's replacement), the one kind of
+ * write the engine answers "unchanged" (`200 changed: false`) when it leaves
+ * the document as it was.
+ */
+export function outcomeOf(answer: ConfigAnswer): ConfigCheckOutcome;
+export function outcomeOf(answer: ConfigAnswer, partial: "partial"): ConfigWriteOutcome;
+export function outcomeOf(answer: ConfigAnswer, partial?: "partial"): ConfigWriteOutcome {
   const body = isRecord(answer.body) ? answer.body : {};
   const warnings = Array.isArray(body.warnings) ? (body.warnings as ConfigWarning[]) : [];
   const derived = isRecord(body.derived) ? (body.derived as unknown as Derived) : null;
@@ -544,6 +573,17 @@ export function outcomeOf(answer: ConfigAnswer): ConfigWriteOutcome {
       kind: "saved",
       revisionId: typeof body.revision_id === "string" ? body.revision_id : "",
       epoch: typeof body.epoch === "number" ? body.epoch : 0,
+      warnings,
+      derived,
+    };
+  }
+  // A WRITE THAT CHANGED NOTHING is a 200 too, and not a check: it names the
+  // revision that already says what it asked for, where a check names the one
+  // it was built on and says it is valid.
+  if (partial && answer.status === 200 && body.changed === false && body.valid !== true) {
+    return {
+      kind: "unchanged",
+      revisionId: typeof body.revision_id === "string" ? body.revision_id : "",
       warnings,
       derived,
     };

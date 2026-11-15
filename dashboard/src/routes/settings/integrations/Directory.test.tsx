@@ -737,6 +737,44 @@ test("the engine's address sits once at the foot of the home, copyable", async (
   );
 });
 
+// AN APP'S PAGE SAYS EACH FACT ONCE: its name, never its key beside it
+// ("Integration slack" over "Slack"); what it covers under the name, and how
+// each agent gets in only under "Each agent"; and the step a person takes by
+// hand apart from the values to have ready. Mutation: put the key back on the
+// header, or the step back in the list, and the case fails.
+test("an app's page names it once, and keeps what to do apart from what to have", async () => {
+  mount(ADMIN, "slack");
+  expect(await screen.findByRole("heading", { level: 2, name: "Slack" })).toBeTruthy();
+  expect(screen.queryByText("slack", { exact: true })).toBeNull();
+  expect(screen.getAllByText(/its own Slack app/)).toHaveLength(1);
+  const need = screen.getByRole("region", { name: "What you need" });
+  expect(within(need).queryByText(/manifest/)).toBeNull();
+  const byHand = screen.getByRole("region", { name: "What you do by hand" });
+  expect(within(byHand).getByText(/Create one Slack app per agent/)).toBeTruthy();
+});
+
+// AN ADDRESS ONLY THIS MACHINE REACHES SAYS SO, on the engine's word: drawn
+// bare, `http://127.0.0.1:…` read as the address every app was set up on,
+// though no app outside the machine can deliver to it. Mutation: drop the
+// warning and the case fails; draw it for a public address and the first half
+// does.
+test("a loopback address apps are given is said to be unreachable from outside", async () => {
+  mount(ADMIN);
+  await waitFor(() => expect(document.querySelector(".int-landing-foot")).not.toBeNull());
+  expect(screen.queryByText("Only this machine can reach this address")).toBeNull();
+  cleanup();
+  const loopback = {
+    ...listing,
+    external_url: {
+      value: "http://127.0.0.1:8080",
+      config_path: "api.external_url",
+      loopback: true,
+    },
+  };
+  mount(ADMIN, undefined, BUILT_IN, { status: 200, body: loopback });
+  expect(await screen.findByText("Only this machine can reach this address")).toBeTruthy();
+});
+
 // A MANAGED DOCUMENT HOLDS WHAT WRITES IT and keeps a key's rotation, which
 // seals a value the document already names.
 test("a managed document holds Connect and keeps Replace key", async () => {

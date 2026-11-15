@@ -100,16 +100,18 @@ test("draws each group as a table named by its card, in the engine's order", asy
   expect(screen.getByRole("table", { name: "Schedules" })).toBeDefined();
 });
 
-test("each cap carries its name, its key, its value and its source", async () => {
+test("each cap carries its name, its key to copy, its value and its source", async () => {
   await show(LIMITS);
   const turn = screen.getByRole("table", { name: "Guardrails on every turn" });
   const changed = within(turn).getByRole("row", { name: /Tool rounds on a first turn/ });
-  // THE KEY BEHIND ITS COPY CONTROL, the kit's way of carrying it.
+  // THE KEY BEHIND THE ROW'S COPY CONTROL (kit 0.128.2), never a line of the
+  // document's spelling under the name.
   expect(
     within(changed).getByRole("button", {
       name: "Copy the setting's key, turn_engine.onboarding_max_tool_rounds",
     }),
   ).toBeDefined();
+  expect(within(changed).queryByText("turn_engine.onboarding_max_tool_rounds")).toBeNull();
   expect(
     within(changed)
       .getAllByRole("cell")
@@ -431,6 +433,7 @@ test("what is typed is held to the cap's unit before any request", async () => {
 test("the engine's constant has no pencil", async () => {
   await show(LIMITS);
   const row = screen.getByRole("row", { name: /A scheduled turn's time limit/ });
+  // No pencil; the key's copy control is the row's only button.
   expect(within(row).queryByRole("button", { name: /^Change / })).toBeNull();
 });
 

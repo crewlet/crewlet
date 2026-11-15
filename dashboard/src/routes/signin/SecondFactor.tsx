@@ -67,11 +67,37 @@ export function groupedKey(secret: string): string {
   return (secret.match(/.{1,4}/g) ?? []).join(" ");
 }
 
-export function SecondFactorSetup({
-  onEnrolled,
-}: {
-  onEnrolled: (answer: SecondFactorEnrolled) => void;
-}) {
+/** What setting up an authenticator holds, between its two requests. */
+export interface SecondFactorSetupState {
+  /** The seed the engine answered, or null while it is asked. */
+  seed: SecondFactorSeed | null;
+  /** Why no seed could be read, which nothing was set up after. */
+  unread: string | null;
+  code: string;
+  setCode: (code: string) => void;
+  busy: boolean;
+  refusal: string | null;
+  /** The engine said a factor is already held, which this session may not replace. */
+  held: boolean;
+  /** Ask for a seed again, after one could not be read. */
+  offer: () => Promise<void>;
+  /** Send the seed back with the code: the second request, which stores the factor. */
+  confirm: () => Promise<void>;
+  /** Whether a confirm would be sent now: a seed on screen, a code typed, none in flight. */
+  ready: boolean;
+}
+
+/**
+ * The setup's STATE, apart from its drawing, because the two doors draw its
+ * one gesture in two places: the required enrolment's page is a form whose
+ * Confirm closes it, and the Account page's dialog puts Confirm in its footer
+ * beside Cancel, as every dialog does. The setup drew its own form and its own
+ * Confirm, so in the dialog the primary action stood in the body, alone on the
+ * left, while Cancel sat alone in the footer.
+ */
+export function useSecondFactorSetup(
+  onEnrolled: (answer: SecondFactorEnrolled) => void,
+): SecondFactorSetupState {
   const [seed, setSeed] = useState<SecondFactorSeed | null>(null);
   const [unread, setUnread] = useState<string | null>(null);
   const [code, setCode] = useState("");
@@ -100,6 +126,8 @@ export function SecondFactorSetup({
     void offer();
   }, [offer]);
 
+  const ready = seed !== null && !busy && code.trim() !== "";
+
   async function confirm() {
     if (!seed || busy || code.trim() === "") return;
     setBusy(true);
@@ -115,6 +143,22 @@ export function SecondFactorSetup({
     }
   }
 
+  return { seed, unread, code, setCode, busy, refusal, held, offer, confirm, ready };
+}
+
+/** Confirm's words: what it does, and that it is doing it. */
+export function confirmLabel(setup: SecondFactorSetupState): string {
+  return setup.busy ? "Checking" : "Confirm";
+}
+
+/**
+ * The setup's steps, drawn without a form or a button of their own: the seed
+ * to scan, the key to type, the code to enter and the engine's refusal. The
+ * form and Confirm are whoever draws them ([SecondFactorSetup], the page's;
+ * [AuthenticatorDialog], the dialog's).
+ */
+export function SecondFactorSteps({ setup }: { setup: SecondFactorSetupState }) {
+  const { seed, unread, code, setCode, refusal, held, offer } = setup;
   if (unread) {
     return (
       <Callout
@@ -133,13 +177,7 @@ export function SecondFactorSetup({
   if (!seed) return <Skeleton variant="text" rows={4} label="Preparing a key" />;
 
   return (
-    <form
-      className="signin-form"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void confirm();
-      }}
-    >
+    <>
       <ol className="signin-steps">
         <li>
           <div className="signin-step">
@@ -192,8 +230,32 @@ export function SecondFactorSetup({
           {refusal}
         </Callout>
       )}
-      <Button type="submit" variant="primary" disabled={busy || code.trim() === ""}>
-        {busy ? "Checking" : "Confirm"}
+    </>
+  );
+}
+
+/**
+ * The required enrolment's setup (`#/enrol`): the page is the form, and its
+ * Confirm closes it under the steps.
+ */
+export function SecondFactorSetup({
+  onEnrolled,
+}: {
+  onEnrolled: (answer: SecondFactorEnrolled) => void;
+}) {
+  const setup = useSecondFactorSetup(onEnrolled);
+  if (!setup.seed || setup.unread) return <SecondFactorSteps setup={setup} />;
+  return (
+    <form
+      className="signin-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void setup.confirm();
+      }}
+    >
+      <SecondFactorSteps setup={setup} />
+      <Button type="submit" variant="primary" disabled={!setup.ready}>
+        {confirmLabel(setup)}
       </Button>
     </form>
   );
@@ -233,8 +295,16 @@ export function RecoveryCodeList({ codes }: { codes: readonly string[] }) {
  * an account nobody but an administrator can reopen. A set that cannot be
  * issued is said, with the way to try again, and the way on without it —
  * the codes can be issued later from the person's Account page.
+ *
+ * STATE APART FROM ITS DRAWING, as the setup's is ([useSecondFactorSetup]):
+ * the page draws the way on under the codes, the dialog in its footer. Issued
+ * once `enabled` turns true, and once only.
  */
-export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
+export function useFirstRecoveryCodes(enabled = true): {
+  codes: string[] | null;
+  refusal: string | null;
+  issue: () => Promise<void>;
+} {
   const [codes, setCodes] = useState<string[] | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
 
@@ -249,36 +319,61 @@ export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
 
   const asked = useRef(false);
   useEffect(() => {
-    if (asked.current) return;
+    if (!enabled || asked.current) return;
     asked.current = true;
     void issue();
-  }, [issue]);
+  }, [enabled, issue]);
 
+  return { codes, refusal, issue };
+}
+
+/** The first set's words: the codes to save, the refusal, or that they are coming. */
+export function FirstRecoveryCodesBody({
+  codes,
+  refusal,
+}: {
+  codes: string[] | null;
+  refusal: string | null;
+}) {
   if (refusal) {
     return (
-      <div className="signin-form">
-        <Callout variant="warning" role="alert">
-          {refusal} Couldn’t create recovery codes.
-        </Callout>
-        <Button variant="primary" onClick={() => void issue()}>
-          Try again
-        </Button>
-        <Button variant="ghost" onClick={onDone}>
-          Skip for now
-        </Button>
-      </div>
+      <Callout variant="warning" role="alert">
+        {refusal} Couldn’t create recovery codes.
+      </Callout>
     );
   }
   if (!codes) return <Skeleton variant="text" rows={4} label="Creating recovery codes" />;
   return (
-    <div className="signin-form">
+    <>
       <Text as="p" variant="body">
         Save these recovery codes. Each works once. <strong>You won’t see them again.</strong>
       </Text>
       <RecoveryCodeList codes={codes} />
-      <Button variant="primary" onClick={onDone}>
-        I’ve saved them
-      </Button>
+    </>
+  );
+}
+
+/** The required enrolment's first set (`#/enrol`), its way on under the codes. */
+export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
+  const { codes, refusal, issue } = useFirstRecoveryCodes();
+  if (!codes && !refusal) return <FirstRecoveryCodesBody codes={codes} refusal={refusal} />;
+  return (
+    <div className="signin-form">
+      <FirstRecoveryCodesBody codes={codes} refusal={refusal} />
+      {refusal ? (
+        <>
+          <Button variant="primary" onClick={() => void issue()}>
+            Try again
+          </Button>
+          <Button variant="ghost" onClick={onDone}>
+            Skip for now
+          </Button>
+        </>
+      ) : (
+        <Button variant="primary" onClick={onDone}>
+          I’ve saved them
+        </Button>
+      )}
     </div>
   );
 }
@@ -307,6 +402,12 @@ export function AuthenticatorDialog({ codes, onClose }: { codes: boolean; onClos
   // taking the codes off the screen before they were saved.
   const [first] = useState(!codes);
   const issuing = enrolled && first;
+  // THE GESTURES LIVE HERE, not in the body, so the dialog's footer carries
+  // them: Confirm beside Cancel while setting up, the first set's way on once
+  // it is issued. The setup drew its own Confirm into the body, where it stood
+  // alone on the left while Cancel stood alone in the footer.
+  const setup = useSecondFactorSetup(() => setEnrolled(true));
+  const firstCodes = useFirstRecoveryCodes(issuing);
   return (
     <Modal
       open
@@ -315,17 +416,49 @@ export function AuthenticatorDialog({ codes, onClose }: { codes: boolean; onClos
       onClose={onClose}
       size="md"
       stackBody
+      // THE FRAME STAYS ONE FORM from the first step to the last, so Enter in
+      // the code field confirms and the frame never changes element under it.
+      onSubmit={() => {
+        if (!enrolled) void setup.confirm();
+      }}
       footer={
-        // THE FIRST SET CARRIES ITS OWN WAY ON, once it is saved or skipped.
-        issuing ? null : (
-          <Button variant={enrolled ? "primary" : "ghost"} onClick={onClose}>
-            {enrolled ? "Done" : "Cancel"}
+        issuing ? (
+          firstCodes.refusal ? (
+            <>
+              <Button variant="ghost" onClick={onClose}>
+                Skip for now
+              </Button>
+              <Button variant="primary" onClick={() => void firstCodes.issue()}>
+                Try again
+              </Button>
+            </>
+          ) : firstCodes.codes ? (
+            <Button variant="primary" onClick={onClose}>
+              I’ve saved them
+            </Button>
+          ) : null
+        ) : enrolled ? (
+          <Button variant="primary" onClick={onClose}>
+            Done
           </Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={setup.busy}>
+              Cancel
+            </Button>
+            {/* NO CONFIRM BEFORE THERE IS A KEY TO CONFIRM: a seed that could
+                not be read leaves Cancel, beside the body's Try again. */}
+            {!setup.unread && (
+              <Button type="submit" variant="primary" disabled={!setup.ready}>
+                {confirmLabel(setup)}
+              </Button>
+            )}
+          </>
         )
       }
     >
       {issuing ? (
-        <FirstRecoveryCodes onDone={onClose} />
+        <FirstRecoveryCodesBody codes={firstCodes.codes} refusal={firstCodes.refusal} />
       ) : enrolled ? (
         <Text as="p" variant="body">
           Authenticator set up. Codes from your old app stop working.
@@ -335,7 +468,7 @@ export function AuthenticatorDialog({ codes, onClose }: { codes: boolean; onClos
           <Text as="p" variant="body" tone="secondary">
             You’ll need a code from this app to sign in. Replaces any earlier app.
           </Text>
-          <SecondFactorSetup onEnrolled={() => setEnrolled(true)} />
+          <SecondFactorSteps setup={setup} />
         </>
       )}
     </Modal>

@@ -107,8 +107,11 @@ func TestAPatchRestoresARedactedValue(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, companyDoc)
 
+	// A CHANGE BESIDE THE MASK, so a revision is stored to read it in: the
+	// mask alone restores to the document as it is, which stores nothing.
 	patchOnly(t, s,
-		`{"integrations": {"gitlab": {"signing_secret": "__redacted__"}}}`,
+		`{"mission": "a mission the write changes", `+
+			`"integrations": {"gitlab": {"signing_secret": "__redacted__"}}}`,
 		summaryHeader)
 
 	document := s.activeDocument(t)
@@ -405,7 +408,14 @@ func TestARouteThatJudgesNoRevisionLosesItsRaceAsAConflict(t *testing.T) {
 			t.Fatalf("GET /config/mcp-servers/tracker = %d, ETag %q", read.Code, tag)
 		}
 		losing.armed.Store(true)
-		res := s.do(t, http.MethodPut, "/config/mcp-servers/tracker", read.Body.String(),
+		// MOVED, under the tag of what was read: a server sent back as it
+		// stands stores nothing, so it would race nobody.
+		moved := strings.Replace(read.Body.String(), "https://mcp.example.com",
+			"https://issues.example.com", 1)
+		if moved == read.Body.String() {
+			t.Fatalf("the read carries no url to move: %s", read.Body.String())
+		}
+		res := s.do(t, http.MethodPut, "/config/mcp-servers/tracker", moved,
 			map[string]string{"X-Summary": "move the tracker server", "If-Match": tag})
 		if res.Code != http.StatusConflict || decode(t, res)["error"] != "revision_advanced" {
 			t.Errorf("PUT under the entity's own tag = %d %s, want 409 revision_advanced",

@@ -2548,6 +2548,12 @@ const (
 	// History's single Load older, a blocker named by its edge's key, Home's
 	// figures and bar on a phone) added 981 bytes, script and sheet, and took
 	// it to 6183.9 KiB (6,332,334 bytes): 6184 KiB.
+	// Kit 0.128.2 (a setting's key behind a copy control, a sheet's subtitle in
+	// its body) and the Settings, Account, Spend, Advisor and Configuration
+	// fixes beside it (credentials and duties in words, the audit log's Where,
+	// the grid key registry, empty spend drawn empty, the diff's per-line
+	// marks) added 13,042 bytes and took it to 6195.7 KiB (6,344,395 bytes):
+	// 6196 KiB.
 	treeBudget = 5<<20 + 1077<<10
 )
 

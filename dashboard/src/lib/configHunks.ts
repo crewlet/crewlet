@@ -4,7 +4,7 @@
  * revert would apply, read before it is confirmed.
  */
 
-import type { DiffHunk } from "~/components/DiffView.tsx";
+import type { DiffHunk, DiffLine } from "~/components/DiffView.tsx";
 import type { ConfigChange } from "~/protocol/index.ts";
 
 /**
@@ -23,6 +23,24 @@ function shownValue(value: unknown): string {
 }
 
 /**
+ * One side of a setting as the diff's lines: ONE DIFF LINE PER LINE OF THE
+ * VALUE, so every line of it carries its glyph and its surface step.
+ *
+ * Handed to the diff as one line, a value of twelve lines (a seat,
+ * `roles[1]`) was marked on its first row alone: the glyph sat beside the
+ * path and the rest of the object hung in the value track unmarked, so a
+ * removed seat read as one removed line over eleven of nothing. Every line
+ * names its setting's path, which is what pairs it with the other side's
+ * lines of that setting; the diff writes the path once, on the first line of
+ * the run (`components/DiffView.tsx`).
+ */
+function valueLines(kind: "add" | "remove", value: unknown, path: string): DiffLine[] {
+  return shownValue(value)
+    .split("\n")
+    .map((text) => ({ kind, text, before: null, after: null, path }));
+}
+
+/**
  * A comparison as the one diff the dashboard draws (`components/DiffView.tsx`),
  * KEYED by path: an added setting is its new value added, a removed one its
  * old value removed, and a CHANGED one is both, its old value removed and its
@@ -31,18 +49,14 @@ function shownValue(value: unknown): string {
  *
  * ONE HUNK A CHANGE, each skipping nothing: the changes are the whole answer,
  * not runs cut out of a longer text, and a hunk is what keeps one setting's
- * two lines together however the next change reads.
+ * lines together however the next change reads.
  */
 export function configHunks(changes: readonly ConfigChange[]): DiffHunk[] {
   return changes.map(({ path, kind, from, to }) => ({
     skipped: 0,
     lines: [
-      ...(kind === "added"
-        ? []
-        : [{ kind: "remove" as const, text: shownValue(from), before: null, after: null, path }]),
-      ...(kind === "removed"
-        ? []
-        : [{ kind: "add" as const, text: shownValue(to), before: null, after: null, path }]),
+      ...(kind === "added" ? [] : valueLines("remove", from, path)),
+      ...(kind === "removed" ? [] : valueLines("add", to, path)),
     ],
   }));
 }

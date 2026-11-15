@@ -787,8 +787,9 @@ export interface Overlay {
   waiting?: InboxWaiting | null;
 }
 
-/** What waits in a seat's inbox, per mailbox: `priority` is people waiting on
- *  the seat (the priority lane), `background` the rest of its work. */
+/** What waits in a seat's inbox, per mailbox: `priority` counts the messages
+ *  in its priority lane, each one a person wrote that the seat owes an answer
+ *  to (a count of messages, not of people), `background` the rest of its work. */
 export interface InboxWaiting {
   priority: number;
   background: number;
@@ -1704,6 +1705,20 @@ export interface DryRunResult {
   valid: true;
   /** The revision the draft was validated against. */
   base_revision_id: string;
+  /** Whether the write would change the document at all. */
+  changed: boolean;
+  warnings: ConfigWarning[] | null;
+  derived: Derived;
+}
+
+/**
+ * `200` from `PATCH /config` or `PUT /config/{kind}/{id}` that left the
+ * document exactly as it was: nothing was stored or activated, and
+ * `revision_id` is the revision that already says it.
+ */
+export interface UnchangedResult {
+  changed: false;
+  revision_id: string;
   warnings: ConfigWarning[] | null;
   derived: Derived;
 }
@@ -5322,6 +5337,12 @@ export interface SetupListing {
   external_url: {
     value: string;
     config_path: string;
+    /**
+     * The address names a loopback host, which only the engine's own machine
+     * reaches, so no third-party app can deliver to it: the engine's rule
+     * (`config.LoopbackURL`), answered rather than re-derived here.
+     */
+    loopback: boolean;
   };
 }
 

@@ -204,11 +204,13 @@ test("a turn that has only started is on its Context step, timed from its start"
   expect(row.textContent).toMatch(/2m/);
 });
 
-// WHAT WAITS BEHIND A RUNNING TURN IS ON ITS ROW, a person waiting said first
-// and apart, as the node holding the seat counts it. The turn's own mail is
-// not in the count, so a seat with nothing else waiting says nothing.
+// WHAT WAITS BEHIND A RUNNING TURN IS ON ITS ROW, as the node holding the seat
+// counts it: one count of what is queued, with messages from people said first
+// and apart in its words. The turn's own mail is not in the count, so a seat
+// with nothing else waiting says nothing. THE COUNTS ARE MESSAGES: the row said
+// "1 person waiting · 4 waiting", which a company of four read as people.
 //
-// Mutation: drop the waiting tags from the row and neither phrase is drawn.
+// Mutation: drop the waiting count from the row and neither phrase is drawn.
 test("a running turn's row says who and what waits behind it", async () => {
   mount({
     agents: [
@@ -236,12 +238,56 @@ test("a running turn's row says who and what waits behind it", async () => {
   const busy = await within(card).findByRole("link", { name: /Search Engineer/ });
   // ONE QUIET COUNT, the words in its tooltip: two tags ran past a narrow card's edge.
   const count = busy.querySelector<HTMLElement>(".live-waiting")!;
-  expect(count.querySelector("[aria-hidden]")?.textContent).toBe("· 5 waiting");
-  expect(count.title).toBe("1 person waiting · 4 waiting");
-  expect(count.textContent).toContain("1 person waiting · 4 waiting");
+  expect(count.querySelector("[aria-hidden]")?.textContent).toBe("· 5 queued");
+  expect(count.title).toBe("Queued in its inbox: 1 message from a person · 4 other notices");
+  expect(count.textContent).toContain(
+    "Queued in its inbox: 1 message from a person · 4 other notices",
+  );
   expect(busy.querySelectorAll(".crewlet-tag")).toHaveLength(0);
   const calm = await within(card).findByRole("link", { name: /Docs Writer/ });
-  expect(calm.textContent).not.toMatch(/waiting/);
+  expect(calm.textContent).not.toMatch(/queued|waiting/);
+});
+
+// AN EXECUTOR IN ITS BOX SAYS WHAT IS QUEUED BEHIND ITS SEAT in the running
+// turn's words: one count, and what it counts in its tooltip. It drew
+// "79 people waiting · 9 waiting" for a seat four people had written to.
+// Mutation: word the priority lane as people again and this goes red.
+test("an executor's row in a box says how much is queued in its seat's inbox, as messages", async () => {
+  mount({
+    agents: [
+      {
+        agent_id: "a1",
+        id: "a1",
+        role: "Search Engineer",
+        handle: "eng-search",
+        activity: "working",
+        waiting: { priority: 79, background: 9 },
+      },
+    ],
+    answers: {
+      executors: {
+        runs: [
+          {
+            turn_id: "t-box",
+            agent_handle: "eng-search",
+            role: "Engineer",
+            status: "running",
+            started_at: ago(600_000),
+            updated_at: ago(60_000),
+            placement: "local",
+            harness: "claude",
+            box_exists: true,
+          },
+        ],
+      },
+    },
+  });
+  const card = cardOf("In a box");
+  const row = await within(card).findByRole("link", { name: /Search Engineer/ });
+  const count = row.querySelector<HTMLElement>("[title^='Queued in its inbox']")!;
+  expect(count.title).toBe("Queued in its inbox: 79 messages from people · 9 other notices");
+  expect(count.querySelector("[aria-hidden]")?.textContent).toBe(" · 88 queued");
+  expect(row.textContent).not.toMatch(/people waiting/);
 });
 
 // A ROUND THAT HAS STOPPED MOVING SAYS SO ON ITS OWN ROW, AND A PARKED TURN

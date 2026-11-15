@@ -680,6 +680,11 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-empty-state",
+    why: "uilet's EmptyState writes it, and a DataGrid writes it for its own empty body. styles/screens.css centres it in a Token spend card that its row stretches to a taller neighbour's height (`.spend-card`), where By agent's empty state stood at the top of about 390px of blank. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-card--flush",
     why: "uilet's Card writes it for `padding=\"none\"` content that reaches the card's edges. styles/screens.css turns its `overflow: hidden` into `clip`, which is what the recipe's own comment asks for — `hidden` also makes the card a scroll container, and a sticky box confined to a scrollport that can never scroll never has `top` applied, so every DataGrid inside a flush card had a dead column head. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

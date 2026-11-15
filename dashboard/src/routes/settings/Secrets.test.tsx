@@ -467,6 +467,10 @@ test("an empty store names the command that fills it as code", async () => {
   expect(await screen.findByText("No secrets are stored")).toBeDefined();
   const command = screen.getByText("crewlet secrets set");
   expect(command.tagName).toBe("CODE");
+  // IN ITS CARD, as MCP & tools and Service accounts draw theirs: drawn by
+  // the page's query it floated on the page's ground. Mutation: hand the
+  // empty state back to the query and it has no card around it.
+  expect(screen.getByText("No secrets are stored").closest(".crewlet-card")).not.toBeNull();
 });
 
 // AN EMPTY STORE LEADS WITH ITS EMPTY STATE, not three zero tiles whose

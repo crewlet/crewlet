@@ -4413,7 +4413,7 @@ func reportForSkip(reason, reported statelog.SkipReason, holds bool) noSnapshotR
 			Reason: reason,
 			Detail: "this node is the only member the fleet counts, so there " +
 				"is nobody to donate a snapshot to and none is taken; a single " +
-				"node's recovery artefact is a backup (retention.backup_owner) " +
+				"node is recovered from a backup (retention.backup_owner) " +
 				"rather than a donor snapshot, and this ends when a second node " +
 				"joins",
 		}

@@ -119,12 +119,15 @@ import {
   TableTextCell,
   toCsv,
   TimeRangePicker,
+  useToast,
+  downloadText,
 } from "@crewlethq/ui";
 import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { usePageMenu } from "~/app/Shell.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
@@ -144,6 +147,10 @@ import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { authorityWords } from "~/lib/refusal.ts";
 import { throughOf } from "~/lib/attribution.ts";
+import { Credential } from "~/components/Credential.tsx";
+import { sentence } from "~/lib/format.ts";
+import { andList, withoutActor } from "~/lib/words.ts";
+import { ACTIONS } from "~/contract/actions.ts";
 import type {
   ArtifactTrailEntry,
   FeedRow,
@@ -198,6 +205,10 @@ const PAGE = {
 /** How often the feeds are re-read. An audit is read, not watched. */
 const POLL_MS = 60_000;
 
+/** The file an export is saved as, and its type. */
+const AUDIT_CSV = "crewlet-audit.csv";
+const CSV_MIME = "text/csv;charset=utf-8";
+
 /** The places a company's own writes are recorded, the runtime audit of every
  *  call a person made, the identity estate's own trail, and every artifact's
  *  history. */
@@ -217,10 +228,75 @@ const SOURCE_LABEL: Record<Source, string> = {
   doclet: "Doclet",
   config: "Configuration",
   credentials: "Credentials",
-  runtime: "Runtime",
+  runtime: "Tool calls",
   identity: "Identity",
   artifacts: "Artifacts",
 };
+
+/**
+ * WHERE A ROW HAPPENED, which is not always the trail it was read from. A
+ * person's call is read off the runtime audit, and every one was drawn as
+ * "Runtime": a chat read and a change opened in Gitlet said nothing about
+ * where they were made, and the filter had no Chatlet or Gitlet to pick. A
+ * call says the part of the product its tool belongs to (the act contract's
+ * `apps`), and a call no part owns keeps the trail's own name.
+ */
+const WHERE_LABEL = {
+  worklet: "Worklet",
+  doclet: "Doclet",
+  chatlet: "Chatlet",
+  gitlet: "Gitlet",
+  atlas: "Atlas",
+  artifacts: "Artifacts",
+  config: "Configuration",
+  credentials: "Credentials",
+  identity: "Identity",
+  models: "Models",
+  mcp: "MCP & tools",
+  backups: "Backups",
+  assistant: "Ask Crewlet",
+  runtime: "Other tool calls",
+} as const;
+type Where = keyof typeof WHERE_LABEL;
+
+/** The part of the product a runtime audit row was made in ([WHERE_LABEL]). */
+export function runtimeWhere(row: Pick<FeedRow, "type" | "tags">): Where {
+  switch (row.type) {
+    case "backup_requested":
+      return "backups";
+    case "model_acted":
+      return "models";
+    case "mcp_server_acted":
+      return "mcp";
+    case "assistant_conversation_read":
+    case "assistant_turn_completed":
+      return "assistant";
+  }
+  const tool = row.tags?.tool ?? "";
+  const app = (ACTIONS as Readonly<Record<string, { apps: readonly string[] }>>)[tool]?.apps[0];
+  if (app && app in WHERE_LABEL) return app as Where;
+  // A PUSH OVER GIT is a call with a repository and no act tool.
+  if (row.tags?.repo) return "gitlet";
+  return "runtime";
+}
+
+/**
+ * What became of a call, in its own words: the engine's summary leads with
+ * the author and the tool ("jane-founder ran mark_chat_read: applied"), which
+ * the Who and What cells beside it already say, the author by a handle the
+ * page names nobody by. What is left is the outcome, sentence-cased; a
+ * summary of another shape keeps its words, the author dropped.
+ */
+export function runtimeDetail(row: Pick<FeedRow, "type" | "tags" | "summary" | "actor">): string {
+  const summary = row.summary ?? "";
+  const actor = row.actor ?? "";
+  const tool = row.tags?.tool;
+  if (row.type === "operator_acted" && tool) {
+    const ran = `${actor} ran ${tool}${row.tags?.repo ? ` on ${row.tags.repo}` : ""}: `;
+    if (summary.startsWith(ran)) return sentence(summary.slice(ran.length));
+  }
+  return sentence(withoutActor(summary, actor));
+}
 
 type RuntimeType = (typeof RUNTIME_AUDIT_TYPES)[number];
 
@@ -349,6 +425,8 @@ export interface AuditEntry {
   id: string;
   at: string;
   source: Source;
+  /** Where it happened ([runtimeWhere]): the trail's own name but for a call. */
+  where?: Where;
   /** What was done, in the subsystem's own word. */
   kind: string;
   /** The seat handle or login recorded on the write. */
@@ -835,9 +913,10 @@ export function Audit() {
         // bound to no seat.
         actorKind: event.tags?.actor_kind ?? "",
         through: throughOf(event.actor ?? "", event.tags?.operator_id),
+        where: runtimeWhere(event),
         ...(event.tags?.node ? { node: event.tags.node } : {}),
         ...(event.failed ? { failed: true as const } : {}),
-        detail: event.summary ?? "",
+        detail: runtimeDetail(event),
       });
     }
     for (const entry of list(identity.page?.events)) {
@@ -891,7 +970,7 @@ export function Audit() {
       .filter((row) => {
         const at = Date.parse(row.at);
         if (Number.isNaN(at) || at < from || at > to) return false;
-        if (kind && row.source !== kind) return false;
+        if (kind && whereOf(row) !== kind) return false;
         // THE NAME THE ROW DRAWS, or the credential beside it: a reader
         // looking for one of somebody's tokens types the token.
         if (actor && ![row.actor, row.through].some((name) => includes(name, actor))) return false;
@@ -905,36 +984,38 @@ export function Audit() {
   // extend past the oldest row that arrived — and a screen that said nothing
   // would be claiming those rows do not exist.
   const truncated = useMemo(() => {
-    const short: string[] = [];
+    const short: Source[] = [];
     const from = Date.parse(since);
-    const oldest = (list: { at: string }[], page: number, label: string) => {
+    const oldest = (list: { at: string }[], page: number, source: Source) => {
       if (list.length < page) return;
       const last = list[list.length - 1];
-      if (last && Date.parse(last.at) > from) short.push(label);
+      if (last && Date.parse(last.at) > from) short.push(source);
     };
     // A WINDOWED PAGE CAN FILL TOO. Every row it holds is inside the window,
     // so a full one whose oldest row is still after the window's start is a
     // busy week reaching further back than a page — the same test.
-    oldest(list(workData?.records), PAGE.work, "Worklet");
+    oldest(list(workData?.records), PAGE.work, "worklet");
     oldest(
       list(identity.page?.events).map((entry) => ({ at: entry.at ?? "" })),
       PAGE.identity,
-      "Identity",
+      "identity",
     );
     oldest(
       list(runtimeData?.events).map((event) => ({ at: event.timestamp })),
       PAGE.runtime,
-      "Runtime",
+      "runtime",
     );
-    oldest(list(knowledgeData?.changes), PAGE.pages, "Doclet");
+    oldest(list(knowledgeData?.changes), PAGE.pages, "doclet");
     oldest(
       list(configData).map((revision) => ({ at: revision.created_at })),
       PAGE.config,
-      "Configuration",
+      "config",
     );
-    oldest(list(artifactsData?.entries), PAGE.artifacts, "Artifacts");
-    return short;
-  }, [workData, identity.page, runtimeData, knowledgeData, configData, artifactsData, since]);
+    oldest(list(artifactsData?.entries), PAGE.artifacts, "artifacts");
+    // ONLY WHAT THE FILTER SHOWS: under Doclet, a notice that Worklet and
+    // the tool calls stopped short spoke of rows the reader had filtered out.
+    return short.filter((source) => !kind || reaches(source, kind)).map((s) => SOURCE_LABEL[s]);
+  }, [workData, identity.page, runtimeData, knowledgeData, configData, artifactsData, since, kind]);
 
   const anyDetail = rows.some((row) => row.detail);
   const columns = useMemo<DataGridColumn<AuditEntry>[]>(
@@ -955,8 +1036,8 @@ export function Audit() {
         header: "Where",
         shrink: true,
         drop: 2,
-        sortValue: (row) => row.source,
-        cell: (row) => <TableTextCell>{SOURCE_LABEL[row.source]}</TableTextCell>,
+        sortValue: (row) => WHERE_LABEL[whereOf(row)],
+        cell: (row) => <TableTextCell>{WHERE_LABEL[whereOf(row)]}</TableTextCell>,
       },
       {
         key: "actor",
@@ -997,9 +1078,7 @@ export function Audit() {
         sortValue: (row) => row.through,
         cell: (row) =>
           row.through ? (
-            <span className="mono truncate" title={row.through}>
-              {row.through}
-            </span>
+            <Credential through={row.through} />
           ) : (
             <EmptyValue label="No credential beside the author" />
           ),
@@ -1105,6 +1184,22 @@ export function Audit() {
 
   const loading =
     work.loading || knowledge.loading || config.loading || runtime.loading || artifacts.loading;
+  const toast = useToast();
+  const exportTitle =
+    ordered.length === 0 ? "Nothing in this window to export" : "Every row in this window, as CSV";
+  usePageMenu([
+    {
+      key: "export",
+      label: "Export CSV",
+      description: exportTitle,
+      disabled: ordered.length === 0,
+      onSelect: () => {
+        const { started, name } = downloadText(auditCsv(ordered), AUDIT_CSV, CSV_MIME);
+        if (started) toast.ok(`Download started: ${name}`);
+        else toast.show({ variant: "warning", title: "The browser refused the download" });
+      },
+    },
+  ]);
   return (
     <>
       <PageActions>
@@ -1113,18 +1208,19 @@ export function Audit() {
             file's URL in the same task as the click that queued it — racing
             the read the download is about to make — and said nothing either
             way; `DownloadButton` waits a task and says what happened. */}
-        <DownloadButton
-          label="Export CSV"
-          filename="crewlet-audit.csv"
-          mime="text/csv;charset=utf-8"
-          text={() => auditCsv(ordered)}
-          disabled={ordered.length === 0}
-          title={
-            ordered.length === 0
-              ? "Nothing in this window to export"
-              : "Every row in this window, as CSV"
-          }
-        />
+        {/* FOLDED INTO "MORE" ON A PHONE (`usePageMenu`, below): beside the
+            window's five choices, the bar's "…" and Ask, it was cut to a
+            faded "Expo" under the menu at 390px. */}
+        <span className="page-action-folds">
+          <DownloadButton
+            label="Export CSV"
+            filename={AUDIT_CSV}
+            mime={CSV_MIME}
+            text={() => auditCsv(ordered)}
+            disabled={ordered.length === 0}
+            title={exportTitle}
+          />
+        </span>
       </PageActions>
 
       {/* ONE BAR, SIZED BY WHAT IT HOLDS. The Who field took the full width
@@ -1155,7 +1251,10 @@ export function Audit() {
           active={kind !== ""}
           options={[
             { value: "", label: "Everywhere" },
-            ...SOURCES.map((s) => ({ value: s, label: SOURCE_LABEL[s] })),
+            ...(Object.keys(WHERE_LABEL) as Where[]).map((w) => ({
+              value: w,
+              label: WHERE_LABEL[w],
+            })),
           ]}
         />
       </PageToolbar>
@@ -1169,10 +1268,7 @@ export function Audit() {
           sentence there was cut at "those rows are the newest, n…", its whole
           point lost at every width. */}
       {truncated.length > 0 && (
-        <Callout variant="warning">
-          {truncated.join(" and ")}{" "}
-          {truncated.length === 1 ? "shows only its newest rows." : "show only their newest rows."}
-        </Callout>
+        <Callout variant="warning">Only the newest rows of {andList(truncated)} are shown.</Callout>
       )}
       {withheld.length > 0 && (
         <Callout variant="warning">
@@ -1331,7 +1427,7 @@ export function auditCsv(rows: AuditEntry[]): string {
     ["at", "where", "who", "who_kind", "through", "what", "to", "detail", "node", "failed"],
     rows.map((row) => [
       row.at,
-      SOURCE_LABEL[row.source],
+      WHERE_LABEL[whereOf(row)],
       row.actor,
       row.actorKind,
       row.through,
@@ -1343,3 +1439,31 @@ export function auditCsv(rows: AuditEntry[]): string {
     ]),
   );
 }
+
+/** Where a row happened: its own place for a call, its trail otherwise. */
+function whereOf(row: AuditEntry): Where {
+  return row.where ?? row.source;
+}
+
+/**
+ * Whether a trail's rows can be shown under a Where: its own, or for the
+ * runtime audit every place a call is said to be made ([runtimeWhere]).
+ */
+function reaches(source: Source, where: string): boolean {
+  if (source === where) return true;
+  return source === "runtime" && RUNTIME_WHERES.has(where);
+}
+
+/** Every Where a call can be said to happen in. */
+const RUNTIME_WHERES: ReadonlySet<string> = new Set<Where>([
+  "worklet",
+  "doclet",
+  "chatlet",
+  "gitlet",
+  "atlas",
+  "models",
+  "mcp",
+  "backups",
+  "assistant",
+  "runtime",
+]);

@@ -29,6 +29,7 @@ import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { sheetRules } from "~/test/sheets.ts";
 import {
   applyPageAction,
   pageSnapshot,
@@ -331,7 +332,7 @@ test("a seat's ceiling is checked before it is saved, as the seat itself", async
   // The check that preceded it carried the same seat and no summary.
   expect(calls[2]!.body).toEqual({ ...PM_SEAT, token_budget: { month: 1000, day: 2_500_000 } });
   // Saved, and applying until this node reports the epoch.
-  expect(screen.getByText("of 2.5M")).toBeTruthy();
+  expect(screen.getByText("of 2.5M tokens")).toBeTruthy();
   expect(screen.getByText("applying…")).toBeTruthy();
 });
 
@@ -350,7 +351,7 @@ describe("a saved ceiling, followed by this node", () => {
     const store = mount(answer());
     await settle();
     await edit(PM_DAY, "2.5M");
-    expect(within(cell()).getByText("of 2.5M")).toBeTruthy();
+    expect(within(cell()).getByText("of 2.5M tokens")).toBeTruthy();
     expect(within(cell()).getByText("applying…")).toBeTruthy();
     return store;
   }
@@ -371,7 +372,7 @@ describe("a saved ceiling, followed by this node", () => {
       ),
     );
     await settle();
-    expect(within(cell()).getByText("of 1,000")).toBeTruthy();
+    expect(within(cell()).getByText("of 1,000 tokens")).toBeTruthy();
     expect(within(cell()).getByText("refused by this node")).toBeTruthy();
     expect(within(cell()).queryByText("applying…")).toBeNull();
     // Nothing moved here, so nothing is read again.
@@ -398,7 +399,7 @@ describe("a saved ceiling, followed by this node", () => {
     expect(within(cell()).getByText("refused by this node")).toBeTruthy();
     act(() => store.setConnected(false));
     await settle();
-    expect(within(cell()).getByText("of 1,000")).toBeTruthy();
+    expect(within(cell()).getByText("of 1,000 tokens")).toBeTruthy();
     expect(within(cell()).getByText("refused by this node")).toBeTruthy();
     expect(within(cell()).queryByText("applying…")).toBeNull();
   });
@@ -436,7 +437,7 @@ describe("a saved ceiling, followed by this node", () => {
     );
     await settle();
     expect(budgetAsks).toBeGreaterThan(asks);
-    expect(within(cell()).getByText("of 1,000")).toBeTruthy();
+    expect(within(cell()).getByText("of 1,000 tokens")).toBeTruthy();
     expect(within(cell()).queryByRole("status")).toBeNull();
   });
 });
@@ -757,4 +758,37 @@ test("the ceiling editor names the seat above a field labelled by its window", a
   const panel = await screen.findByRole("dialog");
   expect(within(panel).getByText("PM")).toBeTruthy();
   expect(within(panel).getByLabelText(/^Daily token ceiling/)).toBeTruthy();
+});
+
+// A SEAT'S SPEND AND ITS CEILING ARE ONE PHRASE IN ONE UNIT: a bare "0" beside
+// "No ceiling" read as one number nobody could name.
+test("a seat's cell says its spend in tokens beside its ceiling", async () => {
+  mount(
+    answer({
+      seats: [
+        {
+          agent_id: "a-pm",
+          role: "PM",
+          handle: "pm",
+          windows: [win("day", { used: 950, limit: 1000 }), win("week"), win("month")],
+        },
+      ],
+    }),
+  );
+  await settle();
+  const row = screen
+    .getAllByRole("row")
+    .find((r) => r.textContent?.includes("PM") && r.querySelector(".budget-cell"))!;
+  const cells = [...row.querySelectorAll<HTMLElement>(".budget-cell .ceiling-value")].map(
+    (c) => c.textContent,
+  );
+  expect(cells[0]).toBe("950 of 1,000 tokens");
+  expect(cells[1]).toBe("0 tokens · No ceiling");
+});
+
+// THE SCOPE'S SENTENCE KEEPS NO ONE-WORD LAST LINE: at 768 the reset line broke
+// "Dec 1." at its space and left "1." alone under "the month on Dec".
+test("a budget row's sentence is wrapped with no stranded last word", () => {
+  const rule = sheetRules().find((r) => r.selector === ".budget-row-scope");
+  expect(rule?.body).toMatch(/text-wrap:\s*pretty/);
 });

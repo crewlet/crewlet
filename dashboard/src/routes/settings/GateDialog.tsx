@@ -372,7 +372,8 @@ export function GateDialog({
             {evict ? (
               <>
                 The trim stops waiting for <InlineCode>{node}</InlineCode>, so records it never
-                applied may be deleted. A node that is still running is refused.
+                applied may be deleted. Evict a node once it has stopped: the engine refuses a
+                running one unless you force it.
               </>
             ) : (
               <>
@@ -409,15 +410,19 @@ export function GateDialog({
               FOR AS LONG AS THIS FORM IS, a refusal included: hidden after
               one, a pasted id the route refused could not be corrected. */}
           <details>
-            <summary className="t-caption">Finish a gesture started elsewhere</summary>
+            <summary className="t-caption">
+              {evict
+                ? "Finish an eviction started on another node"
+                : "Finish a readmission started on another node"}
+            </summary>
             <label className="col" style={{ gap: 6, marginTop: 8 }}>
-              <span className="t-caption">Operation id, as answered</span>
+              <span className="t-caption">Its operation id, from that node&rsquo;s answer</span>
               <Input
                 value={earlier}
                 onChange={(e) => setEarlier(e.target.value)}
                 spellCheck={false}
                 disabled={busy}
-                aria-label="Operation id of the earlier gesture"
+                aria-label={`Operation id of the ${evict ? "eviction" : "readmission"} to finish`}
               />
             </label>
           </details>

@@ -182,6 +182,35 @@ describe("the helpers every /config writer uses", () => {
     });
   });
 
+  // A WRITE OF PART OF THE DOCUMENT THAT CHANGED NOTHING is answered `200
+  // changed: false` with the revision that already says it: already so, and
+  // never "the engine checked the change but stored nothing", which is what a
+  // 200 to a write meant before. A check's 200 stays a check, and a whole
+  // document's write is never answered so. Mutation: read every 200 to a
+  // write as a check and the first two are "valid".
+  test("a save that changes nothing is already so, never a check", async () => {
+    const unchanged = { changed: false, revision_id: "r7", warnings: null, derived: {} };
+    stub(async () => json(unchanged, 200));
+    expect(await savePatch({ name: "Acme" }, '"r7"', "Rename", never())).toMatchObject({
+      kind: "unchanged",
+      revisionId: "r7",
+    });
+    expect(
+      await putEntity("mcp-servers", "linear", { name: "linear" }, '"t1"', "Edit", never()),
+    ).toMatchObject({ kind: "unchanged", revisionId: "r7" });
+    expect(outcomeOf({ status: 200, body: unchanged, fromEngine: true }).kind).toBe("valid");
+    expect(
+      outcomeOf(
+        {
+          status: 200,
+          body: { valid: true, changed: false, base_revision_id: "r7" },
+          fromEngine: true,
+        },
+        "partial",
+      ).kind,
+    ).toBe("valid");
+  });
+
   test("an entity write addresses the entity and is conditional too", async () => {
     const calls = stub(async () =>
       json({ revision_id: "r8", epoch: 9, warnings: null, derived: {} }, 201),

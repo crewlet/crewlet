@@ -22,19 +22,20 @@
  */
 
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useParam } from "~/app/router.tsx";
 import {
   Button,
   ButtonLink,
   Card,
   CodeBlock,
+  Copyable,
   CopyButton,
   EmptyState,
   EmptyValue,
   InlineCode,
   SegmentedControl,
   Skeleton,
+  Tabs,
   TableDateCell,
   TableKeyCell,
   TableTextCell,
@@ -73,12 +74,13 @@ import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, usePeek, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
+import { fmtDateTime, openSentence, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { authorLabel, throughOf } from "~/lib/attribution.ts";
+import { authorLabel, credentialOf, credentialWords, throughOf } from "~/lib/attribution.ts";
+import { nameOfIn, useOrgIndex, type NameOf } from "~/lib/seats.ts";
 import type { FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { reveal } from "~/lib/scroller.ts";
-import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageLenses } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { ENTITY_KINDS } from "~/contract/config.ts";
 
@@ -146,24 +148,33 @@ const NO_REVISION = {
  * itself: a machine token acting as its owner writes under the owner's login,
  * and which of their credentials wrote a revision is what an incident asks.
  */
-export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
-  const name = revision.created_by;
+export function RevisionAuthor({
+  revision,
+  nameOf,
+}: {
+  revision: RevisionMeta;
+  /** The chart's names for a seat handle, and a login's plain words ([nameOfIn]). */
+  nameOf: NameOf;
+}) {
+  // THE READER'S NAME FOR THE AUTHOR, never the recorded key: a person bound
+  // to a seat is recorded under its handle (`jane-founder`) and a Tier A
+  // token under its login (`token:founder`), two spellings nobody calls
+  // anybody. A node's own write (`system`) is recorded under the node's id,
+  // which is the node's name.
+  const name =
+    revision.created_by && revision.created_by_kind !== "system"
+      ? nameOf(revision.created_by)
+      : revision.created_by;
   const kind = revision.created_by_kind;
+  const label = authorLabel(revision.created_by, revision.operator_id, name);
   return (
     // THE NAME OUTRANKS ITS KIND. In a narrow By column the name was cut to
     // "n…" beside a whole `operator` chip, which is the half of the fact a
     // reader can least do without. In a revisions table (`.crewlet-data-grid__cell >
     // .revision-author`) the chip wraps onto a line the cell does not draw
     // before the name gives up a character; the title keeps both.
-    <span
-      className="row gap-1 revision-author"
-      title={name ? `${authorLabel(name, revision.operator_id)} · ${kind}` : undefined}
-    >
-      {name ? (
-        <TableTextCell>{authorLabel(name, revision.operator_id)}</TableTextCell>
-      ) : (
-        <EmptyValue label="No name recorded" />
-      )}
+    <span className="row gap-1 revision-author" title={name ? `${label} · ${kind}` : undefined}>
+      {name ? <TableTextCell>{label}</TableTextCell> : <EmptyValue label="No name recorded" />}
       <Tag appearance="outline">{kind}</Tag>
     </span>
   );
@@ -187,6 +198,67 @@ function RevisionState({ revision }: { revision: RevisionMeta }) {
   if (revision.is_active) return <Tag variant="success">active</Tag>;
   if (revision.activated_at) return <Tag appearance="outline">superseded</Tag>;
   return <Tag appearance="outline">never activated</Tag>;
+}
+
+/**
+ * The chart's names for the authors a history lists ([nameOfIn]), over the
+ * org index every reader of it shares.
+ */
+function useNameOf(): NameOf {
+  const index = useOrgIndex();
+  return useMemo(() => nameOfIn(index), [index]);
+}
+
+/**
+ * Why the active revision's Revert is held: the button's reason, and the line
+ * its header draws.
+ *
+ * DRAWN, NOT ONLY HELD. The reason was the button's `title` and its
+ * description to a screen reader, neither of which reaches a touch screen
+ * ("A write control is never hidden" in docs/reference/dashboard-design.md),
+ * so the one greyed-out control on the header said nothing about why. One
+ * sentence, so the two can never say different things.
+ */
+export const ACTIVE_REVISION_HELD =
+  "This is the active revision. Reload it from the Active view to publish it again.";
+
+/**
+ * What a diff of `revision` was read against, in words: the subtitle the
+ * changes card carries, and what an empty answer says.
+ *
+ * ONE PLACE NAMES THE SIDE. The subtitle read `against` and the empty state
+ * did not, so a revision compared with its parent (every "See its changes")
+ * that changed nothing said "Identical to the active revision" about a side
+ * it never read. And the active revision compared with itself is not a
+ * comparison: it says so, rather than "no differences".
+ *
+ * Exported for the test.
+ */
+export function diffSides(
+  revision: string,
+  against: string,
+  activeId: string | undefined,
+): { subtitle: string; empty: { title: string; hint: string } } {
+  if (against) {
+    const short = against.slice(0, 10);
+    return {
+      subtitle: `against revision ${short}`,
+      empty: { title: "No differences", hint: `Identical to revision ${short}.` },
+    };
+  }
+  if (revision !== "" && revision === activeId) {
+    return {
+      subtitle: "against the active revision",
+      empty: {
+        title: "This is the active revision",
+        hint: "Pick another revision below to see what it changes against this one.",
+      },
+    };
+  }
+  return {
+    subtitle: "against the active revision",
+    empty: { title: "No differences", hint: "Identical to the active revision." },
+  };
 }
 
 /** The Diff lens's head, which a row pressed below it brings back on screen. */
@@ -250,9 +322,7 @@ function AppliedAcross({
       <p className="t-body">No node is running right now.</p>
     ) : (
       <div className="col gap-2">
-        <p className="t-body">
-          {here.length} of {plural(nodes.length, "node")} run this revision.
-        </p>
+        <p className="t-body">{fleetRunsWords(here.length, nodes.length)}</p>
         <div className="col" style={{ gap: 2 }}>
           {ordered.map(({ node, state }) => (
             <NodeLine key={node.id} node={node} state={state} />
@@ -277,6 +347,26 @@ function AppliedAcross({
       {body}
     </Card>
   );
+}
+
+/**
+ * How many of the fleet's nodes run a revision, as a sentence whose verb
+ * agrees with what it counts: "1 of 3 nodes runs this revision", "2 of 3
+ * nodes run it", "All 3 nodes run it". It was "{n} of {plural} run this
+ * revision.", which read "1 of 1 node run this revision." and "0 of 1 node
+ * run this revision.".
+ *
+ * Exported for the test.
+ */
+export function fleetRunsWords(running: number, total: number): string {
+  if (total === 1) {
+    return running === 1
+      ? "The fleet's only node runs this revision."
+      : "The fleet's only node does not run this revision.";
+  }
+  if (running === total) return `All ${total} nodes run this revision.`;
+  if (running === 0) return `None of the ${total} nodes runs this revision.`;
+  return `${running} of ${total} nodes ${running === 1 ? "runs" : "run"} this revision.`;
 }
 
 /** Where one node stands on one revision. */
@@ -337,20 +427,47 @@ function NodeLine({ node, state }: { node: FleetNode; state: NodeOnRevision }) {
   );
 }
 
+/**
+ * The credential a revision was written through, in words: what KIND of
+ * credential it is, with its id behind a copy control.
+ *
+ * THE KIND DRAWN, THE ID COPIED. Drawn as written (`pat:01a1dc39-…`), the id
+ * named nothing a reader knows and wrapped across the rail on a phone; the one
+ * who goes looking for that token or session wants it whole on the clipboard,
+ * not cut on the screen. A Tier A token is its own name, and the assistant
+ * itself ([credentialWords]).
+ */
+function Through({ credential }: { credential: string }) {
+  const named = credentialOf(credential);
+  if (!named) return <>{openSentence(credentialWords(credential))}</>;
+  return (
+    <Copyable
+      value={named.id}
+      display={openSentence(named.kind)}
+      variant="inline"
+      ariaLabel={`Copy the ${named.kind}'s id, ${named.id}`}
+      title={`Copy ${named.id}`}
+    />
+  );
+}
+
 /** A revision's provenance — the fields the history table has no room for. */
 function RevisionBody({
   revision,
+  nameOf,
   nodes,
   answered,
   loading,
   flush,
 }: {
   revision: RevisionMeta;
+  nameOf: NameOf;
   nodes: FleetNode[];
   answered: boolean;
   loading?: boolean;
   flush?: boolean;
 }) {
+  const through = throughOf(revision.created_by, revision.operator_id);
   // EVERY PROPERTY ONCE, here and nowhere else. The header above carries the
   // revision's identity and its state and passes no facts: stacked in one
   // column — the peek's, and the page's, whose cards run under the header
@@ -371,12 +488,13 @@ function RevisionBody({
               title: "the revision this one was written against",
             },
             { label: "Source", value: revision.source },
-            { label: "Created by", value: <RevisionAuthor revision={revision} /> },
+            {
+              label: "Created by",
+              value: <RevisionAuthor revision={revision} nameOf={nameOf} />,
+            },
             {
               label: "Through",
-              value: throughOf(revision.created_by, revision.operator_id) ? (
-                <span className="mono">{throughOf(revision.created_by, revision.operator_id)}</span>
-              ) : undefined,
+              value: through ? <Through credential={through} /> : undefined,
               title: "the credential the revision was written through",
             },
             { label: "Created", value: fmtDateTime(revision.created_at) },
@@ -446,6 +564,7 @@ export function RevisionPeek({ id }: { id: string }) {
     audit.refetch();
     fleet.refetch();
   });
+  const nameOf = useNameOf();
 
   return (
     <>
@@ -472,12 +591,14 @@ export function RevisionPeek({ id }: { id: string }) {
               identifier={revision.revision_id.slice(0, 10)}
               title={revision.summary || "No summary was written"}
               status={<RevisionState revision={revision} />}
+              description={revision.is_active ? ACTIVE_REVISION_HELD : undefined}
               actions={reverting.button(revision)}
             />
             {reverting.dialog}
             <div className="col gap-3">
               <RevisionBody
                 revision={revision}
+                nameOf={nameOf}
                 nodes={fleet.data?.nodes ?? []}
                 answered={Boolean(fleet.data)}
                 loading={fleet.loading}
@@ -583,6 +704,7 @@ export function ConfigScreen({
     if (entity) one.refetch();
   };
   const reverting = useRevert(reread);
+  const nameOf = useNameOf();
   const [editing, setEditing] = useState(false);
   const [reloading, setReloading] = useState(false);
   const stored = useStoredToast();
@@ -600,6 +722,7 @@ export function ConfigScreen({
   const noRevision = !ids.loading && !ids.error && !ids.data;
 
   const rows = useMemo(() => audit.data ?? [], [audit.data]);
+  const sides = diffSides(revision, against, rows.find((r) => r.is_active)?.revision_id);
 
   // THE ORDER `[` AND `]` WALK — the history as the engine answered it, which
   // is the order the table lands in.
@@ -672,26 +795,27 @@ export function ConfigScreen({
 
   return (
     <>
+      {/* THE DOCUMENT'S LENSES ARE THE FRAME'S LENSES, word chips beside
+          its name in the bar, as Models' and MCP & tools' are. Drawn as a
+          segmented control among the page's controls, they wrapped on a
+          phone, "Diff" alone on a second row inside the control's frame; the
+          lens slot takes a row of its own under the bar there and scrolls
+          sideways (`PageLenses`, frame.css). */}
       {!onRevision && (
-        <PageActions>
-          <SegmentedControl<Lens>
-            semantics="radio"
-            activate="manual"
-            label="Configuration view"
+        <PageLenses>
+          <Tabs
+            variant="chip"
+            ariaLabel="Configuration view"
             value={lens}
-            onValueChange={setLens}
-            options={[
-              { value: "active", label: "Active", icon: <NamedGlyph name="file-text" size="xs" /> },
-              {
-                value: "entities",
-                label: "Entities",
-                icon: <NamedGlyph name="layers" size="xs" />,
-              },
-              { value: "audit", label: "History", icon: <NamedGlyph name="clock" size="xs" /> },
-              { value: "diff", label: "Diff", icon: <NamedGlyph name="split" size="xs" /> },
+            onValueChange={(next) => setLens(next as Lens)}
+            items={[
+              { value: "active", label: "Active" },
+              { value: "entities", label: "Entities" },
+              { value: "audit", label: "History" },
+              { value: "diff", label: "Diff" },
             ]}
           />
-        </PageActions>
+        </PageLenses>
       )}
 
       {/* WHAT THE SCREEN IS, said first and once, as every Settings page
@@ -729,6 +853,7 @@ export function ConfigScreen({
                   identifier={addressed.revision_id.slice(0, 10)}
                   title={addressed.summary || "No summary was written"}
                   status={<RevisionState revision={addressed} />}
+                  description={addressed.is_active ? ACTIVE_REVISION_HELD : undefined}
                   actions={
                     <span className="row gap-2">
                       {/* WHAT THIS SAVE CHANGED is the revision against its
@@ -758,6 +883,7 @@ export function ConfigScreen({
                 {reverting.dialog}
                 <RevisionBody
                   revision={addressed}
+                  nameOf={nameOf}
                   nodes={fleet.data?.nodes ?? []}
                   answered={Boolean(fleet.data)}
                   loading={fleet.loading}
@@ -834,15 +960,17 @@ export function ConfigScreen({
                 >
                   <Card.Title>Active revision</Card.Title>
                 </Card.Header>
-                {/* BOUNDED, like every other record block, by the ceiling the
-                    shell declares once (`--record-ceiling`, frame.css). A
-                    whole company configuration runs to hundreds of lines, and
-                    it is one of the records that ceiling is written down for
-                    by name. Unbounded, it pushes the entity lens below it off
-                    the screen. */}
+                {/* THE LENS'S WHOLE CONTENT, SO THE WHOLE VIEW: under the
+                    ceiling every record block takes (`--record-ceiling`,
+                    frame.css) it was a ~460px box with a scrollbar of its own
+                    over an empty page. The cap was for a block with something
+                    under it, which the entity lens once was. It takes the
+                    view's share before the cap (`--record-view`), so it fills
+                    the view it is scrolled to and still fits in it. */}
                 <CodeBlock
                   plain
                   selectable
+                  maxHeight="var(--record-view)"
                   label="The active company configuration, as JSON"
                   code={pretty}
                 />
@@ -1003,9 +1131,7 @@ export function ConfigScreen({
           <Card.Header
             id={CHANGES_HEAD_ID}
             icon={<SplitGlyph size="sm" />}
-            subtitle={
-              against ? `against revision ${against.slice(0, 10)}` : "against the active revision"
-            }
+            subtitle={sides.subtitle}
           >
             {revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
           </Card.Header>
@@ -1023,14 +1149,7 @@ export function ConfigScreen({
               error={diff.error}
               refusal={diff.refusal}
               loading={diff.loading}
-              empty={
-                diff.data?.changes?.length
-                  ? undefined
-                  : {
-                      title: "No differences",
-                      hint: "Identical to the active revision.",
-                    }
-              }
+              empty={diff.data?.changes?.length ? undefined : sides.empty}
             >
               <div className="col" style={{ gap: 6 }}>
                 <DiffView
@@ -1149,7 +1268,7 @@ export function ConfigScreen({
                     header: "By",
                     shrink: true,
                     sortValue: (r) => r.created_by,
-                    cell: (r) => <RevisionAuthor revision={r} />,
+                    cell: (r) => <RevisionAuthor revision={r} nameOf={nameOf} />,
                   },
                 ]}
               />
@@ -1182,7 +1301,7 @@ function useRevert(onStored: () => void): {
       const held = !access.can
         ? access.reason
         : revision.is_active
-          ? "This is the active revision. Reload it from the Active view to publish it again."
+          ? ACTIVE_REVISION_HELD
           : undefined;
       return (
         <Button

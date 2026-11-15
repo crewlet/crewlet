@@ -18,6 +18,7 @@
 
 import type { ReactNode } from "react";
 import { Card, EmptyState, List, ListItem, Text } from "@crewlethq/ui";
+import { renderInline } from "~/lib/markdown.ts";
 
 /** How one card is written, as whoever writes the charter hands it to the card. */
 export interface PrincipleCardEdit<T> {
@@ -98,15 +99,23 @@ export function PrincipleCard({
 }
 
 /**
- * A statement the company wrote, as it wrote it: the kit's passage, which
- * keeps the author's line breaks. The engine allows them in the vision alone
- * (its paragraphs), and holds the mission to one line, which the passage
- * wraps like any other.
+ * A statement the company wrote, as it wrote it: the kit's passage, its line
+ * breaks kept. The engine allows them in the vision alone (its paragraphs),
+ * and holds the mission to one line, which the passage wraps like any other.
+ *
+ * ITS INLINE MARKDOWN IS DRAWN, as a seat's goal is ([renderInline]): the
+ * principles are written for the agents, in the markdown their prompts take,
+ * so a tool or a page named in backticks (`reflect_and_persist`) is code and
+ * a link is a link, never the punctuation around them.
  */
 export function StatementText({ children }: { children: string }) {
+  // LINE BY LINE, its breaks left as the author's characters for the passage
+  // to keep: the inline walk folds a single break into a space.
   return (
     <Text as="p" variant="passage">
-      {children}
+      {children
+        .split("\n")
+        .flatMap((line, i) => [i > 0 ? "\n" : null, ...renderInline(line, `statement-${i}`)])}
     </Text>
   );
 }
@@ -117,13 +126,13 @@ export function StatementText({ children }: { children: string }) {
  * it wraps as prose and keeps no breaks of its own, held to the kit's wide
  * reading measure: across a card as wide as the page a rule otherwise runs
  * to some 150 characters a line, while the rows and their rules still span
- * the card.
+ * the card. Each is drawn with its inline markdown, as a statement is.
  */
 export function PolicyList({ policies, label }: { policies: readonly string[]; label: string }) {
   return (
     <List variant="numbered-divided" density="compact" measure="wide" aria-label={label}>
       {policies.map((policy, i) => (
-        <ListItem key={i}>{policy}</ListItem>
+        <ListItem key={i}>{renderInline(policy, `policy-${i}`)}</ListItem>
       ))}
     </List>
   );

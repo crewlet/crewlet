@@ -21,6 +21,7 @@ import {
   STAGE_WORDS,
   ServiceAccounts,
   TOKEN_ROW_WORDS,
+  openSeatsWords,
 } from "./Access.tsx";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { loadChunk } from "~/app/lazyScreen.ts";
@@ -373,7 +374,9 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
   // the figure reads 2.
   const vacant = screen.getByText("Open seats").closest(".crewlet-statcard");
   expect(vacant?.querySelector(".crewlet-statcard__value")?.textContent).toBe("1");
-  expect(within(vacant as HTMLElement).getByText("1 invited · 3 total")).toBeTruthy();
+  // What the figure is out of, in words: "1 / 3 total" read as a fraction
+  // with its slash missing.
+  expect(within(vacant as HTMLElement).getByText("of 3 human seats · 1 invited")).toBeTruthy();
   // AND ITS ROW NAMES THE INVITATION rather than "Open seat".
   const sam = screen
     .getAllByRole("link", { name: /Sam Support/ })
@@ -845,7 +848,14 @@ test("the open invitations are listed, and the toggle asks for every state", asy
   expect((await screen.findAllByText("sam@example.com")).length).toBe(2);
   expect(screen.getAllByText("Locked").length).toBeGreaterThan(0);
   expect(screen.queryByText("old@example.com")).toBeNull();
-  fireEvent.click(screen.getByRole("checkbox", { name: "Show used and expired" }));
+  // THE TOGGLE IS ONE OF THE HEAD'S CONTROLS, at their compact step: at the
+  // body step its label stood larger than the card's title beside it.
+  // Mutation: drop `size="sm"` and the box is the default step.
+  const toggle = screen.getByRole("checkbox", { name: "Show used and expired" });
+  expect(toggle.closest(".crewlet-checkbox")?.classList.contains("crewlet-checkbox--sm")).toBe(
+    true,
+  );
+  fireEvent.click(toggle);
   const row = (await screen.findByText("old@example.com")).closest(
     ".crewlet-data-grid__row",
   ) as HTMLElement;
@@ -853,4 +863,13 @@ test("the open invitations are listed, and the toggle asks for every state", asy
   expect(
     asked.some((u) => u.pathname === "/iam/invitations" && u.searchParams.get("all") === "true"),
   ).toBe(true);
+});
+
+// WHAT THE FIGURE IS OUT OF, in words, and a figure of none says the seats are
+// held rather than leaving "0" over a bare total.
+test("the open-seats figure says what it is out of", () => {
+  expect(openSeatsWords(0, 0, 4)).toBe("all 4 human seats are held");
+  expect(openSeatsWords(0, 0, 1)).toBe("the one human seat is held");
+  expect(openSeatsWords(2, 0, 4)).toBe("of 4 human seats");
+  expect(openSeatsWords(0, 1, 3)).toBe("of 3 human seats · 1 invited");
 });

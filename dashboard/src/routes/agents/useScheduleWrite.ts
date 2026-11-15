@@ -115,6 +115,11 @@ export function useScheduleWrite(
         savedRef.current?.(write.done, activated);
         return;
       }
+      if (outcome.kind === "unchanged") {
+        // THE ENGINE ALREADY HOLDS IT: nothing was stored to apply.
+        setState({ kind: "unchanged" });
+        return;
+      }
       if (outcome.kind === "valid") {
         setState({
           kind: "refused",

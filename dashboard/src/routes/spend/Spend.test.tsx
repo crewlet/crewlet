@@ -373,7 +373,7 @@ test("the monthly budget is drawn in the engine's state, with its reset", async 
   );
   await settle();
   const meter = screen.getByRole("meter", { name: "This month" });
-  expect(meter.getAttribute("aria-valuetext")).toMatch(/refusing charges, resets Oct 1/);
+  expect(meter.getAttribute("aria-valuetext")).toMatch(/refusing charges, resets Oct\s1/);
   expect(screen.getByText(/70M of 80M · resets Oct 1/)).toBeTruthy();
   expect(screen.getByText("Full until Oct 1.")).toBeTruthy();
 });
@@ -758,7 +758,7 @@ test("the chart offers the contract's six dimensions and asks by the one chosen"
     .getAllByRole("radio")
     .map((r) => r.textContent);
   expect(options).toEqual(GROUPS.map((g) => g.label));
-  fireEvent.click(within(group).getByRole("radio", { name: "Unit" }));
+  fireEvent.click(within(group).getByRole("radio", { name: "Team" }));
   await settle();
   expect(location.hash).toContain("group=unit");
   expect(params("token_series")).toContainEqual({ days: 30, group: "unit", bucket: "day" });
@@ -1158,6 +1158,15 @@ test("turns that changed nothing are listed by agent and wake, over the same win
           nothing: 0,
           nothing_tokens: 0,
         },
+        {
+          seat: "ceo",
+          agent_id: "a-1",
+          wake: "work_item:lead_fallback",
+          turns: 2,
+          tokens: 50,
+          nothing: 2,
+          nothing_tokens: 50,
+        },
       ],
     },
   });
@@ -1165,13 +1174,153 @@ test("turns that changed nothing are listed by agent and wake, over the same win
   expect(params("turn_outcomes")[0]).toEqual(params("tokens")[0]);
   const grid = screen.getByRole("table", { name: /Turns that changed nothing/ });
   const rows = within(grid).getAllByRole("row").slice(1);
-  expect(rows).toHaveLength(2);
+  expect(rows).toHaveLength(3);
   expect(rows[0]?.textContent).toContain("Work handed to it while idle");
   expect(rows[0]?.textContent).toContain("3 of 4 (75%)");
   expect(rows[1]?.textContent).toContain("Schedule standup");
+  // EACH AGENT BY THE CHART'S NAME, as By agent draws it, never its handle;
+  // and a work item's reason in the routing's own words, never as written.
+  expect(rows[1]?.textContent).toContain("CEO");
+  expect(rows[1]?.textContent).not.toContain("ceo");
+  expect(rows[2]?.textContent).toContain("Work items (the unit's lead)");
+  expect(rows[2]?.textContent).not.toContain("lead fallback");
   expect(
     within(rows[1] as HTMLElement).getByRole("link", {
       name: "An admin, by changing how often it runs",
     }),
   ).toBeTruthy();
+});
+
+// A WINDOW OF CALLS THAT SPENT NOTHING. The engine counts every call made, one
+// its model refused included, so a window of refused calls has calls and no
+// tokens: the chart is one empty state that says so (no invented scale and
+// no legend over nothing), and By model counts the calls Settings › Models
+// counts rather than claiming no model was called.
+test("a window whose calls spent no tokens draws one empty state and counts the calls", async () => {
+  const zero = (group: string, label: string) => ({
+    ...bucket(0, { calls: 200 }),
+    group,
+    label,
+    other: false,
+    folded: 0,
+  });
+  mount("#/settings/spend?window=30d&group=unit", <Spend />, {
+    tokens: rollup(0, {
+      totals: bucket(0, { calls: 887 }),
+      by_provider: [
+        {
+          ...bucket(0, { calls: 887 }),
+          provider_key: "default",
+          models: [],
+          seats: ["ceo"],
+          seats_total: 1,
+        },
+      ],
+    }),
+    token_series: (p: Record<string, unknown>) => ({
+      ...series(0),
+      group: p.group === "unit" ? "unit" : "phase",
+      totals: bucket(0, { calls: 887 }),
+      grouped: bucket(0, { calls: 887 }),
+      series: [
+        {
+          ...bucket(0, { calls: 887 }),
+          at: "2026-09-01T00:00:00Z",
+          window: "2026-09-01",
+          days: 1,
+          groups: { core: bucket(0), devrel: bucket(0) },
+          other: bucket(0),
+        },
+      ],
+      by_group:
+        p.group === "unit" ? [zero("core", "Core"), zero("devrel", "Developer Relations")] : [],
+    }),
+    viewer: VIEWER,
+  });
+  await settle();
+  const chart = document.querySelector<HTMLElement>(".spend-chart")!;
+  expect(within(chart).getByText("No tokens spent in this window")).toBeTruthy();
+  expect(chart.textContent).toContain("887 calls, none spent tokens.");
+  expect(within(chart).queryByText("Core")).toBeNull();
+  expect(chart.textContent).not.toContain("The four biggest");
+  const byModel = screen.getByText("By model").closest(".spend-card") as HTMLElement;
+  expect(within(byModel).getByText("No model spent tokens in this window")).toBeTruthy();
+  expect(byModel.textContent).toContain("887 calls, none spent tokens.");
+  expect(byModel.textContent).not.toContain("No model served a call");
+});
+
+// "THE FOUR BIGGEST" IS A FOLD THE ENGINE MADE, said only where it made one,
+// and a split lists only the bands that spent: a team at zero beside one that
+// spent is no band of the legend.
+test("a split names the fold only where the engine folded, and draws no band at zero", async () => {
+  const team = (group: string, label: string, total: number, other = false) => ({
+    ...bucket(total),
+    group,
+    label,
+    other,
+    folded: other ? 3 : 0,
+  });
+  const answer = (folded: boolean) => (p: Record<string, unknown>) => ({
+    ...series(100),
+    group: p.group === "unit" ? "unit" : "phase",
+    series: [
+      {
+        ...bucket(100),
+        at: "2026-09-01T00:00:00Z",
+        window: "2026-09-01",
+        days: 1,
+        groups: { core: bucket(100), devrel: bucket(0) },
+        other: bucket(folded ? 10 : 0),
+      },
+    ],
+    by_group:
+      p.group === "unit"
+        ? [
+            team("core", "Core", 100),
+            team("devrel", "Developer Relations", 0),
+            ...(folded ? [team("", "", 10, true)] : []),
+          ]
+        : [],
+  });
+  mount("#/settings/spend?window=30d&group=unit", <Spend />, {
+    tokens: rollup(100),
+    token_series: answer(false),
+    viewer: VIEWER,
+  });
+  await settle();
+  let chart = document.querySelector<HTMLElement>(".spend-chart")!;
+  expect(within(chart).getAllByText("Core").length).toBeGreaterThan(0);
+  expect(within(chart).queryByText("Developer Relations")).toBeNull();
+  expect(chart.textContent).not.toContain("The four biggest");
+  cleanup();
+
+  mount("#/settings/spend?window=30d&group=unit", <Spend />, {
+    tokens: rollup(110),
+    token_series: answer(true),
+    viewer: VIEWER,
+  });
+  await settle();
+  chart = document.querySelector<HTMLElement>(".spend-chart")!;
+  expect(chart.textContent).toContain("The four biggest, and everything else as one band");
+});
+
+// AN ABSENT MEDIAN IS A MARKED ABSENCE (rule 12), never words in the figure's
+// place: "No tasks" over "median tokens per finished task" read as one phrase.
+test("the median tile marks an absent median and says why under it", async () => {
+  mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: rollup(1),
+    viewer: VIEWER,
+    work_items: (p: Record<string, unknown>) =>
+      p.totals
+        ? items([], {
+            totals: [{ key: "spend_tokens:count", column: "spend_tokens", op: "count", value: 0 }],
+          })
+        : items([]),
+  });
+  await settle();
+  expect(screen.queryByText("No tasks")).toBeNull();
+  const tile = screen.getByText(/median tokens per finished task/).closest(".spend-tile")!;
+  expect(tile.querySelector(".crewlet-empty-value")).not.toBeNull();
+  expect(tile.textContent).toContain("No task finished in this window spent tokens");
+  expect(screen.getByText(/median tokens per finished task · none in this window/)).toBeTruthy();
 });

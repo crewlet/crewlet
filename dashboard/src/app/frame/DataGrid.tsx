@@ -26,6 +26,14 @@
  * own order behind it) hands the grid the reader's choice as `sort` and takes
  * the press back through `onSortChange`, and keeps its own key.
  *
+ * TWO GRIDS NEVER READ ONE KEY, and that is held rather than remembered. The
+ * address is the document's, not the screen's (a page's grid under another in
+ * the peek rail reads the same one), so every mounted grid registers the keys
+ * it reads (`addressKeys`), and a second grid reading a key one already reads
+ * is reported to `console.error` naming the key, which fails every dashboard
+ * case that mounts the pair. Account's sessions and tokens were two unnamed
+ * grids: sorting the tokens by Created re-sorted the sessions too.
+ *
  * # The row the peek is open on is marked
  *
  * By comparing ADDRESSES: a row's link is its object's page, and the peek
@@ -44,7 +52,7 @@
  * they are checked against every other key the dashboard binds.
  */
 
-import { useCallback, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import {
   DataGrid as KitDataGrid,
   countDataGridRows,
@@ -92,6 +100,52 @@ export interface GridProps<T> extends Omit<
   empty?: { title: ReactNode; hint?: ReactNode; icon?: GlyphName; action?: ReactNode };
 }
 
+/**
+ * The address keys a grid reads: its sort's, unless the screen resolves the
+ * sort itself (`sort` and `onSortChange` handed in), and its column set's.
+ */
+export function addressKeys(
+  name: string | undefined,
+  colsName: string | undefined,
+  ownsSort: boolean,
+): string[] {
+  const columnSet = colsName ?? name;
+  const keys = [columnSet ? `cols.${columnSet}` : "cols"];
+  if (!ownsSort) keys.unshift(name ? `sort.${name}` : "sort");
+  return keys;
+}
+
+/** How many mounted grids read each address key, for the one-reader check. */
+const readers = new Map<string, number>();
+
+/**
+ * Registers the keys a mounted grid reads, and reports a key a grid already
+ * mounted reads too: two grids on one key re-sort (or re-column) each other.
+ */
+function useOneReaderPerKey(keys: readonly string[]): void {
+  const joined = keys.join(" ");
+  useEffect(() => {
+    const held = joined.split(" ");
+    for (const key of held) {
+      const count = (readers.get(key) ?? 0) + 1;
+      readers.set(key, count);
+      if (count === 2) {
+        console.error(
+          `Two grids read the address key "${key}", so a sort or column change on one ` +
+            `changes the other: give each grid on a screen its own \`name\`.`,
+        );
+      }
+    }
+    return () => {
+      for (const key of held) {
+        const count = (readers.get(key) ?? 1) - 1;
+        if (count <= 0) readers.delete(key);
+        else readers.set(key, count);
+      }
+    };
+  }, [joined]);
+}
+
 export function DataGrid<T>({
   defaultSort = "",
   name,
@@ -112,6 +166,7 @@ export function DataGrid<T>({
   const setSort = onOwnSortChange ?? setAddressSort;
   const columnSet = colsName ?? name;
   const [cols, setCols] = useParam(columnSet ? `cols.${columnSet}` : "cols", "");
+  useOneReaderPerKey(addressKeys(name, colsName, ownSort !== undefined));
   const handle = useRef<DataGridHandle>(null);
 
   const peek = usePeek();

@@ -91,7 +91,9 @@ export function FixDialog({
     ).then(
       (outcome) => {
         setApplying(false);
-        if (outcome.kind === "saved") {
+        // ALREADY SO is the fix holding: the engine stored nothing because
+        // the entity already says what the fix asks.
+        if (outcome.kind === "saved" || outcome.kind === "unchanged") {
           onApplied();
           return;
         }

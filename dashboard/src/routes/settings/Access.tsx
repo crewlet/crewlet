@@ -168,7 +168,8 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { asSentence, fmtDate, tsKey } from "~/lib/format.ts";
+import { asSentence, fmtDate, plural, tsKey } from "~/lib/format.ts";
+import { NODE_FILE_CHANGE } from "~/lib/nodeFile.ts";
 import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
 import { documentUnits, handleLabel, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
@@ -181,12 +182,7 @@ import { deviceOf } from "~/lib/userAgent.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { pathSegment, rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
-import {
-  EditPersonDialog,
-  InvitePersonDialog,
-  OnYourself,
-  ServiceAccountDialog,
-} from "./AccessDialogs.tsx";
+import { EditPersonDialog, InvitePersonDialog, ServiceAccountDialog } from "./AccessDialogs.tsx";
 
 // ---------------------------------------------------------------------------
 // The wire, as internal/api/iamapi writes it
@@ -479,6 +475,21 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
       {words?.label ?? fallback}
     </Tag>
   );
+}
+
+/**
+ * What the open-seats figure is out of, in a sentence: "0" over "4 total" read
+ * as a fraction with its slash missing ("Open seats 0 / 4 total"), and a
+ * figure of none said nothing about the seats that are held.
+ */
+export function openSeatsWords(vacant: number, invited: number, total: number): string {
+  const of =
+    vacant === 0 && invited === 0
+      ? total === 1
+        ? "the one human seat is held"
+        : `all ${total} human seats are held`
+      : `of ${plural(total, "human seat")}`;
+  return invited > 0 ? `${of} · ${invited} invited` : of;
 }
 
 /**
@@ -875,7 +886,7 @@ export function People() {
                   value={seats.data ? vacant : EMPTY_VALUE}
                   sub={
                     seats.data
-                      ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
+                      ? openSeatsWords(vacant, invited, seatRows.length)
                       : listsNoCompany(seats)
                         ? "no company yet"
                         : "not read"
@@ -1008,6 +1019,7 @@ export function People() {
                 loading={seats.loading && !seats.data}
               >
                 <DataGrid<HumanSeat>
+                  name="seats"
                   rows={seatRows}
                   rowKey={(s) => s.handle}
                   defaultSort="seat"
@@ -1221,8 +1233,8 @@ export function ApiTokens() {
   return (
     <>
       <PageNote>
-        Declared under <InlineCode>api.auth.tokens</InlineCode> in this node&rsquo;s bootstrap file,
-        and changed with a restart. A person&rsquo;s own tokens are on their Account.
+        The tokens this node accepts, set in its configuration file and {NODE_FILE_CHANGE}. A
+        person&rsquo;s own tokens are on their Account.
       </PageNote>
       <Card padding="none">
         <Card.Header
@@ -1248,7 +1260,7 @@ export function ApiTokens() {
             defaultSort="id"
             empty={{
               title: "This node declares no API token",
-              hint: "Tokens are set in api.auth.tokens in the bootstrap file and change with a restart.",
+              hint: `Tokens are set in the node's configuration file and ${NODE_FILE_CHANGE}.`,
             }}
             columns={[
               // IDENTIFIERS ARE NEVER CUT: a token's label and the login it
@@ -1642,7 +1654,11 @@ function Invitations({
       <Card.Header
         icon={<SendGlyph size="sm" />}
         count={rows.length}
-        actions={<Checkbox label="Show used and expired" checked={all} onCheckedChange={onAll} />}
+        // THE HEAD'S CONTROLS' STEP: a body-step label here stood larger than
+        // the card's own title beside it.
+        actions={
+          <Checkbox size="sm" label="Show used and expired" checked={all} onCheckedChange={onAll} />
+        }
       >
         <Card.Title>Invitations</Card.Title>
       </Card.Header>
@@ -1653,6 +1669,7 @@ function Invitations({
         loading={invitations.loading && !invitations.data}
       >
         <DataGrid<InvitationRow>
+          name="invitations"
           rows={rows}
           rowKey={(i) => i.id}
           defaultSort="expires"
@@ -1947,6 +1964,13 @@ export function PersonPeek({ id }: { id: string }) {
  * SECTIONS, NOT CARDS: the rail is the panel already, so they run on as plain
  * blocks rather than growing a second frame inside the first.
  */
+/**
+ * Why your own row holds Suspend and Remove: a person who suspends or removes
+ * themself is signed out with no way back of their own, and the panel offered
+ * both beside "This is you".
+ */
+export const SELF_HELD = "You can't suspend or remove yourself. Another administrator can.";
+
 function Principal({
   row,
   who,
@@ -2023,6 +2047,8 @@ function Principal({
             <Button
               size="small"
               variant="secondary"
+              disabledReason={you && !suspended ? SELF_HELD : undefined}
+              title={you && !suspended ? SELF_HELD : undefined}
               onClick={() => setGesture(suspended ? "reactivate" : "suspend")}
             >
               {suspended ? "Reactivate" : "Suspend"}
@@ -2035,39 +2061,48 @@ function Principal({
             items={[
               ...(machine
                 ? [{ key: "mint", label: "Create token", onSelect: () => setGesture("mint") }]
-                : [
-                    // NOT FOR A STOPPED PERSON: a link would hand back an
-                    // account somebody stopped, and the engine refuses it
-                    // naming the stage.
-                    ...(!suspended && row.stage !== "retired"
-                      ? [
-                          {
-                            key: "reset",
-                            label: "Get reset link",
-                            onSelect: () => setGesture("reset"),
-                          },
-                        ]
-                      : []),
-                    ...(holdsFactor
-                      ? [
-                          {
-                            key: "mfa",
-                            label: "Reset two-step verification",
-                            onSelect: () => setGesture("mfa"),
-                          },
-                        ]
-                      : []),
-                    {
-                      key: "sessions",
-                      label: "Sign out everywhere",
-                      onSelect: () => setGesture("sessions"),
-                    },
-                  ]),
+                : you
+                  ? // YOUR OWN SIGN-IN IS CHANGED ON YOUR ACCOUNT, where every
+                    // one of these is: here they were a second set of the
+                    // same gestures, reached through the administrators'
+                    // panel and worded for somebody else.
+                    []
+                  : [
+                      // NOT FOR A STOPPED PERSON: a link would hand back an
+                      // account somebody stopped, and the engine refuses it
+                      // naming the stage.
+                      ...(!suspended && row.stage !== "retired"
+                        ? [
+                            {
+                              key: "reset",
+                              label: "Get reset link",
+                              onSelect: () => setGesture("reset"),
+                            },
+                          ]
+                        : []),
+                      ...(holdsFactor
+                        ? [
+                            {
+                              key: "mfa",
+                              label: "Reset two-step verification",
+                              onSelect: () => setGesture("mfa"),
+                            },
+                          ]
+                        : []),
+                      {
+                        key: "sessions",
+                        label: "Sign out everywhere",
+                        onSelect: () => setGesture("sessions"),
+                      },
+                    ]),
               { kind: "separator" as const, key: "before-remove" },
               {
                 key: "remove",
                 label: "Remove",
                 danger: true,
+                // HELD ON YOURSELF, as Suspend is, with the same reason.
+                disabled: you,
+                description: you ? SELF_HELD : undefined,
                 onSelect: () => setGesture("remove"),
               },
             ]}
@@ -2114,9 +2149,7 @@ function Principal({
       )}
       {(gesture === "suspend" || gesture === "reactivate") && (
         <PersonWrite
-          title={
-            gesture === "reactivate" ? `Reactivate ${who}?` : `Suspend ${you ? "yourself" : who}?`
-          }
+          title={gesture === "reactivate" ? `Reactivate ${who}?` : `Suspend ${who}?`}
           confirm={gesture === "reactivate" ? "Reactivate" : "Suspend"}
           danger={gesture === "suspend"}
           request={{
@@ -2127,7 +2160,6 @@ function Principal({
           onClose={close}
           onDone={changed}
         >
-          {gesture === "suspend" && you && <OnYourself alone={alone} />}
           {/* WHAT THIS PERSON HOLDS, said: a seat they do not hold is not
               withheld, and the sessions a suspension ends stay ended — a
               password reset link among them, which a reactivation does not
@@ -2135,46 +2167,36 @@ function Principal({
               withheld, never freed, so nobody else is put on it meanwhile. */}
           {gesture === "reactivate"
             ? `${who} can sign in again.`
-            : you
-              ? "You can’t sign in until another admin reactivates you."
-              : "They can’t sign in until reactivated."}
+            : "They can’t sign in until reactivated."}
         </PersonWrite>
       )}
       {gesture === "mfa" && (
         <PersonWrite
-          title={
-            you ? "Reset your two-step verification?" : `Reset ${who}’s two-step verification?`
-          }
+          title={`Reset ${who}’s two-step verification?`}
           confirm="Reset two-step verification"
           danger
           request={{ method: "POST", path: `/iam/people/${pathSegment(row.id)}/mfa/reset` }}
           onClose={close}
           onDone={changed}
         >
-          {you && <OnYourself />}
-          {you
-            ? "Your app and recovery codes stop working."
-            : "Their app and recovery codes stop working."}
+          Their app and recovery codes stop working.
         </PersonWrite>
       )}
       {gesture === "sessions" && (
         <PersonWrite
-          title={you ? "Sign out everywhere?" : `Sign ${who} out everywhere?`}
+          title={`Sign ${who} out everywhere?`}
           confirm="Sign out everywhere"
           danger
           request={{ method: "DELETE", path: `/iam/people/${pathSegment(row.id)}/sessions` }}
           onClose={close}
           onDone={changed}
         >
-          {you && <OnYourself />}
-          {you
-            ? "Your sessions, tokens and reset link stop working."
-            : "Their sessions, tokens and reset link stop working."}
+          Their sessions, tokens and reset link stop working.
         </PersonWrite>
       )}
       {gesture === "remove" && (
         <PersonWrite
-          title={`Remove ${you ? "yourself" : who}?`}
+          title={`Remove ${who}?`}
           confirm="Remove"
           danger
           typeToConfirm={row.login || row.id}
@@ -2183,12 +2205,9 @@ function Principal({
           onDone={changed}
           onLanded={onRemoved}
         >
-          {you && <OnYourself alone={alone} what="" />}
-          {you
-            ? "Can’t be undone."
-            : machine
-              ? "Deletes the service account and its tokens. Can’t be undone."
-              : "Their account is deleted and their seat opens up. Can’t be undone."}
+          {machine
+            ? "Deletes the service account and its tokens. Can’t be undone."
+            : "Their account is deleted and their seat opens up. Can’t be undone."}
         </PersonWrite>
       )}
       <Stack as="section" gap={2}>
@@ -2202,6 +2221,7 @@ function Principal({
           loading={credentials.loading && !credentials.data}
         >
           <DataGrid<CredentialRow>
+            name="credentials"
             rows={credentials.data ?? []}
             rowKey={(c) => c.id}
             defaultSort="method"
@@ -2260,7 +2280,10 @@ function Principal({
                     <EmptyValue label={c.method === "reset" ? "One-time" : "Same as owner"} />
                   ),
               },
-              ...(manages
+              // YOUR OWN CREDENTIALS ARE REVOKED ON YOUR ACCOUNT, which the
+              // callout above opens: listed here they are what an
+              // administrator reads about you, not a second place to act.
+              ...(manages && !you
                 ? [
                     {
                       key: "revoke",
@@ -2297,6 +2320,7 @@ function Principal({
             loading={sessions.loading && !sessions.data}
           >
             <DataGrid<SessionRow>
+              name="sessions"
               rows={sessions.data ?? []}
               rowKey={(s) => s.lineage}
               defaultSort="started"

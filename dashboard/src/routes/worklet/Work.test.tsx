@@ -466,15 +466,19 @@ test("a list row carries the same facts a card does", () => {
 // at forty different places. This is the assertion that the cells are the
 // row's and not the marks'.
 test("a row with nothing to say in a column still keeps the column", () => {
-  const bare = listRow(row("1")).container;
-  const full = listRow(
-    row("2", { priority: "urgent", due: "2031-04-01T00:00:00Z", assignee: "ada" }),
-    { chrome: { seatName: () => "Ada Lovelace" } },
-  ).container;
   const cells = (el: Element) => [...el.querySelectorAll('[role="row"] [role="cell"]')].length;
-  expect(cells(bare)).toEqual(cells(full));
+  // ONE LIST AT A TIME: two mounted lists are two grids on one address key.
+  const bareList = listRow(row("1"));
+  const bare = cells(bareList.container);
+  bareList.unmount();
+  const full = cells(
+    listRow(row("2", { priority: "urgent", due: "2031-04-01T00:00:00Z", assignee: "ada" }), {
+      chrome: { seatName: () => "Ada Lovelace" },
+    }).container,
+  );
+  expect(bare).toEqual(full);
   // EIGHT: priority, key, status, title, due, type, who holds it, when it moved.
-  expect(cells(bare)).toBe(8);
+  expect(bare).toBe(8);
 });
 
 // A CUT TITLE IS STILL READ WHOLE. The title's span cuts it where the kit's own
@@ -496,8 +500,12 @@ test("a list row's title cell carries the whole title on hover", () => {
 test("a due date in this year is drawn without it, and another year keeps it", () => {
   vi.useFakeTimers({ toFake: ["Date"], now: NOW });
   try {
-    const drawn = (due: string) =>
-      listRow(row("1", { due })).container.querySelector(".work-due")?.textContent ?? "";
+    const drawn = (due: string) => {
+      const list = listRow(row("1", { due }));
+      const text = list.container.querySelector(".work-due")?.textContent ?? "";
+      list.unmount();
+      return text;
+    };
     expect(drawn("2031-09-01T00:00:00Z")).not.toContain("2031");
     expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
   } finally {
@@ -511,8 +519,12 @@ test("a due date in this year is drawn without it, and another year keeps it", (
 // not be told from a value that never arrived. `none` — the engine's "nobody
 // said" — and an absent value are not steps on the scale, and draw nothing.
 test("every step of the scale draws its mark, and no step draws none", () => {
-  const marks = (priority?: string) =>
-    listRow(row("1", { priority })).container.querySelectorAll(".work-prio").length;
+  const marks = (priority?: string) => {
+    const list = listRow(row("1", { priority }));
+    const count = list.container.querySelectorAll(".work-prio").length;
+    list.unmount();
+    return count;
+  };
   expect(marks("normal")).toBe(1);
   expect(marks("none")).toBe(0);
   expect(marks(undefined)).toBe(0);

@@ -177,6 +177,7 @@ export function CeilingEditor({
   scope,
   period,
   window: w,
+  spent,
   zone,
   onApplied,
 }: {
@@ -184,6 +185,13 @@ export function CeilingEditor({
   period: Period;
   /** The window as the budgets answer states it; `limit` absent is no ceiling. */
   window: BudgetWindow | undefined;
+  /**
+   * What the window has spent, where the figure is drawn on the ceiling's
+   * own line (a seat's cell): the two are then one phrase in one unit, "2M of
+   * 40M tokens" or "0 tokens · No ceiling", rather than a bare "0" beside "No
+   * ceiling". Left out where the spend is drawn on a line of its own (a tile).
+   */
+  spent?: number | undefined;
   /** The company clock, for when the window resets. */
   zone: string;
   /**
@@ -344,9 +352,23 @@ export function CeilingEditor({
   const fieldId = `${id}-ceiling`;
   return (
     <span className="ceiling">
-      <span className={shown === null ? "ceiling-value muted" : "ceiling-value"}>
-        {shown === null ? "No ceiling" : `of ${fmtCount(shown)}`}
-      </span>
+      {spent === undefined ? (
+        <span className={shown === null ? "ceiling-value muted" : "ceiling-value"}>
+          {shown === null ? "No ceiling" : `of ${fmtCount(shown)}`}
+        </span>
+      ) : (
+        <span className="ceiling-value" title={`${fmtExact(spent)} tokens`}>
+          <span className="ceiling-spent">{fmtCount(spent)}</span>
+          {shown === null ? (
+            <>
+              {" tokens · "}
+              <span className="muted">No ceiling</span>
+            </>
+          ) : (
+            ` of ${fmtCount(shown)} tokens`
+          )}
+        </span>
+      )}
       {saved && saved.standing !== "passed" && (
         <span className="ceiling-applying t-caption" role="status">
           {saved.standing === "applied"

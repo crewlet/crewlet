@@ -257,6 +257,18 @@ func TestTheSnapshotTermSurvivesLosingOneDonor(t *testing.T) {
 		t.Fatal("a single node is blocked by the snapshot term — its loop does " +
 			"not run, and concluding otherwise deadlocks one node for ever")
 	}
+	// AND IT SAYS SO IN THE DASHBOARD'S WORDS: the term's sentence is drawn
+	// on Settings › Backups, where "its recovery artefact is a backup" sat
+	// beside the product's Artifacts, one word spelled two ways for two things.
+	for _, term := range solo.Terms() {
+		if term.Name != statelog.TermSnapshotFloor {
+			continue
+		}
+		if want := "a single node takes no snapshots; it is recovered from a " +
+			"backup, which the backup term gates"; term.Detail != want {
+			t.Errorf("the solo snapshot term reads %q, want %q", term.Detail, want)
+		}
+	}
 }
 
 // A SNAPSHOT FROM ANOTHER GENERATION IS NOT A DONOR.

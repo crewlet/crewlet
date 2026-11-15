@@ -100,7 +100,7 @@ import { href } from "~/app/router.tsx";
 import { peekHref } from "~/app/frame/peekAddress.ts";
 import { ADMIN, holds } from "~/lib/access.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtDate, fmtDateTime } from "~/lib/format.ts";
 import { SessionDevice } from "~/components/SessionDevice.tsx";
 import { deviceOf } from "~/lib/userAgent.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
@@ -473,7 +473,7 @@ function Security({
             </Button>
           }
         >
-          Signs you out elsewhere and stops your tokens.
+          {passwordState(credentials.data)}
         </SecurityLine>
       </Stack>
       {dialog === "password" && (
@@ -500,11 +500,32 @@ function Security({
 }
 
 /**
- * One thing a person proves themselves with: its name, what is true of it now
- * in a line, and the gesture that changes it — beside the line where there is
- * room, under it on a phone.
+ * What is true of the password now, as the other lines say what is true of
+ * theirs: when it was last set, read off its credential, which a change
+ * replaces with a new one stamped at that instant. The line used to say what a
+ * change DOES ("Signs you out elsewhere and stops your tokens."), a consequence
+ * where every other line states a state; the consequence is said in the
+ * dialog, where the change is made. Nothing while the list is unread: the
+ * second factor's line above says why.
  */
-function SecurityLine({
+export function passwordState(credentials: CredentialRow[] | null): string {
+  if (credentials === null) return "";
+  const held = credentials.find((c) => c.method === "password" && !c.revoked);
+  if (!held) return "Not set.";
+  return held.created_at ? `Last set ${fmtDate(held.created_at)}.` : "Set.";
+}
+
+/**
+ * One thing a person proves themselves with: its name, what is true of it now
+ * in a line, and the gesture that changes it, always beside the line.
+ *
+ * TWO TRACKS, THE WORDS WRAPPING. A wrapping row sized the words to their one
+ * line, so whether the button dropped under them turned on how long the
+ * sentence was: at 390 "Change password…" fell below its line while "Set up…"
+ * stayed beside its shorter one. The grid gives the words what the button
+ * leaves, so every line is laid out the same at every width.
+ */
+export function SecurityLine({
   label,
   action,
   children,
@@ -515,15 +536,17 @@ function SecurityLine({
   children: string;
 }) {
   return (
-    <Inline as="section" gap={3} justify="between" wrap aria-label={label}>
+    <section className="account-line" aria-label={label}>
       <Stack gap={1}>
         <Text variant="label">{label}</Text>
-        <Text as="p" variant="body" tone="secondary">
-          {children}
-        </Text>
+        {children && (
+          <Text as="p" variant="body" tone="secondary">
+            {children}
+          </Text>
+        )}
       </Stack>
       {action}
-    </Inline>
+    </section>
   );
 }
 
@@ -659,6 +682,11 @@ function ChangePasswordDialog({
         </Callout>
       ) : (
         <>
+          {/* WHAT THE CHANGE DOES, said where it is made: the Security card's
+              line says what is true of the password now. */}
+          <Text as="p" variant="body" tone="secondary">
+            Changing it signs you out everywhere else and stops your tokens.
+          </Text>
           <CurrentPassword
             value={current}
             onChange={setCurrent}
@@ -837,6 +865,7 @@ function Sessions({
         loading={sessions.loading && !sessions.data}
       >
         <DataGrid<SessionRow>
+          name="sessions"
           rows={live}
           rowKey={(s) => s.lineage}
           defaultSort="started"
@@ -926,7 +955,14 @@ function Tokens({
         count={credentials.data ? working.length : undefined}
         actions={
           <>
-            <Checkbox label="Show revoked and expired" checked={all} onCheckedChange={setAll} />
+            {/* At the head's controls' step, beside a small button: a
+                body-step label stood larger than the card's own title. */}
+            <Checkbox
+              size="sm"
+              label="Show revoked and expired"
+              checked={all}
+              onCheckedChange={setAll}
+            />
             <Button size="small" variant="secondary" onClick={() => setMinting(true)}>
               New token
             </Button>
@@ -949,6 +985,7 @@ function Tokens({
         loading={credentials.loading && !credentials.data}
       >
         <DataGrid<CredentialRow>
+          name="tokens"
           rows={all ? tokens : working}
           rowKey={(c) => c.id}
           defaultSort="created"
