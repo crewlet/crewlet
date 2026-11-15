@@ -17,11 +17,8 @@ import (
 // taskID is the task the questions here are asked on.
 const taskID = "7d0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 
-// threadOf is a reader over one task's thread in pages, newest page first:
-// `GET /worklet/comments` answers the page its cursor names (the first with
-// none), narrowed to one comment's conversation where it names a `thread`, as
-// the route narrows it, and `GET /worklet/decisions` names the person's own
-// record, ana.
+// threadOf answers one task's thread in pages, narrowed by `thread` as the route
+// narrows it, and names the person's own record (ana) on GET /worklet/decisions.
 func threadOf(pages ...[]any) proposal.Read {
 	return func(_ context.Context, r exec.Request) (exec.Response, error) {
 		var body any
@@ -80,14 +77,8 @@ func previewAnswer(t *testing.T, read proposal.Read, args map[string]any) (propo
 	return tool.Preview(t.Context(), read, wednesday, args)
 }
 
-// AN ANSWER IS BOUND TO THE QUESTION IT PREVIEWED. The preview reads the
-// question from the task's thread, page by page back to it, binds the
-// question as the card shows it (whom it asks, its words and decision,
-// whether it is open), and its request names the task and the question by
-// their ids. Re-read unchanged it is the same revision; answered meanwhile,
-// edited or removed it is another, so the approval refuses the change as
-// stale; and a question no longer there is gone. Mutation: bind no revision,
-// leave `resolved` out of it, or read only the newest page, and this fails.
+// An answer binds its question as shown and names it by id; answered, edited or
+// removed meanwhile it re-reads as stale, and gone when the comment is.
 func TestAnAnswerIsBoundToTheQuestionItPreviewed(t *testing.T) {
 	t.Parallel()
 	older := []any{asked("c-9", "ana", nil), remark("c-10")}
@@ -135,14 +126,8 @@ func TestAnAnswerIsBoundToTheQuestionItPreviewed(t *testing.T) {
 	}
 }
 
-// AN ANSWER ANSWERS ONLY AN OPEN QUESTION PUT TO THE PERSON. Named by its
-// comment id, a comment that asks nothing, a question asked of somebody else
-// and one already answered are each refused before any card, naming why: an
-// answer the assistant prepares never answers what text it read asked it to
-// answer for somebody else. Named by none, the answer is the one open
-// question on the task asked of the person, found across the whole thread,
-// and two are refused naming both. Mutation: drop the person check, or infer
-// from the newest page alone, and this fails.
+// An answer is only to an open question put to the person: anything else is
+// refused naming why, and unnamed, the one such question on the whole thread.
 func TestAnAnswerAnswersOnlyAnOpenQuestionPutToThePerson(t *testing.T) {
 	t.Parallel()
 	read := threadOf(

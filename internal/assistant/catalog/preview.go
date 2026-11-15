@@ -507,12 +507,8 @@ func commentPreview(t Tool) proposal.Previewer {
 	}
 }
 
-// answerPreview previews an answer to a question asked on a task: the
-// question it answers, read whole from the task's thread and held to one put
-// to the person and still open, and the option chosen. The approval is bound
-// to the question as the card showed it ([proposal.RevisionAsk]), and the
-// request names the task and the question by their ids, so the answer the
-// person approves goes to the question the card shows.
+// answerPreview previews an answer to an open question put to the person, bound to
+// the question as shown (proposal.RevisionAsk) and sent to it by its ids.
 func answerPreview(t Tool) proposal.Previewer {
 	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		if _, err := built(t, args); err != nil {
@@ -549,12 +545,8 @@ func answerPreview(t Tool) proposal.Previewer {
 	}
 }
 
-// threadPages is the most pages of a task's thread a preview walks to find
-// the question an answer answers: ten pages of at most fifty comments and
-// sixteen kibibytes each (worklet.MaxCommentPage, worklet.CommentPageBytes),
-// which holds every conversation a question gathers and the threads of all
-// but the longest-running tasks. Past it the question is named by its comment
-// id, which list_decisions gives, and read narrowed to its own conversation.
+// threadPages is the most thread pages a preview walks (ten of fifty comments);
+// past it the question is named by its comment id and read narrowed.
 const threadPages = 10
 
 // question is a question asked on a task, as the task's thread answered it.
@@ -578,11 +570,8 @@ func (q question) options() map[string]string {
 	return out
 }
 
-// bound is the revision an answer binds: the question as its card shows it,
-// whom it asks, its words and decision and whether it is still open, as a
-// digest ([proposal.RevisionAsk]). A question is asked once and its decision
-// never changes (ADR-0023), so what moves it is an answer closing it, its
-// words edited or removed: each a question the card no longer shows.
+// bound is a digest of the question as shown: whom it asks, its words, decision
+// and whether it is open, which an answer, an edit or a removal moves.
 func (q question) bound() string {
 	shown := struct {
 		Ask       string `json:"ask"`
@@ -602,11 +591,8 @@ func (q question) bound() string {
 		Version: hex.EncodeToString(sum[:16])}.String()
 }
 
-// questionAnswered is the question an answer on item answers: the one its
-// comment id names, or, named by none, the one open question on the task
-// asked of the person, as the act infers it. THE PERSON'S OWN, and open: an
-// answer the assistant prepares answers nothing put to somebody else and
-// nothing already answered, whatever text it read asked it to.
+// questionAnswered is the question named by id, or the one open question on item
+// asked of the person; only an open question put to them is answered.
 func questionAnswered(ctx context.Context, read proposal.Read, item, id string) (question, error) {
 	// THE PERSON'S RECORD, the name a question put to them is asked of, as
 	// the decisions read answers it for its caller (a page of one, since
@@ -705,10 +691,8 @@ func openQuestionOf(ctx context.Context, read proposal.Read, item, person string
 		strings.Join(ids, ", "))
 }
 
-// walkThread reads item's thread page by page, newest first, as narrowed by
-// narrow, handing each page's comments to page until it answers true or the
-// thread ends. A thread longer than [threadPages] is refused, naming what
-// reads it narrowed.
+// walkThread hands page each page of item's thread, newest first, until it answers
+// true or the thread ends; past threadPages it is refused.
 func walkThread(ctx context.Context, read proposal.Read, item string, narrow url.Values,
 	page func(task question, comments []any) bool) error {
 	cursor := ""
