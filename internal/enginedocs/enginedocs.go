@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"path"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -89,40 +90,71 @@ type Index struct {
 	corpus   textindex.Corpus
 }
 
-// New indexes every Markdown page in tree, named by its path in tree.
+// New indexes every Markdown page in tree, named by its path in tree. Pages are
+// cut and analysed concurrently and merged in path order, so the index is the
+// same whatever the scheduling.
 func New(tree fs.FS) (*Index, error) {
-	ix := &Index{pages: map[string][]int{}, postings: map[string][]textindex.Posting{}}
+	var paths []string
 	err := fs.WalkDir(tree, ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || path.Ext(p) != ".md" {
-			return err
+		if err == nil && !d.IsDir() && path.Ext(p) == ".md" {
+			paths = append(paths, p)
 		}
-		body, readErr := fs.ReadFile(tree, p)
-		if readErr != nil {
-			return fmt.Errorf("enginedocs: read %s: %w", p, readErr)
-		}
-		for _, s := range sectionsOf(p, string(body)) {
-			ix.pages[p] = append(ix.pages[p], len(ix.sections))
-			ix.sections = append(ix.sections, s)
-		}
-		return nil
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
+	slices.Sort(paths)
+	type analysed struct {
+		sections []Section
+		terms    []map[string]int
+		err      error
+	}
+	pages := make([]analysed, len(paths))
+	var wg sync.WaitGroup
+	next := make(chan int)
+	for range runtime.GOMAXPROCS(0) {
+		wg.Go(func() {
+			for i := range next {
+				body, readErr := fs.ReadFile(tree, paths[i])
+				if readErr != nil {
+					pages[i].err = fmt.Errorf("enginedocs: read %s: %w", paths[i], readErr)
+					continue
+				}
+				pages[i].sections = sectionsOf(paths[i], string(body))
+				for _, sec := range pages[i].sections {
+					// The page's title and the heading are part of what a section is about.
+					pages[i].terms = append(pages[i].terms,
+						textindex.Analyze(sec.Title+"\n"+sec.Heading+"\n"+sec.Text))
+				}
+			}
+		})
+	}
+	for i := range paths {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+	ix := &Index{pages: map[string][]int{}, postings: map[string][]textindex.Posting{}}
 	total := 0
-	for i, s := range ix.sections {
-		// THE PAGE'S TITLE AND THE HEADING ARE PART OF WHAT A SECTION IS
-		// ABOUT: "Grants for a change" under "Access" answers "access grant"
-		// whether or not its own paragraph repeats either word.
-		terms := textindex.Analyze(s.Title + "\n" + s.Heading + "\n" + s.Text)
-		length := 0
-		for _, n := range terms {
-			length += n
+	for i, page := range pages {
+		if page.err != nil {
+			return nil, page.err
 		}
-		total += length
-		for term, n := range terms {
-			ix.postings[term] = append(ix.postings[term],
-				textindex.Posting{DocID: strconv.Itoa(i), Freq: n, Length: length})
+		for j, sec := range page.sections {
+			at := len(ix.sections)
+			ix.pages[paths[i]] = append(ix.pages[paths[i]], at)
+			ix.sections = append(ix.sections, sec)
+			length := 0
+			for _, n := range page.terms[j] {
+				length += n
+			}
+			total += length
+			id := strconv.Itoa(at)
+			for term, n := range page.terms[j] {
+				ix.postings[term] = append(ix.postings[term],
+					textindex.Posting{DocID: id, Freq: n, Length: length})
+			}
 		}
 	}
 	ix.corpus = textindex.Corpus{Docs: len(ix.sections)}
@@ -166,9 +198,7 @@ func (ix *Index) Search(query string, limit int) []Hit {
 	}
 	hits := make([]Hit, 0, len(scores))
 	for i, score := range scores {
-		s := ix.sections[i]
-		hits = append(hits, Hit{Section: s, Score: score,
-			Snippet: textindex.Snippet(s.Text, terms, snippetBytes)})
+		hits = append(hits, Hit{Section: ix.sections[i], Score: score})
 	}
 	// BEST FIRST, and in one order for two equal scores, so a search asked
 	// twice answers the same list.
@@ -180,6 +210,9 @@ func (ix *Index) Search(query string, limit int) []Hit {
 	})
 	if limit > 0 && len(hits) > limit {
 		hits = hits[:limit]
+	}
+	for i := range hits {
+		hits[i].Snippet = textindex.Snippet(hits[i].Text, terms, snippetBytes)
 	}
 	return hits
 }
@@ -258,11 +291,18 @@ func sectionsOf(p, body string) []Section {
 	fenced := false
 	title := ""
 	for _, line := range strings.Split(body, "\n") {
-		if fenceRE().MatchString(line) {
+		// Only a line led by at most three spaces and a fence or a # can be one.
+		lead := strings.TrimLeft(line, " ")
+		indented := len(line)-len(lead) > 3
+		if !indented && (strings.HasPrefix(lead, "```") || strings.HasPrefix(lead, "~~~")) &&
+			fenceRE().MatchString(line) {
 			fenced = !fenced
 		}
-		m := headingRE().FindStringSubmatch(line)
-		if fenced || m == nil {
+		var m []string
+		if !fenced && !indented && strings.HasPrefix(lead, "#") {
+			m = headingRE().FindStringSubmatch(line)
+		}
+		if m == nil {
 			text = append(text, line)
 			continue
 		}
