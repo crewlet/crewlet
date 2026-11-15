@@ -222,23 +222,27 @@ func (c *Company) validateDelegatedDecisions(o *org.Organization) error {
 	var p problems
 	path := field("delegated_decisions")
 	if n := len(d.Rules); n > delegatedMaxRules {
-		p.add(at(path, "rules"), ErrOutOfRange, "%d rules is more than %d", n, delegatedMaxRules)
+		p.addSaying(at(path, "rules"), ErrOutOfRange, fmt.Sprintf("A company has at most %d rules.",
+			delegatedMaxRules), "%d rules is more than %d", n, delegatedMaxRules)
 	}
 	claimed := map[delegated.Kind]int{}
 	for i, r := range d.Rules {
 		here := idx(at(path, "rules"), i)
 		if len(r.Kinds) == 0 {
-			p.add(at(here, "kinds"), ErrMissing, "name the kinds this rule delegates: %s",
-				words.Or(delegated.DelegableKinds()))
+			p.addSaying(at(here, "kinds"), ErrMissing, "Pick at least one kind of request.",
+				"name the kinds this rule delegates: %s", words.Or(delegated.DelegableKinds()))
 		}
 		for j, k := range r.Kinds {
 			switch prior, taken := claimed[k]; {
 			case !k.Delegable():
-				p.add(idx(at(here, "kinds"), j), ErrUnknownValue, "%q is not a kind a rule delegates; give %s",
-					k, words.Or(delegated.DelegableKinds()))
+				p.addSaying(idx(at(here, "kinds"), j), ErrUnknownValue,
+					fmt.Sprintf("%q is not a kind of request a rule can decide.", k),
+					"%q is not a kind a rule delegates; give %s", k, words.Or(delegated.DelegableKinds()))
 			case taken:
-				p.add(idx(at(here, "kinds"), j), ErrConflict, "%s is already delegated by rule %d; a kind "+
-					"is in one rule", k, prior)
+				p.addSaying(idx(at(here, "kinds"), j), ErrConflict,
+					fmt.Sprintf("Rule %d already decides %s. A kind of request is in one rule only.", prior,
+						kindSaid(k)),
+					"%s is already delegated by rule %d; a kind is in one rule", k, prior)
 			default:
 				claimed[k] = i + 1
 			}
@@ -246,25 +250,34 @@ func (c *Company) validateDelegatedDecisions(o *org.Organization) error {
 		c.checkDelegates(&p, at(here, "delegates"), o, r)
 		switch n := len(r.EscalateTo); {
 		case n == 0:
-			p.add(at(here, "escalate_to"), ErrMissing, "name at least one person an escalation is put to; "+
-				"administrators are added to them")
+			p.addSaying(at(here, "escalate_to"), ErrMissing, "Pick at least one person.",
+				"name at least one person an escalation is put to; administrators are added to them")
 		case n > delegatedMaxEscalateTo:
-			p.add(at(here, "escalate_to"), ErrOutOfRange, "%d people is more than %d", n, delegatedMaxEscalateTo)
+			p.addSaying(at(here, "escalate_to"), ErrOutOfRange, fmt.Sprintf("Pick at most %d people.",
+				delegatedMaxEscalateTo), "%d people is more than %d", n, delegatedMaxEscalateTo)
 		}
 		seen := map[string]bool{}
 		for j, handle := range r.EscalateTo {
 			switch role := o.Role(handle); {
-			case role == nil || !role.IsHuman():
-				p.add(idx(at(here, "escalate_to"), j), ErrUnknownValue, "%q is not a person's seat; only "+
-					"people answer an escalation", handle)
+			case role == nil:
+				p.addSaying(idx(at(here, "escalate_to"), j), ErrUnknownValue,
+					fmt.Sprintf("@%s is not a seat in this company.", handle),
+					"%q is not a person's seat; only people answer an escalation", handle)
+			case !role.IsHuman():
+				p.addSaying(idx(at(here, "escalate_to"), j), ErrUnknownValue,
+					fmt.Sprintf("%s is an agent. Only people answer an escalation.", role.Name),
+					"%q is not a person's seat; only people answer an escalation", handle)
 			case seen[handle]:
-				p.add(idx(at(here, "escalate_to"), j), ErrConflict, "%q is listed twice", handle)
+				p.addSaying(idx(at(here, "escalate_to"), j), ErrConflict,
+					fmt.Sprintf("%s is listed twice.", role.Name), "%q is listed twice", handle)
 			}
 			seen[handle] = true
 		}
 		if s := r.SampleOneIn; s < 0 || s > delegatedMaxSampleOneIn {
-			p.add(at(here, "sample_one_in"), ErrOutOfRange, "%d is outside 1 to %d; leave it empty for %d",
-				s, delegatedMaxSampleOneIn, delegated.DefaultSampleOneIn)
+			p.addSaying(at(here, "sample_one_in"), ErrOutOfRange,
+				fmt.Sprintf("From 1 to %d.", delegatedMaxSampleOneIn),
+				"%d is outside 1 to %d; leave it empty for %d", s, delegatedMaxSampleOneIn,
+				delegated.DefaultSampleOneIn)
 		}
 		checkRulePaths(&p, at(here, "always_escalate_paths"), r)
 		checkRequiredChecks(&p, at(here, "required_checks"), r)
@@ -295,10 +308,12 @@ const (
 func (c *Company) checkDelegates(p *problems, path Path, o *org.Organization, r DelegatedRule) {
 	switch n := len(r.Delegates); {
 	case n == 0:
-		p.add(path, ErrMissing, "name the agent seat that decides, or two for a panel")
+		p.addSaying(path, ErrMissing, "Pick the agent that decides.",
+			"name the agent seat that decides, or two for a panel")
 		return
 	case n > delegatedMaxDelegates:
-		p.add(path, ErrOutOfRange, "%d delegates is more than a panel of %d", n, delegatedMaxDelegates)
+		p.addSaying(path, ErrOutOfRange, "Pick one agent, or two for a panel.",
+			"%d delegates is more than a panel of %d", n, delegatedMaxDelegates)
 		return
 	}
 	var seats []*org.Role
@@ -307,20 +322,26 @@ func (c *Company) checkDelegates(p *problems, path Path, o *org.Organization, r 
 		role := o.Role(handle)
 		switch {
 		case role == nil:
-			p.add(here, ErrUnknownValue, "%q is not a seat of this company", handle)
+			p.addSaying(here, ErrUnknownValue, fmt.Sprintf("@%s is not a seat in this company.", handle),
+				"%q is not a seat of this company", handle)
 			continue
 		case role.IsHuman():
-			p.add(here, ErrUnknownValue, "%q is a person's seat; a delegate is an agent seat, and a person "+
-				"decides through escalate_to", handle)
+			p.addSaying(here, ErrUnknownValue,
+				fmt.Sprintf("%s is a person. An agent decides, and people get what it escalates.", role.Name),
+				"%q is a person's seat; a delegate is an agent seat, and a person decides through escalate_to",
+				handle)
 			continue
 		case slices.Contains(seats, role):
-			p.add(here, ErrConflict, "%q is listed twice; a panel is two different seats", handle)
+			p.addSaying(here, ErrConflict, "A panel is two different agents.",
+				"%q is listed twice; a panel is two different seats", handle)
 			continue
 		}
 		for _, k := range r.Kinds {
 			if why := c.requests(handle, k); why != "" {
-				p.add(here, ErrConflict, "%q %s, so it cannot decide %s requests: a delegate never decides "+
-					"a kind it can request", handle, why, k)
+				p.addSaying(here, ErrConflict,
+					fmt.Sprintf("%s can ask for %s itself, so it can't decide them.", role.Name, kindSaid(k)),
+					"%q %s, so it cannot decide %s requests: a delegate never decides a kind it can request",
+					handle, why, k)
 			}
 		}
 		seats = append(seats, role)
@@ -328,8 +349,11 @@ func (c *Company) checkDelegates(p *problems, path Path, o *org.Organization, r 
 	if len(seats) == 2 {
 		first, second := firstLLM(seats[0]), firstLLM(seats[1])
 		if first == "" || second == "" || first == second {
-			p.add(path, ErrConflict, "a panel's two delegates run on different models: give %s and %s "+
-				"different first llm entries", seats[0].Handle(), seats[1].Handle())
+			p.addSaying(path, ErrConflict,
+				fmt.Sprintf("%s and %s run on the same model. A panel needs two different models.",
+					seats[0].Name, seats[1].Name),
+				"a panel's two delegates run on different models: give %s and %s different first llm entries",
+				seats[0].Handle(), seats[1].Handle())
 		}
 	}
 }
@@ -362,6 +386,19 @@ func (r DelegatedRule) releases() bool {
 	return slices.Contains(r.Kinds, delegated.KindPRMerge) || slices.Contains(r.Kinds, delegated.KindDeploy)
 }
 
+// kindSaid is a kind of request as a person reads it in a refusal.
+func kindSaid(k delegated.Kind) string {
+	switch k {
+	case delegated.KindSSHOperate:
+		return "server commands"
+	case delegated.KindPRMerge:
+		return "merges"
+	case delegated.KindDeploy:
+		return "deploys"
+	}
+	return string(k)
+}
+
 // checkRulePaths holds a rule's own always-escalate globs to a rule that
 // delegates a merge or a deploy, and each to a path glob a repository's paths
 // are matched by (gitref.ParsePathGlob).
@@ -370,17 +407,20 @@ func checkRulePaths(p *problems, path Path, r DelegatedRule) {
 		return
 	}
 	if !r.releases() {
-		p.add(path, ErrConflict, "paths escalate a merge or a deploy; this rule delegates neither %s nor %s",
+		p.addSaying(path, ErrConflict, "Paths apply only to merges and deploys.",
+			"paths escalate a merge or a deploy; this rule delegates neither %s nor %s",
 			delegated.KindPRMerge, delegated.KindDeploy)
 		return
 	}
 	if n := len(r.AlwaysEscalatePaths); n > delegatedMaxPaths {
-		p.add(path, ErrOutOfRange, "%d paths is more than %d", n, delegatedMaxPaths)
+		p.addSaying(path, ErrOutOfRange, fmt.Sprintf("At most %d paths.", delegatedMaxPaths),
+			"%d paths is more than %d", n, delegatedMaxPaths)
 		return
 	}
 	for i, glob := range r.AlwaysEscalatePaths {
 		if _, err := gitref.ParsePathGlob(glob); err != nil {
-			p.add(idx(path, i), ErrUnknownValue, "%q is not a path glob: %s", glob, err.Error())
+			p.addSaying(idx(path, i), ErrUnknownValue, fmt.Sprintf("%q is not a path pattern such as billing/**.",
+				glob), "%q is not a path glob: %s", glob, err.Error())
 		}
 	}
 }
@@ -399,12 +439,14 @@ func checkRequiredChecks(p *problems, path Path, r DelegatedRule) {
 		return
 	}
 	if !r.releases() {
-		p.add(path, ErrConflict, "required checks hold a merge or a deploy; this rule delegates neither %s nor %s",
+		p.addSaying(path, ErrConflict, "Required checks apply only to merges and deploys.",
+			"required checks hold a merge or a deploy; this rule delegates neither %s nor %s",
 			delegated.KindPRMerge, delegated.KindDeploy)
 		return
 	}
 	if n := len(r.RequiredChecks); n > delegatedMaxRequiredChecks {
-		p.add(path, ErrOutOfRange, "%d entries is more than %d", n, delegatedMaxRequiredChecks)
+		p.addSaying(path, ErrOutOfRange, fmt.Sprintf("At most %d repositories.", delegatedMaxRequiredChecks),
+			"%d entries is more than %d", n, delegatedMaxRequiredChecks)
 		return
 	}
 	targets := map[string]int{}
@@ -413,16 +455,18 @@ func checkRequiredChecks(p *problems, path Path, r DelegatedRule) {
 		owner, name, ok := strings.Cut(rc.Repo, "/")
 		if !ok || !ownerName().MatchString(strings.ToLower(owner)) || !githubRepoName().MatchString(name) ||
 			name == "." || name == ".." {
-			p.add(at(here, "repo"), ErrShape, "%q is not a GitHub repository; give it as owner/name, such as "+
-				"acme/api", rc.Repo)
+			p.addSaying(at(here, "repo"), ErrShape,
+				fmt.Sprintf("%q is not a GitHub repository. Write it as owner/name, like acme/api.", rc.Repo),
+				"%q is not a GitHub repository; give it as owner/name, such as acme/api", rc.Repo)
 		}
 		if !gitref.ValidBranch(rc.Branch) {
-			p.add(at(here, "branch"), ErrShape, "%q is not a branch name; give the branch as GitHub names it, "+
-				"such as main", rc.Branch)
+			p.addSaying(at(here, "branch"), ErrShape, fmt.Sprintf("%q is not a branch name.", rc.Branch),
+				"%q is not a branch name; give the branch as GitHub names it, such as main", rc.Branch)
 		}
 		target := strings.ToLower(rc.Repo) + "\x00" + rc.Branch
 		if was, dup := targets[target]; dup {
-			p.add(here, ErrConflict, "%s's %s is listed twice (first at required_checks[%d]); give its checks "+
+			p.addSaying(here, ErrConflict, fmt.Sprintf("%s %s is listed twice. Put its checks in one entry.",
+				rc.Repo, rc.Branch), "%s's %s is listed twice (first at required_checks[%d]); give its checks "+
 				"in one entry", rc.Repo, rc.Branch, was)
 		} else {
 			targets[target] = i
@@ -436,25 +480,30 @@ func checkRequiredChecks(p *problems, path Path, r DelegatedRule) {
 func checkCheckNames(p *problems, path Path, checks []string) {
 	switch n := len(checks); {
 	case n == 0:
-		p.add(path, ErrMissing, "name at least one check, as GitHub shows its check run")
+		p.addSaying(path, ErrMissing, "Add at least one check.",
+			"name at least one check, as GitHub shows its check run")
 		return
 	case n > CodeMaxRequiredChecks:
-		p.add(path, ErrOutOfRange, "%d checks is more than the %d one branch may require", n,
-			CodeMaxRequiredChecks)
+		p.addSaying(path, ErrOutOfRange, fmt.Sprintf("At most %d checks on one branch.", CodeMaxRequiredChecks),
+			"%d checks is more than the %d one branch may require", n, CodeMaxRequiredChecks)
 		return
 	}
 	named := map[string]int{}
 	for i, name := range checks {
 		switch was, dup := named[name]; {
 		case strings.TrimSpace(name) == "":
-			p.add(idx(path, i), ErrMissing, "a check has a name")
+			p.addSaying(idx(path, i), ErrMissing, "A check needs a name.", "a check has a name")
 		case strings.TrimSpace(name) != name || strings.ContainsFunc(name, unicode.IsControl):
-			p.add(idx(path, i), ErrShape, "%q has spaces at its ends or a control character; GitHub matches a "+
-				"check's name exactly", name)
+			p.addSaying(idx(path, i), ErrShape,
+				fmt.Sprintf("%q has spaces at its ends. GitHub matches a check's name exactly.", name),
+				"%q has spaces at its ends or a control character; GitHub matches a check's name exactly", name)
 		case len(name) > delegatedMaxCheckNameBytes:
-			p.add(idx(path, i), ErrOutOfRange, "a check's name is at most %d bytes", delegatedMaxCheckNameBytes)
+			p.addSaying(idx(path, i), ErrOutOfRange,
+				fmt.Sprintf("A check's name is at most %d bytes.", delegatedMaxCheckNameBytes),
+				"a check's name is at most %d bytes", delegatedMaxCheckNameBytes)
 		case dup:
-			p.add(idx(path, i), ErrConflict, "%q is listed twice (first at checks[%d])", name, was)
+			p.addSaying(idx(path, i), ErrConflict, fmt.Sprintf("%q is listed twice.", name),
+				"%q is listed twice (first at checks[%d])", name, was)
 		default:
 			named[name] = i
 		}
