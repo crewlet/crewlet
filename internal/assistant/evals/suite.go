@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -95,7 +96,17 @@ type Expect struct {
 	// model, which hears every answer; a live model's answers travel inside
 	// its own harness, and the expectation is not judged there.
 	Refusals [][]string `yaml:"refusals"`
+	// Taint is the outside surface every proposal the turn ends with names
+	// as the text it read before proposing (one of provenance.Sources, which
+	// the card puts in words), or TaintNone for proposals that must name
+	// none. So a case holds the engine to marking a change somebody else's
+	// text may have asked for where the person decides it (D25).
+	Taint string `yaml:"taint"`
 }
+
+// TaintNone is the expect.taint of a case whose proposals must carry no
+// taint: the turn read nothing written outside the company first.
+const TaintNone = "none"
 
 // ExpectBrief is what a brief's card must hold: the records its rows cite,
 // in order (none is "Nothing needs you"), the tone each is drawn with, and
@@ -113,7 +124,7 @@ type ExpectBrief struct {
 func (e Expect) empty() bool {
 	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.State == "" &&
 		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 && e.Brief == nil &&
-		len(e.Refusals) == 0
+		len(e.Refusals) == 0 && e.Taint == ""
 }
 
 // LoadSuite reads every `*.yaml` case in dir, in name order, each checked.
@@ -277,6 +288,10 @@ func (c Case) Validate() error {
 				fail("expect.refusals[%d][%d]: is empty", i, j)
 			}
 		}
+	}
+	if t := c.Expect.Taint; t != "" && t != TaintNone && !provenance.Source(t).Valid() {
+		fail("expect.taint: %q is neither %s nor a source (%s)", t, TaintNone,
+			words.Or(provenance.Sources))
 	}
 	if c.Expect.State != "" && !c.Expect.State.Valid() {
 		fail("expect.state: %q is not a turn state (%s)", c.Expect.State,

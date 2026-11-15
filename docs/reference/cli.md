@@ -3577,6 +3577,7 @@ expect:
     verdict: 2 things need you    # optional: the verdict the engine counted from the rows it kept
   refusals:                       # what each refused call's answer names, in order
     - [about, "needs[0].do"]      # judged against the scripted model, which hears every answer
+  taint: none                     # the outside surface every proposal names (executor, page_body, ...), or none
 ```
 
 A case is read by the configuration's own strict reader: a member this build does
