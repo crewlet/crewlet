@@ -3221,8 +3221,18 @@ brief carries an empty one.
 **What it costs.** A line per held call that a told call reads alike, in the
 brief and so in its launch's floor and any rewrite of a long value; nothing
 where none does, so a brief whose held and told calls read apart is byte for
-byte what it was, OpenCode's among them. A fresh run's brief holds no call of
-the round and lists nothing again.
+byte what it was, OpenCode's among them. That is not always a line or two: one
+told call whose arguments are not known whole (in flight, sealed for a
+person's approval, kept past the log's budget, or with no digest) reads alike
+every held call of its tool, so on the copy whose harness ended its own run,
+which holds every call of the round but the late ones, a single late call of a
+much-used tool lists every held call of that tool again, each write whole and
+each long value rewritten by the seat's auxiliary model, within the ledger's
+budgets and its one read cap, spent on these last. The longer brief also
+counts toward Claude Code's compaction threshold, which the first-request
+verdict judges the brief against, so it can tip a continuation into being told
+as one that may be a summary. A fresh run's
+brief holds no call of the round and lists nothing again.
 
 **Mid-upgrade.** Nothing on the wire changes: it is how one brief is worded,
 from what the round's log already records. An older build's continuation of
