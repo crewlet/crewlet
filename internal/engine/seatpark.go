@@ -276,18 +276,19 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 // lifted.
 //
 // THE WINDOW is the release's own: it drops its record under the lock and
-// resumes outside it, and a park taken between the two (a delivery on another
-// partition that met the condition, or the resumed mail meeting it again)
-// re-holds the same attachment, which a hold one per reason leaves unchanged
-// on the queue, and records itself. The resume then lifts the hold that park
-// owns: the seat stays recorded parked, its alarm armed, with its inbox not
-// held, until its next delivery meets the condition and parks it again, at
-// the cost of one of that delivery's attempts. Read again under the lock once
-// the resume has returned, a park in force takes its hold back, for the
-// attachment its record names, which is the one the seat holds now or one its
-// release has ended, which the queue refuses and the release's forget drops.
-// A park taken after this read holds by itself, and a release after it reads
-// again after its own resume.
+// resumes outside it, and a park taken between the two (a turn on another
+// partition that met the condition) re-holds the same attachment, which a hold
+// one per reason leaves unchanged on the queue, and records itself. The resume
+// then lifts the hold that park owns: the seat stays recorded parked, its
+// alarm armed, with its inbox not held, until its next delivery meets the
+// condition and parks it again, at the cost of one of that delivery's
+// attempts. Read again under the lock once the resume has returned, a park in
+// force takes its hold back, for the attachment its record names, which is the
+// one the seat holds now or one its release has ended, which the queue refuses
+// and the release's forget drops. A park taken once the queue has lifted the
+// hold (the resumed mail meeting the condition again, which the in-memory twin
+// hands over inside the resume) holds by itself, as does one taken after this
+// read, and a release after it reads again after its own resume.
 func (p *seatParks[B]) reholdParked(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -301,8 +302,7 @@ func (p *seatParks[B]) reholdParked(ctx context.Context, e *Engine, spec parkSpe
 		return
 	}
 	// A pause fails only on a client that has stopped, a process on its way
-	// out; the record stays for the release that lifts it, and the
-	// screening holds whatever reaches the seat meanwhile.
+	// out; the record stays for the release that lifts it.
 	log.WarnContext(ctx, "seat_park_hold_not_retaken", "seat", parking.handle,
 		"agent_id", seat.String(), "hold", spec.hold, "error", err,
 		"detail", "this seat's park stands but its inbox is not held; a delivery "+

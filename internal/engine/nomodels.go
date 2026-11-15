@@ -201,15 +201,16 @@ func (e *Engine) releaseModelHolds(ctx context.Context) {
 //
 // THE WINDOW is the release's own: it drops the record under the lock and
 // resumes outside it, and a pause taken between the two (a delivery screened
-// against a revision with no model) re-holds the same attachment, which a hold one per reason leaves
-// unchanged on the queue, and records itself. The resume then lifts the hold
-// that pause owns: the seat stays recorded paused with its inbox not held,
-// until its next delivery meets the screening and pauses it again, at the cost
-// of one of that delivery's attempts. Read again under the lock once the
-// resume has returned, a pause recorded meanwhile takes its hold back, for the
-// attachment its record names, which is the one the seat holds now or one its
-// release has ended, which the queue refuses. A pause taken after this read
-// holds by itself, and the apply that adds a model releases it again.
+// against a revision with no model) re-holds the same attachment, which a hold
+// one per reason leaves unchanged on the queue, and records itself. The resume
+// then lifts the hold that pause owns: the seat stays recorded paused with its
+// inbox not held, until its next delivery meets the screening and pauses it
+// again, at the cost of one of that delivery's attempts. Read again under the
+// lock once the resume has returned, a pause recorded meanwhile takes its hold
+// back, for the attachment its record names, which is the one the seat holds
+// now or one its release has ended, which the queue refuses. A pause taken
+// after this read holds by itself, and the apply that adds a model releases it
+// again.
 func (e *Engine) reholdModelHold(ctx context.Context, id uuid.UUID) {
 	e.modelHolds.mu.Lock()
 	defer e.modelHolds.mu.Unlock()
