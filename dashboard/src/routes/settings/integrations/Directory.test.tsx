@@ -288,8 +288,8 @@ afterEach(() => {
 // its group, beside the apps that answer it. ATLASSIAN IS LISTED BY PRODUCT,
 // one line under work tracking and one under docs, because it is one
 // connection that serves two needs. A PRODUCT NAMES ITS MAKER beside it:
-// Chatlet, Worklet and Doclet name Crewlet as Jira and Confluence name
-// Atlassian. Mutation: drop the services' vendor and the three lines lose
+// Chatlet, Worklet, Doclet and Gitlet name Crewlet as Jira and Confluence
+// name Atlassian. Mutation: drop the services' vendor and the four lines lose
 // "Crewlet".
 test("the directory groups by need, with Crewlet's own service first in each", async () => {
   mount(ADMIN);
@@ -313,7 +313,7 @@ test("the directory groups by need, with Crewlet's own service first in each", a
     ["Chat", ["Chatlet (Crewlet)", "Slack", "Mattermost"]],
     ["Work tracking", ["Worklet (Crewlet)", "Jira (Atlassian)"]],
     ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
-    ["Code", ["GitHub", "GitLab"]],
+    ["Code", ["Gitlet (Crewlet)", "GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
     [
       "Cloud and Infrastructure",
@@ -345,6 +345,7 @@ test("an address selects its line, Atlassian and its relay on Jira's", async () 
     ["forge", /^Jira/],
     ["confluence", /Confluence/],
     ["worklet", /^Worklet/],
+    ["gitlet", /^Gitlet/],
   ] as const) {
     mount(ADMIN, kind);
     expect((await line(name)).getAttribute("aria-current"), kind).toBe("page");
@@ -467,7 +468,15 @@ test("the home shows only what is in use, each a compact card with one action", 
   mount(ADMIN);
   const inUse = await screen.findByRole("region", { name: /^In use/ });
   const names = [...inUse.querySelectorAll(".int-tile-link")].map((a) => a.textContent);
-  expect(names).toEqual(["Chatlet", "Worklet", "Doclet", "Confluence", "GitLab", "Datadog"]);
+  expect(names).toEqual([
+    "Chatlet",
+    "Worklet",
+    "Doclet",
+    "Confluence",
+    "Gitlet",
+    "GitLab",
+    "Datadog",
+  ]);
   for (const card of inUse.querySelectorAll(".crewlet-catalog-tile")) {
     expect(card.className).toContain("crewlet-catalog-tile--compact");
   }
@@ -476,7 +485,7 @@ test("the home shows only what is in use, each a compact card with one action", 
     within(gitlab).getByRole("link", { name: "Replace key GitLab" }).getAttribute("href"),
   ).toBe("#/company/integrations/gitlab?open=rotate");
   // THE COUNT BESIDE IN USE is of every card under it, the services included.
-  expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 6");
+  expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 7");
 });
 
 // EVERY STATE IS DRAWN ONE WAY: a service's "In use" and an app's
@@ -922,11 +931,12 @@ test("a service the company runs none of says so, with no product to open", asyn
 test("a node running no company says so and wears no state", async () => {
   mount(ADMIN, "worklet", null);
   expect(await screen.findByText("This node runs no company yet.")).toBeTruthy();
-  // ITS NAME AND ITS MAKER, and nothing after them: Crewlet beside Worklet, Doclet and Chatlet.
+  // ITS NAME AND ITS MAKER, and nothing after them: Crewlet beside each service.
   for (const [name, says] of [
     ["Worklet", "WorkletCrewlet"],
     ["Doclet", "DocletCrewlet"],
     ["Chatlet", "ChatletCrewlet"],
+    ["Gitlet", "GitletCrewlet"],
   ] as const) {
     expect((await line(new RegExp(name))).textContent, name).toBe(says);
   }
@@ -983,4 +993,54 @@ test("a company running no chat says so, with nothing to open", async () => {
   mount(ADMIN, "chat", { ...BUILT_IN, chat: "none" });
   expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
   expect(screen.queryByRole("link", { name: "Open Chatlet" })).toBeNull();
+});
+
+// GITLET COUNTS NOTHING: which repositories a reader sees is their own grant's
+// answer, so its page says what it gives and the way in, asks no count, and
+// opens where the sidebar's Gitlet row does. Mutation: drop the service's
+// `open` and the link goes.
+test("Gitlet in use is In use, with its way in and nothing counted", async () => {
+  const { asked } = mount({ ...MEMBER, grants: [...MEMBER.grants, "gitlet"] }, "gitlet");
+  expect(await screen.findByRole("heading", { level: 2, name: "Gitlet" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Gitlet" }).getAttribute("href")).toBe("#/gitlet");
+  expect(screen.getByText("Git repositories, their changes and checks, hosted here.")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "What Gitlet gives you" })).toBeTruthy();
+  expect((await line(/Gitlet/)).textContent).toContain("In use");
+  // GITLET'S SETTINGS ARE AN ADMIN'S, as the company document is.
+  expect(screen.queryByRole("link", { name: "Gitlet settings" })).toBeNull();
+  expect(asked.filter((q) => q !== "viewer" && q !== "integrations")).toEqual([]);
+});
+
+// THE WAY IN IS OFFERED TO A HOLDER OF GITLET, as Chatlet's is to a holder of
+// Chatlet. Mutation: offer Open Gitlet to every reader, and a reader without
+// Gitlet is sent to a screen that refuses them.
+test("a reader without Gitlet is told what opens it, and offered no way in", async () => {
+  mount(MEMBER, "gitlet");
+  expect(await screen.findByRole("heading", { level: 2, name: "Gitlet" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Gitlet" })).toBeNull();
+  expect(screen.getByText(/needs Gitlet access/)).toBeTruthy();
+});
+
+// AN ADMIN IS SENT TO GITLET'S OWN SETTINGS, where the rest of `code` is read.
+// Mutation: drop the admin's link and this goes red.
+test("an Admin is offered Gitlet's settings beside its way in", async () => {
+  mount({ ...ADMIN, grants: ["admin", "gitlet"] }, "gitlet");
+  expect((await screen.findByRole("link", { name: "Gitlet settings" })).getAttribute("href")).toBe(
+    "#/settings/gitlet",
+  );
+  expect(screen.getByRole("link", { name: "Open Gitlet" })).toBeTruthy();
+});
+
+// NOTHING IS IN GITLET'S PLACE: GitHub and GitLab are integrations a seat
+// calls, never a host, so Gitlet off says Crewlet hosts none of the code
+// rather than "nothing does this" for a company that keeps it on GitHub.
+// Mutation: send Gitlet off through the replacement's sentences and the page
+// says "Nothing does this for your company".
+test("a company with Gitlet off is told Crewlet hosts none of its code", async () => {
+  mount(ADMIN, "gitlet", { ...BUILT_IN, code: "none" });
+  expect(await screen.findByText("Crewlet hosts none of your company's code")).toBeTruthy();
+  expect(screen.queryByText("Nothing does this for your company")).toBeNull();
+  expect(screen.getByRole("region", { name: "What Gitlet would give you" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Open Gitlet" })).toBeNull();
+  expect((await line(/Gitlet/)).textContent).toContain("Not in use");
 });

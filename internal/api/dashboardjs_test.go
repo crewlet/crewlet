@@ -2559,7 +2559,13 @@ const (
 	// main's Gitlet audit fixes on kit 0.129.1, measures 6217.9 KiB
 	// (6,367,157 bytes), 29,976 bytes over the 6188.7 KiB of main it was
 	// built on: 6218 KiB.
-	treeBudget = 5<<20 + 1098<<10
+	// Kit 0.131.0 (a reader's own remarks edited and deleted in a comment
+	// thread, a grid's short columns drawn at their content, the rail's
+	// field and rows kept wide, words kept readable in columns, trails and
+	// identifiers, and the Gitlet product mark) added 8,562 bytes, and Gitlet
+	// listed on Company › Integrations (its line, card and page) 1,572 more,
+	// script and sheet, and took it to 6227.8 KiB (6,377,291 bytes): 6228 KiB.
+	treeBudget = 5<<20 + 1108<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

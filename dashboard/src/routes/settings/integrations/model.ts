@@ -304,11 +304,11 @@ export interface Tool {
 export type ReplacingApp = "jira" | "confluence" | "slack" | "mattermost";
 
 export interface BuiltInService {
-  key: "worklet" | "doclet" | "chat";
+  key: "worklet" | "doclet" | "chat" | "gitlet";
   name: string;
   /**
    * Who makes it, where the directory names a product beside its maker (Jira
-   * beside Atlassian): Crewlet, for Worklet, Doclet and Chatlet.
+   * beside Atlassian): Crewlet, for Worklet, Doclet, Chatlet and Gitlet.
    */
   vendor?: string;
   /** Whether the engine has said what the company runs: false on a node running no company. */
@@ -613,6 +613,7 @@ export function builtIns(
   const tracker = backends?.tracker;
   const knowledge = backends?.knowledge;
   const chat = backends?.chat;
+  const code = backends?.code;
   // THE LINES A VENDOR CHAT IS LISTED ON: the ones the directory has. A vendor
   // nobody named is still a vendor's chat, said in words, with no line to open.
   const vendorLines = chatVendors.filter(
@@ -654,6 +655,22 @@ export function builtIns(
         ? { replacedBy: { keys: vendorLines, name: chatVendorName(chatVendors) } }
         : {}),
       ...(chat === "chatlet" ? { open: openService("chatlet", "Open Chatlet") } : {}),
+    },
+    {
+      // NOTHING IS EVER IN GITLET'S PLACE: a company's repositories on GitHub
+      // or GitLab are integrations its seats call, never a host the engine
+      // runs instead (`contract/services.ts`), so Gitlet off names no
+      // replacement, whatever else the company connects.
+      key: "gitlet",
+      name: SERVICE_NAMES.code,
+      vendor: "Crewlet",
+      known: code !== undefined,
+      on: code === "gitlet",
+      sentence:
+        code === undefined
+          ? NO_COMPANY
+          : "Git repositories, their changes and checks, hosted here.",
+      ...(code === "gitlet" ? { open: openService("gitlet", "Open Gitlet") } : {}),
     },
   ];
 }
