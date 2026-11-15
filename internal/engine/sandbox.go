@@ -4239,45 +4239,32 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// the flush below.
 	e.detachSeatReflection(ctx, seat)
 
-	// A LAST TURN, then forget the seat. The flush carries what the cycles
-	// have not, from the marks they left, before the successor hydrates: what
-	// the seat wrote while held here first, then its profiles, skills and
-	// onboarding marker, sent whole, then, while the bound has time, the rows
-	// this node held for the seat when it took it, which the changelog mostly
-	// holds already ([flushSeatMemory]). It has [memoryFlushTimeout], one
-	// broker round trip a row, and what it does not reach of the first two is
-	// lost to the successor as a crash loses it. That is more than the last
-	// cycle's writes when the seat's profiles and skills, sent whole, outlast
-	// the bound (crewlet/crewlet#1040), behind a burst larger than the bound
-	// carries (crewlet/crewlet#1041), and behind a row larger than the broker
-	// takes, at which every pass of the seat that meets it fails
-	// (crewlet/crewlet#349); and what it does carry of those whole tables can
-	// still be replaced by an older copy published after it, and a release
-	// after a taking of the seat that failed flushes this node's own copies
-	// of the profiles, skills and marker, which can be older than the
-	// changelog's (crewlet/crewlet#511). Forgetting the marks and the
-	// boundary makes the seat's next holding here take a new boundary and
-	// carry back, after what it writes, everything this node holds for it,
-	// as a restart does, which is what puts this node's rows back on a
-	// changelog an operator accepted after a recreation, or one restored
-	// while the node ran.
-	//
-	// Best effort, and it must be: this runs on the release path, where the
-	// seat is already gone. A failure here costs the successor what the
-	// changelog has not acknowledged, as a crash does — and refusing to
-	// release would strand the seat for a full TTL.
+	// A LAST TURN, then forget the seat ([releaseSeatMemory]). The seat's
+	// holding turns to releasing first, so the memory sync cycle stops
+	// publishing it at its next row and the flush alone carries it from
+	// here, and a seat whose hydration failed or never ran has no holding
+	// and flushes nothing (crewlet/crewlet#511). The flush carries what the cycles have
+	// not, from the marks they left, before the successor hydrates: what the
+	// seat wrote while held here first, then its profiles, skills and
+	// onboarding marker, sent whole, then, while the bound has time, the
+	// rows this node held for the seat when it took it, which the changelog
+	// mostly holds already ([flushSeatMemory]). It has [memoryFlushTimeout],
+	// one broker round trip a row, and what it does not reach of the first
+	// two is lost to the successor as a crash loses it. That is more than
+	// the last cycle's writes when the seat's profiles and skills, sent
+	// whole, outlast the bound (crewlet/crewlet#1040), behind a burst larger
+	// than the bound carries (crewlet/crewlet#1041), and behind a row larger
+	// than the broker takes, at which every pass of the seat that meets it
+	// fails (crewlet/crewlet#349); and the row a cycle was sending as the
+	// release began can still land after the flush's copy of it. Forgetting
+	// the seat ends its holding and drops its marks and boundary, which
+	// makes the seat's next holding here take a new boundary and carry
+	// back, after what it writes, everything this node holds for it, as a
+	// restart does, which is what puts this node's rows back on a changelog
+	// an operator accepted after a recreation, or one restored while the
+	// node ran.
 	if e.memory != nil {
-		// BOUNDED, because this runs on the release path — including a
-		// drain, where every seat passes through here at once
-		// (seat.Host.ReleaseAll). A broker that has stopped answering must
-		// cost the drain a few seconds, not the whole shutdown.
-		flushCtx, stopFlush := context.WithTimeout(
-			context.WithoutCancel(ctx), memoryFlushTimeout)
-		for _, line := range flushSeatMemory(flushCtx, e.memory, handle) {
-			log.Log(ctx, line.level, line.msg, line.args...)
-		}
-		stopFlush()
-		e.memory.Forget(handle)
+		releaseSeatMemory(ctx, e.memory, handle)
 	}
 
 	rt := e.sandbox.Load()
