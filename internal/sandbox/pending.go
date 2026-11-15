@@ -292,7 +292,11 @@ type OwedRefusal struct {
 // MaxOwedConditionBytes is the longest condition an owed refusal records
 // ([PendingStore.OweRefusal]): every condition a gate names is a short word of
 // its own ("ownership", "turn_engine", "seat_coding"), and a bound written down
-// is what gives the field its share of the row (rowbytes.go).
+// is what gives the field its share of the row (rowbytes.go). Every [Condition]
+// constant the module declares is held to it where it is written
+// (TestEveryConditionFitsWhatAnOwedRefusalRecords): one past it would be
+// refused at its first record, and every delivery refused on it handed back
+// unrecorded, never acknowledged, for as long as it held.
 const MaxOwedConditionBytes = 32
 
 // completionUnsettled reports whether the job the row holds has a completion
