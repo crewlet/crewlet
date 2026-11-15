@@ -4021,7 +4021,12 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //     completion and re-fires it when the condition clears
 //     ([Engine.readmitResumes]), and the waiter's next announcement is the
 //     backstop for a clearing nothing signals, at most twenty poll intervals
-//     after its last.
+//     after its last. Before it hands this the refusal, the coordinator has
+//     written on the run's row that it owes the completion
+//     ([sandbox.Coordinator.OnEvent]), which a restart or the seat's next
+//     holder re-fires at its recovery; a record the store did not take
+//     reaches this as the store's silence instead (below), never as the
+//     refusal.
 //   - A DRAINING NODE ([waitDrain]) DEFERS: the condition does not clear on this
 //     node, which is leaving, so the attachment is quiesced for the rest of the
 //     drain, as a mailbox's is, and the completion goes back to the head of the

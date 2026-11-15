@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -200,7 +201,10 @@ type refusedCompletion struct {
 // letting go of the seat, or a clearing nothing signals would leave the job
 // with nothing to announce it. So the refusal is still kept for the signalled
 // re-fire, and its delivery is handed back as well, never acknowledged, and
-// renewed before its last ([ErrUnannounced], renew.go). A duplicate is
+// renewed before its last ([ErrUnannounced], renew.go). And where neither says
+// so yet, the refusal its delivery's acknowledgement leaves this node owing is
+// written on the job's record first ([Coordinator.oweRefused]), so a restart
+// or the seat's next holder owes it as this node did ([Coordinator.rearmOwed]). A duplicate is
 // harmless, since the claim is made once, and the re-fire announces nothing
 // afresh while that delivery is in flight ([Coordinator.refire]).
 //
@@ -225,7 +229,10 @@ type refusedCompletion struct {
 // completion. A refusal that names no instant holds nothing: the gate is asked
 // again on every announcement, as for a completion it refused itself.
 //
-// IN THIS NODE'S MEMORY, NEVER ON THE RUN'S ROW. The refusal is this node's
+// THE HOLD IS IN THIS NODE'S MEMORY, NEVER ON THE RUN'S ROW. (What the row
+// keeps is that a refusal was acknowledged and is owed its re-fire
+// ([Coordinator.oweRefused]): an obligation the seat's next holder honours by
+// asking its own gate, never a hold anybody reads.) The refusal is this node's
 // models', whose limits are its own: the sit-out is not shared with the fleet,
 // and a restart, or the seat moving to a peer, asks the models again on the
 // first delivery (ADR-0064). The row is read by every node, and a hold written
@@ -263,9 +270,10 @@ type refusedCompletion struct {
 // A refusal that names no condition is not kept: nothing would signal its end.
 // Nor is one for a seat this node lets go of ([Coordinator.ReleaseSeat]): the
 // waiter that drives its box announces it to the seat's next holder, or, while
-// no waiter can, the delivery handed back for it does. A drain's is kept and
-// never re-fired, since nothing signals a drain's end, until that release
-// drops it.
+// no waiter can, the delivery handed back for it does; and an acknowledged one
+// is on the job's record, which that holder's recovery re-arms
+// ([Coordinator.rearmOwed]). A drain's is kept and never re-fired, since
+// nothing signals a drain's end, until that release drops it.
 //
 // NOR ONE THAT LANDS AFTER THAT RELEASE. The release waits for no resume, and a
 // resume refused after its claim returns once its review has run, minutes on:
@@ -302,6 +310,89 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 	if _, leased := c.leaseOf(ev.AgentHandle); !leased {
 		c.forgetRefused(ev.TurnID)
 	}
+}
+
+// oweRefused is answer, what a delivery of ev's completion leaves with the
+// control topic, once a refusal the topic acknowledges is recorded on the job's
+// record as this holder's obligation ([PendingStore.OweRefusal],
+// [LaunchRecord.RefusalOwed]); every other answer is returned as it is.
+//
+// # Why an acknowledged refusal is written down
+//
+// Acknowledging a refusal is safe while the waiter that drives the job's box
+// announces the job again, and the completion is kept here for the refusal's
+// signal besides ([Coordinator.keepRefused]). But that waiter reads the run's
+// row through its node's coordination store, and a silence of the store's runs
+// alone has no bound: its node's lease and presence are another stream, so no
+// watchdog ends it and no peer finds it gone. A kept completion is this node's
+// memory, which its restart, or its letting go of the seat, forgets; one
+// acknowledged before any collection of the job had found that silence left
+// nothing anywhere that owed the job a re-fire, for as long as the silence
+// lasted. So the obligation is durable state, on the row every holder of the
+// seat reads at its recovery ([Coordinator.RecoverSeat]), written by ONE write
+// before the delivery is let go, and only where the record owes none yet, so a
+// re-announcement refused again writes nothing: each acknowledged refusal
+// costs one read of the row, and the first of a job's a write besides.
+//
+// # Which refusals
+//
+// EVERY ONE THE TOPIC ACKNOWLEDGES, wherever the job's box is hosted: a refusal
+// that names a condition (internal/engine's controlOutcome), the gate's own,
+// a completion this node holds off itself ([Coordinator.stillRefused]) and a
+// resume reverted on a wait after its claim alike. Not one handed back marked
+// [ErrUnannounced], which is renewed and so carried by its delivery; not a
+// store's silence; and not [SeatLost], which is deferred to the seat's holder.
+// A drain's refusal is recorded as well: the engine defers it rather than
+// acknowledge it, a condition of the engine's this package does not name, and
+// the record costs nothing there, since the seat's next holder claims the
+// completion once whichever of the deferred delivery and the record's re-fire
+// reaches it first.
+//
+// # Where the record does not land
+//
+// The refusal is NOT acknowledged. The answer is then the store's silence
+// ([ErrStoreSilent], the node's failure, as every step the store does not
+// answer is), never the refusal, so the delivery is handed back and comes back
+// to be recorded; the completion is still kept here for its signal. A row a
+// newer lease owns refuses the write ([ErrSeatNotHeld]), which the caller
+// names [SeatLost] where this node no longer holds the seat ([Coordinator.lost]),
+// so the delivery goes on to the holder; and a seat this node let go of before
+// the write is deferred the same way, never acknowledged by a node that owes
+// nothing any more.
+func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished, answer error) error {
+	var refused *TurnRefused
+	if !errors.As(answer, &refused) || refused.Condition == "" || refused.Condition == SeatLost ||
+		errors.Is(answer, ErrUnannounced) || errors.Is(answer, ErrStoreSilent) {
+		return answer
+	}
+	fence, held := c.leaseOf(ev.AgentHandle)
+	if !held {
+		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
+			notHeld(ctx, ev.AgentHandle, ev.TurnID, "recording a refused completion"))
+	}
+	since := c.now().UTC()
+	wrote, err := c.pending.OweRefusal(ctx, ev.TurnID, ev.LaunchID,
+		OwedRefusal{Condition: refused.Condition, Since: since}, fence)
+	switch {
+	case errors.Is(err, ErrSeatNotHeld):
+		return fmt.Errorf("sandbox: the refusal of %s's completion (%s) is not recorded: %w", ev.TurnID,
+			answer.Error(), err)
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_completion_refusal_unrecorded",
+			"turn_id", ev.TurnID, "launch_id", ev.LaunchID, "agent", ev.AgentHandle,
+			"condition", string(refused.Condition), "error", err.Error(),
+			"detail", "the refused completion could not be recorded as owed on the run's record, so its "+
+				"delivery is handed back rather than acknowledged, and recorded when it comes back")
+		return storeSilent(ctx, fmt.Errorf("sandbox: recording the refusal of %s's completion (%s): %w",
+			ev.TurnID, answer.Error(), err))
+	case wrote:
+		log.InfoContext(ctx, "sandbox_completion_refusal_owed",
+			"turn_id", ev.TurnID, "launch_id", ev.LaunchID, "agent", ev.AgentHandle,
+			"condition", string(refused.Condition),
+			"detail", "the refused completion is acknowledged and recorded on the run's record as owed its "+
+				"re-fire, which this seat's holder after a restart or a seat move reads at its recovery")
+	}
+	return answer
 }
 
 // stopLanded is what a person's stop of a seat is signalled as

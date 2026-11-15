@@ -112,8 +112,8 @@ import (
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,282,587
-//	to spare, measured .............. measuredSpare             313,321
+//	every other field, measured ..... measuredOtherFields     2,282,856
+//	to spare, measured .............. measuredSpare             313,052
 //
 // Every other field is the identity, status and time fields, the run its
 // turn's leads are kept for and how many leads that part has taken
@@ -136,7 +136,9 @@ import (
 // [MaxKeptLeads]), what the session its box holds carried at its newest
 // request the engine measured ([LaunchRecord.Context]), what Claude Code counts
 // that copy at and the restart its launch's session held
-// ([LaunchRecord.ResumedCount], [LaunchRecord.BasisRestart]); the owed end and
+// ([LaunchRecord.ResumedCount], [LaunchRecord.BasisRestart]), and a refused
+// completion its seat's holder owes ([LaunchRecord.RefusalOwed], its condition
+// at most [MaxOwedConditionBytes]); the owed end and
 // the captures, each with the reads its session holds only as a count
 // ([SessionCapture.Omitted]) and its count ([SessionCapture.ResumedCount]); and
 // what the job may do on Gitlet: the holds of
@@ -342,8 +344,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_282_587
-	measuredSpare       = 313_321
+	measuredOtherFields = 2_282_856
+	measuredSpare       = 313_052
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

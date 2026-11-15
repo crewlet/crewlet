@@ -1262,6 +1262,15 @@ func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch str
 	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
 }
 
+func (s *refusingStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal,
+	fence Fence,
+) (bool, error) {
+	if s.called("OweRefusal") {
+		return false, errRefusedCall
+	}
+	return s.inner.OweRefusal(ctx, turnID, launch, owed, fence)
+}
+
 func (s *refusingStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error) {
 	if s.called("MarkEndedAtDeadline") {
 		return false, errRefusedCall

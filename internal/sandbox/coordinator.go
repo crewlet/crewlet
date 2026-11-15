@@ -1578,6 +1578,11 @@ func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
 // the clock, and a claim of it clears the record ([announcedAfter]): that
 // waiter read the row through the store they say is silent, and announces the
 // job again from there.
+//
+// AND A REFUSAL THE CONTROL TOPIC ACKNOWLEDGES IS RECORDED ON THE JOB'S RECORD
+// FIRST ([Coordinator.oweRefused]): the obligation the acknowledgement leaves
+// with this node outlives it, and a record the store does not take hands the
+// delivery back as this node's failure, never acknowledged.
 func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	if ev == nil {
 		return nil
@@ -1588,7 +1593,8 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	case *types.ExecutorFinished:
 		c.hearAnnouncement(ctx, *payload, ev)
 		ctx = delivering(ctx, ev)
-		return c.lost(payload.AgentHandle, c.renewing(ctx, *payload, ev, c.OnCompleted(ctx, *payload, ev)))
+		answer := c.renewing(ctx, *payload, ev, c.OnCompleted(ctx, *payload, ev))
+		return c.lost(payload.AgentHandle, c.oweRefused(ctx, *payload, answer))
 	case *types.ExecutorAnswerGiven:
 		return c.lost(payload.AgentHandle, c.OnAnswerGiven(ctx, *payload, ev))
 	}
@@ -1787,8 +1793,9 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	// carries the refusal, whose condition decides what the caller does with
 	// this delivery, unless no waiter can announce the job (the clock on its
 	// box's host running), when the delivery is handed back whatever the
-	// condition (renew.go). What was signalled is read first, for the reason
-	// [Coordinator.keepRefused] gives.
+	// condition (renew.go); and one the caller acknowledges is written on the
+	// job's record first, as owed ([Coordinator.oweRefused]). What was
+	// signalled is read first, for the reason [Coordinator.keepRefused] gives.
 	seen := c.signalsSeen()
 	// HELD BY THIS NODE, before its gate is asked: the job's last resume here
 	// met a refusal after its claim that lifts at an instant, which the gate
@@ -6307,31 +6314,98 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 		return fmt.Errorf("sandbox: recovering %s: %w", handle, err)
 	}
 	takeovers := c.takingOver(ctx, handle, active)
+	var tally recovery
 	// EVERY TAKEOVER IS SETTLED ON EVERY WAY OUT, a panic included: one left
-	// out holds every later move on its run (countwrite.go).
+	// out holds every later move on its run (countwrite.go). AND ONLY THEN
+	// ARE THE REFUSALS THE SEAT OWES RE-ARMED, so a re-fire's claim moves a
+	// run the pass is done with ([Coordinator.rearmOwed]).
 	defer func() {
 		for _, w := range takeovers {
 			c.settleWrite(w)
 		}
+		c.rearmOwed(ctx, tally.owed)
 	}()
 	if len(active) == 0 {
 		return nil
 	}
-	var tally recovery
 	for i, run := range active {
 		c.takeoverAnswered(takeovers[i], c.recoverRun(ctx, run, owner, epoch, &tally, true))
 	}
 	log.InfoContext(ctx, "sandbox_seat_recovered",
 		"seat", handle, "epoch", epoch, "running", tally.running,
 		"parked", tally.parked, "abandoned", tally.abandoned, "finished", tally.finished,
-		"revived", tally.revived, "active", len(active))
+		"revived", tally.revived, "owed", len(tally.owed), "active", len(active))
 	return nil
 }
 
 // recovery counts what a seat's recovery pass found, for its one log line:
-// finished is the endings the last holder decided and this one finished, and
-// revived the dead claims whose answer it gave back to the run it answers.
-type recovery struct{ running, parked, abandoned, finished, revived int }
+// finished is the endings the last holder decided and this one finished,
+// revived the dead claims whose answer it gave back to the run it answers, and
+// owed the running jobs whose record owes a refused completion its re-fire
+// ([LaunchRecord.RefusalOwed]), which the pass re-arms once it is done.
+type recovery struct {
+	running, parked, abandoned, finished, revived int
+	owed                                          []PendingRun
+}
+
+// rearmOwed owes again, on this node, the completion of each of runs' jobs,
+// whose record says a holder of the seat acknowledged a refused delivery of it
+// and owes it its re-fire ([LaunchRecord.RefusalOwed]): kept as
+// [Coordinator.keepRefused] keeps a refusal, for the recorded condition's
+// signal, and offered to this node's gate at once.
+//
+// WHY THE ROW. The holder that acknowledged the refusal kept the completion in
+// its memory for the condition's signal, and its restart, or the seat moving
+// to this node, took that with it; the waiter that drives the job's box would
+// announce the job again, but reads the run's row through its node's
+// coordination store, and a silence of that store's runs alone has no bound.
+// Read here, the obligation is this holder's as it was that one's, and nothing
+// waits on that store.
+//
+// AND AT ONCE, NEVER ON THE RECORDED CONDITION ALONE. The condition is the
+// holder's that refused, and its signal an edge on that node: a provider
+// park's release, a pause watch's change, a seat turn's end, an apply. A
+// holder whose models know no limit, or a seat no turn holds, never sees it,
+// and re-armed on it alone the job waited for a signal that never came. So the
+// completion is offered to this holder's own gate at once, as the first
+// delivery after a restart or a seat move is (ADR-0064): admitted, it is
+// carried; refused, it is kept for this holder's own condition, which replaces
+// the re-arm ([Coordinator.keepRefused]), and whose signal carries it, the
+// seat's admission above all, which every acquisition signals once its
+// recovery is done. A re-fire that fails otherwise, a store that did not
+// answer it, leaves the re-arm standing.
+//
+// A completion this node already keeps for the job, a delivery's refusal since
+// the seat was taken, is left as it is, and nothing is re-fired for it.
+func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
+	if len(runs) == 0 {
+		return
+	}
+	var rearmed []PendingRun
+	c.mu.Lock()
+	if !c.closed {
+		for _, run := range runs {
+			if _, kept := c.refused[run.TurnID]; kept {
+				continue
+			}
+			ev, trigger := announcementOf(run)
+			kept := refusedCompletion{cond: run.Launch.RefusalOwed, ev: ev, trigger: trigger}
+			c.refused[run.TurnID] = kept
+			c.refireLocked(kept)
+			rearmed = append(rearmed, run)
+		}
+	}
+	c.mu.Unlock()
+	for _, run := range rearmed {
+		log.InfoContext(ctx, "sandbox_completion_refusal_rearmed",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "agent", run.AgentHandle,
+			"condition", string(run.Launch.RefusalOwed),
+			"since", run.Launch.RefusalOwedSince.UTC().Format(time.RFC3339),
+			"detail", "a holder of the seat acknowledged a refused delivery of the job's completion and owed it "+
+				"its re-fire; this holder owes it now, asks its own gate at once, and keeps it for its "+
+				"condition's signal")
+	}
+}
 
 // reaped is what [Coordinator.reapTail] did with a tail the seat's last holder
 // left.
@@ -6423,6 +6497,11 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 	case StatusRunning:
 		counted = run.Status
 		tally.running++
+		// A REFUSAL A HOLDER OF THE SEAT ACKNOWLEDGED AND OWES, re-armed
+		// once the pass is done ([Coordinator.rearmOwed]).
+		if run.Launch.RefusalOwed != "" {
+			tally.owed = append(tally.owed, run)
+		}
 		// WHAT THE BOX CALLS IS SERVED HERE NOW — see
 		// [CoordinatorOptions.Recovered] — unless a newer lease already
 		// owns the run. A fence the store could not answer is no such
@@ -7105,11 +7184,12 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	// AND ANY COMPLETION IT WAS WAITING TO RE-FIRE: the run is unclaimed,
 	// and the waiter that drives its box announces it to the successor, or,
 	// while that waiter cannot and this node's clock or the run's row says
-	// so, the delivery handed back for it does (renew.go). A refusal of a
-	// job no collection had read since its host's store went silent was
-	// acknowledged, neither saying so yet: that job waits for the host's
-	// store to answer, when its waiter announces it (renew.go's one path
-	// left).
+	// so, the delivery handed back for it does (renew.go). And every
+	// refusal this node acknowledged is on the job's record
+	// ([LaunchRecord.RefusalOwed]), which the successor's recovery
+	// re-arms ([Coordinator.rearmOwed]): one of a job no collection had
+	// read since its host's store went silent among them, which no waiter
+	// announces while that store is silent.
 	for turnID, kept := range c.refused {
 		if kept.ev.AgentHandle == handle {
 			delete(c.refused, turnID)

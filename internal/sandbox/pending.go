@@ -278,6 +278,23 @@ type Release struct {
 	Fence Fence
 }
 
+// OwedRefusal is a refusal of a job's completion the seat's holder
+// acknowledged, as [PendingStore.OweRefusal] records it on the job's record
+// ([LaunchRecord.RefusalOwed]).
+type OwedRefusal struct {
+	// Condition is what the refusal waits on ([Refusal.Condition]).
+	Condition Condition
+
+	// Since is when the holder acknowledged it.
+	Since time.Time
+}
+
+// MaxOwedConditionBytes is the longest condition an owed refusal records
+// ([PendingStore.OweRefusal]): every condition a gate names is a short word of
+// its own ("ownership", "turn_engine", "seat_coding"), and a bound written down
+// is what gives the field its share of the row (rowbytes.go).
+const MaxOwedConditionBytes = 32
+
 // License is what an ending may be DECIDED under ([PendingStore.DecideEnding]):
 // the lease, the statuses and the job it was decided on.
 //
@@ -2855,13 +2872,29 @@ type PendingStore interface {
 	// is held for something else, is not held, or is gone.
 	LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error)
 
+	// OweRefusal records on job launch's record that the seat's holder
+	// acknowledged a delivery of its completion it refused, and owes the
+	// completion its re-fire ([LaunchRecord.RefusalOwed]), reporting whether
+	// THIS call wrote it: ONE WRITE, made only where the row still holds that
+	// job running and unclaimed, with no ending decided, and its record owes
+	// no refusal yet, so a re-announcement refused again writes nothing and
+	// the record keeps the first refusal's condition and instant. Under the
+	// holder's fence: a row a newer lease owns refuses it with
+	// [ErrSeatNotHeld]. A refusal that names no condition, or one past
+	// [MaxOwedConditionBytes], or no instant, is an error and writes nothing.
+	// FALSE IS NOT AN ERROR: the job moved on, its ending was decided, or
+	// the row is gone, and nothing is owed for it.
+	OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal, fence Fence) (bool, error)
+
 	// MarkAwaiting parks a run on a question, freeing the seat. A
 	// question with no [Clarification.AskedAt] is refused: it is the anchor
 	// every answer is measured against ([PendingRun.AskedAt]). The seats it
 	// is put to are held to [MaxAudienceHandles], the first of them kept in
 	// the order the resolution names them: a `team` audience's lead and then
 	// its people in the chart's order, the fallback's lead chain nearest
-	// first.
+	// first. The park SETTLES the job's completion: the refusal its record
+	// owed ([LaunchRecord.RefusalOwed]) is cleared in the same write, since
+	// the question's answer, never that completion, carries the run on.
 	MarkAwaiting(ctx context.Context, turnID string, q Clarification) error
 
 	// ClaimOwnership takes the run for a node, reporting whether it won.
@@ -4853,6 +4886,42 @@ type LaunchRecord struct {
 	// covers, and hands back and renews one whose job this says is unannounced
 	// (renew.go).
 	HostStoreSilentSince time.Time `json:"host_store_silent_since,omitzero"`
+
+	// RefusalOwed, where set, says the seat's holder ACKNOWLEDGED a delivery
+	// of this job's completion that it refused on this condition, and owes
+	// the completion its re-fire; RefusalOwedSince is when it did, by that
+	// holder's clock. Both or neither. Written by the one write
+	// [PendingStore.OweRefusal] makes before the delivery is acknowledged,
+	// only where the record owes none yet, so the first refusal's condition
+	// and instant stand through every re-announcement refused after it;
+	// cleared by the write that settles the completion: the park on the
+	// job's question ([PendingStore.MarkAwaiting]), the turn's next launch,
+	// which starts the job's record afresh, or the run's end, which deletes
+	// the row. A claim leaves it: a claim handed back puts the completion
+	// back, still owed, and one whose resume settles it reaches one of those
+	// three writes.
+	//
+	// ON THE JOB'S RECORD, NEVER IN ONE NODE'S MEMORY ALONE. An acknowledged
+	// refusal is safe because the waiter that drives the job's box
+	// announces the job again; but that waiter reads the row through its
+	// node's coordination store, and a silence of the store's runs alone
+	// has no bound (the node's lease and presence are another stream, so no
+	// watchdog ends it and no peer finds it gone), while the completion the
+	// holder kept for the refusal's signal went with its restart, or with
+	// the seat moving to its next holder, and nothing announced the job
+	// again. So the seat's recovery reads this and owes the completion as
+	// the holder did ([Coordinator.RecoverSeat]): re-armed for the
+	// condition's signal, and offered to the recovering holder's own gate at
+	// once.
+	//
+	// AN OBLIGATION, NEVER A HOLD: nothing reads it as a reason to refuse or
+	// to hold off the job's announcements, and the condition is the holder's
+	// that refused; the recovering holder asks its own gate (ADR-0064). A
+	// build that predates it keeps both keys in [LaunchRecord.Extra] and
+	// writes them back as they are, and neither writes, reads nor clears
+	// them.
+	RefusalOwed      Condition `json:"refusal_owed,omitempty"`
+	RefusalOwedSince time.Time `json:"refusal_owed_since,omitzero"`
 
 	// HarnessEnd is how the job's harness ended, as the read that collected
 	// the job found it ([Coordinator.readBox], [PendingStore.MarkHarnessEnd]):

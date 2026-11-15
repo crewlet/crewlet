@@ -1140,9 +1140,40 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		// And what condensing the collection that parked it cost, onto the
 		// record of the job the row holds — see [LaunchRecord.Condensed].
 		run.Launch.Condensed = q.Condensed
+		// THE PARK SETTLES THE JOB'S COMPLETION: a refusal of it the seat's
+		// holder owed is owed no more ([LaunchRecord.RefusalOwed]).
+		run.Launch.RefusalOwed, run.Launch.RefusalOwedSince = "", time.Time{}
 		return true
 	})
 	return err
+}
+
+// OweRefusal records on a job's record that the seat's holder acknowledged a
+// refused delivery of its completion. See the contract on [PendingStore].
+func (s *CoordStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal, fence Fence,
+) (bool, error) {
+	switch {
+	case owed.Condition == "":
+		return false, fmt.Errorf("sandbox: a refusal of run %s's completion names no condition to owe", turnID)
+	case len(owed.Condition) > MaxOwedConditionBytes:
+		return false, fmt.Errorf("sandbox: the condition a refusal of run %s's completion names is %d bytes, "+
+			"past the %d an owed refusal records", turnID, len(owed.Condition), MaxOwedConditionBytes)
+	case owed.Since.IsZero():
+		return false, fmt.Errorf("sandbox: a refusal of run %s's completion owed since no instant", turnID)
+	case launch == "":
+		return false, nil
+	}
+	_, written, err := s.write(ctx, turnID, true, fence, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Status != StatusRunning || run.Launch.RefusalOwed != "" {
+			return false
+		}
+		run.Launch.RefusalOwed, run.Launch.RefusalOwedSince = owed.Condition, owed.Since.UTC()
+		return true
+	})
+	if errors.Is(err, ErrRunEnding) {
+		return false, nil
+	}
+	return written, err
 }
 
 // RecordAnswer records a reply as the answer to a parked run's question, under

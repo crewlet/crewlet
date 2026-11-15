@@ -132,6 +132,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AReleaseCountsAFailedCollectionOntoTheJob", testAReleaseCountsAFailedCollectionOntoTheJob},
 		{"AReleaseWhoseReadAnsweredEndsTheRunOfFailures", testAReleaseWhoseReadAnsweredEndsTheRunOfFailures},
 		{"AReleaseRecordsWhatTheHostsStoreLastSaid", testAReleaseRecordsWhatTheHostsStoreLastSaid},
+		{"AnOwedRefusalIsRecordedOnceAndSettledByThePark", testAnOwedRefusalIsRecordedOnceAndSettledByThePark},
 		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
@@ -3030,6 +3031,88 @@ func testAReleaseRecordsWhatTheHostsStoreLastSaid(t *testing.T, s sandbox.Pendin
 	mustBeginLaunch(t, s, run("t1"))
 	if got := mustGet(t, s, "t1"); !got.Launch.HostStoreSilentSince.IsZero() {
 		t.Error("the job's next launch inherited what the last job's host's store said")
+	}
+}
+
+// AN OWED REFUSAL IS RECORDED ONCE, ON A RUNNING JOB, AND SETTLED BY THE PARK.
+// The seat's holder records a refused delivery of a job's completion it
+// acknowledges: the job's record takes the condition and the instant, a second
+// refusal writes nothing and leaves the first standing, and one that names no
+// condition, one past the bound, or no instant is refused. A claim leaves it,
+// a claim handed back puts the completion back still owed, the park on the
+// job's question clears it in its own write, and the job's next launch starts
+// without it. Only a running job of the launch named takes it, and a row a
+// newer lease owns refuses it.
+func testAnOwedRefusalIsRecordedOnceAndSettledByThePark(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	launch := mustLaunched(t, s, run("t1"))
+	row := mustGet(t, s, "t1")
+	fence := sandbox.Fence{Owner: row.Owner, Epoch: row.OwnerEpoch}
+	owe := func(owed sandbox.OwedRefusal) (bool, error) {
+		return s.OweRefusal(ctx, "t1", launch, owed, fence)
+	}
+	for _, bad := range []sandbox.OwedRefusal{
+		{Since: first},
+		{Condition: sandbox.Condition(strings.Repeat("c", sandbox.MaxOwedConditionBytes+1)), Since: first},
+		{Condition: "provider"},
+	} {
+		if wrote, err := owe(bad); err == nil || wrote {
+			t.Errorf("an owed refusal %+v was taken (%v, %v); want it refused", bad, wrote, err)
+		}
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "" {
+		t.Fatalf("a refused record wrote the row: it owes %q", got.Launch.RefusalOwed)
+	}
+	if wrote, err := owe(sandbox.OwedRefusal{Condition: "provider", Since: first}); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a running job = %v, %v; want it written", wrote, err)
+	}
+	if wrote, err := owe(sandbox.OwedRefusal{Condition: "pause", Since: first.Add(time.Minute)}); err != nil || wrote {
+		t.Fatalf("a second owed refusal = %v, %v; want nothing written", wrote, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(first) {
+		t.Fatalf("the job's record owes %q since %v; want the first refusal's, provider since %v",
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince, first)
+	}
+	if wrote, err := s.OweRefusal(ctx, "t1", "another-launch", sandbox.OwedRefusal{Condition: "pause",
+		Since: first}, fence); err != nil || wrote {
+		t.Errorf("an owed refusal of another launch = %v, %v; want nothing written", wrote, err)
+	}
+
+	claimed := mustClaim(t, s, "t1")
+	if wrote, err := owe(sandbox.OwedRefusal{Condition: "pause", Since: first}); err != nil || wrote {
+		t.Errorf("an owed refusal on a claimed job = %v, %v; want nothing written", wrote, err)
+	}
+	mustRelease(t, s, claimed)
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "provider" {
+		t.Fatalf("a claim handed back left the job's record owing %q; want it still owed", got.Launch.RefusalOwed)
+	}
+	newer := sandbox.Fence{Owner: "node-c:1", Epoch: fence.Epoch + 5}
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: first}); err != nil {
+		t.Fatalf("parking the run: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "" || !got.Launch.RefusalOwedSince.IsZero() {
+		t.Fatalf("the park left the job's record owing %q since %v; want it settled", got.Launch.RefusalOwed,
+			got.Launch.RefusalOwedSince)
+	}
+
+	launch = mustLaunched(t, s, run("t2"))
+	if won, err := s.ClaimOwnership(ctx, "t2", newer.Owner, newer.Epoch); err != nil || !won {
+		t.Fatalf("fencing t2 to a newer lease = %v, %v", won, err)
+	}
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		sandbox.Fence{Owner: "node-a:1", Epoch: newer.Epoch - 1}); !errors.Is(err, sandbox.ErrSeatNotHeld) || wrote {
+		t.Errorf("an owed refusal under a lease a newer one outranks = %v, %v; want it refused, the seat not "+
+			"held", wrote, err)
+	}
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		newer); err != nil || !wrote {
+		t.Fatalf("an owed refusal under the row's lease = %v, %v; want it written", wrote, err)
+	}
+	mustBeginLaunch(t, s, run("t2"))
+	if got := mustGet(t, s, "t2"); got.Launch.RefusalOwed != "" {
+		t.Error("the job's next launch inherited the refusal the last job owed")
 	}
 }
 

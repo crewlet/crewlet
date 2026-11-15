@@ -122,14 +122,23 @@ import (
 // announcement, and acknowledges a refusal and NAKs a failure as it always
 // did.
 //
-// ONE PATH IS LEFT, and no row can close it: a refusal of a job no collection
-// has read since its host's store went silent. Nothing durable says so then,
-// since no node has heard that host say it, so the refusal is acknowledged as
-// any is where a waiter stands behind it, and kept for its condition's signal,
-// whose re-fire's collection starts the clock and renews the completion at
-// once. Should this node restart, or let the seat go, before that signal, the
-// job waits for that host's store to answer, when its waiter announces it
-// again on its schedule (reannounce.go, TestAnUnclaimedCompletionIsAnnouncedAgain).
+// AND A REFUSAL ACKNOWLEDGED BEFORE ANY NODE HEARD OF THE SILENCE IS OWED ON
+// THE ROW. A refusal of a job no collection has read since its host's store
+// went silent finds no clock and nothing on the row to say so, since no node
+// has heard that host say it, so it is acknowledged as any is where a waiter
+// stands behind it, and kept for its condition's signal, whose re-fire's
+// collection starts the clock and renews the completion at once. That keep is
+// this node's memory, and a silence of the store's runs alone has no bound:
+// the host's lease and presence are another stream, so no watchdog ends that
+// host and no peer finds it gone. So the refusal is written on the job's
+// record before its delivery is acknowledged ([LaunchRecord.RefusalOwed],
+// [Coordinator.oweRefused]), as every acknowledged refusal is, and the seat's
+// recovery, this node's after a restart or the seat's next holder's, re-arms
+// it and asks its own gate at once ([Coordinator.rearmOwed]); a record the
+// store does not take is no acknowledgement, and the delivery is handed back
+// as this node's failure. Kept in memory alone, a restart or a letting go of
+// the seat before that signal left the job with nothing to announce it for as
+// long as that host's store was silent.
 //
 // WHAT IT COSTS: a hand-back that settles nothing for as long as it lasts is
 // NAK'd again at the queue's backoff, at most every thirty seconds, each
