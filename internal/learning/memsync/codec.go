@@ -51,19 +51,31 @@
 // acknowledged before, and each table's consumer reads the table's subjects
 // and the barrier's: it delivers in the stream's order, so its copy hands over
 // the table's rows below the barrier and then the barrier, once it has applied
-// it, and the replay ends at a barrier at or past the hydration's, a racing
-// hydration's included, once its copy holds nothing more. Nothing a hydration
-// asks is answered with a row but its pulls, and the barrier is the one thing
-// it writes, so a broker that refuses this node's writes refuses its
-// hydrations ([Syncer.Hydrate]).
+// it. Once a barrier at or past the hydration's has arrived, a racing
+// hydration's included, the replay publishes an END BARRIER and reads on to
+// it, so a row replaced before the replay reached it is read as its
+// replacement, which lies below the end barrier; the copy's running count of
+// what follows decides nothing (replay.go). Nothing a hydration asks is
+// answered with a row but its pulls, and its barriers are the one thing it
+// writes, so a broker that refuses this node's writes refuses its hydrations
+// ([Syncer.Hydrate]).
+//
+// BOUNDED BY ITS PROGRESS, NEVER BY A TOTAL (crewlet/crewlet#1065). A
+// hydration takes what its bytes take: it is refused only when a pull hears
+// nothing for its stall, or every copy it is placed on stays a minute behind
+// its barrier, and a replay whose copy is behind is placed again on another,
+// past the last sequence it received (replay.go).
 //
 // A PULL AT A TIME, bounded in messages and in bytes, each pull's rows written
 // in one transaction: at most fetchBatch messages, which sets a table's round
-// trips, and at most one message at the transport's limit and the room the
-// broker counts beside it ([Syncer.pullBytes]), which is what a hydration
-// holds of the changelog's rows at once. Bounded by its count alone, one pull
-// held up to 256 rows of up to 8 MiB each (crewlet/crewlet#1052). A row larger
-// than this node's pull is refused by name, never read as a copy that stalled.
+// trips where its rows are small, and at most one message at the transport's
+// limit and the room the broker counts beside it ([Syncer.pullBytes]), which
+// is what a hydration holds of the changelog's rows at once; across a link, a
+// window the floor carries within the node's lease heartbeat, so its lease
+// renewals cross behind it in time ([Syncer.pullBound]). Bounded by its count
+// alone, one pull held up to 256 rows of up to 8 MiB each
+// (crewlet/crewlet#1052). A row larger than this node's pull is refused by
+// name, never read as a copy that stalled.
 //
 // WHAT A HOLDING WRITES GOES FIRST. A seat's marks live in memory, so every
 // acquisition and every restart leaves this node a backlog: everything its
@@ -135,7 +147,8 @@ var log = logging.Get("learning.memsync")
 // The table travels WITH the row as well as in its subject, so a replay can
 // hold a row to the subjects it read it on: a replay reads one table's
 // subjects and writes each row as that table's, and a row whose own table is
-// another is refused rather than written in that table's turn ([received]).
+// another is refused rather than written in that table's turn
+// ([tableReplay.receive]).
 type Row struct {
 	Table string `json:"table"`
 
@@ -536,9 +549,9 @@ func encode(row Row) ([]byte, error) {
 // decode reads a row off the wire.
 //
 // The table it names is held to the table whose subjects carried it by the
-// replay that read it ([received]), never looked up here: a hydration replays
-// the tables this build carries, one at a time, so a row of a table it does
-// not carry, a newer build's, is never read at all.
+// replay that read it ([tableReplay.receive]), never looked up here: a
+// hydration replays the tables this build carries, one at a time, so a row of
+// a table it does not carry, a newer build's, is never read at all.
 func decode(body []byte) (Row, error) {
 	var row Row
 	// UseNumber, so decodeCell sees the digits rather than a float64 that

@@ -2,7 +2,6 @@ package memsync
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -13,72 +12,27 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nuid"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// hydrateWait bounds how long a seat waits for its memory to arrive.
-//
-// It is spent inside seat acquisition, before the mailbox attaches, so it is
-// time the seat is not serving. Fifteen seconds is far past a replay from a
-// local or clustered broker — the rows are already materialised on the stream
-// and the read is sequential — and short enough that a broker having a bad
-// minute delays a seat rather than stalling placement behind it.
-//
-// WHAT A HYDRATION SPENDS OF IT is round trips, most of them fixed, because
-// each table is replayed on its own ([Syncer.Hydrate]): two to read the
-// changelog's identity, before the barrier and after the last table; one to
-// publish the barrier ([Syncer.barrier]); for each of the six carried tables,
-// three for its consumer, which is created (the reply that creates it carries
-// its count), fetched from and deleted ([Syncer.replay]) — one fetch takes a
-// table's rows and its barrier together, and a table with no rows still
-// fetches the barrier; and two for a consumer that counts the seat's rows of
-// each retired table ([Syncer.held]). That is 23 for any seat, with rows or
-// without, where one replay of the whole seat took 6: 2.3 s at 100 ms a round
-// trip, a leaf link across regions; 115 ms at 5 ms; 23 ms at 1 ms. Past those,
-// a fetch for each further 256 messages of a table ([fetchBatch]) or, where
-// its rows are large, for each further pull's bytes ([Syncer.pullBytes]), and
-// the bytes the rows carry; and where a table's replay ran on a copy behind
-// the changelog's leader, the fetches that wait for the copy to apply the
-// barrier, which is the whole changelog up to it, every seat's writes and not
-// only the table's: a member still catching its copy up after a restart holds
-// every replay the server places on it until it has, and a hydration whose
-// budget runs out first is refused ([Syncer.replay], "A copy behind"). No
-// round trip but a fetch carries a row: the barrier is a message of no bytes,
-// and its acknowledgement and every consumer's reply carry a sequence or a
-// count.
-//
-// SO FIFTEEN SECONDS STAYS. On the brokers it was chosen for, the replays
-// cost about a tenth of a second of it. Across a 100 ms link they cost 1.7 s
-// more than the one replay did, which leaves the rows 12.7 s, 127 round trips,
-// where they had 14.4 s: a seat whose rows take longer than that to cross such
-// a link is refused there, as one whose rows took longer than 14.4 s was. A
-// larger figure would move that line rather than remove it, and every second
-// it adds is a second a broker having a bad minute holds each seat of a sweep.
-const hydrateWait = 15 * time.Second
-
-// consumerCleanupTimeout bounds deleting one of a hydration's ephemeral
-// consumers: a table's replay, or a retired table's count.
+// consumerCleanupTimeout bounds deleting one of a hydration's consumers: a
+// table's replay, one of its placements, or a retired table's count
+// ([Syncer.deleteConsumer]), beside the crossing of its request at the floor
+// across a link.
 //
 // Five seconds against one API round trip: far past a healthy answer, and
 // bounded because this runs inside seat acquisition. What it costs when it
-// expires is nothing an operator sees — the server reaps an idle ephemeral
-// consumer on its own, which is why the deletion is hygiene rather than a
-// step whose failure means anything.
-//
-// A HYDRATION OUTLIVES ITS BUDGET BY ONE SUCH STEP AT MOST, a consumer's
-// deletion or the read of where the seat's own writes begin
-// ([boundaryReadTimeout]), never both, though it deletes a consumer per table.
-// Each consumer is deleted as the step that made it ends, inside the budget's
-// time, and the step after a delete runs on the hydration's context, so only a
-// delete under way as [hydrateWait] runs out runs past it, and every step
-// after that one fails at once: the boundary's read is reached only once the
-// last identity read has answered inside the budget. A boundary read under way
-// as the budget runs out is the other way past it, and every step after it
-// fails at once too, before it has made a consumer to delete.
+// expires is nothing an operator sees — the server reaps an idle consumer on
+// its own ([Syncer.reapAfter]), which is why the deletion is hygiene rather
+// than a step whose failure means anything. One request, never asked again: a
+// deletion lost is a consumer lingering until it is reaped.
 const consumerCleanupTimeout = 5 * time.Second
 
 // boundaryReadTimeout bounds the read of where a seat's own writes begin on
@@ -91,56 +45,19 @@ const consumerCleanupTimeout = 5 * time.Second
 // store's lock, which the store's own busy wait bounds (five seconds unless
 // store.Options.BusyTimeout says otherwise). A flat bound is right for such a
 // read alone. One that crossed a link to the broker would need a bound that
-// follows the link's pace rather than a flat figure: the crossing time
-// crewlet/crewlet#1005 gives an acknowledged write (jsapi.Budget), which
-// crewlet/crewlet#1075 proposes for a memory row's publish, or a bound by
-// progress, which crewlet/crewlet#1065 proposes for a hydration's reads. So
-// a change that moves this read across a link replaces this bound.
+// follows the link's pace rather than a flat figure, as every request a
+// hydration makes of the broker has ([Syncer.createConsumer],
+// [Syncer.barrier], [Syncer.checkIdentity]), so a change that moves this read
+// across a link replaces this bound.
 //
-// BOUNDED, because it runs inside seat acquisition, possibly just past the
-// hydration's budget, on a context that budget does not cut, and an unbounded
-// wait there would hang the acquisition on a wedged store, as an unbounded
-// cleanup would on a wedged broker ([Syncer.dropConsumer]). FIVE SECONDS is
-// the store's default lock wait and the bound a consumer's deletion has
+// BOUNDED, because it runs inside seat acquisition, on the hydration's own
+// context, which has no deadline of its own, and an unbounded wait there would
+// hang the acquisition on a wedged store. FIVE SECONDS is the store's default
+// lock wait and the bound a consumer's deletion has
 // ([consumerCleanupTimeout]): a read still waiting then is a store in trouble,
 // and the seat is refused until the next sweep, as on any failure of its
-// store. So a hydration still outlives [hydrateWait] by one such step at most.
+// store.
 const boundaryReadTimeout = 5 * time.Second
-
-// fetchBatch is the most messages one replay pull asks for: a table's rows,
-// and once the barrier that ends its replay ([Syncer.replay]). It sets the
-// ROUND TRIPS a table's rows take, where the bytes every pull is bounded by
-// beside it ([Syncer.pullBytes]) set the MEMORY a pull holds.
-//
-// A pull ends at whichever bound it meets first. The rows a seat mostly holds,
-// a diary note or an episode with the vector it carries (8 KiB at 1 536
-// dimensions), are some 10 KiB, so 256 of them are about 2.5 MiB, inside a
-// pull's bytes, and their count sets their pulls: a few hundred episodes take
-// a couple, and a year of them, about eighteen thousand, 70. That is 70 ms of
-// round trips at 1 ms a round trip, 0.35 s at 5 ms, and 7 s across a 100 ms
-// leaf link, of the 12.7 s [hydrateWait] leaves a seat's rows there. Rows of
-// more than 32 KiB on average, episodes with long asks, fill a pull's bytes
-// first, at a pull per 8 MiB on the embedded broker. A pull's count is its
-// transaction's too ([Syncer.replay]), which holds this store's write while it
-// runs, and 256 of the common rows keep that to a few MiB of writes.
-//
-// NOT A BOUND ON MEMORY: a row is bounded only by the transport, so a pull
-// bounded by its count alone held up to 256 rows of 8 MiB each, 2 GiB on the
-// embedded broker, inside seat acquisition (crewlet/crewlet#1052).
-const fetchBatch = 256
-
-// deliveryOverhead is what the broker counts against a pull's bytes beside a
-// message's headers and payload: its subject, and the acknowledgement subject
-// it is delivered with (nats-server's consumer.go counts the four together).
-// A row's subject is at most 111 bytes: `crewlet.memory.`, a seat's
-// 36-character id, the longest table's name and a hash of 32 hex digits
-// ([table.subject]). Its acknowledgement subject is a couple of hundred:
-// `$JS.ACK.`, the broker's domain, an account's 8-character hash, the stream's
-// and the consumer's names, and five counters of up to twenty digits each.
-// Four KiB holds both with room for any domain, and is the room
-// statelog.MaxDeliveryBytes keeps for the same two beside a state log's
-// largest record.
-const deliveryOverhead = 4 << 10
 
 // exportPageBytes is how much of a seat's memory one read of a table holds
 // before it is published: rows are read in watermark order until their
@@ -240,9 +157,33 @@ type Syncer struct {
 
 	// beforeBoundary, when set, is called just before a hydration reads where
 	// the seat's own writes begin ([Syncer.recordBoundary]): a test's seam,
-	// unset in production, through which a case ends the hydration's budget
-	// there.
+	// unset in production, through which a case cuts the hydration there.
 	beforeBoundary func()
+
+	// said, when set, is called with each line [Syncer.info] logs: a test's
+	// seam, unset in production, through which a case reads what a
+	// hydration's lines report.
+	said func(msg string, args ...any)
+
+	// timing is the provisioning timing of the broker this node reaches
+	// ([Config.Clustered]): the cadences every request a hydration makes is
+	// asked again at.
+	timing jsprovision.Timing
+
+	// pace is how long a mebibyte takes to cross this node's link at the
+	// floor every link is promised ([objstore.MiBPace]), and 0 in a member's
+	// own process ([Config.AcrossLink]): what every request a hydration makes
+	// is given beside its term for its bytes to cross.
+	pace time.Duration
+
+	// window is what a replay pull carries at most across a link
+	// ([Syncer.pullBound]), and 0 in a member's own process.
+	window int
+
+	// copies, when set, is where a hydration's replays make their consumers
+	// ([Syncer.replays]): a test's seam, nil in production, where they are
+	// the changelog's own ([changelogCopies]).
+	copies copies
 
 	// leftOut, when set, is called with what a hydration did not carry each
 	// time its memory_rows_not_carried line says so ([Syncer.settleNotCarried]):
@@ -274,12 +215,33 @@ type Syncer struct {
 // runs — because nothing a hydration asks is answered with a row but its
 // pulls, which are bounded by this connection's own limit ([Syncer.pullBytes]),
 // so no answer of its can be larger than the link carries ([Syncer.replay]).
-func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
+// What the topology changes is how long each request is given and how much a
+// pull carries across a link ([Config]). A node across a link that names no
+// lease heartbeat is refused, by name.
+func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (*Syncer, error) {
 	if db == nil || js == nil || agentID == nil {
-		return nil
+		return nil, nil
 	}
-	return &Syncer{db: db, js: js, agentID: agentID, marks: map[markKey]int64{},
-		holdings: map[string]*seatHolding{}}
+	s := &Syncer{db: db, js: js, agentID: agentID, marks: map[markKey]int64{},
+		holdings: map[string]*seatHolding{}, timing: jsprovision.Clustered(cfg.Clustered).Timing()}
+	if cfg.AcrossLink {
+		if cfg.LeaseHeartbeat <= 0 {
+			return nil, fmt.Errorf("memsync: a node that reaches the memory changelog across a "+
+				"link needs its lease heartbeat (Config.LeaseHeartbeat), which sizes the window "+
+				"its replays' pulls share with its lease renewals; got %v", cfg.LeaseHeartbeat)
+		}
+		s.pace, s.window = objstore.MiBPace, windowFor(cfg.LeaseHeartbeat)
+	}
+	return s, nil
+}
+
+// info logs one of a hydration's lines at info, and hands it to the said seam
+// where a case set one.
+func (s *Syncer) info(ctx context.Context, msg string, args ...any) {
+	log.InfoContext(ctx, msg, args...)
+	if s.said != nil {
+		s.said(msg, args...)
+	}
 }
 
 // holding is what this node's holding of a seat lets publish the seat's
@@ -690,7 +652,7 @@ func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spe
 // or one this store skipped for holding another skill of the seat under the
 // same name.
 //
-// # Each table read to the seat's barrier
+// # Each table read to the seat's barrier, then to an end barrier
 //
 // A replay cannot end where the copy serving it says it holds nothing more:
 // that copy can be behind the changelog's leader ([Syncer.replay]). So after
@@ -700,9 +662,24 @@ func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spe
 // acknowledges, so every row the changelog had acknowledged before — every row
 // the seat's last owner flushed before it let the seat go — lies below that
 // sequence, and every table's replay reads until it has delivered a barrier at
-// or past it and its copy holds nothing more. At or past it, because a
-// hydration of the seat racing this one publishes its own barrier, which
-// replaces this one's, and both replays end at it ([Syncer.barrier]).
+// or past it. At or past, because a hydration of the seat racing this one
+// publishes its own barrier, which replaces this one's, and both replays end
+// at it ([Syncer.barrier]). Then the replay publishes the seat's barrier
+// again, its END BARRIER, and reads on until it has delivered a barrier at or
+// past that one: a row replaced before the replay reached it lies below the
+// end barrier on the changelog's order, so it is read, whatever the copy's
+// count of what follows said ([Syncer.replay], replay.go's head). Seven
+// barriers a hydration, on the seat's one subject, which keeps the last.
+//
+// # Bounded by its progress, never by a total
+//
+// A hydration has no deadline of its own: it takes what its bytes take, and
+// fails only where nothing arrives for a pull's stall, or where every copy a
+// replay is placed on stays behind its barrier for a minute (replay.go's
+// head). Every request it makes keeps its own bound. What waits for a long
+// hydration is the seat host's placement pass that runs it (docs/concepts/
+// seat-ownership.md, "What waits for a long hydration"); its lease is renewed
+// throughout, and a lost lease, a drain or a stop cuts it, through ctx.
 //
 // # A hydration writes
 //
@@ -713,7 +690,8 @@ func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spe
 // refuses the seat wrapped whole. A user without publish permission on the
 // memory subjects (crewlet.memory.>) is refused with no acknowledgement at
 // all, only an error the broker sends the connection, and the hydration names
-// that error once its budget has run out ([Syncer.barrier]). The barrier is no
+// that error once the publish has gone unanswered for as long as it is asked
+// ([Syncer.barrier]). The barrier is no
 // row and takes none away: its subject is no table's, and nothing on the
 // changelog makes room for a message but the stream's one message per subject
 // (topics.MemoryBarrierToken).
@@ -739,18 +717,16 @@ func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spe
 // ahead of what it writes, which is what a seat's new memory waited behind
 // (crewlet/crewlet#1039).
 //
-// ON A CONTEXT THE HYDRATION'S BUDGET DOES NOT CUT, bounded by
-// [boundaryReadTimeout] instead. A statement on a context whose budget has run
-// out is refused before it reaches the store, so a hydration whose last
-// identity read answered within a round trip of its budget's end would be
-// refused for the budget alone, a seat it had carried whole, and at every
-// sweep on a link slow enough to end the budget there. Read BEFORE the count
-// and purge of the retired tables, which fail no hydration, so their round
-// trips neither delay the read nor spend its time. A read the store fails
-// refuses the seat: a store that cannot answer one row of its own just after
-// it committed the replays is failing, and the seat waits for the next sweep,
-// as on every other failure here. A hydration that fails records no boundary,
-// and neither does one of a seat with no address on the changelog.
+// ON THE HYDRATION'S OWN CONTEXT, bounded by [boundaryReadTimeout]: a
+// hydration has no deadline of its own, so the read is held only to its own
+// bound, and a cut of the seat's taking (a lost lease, a drain, a stop)
+// refuses it, as it should. Read BEFORE the count and purge of the retired
+// tables, which fail no hydration, so their round trips neither delay the read
+// nor spend its time. A read the store fails refuses the seat: a store that
+// cannot answer one row of its own just after it committed the replays is
+// failing, and the seat waits for the next sweep, as on every other failure
+// here. A hydration that fails records no boundary, and neither does one of a
+// seat with no address on the changelog.
 //
 // THE BOUNDARY IS NO STREAM SEQUENCE, and nothing compares it with the
 // barrier's: the barrier's sequence is where the CHANGELOG stood, as its
@@ -774,10 +750,13 @@ func (s *Syncer) publishRow(ctx context.Context, handle string, ref seatRef, spe
 //
 // # What it reports
 //
-// The rows its fetches' transactions committed, a failed hydration's
-// included: a fetch's rows are counted once its transaction commits, so a
-// hydration that fails reports what it left in the store and nothing it
-// rolled back. What refuses the seat is the error alone.
+// The rows its pulls' transactions committed, a failed hydration's included:
+// a pull's rows are counted once its transaction commits, so a hydration that
+// fails reports what it left in the store and nothing it rolled back. What
+// refuses the seat is the error alone. Its memory_hydrated line says how long
+// it took, the pulls it asked and the consumers it made; one that runs past a
+// minute says so once a minute while it runs (memory_hydration_slow), and a
+// replay placed again says why (memory_replay_placed_again).
 func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	if s == nil {
 		return 0, nil
@@ -793,8 +772,8 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 		// the broker refuses to make.
 		return 0, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, hydrateWait)
-	defer cancel()
+	run := &hydrationRun{handle: handle, start: time.Now()}
+	run.slowAt = run.start.Add(objstore.Stall)
 
 	// CONTRACT 1 FIRST, before a single row is read.
 	//
@@ -808,7 +787,7 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	}
 	// THE BARRIER, once the identity is read and before any table is: the
 	// sequence every table's replay reads to.
-	barrier, err := s.barrier(ctx, handle, ref.AgentID)
+	barrier, err := s.barrier(ctx, ref.AgentID, handle+"'s barrier", jsapi.Sending(0, s.pace))
 	if err != nil {
 		return 0, err
 	}
@@ -818,7 +797,7 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	// table is replayed, and never written.
 	orphaned := map[string]int{}
 	for _, spec := range tables {
-		wrote, err := s.replay(ctx, handle, ref, spec, barrier, orphaned)
+		wrote, err := s.replay(ctx, run, handle, ref, spec, barrier, orphaned)
 		carried += wrote
 		if err != nil {
 			return carried, err
@@ -849,369 +828,10 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	}
 	s.settleNotCarried(ctx, handle, ref.AgentID, orphaned)
 	if carried > 0 {
-		log.InfoContext(ctx, "memory_hydrated", "seat", handle, "rows", carried)
+		s.info(ctx, "memory_hydrated", "seat", handle, "rows", carried, "took", time.Since(run.start),
+			"pulls", run.pulls, "placements", run.placements)
 	}
 	return carried, nil
-}
-
-// replay carries one table of a seat's memory into this node's store, and says
-// how many rows it wrote: every row of the table the changelog acknowledged
-// before the hydration's barrier, at sequence barrier, but one a publish
-// racing the hydration moves past it ("What the copy's count can miss",
-// below), and every one since that the copy serving the replay has counted by
-// the time it ends, a pull at a time, each bounded in messages and in bytes
-// ([fetchBatch], [Syncer.pullBytes]) and its rows written in one transaction.
-// A row whose parent the store does not hold is not written, and is counted in
-// orphaned instead ([table.parent]).
-//
-// # Why a replay reads to a barrier
-//
-// On a fleet the changelog is replicated, and a replay is an ephemeral R1
-// consumer, which the server places on a RANDOM member of the stream
-// (nats-server jetstream_cluster.go, createGroupForConsumer) and which
-// delivers out of THAT member's copy. A follower applies a row a moment after
-// the leader acknowledged it, so a replay hosted on one that is behind counts
-// its own copy, delivers it, and stops — short of the rows the seat's last
-// owner wrote just before placement moved it, which are the seat's newest.
-// The hydration reported that as success, and the seat served with the
-// amnesia this package exists to prevent.
-//
-// NO CONSUMER CAN BE ASKED FOR THE LEADER'S COUNT INSTEAD. The server puts an
-// R1 consumer on a random active member, preferring those caught up in the
-// METADATA group rather than in the stream's; a consumer's configuration names
-// no placement to ask for the leader by; and the count a consumer reports is
-// its own server's copy's. And a read of the leader that answers with a row is
-// no way out either: it answers the row whole, base64-encoded in JSON, a third
-// larger than the row, so the first row a copy behind the leader lacked, read
-// that way, crossed a `[seats]` satellite's leaf link as a reply past the
-// 8 MiB the leaf carries, and the leaf closed its whole link to the fleet,
-// its lease renewals with it (nats-server leafnode.go, processLeafMsgArgs;
-// crewlet/crewlet#1031).
-//
-// So the replay reads to the BARRIER ([Syncer.barrier]) through its OWN
-// consumer, filtered to the table's subjects and the seat's barrier subject
-// at once ([barrierSubject]). A copy applies the stream in its order, and a
-// consumer delivers in that order too, so the copy hands over the table's rows
-// below the barrier, then the barrier, once it has applied that far. The
-// replay is done when it has received a barrier at or past the hydration's and
-// its copy says it holds nothing more. AT OR PAST, because a hydration of the
-// seat racing this one, on another node in crewlet/crewlet#511's window,
-// publishes its own barrier after this one's, which replaces it (the changelog
-// keeps one message per subject): this replay then receives the later
-// barrier, past its own, and ends there as the other's does. Rows written
-// since the barrier, by a publish racing the hydration, are read like any
-// other once the copy has counted them; one it counts only after the replay
-// has ended stays on the changelog for the seat's next hydration. A barrier
-// below the hydration's is an earlier hydration's, on a copy that has not
-// applied this one yet, and is skipped. While no barrier at or past it has
-// arrived, the replay waits for its copy with the fetch of one message the
-// loop makes anyway, and a copy that has not applied the barrier by the end of
-// the hydration's budget refuses the seat, naming the barrier and how far the
-// copy had come. Nothing crosses the link but the table's own rows, raw, in
-// its pulls.
-//
-// # A copy behind
-//
-// The barrier lies past the WHOLE changelog as the leader held it, every
-// seat's writes and not only this table's, so a copy behind the leader holds
-// the replay until it has applied all of it, even where it already holds every
-// row of the table. The server prefers members caught up in its metadata
-// group, not in the stream, so a member still catching its copy up after a
-// restart is given about a third of the replays on three members, and a
-// hydration of six tables meets it nine times in ten: such a hydration waits
-// for that member, and is refused if its budget runs out first, until the
-// next sweep. An end that asked the leader where the table's rows end did not
-// wait where the copy held them all; this one asks the leader nothing, and
-// that is its price.
-//
-// # What the copy's count can miss
-//
-// The count the replay ends on is the server's RUNNING count of what the copy
-// still holds for the consumer, moved as the server stores, delivers or
-// removes a message (nats-server consumer.go), and a message that replaces
-// another on its subject is the one change it does not make at once: it takes
-// the older off the count as it removes it, and adds the newer a moment later,
-// from the queue it signals consumers through (stream.go, signalConsumersLoop).
-// So a publish racing the hydration (a releasing node's flush still landing, a
-// node that lost the seat's lease still publishing it, crewlet/crewlet#511)
-// can put a newer copy of a row the changelog held before the barrier past the
-// barrier just before the replay reached the older one, and a barrier
-// delivered in that moment says the copy holds nothing more: the replay ends
-// with neither copy of the row, which stays on the changelog for the seat's
-// next hydration. The same race can leave the count one message HIGH instead,
-// where the server's delivery skips the removed row before the removal reaches
-// the count (consumer.go, checkNumPending's note): the replay's last pull then
-// waits for a message that never comes until its expiry, near the end of the
-// budget, and the seat is refused as though the next row were larger than a
-// pull ([errRowPastPull]), until the next sweep. Either needs a second
-// publisher of the seat during its hydration; a pull that read the copy's
-// store rather than its count would close both, at a wait on every table.
-func (s *Syncer) replay(ctx context.Context, handle string, ref seatRef, spec table,
-	barrier uint64, orphaned map[string]int) (int, error) {
-
-	filter, subject := tableFilter(ref.AgentID, spec.name), barrierSubject(ref.AgentID)
-
-	// An EPHEMERAL consumer over this table's subjects and the seat's
-	// barrier's, from the start of the stream. Ephemeral because this is a
-	// one-shot read of a keyed table rather than a subscription with a
-	// position to remember: the next hydration wants the whole current
-	// picture again, not what has changed since some previous node read it.
-	consumer, err := s.js.CreateConsumer(ctx, topics.MemoryStream, jetstream.ConsumerConfig{
-		FilterSubjects: []string{filter, subject},
-		DeliverPolicy:  jetstream.DeliverAllPolicy,
-		AckPolicy:      jetstream.AckNonePolicy,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("memsync: open a replay of %s's %s: %w", handle, spec.name, err)
-	}
-	defer s.dropConsumer(ctx, consumer)
-
-	// HOW MANY MESSAGES THE REPLAY'S COPY HOLDS, BEFORE READING ANY. This
-	// runs inside seat acquisition, so a blind fetch is not affordable: a
-	// fetch asks for a number of messages and waits until it has them or its
-	// budget is spent, and one asking for more than are there waits the
-	// whole budget out, while the seat's first lease renewal comes due.
-	// Measured — two seats waiting that out cost four seconds and the node
-	// lost both leases. So every fetch asks for what the copy says it has, but
-	// one: the fetch of one that waits for a copy behind the leader to apply
-	// the barrier, which nothing but the hydration's budget bounds (below).
-	//
-	// READ OFF THE REPLY THAT CREATED THE CONSUMER, which is the consumer's
-	// info as it started on the member the server placed it on (nats-server
-	// consumer.go: setLeader snapshots it, initialInfo answers the create
-	// with it), counted out of that member's copy as a later info would be.
-	// Asked for again, the same count cost a round trip per table.
-	at := cursor{pending: int(consumer.CachedInfo().NumPending)}
-
-	// UNTIL A BARRIER AT OR PAST THE HYDRATION'S HAS ARRIVED AND THE COPY
-	// HOLDS NOTHING MORE, never on the second alone: a copy behind the leader
-	// says it holds nothing more while the leader holds the table's newest
-	// rows and the barrier past them, and asked for one more message it hands
-	// the next over as soon as it applies it, which is what the fetch of one
-	// below waits for. At or past, never only at: a racing hydration's barrier
-	// replaces this one's, and is the one the copy then holds.
-	carried := 0
-	for {
-		if at.barrier >= barrier && at.pending == 0 {
-			return carried, nil
-		}
-		want := 1
-		if at.pending > 0 {
-			want = min(at.pending, fetchBatch)
-		}
-		// ON THE HYDRATION'S OWN CONTEXT, so the fetches share its one
-		// budget: each used to wait a whole hydrateWait of its own, so a
-		// replay that stalled twice held seat acquisition for twice the
-		// bound this package documents. AND BOUNDED IN BYTES as well as in
-		// messages, because a pull is held whole until its transaction has
-		// written it ([Syncer.pullBytes]).
-		bound := s.pullBytes()
-		batch, err := consumer.Fetch(want, jetstream.FetchContext(ctx),
-			jetstream.FetchMaxBytes(bound))
-		if err != nil {
-			return carried, fmt.Errorf("memsync: replay %s's %s: %w", handle, spec.name, err)
-		}
-		rows, delivered, err := received(batch, handle, spec, subject, &at)
-		if err != nil {
-			return carried, err
-		}
-		if delivered == 0 && at.pending > 0 && ctx.Err() == nil {
-			// A ROW LARGER THAN THIS NODE'S PULLS CARRY. The copy holds
-			// more of the table's messages and the budget is not spent,
-			// so the pull ended with none because the next is larger
-			// than its bytes — a row, since a barrier has none: the
-			// broker ends such a pull rather than send it (`409 Message
-			// Size Exceeds MaxBytes`, which the client reads as the
-			// pull's ordinary end), and every pull of this bound ends
-			// the same way, on every node behind this limit, at every
-			// sweep. Neither a copy behind its leader nor a spent
-			// budget, so it is said as what it is, naming the limit to
-			// align ([Syncer.pullBytes]). COUNTED IN MESSAGES, not rows:
-			// a pull that delivered a barrier alone delivered something.
-			return carried, fmt.Errorf("memsync: replay %s's %s: %w: the copy serving it "+
-				"holds %d more of the table's messages and sent none in a pull of up to %d "+
-				"bytes, one message at this node's connection's max_payload of %d bytes "+
-				"and the room the broker counts beside it. Such a row was published "+
-				"through a server, an account or a user that carries more than this "+
-				"node's connection does: every node's connection to the broker must "+
-				"carry the same max_payload (docs/guides/deployment.md, %q)",
-				handle, spec.name, errRowPastPull, at.pending, bound, bound-deliveryOverhead,
-				"The largest message every server must carry")
-		}
-		if delivered == 0 {
-			// THE BUDGET RAN OUT SHORT OF THE BARRIER, or with the copy
-			// holding more past it. Refused, never admitted short: what
-			// the copy had not delivered is the table's NEWEST, and a
-			// hydration that reported success without it is the amnesia
-			// this package exists to prevent, said by no line anywhere.
-			// The seat waits for the next placement sweep, as it does on
-			// every other failure here.
-			short := fmt.Sprintf("had not applied the barrier this hydration published at "+
-				"sequence %d", barrier)
-			if at.pending > 0 {
-				short = fmt.Sprintf("holds %d more", at.pending)
-			}
-			return carried, fmt.Errorf("memsync: replay %s's %s: the copy serving it had "+
-				"delivered the table's messages to sequence %d, and %s, when the "+
-				"hydration's budget ran out", handle, spec.name, at.reached, short)
-		}
-		if len(rows) == 0 {
-			// A PULL OF A BARRIER ALONE, which writes nothing.
-			continue
-		}
-		var wrote, skipped int
-		if err := s.db.Tx(ctx, func(tx *sql.Tx) error {
-			// COUNTED AFRESH BY EVERY RUN of the body, which the store
-			// may run again ([store.DB.Tx]).
-			wrote, skipped = 0, 0
-			for _, row := range rows {
-				held, err := spec.parentHeld(ctx, tx, row)
-				if err != nil {
-					return err
-				}
-				if !held {
-					skipped++
-					continue
-				}
-				if err := upsert(ctx, tx, spec, row); err != nil {
-					return err
-				}
-				wrote++
-			}
-			return nil
-		}); err != nil {
-			return carried, err
-		}
-		// COUNTED ONCE THE TRANSACTION HAS COMMITTED, never as each row is
-		// written: a row the store refuses rolls back every row of its
-		// fetch, and a hydration that had counted them reported rows it
-		// had rolled back, with the store holding none of them.
-		carried += wrote
-		if skipped > 0 {
-			orphaned[spec.name] += skipped
-		}
-	}
-}
-
-// pullBytes is the byte bound of every replay pull: the largest message this
-// node's connection to the broker carries, its max_payload, and the room the
-// broker counts beside it ([deliveryOverhead]).
-//
-// It bounds what a hydration HOLDS of the changelog's rows. A pull is held
-// whole until its transaction has written it, and a hydration makes one at a
-// time ([Syncer.replay]), so it holds one pull's bytes of rows at once, and
-// nothing beside them: 8 MiB and 4 KiB on the embedded broker, where a pull
-// bounded by its row count alone ([fetchBatch]) held up to 2 GiB.
-//
-// # Never below the largest row the changelog can hold
-//
-// The broker sends a pull nothing past what is left of its bytes: it ends the
-// pull instead (`409 Message Size Exceeds MaxBytes`, which the client reads as
-// the pull's ordinary end). So a pull bounded below its next row ends with no
-// row, and so does every pull after it with the same bound, and the seat is
-// refused ([errRowPastPull]), on every node at every sweep for as long as the
-// row is on the changelog. One message at the transport's limit, whole, is the
-// least a pull can be bounded at, and it is what this is: a larger bound would
-// save only the pulls of rows that large, and hold more of them at once.
-//
-// # Read off the connection, at each pull, never fixed at the contract
-//
-// Nothing holds the changelog's rows to the contract's 8 MiB
-// (queue.MaxPayloadBytes): internal/queue/jetstream provisions the changelog
-// with no largest message of its own, so a row is bounded by the max_payload
-// of the connection that published it. On the embedded broker that is the
-// contract, which the engine configures every member and leaf at. On an
-// external one it is what the servers announce, and the engine refuses only a
-// limit below the contract, so servers an operator runs at 16 MiB take rows of
-// up to 16 MiB. A bound fixed at the contract would refuse every such row, and
-// its seat, on every node at every sweep. This node's own limit holds the
-// largest row any node published wherever every server announces the same
-// limit, which the deployment guide asks of an external broker ("The largest
-// message every server must carry"). Read at each pull, so a connection that
-// has moved to another member is held to that member's.
-func (s *Syncer) pullBytes() int {
-	return int(s.js.Conn().MaxPayload()) + deliveryOverhead
-}
-
-// errRowPastPull is a pull that ended with no message while its copy held more
-// of the table's and the hydration's budget was not spent: the next is a row
-// larger than a pull of this node's bound carries ([Syncer.pullBytes]).
-var errRowPastPull = errors.New("the next row is larger than a pull this node's connection carries")
-
-// errMisroutedRow is a row a replay read on one table's subjects whose body
-// names another table ([received]).
-var errMisroutedRow = errors.New("a row on one table's subjects names another table, which no build publishes")
-
-// cursor is where one table's replay stands ([Syncer.replay]), moved past each
-// message it receives ([received]).
-type cursor struct {
-	// reached is the highest stream sequence the replay has delivered, a
-	// barrier's included.
-	reached uint64
-	// pending is how many messages its copy says it still holds past them:
-	// the table's rows and the seat's barrier, the two its consumer reads.
-	pending int
-	// barrier is the sequence of the newest barrier the replay has
-	// delivered, and 0 while it has delivered none.
-	barrier uint64
-}
-
-// received is one pull's rows, read whole off the wire and decoded, and how
-// many messages it delivered, with at moved past each.
-//
-// A BARRIER IS TOLD APART BY ITS SUBJECT, the seat's one that is no table's
-// ([barrierSubject]), never by its body, and it is no row: never decoded,
-// written or counted. Only its sequence is kept, as at.barrier, where a
-// barrier below the hydration's leaves the replay to go on ([Syncer.replay]).
-// The count of messages is what says whether a pull ended with nothing
-// ([errRowPastPull]): one that delivered a barrier alone delivered something,
-// and wrote nothing.
-//
-// READ BEFORE THE FETCH'S TRANSACTION BEGINS, never inside it. A fetch hands
-// its rows over as they cross the link, so a transaction that read them held
-// this store's write, and so every other writer of the node, for as long as
-// they took to arrive: the rest of the budget, for the fetch of one message
-// that a copy behind its leader never answers. And the store may run a
-// transaction's body again ([store.DB.Tx]), where a fetch read inside it hands
-// over nothing the second time. Read first, the rows are what the transaction
-// writes, however often it runs; the fetch held them in memory either way.
-func received(batch jetstream.MessageBatch, handle string, spec table, barrier string,
-	at *cursor) ([]Row, int, error) {
-
-	var rows []Row
-	delivered := 0
-	for msg := range batch.Messages() {
-		delivered++
-		meta, err := msg.Metadata()
-		if err != nil {
-			return nil, delivered, fmt.Errorf("memsync: read the metadata of a replayed %s "+
-				"message of %s: %w", spec.name, handle, err)
-		}
-		at.reached = max(at.reached, meta.Sequence.Stream)
-		at.pending = int(meta.NumPending)
-		if msg.Subject() == barrier {
-			at.barrier = max(at.barrier, meta.Sequence.Stream)
-			continue
-		}
-		row, err := decode(msg.Data())
-		if err != nil {
-			return nil, delivered, err
-		}
-		if row.Table != spec.name {
-			// A ROW ON ANOTHER TABLE'S SUBJECTS, which no build publishes:
-			// a row's subject names its own table ([table.subject]).
-			// Written here, it would be written in this table's turn
-			// rather than its own, ahead of the parents the turns exist
-			// for, so it is refused, as a row that does not decode is.
-			return nil, delivered, fmt.Errorf("memsync: replay %s's %s: %w, here one that says "+
-				"it is a %q row", handle, spec.name, errMisroutedRow, row.Table)
-		}
-		rows = append(rows, row)
-	}
-	if err := batch.Error(); err != nil {
-		return nil, delivered, fmt.Errorf("memsync: replay %s's %s: %w", handle, spec.name, err)
-	}
-	return rows, delivered, nil
 }
 
 // settleNotCarried takes off the changelog what of a seat's memory nobody will
@@ -1281,37 +901,23 @@ type notCarried struct {
 
 // held is how many rows the changelog holds on filter's subjects, as the copy
 // a consumer over them is served by counts them: the reply that creates the
-// consumer says that, with no row delivered and no request of its own, as a
-// table's replay reads its count ([Syncer.replay]).
+// consumer says that, with no row delivered and no request of its own. Made
+// as a replay's consumer is ([Syncer.createConsumer]), and deleted as the
+// count ends ([Syncer.deleteConsumer]).
 func (s *Syncer) held(ctx context.Context, filter string) (int, error) {
-	consumer, err := s.js.CreateConsumer(ctx, topics.MemoryStream, jetstream.ConsumerConfig{
-		FilterSubject: filter,
-		DeliverPolicy: jetstream.DeliverAllPolicy,
-		AckPolicy:     jetstream.AckNonePolicy,
+	name := nuid.Next()
+	consumer, err := s.createConsumer(ctx, jetstream.ConsumerConfig{
+		Name:              name,
+		FilterSubject:     filter,
+		DeliverPolicy:     jetstream.DeliverAllPolicy,
+		AckPolicy:         jetstream.AckNonePolicy,
+		InactiveThreshold: s.reapAfter(),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("memsync: open a count of %s: %w", filter, err)
 	}
-	defer s.dropConsumer(ctx, consumer)
+	defer s.deleteConsumer(ctx, name)
 	return int(consumer.CachedInfo().NumPending), nil
-}
-
-// dropConsumer deletes one of a hydration's ephemeral consumers as the step
-// that made it ends.
-//
-// The consumer is ephemeral, so the server reaps it when it goes idle — but a
-// node acquiring seats in a sweep would otherwise leave several per seat lying
-// around until then.
-//
-// WithoutCancel because a cleanup that inherits the failure it is cleaning up
-// after does nothing at all — and then its OWN bound, because WithoutCancel
-// drops the deadline with the cancellation. This runs inside seat
-// acquisition, so an unbounded call here would hang the acquisition on exactly
-// the wedged broker that made the hydration fail ([consumerCleanupTimeout]).
-func (s *Syncer) dropConsumer(ctx context.Context, consumer jetstream.Consumer) {
-	cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), consumerCleanupTimeout)
-	defer stop()
-	_ = s.js.DeleteConsumer(cleanupCtx, topics.MemoryStream, consumer.CachedInfo().Name)
 }
 
 // purge removes every row on filter's subjects from the changelog, for every
@@ -1385,14 +991,13 @@ func (s *Syncer) stillHolds(handle string, held *seatHolding, under holding) boo
 
 // recordBoundary reads where this node's change sequence stands and begins the
 // seat's live holding with it as the boundary ([Syncer.Hydrate], "Where this
-// holding's writes begin" and "What a hydration begins"): on a context the
-// hydration's budget does not cut, and bounded by [boundaryReadTimeout]
-// instead.
+// holding's writes begin" and "What a hydration begins"): on the hydration's
+// own context, bounded by [boundaryReadTimeout].
 func (s *Syncer) recordBoundary(ctx context.Context, handle string) error {
 	if s.beforeBoundary != nil {
 		s.beforeBoundary()
 	}
-	readCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), boundaryReadTimeout)
+	readCtx, stop := context.WithTimeout(ctx, boundaryReadTimeout)
 	defer stop()
 	var last int64
 	if err := s.db.SQL().QueryRowContext(readCtx,
@@ -1488,15 +1093,18 @@ func (s *Syncer) ReplayProtocol() statelog.ReplayProtocol { return statelog.Repl
 // failure this guard is about. It costs a delayed seat on a broker having a
 // bad minute, which the caller retries.
 func (s *Syncer) checkIdentity(ctx context.Context) error {
-	// ASKED AS A METADATA READ IS ([jsprovision.ReadBounded]): only the
+	// ASKED AS A METADATA READ IS ([jsprovision.ReadWith]): only the
 	// stream's leader answers its info, and a member that still believes in
 	// a leader its group has just lost drops the request without a word, so
 	// one request waited out the hydration's whole bound and refused the
 	// seat over a reply nobody would send — where asked again, the new
-	// leader answers. A handle of each request's own, because the requests
-	// can be out together and the client caches each reply on its handle
-	// with no lock.
-	info, err := jsprovision.ReadBounded(ctx, s.js.Options().DefaultTimeout,
+	// leader answers. Every two seconds, under the longest silence the
+	// server keeps ([jsprovision.LookupBudget]), each given the crossing of
+	// its reply at the floor across a link: a hydration has no deadline of
+	// its own to hold it to less. A handle of each request's own, because
+	// the requests can be out together and the client caches each reply on
+	// its handle with no lock.
+	info, err := jsprovision.ReadWith(ctx, s.timing.Arriving(jsapi.Crossing(apiBytes, s.pace)),
 		func(ctx context.Context) (*jetstream.StreamInfo, error) {
 			stream, err := s.js.Stream(ctx, topics.MemoryStream)
 			if err != nil {
@@ -1559,24 +1167,36 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 // subject ([barrierSubject]), and says the stream sequence the changelog
 // acknowledged it at: the leader numbers the stream in the order it
 // acknowledges, so every row the changelog had acknowledged before lies below
-// it, and every table's replay reads to it ([Syncer.replay]).
+// it. A hydration publishes one before its first table, which every table's
+// replay reads to, and each replay one more, its END BARRIER, once it has
+// received a barrier at or past the first, which it reads to in turn
+// ([Syncer.replay]). what names which, for a refusal: "eng's barrier", "the
+// end barrier of eng's agent_diary".
 //
 // # Asked again while nobody answers it
 //
-// As a metadata read is ([jsprovision.ReadBounded]): presumed lost after the
-// read term and asked again a pause later, every request kept outstanding and
-// the first acknowledgement taken. Only the stream's leader takes a publish —
-// no other member subscribes to the stream's subjects (nats-server stream.go,
-// setLeader) — and a member that still believes it leads after its group has
-// moved on drops one without a reply: one it queued while it led and takes
-// once it no longer does (jetstream_cluster.go, processClusteredInboundMsg),
-// and one whose proposal its term outlived (jetstream_batching.go,
-// commitSingleMsg). Sent once, such a publish waited out the hydration's whole
-// budget and refused the seat until the next sweep. The client's own retry is
-// no help there: it asks again only on `no responders`, the moment no member
-// subscribes at all, twice a quarter of a second apart, and then gives up with
-// [jetstream.ErrNoStreamResponse] — which is read here as the silence it is,
-// so the hedge asks again after its pause rather than refusing the seat.
+// As a metadata read is ([jsprovision.ReadWith]): presumed lost after the read
+// term and arrival, and asked again a pause later, every request kept
+// outstanding and the first acknowledgement taken, for no longer than the
+// longest silence the server keeps ([jsprovision.LookupBudget]) and arrival.
+// arrival is how long the acknowledgement takes to reach this node behind what
+// it waits behind: the publish's own crossing at the floor across a link
+// ([jsapi.Sending]), and for an end barrier the rest of the pull its replay
+// has out, which the acknowledgement queues behind on the same connection
+// ([jsapi.Delivering]) — so across a link at the window it is asked once in
+// about 21.5 seconds rather than asked again behind the bytes the first is
+// waiting on. Only the stream's leader takes a publish — no other member
+// subscribes to the stream's subjects (nats-server stream.go, setLeader) — and
+// a member that still believes it leads after its group has moved on drops
+// one without a reply: one it queued while it led and takes once it no longer
+// does (jetstream_cluster.go, processClusteredInboundMsg), and one whose
+// proposal its term outlived (jetstream_batching.go, commitSingleMsg). Sent
+// once, such a publish waited out the whole bound and refused the seat until
+// the next sweep. The client's own retry is no help there: it asks again only
+// on `no responders`, the moment no member subscribes at all, twice a quarter
+// of a second apart, and then gives up with [jetstream.ErrNoStreamResponse] —
+// which is read here as the silence it is, so the hedge asks again after its
+// pause rather than refusing the seat.
 //
 // A WRITE ASKED AS A READ IS, which jsprovision keeps from a metadata write: a
 // create's reply is held until the object it made has a leader, and a second
@@ -1587,14 +1207,14 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 // taken, the barrier the asking leaves on the stream lies at or past its
 // sequence, which is all a replay holds a barrier to. A copy that has applied
 // an earlier request's and not the later one's delivers a barrier below it,
-// which the replay skips, as it skips an earlier hydration's.
+// which the replay reads past, as it reads past an earlier hydration's.
 //
 // # Two hydrations of the seat at once
 //
 // For the same reason. A seat can be hydrated by two nodes at once while it
 // moves, in crewlet/crewlet#511's window: a node still taking a seat whose
 // claim has lapsed under it, and the node that has claimed it since. Each
-// publishes a barrier to the seat's one subject, so the later replaces the
+// publishes its barriers to the seat's one subject, so the later replaces the
 // earlier, and the earlier hydration's replays deliver the later one instead
 // of their own: it lies past their own, so they end at it, as the later
 // hydration's do. However many hydrations of a seat there have been, the
@@ -1602,20 +1222,21 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 //
 // # When nobody acknowledges it
 //
-// A hydration refused for its barrier names why. An answer is the broker's
-// own, wrapped whole: an account or a server at its storage limit refuses the
-// publish in its acknowledgement. A broker that refuses this node's
-// connection publish permission on the memory subjects answers the publish
-// with nothing at all: it sends the connection a permissions error instead,
-// which the client hands to its error handler (jetstream_client_error) and
-// keeps as the connection's last error, and the publish waits for an
-// acknowledgement that never comes. So a barrier still unacknowledged when the
-// budget runs out is refused with that error where the connection's last one
-// names this subject, and otherwise with what can leave a publish unanswered
-// that long.
-func (s *Syncer) barrier(ctx context.Context, handle, agentID string) (uint64, error) {
+// A hydration refused for a barrier names why. An answer is the broker's own,
+// wrapped whole: an account or a server at its storage limit refuses the
+// publish in its acknowledgement. A broker that refuses this node's connection
+// publish permission on the memory subjects answers the publish with nothing
+// at all: it sends the connection a permissions error instead, which the
+// client hands to its error handler (jetstream_client_error) and keeps as the
+// connection's last error, and the publish waits for an acknowledgement that
+// never comes. So a barrier still unacknowledged when it has been asked for as
+// long as it is asked is refused with that error where the connection's last
+// one names this subject, and otherwise with what can leave a publish
+// unanswered that long.
+func (s *Syncer) barrier(ctx context.Context, agentID, what string, arrival time.Duration) (uint64, error) {
 	subject := barrierSubject(agentID)
-	ack, err := jsprovision.ReadBounded(ctx, s.js.Options().DefaultTimeout,
+	timing := s.timing.Arriving(arrival)
+	ack, err := jsprovision.ReadWith(ctx, timing,
 		func(ctx context.Context) (*jetstream.PubAck, error) {
 			ack, err := s.js.Publish(ctx, subject, nil)
 			if errors.Is(err, jetstream.ErrNoStreamResponse) {
@@ -1627,23 +1248,23 @@ func (s *Syncer) barrier(ctx context.Context, handle, agentID string) (uint64, e
 	case err == nil:
 		return ack.Sequence, nil
 	case !unacknowledged(err):
-		return 0, fmt.Errorf("memsync: publish %s's barrier to %s: %w", handle, subject, err)
+		return 0, fmt.Errorf("memsync: publish %s to %s: %w", what, subject, err)
 	}
 	if refused := s.refusedPublish(subject); refused != nil {
-		return 0, fmt.Errorf("memsync: publish %s's barrier to %s: the broker refused it (%w): a "+
+		return 0, fmt.Errorf("memsync: publish %s to %s: the broker refused it (%w): a "+
 			"hydration writes the seat's barrier before it reads a row, so this node's "+
 			"connection needs publish permission on %s>, as the seat's memory does: %w",
-			handle, subject, refused, topics.MemoryPrefix, err)
+			what, subject, refused, topics.MemoryPrefix, err)
 	}
-	return 0, fmt.Errorf("memsync: publish %s's barrier to %s: no member of the changelog "+
-		"acknowledged it before the hydration's budget ran out: the changelog had no leader "+
-		"that long, or the broker refused the publish without an answer, as it refuses a "+
-		"connection without publish permission on %s> (jetstream_client_error says so): %w",
-		handle, subject, topics.MemoryPrefix, err)
+	return 0, fmt.Errorf("memsync: publish %s to %s: no member of the changelog acknowledged it "+
+		"in the %v it is asked for: the changelog had no leader that long, or the broker refused "+
+		"the publish without an answer, as it refuses a connection without publish permission "+
+		"on %s> (jetstream_client_error says so): %w",
+		what, subject, timing.Lookup, topics.MemoryPrefix, err)
 }
 
 // unacknowledged reports a publish nobody answered: the silence the hedge
-// heard, or the hydration's deadline.
+// heard, or a deadline: the ceiling's, or the caller's own.
 func unacknowledged(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, nats.ErrTimeout) ||
 		errors.Is(err, nats.ErrNoResponders)

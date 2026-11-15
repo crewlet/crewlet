@@ -73,8 +73,8 @@ func storeHolds(t *testing.T, db *store.DB) int {
 // placement moves it, on a satellite at every boot, and on a node that lost
 // its store. Replayed a table at a time in the registry's order, every skill
 // is written before its versions whatever order the changelog holds them in:
-// the version and its skill a few rows apart, in one fetch of the single
-// replay, and with three hundred notes between them, in two.
+// the version and its skill a few rows apart, in one pull of the single
+// replay, and with more notes between them than a pull asks for, in two.
 //
 // Mutation: replay the seat in one pass in the changelog's order, or replay
 // the tables out of the registry's order, and this goes red.
@@ -87,8 +87,8 @@ func TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat(
 		// and the skill's new one.
 		between int
 	}{
-		{"in one fetch", 0},
-		{"in two fetches", 300},
+		{"in one pull", 0},
+		{"in two pulls", fetchBatch + 44},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -120,7 +120,7 @@ func TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat(
 				last := sequenceOf(t, conn, subjectOf(diary, notes[len(notes)-1]))
 				if first <= version || last >= skill || len(notes) <= fetchBatch {
 					t.Fatalf("the %d notes are at %d..%d, the version at %d and the skill at %d: "+
-						"this case needs more than a fetch's %d rows between the two",
+						"this case needs more than a pull's %d rows between the two",
 						len(notes), first, last, version, skill, fetchBatch)
 				}
 			}
@@ -373,69 +373,35 @@ func TestARowOnAnotherTablesSubjectsIsRefused(t *testing.T) {
 	}
 }
 
-// fetchGate holds back the rows of a hydration's first fetch until the case
-// opens it, and says when the hydration first waits on them.
-type fetchGate struct {
-	waiting chan struct{} // closed when the hydration first reads a fetch's rows
-	open    chan struct{} // closed by the case to let the rows through
+// pullGate holds back the first word a hydration's replay reads off its
+// inbox until the case opens it, and says when the hydration first waits on
+// it.
+type pullGate struct {
+	waiting chan struct{} // closed when the hydration first reads its inbox
+	open    chan struct{} // closed by the case to let the words through
 	once    sync.Once
 }
 
-// gatedJS is a JetStream whose replay consumers' fetches pass through gate.
-type gatedJS struct {
-	jetstream.JetStream
-	gate *fetchGate
+// wait is the gate, as a replay's inbox meets it: until it is open the pull
+// is on the wire, as a slow link or a copy behind its leader keeps it.
+func (g *pullGate) wait() {
+	g.once.Do(func() { close(g.waiting) })
+	<-g.open
 }
 
-func (j gatedJS) CreateConsumer(ctx context.Context, stream string,
-	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
-
-	consumer, err := j.JetStream.CreateConsumer(ctx, stream, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return gatedConsumer{Consumer: consumer, gate: j.gate}, nil
-}
-
-type gatedConsumer struct {
-	jetstream.Consumer
-	gate *fetchGate
-}
-
-func (c gatedConsumer) Fetch(batch int, opts ...jetstream.FetchOpt) (jetstream.MessageBatch, error) {
-	fetched, err := c.Consumer.Fetch(batch, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return gatedBatch{MessageBatch: fetched, gate: c.gate}, nil
-}
-
-type gatedBatch struct {
-	jetstream.MessageBatch
-	gate *fetchGate
-}
-
-// Messages is the fetch's rows, handed over once the gate is open: until then
-// the fetch is on the wire, as a slow link or a copy behind its leader keeps
-// it.
-func (b gatedBatch) Messages() <-chan jetstream.Msg {
-	b.gate.once.Do(func() { close(b.gate.waiting) })
-	<-b.gate.open
-	return b.MessageBatch.Messages()
-}
-
-// A HYDRATION HOLDS NO WRITE WHILE A FETCH IS ON THE WIRE.
+// A HYDRATION HOLDS NO WRITE WHILE A PULL IS ON THE WIRE.
 //
-// A fetch hands its rows over as they cross the link, and a hydration that
-// read them inside the fetch's transaction held this store's write, and so
-// every other writer of the node, for as long as they took to arrive: the rest
-// of its budget, for a fetch a copy behind its leader never answers. A
-// transaction's body may also run again ([store.DB.Tx]), and a fetch's rows
-// read inside it are gone the second time. The rows are read whole before the
-// transaction begins, so the store takes another writer's write while the
-// fetch is still on its way.
+// A pull hands its rows over as they cross the link, and a hydration that
+// read them inside the pull's transaction held this store's write, and so
+// every other writer of the node, for as long as they took to arrive: up to a
+// stall, for a pull a copy that stopped answering never ends. A transaction's
+// body may also run again ([store.DB.Tx]), and a pull's rows read inside it
+// are gone the second time. The rows are staged whole before the transaction
+// begins, so the store takes another writer's write while the pull is still
+// on its way.
 //
-// Mutation: read the fetch's rows inside its transaction, and this goes red.
+// Mutation: open the pull's transaction before reading its rows, and this
+// goes red.
 func TestAHydrationHoldsNoWriteWhileAFetchIsOnTheWire(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -447,8 +413,8 @@ func TestAHydrationHoldsNoWriteWhileAFetchIsOnTheWire(t *testing.T) {
 
 	fresh := openStore(t)
 	syncer := syncerOn(t, fresh, conn)
-	gate := &fetchGate{waiting: make(chan struct{}), open: make(chan struct{})}
-	syncer.js = gatedJS{JetStream: syncer.js, gate: gate}
+	gate := &pullGate{waiting: make(chan struct{}), open: make(chan struct{})}
+	newSpyCopies(syncer).beforeNext = gate.wait
 	var opened sync.Once
 	letThrough := func() { opened.Do(func() { close(gate.open) }) }
 	defer letThrough()
@@ -465,7 +431,7 @@ func TestAHydrationHoldsNoWriteWhileAFetchIsOnTheWire(t *testing.T) {
 	select {
 	case <-gate.waiting:
 	case h := <-done:
-		t.Fatalf("the hydration answered (%d, %v) before it read a fetch's rows", h.carried, h.err)
+		t.Fatalf("the hydration answered (%d, %v) before it read a pull's rows", h.carried, h.err)
 	}
 
 	wrote := fresh.Tx(t.Context(), func(tx *sql.Tx) error {
@@ -477,11 +443,11 @@ func TestAHydrationHoldsNoWriteWhileAFetchIsOnTheWire(t *testing.T) {
 	letThrough()
 	h := <-done
 	if wrote != nil {
-		t.Fatalf("a write while the hydration's first fetch was on the wire failed: %v — the "+
+		t.Fatalf("a write while the hydration's first pull was on the wire failed: %v — the "+
 			"hydration held the store's write waiting on the link", wrote)
 	}
 	if h.err != nil || h.carried != len(tables) {
-		t.Fatalf("Hydrate = (%d, %v), want all %d rows once the fetch arrived", h.carried, h.err, len(tables))
+		t.Fatalf("Hydrate = (%d, %v), want all %d rows once the pull arrived", h.carried, h.err, len(tables))
 	}
 }
 

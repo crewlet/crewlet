@@ -674,7 +674,7 @@ func TestAForgottenSeatCarriesNothingUntilItsNextHydration(t *testing.T) {
 	db := openStore(t)
 	held := writeNotesUnder(t, db, "b", 200, 0)
 	js := &roundTripJS{}
-	s := New(db, js, func(string) string { return seat.AgentID })
+	s := newSyncer(db, js, func(string) string { return seat.AgentID })
 	if err := s.recordBoundary(t.Context(), seat.Handle); err != nil {
 		t.Fatalf("record the boundary: %v", err)
 	}
@@ -791,7 +791,7 @@ func TestASeatWithNoHoldingHereIsCarriedByNoCall(t *testing.T) {
 		seedMemory(t, db)
 		writeNotes(t, db, 3, 0)
 		js := &roundTripJS{}
-		s := New(db, js, func(string) string { return seat.AgentID })
+		s := newSyncer(db, js, func(string) string { return seat.AgentID })
 		var read []string
 		s.beforePage = func(of markRange, table string) {
 			read = append(read, string(of)+" "+table)
@@ -828,7 +828,7 @@ func TestASeatWithNoHoldingHereIsCarriedByNoCall(t *testing.T) {
 		// A ROW OF ITS OWN ALREADY, so the store's change sequence is past 0
 		// and a boundary read here would say so.
 		writeNotes(t, fresh, 1, 0)
-		s := New(fresh, openFailsJS{jsOn(t, conn)}, func(string) string { return seat.AgentID })
+		s := newSyncer(fresh, openFailsJS{jsOn(t, conn)}, func(string) string { return seat.AgentID })
 		if _, err := s.Hydrate(t.Context(), seat.Handle); err == nil {
 			t.Fatal("a hydration whose replay could not open reported success")
 		}
@@ -846,17 +846,17 @@ func TestASeatWithNoHoldingHereIsCarriedByNoCall(t *testing.T) {
 	})
 }
 
-// budgetSpentInTheCountJS is a changelog whose count of a retired table's rows
-// for the seat ends the hydration's budget: it cancels the context the
-// hydration runs under and answers that context's error, as a broker that
-// does not answer the count before hydrateWait runs out does.
-type budgetSpentInTheCountJS struct {
+// cutInTheCountJS is a changelog whose count of a retired table's rows for
+// the seat cuts the hydration: it cancels the context the hydration runs
+// under and answers that context's error, as a lost lease, a drain or a stop
+// cuts a seat's taking there.
+type cutInTheCountJS struct {
 	jetstream.JetStream
 	end     context.CancelFunc
 	counted bool
 }
 
-func (j *budgetSpentInTheCountJS) CreateConsumer(ctx context.Context, stream string,
+func (j *cutInTheCountJS) CreateConsumer(ctx context.Context, stream string,
 	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
 
 	if cfg.FilterSubject == tableFilter(seat.AgentID, retiredTables[0]) {
@@ -867,30 +867,28 @@ func (j *budgetSpentInTheCountJS) CreateConsumer(ctx context.Context, stream str
 	return j.JetStream.CreateConsumer(ctx, stream, cfg)
 }
 
-// A HYDRATION WHOSE BUDGET RUNS OUT AFTER ITS LAST IDENTITY READ STILL RECORDS
-// ITS BOUNDARY.
+// A HYDRATION CUT AS ITS BOUNDARY IS READ RECORDS NONE AND BEGINS NO HOLDING.
 //
-// Once its last identity read has answered, nothing can fail a hydration but
-// the read of its boundary: the count and purge of the retired tables only
-// warn. Read on the hydration's own context, a boundary the budget ran out
-// before, or a count that spent it, refused the seat for the budget alone. It
-// is read on a context the budget does not cut, right after the identity read.
-// The case cancels the context the hydration runs under, as hydrateWait's
-// deadline ends it, either as the boundary is read or inside the count of a
-// retired table.
+// A hydration has no deadline of its own, so the read of its boundary runs on
+// its own context: a cut of the seat's taking there — a lost lease, a drain,
+// a stop — refuses the hydration, which records no boundary and begins no
+// holding, so nothing here publishes the seat and its release flushes
+// nothing. A cut after the boundary is read, in the count and purge of the
+// retired tables, which fail no hydration, leaves the hydration complete: its
+// boundary recorded, its holding begun, its backlog what it wrote.
 //
-// Mutation: read the boundary on the hydration's own context, there or after
+// Mutation: read the boundary on a context the cut does not reach, or after
 // the count and purge, and this goes red.
-func TestAHydrationWhoseBudgetRunsOutAfterItsLastIdentityReadStillRecordsItsBoundary(t *testing.T) {
+func TestAHydrationCutAsItsBoundaryIsReadRecordsNoneAndBeginsNoHolding(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		// inTheCount says the budget runs out in the count of a retired
-		// table, rather than as the boundary is read.
+		// inTheCount says the cut falls in the count of a retired table,
+		// rather than as the boundary is read.
 		inTheCount bool
 	}{
-		{"spent as the boundary is read", false},
-		{"spent in the count of a retired table", true},
+		{"cut as the boundary is read", false},
+		{"cut in the count of a retired table", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -904,21 +902,31 @@ func TestAHydrationWhoseBudgetRunsOutAfterItsLastIdentityReadStillRecordsItsBoun
 
 			fresh := openStore(t)
 			s := syncerOn(t, fresh, conn)
-			budget, end := context.WithCancel(t.Context())
-			defer end()
-			count := &budgetSpentInTheCountJS{JetStream: s.js, end: end}
+			taking, cut := context.WithCancel(t.Context())
+			defer cut()
+			count := &cutInTheCountJS{JetStream: s.js, end: cut}
 			if tc.inTheCount {
 				s.js = count
 			} else {
-				s.beforeBoundary = end
+				s.beforeBoundary = cut
 			}
-			hydrated, err := s.Hydrate(budget, seat.Handle)
-			if budget.Err() == nil || tc.inTheCount != count.counted {
-				t.Fatalf("the premise: the budget was not spent where this case spends it")
+			hydrated, err := s.Hydrate(taking, seat.Handle)
+			if taking.Err() == nil || tc.inTheCount != count.counted {
+				t.Fatalf("the premise: the taking was not cut where this case cuts it")
+			}
+			if !tc.inTheCount {
+				if err == nil {
+					t.Fatalf("Hydrate = (%d, nil), want the hydration refused by its cut", hydrated)
+				}
+				if held := s.holdingIn(seat.Handle, live); held != nil || s.boundary(seat.Handle) != 0 {
+					t.Errorf("a hydration cut as its boundary was read began a holding at boundary %d",
+						s.boundary(seat.Handle))
+				}
+				return
 			}
 			if err != nil || hydrated != 10 {
 				t.Fatalf("Hydrate = (%d, %v), want the 10 notes and the seat placed: nothing after "+
-					"the last identity read fails a hydration for its budget", hydrated, err)
+					"the boundary fails a hydration", hydrated, err)
 			}
 			if b, at := s.boundary(seat.Handle), sequenceAt(t, fresh); b == 0 || b != at {
 				t.Errorf("the hydration recorded the boundary %d with the change sequence at %d, "+

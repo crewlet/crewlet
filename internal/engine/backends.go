@@ -1064,8 +1064,9 @@ func coordinationStoresOf(b *config.Bootstrap) coordinationStores {
 // JetStream across a LINK — a leaf's link to the members, or a dial to an
 // external cluster — rather than its own member in its own process: the one
 // reading of it the engine hands every store on that connection, the object
-// store's puts' window ([openObjects]) and the coordination store's writes
-// ([coordinationReach]) alike. The queue reads the same fact off how its own
+// store's puts' window ([openObjects]), the coordination store's writes
+// ([coordinationReach]) and the memory sync's hydrations (memsync.Config,
+// whose replays ride the coordination connection) alike. The queue reads the same fact off how its own
 // connection was made.
 func acrossLink(b *config.Bootstrap) bool { return b.BrokerKind() != placement.BrokerMember }
 
