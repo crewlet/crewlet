@@ -232,6 +232,7 @@ func register(mux *http.ServeMux, route string, status int, body []byte) (err er
 func judge(e Expect, frames []wire.Frame, refusals []string, heard bool) Trial {
 	var t Trial
 	seen := map[string]bool{}
+	var steppedUp []bool
 	var answer, shown strings.Builder
 	var brief *wire.BriefCard
 	for _, f := range frames {
@@ -244,6 +245,7 @@ func judge(e Expect, frames []wire.Frame, refusals []string, heard bool) Trial {
 		case wire.EventCard:
 			if f.Card.Card.Proposal != nil {
 				t.Proposals++
+				steppedUp = append(steppedUp, f.Card.Card.Proposal.StepUp)
 			}
 			if f.Card.Card.Brief != nil {
 				brief = f.Card.Card.Brief
@@ -278,6 +280,16 @@ func judge(e Expect, frames []wire.Frame, refusals []string, heard bool) Trial {
 	}
 	if e.Proposals != nil && t.Proposals != *e.Proposals {
 		fail("proposals: %d, want %d", t.Proposals, *e.Proposals)
+	}
+	if e.StepUp != nil {
+		for i, up := range steppedUp {
+			if up != *e.StepUp {
+				fail("step_up: proposal %d asks a step-up %v, want %v", i+1, up, *e.StepUp)
+			}
+		}
+		if len(steppedUp) == 0 {
+			fail("step_up: the turn ends with no proposal to ask it of")
+		}
 	}
 	if e.State != "" && t.State != e.State {
 		fail("state: %s, want %s", t.State, e.State)

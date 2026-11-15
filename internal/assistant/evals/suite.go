@@ -73,6 +73,9 @@ type Expect struct {
 	Never []string `yaml:"never"`
 	// Proposals is how many proposals the turn ends with.
 	Proposals *int `yaml:"proposals"`
+	// StepUp is whether every proposal the turn ends with asks the person to confirm
+	// it is them, the engine's word and never the model's.
+	StepUp *bool `yaml:"step_up"`
 	// State is how the turn ends.
 	State wire.TurnState `yaml:"state"`
 	// Says and NeverSays are text the answer contains, and must not,
@@ -111,7 +114,7 @@ type ExpectBrief struct {
 
 // empty reports whether e expects nothing.
 func (e Expect) empty() bool {
-	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.State == "" &&
+	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.StepUp == nil && e.State == "" &&
 		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 && e.Brief == nil &&
 		len(e.Refusals) == 0
 }
