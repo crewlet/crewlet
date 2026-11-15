@@ -256,6 +256,34 @@
 // versions its rules on the checkpoint row and re-derives once, at the first
 // boot whose rules differ.
 //
+// # A record's broker instant is one value, however the record arrived
+//
+// The broker's instant for a record is the one instant an applier may write of
+// its own ([ApplyOptions.StoredAt]), and it reaches the loop in two shapes: as
+// the broker client reports it on a record applied as it arrives —
+// nanoseconds, in the node's local zone — and as the deferred table kept it on
+// a record held back and applied later — the store's encoding, UTC at a
+// microsecond. A document encodes the precision and the zone it is handed, so
+// the loop hands every applier the second shape on both paths
+// ([Record.StoredAt]): two nodes in two zones, or one record applied live on
+// one node and reprocessed on another, then write the same bytes. statelogtest
+// holds every domain to it by applying one set of records live in two zones
+// and held back, through the domain's own applier, and comparing the
+// Replicated tables.
+//
+// NO RECORD VERSION AND NO [Readers] GATE ride on it, because no record
+// changed: a writer publishes the same bytes, and what changed is the value the
+// loop derives from the broker's metadata beside them. A record version would
+// have every node of the earlier build retain every record of every domain over
+// a timestamp it reads perfectly well, which is an outage bought to make a
+// difference in bytes arrive later. So a roll that crosses the change has each
+// node write what its own build derives: a document a node of the earlier build
+// writes during the roll keeps the nanoseconds and the zone it was handed, its
+// peers on this build write the store's encoding, and neither is rewritten
+// until a later record about that object is applied over it. No re-derivation
+// recovers it either: the instant lives in the document alone, and a [Deriver]
+// recomputes what rows imply, not what a record carried.
+//
 // # THE FLOOR THEOREM
 //
 // The trim floor is load-bearing for the WRITE path, not only for recovery,

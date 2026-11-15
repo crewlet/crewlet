@@ -34,8 +34,11 @@ type Message struct {
 	// Seq is the broker's sequence.
 	Seq uint64
 
-	// StoredAt is the broker's own timestamp, which every node reads
-	// identically — unlike a clock each node would read for itself.
+	// StoredAt is the broker's own timestamp, which every node reads as
+	// one instant — unlike a clock each node would read for itself. As one
+	// INSTANT, not one value: the broker client reports it at nanoseconds in
+	// the node's local zone, so the loop hands an applier [brokerInstant] of
+	// it rather than this.
 	StoredAt time.Time
 
 	// Payload is the record's bytes.
@@ -2848,6 +2851,10 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				Position: at,
 				Payload:  body,
 				framed:   row.payload,
+				// ALREADY THE STORE'S ENCODING: the deferred table
+				// keeps the instant as [brokerInstant] makes it, and
+				// [tables.deferredAfter] reads it back through the
+				// store's own decode.
 				StoredAt: row.storedAt,
 			}
 			landed, result, err := r.reprocessOne(ctx, w, rec)
@@ -3179,9 +3186,12 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 			// keeps what the broker held, so a record retained here
 			// is re-verified by the build that can finally read it
 			// rather than trusted because an earlier build looked.
-			Payload:  body,
-			framed:   m.Payload,
-			StoredAt: m.StoredAt,
+			Payload: body,
+			framed:  m.Payload,
+			// THE INSTANT AS THE STORE KEEPS IT ([brokerInstant]): the
+			// broker's own, in the node's zone at nanoseconds, is a value
+			// no record held back and applied later carries.
+			StoredAt: brokerInstant(m.StoredAt),
 			verdict:  verdict,
 			ack:      m.Ack,
 			release:  m.Release,

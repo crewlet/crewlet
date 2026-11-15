@@ -459,14 +459,22 @@ func (f *countingFence) asked() []statelog.Position {
 type loop struct {
 	runner *statelog.Runner
 	cancel context.CancelFunc
-	done   chan error
 	once   sync.Once
+
+	// done is closed when the run has returned, and err is what it
+	// returned, written before the close: a channel closed rather than sent
+	// on, so a case may wait on it and stop may still wait after.
+	done chan struct{}
+	err  error
 }
 
 func startLoop(t *testing.T, runner *statelog.Runner) *loop {
 	ctx, cancel := context.WithCancel(t.Context())
-	l := &loop{runner: runner, cancel: cancel, done: make(chan error, 1)}
-	go func() { l.done <- runner.Run(ctx) }()
+	l := &loop{runner: runner, cancel: cancel, done: make(chan struct{})}
+	go func() {
+		l.err = runner.Run(ctx)
+		close(l.done)
+	}()
 	t.Cleanup(l.stop)
 	return l
 }
@@ -476,6 +484,20 @@ func (l *loop) stop() {
 		l.cancel()
 		<-l.done
 	})
+}
+
+// waitDrained waits until the applier has come level with its log, which
+// drained signals ([statelog.RunnerDeps.OnDrained]) — and a run comes level
+// only from its loop, after its startup, so every record an earlier build
+// retained has been reprocessed by then. A run that returns first is refused
+// with what it returned.
+func (l *loop) waitDrained(drained <-chan struct{}) error {
+	select {
+	case <-drained:
+		return nil
+	case <-l.done:
+		return fmt.Errorf("the applier returned before it came level with its log: %w", l.err)
+	}
 }
 
 // waitPast waits until the applier has committed through seq, and refuses a

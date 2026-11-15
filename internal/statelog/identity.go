@@ -175,6 +175,25 @@ func StreamCreatedAt(info *jetstream.StreamInfo) (time.Time, error) {
 // hydrate any seat, for ever, over a difference nothing can see.
 const identityResolution = time.Microsecond
 
+// brokerInstant is the broker's instant for a record as every applier is handed
+// it ([Record.StoredAt], [ApplyOptions.StoredAt]): the store's own encoding of
+// it, UTC at a microsecond, read back through the store's own decode.
+//
+// ONE VALUE ON EVERY NODE AND ON EVERY PATH, which the broker's own is not. A
+// record applied as it arrives carries what the broker client reported —
+// nanoseconds, in the node's local zone — and a record held back and applied
+// later (a version this build cannot read, a key it lacks) carries what the
+// deferred table kept, which is this encoding. An applier writes the instant
+// into its documents as it stands, and a document encodes the precision and the
+// zone it is handed, so two nodes that took one record by different paths, or
+// from one path in different zones, held different bytes for one record: the
+// difference [Domain.ClaimsIdentity] asserts there is none of.
+//
+// THE STORE'S HELPERS, NEVER A COPY, because the deferred table is written and
+// read through them: a second rule spelled here would drift from the one the
+// held-back path already follows, and the two paths would part again.
+func brokerInstant(t time.Time) time.Time { return store.DecodeTime(store.EncodeTime(t)) }
+
 // IdentityOf compares a stream's current creation instant against the one this
 // node recorded.
 //

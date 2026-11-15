@@ -153,6 +153,13 @@ type Domain interface {
 	// differs. Stating it per domain is what keeps the claim exactly
 	// "the Replicated tables of a domain that claims identity" rather
 	// than "Replicated minus the tables somebody remembered".
+	//
+	// THE FRAMEWORK'S HALF of the claim is that every value it hands an
+	// applier is one value on every node, however the record reached it:
+	// the broker's instant above all ([Record.StoredAt]), which arrives in
+	// the node's own zone at nanoseconds on one path and in the store's
+	// encoding on the other, and is handed on in the store's encoding on
+	// both. The domain's half is that its apply reads nothing else.
 	ClaimsIdentity() bool
 
 	// FeedGroup is the fleet-wide consumer this domain's WAKE FEED runs as
@@ -623,7 +630,10 @@ type Record struct {
 
 	// StoredAt is the broker's own timestamp for this record, which is
 	// what makes it byte-identical on every node rather than a clock each
-	// one reads for itself.
+	// one reads for itself — in the store's encoding, UTC at a microsecond
+	// ([brokerInstant]), whether the record was applied as it arrived or
+	// held back and applied later, so it is ONE VALUE on every node and
+	// not only one instant.
 	StoredAt time.Time
 
 	// verdict is what the framework's signature check concluded about
@@ -751,14 +761,17 @@ type RetentionHook interface {
 // Filled ONCE per apply-loop generation by the framework, EXCEPT StoredAt,
 // which is per record and comes from the broker — which is what makes it
 // byte-identical on every node rather than a clock each node reads for
-// itself.
+// itself, once the framework has put it in the store's encoding
+// ([Record.StoredAt]).
 type ApplyOptions struct {
 	// Now is the batch's instant. NOT for durations: it is the same
 	// value for every record in a batch, so a difference between two
 	// records' Now values is a batch boundary rather than elapsed time.
 	Now time.Time
 
-	// StoredAt is the broker's own timestamp for this record.
+	// StoredAt is the broker's own timestamp for this record, the same
+	// value as [Record.StoredAt]: UTC at a microsecond on every node and on
+	// every path a record reaches the applier by.
 	StoredAt time.Time
 
 	// ArbitratedKinds is the stream's declaration, carried here so an
