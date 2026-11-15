@@ -45,7 +45,6 @@ import {
 } from "@crewlethq/icons/glyphs";
 
 import { useOwnStar } from "~/app/Shell.tsx";
-import { useToastTop } from "~/app/toastInset.tsx";
 import { attentionFigure, isDirect, useChatAttention } from "~/lib/chatRooms.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
@@ -368,10 +367,6 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
   const nav = useChatNav();
   const bar = useRef<HTMLDivElement | null>(null);
   const width = useBarWidth(bar);
-  // TOASTS STAND UNDER THIS BAR, at the conversation's top right: at the
-  // window's foot they lay over the room's composer and a thread's, which
-  // grow as they are typed in, so no fixed inset from the foot clears them.
-  useToastTop(bar);
   const narrow = width > 0 && width < BAR_NARROW_PX;
   const tight = width > 0 && width < BAR_TIGHT_PX;
   const toolsSlot = useViewBarSlot(tight);

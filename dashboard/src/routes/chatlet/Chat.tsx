@@ -511,7 +511,9 @@ function ChatLayout({ children }: { children: ReactNode }) {
             <RoomsDock docked={nav.rooms.docked} back={() => menu.current} size={dock} />
           )}
           <ChatColumn menu={menu}>{children}</ChatColumn>
-          {nav.pane && <ChatPaneHost pane={nav.pane} onClose={nav.closePane} />}
+          {nav.pane && (
+            <ChatPaneHost pane={nav.pane} onClose={nav.closePane} beside={!nav.narrow} />
+          )}
         </div>
       </RoomScopeProvider>
       {nav.rooms.open && <RoomsSheet />}

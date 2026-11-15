@@ -13,9 +13,10 @@
 
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { useToast } from "@crewlethq/ui";
 
 import { useOwnStar } from "~/app/Shell.tsx";
-
+import { InsetToastProvider } from "~/app/toastInset.tsx";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADA, actEngine, applied } from "~/test/chat.tsx";
 import { CHAT_ORG, SERVED, WRITE_READERS } from "~/test/chatAccess.ts";
@@ -286,4 +287,30 @@ test("on a room the bar tells the frame its own More carries the star; on a view
   mountInFrame(<ChatTopBar />, { hash: "#/chatlet/activity", answers });
   await screen.findByRole("button", { name: "Search Chatlet" });
   expect(owns).not.toHaveBeenCalled();
+});
+
+// ONE PLACE FOR A TOAST ON EVERY SCREEN, the window's foot: the bar stood the
+// stack at the top right under itself, on Chatlet alone, where it lay over an
+// open pane. Mutation: claim the top again, and the stack's edge is the top.
+test("the bar leaves the toast stack at the window's foot, where every screen has it", async () => {
+  function Raise() {
+    const toast = useToast();
+    return (
+      <button type="button" onClick={() => toast.show({ variant: "success", title: "Starred" })}>
+        raise
+      </button>
+    );
+  }
+  mountInFrame(
+    <InsetToastProvider>
+      <ChatTopBar />
+      <Raise />
+    </InsetToastProvider>,
+    { hash: "#/chatlet/activity", answers },
+  );
+  await screen.findByRole("button", { name: "Search Chatlet" });
+  fireEvent.click(screen.getByRole("button", { name: "raise" }));
+  await screen.findByText("Starred");
+  const stack = screen.getByText("Starred").closest<HTMLElement>(".crewlet-toaster")!;
+  expect(stack.className).toMatch(/crewlet-toaster--bottom-right/);
 });

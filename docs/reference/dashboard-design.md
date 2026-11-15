@@ -8853,11 +8853,12 @@ Chatlet runs edge to edge under the page bar (the shell's flush fill), and
 every place in it is an address: a room by its id, or one of the views beside
 the rooms, with at most ONE pane named by the `pane=` parameter (see the
 address table above), so Back closes a pane, a reload keeps it and a thread is
-a link from any place (`routes/chatlet/nav.tsx`). While it is open, a toast
-stands under its top bar at the top right (`app/toastInset.tsx`'s
-`useToastTop`), held off the window's top by where the bar ends: at the
-window's foot it would lie over the room's composer and a thread's, which grow
-as they are typed in.
+a link from any place (`routes/chatlet/nav.tsx`). A toast stands where it
+stands on every screen, at the window's foot on its end side, and keeps clear
+of what Chatlet docks there (`app/toastInset.tsx`): above the room's foot and
+a reply box at the foot, however tall each grows as it is typed in
+(`useToastClearOf`), and beside an open pane, never over it
+(`useToastBeside`).
 
 - **The top bar** holds, on one line and at one height: **Menu**, which slides
   the Rooms panel in from the start edge of the chat area (or hides it while it

@@ -1,6 +1,8 @@
 /**
- * The toast stack keeps clear of the assistant: beside it while it is a
- * column or over the page, above its foot while it is the whole window.
+ * The toast stack stands at the window's foot on every screen and keeps clear
+ * of what stands there: beside the assistant while it is a column or over the
+ * page, above its foot while it is the whole window, beside a screen's own pane
+ * at the end edge, and above a bar docked at the foot.
  *
  * TWO OWNERS ASK, each for its own part, and the host keeps the largest of
  * each: the frame knows the width a panel takes and the panel knows its own
@@ -18,9 +20,10 @@ import {
   TOAST_REST_ROOM,
   ToastRoom,
   roomOf,
+  clearOf,
+  useToastBeside,
   useToastClearOf,
   useToastInset,
-  useToastTop,
   wasAtEnd,
   type InsetOwner,
 } from "./toastInset.tsx";
@@ -94,51 +97,80 @@ test("with nobody asking, the stack keeps only its own window inset", () => {
   expect(published()).toEqual({});
 });
 
-/** A bar whose bottom edge stands `bottom` px down the window. */
-function Bar({ bottom }: { bottom: number }) {
-  const bar = useRef<HTMLDivElement | null>(null);
-  useToastTop(bar);
-  return (
-    <div
-      ref={(el) => {
-        if (el) el.getBoundingClientRect = () => ({ bottom }) as DOMRect;
-        bar.current = el;
-      }}
-    />
-  );
-}
-
 /** The edge the stack stands on, as its class says. */
 const edge = () =>
   document
     .querySelector<HTMLElement>("[class*='crewlet-toaster--']")
     ?.className.match(/crewlet-toaster--(\S+)/)?.[1];
 
-test("a screen's bar stands the stack under it, and lets go with it", () => {
-  // THE BAR'S BOTTOM HOLDS THE STACK OFF THE TOP; a panel's width still keeps
-  // it beside the panel, and a foot's height, the other edge's, no longer
-  // applies. Unmounted, the stack goes back to the foot with the foot's room.
+/** A panel at the window's end edge, `width` px wide. */
+function Pane({ width, on = true }: { width: number; on?: boolean }) {
+  const pane = useRef<HTMLDivElement>(null);
+  useToastBeside(() => pane.current, on);
+  return (
+    <div
+      ref={(el) => {
+        if (el)
+          el.getBoundingClientRect = () =>
+            ({ left: window.innerWidth - width, width, height: 600 }) as DOMRect;
+        pane.current = el;
+      }}
+    />
+  );
+}
+
+// ONE PLACE ON EVERY SCREEN, the window's foot: Chatlet stood the stack at the
+// top right under its bar, where it lay over an open pane. A panel at the end
+// edge keeps the stack beside it instead, and lets go when it closes.
+// Mutation: drop the pane's ask, and the stack stands over the pane.
+test("a pane at the end edge keeps the stack beside it, at the foot, and lets go with it", () => {
   const view = render(
     <InsetToastProvider>
-      <Ask owner="frame" inline={428} />
-      <Ask owner="panel" block={120} />
-      <Bar bottom={56} />
+      <Pane width={400} />
       <Toast />
     </InsetToastProvider>,
   );
   act(() => view.getByRole("button", { name: "raise" }).click());
-  expect(edge()).toBe("top-right");
-  expect(Object.values(published()).sort()).toEqual(["428px", "56px"].sort());
-
+  expect(edge()).toBe("bottom-right");
+  expect(published()).toMatchObject({ "--crewlet-toaster-inset-inline": "400px" });
   view.rerender(
     <InsetToastProvider>
-      <Ask owner="frame" inline={428} />
-      <Ask owner="panel" block={120} />
+      <Pane width={400} on={false} />
       <Toast />
     </InsetToastProvider>,
   );
-  expect(edge()).toBe("bottom-right");
-  expect(Object.values(published()).sort()).toEqual(["120px", "428px"].sort());
+  expect(published()).toEqual({});
+});
+
+// TWO ASKERS OF ONE KIND ARE TWO PARTS, the largest kept: a room's foot and a
+// thread's reply box both ask as bars at the foot, and keyed by kind the one
+// that asked last undid the other.
+test("two askers of one kind each keep their part, and the larger holds", () => {
+  const view = render(
+    <InsetToastProvider>
+      <Ask owner="bar" block={150} />
+      <Ask owner="bar" block={90} />
+      <Toast />
+    </InsetToastProvider>,
+  );
+  act(() => view.getByRole("button", { name: "raise" }).click());
+  expect(published()).toMatchObject({ "--crewlet-toaster-inset-block": "150px" });
+  view.rerender(
+    <InsetToastProvider>
+      <Ask owner="bar" block={90} />
+      <Toast />
+    </InsetToastProvider>,
+  );
+  expect(published()).toMatchObject({ "--crewlet-toaster-inset-block": "90px" });
+});
+
+// ONLY A BAR THAT REACHES THE FOOT ASKS, and only one with a box: a reply box
+// following a short thread stands mid-pane, and a column folded away has no box.
+test("a bar asks for room only where it is docked at the foot and drawn", () => {
+  const vh = 900;
+  expect(clearOf({ top: 750, bottom: 892, width: 600, height: 142 } as DOMRect, vh)).toBe(150);
+  expect(clearOf({ top: 300, bottom: 440, width: 600, height: 140 } as DOMRect, vh)).toBeNull();
+  expect(clearOf({ top: 0, bottom: 0, width: 0, height: 0 } as DOMRect, vh)).toBeNull();
 });
 
 /*
@@ -179,7 +211,7 @@ const roomDrawn = (view: { container: HTMLElement }) => {
 // toast came, the page rose 93px under the pointer and fell back as it went.
 // Only a taller stack grows it. Mutation: draw the room only while a toast shows,
 // and the first read goes red; measure nothing, and the taller stack's does.
-test("the page's end keeps one toast's room, a taller stack's, and none while it stands at the top", () => {
+test("the page's end keeps one toast's room, and a taller stack's", () => {
   stackAt(window.innerHeight, 0);
   const view = render(
     <InsetToastProvider>
@@ -205,13 +237,6 @@ test("the page's end keeps one toast's room, a taller stack's, and none while it
     </InsetToastProvider>,
   );
   expect(roomDrawn(tall)).toBe("200px");
-  tall.rerender(
-    <InsetToastProvider>
-      <Bar bottom={56} />
-      <ToastRoom />
-    </InsetToastProvider>,
-  );
-  expect(roomDrawn(tall)).toBeNull();
 });
 
 /** A scroller of 1100px under a 500px view, read as the page's, scrolled to `at`. */
@@ -284,7 +309,12 @@ test("a bar docked at the foot stands the stack above it, while it is docked", (
     this: HTMLElement,
   ) {
     return this.hasAttribute("data-docked")
-      ? ({ top: window.innerHeight - 54 } as DOMRect)
+      ? ({
+          top: window.innerHeight - 54,
+          bottom: window.innerHeight,
+          width: 390,
+          height: 54,
+        } as DOMRect)
       : real.call(this);
   });
   const tree = (on: boolean) => (
@@ -299,6 +329,44 @@ test("a bar docked at the foot stands the stack above it, while it is docked", (
   view.rerender(tree(false));
   expect(published()).toEqual({});
   expect(roomDrawn(view)).toBe(`${TOAST_REST_ROOM}px`);
+});
+
+// A BAR DRAWN AFTER ITS ASKER MOUNTS IS FOUND WHEN IT IS ADDED: a room's foot
+// is drawn under its first read, after the hook that keeps the stack above it
+// has run, and was never measured. Mutation: find only on mount, and the stack
+// stays on the bar.
+function LateBar({ drawn }: { drawn: boolean }) {
+  useToastClearOf(() => document.querySelector<HTMLElement>("[data-late]"), true);
+  return drawn ? <div data-late="" /> : null;
+}
+
+test("a bar drawn after its asker mounted is measured once it is on the page", async () => {
+  const real = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.hasAttribute("data-late")
+      ? ({
+          top: window.innerHeight - 150,
+          bottom: window.innerHeight - 8,
+          width: 800,
+          height: 142,
+        } as DOMRect)
+      : real.call(this);
+  });
+  const tree = (drawn: boolean) => (
+    <InsetToastProvider>
+      <LateBar drawn={drawn} />
+      <ToastRoom />
+    </InsetToastProvider>
+  );
+  const view = render(tree(false));
+  expect(published()).toEqual({});
+  view.rerender(tree(true));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(published()).toMatchObject({ "--crewlet-toaster-inset-block": "150px" });
 });
 
 /*
