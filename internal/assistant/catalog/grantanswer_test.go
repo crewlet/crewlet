@@ -75,8 +75,8 @@ func rowsSaid(p proposal.Preview) string {
 	return b.String()
 }
 
-// A GRANT REQUEST'S ANSWER IS DRAWN IN THE ENGINE'S WORDS AND ASKS A STEP-UP.
-// Mutation: draw the option's label or drop the step-up and this fails.
+// A GRANT REQUEST'S ANSWER IS DRAWN IN THE ENGINE'S WORDS AND ASKS A STEP-UP; a
+// lapsed one can still be declined. Mutation: drop the step-up and this fails.
 func TestAGrantRequestsAnswerIsDrawnInTheEnginesWords(t *testing.T) {
 	t.Parallel()
 	answer := mustTool(t, "answer_decision")
@@ -122,6 +122,22 @@ func TestAGrantRequestsAnswerIsDrawnInTheEnginesWords(t *testing.T) {
 				t.Errorf("the approval sends %s, want the answer choosing %s", p.Request.Body, c.choice)
 			}
 		})
+	}
+
+	lapsed := func(ctx context.Context, r exec.Request) (exec.Response, error) {
+		if strings.HasPrefix(r.Path, "/setup/access/requests/") {
+			return exec.Response{Status: http.StatusNotFound}, nil
+		}
+		return grantRoutes(true)(ctx, r)
+	}
+	if p, err := answer.Preview(t.Context(), lapsed, wednesday, map[string]any{
+		"item": "ENG-58", "answers": "c-ask", "choice": "decline"}); err != nil ||
+		p.Title != "Decline an agent's request" || p.StepUp {
+		t.Errorf("declining a lapsed request = %q step-up %v (%v), want a plain decline", p.Title, p.StepUp, err)
+	}
+	if _, err := answer.Preview(t.Context(), lapsed, wednesday, map[string]any{
+		"item": "ENG-58", "answers": "c-ask", "choice": seataccess.GrantOptionTemporary("abcde12345")}); err == nil {
+		t.Error("a lapsed request's grant was prepared")
 	}
 
 	_, err := answer.Preview(t.Context(), grantRoutes(false), wednesday, map[string]any{

@@ -51,6 +51,10 @@ func grantAnswerPreview(ctx context.Context, read proposal.Read, req exec.Reques
 	a Args, g grantChoice) (proposal.Preview, error) {
 
 	stored, err := readGet(ctx, read, accessRequestRoute, map[string]string{"id": g.request}, nil)
+	if err != nil && !g.grants {
+		// A lapsed or settled request can still be declined, to close its question.
+		return declineCard(req, thread, a, "the agent's request", "the agent"), nil
+	}
 	if err != nil {
 		return proposal.Preview{}, err
 	}
@@ -60,6 +64,9 @@ func grantAnswerPreview(ctx context.Context, read proposal.Read, req exec.Reques
 	}
 	doc, err := readGet(ctx, read, accessSeatRoute, map[string]string{"kind": string(r.Kind),
 		"handle": r.Handle, "lane": string(r.Lane)}, url.Values{"permission": {r.Permission}})
+	if err != nil && !g.grants {
+		return declineCard(req, thread, a, "the agent's request for "+r.Permission, r.Handle), nil
+	}
 	if err != nil {
 		return proposal.Preview{}, err
 	}
@@ -77,16 +84,12 @@ func grantAnswerPreview(ctx context.Context, read proposal.Read, req exec.Reques
 		where = "on " + strings.Join(r.Scope, ", ")
 	}
 
+	if !g.grants {
+		return declineCard(req, thread, a, "the request for "+name+" "+where, view.Name), nil
+	}
 	var c changes
 	c.fact("task", "Task", value(thread, "key")+" "+value(thread, "title"))
 	c.fact("agent", "Agent", view.Name)
-	if !g.grants {
-		c.add("choice", "Answer", "Not now: decline the request for "+name+" "+where)
-		c.move("body", "Comment", "", a.String("body"))
-		return proposal.Preview{Title: "Decline an agent's request", Target: view.Name,
-			Note:         view.Name + " is told no and may ask again. Nothing about its access changes.",
-			ApproveLabel: "Approve and decline", Changes: c.rows(), Request: req}, nil
-	}
 	switch {
 	case !listed && view.LookupNote != "":
 		return proposal.Preview{}, fmt.Errorf("%w: %s cannot be granted now: %s", ErrInvalidArguments,
@@ -117,6 +120,17 @@ func grantAnswerPreview(ctx context.Context, read proposal.Read, req exec.Reques
 			view.Integration + " applies it on the next sync.",
 		ApproveLabel: "Approve and grant", Changes: c.rows(), Request: req,
 		StepUp: recency == iam.RecencyStepUp || entry.Write}, nil
+}
+
+// declineCard is the card for declining a grant request, which changes no access.
+func declineCard(req exec.Request, thread any, a Args, what, agent string) proposal.Preview {
+	var c changes
+	c.fact("task", "Task", value(thread, "key")+" "+value(thread, "title"))
+	c.add("choice", "Answer", "Not now: decline "+what)
+	c.move("body", "Comment", "", a.String("body"))
+	return proposal.Preview{Title: "Decline an agent's request", Target: agent,
+		Note:         "The agent is told no and may ask again. Nothing about its access changes.",
+		ApproveLabel: "Approve and decline", Changes: c.rows(), Request: req}
 }
 
 // lookedUp is the entry of a lane view's lookup that names permission.
