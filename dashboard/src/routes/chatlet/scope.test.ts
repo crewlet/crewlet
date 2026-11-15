@@ -10,6 +10,7 @@ import {
   ORG_MEMBERS,
   OUTSIDE_FOLLOWING,
   OUTSIDE_MEMBERS,
+  OUTSIDE_REMOVING,
   OUTSIDER,
   READING,
   roomRules,
@@ -27,9 +28,15 @@ const room = (over: Partial<ChatChannel> = {}): ChatChannel => ({
 
 const detail = (member: boolean) => ({ data: { member } as never, error: null });
 
+// EVERY RULE, named off a room that is read rather than counted here: a count
+// kept by hand went stale the day the room grew a rule (taking somebody out),
+// and the cases below hold every rule to one sentence, whichever they are.
+const RULES = Object.keys(roomRules(room(), detail(true)));
+const every = (why: string) => Object.fromEntries(RULES.map((rule) => [rule, why]));
+
 describe("a room's rules, one per change", () => {
   test("a room not yet read takes nothing yet, and one whose read failed says so", () => {
-    expect(Object.values(roomRules(undefined, null))).toEqual(Array(7).fill(READING));
+    expect(roomRules(undefined, null)).toEqual(every(READING));
     expect(roomRules(undefined, { data: null, error: "query_failed" }).post).toBe(UNREAD);
   });
 
@@ -70,7 +77,7 @@ describe("a room's rules, one per change", () => {
 
   test("a kind this build cannot classify refuses every change", () => {
     const rules = roomRules(room({ kind: "galaxy" }), detail(true));
-    expect(Object.values(rules)).toEqual(Array(7).fill(NEWER_ROOM));
+    expect(rules).toEqual(every(NEWER_ROOM));
   });
 
   test("members are the org chart's in a team's room and the people in a direct conversation", () => {
@@ -97,5 +104,20 @@ describe("a room's rules, one per change", () => {
     );
     expect(roomRules(room(), detail(true)).following).toBe("");
     expect(roomRules(room(), detail(false)).following).toBe(OUTSIDE_FOLLOWING);
+  });
+
+  // TAKING SOMEBODY OUT IS A WRITE OF THE MEMBERSHIP TOO, refused for the same
+  // rooms as adding people and said for removing: a team's room's members are
+  // the org chart's, and a direct conversation is the people in it.
+  test("removing is the membership's rule, said for removing", () => {
+    expect(roomRules(room({ kind: "unit", unit: "eng" }), detail(true)).removing).toBe(ORG_MEMBERS);
+    expect(roomRules(room({ kind: "dm", name: undefined }), detail(true)).removing).toBe(
+      DIRECT_MEMBERS,
+    );
+    expect(roomRules(room({ archived_at: "2026-02-01T00:00:00Z" }), detail(true)).removing).toBe(
+      ARCHIVED,
+    );
+    expect(roomRules(room(), detail(true)).removing).toBe("");
+    expect(roomRules(room(), detail(false)).removing).toBe(OUTSIDE_REMOVING);
   });
 });
