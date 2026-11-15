@@ -108,6 +108,49 @@ func TestDecisionsCountsAsksAndRunsForThePerson(t *testing.T) {
 	}
 }
 
+// A PAGE OF DECISIONS IS THE CALLER'S SIZE AND SAYS WHAT LIES PAST IT: `limit`
+// cuts the merged page, newest first, and `more` is set by an item the cut
+// dropped or by an open ask the tracker's own page left unread, and by nothing
+// else. Ask Crewlet reads a page of its own size, since fifty questions with
+// their bodies and decisions can pass what one of its steps reads. Mutation:
+// ignore `limit`, or set `more` from the cut alone, and this fails.
+func TestADecisionsPageSaysWhatLiesPastIt(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
+	asks := []worklet.AskRow{{Comment: "c-1", AskedAt: at}, {Comment: "c-2", AskedAt: at.Add(-time.Hour)}}
+	for _, tc := range []struct {
+		name     string
+		open     int
+		params   map[string]any
+		want     []string
+		wantMore bool
+	}{
+		{"the whole page", 2, nil, []string{"c-1", "c-2"}, false},
+		{"a smaller page", 2, map[string]any{"limit": "1"}, []string{"c-1"}, true},
+		{"a page past the asks", 2, map[string]any{"limit": "5"}, []string{"c-1", "c-2"}, false},
+		{"asks the tracker left unread", 3, nil, []string{"c-1", "c-2"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			work := &stubWork{decisions: worklet.DecisionsAnswer{Asks: asks,
+				Total: worklet.ClaimTotal{Total: tc.open}}}
+			got, err := askAsSeat(t, viewerSources(t, work), "ana", "decisions", tc.params)
+			if err != nil {
+				t.Fatalf("decisions: %v", err)
+			}
+			answer := got.(map[string]any)
+			var comments []string
+			for _, item := range answer["items"].([]queries.DecisionItem) {
+				comments = append(comments, item.Ask.Comment)
+			}
+			if !slices.Equal(comments, tc.want) || answer["more"] != tc.wantMore {
+				t.Errorf("decisions %v answered %v, more %v; want %v, more %v", tc.params,
+					comments, answer["more"], tc.want, tc.wantMore)
+			}
+		})
+	}
+}
+
 // NOBODY TO ANSWER ABOUT IS NOT AN EMPTY LIST: a credential the engine can
 // name no record for, naming nobody, is told so — the refusal every personal
 // question gives — rather than answered "nothing waits on you".

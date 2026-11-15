@@ -695,6 +695,12 @@ func (a *accessChanges) of(ctx context.Context, handle string, asked time.Time) 
 // most [worklet.MaxDecisions], with the full count and the oldest one's
 // instant beside the page.
 //
+// `limit` asks for a smaller page, and `more` says whether anything lies past
+// the page answered. A screen reads the whole page; Ask Crewlet reads one of
+// its own size, because each question rides with its body and its decision
+// whole, and fifty of them can pass what one of its steps reads, which then
+// shows it none.
+//
 // # And, on the caller's own record, what they may unblock
 //
 // A person may answer more than is put to them: a run whose question went to
@@ -741,7 +747,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	}
 	own := handle == iam.RecordOwner(principal)
 	var items []DecisionItem
-	total, capped := 0, false
+	total, capped, unread := 0, false, false
 	var oldest *time.Time
 	// A QUESTION ASKED BEFORE AN UNREVIEWED ACCESS CHANGE SAYS SO (ADR-0111).
 	changes := newAccessChanges(ctx, s.Access)
@@ -781,6 +787,9 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		}
 		total += asks.Total.Total
 		capped = asks.Total.Capped
+		// OPEN ASKS PAST THE TRACKER'S PAGE, which no page of this answer
+		// holds.
+		unread = capped || asks.Total.Total > len(asks.Asks)
 		if asks.OldestAt != nil {
 			older(*asks.OldestAt)
 		}
@@ -835,13 +844,19 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		}
 		return items[i].At.After(items[j].At)
 	})
-	if len(items) > worklet.MaxDecisions {
-		items = items[:worklet.MaxDecisions]
+	// A PAGE OF THE CALLER'S SIZE, and SAYING IT IS ONE: past the page are the
+	// items this cut drops and the asks the tracker's own page of
+	// [worklet.MaxDecisions] left unread.
+	limit := Clamp(p.Int("limit", 0), worklet.MaxDecisions, worklet.MaxDecisions)
+	more := len(items) > limit || unread
+	if len(items) > limit {
+		items = items[:limit]
 	}
 	if items == nil {
 		items = []DecisionItem{}
 	}
 	answer["items"] = items
+	answer["more"] = more
 	answer["total"] = total
 	answer["answerable"] = answerable
 	answer["capped"] = capped

@@ -26,5 +26,5 @@ export function asReaders(answer: unknown): unknown {
         : {}),
     };
   });
-  return { answerable: 0, ...a, items };
+  return { answerable: 0, more: false, ...a, items };
 }
