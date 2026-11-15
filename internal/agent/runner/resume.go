@@ -149,7 +149,15 @@ func submitted(calls []ledger.Call) bool {
 // AND THE CALLS IT HELD IN FLIGHT (unfinished, [Resume.Unfinished]): begun,
 // their identity on the record, and not finished as the log was read — each
 // a call whose outcome is unknown ([ledger.Call.Unfinished]).
+//
+// AND THE ROUND THEY ARE OF (of): the open round on a relaunch, the collected
+// round on a send-back, whose closed rounds also hold it last, and the round
+// reopened or collected elsewhere. A brief that lists again a closed round's
+// call ([Runner.closedShown]) reads by it which entry of the closed rounds is
+// this round, whose calls it tells by their own rules. Set wherever a
+// roundCalls is built, so no brief reads its zero.
 type roundCalls struct {
+	of         int
 	bridged    []BridgedCall
 	unfinished []BridgedCall
 	elided     []ledger.Elided

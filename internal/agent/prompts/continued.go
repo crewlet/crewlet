@@ -233,12 +233,15 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 // that it shows each, and never that it lacks one. Each is one the save point
 // holds (internal/agent/runner's heldAt), never the call a person approved that
 // the brief's lead tells, which the engine made on the host and which runner
-// keeps off that side; but a point's claim is not what the session reads back:
-// the calls a Claude Code subagent made through the bridge are held where its
-// session was saved past them, while the main thread a resumed session reads
-// shows only the subagent's report of them. "May" is true of both. And it says
-// the call in the other list is one of its own, made as well, so the two are
-// never read as one call shown twice.
+// keeps off that side, or a call of one of the turn's earlier rounds that the
+// brief tells nowhere else (runner's closedShown), which the session holds as
+// it continued through that round, as a fresh brief's line of it, in a
+// summary's words, or not at all; and a point's claim is not what the session
+// reads back either: the calls a Claude Code subagent made through the bridge
+// are held where its session was saved past them, while the main thread a
+// resumed session reads shows only the subagent's report of them. "May" is
+// true of every one. And it says the call in the other list is one of its own,
+// made as well, so the two are never read as one call shown twice.
 //
 // WHY IT NAMES NO REASON BUT "COULD BE TAKEN FOR": runner lists a held call
 // again wherever it cannot rule out that a model takes the told call for it
@@ -255,6 +258,21 @@ const shownAgainHeader = "## Calls the session above may show, listed again" +
 	"\nThe session above may show each of these calls. Each is listed again because a call in another list" +
 	" of this message names the same tool and could be taken for it: that one is a call of its own, made as" +
 	" well as this one, never this one shown twice."
+
+// EarlierRoundNote is the note a call listed again under [shownAgainHeader]
+// ends its line with where it is a call of one of the turn's earlier rounds,
+// closed before the round whose calls the brief tells (internal/agent/runner's
+// closedShown): it says where in the session above the call may be, which
+// anchors it to the rounds the session holds before this one. fire says the
+// conversation is a schedule's, whose turns are its fires ([NextTurn.Fire]),
+// so the words name a fire where they would name a turn.
+//
+// NEVER ON A CALL OF THE ROUND ITSELF, which a brief lists again as well: on a
+// send-back that round is the one just sent back, so "this round" would be
+// false of it, and "an earlier round" is true of none of its calls.
+func EarlierRoundNote(fire bool) string {
+	return "(made in an earlier round of this " + nextTurnWordsFor(NextTurn{Fire: fire}).turn + ")"
+}
 
 // lateCallsHeader introduces the calls of the round that finished only after
 // the run that made them stopped waiting for them, and the ones still in flight
@@ -429,10 +447,12 @@ type AfterSave struct {
 	// never as calls it lacks, and the dropped ones counted since that point.
 	Interrupted bool
 
-	// Shown are calls of the round the session holds that a call told in Calls or
-	// Late could be taken for (internal/agent/runner's readAlike: the same tool,
-	// and arguments that read alike in the told call's line or are not known
-	// whole), as the prior-work ledger renders them within its budgets, under one
+	// Shown are calls the session may show that a call told in Calls or Late
+	// could be taken for (internal/agent/runner's readAlike: the same tool, and
+	// arguments neither call's line tells apart, or not comparable): first the
+	// calls of the turn's earlier rounds that the brief tells nowhere else, each
+	// line ending with [EarlierRoundNote], then the round's own calls the session
+	// holds, as the prior-work ledger renders them within its budgets, under one
 	// read cap with the other lists', spent on these after every other
 	// (ledger.FormatCallGroups), "" for none, and "" too where the cap left it no
 	// call to list, never a count of reads alone. Told after Calls and before

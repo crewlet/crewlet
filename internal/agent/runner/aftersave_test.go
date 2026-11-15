@@ -42,15 +42,28 @@ func afterSaveBrief(t *testing.T, through int, bridged []runner.BridgedCall, eli
 // its parked state and its loss the case's own.
 func lostRelaunch(t *testing.T, basis runner.SessionBasis, round runner.Resume) runner.AgentRunRequest {
 	t.Helper()
+	return lostRelaunchOver(t, basis, nil, round)
+}
+
+// lostRelaunchOver is [lostRelaunch] of round len(history)+1, its run launched
+// over the turn's closed rounds history, as [freshRelaunchOver]'s is.
+func lostRelaunchOver(t *testing.T, basis runner.SessionBasis, history []ledger.Iteration,
+	round runner.Resume) runner.AgentRunRequest {
+
+	t.Helper()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
-	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	notes := ""
+	if len(history) > 0 {
+		notes = history[len(history)-1].ReviewNotes
+	}
+	launched, req := launch(t, entries, buildOpts{}, len(history)+1, notes, history)
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 	relauncher := &probingLauncher{basis: basis}
 	round.State, round.Lost = parked.State, &runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
 		resume: &round})
-	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+	if _, _, err := collector.Resume(t.Context(), history); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 	again := relauncher.last(t)

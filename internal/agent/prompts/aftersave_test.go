@@ -630,3 +630,24 @@ func TestTheCallsListedAgainAreOnesAToldCallCouldBeTakenFor(t *testing.T) {
 		}
 	}
 }
+
+// AN EARLIER ROUND'S CALL IS SAID TO BE OF AN EARLIER ROUND OF THE TURN, OR OF
+// THE FIRE. A call of the turn's closed rounds that a brief lists again ends its
+// line with a note that says where in the session above it may be: in an
+// earlier round of this turn, or, in a schedule's conversation, whose turns are
+// its fires, of this fire. In parentheses, as the ledger's own marks on a line
+// are, and with no em dash.
+//
+// Mutation: say "turn" of a schedule's fire, or "fire" of a conversation's turn,
+// and a row goes red.
+func TestAnEarlierRoundsCallIsSaidToBeOfAnEarlierRoundOfTheTurnOrFire(t *testing.T) {
+	t.Parallel()
+	for fire, want := range map[bool]string{
+		false: "(made in an earlier round of this turn)",
+		true:  "(made in an earlier round of this fire)",
+	} {
+		if got := EarlierRoundNote(fire); got != want || strings.Contains(got, "\u2014") {
+			t.Errorf("EarlierRoundNote(%t) = %q, want %q", fire, got, want)
+		}
+	}
+}

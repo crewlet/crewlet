@@ -222,7 +222,7 @@ type keptTellings struct {
 // keptTellings builds the kept path's tellings of basis ([Runner.keptSession]).
 // Nothing where basis names no kept session.
 func (r *Runner) keptTellings(ctx context.Context, basis SessionBasis, round roundCalls, current int,
-	leadHeld []string, history []ledger.Iteration, surface *tools.Surface, fresh []steer.Note,
+	leadHeld []toldHeld, history []ledger.Iteration, surface *tools.Surface, fresh []steer.Note,
 	branch string) keptTellings {
 
 	t := keptTellings{f: firstRequest{harness: basis.Harness, window: basis.Window, count: keptCount(basis, r.cfg.Resume)},

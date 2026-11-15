@@ -558,9 +558,9 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	case basis.Continues() && r.cfg.Resume != nil:
 		// THE COLLECTED ROUND'S CALLS, the ones its log dropped from the
 		// middle among them: the session continued is that round's job's.
-		collected := roundCalls{bridged: r.cfg.Resume.Bridged, unfinished: r.cfg.Resume.Unfinished,
-			elided: r.cfg.Resume.Elided, lateElided: r.cfg.Resume.LateElided,
-			absorbed: r.cfg.Resume.Absorbed}
+		collected := roundCalls{of: r.cfg.Resume.State.Round, bridged: r.cfg.Resume.Bridged,
+			unfinished: r.cfg.Resume.Unfinished, elided: r.cfg.Resume.Elided,
+			lateElided: r.cfg.Resume.LateElided, absorbed: r.cfg.Resume.Absorbed}
 		// A SEND-BACK'S LEAD TELLS NO HELD CALL, so every call a person
 		// approved after the save is told among the rest, but one a lead it
 		// tells again tells ([Runner.keptSession]).
@@ -727,7 +727,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// carried run's calls included, as the surface is rebuilt and so BEFORE
 	// the launch: the relaunched run's bridged calls are admitted against
 	// this log from its first one.
-	round := roundCalls{bridged: bridgedCalls, unfinished: inAdmissionOrder(r.cfg.Resume.Unfinished),
+	round := roundCalls{of: state.Round, bridged: bridgedCalls, unfinished: inAdmissionOrder(r.cfg.Resume.Unfinished),
 		elided: elided, lateElided: r.cfg.Resume.LateElided, absorbed: absorbed}
 	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, round)
 	if err != nil {
@@ -804,7 +804,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// budget's last ask; which one is handed is judged once the lead exists.
 	var kept keptTellings
 	if carry.keeps() {
-		kept = r.keptTellings(ctx, basis, round, state.Round, leadsHeld(carry), history, built, fresh,
+		kept = r.keptTellings(ctx, basis, round, state.Round, leadsHeld(carry, state.Round), history, built, fresh,
 			carry.branch())
 	}
 	// AND WHAT THE JOB'S OWN COPY OF ITS SESSION MAY LACK, for the launch
@@ -829,9 +829,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// since its box falls back to this brief wherever it cannot take the
 	// session up after all. The base's continuation takes it whole. Never the
 	// call a person approved that the reseed's lead tells, which is made only
-	// after this, below, nor one an earlier answer it tells approved.
-	freshTold, freshOmitted := r.calledAfter(ctx, round, new(0), nil, false,
-		slices.Concat(leadsHeld(carry), answers.held), built, fence)
+	// after this, below, nor one an earlier answer it tells approved. And
+	// nothing of the closed rounds listed again: the run holds no session that
+	// shows them, and its brief renders every one of them as work already done.
+	freshTold, freshOmitted := r.calledAfter(ctx, round, new(0), nil, history, toldAs{fresh: true,
+		leads: slices.Concat(leadsHeld(carry, state.Round), answers.held), rendered: history}, built, fence)
 	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
 	// ([Runner.executeAsAgentRun]): the prior rounds' payloads and the calls
 	// each brief tells, each past its budget, are rewritten by the seat's
@@ -1114,7 +1116,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 
 	meter := NewBridgedSpendFrom(spent)
 	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), held, snapshot, submit, history,
-		roundCalls{bridged: inAdmissionOrder(bridged), unfinished: inAdmissionOrder(unfinished),
+		roundCalls{of: state.Round, bridged: inAdmissionOrder(bridged), unfinished: inAdmissionOrder(unfinished),
 			elided: elided, absorbed: absorbed})
 	if err != nil {
 		return ReopenedRun{}, err
@@ -1307,7 +1309,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// what it could still have discovered ([Runner.finishWork]); and the
 	// turn's call log, which starts from what the turn already called.
 	built, err := r.rebuiltSurface(ctx, r.ownMeter(), state, snapshot, submit, history,
-		roundCalls{bridged: bridged, unfinished: unfinished, elided: elided, absorbed: absorbed})
+		roundCalls{of: state.Round, bridged: bridged, unfinished: unfinished, elided: elided, absorbed: absorbed})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
