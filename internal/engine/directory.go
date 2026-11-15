@@ -299,7 +299,11 @@ const DirectoryRefresh = 30 * time.Second
 // it to a fleet lease would mean a lease flap stopped a node withdrawing a
 // suspended person's identities.
 func (e *Engine) watchDirectory(ctx context.Context) {
-	ticker := time.NewTicker(DirectoryRefresh)
+	every := DirectoryRefresh
+	if e.directoryRefresh > 0 {
+		every = e.directoryRefresh
+	}
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		select {

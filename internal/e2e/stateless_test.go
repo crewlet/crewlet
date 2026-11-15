@@ -271,7 +271,7 @@ func nodeOptions(boot *config.Bootstrap, cfg *config.Company, env map[string]str
 	return engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(env), SandboxPollInterval: runPollInterval,
-		BoxHostURL: bridge,
+		DirectoryRefresh: directoryRefresh, BoxHostURL: bridge,
 	}
 }
 
@@ -667,7 +667,9 @@ func TestAStatelessNodesAuditTrailLandsOnADataNode(t *testing.T) {
 // the guarantee: such a node runs no applier, so nothing would ever signal its
 // party registry that a seat's standing moved, and the one way it learns is
 // the directory [engine.New] hands it — a data node's, read through the
-// estate's router on the registry's own timer ([engine.DirectoryRefresh]).
+// estate's router on the registry's own timer ([engine.DirectoryRefresh],
+// shortened here to directoryRefresh, so the case reads its change rather than
+// waiting out a production tick).
 // Handed none, it builds the chart-only registry, which routes every suspended,
 // retired and removed holder's accounts for as long as the node runs.
 //

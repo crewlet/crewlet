@@ -116,6 +116,18 @@ const ceoSeat = "    handle: ceo\n    llm: [scripted, coder]\n"
 // in a moment — would wait out a real tick before its review.
 const runPollInterval = 100 * time.Millisecond
 
+// directoryRefresh is how often a node here re-reads the party directory
+// behind its signal ([engine.Options.DirectoryRefresh]).
+//
+// Sized in production at half a minute, the alarm table's stall: on a data
+// node a commit signals the registry at once and the net costs nothing, but a
+// node without `data` has no signal and reads through a data node on each
+// tick, so a case that suspends someone on the data node waited out a real
+// tick — most of TestAStatelessNodesPartyRegistryReadsTheDirectory's 35 s
+// on CI. A quarter second is one leaf round trip's work four times a second,
+// beside cases whose waits poll every 20 ms.
+const directoryRefresh = 250 * time.Millisecond
+
 // tickInterval is the shared tick's cadence on a single node here. Short enough
 // that the spend rollup lands inside a test, long enough not to drown the
 // capture in health frames.
