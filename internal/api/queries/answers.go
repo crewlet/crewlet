@@ -102,8 +102,10 @@ type Sources struct {
 	// existed.
 	Company func() (*config.Company, *org.Organization)
 
-	// Research reads the web pages Ask Crewlet may read (ADR-0151).
+	// Research reads the web pages Ask Crewlet may read (ADR-0151), and
+	// Searcher searches them.
 	Research ResearchReader
+	Searcher ResearchSearcher
 
 	// AwaitingRestart is which of Crewlet's own services the company it is
 	// handed turns on that this node serves only once restarted, by the org
@@ -1047,6 +1049,9 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Research != nil && s.Company != nil {
 		r.Register("research_page", Everybody(), s.researchPage)
+	}
+	if s.Searcher != nil {
+		r.Register("research_search", Everybody(), s.researchSearch)
 	}
 	if s.Work != nil || s.Sandbox != nil {
 		r.Register("decisions", Everybody(), s.decisions)

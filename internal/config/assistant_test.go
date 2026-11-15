@@ -355,3 +355,31 @@ func TestResearchListsBareHostNames(t *testing.T) {
 		})
 	}
 }
+
+// Research search names a shared, enabled Tavily entry whose search is not
+// blocked; any other entry, or none the document holds, is refused naming it.
+func TestResearchSearchNamesTheCompanysTavilyServer(t *testing.T) {
+	t.Parallel()
+	doc := func(servers, name string) string {
+		return "name: Acme\nmcp_servers:\n" + servers + "assistant:\n  research:\n" +
+			"    hosts: [docs.example.com]\n    search: {mcp_server: " + name + "}\n"
+	}
+	const tavily = "  - name: search\n    command: npm\n    args: [exec, --yes, --, tavily-mcp@0.2.22]\n" +
+		"    env: {TAVILY_API_KEY: '${TAVILY_API_KEY}'}\n"
+	if _, err := ParseCompany([]byte(doc(tavily, "search"))); err != nil {
+		t.Fatalf("a shared Tavily entry was refused: %v", err)
+	}
+	for name, tc := range map[string]struct{ servers, server string }{
+		"unknown entry": {tavily, "nothing"},
+		"not Tavily": {"  - name: search\n    command: npx\n    args: [-y, some-other-server]\n",
+			"search"},
+		"per role":       {tavily + "    shared: false\n", "search"},
+		"search blocked": {tavily + "    tools: {levels: {tavily_search: blocked}}\n", "search"},
+		"turned off":     {tavily + "    enabled: false\n", "search"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rejects(t, doc(tc.servers, tc.server), "assistant.research.search.mcp_server")
+		})
+	}
+}

@@ -271,6 +271,10 @@
             "array",
             "null"
           ]
+        },
+        "search": {
+          "$ref": "#/$defs/ResearchSearch",
+          "description": "Web search over the listed hosts, through the company's own search tool server. Absent: Ask Crewlet reads pages it is given but searches none."
         }
       },
       "type": [
@@ -3750,6 +3754,24 @@
           "type": [
             "boolean",
             "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ResearchSearch": {
+      "additionalProperties": false,
+      "properties": {
+        "mcp_server": {
+          "description": "The mcp_servers entry Ask Crewlet searches through: a shared, enabled entry the curated catalogue recognises as Tavily, whose tavily_search is not blocked. Each node serving the API runs its own instance of it for research alone. Required.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
             "null"
           ]
         }

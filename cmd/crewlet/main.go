@@ -2520,6 +2520,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// The web pages Ask Crewlet reads, through the address check
 			// every outbound call takes (ADR-0151).
 			Research: research.New(httpx.Guarded(research.Timeout), time.Now),
+			Searcher: e,
 			// WHICH OF THE COMPANY'S OWN SERVICES THIS NODE SERVES ONLY
 			// ONCE RESTARTED, so the org projection says it beside the
 			// backends and a reader is not shown a workspace whose every

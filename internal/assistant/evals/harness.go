@@ -94,12 +94,26 @@ func DeepCompany(seats ...string) (assistant.Company, error) {
 	return company(deepDoc, true, seats)
 }
 
-// ResearchCompany is [Company] with web research on, from the hosts named.
-func ResearchCompany(hosts []string, seats ...string) (assistant.Company, error) {
-	doc := strings.Replace(companyDoc, "  llm: [assistant]\n",
-		"  llm: [assistant]\n  research:\n    hosts: ["+strings.Join(hosts, ", ")+"]\n", 1)
+// ResearchCompany is [Company] with web research on, from the hosts named,
+// and searched through a Tavily server where search is set.
+func ResearchCompany(hosts []string, search bool, seats ...string) (assistant.Company, error) {
+	research := "  research:\n    hosts: [" + strings.Join(hosts, ", ") + "]\n"
+	doc := companyDoc
+	if search {
+		research += "    search: {mcp_server: search}\n"
+		doc = strings.Replace(doc, "assistant:\n  enabled", searchServer+"assistant:\n  enabled", 1)
+	}
+	doc = strings.Replace(doc, "  llm: [assistant]\n", "  llm: [assistant]\n"+research, 1)
 	return company(doc, true, seats)
 }
+
+// searchServer is the curated Tavily entry a research search runs.
+const searchServer = `mcp_servers:
+  - name: search
+    command: npm
+    args: [exec, --yes, --, tavily-mcp@0.2.22]
+    env: {TAVILY_API_KEY: '${TAVILY_API_KEY}'}
+`
 
 func company(doc string, on bool, seats []string) (assistant.Company, error) {
 	var roles string
