@@ -71,7 +71,7 @@ func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
 
 	e.startSharedServers(ctx, company)
 	e.startSeatServers(ctx, "ceo")
-	rows := statusOf(ctx, t, e).MCP
+	rows := e.statusRecordRows(ctx).MCP
 	if len(rows) != 2 {
 		t.Fatalf("heartbeat carries %d mcp rows, want the shared and the per-role server: %+v", len(rows), rows)
 	}
@@ -88,12 +88,12 @@ func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
 	}
 
 	e.stopSeatServers(ctx, "ceo")
-	if rows := statusOf(ctx, t, e).MCP; len(rows) != 1 || rows[0].Server != "search" {
+	if rows := e.statusRecordRows(ctx).MCP; len(rows) != 1 || rows[0].Server != "search" {
 		t.Errorf("after the seat was released the heartbeat carries %+v, want only the shared server", rows)
 	}
 
 	e.startSharedServers(ctx, mcpStatusCompany(t, false))
-	if rows := statusOf(ctx, t, e).MCP; len(rows) != 0 {
+	if rows := e.statusRecordRows(ctx).MCP; len(rows) != 0 {
 		t.Errorf("after a revision dropped the shared server the heartbeat carries %+v", rows)
 	}
 }

@@ -509,6 +509,36 @@ func TestFleetContract(t *testing.T) {
 	})
 }
 
+// TestNodeStatusRecordContract runs the node status records' suite over the
+// KV: a record store and the lease store whose presence it is joined to, each
+// on its own buckets on one embedded broker, as a node opens both.
+func TestNodeStatusRecordContract(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	coordtest.RunNodeStatusRecords(t, func(t *testing.T) (coord.Backend, coord.NodeStatusRecords) {
+		return openStore(t, nc, coordtest.LongTTL), openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
+	})
+}
+
+// A NODE'S STATUS RECORD AGES OUT WITH ITS BUCKET, at the apply status's
+// freshness: what removes a dead node's rows is the age, and nothing sweeps
+// them, so a bucket opened without one would keep every node that ever ran.
+//
+// Mutation: open the node status bucket with no age, or with the ledger's,
+// and the age in force reads otherwise.
+func TestANodesStatusRecordAgesOutAtTheStatusFreshness(t *testing.T) {
+	t.Parallel()
+	store := openFleet(t, embeddedNATS(t))
+	status, err := store.nodeStatus.Status(t.Context())
+	if err != nil {
+		t.Fatalf("read the node status bucket: %v", err)
+	}
+	if got := status.TTL(); got != time.Minute {
+		t.Errorf("the node status bucket ages at %v, want the StatusFreshness it was opened with (%v)",
+			got, time.Minute)
+	}
+}
+
 // THE BODY RIDES THE POINTER AS THE JSON IT IS.
 //
 // Carried as bytes, encoding/json spells it as a base64 string — over an

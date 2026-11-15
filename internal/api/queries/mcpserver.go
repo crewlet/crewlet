@@ -433,10 +433,11 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	if name == "" {
 		return MCPServerAnswer{}, fmt.Errorf("%w: name must be an MCP server's configured name", ErrBadParams)
 	}
-	if s.MCPListings == nil || s.Config == nil || s.Coord == nil || s.Usage == nil || s.Events == nil {
+	if s.MCPListings == nil || s.Config == nil || s.Coord == nil || s.NodeStatuses == nil || s.Usage == nil ||
+		s.Events == nil {
 		return MCPServerAnswer{}, ErrMCPDetailUnavailable
 	}
-	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
+	leases, records, err := s.liveStatuses(ctx)
 	if err != nil {
 		return MCPServerAnswer{}, err
 	}
@@ -454,7 +455,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	if err != nil {
 		return MCPServerAnswer{}, err
 	}
-	status := s.mcpStatusOf(leases, grants)
+	status := s.mcpStatusOf(leases, records, grants)
 	at := slices.IndexFunc(status.Servers, func(r MCPServerRow) bool { return r.Name == name })
 	if at < 0 && len(listings) == 0 {
 		return MCPServerAnswer{}, fmt.Errorf("%w: no MCP server %q is configured, reported or listed", ErrNotFound, name)

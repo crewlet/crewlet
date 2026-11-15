@@ -246,13 +246,6 @@ type Config struct {
 	// lets the beat write it unbounded.
 	GitBackground func() int64
 
-	// Infra is what this node says of what it runs on ([coord.NodeInfra.Meta]),
-	// which the host writes on every beat under [coord.InfraKey]. Read once
-	// from the node's own file at boot, so the beat reads memory and nothing
-	// can overrun it. Nil on a node that says nothing, whose row carries no
-	// such key.
-	Infra map[string]any
-
 	// RoleNeeded reports whether the COMPANY needs a role at all right now —
 	// false for git where the company hosts no code. Nil: every role is
 	// needed (every role but gitlet always is).
@@ -359,7 +352,6 @@ type Host struct {
 	// gitBackground is Config.GitBackground; nil on a node without the gitlet
 	// role.
 	gitBackground func() int64
-	infra         map[string]any
 	// roleNeeded is Config.RoleNeeded; nil needs every role.
 	roleNeeded func(placement.NodeRole) bool
 	hooks      Hooks
@@ -479,7 +471,6 @@ func New(cfg Config) (*Host, error) {
 		profile:       profile,
 		status:        cfg.Status,
 		gitBackground: cfg.GitBackground,
-		infra:         cfg.Infra,
 		roleNeeded:    cfg.RoleNeeded,
 		hooks:         cfg.Hooks,
 		clock:         cfg.Clock,
@@ -775,6 +766,12 @@ func (h *Host) TTL() time.Duration { return h.ttl }
 // renew is what re-proves it. A caller waiting for MayStart to admit a seat
 // again waits this long, rather than re-asking on a clock of its own.
 func (h *Host) HeartbeatInterval() time.Duration { return h.heartbeat }
+
+// RenewPeriod is how often the heartbeat loop renews this node's leases, its
+// presence among them: a beat inside the heartbeat ([Host.renewPeriod]). What a
+// loop that publishes beside the presence keeps pace with, so what it writes is
+// as fresh as the presence it is read with.
+func (h *Host) RenewPeriod() time.Duration { return h.renewPeriod() }
 
 // Held is the seats whose leases this node holds, sorted.
 //

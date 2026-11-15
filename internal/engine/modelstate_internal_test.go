@@ -159,14 +159,8 @@ func TestTheLoginWatcherSaysWhatTheHarnessSaysOfItsLogin(t *testing.T) {
 	}
 }
 
-// beatOf is what e's next heartbeat carries, a case failing where the beat
-// would publish nothing (the status reads [Engine.nodeStatus] makes did not
-// answer).
-func beatOf(t *testing.T, e *Engine) coord.NodeStatus {
+// beatOf is the rows e's next status record carries ([Engine.statusRecordRows]).
+func beatOf(t *testing.T, e *Engine) coord.NodeStatusRecord {
 	t.Helper()
-	status, err := e.nodeStatus(t.Context())
-	if err != nil {
-		t.Fatalf("the beat answered nothing: %v", err)
-	}
-	return status
+	return e.statusRecordRows(t.Context())
 }

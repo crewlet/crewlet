@@ -67,7 +67,7 @@ func seatID(t *testing.T, c *Company, handle string) uuid.UUID {
 	return id
 }
 
-// AN MCP SERVER'S CONDITION IS THE FLEET'S, JOINED FROM EVERY NODE'S HEARTBEAT:
+// AN MCP SERVER'S CONDITION IS THE FLEET'S, JOINED FROM EVERY NODE'S STATUS RECORD:
 // its instances summed over the nodes; the instance down longest anywhere, with
 // its node, its agent by handle, its class and what it said; the wait held
 // longest likewise; and its refused names once across the fleet, counted as the
@@ -76,13 +76,13 @@ func seatID(t *testing.T, c *Company, handle string) uuid.UUID {
 //
 // Mutation: keep one node's outage rather than the earliest, name the agent by
 // its id, sum the refusal counts, or judge a server turned off, and this fails.
-func TestAnMCPServersConditionIsTheFleetsHeartbeats(t *testing.T) {
+func TestAnMCPServersConditionIsTheFleetsStatusRecords(t *testing.T) {
 	t.Parallel()
 	c := mcpAlarmFixture(t)
 	backend, pm := seatID(t, c, "backend-dev"), seatID(t, c, "pm")
 	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	early, late := now.Add(-time.Hour), now.Add(-time.Minute)
-	statuses := map[string]coord.NodeStatus{
+	statuses := map[string]coord.NodeStatusRecord{
 		"node-a": {MCP: []coord.MCPServerStatus{
 			{Server: "archive", Shared: true, Failed: 1, DownSince: early, Error: "gone"},
 			{Server: "github", Started: 1, Failed: 1, DownSince: early, ErrorSeat: backend,
@@ -171,16 +171,21 @@ func TestAFailedLeaseReadKeepsTheMCPConditions(t *testing.T) {
 	c := mcpAlarmFixture(t)
 	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	leases := &flakyLeases{Backend: coordmemory.New()}
-	status := coord.NodeStatus{MCP: []coord.MCPServerStatus{
-		{Server: "docs", Shared: true, Failed: 1, DownSince: now.Add(-time.Hour), Error: "exit status 1"},
-	}}
-	if _, _, err := leases.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
-		Owner: "node-a:1", TTL: time.Minute, Meta: map[string]any{coord.StatusKey: status.Meta()},
-	}); err != nil {
+	presence, _, err := leases.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
+		Owner: "node-a:1", TTL: time.Minute,
+	})
+	if err != nil || presence == nil {
+		t.Fatalf("claim node-a's presence: %v, %v", presence, err)
+	}
+	fleet := coordmemory.NewFleet()
+	if err := fleet.PutNodeStatus(t.Context(), coord.NodeStatusRecord{Node: "node-a", Epoch: presence.Epoch,
+		MCP: []coord.MCPServerStatus{
+			{Server: "docs", Shared: true, Failed: 1, DownSince: now.Add(-time.Hour), Error: "exit status 1"},
+		}}); err != nil {
 		t.Fatal(err)
 	}
 	e := epochEngine(c)
-	e.backends, e.testNode = &Backends{Coord: leases}, "node-a"
+	e.backends, e.testNode = &Backends{Coord: leases, Fleet: fleet}, "node-a"
 
 	var first, second statelog.Reading
 	e.entriesReading(t.Context(), now, &first)

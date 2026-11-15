@@ -58,7 +58,7 @@ func TestAServerTurnedOffIsNotHeldBackForItsCredentials(t *testing.T) {
 	e.startSharedServers(ctx, company)
 	e.startSeatServers(ctx, "ceo")
 	t.Cleanup(func() { e.stopSeatServers(context.Background(), "ceo") })
-	if rows := statusOf(ctx, t, e).MCP; len(rows) != 0 {
+	if rows := e.statusRecordRows(ctx).MCP; len(rows) != 0 {
 		t.Errorf("the heartbeat carries %+v for servers turned off, want nothing", rows)
 	}
 	if running := e.mcp.Servers(); len(running) != 0 {
