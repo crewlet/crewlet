@@ -61,7 +61,7 @@ import {
   TableTextCell,
   Tag,
 } from "@crewlethq/ui";
-import { UploadGlyph } from "@crewlethq/icons/glyphs";
+import { BookmarkGlyph, GitBranchGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { href, useParam } from "~/app/router.tsx";
@@ -87,9 +87,10 @@ import {
   type CodePushesAnswer,
 } from "~/protocol/index.ts";
 import { spellPosition } from "~/protocol/session.ts";
-import { REPO_PARAM } from "./paths.ts";
+import { REPO_PARAM, commitHref, compareHref } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import "~/styles/gitlet.css";
 
 /**
  * How often the newest page is read again: a MINUTE, the cadence this
@@ -366,7 +367,7 @@ const PushRefs = memo(function PushRefs({ push, repo }: { push: CodePushRow; rep
   const listId = useId();
   const shown = push.commands ?? [];
   const omitted = omittedOf(push.omitted);
-  if (omitted.total === 0) return <Commands commands={shown} />;
+  if (omitted.total === 0) return <Commands commands={shown} repo={repo} />;
 
   const read = async () => {
     setWhole({ state: "reading" });
@@ -394,7 +395,7 @@ const PushRefs = memo(function PushRefs({ push, repo }: { push: CodePushRow; rep
   return (
     <span className="col gap-1">
       <span id={listId}>
-        <Commands commands={showing ? whole.commands : shown} />
+        <Commands commands={showing ? whole.commands : shown} repo={repo} />
       </span>
       {!showing && <Omitted outcomes={omitted.outcomes} total={omitted.total} />}
       {whole.state === "gone" && (
@@ -456,26 +457,30 @@ function Omitted({ outcomes, total }: { outcomes: readonly OutcomeCount[]; total
   );
 }
 
-/** Every ref a push asked to move, and what became of each, one per line. */
-function Commands({ commands }: { commands: readonly CodePushCommand[] }) {
+/**
+ * Every ref a push asked to move, and what became of each, one per line: its
+ * glyph (a branch, or a tag), its name, the word for what became of it, and
+ * the commits it moved between — a moved ref's two ids the way to the
+ * comparison of what the push changed on it, a created ref's id the way to
+ * the commit it was made at.
+ */
+function Commands({ commands, repo }: { commands: readonly CodePushCommand[]; repo: string }) {
   return (
-    <span className="col">
+    <span className="code-push-refs">
       {commands.map((c) => {
         const ref = refName(c.ref);
         const word = commandWord(c);
-        // THE IDS A REF MOVED BETWEEN, where it moved: the one it was made at,
-        // the one it was removed from, or both.
-        const ids =
-          c.result !== "ok"
-            ? null
-            : word === "created"
-              ? [c.new]
-              : word === "deleted"
-                ? [c.old]
-                : [c.old, c.new];
+        const moved = c.result === "ok" && word !== "created" && word !== "deleted";
         return (
-          <span key={c.ref} className="row gap-1 nowrap" title={c.ref}>
-            <span className="mono truncate">
+          <span key={c.ref} className="code-push-ref" title={c.ref}>
+            {ref.kind === "tag" ? (
+              <BookmarkGlyph size="sm" className="code-glyph" />
+            ) : (
+              <GitBranchGlyph size="sm" className="code-glyph" />
+            )}
+            {/* A TAG IS SAID AS ONE, beside its glyph: the glyph is a
+                bookmark, which no reader takes for a tag unaided. */}
+            <span className="code-push-ref__name">
               {ref.kind === "tag" ? `tag ${ref.name}` : ref.name}
             </span>
             {c.result === "ng" ? (
@@ -485,12 +490,28 @@ function Commands({ commands }: { commands: readonly CodePushCommand[] }) {
                 {c.reason ? `refused: ${c.reason}` : word}
               </Tag>
             ) : (
-              <span className="muted">{word}</span>
+              <span className="code-push-ref__word">{word}</span>
             )}
-            {ids && (
-              <span className="mono muted" title={ids.join("..")}>
-                {ids.map(shortOID).join("..")}
+            {c.result === "ok" && word === "created" && (
+              <a className="mono t-link" href={commitHref(repo, c.new)} title={c.new}>
+                {shortOID(c.new)}
+              </a>
+            )}
+            {c.result === "ok" && word === "deleted" && (
+              <span className="mono muted" title={c.old}>
+                {shortOID(c.old)}
               </span>
+            )}
+            {moved && (
+              // THE IDS A REF MOVED BETWEEN, as the comparison that reads
+              // what the push changed on it: base its old, head its new.
+              <a
+                className="mono t-link"
+                href={compareHref(repo, { base: c.old, head: c.new })}
+                title={`${c.old}..${c.new}`}
+              >
+                {`${shortOID(c.old)}..${shortOID(c.new)}`}
+              </a>
             )}
           </span>
         );

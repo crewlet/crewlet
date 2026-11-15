@@ -3,16 +3,16 @@ package jetstream
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+
+	"github.com/crewlet/crewlet/internal/jsapi"
 )
 
 // A DOMAIN CONSUMER'S STANDING PULL, made by hand, because the client library
@@ -317,7 +317,7 @@ func (p *puller) request(batch, maxBytes int, wait time.Duration) error {
 // deliver is the inbox's callback: one delivery, or one status about the
 // request whose reply subject it arrived on.
 func (p *puller) deliver(msg *nats.Msg) {
-	status, failure := pullStatus(msg)
+	status, failure := jsapi.PullStatus(msg)
 	p.mu.Lock()
 	if p.released {
 		p.mu.Unlock()
@@ -355,7 +355,7 @@ func (p *puller) deliver(msg *nats.Msg) {
 				p.requests = p.requests[1:]
 			}
 		}
-	case status == statusHeartbeat:
+	case status == jsapi.StatusHeartbeat:
 		// Not asked for, and no answer about any request.
 		p.mu.Unlock()
 		return
@@ -550,64 +550,3 @@ func (p *puller) take(maxMessages, maxBytes int) []*nats.Msg {
 	}
 	return taken
 }
-
-// statusHeader and descriptionHeader are where the connection puts a status
-// line's code and its text: a status arrives as `NATS/1.0 408 Request Timeout`
-// with no payload, and the client library parses those two parts into these
-// two headers under names it does not export.
-const (
-	statusHeader      = "Status"
-	descriptionHeader = "Description"
-)
-
-// The status codes a pull's inbox receives.
-const (
-	statusHeartbeat = "100"
-	statusNoMsgs    = "404"
-	statusTimeout   = "408"
-	statusConflict  = "409"
-)
-
-// pullStatus reads a delivery as a status: empty for a record, and for a
-// status, whether it ends the request as a FAILURE.
-//
-// THE ORDINARY ENDINGS ARE NOT FAILURES: the wait running out (`408`), a
-// no-wait request finding nothing (`404`), and the two `409`s that are the
-// server's own bounds doing their job — the next record would pass the byte
-// bound, or the batch filled with bytes to spare. Every other status is the
-// request refused or cut off — the consumer deleted under it, its leader
-// moving, too many requests already waiting, no JetStream answering — and
-// the reader reports it rather than returning what looks like an empty log.
-func pullStatus(msg *nats.Msg) (string, error) {
-	if len(msg.Data) > 0 || len(msg.Header) == 0 {
-		return "", nil
-	}
-	code := msg.Header.Get(statusHeader)
-	if code == "" {
-		return "", nil
-	}
-	description := msg.Header.Get(descriptionHeader)
-	switch code {
-	case statusHeartbeat, statusNoMsgs, statusTimeout:
-		return code, nil
-	case statusConflict:
-		if pastMaxBytes(msg) || strings.Contains(strings.ToLower(description), "batch completed") {
-			return code, nil
-		}
-	}
-	return code, fmt.Errorf("%w: the server ended the pull with %s %s",
-		errPullRefused, code, description)
-}
-
-// pastMaxBytes reports a status that ended a pull because the next record
-// would pass the pull's byte bound — the `409` whose text says so, which the
-// server sends in place of that record rather than deliver it (nats-server
-// v2.15.2, consumer.go's nextWaiting: "Message Size Exceeds MaxBytes").
-func pastMaxBytes(msg *nats.Msg) bool {
-	return msg.Header.Get(statusHeader) == statusConflict &&
-		strings.Contains(strings.ToLower(msg.Header.Get(descriptionHeader)), "exceeds maxbytes")
-}
-
-// errPullRefused is a pull the server ended as a failure rather than by
-// running out of time or filling a bound.
-var errPullRefused = errors.New("jetstream: pull refused")
