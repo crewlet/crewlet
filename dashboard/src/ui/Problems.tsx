@@ -29,7 +29,7 @@
  */
 
 import type { ReactNode } from "react";
-import { InlineCode, type InlineCodeTone } from "@crewlethq/ui";
+import { InlineCode, peelPunctuation, type InlineCodeTone } from "@crewlethq/ui";
 
 /** One problem: where it is, and what to do about it. */
 export interface Problem {
@@ -177,8 +177,20 @@ export function marked(text: string, tone: InlineCodeTone = "default"): ReactNod
   let key = 0;
   for (const m of text.matchAll(token)) {
     const at = m.index ?? 0;
-    if (at > last) out.push(text.slice(last, at));
+    // A match inside the punctuation the last chip took is part of that chip's sentence.
+    if (at < last) continue;
     const [whole, linked, href, ticked, url, ref, route, quoted, path, name] = m;
+    // A CHIP TAKES THE PUNCTUATION AROUND IT (`peelPunctuation`), as a
+    // markdown code span does: the kit then keeps the full stop or comma on
+    // the chip's line and its ground hugs it, where the chip's inset beside a
+    // bare "," read as a space before it ("backup_floor: operator ,").
+    const peeled =
+      (linked && href) || url
+        ? null
+        : peelPunctuation(text.slice(last, at), text.slice(at + whole.length));
+    const lead = peeled ? peeled.before : text.slice(last, at);
+    if (lead) out.push(lead);
+    const edges = { open: peeled?.open ?? "", close: peeled?.close ?? "" };
     // A NEW TAB, on every anchor here: this sits in a dialog holding a
     // half-filled form, and following a link in place would throw the form
     // away to read a page about how to fill it in.
@@ -190,7 +202,7 @@ export function marked(text: string, tone: InlineCodeTone = "default"): ReactNod
       );
     } else if (ticked) {
       out.push(
-        <InlineCode key={key++} tone={tone}>
+        <InlineCode key={key++} tone={tone} {...edges}>
           {ticked}
         </InlineCode>,
       );
@@ -205,18 +217,18 @@ export function marked(text: string, tone: InlineCodeTone = "default"): ReactNod
         // A SEALED ENTRY'S NAME, which is one token a reader copies back: the
         // `reference` variant is what keeps its braces together, because a
         // pointer broken across a line names nothing.
-        <InlineCode key={key++} variant="reference" tone={tone}>
+        <InlineCode key={key++} variant="reference" tone={tone} {...edges}>
           {ref ?? name}
         </InlineCode>,
       );
     } else {
       out.push(
-        <InlineCode key={key++} tone={tone}>
+        <InlineCode key={key++} tone={tone} {...edges}>
           {route ?? quoted ?? path}
         </InlineCode>,
       );
     }
-    last = at + whole.length;
+    last = at + whole.length + edges.close.length;
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
