@@ -174,9 +174,11 @@ export const Composer = forwardRef<
           value={text}
           aria-label={fieldLabel}
           placeholder={placeholder}
-          role="combobox"
+          // A TEXTBOX THAT OWNS A LIST, never a combobox: ARIA in HTML allows
+          // no combobox role on a textarea (axe aria-allowed-role), and a
+          // textbox points at its @ list with these three, as Chatlet's
+          // message box does.
           aria-autocomplete="list"
-          aria-expanded={choices.length > 0}
           aria-controls={choices.length > 0 ? listId : undefined}
           aria-activedescendant={choices.length > 0 ? `${listId}-${active}` : undefined}
           aria-describedby={keys.describedBy}

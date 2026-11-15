@@ -1638,7 +1638,7 @@ test("watch follows the task as the person", async () => {
 test("a comment is posted on the task", async () => {
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
-  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment on ENG-42" }), {
     target: { value: "Holding the port for 20s reproduces it." },
   });
   fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
@@ -1678,7 +1678,7 @@ test("a reply sent closes the banner that said who it answers", async () => {
   await settle();
   fireEvent.click(screen.getByRole("button", { name: "Reply" }));
   expect(screen.getByText(/^Replying to/)).toBeTruthy();
-  fireEvent.change(screen.getByRole("combobox", { name: /^Reply to/ }), {
+  fireEvent.change(screen.getByRole("textbox", { name: /^Reply to/ }), {
     target: { value: "Yes, every 20s." },
   });
   fireEvent.click(screen.getByRole("button", { name: /^Send$/ }));
@@ -1762,7 +1762,7 @@ test("an asked person opens the item and answers without Worklet", async () => {
   expect(within(theirs).queryByRole("button", { name: "Accept" })).toBeNull();
   // NO REPLY BOX AND NO COMPOSER: the one write they may make is the answer.
   expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Comment on ENG-42" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Comment on ENG-42" })).toBeNull();
   fireEvent.click(within(mine).getByRole("button", { name: "Accept" }));
   await settle();
   expect(posted).toEqual([
@@ -1775,7 +1775,7 @@ test("an asked person opens the item and answers without Worklet", async () => {
 test("an ask's option past the engine's cap says so under it", async () => {
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
-  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment on ENG-42" }), {
     target: { value: "Which way do we ship?" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
@@ -1805,7 +1805,7 @@ test("an ask's question is prefilled whole and held past the engine's cap", asyn
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
   const opening = `Which ${"region ".repeat(60)}do we ship first?`;
-  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment on ENG-42" }), {
     target: { value: `${opening}\nThe detail.` },
   });
   fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
@@ -1829,7 +1829,7 @@ test("an ask's question is prefilled whole and held past the engine's cap", asyn
 test("an ask's options stop at four, the engine's cap", async () => {
   mount(<WorkItemPage id="ENG-42" />);
   await settle();
-  fireEvent.change(screen.getByRole("combobox", { name: "Comment on ENG-42" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment on ENG-42" }), {
     target: { value: "Which region do we ship first?" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Ask…" }));
@@ -1891,7 +1891,7 @@ test("a second Enter while the first is out files one sub-task and one comment",
   await settle();
   fireEvent.submit(line.closest("form")!);
   await settle();
-  const comment = screen.getByRole("combobox", { name: "Comment on ENG-42" });
+  const comment = screen.getByRole("textbox", { name: "Comment on ENG-42" });
   fireEvent.change(comment, { target: { value: "Holding the port reproduces it." } });
   fireEvent.keyDown(comment, { key: "Enter", ctrlKey: true });
   await settle();
@@ -2506,7 +2506,7 @@ test("a duplicate's page writes and reads by its id, and names it by its key", a
       .catch(() => screen.findByRole("menuitem", { name: "In review" })),
   );
   await settle();
-  fireEvent.change(screen.getByRole("combobox", { name: `Comment on ${SHARED_KEY}` }), {
+  fireEvent.change(screen.getByRole("textbox", { name: `Comment on ${SHARED_KEY}` }), {
     target: { value: "Seen on the duplicate." },
   });
   fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
