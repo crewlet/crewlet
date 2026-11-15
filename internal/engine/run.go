@@ -2521,8 +2521,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// with this node's lease renewals across a link (memsync.Config).
 	e.memory, err = memsync.New(backends.Store, backends.CoordinationJetStream(),
 		func(handle string) string { return memoryAgentID(e.Company(), handle) },
-		memsync.Config{AcrossLink: acrossLink(opts.Bootstrap), LeaseHeartbeat: n.Host().HeartbeatInterval(),
-			Clustered: clusteredStream(opts.Bootstrap)})
+		memsync.Config{
+			AcrossLink:     acrossLink(opts.Bootstrap),
+			LeaseHeartbeat: n.Host().HeartbeatInterval(),
+			Clustered:      clusteredStream(opts.Bootstrap),
+		})
 	if err != nil {
 		return nil, fmt.Errorf("engine: memory sync: %w", err)
 	}
