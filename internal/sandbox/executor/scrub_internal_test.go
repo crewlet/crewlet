@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
 // shapedKey is a credential only its shape gives away.
@@ -112,7 +114,7 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 				`export AWS_SESSION_TOKEN=Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+==\n"}`,
 			gone: []string{"ASIAEXAMPLESESSION01", "Qw3/Qw3/", "Ab3+Ab3+"}},
 	} {
-		got := rewriteLine(tc.line, s, testBounds)
+		got := rewriteLine(t, tc.line, s)
 		if !json.Valid([]byte(got)) {
 			t.Errorf("%s: the line is no longer JSON: %q", name, got)
 		}
@@ -122,19 +124,19 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 			}
 		}
 	}
-	if got := rewriteLine(`{"text":"cut off mid opaque-engine-value`, s, testBounds); strings.Contains(got,
+	if got := rewriteLine(t, `{"text":"cut off mid opaque-engine-value`, s); strings.Contains(got,
 		"opaque-engine-value") {
 		t.Errorf("a line that is not JSON kept its secret: %q", got)
 	}
 	// A TORN LINE HOLDS A VALUE AS ITS STRING ESCAPED IT, and nothing decodes
 	// the string before the scrub reads it: only the escaped form is there.
-	if got := rewriteLine(`{"text":"cut off see with\"quote-value`, s, testBounds); strings.Contains(got,
+	if got := rewriteLine(t, `{"text":"cut off see with\"quote-value`, s); strings.Contains(got,
 		"quote-value") {
 		t.Errorf("a torn line kept the escaped form of a value: %q", got)
 	}
 	// TWO VALUES ON ONE LINE are not the one JSON value a transcript's line
 	// is: the line is redacted as the text it is, rather than split in two.
-	if got := rewriteLine(`{"a":"opaque-engine-value"} {"b":1}`, s, testBounds); strings.Contains(got,
+	if got := rewriteLine(t, `{"a":"opaque-engine-value"} {"b":1}`, s); strings.Contains(got,
 		"opaque-engine-value") || strings.Contains(got, "\n") || !strings.HasSuffix(got, `} {"b":1}`) {
 		t.Errorf("a line of two values was kept as %q", got)
 	}
@@ -142,6 +144,35 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 
 // testBounds is the scrub of an archive at a session's bound.
 var testBounds = boundsFor(32 << 20)
+
+// rewriteLine is one line of a transcript, with no break, as the scrub keeps
+// it ([keptLines]).
+func rewriteLine(t testing.TB, line string, s scrubber) string {
+	t.Helper()
+	return keptLines(t, line, s)
+}
+
+// keptLines is a transcript's text as both readings of a tar keep it: what the
+// second writes, held to the size the first counted.
+func keptLines(t testing.TB, text string, s scrubber) string {
+	t.Helper()
+	plan := &tarPlan{}
+	size, err := measureLines(strings.NewReader(text), s, plan)
+	if err != nil {
+		t.Fatalf("the first reading of the transcript: %v", err)
+	}
+	var out bytes.Buffer
+	if err = writeLines(&out, strings.NewReader(text), s, plan, plan.lines.count()); err != nil {
+		t.Fatalf("the second reading of the transcript: %v", err)
+	}
+	if !plan.lines.done() || !plan.cuts.done() || plan.pending {
+		t.Fatal("the second reading of the transcript left some of the plan unread")
+	}
+	if int64(out.Len()) != size {
+		t.Fatalf("the first reading counted %d bytes and the second wrote %d", size, out.Len())
+	}
+	return out.String()
+}
 
 // A VALUE TOO SHORT TO BE A CREDENTIAL IS NEVER TAKEN OUT BY VALUE, and a long
 // one that begins with another is taken out whole.
@@ -264,7 +295,7 @@ func TestAHandedKeysArmourStaysForTheShapePass(t *testing.T) {
 		"the handed key":        handed,
 		"a key the run printed": printed,
 	} {
-		got := rewriteLine(`{"type":"tool_result","content":`+jsonString(t, "cat k\n"+text)+`}`, s, testBounds)
+		got := rewriteLine(t, `{"type":"tool_result","content":`+jsonString(t, "cat k\n"+text)+`}`, s)
 		if strings.Contains(got, "QyNTUxOQAAACDhRunsOwnPrintedKeyBodyLineOfBase64Chars0123456789ab") ||
 			strings.Contains(got, "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz") {
 			t.Errorf("%s: a line of a key's body survived: %q", name, got)
@@ -449,19 +480,21 @@ func reopenOf(archive []byte) func() (io.ReadCloser, error) {
 	return func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(archive)), nil }
 }
 
-// THE SCRUB HOLDS NOTHING PAST ITS BOUNDS, whatever the box's own code wrote: a
-// gzip that expands past the plaintext one reading admits — a tar's or an
-// export's — a line, a string or a run of blanks the decoder would hold past
-// the piece, a stretch a redaction holds unsettled past it (a key with no END),
-// and a value nested past the rewrite's depth are each refused; the same
-// archive within its bounds, and a value at the depth, are not.
+// THE SCRUB READS NOTHING PAST ITS BOUNDS, AND REFUSES NOTHING FOR ITS LENGTH,
+// whatever the box's own code wrote: a gzip that expands past the plaintext one
+// reading admits, a tar's or an export's, is refused, the same archive within
+// its bounds is not; a transcript's line, a document's string, a run of blanks
+// and a stretch the redaction reads on (a key with no END) each far longer than
+// the scanner's and the redaction's windows are kept; and a value nested past
+// the scanner's depth is no JSON value, one at the depth is.
 //
-// Mutation: drop the plaintext's bound, the line's, the token's, the blanks',
-// the held stretch's or the depth's, and something below is read to its end.
-func TestTheScrubHoldsNothingPastItsBounds(t *testing.T) {
+// Mutation: drop the plaintext's bound, and something below is read to its
+// end; hold a line, a string or a stretch to a bound below them, and it is
+// refused.
+func TestTheScrubReadsNothingPastItsBoundsAndRefusesNothingForItsLength(t *testing.T) {
 	t.Parallel()
 	s := newScrubber(nil)
-	small := scrubBounds{plain: 1 << 20, piece: 64 << 10}
+	small := scrubBounds{plain: 1 << 20}
 	bomb := tarOf(t, map[string]string{
 		"projects/p/s.jsonl": strings.Repeat(`{"text":"ordinary"}`+"\n", (2<<20)/20),
 	})
@@ -472,34 +505,30 @@ func TestTheScrubHoldsNothingPastItsBounds(t *testing.T) {
 		t.Errorf("the same tar within its bounds: %v", err)
 	}
 	export := gzipOf(t, `{"messages":[`+strings.Repeat(`"ordinary",`, (2<<20)/11)+`"end"]}`)
-	if err := scrubDocument(bytes.NewReader(export), io.Discard, s, small); !errors.Is(err, errScrubBound) {
+	if err := scrubDocument(bytes.NewReader(export), reopenOf(export), io.Discard, s,
+		small); !errors.Is(err, errScrubBound) {
 		t.Errorf("an export expanding past its plaintext's bound: %v, want errScrubBound", err)
 	}
-	long := strings.Repeat("a", 128<<10)
+	long := strings.Repeat("a", 3<<20)
 	for name, files := range map[string]map[string]string{
-		"a transcript line past the piece":   {"projects/p/s.jsonl": `{"text":"` + long + `"}` + "\n"},
-		"a document's string past the piece": {"tasks/s/1.json": `{"text":"` + long + `"}`},
-		"a key with no END held past the piece": {"projects/p/s/tool-results/out.txt": "-----BEGIN RSA PRIVATE KEY-----\n" +
-			strings.Repeat(keyLine+"\n", (128<<10)/len(keyLine))},
+		"a transcript line":   {"projects/p/s.jsonl": `{"text":"` + long + `"}` + "\n"},
+		"a document's string": {"tasks/s/1.json": `{"text":"` + long + `"}`},
+		"a run of blanks":     {"tasks/s/1.json": `{"text":` + strings.Repeat(" \n", 1<<20) + `"a"}`},
+		"a key with no END": {"projects/p/s/tool-results/out.txt": "-----BEGIN RSA PRIVATE KEY-----\n" +
+			strings.Repeat(keyLine+"\n", (3<<20)/len(keyLine))},
 	} {
 		archive := tarOf(t, files)
-		if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, s,
-			small); !errors.Is(err, errScrubBound) {
-			t.Errorf("%s: %v, want errScrubBound", name, err)
+		if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, s, testBounds); err != nil {
+			t.Errorf("%s: %v, want it kept", name, err)
 		}
 	}
-	// BLANKS ARE HELD AS A TOKEN IS: the decoder skips them only once it
-	// sees the token after them.
-	blanks := `{"text":` + strings.Repeat(" \n", 64<<10) + `"a"}`
-	if err := rewriteDocument(io.Discard, strings.NewReader(blanks), s, small); !errors.Is(err, errScrubBound) {
-		t.Errorf("a run of blanks past the piece: %v, want errScrubBound", err)
-	}
 	deep := func(n int) string { return strings.Repeat("[", n) + `"x"` + strings.Repeat("]", n) }
-	if err := rewriteDocument(io.Discard, strings.NewReader(deep(scrubDepthMax+1)), s,
-		testBounds); !errors.Is(err, errTooDeep) {
-		t.Errorf("a value nested past the depth: %v, want errTooDeep", err)
+	var fault *jsonscan.Error
+	if err := rewriteDocument(io.Discard, strings.NewReader(deep(jsonscan.MaxDepth+1)), s); !errors.As(err, &fault) ||
+		fault.Fault != jsonscan.FaultDepth {
+		t.Errorf("a value nested past the depth: %v, want the scanner's FaultDepth", err)
 	}
-	if err := rewriteDocument(io.Discard, strings.NewReader(deep(scrubDepthMax)), s, testBounds); err != nil {
+	if err := rewriteDocument(io.Discard, strings.NewReader(deep(jsonscan.MaxDepth)), s); err != nil {
 		t.Errorf("a value nested at the depth: %v", err)
 	}
 }
@@ -587,7 +616,8 @@ func TestAnExportIsOneDocumentKeptScrubbed(t *testing.T) {
 	doc := `{"info":{"id":"ses_1"},"messages":[{"text":"the token opaque-engine-value and ` + shapedKey +
 		`"},{"opaque-engine-value":"named","input":{"password":"opaque-but-keyed"}}]}`
 	var out bytes.Buffer
-	if err := scrubDocument(bytes.NewReader(gzipOf(t, doc)), &out, s, testBounds); err != nil {
+	archive := gzipOf(t, doc)
+	if err := scrubDocument(bytes.NewReader(archive), reopenOf(archive), &out, s, testBounds); err != nil {
 		t.Fatalf("scrubDocument: %v", err)
 	}
 	zr, err := gzip.NewReader(&out)
@@ -606,9 +636,11 @@ func TestAnExportIsOneDocumentKeptScrubbed(t *testing.T) {
 			t.Errorf("the export kept %q: %s", secret, kept)
 		}
 	}
-	if err := scrubDocument(bytes.NewReader(gzipOf(t, doc+"\n"+doc)), io.Discard, s,
-		testBounds); !errors.Is(err, errNotOneValue) {
-		t.Errorf("an export of two documents: %v, want errNotOneValue", err)
+	twice := gzipOf(t, doc+"\n"+doc)
+	var fault *jsonscan.Error
+	if err := scrubDocument(bytes.NewReader(twice), reopenOf(twice), io.Discard, s,
+		testBounds); !errors.As(err, &fault) || fault.Fault != jsonscan.FaultTrailing {
+		t.Errorf("an export of two documents: %v, want the scanner's FaultTrailing", err)
 	}
 }
 
@@ -625,7 +657,7 @@ func TestALoadedToolDefinitionTheScrubRenamedIsLeftOut(t *testing.T) {
 	record := `{"type":"attachment","uuid":"u-1","attachment":{"type":"deferred_tools_record","entries":[` +
 		`{"name":"mcp__cloudhost__backup_list","description":"Lists <b>backups</b>","input_schema":{"type":"object"}},` +
 		`{"name":"mcp__monitor__search","description":"Searches","input_schema":{"type":"object"}}]}}`
-	got := rewriteLine(record, s, testBounds)
+	got := rewriteLine(t, record, s)
 	var kept struct {
 		UUID       string `json:"uuid"`
 		Attachment struct {
@@ -657,17 +689,17 @@ func TestALoadedToolDefinitionTheScrubRenamedIsLeftOut(t *testing.T) {
 			t.Errorf("providerToolName(%q) = %v, want %v", name, !want, want)
 		}
 	}
-	if rewriteLine(record, s, testBounds) != got {
+	if rewriteLine(t, record, s) != got {
 		t.Error("two rewrites of one record differ, and a tar's two readings must write the same bytes")
 	}
 
 	untouched := `{"type":"attachment","attachment":{"type":"deferred_tools_record","entries":[` +
 		`{"name":"mcp__monitor__search","description":"Searches <b>all</b>"}]}}`
-	if got := rewriteLine(untouched, s, testBounds); got != untouched {
+	if got := rewriteLine(t, untouched, s); got != untouched {
 		t.Errorf("a record the scrub renamed nothing in was rewritten: %q", got)
 	}
 	call := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__cloudhost__backup_list"}]}}`
-	if got := rewriteLine(call, s, testBounds); !strings.Contains(got, "tool_use") ||
+	if got := rewriteLine(t, call, s); !strings.Contains(got, "tool_use") ||
 		!strings.Contains(got, scrubMarker) {
 		t.Errorf("a call's own line was not kept as rewritten: %q", got)
 	}
@@ -748,7 +780,7 @@ func TestALoadedToolDefinitionIsCutOutOfItsLineAsWritten(t *testing.T) {
 			"twice, together":  {[]string{ltEcho, ltRenamed, ltRenamed, ltSend}, []string{ltEcho, ltSend}},
 		} {
 			line, want := record(tc.written...), record(tc.kept...)
-			got := rewriteLine(line, s, testBounds)
+			got := rewriteLine(t, line, s)
 			if got != want {
 				t.Errorf("%s, the renamed definition %s: kept\n%s\nwant\n%s", shape, placed, got, want)
 			}
@@ -763,14 +795,13 @@ func TestALoadedToolDefinitionIsCutOutOfItsLineAsWritten(t *testing.T) {
 // THE CUT TAKES NOTHING BUT THE DEFINITION AND ITS COMMA, whatever else the
 // line holds: blanks between its tokens, inside the list as much as outside
 // it, and in its other values escapes, a line separator raw and escaped, a lone
-// surrogate's escape and a byte that is no UTF-8, each kept as written and
-// never decoded and written again. A line the rewrite hands the cut has no
-// blank between its tokens, and every key and string in it written as
-// [jsonRewrite.writeString] writes one; the cut is held to every byte of any
-// line all the same.
+// surrogate's escape and a byte that is no UTF-8. The line is kept as the
+// rewrite writes it, no blank between its tokens and every key and string
+// written as [jsonStringWriter] writes one, so what the cut takes is held to the
+// rewrite of the same line less the definition: nothing else of it moves.
 //
-// Mutation: write the record again from a map, or the list again from its
-// kept definitions, and the blanks or the escapes go.
+// Mutation: cut the definition beside the renamed one, or keep a cut one's
+// comma, and the line differs from its rewrite less the definition.
 func TestTheCutTakesNothingButTheDefinitionAndItsComma(t *testing.T) {
 	t.Parallel()
 	renamed := `{"name": "mcp__` + scrubMarker + `__backup_list", "description": "Lists backups"}`
@@ -786,8 +817,8 @@ func TestTheCutTakesNothingButTheDefinitionAndItsComma(t *testing.T) {
 	} {
 		line := `{"parentUuid": "` + ctUUID(1) + `" , "isSidechain": false, "attachment": {"type": ` +
 			`"deferred_tools_record", "entries": ` + tc.list + `}, "type": "attachment", "text": ` + text + `}`
-		want := strings.Replace(line, tc.cut, "", 1)
-		if got := withoutBrokenDefinitions(line); got != want {
+		want := rewriteLine(t, strings.Replace(line, tc.cut, "", 1), newScrubber(nil))
+		if got := rewriteLine(t, line, newScrubber(nil)); got != want {
 			t.Errorf("the renamed definition %s: kept\n%q\nwant\n%q", placed, got, want)
 		}
 	}
@@ -838,14 +869,14 @@ func TestALineTheCutHasNothingToTakeFromIsHandedOnAsItCame(t *testing.T) {
 		"an attachment the record reads past": `{"parentUuid":null,"attachment":{"type":"deferred_tools_record",` +
 			`"entries":[` + renamed + `]},"attachment":{"type":"date"}}`,
 	} {
-		if got := withoutBrokenDefinitions(line); got != line {
+		if got := rewriteLine(t, line, newScrubber(nil)); got != line {
 			t.Errorf("%s: handed on as\n%s\nwant it as it came\n%s", name, got, line)
 		}
 	}
 	twice := loaded(`{"type":"deferred_tools_record","entries":[` + described + `],"entries":[` + renamed + `,` +
 		described + `]}`)
 	want := loaded(`{"type":"deferred_tools_record","entries":[` + described + `],"entries":[` + described + `]}`)
-	if got := withoutBrokenDefinitions(twice); got != want {
+	if got := rewriteLine(t, twice, newScrubber(nil)); got != want {
 		t.Errorf("a list written twice: kept\n%s\nwant\n%s", got, want)
 	}
 }
@@ -881,8 +912,9 @@ func TestTheCutReadsEachKeyByItsExactName(t *testing.T) {
 		"entries spelled with escapes": `{"parentUuid":null,"attachment":{"type":"deferred_tools_record",` +
 			`"\u0065ntries":LIST},"type":"attachment"}`,
 	} {
-		line, want := strings.Replace(record, "LIST", written, 1), strings.Replace(record, "LIST", kept, 1)
-		if got := withoutBrokenDefinitions(line); got != want {
+		line := strings.Replace(record, "LIST", written, 1)
+		want := rewriteLine(t, strings.Replace(record, "LIST", kept, 1), newScrubber(nil))
+		if got := rewriteLine(t, line, newScrubber(nil)); got != want {
 			t.Errorf("%s: kept\n%s\nwant\n%s", name, got, want)
 		}
 	}
@@ -931,7 +963,7 @@ func TestALoadedToolDefinitionIsJudgedByTheNameClaudeCodeSends(t *testing.T) {
 		if tc.cut {
 			want = strings.Replace(line, `,`+tc.definition, "", 1)
 		}
-		if got := withoutBrokenDefinitions(line); got != want {
+		if got := rewriteLine(t, line, newScrubber(nil)); got != want {
 			t.Errorf("%s: kept\n%s\nwant\n%s", name, got, want)
 		}
 	}

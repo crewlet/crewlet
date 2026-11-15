@@ -40,8 +40,8 @@
 // layer (claudethread.go): a member named exactly ([claudeMainThread],
 // [claudeSubagentThread], [claudeSubagentMeta], [claudePrecompact], and
 // [claudeMemberOf] back), never by [claudeThread], which takes any session's
-// file for the main thread; a whole line at a time through the scrub's own
-// [readLine] at the layer's own line bound and the plaintext a kept session's
+// file for the main thread; a whole line at a time through the layer's
+// [readLine] at its own line bound and the plaintext a kept session's
 // scrub reads, a last piece with no break never a line, and a line or a
 // member past its bound the end of the reading, never a skip; every whole
 // line decoded into its head before anything reads it, with no keyword
