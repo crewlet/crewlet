@@ -401,3 +401,187 @@ func TestAKeptCompletionsRefireGoesWithIt(t *testing.T) {
 		}
 	})
 }
+
+// unliftedHolds is a run store whose coordination store does not answer a lift
+// of a run's hold while silent is set, and answers every other call as the
+// store beneath it does.
+type unliftedHolds struct {
+	PendingStore
+	silent atomic.Bool
+}
+
+func (s *unliftedHolds) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+	if s.silent.Load() {
+		return false, fmt.Errorf("sandbox: lift the hold of run %s: %w", turnID, errStoreUnanswered)
+	}
+	return s.PendingStore.LiftHold(ctx, turnID, cond)
+}
+
+// unlistedRuns is a run store whose coordination store does not answer a
+// listing of the runs, which is all a waiter announces from.
+type unlistedRuns struct{ PendingStore }
+
+func (unlistedRuns) ListActive(context.Context) ([]PendingRun, error) {
+	return nil, fmt.Errorf("sandbox: list the runs: %w", errStoreUnanswered)
+}
+
+// budgetHeldOnRow is a rig whose swe run finished and whose resume its seat's
+// budget held on the run's row until until, the completion's delivery
+// acknowledged; and whose box's host's waiter reads the runs through a store
+// that does not answer it, so it announces nothing, before the hold's instant
+// or after it.
+func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
+	t.Helper()
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.resumer.failWith(budgetHeld(until))
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the premise: the held resume = %v; want its completion spent", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning || got.HeldFor != "budget" || !got.HeldUntil.Equal(until) {
+		t.Fatalf("the premise: the row is %s held for %q until %v; want running, held until %v", got.Status,
+			got.HeldFor, got.HeldUntil, until)
+	}
+	rig.resumer.failWith(nil)
+	silent, err := NewWaiter(WaiterOptions{
+		Queue: rig.queue, Pending: unlistedRuns{rig.pending}, Manager: rig.managers, Drives: rigDrives(Direct),
+		Now: func() time.Time { return until.Add(time.Second) },
+	})
+	if err != nil {
+		t.Fatalf("NewWaiter: %v", err)
+	}
+	if fired, _ := silent.Tick(t.Context()); fired != 0 {
+		t.Fatalf("the premise: the host's waiter announced %d completions through its silent store", fired)
+	}
+}
+
+// A COMPLETION ITS SEAT'S BUDGET HELD ON ITS ROW IS KEPT FOR THE HOLD. A
+// resume the budget refused once it ran hands its claim back holding the run's
+// row until the window turns over, and its delivery is spent: the waiter that
+// drives the job's box announces it again once the hold lifts. But that waiter
+// reads the row through its host's coordination store, and before the instant
+// nothing else carried the job: the claim refuses a held row, a signal only
+// lifted the hold, and a recovery re-armed only an owed refusal. So with that
+// store silent, no restart and no seat move, the job waited with no bound. It
+// is kept on this node, unheld: re-fired at the hold's instant and never
+// sooner, since before it the claim takes nothing; and on its condition's
+// signal once the lift of the hold has landed, and not before, since a re-fire
+// beside the lift met the hold still standing and dropped the keep.
+//
+// Mutation: keep nothing for a hold on the row, and the job is never carried;
+// arm its re-fire no later than the backstop, and it is armed sooner than the
+// instant; re-fire it on its signal without lifting the hold first, or after a
+// lift the store did not answer, and the keep is gone; leave a held row out of
+// a recovery, or re-fire one a stop's lift left held, and nothing is kept.
+func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
+	t.Parallel()
+
+	t.Run("re-fired at the hold's instant, never sooner", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		until := rig.now.Add(time.Hour)
+		budgetHeldOnRow(t, rig, until)
+		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != time.Hour {
+			t.Fatalf("the held completion's re-fires armed = %v; want one, at the hold's instant an hour on",
+				delays)
+		}
+		// THE HOLD'S INSTANT, with nothing signalled and nothing announced.
+		rig.now = until
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) at the hold's instant; want it carried once", len(resumed),
+				resumed)
+		}
+	})
+
+	t.Run("re-fired on its signal once the hold is lifted", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+		rig.coordinator.Readmit("budget", "swe")
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) on its condition's signal; want it carried once, the "+
+				"hold lifted first", len(resumed), resumed)
+		}
+	})
+
+	t.Run("kept for the instant where the signal's lift is not answered", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		until := rig.now.Add(time.Hour)
+		budgetHeldOnRow(t, rig, until)
+		store := &unliftedHolds{PendingStore: rig.coordinator.pending}
+		store.silent.Store(true)
+		rig.coordinator.pending = store
+		rig.coordinator.Readmit("budget", "swe")
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 0 {
+			t.Fatalf("the premise: the turn resumed %d times with its hold standing", len(resumed))
+		}
+		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != time.Hour {
+			t.Fatalf("after a lift the store did not answer the re-fires armed = %v; want the held completion "+
+				"still kept, its re-fire at the hold's instant", delays)
+		}
+		store.silent.Store(false)
+		rig.now = until
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 {
+			t.Fatalf("the turn resumed %d times at the hold's instant; want it carried once", len(resumed))
+		}
+	})
+
+	t.Run("kept by the seat's recovery after a restart", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		until := rig.now.Add(time.Hour)
+		budgetHeldOnRow(t, rig, until)
+		// THE NODE RESTARTS, its memory of the keep gone with it.
+		rig.restart(t, rig.queue, "", rigLease, nil)
+		if err := rig.recoverSeat(t.Context(), rigLease.Owner, rigLease.Epoch); err != nil {
+			t.Fatalf("recovering the seat: %v", err)
+		}
+		rig.coordinator.inflight.Wait()
+		// THE NODE BEFORE THE RESTART holds no lease, so only the restarted
+		// node's re-fire carries anything.
+		var armed []time.Duration
+		for _, d := range rig.retries.delays() {
+			if d == time.Hour {
+				armed = append(armed, d)
+			}
+		}
+		if len(armed) != 2 {
+			t.Fatalf("the re-fires armed after the restart = %v; want the restarted node's beside the old "+
+				"one's, each at the hold's instant", rig.retries.delays())
+		}
+		rig.now = until
+		rig.fireRetries()
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 {
+			t.Fatalf("the turn resumed %d times at the hold's instant after the restart; want it carried once",
+				len(resumed))
+		}
+	})
+
+	t.Run("kept where a stop's lift is not answered", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		until := rig.now.Add(time.Hour)
+		budgetHeldOnRow(t, rig, until)
+		store := &unliftedHolds{PendingStore: rig.coordinator.pending}
+		store.silent.Store(true)
+		rig.coordinator.pending = store
+		if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+			t.Fatalf("StopSeat: %v", err)
+		}
+		rig.coordinator.inflight.Wait()
+		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != time.Hour {
+			t.Fatalf("after a stop whose lift the store did not answer the re-fires armed = %v; want the held "+
+				"completion still kept, its re-fire at the hold's instant", delays)
+		}
+	})
+}

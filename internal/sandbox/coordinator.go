@@ -4378,7 +4378,11 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// turn, and the release that lands moves the count to the set it
 			// returns the run to, once ([Coordinator.unclaimOwing]), never
 			// before it, since one the store does not answer keeps the claim.
-			if unclaimErr := c.unclaimHeld(ctx, run, held.Refusal); unclaimErr != nil {
+			// WHAT WAS SIGNALLED BEFORE THE HOLD IS WRITTEN, for the keep
+			// below ([Coordinator.keepHeldOnRow]).
+			seen := c.signalsSeen()
+			hold, unclaimErr := c.unclaimHeld(ctx, run, held.Refusal)
+			if unclaimErr != nil {
 				//nolint:nilerr // The run was ended in its place, as on
 				// the retry's path below: nothing is left to come back to.
 				return AnswerNotMine, nil
@@ -4386,7 +4390,11 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// THE COMPLETION IS SPENT: the hold is on the row, and the poll
 			// announces the job again when it lifts. Where no poll can (the
 			// clock on its box's host running), its caller hands the
-			// delivery back instead (renew.go).
+			// delivery back instead (renew.go). AND KEPT HERE, unheld, for
+			// a re-fire of its own at the hold's instant and for the
+			// signal that lifts it: the poll reads the row through its
+			// host's store, whose silence has no bound.
+			c.keepHeldOnRow(run, trigger, hold, seen)
 			return AnswerConsumed, nil
 		}
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
@@ -4916,7 +4924,10 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, detail string
 // a recorded answer's series waits for the same signal: the signal lifts it
 // sooner ([Coordinator.Readmit]), and a signal never wired to say so costs the
 // turn that much and no more.
-func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal Refusal) error {
+//
+// It returns the hold it asked the release to write, its instant set, which
+// the completion is kept here for ([Coordinator.keepHeldOnRow]).
+func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal Refusal) (Refusal, error) {
 	if refusal.Until.IsZero() {
 		refusal.Until = c.now().Add(answerWaitBackstop)
 	}
@@ -4925,7 +4936,7 @@ func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal R
 		"reason", refusal.Reason, "until", refusal.Until.UTC().Format(time.RFC3339),
 		"detail", "the job stays collected in its paused box and its seat held behind it; "+
 			"its completion is announced again when the refusal lifts")
-	return c.unclaimAt(ctx, run, resumeUnrevertedDetail, failure{}, &refusal, refusal.Window)
+	return refusal, c.unclaimAt(ctx, run, resumeUnrevertedDetail, failure{}, &refusal, refusal.Window)
 }
 
 // unclaimAt is [Coordinator.unclaim] for a claim handed back because the
@@ -6396,12 +6407,14 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 	// EVERY TAKEOVER IS SETTLED ON EVERY WAY OUT, a panic included: one left
 	// out holds every later move on its run (countwrite.go). AND ONLY THEN
 	// ARE THE REFUSALS THE SEAT OWES RE-ARMED, so a re-fire's claim moves a
-	// run the pass is done with ([Coordinator.rearmOwed]).
+	// run the pass is done with ([Coordinator.rearmOwed]), and the resumes
+	// its rows hold kept ([Coordinator.keepHeldRows]).
 	defer func() {
 		for _, w := range takeovers {
 			c.settleWrite(w)
 		}
 		c.rearmOwed(ctx, tally.owed)
+		c.keepHeldRows(ctx, tally.held)
 	}()
 	if len(active) == 0 {
 		return nil
@@ -6412,7 +6425,7 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 	log.InfoContext(ctx, "sandbox_seat_recovered",
 		"seat", handle, "epoch", epoch, "running", tally.running,
 		"parked", tally.parked, "abandoned", tally.abandoned, "finished", tally.finished,
-		"revived", tally.revived, "owed", len(tally.owed), "active", len(active))
+		"revived", tally.revived, "owed", len(tally.owed), "held", len(tally.held), "active", len(active))
 	return nil
 }
 
@@ -6420,10 +6433,12 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 // finished is the endings the last holder decided and this one finished,
 // revived the dead claims whose answer it gave back to the run it answers, and
 // owed the running jobs whose record owes a refused completion its re-fire
-// ([LaunchRecord.RefusalOwed]), which the pass re-arms once it is done.
+// ([LaunchRecord.RefusalOwed]), which the pass re-arms once it is done, and
+// held the running jobs whose resume their row holds ([PendingRun.HeldFor]),
+// which it keeps once it is done.
 type recovery struct {
 	running, parked, abandoned, finished, revived int
-	owed                                          []PendingRun
+	owed, held                                    []PendingRun
 }
 
 // rearmOwed owes again, on this node, the completion of each of runs' jobs,
@@ -6489,6 +6504,43 @@ func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
 			"detail", "a holder of the seat acknowledged a refused delivery of the job's completion and owed it "+
 				"its re-fire; this holder owes it now, asks its own gate at once, and keeps it for its "+
 				"condition's signal")
+	}
+}
+
+// keepHeldRows keeps on this node the completion of each of runs' jobs, whose
+// resume a holder of the seat handed back held on the run's row
+// ([PendingRun.HeldFor], [HeldError]), as that holder kept it
+// ([Coordinator.keepHeldOnRow]): unheld here, for its own re-fire at the
+// hold's instant, at once for one already past, and for the hold's condition's
+// signal, which lifts the hold and re-fires it.
+//
+// WHY THE ROW. The holder that met the hold kept the completion in its memory
+// for that instant, and its restart, or the seat moving to this node, took that
+// with it; the waiter that drives the job's box announces the job once the
+// hold has lifted, but reads the run's row through its node's coordination
+// store, and a silence of that store's runs alone has no bound. NOT AT ONCE,
+// as an owed refusal is ([Coordinator.rearmOwed]): the claim refuses a held
+// row, so a re-fire before the instant claims nothing.
+//
+// A completion this node already keeps for the job is left as it is.
+func (c *Coordinator) keepHeldRows(ctx context.Context, runs []PendingRun) {
+	var kept []PendingRun
+	for _, run := range runs {
+		c.mu.Lock()
+		_, already := c.refused[run.TurnID]
+		c.mu.Unlock()
+		if already {
+			continue
+		}
+		c.keepHeldOnRow(run, nil, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, nil)
+		kept = append(kept, run)
+	}
+	for _, run := range kept {
+		log.InfoContext(ctx, "sandbox_completion_hold_kept",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "agent", run.AgentHandle,
+			"condition", string(run.HeldFor), "until", run.HeldUntil.UTC().Format(time.RFC3339),
+			"detail", "a holder of the seat handed the job's resume back held on its row; this holder keeps "+
+				"its completion for the hold's instant, and lifts the hold and re-fires it on its condition's signal")
 	}
 }
 
@@ -6582,9 +6634,15 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 	case StatusRunning:
 		counted = run.Status
 		tally.running++
-		// A REFUSAL A HOLDER OF THE SEAT ACKNOWLEDGED AND OWES, re-armed
+		// A RESUME ITS ROW HOLDS, kept for the hold's instant once the
+		// pass is done ([Coordinator.keepHeldRows]), whatever else its
+		// record owes: a re-fire before that instant claims nothing. Else
+		// a refusal a holder of the seat acknowledged and owes, re-armed
 		// once the pass is done ([Coordinator.rearmOwed]).
-		if run.Launch.RefusalOwed != "" {
+		switch {
+		case run.HeldFor != "":
+			tally.held = append(tally.held, run)
+		case run.Launch.RefusalOwed != "":
 			tally.owed = append(tally.owed, run)
 		}
 		// WHAT THE BOX CALLS IS SERVED HERE NOW — see

@@ -205,8 +205,8 @@ func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, b
 // a person's stop: a hold on its row ([PendingRun.HeldFor]) is lifted, so the
 // waiter announces the job again on its schedule, and a completion of it this
 // node kept for a condition, held here or refused at the gate
-// ([Coordinator.keepRefused]), is re-fired at once. Reports whether this node
-// was holding the job itself.
+// ([Coordinator.keepRefused]) or kept for that hold ([Coordinator.keepHeldOnRow]),
+// is re-fired at once. Reports whether this node was holding the job itself.
 //
 // WHY A STOP ENDS THE WAIT. The stop leaves a collected job to its turn, whose
 // fence closes it as stopped at its first round, before any model call or
@@ -220,13 +220,21 @@ func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, b
 //
 // A KEEP FOR ANOTHER JOB of the same turn is dropped, as an announcement drops
 // it ([Coordinator.stillRefused]): the stop decides this job.
+//
+// A HOLD ON THE ROW THE STORE DID NOT LIFT keeps the completion kept for it
+// ([Coordinator.keepHeldOnRow]) as it was: a re-fire now claims nothing while
+// the hold stands, and drops the keep, which left nothing on this node to
+// re-fire the job at the hold's instant, where the waiter that would announce
+// it reads a silent store.
 func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool {
+	unlifted := false
 	if run.HeldFor != "" {
 		liftCtx, liftDone := c.endingCall(ctx)
 		lifted, err := c.pending.LiftHold(liftCtx, run.TurnID, run.HeldFor)
 		liftDone()
 		switch {
 		case err != nil:
+			unlifted = true
 			log.WarnContext(ctx, "sandbox_stop_hold_unlifted", "turn_id", run.TurnID,
 				"agent", run.AgentHandle, "condition", string(run.HeldFor), "error", err.Error(),
 				"detail", "the stopped seat's collected job stays held until its condition "+
@@ -239,7 +247,7 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	kept, ok := c.refused[run.TurnID]
-	if !ok {
+	if !ok || (unlifted && !kept.heldOnRow.IsZero() && kept.ev.LaunchID == run.LaunchID) {
 		return false
 	}
 	c.dropKeptLocked(run.TurnID)

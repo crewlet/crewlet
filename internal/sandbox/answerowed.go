@@ -316,8 +316,9 @@ type Admission func(ctx context.Context, handle string) (refusal Refusal, refuse
 // ([reannounceCeilingPolls]), so a completion no waiter announces, its host's
 // store silent, is re-fired no later than one the waiter does. Save one this
 // node holds off itself until an instant, which every announcement before it
-// would meet refused here: its re-fire waits for that instant
-// ([Coordinator.keptRefireIn]).
+// would meet refused here, and one whose resume its run's row holds until an
+// instant, whose claim the store refuses before it: each one's re-fire waits
+// for that instant ([Coordinator.keptRefireIn]).
 const answerWaitBackstop = 5 * time.Minute
 
 // Reply is a delivery offered to a parked run as the answer to its question.
@@ -2097,7 +2098,9 @@ func (c *Coordinator) owedRefused(ctx context.Context, run PendingRun, refusal R
 // which is re-fired at once rather than at the waiter's next announcement of
 // it, and a resume held on cond on its run's row after its run was collected
 // ([PendingRun.HeldFor]), whose hold is lifted so the waiter announces the job
-// again on its schedule ([Coordinator.liftHoldsLocked]).
+// again on its schedule ([Coordinator.liftHoldsLocked]), and whose completion,
+// kept here for that hold ([Coordinator.keepHeldOnRow]), is re-fired once its
+// own lift has landed ([Coordinator.liftAndRefire]).
 //
 // Safe from any goroutine, and cheap enough to call on every occurrence of the
 // event: with nothing waiting it is one pass over this node's owed answers and

@@ -140,7 +140,9 @@ func TestARelaunchRefusedBelowItsFloorLeavesItsWindowForTheNext(t *testing.T) {
 }
 
 // A SIGNAL FOR THE CONDITION LIFTS THE HOLD AT ONCE: a revision raising the
-// seat's ceiling need not wait out the window it would have waited for.
+// seat's ceiling need not wait out the window it would have waited for. And the
+// completion the node kept for the hold is carried once the lift has landed,
+// without waiting for the poll's next announcement of the job.
 func TestReadmittingTheBudgetLiftsAHeldResume(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -153,9 +155,13 @@ func TestReadmittingTheBudgetLiftsAHeldResume(t *testing.T) {
 	}
 	rig.resumer.failWith(nil)
 	rig.coordinator.Readmit("budget", "swe")
-	eventually(t, func() bool { return rig.get("t1").HeldFor == "" }, "the hold to lift")
-	if fired := rig.tick(); fired != 1 {
-		t.Fatalf("the poll announced %d completions after the hold lifted, want the job's", fired)
+	rig.coordinator.inflight.Wait()
+	if calls := rig.resumer.calls(); len(calls) != 1 || !calls[0].Success {
+		t.Fatalf("the turn resumed %d times (%+v) once the hold was lifted, want it carried once", len(calls),
+			calls)
+	}
+	if fired := rig.tick(); fired != 0 {
+		t.Fatalf("the poll announced %d completions of a job already carried, want none", fired)
 	}
 }
 

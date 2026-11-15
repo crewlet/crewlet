@@ -177,6 +177,15 @@ type refusedCompletion struct {
 	// kept completion's own re-fire is armed for ([Coordinator.keepLocked]).
 	until time.Time
 
+	// heldOnRow, where set, is the instant the hold on the run's row lifts
+	// ([PendingRun.HeldUntil]): a resume its seat's budget held
+	// ([Coordinator.keepHeldOnRow]). No claim of the job wins before it, so
+	// the keep's own re-fire waits for that instant and never comes sooner,
+	// and its condition's signal re-fires it only once it has lifted the
+	// hold ([Coordinator.liftAndRefire]). This node refuses nothing for it:
+	// the row does.
+	heldOnRow time.Time
+
 	// backstop is that re-fire, armed while the completion is kept and
 	// cancelled when it goes ([Coordinator.dropKeptLocked]). Under mu.
 	backstop *keptRefire
@@ -194,8 +203,10 @@ type keptRefire struct {
 // run before, and arms its own re-fire ([Coordinator.keptRefireIn]): at the
 // instant its refusal named for the clock to lift it, no later than
 // [answerWaitBackstop] unless this node holds the completion off itself until
-// that instant, and at that backstop where it named none or one already past.
-// The caller holds c.mu and has checked the coordinator is not closed.
+// that instant, and at that backstop where it named none or one already past;
+// and at the instant the hold on its run's row lifts where its resume was held
+// there, never sooner. The caller holds c.mu and has checked the coordinator
+// is not closed.
 //
 // # Why a kept completion has a timer of its own
 //
@@ -242,7 +253,12 @@ func (c *Coordinator) keepLocked(kept refusedCompletion) {
 // keptRefireIn is how long kept waits for its own re-fire
 // ([Coordinator.keepLocked]): until the instant its refusal named for the
 // clock to lift it, no longer than [answerWaitBackstop], and that backstop
-// where it named none or one already past.
+// where it named none or one already past; and, for a completion whose resume
+// is held on its run's row, until the instant that hold lifts, uncapped and
+// never sooner ([Coordinator.keepHeldOnRow]): before it the store refuses the
+// claim a re-fire makes, and a re-fire that claims nothing settles nothing and
+// leaves nothing kept. An instant already past is a re-fire at once, since the
+// claim no longer refuses the row then.
 //
 // # A completion held here waits for its instant, never the backstop
 //
@@ -260,6 +276,9 @@ func (c *Coordinator) keepLocked(kept refusedCompletion) {
 // the wait sooner re-fires it as it re-fires any kept completion.
 func (c *Coordinator) keptRefireIn(kept refusedCompletion) time.Duration {
 	now := c.now()
+	if !kept.heldOnRow.IsZero() {
+		return max(kept.heldOnRow.Sub(now), 0)
+	}
 	if held := kept.heldUntil.Sub(now); !kept.heldUntil.IsZero() && held > 0 {
 		return held
 	}
@@ -360,7 +379,8 @@ func (c *Coordinator) dropKeptLocked(turnID string) {
 // announcement costs this node a lookup, not a collection and a review, and
 // the job's box, which the collection paused, is left asleep, since the job was
 // read back already ([Waiter.reach]). A seat's budget, which every node reads
-// alike, holds on the row instead ([HeldError]).
+// alike, holds on the row instead ([HeldError]), and the completion is kept
+// here for that hold's instant and its signal ([Coordinator.keepHeldOnRow]).
 //
 // A SIGNAL THAT LANDS WHILE THE GATE IS REFUSING IS NOT LOST. Readmit re-fires
 // only what is kept when it runs, so a condition that cleared between the
@@ -417,6 +437,67 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 	if c.signalledSinceLocked(refusal.Condition, ev.AgentHandle, seen) ||
 		c.signalledSinceLocked(stopLanded, ev.AgentHandle, seen) {
 		c.refireLocked(kept)
+		c.mu.Unlock()
+		return
+	}
+	c.keepLocked(kept)
+	c.mu.Unlock()
+	if _, leased := c.leaseOf(ev.AgentHandle); !leased {
+		c.forgetRefused(ev.TurnID)
+	}
+}
+
+// keepHeldOnRow keeps the completion of run's job, whose resume its seat's
+// budget refused once it ran and whose claim was handed back holding the
+// run's row until hold.Until ([HeldError], [Coordinator.unclaimHeld]): kept
+// UNHELD here, for a re-fire of its own at that instant and never sooner
+// ([Coordinator.keptRefireIn]), and for hold's condition's signal, which lifts
+// the row's hold and then re-fires it ([Coordinator.liftAndRefire]). trigger is
+// the completion's event, or nil for one rebuilt from the row
+// ([announcementOf]); seen is what was signalled before the hold was written,
+// nil where nothing was asked ([Coordinator.keepHeldRows]).
+//
+// # Why a hold on the row is kept in memory too
+//
+// The completion's delivery is acknowledged, spent by the hold, because the
+// waiter that drives the job's box announces the job again once the hold has
+// lifted (or, where no waiter can, the delivery is handed back, renew.go). But
+// that waiter reads the run's row through its node's coordination store, and a
+// silence of that store's runs alone has no bound. Before the instant nothing
+// else carried the job: the claim refuses a held row, the waiter passes one
+// over, a signal only lifted the hold ([Coordinator.liftHoldsLocked]), and a
+// recovery re-armed only a refusal owed on the job's record. So with that
+// host's store silent, and no restart and no seat move, the job waited after
+// its hold had lifted for as long as the silence lasted. Kept here, it is
+// re-fired by this node as a refused completion is ([Coordinator.keepLocked]).
+//
+// NOT HELD HERE, and never re-fired before the instant: the row holds it, for
+// every node alike, and a re-fire before the hold lifts claims nothing, which
+// settles nothing and drops the keep.
+//
+// A SIGNAL THAT LANDED BEFORE THE KEEP IS NOT LOST, as for a refused completion
+// ([Coordinator.keepRefused]): one whose listing of the runs ran before the
+// hold was written lifted nothing, so a condition or a person's stop signalled
+// for the seat since seen lifts the hold here and re-fires at once.
+func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold Refusal,
+	seen map[signal]uint64,
+) {
+	if hold.Condition == "" {
+		return
+	}
+	ev, announced := announcementOf(run)
+	if trigger == nil {
+		trigger = announced
+	}
+	kept := refusedCompletion{cond: hold.Condition, ev: ev, trigger: trigger, heldOnRow: hold.Until}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	if seen != nil && (c.signalledSinceLocked(hold.Condition, ev.AgentHandle, seen) ||
+		c.signalledSinceLocked(stopLanded, ev.AgentHandle, seen)) {
+		c.liftAndRefireLocked(kept)
 		c.mu.Unlock()
 		return
 	}
@@ -531,9 +612,19 @@ func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished,
 // ended the limit and then not answered by the store, was held again: the
 // waiter's announcements of the job refused here, and its re-fire armed for
 // the instant the signal had ended, up to the hour a vendor's window is
-// benched for.
+// benched for. Nor is a hold on the run's row it was kept for: a re-fire is
+// made once that hold is lifted or past ([Coordinator.liftAndRefire]).
 func (c *Coordinator) keepAgain(kept refusedCompletion) {
-	kept.heldUntil, kept.reason, kept.until = time.Time{}, "", time.Time{}
+	kept.heldUntil, kept.reason, kept.until, kept.heldOnRow = time.Time{}, "", time.Time{}, time.Time{}
+	c.keepUnlessKept(kept)
+}
+
+// keepUnlessKept keeps kept with its own re-fire armed afresh
+// ([Coordinator.keepLocked]), as it stands, unless something is kept for its
+// run already or the coordinator is closed, and forgets it again where this
+// node no longer holds the seat: [Coordinator.keepAgain]'s keep, and a lift of
+// its row's hold that the store did not answer ([Coordinator.liftAndRefire]).
+func (c *Coordinator) keepUnlessKept(kept refusedCompletion) {
 	c.mu.Lock()
 	if _, already := c.refused[kept.ev.TurnID]; already || c.closed {
 		c.mu.Unlock()
@@ -597,8 +688,63 @@ func (c *Coordinator) refireRefusedLocked(cond Condition, handles []string) {
 			continue
 		}
 		c.dropKeptLocked(turnID)
+		if !kept.heldOnRow.IsZero() {
+			c.liftAndRefireLocked(kept)
+			continue
+		}
 		c.refireLocked(kept)
 	}
+}
+
+// liftAndRefireLocked lifts the hold on the row of a completion kept for it
+// ([refusedCompletion.heldOnRow]) and then re-fires it, on a goroutine of the
+// coordinator's own lifetime, which [Coordinator.Stop] waits for. The caller
+// holds c.mu and has checked the coordinator is not closed.
+func (c *Coordinator) liftAndRefireLocked(kept refusedCompletion) {
+	c.inflight.Add(1)
+	go func() {
+		defer c.inflight.Done()
+		c.liftAndRefire(kept)
+	}()
+}
+
+// liftAndRefire is a signalled re-fire of a completion whose resume is held on
+// its run's row: the hold for kept's condition lifted first
+// ([PendingStore.LiftHold]), and the completion re-fired once that write has
+// landed, or found the row held for it no longer ([Coordinator.refire]).
+//
+// THE LIFT FIRST, because the claim refuses a held row: re-fired beside the
+// lift ([Coordinator.liftHoldsLocked] lists and lifts every hold on the
+// condition in the background), the re-fire's claim met the hold still
+// standing, claimed nothing, and left nothing kept. A lift the store does not
+// answer leaves the completion kept as it was, for its re-fire at the hold's
+// instant ([Coordinator.keepUnlessKept]), when no claim is refused for it.
+//
+// ITS LIFETIME IS THE COORDINATOR'S, for the reason [Coordinator.refire] gives.
+//
+//nolint:contextcheck // the coordinator's own lifetime (c.life), never a caller's; see [Coordinator.refire]
+func (c *Coordinator) liftAndRefire(kept refusedCompletion) {
+	ctx := c.life
+	if ctx.Err() != nil {
+		return
+	}
+	if _, leased := c.leaseOf(kept.ev.AgentHandle); !leased {
+		return
+	}
+	lifted, err := c.pending.LiftHold(ctx, kept.ev.TurnID, kept.cond)
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_hold_lift_failed", "turn_id", kept.ev.TurnID,
+			"agent", kept.ev.AgentHandle, "condition", string(kept.cond), "error", err.Error(),
+			"detail", "the completion stays kept on this node for the hold's instant, when it is re-fired")
+		c.keepUnlessKept(kept)
+		return
+	}
+	if lifted {
+		log.InfoContext(ctx, "sandbox_resume_hold_lifted", "turn_id", kept.ev.TurnID,
+			"agent", kept.ev.AgentHandle, "condition", string(kept.cond))
+	}
+	kept.heldOnRow = time.Time{}
+	c.refire(kept)
 }
 
 // refireLocked re-fires one kept completion on a goroutine of the

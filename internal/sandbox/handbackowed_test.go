@@ -102,6 +102,17 @@ func TestEveryHandBackTheStoreDoesNotAnswerIsKeptUntilItLands(t *testing.T) {
 			store.silence("ReleaseClaim")
 
 			_ = collectAgain(t, rig) // each hand-back's own answer to its delivery
+			if tc.held != "" {
+				// THE COMPLETION IS KEPT FOR THE HOLD'S INSTANT besides, its
+				// re-fire an hour on, which is another case's subject
+				// (TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold): set
+				// aside here, where the release is.
+				if delays := rig.retries.delays(); !slices.Contains(delays, time.Hour) {
+					t.Fatalf("after the held hand-back the retries waiting are %v; want the completion's "+
+						"re-fire at the hold's instant among them", delays)
+				}
+				rig.coordinator.forgetRefused("t1")
+			}
 			seatHeldByItsClaim(t, rig, holds, tc.landed, "the hand-back")
 
 			// STILL SILENT AT THE RETRY: owed again, never ended.
