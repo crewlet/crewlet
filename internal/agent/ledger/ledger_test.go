@@ -552,8 +552,8 @@ func TestACallWhoseArgumentsDidNotReadBackSaysSo(t *testing.T) {
 		{Name: "close_issue", Result: "asked a person", Failed: true, Withheld: true, ArgsUnread: true},
 	}, Format(nil, nil))
 	want := strings.Join([]string{
-		"- jira_create(arguments recorded in text that does not read back) → success",
-		"- jira_create(arguments recorded in text that does not read back) → success",
+		"- jira_create(arguments in text that could not be read) → success",
+		"- jira_create(arguments in text that could not be read) → success",
 		"- jira_create() → success",
 		"- close_issue(arguments sealed for a person's approval, kept on no record) → error: asked a person",
 	}, "\n")

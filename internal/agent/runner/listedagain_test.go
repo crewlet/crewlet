@@ -403,7 +403,7 @@ func TestACallWhoseArgumentsAreNotKnownIsListedBesideEveryCallOfItsTool(t *testi
 		want := `"text":"hi"`
 		switch held := round.Bridged[0]; {
 		case held.ArgsUnread:
-			want = "- slack_post(arguments recorded in text that does not read back) → success"
+			want = "- slack_post(arguments in text that could not be read) → success"
 		case held.Args == nil:
 			want = "- slack_post() → success"
 		}

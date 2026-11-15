@@ -67,15 +67,18 @@ type Call struct {
 	// arguments are not known, never as the tool called with none.
 	Unfinished bool `json:"Unfinished,omitempty"`
 
-	// ArgsUnread is a call whose arguments its record holds as text that
-	// does not read back (internal/tools' ReadArgs answers nil for it): a
-	// record something truncated or damaged. Args are nil on it, as they are
-	// on a call its record says was made with none (no text at all), so this
-	// says which of the two it is. Its line says its arguments did not read back
-	// whatever Args holds ([FormatCalls]), and every reader that compares or
-	// counts calls by their arguments reads it as a call of its tool whose
-	// arguments are not known: drawn or counted as the tool called with
-	// none, it is a different call.
+	// ArgsUnread is a call made with arguments in text that could not be
+	// read: its record holds them as text that does not read back
+	// (internal/tools' ReadArgs answers nil for it), a record something
+	// truncated or damaged; or the bridge could not parse what the model
+	// wrote and answered the call unrun, recording no text
+	// (internal/sandbox's BridgeCall.ArgsUnparsed). Args are nil on it, as
+	// they are on a call its record says was made with none (no text at
+	// all), so this says which of the two it is. Its line says its arguments
+	// could not be read whatever Args holds ([FormatCalls]), and every reader
+	// that compares or counts calls by their arguments reads it as a call of
+	// its tool whose arguments are not known: drawn or counted as the tool
+	// called with none, it is a different call.
 	//
 	// ADDITIVE ON THE WIRE: a build before it drops the key where a parked
 	// turn's closed rounds carry it, and draws and counts the call as it
@@ -227,7 +230,7 @@ func ShownCallGroups(groups [][]Call, opts FormatOptions) [][]Call {
 // the caller ends the call's line with ([FormatOptions.Notes]). A call whose
 // arguments are not known says why in their place, never `name()`, which reads
 // as the tool called with none: every record withholds them
-// ([Call.Withheld]), its record holds them in text that does not read back
+// ([Call.Withheld]), they were in text that could not be read
 // ([Call.ArgsUnread]), or its outcome is unknown and no record keeps them
 // ([Call.Unfinished]).
 //
@@ -343,9 +346,12 @@ func renderCalls(calls []Call, at []int, notes []string, opts FormatOptions) str
 const withheldArgs = "arguments sealed for a person's approval, kept on no record"
 
 // unreadArgs is what [FormatCalls] renders in place of the arguments of a call
-// whose record holds them in text that does not read back ([Call.ArgsUnread]):
-// it was made with arguments, and its record no longer says which.
-const unreadArgs = "arguments recorded in text that does not read back"
+// made with arguments in text that could not be read ([Call.ArgsUnread]): its
+// record holds text that does not read back, or the bridge could not parse
+// what the model wrote. TRUE OF BOTH, so it never says the text was recorded,
+// which the second is not: it was made with arguments, and no record says
+// which.
+const unreadArgs = "arguments in text that could not be read"
 
 // unkeptArgs is what [FormatCalls] renders in place of the arguments of a call
 // whose outcome is unknown ([Call.Unfinished]) and which carries none: its log

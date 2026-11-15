@@ -33,8 +33,8 @@ import (
 // same to a reader.
 //
 // ALIKE WHEREVER EITHER CALL'S ARGUMENTS ARE NOT COMPARABLE ([argsComparable]):
-// withheld, in flight, recorded in text the engine could not read back, with
-// no digest or nil, or left out whole by their record. Nothing says they read
+// withheld, in flight, in text the engine could not read (recorded so, or
+// never parsed), with no digest or nil, or left out whole by their record. Nothing says they read
 // apart, and the one direction that costs anything is reading two calls apart
 // that a model takes for one: listing a call again that no told call could be
 // taken for costs a line, while leaving one out loses the told call.
@@ -78,10 +78,12 @@ func readAlike(a, b ledger.Call, opts ledger.FormatOptions) bool {
 // sealed whatever the call carries ([ledger.Call.Withheld]), so a reader
 // compares none of them, and were a record ever to keep some, comparing them
 // would read apart two calls whose lines read alike, the one direction that
-// loses a call. NOT READ BACK IS ITS OWN TEST for the same reason: its line
-// says its arguments did not read back whatever the call carries
-// ([ledger.Call.ArgsUnread]). Nil arguments stay a test of their own too, for
-// a record an older build read, which marks no call so.
+// loses a call. NOT READ IS ITS OWN TEST for the same reason: its line says
+// its arguments could not be read whatever the call carries
+// ([ledger.Call.ArgsUnread]). NIL ARGUMENTS stay a test of their own: a call
+// made with none reads back nil (the log spells its arguments as no text), so
+// it reads alike every call of its tool, which costs a line where a told call
+// of the tool shows arguments and never loses a call.
 func argsComparable(call ledger.Call) bool {
 	return !call.Withheld && !call.Unfinished && !call.ArgsUnread && call.Digest != "" && call.Args != nil &&
 		!kept.IsNotKept(call.Args)

@@ -175,7 +175,8 @@ func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 }
 
 // everyField is [worstCall] with every other field a call can carry set
-// besides: both its marks, both its sizes, a runner past the most an
+// besides: both its marks, both its sizes, the mark of arguments that did not
+// parse, a runner past the most an
 // incarnation may be in markup and a bound at the widest instant. What the
 // models hand a writer that keeps a call (an entry in flight, [keptEntry]; the
 // call a person approved, [approvedCall]), so a field the call it keeps leaves
@@ -185,6 +186,7 @@ func everyField(t *testing.T, name string) BridgeCall {
 	t.Helper()
 	call := worstCall(t, name)
 	call.Held, call.Approved, call.ArgsBytes, call.OutputBytes = true, true, math.MaxInt, math.MaxInt
+	call.ArgsUnparsed = true
 	call.Runner, call.Until = strings.Repeat("<", 4<<10), worstAt
 	return call
 }
@@ -1068,8 +1070,10 @@ var zeroInTheWorstRow = func() map[string]string {
 		"Output": "its result rides the row sealed on the held call (approvedCall)",
 		"OutputBytes": "nor a size of it, which beside no output would read as a whole output cut to nothing " +
 			"(approvedCall)",
-		"CallID":    "no harness named it: the resume made it on the engine host (approvedCall)",
-		"Held":      "it was made, so it is marked approved and never held (approvedCall)",
+		"CallID": "no harness named it: the resume made it on the engine host (approvedCall)",
+		"Held":   "it was made, so it is marked approved and never held (approvedCall)",
+		"ArgsUnparsed": "its arguments were sealed and approved, so they parsed, and the log keeps none of a " +
+			"withheld call's to read (approvedCall)",
 		"Seq":       "it has no place until the log takes it and places it (approvedCall, BridgeLog.withApproved)",
 		"Appended":  "nor a number, which the log gives it as it takes it (approvedCall, BridgeLog.appendCall)",
 		"Late":      "the store appends it for its own round, so it is never late (approvedCall)",
@@ -1258,8 +1262,10 @@ var zeroInTheWorstLog = func() map[string]string {
 		"reads as unknown, with the tally's bound held by the fold and counted at its share in rowbytes.go"
 	absorbed := "the calls' own work is tallied the same way, and " + folded
 	zero := map[string]string{
-		"Calls[0].Held":           withheld,
-		"Calls[0].Approved":       withheld,
+		"Calls[0].Held":     withheld,
+		"Calls[0].Approved": withheld,
+		"Calls[0].ArgsUnparsed": "the worst call carries its arguments, and a call whose arguments did not " +
+			"parse carries none (BridgeCall.ArgsUnparsed), so it weighs less (worstCall)",
 		"Calls[0].Runner":         finished,
 		"Calls[0].Until":          finished,
 		"ElidedCalls[0].Name":     folded,
@@ -1271,9 +1277,9 @@ var zeroInTheWorstLog = func() map[string]string {
 	}
 	// AN ENTRY IN FLIGHT, as keptEntry keeps it from a call with every field
 	// set ([worstEntry]).
-	for _, field := range []string{"Args", "ArgsBytes", "Output", "OutputBytes", "Failed", "Appended", "Late",
-		"Abandoned", "DurationMS", "Origin", "Server", "Source", "Refusal", "Held", "Approved", "HeldID",
-		"Committed"} {
+	for _, field := range []string{"Args", "ArgsBytes", "ArgsUnparsed", "Output", "OutputBytes", "Failed",
+		"Appended", "Late", "Abandoned", "DurationMS", "Origin", "Server", "Source", "Refusal", "Held", "Approved",
+		"HeldID", "Committed"} {
 		zero["InFlight[0]."+field] = "an entry keeps its call's identity alone (keptEntry), and its one update " +
 			"brings the rest"
 	}

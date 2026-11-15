@@ -216,9 +216,10 @@ const UnfinishedNote = "This call's outcome is unknown: its turn stopped waiting
 // ([ledger.Call.Withheld]), whose arguments ride sealed — is seeded as a call
 // matching no other ([turnctx.SeededCall.Unknown],
 // [turnctx.CallLog.SeedUnknown]): an over-count, the safe direction. So is a
-// call with no digest whose arguments its record holds in text that does not
-// read back ([ledger.Call.ArgsUnread]): seeded by the nil arguments it reads
-// as, it was counted as the tool called with none, a different call.
+// call with no digest whose arguments were in text that could not be read
+// ([ledger.Call.ArgsUnread]), its record's text not reading back or the
+// model's not parsing: seeded by the nil arguments it reads as, it was counted
+// as the tool called with none, a different call.
 //
 // A CALL WITH NO DIGEST, AND NONE WITHHELD — one a build before it recorded,
 // whose arguments it kept whole — is seeded by its canonical arguments, made

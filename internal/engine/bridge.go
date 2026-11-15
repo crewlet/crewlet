@@ -78,7 +78,7 @@ import (
 func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
-		args, unread := decodeBridgeArgs(call.Args)
+		args, unread := decodeBridgeArgs(call.Args, call.ArgsUnparsed)
 		out = append(out, runner.BridgedCall{
 			Call: ledger.Call{
 				Name:   call.Name,
@@ -155,21 +155,24 @@ func identitiesOf(ids []sandbox.ElidedCall) []ledger.Elided {
 }
 
 // decodeBridgeArgs reads the JSON text a bridged call was recorded with, and
-// whether it was text that does not read back ([ledger.Call.ArgsUnread]).
+// whether its arguments are ones no text of it reads back
+// ([ledger.Call.ArgsUnread]): text that does not read, or arguments the bridge
+// could not parse, which the log records as no text with unparsed set
+// ([sandbox.BridgeCall.ArgsUnparsed]).
 //
 // [tools.ReadArgs] rather than a bare unmarshal, because this is the SECOND
 // decode of the id the log went out of its way to keep exact: a bridged call
 // naming a 19-digit issue id would otherwise reach the resumed turn's ledger
 // as a rounded one.
 //
-// UNREAD ONLY WHERE THERE WAS TEXT: the log spells a call made with no
-// arguments as no text at all ([encodeArgs]), which ReadArgs also answers nil
-// for and which reads back as what it says, a call made with none. (So does
-// encodeArgs' record of arguments it could not encode, which it warns of:
-// arguments the bridge decoded from the box's JSON always encode.)
-func decodeBridgeArgs(raw string) (args map[string]any, unread bool) {
+// NO TEXT AND NOT UNPARSED IS A CALL MADE WITH NONE: the log spells a call
+// made with no arguments as no text at all ([encodeArgs]), which ReadArgs also
+// answers nil for and which reads back as what it says. (So does encodeArgs'
+// record of arguments it could not encode, which it warns of: arguments the
+// bridge decoded from the box's JSON always encode.)
+func decodeBridgeArgs(raw string, unparsed bool) (args map[string]any, unread bool) {
 	args = tools.ReadArgs(raw)
-	return args, raw != "" && args == nil
+	return args, unparsed || raw != "" && args == nil
 }
 
 // bridgeLedger writes a bridged run's calls on the log beside its pending-run
@@ -437,9 +440,13 @@ func (l *bridgeLedger) Record(ctx context.Context, runID string, call mcpbridge.
 			// store, so a decoded map would be re-encoded by the store's
 			// own pass — and a large id survives one round trip through a
 			// json.Number-aware decode and not two through the default one.
-			Args:   encodeArgs(call.Args),
-			Output: call.Output,
-			Failed: call.Failed,
+			Args: encodeArgs(call.Args),
+			// AND WHETHER THEY PARSED: a call whose arguments did not is
+			// recorded with none, which reads as the tool called with none
+			// without this ([sandbox.BridgeCall.ArgsUnparsed]).
+			ArgsUnparsed: call.ArgsUnparsed,
+			Output:       call.Output,
+			Failed:       call.Failed,
 			// THE BRIDGE'S MEASUREMENT, kept for the executor's record:
 			// the one account of the order the run's calls were made in,
 			// when each ran and who answered it — and, with the tool, the
