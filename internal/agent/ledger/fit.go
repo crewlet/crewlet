@@ -113,14 +113,17 @@ func valuePiece(value any, limit int) (Piece, bool) {
 // and neither is the value.
 //
 // IT IS THE RENDER'S OWN TEST, [valuePiece]'s answer, never a second rule
-// beside it: a value is shown whole exactly where [renderArgs] carries it
-// as itself, judged in runes as the budget is, and by the line's own JSON
-// for a value that is not a string. So a caller that asks what a model
-// reading the line can compare with a call it holds, taking a value the line
-// does not show whole for one that may equal anything, asks the render, and
-// the two never part: were it a rule of its own and stricter, a value the
-// line shows would be taken for one that may equal anything; were it looser,
-// a rewrite would be compared as the value.
+// beside it: where its caller fits every piece [CallPieces] names, as
+// ledgerfit.Fit does, a value is shown whole exactly where [renderArgs]
+// carries it as itself, judged in runes as the budget is, and by the line's
+// own JSON for a value that is not a string. (A piece its caller leaves
+// unfitted renders whole, [Fitted], while this answers false: the safe side
+// for a caller that reads false as a value that may equal anything.) So a
+// caller that asks what a model reading the line can compare with a call it
+// holds, taking a value the line does not show whole for one that may equal
+// anything, asks the render, and the two never part: were it a rule of its
+// own and stricter, a value the line shows would be taken for one that may
+// equal anything; were it looser, a rewrite would be compared as the value.
 func ShowsWhole(value any, opts FormatOptions) bool {
 	_, piece := valuePiece(value, opts.ValueLimit)
 	return !piece
