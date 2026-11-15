@@ -347,5 +347,5 @@ var grantTerms = seataccess.GrantTerms{
 	Refusal:    "403 `PERMISSION_DENIED`, naming the permission",
 	Permission: "a role holding the permission refused, such as `roles/pubsub.editor`",
 	Scope:      "project IDs; none is your own projects",
-	Whole:      "its own projects",
+	Whole:      "the agent's own projects",
 }

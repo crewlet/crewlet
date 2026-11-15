@@ -56,7 +56,7 @@ func TestAnUnscopedRequestIsAskedInItsLanesReach(t *testing.T) {
 		t.Fatalf("the request failed: %s", got.Output)
 	}
 	q := trk.patched[0].Comment.Decision.Question
-	if !strings.Contains(q, "its own projects") || strings.Contains(q, "agents reach") {
+	if !strings.Contains(q, "the agent's own projects") || strings.Contains(q, "agents reach") {
 		t.Errorf("question %q, want the agent's own projects", q)
 	}
 }

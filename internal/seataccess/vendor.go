@@ -458,6 +458,8 @@ func ReadOptions(ctx context.Context, sess Session, lane Lane) (Options, error) 
 		if opts.Grants == nil {
 			opts.Grants = []GrantEntry{}
 		}
+		terms := GrantTermsOf(lane)
+		opts.GrantWhole, opts.GrantAccount = terms.Whole, terms.Account
 	}
 	return opts, nil
 }
@@ -653,6 +655,12 @@ type Options struct {
 	// scope may name (the zones the company's agents reach).
 	Grants     []GrantEntry `json:"grants,omitempty"`
 	GrantScope []string     `json:"grant_scope,omitempty"`
+
+	// GrantWhole is where a scoped grant naming no entry applies, and
+	// GrantAccount where one on the whole connection does, in the lane's own
+	// words ([GrantTerms]), for a picker's labels; empty with no grants.
+	GrantWhole   string `json:"grant_whole,omitempty"`
+	GrantAccount string `json:"grant_account,omitempty"`
 
 	// RequiredLevel is, on a [Options.Multiple] lane, the level every other
 	// level in a set needs, so a set naming any level holds this one too:

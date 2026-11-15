@@ -176,4 +176,7 @@ func TestTheGrantCatalogueIsScalewaysLessTheNeverGranted(t *testing.T) {
 	if !slices.Contains(opts.GrantScope, projectData) || !slices.Contains(opts.GrantScope, projectWeb) {
 		t.Errorf("a grant may name %v, want the Organization's projects", opts.GrantScope)
 	}
+	if opts.GrantWhole != "the agent's own projects" || opts.GrantAccount != "the Organization" {
+		t.Errorf("a grant naming none reaches %q, an Organization one %q", opts.GrantWhole, opts.GrantAccount)
+	}
 }

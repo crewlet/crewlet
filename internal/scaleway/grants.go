@@ -340,6 +340,6 @@ var grantTerms = seataccess.GrantTerms{
 	Refusal:    "403 `permissions_denied`",
 	Permission: "a permission set, such as `KubernetesFullAccess`",
 	Scope:      "project IDs; none is your own projects, and an Organization set takes none",
-	Whole:      "its own projects",
+	Whole:      "the agent's own projects",
 	Account:    "the Organization",
 }
