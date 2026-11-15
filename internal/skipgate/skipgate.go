@@ -101,8 +101,12 @@
 // writes, falls back to it. So a package's tests sum to MORE than the package
 // took whenever they overlap, and a test's seconds grow with what ran beside
 // it: the package line is the binary's wall time, a test line is that test's
-// span within it. Subtests are inside their parent's seconds and get no line
-// of their own.
+// span within it. A span is not a cost: it holds the time its parallel
+// subtests sat waiting for a slot behind the rest of the package, so a test of
+// eleven microsecond subtests read 172 s in a package of heavy git cases. Read
+// it beside its subtests' own spans (the slowest list) and the run's CPU line
+// before taking it for work. Subtests are inside their parent's seconds and
+// get no line of their own.
 //
 // The file is CREATED before the test command starts, so a path that cannot
 // be written fails in a second rather than after the whole suite, and a
