@@ -7269,9 +7269,10 @@ text the kit's `CodeBlock` draws — a tool's arguments and result, a phase's
 verbatim prompt, an event's payload, a configuration, a run's transcript —
 reads its ceiling from `--crewlet-codeblock-max-height`, and the shell declares
 it once on the two scrollers a record can sit in, the main region and the
-peek's body (itself a size container for this): `--record-ceiling`, the view
-less the sticky band and a label's line, floored at four rows and capped at
-`--record-max` (460px, the height these records have always had). A running
+peek's body (itself a size container for this): `--record-view`, the view
+less the sticky band and a label's line, floored at four rows, and
+`--record-ceiling`, that capped at `--record-max` (460px, the height these
+records have always had). A running
 ledger narrows it to its own box less the record's label. It used to be a
 number each call passed, and nineteen of twenty-one blocks passed the bare
 460 — so on a window whose view was shorter, a record's bottom sat below the
@@ -7279,7 +7280,8 @@ fold while the wheel was inside it, and a sheet gate could not see a ceiling
 that arrived as an inline style. A block states its own only where it
 genuinely differs: the YAML dialog, which is portaled outside both scrollers
 and takes the root's cap, and the trace's paired Input and Output, half the
-ceiling each, derived from it.
+ceiling each, derived from it, and Configuration's active document, the
+Active lens's whole content, which takes the view's share uncapped.
 
 `styles/scrollers.test.ts` holds all of it. It scans EVERY rule in the sheets
 that scrolls its block axis with a declared bound, and passes one with a
@@ -11478,8 +11480,8 @@ and a diff. The lenses are the frame's **lens chips** beside the page's name
 (`PageLenses`, as Models' and MCP & tools' are), which on a phone take a row of
 their own under the bar and scroll sideways rather than wrapping a lens onto a
 second line. **The active document is the Active lens's whole content**, so it
-is unbounded and the page scrolls it, rather than a box of its own under the
-record ceiling over an empty page. **The Diff lens draws the changes first** and the revisions they
+takes the whole view (`--record-view`), rather than a 460px box of its own
+over an empty page, and still fits the view it is scrolled to. **The Diff lens draws the changes first** and the revisions they
 are picked from under them — beneath fifteen rows of history the changes began
 off the screen, so **See its changes** landed on a list — and a revision
 pressed further down brings the changes back on screen (only when they are off
