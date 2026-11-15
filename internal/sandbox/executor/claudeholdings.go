@@ -328,23 +328,31 @@ import (
 // any other is kept as no leg ([holdingsWalk.leg]), and a metadata naming one
 // keeps none ([subagentMetaOf]), since an id is the box's word, as long as a
 // line, and nothing can link, answer or notice a call under one. MEASURED on
-// two cores (BenchmarkAReadingAtItsBounds): its worst for one line is a line at
-// the line's bound of the smallest results a message holds, 88 MiB live, its
-// heap peaking at 94 MiB, read in a fifth of a second; the model of the resume,
-// as its own doc measured it ([threadChain], THE BOUNDS), holds at most 35 MiB
-// while it files a thread at both its bounds and 43 MiB as it decides, so
-// beside that line a reading holds about 123 MiB by their sum (computed, not
-// measured), within what a seat's read for words, the other taker of the seats'
-// one slot, holds at its worst ([SeatTranscriptReadsAtOnce]). 255 MiB of
-// ordinary lines, the plaintext's bound, read in 1.8 s holding 9 MiB live; the
-// slowest lines measured for their size, a line at the line's bound of blocks
-// of a kind no reader names, 8 MiB in 0.30 s, so an archive of them to the
-// plaintext's bound, which gzip shrinks to almost nothing, reads in about 10 s
-// by that rate (computed, not measured whole); 1,024 subagents in 81 ms; 96
-// Agent calls under ids of a mebibyte and 1,024 metadata naming ids of 65,000
-// bytes, which held 97.7 and 65.3 MiB live before the reading kept no such id,
-// in 0.52 s and 0.15 s holding 6 and 2 MiB live; and an ordinary kept session,
-// a 1.6 MiB archive, in 52 ms.
+// two cores (BenchmarkAReadingAtItsBounds, whose doc says how each figure is
+// read off the runtime's GC trace), one case a process, in three runs: a time
+// is the slower of two at the default GOGC, what is HELD AT MOST the largest
+// live heap a collection left during the read in any of the three, one with the
+// collector run at every tenth of the heap's growth (GOGC=10), and a peak the
+// largest heap at the default. ITS WORST is the coincident one: a line at the
+// line's bound of the smallest results a message holds, read after a main
+// thread at both bounds of the model of the resume, so decoded beside all the
+// model filed before the line passes its bounds, 102 MiB held at most, its heap
+// peaking at 181 MiB, in 1.7 s: within the about 133 MiB a seat's read for
+// words, the other taker of the seats' one slot, holds at its worst
+// ([SeatTranscriptReadsAtOnce]). That line alone, 75 MiB held at most and a
+// peak of 123 MiB, in 0.22 s; the thread at both bounds alone, 2^17 replies
+// each making a call and naming a parent written after it, a reading in 1.5 s,
+// 42 MiB held at most; the model's other bounds, its calls and its retractions
+// and kept uuids, 0.26 s and 0.36 s, 12 and 11 MiB. 255 MiB of ordinary lines,
+// the plaintext's bound, each reply under its own id, read in 2.7 s holding 33
+// MiB; the slowest lines measured for their size, a line at the line's bound of
+// blocks of a kind no reader names, 8 MiB in 0.34 s, so an archive of them to
+// the plaintext's bound, which gzip shrinks to almost nothing, reads in about
+// 11 s by that rate (computed, not measured whole); 1,024 subagents in 0.13 s;
+// 96 Agent calls under ids of a mebibyte and 1,024 metadata naming ids of
+// 65,000 bytes, which held 97.7 and 65.3 MiB live before the reading kept no
+// such id, in 0.94 s and 0.16 s holding 8 and 2 MiB; and an ordinary kept
+// session, a 1.6 MiB archive, in 68 ms.
 
 // holdingsWriterFloor is the oldest Claude Code release whose sessions a
 // reading reads ([ClaudeCode.holdingsFloor]).

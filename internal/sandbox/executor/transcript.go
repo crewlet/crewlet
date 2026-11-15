@@ -532,11 +532,11 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // line's, so about a third more, in the one slot seats take between them
 // ([SeatTranscriptReadsAtOnce]). A relaunch's reading of which of its round's
 // calls a kept session holds ([Runner.ReadHoldings]) takes that slot too, and
-// holds no more than a seat's read for words at its worst: about 120 MiB by
-// the sum of its two worsts measured (BenchmarkAReadingAtItsBounds), a line at
-// the line's bound of the smallest results a message holds, 88 MiB live, its
-// heap peaking at 94 MiB, and a thread at the most records whose chain it
-// walks, 35 MiB live.
+// holds no more than a seat's read for words at its worst: 102 MiB held at
+// most, measured (BenchmarkAReadingAtItsBounds), at its worst line, a line at
+// the line's bound of the smallest results a message holds, read beside the
+// model of Claude Code's resume at both its bounds ([threadChain]), its heap
+// peaking at 181 MiB.
 //
 // A READ PAST THEM WAITS for a slot for as long as its caller waits, holding
 // no decoder while it does — and no opened object, whose store connection it
@@ -564,17 +564,17 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 //
 // A RELAUNCH'S READING TAKES IT TOO ([Runner.ReadHoldings]): which of its
 // round's calls the cut-off session it continues holds, read off the kept
-// archive before its brief is written, whose worst, about 120 MiB by the sum
-// of the two measured ([TranscriptReadsAtOnce]), is within a seat's read for
-// words', which takes this same slot. It waits for the slot inside its own
-// wait, and a reading that waits past it tells its session every call after
-// its save point, which is never wrong. Measured on two cores
-// (BenchmarkAReadingAtItsBounds), an ordinary kept session, a 1.6 MiB archive,
-// reads in about 50 ms, so a burst of 32 relaunches' readings takes the slot
-// for about 1.7 s; 255 MiB of ordinary lines, the plaintext's bound, take it
-// for 1.8 s; a thread at the most records whose chain a reading walks, 1.4 s;
-// and an archive of the slowest lines measured for their size to the
-// plaintext's bound, about 10 s by their rate: each inside its wait.
+// archive before its brief is written, whose worst, 102 MiB held at most
+// ([TranscriptReadsAtOnce]), is within a seat's read for words', which takes
+// this same slot. It waits for the slot inside its own wait, and a reading that
+// waits past it tells its session every call after its save point, which is
+// never wrong. Measured on two cores (BenchmarkAReadingAtItsBounds), an
+// ordinary kept session, a 1.6 MiB archive, reads in about 70 ms, so a burst
+// of 32 relaunches' readings takes the slot for about 2.2 s; 255 MiB of
+// ordinary lines, the plaintext's bound, take it for 2.7 s; a thread at both
+// bounds of the model of the resume, 1.5 s, and its worst line beside it,
+// 1.7 s; and an archive of the slowest lines measured for their size to the
+// plaintext's bound, about 11 s by their rate: each inside its wait.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at

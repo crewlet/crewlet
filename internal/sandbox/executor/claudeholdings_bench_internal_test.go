@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -20,35 +21,55 @@ import (
 )
 
 // WHAT A READING COSTS AT ITS BOUNDS, in time and in memory: the figures the
-// reading's wait ([holdingsReadWait]) and the seats' transcript slot it takes
-// ([SeatTranscriptReadsAtOnce]) are stated by. Each case writes its archive to
-// a file first, gzipped as the take's scrub writes one, and reads it from
-// there, so what a case holds is the reading's own and never the archive's.
-// Its peak heap is read off the runtime's GC trace (GODEBUG=gctrace=1), one
-// case a process, after the forced collection each case takes once its archive
-// is written: a sampling ticker would be a clock in test code. Each case
-// reports the plaintext it reads and the gzipped archive it read it from, in
-// MiB (nothing is sealed here), its lines' text made of random base64, which
-// gzip barely shrinks, and of one phrase, which it shrinks to nothing, in the
-// measure each case's inflation asks. The measure is near, not exact: the run
-// the figures in the docs come from wrote the ordinary archive at 1.59 MiB,
-// and those at the archive's bound and to the plaintext's at 33.7 and 35.9
-// MiB, past the 32 they are named for, inflating by 3.5 and 7.1 rather than
-// 3.7 and 8: more of gzip's work than a real archive at those bounds, so
-// their times are upper estimates.
+// reading's wait (internal/sandbox's holdingsReadWait) and the seats'
+// transcript slot it takes ([SeatTranscriptReadsAtOnce]) are stated by. Each
+// case writes its archive to a file first, gzipped as the take's scrub writes
+// one, and reads it from there, so what a case holds is the reading's own and
+// never the archive's. Each case holds its reading to the answer its archive is
+// built for, a reading or none and how many of its asked calls it holds, so a
+// change that turns a case into a cheaper answer fails it rather than measure
+// that; a case at a bound of the model of Claude Code's resume ([threadChain],
+// THE BOUNDS) takes either, and reports which as its read metric. What a
+// reading holds is read off the runtime's GC trace (GODEBUG=gctrace=1), one
+// case a process, between the two lines the case writes to standard error
+// around its read, after the forced collection each case takes once its
+// archive is written, since a sampling ticker would be a clock in test code.
+// Each cycle's line there reads `start->end->live MB` (MiB): what is HELD AT
+// MOST is the largest live heap, the third figure, of a cycle between the two
+// lines with the collector at GOGC=10, which runs a cycle at every tenth of the
+// heap's growth, so no growth goes long unsampled, as the chain's own
+// benchmark reads it (BenchmarkAThreadChainAtItsBounds); and the PEAK is the
+// largest heap at a cycle's start or end, the first two figures, at the
+// default GOGC, which adds the collector's headroom. Each case reports the
+// plaintext it reads and the gzipped archive it read it from, in MiB (nothing
+// is sealed here), its lines' text made of random base64, which gzip barely
+// shrinks, and of one phrase, which it shrinks to nothing, in the measure each
+// case's inflation asks. The measure is near, not exact: the run the figures
+// in the docs come from wrote the ordinary archive at 1.61 MiB, and those at
+// the archive's bound and to the plaintext's at 34.1 and 36.5 MiB, past the 32
+// they are named for, inflating by 3.5 and 7.0 rather than 3.7 and 8: more of
+// gzip's work than a real archive at those bounds, so their times are upper
+// estimates.
 //
-//	go test -run '^$' -bench '^BenchmarkAReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
+//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
+//	GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
+//
+// The first gives what is held at most and the second the peak and the time.
 //
 // The cases:
 //
 //   - an ordinary session: probe P6's median kept session, 1.51 MiB sealed,
-//     of lines of the 2,053 bytes a real main thread's average, inflating by
-//     the 3.7 a session at the archive's bound does (32 MiB to about 118);
+//     of lines of the 2,053 bytes a real main thread's average, a call and its
+//     result in turn, each reply under an id of its own and each record at a
+//     time of its own, inflating by the 3.7 a session at the archive's bound
+//     does (32 MiB to about 118), [sandbox.MaxBridgeCalls] of its calls asked
+//     and every one held;
 //   - a session at the archive's bound, so: about 118 MiB of such lines;
 //   - lines to the plaintext's bound, [threadPlainMax], inflating by the 8 a
 //     session must to reach it from the archive's bound;
 //   - [holdingsMaxAgents] subagents, each with its thread and metadata and its
-//     answer in the main thread, [sandbox.MaxBridgeCalls] of their calls asked;
+//     answer in the main thread, [sandbox.MaxBridgeCalls] of their calls asked
+//     and every one held;
 //   - lines at the line's bound, [threadLineMax], each a user record of text,
 //     to the plaintext's bound;
 //   - one line at the line's bound of the smallest results a message holds, all
@@ -60,8 +81,20 @@ import (
 //     held live before it kept no such id: 96 Agent calls each under an id of
 //     a mebibyte, and [holdingsMaxAgents] metadata each naming its call by an
 //     id of 65,000 bytes;
-//   - a main thread at [threadChainMaxRecords], each record at its worst for
-//     what the model of Claude Code's resume holds ([benchRecords]).
+//   - the model of the resume at its bounds, each of the chain's own cases at a
+//     bound read as the main thread of a reading's archive: a thread at its
+//     records bound, [threadChainMaxRecords] replies each of its own id making
+//     a call of its own and naming a parent written after it, so at both its
+//     bounds, [sandbox.MaxBridgeCalls] of its calls asked, a reading; at its
+//     retraction and kept bound, the records bound filled half by records and
+//     half by the prefixes a retry retracts and the uuids two compactions'
+//     boundaries list, a thread past 5,242,880 bytes holding a boundary, which
+//     the model cannot place, so no reading; and at its calls bound,
+//     [threadChainMaxCalls] calls in replies of 1,024 each answered by results
+//     of other ids, [sandbox.MaxBridgeCalls] of its calls asked, a reading;
+//   - THE COINCIDENT WORST: the reading's worst line, of the smallest results,
+//     after the thread at the records bound, so the reading decodes it beside
+//     the model at both its bounds, before the line passes them: no reading.
 func BenchmarkAReadingAtItsBounds(b *testing.B) {
 	const (
 		line     = 2053           // a real main thread's average line, probe P6
@@ -70,58 +103,109 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 	)
 	ordinary := int64(math.Round(1.51 * measured * (1 << 20)))
 	atBound := int64(math.Round(measured * executorkeep.SessionMaxBytes))
+	recordsCall := func(i int) string { return fmt.Sprintf("toolu_%08d", i+1) }
+	callsCall := func(i int) string { return fmt.Sprintf("toolu_use_000_%04d", i) }
 	for _, bc := range []struct {
 		name  string
 		write func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk
-		// past is whether the case passes a bound of the model of Claude
-		// Code's resume, so its reading is no reading.
-		past bool
+		// read is what the case's reading is: benchReads, a reading;
+		// benchReadsNot, none, its thread past a bound of the model of
+		// Claude Code's resume; benchReadsEither, either, reported.
+		read benchReading
+		// held is how many of its asked calls the reading holds.
+		held int
 	}{
-		{"an_ordinary_session", benchSessionLines(ordinary, line, measured), false},
-		{"a_session_at_the_archives_bound", benchSessionLines(atBound, line, measured), false},
-		{"lines_to_the_plaintexts_bound", benchSessionLines(threadPlainMax-benchSlack, line, bound), false},
-		{"subagents_at_their_bound", benchSubagents, false},
-		{"lines_at_the_lines_bound", benchSessionLines(threadPlainMax-benchSlack, threadLineMax, bound), false},
-		{"a_line_of_the_smallest_results", benchBlocks(`{"type":"tool_result","tool_use_id":"a"}`), true},
-		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`), false},
-		{"legs_of_ids_a_mebibyte_long", benchLongLegs, false},
-		{"metadata_of_ids_most_of_their_bound", benchLongMetas, false},
-		{"a_thread_at_its_records_bound", benchRecords, false},
+		{"an_ordinary_session", benchSessionLines(ordinary, line, measured), benchReads, sandbox.MaxBridgeCalls},
+		{"a_session_at_the_archives_bound", benchSessionLines(atBound, line, measured), benchReads,
+			sandbox.MaxBridgeCalls},
+		{"lines_to_the_plaintexts_bound", benchSessionLines(threadPlainMax-benchSlack, line, bound), benchReads,
+			sandbox.MaxBridgeCalls},
+		{"subagents_at_their_bound", benchSubagents, benchReads, sandbox.MaxBridgeCalls},
+		{"lines_at_the_lines_bound", benchSessionLines(threadPlainMax-benchSlack, threadLineMax, bound), benchReads, 0},
+		{"a_line_of_the_smallest_results", benchBlocks(`{"type":"tool_result","tool_use_id":"a"}`), benchReadsNot, 0},
+		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`), benchReads, 0},
+		{"legs_of_ids_a_mebibyte_long", benchLongLegs, benchReads, 0},
+		{"metadata_of_ids_most_of_their_bound", benchLongMetas, benchReads, 0},
+		{"a_thread_at_its_records_bound", benchChainThread(benchAtTheBound, recordsCall), benchReadsEither, 0},
+		{"a_thread_at_its_retraction_and_kept_bound", benchChainThread(benchRetractionsAndKept, nil),
+			benchReadsEither, 0},
+		{"a_thread_at_its_calls_bound", benchChainThread(benchCalls, callsCall), benchReadsEither, 0},
+		{"the_smallest_results_beside_a_thread_at_its_bounds", benchChainThread(benchReadingLine, recordsCall),
+			benchReadsEither, 0},
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			file := filepath.Join(b.TempDir(), "archive.tar.gz")
 			ask, plain, gzipped := benchArchive(b, file, bc.write)
 			archive := sandbox.SessionArchive{Harness: ClaudeCodeName, SessionID: ctSession,
 				Format: claudeArchiveFormat, Version: holdingsWriterFloor}
+			// AN ASK A READING TAKES, as a relaunch's continuing release would
+			// send it: one the reading refuses before it opens anything would
+			// measure nothing.
+			ask.Resumer = hsResumer
+			if err := (ClaudeCode{}).checkHoldings(archive, ask); err != nil {
+				b.Fatalf("the case's ask is refused: %v", err)
+			}
 			// WHAT WRITING THE ARCHIVE LEFT is collected before the reading
 			// starts, so the trace's heaps after it are the reading's own.
 			runtime.GC()
+			fmt.Fprintf(os.Stderr, "reading-bench %s: the read starts\n", bc.name)
 			b.ResetTimer()
 			// REPORTED ONCE THE TIMER IS RESET, which deletes every metric
 			// reported before it.
 			b.ReportMetric(float64(plain)/(1<<20), "plain-MiB")
 			b.ReportMetric(float64(gzipped)/(1<<20), "archive-MiB")
+			var got sandbox.SessionHoldings
 			for range b.N {
 				f, err := os.Open(file)
 				if err != nil {
 					b.Fatal(err)
 				}
-				got, err := ClaudeCode{}.readHoldings(b.Context(), bufio.NewReader(f), archive, ask,
+				got, err = ClaudeCode{}.readHoldings(b.Context(), bufio.NewReader(f), archive, ask,
 					boundsFor(executorkeep.SessionMaxBytes))
 				_ = f.Close()
 				var own *holdingsError
 				switch {
-				case bc.past && errors.As(err, &own):
+				case bc.read != benchReads && errors.As(err, &own):
 					b.ReportMetric(0, "read")
 				case err != nil || !got.Read:
 					b.Fatalf("a reading = %+v, %v; want one", got.Read, err)
+				case bc.read == benchReadsNot:
+					b.Fatal("a reading; want none, the thread past a bound of the model of the resume")
 				default:
 					b.ReportMetric(1, "read")
 				}
 			}
+			b.StopTimer()
+			fmt.Fprintf(os.Stderr, "reading-bench %s: the read ends\n", bc.name)
+			// WHAT IT HOLDS, held to what the case is built for: a reading that
+			// held less than its case was built to would measure a cheaper
+			// reading than the case names.
+			held, told := 0, ""
+			for _, c := range ask.Calls {
+				if ok, _ := got.Holds(c); ok {
+					held++
+				} else if told == "" {
+					r := got.Calls[c.ID]
+					told = fmt.Sprintf("%s, its records %+v and its thread's %+v", c.ID, r, got.Subagents[r.Thread])
+				}
+			}
+			b.ReportMetric(float64(held), "held")
+			if held != bc.held {
+				b.Fatalf("the reading holds %d of the asked calls, telling first %s; want %d", held, told, bc.held)
+			}
 		})
 	}
 }
+
+// benchReading is what a case's reading is: one, none, or either, reported as
+// its read metric.
+type benchReading int
+
+const (
+	benchReads benchReading = iota
+	benchReadsNot
+	benchReadsEither
+)
 
 // benchSlack is what a case written to the plaintext's bound leaves of it for
 // its tar's own blocks: its members' headers and the zeros that end it.
@@ -206,31 +290,48 @@ func benchSessionLines(plain int64, n int, ratio float64) func(*testing.B, *tar.
 		}
 		var ask sandbox.HoldingsAsk
 		for i := range lines {
-			id := fmt.Sprintf("toolu_bench_%08d", i/2)
+			id := fmt.Sprintf("toolu_bench%08d", i/2)
+			// EACH RECORD UNDER THE ONE BEFORE IT, the first rooting the
+			// thread, each reply under an id of its own, as a real session
+			// writes them, and each record at a time of its own: the resume
+			// starts from the newest record it can date, and a thread of no
+			// time holds no conversation, so a reading of it holds nothing.
+			parent := `"` + ctUUID(int(i)+1) + `"`
+			if i == 0 {
+				parent = "null"
+			}
+			own := `"uuid":"` + ctUUID(int(i)+2) + `","timestamp":"` + rcAt(int(i)) + `"}`
 			var record string
 			switch {
 			case n == threadLineMax:
-				head := `{"parentUuid":"` + ctUUID(int(i)+1) + `","isSidechain":false,"type":"user","message":` +
+				head := `{"parentUuid":` + parent + `,"isSidechain":false,"type":"user","message":` +
 					`{"role":"user","content":"`
-				tail := `"},"uuid":"` + ctUUID(int(i)+2) + `"}`
+				tail := `"},` + own
 				record = head + fill.text(n-1-len(head)-len(tail), n, ratio) + tail
 			case i%2 == 0:
-				head := `{"parentUuid":"` + ctUUID(int(i)+1) + `","isSidechain":false,"message":{"id":"msg_bench",` +
-					`"type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"tool_use",` +
-					`"id":"` + id + `","name":"mcp__crewlet__slow","input":{"note":"`
+				head := `{"parentUuid":` + parent + `,"isSidechain":false,"message":{"id":"` +
+					fmt.Sprintf("msg_bench_%08d", i/2) + `","type":"message","role":"assistant",` +
+					`"model":"claude-sonnet-4-5","content":[{"type":"tool_use","id":"` + id +
+					`","name":"mcp__crewlet__slow","input":{"note":"`
 				tail := `"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":100,` +
 					`"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":20}},` +
-					`"type":"assistant","uuid":"` + ctUUID(int(i)+2) + `"}`
+					`"type":"assistant",` + own
 				record = head + fill.text(n-1-len(head)-len(tail), n, ratio) + tail
 				if len(ask.Calls) < sandbox.MaxBridgeCalls {
 					ask.Calls = append(ask.Calls, sandbox.LoggedCall{ID: id, Asked: true})
 				}
 			default:
-				head := `{"parentUuid":"` + ctUUID(int(i)+1) + `","isSidechain":false,"type":"user","message":` +
+				head := `{"parentUuid":` + parent + `,"isSidechain":false,"type":"user","message":` +
 					`{"role":"user","content":[{"tool_use_id":"` + id + `","type":"tool_result","content":` +
 					`[{"type":"text","text":"`
-				tail := `"}]}]},"uuid":"` + ctUUID(int(i)+2) + `"}`
-				record = head + fill.text(n-1-len(head)-len(tail), n, ratio) + tail
+				tail := `"}]}]},` + own
+				text := fill.text(n-1-len(head)-len(tail), n, ratio)
+				record = head + text + tail
+				// THE OUTPUT ITS LOG KEPT, the result's own text, so the
+				// reading holds each asked call its session holds.
+				if k := int(i / 2); k < len(ask.Calls) {
+					ask.Calls[k].Output = text
+				}
 			}
 			if _, err := tw.Write([]byte(record + "\n")); err != nil {
 				b.Fatal(err)
@@ -253,8 +354,11 @@ func benchSubagents(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	main.WriteString(ctBrief(ctUUID(1)) + "\n")
 	var ask sandbox.HoldingsAsk
 	for i := range holdingsMaxAgents {
-		agent, started, call := fmt.Sprintf("a%016x", i), fmt.Sprintf("toolu_agent_%04d", i),
-			fmt.Sprintf("toolu_sub_%04d", i)
+		// IDS OF NO BATCH'S SPLIT FORM, as a real call's are: a main thread
+		// holding a result under an id that ends in `_` and digits answers
+		// no leg ([splitBase]).
+		agent, started, call := fmt.Sprintf("a%016x", i), fmt.Sprintf("toolu_agent%04d", i),
+			fmt.Sprintf("toolu_sub%04d", i)
 		output := "sub " + call + " done"
 		// EACH RECORD ITS OWN UUID, the main thread one chain: a uuid two
 		// records carry is no reading.
@@ -262,9 +366,12 @@ func benchSubagents(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 		if i > 0 {
 			parent = ctUUID(999 + 2*i)
 		}
-		main.WriteString(ctAssistant(parent, use, hsCallOf(started, claudeToolAgent, hsAgentInput)) + "\n")
-		main.WriteString(ctResult(use, answer, `[{"tool_use_id":"`+started+`","type":"tool_result",`+
-			`"content":[{"type":"text","text":"the subagent's report"}]}]`, hsCompleted(agent)) + "\n")
+		// EACH CALL'S REPLY UNDER AN ID OF ITS OWN and each record at a time
+		// of its own, as a real session writes them.
+		main.WriteString(benchAt(strings.Replace(ctAssistant(parent, use, hsCallOf(started, claudeToolAgent,
+			hsAgentInput)), `"id":"msg_test"`, `"id":"msg_agent_`+fmt.Sprintf("%04d", i)+`"`, 1), 2*i+1) + "\n")
+		main.WriteString(benchAt(ctResult(use, answer, `[{"tool_use_id":"`+started+`","type":"tool_result",`+
+			`"content":[{"type":"text","text":"the subagent's report"}]}]`, hsCompleted(agent)), 2*i+2) + "\n")
 		side := func(record string) string {
 			return strings.Replace(record, `"isSidechain":false`, `"isSidechain":true,"agentId":"`+agent+`"`, 1)
 		}
@@ -283,6 +390,12 @@ func benchSubagents(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	}
 	benchMember(b, tw, hsMain, main.String())
 	return ask
+}
+
+// benchAt is record written at ms milliseconds after [rcBase] in place of
+// [ctStamp].
+func benchAt(record string, ms int) string {
+	return strings.Replace(record, `"timestamp":"`+ctStamp+`"`, `"timestamp":"`+rcAt(ms)+`"`, 1)
 }
 
 // benchLongLegs writes a main thread of 96 Agent calls, each under an id of a
@@ -313,34 +426,36 @@ func benchLongMetas(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
 }
 
-// benchRecords writes a main thread of [threadChainMaxRecords] records, the
-// most the model of Claude Code's resume files of one thread, at their worst
-// for what it holds: each a reply of its own id, so each is a reply it interns,
-// all of them on the walk from the thread's last record, and all but the brief
-// and the last naming as their parent a record that comes later, so it keeps
-// each one's parent to look up once the thread is read whole. The brief roots
-// the chain; the last record names the first reply; each reply names the
-// next, the last of them the brief.
-func benchRecords(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
-	replies := threadChainMaxRecords - 2
-	record := func(parent, uuid, i int) string {
-		return `{"parentUuid":"` + ctUUID(parent) + `","isSidechain":false,"message":{"id":"msg_` +
-			fmt.Sprintf("%08d", i) + `","type":"message","role":"assistant","model":"claude-sonnet-4-5",` +
-			`"content":[{"type":"text","text":"x"}],"stop_reason":"end_turn"},"type":"assistant","uuid":"` +
-			ctUUID(uuid) + `"}` + "\n"
-	}
-	var main strings.Builder
-	main.WriteString(ctBrief(ctUUID(1)) + "\n")
-	for i := range replies {
-		parent := 3 + i
-		if i == replies-1 {
-			parent = 1
+// benchChainThread writes the main thread write writes, one of the chain's own
+// cases at its bounds (BenchmarkAThreadChainAtItsBounds), the first
+// [sandbox.MaxBridgeCalls] of whose calls asked names are asked, each by its
+// place from 0: nil asks a call the thread holds none of.
+func benchChainThread(write func(*benchThread),
+	asked func(i int) string) func(*testing.B, *tar.Writer) sandbox.HoldingsAsk {
+
+	return func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
+		t := benchWrite(b, filepath.Join(b.TempDir(), "thread.jsonl"), write)
+		f, err := os.Open(t.file)
+		if err != nil {
+			b.Fatal(err)
 		}
-		main.WriteString(record(parent, 2+i, i))
+		defer f.Close()
+		if err := tw.WriteHeader(&tar.Header{Name: hsMain, Mode: 0o600, Size: t.bytes,
+			Typeflag: tar.TypeReg}); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := io.Copy(tw, f); err != nil {
+			b.Fatal(err)
+		}
+		if asked == nil {
+			return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
+		}
+		var ask sandbox.HoldingsAsk
+		for i := range sandbox.MaxBridgeCalls {
+			ask.Calls = append(ask.Calls, sandbox.LoggedCall{ID: asked(i), Asked: true})
+		}
+		return ask
 	}
-	main.WriteString(record(2, 2+replies, replies))
-	benchMember(b, tw, hsMain, main.String())
-	return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
 }
 
 // benchBlocks writes a main thread of one user record of blocks at the line's

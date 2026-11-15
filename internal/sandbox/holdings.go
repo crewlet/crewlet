@@ -306,15 +306,16 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // the relaunch tells the session every call after its save point, which is
 // never wrong. MEASURED on two cores (the executor's
 // BenchmarkAReadingAtItsBounds): Claude Code's reading of an ordinary kept
-// session, a 1.6 MiB archive, takes about 50 ms, so a burst of 32 relaunches,
+// session, a 1.6 MiB archive, takes about 70 ms, so a burst of 32 relaunches,
 // whose readings take turns on the seats' one transcript slot, reads in about
-// 1.7 s; 255 MiB of ordinary lines, the plaintext's bound, read in 1.8 s; a
-// thread at the most records whose chain a reading walks, in 1.4 s; and the
-// slowest lines measured for their size, a line at the line's bound of blocks
-// of a kind no reader names, read 8 MiB in 0.30 s, so an archive of them to
-// the plaintext's bound, which gzip shrinks to almost nothing, reads in about
-// 10 s by that rate (computed, not measured whole): inside the wait still,
-// though on a loaded node it holds the seats' slot for most of it.
+// 2.2 s; 255 MiB of ordinary lines, the plaintext's bound, read in 2.7 s; a
+// thread at both bounds of the model of Claude Code's resume, in 1.5 s, and
+// with the reading's worst line after it, in 1.7 s; and the slowest lines
+// measured for their size, a line at the line's bound of blocks of a kind no
+// reader names, read 8 MiB in 0.34 s, so an archive of them to the
+// plaintext's bound, which gzip shrinks to almost nothing, reads in about 11 s
+// by that rate (computed, not measured whole): inside the wait still, though
+// on a loaded node it holds the seats' slot for most of it.
 const holdingsReadWait = 15 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
