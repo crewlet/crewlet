@@ -521,6 +521,15 @@ func answerPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, fmt.Errorf("%w: %s holds no open question to answer; name "+
 				"it with answers", ErrInvalidArguments, value(doc, "key"))
 		}
+		// AN AGENT'S GRANT REQUEST is answered in the engine's words, and
+		// choosing its grant is the approval (ADR-0118).
+		if g, ok := grantChoiceOf(options, a.String("choice")); ok {
+			if _, offered := options[a.String("choice")]; !offered {
+				return proposal.Preview{}, fmt.Errorf("%w: the question offers no option %q",
+					ErrInvalidArguments, a.String("choice"))
+			}
+			return grantAnswerPreview(ctx, read, req, doc, a, g)
+		}
 		var c changes
 		c.fact("task", "Task", value(doc, "key")+" "+value(doc, "title"))
 		c.fact("question", "Question", orDefault(value(question, "decision.question"),
