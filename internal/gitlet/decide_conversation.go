@@ -844,7 +844,7 @@ func (w ConversationWrite) CeilingNeeds() Access {
 // decideReview is a review's rules over row (rules D21 and D22): a LIVE change
 // (change_closed, change_merged); a reviewer who may review the repository and
 // did not write the change — an author's review of their own change, its
-// approval above all, counts for nothing, so none is taken (not_permitted); a
+// approval above all, counts for nothing, so none is taken (own_change); a
 // revision the change has reached (unknown_revision); every finding it carries
 // one of its reviewer's own (not_raiser) still standing on the change
 // (finding_gone); and its reviewer left with at most [MaxStandingFindings]
@@ -868,7 +868,7 @@ func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker st
 	}
 	switch {
 	case authors[asker] == kind:
-		return d.refuse(ConversationRefusalNotPermitted, fmt.Sprintf("%s is an author of %s, and an author's "+
+		return d.refuse(ConversationRefusalOwnChange, fmt.Sprintf("%s is an author of %s, and an author's "+
 			"review of their own change counts for nothing, so none is taken: ask a reviewer", grant.who(), named))
 	case grant.Access < AccessReview:
 		return d.refuse(ConversationRefusalNotPermitted, fmt.Sprintf("%s holds %s on %s's repository, and a "+

@@ -266,6 +266,15 @@ func QueueEntryNotYours() Refusal {
 		"maintains its repository or a person may take it off the queue, so it is still queued."}
 }
 
+// ReviewOfYourOwnChange is a review of a change by one of its authors: an
+// author's review of their own change counts for nothing, so none is taken,
+// and somebody else reviews it. NO REMEDY: the change page asks a reviewer
+// from the same bar, and the words say to.
+func ReviewOfYourOwnChange() Refusal {
+	return Refusal{person: "You wrote this change, so your review would not count and none was " +
+		"taken. Ask somebody else to review it."}
+}
+
 // ArtifactTrashed is a change to an artifact that is in the trash.
 func ArtifactTrashed() Refusal {
 	return Refusal{person: "This artifact is in the trash. Restore it first, " +

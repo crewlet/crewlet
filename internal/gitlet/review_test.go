@@ -327,15 +327,16 @@ func TestASameRevisionReviewSupersedesNothing(t *testing.T) {
 }
 
 // AN AUTHOR CANNOT REVIEW (rule D21): the change's owner, a seat whose push
-// made it an author and a person whose push did are each refused
-// not_permitted — an author's review of their own change, its approval above
-// all, counts for nothing, so none is taken — and so is a seat below review on
-// the repository, naming what it holds and what would admit it; a seat that
-// reviews the repository, and a person who did not write the change, review
-// it.
+// made it an author and a person whose push did are each refused own_change,
+// a code of its own so the person who meets it is told the change is theirs
+// rather than that it is not (an author's review of their own change, its
+// approval above all, counts for nothing, so none is taken); and a seat below
+// review on the repository is refused not_permitted, naming what it holds and
+// what would admit it; a seat that reviews the repository, and a person who
+// did not write the change, review it.
 //
 // Mutation: drop the author check, and the owner's approval of their own
-// change lands.
+// change lands; refuse it not_permitted again, and the authors' rows go red.
 func TestAnAuthorCannotReview(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -348,19 +349,23 @@ func TestAnAuthorCannotReview(t *testing.T) {
 	w, _ := writerOn(t, n, n.pub)
 	ctx := t.Context()
 	for _, tc := range []struct {
-		name  string
-		asker gitlet.Principal
-		says  string
+		name    string
+		asker   gitlet.Principal
+		refusal gitlet.ConversationRefusal
+		says    string
 	}{
-		{"its owner", dev, `seat "dev" is an author of web!1`},
-		{"a seat whose push made it an author", cto, `seat "cto" is an author of web!1`},
-		{"a person whose push made them an author", ada, `credential "pat:ada" is an author of web!1`},
-		{"a seat below review", reader, `seat "reader" holds read on web!1's repository, and a review needs ` +
-			`review: a person can set its role.code.access to review or full_access`},
+		{"its owner", dev, gitlet.ConversationRefusalOwnChange, `seat "dev" is an author of web!1`},
+		{"a seat whose push made it an author", cto, gitlet.ConversationRefusalOwnChange,
+			`seat "cto" is an author of web!1`},
+		{"a person whose push made them an author", ada, gitlet.ConversationRefusalOwnChange,
+			`credential "pat:ada" is an author of web!1`},
+		{"a seat below review", reader, gitlet.ConversationRefusalNotPermitted, `seat "reader" holds read on ` +
+			`web!1's repository, and a review needs review: a person can set its role.code.access to review or ` +
+			`full_access`},
 	} {
 		before := n.end()
 		res, err := w.Converse(ctx, reviewing(repo, change, tc.asker, 3, gitlet.VerdictApprove, nil))
-		requireConversationRefused(t, n, before, res, err, gitlet.ConversationRefusalNotPermitted, tc.says)
+		requireConversationRefused(t, n, before, res, err, tc.refusal, tc.says)
 	}
 	if got := n.count(`SELECT COUNT(*) FROM code_reviews WHERE change_id = ?`, change); got != 0 {
 		t.Fatalf("refused reviews wrote %d rows", got)

@@ -2193,6 +2193,7 @@ sentence:
 | `repo_deleted`, `repo_archived` | The repository is deleted, being purged or gone, or archived and read-only |
 | `change_not_found` | The repository holds no such change |
 | `not_permitted` | The asker may not make the write — a seat that reads nothing of the repository makes none — a reviewer asked may not review the change, or an author asked to review their own: the sentence says which, and what would admit it |
+| `own_change` | A review by an author of the change: an author's review of their own change counts for nothing, so none is taken, whatever their access |
 | `no_reviewer` | A reviewer asked is no seat of the chart |
 | `too_many_reviewers` | The change would ask more than 32 reviewers at once |
 | `unknown_revision` | A comment points at, or a review judges, a revision the change has not reached |
