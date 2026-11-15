@@ -1136,10 +1136,13 @@ func (s *Service) refuseApply(w http.ResponseWriter, r *http.Request, err error)
 			"the patched document was refused; an unknown key in a "+
 				"patch is refused here rather than ignored", err)
 	case errors.As(err, &invalid):
+		// A SENTENCE A PERSON CAN BE SHOWN: a settings screen draws the hint
+		// under the refusal, and this one was shouted at them in an
+		// operator's terms.
 		refuseDocument(w, httpjson.CodeValidationError, invalid.Err.Error(),
-			"the WHOLE document a write produces is validated, not only "+
-				"the part it changed, so a section that is fine on its own is "+
-				"still refused when the company it leaves is invalid", err)
+			"The whole company is checked on every change, not only the part "+
+				"that changed, so a change that is fine on its own is still "+
+				"refused when it leaves the company unable to run.", err)
 	case errors.As(err, &held):
 		// A REMEDY PER KIND OF HOLDER, because a person is never unbound —
 		// they hold a human seat for as long as they exist (ADR-0032) — so

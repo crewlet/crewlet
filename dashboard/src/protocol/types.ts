@@ -41,6 +41,7 @@ import type { LogPosition } from "./session.ts";
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
+import type { SettingRange } from "../contract/limits.ts";
 import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
@@ -1647,6 +1648,18 @@ export interface ConfigProblem {
   unit?: string;
   /** 1-based line in the submitted text, for parse failures only. */
   line?: number;
+  /**
+   * The bound a value outside its setting's declared range broke
+   * (`config.Range`), for a screen to say in its own words and the setting's
+   * unit: `message` is the engine's line for an operator, path and all.
+   */
+  range?: SettingRange;
+  /**
+   * The problem in a person's words, where the engine's rule wrote them: no
+   * key, no path. Absent where it wrote none, and `message` is then the only
+   * wording there is.
+   */
+  said?: string;
 }
 
 /**

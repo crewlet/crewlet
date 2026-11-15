@@ -646,21 +646,14 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 
 	p.wrap(c.TokenBudget.validate(field("token_budget")))
-	if c.NotificationRateLimit < 0 {
-		p.add(field("notification_rate_limit"), ErrOutOfRange,
-			"must not be negative, got %d", c.NotificationRateLimit)
-	}
+	p.within(field("notification_rate_limit"), float64(c.NotificationRateLimit), "")
 	if w := c.NotificationCoalesceWindowSeconds; w < 0 || w > coalesceWindowMax {
 		p.add(field("notification_coalesce_window_seconds"), ErrOutOfRange,
 			"must be 0..%v seconds, got %v: the window is spent out of the "+
 				"broker's ack-timeout budget, which also has to fit a whole turn",
 			coalesceWindowMax, w)
 	}
-	if b := c.NotificationCoalesceMaxBatch; b < 1 || b > coalesceMaxBatchMax {
-		p.add(field("notification_coalesce_max_batch"), ErrOutOfRange,
-			"must be between 1 and %d, got %d", coalesceMaxBatchMax,
-			c.NotificationCoalesceMaxBatch)
-	}
+	p.within(field("notification_coalesce_max_batch"), float64(c.NotificationCoalesceMaxBatch), "")
 
 	p.wrap(c.Providers.validate(field("providers")))
 	p.wrap(c.TurnEngine.validate(field("turn_engine")))

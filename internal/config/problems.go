@@ -53,6 +53,15 @@ type Problem struct {
 	// Line is the 1-based line in the submitted text, for a failure the
 	// parser found.
 	Line int `json:"line,omitempty"`
+	// Range is the bound the value broke, for a value outside its setting's
+	// declared range ([Range]): what a screen says to a person in its own
+	// words and the setting's unit ("At least 1."), where Message is this
+	// package's line for an operator. Absent for every other problem.
+	Range *Range `json:"range,omitempty"`
+	// Said is the problem in a person's words, where its rule wrote them
+	// ([Fault.Said]): what a screen shows a person in place of Message, which
+	// names the document's keys. Absent where the rule wrote none.
+	Said string `json:"said,omitempty"`
 }
 
 // Problems flattens a validation error into its located, classified
@@ -158,7 +167,7 @@ func holdsProblems(err error) bool {
 func (f *Fault) problem() Problem {
 	return Problem{
 		Path: f.Path.String(), Segments: segmentsOf(f.Path),
-		Kind: kindName(f.Kind), Message: f.Error(), Line: f.Line,
+		Kind: kindName(f.Kind), Message: f.Error(), Line: f.Line, Range: f.Range, Said: f.Said,
 	}
 }
 
