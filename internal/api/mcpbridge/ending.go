@@ -194,12 +194,8 @@ type bridgedCalls struct {
 	// ([binding.endKeeping]).
 	closing sync.WaitGroup
 
-	// answering, when set, is called by each call's handler between starting
-	// the call and waiting on it, handed the channel closed once the call is
-	// recorded (the suite's, export_test.go): a case that holds the handler
-	// there until then has the call's start and its answer both ready as the
-	// handler first looks, as a tool that returns at once has them on a
-	// loaded runner. Nil in production, and set before any call.
+	// answering, nil in production, runs in each call's handler before it waits
+	// on the call, handed the call's recorded channel (export_test.go).
 	answering func(recorded <-chan struct{})
 }
 

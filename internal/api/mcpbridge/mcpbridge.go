@@ -2183,12 +2183,8 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	// answer, so the box waits for none of it ([binding.writeAhead],
 	// [binding.conclude]).
 	//
-	// ITS TWO ANSWERS COME APART: notRun is the answer of a call its opening
-	// decided not to run ([binding.writeAhead]), which comes in place of its
-	// start, and concluded the answer of a call whose tool ran, which comes
-	// after it. On one channel, a tool that returned at once had its answer
-	// beside its start by the time the handler looked, and the runtime's pick
-	// between two ready cases skipped the call's first progress half the time.
+	// notRun answers a call the opening refused, in place of its start;
+	// concluded answers a call whose tool ran, after it.
 	notRun, concluded := make(chan answer, 1), make(chan answer, 1)
 	go func() {
 		defer o.calls.done(c)
@@ -2219,12 +2215,8 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	// package's own idea of the surface's gates. Nil for a call no request
 	// carries.
 	//
-	// DECIDED BY WHETHER THE TOOL RAN, never by which ready case the runtime
-	// picks: a call is begun or refused, never both, so began and notRun are
-	// never ready together, however soon its tool returns; and an end that
-	// answered it decided under the opening's lock whether it had begun
-	// ([binding.endKeeping]), which unrun says once cut is closed. So a call
-	// that ran is told so once, before its answer, whichever came first.
+	// Decided by whether the tool ran: began and notRun are never both ready,
+	// and once cut is closed unrun says whether the end found the call begun.
 	if o.calls.answering != nil {
 		o.calls.answering(c.recorded)
 	}

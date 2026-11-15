@@ -266,17 +266,9 @@ func TestACallTheBridgeAnswersWithoutRunningGetsNoProgress(t *testing.T) {
 	}
 }
 
-// A CALL WHOSE TOOL RETURNS AT ONCE IS TOLD IT RAN, once and before its
-// answer, on the job's endpoint and on one of the seat's servers alike. Each
-// call's handler is held until the call is recorded, so its start and its
-// answer are both ready as the handler first looks, as a tool that returns at
-// once has them on a loaded runner; read off the wire in the order the box
-// reads it, every call's answer opens with one progress. Sixteen calls on
-// each, since the runtime picks between two ready cases at random.
-//
-// Mutation: hand a call that ran its answer on the channel a refusal takes,
-// and about half the calls are answered with no progress: the case passes one
-// run in 2^32.
+// A CALL WHOSE TOOL RETURNS AT ONCE IS TOLD IT RAN: one progress before its
+// answer, with its start and its answer both ready as its handler first looks.
+// Mutation: answer a call that ran on the refusals' channel, and about half get none.
 func TestACallWhoseToolReturnsAtOnceIsToldItRan(t *testing.T) {
 	t.Parallel()
 	const calls = 16
