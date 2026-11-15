@@ -184,7 +184,8 @@ type Provider struct {
 
 	// now is the clock the bench is read against — time.Now, and a fixed
 	// clock in the suite, which has to watch a window end without waiting
-	// a minute for it.
+	// a minute for it — and the one a run's record reader dates each
+	// request by ([llm.Turn.Seen]).
 	now func() time.Time
 }
 

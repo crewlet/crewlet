@@ -40,7 +40,7 @@ func readerOver(t *testing.T, requests map[string]any, usage map[string]any) (*r
 	host := newTestHost(t)
 	var deltas []string
 	req := llm.Request{Tools: host, OnDelta: func(d llm.Delta) { deltas = append(deltas, d.Content) }}
-	return newRecordReader(p, req, "the prompt"), host, &deltas
+	return newRecordReader(p, req, "the prompt", time.Now), host, &deltas
 }
 
 // feed hands the reader each event as one line of stdout.
@@ -166,6 +166,47 @@ func TestARecordWithLateCallsTellsARequestOnceTheRecordMovesPastIt(t *testing.T)
 	r.finish()
 	if turns := host.latestTurns(); len(turns) != 2 || turns[1].Text != "done" {
 		t.Errorf("at the end the host was told %+v, want the last request too", turns)
+	}
+}
+
+// A REQUEST TOLD AT THE END IS DATED BY ITS RECORD. In a record whose calls
+// show late, a request no later event follows is told only at the run's
+// finish, after whatever the run's end waited for. The turn the host is told
+// carries when the record last showed it ([llm.Turn.Seen]): the instant its
+// latest event was read, not the first one, and not the finish.
+//
+// Mutation: leave Seen unset in turnOf and the host is told no instant; set it
+// at the request's first event, or at the finish, and the instant is the
+// wrong one.
+func TestARequestToldAtTheEndIsDatedByItsRecord(t *testing.T) {
+	t.Parallel()
+	r, host, _ := readerOver(t, map[string]any{"late_calls": true, "events": []any{
+		map[string]any{"match": []any{is([]any{"type"}, "step")}, "id": []any{"id"}, "text": []any{"text"}},
+		map[string]any{"match": []any{is([]any{"type"}, "tool")}, "id": []any{"id"},
+			"call": map[string]any{"name": []any{"name"}}},
+	}}, nil)
+	began := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	at := began
+	r.now = func() time.Time { return at }
+
+	feed(t, r, map[string]any{"type": "step", "id": "s1", "text": "looking"})
+	at = began.Add(time.Second)
+	feed(t, r, map[string]any{"type": "tool", "id": "s1", "name": "mcp__crewlet__search"})
+	if turns := host.latestTurns(); len(turns) != 0 {
+		t.Fatalf("the request was told before the finish (%+v), so this case says nothing "+
+			"about one told at the end", turns)
+	}
+	// The run's end waits, and only then is the record finished.
+	at = began.Add(5 * time.Second)
+	r.finish()
+
+	turns := host.latestTurns()
+	if len(turns) != 1 {
+		t.Fatalf("the host was told %+v, want the one request", turns)
+	}
+	if want := began.Add(time.Second); !turns[0].Seen.Equal(want) {
+		t.Errorf("the request was told as seen at %v, want %v: when its latest event was read",
+			turns[0].Seen, want)
 	}
 }
 

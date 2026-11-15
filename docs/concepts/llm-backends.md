@@ -2432,6 +2432,14 @@ that shows a request's calls only once they have run (`late_calls`: Gemini CLI,
 OpenCode) each call is placed at once and joined to its request when the record
 catches up.
 
+**A round is dated by its record.** Its duration runs from when the model had
+everything it needed to ask to when the record last showed the request, not to
+when the loop heard of it. A record that closes a request only when the run ends
+(`late_calls`, a final request no later event follows) tells the loop of it after
+everything the run's end waited for, and that wait is not the model's time. The
+record's instant is held within the round's own span: never before the model
+began, never after the loop heard of the request.
+
 **A call is joined to the request that asked for it** by the id the harness hands
 the server with the call, under the `_meta` key the profile names
 (`call_id_meta`: Claude Code's `claudecode/toolUseId`, Codex's `callId`, Muse

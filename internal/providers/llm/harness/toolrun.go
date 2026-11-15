@@ -80,7 +80,7 @@ func (p *Provider) serveTools(
 		host: req.Tools,
 		// AS A RUN WITH TOOLS PRINTS: its output may be the route's own
 		// ([harnessprofile.MCP.Output]).
-		reader: newRecordReader(p.profile.Routed(), req, sent),
+		reader: newRecordReader(p.profile.Routed(), req, sent, p.now),
 		clock:  newStretch(p.timeout),
 		carry:  startCarrier(ctx, p, checkout),
 	}
