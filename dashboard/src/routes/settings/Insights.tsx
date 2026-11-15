@@ -3,11 +3,12 @@
  * share weekly records of how its agents work, the records waiting for review,
  * and every record kept, each with its exact bytes.
  *
- * The consent is `diagnostics.insights` on the company document, written as any
- * setting is; a review answer is `POST /diagnostics/insights/decisions`.
+ * The consent is `diagnostics.insights` on the company document, written
+ * through the one setting write (`lib/useSettingWrite.ts`), as any setting
+ * is; a review answer is `POST /diagnostics/insights/decisions`.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Button,
   Callout,
@@ -25,11 +26,12 @@ import { Modal } from "~/components/Modal.tsx";
 import { FileTextGlyph, ListChecksGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { refusalWords } from "~/lib/ceilings.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { getConfig, savePatch } from "~/protocol/configWrite.ts";
+import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
+import { insightsPlan, type InsightsChange } from "~/lib/diagnosticsSettings.ts";
+import { useSettingWrite } from "~/lib/useSettingWrite.ts";
 import type {
   InsightClass,
   InsightRow,
@@ -44,7 +46,8 @@ import { uiletTone } from "~/ui/primitives.tsx";
 const POLL_MS = 60_000;
 const APPLYING_POLL_MS = 3_000;
 
-const COMPANY = { kind: "company" } as const;
+/** How a change that met a newer document ends. */
+const REREAD = "Reload to see the setting as it is now.";
 const TERM_WIDTH = "7.5rem";
 
 /** The three answers to "share?", in the order a person weighs them. */
@@ -140,53 +143,6 @@ function shareOf(share: InsightsShare): "off" | "review" | "auto" {
   return share === "" ? "off" : share;
 }
 
-/** Writes one change to `diagnostics.insights`, with its words for a refusal. */
-function useInsightsWrite(onSaved: () => void) {
-  const saving = useRef(false);
-  const [refused, setRefused] = useState("");
-  const inflight = useRef<AbortController | null>(null);
-  useEffect(() => () => inflight.current?.abort(), []);
-  const write = useCallback(
-    async (insights: Record<string, unknown>, summary: string): Promise<boolean> => {
-      if (saving.current) return false;
-      saving.current = true;
-      const controller = new AbortController();
-      inflight.current = controller;
-      const { signal } = controller;
-      setRefused("");
-      try {
-        const read = await getConfig(signal);
-        if (read.kind !== "document") {
-          setRefused(refusalWords(read, COMPANY).message);
-          return false;
-        }
-        const outcome = await savePatch({ diagnostics: { insights } }, read.etag, summary, signal);
-        // ALREADY SO is what was asked for: the engine stored nothing because
-        // the document already says it.
-        if (outcome.kind !== "saved" && outcome.kind !== "unchanged") {
-          setRefused(
-            outcome.kind === "valid"
-              ? "The engine checked the change but didn't save it. Please try again."
-              : refusalWords(outcome, COMPANY).message,
-          );
-          return false;
-        }
-        onSaved();
-        return true;
-      } catch (err) {
-        if (!signal.aborted) {
-          setRefused(err instanceof Error ? err.message : "Couldn't reach the engine.");
-        }
-        return false;
-      } finally {
-        saving.current = false;
-      }
-    },
-    [onSaved],
-  );
-  return { write, refused };
-}
-
 /** The consent, what a record sends and never sends, and a sample of each class. */
 function Consent({
   answer,
@@ -200,16 +156,31 @@ function Consent({
   onSaved: () => void;
 }) {
   const access = useConfigWriteAccess();
-  const { write, refused } = useInsightsWrite(onSaved);
+  // THE ONE SETTING WRITE: checked by the engine first, stopped on a warning
+  // the change introduces, and watched until this node applies it.
+  const write = useSettingWrite({ reread: REREAD, onApplied: onSaved });
+  const { state } = write;
+  // A CHANGE THAT CAME TO NOTHING lets go of the wanted choice, so the list
+  // goes back to what the engine holds.
+  useEffect(() => {
+    if (state.kind === "refused" || state.kind === "idle") onWanted(null);
+  }, [state.kind, onWanted]);
   const shown = wanted ?? shareOf(answer.share);
   // CHOOSING TO SHARE ACCEPTS THIS BUILD'S CATALOGUE, the one listed below.
   const choose = (value: string) => {
+    if (write.busy) return;
     const share = value as "off" | "review" | "auto";
-    const change = share === "off" ? { share } : { share, accepted: answer.schema };
-    void write(change, `Set usage insights to ${SHARE_WORDS[share].label.toLowerCase()}`).then(
-      (saved) => saved && onWanted(share),
+    const change: InsightsChange = share === "off" ? { share } : { share, accepted: answer.schema };
+    onWanted(share);
+    write.submit(
+      insightsPlan(change, `Set usage insights to ${SHARE_WORDS[share].label.toLowerCase()}`),
     );
   };
+  const saved = state.kind === "saved" ? state : null;
+  const mark =
+    saved && (saved.standing === "applying" || saved.standing === "refused")
+      ? `Saved, ${standingWords(saved.standing)}`
+      : "";
   // THE ENGINE SHARES ONLY ON THE LIST ACCEPTED, so an older one, or a newer
   // one accepted on another build, shares nothing.
   const stale = shareOf(answer.share) !== "off" && answer.accepted !== answer.schema;
@@ -247,17 +218,27 @@ function Consent({
               size="small"
               disabled={!access.can}
               onClick={() =>
-                void write({ accepted: answer.schema }, "Accepted the usage insights list")
+                write.submit(
+                  insightsPlan({ accepted: answer.schema }, "Accepted the usage insights list"),
+                )
               }
             >
               Accept this list
             </Button>
           </Callout>
         )}
-        {refused && (
-          <Callout variant="danger" title="Couldn't save that">
-            {refused}
-          </Callout>
+        {mark && (
+          <Text as="p" tone="secondary" role="status">
+            {mark}
+          </Text>
+        )}
+        {state.kind !== "saved" && (
+          <SettingWriteStatus
+            write={write}
+            unchanged="Already so."
+            onReload={onSaved}
+            answersWarning
+          />
         )}
         <Disclosure title="What a record holds, and never holds" defaultOpen={shown === "off"}>
           <div className="col gap-2">
@@ -304,7 +285,10 @@ function ReviewQueue({ answer, onDecided }: { answer: InsightsAnswer; onDecided:
   const [busy, setBusy] = useState("");
   const [refused, setRefused] = useState("");
   const [opened, setOpened] = useState<InsightRow | null>(null);
-  const { write, refused: notSaved } = useInsightsWrite(onDecided);
+  // ALWAYS SENDING A PATTERN is a change to the company document, made
+  // through the one setting write like the consent above it.
+  const write = useSettingWrite({ reread: REREAD, onApplied: onDecided });
+  const [alwaysFor, setAlwaysFor] = useState<InsightRow | null>(null);
   const titleOf = useTitles(answer);
 
   const decide = async (r: InsightRow, choice: "send" | "decline"): Promise<boolean> => {
@@ -325,24 +309,48 @@ function ReviewQueue({ answer, onDecided }: { answer: InsightsAnswer; onDecided:
       setBusy("");
     }
   };
-  // ALWAYS SENDING A CLASS SENDS THIS RECORD TOO: the person has said yes to it.
-  const always = async (r: InsightRow) => {
+  // ALWAYS SENDING A CLASS SENDS THIS RECORD TOO: the person has said yes to
+  // it, once the document holds the pattern (saved, or already so).
+  const always = (r: InsightRow) => {
+    if (write.busy) return;
     const classes = [...new Set([...answer.always, r.class])];
-    if (await write({ always: classes }, `Always send the ${titleOf(r.class)} usage insight`)) {
-      await decide(r, "send");
-    }
+    setAlwaysFor(r);
+    write.submit(
+      insightsPlan({ always: classes }, `Always send the ${titleOf(r.class)} usage insight`),
+    );
   };
+  const written = write.state.kind;
+  useEffect(() => {
+    if (!alwaysFor) return;
+    if (written === "saved" || written === "unchanged") {
+      setAlwaysFor(null);
+      void decide(alwaysFor, "send");
+    } else if (written === "refused" || written === "idle") {
+      setAlwaysFor(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [written, alwaysFor]);
 
   return (
     <Card padding="none">
       <Card.Header icon={<ListChecksGlyph size="sm" />} count={queued.length}>
         <Card.Title>Waiting for your review</Card.Title>
       </Card.Header>
-      {(refused || notSaved) && (
+      {refused && (
         <Card.Body padding="md">
           <Callout variant="danger" title="Couldn't do that">
-            {refused || notSaved}
+            {refused}
           </Callout>
+        </Card.Body>
+      )}
+      {write.state.kind !== "idle" && write.state.kind !== "saved" && (
+        <Card.Body padding="md">
+          <SettingWriteStatus
+            write={write}
+            unchanged="Already so."
+            onReload={onDecided}
+            answersWarning
+          />
         </Card.Body>
       )}
       <DataGrid<InsightRow>
@@ -396,7 +404,7 @@ function ReviewQueue({ answer, onDecided }: { answer: InsightsAnswer; onDecided:
                     variant="ghost"
                     disabled={blocked}
                     title="Send this record, and send this pattern's records without review from now on"
-                    onClick={() => void always(r)}
+                    onClick={() => always(r)}
                   >
                     Always send this pattern
                   </Button>

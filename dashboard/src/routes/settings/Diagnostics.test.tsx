@@ -1,7 +1,8 @@
 /**
  * Settings › Diagnostics. The invariants worth breaking a build over: it is off
  * until somebody turns it on, and says what is sent and what never is before they
- * do; the write is the one setting, on the revision just read; a build that sends
+ * do; the write is the one setting, checked by the engine first and on the
+ * revision just read, through the one setting write; a build that sends
  * nothing says so once it is on; and a reader who may not write cannot move it.
  */
 
@@ -21,10 +22,12 @@ import { Diagnostics } from "./Diagnostics.tsx";
 
 const save = vi.hoisted(() => vi.fn());
 const read = vi.hoisted(() => vi.fn());
+const check = vi.hoisted(() => vi.fn());
 vi.mock("~/protocol/configWrite.ts", async (original) => ({
   ...(await original<typeof import("~/protocol/configWrite.ts")>()),
   getConfig: read,
   savePatch: save,
+  dryRunPatch: check,
 }));
 
 const access = vi.hoisted(() => vi.fn());
@@ -104,6 +107,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   access.mockReturnValue({ can: true });
   read.mockResolvedValue({ kind: "document", document: {}, etag: '"rev"' });
+  check.mockResolvedValue({ kind: "valid", warnings: [], derived: null });
   save.mockResolvedValue({ kind: "saved", revisionId: "r", epoch: 2, warnings: [], derived: null });
 });
 
@@ -138,12 +142,58 @@ test("turning it on writes the one setting, on the revision just read, with its 
     fireEvent.click(theSwitch());
     await settled();
   });
+  // CHECKED FIRST, as every setting is: the change and the company as it
+  // stands, both on the revision just read.
+  expect(check.mock.calls.map((call) => call.slice(0, 2))).toEqual([
+    [{}, '"rev"'],
+    [{ diagnostics: { issue_reports: { enabled: true } } }, '"rev"'],
+  ]);
   expect(save).toHaveBeenCalledOnce();
   const [patch, etag, summary] = save.mock.calls[0] ?? [];
   expect(patch).toEqual({ diagnostics: { issue_reports: { enabled: true } } });
   expect(etag).toBe('"rev"');
   expect(summary).toBe("Turned on bug reports to Crewlet");
   expect(theSwitch().checked).toBe(true);
+  // AND WATCHED until this node applies it.
+  expect(screen.getByText("Saved, applying…")).toBeTruthy();
+});
+
+// A WARNING THE CHANGE INTRODUCES STOPS THE SAVE, as it does for every other
+// setting: the switch wrote straight through and never asked.
+test("a warning the change introduces stops the save until Save anyway", async () => {
+  const warning = { path: "diagnostics.issue_reports", message: "reports go to a public tracker" };
+  check.mockImplementation(async (patch: Record<string, unknown>) => ({
+    kind: "valid",
+    warnings: Object.keys(patch).length === 0 ? [] : [warning],
+    derived: null,
+  }));
+  await mount(reading());
+  await act(async () => {
+    fireEvent.click(theSwitch());
+    await settled();
+  });
+  expect(save).not.toHaveBeenCalled();
+  expect(screen.getByText("The engine accepts this, with a warning")).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    await settled();
+  });
+  expect(save).toHaveBeenCalledOnce();
+});
+
+test("the document already saying so saves nothing", async () => {
+  read.mockResolvedValue({
+    kind: "document",
+    document: { diagnostics: { issue_reports: { enabled: true } } },
+    etag: '"rev"',
+  });
+  await mount(reading());
+  await act(async () => {
+    fireEvent.click(theSwitch());
+    await settled();
+  });
+  expect(save).not.toHaveBeenCalled();
+  expect(check).not.toHaveBeenCalled();
 });
 
 // A DISABLED INPUT DROPS FOCUS, so disabling the switch while it saves left a
@@ -180,7 +230,7 @@ test("a refused write says so, and the switch stays where the engine has it", as
     fireEvent.click(theSwitch());
     await settled();
   });
-  expect(screen.getByText("Couldn't save that")).toBeTruthy();
+  expect(screen.getByText("Nothing was saved")).toBeTruthy();
   expect(theSwitch().checked).toBe(false);
 });
 
