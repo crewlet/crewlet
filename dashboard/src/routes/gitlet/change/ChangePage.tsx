@@ -1,6 +1,8 @@
 /**
- * One change's page, `#/gitlet/repos/{name}/changes/{n}` — `web!42` in full:
- * what it proposes, where its merge stands, the conversation about it, its
+ * One change's page, `#/gitlet/repos/{name}/changes/{n}` — `web!42` in full,
+ * laid out as a code host lays one out: a header saying who wants to merge
+ * which revision of which branch into which, then the conversation about it
+ * with where its merge stands (its merge box) and a rail of whom it asked, its
  * diff with every finding and thread on the lines they are about, its
  * revisions, where it came from and whom its records notified.
  *
@@ -21,15 +23,15 @@
  * against the version on screen; Apply suggestion commits a finding's
  * suggestion on the change's branch against the head on screen; a comment, a
  * reply and Resolve go through `code_comment_on_change`; Merge (or Add to
- * queue), Override and Re-run checks are the merge controls above the tabs
- * (`Merge.tsx`), Merge sending the head on screen. Each goes through
+ * queue), Override and Re-run checks are the merge controls in the
+ * conversation's merge box (`Merge.tsx`), Merge sending the head on screen. Each goes through
  * `useAct` and a `WriteButton`: drawn for every reader, disabled with the
  * reason where it cannot act, and NEVER OPTIMISTIC — nothing on screen moves
  * until the engine answers, and the answer's position is the floor the page
  * is read at next.
  */
 
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   Button,
   EmptyState,
@@ -41,15 +43,24 @@ import {
   Textarea,
   tabId,
 } from "@crewlethq/ui";
+import {
+  BellGlyph,
+  DiffGlyph,
+  ListChecksGlyph,
+  MessagesSquareGlyph,
+  RotateCcwClockGlyph,
+  ScrollTextGlyph,
+} from "@crewlethq/icons/glyphs";
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
-import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageMenu } from "~/app/Shell.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
-import { changeLive, changeRef, isRepoName, refName, repoPath } from "~/lib/code.ts";
+import { changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
+import { useNow } from "~/lib/clock.ts";
 import { draftedRevisions, findingOf, forgetDrafts, readDrafts } from "~/lib/reviewDrafts.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -57,15 +68,16 @@ import { menuHold, type WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeVerdict } from "~/protocol/index.ts";
-import { ChangeStateTag } from "../Changes.tsx";
+import { ChangeStateTag, ReadinessMeter } from "../Changes.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
+import { changesHref, repoHref } from "../paths.ts";
+import { Byline } from "../ui.tsx";
 import { Checks } from "./Checks.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
 import { Commits, Notified, Provenance } from "./Facts.tsx";
-import { RevertChangePanel } from "./ChangeWrites.tsx";
-import { MergePanel } from "./Merge.tsx";
 import { CHANGE_POLL_MS, useStandingFindings } from "./reads.ts";
+import "~/styles/gitlet.css";
 
 /** The page's tabs, the conversation first: what a reader opens a change for. */
 const CHANGE_TABS = [
@@ -77,6 +89,16 @@ const CHANGE_TABS = [
   "notified",
 ] as const;
 type ChangeTab = (typeof CHANGE_TABS)[number];
+
+/** Each tab's glyph: decorative, its label names it. */
+const CHANGE_TAB_GLYPHS: Readonly<Record<ChangeTab, ReactNode>> = {
+  conversation: <MessagesSquareGlyph size="sm" />,
+  files: <DiffGlyph size="sm" />,
+  commits: <RotateCcwClockGlyph size="sm" />,
+  checks: <ListChecksGlyph size="sm" />,
+  provenance: <ScrollTextGlyph size="sm" />,
+  notified: <BellGlyph size="sm" />,
+};
 
 const CHANGE_TAB_LABELS: Readonly<Record<ChangeTab, string>> = {
   conversation: "Conversation",
@@ -134,8 +156,6 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
       </PageActions>
       <header>
         <ChangeHeader change={change} />
-        <MergePanel change={change} />
-        <RevertChangePanel change={change} />
         <Tabs
           overflow="menu"
           variant="underline"
@@ -146,6 +166,7 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
           items={CHANGE_TABS.map((value) => ({
             value,
             label: CHANGE_TAB_LABELS[value],
+            icon: CHANGE_TAB_GLYPHS[value],
             ...(value === "conversation" && change.conversation
               ? { count: change.conversation.reviews + change.conversation.comments }
               : {}),
@@ -197,51 +218,99 @@ function ChangeDraft({ boxes, change }: { boxes: DraftBoxes; change: CodeChangeD
   return null;
 }
 
-/** The change's header: its reference, title, state and the facts a reader places it by. */
+/**
+ * What the change's byline says it does, as a code host's does: who wants to
+ * merge which revision of which branch into which — or merged it, or closed
+ * it — and when.
+ */
+function bylineVerb(change: CodeChangeDetail): ReactNode {
+  const source = refName(change.source_ref).name;
+  const target = refName(change.target_ref).name;
+  // EACH BRANCH A LINK IN THE SENTENCE, so it takes `.prose-link`'s rule
+  // under its words as every link inside a sentence does, on its chip.
+  const branches = (
+    <>
+      <a className="code-branch-chip prose-link" href={repoHref(change.repo, { ref: source })}>
+        {source}
+      </a>{" "}
+      into{" "}
+      <a className="code-branch-chip prose-link" href={repoHref(change.repo)}>
+        {target}
+      </a>
+    </>
+  );
+  switch (change.state) {
+    case "merged":
+      return (
+        <>
+          merged revision {change.revision} of {branches}
+        </>
+      );
+    case "closed":
+      return <>closed its proposal of {branches}</>;
+    case "draft":
+      return (
+        <>
+          drafts revision {change.revision} of {branches}
+        </>
+      );
+  }
+  return (
+    <>
+      wants to merge revision {change.revision} of {branches}
+    </>
+  );
+}
+
+/** When the byline's act happened: the merge, the close, or the opening. */
+function bylineAt(change: CodeChangeDetail): string | undefined {
+  if (change.state === "merged") return change.merged_at ?? change.opened_at;
+  if (change.state === "closed") return change.closed_at ?? change.opened_at;
+  return change.opened_at;
+}
+
+/**
+ * The change's header: its reference, title and state — beside a live
+ * change's readiness, the meter every listing draws — and its byline, which
+ * says what it proposes. Where it stands with its reviewers, its work item
+ * and its head are the conversation's rail, beside it.
+ */
 function ChangeHeader({ change }: { change: CodeChangeDetail }) {
+  const now = useNow();
   const seatBadge = useSeatBadgeOf();
+  const actor = change.state === "merged" && change.merged_by ? change.merged_by : change.owner;
   const work = change.work_item;
-  const facts: Fact[] = [
-    {
-      label: "Repository",
-      value: change.repo,
-      path: repoPath(change.repo),
-    },
-    {
-      label: "Branches",
-      value: (
-        <span className="mono">
-          {refName(change.source_ref).name} → {refName(change.target_ref).name}
-        </span>
-      ),
-      token: true,
-    },
-    {
-      label: "Owner",
-      value: seatBadge(change.owner).name,
-      path: ["gitlet"],
-      query: { owner: change.owner },
-    },
-    { label: "Revisions", value: String(change.revision) },
-    ...(work
-      ? [
-          {
-            label: "Work item",
-            value: work.key || work.id,
-            path: ["gitlet"],
-            query: { work: `${work.backend}:${work.id}`, state: "all" },
-          },
-        ]
-      : []),
-  ];
   return (
     <ObjectHeader
       kind="Change"
       icon="diff"
       identifier={change.ref}
       title={change.title}
-      status={<ChangeStateTag state={change.state} />}
-      facts={facts}
+      status={
+        <>
+          <ChangeStateTag state={change.state} />
+          {changeLive(change.state) && change.readiness && (
+            <ReadinessMeter change={change} nameOf={(h) => seatBadge(h).name} />
+          )}
+        </>
+      }
+      description={
+        <span className="code-change-byline">
+          <Byline who={actor} verb={bylineVerb(change)} at={bylineAt(change)} now={now}>
+            <a className="t-link" href={repoHref(change.repo)}>
+              {change.repo}
+            </a>
+            {work && (
+              <a
+                className="t-link mono"
+                href={changesHref({ work: `${work.backend}:${work.id}`, state: "all" })}
+              >
+                {work.key || work.id}
+              </a>
+            )}
+          </Byline>
+        </span>
+      }
     />
   );
 }

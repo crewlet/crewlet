@@ -66,15 +66,12 @@ import {
   Select,
   Skeleton,
   TableDateCell,
-  TableEntityCell,
   TableKeyCell,
   TableNumberCell,
-  TableTextCell,
   Tag,
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
-import { plainSeat } from "~/app/frame/cells.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -89,8 +86,9 @@ import {
   isChangeNeed,
   isChangeWindow,
   isRepoName,
+  refName,
 } from "~/lib/code.ts";
-import { fmtCount, plural } from "~/lib/format.ts";
+import { fmtCount, fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -99,6 +97,8 @@ import { REPO_PARAM, changeObject } from "./paths.ts";
 import { readinessCount, readinessNext } from "./readinessWords.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { Face, useWhoName } from "./ui.tsx";
+import "~/styles/gitlet.css";
 
 /**
  * How often the listing's first page is read again while it is open: a
@@ -339,15 +339,9 @@ export function ChangesGrid({
         {
           key: "change",
           header: "Change",
-          shrink: true,
+          floor: "16rem",
           phoneLead: true,
-          cell: (c) => <TableKeyCell value={c.ref} />,
-        },
-        {
-          key: "title",
-          header: "Title",
-          floor: "12rem",
-          cell: (c) => <TableTextCell>{c.title}</TableTextCell>,
+          cell: (c) => <ChangeCell change={c} now={now} />,
         },
         {
           key: "state",
@@ -363,13 +357,6 @@ export function ChangesGrid({
           cell: (c) => <ReadinessMeter change={c} nameOf={(h) => seatBadge(h).name} />,
         },
         {
-          key: "owner",
-          header: "Owner",
-          shrink: true,
-          // NOT A LINK: the row around it is one, to the change.
-          cell: (c) => <TableEntityCell {...plainSeat({ ...seatBadge(c.owner) })} />,
-        },
-        {
           key: "work",
           header: "Work item",
           shrink: true,
@@ -380,14 +367,6 @@ export function ChangesGrid({
             ) : (
               <EmptyValue label="No work item" />
             ),
-        },
-        {
-          key: "revisions",
-          header: "Revisions",
-          shrink: true,
-          align: "right",
-          drop: 4,
-          cell: (c) => <TableNumberCell value={c.revision} format={fmtCount} />,
         },
         {
           key: "findings",
@@ -405,11 +384,46 @@ export function ChangesGrid({
           header: "Updated",
           shrink: true,
           align: "right",
-          drop: 5,
+          drop: 4,
           cell: (c) => <TableDateCell value={c.updated_at} now={now} />,
         },
       ]}
     />
+  );
+}
+
+/**
+ * A change as a row names it, as a code host's listing does: its title, then
+ * a line of what places it — its reference, when it was opened and by whom
+ * (their face and name), the branch it proposes into which, and its revision
+ * once it has had more than one.
+ *
+ * NO LINK INSIDE: the row around it is one, to the change's peek.
+ */
+function ChangeCell({ change, now }: { change: CodeChangeSummary; now: number }) {
+  const whoName = useWhoName();
+  return (
+    <span className="code-change-cell">
+      <span className="code-change-cell__title">{change.title}</span>
+      <span className="code-change-cell__meta">
+        <span className="mono">{change.ref}</span>
+        <span>
+          opened{" "}
+          <time dateTime={change.opened_at} title={fmtDateTime(change.opened_at)}>
+            {relTime(change.opened_at, now)}
+          </time>{" "}
+          by
+        </span>
+        <span className="code-change-cell__who">
+          <Face who={change.owner} />
+          <span>{whoName(change.owner)}</span>
+        </span>
+        <span className="mono code-change-cell__branches">
+          {refName(change.source_ref).name} → {refName(change.target_ref).name}
+        </span>
+        {change.revision > 1 && <span>revision {change.revision}</span>}
+      </span>
+    </span>
   );
 }
 

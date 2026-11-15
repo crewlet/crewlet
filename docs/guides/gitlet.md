@@ -126,12 +126,14 @@ could, so owning `deploy/**` lets no seat push there that could not before
 A project the document does not declare is made in the dashboard too: **New
 repository** on **Gitlet › Repositories** (`code_create_repo`) takes its name,
 the unit that owns it and, where you say them, a description, a default
-branch and which seats read it, and opens its page. Its **Files** tab adds its
-first file with **Add a file**, the root commit that makes its default branch,
-so it needs no clone to start. From then on the repository's page writes it
-from the browser, each write one commit or one ref moved, as you:
+branch and which seats read it, and opens its page. Its **Code** tab, where
+the page lands, adds its first file with **Add a file**, the root commit that
+makes its default branch, so it needs no clone to start; beside it, the
+address to clone it from and the two commands that push a repository you
+already have into it. From then on the repository's page writes it from the
+browser, each write one commit or one ref moved, as you:
 
-- **Files**, on a branch: **Edit** a text file of up to 256 KiB, **Delete
+- **Code**, on a branch: **Edit** a text file of up to 256 KiB, **Delete
   file**, or **New file** in a directory (`code_commit_files`), each at the
   commit the page read, so a push made since is refused rather than written
   over;
@@ -223,7 +225,8 @@ and a service account is created with it (`crewlet iam create -kind machine
 
 ## Clone, fetch and push
 
-The address is the API's own, on `api.port` — never the public listener:
+The address is the API's own, on `api.port` — never the public listener —
+and a repository's page offers it under **Clone**, beside its files:
 
 ```sh
 git clone https://crewlet.example.com/git/web.git
@@ -439,8 +442,10 @@ revision touches paths the repository's `path_owners` name asks their owners
 itself, once its home has read the revision ([Path
 owners](../concepts/gitlet.md#path-owners)).
 
-**Read it.** **Conversation** is the change's readiness, its description and
-its timeline in the order its records landed; **Files** is a revision's
+**Read it.** **Conversation** is the change's description, its merge box —
+every condition to merge with where it stands, and the merge controls — and
+its activity in the order its records landed, beside a rail of whom it asked
+for a review and where each stands; **Files** is a revision's
 diff — the head unless you pick another, or what changed since an earlier
 revision — with each finding under the lines it points at, and one whose
 lines have changed since drawn above the diff, never dropped. A seat reads the
@@ -497,7 +502,7 @@ or, where the gate lets none of them, the lead of the repository's owner
 ([Who a change wakes](../concepts/gitlet.md#who-a-change-wakes)) — and
 merge it as [Merging a change](#merging-a-change) says.
 
-**Who heard about it.** The page's **Woke** tab is whom each record about the
+**Who heard about it.** The page's **Notified** tab is whom each record about the
 change reached, newest first, each with the one reason they heard under; the
 same answer is `GET /gitlet/repos/{name}/changes/{n}/routing` ([A change's
 questions](../reference/api-endpoints.md#a-changes-questions)).
@@ -582,12 +587,13 @@ change; a seat cannot override.
 ### From the change's page
 
 A live change's page (**Gitlet › Changes**, then the change) carries the same
-call as controls above its tabs, each made as you and never ahead of the
-engine's answer:
+call in its **Conversation**'s merge box, under the description, each control
+made as you and never ahead of the engine's answer:
 
-- **Where its gate stands** — how many of its conditions are met, and the
-  first one that is not, judged with *you* as the merger, so a reader without
-  the authority to merge into the target is told so before pressing anything.
+- **Where its gate stands** — how many of its conditions are met, each
+  condition with where it stands, and the first one that is not, judged with
+  *you* as the merger, so a reader without the authority to merge into the
+  target is told so before pressing anything.
 - **Merge**, or **Add to queue** where the target's gate requires a check, with
   how it merges (**Merge commit**, **Squash** or **Fast-forward**), **Delete
   its branch** — left unticked, the rule above decides — and **Close ENG-42
@@ -1485,8 +1491,8 @@ exists already when it is made a pull mirror — its `code.repos` entry's
 `importing` until the source has landed, every branch and tag it holds but a
 seat's own made the source's and one the source does not have deleted. Your own assistant does the
 same with `code_import_repo`, and so does **Import a repository** on the
-dashboard's Gitlet › Repositories, where the repository's Overview then says
-how far the import went; no seat is offered it. Every flag is in
+dashboard's Gitlet › Repositories, where the About rail beside the
+repository's code then says how far the import went; no seat is offered it. Every flag is in
 [`crewlet gitlet import`](../reference/cli.md#crewlet-gitlet-import).
 
 #### Your machine pushes it

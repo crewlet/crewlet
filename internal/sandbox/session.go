@@ -719,6 +719,19 @@ type SessionCapture struct {
 	SessionID      string `json:"session_id,omitempty"`
 	ArchiveFormat  int    `json:"archive_format,omitempty"`
 
+	// RunBegan and RunAfter are where the run that packed the session began in
+	// it, as the box described it ([SessionArchive.RunStart], read whole as
+	// [SessionCapture.RunStart]): the session the run's own from its start, or
+	// every message after the one RunAfter names, an id as the kept archive
+	// spells it — the take passes it through the very rewrite every message id
+	// of the archive passes, so the kept session holds that message under that
+	// id — and none at all where that rewrite left no message id
+	// ([ValidMessageID]). Neither, where the box said neither. Carried in
+	// [SessionCapture.Extra] by a build that does not know them, and held to
+	// [MaxMessageIDBytes] ([SessionCapture.Bounded]).
+	RunBegan bool   `json:"run_began,omitempty"`
+	RunAfter string `json:"run_after,omitempty"`
+
 	// Object, ObjectHash, ObjectSize and ContentKey are the sealed object it
 	// was uploaded into, once it was; Home and Workspace the box's paths,
 	// which a later launch maps onto its own.
@@ -771,6 +784,7 @@ func (c SessionCapture) Bounded() error {
 		{"harness", c.Harness, executorkeep.HarnessMaxBytes},
 		{"harness_version", c.HarnessVersion, executorkeep.HarnessVersionMaxBytes},
 		{"session_id", c.SessionID, executorkeep.SessionIDMaxBytes},
+		{"run_after", c.RunAfter, MaxMessageIDBytes},
 		{"home", c.Home, executorkeep.PathMaxBytes},
 		{"workspace", c.Workspace, executorkeep.PathMaxBytes},
 		{"taker", c.Taker, maxIncarnationBytes},
@@ -801,6 +815,10 @@ func (c SessionCapture) Bounded() error {
 	}
 	return nil
 }
+
+// RunStart is where the run that packed c's session began in it, as the stamp
+// keeps it ([SessionCapture.RunBegan]).
+func (c SessionCapture) RunStart() RunStart { return RunStart{Began: c.RunBegan, After: c.RunAfter} }
 
 // maxIncarnationBytes bounds a process incarnation as a run's row carries one:
 // the process that owns the run's seat ([PendingRun.Owner]) and the one that
@@ -1519,6 +1537,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Taker: hold.holder, TakerEpoch: hold.epoch,
 		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
 		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
+		RunBegan: taken.Archive.RunStart.Began, RunAfter: taken.Archive.RunStart.After,
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
@@ -2812,8 +2831,7 @@ func (c *Coordinator) askRecord(ctx context.Context, what, turn string, budget t
 func (c *Coordinator) settleCapture(ctx context.Context, by time.Time, run PendingRun,
 	last SessionCapture) SessionCapture {
 
-	key, err := objstore.ParseKey(last.Object)
-	if err == nil && c.now().Sub(key.Minted()) > objstore.RecordWithin {
+	if pastRecordWithin(last.Object, c.now()) {
 		last.State, last.Reason = CaptureRefused, fmt.Sprintf("its record was never answered within the "+
 			"%s an object may be named in", objstore.RecordWithin)
 	} else {
@@ -2822,6 +2840,16 @@ func (c *Coordinator) settleCapture(ctx context.Context, by time.Time, run Pendi
 	}
 	c.stampSettled(ctx, by, run.TurnID, last)
 	return last
+}
+
+// pastRecordWithin reports whether a capture's object, named by object, is
+// past objstore.RecordWithin as of now: no record may name it any more, so an
+// ask of its record is refused unasked ([Coordinator.settleCapture]), and no
+// reader waits on its answer ([captureAwaitsAnswer]). An object whose key does
+// not parse is not: its record is asked as any other's is.
+func pastRecordWithin(object string, now time.Time) bool {
+	key, err := objstore.ParseKey(object)
+	return err == nil && now.Sub(key.Minted()) > objstore.RecordWithin
 }
 
 // settleUnresolved asks run's newest capture again where its record was sent

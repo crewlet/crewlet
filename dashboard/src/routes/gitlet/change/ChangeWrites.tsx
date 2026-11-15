@@ -123,8 +123,8 @@ export function RevertChangePanel({ change }: { change: CodeChangeDetail }) {
   const target = refName(change.target_ref).name;
   if (change.state !== "merged") return null;
   return (
-    <section className="col gap-2" aria-label="Revert">
-      <p className="muted">It is merged into {target}.</p>
+    // IN THE MERGE BOX, under the head that says into what it merged.
+    <section className="code-merge-box__controls" aria-label="Revert">
       <div className="row gap-2 wrap">
         <WriteButton
           write={write}

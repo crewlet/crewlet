@@ -7,12 +7,17 @@ import { href } from "~/app/router.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { changePath, changeRef, commitPath, repoPath } from "~/lib/code.ts";
 
-/** A repository page's tabs, the overview first: what a reader opens a repository for. */
+/**
+ * A repository page's tabs, its code first: what a reader opens a repository
+ * for, as every code host lands on it — the files at the default branch, its
+ * README and what the repository is — then the changes proposed to it, its
+ * history, its branches and tags, its pushes, its checks and its settings.
+ */
 export const REPO_TABS = [
-  "overview",
-  "files",
-  "branches",
+  "code",
+  "changes",
   "commits",
+  "branches",
   "pushes",
   "checks",
   "settings",
@@ -21,8 +26,8 @@ export type RepoTab = (typeof REPO_TABS)[number];
 
 /**
  * Where on a repository's page an address points, by its query keys: the tab,
- * and on Files and Commits the revision (`ref`, a branch, a tag, a whole ref
- * or a commit id; none is the default branch) and the path; on Files the lens
+ * and on Code and Commits the revision (`ref`, a branch, a tag, a whole ref
+ * or a commit id; none is the default branch) and the path; on Code the lens
  * (`blame`) and the lines picked (`12`, `12-20`).
  */
 export interface RepoAt {
@@ -33,13 +38,17 @@ export interface RepoAt {
   lines?: string;
 }
 
-/** A repository's page, at `at`: `#/gitlet/repos/{name}`, the overview where `at` names no tab. */
+/**
+ * A repository's page, at `at`: `#/gitlet/repos/{name}`, its code where `at`
+ * names no tab — so a file's address is the repository's and its path,
+ * `#/gitlet/repos/web?path=cmd%2Fmain.go`.
+ */
 export function repoHref(repo: string, at: RepoAt = {}): string {
   const query: Record<string, string> = {};
   for (const [key, value] of Object.entries(at)) {
     // THE LANDING TAB IS NEVER SPELLED, as `useTab` drops it from the address
     // a reader moves to: one page, one address.
-    if (value && !(key === "tab" && value === "overview")) query[key] = value;
+    if (value && !(key === "tab" && value === "code")) query[key] = value;
   }
   return href(repoPath(repo), query);
 }

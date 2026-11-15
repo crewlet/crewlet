@@ -1,8 +1,10 @@
 /**
  * One commit's page, `#/gitlet/repos/{name}/commits/{sha}`, by its WHOLE id —
- * the one spelling no push can move: its facts as git keeps them, who pushed
- * it and from which turn and run, the changes it belongs to, and what it
- * changed.
+ * the one spelling no push can move — laid out as a code host lays one out:
+ * its subject with who wrote it and when, its parents and its whole id with
+ * its copy; then how it arrived — who pushed it, how, and the turn, executor
+ * and work item behind a seat's push — and the changes it belongs to, a card
+ * each; then what it changed, the file tree beside each file's diff.
  *
  * # Whose it is, from the rows; what it is, from git
  *
@@ -28,14 +30,14 @@
  */
 
 import type { ReactNode } from "react";
-import { EmptyState, EmptyValue, Skeleton, Stack, Tag } from "@crewlethq/ui";
-import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { Card, Copyable, EmptyState, EmptyValue, Skeleton, Stack } from "@crewlethq/ui";
+import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
+import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
   EMPTY_TREE,
   changePath,
-  changeStateWord,
   commitPath,
   isRepoName,
   parseChangeRef,
@@ -45,12 +47,16 @@ import {
 } from "~/lib/code.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
+import { useNow } from "~/lib/clock.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeName, CodeCommitAnswer, CodePushRun } from "~/protocol/index.ts";
 import { subjectOf } from "../repo/History.tsx";
+import { ChangeStateTag } from "../Changes.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
+import { Byline } from "../ui.tsx";
 import { CommitWrites } from "./CommitWrites.tsx";
 import { DiffFiles } from "./DiffFiles.tsx";
+import "~/styles/gitlet.css";
 
 /** Every way a push's commits came to be, in words (`gitlet.PushVias`). */
 const VIA_WORDS: Readonly<Record<string, string>> = {
@@ -104,20 +110,20 @@ export function CommitPage({ repo, sha }: { repo: string; sha: string }) {
     <Stack gap={4}>
       <CommitHeader repo={repo} answer={answer} />
       <CommitWrites repo={repo} sha={c.oid} subject={subjectOf(c)} />
-      <Pushed answer={answer} />
-      <BelongsTo answer={answer} />
-      <section aria-label="What it changed">
+      <div className="code-commit-cards">
+        <Pushed answer={answer} />
+        <BelongsTo answer={answer} />
+      </div>
+      <section aria-label="What it changed" className="code-section">
         {base === EMPTY_TREE ? (
-          <p className="t-label">What it changed: every file of a root commit</p>
+          <h2 className="code-section__title">What it changed: every file of a root commit</h2>
         ) : parents.length > 1 ? (
-          // A CAPTION, NOT A LABEL: it names a commit, which the label
-          // register's capitals would rewrite.
-          <p className="t-caption">
+          <h2 className="code-section__title">
             What it changed against its first parent, <span className="mono">{shortOID(base)}</span>
             , of {plural(parents.length, "parent")}
-          </p>
+          </h2>
         ) : (
-          <p className="t-label">What it changed</p>
+          <h2 className="code-section__title">What it changed</h2>
         )}
         {base ? (
           <DiffFiles repo={repo} base={base} head={c.oid} />
@@ -131,62 +137,65 @@ export function CommitPage({ repo, sha }: { repo: string; sha: string }) {
   );
 }
 
-/** The commit's header: its subject, its id, and the facts git keeps of it. */
+/**
+ * The commit's header: its subject, and under it who wrote it and when — and
+ * when git says it was committed apart from that — its repository, its
+ * parents and its whole id, with its copy.
+ */
 function CommitHeader({ repo, answer }: { repo: string; answer: CodeCommitAnswer }) {
+  const now = useNow();
   const c = answer.commit;
   const parents = c.parents ?? [];
-  const facts: Fact[] = [
-    { label: "Repository", value: repo, path: repoPath(repo) },
-    {
-      label: "Author",
-      value: c.author ?? `(a name of ${c.author_bytes ?? 0} bytes)`,
-      ...(c.author_email ? { note: c.author_email } : {}),
-    },
-    { label: "Authored", value: fmtDateTime(c.authored_at) },
-    ...(c.committed_at !== c.authored_at
-      ? [{ label: "Committed", value: fmtDateTime(c.committed_at) }]
-      : []),
-    {
-      label: parents.length > 1 ? "Parents" : "Parent",
-      value:
-        parents.length === 0 ? (
-          <EmptyValue
-            label={c.parent_count ? `${c.parent_count} parents` : "None: a root commit"}
-          />
-        ) : (
-          <span className="row gap-1 mono">
-            {parents.map((p) => (
-              <a key={p} className="prose-link" href={href(commitPath(repo, p))} title={p}>
-                {shortOID(p)}
-              </a>
-            ))}
-          </span>
-        ),
-      token: true,
-    },
-  ];
+  const author = c.author ?? `(a name of ${c.author_bytes ?? 0} bytes)`;
   return (
     <ObjectHeader
       kind="Commit"
       icon="code"
       identifier={shortOID(c.oid)}
       title={subjectOf(c)}
-      facts={facts}
+      description={
+        <span className="code-commit-byline">
+          <span title={c.author_email}>
+            <Byline who={author} verb="authored it" at={c.authored_at} now={now} />
+          </span>
+          {c.committed_at !== c.authored_at && (
+            <span className="code-commit-byline__part">
+              committed{" "}
+              <time dateTime={c.committed_at} title={fmtDateTime(c.committed_at)}>
+                {fmtDateTime(c.committed_at)}
+              </time>
+            </span>
+          )}
+          <a className="t-link" href={href(repoPath(repo))}>
+            {repo}
+          </a>
+          <span className="code-commit-byline__part">
+            {parents.length === 0 ? (
+              <EmptyValue
+                label={c.parent_count ? `${c.parent_count} parents` : "None: a root commit"}
+              />
+            ) : (
+              <>
+                {parents.length > 1 ? "parents" : "parent"}{" "}
+                {parents.map((p) => (
+                  <a key={p} className="mono t-link" href={href(commitPath(repo, p))} title={p}>
+                    {shortOID(p)}
+                  </a>
+                ))}
+              </>
+            )}
+          </span>
+          <Copyable
+            className="code-sha"
+            value={c.oid}
+            monospace
+            truncate={false}
+            ariaLabel="Copy the commit's whole id"
+            title={`Copy ${c.oid}`}
+          />
+        </span>
+      }
     />
-  );
-}
-
-/** A label and its value, as the page's fact lists draw them. */
-function FactList({ label, rows }: { label: string; rows: { label: string; value: ReactNode }[] }) {
-  return (
-    <dl className="code-facts" aria-label={label}>
-      {rows.map((r) => (
-        <div key={r.label}>
-          <dt>{r.label}</dt>
-          <dd>{r.value}</dd>
-        </div>
-      ))}
-    </dl>
   );
 }
 
@@ -200,14 +209,13 @@ function Pushed({ answer }: { answer: CodeCommitAnswer }) {
   const by = answer.pushed_by;
   if (!by) {
     return (
-      <section aria-label="Pushed">
-        <p className="t-label">Pushed</p>
+      <CommitCard label="Pushed" title="Pushed">
         <p className="muted">
           {answer.coverage?.complete
             ? "No push the index keeps introduced it: it came in a push that brought more commits than the index lists, or before the push history the repository keeps."
             : "The index of pushes on the node that answered has not read the push that introduced it yet."}
         </p>
-      </section>
+      </CommitCard>
     );
   }
   const push = answer.push;
@@ -215,73 +223,96 @@ function Pushed({ answer }: { answer: CodeCommitAnswer }) {
   const seat = by.principal.seat;
   const moved = (push?.commands ?? []).filter((cmd) => cmd.result === "ok");
   return (
-    <section aria-label="Pushed">
-      <p className="t-label">Pushed</p>
-      <FactList
-        label="Who pushed it"
-        rows={[
+    <CommitCard label="Pushed" title="Pushed">
+      <PropertiesRail
+        headings="sentence"
+        groups={[
           {
-            label: "Pushed by",
-            value: (
-              <>
-                {seat ? seatBadge(seat).name : (by.principal.operator_id ?? "")}
-                {by.principal.operator_id && seat && (
-                  <span className="muted mono"> via {by.principal.operator_id}</span>
-                )}
-              </>
-            ),
-          },
-          { label: "When", value: fmtDateTime(by.at) },
-          { label: "How", value: VIA_WORDS[by.via] ?? by.via },
-          {
-            label: "Turn",
-            value: run?.turn_id ? (
-              <a className="mono prose-link" href={href(["live", "turns", run.turn_id])}>
-                {run.turn_id}
-              </a>
-            ) : (
-              <EmptyValue label="Pushed by a person" />
-            ),
-          },
-          {
-            // THE EXECUTORS BOARD IS KEYED BY THE TURN that launched the
-            // executor: the launch's job id is shown, the turn is linked.
-            label: "Executor",
-            value:
-              run?.run_id && run.turn_id ? (
-                <a className="mono prose-link" href={href(["live", "executors", run.turn_id])}>
-                  {run.run_id}
-                </a>
-              ) : (
-                <EmptyValue label="None" />
-              ),
-          },
-          {
-            label: "Work item",
-            value: run?.work_key ? (
-              <span className="mono">
-                {run.work_key}
-                {run.work_backend && <span className="muted"> ({run.work_backend})</span>}
-              </span>
-            ) : (
-              <EmptyValue label="None" />
-            ),
-          },
-          ...(moved.length > 0
-            ? [
-                {
-                  label: "Refs it moved",
-                  value: (
-                    <span className="mono">
-                      {moved.map((cmd) => refName(cmd.ref).name).join(", ")}
-                    </span>
+            properties: [
+              {
+                label: "Pushed by",
+                value: (
+                  <>
+                    {seat ? seatBadge(seat).name : (by.principal.operator_id ?? "")}
+                    {by.principal.operator_id && seat && (
+                      <span className="muted mono"> via {by.principal.operator_id}</span>
+                    )}
+                  </>
+                ),
+              },
+              { label: "When", value: fmtDateTime(by.at) },
+              { label: "How", value: VIA_WORDS[by.via] ?? by.via },
+              {
+                label: "Turn",
+                value: run?.turn_id ? (
+                  <a className="mono prose-link" href={href(["live", "turns", run.turn_id])}>
+                    {run.turn_id}
+                  </a>
+                ) : (
+                  <EmptyValue label="Pushed by a person" />
+                ),
+              },
+              {
+                // THE EXECUTORS BOARD IS KEYED BY THE TURN that launched the
+                // executor: the launch's job id is shown, the turn is linked.
+                label: "Executor",
+                value:
+                  run?.run_id && run.turn_id ? (
+                    <a className="mono prose-link" href={href(["live", "executors", run.turn_id])}>
+                      {run.run_id}
+                    </a>
+                  ) : (
+                    <EmptyValue label="None" />
                   ),
-                },
-              ]
-            : []),
+              },
+              {
+                label: "Work item",
+                value: run?.work_key ? (
+                  <span className="mono">
+                    {run.work_key}
+                    {run.work_backend && <span className="muted"> ({run.work_backend})</span>}
+                  </span>
+                ) : (
+                  <EmptyValue label="None" />
+                ),
+              },
+              ...(moved.length > 0
+                ? [
+                    {
+                      label: "Refs it moved",
+                      value: (
+                        <span className="mono">
+                          {moved.map((cmd) => refName(cmd.ref).name).join(", ")}
+                        </span>
+                      ),
+                    },
+                  ]
+                : []),
+            ],
+          },
         ]}
       />
-    </section>
+    </CommitCard>
+  );
+}
+
+/** One card under the commit's header: its title, then what it says. */
+function CommitCard({
+  label,
+  title,
+  children,
+}: {
+  label: string;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <Card as="section" aria-label={label} className="code-commit-card">
+      <Card.Header divided>
+        <Card.Title as="h2">{title}</Card.Title>
+      </Card.Header>
+      <Card.Body>{children}</Card.Body>
+    </Card>
   );
 }
 
@@ -297,7 +328,7 @@ function ChangeLink({ change }: { change: CodeChangeName }) {
       ) : (
         <span className="mono">{change.ref}</span>
       )}{" "}
-      {change.title} <Tag appearance="outline">{changeStateWord(change.state)}</Tag>
+      {change.title} <ChangeStateTag state={change.state} />
     </>
   );
 }
@@ -307,8 +338,7 @@ function BelongsTo({ answer }: { answer: CodeCommitAnswer }) {
   const merged = answer.merged ?? [];
   const revisions = answer.revisions ?? [];
   return (
-    <section aria-label="Changes">
-      <p className="t-label">Changes</p>
+    <CommitCard label="Changes" title="Changes">
       {merged.length === 0 && revisions.length === 0 ? (
         <p className="muted">No change names this commit: it is no change's revision or merge.</p>
       ) : (
@@ -332,6 +362,6 @@ function BelongsTo({ answer }: { answer: CodeCommitAnswer }) {
         </ul>
       )}
       {answer.more && <p className="t-caption">More changes name it than one page lists.</p>}
-    </section>
+    </CommitCard>
   );
 }

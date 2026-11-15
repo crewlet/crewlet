@@ -734,6 +734,10 @@ interface Handle {
 
 const HANDLES: Handle[] = [
   {
+    name: "task-watching",
+    why: "routes/worklet/item/Rail.tsx puts it on the rail's Watching section so routes/worklet/item/thread.layout.test.tsx can find it among the rail's sections. The section draws as every other `.task-rail-section`; its one row is `.task-watching-row`.",
+  },
+  {
     name: "btable-name",
     why: "routes/org/builder/TableView.tsx puts it on the design system's OrgTableName so four suites can find a builder row by its NAME cell rather than by whichever cell happens to mention a name. The package's own `.crewlet-org-label--row` already declares every property it would carry, byte for byte, and routes/org/builder/builderStyles.test.ts asserts this tree adds nothing on top.",
   },
@@ -971,9 +975,12 @@ describe("every class the dashboard names", () => {
 // share, `chatlet-frame.css`, Chatlet's frame (its grid, top bar and Rooms
 // panel), `chatlet-room.css`, a Chatlet room's transcript and composer,
 // `chatlet-panes.css`, Chatlet's panes, dialogs and views, `atlas.css`,
-// Company › Atlas's (its map's box, lists, hops and claims), and `diff.css`,
-// the one diff's, which every screen drawing a diff reaches through
-// `components/DiffView.tsx`. Each is appended after the entry's sheets, so
+// Company › Atlas's (its map's box, lists, hops and claims), `gitlet.css`,
+// the Gitlet workspace's (a repository's code, history and settings, a
+// change's conversation and files, the listings), which every module drawing
+// a `code-` class imports — Home's changes waiting on a person and Settings ›
+// Gitlet among them — and `diff.css`, the one diff's, which every screen
+// drawing a diff reaches through `components/DiffView.tsx`. Each is appended after the entry's sheets, so
 // each of its rules must select a class of the screen it arrives with, or a
 // tie it wins would change other screens from the moment a reader first
 // opened that one.
@@ -1029,6 +1036,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "diff.css": {
     importer: "components/DiffView.tsx",
     owns: /\.diff-view(?:__[a-z]+|--[a-z]+)?(?![\w-])/,
+  },
+  "gitlet.css": {
+    importer: "routes/gitlet/ui.tsx",
+    owns: /\.code-[a-z_-]+\b/,
   },
 };
 

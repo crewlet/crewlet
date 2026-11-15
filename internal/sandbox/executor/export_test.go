@@ -90,6 +90,18 @@ func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, 
 	}))
 }
 
+// RecordStart is where the run a session record names began in its session,
+// as the record says it ([parseSessionRecord]): whether it began the session,
+// and the message it began after.
+func RecordStart(text string) (began bool, after string) {
+	rec := parseSessionRecord(text)
+	return rec.began, rec.from
+}
+
+// OpenCodeCursorTail is how much of a list answer's end a run's script reads
+// its cursor from ([openCodeCursor]).
+const OpenCodeCursorTail = openCodeCursorTail
+
 // OpenCodeEndPath is the most a run's script spends after an end request
 // reaches it while its harness runs, at the waits Command runs it at
 // ([openCodeEndPath]).

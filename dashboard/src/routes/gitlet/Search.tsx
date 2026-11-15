@@ -56,7 +56,7 @@ import {
   SegmentedControl,
   Skeleton,
 } from "@crewlethq/ui";
-import { SearchGlyph } from "@crewlethq/icons/glyphs";
+import { FileCodeGlyph, SearchGlyph, SquareCodeGlyph } from "@crewlethq/icons/glyphs";
 import { href, useDraft, useNavigator, useParam } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { QueryState } from "~/components/common.tsx";
@@ -67,6 +67,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { repoHref } from "./paths.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
 import { coverageNotes, groupHits, hitAt, type FileHits, type RepoHits } from "~/lib/codeSearch.ts";
+import "~/styles/gitlet.css";
 
 /** Each mode, as the bar offers it. */
 const MODE_WORDS: Readonly<
@@ -245,6 +246,7 @@ const RepoResult = memo(function RepoResult({ group }: { group: RepoHits }) {
   return (
     <section className="code-search-repo" aria-label={group.repo}>
       <h3 className="code-search-repo__head">
+        <SquareCodeGlyph size="sm" className="code-glyph" />
         <a className="mono" href={repoHref(group.repo, group.tip ? { ref: group.tip } : {})}>
           {group.repo}
         </a>
@@ -275,6 +277,7 @@ function FileResult({ repo, tip, file }: { repo: string; tip?: string; file: Fil
   return (
     <div className="code-search-file">
       <div className="code-search-file__path mono">
+        <FileCodeGlyph size="sm" className="code-glyph" />
         {first ? (
           <a className="code-search-file__link" href={href(repoPath(repo), fileOnly(first))}>
             {file.path}
@@ -282,6 +285,7 @@ function FileResult({ repo, tip, file }: { repo: string; tip?: string; file: Fil
         ) : (
           <span title="Its path is not UTF-8, so no address names it">{file.path}</span>
         )}
+        <span className="code-search-file__count">{plural(file.lines.length, "line")}</span>
       </div>
       <ol className="code-search-lines">
         {file.lines.map((hit) => {

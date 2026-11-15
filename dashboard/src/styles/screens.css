@@ -5031,11 +5031,14 @@ span.list-position-step {
   max-width: 760px;
   min-width: 0;
 }
+/* THE RAIL STARTS ON THE COLUMN'S OWN TOP LINE, the main column's 30px, so
+   its first property stands level with the task's title rather than above
+   it: at 18px the rail's first row sat higher than the title it describes. */
 .task-rail {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 18px 20px 28px;
+  padding: 30px 20px 28px;
   border-left: 1px solid var(--color-border-default);
 }
 .task-flags {
@@ -5375,16 +5378,42 @@ span.list-position-step {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
-  padding: 10px 14px;
+  padding: 10px 16px;
 }
 .task-turn-head {
   border-bottom: 1px solid var(--color-border-default);
 }
+/* THE COMMENT'S WORDS, and under a long one the Show more that folds it
+   (the kit's Clamp): one inset for both, so the press stands on the words'
+   own edge. */
+.task-comment-fold {
+  padding: 2px 16px 14px;
+}
+/* A READING MEASURE FOR ITS PROSE, about seventy characters, and the card's
+   whole width for what is laid out rather than read line by line: a table or
+   a block of code kept to the measure wrapped its columns for no reason. */
 .task-comment-body {
-  padding: 0 14px 12px;
+  max-width: none;
+}
+.task-comment-body > :is(p, ul, ol, blockquote, h2, h3, h4, h5, h6, .md-heading) {
+  max-width: 70ch;
+}
+/* A REPORT'S OWN HEADINGS GIVE IT A SHAPE TO SCAN: its title at the body's
+   size and weight read as one more paragraph, so a section heading takes the
+   primary ink and the step above the body, and its sub-headings the quiet
+   ink, closer to what they head. */
+.task-comment-body > h2 {
+  font-size: var(--font-size-sm);
+}
+.task-comment-body > :is(h3, h4, h5, h6) {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+.task-comment-body > * + :is(h3, h4, h5, h6) {
+  margin-top: var(--spacing-4);
 }
 .task-comment-decision {
-  margin: 0 14px 12px;
+  margin: 0 16px 14px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   background: var(--color-surface-elevated);
@@ -5657,19 +5686,18 @@ span.list-position-step {
   gap: 4px;
   color: var(--color-feedback-warning-ink);
 }
-.task-watching {
-  flex-direction: row;
-  flex-wrap: wrap;
+/* WHO WATCHES AND THE READER'S OWN PRESS, on one row under the section's
+   label as every rail section sets its content: the kit's stack at the start,
+   Watch or Unwatch flush at the end, both centred on the row. The stack was
+   drawn face by face in inline spans beside a label that took the row, so a
+   person's initials sat lower than the agents beside them and the faces stood
+   wherever the label's width left them. */
+.task-watching-row {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--spacing-2);
-}
-.task-watching .task-lbl {
-  flex: 1 1 auto;
-  margin: 0;
-}
-.task-watchers {
-  display: inline-flex;
-  gap: 2px;
+  min-height: var(--size-control-sm);
 }
 .task-peek .task-rail-body {
   padding-bottom: var(--spacing-2);
@@ -5971,6 +5999,8 @@ a.work-cal-chip {
   padding: var(--spacing-1) var(--spacing-2);
   border-bottom: 1px solid var(--color-border-default);
   vertical-align: top;
+  /* A column of figures lines up digit under digit. */
+  font-variant-numeric: tabular-nums;
 }
 .prose.md .md-table th {
   font-weight: 600;
@@ -10271,288 +10301,6 @@ a.live-row:hover {
   }
 }
 
-/* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
-   move on its own, above the grid. A ruled box rather than a callout, since
-   nothing here is a fault: it is a list, read first. */
-.code-person-band {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin-block-end: var(--spacing-4);
-  padding: var(--spacing-3) var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-}
-
-/* A live change's readiness in the Changes grid: a meter of its own width
-   beside its count, since the kit's meter fills its box and has none. */
-.code-readiness {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.code-readiness__meter {
-  flex: 0 0 4rem;
-}
-.code-readiness__count {
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-
-.code-person-band__list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-/* A CHANGE'S PAGE (`routes/gitlet/change/`). Its timeline is a plain list of
-   records in log order, each ruled off the next; nothing in it is a state, so
-   nothing in it takes a hue. */
-.code-timeline {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.code-entry {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding-block-end: var(--spacing-3);
-  border-block-end: 1px solid var(--color-border-default);
-}
-
-.code-reply {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-}
-
-.code-carries {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-}
-
-/* THE FILES TAB: the file list beside the diff, the list a column of its own
-   width on a wide page and above the diff on a narrow one. */
-.code-files {
-  display: grid;
-  grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
-  gap: var(--spacing-4);
-  align-items: start;
-}
-
-@container page (width < 720px) {
-  .code-files {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.code-files__list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  min-width: 0;
-}
-
-.code-files__file {
-  width: 100%;
-  padding: var(--spacing-1) var(--spacing-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: start;
-  overflow-wrap: anywhere;
-  cursor: pointer;
-}
-
-.code-files__file:hover {
-  background: var(--color-surface-hover);
-}
-
-.code-files__file[aria-current="true"] {
-  background: var(--color-surface-pressed);
-}
-
-.code-file {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  min-width: 0;
-}
-
-.code-finding {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-
-.code-suggestion {
-  margin: 0;
-  padding: var(--spacing-2);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-/* PROVENANCE: a label and its value a row, the labels one column. */
-.code-facts {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--spacing-2) var(--spacing-4);
-  margin: 0;
-}
-
-.code-facts > div {
-  display: contents;
-}
-
-.code-facts dt {
-  color: var(--color-text-secondary);
-}
-
-.code-facts dd {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/* A REPOSITORY'S PAGE (`routes/gitlet/repo/`). Its listings are plain ruled
-   tables and its file a column of numbered lines in the code face; nothing
-   here is a state, so nothing takes a hue. */
-.code-rules {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.code-rules > li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-1) var(--spacing-3);
-}
-
-.code-blame {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-/* A FILE'S LINES: the number a button in its own track, the text in the
-   code face at the document's 13px, kept as git wrote it. A line too wide
-   scrolls the file, never the page. */
-.code-source {
-  overflow-x: auto;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-compact);
-  line-height: var(--font-line-height-body);
-}
-
-.code-source__line {
-  display: grid;
-  grid-template-columns: 6ch max-content;
-  column-gap: var(--spacing-3);
-  padding-inline-end: var(--spacing-3);
-}
-
-/* A PICKED LINE IS RULED, not tinted, as a picked line of a diff is: a pick
-   is the reader's place, not the line's state. */
-.code-source__line[data-picked],
-.code-blame tr[data-picked] {
-  box-shadow: inset 2px 0 0 var(--color-border-strong);
-}
-
-.code-source__number {
-  padding: 0 var(--spacing-2) 0 0;
-  border: 0;
-  background: none;
-  color: var(--color-text-tertiary);
-  font: inherit;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  user-select: none;
-}
-
-.code-source__number:hover {
-  color: var(--color-text-primary);
-  text-decoration-line: underline;
-}
-
-.code-source__text {
-  white-space: pre;
-}
-
-.code-blame {
-  font-size: var(--font-size-compact);
-  line-height: var(--font-line-height-body);
-}
-
-.code-blame tr[data-run] td {
-  border-block-start: 1px solid var(--color-border-default);
-}
-
-.code-blame td {
-  padding: 0 var(--spacing-2);
-  vertical-align: top;
-}
-
-.code-blame__commit {
-  width: 18rem;
-  max-width: 18rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.code-blame__number {
-  width: 6ch;
-  text-align: right;
-}
-
-.code-blame__text {
-  white-space: pre;
-}
-
-.code-readme {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding-block-start: var(--spacing-3);
-  border-block-start: 1px solid var(--color-border-default);
-}
-
-.code-readme__text {
-  margin: 0;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-compact);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 /* ---- The Dashboard Assistant (app/assistant) -----------------------------
    The one line under the composer, centred, on one line at every width. */
 .assistant-disclaimer {
@@ -10565,92 +10313,4 @@ a.live-row:hover {
 .assistant-model-notice,
 .assistant-attach-refusal {
   margin: 0 0 var(--spacing-2);
-}
-
-/* Gitlet › Search: the bar's filters, then the lines by repository and file. */
-.code-search-filters {
-  display: flex;
-  flex: 1 1 100%;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--spacing-2) var(--spacing-3);
-}
-
-/* EACH FILTER ITS OWN SIZE on one row, wrapping on a narrow screen, rather
-   than a field the row's full width each. */
-.code-search-filter {
-  flex: 1 1 12rem;
-  max-width: 20rem;
-  min-width: 0;
-}
-
-.code-search-coverage {
-  margin: 0;
-  padding-inline-start: var(--spacing-4);
-}
-
-.code-search-results {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-6);
-}
-
-.code-search-repo {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  min-width: 0;
-}
-
-.code-search-repo__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--spacing-2);
-  margin: 0;
-}
-
-.code-search-file {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-
-.code-search-file__path {
-  overflow-wrap: anywhere;
-}
-
-/* A result's path, linking to its file: chrome, the heading its lines hang
-   under, drawn in the link ink with no underline. A link inside a sentence
-   takes .prose-link instead. */
-.code-search-file__link {
-  color: var(--color-brand-accent-ink);
-}
-
-.code-search-lines {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  overflow-x: auto;
-}
-
-.code-search-line {
-  display: grid;
-  grid-template-columns: 4rem minmax(0, 1fr);
-  gap: var(--spacing-2);
-  padding-inline: var(--spacing-2);
-}
-
-/* A line's number is read (and is the link to the line), so it takes the
-   tertiary rung: the faint one is about 3:1, a mark's floor, not a word's. */
-.code-search-line__number {
-  text-align: end;
-  color: var(--color-text-tertiary);
-}
-
-.code-search-line__text {
-  white-space: pre;
 }

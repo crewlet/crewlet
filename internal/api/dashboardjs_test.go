@@ -2490,7 +2490,30 @@ const (
 	// schedule writes, and the repository and room writes, merged on kit
 	// 0.126.3 with the train before it, measures 6132.4 KiB (6,279,549
 	// bytes), 124,606 bytes over the 6010.7 KiB it was built on: 6133 KiB.
-	treeBudget = 5<<20 + 1013<<10
+	// Kit 0.128.0 (one-sentence delivery receipts, a thread line as long as
+	// what it says, an avatar centred on its line, Clamp) with a long task
+	// thread folded behind Show more, Jump to latest, the watchers' stack
+	// and a Chatlet transcript laid out where the page draws it added 3,713
+	// bytes, nearly all script, over the 6132.6 KiB of main on kit 0.127.0,
+	// and took it to 6136.3 KiB (6,283,579 bytes): 6137 KiB.
+	// A Gitlet repository laid out as a code host lays one out (its Code tab
+	// with the latest commit across the files, the README and the About rail,
+	// a file's card with its blame runs, Clone, commits banded by day, the
+	// Changes tab and an empty repository's card), on a sheet of its own,
+	// added 16,451 bytes, script and sheet, and took it to 6152.4 KiB
+	// (6,300,030 bytes): 6153 KiB.
+	// A Gitlet change reviewed as a code host lays one out (its byline, the
+	// merge box and its checklist, the activity rail of cards with faces, the
+	// rail of reviewers, a file tree beside the diff with a head on each
+	// file, revisions as cards, the commit page's cards and the listing's
+	// richer row) added 24,076 bytes, script and sheet, and took it to
+	// 6175.9 KiB (6,324,106 bytes): 6176 KiB.
+	// Gitlet's listings drawn as a code host lists them (a repository's row
+	// with its glyph, marks and description, a push's refs with their glyphs
+	// and the comparison each moved ref opens, and a search's file cards)
+	// added 2,313 bytes, script and sheet, and took it to 6178.1 KiB
+	// (6,326,419 bytes): 6179 KiB.
+	treeBudget = 5<<20 + 1059<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

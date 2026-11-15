@@ -10,8 +10,10 @@ import {
   dayOf,
   daysBefore,
   daysBetween,
+  daysInWindow,
   isUnread,
   layoutDays,
+  placedHeights,
   RUN_MS,
 } from "./days.ts";
 
@@ -150,5 +152,61 @@ describe("when a list row was last spoken in", () => {
       short: "Dec 21, 2025",
     });
     expect(listDate("", today)).toEqual({ long: "", short: "" });
+  });
+});
+
+// WHAT IS NOT DRAWN IS STOOD FOR AT ITS DRAWN HEIGHT. Three days of three rows,
+// each row as tall as its index plus ten, under a 40px label and rule.
+describe("the days a window draws", () => {
+  const days = layoutDays(
+    [
+      view(1, "2026-01-01T09:00:00Z"),
+      view(2, "2026-01-01T10:00:00Z"),
+      view(3, "2026-01-01T11:00:00Z"),
+      view(4, "2026-01-02T09:00:00Z"),
+      view(5, "2026-01-02T10:00:00Z"),
+      view(6, "2026-01-02T11:00:00Z"),
+      view(7, "2026-01-03T09:00:00Z"),
+      view(8, "2026-01-03T10:00:00Z"),
+      view(9, "2026-01-03T11:00:00Z"),
+    ],
+    "2026-01-05",
+    "",
+  );
+  const height = (i: number) => 10 + i;
+  const CHROME = 40;
+
+  test("places a day's label and rule above its first row, and nowhere else", () => {
+    const placed = placedHeights(days, height, CHROME);
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 8].map(placed)).toEqual([50, 11, 12, 53, 14, 15, 56, 17, 18]);
+  });
+
+  // Mutation: count a left-out day's rows alone, and the spacer is a rule short.
+  test("stands for a whole day left out with its rows and its label and rule", () => {
+    const laid = daysInWindow(days, 4, 5, height, CHROME);
+    expect(laid.days.map((d) => d.day.key)).toEqual(["2026-01-02"]);
+    expect(laid.padTop).toBe(CHROME + 10 + 11 + 12);
+    expect(laid.padBottom).toBe(CHROME + 16 + 17 + 18);
+    const [drawn] = laid.days;
+    expect(drawn!.rows.map((r) => r.index)).toEqual([4]);
+    expect(drawn!.above).toBe(13);
+    expect(drawn!.below).toBe(15);
+  });
+
+  // The window's coordinates and the page's agree: whatever the window, the
+  // space above its first drawn row is the same.
+  test("puts every drawn row where the window placed it", () => {
+    const placed = placedHeights(days, height, CHROME);
+    for (let start = 0; start < 9; start++) {
+      const laid = daysInWindow(days, start, 9, height, CHROME);
+      const [first] = laid.days;
+      // Above the first drawn row: the left-out days, the first drawn day's
+      // label and rule, and its rows above the window.
+      const drawnAbove = laid.padTop + CHROME + first!.above;
+      let windowAbove = 0;
+      for (let i = 0; i < start; i++) windowAbove += placed(i);
+      const opensDay = first!.day.rows[0]!.index === start;
+      expect(drawnAbove).toBe(windowAbove + (opensDay ? CHROME : 0));
+    }
   });
 });
