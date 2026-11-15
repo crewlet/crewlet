@@ -2513,7 +2513,14 @@ const (
 	// and the comparison each moved ref opens, and a search's file cards)
 	// added 2,313 bytes, script and sheet, and took it to 6178.1 KiB
 	// (6,326,419 bytes): 6179 KiB.
-	treeBudget = 5<<20 + 1059<<10
+	// Kit 0.129.0 (each trunk count placed clear of the map's titles, cards
+	// and other counts, the legend's switches tied to what they draw, the
+	// zoom steppers held at their limits) and an Atlas round (an address
+	// read against the closed sets, one grouping of what an entry touches,
+	// the retired filter, a failed source said in a sentence) added 7,464
+	// bytes, script and sheet, and took it to 6185.4 KiB (6,333,883 bytes):
+	// 6186 KiB.
+	treeBudget = 5<<20 + 1066<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
