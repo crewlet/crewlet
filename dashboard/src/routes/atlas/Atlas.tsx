@@ -35,12 +35,12 @@ import {
   ATLAS_POLL_MS,
   narrowed as isNarrowed,
   queryParams,
-  useAtlasFilters,
+  useAtlasAddress,
   useSelection,
   useTrace,
   type AtlasFilters,
 } from "./filters.ts";
-import { ActiveFilters, FilterControl, SearchBox } from "./Filters.tsx";
+import { ActiveFilters, FilterControl, IgnoredFilters, SearchBox } from "./Filters.tsx";
 import { coverageLine, coverageNotes } from "./parts.tsx";
 
 /** What fills the atlas in this build, said where it is empty. */
@@ -51,7 +51,7 @@ const NO_PARAMS = {};
 const ONE = { limit: 1 };
 
 export function Atlas() {
-  const filters = useAtlasFilters();
+  const { filters, ignored } = useAtlasAddress();
   const params = useMemo(() => queryParams(filters), [filters]);
   const narrowed = isNarrowed(filters);
   const held = useHeldGrants() ?? [];
@@ -136,6 +136,7 @@ export function Atlas() {
       </PageToolbar>
       {adding && <AddEntry onClose={() => setAdding(false)} />}
       <ActiveFilters filters={filters} />
+      <IgnoredFilters ignored={ignored} />
       <Coverage
         facets={facets.data}
         narrowed={narrowed}
