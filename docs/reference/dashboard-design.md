@@ -1415,7 +1415,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/edit` · `#/company/org/roster` · `#/company/org/teams` · `#/company/org/teams/{unit}` | The org pages Structure replaced (Edit org, the Roster, Teams and a team's page), kept because their addresses are in bookmarks and in links pasted into tasks and chat: each is replaced at once by the Structure tab that holds it. Edit org opens the Org chart, or the Table with `view=table`, and opens the editor of a node its `seat=` or `unit=` names; the Roster and Teams open the Table; a team's page opens the Table with that unit's panel open (`peek=unit:{unit}`) | `view=table` (Edit org's) |
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|activity\|settings`, and a section's word (`code`, `turns`, `memory`, `schedules`, `access`) lands on the tab holding it, scrolled to that section · `session=` (Memory); human: overview · work · settings (Work only where the company runs Worklet or hosts code) · `from=` (the address it was opened from, which its trail names and its crumbs go back to) |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, **New schedule** in the bar, and with none an empty state offering a new schedule and, to a reader who may open it, the configuration a schedule is written in; one schedule, with **Run now**, **Edit**, **Pause** or **Resume** and **Delete** in its bar and its peek | |
-| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Agents, Activity and Settings, its settings form opening in place; a service's counts, its projects or spaces each linking to the service's own list of them, then its Agents, Activity and Settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
+| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Agents, Activity and Settings, its settings form opening in place; a service's counts, its projects or spaces each linking to the service's own list of them, then its Agents, Activity and Settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`, `gitlet`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/atlas` · `#/company/atlas/{id}` · `#/company/atlas/changes` · `#/company/atlas/review` · `#/company/atlas/sources` | **Atlas** *(needs Atlas access, locked for a reader without it)*: what the company runs on, as one page: a band of counts, the map read the way a request travels and the catalogue under it grouped by health, sharing one search, one set of filters and one selection, under a coverage line that says how many entries and where from and never that it is complete; one entry's page, its tabs Overview, Relations, Sources and History; Changes, the atlas's own log for the company; Review, what waits for a person, where `kind=` narrows it; Sources, each integration's last read and Refresh now ([Company › Atlas](#company--atlas)) | `q=` · `kind=` · `lane=` · `vendor=` · `confidence=` · `health=` · `unconfirmed=true` · `sel={id}` (the selection) · `trace=up\|down\|both` (the side of its path a link lit) · `peek=atlas:{id}` (the sheet, whose entry is the selection) · on an entry's page `tab=` |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
 | `#/chatlet` | **Chatlet**: the company's own rooms and conversations, under a top bar (Menu, the Rooms and Messages switchers, and the open room's actions), with the Rooms panel slid in from Menu or pinned beside the conversation *(the whole of Chatlet needs Chatlet access)*. Every chat page is read as the seat your session holds: a credential acting as no seat (a deployment's own token, or a service account bound to nobody) reads nothing here, not even a public room. The bare address is no page of its own: it opens Activity, Chatlet's landing, and is replaced at once (never a step of Back) by `#/chatlet/activity`, keeping a `pane=` | `dm=` (a seat's handle, from its page or peek: replaced at once by `#/chatlet/new?to={handle}`) · `pane=` (on every Chatlet address: see the room) |
@@ -10835,7 +10835,7 @@ that answer the same need:
 | Chat | Chatlet, Slack, Mattermost |
 | Work tracking | Worklet, Jira |
 | Docs and knowledge | Doclet, Confluence |
-| Code | GitHub, GitLab |
+| Code | Gitlet, GitHub, GitLab |
 | Observability | Datadog |
 
 **Atlassian is listed by product**: it is one connection that serves two needs,
@@ -10843,7 +10843,7 @@ so Jira sits under work tracking and Confluence under docs, each with its own
 product's state, and both open the one Atlassian page, since it is one key and
 one account per agent. A line stands at the rail's row step (30px) and carries
 its mark, its name (a product's vendor inline after it, in the quiet ink:
-Atlassian after Jira and Confluence, Crewlet after Worklet and Doclet) and its
+Atlassian after Jira and Confluence, Crewlet after Worklet, Doclet, Chatlet and Gitlet) and its
 state only where it carries one: **In use** or **Not in use** for a
 service, which is Crewlet's own and so never *connected* (none on a node
 running no company, which is "not known yet", never Not in use), and
@@ -10971,7 +10971,14 @@ reader's own seat's: in use, its page says what it gives and, to a reader
 holding Chatlet, opens it (a reader without Chatlet is told it needs Chatlet access); on a
 vendor's chat it says which (*Slack does this for your company*, named from the
 `viewer` answer, which tells it to a holder of Chatlet), with the way to that
-app's line.
+app's line. Gitlet counts nothing either, since which repositories a reader
+sees is their own grant's answer: in use, its page says what it gives, opens
+it to a reader holding Gitlet (a reader without Gitlet is told it needs Gitlet
+access), and offers an Admin **Gitlet settings**. Nothing runs in Gitlet's
+place, since a company's repositories on GitHub or GitLab are integrations its
+agents call rather than a host the engine runs instead, so with Gitlet off its
+page says *Crewlet hosts none of your company's code* and what running it here
+would give, never that nothing does this.
 
 **A reader without Admin** sees the whole directory: the services with their
 states and their pages in full (each count read only where the reader holds
