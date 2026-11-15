@@ -41,7 +41,17 @@ import {
   WordTag,
   sourceSetBy,
 } from "./parts.tsx";
-import { factLabel, KINDS, LANES, MEANING, SIGNALS, STATES, WORDS, entries } from "./words.ts";
+import {
+  factLabel,
+  KINDS,
+  LANES,
+  MEANING,
+  SIGNALS,
+  STATES,
+  WORDS,
+  reliedOn,
+  reliedOnBy,
+} from "./words.ts";
 
 /** The address of an entry's page. */
 export function entryPath(id: string): string[] {
@@ -148,11 +158,9 @@ export function EntryHead({
  */
 export function touchingSentence({ usedBy, reliesOn, around }: Touching): string {
   // NONE IS SAID AS NOTHING, never "0 entries rely on it, and it relies on 0".
-  const first =
-    usedBy === 0
-      ? "Nothing relies on it"
-      : `${entries(usedBy)} ${usedBy === 1 ? "relies" : "rely"} on it`;
-  const relied = reliesOn === 0 ? "nothing" : reliesOn.toLocaleString();
+  const said = reliedOnBy(usedBy);
+  const first = said.charAt(0).toUpperCase() + said.slice(1);
+  const relied = reliedOn(reliesOn);
   if (around === 0) return `${first}, and it relies on ${relied}.`;
   return `${first}, it relies on ${relied}, and ${around.toLocaleString()} ${
     around === 1 ? "stands" : "stand"

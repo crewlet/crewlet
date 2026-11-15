@@ -9769,7 +9769,8 @@ own glyph where not; under it every entry is its own card. A service on a call
 chain stands one column right of the deepest service calling it; a service on
 none names no column and flows across the lane like any other lane's entries.
 A narrowed map draws only the lanes holding what matched (every lane while
-nothing does), so a few matches open at a size their names read. A map past what the engine
+nothing does), each no wider than the columns its matches fill, so a few
+matches open at a size their names read, on a phone too. A map past what the engine
 draws at once arrives with groups the engine closed (`collapsed`), named in a
 banner above the map with a link to read each in the catalogue, so a partial
 map is never taken for the whole.
@@ -9795,9 +9796,10 @@ map along its whole path both ways, with the rest receding to a fifth and the
 lit lines under a glow with faster dashes, and is marked in the catalogue. The
 dock at the map's foot names it (its disc, name, kind, health and "Over every
 hop, 7 entries rely on it and it relies on 1", the set the map lights, said as
-every hop so it never reads as the sheet's count one step out), with **Details**,
-which opens its sheet and leaves fullscreen first since the sheet is the
-shell's, and a button that clears. A press on the selected card, on the ground
+every hop so it never reads as the sheet's count one step out, and none said
+as nothing, "nothing relies on it", as the entry's own page says it), with
+**Details**, which opens its sheet and leaves fullscreen first since the sheet
+is the shell's, and a button that clears. A press on the selected card, on the ground
 or Escape clears as well. A link that arrives with `trace=up` or `trace=down`
 narrows the lit path to that side; selecting another entry drops it. The
 pointer or focus resting on a card lights its neighbours and opens a card
@@ -9863,8 +9865,10 @@ person gave it, its vendor, when it was last seen and its number of sources),
 its signals ("Nothing is wrong with it: no source reports a signal on it." when
 there are none, never "open", the word the Work tab counts tasks in), **What it
 touches** (how many entries rely on it and how many it relies on, in the
-engine's counts, over a still `GraphCanvas` of the entry among its neighbours,
-each in the cluster that says how it relates: Relies on it, This entry,
+engine's counts, with none said as nothing: "Nothing relies on it, and it
+relies on nothing.", alone for an entry with no relation, without a diagram of
+the entry by itself; otherwise over a still `GraphCanvas` of the entry among
+its neighbours, each in the cluster that says how it relates: Relies on it, This entry,
 Depends on, Runs on, Around it), its facts with where each came from, what
 relies on it, what it relies on and what stands around it (`relatedOf`, the
 diagram's own clusters, so the lists' counts are the sentence's; six each,

@@ -37,7 +37,17 @@ import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import type { TraceChoice } from "./filters.ts";
 import { HEALTH_TONES, MAP_LABELS, MAP_TONES, cardOf, carrying, lineOf } from "./graph.tsx";
 import { EntryDisc, HealthWord, VendorLead } from "./parts.tsx";
-import { HEALTH, KINDS, LANES, MAP_ROWS, VENDORS, entries, openTasks } from "./words.ts";
+import {
+  HEALTH,
+  KINDS,
+  LANES,
+  MAP_ROWS,
+  VENDORS,
+  entries,
+  openTasks,
+  reliedOn,
+  reliedOnBy,
+} from "./words.ts";
 
 /**
  * Entries stand in vendor groups, closed, past this many drawn. About
@@ -102,8 +112,9 @@ export function serviceColumns(answer: AtlasMapAnswer): Map<string, number> {
  *
  * A NARROWED MAP DRAWS THE LANES THAT HOLD SOMETHING (`onlyFilled`): every
  * lane drawn at its full width, empty ones included, set the fit, so the four
- * entries a filter left opened on a phone as four marks with no name. While
- * nothing at all matches, every lane is drawn, each saying so.
+ * entries a filter left opened on a phone as four marks with no name. Each is
+ * as wide as the columns its matches fill. While nothing at all matches, every
+ * lane is drawn, each saying so.
  */
 function bandsOf(
   lanes: AtlasMapAnswer["lanes"],
@@ -113,11 +124,16 @@ function bandsOf(
   const filled = lanes.filter((one) => one.count > 0);
   const drawn = onlyFilled && filled.length > 0 ? filled : lanes;
   const answered = new Set(drawn.map((one) => one.lane));
+  const counts = new Map(drawn.map((one) => [one.lane, one.count]));
   const placed = new Set(MAP_ROWS.flatMap((row) => row.lanes));
   const lane = (id: AtlasLane) => ({
     id,
     label: LANES[id].label,
-    columns: LANES[id].columns,
+    // A NARROWED LANE IS AS WIDE AS WHAT MATCHED: two matches in a lane three
+    // columns wide stood beside an empty column the fit still had to hold.
+    columns: onlyFilled
+      ? Math.max(1, Math.min(LANES[id].columns, counts.get(id) ?? 0))
+      : LANES[id].columns,
     empty: emptyOf(id),
   });
   return MAP_ROWS.map((row, i) => ({
@@ -135,7 +151,7 @@ function bandsOf(
  * on it however far up, and how many it relies on however far down.
  */
 export function pathSentence(up: number, down: number): string {
-  return `Over every hop, ${entries(up)} ${up === 1 ? "relies" : "rely"} on it and it relies on ${down.toLocaleString()}`;
+  return `Over every hop, ${reliedOnBy(up)} and it relies on ${reliedOn(down)}`;
 }
 
 export function AtlasMap({

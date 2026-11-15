@@ -211,7 +211,18 @@ describe("the map's cards and lines", () => {
   // different question from one step out, so it says which it answers.
   test("the dock's counts name every hop, in the verb one step out uses", () => {
     expect(pathSentence(2, 13)).toBe("Over every hop, 2 entries rely on it and it relies on 13");
-    expect(pathSentence(1, 0)).toBe("Over every hop, 1 entry relies on it and it relies on 0");
+    expect(pathSentence(1, 0)).toBe(
+      "Over every hop, 1 entry relies on it and it relies on nothing",
+    );
+  });
+
+  // NONE IS SAID AS NOTHING in the dock as on the entry's own page, never
+  // "0 entries rely on it".
+  test("the dock says nothing where nothing relies on the entry", () => {
+    expect(pathSentence(0, 9)).toBe("Over every hop, nothing relies on it and it relies on 9");
+    expect(pathSentence(0, 0)).toBe(
+      "Over every hop, nothing relies on it and it relies on nothing",
+    );
   });
 });
 

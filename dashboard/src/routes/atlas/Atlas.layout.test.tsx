@@ -87,11 +87,12 @@ async function mount(
   fixture: AtlasFixture,
   hash = "#/company/atlas",
   narrow: (params: Record<string, unknown>) => AtlasFixture = () => fixture,
+  gutter = 0,
 ) {
   location.hash = hash;
   await page.viewport(width, 900);
   host = document.createElement("div");
-  host.style.cssText = `width: ${width}px; height: 900px; display: flex; flex-direction: column;`;
+  host.style.cssText = `width: ${width}px; height: 900px; display: flex; flex-direction: column; padding-inline: ${gutter}px; box-sizing: border-box;`;
   document.body.append(host);
   root = createRoot(host);
   const ask = (what: string, params: Record<string, unknown>) =>
@@ -318,7 +319,8 @@ test("a Needs attention card brings the map, with its selection, into view on a 
 
 // A NARROWED MAP DRAWS WHAT MATCHED: all eight lanes at their full width set
 // the fit, so on a phone the alerting entries the band's link leads to were
-// marks with no name. Mutation: draw every lane on a narrowed map again.
+// marks with no name. Mutation: draw every lane on a narrowed map again, or
+// give a lane of two matches its full width of columns.
 test("on a phone, a filter's few matches open in their own lanes at a size their names read", async () => {
   const company = generatedCompany(120);
   const alerting = {
@@ -328,8 +330,13 @@ test("on a phone, a filter's few matches open in their own lanes at a size their
       (node) => node.health === "alerting" && (node.lane === "services" || node.lane === "data"),
     ),
   };
-  await mount(390, company, "#/company/atlas?health=alerting", (params) =>
-    params.health === "alerting" ? alerting : company,
+  // Inside the phone's 16px gutter, as the app draws the page, not edge to edge.
+  await mount(
+    390,
+    company,
+    "#/company/atlas?health=alerting",
+    (params) => (params.health === "alerting" ? alerting : company),
+    16,
   );
   await shownMap();
   const lanes = new Set(alerting.nodes.map((node) => node.lane));
