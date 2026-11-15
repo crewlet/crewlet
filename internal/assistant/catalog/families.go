@@ -4,12 +4,14 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // agentControlActs are the acts that pause, resume, steer or answer an agent's run.
-var agentControlActs = []string{"pause_seat", "resume_seat", "steer_turn", "answer_executor"}
+var agentControlActs = []authz.Action{authz.ActionSeatPause, authz.ActionSeatResume,
+	authz.ActionTurnSteer, authz.ActionExecutorAnswer}
 
 // FamiliesOf is every family `assistant.tools.deny` can turn t off by; a tool in
 // none of them (a curated read, describe_api, open_in_app) is always offered.
@@ -25,7 +27,7 @@ func FamiliesOf(t Tool) []config.AssistantToolFamily {
 			out = append(out, config.FamilyChatWrites)
 		case strings.HasPrefix(t.Act, "atlas_"):
 			out = append(out, config.FamilyAtlasWrites)
-		case slices.Contains(agentControlActs, t.Act):
+		case slices.Contains(agentControlActs, authz.Action(t.Act)):
 			out = append(out, config.FamilyAgentControls)
 		}
 	case KindRead:
