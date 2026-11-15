@@ -64,11 +64,12 @@ func rcReply(parent, n int, id string, ms int, content string) string {
 // rcSaid is a reply's content of one text block.
 func rcSaid(text string) string { return `[{"type":"text","text":"` + text + `"}]` }
 
-// rcCalls is a reply's content of a tool_use block each id.
+// rcCalls is a reply's content of a tool_use block each id, each a call of a
+// tool of the bridge's, as a seat's executor makes one.
 func rcCalls(ids ...string) string {
 	blocks := make([]string, len(ids))
 	for i, id := range ids {
-		blocks[i] = `{"type":"tool_use","id":"` + id + `","name":"Bash","input":{}}`
+		blocks[i] = `{"type":"tool_use","id":"` + id + `","name":"mcp__crewlet__slow","input":{}}`
 	}
 	return "[" + strings.Join(blocks, ",") + "]"
 }

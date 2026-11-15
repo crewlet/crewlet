@@ -1,0 +1,1 @@
+{"agentType":"general-purpose","isBuiltIn":true,"description":"probe T5_agent subagent","toolUseId":"toolu_T5_agent","spawnDepth":1,"requestShape":"foreground","requestNonInteractive":true,"finished":true}
