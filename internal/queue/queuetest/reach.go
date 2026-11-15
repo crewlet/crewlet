@@ -110,7 +110,12 @@ func (s *suite) runReachability(t *testing.T) {
 		// deadline, so the deadline only sets how long a backend that
 		// buffered it takes to be caught, and a refusal never comes near
 		// it — at the pause every positive wait allows, which a loaded
-		// runner's refusal does not reach either.
+		// runner's refusal does not reach either. What it catches is a
+		// request held until its ASKER gives up. A backend that held it for
+		// a timer of its own shorter than that, and then answered the same
+		// mark, answers inside it and is not caught here: only a clock
+		// tells that from a refusal, and a clock that decided it would fail
+		// a healthy build a loaded runner paused (#1204).
 		//
 		// Mutation: have the refusal wait out the ask's deadline before it
 		// answers, and the ask returns with its deadline passed.

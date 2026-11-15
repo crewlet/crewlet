@@ -1007,12 +1007,12 @@ func (s *suite) runCore(t *testing.T) {
 		// itself here. Without -race it still exercises the interleaving
 		// and asserts the counts stay sane.
 		q := s.start(ctx, t)
-		var handled atomic.Int64
-		subscribe(ctx, t, q, "topic.overlap", "grp",
-			func(context.Context, *events.Event) queue.Result {
-				handled.Add(1)
-				return queue.Ack()
-			})
+		// A JOURNAL, so the wait for every message to be handled restarts
+		// its bound on each one handled: two hundred hand-overs are one
+		// wait's length but never one pause (#1197), and a timeout names
+		// what was handled.
+		handled := newJournal()
+		subscribe(ctx, t, q, "topic.overlap", "grp", recordingHandler(handled))
 
 		var (
 			wg        sync.WaitGroup
@@ -1049,8 +1049,8 @@ func (s *suite) runCore(t *testing.T) {
 		// one began — a drain that reports one in flight, rightly, for a
 		// handler that started after it woke. Only once nothing is left to
 		// start is a non-zero answer a handler the count failed to end.
-		awaitState(t, "every published message to be handled", func() bool {
-			return handled.Load() >= published.Load()
+		handled.await(t, "every published message to be handled", func(seen []string) bool {
+			return int64(len(seen)) >= published.Load()
 		})
 		remaining, err := q.WaitForHandlers(ctx, stallFor)
 		if err != nil {

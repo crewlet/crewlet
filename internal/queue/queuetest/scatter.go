@@ -59,7 +59,9 @@ func (s *suite) runScatter(t *testing.T) {
 			return nil, ctx.Err()
 		})
 
-		deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
+		// ONE PAUSE, stallFor: the ask is answered well inside it, and only
+		// one that waited on the answerer that never answers ends on it.
+		deadline, cancel := context.WithTimeout(ctx, stallFor)
 		defer cancel()
 		replies, err := q.Ask(deadline, subject, []byte("q"), 1)
 		if err != nil {
@@ -69,9 +71,9 @@ func (s *suite) runScatter(t *testing.T) {
 			t.Fatalf("asked for 1 reply and got %d", len(replies))
 		}
 		if deadline.Err() != nil {
-			t.Fatal("an ask satisfied by its first reply returned only once its 10s " +
-				"deadline had passed — a fan-out that waits for the slowest answerer it " +
-				"did not need is a fan-out with no latency benefit")
+			t.Fatalf("an ask satisfied by its first reply returned only once its %s "+
+				"deadline had passed — a fan-out that waits for the slowest answerer it "+
+				"did not need is a fan-out with no latency benefit", stallFor)
 		}
 	})
 
@@ -101,7 +103,9 @@ func (s *suite) runScatter(t *testing.T) {
 				return nil, ctx.Err()
 			}
 		})
-		deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
+		// ONE PAUSE, stallFor: the ask is answered well inside it, and only
+		// one that waited on the answerer that never answers ends on it.
+		deadline, cancel := context.WithTimeout(ctx, stallFor)
 		defer cancel()
 		var (
 			got  []string
@@ -118,8 +122,8 @@ func (s *suite) runScatter(t *testing.T) {
 			t.Fatalf("ask each: %v", err)
 		}
 		if late != nil {
-			t.Fatal("the first reply was handed over only once the ask's 10s deadline " +
-				"had passed: AskEach that collects for the end is Ask under another name")
+			t.Fatalf("the first reply was handed over only once the ask's %s deadline "+
+				"had passed: AskEach that collects for the end is Ask under another name", stallFor)
 		}
 		if !sameSet(got, []string{"fast:q", "slow:q"}) {
 			t.Fatalf("ask each handed over %v, want the fast answer and the one it let through", got)
@@ -141,7 +145,9 @@ func (s *suite) runScatter(t *testing.T) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		})
-		deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
+		// ONE PAUSE, stallFor: the ask is answered well inside it, and only
+		// one that waited on the answerer that never answers ends on it.
+		deadline, cancel := context.WithTimeout(ctx, stallFor)
 		defer cancel()
 		calls := 0
 		if err := q.AskEach(deadline, subject, []byte("q"), func([]byte) bool {
@@ -154,7 +160,7 @@ func (s *suite) runScatter(t *testing.T) {
 			t.Fatalf("each was called %d times after answering false the first time", calls)
 		}
 		if deadline.Err() != nil {
-			t.Fatal("an ask its caller ended returned only once its 10s deadline had passed")
+			t.Fatalf("an ask its caller ended returned only once its %s deadline had passed", stallFor)
 		}
 	})
 
@@ -218,7 +224,7 @@ func (s *suite) runScatter(t *testing.T) {
 				t.Fatalf("the ask returned %v, want the one answer that "+
 					"arrived before its deadline", got)
 			}
-		case <-time.After(10 * time.Second): //fixedwait:liveness
+		case <-time.After(stallFor): //fixedwait:liveness
 			t.Fatal("an answerer that never returned held the asker past its " +
 				"own deadline — the deadline is the asker's and only the " +
 				"asker can enforce it, because only the asker knows it")
@@ -404,18 +410,21 @@ func (s *suite) runScatter(t *testing.T) {
 		})
 		t.Cleanup(func() { close(held) })
 
-		slow, cancelSlow := context.WithTimeout(ctx, 10*time.Second)
+		// BOUNDED only so the held ask cannot outlive the case.
+		slow, cancelSlow := context.WithTimeout(ctx, hangFor)
 		defer cancelSlow()
 		go func() { _, _ = q.Ask(slow, subject, []byte("slow"), 1) }()
 		// UNTIL THE HELD REQUEST IS IN, so the second is not simply
 		// answered first.
 		select {
 		case <-holding:
-		case <-time.After(5 * time.Second): //fixedwait:liveness
-			t.Fatal("the first request never reached the answerer")
+		case <-time.After(stallFor): //fixedwait:liveness
+			t.Fatalf("the first request never reached the answerer, in %s (stallFor)", stallFor)
 		}
 
-		deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// ONE HAND-OVER, so one pause: the ask returns on its reply, and
+		// the deadline only ends a registration that never answers it.
+		deadline, cancel := context.WithTimeout(ctx, stallFor)
 		defer cancel()
 		started := time.Now()
 		replies, err := q.Ask(deadline, subject, []byte("next"), 1)
@@ -472,14 +481,16 @@ func (s *suite) runScatter(t *testing.T) {
 			// RELEASED BEFORE THE WITHDRAWAL, which waits for the
 			// answers in flight.
 			releaseAll()
-			bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), stallFor)
 			defer cancel()
 			if err := stop(bounded); err != nil {
 				t.Errorf("stop serving: %v", err)
 			}
 		})
 
-		asked, cancelAsked := context.WithTimeout(ctx, 20*time.Second)
+		// BOUNDED only so the asks cannot outlive the case: each is
+		// answered once its slot is released.
+		asked, cancelAsked := context.WithTimeout(ctx, hangFor)
 		defer cancelAsked()
 		answered := make(chan string, bound+1)
 		for i := range bound + 1 {
@@ -493,8 +504,9 @@ func (s *suite) runScatter(t *testing.T) {
 		for range bound {
 			select {
 			case <-entered:
-			case <-time.After(5 * time.Second): //fixedwait:liveness
-				t.Fatalf("fewer than %d requests reached a registration bounded at %d", bound, bound)
+			case <-time.After(stallFor): //fixedwait:liveness
+				t.Fatalf("fewer than %d requests reached a registration bounded at %d, the "+
+					"next not in %s (stallFor)", bound, bound, stallFor)
 			}
 		}
 		// THE ONE PAST THE BOUND WAITS for a slot of this registration:
@@ -532,7 +544,7 @@ func (s *suite) runScatter(t *testing.T) {
 			select {
 			case reply := <-answered:
 				got = append(got, reply)
-			case <-time.After(10 * time.Second): //fixedwait:liveness
+			case <-time.After(stallFor): //fixedwait:liveness
 				t.Fatalf("after its slots were released the registration answered %v of %d "+
 					"requests — the one past the bound waits for a slot, it is never dropped",
 					got, bound+1)
@@ -567,20 +579,25 @@ func (s *suite) runScatter(t *testing.T) {
 	// has returned.
 	//
 	// Mutation: return from the withdrawal without waiting on the gate, or
-	// wait on a context other than its bound, and the first half fails.
+	// wait on a context other than its bound, or wait out a grace of its own
+	// before answering, and the first half fails.
 	t.Run("a_withdrawal_waits_for_the_answers_in_flight", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
 		held := holdAnswer(ctx, t, q, ns(t)+".ask")
-		ended, cancel := context.WithTimeout(ctx, 0)
-		defer cancel()
+		// ENDED BY CANCELLING IT, so its error is Canceled: a grace of the
+		// withdrawal's own that it waited out instead answers
+		// DeadlineExceeded, however short, and the answer tells the two
+		// apart where no clock could.
+		ended, cancel := context.WithCancel(ctx)
+		cancel()
 		err := withdraw(ended, t, held, "a withdrawal under a bound that had ended", nil)
-		if !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("a withdrawal under a bound that had ended, with an answer still "+
 				"running, answered %v, want the bound's own %v — a withdrawal that returns "+
 				"without waiting says the answer is done, and a caller that closes what the "+
 				"answerer reads straight after it closes it under that answer",
-				err, context.DeadlineExceeded)
+				err, context.Canceled)
 		}
 		if held.finished.Load() {
 			t.Fatal("the held answer had finished before the case released it: the " +
@@ -644,7 +661,9 @@ func (s *suite) runScatter(t *testing.T) {
 				subject := ns(t) + ".ask"
 				serve(ctx, t, peer, subject, echo("peer"))
 
-				deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
+				// ONE HAND-OVER, so one pause: the ask returns on its
+				// reply.
+				deadline, cancel := context.WithTimeout(ctx, stallFor)
 				replies, err := q.Ask(deadline, subject, []byte("q"), 1)
 				cancel()
 				if err != nil {
@@ -679,8 +698,8 @@ func serve(ctx context.Context, t *testing.T, q queue.EventQueue, subject string
 	t.Cleanup(func() {
 		// BOUNDED, because a withdrawal waits for the answers in flight
 		// and a case that forgot to release one must fail rather than
-		// hang the suite.
-		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		// hang the suite: one pause, at stallFor.
+		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), stallFor)
 		defer cancel()
 		if err := stop(bounded); err != nil {
 			t.Errorf("stop serving %s: %v", subject, err)
@@ -716,21 +735,25 @@ func holdAnswer(ctx context.Context, t *testing.T, q queue.EventQueue, subject s
 	t.Cleanup(h.release)
 	// BOUNDED only so the ask cannot outlive the case; nothing is read off
 	// when it ends.
-	asked, cancelAsk := context.WithTimeout(ctx, 10*time.Second)
+	asked, cancelAsk := context.WithTimeout(ctx, hangFor)
 	t.Cleanup(cancelAsk)
 	go func() { _, _ = q.Ask(asked, subject, []byte("q"), 1) }()
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second): //fixedwait:liveness
-		t.Fatal("the answerer was never called")
+	case <-time.After(stallFor): //fixedwait:liveness
+		t.Fatalf("the answerer was never called, in %s (stallFor)", stallFor)
 	}
 	return h
 }
 
 // ask scatters with a bounded deadline and fails the test on an error.
+//
+// BOUNDED BY stallFor, one pause: the ask returns once want replies have
+// come, so the deadline costs a healthy case nothing and ends only an ask a
+// broken backend never answers.
 func ask(ctx context.Context, t *testing.T, q queue.EventQueue, subject string, req []byte, want int) [][]byte {
 	t.Helper()
-	deadline, cancel := context.WithTimeout(ctx, 5*time.Second)
+	deadline, cancel := context.WithTimeout(ctx, stallFor)
 	defer cancel()
 	replies, err := q.Ask(deadline, subject, req, want)
 	if err != nil {
