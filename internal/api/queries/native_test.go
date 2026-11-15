@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -469,6 +470,39 @@ func TestTheNativeQuestionsAreAbsentWithoutTheirReaders(t *testing.T) {
 		if _, err := askNative(t, queries.Sources{}, what, nil); !errors.Is(err, queries.ErrUnknown) {
 			t.Errorf("%s on a node with no native backend answered %v, want unknown", what, err)
 		}
+	}
+}
+
+// THE CONTAINERS SAY WHICH ONE HOLDS THE TOOL SKILLS, so a screen with no
+// skill to list can point at the space one is written in: Agent skills said
+// "Add a page to the skills space" with no way to it, because nothing in the
+// answer said which space that was. A company that turned tool skills off
+// names none.
+//
+// Mutation: drop `skills` from the answer and the first half fails; answer it
+// for a company with tool skills off and the second does.
+func TestTheContainersNameTheToolSkillsSpace(t *testing.T) {
+	company := &config.Company{}
+	src := queries.Sources{
+		Pages:   &stubPages{},
+		Company: func() (*config.Company, *org.Organization) { return company, nil },
+	}
+	got, err := askNative(t, src, "containers", nil)
+	if err != nil {
+		t.Fatalf("containers: %v", err)
+	}
+	if skills := got.(map[string]any)["skills"]; skills != config.DefaultSkillsContainer {
+		t.Errorf("skills = %v, want the default container %q", skills, config.DefaultSkillsContainer)
+	}
+
+	off := ""
+	company = &config.Company{Knowledge: config.Knowledge{SkillsContainer: &off}}
+	got, err = askNative(t, src, "containers", nil)
+	if err != nil {
+		t.Fatalf("containers with tool skills off: %v", err)
+	}
+	if skills, named := got.(map[string]any)["skills"]; named {
+		t.Errorf("skills = %v on a company with tool skills off, want none named", skills)
 	}
 }
 
