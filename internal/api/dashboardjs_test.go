@@ -2633,6 +2633,9 @@ const (
 	// bytes), 11,693 over main's 6313.4 KiB: 6325 KiB.
 	// Held reasons for every reader, field errors and kit 0.133.0: 6317.9 KiB
 	// (6,469,591 bytes), 4,666 bytes over main's 6313.4 KiB: 6318 KiB.
+	// The company's sign-in policy changed in place (Settings › Sign-in
+	// policy's pencils, a duration typed as one) takes it to 6316.7 KiB
+	// (6,468,275 bytes): 6317 KiB.
 	treeBudget = 5<<20 + 1205<<10
 )
 
