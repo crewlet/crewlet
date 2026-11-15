@@ -3223,8 +3223,9 @@ func (e *Engine) Stop(ctx context.Context) {
 
 // stopping is the allowance this node's stop gives its leases back on — the
 // presence and seat leases, the sandbox coordinator's taker lease
-// ([Engine.stopSandbox]), the duties it releases, and the holds its loops
-// give back as the teardown ends them ([Engine.tearingDown]) — built once, by
+// ([Engine.stopSandbox]), the duties it releases, the holds its loops give
+// back as the teardown ends them ([Engine.tearingDown]), and the removal of
+// its MCP listings after them ([Engine.removeMCPListings]) — built once, by
 // the drain or by a failed boot's teardown, whichever comes first. See
 // [seat.StopBudget] for why one allowance and not one per step. Its size is
 // the stop allowance of this node's own lease TTL ([seat.StopAllowance], one
@@ -3478,11 +3479,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRunnerProbe()
 	e.stopHostLogins()
 	e.stopModelRetries()
-	// AND THIS NODE'S MCP LISTINGS, removed now that its servers are down,
-	// and its instances no longer answered; and its STATUS RECORD, whose
-	// rows describe those servers, removed beside them rather than after.
+	// AND THIS NODE'S MCP LISTINGS' PUBLISHER, now that its servers are
+	// down — what it published is removed once the seats are given back,
+	// below — and its instances no longer answered; and its STATUS RECORD,
+	// whose rows describe those servers.
 	recordRemoved := e.stopStatusRecords(ctx)
-	e.stopMCPListings(ctx)
+	e.stopMCPListings()
 	recordRemoved()
 	e.stopMCPInstances(ctx)
 	e.stopMCPChecks(ctx)
@@ -3590,6 +3592,11 @@ func (e *Engine) teardown(ctx context.Context) {
 	// the seat holders, and a holder that stops answering first costs a pass
 	// its expiry. See codeholds.go.
 	e.stopCodeHolds(ctx)
+	// AND WHAT THIS NODE PUBLISHED OF ITS MCP SERVERS, removed on what the
+	// give-backs above left of the stop's allowance: nothing counts the
+	// listings since the presence went, and a removal that runs out of it
+	// leaves them to the sweep ([Engine.removeMCPListings]).
+	e.removeMCPListings(ctx)
 	// AFTER the seats are released, so a per-role child is normally
 	// already gone with its seat. This is the backstop for the ones that
 	// were not: a stdio server is a process TREE holding a seat's

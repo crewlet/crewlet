@@ -353,8 +353,8 @@ func (l stallingLeases) Get(ctx context.Context, resource string) (*coord.Lease,
 	return l.coordBackend.Get(ctx, resource)
 }
 
-// stallingFleet is a fleet store whose admission withdrawal stalls once
-// gone answers true.
+// stallingFleet is a fleet store whose admission withdrawal and removals of
+// what a node published of itself stall once gone answers true.
 type stallingFleet struct {
 	fleet
 	gone   func() bool
@@ -366,6 +366,13 @@ func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation 
 		return f.stalls.stall(ctx, "forget_admission", nodeID)
 	}
 	return f.fleet.ForgetAdmission(ctx, nodeID, incarnation)
+}
+
+func (f stallingFleet) DeleteMCPListing(ctx context.Context, server, node string, version uint64) (bool, error) {
+	if f.gone() {
+		return false, f.stalls.stall(ctx, "delete_mcp_listing", coord.MCPListingKey(server, node))
+	}
+	return f.fleet.DeleteMCPListing(ctx, server, node, version)
 }
 
 // A STOP ON A STREAM THAT WILL NOT ACKNOWLEDGE LEAVES NOTHING HELD.
