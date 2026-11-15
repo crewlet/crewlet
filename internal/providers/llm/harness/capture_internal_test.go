@@ -94,12 +94,17 @@ func TestNothingWrittenAfterTheEndIsRead(t *testing.T) {
 // the capture pinned after the original is closed; closing every copy lets it
 // go — the instant a pipe's reader would have seen its end.
 //
+// Sequential: a child that any other case starts holds a copy of every
+// description open in this process from its fork until its exec, and a fork
+// landing before the last close would still pin the capture when the case
+// asks. While a top-level case runs sequentially no other case's body runs, so
+// no fork can land.
+//
 // Mutation: open the engine's description as a dup of the child's (the same
 // description, as darwin's /dev/fd gives): the probe then converts the pin
 // instead of being refused by it, and the capture is refused as one on a
 // filesystem without per-description locks.
 func TestAPinLastsWhileAnyHolderHoldsTheDescription(t *testing.T) {
-	t.Parallel()
 	c, w := testCapture(t, "stdout", streamSpec{kind: oneAnswer}, nil)
 	fd, err := unix.Dup(int(w.Fd())) //nolint:gosec // a descriptor fits an int
 	if err != nil {
