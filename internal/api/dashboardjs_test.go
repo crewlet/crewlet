@@ -2627,7 +2627,9 @@ const (
 	// are not numbers changed in place, merged on kit 0.131.0, measures
 	// 6313.1 KiB (6,464,594 bytes), 46,487 bytes over the 6267.7 KiB of main
 	// it was built on: 6314 KiB.
-	treeBudget = 5<<20 + 1194<<10
+	// Think harder and Settings › Ask Crewlet take it to 6324.8 KiB (6,476,618
+	// bytes), 11,693 over main's 6313.4 KiB: 6325 KiB.
+	treeBudget = 5<<20 + 1205<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

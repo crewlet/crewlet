@@ -164,6 +164,12 @@ does not.
 4. **Apply the revision** (`crewlet config import`, or the dashboard's
    configuration editor). The next page load lights **Ask** for every person.
 
+An administrator can also change every setting of the block where it is read,
+on **Settings › Ask Crewlet** (`#/settings/ask-crewlet`): whether it is on,
+its model chain and the stronger chain, the bounds of a turn, the tool
+families turned off, and deep work. Each change is checked by the engine
+before it is saved, as a configuration edit is.
+
 `crewlet validate` and every `/config` write refuse a chain that breaks the
 rules above, naming the member and the field to change. A stored revision that
 somehow carries one still applies, so every seat keeps running, and
