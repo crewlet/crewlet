@@ -176,20 +176,26 @@ func newRenewRig(t *testing.T) *renewRig {
 
 // controlResult is what the engine's control handler leaves a delivery with,
 // for what these cases meet (internal/engine's controlOutcome): nil is
-// acknowledged; a store's silence and every delivery the coordinator marks as
-// one no waiter announces again ([ErrStoreSilent], [ErrUnannounced]) are NAK'd
-// as the node's own, a refusal so marked included; any other refusal on a
-// condition that clears by waiting is acknowledged; every other error is
-// NAK'd.
+// acknowledged; a refusal the handler hands on, a drain's and a seat let go
+// of's ([Draining], [SeatLost]), is deferred; a store's silence and every
+// delivery the coordinator marks as one no waiter announces again
+// ([ErrStoreSilent], [ErrUnannounced]) are NAK'd as the node's own, a refusal
+// so marked included; any other refusal on a condition that clears by waiting
+// is acknowledged; every other error is NAK'd.
 func controlResult(err error) queue.Result {
 	if err == nil {
 		return queue.Ack()
 	}
 	var refused *TurnRefused
+	waits := errors.As(err, &refused) && refused.Condition != ""
 	switch {
+	case waits && refused.Condition == Draining:
+		return queue.Defer(queue.DeferDraining, err.Error())
+	case waits && refused.Condition == SeatLost:
+		return queue.Defer(queue.DeferSeatMoved, err.Error())
 	case errors.Is(err, ErrStoreSilent), errors.Is(err, ErrUnannounced):
 		return queue.NakNode(err)
-	case errors.As(err, &refused) && refused.Condition != "":
+	case waits:
 		return queue.Ack()
 	}
 	return queue.Nak(err)
@@ -492,7 +498,7 @@ func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 			t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
 		}
 		gate.refuse(false)
-		rig.coordinator.Readmit(conditionDrain, "swe")
+		rig.coordinator.Readmit(Draining, "swe")
 		rig.coordinator.inflight.Wait()
 
 		var renewed []*events.Event
@@ -535,7 +541,7 @@ func TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed(t *testing.T) {
 		rig.coordinator.pending = &unansweredRelease{silentStore: &silentStore{PendingStore: rig.coordinator.pending,
 			silent: []string{"ReleaseClaim"}}, refused: true}
 		gate.refuse(false)
-		rig.coordinator.Readmit(conditionDrain, "swe")
+		rig.coordinator.Readmit(Draining, "swe")
 		rig.coordinator.inflight.Wait()
 		failed := rig.failures()
 		if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureClaimStranded || clocked(rig) {
@@ -849,7 +855,7 @@ func TestARefusalWhileTheClockOnItsHostRunsIsHandedBack(t *testing.T) {
 		// while a delivery of the completion claims the run, its read of the
 		// box held in turn; the re-fire's claim then loses to that
 		// delivery's.
-		rig.coordinator.Readmit(conditionDrain, "swe")
+		rig.coordinator.Readmit(Draining, "swe")
 		<-gate.gating
 		_, ev := rig.completion("t1")
 		handed := make(chan error, 1)
@@ -894,7 +900,7 @@ func TestARefusalWhileTheClockOnItsHostRunsIsHandedBack(t *testing.T) {
 		// re-fire's own collection is handed back as the host's store
 		// still does not answer.
 		gate.refuse(false)
-		rig.coordinator.Readmit(conditionDrain, "swe")
+		rig.coordinator.Readmit(Draining, "swe")
 		rig.coordinator.inflight.Wait()
 		if asked, granted, _ := gate.counts(); asked != 2 || granted != 1 {
 			t.Fatalf("the gate was asked %d times and admitted %d; want the re-fire admitted", asked, granted)
@@ -910,7 +916,7 @@ func TestARefusalWhileTheClockOnItsHostRunsIsHandedBack(t *testing.T) {
 }
 
 // racingGate is a [TurnGate] that refuses the first resume it is asked about
-// on [conditionDrain]; holds the second, saying so on gating, until pass, and
+// on [Draining]; holds the second, saying so on gating, until pass, and
 // then admits it with a release that says so on admitted and waits for
 // proceed; and admits every other at once: a completion kept for its
 // condition, its re-fire, held at its admission and again as its attempt
@@ -930,7 +936,7 @@ func (g *racingGate) gate(ctx context.Context, _ string, _ ResumeRoute) (context
 	switch n {
 	case 1:
 		return nil, nil, &TurnRefused{Cause: errLeaving,
-			Refusal: Refusal{Condition: conditionDrain, Reason: errLeaving.Error()}}
+			Refusal: Refusal{Condition: Draining, Reason: errLeaving.Error()}}
 	case 2:
 		close(g.gating)
 		<-g.pass
@@ -1044,7 +1050,7 @@ func refusedRefire(t *testing.T) (*coordRig, *silentStore) {
 	rig.queue.mu.Lock()
 	rig.queue.err = errBrokerRefused
 	rig.queue.mu.Unlock()
-	rig.coordinator.Readmit(conditionDrain, "swe")
+	rig.coordinator.Readmit(Draining, "swe")
 	synctest.Wait()
 	if renewed := renewedOn(rig); len(renewed) != 0 {
 		t.Fatalf("the broker took %d announcements it was to refuse", len(renewed))
@@ -1182,7 +1188,7 @@ func TestARefiresRefusedAnnouncementIsPublishedAgain(t *testing.T) {
 				t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
 			}
 			gate.refuse(false)
-			rig.coordinator.Readmit(conditionDrain, "swe")
+			rig.coordinator.Readmit(Draining, "swe")
 			synctest.Wait()
 			if renewed := renewedOn(rig); len(renewed) != 1 || !clocked(rig) {
 				t.Fatalf("the later re-fire announced the completion %d times, clocked %v; want it announced "+
@@ -1373,7 +1379,7 @@ func TestAJobNoWaiterAnnouncesIsRenewedByItsRow(t *testing.T) {
 			t.Fatalf("a refusal after the restart = %v; want it handed back as no waiter's to announce again", err)
 		}
 		gate.refuse(false)
-		rig.coordinator.Readmit(conditionDrain, "swe")
+		rig.coordinator.Readmit(Draining, "swe")
 		rig.coordinator.inflight.Wait()
 		if !clocked(rig) {
 			t.Fatal("the premise: the re-fire's collection did not start the clock on the host")

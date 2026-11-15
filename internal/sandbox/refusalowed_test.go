@@ -84,7 +84,7 @@ func TestAnAcknowledgedRefusalOutlivesItsHolder(t *testing.T) {
 		{name: "on the seat's next holder, on its condition's signal", node: "node-c",
 			fence: Fence{Owner: "node-c:1", Epoch: rigLease.Epoch + 1}, own: conditionLimit},
 		{name: "on the seat's next holder, on a condition of its own", node: "node-c",
-			fence: Fence{Owner: "node-c:1", Epoch: rigLease.Epoch + 1}, own: conditionDrain},
+			fence: Fence{Owner: "node-c:1", Epoch: rigLease.Epoch + 1}, own: Draining},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -245,12 +245,16 @@ func (s *owedRefusals) OweRefusal(ctx context.Context, turnID, launch string, ow
 // acknowledged, a re-announcement refused again writes nothing and leaves the
 // first standing, and a record the store does not take is no acknowledgement:
 // the delivery is handed back as this node's failure, to be recorded when it
-// comes back. A row a newer lease owns refuses the record, and the delivery is
-// not acknowledged by the node that lost the seat.
+// comes back; so is one this node's own ended context cut, which is handed back
+// as the node's, never with the refusal that would have it acknowledged. A row
+// a newer lease owns refuses the record, and the delivery is not acknowledged
+// by the node that lost the seat.
 //
 // Mutation: acknowledge a refusal without recording it, and its record is
-// missing and a record the store did not take is acknowledged; write it on
-// every refusal, and the first refusal's instant is lost.
+// missing and a record the store did not take is acknowledged; carry the
+// refusal behind a record its context cut, and that refusal is acknowledged
+// unrecorded; write it on every refusal, and the first refusal's instant is
+// lost.
 func TestAnAcknowledgedRefusalIsRecordedOnItsJob(t *testing.T) {
 	t.Parallel()
 	// owing builds a rig whose node-b refuses t1's completion on
@@ -331,6 +335,24 @@ func TestAnAcknowledgedRefusalIsRecordedOnItsJob(t *testing.T) {
 		}
 	})
 
+	t.Run("a record this node's ended context cut is no acknowledgement", func(t *testing.T) {
+		t.Parallel()
+		rig, store, _ := owing(t)
+		store.silent.Store(true)
+		_, ev := rig.completion("t1")
+		ended, end := context.WithCancel(t.Context())
+		end()
+		err := rig.coordinator.OnEvent(delivery(ended, ev), ev)
+		var refused *TurnRefused
+		if got := controlResult(err); errors.As(err, &refused) || got.Outcome == queue.OutcomeAck {
+			t.Fatalf("the refusal whose record this node's ended context cut = %v, left %s; want it handed "+
+				"back, the refusal not carried", err, got.Outcome)
+		}
+		if got := rig.get("t1"); got.Launch.RefusalOwed != "" {
+			t.Fatalf("the job's record owes %q; want nothing recorded", got.Launch.RefusalOwed)
+		}
+	})
+
 	t.Run("a row a newer lease owns", func(t *testing.T) {
 		t.Parallel()
 		rig, store, _ := owing(t)
@@ -351,69 +373,51 @@ func TestAnAcknowledgedRefusalIsRecordedOnItsJob(t *testing.T) {
 	})
 }
 
-// A REFUSAL WHOSE RECORD THE STORE DID NOT TAKE STILL SAYS ITS CONDITION, BEHIND
-// THE STORE'S SILENCE. Unrecorded, a refusal is no acknowledgement: the store's
-// silence is ahead of it, so the control topic hands the delivery back as this
-// node's failure. But the caller hands some conditions on rather than
-// acknowledging them, a draining node's above all, and a drain's refusal is
-// recorded too, since this package does not name the drain: answered as the
-// store's silence alone, it was handed back to the node that is leaving,
-// delivery after delivery, rather than on to the seat's next holder. Where this
-// node's own context ended, the cause is that, and the refusal is not carried:
-// nothing ahead of it would keep it from being acknowledged.
+// A DRAIN'S REFUSAL IS HANDED ON AND OWES NOTHING. A draining node starts no
+// turn, and the condition does not clear on it, so the control topic hands the
+// delivery on to the seat's next holder rather than acknowledging it, and a
+// delivery handed on leaves nothing owed on the job's record. Recorded as an
+// acknowledged refusal would be, a drain's cost a write per job its deferred
+// delivery never needed, and one the store did not take came back as the
+// store's silence, handed back to the node that is leaving delivery after
+// delivery rather than on.
 //
-// Mutation: answer a record the store did not take with the store's silence
-// alone, and a drain's refusal is handed back rather than on; carry the
-// refusal whatever ended the write, and one whose context ended is
-// acknowledged unrecorded.
-func TestAnUnrecordedRefusalStillSaysItsCondition(t *testing.T) {
+// Mutation: record a drain's refusal as an acknowledged one is, and its
+// record is written, and where the store does not take it the delivery is
+// handed back as the store's silence.
+func TestADrainsRefusalIsHandedOnOwingNothing(t *testing.T) {
 	t.Parallel()
-
-	t.Run("behind the store's silence", func(t *testing.T) {
-		t.Parallel()
-		rig := newCoordRig(t)
-		unsettledHost(t, rig)
-		store := &owedRefusals{PendingStore: rig.coordinator.pending}
-		store.silent.Store(true)
-		rig.coordinator.pending = store
-		gate := &conditionGate{}
-		gate.refuse(conditionDrain)
-		rig.coordinator.gate = gate.admit
-		_, ev := rig.completion("t1")
-		err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev)
-		var refused *TurnRefused
-		if !errors.Is(err, ErrStoreSilent) || !errors.As(err, &refused) || refused.Condition != conditionDrain {
-			t.Fatalf("the drain's refusal whose record the store did not take = %v; want the store's silence "+
-				"with the refusal on %q behind it", err, conditionDrain)
-		}
-		if got := rig.get("t1"); got.Launch.RefusalOwed != "" {
-			t.Fatalf("the job's record owes %q; want nothing recorded", got.Launch.RefusalOwed)
-		}
-	})
-
-	t.Run("never where this node's context ended", func(t *testing.T) {
-		t.Parallel()
-		rig := newCoordRig(t)
-		unsettledHost(t, rig)
-		store := &owedRefusals{PendingStore: rig.coordinator.pending}
-		store.silent.Store(true)
-		rig.coordinator.pending = store
-		gate := &conditionGate{}
-		gate.refuse(conditionLimit)
-		rig.coordinator.gate = gate.admit
-		_, ev := rig.completion("t1")
-		ended, end := context.WithCancel(t.Context())
-		end()
-		err := rig.coordinator.OnEvent(delivery(ended, ev), ev)
-		var refused *TurnRefused
-		if got := controlResult(err); errors.As(err, &refused) || got.Outcome == queue.OutcomeAck {
-			t.Fatalf("the refusal whose record this node's ended context cut = %v, left %s; want it handed "+
-				"back, its refusal not carried", err, got.Outcome)
-		}
-		if got := rig.get("t1"); got.Launch.RefusalOwed != "" {
-			t.Fatalf("the job's record owes %q; want nothing recorded", got.Launch.RefusalOwed)
-		}
-	})
+	for _, tc := range []struct {
+		name   string
+		silent bool
+	}{
+		{name: "the store answering"},
+		{name: "the store silent", silent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			unsettledHost(t, rig)
+			store := &owedRefusals{PendingStore: rig.coordinator.pending}
+			store.silent.Store(tc.silent)
+			rig.coordinator.pending = store
+			gate := &conditionGate{}
+			gate.refuse(Draining)
+			rig.coordinator.gate = gate.admit
+			_, ev := rig.completion("t1")
+			err := rig.coordinator.OnEvent(delivery(t.Context(), ev), ev)
+			var refused *TurnRefused
+			if got := controlResult(err); errors.Is(err, ErrStoreSilent) || !errors.As(err, &refused) ||
+				refused.Condition != Draining || got.Outcome != queue.OutcomeDefer {
+				t.Fatalf("the drain's refusal = %v, left %s; want it handed on to the seat's next holder as the "+
+					"drain's", err, got.Outcome)
+			}
+			if got := rig.get("t1"); got.Launch.RefusalOwed != "" || store.written.Load() != 0 {
+				t.Fatalf("the job's record owes %q after %d writes; want nothing written for a refusal handed on",
+					got.Launch.RefusalOwed, store.written.Load())
+			}
+		})
+	}
 }
 
 // A SETTLED COMPLETION OWES NO REFUSAL. The record says a holder acknowledged a

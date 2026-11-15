@@ -268,7 +268,8 @@ func deferred(t *testing.T, e *Engine) bool {
 // engine's gate from its wiring, and the draining node claims and collects the
 // run; map a drain refusal to a Nak and the control attachment is never
 // quiesced, so the broker hands the completion straight back to the node that
-// is leaving for as long as it drains.
+// is leaving for as long as it drains; record the drain's refusal as owed, and
+// the job's record is written for a delivery the drain hands on.
 func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 	t.Parallel()
 	r := newDrainRig(t)
@@ -324,6 +325,12 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 		t.Fatalf("run = %q (collected %v), want it untouched for the seat's next holder",
 			got.Status, got.Collected)
 	}
+	// AND OWING NOTHING: a delivery handed on is never acknowledged, so the
+	// drain's refusal writes nothing on the job's record.
+	if got := r.run(t, e, "t1"); got.Launch.RefusalOwed != "" {
+		t.Fatalf("the job's record owes %q after the drain's refusal; want nothing written for a delivery "+
+			"handed on", got.Launch.RefusalOwed)
+	}
 
 	finish()
 	select {
@@ -361,17 +368,17 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 // waiter reads the run through a store that does not answer it) is never
 // acknowledged, whatever its refusal waits on: it is a Nak, but where a drain or
 // a seat let go of hands it on, which still defers it. So is a refusal whose
-// record the store did not take (sandbox.ErrStoreSilent, the refusal behind
-// it): the coordinator acknowledges no refusal it has not written on the job's
-// record as owed, and a drain's behind it is still handed on.
+// record the store did not take (sandbox.ErrStoreSilent alone): the
+// coordinator acknowledges no refusal it has not written on the job's record
+// as owed, and writes none for a drain's, which is handed on.
 //
 // Mutation: key the hand-back on node.ErrDraining again and the provider limit
 // is a Nak, walking a healthy completion to the dead-letter boundary one
 // delivery at a time; defer every refusal and a seat whose ownership merely
 // blipped quiesces its control topic for as long as this node holds it;
-// acknowledge a refusal no waiter announces again, and nothing does; read the
-// store's silence before a drain, and a drain whose record the store did not
-// take is handed back to the node that is leaving.
+// acknowledge a refusal no waiter announces again, and nothing does;
+// acknowledge a refusal whose record the store did not take, and nothing owes
+// it.
 func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	t.Parallel()
 	refusal := func(cond sandbox.Condition, cause error) error {
@@ -381,18 +388,16 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	// unannounced is err as the coordinator hands back a delivery while the
 	// clock on its box's host runs.
 	unannounced := func(err error) error { return fmt.Errorf("%w: %w", sandbox.ErrUnannounced, err) }
-	// unrecorded is err, a refusal the coordinator could not write on the
-	// job's record as owed, as it hands it back: behind the store's silence.
-	unrecorded := func(err error) error {
-		return fmt.Errorf("%w: sandbox: recording the refusal of t1's completion: nats: timeout; %w",
-			sandbox.ErrStoreSilent, err)
-	}
+	// unrecorded is a refusal the coordinator could not write on the job's
+	// record as owed, as it hands it back: the store's silence alone.
+	unrecorded := fmt.Errorf("%w: sandbox: recording the refusal of t1's completion: nats: timeout",
+		sandbox.ErrStoreSilent)
 	for name, tc := range map[string]struct {
 		err  error
 		want queue.Outcome
 	}{
 		"settled":                    {err: nil, want: queue.OutcomeAck},
-		"the node is draining":       {err: refusal(waitDrain, node.ErrDraining), want: queue.OutcomeDefer},
+		"the node is draining":       {err: refusal(sandbox.Draining, node.ErrDraining), want: queue.OutcomeDefer},
 		"the seat is not provable":   {err: refusal(waitOwnership, node.ErrSeatNotOwned), want: queue.OutcomeAck},
 		"a provider's limit":         {err: refusal("provider_limit", errors.New("provider limit reached")), want: queue.OutcomeAck},
 		"a refusal naming no wait":   {err: refusal("", errors.New("refused")), want: queue.OutcomeNak},
@@ -404,16 +409,13 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 			want: queue.OutcomeNak},
 		"a limit no waiter announces again": {err: unannounced(refusal("provider_limit",
 			errors.New("provider limit reached"))), want: queue.OutcomeNak},
-		"a drain no waiter announces again": {err: unannounced(refusal(waitDrain, node.ErrDraining)),
+		"a drain no waiter announces again": {err: unannounced(refusal(sandbox.Draining, node.ErrDraining)),
 			want: queue.OutcomeDefer},
 		"a seat let go of, no waiter announcing again": {err: refusal(sandbox.SeatLost,
 			unannounced(sandbox.ErrSeatNotHeld)), want: queue.OutcomeDefer},
 		"nothing settled while no waiter announces again": {err: fmt.Errorf("%w: its run is not settled",
 			sandbox.ErrUnannounced), want: queue.OutcomeNak},
-		"a wait whose record the store did not take": {err: unrecorded(refusal(waitOwnership,
-			node.ErrSeatNotOwned)), want: queue.OutcomeNak},
-		"a drain whose record the store did not take": {err: unrecorded(refusal(waitDrain, node.ErrDraining)),
-			want: queue.OutcomeDefer},
+		"a wait whose record the store did not take": {err: unrecorded, want: queue.OutcomeNak},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -645,9 +647,9 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 		}
 		return errors.As(err, &refused) && !errors.Is(err, node.ErrSeatBusy)
 	})
-	if refused.Condition != waitDrain || !errors.Is(refused, node.ErrDraining) {
+	if refused.Condition != sandbox.Draining || !errors.Is(refused, node.ErrDraining) {
 		t.Fatalf("a resume on a draining node was refused as %+v, want it waiting on %q "+
-			"with the node's drain as its cause", refused.Refusal, waitDrain)
+			"with the node's drain as its cause", refused.Refusal, sandbox.Draining)
 	}
 	select {
 	case <-drained:

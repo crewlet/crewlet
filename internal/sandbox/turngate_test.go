@@ -19,11 +19,8 @@ import (
 // run exactly as the resume found it, for the seat's next holder.
 
 // errLeaving is the gate's cause in these cases, standing in for the node's
-// own drain sentinel.
+// own drain sentinel; the gate names [Draining] for it, as the engine's does.
 var errLeaving = errors.New("the node is draining")
-
-// conditionDrain is what a refusal for errLeaving waits on.
-const conditionDrain Condition = "drain"
 
 // turnGate is a [TurnGate] a case moves by hand: it refuses while it holds a
 // refusal, and records the route of every resume it is asked about, every
@@ -46,7 +43,7 @@ func (g *turnGate) admit(ctx context.Context, _ string, route ResumeRoute) (cont
 	g.routes = append(g.routes, route)
 	if g.refusing {
 		return nil, nil, &TurnRefused{Cause: errLeaving,
-			Refusal: Refusal{Condition: conditionDrain, Reason: errLeaving.Error()}}
+			Refusal: Refusal{Condition: Draining, Reason: errLeaving.Error()}}
 	}
 	g.granted++
 	var once sync.Once
@@ -264,7 +261,7 @@ func TestARetriedAnswerTheNodeWillNotAdmitWaitsAndSpendsNothing(t *testing.T) {
 		heldDuring = granted == 1 && released == 0
 	}
 	gate.refuse(false)
-	rig.coordinator.Readmit(conditionDrain, "swe")
+	rig.coordinator.Readmit(Draining, "swe")
 	rig.fireRetries()
 	if calls := rig.resumer.calls(); len(calls) != 1 {
 		t.Fatalf("%d resumes once admitted, want 1", len(calls))
@@ -344,11 +341,11 @@ func TestARefusedCompletionIsReFiredWhenItsConditionClears(t *testing.T) {
 
 			gate.refuse(false)
 			rig.coordinator.Readmit("another_condition", "swe")
-			rig.coordinator.Readmit(conditionDrain, "another_seat")
+			rig.coordinator.Readmit(Draining, "another_seat")
 			if released {
 				rig.coordinator.ReleaseSeat("swe")
 			}
-			rig.coordinator.Readmit(conditionDrain, "swe")
+			rig.coordinator.Readmit(Draining, "swe")
 			// THE COORDINATOR'S OWN GOROUTINES, which a re-fire runs on, are
 			// counted in its in-flight group: waited for here, not stopped,
 			// since stopping would cancel a re-fire before it ran.
@@ -481,9 +478,9 @@ func TestASignalWhileTheGateRefusesIsNotLost(t *testing.T) {
 		if first {
 			// The condition clears, and is signalled, between the
 			// refusal and the keep.
-			rig.coordinator.Readmit(conditionDrain, handle)
+			rig.coordinator.Readmit(Draining, handle)
 			return nil, nil, &TurnRefused{Cause: errLeaving,
-				Refusal: Refusal{Condition: conditionDrain, Reason: errLeaving.Error()}}
+				Refusal: Refusal{Condition: Draining, Reason: errLeaving.Error()}}
 		}
 		return ctx, func() {}, nil
 	}

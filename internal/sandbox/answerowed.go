@@ -225,6 +225,25 @@ const SeatCoding Condition = "seat_coding"
 // for a seat this node does hold would leave it deaf to it.
 const SeatLost Condition = "seat_lost"
 
+// Draining is a resume refused because this node is draining and starts no
+// turn: the engine's gate names it ([TurnGate]). Nothing signals its end,
+// because nothing undoes a drain: it ends when the drain hands the seat back,
+// which lets go of what this node keeps for it ([Coordinator.ReleaseSeat]), or
+// when the node stops. So the caller that settles a completion's delivery
+// hands it on to the seat's next holder rather than acknowledging it
+// (internal/engine's controlOutcome), as it hands on [SeatLost], and an
+// answer waiting on it waits for that release.
+//
+// THIS PACKAGE NAMES IT, though only the engine's gate refuses on it, because
+// what it decides is this package's: whether the refusal leaves an
+// acknowledgement owed on the job's record ([Coordinator.oweRefused]). A
+// delivery handed on is never acknowledged, so it owes nothing. Named in the
+// engine alone, a drain's refusal was written on the job's record once per job,
+// a write its deferred delivery never needed, and one the store did not take
+// came back as the store's silence, which the caller handed back to the node
+// that is leaving rather than on.
+const Draining Condition = "drain"
+
 // seatCoding refuses an owed resume on a seat its executor holds for
 // another turn.
 func (c *Coordinator) seatCoding(handle string) (Refusal, bool) {

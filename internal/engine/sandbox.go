@@ -3523,14 +3523,14 @@ const (
 	// and otherwise lifted on the clock when the first is tried again, which
 	// the refusal names (see providerpark.go).
 	waitProvider sandbox.Condition = "provider"
-
-	// waitDrain: this node is draining, and starts no turn. Nothing
-	// signals it, because nothing in the engine undoes a drain
-	// ([Engine.Drain] latches): the wait ends when the drain hands the seat
-	// back, which lets go of the answer for the seat's next holder to
-	// resume ([sandbox.Coordinator.ReleaseSeat]), or when the node stops.
-	waitDrain sandbox.Condition = "drain"
 )
+
+// A draining node's refusal is [sandbox.Draining], which the sandbox package
+// names because it decides whether a refusal leaves an acknowledgement owed:
+// nothing in the engine undoes a drain ([Engine.Drain] latches), so the wait
+// ends when the drain hands the seat back, which lets go of the answer for the
+// seat's next holder to resume ([sandbox.Coordinator.ReleaseSeat]), or when
+// the node stops.
 
 // turnGate is the gate the coordinator resumes through: [Engine.admitResume],
 // wrapped by [Options.resumeGate] where a case in this package set one.
@@ -3572,7 +3572,7 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 		return ctx, release, nil
 	case errors.Is(err, node.ErrDraining):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
-			Condition: waitDrain, Reason: err.Error()}}
+			Condition: sandbox.Draining, Reason: err.Error()}}
 	case errors.Is(err, node.ErrSeatBusy):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
 			Condition: waitSeatBusy, Reason: err.Error()}}
@@ -4157,14 +4157,17 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //     written on the run's row that it owes the completion
 //     ([sandbox.Coordinator.OnEvent]), which a restart or the seat's next
 //     holder re-fires at its recovery; a record the store did not take
-//     reaches this as the store's silence with the refusal behind it, which
-//     is handed back as the node's (below) before the refusal could
-//     acknowledge it, while a drain's behind it is still deferred (next).
-//   - A DRAINING NODE ([waitDrain]) DEFERS: the condition does not clear on this
-//     node, which is leaving, so the attachment is quiesced for the rest of the
-//     drain, as a mailbox's is, and the completion goes back to the head of the
-//     topic for the seat's next holder. It costs one delivery, as every handoff
-//     does, which the delivery budget is sized for.
+//     reaches this as the store's silence alone, which is handed back as the
+//     node's (below), never acknowledged.
+//   - A DRAINING NODE ([sandbox.Draining]) DEFERS: the condition does not
+//     clear on this node, which is leaving, so the attachment is quiesced for
+//     the rest of the drain, as a mailbox's is, and the completion goes back to
+//     the head of the topic for the seat's next holder. It costs one delivery,
+//     as every handoff does, which the delivery budget is sized for, and no
+//     write: a delivery handed on is never acknowledged, so the coordinator
+//     records nothing owed for it, and named here alone the drain's refusal
+//     cost a write per job, and one the store did not take came back as the
+//     store's silence, handed back to the node that is leaving.
 //   - A SEAT THIS NODE HAS LET GO OF ([sandbox.SeatLost]) DEFERS for the same
 //     reason, and it is the condition a person's answer is refused on as well
 //     as a completion: the delivery belongs to the seat's holder. Naked, it
@@ -4275,7 +4278,7 @@ func controlOutcome(ctx context.Context, err error) queue.Result {
 	var refused *sandbox.TurnRefused
 	waits := errors.As(err, &refused) && refused.Condition != ""
 	switch {
-	case waits && refused.Condition == waitDrain:
+	case waits && refused.Condition == sandbox.Draining:
 		return queue.Defer(queue.DeferDraining, err.Error())
 	case waits && refused.Condition == sandbox.SeatLost:
 		return queue.Defer(queue.DeferSeatMoved, err.Error())
