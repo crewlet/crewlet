@@ -46,7 +46,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"hostboxtest": true, "httpjson": true, "httprelay": true, "httpx": true, "httpxtest": true, "iam": true,
 		"iamapi": true, "iamdomain": true, "inbox": true, "insights": true, "integration": true, "notice": true, "issuereport": true,
 		"integrationtest": true, "jetstream": true, "jetstreamtest": true,
-		"jira": true, "jsapi": true, "jsapitest": true, "jsinflight": true, "jsoncarry": true, "jsonform": true,
+		"jira": true, "jsapi": true, "jsapitest": true, "jsinflight": true, "jsoncarry": true, "jsonform": true, "jsonscan": true,
 		"jsprovision": true, "jwks": true, "kept": true, "keyset": true,
 		"knowledge": true, "kv": true, "kvtest": true,
 		"learning": true, "ledger": true, "ledgerfit": true, "ledgerstore": true,
