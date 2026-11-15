@@ -679,13 +679,14 @@ What follows are the prerequisites that legitimately vary by machine.
   bundle](#a-dashboard-bump-brings-its-own-bundle).
 
   **Which node.** CI installs `latest` (the newest Node release, resolved by
-  setup-node when the job runs) in the `dashboard` job, the race shards, the
-  `end-to-end gates` shards and
+  setup-node when the job runs) in the `dashboard gates` job and the
+  `dashboard unit` shards (one step, which the shards reuse), the race shards,
+  the `end-to-end gates` shards and
   [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)'s
-  `build` job. The last must always answer this the same way as `dashboard`,
-  because it rebuilds the bundle that job diffs. The two sets of shards need
-  not match either: what they run under plain node is a committed file (the
-  plugin, the built bundle), not a fresh build.
+  `build` job. The last must always answer this the same way as `dashboard
+  gates`, because it rebuilds the bundle that job diffs. The two sets of Go
+  shards need not match either: what they run under plain node is a committed
+  file (the plugin, the built bundle), not a fresh build.
 
   **Nothing in this repository names a node version**, and that is a decision
   rather than an oversight. A pin earns its keep by being maintained, and
@@ -697,10 +698,10 @@ What follows are the prerequisites that legitimately vary by machine.
   version steady — it just goes quietly out of date while looking deliberate.
 
   The cost is worth knowing before you hit it: a new Node major reaches CI
-  with no commit behind it, so the `dashboard` job can go red on a day nobody
+  with no commit behind it, so the `dashboard` check can go red on a day nobody
   changed anything. If that happens, the fix is `lts/*` in `ci.yml`'s
-  `dashboard` job and in `dependabot-dashboard.yml`'s `build` job, in the same
-  commit — the current LTS, which lags the newest major and is the same
+  `dashboard gates` job and in `dependabot-dashboard.yml`'s `build` job, in
+  the same commit — the current LTS, which lags the newest major and is the same
   zero-maintenance trade — not a hand-maintained number.
 
   **Do not add `engines` or `devEngines` to `dashboard/package.json`**, however
@@ -1251,7 +1252,7 @@ worth knowing:
 - **A dashboard bump that changes the emitted bytes needs a rebuilt bundle, and
   gets one.** The build's output is committed (`static/dashboard`,
   `static/artifacts` and `static/protocol`, the Makefile's `UI_OUT`) and the
-  `dashboard` job rebuilds and diffs it, but Dependabot edits only
+  `dashboard gates` job rebuilds and diffs it, but Dependabot edits only
   `package.json` and the lockfile — it cannot run a bundler — so such a bump
   used to sit red on that gate until someone ran `make dashboard` and pushed
   the output onto its branch.
@@ -1428,8 +1429,8 @@ merge command on any diff that touches
 
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)
 runs when Dependabot opens or updates a pull request that touches `dashboard/`.
-It does what the failing `dashboard` job tells a person to do — `make dashboard`
-— and, if any tree the build writes came out different, commits the result onto
+It does what the failing `dashboard gates` job tells a person to do — `make
+dashboard` — and, if any tree the build writes came out different, commits the result onto
 Dependabot's branch as `build(dashboard): rebuild the bundle for this dependency
 bump`, signed off like every other commit. ci.yml then runs on that new head and
 the drift gate that failed on the first commit passes on the second. A bump that
