@@ -245,6 +245,13 @@ export interface AccessOptions {
   grants?: AccessGrantEntry[];
   /** The entries a grant's scope may name (the zones the company's agents reach). */
   grant_scope?: string[];
+  /**
+   * Where a scoped grant naming no entry applies ("every zone the company's
+   * agents reach", "the agent's own projects"), in the lane's own words.
+   */
+  grant_whole?: string;
+  /** Where a grant on the whole connection applies ("the account", "the Organization"). */
+  grant_account?: string;
 }
 
 /** What the company document asks for one seat on one lane. */

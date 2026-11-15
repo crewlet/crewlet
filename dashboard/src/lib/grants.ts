@@ -69,8 +69,34 @@ export function grantEntry(lane: AccessOptions, permission: string): AccessGrant
   return lane.grants?.find((e) => e.id === permission);
 }
 
-/** Where a grant applies, in words: its zones, or its whole reach by its kind. */
+/** A phrase as a label starts it: its first letter a capital. */
+function capital(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Where a grant naming no scope entry applies, in the lane's own words: the
+ * whole connection for an account permission ("the account", "the
+ * Organization"), else the lane's whole reach ("every zone the company's
+ * agents reach", "the agent's own projects").
+ */
+export function grantWhole(lane: AccessOptions, entry: AccessGrantEntry | undefined): string {
+  if (entry?.scope_kind === "account") return lane.grant_account ?? "the account";
+  return lane.grant_whole ?? `every ${entry?.scope_kind ?? "entry"} the company's agents reach`;
+}
+
+/** What a lane's scope entries are, as a picker labels them: "Zones", "Projects". */
+export function scopeKindLabel(kind: string): string {
+  return `${capital(kind)}s`;
+}
+
+/** One scope entry as a person reads it: the vendor's name for it, else its identifier. */
+export function grantScopeLabel(lane: AccessOptions, id: string): string {
+  return lane.scope_names?.[id] ?? id;
+}
+
+/** Where a grant applies, in words: its entries by name, or its whole reach in the lane's words. */
 export function grantReach(lane: AccessOptions, g: AccessGrant): string {
-  if (g.scope && g.scope.length > 0) return andList(g.scope);
-  return grantEntry(lane, g.permission)?.scope_kind === "account" ? "The account" : "Every zone";
+  if (g.scope && g.scope.length > 0) return andList(g.scope.map((id) => grantScopeLabel(lane, id)));
+  return capital(grantWhole(lane, grantEntry(lane, g.permission)));
 }

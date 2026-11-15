@@ -913,5 +913,7 @@ test("a grant is part of a seat's draft, with its length from now and its words"
   expect(grantExpiry(g, now)).toBe("Expires in 4h");
   expect(grantExpiry(g, now + 5 * 3_600_000)).toBe("Expired");
   expect(grantExpiry({ ...g, expires_at: undefined }, now)).toBe("Permanent");
-  expect(grantReach(lane, { ...g, scope: undefined })).toBe("Every zone");
+  expect(grantReach(lane, { ...g, scope: undefined })).toBe(
+    "Every zone the company's agents reach",
+  );
 });
