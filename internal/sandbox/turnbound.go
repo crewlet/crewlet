@@ -35,12 +35,13 @@ import (
 //     and anything that would make it wait or retry ends it instead
 //     ([Coordinator.completeAtDeadline], [Coordinator.endAtDeadline]).
 //   - THE RESUME GIVE-UP ([ResumeGiveUp], [MinResumeFailures]), for every
-//     turn, capped or not. A resume that FAILS (not one that waits) is
-//     counted onto the job's record and, once it has failed that often for
-//     that long, the run is settled ([Coordinator.resumeGivenUp]). Uncounted,
-//     each poll's announcement was a fresh delivery with a fresh budget, so a
-//     resume that always failed was retried every poll for as long as the
-//     engine ran.
+//     turn, capped or not. A resume that FAILS for a reason of the run's own
+//     (not one that waits, and not one the node or its infrastructure
+//     failed) is counted onto the job's record and, once it has failed that
+//     often for that long, the run is settled ([Coordinator.resumeGivenUp]).
+//     Uncounted, each poll's announcement was a fresh delivery with a fresh
+//     budget, so a resume that always failed was retried every poll for as
+//     long as the engine ran.
 //
 // A WAIT ON A CONDITION is not bounded here for a turn with no deadline: the
 // condition names when it lifts, or the event that lifts it, and the seat
@@ -173,6 +174,16 @@ func deadlineDetail(deadline time.Time, delivered []string, elided int) string {
 // handled, and reports whether it did. The run's other failures are on its
 // job's record ([LaunchRecord.ResumeFailures]), so the count holds across
 // nodes and restarts.
+//
+// ONLY THE RUN'S OWN FAILURES COUNT ([Coordinator.runsOwnFailure]), and its
+// caller asks before it asks this. A resume the node or its infrastructure
+// failed (a coordination store that did not answer the read of where the
+// turn's writes are minted, a full disk, a stop that cut it short) is handed
+// back as any failure is, and comes round again when the poll announces the
+// job, but it is no evidence that the turn cannot be re-entered: counted, an
+// outage of half an hour ended every run whose job finished during it, the
+// work it reviewed thrown out with the run, though the next attempt after the
+// outage would have resumed it.
 func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now time.Time, cause error) bool {
 	attempts := run.Launch.ResumeFailures + 1
 	since := run.Launch.ResumeFailingSince
@@ -195,4 +206,11 @@ func (c *Coordinator) resumeGivenUp(ctx context.Context, run PendingRun, now tim
 	}
 	c.settleNoted(ctx, run, note)
 	return true
+}
+
+// runsOwnFailure reports whether err, a resume's failure, is the run's own,
+// which the give-up counts ([Coordinator.resumeGivenUp]), rather than the
+// node's or its infrastructure's ([CoordinatorOptions.NodesFailure]).
+func (c *Coordinator) runsOwnFailure(ctx context.Context, err error) bool {
+	return c.nodesFailure == nil || !c.nodesFailure(ctx, err)
 }

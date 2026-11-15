@@ -833,7 +833,13 @@ collect; and a run no build will resume is settled before its turn begins
 ([When a run does not start](code-sandbox.md#when-a-run-does-not-start)).
 Every other resume failure still un-claims and comes back, because the run's
 collected work is the expensive thing there and a resume whose record shows no
-act, and that a retry may get past, has lost nothing by trying again.
+act, and that a retry may get past, has lost nothing by trying again. A resume
+that keeps failing for a reason of the run's own ends its run once it has failed
+three times over half an hour (`resume_failing`); one the node or what it runs
+on failed (a coordination store, a state log, a store or a disk that did not
+answer, a queue no longer live, a stop that cut it short) counts nothing toward
+that, by the same answer that hands such a failure back as the node's rather
+than the message's, so an outage ends no run whose job finished during it.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:
 two nodes that both run one partition — possible if a turn outlives the

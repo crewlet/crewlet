@@ -1644,12 +1644,14 @@ func nakFailure(ctx context.Context, err error) queue.Result {
 // nodesFailure reports whether err, the failure of a delivery a seat was
 // handed, is THIS NODE'S OWN or its infrastructure's rather than the work's:
 // the one answer both handlers of a seat's deliveries NAK by, its mailbox's
-// ([nakFailure]) and its sandbox control topic's ([controlOutcome]). One
-// answer, because the same failure reaches both: a turn and a resumed turn
-// read where their writes are minted from the same coordination store
-// ([rebaseFor]), and a copy of the rule at each handler had already let the
-// control topic count that read's outage against the message while the
-// mailbox kept it out of the poison.
+// ([nakFailure]) and its sandbox control topic's ([controlOutcome]), and the
+// one the sandbox coordinator counts a failed resume toward the give-up that
+// ends its run by ([sandbox.CoordinatorOptions.NodesFailure]): only the run's
+// own failures count. One answer, because the same failure reaches all
+// three: a turn and a resumed turn read where their writes are minted from
+// the same coordination store ([rebaseFor]), and a copy of the rule at each
+// handler had already let the control topic count that read's outage against
+// the message while the mailbox kept it out of the poison.
 //
 // The node's, in four ways:
 //   - THE QUEUE TELLS IT AS THE NODE'S ([queue.NodeFault]): a broker that did

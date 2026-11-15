@@ -3075,8 +3075,12 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 	opts := sandbox.CoordinatorOptions{
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
 		FailureKind: runner.ErrorKind,
-		Resume:      &resumer{engine: e},
-		Account:     e.sandboxAccountant(),
+		// A resume this node or its infrastructure failed is handed back
+		// uncounted toward the give-up that ends a run, by the answer the
+		// seat's deliveries are NAKed by ([nodesFailure]).
+		NodesFailure: nodesFailure,
+		Resume:       &resumer{engine: e},
+		Account:      e.sandboxAccountant(),
 		// Who a parked question is put to, resolved against the live
 		// chart at the park — see audience.go.
 		Audience: audienceResolver{engine: e},

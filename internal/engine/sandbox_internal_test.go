@@ -1041,6 +1041,44 @@ func (e *Engine) useSandbox(pending sandbox.PendingStore, coordinator *sandbox.C
 	e.sandbox.Store(&sandboxRuntime{pending: pending, coordinator: coordinator})
 }
 
+// THE COORDINATOR COUNTS A FAILED RESUME TOWARD ITS GIVE-UP BY THE ANSWER THE
+// SEAT'S DELIVERIES ARE NAKED BY (nodesFailure): a resume the coordination
+// store, the queue or a stop failed is the node's, and ends no run, while one
+// the run itself failed, a deadline among them, is counted. Unwired, every
+// failure is the run's, and half an hour of an outage ends every run whose job
+// finished during it.
+//
+// Mutation: leave NodesFailure off the coordinator's options, or hand it any
+// answer but nodesFailure's, and a row goes red.
+func TestTheEnginesCoordinatorCountsOnlyTheRunsOwnFailures(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e := &Engine{backends: &Backends{Queue: queuememory.New()}, answers: testAnswers()}
+	opts := e.coordinatorOptions(nil, nil)
+	if opts.NodesFailure == nil {
+		t.Fatal("the coordinator is built with no answer to whose a failed resume is")
+	}
+	for name, tc := range map[string]struct {
+		err   error
+		nodes bool
+	}{
+		"a coordination store that did not answer": {err: fmt.Errorf("engine: read the rebase: %w: "+
+			"nats: timeout", coord.ErrUnavailable), nodes: true},
+		"a step the coordination store was silent on": {err: fmt.Errorf("%w: sandbox: read run t1",
+			sandbox.ErrStoreSilent), nodes: true},
+		"a resume that ran past its deadline": {err: fmt.Errorf("runner: %w", context.DeadlineExceeded)},
+		"the run's own":                       {err: errors.New("the turn could not be re-entered")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := opts.NodesFailure(ctx, tc.err); got != tc.nodes || got != nodesFailure(ctx, tc.err) {
+				t.Errorf("the coordinator reads %v as the node's = %v, want %v, as nodesFailure does",
+					tc.err, got, tc.nodes)
+			}
+		})
+	}
+}
+
 // THE ENGINE'S COORDINATOR HOLDS THIS PROCESS'S TAKER LEASE IN THE NODE'S LEASE
 // STORE, AND GIVES IT BACK ONLY AS THE SANDBOX STOPS. Every capture the
 // coordinator begins names the lease it holds, and a wait for a capture another

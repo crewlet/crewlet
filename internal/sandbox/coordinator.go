@@ -435,6 +435,18 @@ type CoordinatorOptions struct {
 	// leaves the word unsaid.
 	FailureKind func(error) string
 
+	// NodesFailure reports whether a resume's failure is the node's own or
+	// its infrastructure's rather than the run's: a coordination store, a
+	// state log, a store or a disk that did not answer, a queue no longer
+	// live, a resume this node's stop cut short. Such a failure is handed
+	// back as any other, but it is not counted toward the give-up that ends
+	// the run ([Coordinator.resumeGivenUp]): an outage of half an hour says
+	// nothing about whether the run's turn can be re-entered, and counted, it
+	// ended every run whose job finished during one. The classification sits
+	// above this package (internal/engine's nodesFailure, the one its seat's
+	// deliveries are NAKed by); nil counts every failure as the run's.
+	NodesFailure func(context.Context, error) bool
+
 	// Resume re-enters a suspended turn. Required: every node that builds a
 	// coordinator runs the engine whose seats a completion resumes into,
 	// and [NewCoordinator] refuses one without it.
@@ -985,6 +997,8 @@ type CoordinatorOptions struct {
 type Coordinator struct {
 	// failureKind is [CoordinatorOptions.FailureKind].
 	failureKind func(error) string
+	// nodesFailure is [CoordinatorOptions.NodesFailure].
+	nodesFailure func(context.Context, error) bool
 
 	queue   Publisher
 	pending PendingStore
@@ -1268,6 +1282,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager, failureKind: opts.FailureKind,
 		resume: opts.Resume, pushes: opts.Pushes, account: opts.Account, audience: opts.Audience,
+		nodesFailure: opts.NodesFailure,
 		answers:      opts.Answers,
 		leads:        opts.Leads,
 		condense:     opts.Condense,
@@ -4364,11 +4379,11 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 				"turn_id", run.TurnID, "revert_to", claimedFrom(run),
 				"attempt", run.Launch.ResumeFailures+1, "error", err.Error())
 		}
-		// A FAILURE IS COUNTED AND BOUNDED, a wait is not: see
-		// [Coordinator.resumeGivenUp]. A completion's only, for the reason
-		// the deadline above gives.
+		// A FAILURE IS COUNTED AND BOUNDED, a wait is not, and nor is a
+		// failure of the node's own: see [Coordinator.resumeGivenUp]. A
+		// completion's only, for the reason the deadline above gives.
 		var failed failure
-		if !refused && !claimedAnswer(run) {
+		if !refused && !claimedAnswer(run) && c.runsOwnFailure(ctx, err) {
 			now := c.now()
 			if c.resumeGivenUp(ctx, run, now, err) {
 				return AnswerConsumed, nil

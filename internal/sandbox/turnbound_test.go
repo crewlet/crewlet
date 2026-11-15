@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -240,6 +241,55 @@ func TestAResumeThatKeepsFailingIsGivenUp(t *testing.T) {
 	ended, _ := rig.ending("t1", types.ExecutorFailureResumeFailing)
 	if want := "kind of: the turn could not be re-entered"; ended.ErrorKind != want {
 		t.Errorf("ErrorKind = %q, want %q", ended.ErrorKind, want)
+	}
+}
+
+// A RESUME THE NODE FAILED IS NOT THE RUN'S FAILURE, and counts nothing toward
+// the give-up. Half an hour of a coordination store that did not answer the
+// read of where the turn's writes are minted failed every attempt, and
+// counted, it ended a run whose job had finished, though the first attempt
+// after the outage would have resumed it. The failure is handed back as any
+// failure is, and the run waits on; the run's own failure after the outage is
+// still counted, from one.
+//
+// Mutation: count every failure that is not a wait, whatever
+// CoordinatorOptions.NodesFailure says, and the third attempt, half an hour
+// in, ends the run.
+func TestAResumeTheNodeFailedIsNotCountedTowardItsGiveUp(t *testing.T) {
+	t.Parallel()
+	outage := errors.New("coordination store unavailable: nats: timeout")
+	rig := newCoordRigWith(t, func(opts *CoordinatorOptions) {
+		opts.NodesFailure = func(_ context.Context, err error) bool { return errors.Is(err, outage) }
+	})
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.failWith(fmt.Errorf("engine: read the rebase: %w", outage))
+
+	attempt := func() error {
+		payload, ev := rig.completion("t1")
+		return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	}
+	for i, after := range []time.Duration{0, 20 * time.Minute, 11 * time.Minute, 5 * time.Minute} {
+		rig.now = rig.now.Add(after)
+		if err := attempt(); err == nil {
+			t.Fatalf("failure %d was not handed back for a retry", i+1)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || got.Launch.ResumeFailures != 0 {
+			t.Fatalf("after the node's failure %d, thirty-six minutes at most into the outage, the row "+
+				"is %s with %d failures counted, want it running with none", i+1, got.Status,
+				got.Launch.ResumeFailures)
+		}
+	}
+	if rig.gone("t1") || len(rig.failures()) != 0 {
+		t.Fatalf("a run whose resume only the node failed was ended: failures %+v", rig.failures())
+	}
+	rig.resumer.failWith(errors.New("the turn could not be re-entered"))
+	if err := attempt(); err == nil {
+		t.Fatal("the run's own failure was not handed back for a retry")
+	}
+	if got := rig.get("t1"); got.Launch.ResumeFailures != 1 {
+		t.Fatalf("the run's own failure after the outage counted %d, want 1", got.Launch.ResumeFailures)
 	}
 }
 
