@@ -270,9 +270,9 @@ func (b *Broker) Client(opts ...Option) *Queue {
 // on every client: Publish, Subscribe, SubscribeBatch, EnsureSubscription,
 // DeleteSubscription, ListSubscriptions, SubscribeStream, Serve, Ask, Broadcast,
 // Listen and the three dead-letter verbs. The verbs about a client's OWN
-// attachments (Quiesce, Unquiesce, Detach, PauseTopic, ResumeTopic) still
-// answer, because on the broker this twin stands for they are the client's own
-// state and touch no server, and a node
+// attachments (Quiesce, Unquiesce, Detach, Attachment, PauseTopic,
+// ResumeTopic) still answer, because on the broker this twin stands for they
+// are the client's own state and touch no server, and a node
 // that cannot prove it owns a seat quiesces it on exactly the outage this
 // models. Nothing is delivered, and no client is stopped by it: a queue whose
 // broker went away is still live, which is the difference between

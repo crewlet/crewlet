@@ -1327,7 +1327,7 @@ func listErr(_ []queue.Subscription, err error) error { return err }
 // lifecycleVerbs sends every publish, subscription, attachment, ephemeral and
 // dead-letter verb once and reports what each answered.
 //
-// ALL TWENTY-ONE, in one list, because the property under test is that they AGREE
+// ALL TWENTY-TWO, in one list, because the property under test is that they AGREE
 // — a helper that took a subset would be certifying the subset the author
 // happened to think of, which is exactly how nine of them went unsent.
 //

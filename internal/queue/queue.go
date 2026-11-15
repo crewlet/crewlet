@@ -523,7 +523,7 @@ var ErrNotLive = errors.New("queue: not live")
 // addressed, a leader mid-election among them — did not reply within the
 // client's own time.
 //
-// A CONDITION, and the only one of the three sentinels that is: the same call
+// A CONDITION, and the only one of the four sentinels that is: the same call
 // made again once the connection is back may succeed, so a caller answers it
 // as it answers any wait that clears — later, or with "try again shortly" —
 // and never as a fault of this node, which it is not. Each backend wraps its
