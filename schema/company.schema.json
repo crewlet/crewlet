@@ -4220,6 +4220,16 @@
             "null"
           ]
         },
+        "grants": {
+          "description": "AWS managed policies, by ARN, this agent's role holds beside its level, each still held to the seat boundary, added on the Agents tab or by approving the agent's request.",
+          "items": {
+            "$ref": "#/$defs/SeatGrant"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "level": {
           "description": "read (the default): describe and list compute, networking, containers, functions, databases, DNS and CDN, read metrics and CloudWatch Logs, and list object names, with no object, parameter or secret contents. operate: read plus starting, stopping, rebooting and scaling, invoking functions, invalidating the CDN, editing alarms and reading and writing S3 objects. administer: operate plus managing those services whole, which can leave access behind such as key pairs, user data and bucket policies.",
           "enum": [
@@ -4644,6 +4654,16 @@
             "null"
           ]
         },
+        "grants": {
+          "description": "Google Cloud roles this agent's account holds beside its level, each on some projects (its own projects where it names none) whose grants list names the role, added on the Agents tab or by approving the agent's request.",
+          "items": {
+            "$ref": "#/$defs/SeatGrant"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "level": {
           "description": "viewer (the default): read the project, Compute, GKE, Cloud Run, Cloud SQL, DNS, buckets, metrics and logs, and call Google's MCP tools. operator: viewer plus restarting and scaling VMs, pods and Cloud SQL, running Cloud Run jobs, editing alerting and reading and writing Cloud Storage objects. administer: operator plus managing VMs, networks, firewalls, clusters, Cloud SQL, DNS and buckets, which can leave access behind; granting it needs a fresh sign-in.",
           "enum": [
@@ -5045,6 +5065,16 @@
           "type": [
             "boolean",
             "string",
+            "null"
+          ]
+        },
+        "grants": {
+          "description": "Scaleway permission sets this agent's policy holds beside its level, each on some projects (its own projects where it names none) or the Organization, added on the Agents tab or by approving the agent's request.",
+          "items": {
+            "$ref": "#/$defs/SeatGrant"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
