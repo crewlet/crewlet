@@ -74,7 +74,8 @@ describe("file storage", () => {
     ).toBeTruthy();
     expect(screen.getByText("1,828 named, none missing")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
+    // No notice: the store row's copy control keeps an empty status of its own.
+    expect(screen.queryAllByRole("status").filter((s) => s.textContent)).toEqual([]);
   });
 
   test("files that cannot be read are an alert naming each file and what was found of it", () => {
@@ -111,10 +112,10 @@ describe("file storage", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/deleted nothing/)).toBeNull();
     // A REFUSED SWEEP is said beside the collection, with what the identity lacks.
-    expect(screen.getByRole("status").textContent).toContain(
-      "Unfinished uploads couldn’t be cleared",
-    );
-    expect(screen.getByRole("status").textContent).toContain("s3:ListBucketMultipartUploads");
+    const sweep = screen
+      .getAllByRole("status")
+      .find((s) => s.textContent?.includes("Unfinished uploads couldn’t be cleared"));
+    expect(sweep?.textContent).toContain("s3:ListBucketMultipartUploads");
     // No audit has ended: the row says so rather than drawing a zero.
     expect(screen.getByText("Not run yet")).toBeTruthy();
   });

@@ -86,11 +86,18 @@ test("draws each group as a table named by its card, in the engine's order", asy
   expect(screen.getByRole("table", { name: "Schedules" })).toBeDefined();
 });
 
-test("each cap carries its name, its key, its value and its source", async () => {
+test("each cap carries its name, its key to copy, its value and its source", async () => {
   await show(LIMITS);
   const turn = screen.getByRole("table", { name: "Guardrails on every turn" });
   const changed = within(turn).getByRole("row", { name: /Tool rounds on a first turn/ });
-  expect(within(changed).getByText("turn_engine.onboarding_max_tool_rounds")).toBeDefined();
+  // THE KEY BEHIND THE ROW'S COPY CONTROL (kit 0.128.2), never a line of the
+  // document's spelling under the name.
+  expect(
+    within(changed).getByRole("button", {
+      name: "Copy the setting's key, turn_engine.onboarding_max_tool_rounds",
+    }),
+  ).toBeDefined();
+  expect(within(changed).queryByText("turn_engine.onboarding_max_tool_rounds")).toBeNull();
   expect(
     within(changed)
       .getAllByRole("cell")
@@ -203,7 +210,12 @@ test("a cap is checked by the engine, then saved as a patch of its one key", asy
   // this node applied, which is still the value before.
   const row = screen.getByRole("row", { name: /Review rounds per turn/ });
   expect(within(row).getByText("5")).toBeTruthy();
-  expect(within(row).getByRole("status").textContent).toBe("applying…");
+  // THE ROW'S OWN MARK, beside the key's copy control and its (empty) status.
+  expect(
+    within(row)
+      .getAllByRole("status")
+      .map((s) => s.textContent),
+  ).toContain("applying…");
   expect(screen.queryByRole("textbox")).toBeNull();
 });
 
@@ -236,7 +248,11 @@ test("the applying mark goes once this node applied the revision", async () => {
   expect(asked.filter((q) => q === "limits").length).toBeGreaterThan(before);
   const row = screen.getByRole("row", { name: /Review rounds per turn/ });
   expect(within(row).getByText("5")).toBeTruthy();
-  expect(within(row).queryByRole("status")).toBeNull();
+  expect(
+    within(row)
+      .getAllByRole("status")
+      .filter((s) => s.textContent),
+  ).toEqual([]);
   expect(within(row).getByText("Changed from 3")).toBeTruthy();
 });
 
@@ -325,7 +341,8 @@ test("what is typed is held to the cap's unit before any request", async () => {
 test("the engine's constant has no pencil", async () => {
   await show(LIMITS);
   const row = screen.getByRole("row", { name: /A scheduled turn's time limit/ });
-  expect(within(row).queryByRole("button")).toBeNull();
+  // No pencil; the key's copy control is the row's only button.
+  expect(within(row).queryByRole("button", { name: /^Change / })).toBeNull();
 });
 
 // NEVER HIDDEN: a reader who cannot write the document sees every pencil,
