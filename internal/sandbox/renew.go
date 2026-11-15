@@ -138,8 +138,10 @@ import (
 // the seat before that signal left the job with nothing to announce it for as
 // long as that host's store was silent. And WITH NO RESTART AND NO SEAT MOVE,
 // the keep re-fires itself at its refusal's instant, no later than
-// [answerWaitBackstop] unless this node holds it off itself until that instant,
-// and at the backstop where it names none ([Coordinator.keepLocked]), as a
+// [answerWaitBackstop] unless this node holds it off itself until that instant
+// (whose backstop before it asks only whether its turn's deadline has passed,
+// and ends the run if so, [Coordinator.recheckHeld]), and at the backstop where
+// it names none ([Coordinator.keepLocked]), as a
 // recovery's re-arm and a re-fire that settled nothing do
 // ([Coordinator.keepAgain]): a condition that lifts on the clock with no edge
 // (a lease merely stale, a provider's limit at its instant) left the kept

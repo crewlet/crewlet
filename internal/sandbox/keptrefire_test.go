@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -134,15 +136,19 @@ func TestAKeptCompletionIsReFiredWithoutASignal(t *testing.T) {
 // limit every five minutes until the instant. Armed for the instant, it comes
 // once, when the limit lifts with nothing to signal it.
 //
-// Mutation: arm a held completion's re-fire no later than the backstop, as
-// the gate's own refusals are, and the job is resumed again five minutes on,
-// into the same limit.
+// Its timer fires at each backstop before the instant, and re-fires nothing
+// there (TestAHeldCompletionPastItsDeadlineEndsWithinTheBackstop), so the case
+// runs on the bubble's clock, which every one of those reads.
+//
+// Mutation: re-fire a held completion no later than the backstop, as the
+// gate's own refusals are, and the job is resumed again five minutes on, into
+// the same limit.
 func TestACompletionHeldHereIsReFiredAtItsInstantAndNeverSooner(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		rig := newCoordRigWith(t, func(o *CoordinatorOptions) { o.After = nil })
+		rig := bubbleRig(t)
 		const lifts = 4 * answerWaitBackstop
-		limitedAfterClaim(t, rig, rig.now.Add(lifts))
+		limitedAfterClaim(t, rig, time.Now().Add(lifts))
 		// PAST EVERY BACKSTOP, a second short of the instant: still held,
 		// and nothing resumed into the limit again.
 		time.Sleep(lifts - time.Second)
@@ -582,6 +588,81 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != time.Hour {
 			t.Fatalf("after a stop whose lift the store did not answer the re-fires armed = %v; want the held "+
 				"completion still kept, its re-fire at the hold's instant", delays)
+		}
+	})
+}
+
+// bubbleRig is a rig whose coordinator reads the clock of the synctest bubble
+// it is made in, and arms its timers on it, its run store reading the instant
+// the bubble began: a case whose subject is what the coordinator does as that
+// clock moves.
+func bubbleRig(t *testing.T) *coordRig {
+	t.Helper()
+	rig := newCoordRigWith(t, func(o *CoordinatorOptions) { o.After, o.Now = nil, time.Now })
+	rig.now = time.Now()
+	return rig
+}
+
+// A HELD COMPLETION PAST ITS TURN'S DEADLINE ENDS WITHIN THE BACKSTOP. A
+// completion whose resume met a limit after its claim is held here until the
+// limit's instant, and its own re-fire waits for that instant. But past its
+// turn's deadline nothing waits: an announcement then ends the run. Where no
+// waiter announces the job (these rigs run none, as a host whose store is
+// silent announces nothing), nothing asked, and the turn whose deadline passed
+// waited for the hold's instant, up to the hour a vendor's window is benched
+// for. So the held keep's backstop asks what an announcement asks: before the
+// deadline it keeps the hold, resuming nothing, and arms the next backstop;
+// past it, the run is ended.
+//
+// Mutation: arm a held completion's timer for its instant alone, and the run
+// is still held past its deadline and a backstop; re-fire it at the backstop
+// instead of asking, and it is resumed into the limit; ask without arming the
+// next backstop, or without asking for the deadline, and the run is never
+// ended.
+func TestAHeldCompletionPastItsDeadlineEndsWithinTheBackstop(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		rig := bubbleRig(t)
+		const deadline = answerWaitBackstop + 2*time.Minute
+		gated(rig)
+		rig.launchUntil("t1", time.Now().Add(deadline))
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(Result{Success: true, Text: "checked the monitors"})
+		rig.resumer.failWith(&TurnRefused{Cause: errors.New("llm chain exhausted: usage limit"),
+			Refusal: Refusal{Condition: conditionLimit, Reason: "provider limit: default",
+				Until: time.Now().Add(time.Hour)}})
+		rig.resumer.failsInTurn = true
+		payload, ev := rig.completion("t1")
+		var refused *TurnRefused
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); !errors.As(err, &refused) {
+			t.Fatalf("the premise: OnCompleted = %v; want the resume's refusal", err)
+		}
+		if _, held := rig.coordinator.stillRefused(payload); !held {
+			t.Fatal("the premise: the completion is not held here")
+		}
+		// A BACKSTOP ON, SHORT OF THE DEADLINE: still held, nothing resumed into
+		// the limit again, the run running.
+		time.Sleep(answerWaitBackstop + time.Second)
+		synctest.Wait()
+		if _, held := rig.coordinator.stillRefused(payload); !held {
+			t.Fatal("the backstop before the deadline dropped the hold; want it kept")
+		}
+		if begun := rig.resumer.turnsBegun(); begun != 1 || rig.gone("t1") {
+			t.Fatalf("by the first backstop %d resumed turns began (run gone %v); want only the one that met "+
+				"the limit, the run held", begun, rig.gone("t1"))
+		}
+		// THE DEADLINE PASSES with nothing announcing the job: ended by the next
+		// backstop, never resumed.
+		// (A backstop and a second slept already: a deadline more is a
+		// backstop and a second past it.)
+		time.Sleep(deadline)
+		synctest.Wait()
+		if !rig.gone("t1") || !rig.endedWith("t1", types.ExecutorFailureDeadline) {
+			t.Fatalf("a backstop past the deadline the held run is not ended at its deadline: failures %+v",
+				rig.failures())
+		}
+		if begun := rig.resumer.turnsBegun(); begun != 1 {
+			t.Fatalf("%d resumed turns began; want only the one that met the limit", begun)
 		}
 	})
 }

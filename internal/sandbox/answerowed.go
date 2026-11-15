@@ -318,7 +318,10 @@ type Admission func(ctx context.Context, handle string) (refusal Refusal, refuse
 // node holds off itself until an instant, which every announcement before it
 // would meet refused here, and one whose resume its run's row holds until an
 // instant, whose claim the store refuses before it: each one's re-fire waits
-// for that instant ([Coordinator.keptRefireIn]).
+// for that instant ([Coordinator.keptRefireIn]). The first still has its
+// backstop before the instant, which re-fires nothing and asks only whether
+// its turn's deadline has passed, as an announcement would
+// ([Coordinator.recheckHeld]).
 const answerWaitBackstop = 5 * time.Minute
 
 // Reply is a delivery offered to a parked run as the answer to its question.

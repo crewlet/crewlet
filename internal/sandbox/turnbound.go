@@ -119,7 +119,10 @@ func (c *Coordinator) pastDeadline(ctx context.Context, ev types.ExecutorFinishe
 // completion the gate refuses, or one this node holds off after its resume met
 // a limit, waits for the condition to clear, because the turn still has time
 // to review its job. After it, the wait is time the turn does not have, spent
-// holding the seat.
+// holding the seat. Asked by an announcement of the job, or, for one this node
+// holds off itself where no waiter announces it, by that hold's own backstop
+// ([Coordinator.recheckHeld]), so a deadline that passes while nothing
+// announces the job still ends the run within the backstop.
 //
 // No turn starts here, which is why no admission is asked: the claim, the
 // collection and the ending are the run's, and none of them is a turn.
