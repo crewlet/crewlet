@@ -13,10 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// cloudflareView is a Cloudflare lane offer read at readAt: its levels, the
-// lane's words for a grant's reach, and a catalogue of five groups. DNS Read is
-// in the Read level; Zone Settings Write in Configure; Origin Rules: Edit is
-// one the provisioner token does not hold.
+// cloudflareView is a Cloudflare offer: DNS Read in Read, Zone Settings Write in
+// Configure, Origin Rules: Edit lacking at the connection.
 func cloudflareView(readAt time.Time) seataccess.Options {
 	return seataccess.Options{Lane: seataccess.LaneCloudflare, Live: true, ReadAt: readAt,
 		Levels: []seataccess.Level{{ID: "read", Name: "Read"}, {ID: "operate", Name: "Operate"},
@@ -37,8 +35,7 @@ func cloudflareView(readAt time.Time) seataccess.Options {
 		GrantWhole: "every zone the company's agents reach", GrantAccount: "the account"}
 }
 
-// cloudflareAnswer is one SRE on Cloudflare's Read level holding grants, as the
-// access route answers it.
+// cloudflareAnswer is one SRE on Cloudflare, as the access route answers it.
 func cloudflareAnswer(offer seataccess.Options, want seataccess.Desired,
 	have seataccess.Observed) seataccess.Answer {
 	return seataccess.Answer{Kind: integration.KindCloudflare, Options: []seataccess.Options{offer},
@@ -47,32 +44,24 @@ func cloudflareAnswer(offer seataccess.Options, want seataccess.Desired,
 				Desired: want, Observed: have, Tool: seataccess.ToolLive, Plan: []seataccess.Step{}}}}}}
 }
 
-// AN AGENT'S GRANTS, ITS OPEN REQUESTS AND WHAT THE CONNECTION LACKS ARE READ
-// ON ITS ACCESS, IN THE ENGINE'S WORDS. Each grant says what it gives by the
-// catalogue's name, where, until when, who granted it and for which request,
-// and whether the credential holds it yet; each of the agent's own requests on
-// the lane names the two options of its question that grant it; the catalogue
-// is counted beside the agent's level, and each permission a grant or request
-// names is worded with what a person adds to the company's connection at the
-// vendor and where. Mutation: drop the seat filter on the requests, word a
-// permission by its id, count what the level holds, or leave out the action
-// URL, and this fails.
+// AN AGENT'S GRANTS, ITS OWN REQUESTS AND WHAT THE CONNECTION LACKS ARE WORDED.
+// Mutation: drop the seat filter or the action URL and this fails.
 func TestALaneViewSaysTheGrantsTheRequestsAndWhatTheConnectionLacks(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 15, 16, 0, 0, 0, time.UTC)
 	readAt := now.Add(-40 * time.Second)
 	want := seataccess.Desired{Enabled: true, Level: "read", Grants: []seataccess.Grant{
 		{ID: "gaaaaaaaaaa", Permission: "Workers Scripts Write", ExpiresAt: now.Add(2 * time.Hour),
-			GrantedBy: "Ada Lovelace", GrantedAt: now.Add(-2 * time.Hour), Reason: "deploy the route",
+			GrantedBy: "Jane Founder", GrantedAt: now.Add(-2 * time.Hour), Reason: "deploy the route",
 			Request: "zyxwv98765"},
 		{ID: "gbbbbbbbbbb", Permission: "Origin Read", Scope: []string{"example.com"},
-			GrantedBy: "Ada Lovelace", GrantedAt: now.Add(-time.Hour), Reason: "read the rules"},
+			GrantedBy: "Jane Founder", GrantedAt: now.Add(-time.Hour), Reason: "read the rules"},
 	}}
 	have := seataccess.Observed{Exists: true, Enabled: true, Level: "read", Grants: []seataccess.Grant{
 		{Permission: "Workers Scripts Write"}}}
 	asked := seataccess.GrantRequest{ID: "abcde12345", Kind: integration.KindCloudflare,
 		Lane: seataccess.LaneCloudflare, Handle: "sre", Permission: "Origin Write",
-		Scope: []string{"example.com"}, Hours: 4, Reason: "add the origin rule", Item: "OPS-77",
+		Scope: []string{"example.com"}, Hours: 4, Reason: "add the origin rule", Item: "ENG-58",
 		Ask: "ada", AskedAt: now.Add(-10 * time.Minute)}
 	other := asked
 	other.ID, other.Handle, other.Permission = "fghij67890", "qa", "DNS Read"
@@ -84,9 +73,9 @@ func TestALaneViewSaysTheGrantsTheRequestsAndWhatTheConnectionLacks(t *testing.T
 		t.Fatal("the agent's lane was not found")
 	}
 	for _, said := range []string{
-		"Origin Rules: Read on example.com for good, granted by Ada Lovelace on 2026-11-15 " +
+		"Origin Rules: Read on example.com for good, granted by Jane Founder on 2026-11-15 " +
 			"(not on its credential yet: the next sync adds it)",
-		"Workers Scripts Write on the account until 2026-11-15 18:00 UTC, granted by Ada Lovelace " +
+		"Workers Scripts Write on the account until 2026-11-15 18:00 UTC, granted by Jane Founder " +
 			"on 2026-11-15 for the agent's request zyxwv98765",
 	} {
 		if !strings.Contains(view.Grants, said) {
@@ -96,7 +85,7 @@ func TestALaneViewSaysTheGrantsTheRequestsAndWhatTheConnectionLacks(t *testing.T
 	if strings.Count(view.Grants, "; ") != 1 || strings.Contains(view.Grants, "zyxwv98765 (not") {
 		t.Errorf("grants = %q, want two sentences and the held one not waiting on a sync", view.Grants)
 	}
-	wantRequest := "request abcde12345 asks for Origin Rules: Edit on example.com for 4 hours, on OPS-77 " +
+	wantRequest := "request abcde12345 asks for Origin Rules: Edit on example.com for 4 hours, on ENG-58 " +
 		"on 2026-11-15; its question grants it with grant-rabcde12345-t (for 4 hours) or " +
 		"grant-rabcde12345-p (for good)"
 	if view.Requests != wantRequest {
@@ -125,14 +114,8 @@ func TestALaneViewSaysTheGrantsTheRequestsAndWhatTheConnectionLacks(t *testing.T
 	}
 }
 
-// A LOOKUP FINDS A PERMISSION BY PART OF ITS NAME, SAYS WHICH LEVEL HOLDS IT
-// AND WHAT THE CONNECTION LACKS, AND IS BOUNDED. A lookup ignores case and
-// punctuation, so "origin RULES" finds "Origin Rules: Edit"; each match says
-// which level holds it, whether it changes things, and where the company's
-// connection cannot grant it, what to add there and where; one that matches
-// nothing says so; and one that matches more than a lookup answers says there
-// are more. Mutation: match the identifier only, answer every match, or drop
-// the level an entry is in, and this fails.
+// A LOOKUP FINDS A PERMISSION BY PART OF ITS NAME, judged for the level, and is
+// bounded. Mutation: match the id only, or answer every match, and this fails.
 func TestALookupFindsAPermissionByPartOfItsNameAndIsBounded(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 15, 16, 0, 0, 0, time.UTC)
@@ -186,18 +169,13 @@ func TestALookupFindsAPermissionByPartOfItsNameAndIsBounded(t *testing.T) {
 	}
 }
 
-// A LAPSED GRANT IS SAID AS LAPSED, and while its credential still holds it,
-// as held until the next sync takes it off; a lane whose catalogue was not
-// read words no catalogue at all rather than an empty one, and a lookup on it
-// says the catalogue was not read rather than that nothing matched. Mutation:
-// read every grant as live, or count a catalogue that was not read, and this
-// fails.
+// A LAPSED GRANT IS SAID AS LAPSED, and an unread catalogue is never worded.
 func TestALapsedGrantAndAnUnreadCatalogueAreSaidAsSuch(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 15, 16, 0, 0, 0, time.UTC)
 	want := seataccess.Desired{Enabled: true, Level: "read", Grants: []seataccess.Grant{
 		{ID: "gaaaaaaaaaa", Permission: "Origin Read", ExpiresAt: now.Add(-time.Minute),
-			GrantedBy: "Ada Lovelace", GrantedAt: now.Add(-4 * time.Hour), Reason: "read the rules"}}}
+			GrantedBy: "Jane Founder", GrantedAt: now.Add(-4 * time.Hour), Reason: "read the rules"}}}
 	have := seataccess.Observed{Exists: true, Enabled: true, Level: "read",
 		Grants: []seataccess.Grant{{Permission: "Origin Read"}}}
 	unread := cloudflareView(time.Time{})
@@ -208,7 +186,7 @@ func TestALapsedGrantAndAnUnreadCatalogueAreSaidAsSuch(t *testing.T) {
 		t.Fatal("the agent's lane was not found")
 	}
 	if view.Grants != "Origin Read on every zone the company's agents reach, lapsed at 2026-11-15 15:59 UTC, "+
-		"granted by Ada Lovelace on 2026-11-15 (still on its credential until the next sync takes it off)" {
+		"granted by Jane Founder on 2026-11-15 (still on its credential until the next sync takes it off)" {
 		t.Errorf("grants = %q", view.Grants)
 	}
 	if view.Grantable != "" || view.Permissions != "" || !view.CatalogueReadAt.IsZero() ||
@@ -221,10 +199,7 @@ func TestALapsedGrantAndAnUnreadCatalogueAreSaidAsSuch(t *testing.T) {
 	}
 }
 
-// THE OPEN REQUESTS ARE EVERY ONE STILL OPEN, OLDEST FIRST: one past its month
-// or one this build cannot read is left for the sweep, never failing the read
-// of the rest. Mutation: return every stored request, or fail on the
-// unreadable one, and this fails.
+// THE OPEN REQUESTS ARE EVERY READABLE ONE STILL OPEN, OLDEST FIRST.
 func TestTheOpenRequestsAreEveryOneStillOpen(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 15, 16, 0, 0, 0, time.UTC)
@@ -234,7 +209,7 @@ func TestTheOpenRequestsAreEveryOneStillOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := seataccess.GrantRequest{Kind: integration.KindCloudflare, Lane: seataccess.LaneCloudflare,
-		Handle: "sre", Permission: "Origin Write", Hours: 4, Reason: "add the rule", Item: "OPS-77",
+		Handle: "sre", Permission: "Origin Write", Hours: 4, Reason: "add the rule", Item: "ENG-58",
 		Ask: "ada"}
 	for id, age := range map[string]time.Duration{"aaaaa11111": time.Hour, "bbbbb22222": 3 * time.Hour,
 		"ccccc33333": seataccess.RequestTTL + time.Hour} {

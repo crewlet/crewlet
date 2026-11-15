@@ -663,11 +663,8 @@ type Options struct {
 	GrantWhole   string `json:"grant_whole,omitempty"`
 	GrantAccount string `json:"grant_account,omitempty"`
 
-	// ReadAt is when [ReadOptions] read the offer from the vendor, kept as
-	// it was while the read is reused; zero for the offer drawn without one
-	// (a vendor that did not answer, a lane the engine does not provision).
-	// It says how fresh a grant catalogue is: one a person changed at the
-	// vendor a minute ago is offered once the offer is read again.
+	// ReadAt is when [ReadOptions] read the offer, kept while the read is reused;
+	// zero for an offer drawn without one.
 	ReadAt time.Time `json:"read_at,omitzero"`
 
 	// RequiredLevel is, on a [Options.Multiple] lane, the level every other

@@ -46,11 +46,8 @@ func TestTheSeatAccessCardReadsItsRoutesOwnAnswer(t *testing.T) {
 	}
 }
 
-// THE CATALOGUE LOOKUP'S TABLE READS ITS ROUTE'S OWN ANSWER: search_grant_catalogue
-// asks the seat read with a lookup, and every column of its table must be a
-// member of the lookup's entries, its note and its more the view's own.
-// Mutation: read a column from `available`, or the rows from `matches`, and
-// this names the path.
+// THE CATALOGUE LOOKUP'S TABLE READS ITS ROUTE'S OWN ANSWER. Mutation: read a
+// column from `available` and this names the path.
 func TestTheCatalogueLookupReadsItsRoutesOwnAnswer(t *testing.T) {
 	t.Parallel()
 	tool, ok := catalog.Lookup("search_grant_catalogue")

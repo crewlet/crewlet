@@ -252,11 +252,7 @@ export interface AccessOptions {
   grant_whole?: string;
   /** Where a grant on the whole connection applies ("the account", "the Organization"). */
   grant_account?: string;
-  /**
-   * When this offer was read from the vendor, kept while the read is reused;
-   * absent where it was drawn without one (the vendor did not answer, or the
-   * engine does not provision the lane).
-   */
+  /** When this offer was read from the vendor; absent where it was not read. */
   read_at?: string;
 }
 

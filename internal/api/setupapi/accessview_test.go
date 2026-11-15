@@ -48,21 +48,17 @@ func TestOneAgentsLaneIsReadInWords(t *testing.T) {
 	}
 }
 
-// ONE AGENT'S LANE CARRIES ITS OWN OPEN REQUESTS AND WHAT A LOOKUP FINDS IN THE
-// CATALOGUE: the stored requests of the lane's kind reach the view, which keeps
-// the agent's own, and `permission` looks a permission up by part of its name,
-// saying what the company's connection lacks. A lookup longer than any
-// permission's name is refused as a bad query rather than matched. Mutation:
-// read the view without the stored requests or the lookup, and this fails.
+// ONE AGENT'S LANE CARRIES ITS OWN OPEN REQUESTS AND A LOOKUP, and an over-long
+// lookup is refused. Mutation: drop the requests or the lookup and this fails.
 func TestOneAgentsLaneCarriesItsRequestsAndALookup(t *testing.T) {
 	t.Parallel()
 	s := newCloudflareSurface(t)
 	s.access.requests = map[string]seataccess.GrantRequest{
 		"abcde12345": {ID: "abcde12345", Kind: integration.KindCloudflare, Lane: seataccess.LaneCloudflare,
 			Handle: "sre", Permission: "Origin Write", Scope: []string{"example.com"}, Hours: 4,
-			Reason: "add the origin rule", Item: "OPS-77", Ask: "owner"},
+			Reason: "add the origin rule", Item: "ENG-58", Ask: "owner"},
 		"fghij67890": {ID: "fghij67890", Kind: integration.KindCloudflare, Lane: seataccess.LaneCloudflare,
-			Handle: "cto", Permission: "Origin Read", Hours: 4, Reason: "read", Item: "OPS-78", Ask: "owner"},
+			Handle: "cto", Permission: "Origin Read", Hours: 4, Reason: "read", Item: "ENG-59", Ask: "owner"},
 	}
 	res := s.do(t, http.MethodGet, "/setup/integrations/cloudflare/access/seats/sre/cloudflare?permission=dns", "", nil)
 	if res.Code != http.StatusOK {

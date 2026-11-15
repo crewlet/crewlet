@@ -40,39 +40,23 @@ type LaneView struct {
 	Account string    `json:"account,omitempty"`
 	Tool    ToolState `json:"tool"`
 
-	// Grants is each grant the seat holds at the lane beside its level, one
-	// sentence each ([grantWords]): what it gives by the catalogue's name,
-	// where, until when, who granted it and for which of the agent's
-	// requests, and whether its credential holds it. Empty where it holds
-	// none or the lane takes none.
+	// Grants is each grant the seat holds beside its level, one sentence each.
 	Grants string `json:"grants,omitempty"`
 
-	// Requests is each request the agent has open for a grant at the lane
-	// (ADR-0118), one sentence each with the two options of its question
-	// that grant it ([requestWords]).
+	// Requests is each open request on the lane (ADR-0118) with its two grant options.
 	Requests string `json:"requests,omitempty"`
 
-	// Grantable is how many permissions the lane's catalogue offers the seat
-	// beside what its level holds, and how many of them the company's own
-	// connection cannot grant yet; empty on a lane that takes no grants.
-	// CatalogueReadAt is when that catalogue was read from the vendor, zero
-	// where it could not be.
+	// Grantable counts the catalogue beside the seat's level and what the connection
+	// lacks; CatalogueReadAt is when it was read.
 	Grantable       string    `json:"grantable,omitempty"`
 	CatalogueReadAt time.Time `json:"catalogue_read_at,omitzero"`
 
-	// Permissions is each catalogue entry the seat's grants and requests
-	// name, one sentence each ([entryWords]): whether the seat's level holds
-	// it, whether it changes things, and, where the company's connection
-	// cannot grant it, what a person adds to that connection at the vendor
-	// and where. So an answer says what to add at the vendor from the
-	// engine's own reading, never from a guess.
+	// Permissions words each entry the grants and requests name, with what a person
+	// adds at the vendor and where.
 	Permissions string `json:"permissions,omitempty"`
 
-	// Lookup is each catalogue entry [ViewQuery.Lookup] matched, at most
-	// [MaxLookup], judged for the seat, and LookupMore that it matched more;
-	// absent without a lookup. LookupNote says why a lookup found nothing:
-	// no entry matched, the lane takes no grants, or its catalogue could
-	// not be read.
+	// Lookup is the entries [ViewQuery.Lookup] matched, at most [MaxLookup];
+	// LookupNote says why none did.
 	Lookup     []LookupEntry `json:"lookup,omitempty"`
 	LookupMore bool          `json:"lookup_more,omitempty"`
 	LookupNote string        `json:"lookup_note,omitempty"`
@@ -95,15 +79,13 @@ type LaneView struct {
 
 // ViewQuery is what [ViewOf] words beside the answer.
 type ViewQuery struct {
-	// Requests are the open grant requests the store holds; the view keeps
-	// the seat's own on the lane.
+	// Requests are the store's open requests; the view keeps the seat's own.
 	Requests []GrantRequest
 
-	// Lookup is part of a permission's name or identifier to find in the
-	// lane's catalogue ("Origin Rules"), empty for none.
+	// Lookup is part of a permission's name to find ("Origin Rules"), or empty.
 	Lookup string
 
-	// Now is the clock a grant is read as live or lapsed at.
+	// Now is when a grant is read as live or lapsed.
 	Now time.Time
 }
 
