@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -501,7 +502,7 @@ func TestTheChainIsOneReadingAndARefusedLayerListsItsRepositoryDamaged(t *testin
 	chainW, chainL := w.buildChain(t, pw), w.buildChain(t, pl)
 	gone := chainL[0].Parts[0].Object
 	w.objects.mu.Lock()
-	w.objects.fail = func(k objstore.Key) error {
+	w.objects.fail = func(_ context.Context, k objstore.Key) error {
 		if k == gone {
 			return objstore.ErrNotFound
 		}

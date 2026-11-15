@@ -1281,7 +1281,7 @@ func (w *syncWorld) refusePush(t *testing.T, h history) (release func()) {
 	t.Cleanup(release)
 	w.objects.mu.Lock()
 	defer w.objects.mu.Unlock()
-	w.objects.fail = func(k objstore.Key) error {
+	w.objects.fail = func(_ context.Context, k objstore.Key) error {
 		if k == push.Object {
 			return errPushRefused
 		}
@@ -1757,8 +1757,9 @@ func (f *failFrom) stage(object objstore.Key) {
 	}
 }
 
-// open is the store's answer to an open of object: nil to open it.
-func (f *failFrom) open(object objstore.Key) error {
+// open is the store's answer to an open of object under the open's context
+// (the round's): nil to open it.
+func (f *failFrom) open(ctx context.Context, object objstore.Key) error {
 	f.mu.Lock()
 	at, ok := f.staged[object]
 	off := f.off
@@ -1768,12 +1769,21 @@ func (f *failFrom) open(object objstore.Key) error {
 	}
 	select {
 	case <-f.before:
+	case <-ctx.Done():
+		// The round failed some other way while this open waited: that
+		// failure is its answer, and the case reads it now.
+		return context.Cause(ctx)
 	case <-time.After(hangDetector): //fixedwait:liveness
-		// Placing the packs before it needs nothing this open holds, so a
-		// bound that runs out is a hang, said here rather than by the
-		// package's timeout.
-		return fmt.Errorf("the %d packs before the round's pack %d were not placed in %v", f.n-1, at,
-			hangDetector)
+		// If placing those packs ever waited on this open — the case
+		// failing one of them, as #856's did (failing the round's second
+		// pack rather than its third is that deadlock again), or a placer
+		// that waits for a later download — before would never close, and
+		// this bound makes that the case's failure rather than the
+		// package's timeout. A placement that hangs by itself holds the
+		// round's workers whatever this open answers, so only the package's
+		// timeout reports that.
+		return fmt.Errorf("the round's first %d packs were not placed in %v (its pack %d's open waited for them)",
+			f.n-1, hangDetector, at)
 	}
 	return errFailedDownload
 }
@@ -1794,9 +1804,7 @@ func (f *failFrom) disarm() {
 // Mutations: a failed download leaves its staged files (download's fail
 // does not abandon them) — tmp/ is not empty; the next round downloads a
 // pack it holds whole (install's skip of an installed pack taken out) — it
-// downloads all six; the case fails the second pack in the round's order
-// rather than the third — the failing download waits on itself, #856's
-// deadlock, and the bound names it.
+// downloads all six.
 func TestAFailedRoundLeavesNoTemporaryFiles(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)

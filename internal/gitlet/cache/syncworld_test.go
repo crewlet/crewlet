@@ -510,10 +510,11 @@ type countingObjects struct {
 	inFlight int
 	most     int
 	hold     func(objstore.Key) <-chan struct{}
-	// fail, when set, is the store's answer to an open of an object, nil
-	// to open it; readFail the answer of every read of an object it opened,
-	// nil to read it.
-	fail, readFail func(objstore.Key) error
+	// fail, when set, is the store's answer to an open of an object under
+	// the open's context, nil to open it; readFail the answer of every read
+	// of an object it opened, nil to read it.
+	fail     func(context.Context, objstore.Key) error
+	readFail func(objstore.Key) error
 }
 
 func (o *countingObjects) Open(ctx context.Context, obj objstore.Object) (io.ReadCloser, error) {
@@ -540,7 +541,7 @@ func (o *countingObjects) Open(ctx context.Context, obj objstore.Object) (io.Rea
 		}
 	}
 	if fail != nil {
-		if err := fail(obj.Key); err != nil {
+		if err := fail(ctx, obj.Key); err != nil {
 			done()
 			return nil, err
 		}

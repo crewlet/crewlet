@@ -247,7 +247,7 @@ func (f *fakeLog) unpublishedPacks(repo string) []gitlet.PackRow {
 
 // setFail sets the store's answer to an open of an object (fail), nil to open
 // every one.
-func (o *countingObjects) setFail(fail func(objstore.Key) error) {
+func (o *countingObjects) setFail(fail func(context.Context, objstore.Key) error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.fail = fail
@@ -415,7 +415,7 @@ func (in *interleaving) publishElsewhere(repo string) string {
 func (in *interleaving) withStoreDown(f func()) {
 	parts := in.layerParts()
 	var failed atomic.Bool
-	in.w.objects.setFail(func(k objstore.Key) error {
+	in.w.objects.setFail(func(_ context.Context, k objstore.Key) error {
 		if parts[k] && failed.CompareAndSwap(false, true) {
 			return errStoreDown
 		}
