@@ -823,8 +823,14 @@ function AttachPageDialog({
   );
 }
 
-/** A short list of things to choose one of, as radio buttons. */
-function PickList({
+/**
+ * A short list of things to choose one of, as radio buttons.
+ *
+ * THE KEY IS WHOLE AND THE TITLE GIVES WAY: both were flex items free to
+ * shrink, so a long title squeezed the key until it broke at its hyphen
+ * ("ENG-" over "11"), which is the one part a reader matches on.
+ */
+export function PickList({
   label,
   items,
   chosen,
@@ -849,8 +855,8 @@ function PickList({
           className="composer-pick"
           onClick={() => onChoose(it.id)}
         >
-          <span className="mono t-caption">{it.meta}</span>
-          <span className="truncate">{it.title}</span>
+          <span className="composer-pick-key mono t-caption">{it.meta}</span>
+          <span className="composer-pick-title truncate">{it.title}</span>
         </button>
       ))}
     </div>
