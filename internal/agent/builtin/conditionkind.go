@@ -66,7 +66,9 @@ const SandboxKindPrefix = "sandbox_"
 // A CODING SANDBOX'S CLASS ([SandboxKindPrefix]) IS PUT ON A SIDE BY WHETHER A
 // MAIL CAN CAUSE IT, class by class ([sandboxClassIsTheNodes]), never as a
 // block: a provider that did not answer or is at its account's limit spent a
-// seat's backlog into its poison when every class was the work's.
+// seat's backlog into its poison when every class was the work's. No class
+// the sandbox names today is one a mail can cause, so each is the node's, and
+// a class added there is decided on its own.
 //
 // EVERY KIND THIS PACKAGE DECLARES, AND EVERY CLASS THE SANDBOX NAMES, IS
 // NAMED HERE, on one side, and TestEveryConditionKindIsTheNodesOrTheWorks
@@ -131,12 +133,15 @@ func sandboxClassIsTheNodes(why sandbox.Why) bool {
 		// person's edit changes and nothing in a mail reaches.
 		return true
 	case sandbox.WhyProviderRefused:
-		// THE WORK'S: the provider refused the company's credentials (a 401
-		// or 403 from its control plane). A person changes the key, and the
-		// failure hold pauses the seat on its second time in a row and parks
-		// its mail (internal/engine's failurehold.go, ADR-0117), so a delivery
-		// spends no more than one attempt on it either way.
-		return false
+		// THE NODE'S: the provider's control plane refused the company's
+		// credentials (a 401 or 403 from it, whose requests name the
+		// deployment's template, timeout and run environment or a box, and
+		// carry nothing of a mail's); a box's own agent answering one gets
+		// no class at all. A person changes the key, as with billing and a
+		// configuration. Counted as the mail's, its first failure marked a
+		// healthy message failed, so an outage that spent the message's
+		// budget later sent it to the poison.
+		return true
 	}
 	return false
 }

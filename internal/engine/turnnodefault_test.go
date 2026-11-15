@@ -30,11 +30,11 @@ import (
 // this node's stop or drain ended), or a condition of the infrastructure the
 // engine runs on (builtin.InfrastructureKind: a coordination store that did
 // not answer, a busy store, a full disk, a sandbox provider that did not
-// answer), the NAK is the node's
+// answer or refused the company's credentials), the NAK is the node's
 // (queue.NakNode), so a delivery whose budget it spends is kept with the
 // group's unhandled deliveries and never with its poison. Any other failure
-// stays the mail's, a deadline, a write the state log refused for what it is
-// and a sandbox provider refusing the company's credentials among them.
+// stays the mail's, a deadline and a write the state log refused for what it
+// is among them.
 //
 // THE SAME ANSWER THE SEAT'S CONTROL TOPIC NAKS BY (nodesFailure), so the
 // sandbox coordinator's marks for a store that did not answer it
@@ -45,8 +45,9 @@ import (
 // the failure against the mail; drop the infrastructure's conditions from
 // nodesFailure and the rows for a coordination store, a busy store and a
 // full disk do; drop the coordinator's marks and theirs do; read every
-// condition as the node's and the deadline's and the sandbox's rows count it
-// against the node.
+// condition as the node's and the deadline's and the refused write's rows
+// count it against the node; put a sandbox provider refusing the key back on
+// the work's side and its rows count it against the mail.
 func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 	t.Parallel()
 	live := t.Context()
@@ -80,7 +81,7 @@ func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 		"a sandbox provider that did not answer": {err: fmt.Errorf("runner: launching the executor's "+
 			"run: %w", sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("e2b: 503"))), nodes: true},
 		"a sandbox provider refusing the company's key": {err: fmt.Errorf("runner: launching the executor's run: %w",
-			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401")))},
+			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401"))), nodes: true},
 		"the mail's own": {err: errors.New("the payload is larger than the broker takes")},
 	}
 	sites := map[string]func(t *testing.T, failed error) (*engine.Dispatcher, []*events.Event){

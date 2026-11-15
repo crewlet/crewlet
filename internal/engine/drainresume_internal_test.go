@@ -441,8 +441,9 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 // cancelled. AND SO IS A CONDITION OF THE INFRASTRUCTURE, by the one answer
 // the seat's mailbox NAKs by too (nodesFailure): a resumed turn that could not
 // read where its writes are minted from a coordination store that did not
-// answer. A failure of the completion itself stays the message's, a resume
-// that ran past its deadline among them.
+// answer, and a relaunch whose sandbox provider did not answer or refused the
+// company's key. A failure of the completion itself stays the message's, a
+// resume that ran past its deadline among them.
 //
 // Mutation: hand a store's silence, a broker's refusal or a cancelled handler
 // back with queue.Nak, and a delivery spent during an outage or a stop is kept
@@ -489,7 +490,7 @@ func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
 		"a relaunch a sandbox provider did not answer": {err: fmt.Errorf("sandbox: resuming t1: %w",
 			sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("e2b: 503"))), nodes: true},
 		"a relaunch a sandbox provider refused the key of": {err: fmt.Errorf("sandbox: resuming t1: %w",
-			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401")))},
+			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401"))), nodes: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

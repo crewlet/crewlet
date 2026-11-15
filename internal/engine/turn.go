@@ -1672,11 +1672,11 @@ func nakFailure(ctx context.Context, err error) queue.Result {
 //     prompt a full disk could not take) is the node's though its record
 //     names the provider's own kind. A coding sandbox's class is put on a
 //     side by whether a mail can cause it: a provider that did not answer,
-//     at its account's limit or wanting it paid for, a setup download failing
-//     on the far side and a configuration the deployment cannot start are the
-//     node's. A deadline, an abandoned wait, a write the state log refused for
-//     what the write itself is and a provider refusing the company's
-//     credentials stay the work's.
+//     at its account's limit, wanting it paid for or refusing the company's
+//     credentials, a setup download failing on the far side and a
+//     configuration the deployment cannot start are the node's. A deadline,
+//     an abandoned wait and a write the state log refused for what the write
+//     itself is stay the work's.
 //   - THE COORDINATION STORE'S SILENCE on a step of the sandbox coordinator's
 //     ([sandbox.ErrStoreSilent]).
 //   - A HAND-BACK MADE WHILE NO WAITER CAN ANNOUNCE ITS JOB
