@@ -8,7 +8,8 @@
  */
 
 import { fmtDateCompact, tsKey } from "~/lib/format.ts";
-import { companyMidnight, dayLabelIn } from "~/lib/range.ts";
+import { companyMidnight } from "~/lib/range.ts";
+import { dayLabelIn } from "~/lib/companyDay.ts";
 import type { PageChange, PageRevision } from "~/protocol/index.ts";
 import { changeWords, changedBy } from "./parts.tsx";
 import { assisted } from "~/lib/attribution.ts";

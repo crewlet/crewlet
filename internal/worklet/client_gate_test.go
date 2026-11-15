@@ -285,6 +285,7 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 		"TASK_TITLE_MAX_BYTES":        worklet.MaxTitle,
 		"TASK_BODY_MAX_BYTES":         worklet.MaxBody,
 		"VIEW_NAME_MAX_BYTES":         worklet.MaxViewName,
+		"PROJECT_FILE_MAX_BYTES":      worklet.MaxFileBytes,
 		"DECISION_QUESTION_MAX_BYTES": decision.MaxQuestion,
 		"DECISION_OPTION_MAX_BYTES":   decision.MaxOptionLabel,
 		"DECISION_MIN_OPTIONS":        decision.MinOptions,

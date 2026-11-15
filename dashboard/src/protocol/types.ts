@@ -3362,7 +3362,13 @@ export interface WorkProjectDetail extends WorkProjectRow {
   /** The workspace field ids this project redeclares — the state a field in
    *  the middle of a move between scopes is in. */
   shadowed?: string[];
+  /** The project's OWN field declarations as stored, archived ones included:
+   *  the whole set a `fields` write on `write_project` replaces. `fields`
+   *  above is the effective set a task files against. */
+  own_fields?: WorkFieldDef[];
   tags?: WorkProjectTag[];
+  /** The labels that take no new work, which `tags` leaves out. */
+  archived_tags?: WorkProjectTag[];
   policy_stamp: number;
   read_level?: ReadLevel;
   log_seq?: number;

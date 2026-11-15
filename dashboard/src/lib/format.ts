@@ -235,6 +235,31 @@ const MONTH_DAY: DateShape = Object.freeze({ month: "short", day: "2-digit" });
 const MONTH_DAY_YEAR: DateShape = Object.freeze({ ...MONTH_DAY, year: "numeric" });
 
 /**
+ * A CIVIL DATE (`2026-11-30`) in the shapes [fmtDate] and [fmtDateCompact]
+ * draw an instant in: in full, or with the year dropped when it is `thisYear`.
+ *
+ * A DATE IS NOT AN INSTANT, so no zone reads it: it is placed at noon UTC and
+ * formatted in UTC, the way [companyDateLabel] draws its labels, and every
+ * reader sees the date that was written. Handed to [fmtDate] instead, a bare
+ * date parses as UTC midnight and reads as the day before west of Greenwich.
+ * The value as it came where it is not a date.
+ */
+export function fmtCivilDay(day: string, thisYear?: string): string {
+  if (!day) return EMPTY_VALUE;
+  const at = Date.parse(`${day}T12:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(at)) return day;
+  return dateTimeFormat(
+    undefined,
+    "UTC",
+    thisYear === undefined
+      ? DATE_PARTS
+      : day.startsWith(`${thisYear}-`)
+        ? MONTH_DAY
+        : MONTH_DAY_YEAR,
+  ).format(at);
+}
+
+/**
  * "Sep 9", from a COMPANY DATE LABEL (`2026-09-09`) — a day the engine cut on
  * the company's clock, drawn as that date rather than re-derived from an
  * instant on this browser's: read at noon UTC and formatted in UTC, so no

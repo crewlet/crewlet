@@ -133,7 +133,7 @@ import { type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
-import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
+import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
@@ -604,19 +604,6 @@ function list<T>(value: T[] | null | undefined): T[] {
 }
 
 /**
- * A socket read's answer, or none where the engine refused it on authority.
- *
- * `useQuery` keeps its last answer through a failed ask, which is right for a
- * node that blinked and wrong for a refusal: a source whose grant was taken
- * away mid-session would go on drawing its rows under the sentence saying it
- * is withheld. A refusal replaces what was on screen, as it does for a REST
- * read.
- */
-function held<T>(read: QueryResult<T>): T | null {
-  return read.error === "unauthorized" ? null : read.data;
-}
-
-/**
  * Who a row's writer IS, as the Who column draws them.
  *
  * A LOGIN IS NOT A SEAT. An `operator` write carries a credential's whole
@@ -805,11 +792,11 @@ export function Audit() {
   const failed = reads
     .map(({ read }) => read)
     .find((read) => read.error !== null && read.error !== "unauthorized");
-  const workData = held(work);
-  const knowledgeData = held(knowledge);
-  const configData = held(config);
-  const runtimeData = held(runtime);
-  const artifactsData = held(artifacts);
+  const workData = work.data;
+  const knowledgeData = knowledge.data;
+  const configData = config.data;
+  const runtimeData = runtime.data;
+  const artifactsData = artifacts.data;
   // A SHARE'S AUDIENCE AND A TRANSFER'S SEAT BY THE NAMES THE CHART GIVES
   // THEM, as the artifact's own Changes tab says them.
   const people = useArtifactPeople();

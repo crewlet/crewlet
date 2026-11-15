@@ -17,7 +17,7 @@ import { Meter, Skeleton } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { windowOf } from "~/lib/budget.ts";
 import { companyDateLabel, fmtCount, fmtExact } from "~/lib/format.ts";
-import { dayLabelIn } from "~/lib/range.ts";
+import { dayLabelIn } from "~/lib/companyDay.ts";
 import type { OrgBudget } from "~/protocol/types.ts";
 
 export function BudgetTile({

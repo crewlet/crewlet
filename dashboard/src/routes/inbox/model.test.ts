@@ -542,7 +542,7 @@ describe("the snooze presets", () => {
 
   // A COMPANY ZONE THIS BROWSER CANNOT READ is read as UTC, the day a preset
   // lands on and the instant it names alike, as every company-clock reading
-  // is (`range.ts`'s companyZone): never a menu that fails to draw.
+  // is (`companyDay.ts`'s companyZone): never a menu that fails to draw.
   test("read a company zone this browser cannot read as UTC", () => {
     expect(snoozePresets(now, "Not/AZone", undefined)).toEqual(
       snoozePresets(now, "UTC", undefined),

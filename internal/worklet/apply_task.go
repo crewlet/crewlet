@@ -2357,12 +2357,11 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 // re-run of the call that posted it — rewrote it whole, the author's edit
 // since and the answer that closed it included.
 //
-// NO GESTURE TAKES A TRACKER COMMENT DOWN YET. The `removed` column is written
-// by nothing — every comment holds the row's default — so no kind writes it,
-// and a record of the removal kind ([ChangeCommentRemoved]) writes nothing at
-// all. Taken for a post, as a comment under any kind but the edit and the
-// resolve is, it made the remark it named up from the removal on a node that
-// did not hold it, closing whatever ask the remark claimed to answer.
+// A REMOVAL OWNS THE TAKING DOWN: the `removed` flag, the blanked words and
+// the document carrying both ([removeComment]). Taken for a post, as a
+// comment under any kind but the edit, the resolve and the removal is, it
+// would make the remark it named up from the removal on a node that did not
+// hold it.
 //
 // `record_id` is the record that POSTED the remark — the id of the history row
 // it wrote ([historyID]), which is what places the remark in the log for
@@ -2383,7 +2382,7 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	case ChangeCommentResolved:
 		return resolveComment(ctx, tx, task, comment, c)
 	case ChangeCommentRemoved:
-		return 0, nil
+		return removeComment(ctx, tx, task, comment, c)
 	}
 	comment.Task = task.ID
 	document, err := json.Marshal(comment)
@@ -2556,6 +2555,90 @@ func resolveComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	}
 	return affected(res)
 }
+
+// removeComment takes a stored comment down: the flag, its words blanked in
+// the column and the document, and the instant it was taken down.
+//
+// THE ROW STAYS, so a reply under it still resolves against something, and
+// everything else about the remark (who wrote it, when, what it mentioned)
+// stays what its post made it, for [editComment]'s reason.
+//
+// AND NOTHING GOES ON QUOTING IT: the history row its post wrote and the inbox
+// notices that post left each carry an excerpt of its words, and a remark
+// taken down that every feed and inbox still quoted would be taken down from
+// one screen only. Both are blanked here, by the comment's id, at the same
+// position on every node. The record that posted it stays in the log, which
+// is the stream's account of what happened; a purge is what forgets.
+//
+// A REMOVAL OF A ROW THIS NODE DOES NOT HOLD WRITES NOTHING, for an edit's
+// reason: the post is below it in the log, so a missing row is a remark nobody
+// posted.
+func removeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
+	c applyContext) (int, error) {
+
+	var stored []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT document FROM tracker_comments WHERE id = ? AND task_id = ?`,
+		comment.ID, task.ID).Scan(&stored)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("worklet: read comment %s to remove at %s: %w",
+			comment.ID, c.position, err)
+	}
+	var removed Comment
+	if err = json.Unmarshal(stored, &removed); err != nil {
+		return 0, fmt.Errorf("worklet: decode comment %s to remove at %s: %w",
+			comment.ID, c.position, err)
+	}
+	removed.Body, removed.Removed = "", true
+	if !comment.UpdatedAt.IsZero() {
+		removed.UpdatedAt = comment.UpdatedAt
+	}
+	document, err := json.Marshal(removed)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: encode comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, removeCommentStatement,
+		store.EncodeTime(commentUpdatedAt(removed)), document, comment.ID, task.ID)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: remove comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	written, err := affected(res)
+	if err != nil || written == 0 {
+		return written, err
+	}
+	if _, err = tx.ExecContext(ctx, unquoteNoticesStatement, task.ID, comment.ID); err != nil {
+		return 0, fmt.Errorf("worklet: stop quoting comment %s in the inbox at %s: %w",
+			comment.ID, c.position, err)
+	}
+	if _, err = tx.ExecContext(ctx, unquoteHistoryStatement, task.ID, comment.ID); err != nil {
+		return 0, fmt.Errorf("worklet: stop quoting comment %s in the history at %s: %w",
+			comment.ID, c.position, err)
+	}
+	return written, nil
+}
+
+// The removal's statements: the row taken down, and the excerpts of it the
+// post's history row and inbox notices carry, found among the task's own
+// history (`tracker_history_subject_idx`) by the comment's id, and the notices
+// by those rows' ids.
+const (
+	removeCommentStatement = `
+		UPDATE tracker_comments SET removed = 1, body = '', updated_at = ?, document = ?
+		WHERE id = ? AND task_id = ?`
+	unquoteNoticesStatement = `
+		UPDATE tracker_notifications SET excerpt = ''
+		WHERE record_id IN (
+			SELECT id FROM tracker_history
+			WHERE subject_id = ? AND comment_id = ? AND excerpt <> '')`
+	unquoteHistoryStatement = `
+		UPDATE tracker_history SET excerpt = ''
+		WHERE subject_id = ? AND comment_id = ? AND excerpt <> ''`
+)
 
 // commentUpdatedAt is the edit instant, defaulting to the creation one so the
 // column is never zero on a comment nobody has touched.

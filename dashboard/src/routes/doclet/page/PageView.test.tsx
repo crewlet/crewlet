@@ -1103,6 +1103,67 @@ test("a comment is written as the signed-in person, and drawn as the seat they w
   ]);
 });
 
+// A PERSON EDITS AND TAKES DOWN THEIR OWN REMARK ON A PAGE, through the
+// engine's PATCH and DELETE on the comment's address, each keyed. The thread
+// offered only Reply, though the engine served both. Somebody else's remark
+// offers neither. Mutation: mark every remark editable and the other seat's
+// offers Edit; send the edit through the act route and no PATCH is made.
+test("a person edits and deletes their own page comment, keyed, and nobody else's", async () => {
+  const sent = recordRest();
+  mount(<PageView id={ID} />, {
+    page: detail({
+      comments: [
+        {
+          id: "c-1",
+          author: "jane",
+          author_kind: "human",
+          body: "Is step 2 still right?",
+          created_at: "2026-09-24T20:00:00Z",
+          updated_at: "2026-09-24T20:00:00Z",
+        } as never,
+        {
+          id: "c-2",
+          author: "swe",
+          author_kind: "agent",
+          body: "It is.",
+          created_at: "2026-09-24T20:05:00Z",
+          updated_at: "2026-09-24T20:05:00Z",
+          reply_to: "c-1",
+        } as never,
+      ],
+    }),
+    page_reads: reads(),
+  });
+  await settle();
+  const thread = region(/^Comments/);
+  const [mine, theirs] = within(thread).getAllByRole("listitem");
+  expect(within(theirs!).queryByRole("button", { name: /Edit|Delete/ })).toBeNull();
+
+  fireEvent.click(within(mine!).getByRole("button", { name: "Edit your comment" }));
+  const field = within(mine!).getByRole("textbox", { name: "Edit your comment" });
+  expect((field as HTMLTextAreaElement).value).toBe("Is step 2 still right?");
+  fireEvent.change(field, { target: { value: "Is step 2 still right after the move?" } });
+  fireEvent.click(within(mine!).getByRole("button", { name: "Save" }));
+  await settle();
+  const patch = sent.find((s) => s.method === "PATCH");
+  expect(patch?.url).toContain(`/doclet/pages/${ID}/comments/c-1`);
+  expect(patch?.body).toEqual({ body: "Is step 2 still right after the move?" });
+  expect(patch?.key).toMatch(/^[0-9a-f-]{36}$/);
+
+  fireEvent.click(
+    within(mine!).getByRole("button", { name: "Delete the comment by Jane Founder" }),
+  );
+  fireEvent.click(
+    within(within(mine!).getByRole("group", { name: /Delete this comment/ })).getByRole("button", {
+      name: "Delete",
+    }),
+  );
+  await settle();
+  const removal = sent.find((s) => s.method === "DELETE");
+  expect(removal?.url).toContain(`/doclet/pages/${ID}/comments/c-1`);
+  expect(removal?.key).toMatch(/^[0-9a-f-]{36}$/);
+});
+
 // A UUID IS NOTHING A PERSON READS: until the page answers, and when it never will, a noun.
 test("the trail never prints a page's id", () => {
   expect(crumbsFor(["doclet", "pages", ID]).at(-1)).toEqual({ label: "Page" });

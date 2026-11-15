@@ -750,6 +750,51 @@ func TestAWorkCommentIsEditedByItsAuthor(t *testing.T) {
 	}
 }
 
+// A REMARK ON A WORK ITEM IS TAKEN DOWN BY ITS AUTHOR, OR BY A MODERATOR, and
+// the writer is told which.
+//
+// The table is asked with the STORED author, so a colleague who did not write
+// the remark never reaches the writer; an administrator does, as a moderator.
+//
+// Mutation: decide on the caller instead of the stored author, and the
+// colleague's removal reaches the writer; drop the moderation flag, and the
+// administrator's removal is refused by the writer as somebody else's.
+func TestAWorkCommentIsTakenDownByItsAuthorOrAModerator(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		who  iam.Principal
+		want int
+		told string
+	}{
+		{"its author", colleague("ana"), http.StatusOK, "c-1|moderate=false"},
+		{"a colleague", colleague("bo"), http.StatusForbidden, ""},
+		{"a moderator", admin("root"), http.StatusOK, "c-1|moderate=true"},
+	} {
+		r := newRig(t, chart{})
+		r.reader.addComment("t-1", worklet.Comment{ID: "c-1", Task: "t-1",
+			Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
+		got := r.do(as(c.who), http.MethodDelete, "/worklet/items/ENG-1/comments/c-1", nil)
+		if got.status != c.want {
+			t.Errorf("%s: answered %d, want %d: %v", c.name, got.status, c.want, got.body)
+			continue
+		}
+		var want []string
+		if c.told != "" {
+			want = []string{c.told}
+		}
+		if !slices.Equal(r.writes.removed, want) {
+			t.Errorf("%s: the writer was asked %v, want %v", c.name, r.writes.removed, want)
+		}
+	}
+	// A REMARK THE TASK DOES NOT HOLD IS NOT FOUND, and reaches no writer.
+	r := newRig(t, chart{})
+	if got := r.do(as(colleague("ana")), http.MethodDelete,
+		"/worklet/items/ENG-1/comments/c-9", nil); got.status != http.StatusNotFound || len(r.writes.removed) != 0 {
+		t.Errorf("a missing remark answered %d and wrote %v", got.status, r.writes.removed)
+	}
+}
+
 // A PURGE IS CONFIRMED BY THE ITEM'S KEY, CHECKED, AND FILED UNDER ITS OWN
 // PROJECT — and it is a person's gesture.
 //
@@ -962,6 +1007,7 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		"DELETE /doclet/pages/{id}/comments/{cid}",
 		"DELETE /worklet/files/{project}/{path...}",
 		"DELETE /worklet/items/{key}",
+		"DELETE /worklet/items/{key}/comments/{cid}",
 		"DELETE /worklet/views/{id}",
 		"GET /worklet/files/{project}/{path...}",
 		"PATCH /doclet/pages/{id}/comments/{cid}",

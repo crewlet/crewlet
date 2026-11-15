@@ -31,7 +31,8 @@ import {
 } from "./format.ts";
 import { cellText, formatDay, formatNumber, scaleFormat } from "./artifacts/dashboard.ts";
 import { nextFires } from "./cron.ts";
-import { clockIn, companyDays, companyMidnight, dayLabelIn } from "./range.ts";
+import { clockIn, companyDays, companyMidnight } from "./range.ts";
+import { dayLabelIn } from "./companyDay.ts";
 import { monthDay } from "./timeline.ts";
 import { monthLabel, targetLabel } from "./work.ts";
 import { budgetCaption } from "~/routes/home/model.ts";

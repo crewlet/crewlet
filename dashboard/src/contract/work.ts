@@ -243,6 +243,14 @@ export const TASK_BODY_MAX_BYTES = 32768;
 export const VIEW_NAME_MAX_BYTES = 128;
 
 /**
+ * The largest file a project keeps, in bytes: the engine's `MaxFileBytes`,
+ * which refuses a larger upload whole. The Files tab says so before it sends
+ * one, rather than streaming a gibibyte for a refusal at the end. Held by
+ * `internal/worklet/client_gate_test.go`.
+ */
+export const PROJECT_FILE_MAX_BYTES = 1073741824;
+
+/**
  * The most a structured ask's QUESTION holds, in UTF-8 bytes — the engine's
  * `MaxDecisionQuestion`. The Ask dialog prefills it from the comment's first
  * line WHOLE and says when that is past the cap, rather than slicing the line

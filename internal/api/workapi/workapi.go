@@ -204,15 +204,18 @@ var decisionRead = statelog.Freshness{
 	Level: statelog.DefaultReadLevel(statelog.SurfaceSeat),
 }
 
-// TrackerWriter is the tracker's write side for the two gestures no tool
-// makes — rewriting one's own remark and a work item's purge — bound to one
-// actor. A rank move is NOT one of them: the board drag is the catalogue's
-// `place_work_item`, reached through the dispatch like every other tool.
+// TrackerWriter is the tracker's write side for the gestures no tool makes
+// (rewriting one's own remark, taking one down, and a work item's purge),
+// bound to one actor. A rank move is NOT one of them: the board drag is the
+// catalogue's `place_work_item`, reached through the dispatch like every
+// other tool.
 type TrackerWriter interface {
 	PurgeTask(ctx context.Context, opID, id, project, reason string) (
 		worklet.WriteResult, error)
 	EditComment(ctx context.Context, opID, taskID, project, commentID,
 		body string, notify *worklet.Notify) (worklet.WriteResult, error)
+	RemoveComment(ctx context.Context, opID, taskID, project, commentID string,
+		authority worklet.CommentAuthority) (worklet.WriteResult, error)
 }
 
 // PageStore is the knowledge base's write side for the verbs no tool makes.

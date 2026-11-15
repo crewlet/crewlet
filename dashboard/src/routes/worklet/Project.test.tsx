@@ -117,6 +117,42 @@ test("the header says what the container is, in the company's own words", async 
   expect(screen.getByText("Build and ship the product")).toBeTruthy();
 });
 
+// LATEST CHANGES NAMES TASKS BY KEY AND PEOPLE BY NAME, as every other feed of
+// a change does: it read "Linked: added 94ffc849-… · ada", because it never
+// read its answer's `keys` and printed the actor's handle. Mutation: render
+// with the page's chrome alone and the uuid and the handle come back.
+test("latest changes name the other task by its key and the actor by name", async () => {
+  location.hash = "#/worklet/ENG?lens=about";
+  serving({
+    work_project: detail(),
+    work_activity: {
+      records: [
+        {
+          id: "r-1",
+          log_seq: 1,
+          log_stream: "s",
+          log_generation: 1,
+          at: "2031-04-16T00:00:00Z",
+          effective_at: "2031-04-16T00:00:00Z",
+          kind: "relations",
+          subject_kind: "task",
+          subject_id: "t-1",
+          subject_key: "ENG-1",
+          actor: "ada",
+          actor_kind: "agent",
+          fields: { linked: { from: "", to: "", added: ["94ffc849-9800-5bb9-8631-615c0782fe70"] } },
+        },
+      ],
+      keys: { "94ffc849-9800-5bb9-8631-615c0782fe70": "ENG-2" },
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Latest changes")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Linked: added ENG-2 · Ada Okonkwo")).toBeTruthy());
+  expect(document.body.textContent).not.toContain("94ffc849");
+});
+
 // THE PURPOSE IS THE OBJECT'S LEDE, and it sits where a seat's goal sits: a
 // PageNote under the header, above everything else the page draws. It used to
 // come AFTER the census, so a chart stood between the object's name and the
@@ -322,7 +358,7 @@ test("a vocabulary a project does not declare is a sentence, not a gap", async (
     work_activity: { records: [], complete: true },
   });
   mount();
-  await waitFor(() => expect(screen.getByText("This project declares no labels")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("This project declares no labels yet")).toBeTruthy());
   expect(screen.getByText("This project declares no fields of its own")).toBeTruthy();
 });
 

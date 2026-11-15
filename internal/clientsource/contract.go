@@ -113,6 +113,7 @@ var contract = []Entry{
 	{"ADVISOR_PAGES", ReadLiteral, "internal/advisor.TestTheDashboardTakesEveryPageAFixOpens"},
 	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"PROJECT_FILE_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"DECISION_OPTION_MAX_BYTES", ReadScalar,

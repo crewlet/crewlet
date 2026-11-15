@@ -86,8 +86,11 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { barsOver, useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
+import { useCompanyZone } from "~/lib/companyDay.ts";
 import {
+  changeActor,
   changeLabel,
+  changeLabels,
   changeWhole,
   describeChange,
   foldChartReapplies,
@@ -267,27 +270,22 @@ export function HistoryView({
 
   // EVERY PAGE'S RESOLUTIONS, with the LIVE answer's last: an id resolves to
   // one key at a time, and a task that has been re-keyed since an older page
-  // was fetched should read as what it is called now.
-  const keys = useMemo(
-    () => ({ ...olderKeys, ...(state.data?.keys ?? {}) }),
-    [olderKeys, state.data],
+  // was fetched should read as what it is called now ([changeLabels]).
+  const zone = useCompanyZone();
+  const chrome: LabelContext = changeLabels(
+    {
+      seatName: (handle: string) => index.byHandle.get(handle)?.name ?? handle,
+      // WHO IS READING, so a sentence the engine addressed to the seat it woke
+      // is re-addressed to whoever is looking at the log. The reader's OWN
+      // RECORD's name (their seat when the directory binds them to one, their
+      // login when it does not), because the records that carry such a sentence
+      // are a person's, and a person subject is keyed on exactly that name
+      // (`lib/work.ts` says so where it compares them).
+      viewer: viewer.owner,
+    },
+    [olderKeys, state.data?.keys],
+    zone,
   );
-
-  const chrome: LabelContext = {
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
-    // WHAT A RELATION'S OTHER END IS CALLED. The delta carries that task's id,
-    // because a key belongs to its own row and a history row is written once by
-    // every node; the answer resolves what the answering node holds, and an id
-    // it did not resolve falls through to itself rather than to a blank.
-    taskKey: (id) => keys[id] ?? "",
-    // WHO IS READING, so a sentence the engine addressed to the seat it woke
-    // is re-addressed to whoever is looking at the log. The reader's OWN
-    // RECORD's name — their seat when the directory binds them to one, their
-    // login when it does not — because the records that carry such a sentence
-    // are a person's, and a person subject is keyed on exactly that name
-    // (`lib/work.ts` says so where it compares them).
-    viewer: viewer.owner,
-  };
 
   const lines = useMemo(() => foldChartReapplies(records), [records]);
 
@@ -327,7 +325,7 @@ export function HistoryView({
       (value) => {
         const r = person.get(value);
         const name = (h: string) => index.byHandle.get(h)?.name ?? h;
-        return r ? actorName(r, { seatName: name }) : name(value);
+        return r ? changeActor(r, { seatName: name }) : name(value);
       },
     );
   }, [records, state.data, index]);
@@ -529,18 +527,6 @@ function FacetPicker({
 }
 
 /**
- * Who made a change, by the name the rest of the product uses: the seat's name
- * where the author is a seat — an agent, or a person the identity directory
- * binds to one, whom the engine records AS that seat (`iam.ActorFor`) — the
- * login of anybody else, and the engine where nobody did.
- */
-export function actorName(record: WorkActivityRecord, chrome: LabelContext): string {
-  // THE ENGINE WRITES AS ITS NODE, a name that means nothing beside a person's.
-  if (!record.actor || record.actor_kind === "system") return "the engine";
-  return chrome.seatName?.(record.actor) ?? record.actor;
-}
-
-/**
  * The log as the kit's grid, on the ledger columns every history reads through
  * (`components/ledgerGrid.tsx`), with which item each change was to.
  */
@@ -626,7 +612,7 @@ function ChangeAuthor({ line, chrome }: { line: ChangeLine; chrome: LabelContext
       >
         {/* A WRITE THROUGH THE ASSISTANT is the person's, "with the assistant",
             off the server-set credential; never its grant id. */}
-        {authorWords(actorName(record, chrome), record.operator_id)}
+        {authorWords(changeActor(record, chrome), record.operator_id)}
       </span>
       {/* AN OPERATOR IS NEITHER A PERSON NOR AN AGENT, and the tracker records
           which: a write made with an API token carries the token's own name.
