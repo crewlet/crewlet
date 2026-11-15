@@ -551,6 +551,22 @@ test("the eye watches and unwatches as the person, and a mute is not a watch", a
   expect(followersOf({ watchers: ["jane", "swe"], muted: ["jane"] })).toEqual(["swe"]);
 });
 
+// THE COUNT IS NAMED BY THE NUMBER IT SHOWS, then by who it counts. An
+// aria-label of "Watching: you, …" over a button showing "2" was a name that
+// did not contain what is on screen (axe label-content-name-mismatch), so a
+// person who says "click 2" reached nothing.
+test("the watchers count is named by the number it shows, then by who watches", async () => {
+  mount(<PageView id={ID} />, {
+    page: detail({}, { watchers: ["jane", "swe"] }),
+    page_reads: reads(),
+  });
+  await settle();
+  const count = screen.getByRole("button", { name: /^2 watching/ });
+  expect(count.hasAttribute("aria-label")).toBe(false);
+  expect(count.textContent?.startsWith("2")).toBe(true);
+  expect(count.textContent).toContain("you");
+});
+
 // A DRAFT HAS A WAY OUT: the page says it is one, above its body, with Publish
 // beside it, and the press is `save_page` with the status alone against the
 // version on screen. A page saved as a draft used to stay one for good: the
