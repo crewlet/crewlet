@@ -17,14 +17,13 @@ import {
   EntryHead,
   Facts,
   PEEK_RELATED,
-  RelatedList,
+  RelatedSections,
   Signals,
   Touches,
-  dependsOn,
   namesOf,
   selfOf,
   useEntryReads,
-  usedBy,
+  useRelated,
   type EntryReads,
 } from "./entry.tsx";
 import { EntryActions } from "./EntryActions.tsx";
@@ -63,8 +62,7 @@ function EntryPeek({ answer, reads }: { answer: AtlasEntryAnswer; reads: EntryRe
   const now = useNow();
   const { entry } = answer;
   const self = selfOf(reads);
-  const below = dependsOn(entry, reads.next.data);
-  const above = usedBy(answer);
+  const groups = useRelated(entry.id, reads);
   const work = useEntryWork(entry.id);
   return (
     <>
@@ -76,20 +74,7 @@ function EntryPeek({ answer, reads }: { answer: AtlasEntryAnswer; reads: EntryRe
         <Section spacing="tight" headingLevel={3} title="Facts">
           <Facts entry={entry} now={now} />
         </Section>
-        <Section
-          spacing="tight"
-          headingLevel={3}
-          title={`Depends on (${below.length.toLocaleString()})`}
-        >
-          <RelatedList related={below} limit={PEEK_RELATED} none="It depends on no other entry." />
-        </Section>
-        <Section
-          spacing="tight"
-          headingLevel={3}
-          title={`Used by (${above.length.toLocaleString()})`}
-        >
-          <RelatedList related={above} limit={PEEK_RELATED} none="No other entry depends on it." />
-        </Section>
+        <RelatedSections groups={groups} reads={reads} headingLevel={3} limit={PEEK_RELATED} />
         <PeekWork id={entry.id} reading={work} />
         <Section spacing="tight" headingLevel={3} title="Recent changes">
           <Changes id={entry.id} limit={PEEK_CHANGES} />

@@ -22,7 +22,15 @@ import { relTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { ATLAS_POLL_MS } from "./filters.ts";
-import { Neighbourhood, neighbourhood, touching, type Touching } from "./Neighbourhood.tsx";
+import {
+  Neighbourhood,
+  neighbourhood,
+  relatedOf,
+  touching,
+  type Related,
+  type RelatedGroups,
+  type Touching,
+} from "./Neighbourhood.tsx";
 import {
   EntryDisc,
   FactValue,
@@ -33,17 +41,7 @@ import {
   WordTag,
   sourceSetBy,
 } from "./parts.tsx";
-import {
-  factLabel,
-  KINDS,
-  LANES,
-  MEANING,
-  RELATIONS,
-  SIGNALS,
-  STATES,
-  WORDS,
-  entries,
-} from "./words.ts";
+import { factLabel, KINDS, LANES, MEANING, SIGNALS, STATES, WORDS, entries } from "./words.ts";
 
 /** The address of an entry's page. */
 export function entryPath(id: string): string[] {
@@ -197,27 +195,67 @@ export function Touches({
   );
 }
 
-/** One related entry and how it relates, from either side. */
-export interface Related {
-  relation: string;
-  entry: AtlasSummary;
+/**
+ * What an entry touches, one step out, read off its two traces: the groups the
+ * diagram draws and the sentence over it counts ([relatedOf]). Null until
+ * either trace answers.
+ */
+export function useRelated(
+  id: string,
+  reads: Pick<EntryReads, "next" | "prev">,
+): RelatedGroups | null {
+  const down = reads.next.data;
+  const up = reads.prev.data;
+  return useMemo(() => (down || up ? relatedOf(id, down, up) : null), [id, down, up]);
 }
 
-/** What an entry depends on, read off its relations and the summaries one hop along them. */
-export function dependsOn(entry: AtlasEntry, next: AtlasTraceAnswer | null): Related[] {
-  const named = new Map((next?.hops[0]?.entries ?? []).map((summary) => [summary.id, summary]));
-  return entry.relations.flatMap((edge) => {
-    const summary = edge.to ? named.get(edge.to) : undefined;
-    return summary ? [{ relation: RELATIONS[edge.relation], entry: summary }] : [];
-  });
+/** How many entries one step out an entry touches: every group, as its tab counts them. */
+export function relatedCount(groups: RelatedGroups | null): number {
+  return groups ? groups.reliedOnBy.length + groups.reliesOn.length + groups.around.length : 0;
 }
 
-/** What depends on an entry, each saying how it relies on this one: "Runs on it". */
-export function usedBy(answer: AtlasEntryAnswer): Related[] {
-  return answer.used_by.map((link) => ({
-    relation: `${RELATIONS[link.relation]} it`,
-    entry: link.entry,
-  }));
+/**
+ * What an entry touches, one step out, as three lists under the words the
+ * sentence over its diagram uses: what relies on it, what it relies on, what
+ * stands around it.
+ */
+export function RelatedSections({
+  groups,
+  reads,
+  headingLevel,
+  limit,
+}: {
+  groups: RelatedGroups | null;
+  reads: Pick<EntryReads, "next" | "prev">;
+  headingLevel: 2 | 3;
+  limit?: number;
+}) {
+  if (!groups) {
+    return !reads.next.loading && !reads.prev.loading ? (
+      <p className="muted">Its relations could not be read.</p>
+    ) : (
+      <Skeleton variant="text" rows={3} label="Loading its relations" />
+    );
+  }
+  const sides: [string, Related[], string][] = [
+    ["Relies on it", groups.reliedOnBy, "No other entry relies on it."],
+    ["It relies on", groups.reliesOn, "It relies on no other entry."],
+    ["Around it", groups.around, "Nothing stands around it."],
+  ];
+  return (
+    <>
+      {sides.map(([title, related, none]) => (
+        <Section
+          key={title}
+          spacing="tight"
+          headingLevel={headingLevel}
+          title={`${title} (${related.length.toLocaleString()})`}
+        >
+          <RelatedList related={related} limit={limit} none={none} />
+        </Section>
+      ))}
+    </>
+  );
 }
 
 /** The facts that place an entry, then what people decided it means, then the rest. */
@@ -248,7 +286,7 @@ export function Signals({ entry, now }: { entry: AtlasEntry; now: number }) {
       <p className="muted">
         {entry.review
           ? "Nothing is broken. It waits for a person, because its sources disagree: see Sources."
-          : "Nothing open on this entry."}
+          : "Nothing is wrong with it: no source reports a signal on it."}
       </p>
     );
   }

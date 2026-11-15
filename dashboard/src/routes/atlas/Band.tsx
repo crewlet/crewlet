@@ -19,6 +19,7 @@ import {
   StackedBar,
   StackedRing,
   Text,
+  VisuallyHidden,
 } from "@crewlethq/ui";
 import type {
   AtlasActivityAnswer,
@@ -61,9 +62,12 @@ function AttentionLinks({
             health: one,
             ...(unconfirmed ? { unconfirmed: "true" } : {}),
           })}
-          aria-label={`${entries(health[one] ?? 0)}: ${HEALTH[one].label}. Show them in the catalogue`}
         >
+          {/* NAMED BY WHAT IT SHOWS FIRST, so a reader speaking to the page
+              reaches it by the words on it ("Alerting 4"), and the rest of
+              its name says where it goes. */}
           {HEALTH[one].label} {(health[one] ?? 0).toLocaleString()}
+          <VisuallyHidden>: show them in the catalogue</VisuallyHidden>
         </Link>
       ))}
     </span>

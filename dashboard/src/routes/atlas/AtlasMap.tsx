@@ -110,6 +110,14 @@ function bandsOf(
   })).filter((band) => band.lanes.length > 0);
 }
 
+/**
+ * The path a selection lights, counted over every hop: how many entries rely
+ * on it however far up, and how many it relies on however far down.
+ */
+export function pathSentence(up: number, down: number): string {
+  return `Over every hop, ${entries(up)} ${up === 1 ? "relies" : "rely"} on it and it relies on ${down.toLocaleString()}`;
+}
+
 export function AtlasMap({
   answer,
   work,
@@ -197,12 +205,15 @@ export function AtlasMap({
   const [arrived] = useState(selectedId);
 
   const selected = selectedId === null ? undefined : byId.get(selectedId);
+  // THE PATH THE MAP LIGHTS, COUNTED OVER EVERY HOP and said so, in the verb
+  // the entry's own counts use one step out ("1 entry relies on it"), so the
+  // dock and the sheet never read as two answers to one question.
   const impact = useMemo(() => {
     if (!selected) return "";
     const lines = carrying(edges);
     const up = graphReach(lines, selected.id, "up", Number.POSITIVE_INFINITY).nodes.size - 1;
     const down = graphReach(lines, selected.id, "down", Number.POSITIVE_INFINITY).nodes.size - 1;
-    return `${entries(up)} ${up === 1 ? "depends" : "depend"} on it, and it depends on ${down.toLocaleString()}`;
+    return pathSentence(up, down);
   }, [selected, edges]);
 
   return (

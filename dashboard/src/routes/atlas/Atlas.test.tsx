@@ -5,7 +5,7 @@
  * search the map and the catalogue share, the sheet and an entry's page.
  */
 
-import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   disputedServer,
@@ -24,11 +24,12 @@ import type { AtlasEntryAnswer } from "~/contract/atlas.ts";
 import { Atlas } from "./Atlas.tsx";
 import { AtlasPeek } from "./AtlasPeek.tsx";
 import { EntryPage } from "./EntryPage.tsx";
-import { serviceColumns } from "./AtlasMap.tsx";
+import { pathSentence, serviceColumns } from "./AtlasMap.tsx";
 import { bandsOf } from "./Catalogue.tsx";
 import { queryParams } from "./filters.ts";
+import { Signals } from "./entry.tsx";
 import { cardOf, lineOf } from "./graph.tsx";
-import { neighbourhood } from "./Neighbourhood.tsx";
+import { neighbourhood, relatedOf, touching } from "./Neighbourhood.tsx";
 import { coverageLine, coverageNotes } from "./parts.tsx";
 import { factLabel } from "./words.ts";
 
@@ -163,6 +164,44 @@ describe("the map's cards and lines", () => {
     expect(lane("orders-db cpu high")).toBe("around");
     expect(near.edges).toHaveLength(near.nodes.length - 1);
   });
+
+  // ONE ENTRY, ONE COUNT OF EACH THING: the sentence over the diagram counts
+  // its clusters, and the lists on the sheet and the page list the same
+  // groups. Mutation: list every outgoing relation under "It relies on" again
+  // (around it included) and the lists stop matching the sentence.
+  test("the lists of what an entry touches are the groups its diagram draws and its sentence counts", () => {
+    const company = grownCompany();
+    for (const entry of [company.ordersDb, company.web1, company.checkout]) {
+      const down = traceAnswer(company, entry, "down", 1);
+      const up = traceAnswer(company, entry, "up", 1);
+      const counted = touching(neighbourhood(entry, down, up, 0).nodes);
+      const listed = relatedOf(entry.id, down, up);
+      expect(
+        {
+          usedBy: listed.reliedOnBy.length,
+          reliesOn: listed.reliesOn.length,
+          around: listed.around.length,
+        },
+        entry.name,
+      ).toEqual(counted);
+    }
+    const db = relatedOf(
+      company.ordersDb.id,
+      traceAnswer(company, company.ordersDb, "down", 1),
+      traceAnswer(company, company.ordersDb, "up", 1),
+    );
+    // What stands around is never something it relies on.
+    expect(db.reliesOn.map((one) => one.entry.name)).not.toContain("orders-db cpu high");
+    expect(db.around.map((one) => one.entry.name)).toContain("orders-db cpu high");
+    expect(db.reliedOnBy.find((one) => one.entry.name === "orders-api")?.relation).toMatch(/ it$/);
+  });
+
+  // EVERY HOP IS SAID: the dock counts the path the map lights, which is a
+  // different question from one step out, so it says which it answers.
+  test("the dock's counts name every hop, in the verb one step out uses", () => {
+    expect(pathSentence(2, 13)).toBe("Over every hop, 2 entries rely on it and it relies on 13");
+    expect(pathSentence(1, 0)).toBe("Over every hop, 1 entry relies on it and it relies on 0");
+  });
 });
 
 describe("the filters", () => {
@@ -177,8 +216,10 @@ describe("the filters", () => {
       confidence: "",
       health: "",
       unconfirmed: false,
+      show: "",
     } as const;
     expect(queryParams(none)).toEqual({});
+    expect(queryParams({ ...none, show: "retired" })).toEqual({ show: "retired" });
     expect(queryParams({ ...none, kind: "host", unconfirmed: true })).toEqual({
       kind: "host",
       unconfirmed: true,
@@ -209,6 +250,33 @@ describe("the filters", () => {
     );
   });
 
+  // A RETIRED ENTRY IS FOUND AGAIN where the Retire dialog says it is: every
+  // read leaves the retired out, and the engine lists them alone when asked.
+  // Mutation: drop the switch and a retired entry is reachable only by its
+  // old address.
+  test("Show retired entries only asks the engine for the retired, and says so as a chip", async () => {
+    const { asked } = mount("#/company/atlas", <Atlas />, grownCompany());
+    const control = await screen.findByRole("button", { name: "Filter" });
+    await act(async () => {
+      fireEvent.click(control);
+    });
+    const toggle = await screen.findByRole("switch", { name: "Show retired entries only" });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    expect(asked.every((a) => !("show" in a.params))).toBe(true);
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(location.hash).toContain("show=retired");
+    for (const what of ["atlas_map", "atlas_entries"]) {
+      expect(
+        asked.some((a) => a.what === what && a.params.show === "retired"),
+        what,
+      ).toBe(true);
+    }
+    const chips = screen.getByRole("group", { name: "Filters in force" });
+    expect(chips.textContent).toContain("Retired entries only");
+  });
+
   // THE TOOLBAR ROW IS THE SEARCH AND ONE FILTER CONTROL: no menu stands on
   // the row, the control counts what is in force, and each filter in force is
   // a chip removed on its own. Mutation: draw the menus on the row again.
@@ -231,6 +299,40 @@ describe("the filters", () => {
       fireEvent.click(within(chips).getByRole("button", { name: "Clear all" }));
     });
     expect(location.hash).not.toContain("vendor=");
+  });
+
+  // A VALUE THIS BUILD DOES NOT KNOW IS LEFT OUT, never a crash and never a
+  // question the engine refuses: a stale bookmark, a newer build's value or a
+  // typo. Mutation: cast the address values again, and the chips index the
+  // word tables with "bogus" and take the screen down.
+  test("an unknown value in the address is left out, said once, and removed on request", async () => {
+    const { asked } = mount(
+      "#/company/atlas?lane=bogus&kind=nope&vendor=nope&health=nope&confidence=nope",
+      <Atlas />,
+      grownCompany(),
+    );
+    const note = await screen.findByText("Part of this address is not applied");
+    const callout = note.closest(".crewlet-callout") as HTMLElement;
+    expect(callout.textContent).toContain(
+      "It asks for the kind “nope”, the lane “bogus”, the vendor “nope”, the confidence “nope” and the health “nope”",
+    );
+    expect(screen.queryByText(/could not be drawn/)).toBeNull();
+    // No chip for what is left out, and nothing of it sent to the engine.
+    expect(screen.queryByRole("group", { name: "Filters in force" })).toBeNull();
+    const sent = asked.filter((a) => a.what === "atlas_map" || a.what === "atlas_entries");
+    expect(sent.length).toBeGreaterThan(0);
+    for (const one of sent) {
+      for (const key of ["lane", "kind", "vendor", "health", "confidence"]) {
+        expect(one.params).not.toHaveProperty(key);
+      }
+    }
+    await act(async () => {
+      fireEvent.click(within(callout).getByRole("button", { name: "Remove it" }));
+    });
+    for (const key of ["lane=", "kind=", "vendor=", "health=", "confidence="]) {
+      expect(location.hash).not.toContain(key);
+    }
+    expect(screen.queryByText("Part of this address is not applied")).toBeNull();
   });
 
   test("no chip row is drawn while no filter is set, and a search is not a chip", async () => {
@@ -316,8 +418,11 @@ describe("the page", () => {
     ] as const) {
       const n = wrong.filter((node) => node.health === health).length;
       if (n === 0) continue;
-      const link = await screen.findByRole("link", { name: new RegExp(`${label}\\. Show them`) });
-      expect(link.textContent).toBe(`${label} ${n}`);
+      // NAMED BY WHAT IT SHOWS FIRST (WCAG 2.5.3): "Alerting 4" is what a
+      // person speaking to the page says. Mutation: name it by its count first.
+      const link = await screen.findByRole("link", {
+        name: `${label} ${n}: show them in the catalogue`,
+      });
       // The health alone: the band is about the company, so the search is not carried.
       expect(link.getAttribute("href")).toBe(`#/company/atlas?health=${health}`);
       counted += n;
@@ -333,7 +438,7 @@ describe("the page", () => {
     mountAtlas("#/company/atlas", <Atlas />, company, {
       answers: { atlas_entries: new Promise(() => {}) },
     });
-    await screen.findByRole("link", { name: /Alerting\. Show them/ });
+    await screen.findByRole("link", { name: /^Alerting \d+: show them in the catalogue$/ });
     expect(screen.getByText("Reading what needs attention")).toBeTruthy();
     expect(screen.queryByText("Nothing needs attention.")).toBeNull();
   });
@@ -343,7 +448,7 @@ describe("the page", () => {
     const calm = { ...company, nodes: company.nodes.map((node) => ({ ...node, health: "quiet" })) };
     mount("#/company/atlas", <Atlas />, calm as typeof company);
     expect(await screen.findByText("Nothing needs attention.")).toBeTruthy();
-    expect(screen.queryByRole("link", { name: /Show them in the catalogue/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /show them in the catalogue/ })).toBeNull();
   });
 
   test("an empty atlas says what fills it, and draws no band of zeros", async () => {
@@ -426,7 +531,7 @@ describe("the selection", () => {
 });
 
 describe("an entry", () => {
-  test("its peek names what it depends on and what depends on it", async () => {
+  test("its peek lists what relies on it, what it relies on and what stands around it", async () => {
     const company = grownCompany();
     mount(
       `#/company/atlas?peek=atlas:${company.web1.id}`,
@@ -435,9 +540,29 @@ describe("an entry", () => {
       (id) => (id === company.web1.id ? disputedServer(company) : undefined),
     );
     expect(await screen.findByText("web-1")).toBeTruthy();
-    expect(await screen.findByText("Used by (3)")).toBeTruthy();
+    const listed = relatedOf(
+      company.web1.id,
+      traceAnswer(company, company.web1, "down", 1),
+      traceAnswer(company, company.web1, "up", 1),
+    );
+    expect(listed.reliedOnBy.length).toBeGreaterThan(0);
+    expect(await screen.findByText(`Relies on it (${listed.reliedOnBy.length})`)).toBeTruthy();
+    expect(screen.getByText(`It relies on (${listed.reliesOn.length})`)).toBeTruthy();
+    expect(screen.getByText(`Around it (${listed.around.length})`)).toBeTruthy();
     expect(screen.getByText("What it touches")).toBeTruthy();
     expect(screen.getByText("Show it on the map")).toBeTruthy();
+  });
+
+  // AN EMPTY SIGNALS LIST SAYS WHAT IS EMPTY, never "open", the word the Work
+  // tab counts tasks in: "Nothing open on this entry" stood beside "2 open
+  // tasks name this entry". Mutation: put the old sentence back.
+  test("an entry with no signals says nothing is wrong with it, never that nothing is open", () => {
+    const { entry } = entryAnswer(grownCompany().checkout);
+    render(<Signals entry={{ ...entry, signals: [], review: false }} now={0} />);
+    expect(
+      screen.getByText("Nothing is wrong with it: no source reports a signal on it."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/open/i)).toBeNull();
   });
 
   // THE TIMELINE IS THE ATLAS'S OWN LOG, asked for this entry alone.

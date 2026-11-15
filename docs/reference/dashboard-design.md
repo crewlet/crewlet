@@ -9785,8 +9785,9 @@ placed, so a selection made later never moves the reader's view.
 **One selection** (`sel={id}`, or the entry the sheet is open on) is lit on the
 map along its whole path both ways, with the rest receding to a fifth and the
 lit lines under a glow with faster dashes, and is marked in the catalogue. The
-dock at the map's foot names it (its disc, name, kind, health and "7 entries
-depend on it, and it depends on 1", the set the map lights), with **Details**,
+dock at the map's foot names it (its disc, name, kind, health and "Over every
+hop, 7 entries rely on it and it relies on 1", the set the map lights, said as
+every hop so it never reads as the sheet's count one step out), with **Details**,
 which opens its sheet and leaves fullscreen first since the sheet is the
 shell's, and a button that clears. A press on the selected card, on the ground
 or Escape clears as well. A link that arrives with `trace=up` or `trace=down`
@@ -9800,8 +9801,13 @@ Every motion stops for a reader who asked for less.
 **The toolbar** is the search and one **Filter** control, and nothing else
 on the row. The control is a kit `Popover` holding the five menus (Kind, Lane,
 Vendor, Health and Confidence, each listing the values with entries and
-counting each over every other filter, `atlas_facets`), **Show unconfirmed**
-and Clear all filters; its button carries a count of the filters in force.
+counting each over every other filter, `atlas_facets`), **Show unconfirmed**,
+**Show retired entries only** (`show=retired`, the retired entries alone,
+where the Retire dialog sends a reader to find one again) and Clear all
+filters; its button carries a count of the filters in force. Each closed
+filter's value in the address is kept only where the dashboard's word tables
+know it (`parseFilters`); an unknown one is not applied, sent or drawn as a
+chip, and a warning banner names it with **Remove it**.
 While any filter is set, each is a removable chip (the kit's `FilterPill`,
 "Kind is Server") in a row under the toolbar, with Clear all; with none set
 the row is not drawn. The
@@ -9846,12 +9852,15 @@ lands on the same picture, and its entry is the selection, which stays lit
 when the sheet closes. It is the entry's header (its disc beside its name, its
 kind and key, its health word, its owner, its confidence word, the one line a
 person gave it, its vendor, when it was last seen and its number of sources),
-its signals ("Nothing open on this entry." when there are none), **What it
+its signals ("Nothing is wrong with it: no source reports a signal on it." when
+there are none, never "open", the word the Work tab counts tasks in), **What it
 touches** (how many entries rely on it and how many it relies on, in the
 engine's counts, over a still `GraphCanvas` of the entry among its neighbours,
-each in the cluster that says how it relates: Used by, This entry, Depends on,
-Runs on, Around it), its facts with where each came from, what it depends on
-and what depends on it (six each, then a pointer to the page), its **Work**
+each in the cluster that says how it relates: Relies on it, This entry,
+Depends on, Runs on, Around it), its facts with where each came from, what
+relies on it, what it relies on and what stands around it (`relatedOf`, the
+diagram's own clusters, so the lists' counts are the sentence's; six each,
+then a pointer to the page), its **Work**
 (the open tasks that name it, five, then a pointer to the page's Work tab;
 locked with its reason for a reader without Worklet), its **Recent
 changes** as a kit `Timeline` from `atlas_log` (six, then a pointer to the
@@ -9864,9 +9873,12 @@ each with a by-line saying where the value came from and how far it is
 trusted ("seen by Cloudflare · confirmed · 4 min ago", "observed by sre ·
 likely · turn"), its use channel by channel, the agents holding an account at
 it, the exact keys merged into it, and its eight latest changes, then the way
-to History. **Relations**: what it depends on, what
-depends on it, the seats, units and pages it names, and everything that depends
-on it hop by hop (`atlas_trace`), with the way to show it on the map.
+to History. **Relations**: what relies on it, what it relies on and
+what stands around it (the same three lists, the tab counting all three), the
+seats, units and pages it names, and everything that relies on it over every
+hop (`atlas_trace`), with the way to show it on the map in a link underlined
+as one set inside its sentence. A purge of the entry itself leaves it: its
+sheet closes, or its page goes back to the atlas.
 **Work** (`tab=work`): the Worklet tasks that name the entry
 (`atlas_entry_work`), the open ones most recently changed first and then
 "Finished in the last 30 days", each drawn by Worklet's own task rows and
