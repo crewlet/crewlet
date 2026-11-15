@@ -47,7 +47,7 @@ func (s *Service) writeSection(w http.ResponseWriter, r *http.Request, company *
 		return
 	}
 	var document map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &document); err != nil {
+	if err = json.Unmarshal(encoded, &document); err != nil {
 		s.fail(w, r, "decode the config", err)
 		return
 	}
@@ -62,7 +62,7 @@ func (s *Service) writeSection(w http.ResponseWriter, r *http.Request, company *
 		return
 	}
 	var decoded any
-	if err := json.Unmarshal(value, &decoded); err != nil {
+	if err = json.Unmarshal(value, &decoded); err != nil {
 		s.fail(w, r, "decode the section", err)
 		return
 	}
