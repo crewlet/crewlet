@@ -358,6 +358,16 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  delete_work_view: {
+    // DELETE ON A VIEW'S PAGE AND IN THE SAVED VIEWS LIST'S ROW MENU: the
+    // view by its id, decided by the engine on the stored view's owner and
+    // container as a save that replaces it is.
+    args: ["id"],
+    domain: "tracker",
+    apps: ["worklet"],
+    refreshes: [],
+    scope: "person",
+  },
   // `seen` IS HOW FAR THIS PAGE READ THE DOMAIN'S LOG (the notice's own
   // position, the furthest of those a mark names, or the newest loaded): the
   // mark is decided by whichever data node is asked, and it waits for that

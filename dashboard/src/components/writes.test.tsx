@@ -13,6 +13,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import {
   AssignButton,
+  DeleteViewButton,
   EditProjectButton,
   PinButton,
   RestoreButton,
@@ -51,6 +52,7 @@ const JANE: ViewerState = {
     "mark_inbox",
     "write_project",
     "save_work_view",
+    "delete_work_view",
   ],
   project: "",
   kind: "human",
@@ -198,6 +200,32 @@ test("pinning adds the one view and unpinning removes it, never replacing the st
   fireEvent.click(screen.getByRole("button", { name: "Unpin" }));
   await waitFor(() => expect(sent).toHaveLength(2));
   expect(sent[1]!.body.args).toEqual({ views: { remove: ["v-1"] } });
+});
+
+// A VIEW IS DELETED ONLY ONCE THE READER SAID YES, and by its id: the press
+// opens the question, Cancel sends nothing, and Delete view sends the one
+// `delete_work_view` naming the view, after which the page is told to leave.
+test("deleting a view asks first, then sends its id and nothing else", async () => {
+  const left = vi.fn();
+  mount(
+    <DeleteViewButton view={{ id: "v-9", name: "Triage", personal: false }} onDeleted={left} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Delete view" }));
+  let dialog = await screen.findByRole("dialog", { name: /Delete the view “Triage”\?/ });
+  expect(dialog.textContent).toContain("everyone who sees it");
+  expect(dialog.textContent).toContain("Nothing brings the view back.");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(sent).toEqual([]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Delete view" }));
+  dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete view" }));
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0]!.tool).toBe("delete_work_view");
+  expect(sent[0]!.body.args).toEqual({ id: "v-9" });
+  await waitFor(() => expect(left).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
 // A VIEW'S NAME PAST THE ENGINE'S CAP IS HELD WHOLE AND SAID, NEVER CUT. The

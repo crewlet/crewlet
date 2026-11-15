@@ -43,6 +43,7 @@ import {
   PlusGlyph,
   SearchGlyph,
   CompassGlyph,
+  TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { QueryState } from "./common.tsx";
@@ -554,8 +555,8 @@ export function SaveViewButton({
  * THE SAME WRITE AS SAVING ONE, naming the view it replaces (`id`) and sending
  * the rest of it as it stands, so a rename changes the name and nothing the
  * view asks. Whether the reader may is the engine's (a protected personal
- * view is its owner's alone), said in its own words. There is no delete: the
- * engine offers none.
+ * view is its owner's alone), said in its own words. Taking the view away is
+ * [DeleteViewButton]'s.
  */
 export function EditViewButton({
   view,
@@ -598,6 +599,130 @@ export function EditViewButton({
         />
       )}
     </>
+  );
+}
+
+/** A saved view as its delete names it: by id to the engine, by name to the reader. */
+export interface DeletableView {
+  id: string;
+  name: string;
+  /** A personal view: only its owner's strip and pins lose it. */
+  personal: boolean;
+}
+
+/**
+ * Delete on a saved view's own page, and on its row in the Saved views list,
+ * asked first ([DeleteViewDialog]).
+ *
+ * DRAWN FOR EVERY READER, held with the engine's reason where the reader may
+ * not delete it, as every write control is. Whether they may is the engine's:
+ * the view's own owner and container decide it, as they decide a save that
+ * would replace it. `compact` is the row's: the glyph alone, named for the
+ * view it deletes, since a list of rows each saying "Delete view" names none.
+ */
+export function DeleteViewButton({
+  view,
+  onDeleted,
+  compact = false,
+}: {
+  view: DeletableView;
+  /** Told once the engine has the delete, so the page leaves the view. */
+  onDeleted: () => void;
+  compact?: boolean;
+}) {
+  const write = useAct("delete_work_view");
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant={compact ? "ghost" : "secondary"}
+        leadingIcon={<TrashGlyph />}
+        showRefusal={false}
+        onPress={() => setOpen(true)}
+        {...(compact ? { "aria-label": `Delete the view “${view.name}”` } : {})}
+      >
+        {compact ? null : "Delete view"}
+      </WriteButton>
+      {open && (
+        <DeleteViewDialog
+          view={view}
+          write={write}
+          onClose={() => {
+            write.dismiss();
+            setOpen(false);
+          }}
+          onDeleted={onDeleted}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * Deleting a saved view, said before it is done.
+ *
+ * CONFIRMED, NOT OPTIMISTIC: the view stays on screen until the engine has the
+ * delete, and the dialog says what goes with it (every strip and pin it is
+ * in, or the reader's own for a personal view), that the work it shows is not
+ * touched, and that nothing brings the view back. A refusal stays in the
+ * dialog, in the engine's words.
+ */
+function DeleteViewDialog({
+  view,
+  write,
+  onClose,
+  onDeleted,
+}: {
+  view: DeletableView;
+  write: ReturnType<typeof useAct<"delete_work_view">>;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const submit = async () => {
+    if (!pressable(write, undefined)) return;
+    const result = await write.run({ id: view.id }, { done: `Deleted the view ${view.name}` });
+    if (result && (result.kind === "applied" || result.kind === "pending")) {
+      onClose();
+      onDeleted();
+    }
+  };
+  return (
+    <Modal
+      open
+      size="sm"
+      title={`Delete the view “${view.name}”?`}
+      icon={<TrashGlyph />}
+      onClose={onClose}
+      onSubmit={() => void submit()}
+      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
+            Cancel
+          </Button>
+          <WriteButton
+            write={write}
+            variant="danger"
+            showRefusal={false}
+            onPress={() => void submit()}
+          >
+            Delete view
+          </WriteButton>
+        </>
+      }
+    >
+      <div className="col gap-3">
+        <p>
+          {view.personal
+            ? "It leaves your strip, your pins and the Saved views list."
+            : "It leaves the strip, the pins and the Saved views list of everyone who sees it."}{" "}
+          The work it shows is not touched. Nothing brings the view back.
+        </p>
+        <RefusalNote write={write} />
+      </div>
+    </Modal>
   );
 }
 
