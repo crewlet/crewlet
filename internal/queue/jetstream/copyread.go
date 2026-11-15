@@ -120,7 +120,11 @@ import (
 // the consumer's count of a delivery that never arrived.
 //
 // A pull that hears nothing for a quiet second ([letterQuiet]) asks the
-// consumer what it says of itself ([pulling.quiet]). A cluster drops a new
+// consumer what it says of itself ([pulling.quiet]), given the time the
+// message it reads takes to cross, since the consumer's answer crosses the
+// link behind it: held to the read term and the ceiling alone, every answer
+// arrived after the ceiling on a link that carries the message in longer, and
+// the read failed while its message was on its way. A cluster drops a new
 // consumer's FIRST pull routinely — natsobj measured one read in twenty-five
 // on a loaded three-member fleet — and a consumer that holds no pull and has
 // delivered nothing never got it: it is deleted and made again, up to
@@ -326,8 +330,15 @@ const (
 // answers, as every read of a leader is ([jsprovision.ReadWith]): only the
 // consumer's leader answers its info, and a member that still believes in one
 // its group just lost drops the request without a word.
-func (p *pulling) quiet(ctx context.Context) (quietSays, *jetstream.ConsumerInfo, error) {
-	info, err := jsprovision.ReadWith(ctx, p.timing,
+//
+// arrival is how long the answer may take to reach the reader behind what the
+// consumer delivered ahead of it, beyond the read term and the ceiling
+// ([jsprovision.Timing.Arriving]): the answer crosses the same link as the
+// deliveries, and a message arrives whole only once its last byte is in, so a
+// probe given less than a message still crossing was asked again behind it
+// until the ceiling, and failed a read whose message was on its way.
+func (p *pulling) quiet(ctx context.Context, arrival time.Duration) (quietSays, *jetstream.ConsumerInfo, error) {
+	info, err := jsprovision.ReadWith(ctx, p.timing.Arriving(arrival),
 		func(ctx context.Context) (*jetstream.ConsumerInfo, error) { return p.cons.Info(ctx) }, nil)
 	switch {
 	case err != nil:
@@ -588,7 +599,7 @@ func (c *copyRead) read(ctx context.Context, cfg jetstream.ConsumerConfig, cross
 		if err != nil {
 			return err
 		}
-		got, err := c.first(ctx, cons, maxBytes, remade < firstPullRemakes)
+		got, err := c.first(ctx, cons, crossing, maxBytes, remade < firstPullRemakes)
 		drop()
 		switch {
 		case errors.Is(err, errUnpulled):
@@ -605,9 +616,11 @@ func (c *copyRead) read(ctx context.Context, cfg jetstream.ConsumerConfig, cross
 // first is the first message cons delivers, pulled once on an inbox of its own
 // for as long as ctx allows, or nil where it has nothing to deliver — and
 // [errUnpulled], where remake allows it, for a consumer whose pull never
-// reached it: see this file's head.
-func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, maxBytes int,
-	remake bool) (*fetched, error) {
+// reached it: see this file's head. crossing is how long the message takes to
+// cross raw, which the consumer's answer to a quiet pull may wait behind
+// ([pulling.quiet]).
+func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, crossing time.Duration,
+	maxBytes int, remake bool) (*fetched, error) {
 
 	if cons.CachedInfo().NumPending == 0 {
 		return nil, nil
@@ -625,7 +638,9 @@ func (c *copyRead) first(ctx context.Context, cons jetstream.Consumer, maxBytes 
 	}
 	got, err := p.within(ctx, letterQuiet)
 	if errors.Is(err, errQuiet) {
-		says, _, qerr := p.quiet(ctx)
+		// ITS ANSWER BEHIND THE MESSAGE: what the consumer delivered
+		// before the probe crosses the link ahead of the probe's answer.
+		says, _, qerr := p.quiet(ctx, crossing)
 		switch {
 		case errors.Is(qerr, jetstream.ErrConsumerNotFound):
 			// GONE before it delivered anything — as good as one that

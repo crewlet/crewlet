@@ -303,7 +303,10 @@ func (s letterStream) headers(ctx context.Context, q *Queue, cons jetstream.Cons
 			heard = time.Now()
 			continue
 		}
-		says, info, err := p.quiet(ctx)
+		// NO ARRIVAL beyond the read term: a listing's deliveries are
+		// headers, each crossing the link in a fraction of it at the
+		// floor, so its consumer's answer waits behind none longer.
+		says, info, err := p.quiet(ctx, 0)
 		switch {
 		case err != nil:
 			return nil, err
