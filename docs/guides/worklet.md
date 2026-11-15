@@ -587,7 +587,10 @@ A **project's own** field declarations are the project **lead's** (or an
 administrator's), written with `write_project(fields: [...])`. That
 list REPLACES the project's declarations and leaves the workspace's alone —
 the two are separate scopes and a task's effective set is their union — so
-send the whole set, and read `describe_project` first. A project declaration sharing a workspace field's id
+send the whole set, and read `describe_project` first: its `own_fields` is
+exactly that set, archived declarations included, where its `fields` is the
+effective one a task files against, and sending that back would copy every
+workspace field into the project. A project declaration sharing a workspace field's id
 **shadows** it, which `describe_project` names so a reader can see which
 definition is in force.
 
