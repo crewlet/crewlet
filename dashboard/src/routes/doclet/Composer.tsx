@@ -73,7 +73,8 @@ import type { PageStatus } from "~/protocol/index.ts";
 import { useAssistantDraft, useDraftState, writeParts, writeVia } from "~/app/assistant/draft.ts";
 import { composerDraft, type ComposerValues } from "./composerDraft.ts";
 import { linkPageCommand } from "./page/LinkPicker.tsx";
-import { DocletBar, PageGlyph, pagePath, placesIn, useSpaces } from "./parts.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageGlyph, PathSteps, pagePath, placesIn, useSpaces } from "./parts.tsx";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 
 /**
@@ -275,7 +276,6 @@ export function Composer() {
   if (read && spaces.length === 0) {
     return (
       <>
-        <DocletBar />
         <EmptyState
           icon={<BookOpenGlyph size="xl" />}
           title="There is no space to file a page in yet"
@@ -330,7 +330,8 @@ export function Composer() {
 
   return (
     <>
-      <DocletBar>
+      {/* THE NEW PAGE'S OWN ACTIONS ALONE, no search: see `DocletBar`. */}
+      <PageActions>
         <Button
           size="small"
           variant="ghost"
@@ -341,7 +342,7 @@ export function Composer() {
         </Button>
         {save("draft", "Save as draft", "secondary")}
         {save("published", "Publish", "primary")}
-      </DocletBar>
+      </PageActions>
 
       <div className="knowledge-composer">
         <div className="knowledge-composer-main">
@@ -349,31 +350,32 @@ export function Composer() {
             <span className="knowledge-composer-label" aria-hidden="true">
               File it in
             </span>
-            <Select
-              size="sm"
-              width="auto"
-              ariaLabel="The space to file it in"
-              placeholder="Choose a space"
-              aria-describedby={space ? undefined : "knowledge-composer-space-first"}
-              value={space || undefined}
-              options={spaceOptions}
-              onChange={(value) => {
-                setSpace(String(value));
-                setParent("");
-              }}
-            />
-            <span aria-hidden="true">/</span>
-            <Select
-              size="sm"
-              width="auto"
-              searchable
-              searchPlaceholder="Words from a title"
-              ariaLabel="The page it goes under"
-              disabled={!space}
-              value={parent}
-              options={parentOptions}
-              onChange={(value) => setParent(String(value))}
-            />
+            <PathSteps>
+              <Select
+                size="sm"
+                width="auto"
+                ariaLabel="The space to file it in"
+                placeholder="Choose a space"
+                aria-describedby={space ? undefined : "knowledge-composer-space-first"}
+                value={space || undefined}
+                options={spaceOptions}
+                onChange={(value) => {
+                  setSpace(String(value));
+                  setParent("");
+                }}
+              />
+              <Select
+                size="sm"
+                width="auto"
+                searchable
+                searchPlaceholder="Words from a title"
+                ariaLabel="The page it goes under"
+                disabled={!space}
+                value={parent}
+                options={parentOptions}
+                onChange={(value) => setParent(String(value))}
+              />
+            </PathSteps>
             {/* THE ONE HOLD NOTHING ELSE ON THE PAGE SHOWS, said beside the
                 field that clears it: an empty title and an empty page show
                 themselves, and a title already taken is said under the title,

@@ -285,7 +285,7 @@ describe("the figures", () => {
   });
 
   // THE COMPANY'S CLOCK WHERE THIS BROWSER CANNOT READ IT is UTC, as every
-  // reading of it is (`range.ts`'s companyZone), and so is a company with no
+  // reading of it is (`companyDay.ts`'s companyZone), and so is a company with no
   // zone, as the engine reads one: the weekday is the day Company › Budgets
   // names for the same reset, never the browser's own (the suite's Berlin).
   test("the reset's weekday is read in UTC where the company's zone cannot be", () => {

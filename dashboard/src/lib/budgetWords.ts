@@ -8,7 +8,7 @@
 
 import type { BudgetWindow } from "~/protocol/types.ts";
 import { companyDateLabel, companyMonthLabel, relTime } from "./format.ts";
-import { dayLabelIn } from "./range.ts";
+import { dayLabelIn } from "./companyDay.ts";
 
 /** A window's heading, over its figure or its bar: "Today", "This week". */
 export const PERIOD_HEADING: Readonly<Record<BudgetWindow["period"], string>> = {

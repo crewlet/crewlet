@@ -692,6 +692,70 @@ func TestADescriptionGroupsFieldsAndNamesTheShadowed(t *testing.T) {
 	}
 }
 
+// TestADescriptionServesTheProjectsOwnDeclarationsWhole is the read a `fields`
+// write needs: that write REPLACES the project's own declarations, so a
+// reader editing them has to be handed exactly that set, archived ones and
+// all, and never the effective one the form files against. Sending the
+// effective set back copied every workspace field into the project as a
+// shadow, and leaving the archived ones out dropped their declarations.
+//
+// AND THE ARCHIVED LABELS beside the live ones, which a create refuses and a
+// lead still reads: the tasks filed under one keep it.
+func TestADescriptionServesTheProjectsOwnDeclarationsWhole(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.WriteFields(t.Context(), "op-fields", []worklet.FieldDef{
+		{ID: "f-impact", Slug: "impact", Name: "Impact", Type: worklet.FieldText},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+	seedProject(t, r, worklet.Project{Key: "ENG", Name: "Engineering",
+		Fields: []worklet.FieldDef{
+			{ID: "f-note", Slug: "note", Name: "Note", Type: worklet.FieldText},
+			{ID: "f-old", Slug: "old", Name: "Old", Type: worklet.FieldText,
+				Archived: true},
+		}})
+
+	detail := r.project(worklet.ProjectDetailQuery{Project: "ENG"})
+	var own []string
+	for _, f := range detail.OwnFields {
+		own = append(own, f.ID)
+	}
+	if !slices.Equal(own, []string{"f-note", "f-old"}) {
+		t.Fatalf("the project's own declarations are %v, want [f-note f-old]: "+
+			"the workspace's impact is not the project's, and the archived old is", own)
+	}
+	if got := fieldSlugs(detail.Fields); !slices.Equal(got, []string{"impact", "note"}) {
+		t.Fatalf("the effective set is %v, want [impact note]: what a caller "+
+			"files against is unchanged", got)
+	}
+
+	bare := r.project(worklet.ProjectDetailQuery{Project: "ENG", ForType: "bug"})
+	if len(bare.OwnFields) != 2 {
+		t.Fatalf("for_type narrowed the project's own declarations to %d: the "+
+			"set a write replaces is the whole set", len(bare.OwnFields))
+	}
+
+	r.declareTags("api", "legacy")
+	if _, err := r.writer.WriteTags(t.Context(), "op-archive", "ENG",
+		worklet.TagEdit{Archive: []string{"legacy"}},
+		worklet.TagAuthority{Policy: true}); err != nil {
+
+		t.Fatalf("archive: %v", err)
+	}
+	r.drain()
+	detail = r.project(worklet.ProjectDetailQuery{Project: "ENG"})
+	if len(detail.Tags) != 1 || detail.Tags[0].Slug != "api" {
+		t.Fatalf("the live labels are %+v, want only api", detail.Tags)
+	}
+	if len(detail.ArchivedTags) != 1 || detail.ArchivedTags[0].Slug != "legacy" ||
+		!detail.ArchivedTags[0].Archived {
+		t.Fatalf("the archived labels are %+v, want legacy, marked archived",
+			detail.ArchivedTags)
+	}
+}
+
 // chart is a test Units: the org this reader deliberately does not hold.
 //
 // IT ANSWERS EITHER SPELLING, folded, because that is the seam's contract —

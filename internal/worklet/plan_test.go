@@ -1250,6 +1250,10 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 			purged, kind, record),
 		"a purge empties a kept row": seek(historyKey, forgetSkeletonStatement,
 			[]byte(`{}`), `{}`, record),
+		"a removed remark leaves the inbox": seek(subject, unquoteNoticesStatement,
+			task, "c-1"),
+		"a removed remark leaves the history": seek(subject, unquoteHistoryStatement,
+			task, "c-1"),
 	}
 	one, oneArgs := restampStatement(task)
 	reads["one task's last change"] = seek(subject, one, oneArgs...)

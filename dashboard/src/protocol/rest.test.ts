@@ -321,6 +321,22 @@ describe("what a request sends", () => {
     ).rejects.toThrow(TypeError);
   });
 
+  // A BLOB IS BYTES UNDER ANY TYPE: a project file picked from disk as JSON is
+  // its bytes too. Encoded as JSON it went as "{}", and the file's contents
+  // never left the browser. Mutation: decide the encoding on the type alone.
+  test("a blob is sent as itself, even under a JSON type", async () => {
+    const sent = stub(() => json({}, 201));
+    const file = new Blob(['{"q": 3}'], { type: "application/json" });
+    await rest.request("PUT", "/worklet/files/ENG/numbers.json", {
+      body: file,
+      contentType: "application/json",
+    });
+    expect(sent[0]!.init.body).toBe(file);
+    expect((sent[0]!.init.headers as Record<string, string>)["Content-Type"]).toBe(
+      "application/json",
+    );
+  });
+
   // A HEADER IS BYTES: text a person wrote (a revision's summary) is sent as
   // its UTF-8 bytes, which the engine reads back whole; `fetch` refused a
   // character past U+00FF and sent "ü" as a byte no UTF-8 reader reads.

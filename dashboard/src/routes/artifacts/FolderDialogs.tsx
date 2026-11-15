@@ -211,7 +211,9 @@ export function NewFolderFields({
               {
                 value: "private",
                 label: "Only you",
-                detail: "Nobody else sees it, or anything you file in it, by its place.",
+                // ABOUT THE FOLDER ALONE, as Everyone's is: what is filed in
+                // it is the note under the choice's to say, once.
+                detail: "Nobody else can find it or file into it.",
                 media: <ArtifactAccessGlyph access="private" />,
               },
             ]}

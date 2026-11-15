@@ -353,7 +353,6 @@ export function DocCreate() {
       }}
       handoff={{
         tool: askTool(who, panel),
-        open: () => panel.setOpen(true),
         panel: panel.open ? (
           <AskAgentPanel
             panel={panel}

@@ -13,23 +13,23 @@
  * three-day task inside one, and the first thing anybody does with a timeline
  * is look at this week.
  *
- * DAYS ARE THE READER'S, through `lib/format.ts`'s [readerDay] — the SAME
+ * DAYS ARE THE COMPANY'S, through `lib/companyDay.ts`'s [companyDayOf], the SAME
  * function `lib/work.ts`'s calendar keys its cells with, rather than a second
  * copy of it, so a bar and a calendar cell cannot come to disagree about which
- * day a task is due. The engine resolves a bare date in the COMPANY's zone and
- * this buckets in the READER's; the screen says so, exactly as the calendar
- * does. Arithmetic over a day key is civil and zone-free ([civilAt]).
+ * day a task is due. A start and a due date are days on the company's
+ * calendar, stored as its midnight; read on the reader's clock, a task picked
+ * to start on the 20th drew from the 19th west of the company. Arithmetic
+ * over a day key is civil and zone-free ([civilAt]).
  */
 
-import { civilAt, civilKey, readerDay } from "./format.ts";
+import { civilAt, civilKey } from "./format.ts";
 import { dateTimeFormat, type DateShape } from "./formatters.ts";
+import { companyDayOf, dayLabelIn } from "./companyDay.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
 
-/** The reader's day an instant falls on, or empty when it is unreadable. */
-export function dayOf(ts: string | undefined): string {
-  if (!ts) return "";
-  const at = new Date(ts);
-  return Number.isNaN(at.getTime()) ? "" : readerDay(at);
+/** The company day a start or due date names, or empty when it is unreadable. */
+export function dayOf(ts: string | undefined, zone: string | undefined): string {
+  return companyDayOf(ts, zone);
 }
 
 /**
@@ -138,11 +138,13 @@ export interface TimelineOptions {
   /** The reader's now, as epoch ms. Passed rather than read, so the layout is
    *  a pure function and "today" is testable. */
   now: number;
+  /** The company's zone, which a start or due date's day is read in ([dayOf]). */
+  zone?: string;
 }
 
-/** The two dates a row carries, as local days, either possibly empty. */
-function endsOf(row: WorkSummary): { start: string; due: string } {
-  return { start: dayOf(row.start), due: dayOf(row.due) };
+/** The two dates a row carries, as company days, either possibly empty. */
+function endsOf(row: WorkSummary, zone: string | undefined): { start: string; due: string } {
+  return { start: dayOf(row.start, zone), due: dayOf(row.due, zone) };
 }
 
 /**
@@ -154,8 +156,11 @@ function endsOf(row: WorkSummary): { start: string; due: string } {
  * the screen can say so. Swapping them would render a coherent plan out of
  * incoherent data, and the person who typed it would never find out.
  */
-function spanOf(row: WorkSummary): { from: string; to: string; kind: BarKind } | null {
-  const { start, due } = endsOf(row);
+function spanOf(
+  row: WorkSummary,
+  zone: string | undefined,
+): { from: string; to: string; kind: BarKind } | null {
+  const { start, due } = endsOf(row, zone);
   if (start && due) {
     if (daysBetween(start, due) < 0) return { from: due, to: start, kind: "inverted" };
     return { from: start, to: due, kind: "span" };
@@ -181,7 +186,7 @@ function spanOf(row: WorkSummary): { from: string; to: string; kind: BarKind } |
  * hold.
  */
 export function timelineOf(rows: WorkSummary[], opts: TimelineOptions): Timeline {
-  const spans = rows.map((row) => ({ row, span: spanOf(row) }));
+  const spans = rows.map((row) => ({ row, span: spanOf(row, opts.zone) }));
   const dated = spans.filter((e) => e.span !== null);
   const unscheduled = spans.filter((e) => e.span === null).map((e) => e.row);
 
@@ -268,7 +273,7 @@ export function timelineOf(rows: WorkSummary[], opts: TimelineOptions): Timeline
     }
   }
 
-  const todayKey = readerDay(opts.now);
+  const todayKey = dayLabelIn(opts.now, opts.zone);
   const todayColumn = daysBetween(earliest, todayKey);
   return {
     from: earliest,

@@ -132,6 +132,10 @@ test("every agent is listed, past a dozen, each linking to its diary", async () 
   // THE HEADER COUNTS THE AGENTS, and no partial callout on a complete answer.
   expect(screen.getByText("15")).toBeTruthy();
   expect(screen.queryByText(/is missing/)).toBeNull();
+  // NO NODE NAMES IN A READER'S TABLE: a "Runs on" column of raw node names,
+  // the same on every row, was the one a narrow screen kept longest.
+  expect(screen.queryByRole("columnheader", { name: /Runs on/ })).toBeNull();
+  expect(within(last).queryByText("node-a")).toBeNull();
 });
 
 test("a holder that did not answer is named, and its agent draws no zeros", async () => {
@@ -189,8 +193,9 @@ test("an agent no node holds says so on the list", async () => {
   });
   await settle();
   const r = rowOf("Agent 02");
+  // SAID IN THE ROW'S OWN WORDS, where its latest entry and counts would be;
+  // no node column to say it again.
   expect(within(r).getAllByText("Not running on any node").length).toBeGreaterThan(0);
-  expect(within(r).getByText("No node")).toBeTruthy();
   expect(within(r).queryByText("0")).toBeNull();
 });
 
@@ -210,12 +215,15 @@ const memory = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-test("one agent's diary is its holder's answer, and names that node", async () => {
+// NO NODE NAME IN A READER'S DIARY: it opened on "Runs on node-b.", the
+// fleet's business rather than the diary's; it says when it last wrote.
+test("one agent's diary is its holder's answer, and says when it last wrote, not where it runs", async () => {
   const { asked } = mount(<Diary handle="agent-3" />, { agent_memory: memory() });
   await settle();
   expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({ id: "agent-3" });
   expect(screen.getByText("the release window moved to Thursday")).toBeTruthy();
-  expect(screen.getByText(/Runs on node-b\./)).toBeTruthy();
+  expect(document.body.textContent).not.toContain("node-b");
+  expect(screen.getByText(/^Last written .+\.$/)).toBeTruthy();
   // THE HEADER IS THE TOTAL, with the page it drew said beside it.
   expect(screen.getByText(/Latest 1 of 60/)).toBeTruthy();
   expect(
@@ -223,6 +231,18 @@ test("one agent's diary is its holder's answer, and names that node", async () =
       .getByRole("link", { name: "2 learned skills and 5 colleagues remembered" })
       .getAttribute("href"),
   ).toBe("#/company/org/seats/agent-3?tab=memory");
+});
+
+// A LINK ONLY TO SOMETHING: "0 learned skills and 0 colleagues remembered"
+// was a link to a seat's memory with nothing more in it.
+test("a diary with nothing learned and nobody remembered says so, and links nowhere", async () => {
+  mount(<Diary handle="agent-3" />, {
+    agent_memory: memory({ skills_total: 0, counterparties_total: 0 }),
+  });
+  await settle();
+  const line = screen.getByText("No learned skills or remembered colleagues yet.");
+  expect(line.closest("a")).toBeNull();
+  expect(screen.queryByRole("link", { name: /learned skill/ })).toBeNull();
 });
 
 test("one agent no node holds says why its diary is not shown", async () => {

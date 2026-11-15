@@ -45,7 +45,14 @@ vi.mock("~/lib/artifacts/access.ts", async () => {
   );
   return {
     ...actual,
-    useArtifactAccess: () => ({ can: authoring, as: "token:review", acts: [], reason: "" }),
+    useArtifactAccess: () =>
+      authoring
+        ? { can: true, as: "token:review", acts: [] }
+        : {
+            can: false,
+            block: "no_access",
+            reason: "This change needs Artifacts access. An admin can give it to you.",
+          },
   };
 });
 vi.mock("~/lib/artifacts/pinToggle.ts", () => ({
@@ -235,6 +242,34 @@ test("the trash says when each went in and when it goes for good, and offers a r
   expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeTruthy();
 });
 
+// WHAT A MISSING ACCESS HOLDS BACK IS SAID ON THE PAGE, as Doclet and Gitlet
+// say theirs: the gallery stays open to a reader without Artifacts access (a
+// share alone admits them), and New held with a pointer's title alone was the
+// only sign that making one needs access.
+test("a reader without Artifacts access is told on the page that making one needs it", () => {
+  authoring = false;
+  mount("all");
+  expect(
+    screen.getByText(
+      /^Making an artifact needs Artifacts access\. An admin can give it to you\. What is shared with you opens here all the same\.$/,
+    ),
+  ).toBeTruthy();
+  cleanup();
+  authoring = true;
+  mount("all");
+  expect(screen.queryByText(/^Making an artifact needs/)).toBeNull();
+});
+
+// SAID ONCE: the line over the trash says who sees it and how long an
+// artifact stays, and the empty state under it does not repeat it.
+test("an empty trash says how long an artifact stays once, and how one gets there", () => {
+  items = [];
+  mount("yours", "#/artifacts/yours?status=trashed");
+  expect(screen.getByText("Nothing in the trash")).toBeTruthy();
+  expect(screen.getAllByText(/30 days/)).toHaveLength(1);
+  expect(screen.getByText(/from its More menu waits here/)).toBeTruthy();
+});
+
 // A ROW OPENS ON A PAGE OF ITS OWN in a new tab, with no opener; the trash's rows do not.
 test("a row's More opens the artifact's standalone page in a new tab", () => {
   asList();
@@ -378,8 +413,9 @@ test("the Make row offers every kind on All and Yours, each opening its kind's o
   const make = screen.getByRole("region", { name: "Start a new artifact" });
   const tiles = within(make).getAllByRole("link");
   // NAMED BY THE TITLE EACH SHOWS, in its own words rather than a label laid
-  // over them (axe label-content-name-mismatch), in the row's order.
-  const kinds = ["Docs", "Slides", "Design", "Dashboard", "HTML", "Sheet"];
+  // over them (axe label-content-name-mismatch), in the row's order. ONE NAME
+  // PER KIND, the New menu's: a doc is a "Doc" on both.
+  const kinds = ["Doc", "Slides", "Design", "Dashboard", "HTML", "Sheet"];
   expect(kinds.map((kind) => within(make).getByRole("link", { name: kind }))).toEqual(tiles);
   for (const tile of tiles) expect(tile.hasAttribute("aria-label")).toBe(false);
   // WHAT EACH IS FOR is read as the link's description, never run into its name.

@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "vitest";
 
-import { chatPeople, handlesOf, matchesPerson } from "./people.ts";
+import { chatPeople, handlesOf, matchesPerson, seatLine } from "./people.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 
@@ -97,6 +97,33 @@ describe("what a seat is doing", () => {
   test("a person is not run by the engine, so a roster row under their handle is not read", () => {
     const people = chatPeople({ seats: [seat("ann", "Ann", "human")] }, [row("ann", "working")]);
     expect(people.person("ann")).toMatchObject({ state: "offline", status: undefined });
+  });
+});
+
+// ONE KIND OF LINE UNDER EVERY AGENT where a list offers seats: its work or its
+// state, never its team for one and its state for the rest. An idle agent read
+// "Core" among working agents reading "Working".
+describe("the line under a seat in a pick list", () => {
+  test("an agent says its work, else its state, and a person says their team", () => {
+    const people = chatPeople(
+      {
+        seats: [
+          seat("ops", "Ops", "agent", "Platform"),
+          seat("qa", "QA", "agent", "Platform"),
+          seat("ann", "Ann", "human", "Founders"),
+        ],
+      },
+      [
+        row("ops", "working", {
+          current_phase: "execute",
+          live_call: { work_item: { id: "w1", key: "ENG-4" } },
+        } as Partial<AgentRow>),
+        row("qa", "idle"),
+      ],
+    );
+    expect(seatLine(people.person("ops"))).toBe("Executing ENG-4");
+    expect(seatLine(people.person("qa"))).toBe("Idle");
+    expect(seatLine(people.person("ann"))).toBe("Founders");
   });
 });
 

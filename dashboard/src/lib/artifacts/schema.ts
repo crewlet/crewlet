@@ -12,6 +12,7 @@ import {
   COLLECTION_NAME_PATTERN,
   DATA_COLLECTIONS_MAX,
   DATA_COLUMNS_MAX,
+  DATA_LABEL_MAX_BYTES,
   DATA_OPTION_ID_CHARS,
   DATA_OPTION_ID_MAX,
   FIELD_NAME_PATTERN,
@@ -24,6 +25,7 @@ import type {
   DataColumn,
   DataOption,
 } from "~/protocol/index.ts";
+import { utf8Bytes } from "~/lib/format.ts";
 
 const COLLECTION = new RegExp(COLLECTION_NAME_PATTERN);
 const FIELD = new RegExp(FIELD_NAME_PATTERN);
@@ -273,6 +275,18 @@ export function reviewSheetSchema(): DataCollection[] {
 
 /** A blank sheet: one collection with one text column, ready to grow. */
 export function blankSheetSchema(): DataCollection[] {
+  return sheetSchemaOf(["Name"]);
+}
+
+/**
+ * A sheet's schema from the names of its columns, in order: ONE TABLE BEHIND
+ * THE SCENES, the collection every new sheet keeps (`rows`), each column text
+ * and the first the one a row is named by. A person setting up a sheet names
+ * columns; the collection, its identifier and its policy are the datastore's
+ * words, never theirs. Blank names are left out.
+ */
+export function sheetSchemaOf(labels: readonly string[]): DataCollection[] {
+  const named = labels.map((l) => l.trim()).filter((l) => l !== "");
   return [
     {
       name: "rows",
@@ -281,9 +295,41 @@ export function blankSheetSchema(): DataCollection[] {
       read: "all",
       create: "editor",
       delete: "editor",
-      columns: [{ key: "name", type: "text", label: "Name", primary: true }],
+      columns: named.map((label, i): DataColumn => ({
+        key: keyFromLabel(label),
+        type: "text",
+        label,
+        ...(i === 0 ? { primary: true } : {}),
+      })),
     },
   ];
+}
+
+/**
+ * Why a sheet's column names cannot be saved as they are, in the words of the
+ * names the reader typed, or null: none named yet, more than a sheet keeps, a
+ * name past what a label holds, or two names that would be the same column.
+ */
+export function sheetColumnsProblem(labels: readonly string[]): string | null {
+  const named = labels.map((l) => l.trim()).filter((l) => l !== "");
+  if (named.length === 0) return "Name a column first.";
+  if (named.length > DATA_COLUMNS_MAX) {
+    return `A sheet keeps at most ${DATA_COLUMNS_MAX} columns.`;
+  }
+  const long = named.find((l) => utf8Bytes(l) > DATA_LABEL_MAX_BYTES);
+  if (long) return `“${long.slice(0, 24)}…” is longer than a column's name can be.`;
+  const seen = new Map<string, string>();
+  for (const label of named) {
+    const key = keyFromLabel(label);
+    const before = seen.get(key);
+    if (before !== undefined) {
+      return before === label
+        ? `Two columns are called “${label}”. Rename one.`
+        : `“${before}” and “${label}” would be the same column. Rename one.`;
+    }
+    seen.set(key, label);
+  }
+  return null;
 }
 
 /** One collection people who can edit change, with the columns given. */

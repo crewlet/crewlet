@@ -224,7 +224,8 @@ test("a cap is checked by the engine, then saved as a patch of its one key", asy
   // this node applied, which is still the value before.
   const row = screen.getByRole("row", { name: /Review rounds per turn/ });
   expect(within(row).getByText("5")).toBeTruthy();
-  expect(within(row).getByText("applying…").closest('[role="status"]')).not.toBeNull();
+  // THE WRITE'S OWN STATUS, beside the key's copy status the row also holds.
+  expect(within(row).getByText("applying…").getAttribute("role")).toBe("status");
   expect(screen.queryByRole("textbox")).toBeNull();
 });
 
@@ -433,8 +434,12 @@ test("what is typed is held to the cap's unit before any request", async () => {
 test("the engine's constant has no pencil", async () => {
   await show(LIMITS);
   const row = screen.getByRole("row", { name: /A scheduled turn's time limit/ });
-  // No pencil; the key's copy control is the row's only button.
-  expect(within(row).queryByRole("button", { name: /^Change / })).toBeNull();
+  // Only the key's copy control: no pencil.
+  expect(
+    within(row)
+      .queryAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent),
+  ).toEqual([expect.stringMatching(/^Copy the setting's key, /)]);
 });
 
 // NEVER HIDDEN: a reader who cannot write the document sees every pencil,

@@ -3362,7 +3362,13 @@ export interface WorkProjectDetail extends WorkProjectRow {
   /** The workspace field ids this project redeclares — the state a field in
    *  the middle of a move between scopes is in. */
   shadowed?: string[];
+  /** The project's OWN field declarations as stored, archived ones included:
+   *  the whole set a `fields` write on `write_project` replaces. `fields`
+   *  above is the effective set a task files against. */
+  own_fields?: WorkFieldDef[];
   tags?: WorkProjectTag[];
+  /** The labels that take no new work, which `tags` leaves out. */
+  archived_tags?: WorkProjectTag[];
   policy_stamp: number;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -8146,7 +8152,9 @@ export interface QueryMap {
   chat_search: ChatSearchAnswer;
   pages: PagesAnswer;
   page: PageDetail;
-  containers: { containers: PageContainer[] };
+  /* `skills` NAMES THE SPACE TOOL SKILLS ARE WRITTEN IN, absent on a company
+     that turned tool skills off: Agent skills points at it when it holds none. */
+  containers: { containers: PageContainer[]; skills?: string };
   page_activity: PageActivityAnswer;
   page_reads: PageReadsAnswer;
   page_revision: PageRevisionBody;

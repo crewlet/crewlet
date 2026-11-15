@@ -112,6 +112,7 @@ import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { activityOf, indexOrg, liveOnItems, statusOf, seatResolvers } from "~/lib/seats.ts";
 import { startOfDay, useClock, useNow } from "~/lib/clock.ts";
+import { dayLabelIn, useCompanyZone } from "~/lib/companyDay.ts";
 import {
   anyFilter,
   asScope,
@@ -119,7 +120,6 @@ import {
   buildItemsParams,
   calendarWeeks,
   countedLabel,
-  dayKey,
   dayRange,
   defaultView,
   drawnRows,
@@ -486,8 +486,11 @@ export function ItemsView({
     fields,
   };
 
-  const thisMonth = monthOrNow(month, today);
-  const todayKey = dayKey(new Date(today).toISOString());
+  // THE COMPANY'S CALENDAR, which a due date's day is read on ([dayKey]):
+  // today is the company's, and moves when the company's date does.
+  const zone = useCompanyZone();
+  const todayKey = useClock((now) => dayLabelIn(now, zone));
+  const thisMonth = monthOrNow(month, todayKey);
   const weeks = useMemo(
     () => (shape === "calendar" ? calendarWeeks(thisMonth, todayKey) : []),
     [shape, thisMonth, todayKey],

@@ -611,7 +611,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           htmlFor="new-task-labels"
           helper={
             detail && (detail.tags ?? []).filter((t) => !t.archived).length === 0
-              ? `${draft.project} declares no labels yet.`
+              ? `${draft.project} declares no labels yet. Add them under the project's About.`
               : "Only this project’s labels."
           }
         >

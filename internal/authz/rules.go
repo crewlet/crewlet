@@ -352,6 +352,7 @@ const (
 	ActionPageCommentEdit   Action = "pages.comment.edit"
 	ActionPageCommentRemove Action = "pages.comment.remove"
 	ActionWorkCommentEdit   Action = "work.comment.edit"
+	ActionWorkCommentRemove Action = "work.comment.remove"
 	// ActionWithdrawAsk is a seat withdrawing its own question, or a call its
 	// executor holds for approval (ADR-0111): an agent's alone, on its own.
 	ActionWithdrawAsk Action = toolname.WithdrawAsk
@@ -1514,6 +1515,11 @@ var rules = map[Action]rule{
 	// anybody but the author an edit, because an edit puts words in
 	// somebody's mouth where a removal only takes them down.
 	ActionWorkCommentEdit: {class: ClassAuthored, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// AND ITS REMOVAL, which the writer takes from the author and from an
+	// admin moderating, as a page's: taking words down is visible to
+	// everybody, where an edit is not.
+	ActionWorkCommentRemove: {class: ClassAuthored, app: iam.GrantWorklet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 
 	// A VIEW IS NOT A RECORD, because half of them are not personal at

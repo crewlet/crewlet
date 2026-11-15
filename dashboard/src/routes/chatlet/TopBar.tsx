@@ -44,16 +44,16 @@ import {
   SquarePenGlyph,
 } from "@crewlethq/icons/glyphs";
 
-import { useToastTop } from "~/app/toastInset.tsx";
+import { useOwnStar } from "~/app/Shell.tsx";
 import { attentionFigure, isDirect, useChatAttention } from "~/lib/chatRooms.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
 import { ChatFace } from "./Face.tsx";
-import { openRoomOf, useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
+import { useChatFrame, useChatNav, useOpenRoom, type ChatPlace, type OpenRoom } from "./nav.tsx";
 import { matchesPerson, useChatPeople } from "./people.ts";
 import { RoomActions } from "./RoomActions.tsx";
 import { RoomMark } from "./RoomsPanel.tsx";
-import { roomTitle, roomWhere, unreadIn, unreadLabel, waitingIn } from "./rooms.ts";
+import { roomTitle, unreadIn, unreadLabel, waitingIn } from "./rooms.ts";
 import { useViewBarSlot } from "./ViewHead.tsx";
 
 /** Under this width of the bar, Menu drops its word. */
@@ -167,22 +167,33 @@ function useListedRooms(): readonly ChatChannelSummary[] {
   return channels.filter((room) => !room.channel.archived_at);
 }
 
+/**
+ * The open room as a switcher names it, when it is one of the switcher's kind
+ * (a conversation for Messages, any other room for Rooms), or null.
+ *
+ * THE FRAME'S ONE READING OF THE OPEN ROOM (`useOpenRoom`), never a row of the
+ * switcher's own list: that list is the rooms the reader is in and has not
+ * archived, and a team's room they are outside of, a public room they are
+ * reading without joining and an archived room are none of them. Looked up in
+ * it, the open room was not found and the trigger read "Rooms" there.
+ */
+function useOpenOfKind(direct: boolean): OpenRoom | null {
+  const open = useOpenRoom();
+  return open?.channel && isDirect(open.channel.kind) === direct ? open : null;
+}
+
 /** Rooms: the open room's name, and every room the reader is in under it. */
 function RoomSwitcher({ tight }: { tight: boolean }) {
   const nav = useChatNav();
-  const { viewer, nameOf, measured, starred } = useChatFrame();
+  const { measured, starred } = useChatFrame();
   const sw = useSwitcher();
   const option = useRoomOption();
   const all = useListedRooms().filter((room) => !isDirect(room.channel.kind));
-  const open = openRoomOf(nav.place);
-  const here = all.find((room) => room.channel.id === open);
-  const current = here?.channel.id ?? "";
+  const here = useOpenOfKind(false);
+  const current = here?.id ?? "";
   const rooms = all.filter((room) => matches(sw.query, room.channel.name, room.channel.topic));
   const isStarred = (room: ChatChannelSummary) => starred.has(room.channel.id);
   const elsewhere = waitingAcross(all, measured, current);
-  const title = here
-    ? roomTitle(here.channel, { participants: here.participants, viewer, nameOf })
-    : "";
   const browse: SwitcherOption = {
     id: "browse",
     label: "Browse rooms",
@@ -198,7 +209,7 @@ function RoomSwitcher({ tight }: { tight: boolean }) {
         trigger={{
           // THE ROOM AS A SENTENCE CALLS IT, since the trigger draws no
           // glyph: `#name`, or a team's room by its team's name.
-          label: here ? roomWhere(here.channel.kind, title) : "Rooms",
+          label: here ? here.where : "Rooms",
           title: elsewhere ? `Switch room. ${waitingElsewhere(elsewhere, "rooms")}` : "Switch room",
           ...(elsewhere && !tight
             ? { tag: <Count tone="attention" value={elsewhere} label={ELSEWHERE.rooms} /> }
@@ -258,9 +269,8 @@ function MessageSwitcher({ narrow, tight }: { narrow: boolean; tight: boolean })
   const sw = useSwitcher();
   const option = useRoomOption();
   const all = useListedRooms().filter((room) => isDirect(room.channel.kind));
-  const open = openRoomOf(nav.place);
-  const here = all.find((room) => room.channel.id === open);
-  const current = here?.channel.id ?? "";
+  const here = useOpenOfKind(true);
+  const current = here?.id ?? "";
   const titleOf = (room: ChatChannelSummary) =>
     roomTitle(room.channel, { participants: room.participants, viewer, nameOf });
   const conversations = all.filter((room) => matches(sw.query, titleOf(room)));
@@ -281,7 +291,7 @@ function MessageSwitcher({ narrow, tight }: { narrow: boolean; tight: boolean })
         label="Switch conversation"
         {...sw}
         trigger={{
-          label: here ? titleOf(here) : tight ? "DMs" : narrow ? "Messages" : "Direct messages",
+          label: here ? here.title : tight ? "DMs" : narrow ? "Messages" : "Direct messages",
           title: elsewhere
             ? `Switch conversation. ${waitingElsewhere(elsewhere, "conversations")}`
             : "Switch conversation",
@@ -339,14 +349,24 @@ function MessageSwitcher({ narrow, tight }: { narrow: boolean; tight: boolean })
   );
 }
 
+/**
+ * A ROOM'S STAR IS ITS OWN MORE'S ("Add to Starred", `RoomActions.tsx`), so the
+ * frame draws none in the page bar (`useOwnStar`), as a Doclet page's and an
+ * artifact's menus carry theirs. Drawn as well, it was a second star beside
+ * the room's, and on a phone it folded into a page bar "…" of its own: two
+ * overflow menus stacked over the conversation, and the page bar spent a row
+ * on that "…" and Ask. A view beside the rooms has no More, so it keeps the
+ * frame's star.
+ */
+function RoomOwnsStar() {
+  useOwnStar();
+  return null;
+}
+
 export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined } = {}) {
   const nav = useChatNav();
   const bar = useRef<HTMLDivElement | null>(null);
   const width = useBarWidth(bar);
-  // TOASTS STAND UNDER THIS BAR, at the conversation's top right: at the
-  // window's foot they lay over the room's composer and a thread's, which
-  // grow as they are typed in, so no fixed inset from the foot clears them.
-  useToastTop(bar);
   const narrow = width > 0 && width < BAR_NARROW_PX;
   const tight = width > 0 && width < BAR_TIGHT_PX;
   const toolsSlot = useViewBarSlot(tight);
@@ -394,7 +414,10 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
       <span className="chat-topbar-end">
         <span ref={toolsSlot} className="chat-topbar-tools" />
         {nav.place.kind === "room" ? (
-          <RoomActions tight={tight} />
+          <>
+            <RoomOwnsStar />
+            <RoomActions tight={tight} />
+          </>
         ) : (
           <Tooltip content="Search Chatlet">
             <IconButton

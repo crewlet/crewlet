@@ -308,7 +308,7 @@ answer is that there is no such work.
 | **tags** | from a per-project tag set — see [Tags](#tags). A tag the project has not declared is REFUSED at the write. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
 | **checklists** | up to 16 named lists holding up to 64 items each and 256 between them, each item with its own assignee — see [Checklists](#checklists). |
-| **relations**, **dependencies** | links between tasks, and blocking edges. |
+| **relations**, **dependencies** | links between tasks, and blocking edges: `linked` (related, no blocking meaning), `waiting_on` and `blocking` (one edge seen from its two ends), each a set changed with `{add, remove}` on `update_work_item`, and `duplicate_of` (one task the item duplicates, cleared with `null` or `""`). |
 | **linked pages** | knowledge-base pages the task names, set with `linked_pages` on `update_work_item`. `linked_page=<page id>` lists the tasks that name a page. |
 | **atlas entries** | the entries of the company's [atlas](atlas.md) the task touches (the servers, services, databases, domains and accounts the work changes), set with `linked_entries` on `update_work_item`. Up to 32, each kept by the entry's id. See [The atlas entries a task touches](#the-atlas-entries-a-task-touches). |
 | **references** | other tasks this task's description mentions by key (`ENG-12`), derived by the applier on every data node from the first 64 distinct keys the description names, where a task's former key resolves like its current one. `references=<key>` lists the tasks whose description mentions it. A comment's mentions are not references. |
@@ -587,7 +587,10 @@ A **project's own** field declarations are the project **lead's** (or an
 administrator's), written with `write_project(fields: [...])`. That
 list REPLACES the project's declarations and leaves the workspace's alone —
 the two are separate scopes and a task's effective set is their union — so
-send the whole set, and read `describe_project` first. A project declaration sharing a workspace field's id
+send the whole set, and read `describe_project` first: its `own_fields` is
+exactly that set, archived declarations included, where its `fields` is the
+effective one a task files against, and sending that back would copy every
+workspace field into the project. A project declaration sharing a workspace field's id
 **shadows** it, which `describe_project` names so a reader can see which
 definition is in force.
 
@@ -865,6 +868,11 @@ the clock from 00:00 straight to 01:00, so on that day the day — and "today",
 and a task's all-day due date — begins at 01:00; where a zone sets its clock
 back from 01:00 to 00:00, as Cuba does, midnight happens twice and the day
 begins at the first. The week is the ISO week, Monday to Monday.
+
+The dashboard draws a due date and a start date as the company's date too, for
+every reader wherever they are: a task due on the 30th reads Nov 30 in its
+rail, its list row, its card, its history and its calendar cell, never the
+29th for a reader west of the company's clock.
 
 ### The timeline
 
@@ -1688,11 +1696,26 @@ drawn for everybody and held with that reason for anybody without it.
   **Every task has a menu** (the ellipsis at the end of a list or table row,
   on a board card's corner and beside a timeline row's name; a calendar day's
   task opens its peek, which has the same menu in its header). It holds
-  **Move to project…**, **Move to trash**, and in the trash **Restore** and
-  **Delete permanently**. A move takes one top-level task and its subtasks to
-  the project you choose, re-keyed there with their old keys still opening
-  them; a subtask's entry is held, since it moves with its parent, and the
-  lead of the task's project decides it.
+  **Move to project…**, **Merge into…**, **Add to my priorities** (or
+  **Remove from my priorities** for a task already on them), **Move to
+  trash**, and in the trash **Restore** and **Delete permanently**. A move
+  takes one top-level task and its subtasks to the project you choose,
+  re-keyed there with their old keys still opening them; a subtask's entry is
+  held, since it moves with its parent, and the lead of the task's project
+  decides it. A merge folds the task into the one you find by its key or its
+  words (`merge_work_item`): it is linked to that task as its duplicate, its
+  subtasks move onto it unless you keep them where they are, and it is closed
+  as cancelled; the dialog says so before you press Merge, draws the engine's
+  refusal in place, and takes you to the task that carries the work on. Add to
+  my priorities puts the task at the end of your own list (`set_priorities`
+  under your record's version), where My work's Priorities orders it.
+
+  **A task's links are drawn and taken off on its page.** Link a task asks
+  what this task is to the one you pick: **Related to**, **Blocking** or
+  **Waiting on**, the last two with an optional line saying why. Each task in
+  the rail's Relations has a remove control for a reader who may change the
+  task: a dependency comes off from either end, and a related link or a
+  duplicate drawn from the other task is taken off that task.
   A list or a table also takes a **selection**: tick rows (Shift ticks a
   range) and the bar over the grid moves them all to the trash, or restores
   them all in the trash. Moving a task with subtasks asks first whether they
@@ -1809,9 +1832,26 @@ drawn for everybody and held with that reason for anybody without it.
   declared its `project` key; a project declared on a seat rather than on a
   unit has none, so the line says which unit owns it instead. A project nothing
   has been filed into says so and offers **New task**, rather than showing an
-  empty list. **Edit project** sets or clears the target date
-  (`write_project{target_date}`) — the project's lead may, and so may a person
-  acting as themselves; a seat that does not lead the project is refused.
+  empty list. **Edit project** sets or clears the target date, picks the
+  **default assignee** (a seat from the chart, or nobody, which leaves new work
+  to the lead's triage) and archives or unarchives the project
+  (`write_project{target_date, default_assignee, archived}`). It sends only
+  what you changed, and archiving names itself on the button and says what it
+  does before it is pressed. The project's lead may, and so may an admin;
+  archiving is a person's, never an agent's. Anybody else sees **Edit
+  project** held with "Editing this project needs Admin access, or leading
+  it." before anything is chosen, and the engine refuses the change all the
+  same. About lists the project's
+  **Labels** with **Add label** (any colleague may declare one), and
+  **Rename** and **Archive** on each (the lead's); archived labels are listed
+  under them, since the tasks filed under one keep it. Its **Fields** card
+  lists the fields the project declares itself, with **Add field**, **Edit**
+  and **Archive** (the lead's), beside the company's fields its tasks carry as
+  well. A field's slug and type stay once it exists, a dropdown's choice taken
+  out is archived rather than dropped, and archiving a label or a field asks
+  first, since neither comes back. **Files** lists the project's files with
+  **Upload**, and **Replace** and **Remove** on each row (see
+  [A project's files](#a-projects-files)).
 - **Search** (`#/worklet/search`) ranks the company's work against a phrase:
   **Hybrid** (the default: words and meaning, each ranked and then fused),
   **Keyword** (the words, BM25) or **Meaning** (`semantic`: what the text is
@@ -2161,7 +2201,13 @@ Its author may correct a question's wording afterwards
 (`PATCH /worklet/items/{key}/comments/{cid}`), and that changes its words and
 nothing else: an answered question stays answered and nobody is asked it
 again, and the person it asks, the answer it closed and the decision it carries
-stay what its post made them. A remark is posted once: a re-run of the call
+stay what its post made them. A remark that asks or answers nothing can also be
+taken down (`DELETE` on the same address), by its author or by an admin
+moderating: the row stays on the thread with its words blanked, so the replies
+under it still read in order, and neither the item's history nor anybody's
+inbox goes on quoting it. A question or an answer is never taken down, since
+the ask would be left with no question behind it or closed with no answer:
+withdraw the question, or edit the words. A remark is posted once: a re-run of the call
 that posted it finds it on the thread and changes nothing — not its words, not
 its answer, not who follows the item — whatever has happened to it since, the
 item having been trashed included. And it is answered as that remark: the
@@ -2970,7 +3016,13 @@ writers putting the same path contend, and exactly one wins.
 
 Seats reach them with the four tools in [What a seat can do](#what-a-seat-can-do);
 a person reaches them on the dashboard's project page, through their own
-assistant (the same four tools), or over REST —
+assistant (the same four tools), or over REST. On the project's **Files** lens,
+**Upload** puts each file you pick at the project's top level under its own
+name (a name the project already keeps is refused, since replacing is the
+row's), **Replace** on a row writes a new copy over that file and **Remove**
+takes it out, both naming the version on screen so a file somebody changed
+since is refused rather than overwritten. A file past the size cap is refused
+before its bytes are sent. Over REST,
 [`/worklet/files`](../reference/api-endpoints.md#project-files) takes an upload and
 streams a download without either passing through a model.
 

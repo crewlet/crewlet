@@ -347,10 +347,11 @@ export type QueryValue = string | number | boolean | undefined;
 
 export interface RequestOptions {
   /**
-   * The request body. Encoded as JSON unless `contentType` names a type that
-   * is not JSON, in which case it must already be a string or a `Blob` and is
-   * sent byte for byte: `PUT /secrets/{name}` takes the credential itself, and
-   * an encoding step would seal JSON quotes into it; an artifact's picture is
+   * The request body. A `Blob` is sent byte for byte under whatever type it
+   * names. Anything else is encoded as JSON unless `contentType` names a type
+   * that is not JSON, in which case it must already be a string and is sent
+   * as it is: `PUT /secrets/{name}` takes the credential itself, and an
+   * encoding step would seal JSON quotes into it; an artifact's picture is
    * its bytes.
    */
   body?: unknown;
@@ -625,7 +626,12 @@ async function attempt(
   const contentType = options.contentType ?? (body === undefined ? undefined : "application/json");
   let encoded: string | Blob | undefined;
   if (body !== undefined) {
-    if (contentType && !isJson(contentType)) {
+    // A BLOB IS BYTES, whatever type it is sent under: a project file picked
+    // from disk as `application/json` was encoded as JSON, which spells any
+    // Blob as `{}`, and the file's contents never left the browser.
+    if (body instanceof Blob) {
+      encoded = body;
+    } else if (contentType && !isJson(contentType)) {
       if (typeof body !== "string" && !(body instanceof Blob)) {
         throw new TypeError(`rest.request: a ${contentType} body must be a string or a Blob`);
       }

@@ -11,7 +11,7 @@
  * of trying to read it, and each has its own sentence:
  *
  *  - `read`     — the document answered; an EMPTY list is then a real fact
- *                 about the company ("no unit names this space").
+ *                 about the company ("no team owns this space").
  *  - `no_grant` — the engine has said this reader does not hold Admin, so
  *                 nothing was asked: the refusal is known before the
  *                 question.
@@ -69,7 +69,8 @@ export function ownerSentence(owners: SpaceOwners): string {
     case "refused":
       return "Owner unknown";
     case "read": {
-      if (owners.units.length === 0) return "No unit names this space in its space:";
+      // IN A READER'S WORDS: "unit" and `space:` are the company document's.
+      if (owners.units.length === 0) return "No team owns this space";
       return owners.units
         .map((u) => `Filed by ${u.name}${u.project ? `, whose work is in ${u.project}` : ""}`)
         .join("; ");
@@ -92,4 +93,26 @@ export function otherProjects(owners: SpaceOwners, key: string): string[] {
     if (p && p.toUpperCase() !== key.toUpperCase() && !out.includes(p)) out.push(p);
   }
   return out;
+}
+
+/**
+ * The teams filing into a space that its own name does not already say, and
+ * whether its namesake is among them: what a space's head names beside
+ * "Filed by".
+ *
+ * A TEAM'S OWN SPACE TAKES THE TEAM'S NAME (the chart names a unit's space
+ * after the unit), so the head of Core read "Filed by Core", saying the title
+ * again. Only another team filing here is news, and it is said as "also"
+ * where the namesake files here too.
+ */
+export function otherFilers(
+  owners: SpaceOwners,
+  spaceName: string,
+): { names: string[]; namesake: boolean } {
+  if (owners.state !== "read") return { names: [], namesake: false };
+  const same = (name: string) => name.trim().toLowerCase() === spaceName.trim().toLowerCase();
+  return {
+    names: owners.units.filter((u) => !same(u.name)).map((u) => u.name),
+    namesake: owners.units.some((u) => same(u.name)),
+  };
 }

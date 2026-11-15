@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -69,6 +70,30 @@ func TestTheReservedContainersAreMaterialisedFromTheirOwnAccessors(t *testing.T)
 	}})
 	if want := []string{"ROOT", "SKILLS"}; !equal(keysOf(got), want) {
 		t.Fatalf("containers = %v, want %v", keysOf(got), want)
+	}
+}
+
+// THE ROOT'S PURPOSE IS TRUE OF A SPACE WITH NO PAGES. It heads the space
+// beside its page count, and it promised "the Onboarding page every seat reads
+// first" beside "0 pages" on every new company: the Onboarding page is a page
+// somebody titles so, and the purpose says it as that convention.
+//
+// Mutation: put back a purpose that names the page as present and this fails.
+func TestTheRootSpacesPurposeHoldsBeforeAnythingIsWritten(t *testing.T) {
+	t.Parallel()
+	root := "HOME"
+	got := chartContainers(&Company{Config: &config.Company{
+		Knowledge: config.Knowledge{RootSpace: &root},
+	}})
+	if len(got) == 0 || got[0].Key != "HOME" {
+		t.Fatalf("containers = %v, want the root first", keysOf(got))
+	}
+	purpose := got[0].Purpose
+	if strings.Contains(purpose, "starting with") {
+		t.Errorf("the root's purpose %q claims a page it may not hold", purpose)
+	}
+	if !strings.Contains(purpose, "titled Onboarding") {
+		t.Errorf("the root's purpose %q does not say what makes a page its Onboarding page", purpose)
 	}
 }
 

@@ -580,7 +580,10 @@ test("a draft says it is one and is published by one press, against the version 
   const notice = screen
     .getByText("This page is a draft")
     .closest(".crewlet-callout") as HTMLElement;
-  expect(notice.textContent).toMatch(/no search finds it until it is published/);
+  // IN A READER'S WORDS, said once: the Kind line says "Draft" and the notice
+  // what that means, where both spelled out the search exclusion.
+  expect(notice.textContent).toContain("Search leaves it out until it is published.");
+  expect(document.querySelector(".knowledge-props")!.textContent).toMatch(/KindDraft$/);
   fireEvent.click(within(notice).getByRole("button", { name: "Publish" }));
   await settle();
   expect(posted).toEqual([
@@ -761,6 +764,31 @@ test("a page in the trash offers Restore, and an admin Delete permanently with t
   expect(screen.queryByText("This page is in the trash")).toBeNull();
 });
 
+// A PAGE IN THE TRASH READS AND TAKES NO CHANGE. It offered Edit, the watch
+// eye and a working comment box, so a deleted page could be rewritten,
+// followed and discussed. Every control in the bar that changes it is held
+// with the one reason, the thread reads with no field, Restore stays the way
+// back, and History still reads. Mutation: draw the bar or the thread without
+// the page's hold and this fails.
+test("a page in the trash holds Edit, the watch and a sub-page with one reason, and takes no comment", async () => {
+  mount(<PageView id={ID} />, { page: detail({}, { status: "trashed" }), page_reads: reads() });
+  await settle();
+  const held = (el: HTMLElement) => el.getAttribute("aria-disabled") === "true";
+  const edit = screen.getByRole("button", { name: "Edit" });
+  expect(held(edit)).toBe(true);
+  expect(edit.getAttribute("title")).toBe("It is in the trash. Restore it first.");
+  expect(held(screen.getByRole("button", { name: /watching this page$|^Watch this page/i }))).toBe(
+    true,
+  );
+  // THE THREAD READS, and takes no comment: no field to type into.
+  expect(screen.queryByRole("textbox", { name: /Comment/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Comment" })).toBeNull();
+  expect(held(screen.getByRole("button", { name: /History/ }))).toBe(false);
+  await openMore(/^New sub-page/);
+  expect(posted).toEqual([]);
+  expect(location.hash).not.toContain("doclet/new");
+});
+
 // A MOVE OFFERS EVERY PAGE OF THE SPACE BUT THE PAGE AND WHAT IS UNDER IT,
 // which the engine refuses as a parent, and saves the parent with save_page.
 // THE LIST IS THE DIALOG'S BODY, on screen in the dialog under its field, so
@@ -871,7 +899,7 @@ test("More stars the page, and offers the sub-page, a draft, History and the add
   ).toEqual([
     "Star this pagePinned on Doclet and kept in the sidebar",
     "New sub-page",
-    "Move back to draftNo search finds a draft",
+    "Move back to draftSearch leaves it out until it is published again",
     "Rename",
     "Labels",
     "MoveUnder another page of its space",
@@ -1103,6 +1131,96 @@ test("a comment is written as the signed-in person, and drawn as the seat they w
   ]);
 });
 
+// A PERSON EDITS AND TAKES DOWN THEIR OWN REMARK ON A PAGE, through the
+// engine's PATCH and DELETE on the comment's address, each keyed. The thread
+// offered only Reply, though the engine served both. Somebody else's remark
+// offers neither. Mutation: mark every remark editable and the other seat's
+// offers Edit; send the edit through the act route and no PATCH is made.
+test("a person edits and deletes their own page comment, keyed, and nobody else's", async () => {
+  const sent = recordRest();
+  mount(<PageView id={ID} />, {
+    page: detail({
+      comments: [
+        {
+          id: "c-1",
+          author: "jane",
+          author_kind: "human",
+          body: "Is step 2 still right?",
+          created_at: "2026-09-24T20:00:00Z",
+          updated_at: "2026-09-24T20:00:00Z",
+        } as never,
+        {
+          id: "c-2",
+          author: "swe",
+          author_kind: "agent",
+          body: "It is.",
+          created_at: "2026-09-24T20:05:00Z",
+          updated_at: "2026-09-24T20:05:00Z",
+          reply_to: "c-1",
+        } as never,
+      ],
+    }),
+    page_reads: reads(),
+  });
+  await settle();
+  const thread = region(/^Comments/);
+  const [mine, theirs] = within(thread).getAllByRole("listitem");
+  expect(within(theirs!).queryByRole("button", { name: /Edit|Delete/ })).toBeNull();
+
+  fireEvent.click(within(mine!).getByRole("button", { name: "Edit your comment" }));
+  const field = within(mine!).getByRole("textbox", { name: "Edit your comment" });
+  expect((field as HTMLTextAreaElement).value).toBe("Is step 2 still right?");
+  fireEvent.change(field, { target: { value: "Is step 2 still right after the move?" } });
+  fireEvent.click(within(mine!).getByRole("button", { name: "Save" }));
+  await settle();
+  const patch = sent.find((s) => s.method === "PATCH");
+  expect(patch?.url).toContain(`/doclet/pages/${ID}/comments/c-1`);
+  expect(patch?.body).toEqual({ body: "Is step 2 still right after the move?" });
+  expect(patch?.key).toMatch(/^[0-9a-f-]{36}$/);
+
+  fireEvent.click(
+    within(mine!).getByRole("button", { name: "Delete the comment by Jane Founder" }),
+  );
+  fireEvent.click(
+    within(within(mine!).getByRole("group", { name: /Delete this comment/ })).getByRole("button", {
+      name: "Delete",
+    }),
+  );
+  await settle();
+  const removal = sent.find((s) => s.method === "DELETE");
+  expect(removal?.url).toContain(`/doclet/pages/${ID}/comments/c-1`);
+  expect(removal?.key).toMatch(/^[0-9a-f-]{36}$/);
+});
+
+// A PAGE IN THE TRASH TAKES NO CHANGE TO A REMARK EITHER: the engine refuses
+// an edit or a removal of a comment on a trashed page as it refuses a new one,
+// so the reader's own remark there reads and offers neither. Mutation: mark
+// the reader's remark editable whatever the page's hold, and it offers Edit.
+test("a page in the trash offers no Edit or Delete on the reader's own comment", async () => {
+  mount(<PageView id={ID} />, {
+    page: detail(
+      {
+        comments: [
+          {
+            id: "c-1",
+            author: "jane",
+            author_kind: "human",
+            body: "Is step 2 still right?",
+            created_at: "2026-09-24T20:00:00Z",
+            updated_at: "2026-09-24T20:00:00Z",
+          } as never,
+        ],
+      },
+      { status: "trashed" },
+    ),
+    page_reads: reads(),
+  });
+  await settle();
+  const [mine] = within(region(/^Comments/)).getAllByRole("listitem");
+  expect(within(mine!).getByText("Is step 2 still right?")).toBeTruthy();
+  expect(within(mine!).queryByRole("button", { name: /Edit|Delete/ })).toBeNull();
+});
+
 // A UUID IS NOTHING A PERSON READS: until the page answers, and when it never will, a noun.
 test("the trail never prints a page's id", () => {
   expect(crumbsFor(["doclet", "pages", ID]).at(-1)).toEqual({ label: "Page" });
@@ -1217,4 +1335,27 @@ test("a page title past the engine's cap is held whole and said, not cut", async
   expect(publish.getAttribute("aria-disabled")).toBe("true");
   expect(reasonOf(publish)).toContain("too long");
   expect(posted).toEqual([]);
+});
+
+// A PAGE'S BAR IS THE PAGE'S OWN ACTIONS, and so is the composer's. The trail
+// is the one thing on a bar that gives way, and a search field with its
+// ranking menu beside a page's watch, History, Edit and More took the room its
+// ancestors needed: at 1440 "Doclet" fell to "D…", and at 390 the bar took
+// three rows. Mutation: draw `DocletBar` on either screen and this fails.
+test("a page's bar and the composer's hold their own actions and no search", async () => {
+  mount(<PageView id={ID} />, { page: detail(), page_reads: reads() });
+  await settle();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /History/ })).toBeTruthy();
+  expect(screen.queryByRole("search")).toBeNull();
+  expect(screen.queryByRole("searchbox", { name: "Search pages" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Rank by/ })).toBeNull();
+
+  cleanup();
+  location.hash = "#/doclet/new?space=ENG";
+  mount(<Composer />, { viewer: JANE, pages: { pages: [], limit: 500, total: 0 } });
+  await settle();
+  expect(screen.getByRole("button", { name: /Save as draft/ })).toBeTruthy();
+  expect(screen.queryByRole("search")).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Rank by/ })).toBeNull();
 });
