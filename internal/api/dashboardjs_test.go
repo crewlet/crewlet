@@ -1468,7 +1468,8 @@ const (
 	// built on: Worklet's task operations and the polish, the kit's
 	// punctuation peel a marked chip now takes among it, in the shared chunk.
 	// So it moved to 418 KiB, 2.28 seconds.
-	initialBudget = 418 << 10
+	// Delegated decisions made readable, on kit 0.134.0: 418.0 KiB, 508 bytes over main: 419 KiB, 2.29 seconds.
+	initialBudget = 419 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2627,7 +2628,8 @@ const (
 	// are not numbers changed in place, merged on kit 0.131.0, measures
 	// 6313.1 KiB (6,464,594 bytes), 46,487 bytes over the 6267.7 KiB of main
 	// it was built on: 6314 KiB.
-	treeBudget = 5<<20 + 1194<<10
+	// Delegated decisions made readable, on kit 0.134.0: 6322.5 KiB, 9,271 bytes over main: 6323 KiB.
+	treeBudget = 5<<20 + 1203<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
