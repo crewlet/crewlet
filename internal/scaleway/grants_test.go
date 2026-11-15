@@ -103,7 +103,7 @@ func TestAGrantLeavesThePolicyBeforeItsExpiry(t *testing.T) {
 	}
 	key, _ := w.sink.Held(sealedAccess)
 
-	w.advance(expires.Sub(w.clock) - seataccess.LapseLead + time.Second)
+	w.at(expires.Add(-seataccess.LapseLead + time.Second))
 	w.sync()
 	if _, _, ok := ruleWith(w.policy(app), "KubernetesReadOnly"); ok {
 		t.Fatal("the pass inside the lapse lead left KubernetesReadOnly on the policy")
