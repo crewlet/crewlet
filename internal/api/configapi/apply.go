@@ -1,6 +1,7 @@
 package configapi
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -419,6 +421,12 @@ type prepared struct {
 	// takes away (mcpremoval.go). Nil where nothing was active, and over a
 	// base stored without a seal.
 	prior *config.Company
+	// unchanged reports a proposal that leaves the active document exactly
+	// as it is stored ([sameDocument]): what every dry run answers as
+	// `changed`, and what a write of PART of the document answers instead of
+	// storing anything ([writeUnchanged]). False over a base stored without
+	// a seal, which nothing read, and where nothing was active.
+	unchanged bool
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -579,7 +587,47 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if found {
 		p.base, p.baseUnsealed, p.baseFleet = active, b.unsealed, cur.fleet
 	}
+	if found && !b.unsealed {
+		if p.unchanged, err = sameDocument(b.document, document); err != nil {
+			return nil, err
+		}
+	}
 	return p, nil
+}
+
+// sameDocument reports whether two stored documents say the same thing: equal
+// as JSON values, whatever their key order or spacing.
+//
+// THE STORED BYTES, NEVER THE DECODED COMPANIES. A field a newer peer wrote is
+// carried through every write ([carryUnknown]) and dropped by this build's
+// struct, so a comparison of decoded companies would call a write that moves
+// such a field unchanged. Two equal documents are the same revision's content:
+// a history diff of them ([Changes]) is empty.
+//
+// NUMBERS AS WRITTEN, never as float64, which holds two integers past 2^53
+// apart as one value. Both sides are this engine's encodings, so a number
+// spelled two ways is a change it reports rather than one it misses.
+func sameDocument(a, b []byte) (bool, error) {
+	left, err := jsonValue(a)
+	if err != nil {
+		return false, fmt.Errorf("configapi: read the active document to compare: %w", err)
+	}
+	right, err := jsonValue(b)
+	if err != nil {
+		return false, fmt.Errorf("configapi: read the proposed document to compare: %w", err)
+	}
+	return reflect.DeepEqual(left, right), nil
+}
+
+// jsonValue decodes one JSON document, its numbers kept as written.
+func jsonValue(raw []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var out any
+	if err := decoder.Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // warnings is everything a write's answer reports as VALID and worth knowing:

@@ -2074,6 +2074,7 @@ curl -X PATCH https://engine.example.com/config \
 - **Unknown keys are refused**, not ignored. A patch is the edit least visible in a diff, so a typo that silently changes nothing is the worst outcome available, because the caller believes they changed something. That holds whatever the key is set to, `null` included: deleting a key this build does not know is refused rather than ignored, because the write [carries it back](#fields-a-newer-build-wrote-survive-every-write) and the caller would be told a deletion landed that did not.
 - **Validated as the whole document it produces.** A section that is fine alone is still refused when it leaves the company invalid.
 - Same summary rule and same `If-Match` as `PUT /config`, and a **409** when nothing is active: a patch is defined against a document, and building a company out of one section is not what this route is for.
+- **A patch that changes nothing stores nothing.** One that leaves the document as it stands answers `200` with `changed: false` and the active revision, needs no summary, and activates nothing: see [A write that changes nothing](#a-write-that-changes-nothing).
 
 **A document is held to what its activation carries.** Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload and a revert) hands the document to every node sealed inside the activation pointer, one value of the coordination store, which holds a key to 6,290,542 bytes ([Coordination](../concepts/coordination.md#what-one-key-holds)). A body is held to 4 MiB, but a patch is merged onto the active document and the seal writes it a third larger, so a write whose document — sealed, with its summary — would make a pointer past that is refused `413 body_too_large` **before anything is stored**, naming `document_bytes`, `pointer_bytes` and `max_pointer_bytes`; a dry run of it is refused the same way. Make the document or its summary smaller: a company document of about four and a half mebibytes is the most a pointer carries.
 
@@ -2104,6 +2105,41 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company a newer peer admitted under other rules answers with one, one beside each entity the violation names.
   - `advisory`: a setting that is valid and worth knowing before it runs — the company's own (a human seat with no account on the Mattermost or Slack workspace the company talks on, which nobody can @-mention there; a token ceiling another ceiling makes unable to refuse a turn; a `${VAR}` nothing supplies; a repository or a seat's `code.access` that will not do what it seems to), or what the company does together with the Tier A of the node that served the write. `path` and `message` locate and say it; `ref`, `from` and `to` are empty. Every node also logs each of the company's own when it applies the revision, as a [`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing) line, so the answer is not the only place it is said. The cross-tier ones are [Warnings across the two tiers](../concepts/configuration.md#warnings-across-the-two-tiers): a fleet hosting code on the default `nats` object store (`store.objects.backend`), and a Gitlet node whose explicit `gitlet.cache_max_bytes` is below `code.limits.repo_max_bytes`. **They are judged against the Tier A of the node that answered the write**, so the same `PUT /config` can answer them on a Gitlet node and not on an ingress node without the `gitlet` role, and a write answers a budget only where it is set explicitly — a derived one is a share of a volume the write never sees, which each Gitlet node compares itself when it applies the revision (`config_tier_warning`).
 - **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
+
+#### A write that changes nothing
+
+A `PATCH /config` or a per-entity `PUT` whose document, once merged or
+spliced, says exactly what the active revision says (compared as JSON values,
+whatever the key order or spacing, numbers as written) **stores nothing and
+activates nothing**. It answers `200`, not `201`, with the revision that
+already says it and what the engine makes of it:
+
+```json
+{"changed": false, "revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41", "warnings": [], "derived": {"seats": [...], "units": [...]}}
+```
+
+- **No summary is needed**, since no revision records one; one sent is not
+  stored.
+- **An entity's answer carries its `ETag`**, the tag its `GET` answers, so a
+  client's next write of it is conditional on what it already holds.
+- **It is decided after everything that refuses the write**: a stale
+  `If-Match`, a document the write would refuse, and a lead's write of a part
+  of the company they do not lead are refused as they are when the write
+  changes something. Answering a lead's unchanged write would tell somebody
+  who may not read a setting whether it already holds a value they guessed.
+- **Why.** A patch or an entity's `PUT` is "change these fields". Stored, one
+  that changed none was a second revision under a summary saying what the
+  first one did, a diff of nothing between them in the history, and an
+  activation that rebuilt every node's seats for no reason. Publishing the
+  active document again is a gesture of its own, [`POST
+  /config/reload`](#post-configreload-after-a-secret-changes).
+- **A whole document is not answered this way.** `PUT /config` of the
+  document as it stands is stored and published again (`201`), because that
+  is how a caller that renders the document, an operator reconciling it,
+  activates it after writing the values it reads. A revert of the active
+  revision is the same: it is a reload.
+
+A [dry run](#dry-runs) says which a write would be (`changed`).
 
 **Every seat's handle and every unit's key is written into the stored
 document.** A seat that declares no `handle` is stored with the one its `name`
@@ -2251,12 +2287,13 @@ curl -X PATCH "https://engine.example.com/config?dry_run=true" \
 A valid check answers `200`:
 
 ```json
-{"valid": true, "base_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41", "warnings": [], "derived": {"seats": [...], "units": [...]}}
+{"valid": true, "base_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41", "changed": true, "warnings": [], "derived": {"seats": [...], "units": [...]}}
 ```
 
 - **`dry_run` is read before anything else**, and takes exactly `true` or `false`, or nothing. Any other value (`1`, `yes`, an empty value, the parameter twice) is `400 invalid_query`: the two readings of a guess differ by whether the fleet's configuration changes.
 - **No summary is needed**, because nothing is stored to record one on. A `_summary` key in the body is still lifted out, so the document checked is the one the write reads.
 - **`base_revision_id`** is the fleet's revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
+- **`changed`** says whether the document the write would store differs from the active one. A patch or an entity's `PUT` whose check says `false` is [answered unchanged](#a-write-that-changes-nothing) when it is sent, storing nothing; a whole document's `PUT` is stored and published again all the same. `true` when nothing is active.
 - **Each warning says whether this write introduces it.** A check's `warnings` are the [write's](#what-a-write-answers), judged on the whole document it would store, so they include every advisory the active revision already carries. Each also has `"introduced": true` when the active revision does not carry it (compared by its kind, seat, unit, reference and message, never by its `path`, which a write moves by adding a seat ahead of it), and `false` when it does. Every warning of a check made with nothing active is introduced. Ask Crewlet shows a change's introduced warnings on its proposal card and leaves the rest off, because a warning the company already had is not news about the change.
 - **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `400 conflicting_preconditions` for `If-Match` beside `If-None-Match`, `412 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
 - **A dry run is decided as the write, without the step-up** (ADR-0055): the same permission, a [lead's](#a-lead-edits-their-own-team) included, but not the recent proof, because it changes nothing. A person whose sign-in is old checks a change and is asked to confirm it is them only to make it. Ask Crewlet's read access sends a dry run to these routes, and to no other, which is how it checks a change before the person is shown it.

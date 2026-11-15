@@ -633,15 +633,17 @@ func onlyAnAdministratorMayTurnOn(t *testing.T, on string) {
 
 // A WRITE THAT CHANGES NOTHING IS ADMIN'S.
 //
-// Storing the document unchanged makes a new revision and re-activates it on
-// every node — `POST /config/reload`'s gesture — so a caller without admin is
-// refused it however it arrives: a patch of a key that is already unset, by a
-// person who leads nothing, and an entity sent back as it was read, by a lead.
-// The revision does not move. The control is an admin, whose same patch
-// lands.
+// A whole document sent back unchanged re-activates it on every node (`POST
+// /config/reload`'s gesture), and a patch or an entity's PUT that changes
+// nothing is answered as already so, which would tell its caller that a
+// setting they may not read holds a value they guessed. So a caller without
+// admin is refused it however it arrives: a patch of a key that is already
+// unset, by a person who leads nothing, and an entity sent back as it was
+// read, by a lead. The revision does not move. The control is an admin, whose
+// same patch is answered `changed: false`, and stores nothing either.
 //
 // Mutation: admit a diff with no part refused, as before, and both writes
-// land as new revisions.
+// are answered as unchanged to callers who may not read what they name.
 func TestAWriteThatChangesNothingIsTheCompanyGrants(t *testing.T) {
 	t.Parallel()
 	s := leadSurface(t)
@@ -666,9 +668,13 @@ func TestAWriteThatChangesNothingIsTheCompanyGrants(t *testing.T) {
 	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
 		ReauthAt: time.Now().Add(time.Hour)}
-	if res := doAs(t, s, admin, http.MethodPatch, "/config", `{"vision": null}`,
-		headers); res.Code != http.StatusCreated {
-		t.Errorf("an admin re-publishing the document = %d: %s", res.Code, res.Body.String())
+	res := doAs(t, s, admin, http.MethodPatch, "/config", `{"vision": null}`, headers)
+	if res.Code != http.StatusOK || decode(t, res)["changed"] != false {
+		t.Errorf("an admin's patch that changes nothing = %d %s, want 200 changed: false",
+			res.Code, res.Body.String())
+	}
+	if after := activeRevision(t, s); after != before {
+		t.Errorf("an admin's patch that changes nothing moved the active revision to %s", after)
 	}
 }
 

@@ -723,6 +723,18 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 		writeChecked(w, prepared)
 		return true, nil
 	}
+	// AN ENTITY SENT BACK AS IT STANDS stores nothing ([writeUnchanged]),
+	// answered with the tag it already has, as a write that stored would be.
+	if prepared.unchanged {
+		tag, err := storedTag(e.kind, e.id, prepared.document)
+		if err != nil {
+			s.fail(w, r, "tag the entity", err)
+			return true, nil
+		}
+		w.Header().Set("ETag", tag)
+		writeUnchanged(w, prepared)
+		return true, nil
+	}
 	// The same rule the whole-document write has, and for the same reason,
 	// asked as late: a per-entity write can say more, so the hint does.
 	if !requireSummary(w, e.summary, "this write needs an audit summary: "+
