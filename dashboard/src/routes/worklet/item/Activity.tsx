@@ -125,6 +125,7 @@ import type {
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
 import { ACTIVITY_TABS, timeline, type ActivityTab, type Entry, type Source } from "./timeline.ts";
+import { useOwnRemark } from "./remark.tsx";
 import { usePaged } from "~/lib/usePaged.ts";
 
 /** How often the newest page of each history is asked again: nothing pushes them. */
@@ -547,6 +548,7 @@ function FeedEntry({
       return (
         <CommentRow
           comment={entry.comment}
+          item={item}
           chrome={chrome}
           index={index}
           now={now}
@@ -677,9 +679,13 @@ function ChangeRow({
   );
 }
 
-/** A comment on the task: who said it, when, what, and what it asks. */
+/**
+ * A comment on the task: who said it, when, what, and what it asks; and, on
+ * the reader's own, its Edit and Delete ([useOwnRemark]).
+ */
 function CommentRow({
   comment,
+  item,
   chrome,
   index,
   now,
@@ -688,6 +694,7 @@ function CommentRow({
   newest,
 }: {
   comment: WorkComment;
+  item: WorkItem;
   chrome: RowChrome;
   index: OrgIndex;
   now: number;
@@ -706,6 +713,7 @@ function CommentRow({
   const chosen = comment.choice
     ? (comment.decision?.options.find((o) => o.id === comment.choice)?.label ?? comment.choice)
     : "";
+  const own = useOwnRemark(comment, item);
   return (
     <li className="task-entry" data-kind="comment">
       <span className="task-entry-avatar">
@@ -731,7 +739,7 @@ function CommentRow({
           >
             {fmtAt(comment.created_at, now)}
           </time>
-          {comment.updated_at && <span className="task-when">(edited)</span>}
+          {comment.updated_at && !comment.removed && <span className="task-when">(edited)</span>}
           {comment.ask && (
             <Tag variant="warning" leadingIcon={<CircleQuestionMarkGlyph size="xs" />}>
               {`asked ${chrome.seatName?.(comment.ask) ?? comment.ask}`}
@@ -749,18 +757,22 @@ function CommentRow({
               Reply
             </Button>
           )}
+          {own.controls}
         </header>
-        <Clamp className="task-comment-fold" height={COMMENT_FOLD} defaultOpen={newest}>
-          <div className="prose md task-comment-body">
-            {comment.removed ? (
-              <span className="muted">(this comment was removed)</span>
-            ) : comment.body.trim() ? (
-              renderMarkdown(comment.body)
-            ) : chosen ? (
-              <p>{`Chose “${chosen}”.`}</p>
-            ) : null}
-          </div>
-        </Clamp>
+        {own.dialog}
+        {own.editor ?? (
+          <Clamp className="task-comment-fold" height={COMMENT_FOLD} defaultOpen={newest}>
+            <div className="prose md task-comment-body">
+              {comment.removed ? (
+                <span className="muted">(this comment was removed)</span>
+              ) : comment.body.trim() ? (
+                renderMarkdown(comment.body)
+              ) : chosen ? (
+                <p>{`Chose “${chosen}”.`}</p>
+              ) : null}
+            </div>
+          </Clamp>
+        )}
         {comment.decision && (
           <div className="task-comment-decision">
             <span className="task-lbl">{comment.decision.question}</span>

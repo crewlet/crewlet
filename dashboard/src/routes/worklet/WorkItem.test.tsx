@@ -1825,6 +1825,166 @@ test("an asked person opens the item and answers without Worklet", async () => {
   ]);
 });
 
+/** Every REST write a remark gesture sends, answered as a landed tracker write. */
+function recordRemarkWrites(): {
+  method: string;
+  url: string;
+  body: unknown;
+  key: string | null;
+}[] {
+  const sent: { method: string; url: string; body: unknown; key: string | null }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit = {}) => {
+      sent.push({
+        method: (init.method ?? "GET").toUpperCase(),
+        url: String(url),
+        body: typeof init.body === "string" ? JSON.parse(init.body) : undefined,
+        key: ((init.headers ?? {}) as Record<string, string>)["Idempotency-Key"] ?? null,
+      });
+      return new Response(
+        JSON.stringify({ outcome: "applied", position: "CREWLET_TRACKER_LOG@1:120", op_id: "k" }),
+        { status: 200, headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" } },
+      );
+    }),
+  );
+  return sent;
+}
+
+/** A thread with one remark of the reader's, one of somebody else's, and one question of theirs. */
+const REMARKS = {
+  item: "t-1",
+  key: "ENG-42",
+  title: "Fix the login race",
+  comments: [
+    {
+      id: "c-mine",
+      task: "t-1",
+      author: "jane",
+      author_kind: "human",
+      body: "The race is in the session refresh.",
+      created_at: "2031-04-12T09:00:00Z",
+    },
+    {
+      id: "c-theirs",
+      task: "t-1",
+      author: "ada",
+      author_kind: "agent",
+      body: "I can take the refresh path.",
+      created_at: "2031-04-12T10:00:00Z",
+    },
+    {
+      id: "c-ask",
+      task: "t-1",
+      author: "jane",
+      author_kind: "human",
+      body: "Can you reproduce it on staging?",
+      ask: "ada",
+      created_at: "2031-04-12T11:00:00Z",
+    },
+  ],
+};
+
+// A PERSON EDITS AND DELETES THEIR OWN REMARK, AND NOBODY ELSE'S. The task's
+// thread offered Reply alone: the engine served a remark's rewrite and its
+// take-down and the page reached neither. Edit and Delete sit on the reader's
+// own remarks; a question of theirs takes Edit only, since the engine never
+// takes a question down; somebody else's takes neither. Mutation: offer the
+// controls on every remark, or Delete on a question, and a line here goes red.
+test("Edit and Delete sit on the reader's own remarks only", async () => {
+  mount(<WorkItemPage id="ENG-42" />, { answers: { work_comments: REMARKS } });
+  await settle();
+  const row = (text: string) => screen.getAllByText(text)[0]!.closest("article")!;
+  const mine = row("The race is in the session refresh.");
+  const theirs = row("I can take the refresh path.");
+  const asking = row("Can you reproduce it on staging?");
+  expect(within(mine).getByRole("button", { name: "Edit your comment" })).toBeTruthy();
+  expect(within(mine).getByRole("button", { name: "Delete your comment" })).toBeTruthy();
+  expect(within(theirs).queryByRole("button", { name: /^Edit/ })).toBeNull();
+  expect(within(theirs).queryByRole("button", { name: /^Delete/ })).toBeNull();
+  expect(within(asking).getByRole("button", { name: "Edit your question or answer" })).toBeTruthy();
+  expect(within(asking).queryByRole("button", { name: /^Delete/ })).toBeNull();
+});
+
+// AN EDIT REWRITES THE REMARK IN PLACE through the engine's own route, keyed,
+// and refuses to save words that did not change. Mutation: send the edit
+// through the act route, or unkeyed, and the request below is not the one sent.
+test("Edit rewrites the remark through its PATCH route, keyed", async () => {
+  mount(<WorkItemPage id="ENG-42" />, { answers: { work_comments: REMARKS } });
+  await settle();
+  const sent = recordRemarkWrites();
+  const mine = screen.getAllByText("The race is in the session refresh.")[0]!.closest("article")!;
+  fireEvent.click(within(mine).getByRole("button", { name: "Edit your comment" }));
+  const field = within(mine).getByRole("textbox", { name: "Your comment on ENG-42" });
+  fireEvent.click(within(mine).getByRole("button", { name: "Save" }));
+  await settle();
+  expect(sent.filter((s) => s.method !== "GET")).toEqual([]);
+  fireEvent.change(field, { target: { value: "The race is in the token refresh." } });
+  fireEvent.click(within(mine).getByRole("button", { name: "Save" }));
+  await settle();
+  const edit = sent.find((s) => s.method === "PATCH");
+  expect(new URL(edit!.url, "http://x").pathname).toBe("/worklet/items/t-1/comments/c-mine");
+  expect(edit?.body).toEqual({ body: "The race is in the token refresh." });
+  expect(edit?.key).toMatch(/^[0-9a-f-]{36}$/);
+  expect(within(mine).queryByRole("textbox")).toBeNull();
+});
+
+// A REMOVAL IS CONFIRMED, then sent to the remark's DELETE route, keyed; and a
+// remark taken down reads as removed, with no controls and no "(edited)".
+// Mutation: send the removal on the first press, and nothing is confirmed.
+test("Delete is confirmed, then takes the remark down through its DELETE route", async () => {
+  mount(<WorkItemPage id="ENG-42" />, { answers: { work_comments: REMARKS } });
+  await settle();
+  const sent = recordRemarkWrites();
+  const mine = screen.getAllByText("The race is in the session refresh.")[0]!.closest("article")!;
+  fireEvent.click(within(mine).getByRole("button", { name: "Delete your comment" }));
+  const dialog = await screen.findByRole("dialog", { name: "Delete your comment?" });
+  expect(sent.filter((s) => s.method !== "GET")).toEqual([]);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+  await settle();
+  const removal = sent.find((s) => s.method === "DELETE");
+  expect(new URL(removal!.url, "http://x").pathname).toBe("/worklet/items/t-1/comments/c-mine");
+  expect(removal?.key).toMatch(/^[0-9a-f-]{36}$/);
+  expect(screen.queryByRole("dialog", { name: "Delete your comment?" })).toBeNull();
+});
+
+test("a remark taken down reads as removed and offers nothing", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_comments: {
+        ...REMARKS,
+        comments: [
+          {
+            ...REMARKS.comments[0]!,
+            body: "",
+            removed: true,
+            updated_at: "2031-04-13T09:00:00Z",
+          },
+        ],
+      },
+    },
+  });
+  await settle();
+  const gone = screen.getByText("(this comment was removed)").closest("article")!;
+  expect(within(gone).queryByRole("button")).toBeNull();
+  expect(within(gone).queryByText("(edited)")).toBeNull();
+});
+
+// A TASK IN THE TRASH TAKES NO CHANGE, so its remarks offer neither gesture.
+test("a task in the trash offers no Edit or Delete on its remarks", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_item: detail({
+        task: task({ removed: { by: "jane", kind: "human", at: "2031-04-15T09:00:00Z" } }),
+      }),
+      work_comments: REMARKS,
+    },
+  });
+  await settle();
+  const mine = screen.getAllByText("The race is in the session refresh.")[0]!.closest("article")!;
+  expect(within(mine).queryByRole("button", { name: /^Edit|^Delete/ })).toBeNull();
+});
+
 // AN OPTION IS HELD TO THE ENGINE'S CAP ON ITS OWN FIELD: past 80 bytes the
 // ask was sent and refused with "Check what was entered", naming no field.
 test("an ask's option past the engine's cap says so under it", async () => {
