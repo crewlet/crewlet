@@ -489,7 +489,7 @@ describe("merging a task into another", () => {
     replies.merge_work_item = {
       status: 422,
       body: {
-        error: "invalid_body",
+        error: "invalid",
         tool: "merge_work_item",
         detail: "ENG-1 has a subtask filed in another project than ENG-2.",
       },

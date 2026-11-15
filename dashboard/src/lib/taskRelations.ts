@@ -96,10 +96,16 @@ export function unlinkChange(
 }
 
 /** The sentence a link taken off is confirmed with, worded as the rail heads it. */
-export function unlinkedSentence(link: Pick<WorkLink, "kind" | "derived">, task: string, other: string): string {
+export function unlinkedSentence(
+  link: Pick<WorkLink, "kind" | "derived">,
+  task: string,
+  other: string,
+): string {
   switch (link.kind) {
     case "waiting_on":
-      return link.derived ? `${task} no longer blocks ${other}` : `${task} no longer waits on ${other}`;
+      return link.derived
+        ? `${task} no longer blocks ${other}`
+        : `${task} no longer waits on ${other}`;
     case "duplicates":
       return link.derived
         ? `${other} is no longer marked a duplicate of ${task}`

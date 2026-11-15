@@ -143,7 +143,8 @@ export function taskTargetOf(
 }
 
 /** Why a reader with no record of their own has no priorities to change. */
-const PRIORITIES_NEED_A_RECORD = "You have no work record of your own, so there is no list to change.";
+const PRIORITIES_NEED_A_RECORD =
+  "You have no work record of your own, so there is no list to change.";
 
 /** Why the priorities entry is held until the reader's own record has answered. */
 const PRIORITIES_READING = "Reading your priorities first.";

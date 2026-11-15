@@ -308,7 +308,7 @@ answer is that there is no such work.
 | **tags** | from a per-project tag set — see [Tags](#tags). A tag the project has not declared is REFUSED at the write. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
 | **checklists** | up to 16 named lists holding up to 64 items each and 256 between them, each item with its own assignee — see [Checklists](#checklists). |
-| **relations**, **dependencies** | links between tasks, and blocking edges. |
+| **relations**, **dependencies** | links between tasks, and blocking edges: `linked` (related, no blocking meaning), `waiting_on` and `blocking` (one edge seen from its two ends), each a set changed with `{add, remove}` on `update_work_item`, and `duplicate_of` (one task the item duplicates, cleared with `null` or `""`). |
 | **linked pages** | knowledge-base pages the task names, set with `linked_pages` on `update_work_item`. `linked_page=<page id>` lists the tasks that name a page. |
 | **atlas entries** | the entries of the company's [atlas](atlas.md) the task touches (the servers, services, databases, domains and accounts the work changes), set with `linked_entries` on `update_work_item`. Up to 32, each kept by the entry's id. See [The atlas entries a task touches](#the-atlas-entries-a-task-touches). |
 | **references** | other tasks this task's description mentions by key (`ENG-12`), derived by the applier on every data node from the first 64 distinct keys the description names, where a task's former key resolves like its current one. `references=<key>` lists the tasks whose description mentions it. A comment's mentions are not references. |
@@ -1693,11 +1693,26 @@ drawn for everybody and held with that reason for anybody without it.
   **Every task has a menu** (the ellipsis at the end of a list or table row,
   on a board card's corner and beside a timeline row's name; a calendar day's
   task opens its peek, which has the same menu in its header). It holds
-  **Move to project…**, **Move to trash**, and in the trash **Restore** and
-  **Delete permanently**. A move takes one top-level task and its subtasks to
-  the project you choose, re-keyed there with their old keys still opening
-  them; a subtask's entry is held, since it moves with its parent, and the
-  lead of the task's project decides it.
+  **Move to project…**, **Merge into…**, **Add to my priorities** (or
+  **Remove from my priorities** for a task already on them), **Move to
+  trash**, and in the trash **Restore** and **Delete permanently**. A move
+  takes one top-level task and its subtasks to the project you choose,
+  re-keyed there with their old keys still opening them; a subtask's entry is
+  held, since it moves with its parent, and the lead of the task's project
+  decides it. A merge folds the task into the one you find by its key or its
+  words (`merge_work_item`): it is linked to that task as its duplicate, its
+  subtasks move onto it unless you keep them where they are, and it is closed
+  as cancelled; the dialog says so before you press Merge, draws the engine's
+  refusal in place, and takes you to the task that carries the work on. Add to
+  my priorities puts the task at the end of your own list (`set_priorities`
+  under your record's version), where My work's Priorities orders it.
+
+  **A task's links are drawn and taken off on its page.** Link a task asks
+  what this task is to the one you pick: **Related to**, **Blocking** or
+  **Waiting on**, the last two with an optional line saying why. Each task in
+  the rail's Relations has a remove control for a reader who may change the
+  task: a dependency comes off from either end, and a related link or a
+  duplicate drawn from the other task is taken off that task.
   A list or a table also takes a **selection**: tick rows (Shift ticks a
   range) and the bar over the grid moves them all to the trash, or restores
   them all in the trash. Moving a task with subtasks asks first whether they

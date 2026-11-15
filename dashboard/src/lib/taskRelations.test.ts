@@ -84,6 +84,8 @@ describe("unlinking", () => {
     expect(unlinkedSentence({ kind: "duplicates", derived: true }, "ENG-1", "ENG-2")).toBe(
       "ENG-2 is no longer marked a duplicate of ENG-1",
     );
-    expect(unlinkedSentence({ kind: "linked" }, "ENG-1", "ENG-2")).toBe("Unlinked ENG-2 from ENG-1");
+    expect(unlinkedSentence({ kind: "linked" }, "ENG-1", "ENG-2")).toBe(
+      "Unlinked ENG-2 from ENG-1",
+    );
   });
 });

@@ -5585,6 +5585,10 @@ a tool arrives in it with the control that sends it. The controls
 | An option · Something else and Send | A question in the Inbox's pane | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}`, then `mark_inbox{read}` for the notices that asked it |
 | Send | The reply box under the Inbox's conversation | `comment_on_work_item{item, body, reply_to}` |
 | Link a task · Attach a page | The Inbox's reply box | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
+| Link a task (Related to · Blocking · Waiting on, with "Why") | A task's composer | `update_work_item{item, linked}` / `{item, blocking, dependency_note?}` / `{item, waiting_on, dependency_note?}`, each `{add: [task]}` |
+| Remove a relation (the x on a Relations row) | A task's rail | `update_work_item` with `{remove: [task]}` on `waiting_on` or `blocking` (the end this task holds), on `linked` of the task that drew a related link, or `duplicate_of: null` on the duplicate |
+| Merge into… | A task's More, its peek and every row's menu | `merge_work_item{item, into, move_subtasks}`; on success the page opens the surviving task |
+| Add to my priorities · Remove from my priorities | A task's More, its peek and every row's menu | `set_priorities{items, if_match}`: your own stored list with the task appended or taken out, conditional on the record's version |
 | Link an atlas entry · remove one | A work item's rail, Atlas entries | `update_work_item{item, linked_entries}`, a delta of entry ids; adding takes Atlas as well as Worklet |
 | An option · Something else and Send answer | A parked executor in the Inbox's pane, and its Answer dialog | `answer_executor{turn_id, launch_id, choice}` / `answer_executor{turn_id, launch_id, answer}` |
 | Accept · Change and Submit · Something else · Answer | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
