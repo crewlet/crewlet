@@ -6451,11 +6451,14 @@ type recovery struct {
 // the re-arm ([Coordinator.keepRefused]), and whose signal carries it, the
 // seat's admission above all, which every acquisition signals once its
 // recovery is done. A re-fire that fails otherwise, a store that did not
-// answer it, leaves the re-arm standing, and THE RE-ARM HAS A RE-FIRE OF ITS
-// OWN at the backstop ([Coordinator.keepLocked]): kept on the recorded
-// condition alone, whose signal this holder may never see, the completion
-// waited for the waiter's next announcement, which a silent store keeps from
-// coming, and for nothing else while this holder kept the seat.
+// answer it, leaves the completion kept all the same: the re-arm stands where
+// the gate could not ask, and where the gate admitted the re-fire, which drops
+// the re-arm, and the claim went unanswered, the re-fire keeps it again
+// ([Coordinator.keepAgain]). AND EITHER KEEP HAS A RE-FIRE OF ITS OWN at the
+// backstop ([Coordinator.keepLocked]): kept on the recorded condition alone,
+// whose signal this holder may never see, the completion waited for the
+// waiter's next announcement, which a silent store keeps from coming, and for
+// nothing else while this holder kept the seat.
 //
 // A completion this node already keeps for the job, a delivery's refusal since
 // the seat was taken, is left as it is, and nothing is re-fired for it.
