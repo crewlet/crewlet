@@ -10,6 +10,7 @@ import type { AssistantCardEvent, AssistantTableCard } from "~/contract/assistan
 import { Router } from "~/app/router.tsx";
 import { CardBlock, type CardHandlers } from "./blocks.tsx";
 import { Answer, TableRows } from "./reads.tsx";
+import { sourcesOf } from "./sources.tsx";
 
 afterEach(cleanup);
 
@@ -164,20 +165,74 @@ test("a chat room's chip is its name, and its peek says it is a room and opens i
   expect(open.getAttribute("href")).toBe(`#/chatlet/${id}`);
 });
 
-test("a web page the engine read is listed by its title, and its peek says it is a web page", () => {
-  const rules = event({
+const page = (url: string, title = "Origin rules") =>
+  event({
     type: "entity",
     entity: {
       kind: "web_page",
-      id: "https://docs.example.com/rules",
-      title: "Origin rules",
-      facts: [{ label: "Address", value: "https://docs.example.com/rules" }],
+      id: url,
+      title,
+      facts: [
+        { label: "Address", value: url },
+        { label: "Read", value: "2026-11-14T09:30:00Z", type: "datetime" },
+      ],
     },
   });
-  draw("Overrides need the Enterprise plan.", [rules]);
+
+test("a web page the engine read is cited under Sources, not on the Also looked up line", () => {
+  draw("Overrides need the Enterprise plan.", [crash(), page("https://docs.example.com/rules")]);
   const line = screen.getByRole("list", { name: "Also looked up" });
-  fireEvent.click(within(line).getByRole("button", { name: /Origin rules/ }));
-  expect(within(screen.getByRole("dialog")).getByText("Web page")).toBeTruthy();
+  expect(
+    within(line)
+      .getAllByRole("button")
+      .map((b) => b.textContent),
+  ).toEqual(["GOP-11"]);
+  const sources = screen.getByRole("region", { name: "Sources" });
+  const link = within(sources).getByRole("link", { name: /Origin rules/ });
+  expect(link.getAttribute("href")).toBe("https://docs.example.com/rules");
+  expect(within(sources).getByText("docs.example.com")).toBeTruthy();
+  expect(within(sources).getByText(/^Read /)).toBeTruthy();
+});
+
+test("a source opens only through the stop that names its host, and only when asked", () => {
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  draw("Overrides need the Enterprise plan.", [page("https://docs.example.com/rules")]);
+  const sources = screen.getByRole("region", { name: "Sources" });
+  fireEvent.click(within(sources).getByRole("link", { name: /Origin rules/ }));
+  expect(open).not.toHaveBeenCalled();
+  const stop = screen.getByRole("dialog", { name: "Open an external link?" });
+  expect(within(stop).getByText(/Ask Crewlet read this page/)).toBeTruthy();
+  expect(within(stop).getAllByText(/docs\.example\.com/).length).toBeGreaterThan(0);
+  fireEvent.click(within(stop).getByRole("button", { name: "Open link" }));
+  expect(open).toHaveBeenCalledWith(
+    "https://docs.example.com/rules",
+    "_blank",
+    "noopener,noreferrer",
+  );
+  open.mockRestore();
+});
+
+test("a page's title in the answer stays words: the site wrote it, so the page is cited, not named", () => {
+  draw("Origin rules says overrides need the Enterprise plan.", [
+    page("https://docs.example.com/rules"),
+  ]);
+  expect(screen.queryByRole("button", { name: /Origin rules/ })).toBeNull();
+  expect(screen.queryByRole("list", { name: "Also looked up" })).toBeNull();
+  const sources = screen.getByRole("region", { name: "Sources" });
+  expect(within(sources).getByRole("link", { name: /Origin rules/ })).toBeTruthy();
+});
+
+test("a page read in parts is one source, and an address that is not https is none", () => {
+  const sources = sourcesOf([
+    page("https://docs.example.com/rules"),
+    page("https://docs.example.com/rules", "Origin rules, part two"),
+    page("http://docs.example.com/plain"),
+    page("javascript:alert(1)"),
+    crash(),
+  ]);
+  expect(sources.map((s) => [s.url.href, s.title])).toEqual([
+    ["https://docs.example.com/rules", "Origin rules, part two"],
+  ]);
 });
 
 test("a table's peek holds its rows, its downloads and the way to its page", () => {

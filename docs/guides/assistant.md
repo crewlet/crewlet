@@ -307,6 +307,12 @@ site's: a change Ask Crewlet proposes after reading one says it was prepared
 after reading a web page. List only the documentation hosts you trust, such as
 the vendors your integrations connect to.
 
+The pages a turn read are cited under its answer, under **Sources**: one link a
+page, with its host and when it was read, from the engine's own record of the
+read. A source opens in a new tab only after a stop that names its host and its
+whole address. A page's title is the site's words, so a mention of it in the
+answer stays plain text.
+
 ## Deep work
 
 Deep work lets Ask Crewlet hand a large task to a harness with its own
