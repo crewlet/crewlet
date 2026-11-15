@@ -348,7 +348,7 @@ download <run-id> -n test-weights`. Under each package's line the file names
 the seconds of each of its top-level tests, which is where to look for the
 tests a slow package spends its time in, and the gate's last lines say how much
 CPU the run used against the CPUs it had, which tells a shard that is short of
-cores from one that waits. None of the three variables changes which
+cores from one that waits, and list the run's slowest tests and subtests. None of the three variables changes which
 packages are in a half, and left unset, the default, `make test` is the whole
 half in `go list` order, as it always was. `make test-solo` takes the same
 three: at `-p 1` its order changes nothing, but a shard of it takes the sum of
