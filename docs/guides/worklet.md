@@ -581,7 +581,20 @@ its options included. So read the catalogue, change what you mean to change,
 and send it back — a field composed from scratch loses whatever it is not
 carrying. That is the same rule the list itself follows, and it is why the
 settings are spelled here exactly as the read spells them: the object you are
-handed is the object you send.
+handed is the object you send. The `types` list is the same, read from the
+answer's `declared_types` (the company's own declarations, archived ones
+included whatever `archived` asked) rather than from `types`, the effective
+set: sent back, the effective set would copy every builtin into the
+company's words.
+
+**In the dashboard**, a project's About lists the types under *What this
+project calls things*, with **Edit the company's types**. Its dialog lists
+every type with **Rename** and **Archive** (archiving asks first and keeps
+the type on the tasks filed as it), the archived ones apart with **Restore**,
+and **Add type**, which shows the slug tasks will hold for good. Each press
+writes `PUT /worklet/catalogue` with the declarations whole and the one
+change applied; every control is drawn for every reader and held with the
+reason for anybody without `admin`.
 
 A **project's own** field declarations are the project **lead's** (or an
 administrator's), written with `write_project(fields: [...])`. That

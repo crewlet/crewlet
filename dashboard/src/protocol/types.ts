@@ -3447,6 +3447,10 @@ export interface WorkCatalogueAnswer {
   /** The EFFECTIVE set: what this build ships plus what the company declared,
    *  a declaration replacing a builtin of the same slug. */
   types: WorkTypeDef[];
+  /** The company's OWN type declarations, archived ones included whatever was
+   *  asked: what a write of `types` replaces, so a writer sends back exactly
+   *  these with its change, never the effective set. */
+  declared_types: WorkTypeDef[];
   /** The WORKSPACE's declarations. A project declares its own beside them. */
   fields: WorkFieldDef[];
   policy_version: number;
