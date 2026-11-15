@@ -669,6 +669,45 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	group("ContractPolicyFunctions", s.runContractPolicy)
 }
 
+// RunLagged runs, alone, the cases a loaded broker's pauses once cut while
+// they were still delivering (#1204), against a backend newQueue builds across
+// a link the caller makes LAG: one that answers every request a while late,
+// as a broker paused by a loaded runner does. It is [RunWith]'s contract for
+// newQueue and caps, and certifies that the suite's waits hold a pause to
+// stallFor rather than a wait to its length: through a lag of half a second
+// each way, a case that waits for three deliveries waits for many seconds,
+// and passes.
+//
+// TWO CASES, NOT THE SUITE: every round trip of every case pays twice the lag,
+// and these two alone take ten to sixteen seconds each through it, so the
+// whole suite through it would cost CI many times its own run. These two are
+// the shapes that were cut — a wait for redeliveries, each a round trip and a
+// backoff apart, and a handler's own publish coming back to it — and the
+// others wait the same way, through the same journal (awaitDeliveries). The
+// third case #1204 recorded, a passed partition, also waits on the 50 ms
+// linger window a lag outlasts by construction, which is #1261's to fix
+// before it can run here.
+//
+// Mutation: bound a journal's wait at three seconds from its start, as
+// settleFor did, and both cases fail through a lag of half a second each way:
+// the redelivery case's attempts come seconds apart there.
+func RunLagged(t *testing.T, newQueue Factory, caps Capabilities) {
+	t.Helper()
+	if caps.Settle == nil {
+		t.Fatal("queuetest: Capabilities.Settle is required, as RunWith's doc says")
+	}
+	s := &suite{newQueue: newQueue, caps: caps}
+	ctx := t.Context()
+	t.Run("handler_failure_triggers_redelivery", func(t *testing.T) {
+		t.Parallel()
+		s.handlerFailureTriggersRedelivery(ctx, t)
+	})
+	t.Run("a_handler_that_publishes_to_its_own_subscription_is_not_re_entered", func(t *testing.T) {
+		t.Parallel()
+		s.publishesToItsOwnSubscription(ctx, t)
+	})
+}
+
 type suite struct {
 	newQueue Factory
 	caps     Capabilities
@@ -857,7 +896,7 @@ const (
 	// link held 500ms each way and nothing else changed, the redelivery
 	// case came round in 6.1 to 10.2 s where three seconds had cut it every
 	// time, and one of its healthy redeliveries came 6.1 s after the
-	// attempt before it.
+	// attempt before it (jetstream's TestCasesThroughALaggingLeaf runs it so).
 	//
 	// THIRTY SECONDS, against that 6.59 s, the slowest single pause a
 	// healthy process was measured to take: 4.5x it, as the Makefile's

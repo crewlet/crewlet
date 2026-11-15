@@ -55,62 +55,7 @@ func (s *suite) runReentrancy(t *testing.T) {
 	// depth reads 2.
 	t.Run("a_handler_that_publishes_to_its_own_subscription_is_not_re_entered", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(ctx, t)
-		batches := newBatchJournal()
-
-		var mu sync.Mutex
-		var depth, maxDepth int
-		var publishErr error
-
-		subscribeBatch(ctx, t, q, "t.reentry", "g",
-			func(hctx context.Context, evs []*events.Event) queue.Result {
-				mu.Lock()
-				depth++
-				if depth > maxDepth {
-					maxDepth = depth
-				}
-				first := maxDepth == 1 && len(batches.all()) == 0
-				mu.Unlock()
-
-				if first {
-					// Published from INSIDE the handler, with the
-					// handler's own context, which is what a tool
-					// call in a turn does.
-					err := q.Publish(hctx, "t.reentry", newConvEvent("second", "c1"))
-					mu.Lock()
-					publishErr = err
-					mu.Unlock()
-				}
-
-				batches.record(evs)
-				mu.Lock()
-				depth--
-				mu.Unlock()
-				return queue.Ack()
-			},
-			queue.DefaultBatchOptions())
-
-		publish(ctx, t, q, "t.reentry", newConvEvent("first", "c1"))
-
-		batches.await(t, "both events handled", func(got [][]string) bool {
-			n := 0
-			for _, b := range got {
-				n += len(b)
-			}
-			return n >= 2
-		})
-
-		mu.Lock()
-		gotDepth, gotErr := maxDepth, publishErr
-		mu.Unlock()
-		if gotErr != nil {
-			t.Fatalf("publish from inside a handler failed: %v", gotErr)
-		}
-		if gotDepth != 1 {
-			t.Errorf("max handlers running at once on one subscription = %d, want 1: "+
-				"a seat can be woken while its own turn is still running",
-				gotDepth)
-		}
+		s.publishesToItsOwnSubscription(ctx, t)
 	})
 
 	t.Run("a_handlers_publish_returns_without_waiting_for_the_delivery_it_causes", func(t *testing.T) {
@@ -162,4 +107,68 @@ func (s *suite) runReentrancy(t *testing.T) {
 				"a turn that wakes its own seat would block on itself")
 		}
 	})
+}
+
+// publishesToItsOwnSubscription is
+// a_handler_that_publishes_to_its_own_subscription_is_not_re_entered: a
+// handler's publish to its own subscription succeeds, both events are handled,
+// and the handler is never running twice at once. One of the cases
+// [RunLagged] runs too.
+func (s *suite) publishesToItsOwnSubscription(ctx context.Context, t *testing.T) {
+	q := s.start(ctx, t)
+	batches := newBatchJournal()
+
+	var mu sync.Mutex
+	var depth, maxDepth int
+	var publishErr error
+
+	subscribeBatch(ctx, t, q, "t.reentry", "g",
+		func(hctx context.Context, evs []*events.Event) queue.Result {
+			mu.Lock()
+			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
+			first := maxDepth == 1 && len(batches.all()) == 0
+			mu.Unlock()
+
+			if first {
+				// Published from INSIDE the handler, with the
+				// handler's own context, which is what a tool
+				// call in a turn does.
+				err := q.Publish(hctx, "t.reentry", newConvEvent("second", "c1"))
+				mu.Lock()
+				publishErr = err
+				mu.Unlock()
+			}
+
+			batches.record(evs)
+			mu.Lock()
+			depth--
+			mu.Unlock()
+			return queue.Ack()
+		},
+		queue.DefaultBatchOptions())
+
+	publish(ctx, t, q, "t.reentry", newConvEvent("first", "c1"))
+
+	batches.await(t, "both events handled", func(got [][]string) bool {
+		n := 0
+		for _, b := range got {
+			n += len(b)
+		}
+		return n >= 2
+	})
+
+	mu.Lock()
+	gotDepth, gotErr := maxDepth, publishErr
+	mu.Unlock()
+	if gotErr != nil {
+		t.Fatalf("publish from inside a handler failed: %v", gotErr)
+	}
+	if gotDepth != 1 {
+		t.Errorf("max handlers running at once on one subscription = %d, want 1: "+
+			"a seat can be woken while its own turn is still running",
+			gotDepth)
+	}
 }

@@ -287,22 +287,7 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("handler_failure_triggers_redelivery", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(ctx, t)
-		j := newJournal()
-		var attempts int
-		subscribe(ctx, t, q, "topic.flaky", "grp", func(context.Context, *events.Event) queue.Result {
-			attempts++
-			j.record("attempt")
-			if attempts < 3 {
-				return queue.Nak(errors.New("transient failure"))
-			}
-			return queue.Ack()
-		})
-
-		publish(ctx, t, q, "topic.flaky", newEvent("t"))
-
-		j.await(t, "two failures and a success", func(seen []string) bool { return len(seen) == 3 })
-		j.staysAt(ctx, t, 3, "an acknowledged event")
+		s.handlerFailureTriggersRedelivery(ctx, t)
 	})
 
 	// A HANDLER RUNS UNDER ITS CONSUMER'S LIFETIME, NEVER ITS PUBLISHER'S.
@@ -1390,4 +1375,26 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"DeadLetterMarks", marksErr(q.DeadLetterMarks(ctx, topics.DeadLettersUnder(topic)))},
 		{"DropDeadLetter", q.DropDeadLetter(ctx, letters, absentLetter)},
 	}
+}
+
+// handlerFailureTriggersRedelivery is handler_failure_triggers_redelivery: a
+// handler that fails twice is handed its event a third time, and once it
+// succeeds the event stays handled. One of the cases [RunLagged] runs too.
+func (s *suite) handlerFailureTriggersRedelivery(ctx context.Context, t *testing.T) {
+	q := s.start(ctx, t)
+	j := newJournal()
+	var attempts int
+	subscribe(ctx, t, q, "topic.flaky", "grp", func(context.Context, *events.Event) queue.Result {
+		attempts++
+		j.record("attempt")
+		if attempts < 3 {
+			return queue.Nak(errors.New("transient failure"))
+		}
+		return queue.Ack()
+	})
+
+	publish(ctx, t, q, "topic.flaky", newEvent("t"))
+
+	j.await(t, "two failures and a success", func(seen []string) bool { return len(seen) == 3 })
+	j.staysAt(ctx, t, 3, "an acknowledged event")
 }
