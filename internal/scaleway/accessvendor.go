@@ -532,7 +532,7 @@ func (s *accessSession) rulesFor(ctx context.Context, in seataccess.ApplyInput) 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := rulesFor(in.Want.Level, s.client.OrganizationID(), in.Want.Scope); err != nil {
+	if _, err = rulesFor(in.Want.Level, s.client.OrganizationID(), in.Want.Scope); err != nil {
 		return nil, &seataccess.Refusal{
 			Said:   "Scaleway: " + err.Error(),
 			Remedy: "Choose a level and at least one project for this agent on the Agents tab",
