@@ -846,7 +846,14 @@ a roll, or a seat or a company that is not the node's) while a live node reads
 the version of the run's parked state: the run is resumed once a node that
 can holds the seat. Once no live node reads it, as after a rollback, it counts
 like the run's own, so a state nobody running can read holds the seat no longer
-than the give-up does.
+than the give-up does. A condition only an operator clears (this node's disk
+full, read-only or failing, its open files at their limit, the fleet's nodes
+holding different keys or running different builds) is the node's too, so the
+give-up never ends a run held by one: the run and its seat wait for the
+operator, and a turn with a wall-clock cap still ends at it. What the operator
+sees is each attempt's `sandbox_resume_failed` line, at error, its `error`
+naming the condition, and for a full volume holding the node's databases the
+[`volume_low`](../reference/alarms.md) alarm besides.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:
 two nodes that both run one partition — possible if a turn outlives the

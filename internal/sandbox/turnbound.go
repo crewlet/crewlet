@@ -49,6 +49,28 @@ import (
 // condition names when it lifts, or the event that lifts it, and the seat
 // could not run other work through it meanwhile. An answer's resume is bounded
 // by its own series ([MaxAnswerAttempts]) and the run's pause TTL.
+//
+// NOR IS A CONDITION ONLY AN OPERATOR CLEARS. A resume that fails on this
+// node's disk (full, mounted read-only, or failing to read or write), on its
+// limit of open files, or on the fleet's nodes holding different keys or
+// running different builds is the node's or its infrastructure's
+// ([CoordinatorOptions.NodesFailure]), so it counts nothing toward the
+// give-up, and no wait clears it: the run and its seat wait for the operator,
+// the job's completion coming round on each announcement, and a turn with a
+// deadline still ends at it. Ending the run would throw away the review of a
+// job that finished, for a condition the next resume after the operator's fix
+// gets past. What the operator sees, condition by condition:
+//
+//   - every one: each attempt's `sandbox_resume_failed` line, at error, its
+//     `error` naming the condition (its `attempt` stays at the count of the
+//     run's own failures, which these leave alone): the system's own
+//     words for a disk or the open files (such as "no space left on device",
+//     "read-only file system", "input/output error", "too many open files"),
+//     the estate's "finish the upgrade" for builds that differ, and a note or
+//     a run's record this node could not verify for keys that differ;
+//   - a full disk that is the volume holding this node's databases: the
+//     `volume_low` alarm besides, raised while the volume has less free
+//     space than its next restore, vacuum or snapshot needs.
 
 // ResumeGiveUp is how long the resume of a finished job's turn may keep failing
 // before the run is settled as [types.ExecutorFailureResumeFailing].
