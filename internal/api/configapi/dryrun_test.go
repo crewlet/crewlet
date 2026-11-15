@@ -756,3 +756,56 @@ func TestADryRunIsRefusedADocumentItsActivationCannotCarry(t *testing.T) {
 		}
 	})
 }
+
+// A WRITE THAT MOVES THE COMPANY'S CLOCK IS CHECKED WITH A WARNING it
+// introduces, naming both zones: every budget window and every schedule
+// without a zone of its own moves with it, and a screen confirms that before
+// it saves (the dashboard stops on an introduced warning). A write that
+// leaves the clock alone carries none, and the warning is the write's, not
+// the document's: the company as it stands, checked again, raises none.
+//
+// Mutation: drop config.ClockMoves from the write path and no warning is
+// answered.
+func TestAWriteThatMovesTheClockIsWarnedOfIt(t *testing.T) {
+	t.Parallel()
+	s := newCountedSurface(t)
+	s.seed(t, companyDoc)
+	type checked struct {
+		Warnings []struct {
+			config.Warning
+			Introduced bool `json:"introduced"`
+		} `json:"warnings"`
+	}
+	clockWarnings := func(body string) []string {
+		t.Helper()
+		res := s.do(t, http.MethodPatch, "/config?dry_run=true", body, nil)
+		if res.Code != http.StatusOK {
+			t.Fatalf("dry run of %s = %d, want 200: %s", body, res.Code, res.Body)
+		}
+		var answer checked
+		if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
+			t.Fatalf("decode: %v (%s)", err, res.Body)
+		}
+		var out []string
+		for _, w := range answer.Warnings {
+			if w.Path != "timezone" {
+				continue
+			}
+			if !w.Introduced || w.Kind != config.WarningAdvisory {
+				t.Errorf("the clock's warning is %+v, want an advisory this write introduces", w)
+			}
+			out = append(out, w.Message)
+		}
+		return out
+	}
+	moved := clockWarnings(`{"timezone": "Europe/Berlin"}`)
+	if len(moved) != 1 || !strings.Contains(moved[0], "from UTC to Europe/Berlin") {
+		t.Errorf("moving the clock warns %q, want one warning naming both zones", moved)
+	}
+	if got := clockWarnings(`{}`); len(got) != 0 {
+		t.Errorf("a check of the company as it stands warns %q about its clock", got)
+	}
+	if got := clockWarnings(`{"timezone": "UTC"}`); len(got) != 0 {
+		t.Errorf("writing the zone the clock already keeps warns %q", got)
+	}
+}
