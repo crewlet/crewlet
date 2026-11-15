@@ -204,3 +204,13 @@ func grantSteps(want seataccess.Desired, have seataccess.Observed) []seataccess.
 	}
 	return out
 }
+
+// grantTerms is how an agent reads an AWS grant ([seataccess.GrantTerms]).
+//
+//nolint:gochecknoglobals // immutable words, not state
+var grantTerms = seataccess.GrantTerms{
+	Refusal: "`AccessDenied`, `AccessDeniedException` or `UnauthorizedOperation`, naming the action",
+	Permission: "the ARN of an AWS managed policy holding the action refused, such as " +
+		"`arn:aws:iam::aws:policy/AmazonSQSFullAccess`",
+	Account: "the account, within the seat boundary",
+}

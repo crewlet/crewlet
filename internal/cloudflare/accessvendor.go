@@ -36,7 +36,7 @@ func (accessVendor) Catalog() seataccess.Catalog {
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneCloudflare, Levels: true,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
-			Rotatable: true, Grants: true,
+			Rotatable: true, Grants: true, GrantTerms: grantTerms,
 		}},
 	}
 }

@@ -116,9 +116,13 @@ func grantSentence(lane seataccess.Lane) string {
 	if slices.Contains(seataccess.GrantLanes(), lane) {
 		// THE WAY TO MORE, on the lane an agent meets a refusal on: a person
 		// editing the token at the vendor is drift the next sync undoes.
-		out += " When " + seataccess.LaneName(lane) + " refuses a call for a permission you lack, " +
-			"ask for that one permission with " + toolname.RequestAccess + "; never ask a person to " +
-			"change your token at " + seataccess.LaneName(lane) + " by hand."
+		refusal := ""
+		if w := seataccess.GrantTermsOf(lane).Refusal; w != "" {
+			refusal = " (" + w + ")"
+		}
+		out += " When " + seataccess.LaneName(lane) + " refuses a call for a permission you lack" + refusal +
+			", ask for that one permission with " + toolname.RequestAccess + "; never ask a person to " +
+			"change your credential at " + seataccess.LaneName(lane) + " by hand."
 	}
 	return out
 }

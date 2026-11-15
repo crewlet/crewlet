@@ -423,6 +423,10 @@ type LaneSpec struct {
 	// take [OpGrants]. Static, so a tool and the dashboard know without a
 	// call to the vendor.
 	Grants bool
+
+	// GrantTerms is how an agent reads the lane's grants ([GrantTerms]):
+	// set wherever Grants is.
+	GrantTerms GrantTerms
 }
 
 // Granter is the session of a vendor whose lane takes grants

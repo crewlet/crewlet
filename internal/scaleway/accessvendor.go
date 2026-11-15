@@ -47,7 +47,7 @@ func (accessVendor) Catalog() seataccess.Catalog {
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneScaleway, Levels: true, Scoped: true, ScopeRequired: true,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet,
-			Rotatable: true, Grants: true,
+			Rotatable: true, Grants: true, GrantTerms: grantTerms,
 			BoxEnv: []seataccess.BoxVar{
 				{Field: SecretKeyField, Env: SecretKeyEnv},
 				{Field: AccessKeyField, Env: AccessKeyEnv},

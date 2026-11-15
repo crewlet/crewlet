@@ -46,6 +46,7 @@ func (accessVendor) Catalog() seataccess.Catalog {
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneAWS, Levels: true, Issued: CredentialsField,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, Grants: true,
+			GrantTerms: grantTerms,
 		}},
 	}
 }

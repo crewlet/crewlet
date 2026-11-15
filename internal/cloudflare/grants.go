@@ -445,3 +445,14 @@ func grantReach(g seataccess.Grant, opts seataccess.Options) string {
 		return "its whole reach"
 	}
 }
+
+// grantTerms is how an agent reads a Cloudflare grant ([seataccess.GrantTerms]).
+//
+//nolint:gochecknoglobals // immutable words, not state
+var grantTerms = seataccess.GrantTerms{
+	Refusal:    `403 "request is not authorized"`,
+	Permission: "a permission group's API name, such as `Origin Write`",
+	Scope:      "zone names; none is every zone the company's agents reach, and an account group takes none",
+	Whole:      "every zone the company's agents reach",
+	Account:    "the account",
+}

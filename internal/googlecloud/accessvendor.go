@@ -46,7 +46,7 @@ func (accessVendor) Catalog() seataccess.Catalog {
 		Lanes: []seataccess.LaneSpec{{
 			Lane: seataccess.LaneGoogleCloud, Levels: true, Scoped: true, ScopeRequired: true,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, Issued: AccessTokenField,
-			Grants: true,
+			Grants: true, GrantTerms: grantTerms,
 		}},
 	}
 }
