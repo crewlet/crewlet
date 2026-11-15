@@ -3389,7 +3389,11 @@ deliveries, and it is delivered again when the window turns over (the one
 that ends last, where several refuse) or at once when a change to the
 ceilings applies on that node — the revision that changed them. The node logs
 `seat_budget_parked` with the window and when it resets, and
-`seat_budget_park_released` when the mail flows again. A
+`seat_budget_park_released` when it lifts the hold and the mail flows again.
+A release whose line carries `held_again=true` met a park taken while it was
+in flight (a turn on another partition that found the window still spent):
+that park holds the seat again, so its inbox stays held and its mail waits
+for that park's own release. A
 turn refused part-way through is parked the same way, unless it had already
 written outside the engine, in which case it is recorded and not run again.
 See [Agent Runtime § The budget park](../concepts/agent-runtime.md#the-budget-park).

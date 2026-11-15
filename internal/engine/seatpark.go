@@ -278,15 +278,24 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 				"client is replaced")
 		return false
 	}
-	p.reholdParked(ctx, e, spec, seat)
+	heldAgain := p.reholdParked(ctx, e, spec, seat)
+	// SAID WITH THE RELEASE, because the park that holds the seat again
+	// logged its own line before this one: without it the seat's last line
+	// read released while its inbox was held.
+	detail := "this park's hold is lifted from the seat's inbox"
+	if heldAgain {
+		detail = "a park taken while this release was in flight holds the seat again, " +
+			"so its inbox stays held until that park is released"
+	}
 	log.InfoContext(ctx, spec.released, "seat", parking.handle,
-		"agent_id", seat.String(), "reason", why)
+		"agent_id", seat.String(), "reason", why, "held_again", heldAgain, "detail", detail)
 	return true
 }
 
 // reholdParked takes back the hold of a park recorded while a release of the
 // seat's earlier park was in flight, which that release's resume has just
-// lifted.
+// lifted, reporting whether a park stands with the seat's inbox held under it
+// once it returns, which the release's line says.
 //
 // THE WINDOW is the release's own: it drops its record under the lock and
 // resumes outside it, and a park taken between the two (a turn on another
@@ -302,17 +311,20 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 // hold (the resumed mail meeting the condition again, which the in-memory twin
 // hands over inside the resume) holds by itself, as does one taken after this
 // read, and a release after it reads again after its own resume.
-func (p *seatParks[B]) reholdParked(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID) {
+func (p *seatParks[B]) reholdParked(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	parking := p.seats[seat]
 	if parking == nil {
-		return
+		return false
 	}
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
 	err := e.backends.Queue.PauseTopic(ctx, subject, group, parking.inbox, spec.hold)
-	if err == nil || errors.Is(err, queue.ErrAttachmentGone) {
-		return
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, queue.ErrAttachmentGone) {
+		return false
 	}
 	// A pause fails only on a client that has stopped, a process on its way
 	// out; the record stays for the release that lifts it.
@@ -320,6 +332,7 @@ func (p *seatParks[B]) reholdParked(ctx context.Context, e *Engine, spec parkSpe
 		"agent_id", seat.String(), "hold", spec.hold, "error", err,
 		"detail", "this seat's park stands but its inbox is not held; a delivery "+
 			"that meets the condition parks it again")
+	return false
 }
 
 // changed is every parked seat whose basis keep says no longer holds, in a

@@ -1,9 +1,13 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -683,6 +688,85 @@ func TestAPauseFoldedAsAResumeIsLiftedKeepsTheSeatHeld(t *testing.T) {
 	if !recorded || at != e.inboxOf(ceoSeat) {
 		t.Errorf("the hold is recorded=%v for attachment %d, want recorded for %d, which "+
 			"the next resume lifts", recorded, at, e.inboxOf(ceoSeat))
+	}
+}
+
+// A LIFT THAT TOOK A PAUSE'S HOLD BACK SAYS THE INBOX STAYS HELD.
+//
+// A pause folded while a lift was in flight holds the seat again once the
+// lift's resume returns, and its `seat_paused` line came before the lift's.
+// The lift's `seat_pause_lifted` then read as the seat's last word, a seat
+// whose mail flows, while its inbox was held. So the line says what the lift's
+// re-read found: held_again, and a detail saying the inbox stays held.
+//
+// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns.
+//
+// Mutation: log the lift without what its re-read found, and this fails.
+func TestAPauseLiftThatTookItsHoldBackSaysTheInboxStaysHeld(t *testing.T) {
+	ctx := t.Context()
+	lines := processLog(t)
+	e, q := engineOn(t)
+	e.adoptSeatPauses(ctx, map[uuid.UUID]coord.SeatPause{})
+	pause := coord.SeatPause{Seat: ceoSeat, By: "jane", ByKind: iam.ActorHuman, Reason: "looping"}
+	e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &pause})
+	e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat})
+	e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &pause})
+
+	again := coord.SeatPause{Seat: ceoSeat, By: "pat", ByKind: iam.ActorHuman, Reason: "still looping"}
+	staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(ceoSeat), hold: seatPauseHold,
+		fold: func() { e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &again}) }}
+	e.backends.Queue = staged
+	e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: ceoSeat})
+	if !staged.fired.Load() {
+		t.Fatal("the resume lifted no pause hold, so nothing was staged in its window")
+	}
+
+	saysHeldAgain(t, lines, "seat_pause_lifted", "agent_id", ceoSeat.String())
+}
+
+// processLog points the process's log at a JSON buffer for the rest of the
+// case and answers the lines written so far under one message. A case that
+// calls it reads every goroutine of the process, so it is never parallel.
+func processLog(t *testing.T) func(msg string) []map[string]any {
+	t.Helper()
+	logs := &syncBuffer{}
+	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+	return func(msg string) []map[string]any {
+		t.Helper()
+		return logLines(t, bytes.NewBufferString(logs.String()))[msg]
+	}
+}
+
+// saysHeldAgain holds a lift's lines for one seat (key, value) to two: the
+// plain lift first, which says the hold is lifted, then the lift whose re-read
+// took a hold back, which says the inbox stays held.
+func saysHeldAgain(t *testing.T, lines func(string) []map[string]any, msg, key, value string) {
+	t.Helper()
+	var said []map[string]any
+	for _, line := range lines(msg) {
+		if line[key] == value {
+			said = append(said, line)
+		}
+	}
+	if len(said) != 2 {
+		t.Fatalf("%d %s lines for %s, want the plain lift's and the window's: %v",
+			len(said), msg, value, said)
+	}
+	if again, _ := said[0]["held_again"].(bool); again || said[0]["held_again"] == nil {
+		t.Errorf("the plain lift's %s says held_again=%v, want false: %v", msg,
+			said[0]["held_again"], said[0])
+	}
+	if detail, _ := said[0]["detail"].(string); strings.Contains(detail, "stays held") {
+		t.Errorf("the plain lift's %s says the inbox stays held: %q", msg, detail)
+	}
+	if again, _ := said[1]["held_again"].(bool); !again {
+		t.Errorf("the lift that took the hold back logs %s with held_again=%v, want true: "+
+			"its line reads as a seat whose mail flows, while its inbox is held: %v",
+			msg, said[1]["held_again"], said[1])
+	}
+	if detail, _ := said[1]["detail"].(string); !strings.Contains(detail, "inbox stays held") {
+		t.Errorf("the lift that took the hold back says %q, want that the inbox stays held", detail)
 	}
 }
 

@@ -512,8 +512,9 @@ func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 }
 
 // takePauseHoldLocked takes the hold on one paused seat's inbox, for the
-// attachment this node holds it under. The caller holds the lock; the queue
-// call does not drain, so that is safe.
+// attachment this node holds it under, reporting whether the inbox is held and
+// the hold recorded once it returns. The caller holds the lock; the queue call
+// does not drain, so that is safe.
 //
 // A SEAT THIS NODE DOES NOT HOLD is left alone: every node folds every pause,
 // and the seat's acquisition records its attachment under this same lock
@@ -521,24 +522,25 @@ func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 // hold itself, while one that recorded it before is held here, before or after
 // its attach. A seat released as this runs ended the attachment, and the queue
 // refuses the hold.
-func (e *Engine) takePauseHoldLocked(ctx context.Context, seat uuid.UUID) {
+func (e *Engine) takePauseHoldLocked(ctx context.Context, seat uuid.UUID) bool {
 	at := e.inboxOf(seat)
 	if at == 0 {
-		return
+		return false
 	}
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
 	err := e.backends.Queue.PauseTopic(ctx, subject, group, at, seatPauseHold)
 	if errors.Is(err, queue.ErrAttachmentGone) {
-		return
+		return false
 	}
 	if err != nil {
 		// A pause fails only on a client that has stopped, which is a
 		// process on its way out. The screening is the backstop: it reads
 		// the same copy and holds whatever reaches it.
 		log.WarnContext(ctx, "seat_pause_hold_not_taken", "agent_id", seat.String(), "error", err)
-		return
+		return false
 	}
 	e.recordHeldLocked(seat, at)
+	return true
 }
 
 // liftPauseHold releases the hold this client took on one seat, if it took
@@ -584,12 +586,21 @@ func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) 
 	// ([Engine.takePauseHoldLocked]). A pause folded after this read takes
 	// its own; a lift after it reads again after its own resume.
 	e.pauses.mu.Lock()
+	heldAgain := false
 	if _, paused := e.pauses.pauses[seat]; paused {
-		e.takePauseHoldLocked(ctx, seat)
+		heldAgain = e.takePauseHoldLocked(ctx, seat)
 	}
 	e.pauses.mu.Unlock()
+	// SAID WITH THE LIFT, because the pause that holds the seat again logged
+	// `seat_paused` before this line: without it the seat's last line read
+	// lifted while its inbox was held.
+	detail := "this pause's hold is lifted from the seat's inbox"
+	if heldAgain {
+		detail = "a pause placed while this lift was in flight holds the seat again, " +
+			"so its inbox stays held until that pause is lifted"
+	}
 	log.InfoContext(ctx, "seat_pause_lifted", "seat", e.seatLabel(seat),
-		"agent_id", seat.String(), "reason", why)
+		"agent_id", seat.String(), "reason", why, "held_again", heldAgain, "detail", detail)
 }
 
 // clearRemovedSeatPauses lifts the pause of every seat the company no longer

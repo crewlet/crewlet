@@ -972,6 +972,49 @@ func TestAParkTakenAsItsSeatsReleaseLiftsKeepsTheSeatHeld(t *testing.T) {
 	}
 }
 
+// A RELEASE THAT TOOK A PARK'S HOLD BACK SAYS THE INBOX STAYS HELD.
+//
+// A park taken while a release was in flight holds the seat again once the
+// release's resume returns ([seatParks.reholdParked]), and that park logged its
+// own line before the release's. The release's line (`seat_budget_park_released`,
+// `seat_provider_park_released`: one release serves both) then read as the
+// seat's last word, a seat whose mail flows again, while its inbox was held.
+// So the line says what the release's re-read found.
+//
+// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns.
+//
+// Mutation: log the release without what its re-read found, and this fails.
+func TestAReleaseThatTookAParksHoldBackSaysTheInboxStaysHeld(t *testing.T) {
+	ctx := t.Context()
+	lines := processLog(t)
+	e, q := engineOn(t)
+	seat := seatOf("ceo")
+	park := func(why string) {
+		t.Helper()
+		if err := e.providerParks.take(ctx, e, providerParkSpec, seat, "ceo", providerBasis{},
+			time.Time{}, why); err != nil {
+			t.Errorf("take: %v", err)
+		}
+	}
+	park("every model is limited")
+	if !e.providerParks.release(ctx, e, providerParkSpec, seat, "a probe was answered") {
+		t.Fatal("the plain release lifted nothing")
+	}
+	park("every model is limited")
+
+	staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(seat),
+		hold: providerParkSpec.hold, fold: func() { park("every model is limited again") }}
+	e.backends.Queue = staged
+	if !e.providerParks.release(ctx, e, providerParkSpec, seat, "a probe was answered") {
+		t.Fatal("the release lifted nothing")
+	}
+	if !staged.fired.Load() {
+		t.Fatal("the release lifted no park hold, so nothing was staged in its window")
+	}
+
+	saysHeldAgain(t, lines, providerParkSpec.released, "agent_id", seat.String())
+}
+
 // A PARK ON ITS CHAIN TAKEN AS THE PROBE'S RELEASE LIFTS IS LEFT WHOLE: HELD,
 // PROBED AND ANNOUNCED.
 //
