@@ -2519,7 +2519,13 @@ const (
 	// task's address, a New task draft kept for the tab, saved views deleted
 	// where they are read, one Inbox row per engine pause) added 4,934 bytes,
 	// script and sheet, and took it to 6183.0 KiB (6,331,353 bytes): 6183 KiB.
-	treeBudget = 5<<20 + 1063<<10
+	// Kit 0.128.2 (a setting's key behind a copy control, a sheet's subtitle in
+	// its body) and the Settings, Account, Spend, Advisor and Configuration
+	// fixes beside it (credentials and duties in words, the audit log's Where,
+	// the grid key registry, empty spend drawn empty, the diff's per-line
+	// marks) added 13,042 bytes and took it to 6195.7 KiB (6,344,395 bytes):
+	// 6196 KiB.
+	treeBudget = 5<<20 + 1076<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
