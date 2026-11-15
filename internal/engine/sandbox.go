@@ -4233,6 +4233,15 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // itself, and a budget spent so sent a healthy completion to the poison. It
 // is the node's ([queue.NakNode]), below.
 //
+// A RUN THAT MOVED ON BEFORE THIS NODE COULD END IT REACHES THIS AS NIL, and
+// its delivery is ACKED: the coordinator settles it
+// ([sandbox.Coordinator.OnCompleted]). The seat's next holder fenced the
+// claim, and its recovery reaps it and announces the run, or somebody else
+// ended it first: that party drives the run from its row, and a redelivery
+// reaching it finds no running job to claim, so the delivery carries nothing
+// any node needs. Handed back, it failed as the message's, a routing failure
+// marked as the message's own.
+//
 // A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S. A completion
 // handed back because the coordination store did not answer a step
 // ([sandbox.ErrStoreSilent]: a collection's, the record of a park's question,

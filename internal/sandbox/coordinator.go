@@ -1901,6 +1901,24 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished
 	defer adm.release()
 	c.forgetAdmitted(ev)
 	err = c.completeAdmitted(adm, ev, trigger, fence)
+	if errors.Is(err, errRunMovedOn) {
+		// THE RUN MOVED ON BEFORE THIS ATTEMPT COULD END IT, and this
+		// delivery is SETTLED: the seat's next holder fenced the claim, and
+		// its recovery reaps it and announces the run, or somebody else
+		// ended it first. Either way that holder drives the run from its row
+		// and needs no delivery of this completion: a redelivery reaching it
+		// finds no running job to claim. Handed back, it was a failure of
+		// the message's own on the control topic (internal/engine's
+		// controlOutcome), for a routing failure, a mark that could send a
+		// healthy completion to the poison. The answer route reads the same
+		// answer as not this node's to say ([Coordinator.resumeOwedAdmitted]).
+		log.InfoContext(ctx, "sandbox_completion_moved_on",
+			"turn_id", ev.TurnID, "launch_id", ev.LaunchID, "agent", ev.AgentHandle,
+			"detail", "the run moved on to the seat's next holder, or was ended by another "+
+				"party, before this node could end it; that party drives what becomes of it, "+
+				"and this delivery is settled")
+		return nil
+	}
 	if refusal, refused := waitingRefusal(err); refused {
 		// REVERTED ON A WAIT, and so the gate's refusal found a round
 		// later: kept for the signal that ends it, and handed back by the
@@ -3947,6 +3965,9 @@ func (c *Coordinator) OnAnswerGiven(ctx context.Context, given types.ExecutorAns
 // to somebody else first — a newer lease owns it, or it was ended by another
 // party — so the disposition beside it ([AnswerNotMine]) is not a run that is
 // gone: whoever holds the run now drives what becomes of it, and announces it.
+// Neither route hands back the delivery that met it: a completion's is
+// settled ([Coordinator.OnCompleted]), and an answer's says nothing of the
+// answer.
 var errRunMovedOn = errors.New("sandbox: the run moved on to another holder before this " +
 	"attempt could end it")
 
