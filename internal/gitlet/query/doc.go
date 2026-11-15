@@ -2,7 +2,8 @@
 // tree's listing, a file's lines, a diff's stat or one file's patch, how two
 // commits compare, whether a commit landed in a branch and which push landed
 // it, a path's history (log.go) and which commit last changed each line of a
-// file (blame.go) — and of a change's revisions, by the ids their rows record: a
+// file (blame.go), a file found by its name in a commit's tree (find.go) — and
+// of a change's revisions, by the ids their rows record: a
 // revision's facts against its target (facts.go), where lines anchored in one
 // revision are in another (anchor.go), and what a change changed between two
 // revisions (interdiff.go) — and the checks file a commit holds, read whole
@@ -279,6 +280,12 @@
 // write of the page's files and one unit of the share, where each ran its
 // own.
 //
+// A FIND (find.go) KEEPS NOTHING OF ITS OWN: it walks the recursive listing
+// of its commit's root tree, asked by the tree's id and unstamped, as the memo
+// keeps it, and from the first page the memo lacks runs one listing that cuts
+// that page and every later one, so a person typing a query runs git once per
+// tree.
+//
 // # Measured
 //
 // BenchmarkCodeRead over gittest.History's 32 MB composition — 44 files of one
@@ -350,4 +357,13 @@
 // 1 MiB patch, 170 ms for 16 MiB, 621 ms for 64 MiB and 2.30 s (2.38 at the
 // slowest) for 249 MiB, at MaxPatchIDDiffBytes: some 114 MB of patch a second,
 // so the bound's facts fit a quarter of the read's one budget of git.
+//
+// BenchmarkFind over one commit of 100 000 files in 1 000 directories,
+// twenty finds an arm (-benchtime 20x, one count, git 2.56.0 on the twelve
+// vCPUs of an AMD EPYC Rome server): the first query of the tree, which lists
+// it and stages its pages for the memo, takes 407 ms (479 at p95); every
+// later query of a person typing, which walks those pages from the memo with
+// no git but the read's check and ranks every file in Go, 77 ms (115 at p95):
+// two orders of magnitude inside gitproc.ReadDeadline, so the memo's walk is
+// the finder's path and no index of names is kept beside it.
 package query

@@ -54,6 +54,12 @@ func TestEveryAnswerFitsAPage(t *testing.T) {
 			files+1)
 	}
 	pages(t, s, treeQ(repo, gitlet.TreeQuery{Rev: head, Path: "wide"}), limit)
+	// A FIND of the most files it answers, over every file of the tree.
+	if a := mustRead(t, s, findQ(repo, head, "e", gitlet.MaxFindLimit)); encoded(t, a) > limit ||
+		a.Find.Total != files+1 || len(a.Find.Matches) == 0 {
+		t.Errorf("the find of e answered %d matches of %d in %d bytes, want some of %d, within %d",
+			len(a.Find.Matches), a.Find.Total, encoded(t, a), files+1, limit)
+	}
 
 	text := pages(t, s, blobQ(repo, gitlet.BlobQuery{Rev: head, Path: "huge.txt"}), limit)
 	if joined(text) != tree["huge.txt"] {

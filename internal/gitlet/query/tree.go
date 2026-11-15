@@ -32,7 +32,7 @@ func (r *read) treeRead(ctx context.Context, objs found, at cursor, m *memoRun) 
 	if objs.target.kind != "tree" {
 		return gitlet.GitAnswer{}, r.noDirectory(objs, rev)
 	}
-	return r.list(ctx, rev.peeled, objs.path, objs.target.id, r.q.Tree.Recursive, at, m)
+	return r.list(ctx, rev.peeled, objs.path, objs.target.id, r.q.Tree.Recursive, at, m, nil)
 }
 
 // noDirectory is a listing's path naming a file or nothing.
@@ -46,8 +46,16 @@ func (r *read) noDirectory(objs found, rev object) error {
 
 // list is a page of tree's listing — the directory dir under rev — from the
 // entry at, and, where m takes them, every page after it.
+//
+// each, where set, is handed EVERY ENTRY from at to the listing's end as git
+// writes it, whether or not a page holds it: a find's walk of a whole listing
+// (find.go), which ranks every file it passes. Such a run refuses no entry
+// for its size. An entry no page could hold, the asked one's first included,
+// is no file a find answers either (its path is past MaxGitPathBytes, which no
+// read names back): the run goes on past it, cutting no page from there, as a
+// listing's run does past an entry wider than a page.
 func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, at cursor,
-	m *memoRun) (gitlet.GitAnswer, error) {
+	m *memoRun, each func(gitlet.TreeEntry)) (gitlet.GitAnswer, error) {
 
 	path, pathB64 := gitlet.WirePath(dir)
 	page := func() gitlet.GitAnswer {
@@ -77,7 +85,7 @@ func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, 
 	recs := newRecords(0, gitproc.MaxLine+gitlet.MaxGitPathBytes, func(rec []byte, long bool) error {
 		i := total
 		total++
-		if i < start || !cutting {
+		if i < start || (!cutting && each == nil) {
 			return nil
 		}
 		asked := cur == &a
@@ -87,18 +95,31 @@ func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, 
 			// as before one too wide for the room, so the entries ahead of it
 			// are a page whose Next names it; only a read asking from it is
 			// refused, and the run cuts no page past it.
-			if asked && len(a.Tree.Entries) == 0 {
+			switch {
+			case !cutting:
+			case asked && len(a.Tree.Entries) == 0 && each == nil:
 				tooLarge = fmt.Errorf("%w: entry %d of the listing of %q is longer than one answer holds: "+
 					"read the directory above it", gitlet.ErrSliceTooLarge, i, dir)
 				return errStop
+			case len(cur.Tree.Entries) == 0:
+				// A find's first page, which no entry before this one
+				// began: nothing to stage, and no page names it.
+				cutting = false
+			default:
+				r.endPage(m, cur, curAt, i, left)
+				cutting = false
 			}
-			r.endPage(m, cur, curAt, i, left)
-			cutting = false
 			return nil
 		}
 		e, err := parseEntry(rec, dir)
 		if err != nil {
 			return err
+		}
+		if each != nil {
+			each(e)
+			if !cutting {
+				return nil
+			}
 		}
 		cost := jsonLen(e)
 		if len(cur.Tree.Entries) > 0 {
@@ -109,7 +130,7 @@ func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, 
 			cur.Tree.Entries, left = append(cur.Tree.Entries, e), left-cost
 			return nil
 		case len(cur.Tree.Entries) == 0:
-			if asked {
+			if asked && each == nil {
 				tooLarge = fmt.Errorf("%w: entry %d of the listing of %q encodes to %d bytes, past the %d one "+
 					"answer holds: read the directory above it", gitlet.ErrSliceTooLarge, i, dir, cost, left)
 				return errStop

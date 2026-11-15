@@ -5190,6 +5190,7 @@ clone: a tree's listing, a file's lines, a diff — its per-file stat, or one
 file's patch — how two commits compare (their merge base, which contains
 which, the commits each has that the other lacks, and what one changed since
 the merge base), a path's history ([A path's history](#a-paths-history)),
+a file found by its name in a commit's tree ([Finding a file](#finding-a-file)),
 which commit last changed each line of a file
 ([Who changed a line](#who-changed-a-line)), whether a commit landed in a
 branch and which push landed it (`landed_in`,
@@ -5453,6 +5454,46 @@ ready. An answer the search read to its end — every matching line, or as
 many as its limit — is kept in the [memo](#the-memo), keyed by the commit,
 the ref that named it and every part of the search; one the five seconds cut
 is kept nowhere.
+
+### Finding a file
+
+`code_find` is a finder's "go to file": the files of a commit's tree (its
+default branch's tip unless the question names a ref or a commit) whose path
+holds a query's characters in order. Each character of the query matches one
+character of the path, in any case (Unicode's simple case folding, as
+`strings.EqualFold` folds, so `k` finds a name spelled with the Kelvin sign
+and `ß` is not `ss`); a space is a character like any other, and a byte of a
+path that is not text matches nothing. A query is 1 to 256 bytes of UTF-8,
+and it never reaches git: it is matched in Go.
+
+**How it ranks.** A file whose name (the part of its path after the last `/`)
+holds the query comes before one whose directories alone do; then the closer
+together the matched characters, the earlier the match begins in the name,
+the shorter the name, the shorter the path, and last the path's bytes, so two
+nodes rank a tree the same. Searching `main` answers `x/main.go` before
+`cmd/web/main.go`, both before `main.go.orig`, then `src/domain.go`, and
+`main/readme.md` last.
+
+**What it answers.** The best `limit` files (1 to 100, 50 unless the question
+names one), fewer where their paths fill one answer, each with its path, its
+blob, its mode and `spans`, the runs of the path's characters the query
+matched as `[start, end)` code points, which a finder draws in bold; then
+`total`, how many files of the tree match, and `files`, how many it holds.
+One answer, with no next page: a person narrows the list by typing on. A
+symbolic link is a file; a submodule is not, having no file to open.
+
+**What it costs.** A find reads the tree's recursive listing as the
+[memo](#the-memo) keeps it, by the tree's own id rather than the commit's, so
+every commit holding the tree, and every reader, shares one set of pages. The
+first query of a tree lists it once, under one unit of the node's seat
+git-work share, and stages its pages; every later query of that tree, from
+any commit holding it, runs no git but the read's check of the commit, and
+ranks every file in Go. Nothing is kept per query. Where a page is gone from the
+memo, trimmed with its cohort, the find lists the tree from that page on, once,
+and puts the pages back. A tree whose listing does not finish in the read's
+ten seconds of git is refused as too large, never answered with a ranking of
+part of it. Measured over one commit of 100 000 files in 1 000 directories
+on twelve vCPUs: the first query 407 ms at the median, every later one 77 ms.
 
 ### Code search
 

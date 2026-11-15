@@ -208,12 +208,15 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 // should keep; a re-anchoring, a check and one diff of a few blobs, keyed
 // by a list of anchors each caller makes anew; and a checks file, asked once
 // a target's tip by the home that keeps what it parsed of it — a whole file
-// the memo would hold for nobody else; and a commit's deploy and dependency
-// files, asked once a tip by the scan that records what they declare.
+// the memo would hold for nobody else; a commit's deploy and dependency
+// files, asked once a tip by the scan that records what they declare; and a
+// find, which keeps nothing of its own: it reads the tree's listing pages,
+// which a tree read keys by the tree alone, and a query's answer would be a
+// page per keystroke in a memo shared by the whole node.
 func memoizable(q gitlet.GitQuery) bool {
 	switch q.Kind {
 	case gitlet.GitLandedIn, gitlet.GitRevisionFacts, gitlet.GitReanchor, gitlet.GitChecksFile,
-		gitlet.GitCodeFiles:
+		gitlet.GitCodeFiles, gitlet.GitFind:
 		return false
 	}
 	return true

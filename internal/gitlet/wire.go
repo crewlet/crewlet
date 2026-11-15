@@ -3236,6 +3236,12 @@ const (
 	// node keeps one, and otherwise git grep — at most MaxSearchHits of
 	// them, in one answer with no next page (search.go).
 	GitSearch GitReadKind = "search"
+	// GitFind is the files of a commit's tree whose path holds a query's
+	// characters in order, case-folded: a finder's "go to file", answered with
+	// the best of them, best first, and how many match (find.go). Read over the
+	// tree's recursive listing as its memo keeps it, by the tree's own id, so
+	// a person typing runs no git after the first query of a tree.
+	GitFind GitReadKind = "find"
 )
 
 // GitReadKinds is the closed set.
@@ -3246,7 +3252,7 @@ const (
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn, GitRevisionFacts, GitReanchor,
-		GitInterdiff, GitLog, GitBlame, GitChecksFile, GitCodeFiles, GitSearch}
+		GitInterdiff, GitLog, GitBlame, GitChecksFile, GitCodeFiles, GitSearch, GitFind}
 }
 
 // Valid reports a kind this build answers.
@@ -3268,14 +3274,16 @@ func (k GitReadKind) EnginesOwn() bool {
 
 // Unstampable reports a kind whose answer is a PAGE of the repository's
 // content — a listing, a file's lines, a diff, a comparison, an interdiff, a
-// history or a blame — which a read may ask cut and answered with no stamp
-// ([GitQuery.Unstamped]). Never a landed-in read, whose answer IS what the
+// history, a blame or a find — which a read may ask cut and answered with no
+// stamp ([GitQuery.Unstamped]). A find's answer is a function of the tree, the
+// query, the limit and the build, so a find by whole ids is one a browser may
+// keep for a typing session at no cost to the node. Never a landed-in read, whose answer IS what the
 // node's index says of a push; nor a revision's facts, a re-anchoring or a
 // checks file, which the engine and a change's own reads ask, never a
 // question that keeps a page.
 func (k GitReadKind) Unstampable() bool {
 	switch k {
-	case GitTree, GitBlob, GitDiff, GitCompare, GitInterdiff, GitLog, GitBlame:
+	case GitTree, GitBlob, GitDiff, GitCompare, GitInterdiff, GitLog, GitBlame, GitFind:
 		return true
 	}
 	return false
@@ -3418,6 +3426,7 @@ type GitQuery struct {
 	ChecksFile    *ChecksFileQuery    `json:"checks_file,omitempty"`
 	CodeFiles     *CodeFilesQuery     `json:"code_files,omitempty"`
 	Search        *SearchQuery        `json:"search,omitempty"`
+	Find          *FindQuery          `json:"find,omitempty"`
 }
 
 // CodeFilesQuery reads a commit's deploy and dependency files
@@ -3786,8 +3795,9 @@ func WirePath(p string) (text, b64 string) {
 // or none, a revision [ValidRev] refuses, a path [GitPath] refuses — or none
 // where a blame names its file — a line range that runs backwards or past a
 // blame's MaxBlameLines, a diff naming both a file and paths, a log whose
-// literal, limit or date no log takes, and a read made for a check that names
-// an asker or reads anything but its check's commit. A cursor longer than any
+// literal, limit or date no log takes, a find whose query or limit no find
+// takes, and a read made for a check that names an asker or reads anything
+// but its check's commit. A cursor longer than any
 // a Gitlet node issues is [ErrBadCursor]; whether a shorter one is the kind's own
 // is the Gitlet node's to judge.
 func (q GitQuery) Validate() error {
@@ -3845,7 +3855,7 @@ func (q GitQuery) Validate() error {
 		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
 		{GitChecksFile, q.ChecksFile != nil}, {GitCodeFiles, q.CodeFiles != nil},
-		{GitSearch, q.Search != nil}} {
+		{GitSearch, q.Search != nil}, {GitFind, q.Find != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -3886,6 +3896,8 @@ func (q GitQuery) Validate() error {
 		return q.CodeFiles.validate()
 	case GitSearch:
 		return q.Search.validate()
+	case GitFind:
+		return q.Find.validate()
 	}
 	return q.Compare.validate()
 }
@@ -4224,14 +4236,14 @@ func TouchedCost(touched []string) int {
 }
 
 // GitAnswer answers a [GitQuery]: exactly the field of its Kind is set — a
-// file read whose path names a directory answers Kind tree, and an interdiff
-// (Kind interdiff) sets Diff, being one. Its JSON is at most
-// MaxGitAnswerBytes.
+// file read whose path names a directory answers Kind tree, an interdiff
+// (Kind interdiff) sets Diff, being one, and a find (Kind find) sets Find. Its
+// JSON is at most MaxGitAnswerBytes.
 type GitAnswer struct {
 	Kind   GitReadKind `json:"kind"`
 	RepoID string      `json:"repo_id"`
-	// Rev is the object a tree or a file read was asked of, as its whole id
-	// — a tag's is the commit or tree it names. A diff, a comparison, an
+	// Rev is the object a tree, a file or a find read was asked of, as its
+	// whole id — a tag's is the commit or tree it names. A diff, a comparison, an
 	// interdiff and a revision's facts name their commits in their own
 	// answer, and a re-anchoring names none.
 	Rev string `json:"rev,omitempty"`
@@ -4270,6 +4282,7 @@ type GitAnswer struct {
 	ChecksFile    *ChecksFileAnswer    `json:"checks_file,omitempty"`
 	CodeFiles     *CodeFilesAnswer     `json:"code_files,omitempty"`
 	Search        *SearchAnswer        `json:"search,omitempty"`
+	Find          *FindAnswer          `json:"find,omitempty"`
 }
 
 // CodeFilesAnswer is a commit's deploy and dependency files: its LISTING, at
