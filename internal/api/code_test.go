@@ -548,9 +548,10 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 				// A COMPARISON'S AND A DIFF'S TWO REVISIONS, and the branch an
 				// attempt was checked for, which every other question reads
 				// past as no parameter of its own.
-				for _, at := range []string{path + "?base=HEAD&head=HEAD&path=go.mod&target=refs/heads/main",
-					"/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit + "&base=HEAD&head=HEAD&path=go.mod" +
-						"&oid=" + fakeCommit + "&check=unit&attempt=1&target=refs/heads/main"} {
+				for _, at := range []string{path + "?base=HEAD&head=HEAD&path=go.mod&target=refs/heads/main&oids=" +
+					fakeCommit, "/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit +
+					"&base=HEAD&head=HEAD&path=go.mod&oid=" + fakeCommit + "&check=unit&attempt=1" +
+					"&target=refs/heads/main&oids=" + fakeCommit} {
 					// EVERY READ OF THE ROWS COUNTED, a resolve of refs as
 					// much as a read of a kind: a question that read its
 					// repository and then resolved would be two.
@@ -620,6 +621,7 @@ var codeQuestions = []codeQuestion{
 	{"code_log", "GET /gitlet/repos/{name}/log", "", "web", []string{gitlet.HeadRef}},
 	{"code_blame", "GET /gitlet/repos/{name}/blame", "", "web", []string{gitlet.HeadRef}},
 	{"code_diff", "GET /gitlet/repos/{name}/diff", "", "web", []string{gitlet.HeadRef}},
+	{"code_tips", "GET /gitlet/repos/{name}/tips", "", "web", []string{gitlet.HeadRef}},
 	{"code_compare", "GET /gitlet/repos/{name}/compare", "", "web", []string{gitlet.HeadRef}},
 	{"code_commit", "GET /gitlet/repos/{name}/commits/{sha}", gitlet.ReadCommit, "web", nil},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the queues and the attempts listed

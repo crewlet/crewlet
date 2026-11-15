@@ -163,6 +163,7 @@ var SESSION_QUERIES = {
 		"code_log",
 		"code_blame",
 		"code_diff",
+		"code_tips",
 		"code_compare",
 		"code_commit",
 		"code_queue",

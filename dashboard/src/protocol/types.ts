@@ -9125,6 +9125,8 @@ export interface CodeGitAnswer {
   blame?: CodeBlameAnswer;
   diff?: CodeDiffAnswer;
   compare?: CodeCompareFacts;
+  /** A `code_tips` page (kind `tips`). */
+  tips?: CodeTipsAnswer;
   resolved?: Record<string, CodeResolved>;
   position?: LogPosition;
   pushed_by?: Record<string, CodePushedBy>;
@@ -9164,6 +9166,37 @@ export interface CodeMergePreview {
 /** `code_compare`: how two revisions relate, and the merge preview (`queries.CodeComparison`). */
 export interface CodeComparisonAnswer extends CodeGitAnswer {
   preview: CodeMergePreview;
+}
+
+/** An annotated tag's own facts (`gitlet.TipTag`), each unbounded field described past its bound. */
+export interface CodeTipTag {
+  tagger?: string;
+  tagger_bytes?: number;
+  tagger_email?: string;
+  tagger_email_bytes?: number;
+  tagged_at?: string;
+  subject?: string;
+  subject_bytes?: number;
+}
+
+/** One object of a tips read (`gitlet.Tip`): what it peels to, its tag and commit, and its counts against a base. */
+export interface CodeTip {
+  oid: string;
+  type: "commit" | "tag" | "tree" | "blob" | (string & {});
+  peeled: string;
+  peeled_type: "commit" | "tag" | "tree" | "blob" | (string & {});
+  tag?: CodeTipTag;
+  commit?: CodeLogCommit;
+  /** The commits the base has that the tip lacks, and the reverse; absent where the read ran out of time. */
+  behind?: number;
+  ahead?: number;
+  counts_out_of_time?: boolean;
+}
+
+/** One page of a tips read (`gitlet.TipsAnswer`): the base's commit, and the tips in the order asked. */
+export interface CodeTipsAnswer {
+  base?: string;
+  tips: CodeTip[] | null;
 }
 
 /** A change as a row about it names it (`gitlet.ChangeName`): its repository, reference, title and state. */
@@ -9359,6 +9392,7 @@ export interface CodeQueryMap {
   code_check_log: CodeCheckLogPage;
   code_commit: CodeCommitAnswer;
   code_diff: CodeGitAnswer;
+  code_tips: CodeGitAnswer;
   code_compare: CodeComparisonAnswer;
   code_repos: CodeReposAnswer;
   code_repo: CodeRepoAnswer;
