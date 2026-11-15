@@ -461,14 +461,18 @@ the dependency surface before choosing a host for it:
   to. A seat's hydration takes what its bytes take: its 29 round trips cost
   about 2.9 seconds across a 100 ms leaf link before its rows' own bytes
   (145 ms at 5 ms a round trip, 29 ms at 1 ms), and a year of episodes about
-  a minute across a 100 ms, 100 Mbit/s link. It fails only when nothing
-  arrives for its stall (20.5 seconds for a pull across a link) or when every
-  copy of the changelog it is served from stays a minute behind, and says
-  once a minute that it is still running (`memory_hydration_slow`). It
-  windows its pulls to what the link carries within one lease heartbeat at
-  the floor, so the node's lease renewals cross behind them in time; below
-  about 0.84 Mbit/s a renewal sent behind a full window can still miss its
-  own five-second term, as one behind an upload can
+  a minute across a 100 ms, 100 Mbit/s link. Time refuses it only when
+  nothing arrives for its stall (20.5 seconds for a pull across a link) or
+  when nothing is delivered to a table's replay for a minute, whichever
+  copies of the changelog it is placed on, and it says once a minute that it
+  is still running (`memory_hydration_slow`); the answers that refuse a seat
+  whatever the time, such as a row larger than the node's connection
+  carries, still refuse it. It windows its pulls to what the link carries
+  within one lease heartbeat at the floor, so the node's lease renewals cross
+  behind them in time; below about 0.84 Mbit/s a renewal sent behind a full
+  window can still miss its own five-second term, as one behind an upload
+  can, and with an upload and a hydration both in flight a renewal can wait
+  behind both windows, which misses its term below about 1.68 Mbit/s
   ([#1035](https://github.com/crewlet/crewlet/issues/1035)). Meanwhile the
   node's placement pass waits for it (see
   [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).

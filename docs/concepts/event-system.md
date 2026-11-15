@@ -79,7 +79,9 @@ crewlet.rooms.ask
 crewlet.memory.{seat-id}.{table}.{key-digest}
 # and beside its rows one subject of the seat's that is no row's: the barrier
 # a node publishes before it replays the seat, which each table's replay reads
-# to, so a replay served by a copy behind the stream's leader is never short
+# to, so a replay served by a copy behind the stream's leader is never short,
+# and each table's end barrier, published there once that barrier has arrived,
+# which the replay reads on to, so a row replaced around the barrier is carried
 crewlet.memory.{seat-id}.hydration-barrier
 
 # Dead letters, deliberately OUTSIDE the crewlet.* space so the dashboard's

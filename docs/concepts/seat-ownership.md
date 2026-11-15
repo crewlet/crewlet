@@ -332,25 +332,34 @@ sequence it received, and the server places the new one afresh, on a member
 caught up at least one time in three. Nothing is skipped and nothing is read
 twice: every message up to that sequence arrived or was replaced by a newer
 copy that lies past it, and the new consumer delivers nothing at or below it.
-The same goes for a consumer the broker says is gone, one that never got its
-first pull (up to three times in a row), and a delivery the link lost. Each
-placement logs `memory_replay_placed_again`, with the reason (`behind`,
-`gone`, `unpulled` or `gap`). Only copies that all stay behind for a minute
-refuse the seat, until the next sweep, rather than admitting it without its
-newest memory.
+The same goes for a consumer the broker says is gone or whose pull it
+refuses, one that never got its first pull (up to three times in a row, after
+which its pull is waited for, since one held back by a slow link reaches it in
+the end), and a delivery the link lost. A placement that delivered nothing is
+followed by the next a second after it, so a broker that refuses every pull is
+asked for a consumer once a second, not as fast as it answers. Each placement
+after a table's first logs `memory_replay_placed_again`, with the reason
+(`behind`, `gone`, `unpulled` or `gap`) and what the broker or the link said
+(`detail`: a refusal's status line, a lost delivery's counts). A replay that
+nothing has been delivered to for a minute, across every placement and
+whatever each ended with, refuses the seat, until the next sweep, rather than
+admitting it without its newest memory, and names what ended its last
+placement. A pull asks no more messages than the consumer it was given takes:
+a server whose JetStream limits set `max_request_batch` gives every consumer
+that limit, and refuses a pull asking more.
 
-**A hydration writes.** The barrier is the one write a hydration makes, before
-it reads a row, so a broker that refuses this node's writes refuses its
-hydrations too, as it already refuses the seat's mailbox and its memory's
-publishes. An account or a server at its storage limit refuses the publish,
-and the hydration's error carries the broker's refusal. A user without publish
-permission on the memory subjects (`crewlet.memory.>`) is not answered at all:
-the broker sends the connection a permissions error instead (logged as
-`jetstream_client_error`), and the hydration, refused once the publish has
-gone unanswered for the thirty seconds it is asked, names that error. The barrier takes no row's place: the changelog has
-no age, size or message-count limit, so the only message it drops is the one a
-newer message on the same subject replaces, and the barrier's subject is no
-row's.
+**A hydration writes.** The barriers are the only writes a hydration makes,
+the first before it reads a row, so a broker that refuses this node's writes
+refuses its hydrations too, as it already refuses the seat's mailbox and its
+memory's publishes. An account or a server at its storage limit refuses the
+publish, and the hydration's error carries the broker's refusal. A user
+without publish permission on the memory subjects (`crewlet.memory.>`) is not
+answered at all: the broker sends the connection a permissions error instead
+(logged as `jetstream_client_error`), and the hydration, refused once the
+publish has gone unanswered for as long as it is asked, names that error. A
+barrier takes no row's place: the changelog has no age, size or message-count
+limit, so the only message it drops is the one a newer message on the same
+subject replaces, and the barrier's subject is no row's.
 
 Nothing a hydration asks is answered with a row except its pulls: a barrier
 carries no bytes, and a consumer's creation and its info carry a count. The
@@ -365,27 +374,40 @@ the server places a consumer on whichever member it chooses, and its count is
 that member's copy's. A read has to check that, and make the consumer again
 until it lands there, each attempt a metadata proposal. The barrier needs
 neither. A barrier whose publish a member drops, as one that still believes it
-leads after an election does, is published again two seconds later, as a read
-the leader did not answer is asked again; published twice, it is one barrier,
-the later.
+leads after an election does, is published again, as a read the leader did not
+answer is asked again: the hydration's first barrier two seconds later, and an
+end barrier, whose acknowledgement queues behind the rest of its replay's
+pull, once that pull's bytes could have arrived too (asked again at 10 seconds
+in a member's own process at the broker's limit, and at 17.5 across a link at
+the window below). Published twice, it is one barrier, the later.
 
-**A hydration has no deadline: it takes what its bytes take.** It fails only
-where nothing arrives. A pull that hears nothing at all (no row, no barrier,
-no heartbeat, no status) for its **stall**, the client's five-second request
-term and what the pull's bytes take to arrive, refuses the seat: 13 seconds in
-a member's own process, 20.5 across a link at the window below, and about 253
-for a pull of one row at the broker's limit across a link at the floor of
-thirty seconds a mebibyte. So do copies that all stay a minute behind (above).
-A seat that is merely large, or a link that is merely slow, is never refused:
-no refusal can be produced while messages arrive. A hydration still running a
-minute in says so once a minute, `memory_hydration_slow`, with the rows it has
-received and the bytes a second they arrive at, and `memory_hydrated` says how
-long it took, the pulls it asked and the consumers it made. Every request a
-hydration makes keeps its own bound: the identity reads and the barriers are
-asked again every two seconds for up to thirty, each consumer's creation is
-asked as a write, for up to thirty seconds, and a deletion is hygiene, one
-request of five seconds, whose failure leaves the consumer for the broker to
-reap.
+**A hydration has no deadline: it takes what its bytes take.** Time refuses it
+only where nothing arrives. A pull that hears nothing at all (no row, no
+barrier, no heartbeat, no status) for its **stall**, the client's five-second
+request term and what the pull's bytes take to arrive, refuses the seat: 13
+seconds in a member's own process, 20.5 across a link at the window below, and
+about 253 for a pull of one row at the broker's limit across a link at the
+floor of thirty seconds a mebibyte. The stall counts from the pull's last word
+or the return of the replay's own end barrier, never from before it, and a
+pull is called silent only once its inbox holds nothing: what arrived while
+the replay was publishing or asking its consumer about itself is read first.
+So does a replay nothing has been delivered to for a minute (above). A seat
+that is merely large, or a link that is merely slow, is never refused for
+time: no such refusal can be produced while messages arrive. The answers that
+refuse a seat whatever the time still refuse it: a recreated changelog, a
+broker's refusal of a barrier, a barrier or a consumer's creation unanswered
+for as long as it is asked, a row larger than the node's connection carries,
+and a row the store refuses. A hydration still running a minute in says so
+once a minute, `memory_hydration_slow`, with the rows it has received and the
+bytes a second they arrive at, and `memory_hydrated` says how long it took,
+the pulls it asked and the consumers it made. Every request a hydration makes
+keeps its own bound: the identity reads and the hydration's first barrier are
+asked again every two seconds for up to thirty, an end barrier as above for up
+to thirty seconds and its pull's arrival, each consumer's creation is asked as
+a write, for up to thirty seconds, and a deletion is hygiene, one request of
+five seconds, whose failure leaves the consumer for the broker to reap once it
+has had no pull for longer than a live replay goes between two (46 seconds in
+a member's own process, about nine minutes across a link).
 
 Its fixed cost is round trips. Two read the changelog's identity, before the
 barrier and after the last table, and one publishes the barrier; each of the
@@ -423,9 +445,13 @@ price is round trips on a fast distant link: a year of episodes takes 368
 pulls, about a minute with its writes across 100 ms at 100 Mbit/s. What it does
 not cover is [#1035](https://github.com/crewlet/crewlet/issues/1035)'s, shared
 with uploads: a renewal's own five-second request term is shorter than a full
-window below 0.84 Mbit/s, and one row larger than the window holds the link
-for its own crossing. A memory row is bounded only by the
-broker (an episode keeps its ask whole), so a pull bounded by its rows alone
+window below 0.84 Mbit/s; the window is the hydration's own, and the object
+store's upload window is another on the same connection, so a renewal whose
+request crosses behind an upload and whose reply crosses behind a pull waits
+behind both, which misses its term below 1.68 Mbit/s at the shipped lease; and
+one row larger than the window holds the link for its own crossing. A memory
+row is bounded only by the broker (an episode keeps its ask whole), so a pull
+bounded by its rows alone
 held up to 256 rows of 8 MiB each, 2 GiB, inside seat acquisition
 ([#1052](https://github.com/crewlet/crewlet/issues/1052)). The broker sends a
 pull nothing past its bytes, so a pull bounded below its next row would be
@@ -681,8 +707,8 @@ the row's newer copy. What stays open is a row moved twice inside one table's
 replay, around its barrier and again after its end barrier was published: the
 hydration carries neither copy, the newest stays on the changelog, and where
 this node already held an older copy, its backlog's turn puts that copy back
-over the newest, two holders of the seat at once, as above. A release whose flush could not carry the seat's own rows and its
-tables sent whole says so, `seat_memory_not_flushed`, at warning, with
+over the newest, two holders of the seat at once, as above. A release whose
+flush could not carry the seat's own rows and its tables sent whole says so, `seat_memory_not_flushed`, at warning, with
 `pass=own`, and so does one whose backlog failed with time left, with
 `pass=backlog`; one that carried them and ran out in its backlog says
 `memory_flush_ran_out`, at info. A row lost so stays in its node's store
