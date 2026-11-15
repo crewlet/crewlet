@@ -188,6 +188,10 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/settings/integrations/access/AgentsAccess.tsx"],
     why: "an agent's permissions and scope, set in their dialogs into the Agents tab's draft, which the tab declares",
   },
+  "routes/settings/integrations/access/Grants.tsx": {
+    screen: ["routes/settings/integrations/access/AgentsAccess.tsx"],
+    why: "an agent's grant, added from its dialog into the Agents tab's draft, which the tab declares with each agent's grants",
+  },
   // A SHEET, AND STILL THE BOARD'S: each change made in a widget's settings is
   // written into the board being arranged as it is made, through Home's own
   // setter, and Done keeps it there (Cancel takes it back).

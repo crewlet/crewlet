@@ -2559,7 +2559,11 @@ const (
 	// main's Gitlet audit fixes on kit 0.129.1, measures 6217.9 KiB
 	// (6,367,157 bytes), 29,976 bytes over the 6188.7 KiB of main it was
 	// built on: 6218 KiB.
-	treeBudget = 5<<20 + 1098<<10
+	// An agent's grants beside its level (the Agents tab's grants column and
+	// Add grant dialog, and the Inbox's grant of an agent's request) added
+	// 8,852 bytes, script and sheet, and took it to 6226.6 KiB (6,376,009
+	// bytes): 6227 KiB.
+	treeBudget = 5<<20 + 1107<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
