@@ -93,19 +93,17 @@
 // stopped it, so it is not a measurement of the package — and ci.yml keeps
 // only a passing run's file anyway.
 //
-// A test's seconds are its ACTIVE span, read from the stamps test2json puts
-// on its events ([span]): from its `run` to its result, its parallel
-// subtests included, less the time t.Parallel held it paused for a slot. Not
-// the test's own Elapsed, which stops when its body returns and so leaves out
-// every parallel subtest; a record with no stamp, which test2json never
-// writes, falls back to it. So a package's tests sum to MORE than the package
-// took whenever they overlap, and a test's seconds grow with what ran beside
-// it: the package line is the binary's wall time, a test line is that test's
-// span within it. A span is not a cost: it holds the time its parallel
-// subtests sat waiting for a slot behind the rest of the package, so a test of
-// eleven microsecond subtests read 172 s in a package of heavy git cases. Read
-// it beside its subtests' own spans (the slowest list) and the run's CPU line
-// before taking it for work. Subtests are inside their parent's seconds and
+// A test's seconds are its BUSY time, read from the stamps test2json puts on
+// its events ([span]): the stretches in which some part of it — its body or
+// any of its subtests — was running, merged, so neither the time t.Parallel
+// held it paused for a slot nor the time its parallel subtests sat queued
+// behind the rest of the package counts. Not the test's own Elapsed, which
+// stops when its body returns and so leaves out every parallel subtest; a
+// record with no stamp, which test2json never writes, falls back to it. So a
+// package's tests sum to MORE than the package took whenever they overlap,
+// and a test's seconds grow with the CPU share it had beside what ran with
+// it: the package line is the binary's wall time, a test line the time that
+// test held a slot within it. Subtests are inside their parent's seconds and
 // get no line of their own.
 //
 // The file is CREATED before the test command starts, so a path that cannot
@@ -160,41 +158,130 @@ type event struct {
 	Time time.Time
 }
 
-// span is one test's time ACTIVE, from its event stamps: from `run` to its
-// result, less every stretch between a `pause` and the `cont` that resumed
-// it. Not the test's own Elapsed, which the testing package stops when the
-// test's body returns, BEFORE its parallel subtests run: a test whose
-// subtests call t.Parallel reports its own setup alone (internal/coord/kv's
-// TestContract reported 0.25 s over a suite of ninety-nine cases), so a
-// weight read from it would put a suite's whole cost at nothing.
+// span is one test's BUSY time, from its event stamps: the stretches in
+// which some part of it ran — its own body, or any of its subtests — and
+// never one in which all of it sat waiting for a slot.
+//
+// Not the test's own Elapsed, which the testing package stops when the test's
+// body returns, BEFORE its parallel subtests run: a test whose subtests call
+// t.Parallel reported its setup alone (internal/coord/kv's TestContract: 0.25 s
+// over a suite of ninety-nine cases). And not run-to-result less its own
+// pauses, which is what this measured first: a parent's clock then ran on
+// while its parallel subtests queued behind the rest of the package, so a
+// trivial table test in internal/engine read 830 s, the whole package's
+// tail, and the slowest-tests list was every parent in it.
+//
+// So a test's busy time is the UNION of its own running stretches (from
+// `run` or the `cont` that resumed it, to its `pause` or its result) and its
+// subtests' busy time — with its own stretch from its last subtest's `run` to
+// that subtest's result left out, because no event marks its body returning:
+// over that stretch it is waiting on its subtests (a sequential one runs
+// there and is counted as itself; parallel ones are counted as they ran),
+// and its own work resumes, if it has any, only once the last has answered.
+// A `cont` for a test that is not paused is not a resume: in verbose mode
+// cmd/go prints `=== CONT` whenever the output switches back to a test,
+// which says nothing about its clock.
 type span struct {
 	started time.Time
-	active  time.Duration
-	paused  bool
+	running bool
+	own     []interval
+	// lastChildRun and lastChildEnd bound the stretch the test waited on its
+	// subtests: its last subtest's `run`, and the result after it.
+	lastChildRun, lastChildEnd time.Time
+	children                   []interval
 }
 
-// at reads a span's events. A `cont` for a test that is not paused is not a
-// resume: in verbose mode cmd/go prints `=== CONT` whenever the output
-// switches back to a test, which says nothing about its clock.
+// interval is one stretch of wall time.
+type interval struct{ from, to time.Time }
+
+// at reads one of the test's own events.
 func (s *span) at(action string, now time.Time) {
 	switch action {
-	case "run":
-		s.started = now
-	case "pause":
-		if !s.paused {
-			s.active += now.Sub(s.started)
-			s.paused = true
-		}
-	case "cont":
-		if s.paused {
+	case "run", "cont":
+		if !s.running {
 			s.started = now
-			s.paused = false
+			s.running = true
 		}
-	case "pass", "fail", "skip":
-		if !s.paused {
-			s.active += now.Sub(s.started)
+	case "pause", "pass", "fail", "skip":
+		if s.running {
+			s.own = append(s.own, interval{s.started, now})
+			s.running = false
 		}
 	}
+}
+
+// childRun and childEnded read a direct subtest's `run` and its result,
+// handing the parent that subtest's busy stretches.
+func (s *span) childRun(now time.Time) { s.lastChildRun = now }
+
+func (s *span) childEnded(now time.Time, busy []interval) {
+	s.lastChildEnd = now
+	s.children = append(s.children, busy...)
+}
+
+// busy is the test's busy stretches, merged, once it has its result.
+func (s *span) busy() []interval {
+	own := s.own
+	if !s.lastChildRun.IsZero() && s.lastChildEnd.After(s.lastChildRun) {
+		own = without(own, interval{s.lastChildRun, s.lastChildEnd})
+	}
+	return union(append(slices.Clone(own), s.children...))
+}
+
+// seconds is the length of stretches merged by [union].
+func seconds(merged []interval) float64 {
+	var d time.Duration
+	for _, iv := range merged {
+		d += iv.to.Sub(iv.from)
+	}
+	return d.Seconds()
+}
+
+// union merges overlapping and touching stretches, in order of their start.
+func union(ivs []interval) []interval {
+	slices.SortFunc(ivs, func(a, b interval) int { return a.from.Compare(b.from) })
+	var out []interval
+	for _, iv := range ivs {
+		if !iv.to.After(iv.from) {
+			continue
+		}
+		if n := len(out); n > 0 && !iv.from.After(out[n-1].to) {
+			if iv.to.After(out[n-1].to) {
+				out[n-1].to = iv.to
+			}
+			continue
+		}
+		out = append(out, iv)
+	}
+	return out
+}
+
+// without is ivs with the stretch cut out of each.
+func without(ivs []interval, cut interval) []interval {
+	var out []interval
+	for _, iv := range ivs {
+		if iv.from.Before(cut.from) {
+			out = append(out, interval{iv.from, minTime(iv.to, cut.from)})
+		}
+		if iv.to.After(cut.to) {
+			out = append(out, interval{maxTime(iv.from, cut.to), iv.to})
+		}
+	}
+	return out
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // finish is how one package's test binary ended.
@@ -388,8 +475,24 @@ func read(in *bufio.Scanner, out *os.File) report {
 					spans[key] = sp
 				}
 				sp.at(e.Action, e.Time)
-				if !sp.started.IsZero() {
-					elapsed = sp.active.Seconds()
+				var parent *span
+				if i := strings.LastIndex(e.Test, "/"); i > 0 {
+					parent = spans[e.Package+"\x00"+e.Test[:i]]
+				}
+				switch e.Action {
+				case "run":
+					if parent != nil {
+						parent.childRun(e.Time)
+					}
+				case "pass", "fail", "skip":
+					if !sp.started.IsZero() {
+						busy := sp.busy()
+						elapsed = seconds(busy)
+						if parent != nil {
+							parent.childEnded(e.Time, busy)
+						}
+					}
+					delete(spans, key)
 				}
 			}
 		}
