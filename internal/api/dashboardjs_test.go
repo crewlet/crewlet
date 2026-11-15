@@ -2519,7 +2519,12 @@ const (
 	// task's address, a New task draft kept for the tab, saved views deleted
 	// where they are read, one Inbox row per engine pause) added 4,934 bytes,
 	// script and sheet, and took it to 6183.0 KiB (6,331,353 bytes): 6183 KiB.
-	treeBudget = 5<<20 + 1063<<10
+	// The audit's follow-up fixes on kit 0.128.1 (one toast per Mark all
+	// read, a board card's menu beside its badge, a rail's labelled estimate,
+	// History's single Load older, a blocker named by its edge's key, Home's
+	// figures and bar on a phone) added 981 bytes, script and sheet, and took
+	// it to 6183.9 KiB (6,332,334 bytes): 6184 KiB.
+	treeBudget = 5<<20 + 1064<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
