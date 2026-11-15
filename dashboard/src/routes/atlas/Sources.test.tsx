@@ -227,6 +227,35 @@ describe("Sources", () => {
     expect(within(cloudflare).getByText(/^ada asked for a read/)).toBeTruthy();
   });
 
+  // A FAILED READ IS SAID IN A SENTENCE, with the way to fix it: the card's
+  // only words were the engine's error chain under "Failed". Mutation: print
+  // last_error as the message again.
+  test("a failed read says so in a sentence, links its integration, and keeps the engine's words behind a disclosure", async () => {
+    const chain =
+      "cloudflare: read the account: integration: the third-party app refused this credential: 400: Invalid request headers";
+    mountSources(
+      sourcesAnswer({
+        sources: [
+          sourceStanding("cloudflare", {
+            state: "failed",
+            last_attempt_at: "2026-11-11T08:00:00Z",
+            last_error: chain,
+          }),
+        ],
+      }),
+    );
+    const cloudflare = await card("Cloudflare");
+    expect(cloudflare.textContent).toContain(
+      "The last read of Cloudflare did not finish, so the atlas keeps what its last whole read found.",
+    );
+    const link = within(cloudflare).getByRole("link", { name: "Integrations › Cloudflare" });
+    expect(link.getAttribute("href")).toBe("#/company/integrations/cloudflare");
+    const more = within(cloudflare).getByRole("button", { name: "What the read said" });
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(more);
+    expect(within(cloudflare).getByText(chain)).toBeTruthy();
+  });
+
   test("says so when the company connects no source", async () => {
     mountSources(sourcesAnswer({ sources: [] }));
     expect(await screen.findByText("No source is connected")).toBeTruthy();
