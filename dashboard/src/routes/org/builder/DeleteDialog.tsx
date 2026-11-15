@@ -24,6 +24,16 @@
  *   reattaches to a seat added later under the same handle
  *   (`docs/concepts/seat-ownership.md`, "The removed seat").
  *
+ * - A human seat somebody holds, or an open invitation names, is kept by the
+ *   engine: the save that removes it is refused (`seat_held`) until the person
+ *   moves to another seat or the invitation is cancelled, in Settings › People.
+ *   So the dialog says that of every human seat it deletes, and of the
+ *   reader's OWN seat it warns that this is them: it is the one delete the
+ *   reader can never save as they stand.
+ *
+ * Nothing is removed until the draft is reviewed and saved, which the dialog
+ * says under its first sentence, so a delete reads as the draft change it is.
+ *
  * Root seats placed in a removed unit by their `unit:` reference are the
  * operator's to decide (the chart draws them inside the unit, the document
  * holds them at the root), and a removal of more than half the saved
@@ -34,6 +44,7 @@ import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { useAgents, useExecutors } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
@@ -69,6 +80,7 @@ type PlacedChoice = "keep" | "remove";
 
 export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
+  const viewer = useViewer();
   const rows = useAgents();
   const executors = useExecutors();
   const { state } = api;
@@ -134,6 +146,8 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
   const stranded = preview.ok ? newlyStranded(state.draft, after) : [];
   const mass = preview.ok ? massRemoval(state.baseDraft, after) : null;
   const agents = seats.filter((seat) => kindOf(seat.data) === "agent");
+  const people = seats.filter((seat) => kindOf(seat.data) === "human");
+  const own = viewer.handle ? people.find((seat) => handleOf(seat) === viewer.handle) : undefined;
   const working = seats
     .filter((seat) => isWorking(handleOf(seat), rows, executors))
     .map((seat) => seat.data.name);
@@ -203,8 +217,10 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
               ]
                 .filter(Boolean)
                 .join(" and ")} inside it.`
-          : `Deletes the ${kindOf(found.node.data) === "human" ? "human" : "agent"} seat ${name}.`}
+          : `Deletes the ${kindOf(found.node.data) === "human" ? "human" : "agent"} seat ${name}.`}{" "}
+        Nothing changes until you review and save.
       </p>
+      <HeldSeats seats={people} own={own} />
 
       {bare.ok && bare.op.type === "remove" && bare.op.placed.length > 0 && (
         <EditorSection
@@ -258,6 +274,35 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
         />
       )}
     </Modal>
+  );
+}
+
+/**
+ * What a delete of human seats meets on save: the engine keeps a seat
+ * somebody holds or an invitation names, and refuses the save until the
+ * person moves or the invitation is cancelled. The reader's own seat is said
+ * as theirs, in the warning tone: they hold it, so that save is refused for
+ * certain, and the access their seat gives them is what they would be giving
+ * up.
+ */
+function HeldSeats({ seats, own }: { seats: readonly DraftSeat[]; own: DraftSeat | undefined }) {
+  if (seats.length === 0) return null;
+  const people = <ScreenLink to="people">Open People</ScreenLink>;
+  if (own) {
+    return (
+      <Callout variant="warning" title="This is your own seat">
+        You hold {own.data.name}, and your access comes with it. A seat somebody holds is kept, so
+        saving this is refused until you move to another seat in People. {people}
+      </Callout>
+    );
+  }
+  return (
+    <p className="t-body">
+      {seats.length === 1
+        ? "If somebody holds this seat or an invitation names it, saving is refused until they move to another seat or the invitation is cancelled in People."
+        : "If somebody holds one of these seats or an invitation names one, saving is refused until they move to another seat or the invitation is cancelled in People."}{" "}
+      {people}
+    </p>
   );
 }
 

@@ -341,3 +341,62 @@ describe("before the seats go", () => {
     expect(screen.getByText("The org can’t be changed right now.")).toBeDefined();
   });
 });
+
+/*
+ * A HUMAN SEAT IS A PERSON'S, AND THE DELETE IS A DRAFT. Deleting the reader's
+ * own seat read "Deletes the human seat Jane Founder." like any other, with
+ * nothing saying it is theirs, that the engine refuses to remove a seat
+ * somebody holds, or that nothing happens until the draft is saved. Mutation:
+ * draw the delete's sentence alone, and every expectation goes red.
+ */
+describe("a human seat", () => {
+  const withPeople = () => {
+    const doc = fixtureCompany();
+    doc.roles!.push(
+      { name: "Jane Founder", handle: "jane", kind: "human" },
+      { name: "Riley Chen", handle: "riley", kind: "human" },
+    );
+    return keyedState(doc);
+  };
+  const jane = {
+    login: "jane.founder",
+    grants: ["admin"],
+    handle: "jane",
+    name: "Jane Founder",
+    kind: "human",
+    owner: "jane",
+    acts: [],
+    project: "",
+  } as unknown as NonNullable<HarnessOptions["viewer"]>;
+
+  test("the reader's own seat is said to be theirs, and that its save is refused while they hold it", async () => {
+    open(withPeople(), "seat:jane", { viewer: jane });
+    expect(
+      screen.getByText(
+        /Deletes the human seat Jane Founder. Nothing changes until you review and save./,
+      ),
+    ).toBeDefined();
+    const own = await screen.findByText("This is your own seat");
+    const callout = own.closest("[role='alert'], .crewlet-callout, div") as HTMLElement;
+    expect(callout.textContent).toContain(
+      "saving this is refused until you move to another seat in People",
+    );
+    expect(within(callout).getByRole("link", { name: "Open People" }).getAttribute("href")).toBe(
+      "#/settings/people",
+    );
+  });
+
+  test("another person's seat says what holds it back, and an agent's says neither", async () => {
+    open(withPeople(), "seat:riley", { viewer: jane });
+    expect(
+      await screen.findByText(
+        /If somebody holds this seat or an invitation names it, saving is refused/,
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText("This is your own seat")).toBeNull();
+    cleanup();
+    open(withPeople(), "seat:dev", { viewer: jane });
+    expect(screen.getByText(/Nothing changes until you review and save./)).toBeDefined();
+    expect(screen.queryByText(/If somebody holds/)).toBeNull();
+  });
+});

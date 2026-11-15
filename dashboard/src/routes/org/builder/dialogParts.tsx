@@ -122,6 +122,8 @@ export const SCREENS = {
   nodes: ["settings", "nodes"],
   /** The model entries, where each chooses the cell its executors run in. */
   models: ["settings", "models"],
+  /** Who holds which human seat, and the invitations that name one. */
+  people: ["settings", "people"],
 } as const satisfies Record<string, readonly [string, ...string[]]>;
 
 /** A screen the builder can send a reader to. */
