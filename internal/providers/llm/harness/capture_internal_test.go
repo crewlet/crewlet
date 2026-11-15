@@ -94,12 +94,17 @@ func TestNothingWrittenAfterTheEndIsRead(t *testing.T) {
 // the capture pinned after the original is closed; closing every copy lets it
 // go — the instant a pipe's reader would have seen its end.
 //
+// Sequential: a child that any other case starts holds a copy of every
+// description open in this process from its fork until its exec, and a fork
+// landing before the last close would still pin the capture when the case
+// asks. While a top-level case runs sequentially no other case's body runs, so
+// no fork can land.
+//
 // Mutation: open the engine's description as a dup of the child's (the same
 // description, as darwin's /dev/fd gives): the probe then converts the pin
 // instead of being refused by it, and the capture is refused as one on a
 // filesystem without per-description locks.
 func TestAPinLastsWhileAnyHolderHoldsTheDescription(t *testing.T) {
-	t.Parallel()
 	c, w := testCapture(t, "stdout", streamSpec{kind: oneAnswer}, nil)
 	fd, err := unix.Dup(int(w.Fd())) //nolint:gosec // a descriptor fits an int
 	if err != nil {
@@ -300,10 +305,17 @@ func TestACaptureOnAFilesystemWithoutPerDescriptionLocksIsRefused(t *testing.T) 
 // included — while the holder still has the description; and once the holder
 // lets go, the next tick closes it.
 //
+// Sequential: a child that any other case starts holds a copy of every
+// description open in this process from its fork until its exec, this
+// capture's write description among them, and the janitor rightly keeps a
+// capture something still holds. A fork landing on the second tick would hold
+// the capture past it, and no tick the case could count would be the last.
+// While a top-level case runs sequentially no other case's body runs, so no
+// fork can land.
+//
 // Mutation: open the engine's description read-only again: it can then neither
 // reserve nor truncate.
 func TestAHeldCaptureIsEmptiedAtTheEnd(t *testing.T) {
-	t.Parallel()
 	hooks := now()
 	c, w := testCapture(t, "stdout", streamSpec{kind: readToEnd, keep: maxOutput}, hooks)
 	ticks, observed := make(chan time.Time), make(chan int64)
