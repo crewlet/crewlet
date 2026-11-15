@@ -115,6 +115,11 @@ func (r GrantRequest) Grant(permanent bool, now time.Time) Grant {
 // granted, or lapsed ([RequestTTL]).
 var ErrNoRequest = errors.New("seataccess: no such request")
 
+// GrantRefused is a chosen grant that cannot be saved as asked, with why.
+type GrantRefused struct{ Reason string }
+
+func (e *GrantRefused) Error() string { return "seataccess: " + e.Reason }
+
 // CoordRequests is the agents' grant requests on the fleet's coordination
 // store: the whole company, now, since a request asked on the node holding the
 // seat is answered on whichever node serves the person.
