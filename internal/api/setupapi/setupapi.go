@@ -916,7 +916,7 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind == integration.KindSSH {
-		servers, err := s.sshServers(r.Context(), fc.company)
+		servers, err := s.sshServers(r.Context(), fc.company, fc.revision)
 		if err != nil {
 			log.WarnContext(r.Context(), "setup_ssh_tests_unavailable", "error", err.Error())
 			httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,

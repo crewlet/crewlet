@@ -22,6 +22,7 @@ function server(id: string, more: Partial<SetupSSHServer> = {}): SetupSSHServer 
     address: `${id}.acme.example`,
     port: 22,
     fingerprints: [],
+    host_keys: [],
     users: { read: "crewlet-read" },
     granted_to: [],
     ...more,
