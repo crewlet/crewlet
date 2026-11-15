@@ -1294,7 +1294,7 @@ A `holding_up` row is the task plus `blocks` (how many open items wait on it,
 directly or through another waiting item, each counted once; `blocks_capped`
 says the count is a floor, past 512 waiting items or past the 2,048 items one
 read walks, shared by the whole list), `holders` (who holds that waiting work, the reader
-left out, at most eight), `held_since` (when it last changed hands, whichever change moved its assignee: its filing, an assignment, or a status change that handed it over) and `agent_waiting` (how many of the items waiting through it agent seats hold). It is
+left out, at most eight), `held_since` (when it last changed hands, whichever change moved its assignee: its filing, an assignment, or a status change that handed it over; for an item held by an open question, when that question was put; absent where neither is recorded) and `agent_waiting` (how many of the items waiting through it agent seats hold). It is
 the one list about who waits on the reader rather than what waits for them, and
 it is the same for a person, whose dashboard shows it under My work. The reader
 holds two kinds of item: one **assigned** to them that open work waits on, and
@@ -2074,7 +2074,9 @@ was until a pass can read it
 one statement, so `blocked` is exactly "some entry in `waiting_on` is open" and
 a screen can never show a blocked badge beside no dependencies. A blocker your
 own filter excluded is an id you hold no row for — the honest answer, since the
-edge exists and that page cannot draw it. Cleared edges stay on the row rather
+edge exists and that page cannot draw it, though the edge still names it by
+its `key` (with `key_collision` where another task claimed that key first), so
+a project's list says which task in another project holds a row up. Cleared edges stay on the row rather
 than disappearing when the blocker finishes: what a plan looked like once it
 was executed is the thing a timeline is for.
 

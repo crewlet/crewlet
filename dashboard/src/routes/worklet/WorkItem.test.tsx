@@ -467,12 +467,12 @@ test("the hand-off warning is at the engine's budget", async () => {
   };
   at(7, 8);
   await settle();
-  expect(screen.getByText(/Hand-offs 7 of 8/)).toBeTruthy();
+  expect(screen.getByText(/Handed over 7 of the 8 times the engine allows/)).toBeTruthy();
   expect(screen.queryByText(/the next hand-off will be refused/)).toBeNull();
 
   at(8, 8);
   await settle();
-  expect(screen.getByText(/Hand-offs 8 of 8/)).toBeTruthy();
+  expect(screen.getByText(/Handed over 8 of the 8 times the engine allows/)).toBeTruthy();
   expect(screen.getByText(/the next hand-off will be refused/)).toBeTruthy();
 
   at(3, 3);
@@ -2028,6 +2028,24 @@ test("opening one of the rail's editors shuts the last", async () => {
   expect(screen.getByLabelText("Points of ENG-42")).toBeTruthy();
   expect(screen.queryByRole("alertdialog")).toBeNull();
   expect(screen.getAllByRole("button", { name: "Save" })).toHaveLength(1);
+});
+
+// AN ESTIMATE'S FIELDS ARE LABELLED IN SIGHT: they said what they hold only
+// by a placeholder ("points", "minutes"), which goes the moment a number is
+// typed. Each name starts with the word on screen.
+test("the estimate editor labels its two fields where they are seen", async () => {
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(pencil("Change the estimate of ENG-42"));
+  await settle();
+  for (const [shown, named] of [
+    ["Points", "Points of ENG-42"],
+    ["Minutes", "Minutes estimated for ENG-42"],
+  ] as const) {
+    const field = screen.getByLabelText(named) as HTMLInputElement;
+    expect(field.closest("label")?.textContent).toBe(shown);
+    expect(field.getAttribute("placeholder")).toBeNull();
+  }
 });
 
 test("opening another of the rail's editors asks only if the last one changed", async () => {

@@ -4396,6 +4396,14 @@ a.knowledge-reader-how:hover {
   top: var(--spacing-1);
   box-shadow: var(--shadow-sm);
 }
+/* THE CARD MAKES ROOM FOR ITS MENU: the menu stands on the card's top-right
+   corner, which is where the holder's badge ends the top row, and on a screen
+   with no hover it is always shown, so every badge was half covered (initials
+   cut to one letter). The top row keeps the menu's width clear, so the badge sits
+   beside it whether or not it is shown. */
+.work-col-slot:has(> .task-row-menu) .work-card-top {
+  padding-inline-end: calc(var(--size-control-sm) + var(--spacing-1));
+}
 .tl-name-row > .task-row-menu {
   top: 50%;
   transform: translateY(-50%);
@@ -5616,6 +5624,21 @@ span.list-position-step {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--color-border-default);
+}
+/* A SECTION'S ADD ACTION SITS AT ITS START, as every rail action does: a
+   column stretches its children, so "Link an atlas entry" was a full-width
+   button with its words centred under a left-aligned "New artifact". */
+.task-rail-section > button {
+  align-self: flex-start;
+}
+/* AN ESTIMATE'S FIELDS SAY WHAT THEY HOLD, above each box: a placeholder is
+   gone the moment a number is typed. */
+.task-rail-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
 }
 .task-rail-link-row {
   display: flex;

@@ -3018,6 +3018,11 @@ export interface WorkBlocker {
   /** The blocking task's ID, never its key: an edge is drawn between two rows
    *  on one page and `WorkSummary.id` is what they are matched on. */
   id: string;
+  /** The blocking task's key, so a page that holds no row for the blocker
+   *  can still name it; absent for an edge to something that is not a task. */
+  key?: string;
+  /** The blocker's key is one another task claimed first. */
+  key_collision?: boolean;
   /** Whether the blocker is still holding this task up. `false` is a settled
    *  fact rather than a missing one — the blocker has finished. */
   open?: boolean;
@@ -5643,8 +5648,10 @@ export interface WorkHoldingRow extends WorkSummary {
   blocks_capped?: boolean;
   /** Who holds the waiting work, the person left out, sorted, at most eight. */
   holders: string[];
-  /** When it was last assigned, or filed already assigned. */
-  held_since: string;
+  /** When the person came to hold it: when it was last assigned (or filed
+   *  already assigned), or when the question it is held by was put. Absent
+   *  where neither is recorded. */
+  held_since?: string;
   /** The open question to the person this row is held by, its comment id,
    *  where they hold the item by being asked: the item itself waits on them. */
   asked?: string;

@@ -2543,6 +2543,11 @@ const (
 	// the retired filter, a failed source said in a sentence) added 7,464
 	// bytes, script and sheet, and took it to 6185.4 KiB (6,333,883 bytes):
 	// 6186 KiB.
+	// The audit's follow-up fixes on kit 0.128.1 (one toast per Mark all
+	// read, a board card's menu beside its badge, a rail's labelled estimate,
+	// History's single Load older, a blocker named by its edge's key, Home's
+	// figures and bar on a phone) added 981 bytes, script and sheet, and took
+	// it to 6183.9 KiB (6,332,334 bytes): 6184 KiB.
 	treeBudget = 5<<20 + 1077<<10
 )
 

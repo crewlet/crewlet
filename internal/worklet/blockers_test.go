@@ -242,3 +242,29 @@ func TestAWriteToABlockerIsProbedWhereItsDependentIsFiled(t *testing.T) {
 			"want it refused as deferred", err)
 	}
 }
+
+// AN EDGE NAMES ITS BLOCKER BY KEY, so a page that holds no row for the
+// blocker can still say which task holds it up: a project's list named a
+// blocker in another project by nothing ("Blocked") while All tasks, which
+// held the row, said "Blocked · PROD-9". Asked for the dependent alone, the
+// answer carries no row for the blocker and still names it.
+func TestAnEdgeNamesItsBlockerByKeyWithoutItsRow(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
+	if _, err := r.writer.Depend(t.Context(), "op-depend", worklet.DependencyChange{
+		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
+	}, fixedLeads{project: "eng-lead"}); err != nil {
+		t.Fatalf("Depend: %v", err)
+	}
+	r.drain()
+	want := r.task(t, "blk").Task.Key
+	if want == "" {
+		t.Fatal("the blocker has no key, so this case tests nothing")
+	}
+	dep := row(t, r, "dep")
+	if len(dep.WaitingOn) != 1 || dep.WaitingOn[0].Key != want {
+		t.Fatalf("the dependent's edge is %+v, want it to name its blocker as %s", dep.WaitingOn, want)
+	}
+}

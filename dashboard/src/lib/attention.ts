@@ -46,7 +46,7 @@ import type { AdvisorFinding, AdvisorNotice, AdvisorSubject } from "~/protocol/a
 import { alarmHome, alarmKindTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
 import { HELD_CLASS, heldItem, heldReason, heldSetting } from "./heldConversation.ts";
 import { PAUSED_SEAT_CLASSES } from "~/contract/advisor.ts";
-import { unreadSentences } from "./advisorUnread.ts";
+import { unreadSentences, unreadTitle } from "./advisorUnread.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -669,7 +669,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       severity: "caution",
       subject: "setup",
       icon: "list-checks",
-      title: "The advisor couldn't read everything",
+      title: unreadTitle(setupUnread),
       detail: unreadSentences(setupUnread).join(" "),
       path: ["settings", "advisor"],
       action: "Open the advisor",

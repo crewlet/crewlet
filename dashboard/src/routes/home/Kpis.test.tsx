@@ -176,3 +176,17 @@ test("a figure over a whole answer makes its claim", () => {
   draw(["progress"], { flow: flowAnswer(true) });
   expect(document.body.textContent).not.toContain(PARTIAL_FIGURE);
 });
+
+// NO LINE OPENS ON A DOT: the separator ends the part before it, so where the
+// line wraps between two parts it breaks after the dot. Carried at the start
+// of the next part, a wrapped subline read "+34 vs last week" over "· 7
+// blocked · 11 overdue".
+test("a figure's parts carry their separator at their end, never at their start", () => {
+  const flow = flowAnswer(true);
+  flow.data!.now = { not_started: 0, active: 3, blocked: 7, overdue: 11 };
+  draw(["progress"], { flow });
+  const parts = [...document.querySelectorAll(".home-kpi-part")].map((p) => p.textContent ?? "");
+  expect(parts.length).toBeGreaterThan(1);
+  for (const part of parts) expect(part.startsWith("·"), part).toBe(false);
+  expect(parts.slice(0, -1).every((part) => part.endsWith(" ·"))).toBe(true);
+});
