@@ -228,8 +228,11 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_task", Phrase: "read this task",
-			Description: "Read one task: its description, status, people, dates and the version " +
-				"an update proposes against. Its comments are get_task_thread.",
+			Description: "Read one task: its description, status, people, dates, the version " +
+				"an update proposes against, the task it is filed under, and its links to other " +
+				"tasks, pages and atlas entries, each with the relation and the other end's " +
+				"status. A link the other end holds reads from that end: waiting_on from it " +
+				"means it waits on this task. Its comments are get_task_thread.",
 			schema: object([]string{"item"}, map[string]*schema{
 				"item": text("The task's key (ENG-42) or id.", nameBytes),
 			}),
@@ -237,17 +240,38 @@ func readTools() []Tool {
 			Build: func(a map[string]any) (exec.Request, error) {
 				return get("GET /worklet/{id}", map[string]string{"id": Args(a).String("item")}, nil)
 			},
-			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, Root: "task",
-				ID: "key", Key: "key", Title: "title", Subtitle: "key", Prose: true, Text: "body",
-				Facts: []cards.Fact{fact("Status", "status", tLabel),
-					fact("Priority", "priority", tLabel), fact("Assignee", "assignee", tText),
-					{Label: "Reporter", Path: "reporter", Type: tText, Detail: true},
-					fact("Project", "project", tText),
-					fact("Type", "type", tLabel), fact("Due", "due_at", tDatetime),
-					fact("Updated", "updated_at", tDatetime),
-					{Label: "Version", Path: "version", Type: tNumber, Mono: true, Detail: true}},
-				Open: &cards.Open{Screen: "item", Params: map[string]string{"id": "id"},
-					LabelFrom: "key"}}}),
+			// THE WHOLE ANSWER IS THE RECORD, so the parent and the links
+			// beside the task are read with it: carded from `task` alone,
+			// the model never saw what the task waits on or belongs to.
+			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask,
+				ID: "task.key", Key: "task.key", Title: "task.title", Subtitle: "task.key",
+				Prose: true, Text: "task.body",
+				Facts: []cards.Fact{fact("Status", "task.status", tLabel),
+					fact("Priority", "task.priority", tLabel),
+					fact("Assignee", "task.assignee", tText),
+					{Label: "Reporter", Path: "task.reporter", Type: tText, Detail: true},
+					fact("Project", "task.project", tText),
+					fact("Parent", "parent.key", tText),
+					{Label: "Parent's title", Path: "parent.title", Type: tText, Detail: true},
+					{Label: "Parent's status", Path: "parent.status", Type: tLabel, Detail: true},
+					fact("Type", "task.type", tLabel), fact("Due", "task.due_at", tDatetime),
+					fact("Updated", "task.updated_at", tDatetime),
+					{Label: "Version", Path: "task.version", Type: tNumber, Mono: true,
+						Detail: true}},
+				// EACH LINK BY ITS OTHER END: a task's by its title and key, a
+				// page's or an atlas entry's, which carry neither, by what it
+				// is, with its id to read it by.
+				Items: &cards.Items{Path: "links", ID: "other", Label: "title", Else: "kind",
+					Fact: "key", Noun: wire.Noun{One: "link", Many: "links"},
+					Facts: []cards.Fact{{Label: "Relation", Path: "kind", Type: tLabel},
+						{Label: "Held by", Path: "derived", Type: tText,
+							Flag: "the other end, so it reads from there to this task"},
+						{Label: "Status", Path: "status", Type: tLabel},
+						{Label: "Note", Path: "note", Type: tText},
+						{Label: "Key", Path: "key_collision", Type: tText,
+							Flag: "opens another task; read this one by its id"}}},
+				Open: &cards.Open{Screen: "item", Params: map[string]string{"id": "task.id"},
+					LabelFrom: "task.key"}}}),
 			Label: func(a map[string]any) string { return "Reading " + Args(a).String("item") },
 		},
 		{

@@ -149,3 +149,46 @@ func TestAnEntryListNamesWhatToWrite(t *testing.T) {
 		t.Errorf("entries led by their first word were refused: %v", err)
 	}
 }
+
+// A LINK IS LISTED BY WHAT IT IS WHERE IT HAS NO NAME, AND A FLAG FACT IS WORDS
+// ONLY WHERE IT IS SET: an item reads its label at Else where Label holds
+// nothing (a task's link to a page, which has no title here), and a fact that
+// is a flag reads its words when true and is no fact otherwise, as an item's
+// flag is. Mutation: drop the Else, or keep a false flag as "false", and this
+// fails.
+func TestALinkWithNoNameIsListedByWhatItIs(t *testing.T) {
+	t.Parallel()
+	spec := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, ID: "task.key",
+		Key: "task.key", Title: "task.title",
+		Items: &cards.Items{Path: "links", ID: "other", Label: "title", Else: "kind",
+			Fact: "key", Noun: wire.Noun{One: "link", Many: "links"},
+			Facts: []cards.Fact{{Label: "Held by", Path: "derived", Type: wire.ColumnText,
+				Flag: "the other end"}}}}}
+	if err := spec.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	answer, _ := json.Marshal(map[string]any{"task": map[string]any{"key": "ENG-7",
+		"title": "Ship it"}, "links": []any{
+		map[string]any{"kind": "waiting_on", "other": "t-2", "key": "ENG-2",
+			"title": "Release the backend", "derived": true},
+		map[string]any{"kind": "page", "other": "p-9", "derived": false},
+	}})
+	built, err := cards.Build(spec, answer, evals.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := built.Card.Entity.Items
+	if items[0].Label != "Release the backend" || items[1].Label != "page" || items[1].ID != "p-9" {
+		t.Errorf("the links are listed as %+v, want the task by its title and the page by "+
+			"what it is, with its id", items)
+	}
+	if len(items[0].Facts) != 1 || items[0].Facts[0].Value != "the other end" ||
+		len(items[1].Facts) != 0 {
+		t.Errorf("the flag reads %+v and %+v, want its words where set and nothing where not",
+			items[0].Facts, items[1].Facts)
+	}
+	spec.Entity.Items.Facts[0].Entries = &cards.Entries{Lead: "id"}
+	if spec.Validate() == nil {
+		t.Error("a fact both listing entries and wording a flag validated")
+	}
+}
