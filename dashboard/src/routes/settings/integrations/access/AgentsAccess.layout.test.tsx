@@ -12,9 +12,14 @@ import { Router } from "~/app/router.tsx";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import { githubAnswer } from "./fixtures.ts";
 
-// LONGER THAN THE COLUMN at either width, so the chip has to give way.
+// LONGER THAN THE COLUMN at either width, so the chip has to give way: the
+// longest name GitHub allows, a 39 character owner and a 100 character
+// repository. A shorter one stopped overflowing at 1440px once the grid drew
+// its short columns at their content (@crewlethq/ui 0.130.1) and gave this
+// one the room, which left the ellipsis this case is about untested there.
 const LONG =
-  "example/customer-onboarding-notification-delivery-service-for-enterprise-tenants-in-every-region";
+  "example-organization-holding-every-repo/" +
+  "customer-onboarding-notification-delivery-service-for-enterprise-tenants-in-every-region-and-zone-xy";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
