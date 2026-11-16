@@ -1,7 +1,4 @@
-/**
- * The page's half of the comment layer: anchors declared, layout reported only
- * while asked, a pick kept from the page's own handlers, and the host's asks.
- */
+/** The page's half of the comment layer: anchors, layout while asked, picks and host asks. */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ANCHOR_ATTRIBUTE, PageComments, anchorAround, clipBytes, fractionOf } from "./comments.ts";

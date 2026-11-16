@@ -33,14 +33,9 @@ func canvas(board string, w, h int) canvasformat.Canvas {
 		Order: []string{board}}
 }
 
-// A thread finds its place by WHAT IT POINTS AT, not by where that sat when the
-// thread was made: an element pushed down its slide is found by its tag and
-// text and answered as moved, with the path it has now; a name declared on a
-// page is found on that page whatever else the page changed; a point on a board
-// is found while the board still holds it, wherever the board moved on the canvas.
-//
-// Mutation: find a slide's element by its path alone, or drop the shared
-// script's declaration, and this goes red.
+// A thread finds its place by WHAT IT POINTS AT, not where that sat: a slide's
+// element by its tag and text, a page's declared name on its page, and a
+// board's point wherever the board moved.
 func TestAPlaceIsFoundByItsContentNotItsPosition(t *testing.T) {
 	t.Parallel()
 
@@ -101,14 +96,8 @@ func TestAPlaceIsFoundByItsContentNotItsPosition(t *testing.T) {
 	}
 }
 
-// A thread whose place is gone is OUTDATED, never dropped: a page, a name, a
-// slide, an element or a board the version no longer holds, or a point the
-// board no longer covers, each answers a placement saying so, and the thread
-// still labels as it was made. A thread made after the version asked answers
-// later rather than outdated.
-//
-// Mutation: answer a missing slide as here, or a point past the board's edge as
-// inside it, and this goes red.
+// A thread whose place is gone is OUTDATED, never dropped, and still labels as
+// made; a thread made after the version asked answers later instead.
 func TestAnAnchorThatIsGoneIsOutdatedNeverDropped(t *testing.T) {
 	t.Parallel()
 	site := commentanchor.IndexHTML([]commentanchor.File{
@@ -169,14 +158,9 @@ func TestAnAnchorThatIsGoneIsOutdatedNeverDropped(t *testing.T) {
 	}
 }
 
-// EVERY ARTIFACT KIND SAYS WHERE ITS COMMENTS MAY POINT: a row for each entry of
-// the kind table, each taking the whole version and otherwise only the anchor
-// named for its own kind, and every anchor kind the row leaves out refused with
-// a sentence naming whole-version comments. A kind added to the table and not
-// here fails, so a new kind states its anchors.
-//
-// Mutation: drop a kind's row from the table, or let a doc take an html anchor,
-// and this goes red.
+// EVERY ARTIFACT KIND SAYS WHERE ITS COMMENTS MAY POINT: the whole version or
+// its own kind's anchor, any other refused naming whole-version comments. A
+// kind added to the table without a row here fails.
 func TestEveryKindAnswersWhereItsCommentsMayPoint(t *testing.T) {
 	t.Parallel()
 	examples := map[commentanchor.Kind]commentanchor.Anchor{

@@ -9,14 +9,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// The records on a comment thread's subject (ADR-0153).
-//
-// A REFUSAL WRITES NOTHING, and the writer reads that back as its verdict from
-// the rows' positions ([Writer.commentVerdict]): a thread's record writes no
-// history row, so the refusal an artifact record files as one is here the
-// absence of the row it would have moved. Every case is a total function of the
-// record and the rows, and every row it writes carries the record's position,
-// so a redelivery moves nothing.
+// The records on a comment thread's subject (ADR-0153). A refusal writes no
+// row, and the writer reads that absence back as its verdict; every row
+// carries the record's position, so a redelivery moves nothing.
 
 // applyComment writes one record on a thread's subject.
 func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {

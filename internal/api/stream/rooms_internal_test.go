@@ -173,11 +173,8 @@ func TestAPresenceMemberIsNamedAsItsRecordIs(t *testing.T) {
 }
 
 // EVERY MOVEMENT SAYS WHETHER IT NARROWS THE ROOM: one that may change who
-// reads the artifact suspends its datastore pushes until the room is decided
-// again, and one that cannot (a version, a comment) leaves them flowing; a
-// reset names no artifact and suspends every room before this is asked. A
-// movement kind added without a row here fails, so none is classified by the
-// switch's default.
+// reads the artifact suspends its datastore pushes, one that cannot (a version,
+// a comment) does not. A movement kind with no row here fails.
 func TestEveryMovementSaysWhetherItNarrowsTheRoom(t *testing.T) {
 	t.Parallel()
 	want := map[artifactsdomain.MoveKind]bool{

@@ -23,9 +23,8 @@
  * presenter's next slide), so every drawing's ids and references are prefixed
  * with the instance's own prefix.
  *
- * EVERY ELEMENT DRAWN CARRIES ITS PATH (`data-node`), never a Fragment, which
- * draws nothing: a comment is anchored to the element under the reader's
- * pointer by that path, and its pin is placed on the element found by it.
+ * EVERY ELEMENT DRAWN CARRIES ITS PATH (`data-node`), never a Fragment: a comment anchors to the
+ * element under the pointer by that path, and its pin is placed by it.
  *
  * WRITTEN BACK CANONICALLY. A person's edit changes the tree; `slideSource`
  * writes it as slide HTML the engine's parser reads back to the same tree,

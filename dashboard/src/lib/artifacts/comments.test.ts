@@ -1,9 +1,5 @@
 // @vitest-environment node
-/**
- * An artifact's threads as the dashboard draws the engine's answer: the list
- * each is under, the words a draft is given (the engine's own), and where a
- * pin stands over a page, a slide's element and a design's board.
- */
+/** Threads as the dashboard draws them: their lists, a draft's words and where each pin stands. */
 
 import { describe, expect, test } from "vitest";
 import type { ArtifactCommentThread } from "~/protocol/index.ts";

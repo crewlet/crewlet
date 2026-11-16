@@ -175,10 +175,8 @@ const (
 	OpAdopt OpKind = "adopt"
 	OpClear OpKind = "clear"
 
-	// The ops on a comment thread's subject (ADR-0153): its opening remark,
-	// a reply, a remark's edit and removal, and the thread's resolve and
-	// reopen. Named for the thread rather than reusing the artifact's names,
-	// so a log line says what happened without its subject beside it.
+	// The ops on a comment thread's subject (ADR-0153), named for the thread so
+	// a log line says what happened without its subject beside it.
 	OpCommentOpen    OpKind = "comment_open"
 	OpCommentReply   OpKind = "comment_reply"
 	OpCommentEdit    OpKind = "comment_edit"

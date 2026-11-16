@@ -1,7 +1,4 @@
-/**
- * The Comments panel: how a commenter starts, each state a thread's card can
- * show, what a reader below commenter sees, and the keyed writes it sends.
- */
+/** The Comments panel: how a commenter starts, each card state, a lower role's view, the writes. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

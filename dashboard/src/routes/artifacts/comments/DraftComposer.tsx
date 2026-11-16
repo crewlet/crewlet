@@ -1,7 +1,4 @@
-/**
- * A new thread being written: where it points, the part's words and picture,
- * and the words typed; beside its pin, or in the panel on a phone.
- */
+/** A new thread being written: beside its pin, or in the panel on a phone. */
 
 import { useState } from "react";
 import { Button, Checkbox, Composer } from "@crewlethq/ui";

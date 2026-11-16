@@ -1,8 +1,4 @@
-/**
- * The comment layer over a page's frame. The frame is another origin, so its
- * runtime reports where its anchors are and the reader's pick, only while
- * this layer asks; the layer draws the pins and starts the draft.
- */
+/** Comment pins over a page's frame, from what its cross-origin runtime reports while asked. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LayerHost } from "@crewlethq/ui";

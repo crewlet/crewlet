@@ -585,13 +585,8 @@ func pngOf(t *testing.T) []byte {
 	return b.Bytes()
 }
 
-// AN ANSWER'S IMAGE REACHES THE HARNESS AFTER ITS TEXT, through the relay a
-// harness is handed: one text block, then one image block holding the bytes
-// and the type the tool answered, so a client that reads no image still reads
-// the text that says whose picture it is.
-//
-// Mutation: answer the text alone, or put the image first, and the harness
-// reads one block or the image before its text.
+// AN ANSWER'S IMAGE REACHES THE HARNESS AFTER ITS TEXT, through the relay: one
+// text block, then one image block with the tool's bytes and type.
 func TestAnAnswersImageReachesTheHarnessAfterItsText(t *testing.T) {
 	t.Parallel()
 	h := host(t)
@@ -626,13 +621,8 @@ func TestAnAnswersImageReachesTheHarnessAfterItsText(t *testing.T) {
 	}
 }
 
-// AN IMAGE THE RULE REFUSES IS NEVER WRITTEN. Whatever a dispatcher hands the
-// session, an answer carrying an image that is not one, or too large, or with
-// no text beside it, reaches the harness as a failed call saying why, and no
-// image block.
-//
-// Mutation: write the answer's images without the check, and the harness
-// holds bytes the rule refuses.
+// AN IMAGE THE RULE REFUSES IS NEVER WRITTEN: whatever a dispatcher hands the
+// session, the harness gets a failed call saying why, and no image block.
 func TestAnImageTheRuleRefusesIsNeverWritten(t *testing.T) {
 	t.Parallel()
 	h := host(t)

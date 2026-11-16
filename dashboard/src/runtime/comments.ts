@@ -1,8 +1,4 @@
-/**
- * The page's half of the comment layer (`crewlet.comments`): the declared
- * anchors' layout while the host asks, a click in Comment mode, and a picture
- * of a part. The page only reports what it draws; the host writes the comment.
- */
+/** The page's half of the comment layer (`crewlet.comments`): reports layout, picks, crops. */
 
 import {
   COMMENT_LAYOUT_MAX_ANCHORS,

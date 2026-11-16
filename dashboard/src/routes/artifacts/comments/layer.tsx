@@ -1,7 +1,4 @@
-/**
- * What every pin layer draws: a thread's pin, the draft's pin with the kit's
- * Popover holding its composer, and a part's outline.
- */
+/** What every pin layer draws: a thread's pin, the draft's pin and composer, a part's outline. */
 
 import { useLayoutEffect } from "react";
 import { CommentPin, LAYER_REPOSITION_EVENT, Popover, useLayerContainer } from "@crewlethq/ui";
@@ -33,10 +30,7 @@ export function ThreadPin({ t, x, y }: { t: ArtifactCommentThread; x: number; y:
   );
 }
 
-/**
- * The draft's pin, and its composer beside it while the reader writes there:
- * on a phone, or once the pin left the view, the composer is the panel's.
- */
+/** The draft's pin and composer; on a phone or once the pin is off view, the panel holds it. */
 export function DraftPin({ x, y }: { x: number; y: number }) {
   const c = useComments()!;
   const draft = c.draft;
@@ -83,11 +77,7 @@ export function Outline({ box, label }: { box: Box; label?: string | undefined }
   );
 }
 
-/**
- * Tells the layer a popup is drawn in that what it is anchored to moved,
- * whenever `stamp` changes: a page scrolled inside its frame, which the
- * window never hears, or a new pick moved the draft.
- */
+/** Repositions the layer's popups when `stamp` changes: the window never hears a frame scroll. */
 export function Repositioned({ stamp }: { stamp: string }) {
   const container = useLayerContainer();
   useLayoutEffect(() => {

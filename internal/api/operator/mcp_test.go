@@ -622,12 +622,8 @@ func (stubPageWriter) EditComment(context.Context, doclet.Actor, string, string,
 	return doclet.Comment{}, doclet.Written{}, nil
 }
 
-// AN OPERATOR'S ASSISTANT IS HANDED A TOOL'S PICTURE AFTER ITS TEXT. An answer
-// carrying an image reaches the MCP transport as its text, a note on the
-// arguments after it, and then one image block per picture, so the text that
-// says whose picture it is never arrives without it.
-//
-// Mutation: answer the text alone, and the picture the text names is missing.
+// AN OPERATOR'S ASSISTANT IS HANDED A TOOL'S PICTURE AFTER ITS TEXT and the
+// arguments note, and the text naming the picture never arrives without it.
 func TestAnOperatorsAssistantIsHandedAToolsPictureAfterItsText(t *testing.T) {
 	t.Parallel()
 	data := []byte("\x89PNG\r\n\x1a\n a crop")

@@ -45,9 +45,7 @@ import (
 //     administrators adopting at once contend there, and the later one is
 //     decided against the earlier one's adoption.
 //   - A comment thread rides a subject of its own beneath its artifact
-//     (ADR-0153): its remarks, edits, resolve and reopen contend only with
-//     each other, never with a publish, and the artifact's deletion gate
-//     covers it as it covers an asset.
+//     (ADR-0153), never contending with a publish; the deletion gate covers it.
 
 // ObjectKind is what an object on the artifacts log is.
 //
@@ -107,10 +105,8 @@ const (
 	// adoption and a clear.
 	KindBrand ObjectKind = "brand"
 
-	// KindComment is one comment thread on an artifact (ADR-0153): its
-	// opening remark, its replies, their edits and removals, its resolve and
-	// its reopen. Its id is the artifact's id, a dot and the thread's, so the
-	// deletion gate reads the artifact from the subject alone, as an asset's.
+	// KindComment is one comment thread on an artifact (ADR-0153). Its id is
+	// `<artifact>.<thread>`, so the deletion gate reads the artifact from it.
 	KindComment ObjectKind = "comment"
 )
 
@@ -124,9 +120,8 @@ const (
 // certify a refusal.
 //
 // A KIND ADDED LATER IS APPENDED, never inserted: the folder tree, the brand
-// and comment threads came after the base format, so a build that predates
-// them retains their records ([versionedFields] stamps each kind at its
-// version).
+// and comment threads came after the base format, so a build predating them
+// retains their records ([versionedFields] stamps each kind at its version).
 var ObjectKinds = []ObjectKind{
 	KindArtifact, KindAsset, KindReader, KindSource, KindEviction, KindGeneration,
 	KindBarrier, KindTrimmed, KindFolder, KindBrand, KindComment,

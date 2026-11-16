@@ -47,10 +47,8 @@ func RefusalError(ctx context.Context, w *Writer, id string, reason Refusal, s H
 	return w.refusal(ctx, id, reason, s, number)
 }
 
-// OpenThreadStamped opens a thread as a writer whose thread bound was
-// maxThreads, deciding nothing but the record: it stands in two opens that
-// raced past one snapshot, so a test can hold the apply to the stamped bound
-// and the writer to the verdict it reads back.
+// OpenThreadStamped opens a thread as a writer stamped with maxThreads, so a
+// test can stand in for two opens that raced past one snapshot.
 func OpenThreadStamped(ctx context.Context, w *Writer, c Call, in ThreadInput, maxThreads int) (
 	Commented, error) {
 

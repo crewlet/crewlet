@@ -15,6 +15,9 @@
  * used to stack over the artifact is in those panels now, one at a time at
  * its side (`panels.ts`), each reached by its key too (`app/keymap.ts`).
  *
+ * The Comments panel (`panel=comments`, key `c`) lists the threads, and Comment mode (Shift+C)
+ * places one on a page, slide or board (`comments/`); a reader below commenter only reads.
+ *
  * # The engine decides what this reader sees
  *
  * The head (`artifact`) is shaped by the reader's role: the owner and editors
@@ -40,12 +43,6 @@
  * and, on a sheet, the collection the followed person is on, under a
  * `FollowBanner`; the reader's own scroll, wheel, press or navigation key in
  * the body stops it, as do Escape and the followed person leaving.
- *
- * # Comments
- *
- * The Comments panel (`panel=comments`, key `c`) holds the threads; Comment
- * mode (Shift+C) places one on a part of a page, a slide or a board, whose
- * layer draws the pins (`comments/`). A reader below commenter only reads.
  *
  * # On a page of its own
  *

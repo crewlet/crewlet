@@ -16,9 +16,8 @@
  * opens the one artboard it names (`document`), under a ticket minted for that
  * board alone, so every board on a canvas is a frame of its own.
  *
- * THE COMMENT LAYER (`comments`): a page's own view draws its pins over the
- * frame from what the page reports, and a design's board lends its host to
- * the design's layer, for a picture of a point.
+ * THE COMMENT LAYER (`comments`): a page's pins are drawn over its frame from what it reports,
+ * and a design's board lends its host to the design's layer for a point's picture.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -124,10 +123,7 @@ export function FrameView({
   className?: string | undefined;
   /** Says under an old version that its data is today's; off where the caller says it once for two. */
   dataNote?: boolean;
-  /**
-   * Its part in the artifact's comments: `page` draws the page's pins over
-   * it, `board` lends its host to the design's layer. Left out, none.
-   */
+  /** Its part in the comments: `page` draws the page's pins over it, `board` lends its host. */
   comments?: "page" | "board" | undefined;
 }) {
   const [attempt, setAttempt] = useState(0);

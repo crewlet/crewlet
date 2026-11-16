@@ -15,18 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// COMMENT THREADS (ADR-0153). A thread is its own subject beneath its artifact
-// ([CommentSubject]): its opening remark, every reply, a remark's edit and
-// removal, and the thread's resolve and reopen contend only with each other.
-// A thread keeps the anchor it was made with and the version it was made on,
-// and nothing else about where it is: its place on any version is found at
-// read by internal/artifacts/commentanchor.
-//
-// A comment record writes no history row. The thread's own rows are what
-// happened to it, each stamped with the position of the record that last
-// wrote it, and the writer reads its verdict back from them: a record the
-// applier refused (an artifact trashed or gone since the decide, a bound the
-// record was stamped with) moved no row past its own position.
+// COMMENT THREADS (ADR-0153) ride their own subject beneath the artifact
+// ([CommentSubject]) and write no history row: the writer reads its verdict
+// back from the positions on the thread's rows.
 
 // ThreadStatus is whether a thread still asks for something.
 type ThreadStatus string
@@ -84,10 +75,9 @@ type Recipient struct {
 	Addressed bool `json:"addressed,omitempty"`
 }
 
-// CommentNotify is a comment record's ROUTING SNAPSHOT: who is to be woken
-// (Agents) or told (People), computed by the writer's caller when the record is
-// formed and carried on it as data, so delivery reads one record rather than
-// state that may have moved since (ADR-0012). The applier writes no row of it.
+// CommentNotify is a comment record's routing snapshot: who is woken (Agents)
+// or told (People), computed when the record is formed so delivery reads only
+// the record (ADR-0012). The applier writes no row of it.
 type CommentNotify struct {
 	Agents []Recipient `json:"agents,omitempty"`
 	People []Recipient `json:"people,omitempty"`
@@ -152,10 +142,8 @@ type CommentOpenPayload struct {
 	// Mentions are the seat handles the remark names, sorted and unique.
 	Mentions []string `json:"mentions,omitempty"`
 
-	// MaxThreads is the bound on one artifact's threads the writer decided
-	// under ([artifacts.MaxThreadsPerArtifact]), STAMPED: threads ride
-	// subjects of their own, so two opens may race past the writer's
-	// snapshot and only the apply sees both.
+	// MaxThreads is the per-artifact thread bound the writer decided under,
+	// stamped: two opens on their own subjects may race past its snapshot.
 	MaxThreads int `json:"max_threads"`
 
 	Notify *CommentNotify `json:"notify,omitempty"`

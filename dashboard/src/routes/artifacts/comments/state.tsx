@@ -1,8 +1,4 @@
-/**
- * An artifact's comments as its page holds them: the threads on the version
- * on show, the filter and thread in the address, Comment mode and the draft.
- * Read as the socket question `artifact_comments`, written as keyed requests.
- */
+/** An artifact's comments on its page: threads, filter, selection, Comment mode and the draft. */
 
 import {
   createContext,
@@ -85,11 +81,8 @@ export interface ArtifactComments {
   /** The draft's pin left the view: it is written on in the panel. */
   dockDraft: () => void;
   clearDraft: () => void;
-  /**
-   * The draft's words as typed so far, kept across the composer moving
-   * between its pin and the panel, outside React's state so a keystroke
-   * draws nothing but the composer.
-   */
+  /** The draft's words, kept across pin and panel outside React state so typing redraws only the
+   *  composer. */
   draftWords: { current: string };
   /** The reader may comment, and why not where they may not. */
   can: boolean;
@@ -315,11 +308,8 @@ export function useArtifactComments({
   ]);
 }
 
-/**
- * One gesture's comment write: its key kept for the retry an unknown answer
- * asks for, the threads asked for again once it lands, and a refusal said in
- * a toast in the engine's words, the words typed kept where they were.
- */
+/** One gesture's comment write: its key kept for a retry, the threads re-read once it lands, and
+ *  a refusal toasted in the engine's words with the typed words kept. */
 export function useCommentWrite(): {
   run: (req: Omit<KeyedRequest, "key">, done: string) => Promise<boolean>;
   busy: boolean;

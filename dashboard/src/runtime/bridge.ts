@@ -45,11 +45,8 @@ export const BRIDGE_MESSAGE = {
 /** The capabilities a version declares, as the runtime names them (`artifacts.Capability`). */
 export type RuntimeCapability = (typeof ARTIFACT_CAPABILITIES)[number];
 
-/**
- * Every method a page may call, and the capability each needs: none for
- * `openLink`, `print` and the comment layer's four, which report only what
- * the page already draws and gain it nothing.
- */
+/** Every method a page may call, and the capability each needs (none for `openLink`, `print` and
+ *  the comment layer's four, which only report what the page already draws). */
 export const BRIDGE_METHODS = {
   "identity.me": "identity",
   "identity.people": "identity",
@@ -576,10 +573,7 @@ export function isCropImage(v: unknown): v is string {
   return bytes <= ARTIFACT_COMMENT_CROP_MAX_BYTES;
 }
 
-/**
- * A crop's answer, or null. A picture the engine would not keep is answered
- * as none, so the reader is told there is no picture rather than kept waiting.
- */
+/** A crop's answer, or null; a picture the engine would not keep reads as none, so nobody waits. */
 export function readCommentCrop(data: unknown): CommentCrop | null {
   const m = record(data);
   const id = m?.["id"];

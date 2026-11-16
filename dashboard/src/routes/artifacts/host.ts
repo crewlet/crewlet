@@ -14,9 +14,8 @@
  * reader (`runtime/bridge.ts`), its parameters checked here, and anything
  * that is not exactly a call is dropped.
  *
- * THE COMMENT LAYER LISTENS HERE TOO: the page is told the layer's mode on
- * every hello, and what it reports back is checked and handed to the layer
- * only while the layer asked for it.
+ * THE COMMENT LAYER LISTENS HERE TOO: the page is told its mode on each hello, and its reports
+ * are checked and handed on only while the layer asks.
  */
 
 import { EXTERNAL_URL_MAX, externalUrl } from "@crewlethq/ui";
@@ -114,11 +113,7 @@ export function bridgeOutcome(result: WriteResult): BridgeWriteOutcome {
   }
 }
 
-/**
- * What the page told the comment layer: where its anchors are (null once it
- * stops saying, the frame gone or the layer off), a reader's pick, a picture
- * asked for (null where none came), or Escape while placing.
- */
+/** The page's news to the comment layer: layout (null once it stops), a pick, a crop or Escape. */
 export type PageCommentNews =
   | { kind: "layout"; layout: CommentLayout | null }
   | { kind: "pick"; pick: CommentPick }

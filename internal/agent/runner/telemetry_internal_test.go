@@ -392,13 +392,8 @@ func TestAContainedPanicIsItsOwnKind(t *testing.T) {
 	}
 }
 
-// A CALL'S IMAGES ARE RECORDED BY TYPE AND SIZE, NEVER AS PICTURES. A phase
-// record's row of a call whose answer carried an image keeps the text the
-// model read as its result and, under `images`, each image's type and size;
-// a row of an answer with none has no such key.
-//
-// Mutation: leave the key off, or write it on every row, and one of the two
-// rows reads wrong.
+// A CALL'S IMAGES ARE RECORDED BY TYPE AND SIZE, NEVER AS PICTURES: a row keeps
+// `images` only when its call's answer carried one.
 func TestARowRecordsACallsImagesByTypeAndSize(t *testing.T) {
 	t.Parallel()
 	rows := toolExecutions([]toolloop.Execution{

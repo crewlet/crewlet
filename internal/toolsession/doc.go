@@ -64,11 +64,8 @@
 // no answer: the bridge waits on it before it closes the sessions of the
 // opening that ended.
 //
-// # An answer's images
-//
-// A call's answer may carry images ([Result.Images]), written after its text so
-// a client that reads no image still reads it, and held to internal/mcp's
-// CheckImages as they are written, so an image it refuses never leaves.
+// An answer may carry images ([Result.Images]), written after its text so a
+// client reading none still reads it, and held to internal/mcp's CheckImages.
 //
 // # No listener anywhere
 //

@@ -31,12 +31,8 @@ func pictures(t *testing.T) map[string][]byte {
 	return map[string][]byte{ImagePNG: p.Bytes(), ImageJPEG: j.Bytes(), ImageWebP: webp}
 }
 
-// AN IMAGE'S TYPE IS WHAT ITS BYTES SAY. Each type an answer may carry is
-// read from its file's own signature, so a tool never names a type the bytes
-// do not bear out, and an answer carrying it passes the check.
-//
-// Mutation: read the type from anything but the bytes, or drop a signature,
-// and that type is refused or named wrongly.
+// AN IMAGE'S TYPE IS WHAT ITS BYTES SAY: each is read from its file signature,
+// so a tool never names a type the bytes do not bear out.
 func TestAnImagesTypeIsReadFromItsBytes(t *testing.T) {
 	t.Parallel()
 	for want, data := range pictures(t) {
@@ -54,12 +50,9 @@ func TestAnImagesTypeIsReadFromItsBytes(t *testing.T) {
 	}
 }
 
-// ANYTHING BUT A SMALL PNG, JPEG OR WEBP IS REFUSED, NEVER SENT. Bytes of no
-// type sent (text, a GIF), an image past its bound, a type the bytes do not
-// bear out, more images than an answer carries and an image with no text
-// beside it are each refused with why, under [ErrImageRefused].
-//
-// Mutation: drop any one check, and its case passes the check.
+// ANYTHING BUT A SMALL PNG, JPEG OR WEBP IS REFUSED, NEVER SENT: other types,
+// oversized images, a mismatched type, too many images or no text beside them
+// are each refused with why, under [ErrImageRefused].
 func TestAnImageOutsideTheRulesIsRefused(t *testing.T) {
 	t.Parallel()
 	pics := pictures(t)
@@ -95,11 +88,8 @@ func TestAnImageOutsideTheRulesIsRefused(t *testing.T) {
 	}
 }
 
-// A RECORD KEEPS AN IMAGE'S TYPE AND SIZE, NEVER ITS BYTES. What every record
-// of a call keeps of the images its answer carried encodes to a few bytes
-// whatever the picture weighs.
-//
-// Mutation: carry the data into the record, and its encoding holds the bytes.
+// A RECORD KEEPS AN IMAGE'S TYPE AND SIZE, NEVER ITS BYTES, so it encodes to a
+// few bytes whatever the picture weighs.
 func TestARecordKeepsAnImagesTypeAndSizeAlone(t *testing.T) {
 	t.Parallel()
 	data := pictures(t)[ImagePNG]

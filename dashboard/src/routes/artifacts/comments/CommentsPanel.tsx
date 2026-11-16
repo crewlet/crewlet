@@ -1,8 +1,4 @@
-/**
- * The Comments panel (`panel=comments`): how to start, the lists with their
- * counts, and a card per thread. A reader below commenter reads it all and is
- * told why they cannot write; an outdated thread is kept, with its reason.
- */
+/** The Comments panel (`panel=comments`): how to start, the lists and counts, a card per thread. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {

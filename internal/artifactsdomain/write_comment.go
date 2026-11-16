@@ -21,17 +21,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The writes on a comment thread's subject (ADR-0153). Each decides inside one
-// snapshot of this node's rows: the artifact exists and is not in the trash,
-// the thread and the remark exist, an edit is its author's, a resolve names a
-// version between the one the thread was made on and the head. Who may comment
-// at all is the API's decision (`comment_on_artifact`), as every role is.
+// The writes on a comment thread's subject (ADR-0153), each decided inside one
+// snapshot of this node's rows; who may comment is the API's decision
+// (`comment_on_artifact`).
 
-// OpenThread opens a thread on an artifact with its first remark.
-//
-// THE THREAD'S ID AND ITS FIRST REMARK'S ARE THE OPERATION'S, each in its own
-// namespace, so a retry names what its first attempt made; the thread's
-// subject is its own beneath the artifact, create-only, as an asset's is.
+// OpenThread opens a thread on an artifact with its first remark. Both ids
+// derive from the operation, so a retry names what its first attempt made.
 func (w *Writer) OpenThread(ctx context.Context, c Call, in ThreadInput) (Commented, error) {
 	if err := validCall(c); err != nil {
 		return Commented{}, err
@@ -622,11 +617,9 @@ func countRemarks(ctx context.Context, tx *sql.Tx, artifact, thread string) (int
 
 // ---- the verdict ----------------------------------------------------------- //
 
-// commentVerdict is what the apply of a comment record did, read back from the
-// rows it writes: nil when the row moved to the record's position or past it,
-// and the refusal the rows explain when it did not. remark is the remark the
-// record writes, uuid.Nil for a resolve or a reopen, which write the thread;
-// bound is the thread or remark bound an open or a reply was stamped with.
+// commentVerdict reads back what a comment record's apply did: nil when its row
+// reached the record's position, else the refusal the rows explain. remark is
+// uuid.Nil for a resolve or reopen; bound is the open's or reply's bound.
 func (w *Writer) commentVerdict(ctx context.Context, id artifacts.ID, thread, remark uuid.UUID,
 	op OpKind, res statelog.Result, bound int) error {
 
@@ -650,10 +643,9 @@ func (w *Writer) commentVerdict(ctx context.Context, id artifacts.ID, thread, re
 	return refused
 }
 
-// commentLanded reports whether the row a comment record writes moved to its
-// position or past it: an open's thread and a reply's remark exist once made,
-// an edit's and a removal's remark and a resolve's and a reopen's thread carry
-// the position, and a resolve's or a reopen's status says which.
+// commentLanded reports whether the row a comment record writes reached its
+// position: an open's thread or a reply's remark exists, and any other op's
+// row carries the position (and, for a resolve or reopen, the status).
 func commentLanded(ctx context.Context, tx *sql.Tx, artifact, thread string, remark uuid.UUID,
 	op OpKind, packed int64) (bool, error) {
 

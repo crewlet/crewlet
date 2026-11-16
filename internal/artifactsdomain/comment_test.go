@@ -67,14 +67,8 @@ func pngOf(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// A COMMENT RIDES ITS THREAD'S SUBJECT, NEVER THE ARTIFACT'S (ADR-0153): every
-// op on a thread is published to `comment.<artifact>.<thread>`, scoped beneath
-// the artifact, and writes no row of the artifact's own, so a remark never
-// contends with a publish and a publish based on the head before a thread
-// still lands after it.
-//
-// Mutation: publish a comment op on ArtifactSubject, or let its apply touch
-// the artifact's row or history, and a row goes red.
+// A COMMENT RIDES ITS THREAD'S SUBJECT, NEVER THE ARTIFACT'S (ADR-0153), and
+// writes no artifact row, so a remark never contends with a publish.
 func TestACommentRidesItsThreadsSubjectNeverTheArtifacts(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -171,13 +165,8 @@ func TestACommentRidesItsThreadsSubjectNeverTheArtifacts(t *testing.T) {
 	}
 }
 
-// A THREAD KEEPS THE ANCHOR AND THE VERSION IT WAS MADE ON (ADR-0153), exactly
-// as made, through every later publish: where it is on another version is
-// found at read, so a publish writes nothing to it. Its quote and its crop are
-// kept beside them.
-//
-// Mutation: store the head instead of the version asked, rewrite the anchor in
-// the apply, or let a publish touch a thread's row, and a row goes red.
+// A THREAD KEEPS THE ANCHOR AND THE VERSION IT WAS MADE ON (ADR-0153), with its
+// quote and crop, through every later publish, which writes nothing to it.
 func TestAThreadKeepsTheAnchorAndVersionItWasMadeOn(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)

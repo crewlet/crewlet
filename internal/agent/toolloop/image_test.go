@@ -81,15 +81,8 @@ func imagePhase(t *testing.T, tool tools.Callable) (llmtest.Result, *toolloop.Re
 }
 
 // A BUILTIN'S PICTURE REACHES THE HARNESS BESIDE ITS TEXT, AND NO RECORD KEEPS
-// IT. A seat tool answering text and one image is answered, over the phase's
-// real session, as one text block and then one image block holding the tool's
-// bytes; the phase's execution and the surface's call keep the text as the
-// model read it and the image's type and size, and nothing either encodes
-// holds the picture.
-//
-// Mutation: answer the harness from Output alone (toolloop's dispatcher or the
-// session's server), and the image block is missing; write the picture into the
-// text a record keeps, and the records hold its bytes.
+// IT: the harness gets a text block then an image block, and the records keep
+// only the text and the image's type and size.
 func TestABuiltinsPictureReachesTheHarnessAndNoRecordKeepsIt(t *testing.T) {
 	t.Parallel()
 	data := cropPNG(t)
@@ -132,13 +125,8 @@ func TestABuiltinsPictureReachesTheHarnessAndNoRecordKeepsIt(t *testing.T) {
 	}
 }
 
-// A PAYLOAD THAT IS NOT A SMALL IMAGE IS REFUSED WHERE THE ANSWER IS TAKEN,
-// NEVER SENT. A builtin whose answer carries bytes no image type bears out, or
-// a picture past its bound, is answered failed saying why, with no image block,
-// and its record says the same failure and keeps no image.
-//
-// Mutation: drop the check where the surface takes a tool's answer, and the
-// harness is handed the bytes.
+// A PAYLOAD THAT IS NOT A SMALL IMAGE IS REFUSED WHERE THE ANSWER IS TAKEN: the
+// call fails saying why, with no image block, and its record keeps no image.
 func TestAPayloadThatIsNotASmallImageIsRefusedAndNeverSent(t *testing.T) {
 	t.Parallel()
 	oversized := append(cropPNG(t), make([]byte, crewletmcp.MaxImageBytes)...)

@@ -1,8 +1,4 @@
-/**
- * The comment layer in a design canvas's own overlay: pins placed with the
- * canvas handle's `screenRect` and drawn again on every view change, never by
- * reading a board's box; a click while placing is the world point under it.
- */
+/** Comment pins in a canvas's overlay, placed by the handle's `screenRect` on each view change. */
 
 import { useEffect, useReducer, useRef, useState, type RefObject } from "react";
 import type { CanvasHandle } from "@crewlethq/ui";

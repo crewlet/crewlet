@@ -1,8 +1,4 @@
-/**
- * The comment layer over a deck's stage: a pin stands on the element its
- * thread's path names (`data-node`), measured when the slide, the threads or
- * the stage's size change, and a click anchors to the element under it.
- */
+/** Comment pins on a deck's stage, each on the element its thread's path names (`data-node`). */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type RefObject } from "react";
 import {

@@ -1,9 +1,5 @@
 // @vitest-environment node
-/**
- * The region a comment's picture shows: an element with room around it, or
- * the window around a point, held inside the drawing and drawn no larger
- * than the engine keeps.
- */
+/** A comment picture's region: an element with room around it or a point's window, in bounds. */
 
 import { expect, test } from "vitest";
 import { CROP_POINT_SIZE, cropScale, padRegion, pointRegion } from "./crop.ts";

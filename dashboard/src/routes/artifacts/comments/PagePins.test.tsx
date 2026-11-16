@@ -1,7 +1,4 @@
-/**
- * The comment layer over a page, through a real page host: layout asked only
- * when needed, pins where the page says, and a pick turned into a draft.
- */
+/** The comment layer over a real page host: layout asked only when needed, pins, and picks. */
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";

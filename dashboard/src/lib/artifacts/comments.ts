@@ -1,8 +1,4 @@
-/**
- * An artifact's threads as the dashboard draws the engine's answer: the list
- * each is under, a draft in the engine's own words (`commentanchor.Label`),
- * and where a pin stands. The engine places every thread; nothing here does.
- */
+/** An artifact's threads as drawn from the engine's answer; the engine places every thread. */
 
 import type {
   ArtifactCommentAnchor,
@@ -46,10 +42,7 @@ export function placeOf(t: ArtifactCommentThread): ArtifactCommentAnchor | null 
   return at && at.kind !== "version" ? at : null;
 }
 
-/**
- * Whether a thread's pin is drawn: an open thread placed here, a resolved
- * one while Resolved is listed, and the one selected whatever it is.
- */
+/** Whether a thread's pin is drawn: open and placed here, resolved while listed, or selected. */
 export function pinned(
   t: ArtifactCommentThread,
   filter: CommentFilter,
@@ -126,11 +119,7 @@ export function stateWords(t: ArtifactCommentThread, showing: number): string | 
 
 // ---- a slide's element ------------------------------------------------------
 
-/**
- * An element's text as an anchor keeps it (`commentanchor.ElementText`):
- * every run beneath it joined, a line break as a space, whitespace collapsed,
- * at most `max` characters.
- */
+/** An element's text as an anchor keeps it (`commentanchor.ElementText`), at most `max` long. */
 export function elementText(n: SlideNode | null | undefined, max = 200): string {
   if (!n) return "";
   const parts: string[] = [];
@@ -171,10 +160,7 @@ export function anchorBox(layout: CommentLayout, name: string): Box | null {
   return a ? { x: a.x - layout.scroll.x, y: a.y - layout.scroll.y, w: a.w, h: a.h } : null;
 }
 
-/**
- * Where a page anchor's pin stands in the frame's viewport: on its section,
- * or at its point on the document. Null where the page does not draw it.
- */
+/** Where a page anchor's pin stands in the frame's viewport, or null where the page omits it. */
 export function pagePin(
   layout: CommentLayout,
   a: ArtifactCommentAnchor,

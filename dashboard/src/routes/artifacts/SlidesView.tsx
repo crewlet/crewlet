@@ -20,9 +20,8 @@
  * is merged onto their version slide by slide (`lib/artifacts/deck.ts`); what
  * both changed differently is the person's to resolve before saving again.
  *
- * COMMENTS ARE PINNED ON THE STAGE (`comments/SlidePins.tsx`), on the element
- * each thread names by path; placing a comment brings the editor's stage back
- * from the grid or a show.
+ * COMMENTS ARE PINNED ON THE STAGE (`comments/SlidePins.tsx`), on the element each thread names
+ * by path; placing one brings the editor's stage back from the grid or a show.
  *
  * THE PRESENTER WINDOW IS THE DASHBOARD'S OWN, opened by the reader's press,
  * never by artifact code: the same artifact address with `mode=presenter`.

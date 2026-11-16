@@ -1,8 +1,4 @@
-/**
- * A picture of part of a drawing, drawn through an SVG foreignObject with
- * every computed style inlined: by a page's runtime, and by the dashboard for
- * a slide. One the browser cannot draw is null, never an error.
- */
+/** A picture of part of a drawing via an SVG foreignObject, styles inlined; null where it fails. */
 
 import { isCropImage } from "./bridge.ts";
 import { ARTIFACT_COMMENT_CROP_MAX_SIDE } from "../contract/artifactsworkspace.ts";
@@ -52,10 +48,7 @@ export function cropScale(region: CropRegion): number {
 const QUALITIES = [0.8, 0.6, 0.4] as const;
 const SHRINKS = [1, 0.7, 0.5, 0.35] as const;
 
-/**
- * Draws `region` of `root` (in its own, untransformed pixels; `size` is its
- * whole drawn size) as a WebP data URL within the engine's bounds, or null.
- */
+/** Draws `region` of `root` (untransformed px, of `size` overall) as a WebP data URL, or null. */
 export async function drawRegion(
   root: Element,
   size: { w: number; h: number },

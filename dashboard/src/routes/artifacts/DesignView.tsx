@@ -25,9 +25,8 @@
  * refused because somebody published since is merged onto their version item
  * by item (lib/artifacts/canvas.ts) and saved again by the person.
  *
- * COMMENTS ARE PINNED ON THE CANVAS, in its own overlay (`comments/BoardPins.tsx`):
- * a pin follows its board through every pan and zoom, and a live board's page
- * draws the picture of a point a reader comments on.
+ * COMMENTS ARE PINNED ON THE CANVAS, in its overlay (`comments/BoardPins.tsx`), following each
+ * board through pan and zoom; a live board's page draws a commented point's picture.
  *
  * PRINT IS PER BOARD, and the host's (`crewlet.print()`, or Print on an opened
  * board): a print view covers the window with that board alone, framed afresh

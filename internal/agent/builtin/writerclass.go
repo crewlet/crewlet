@@ -333,10 +333,9 @@ func pageClass(err error) (tools.Refusal, bool) {
 // company or one folder holds at their bound the state (`conflict`), and a
 // destination inside the folder moved, one deeper than folders go, or a path
 // naming several folders the caller sees the argument to change (`invalid`).
-// A COMMENT by the same rule: a thread or remark that is not there is
-// `not_found`, a thread or an artifact at its comment bound the state
-// (`conflict`), somebody else's remark `forbidden`, and a credential in one
-// the words to change (`invalid`).
+// A COMMENT by the same rule: a missing thread or remark is `not_found`, a
+// comment bound `conflict`, somebody else's remark `forbidden`, and a
+// credential in one `invalid`.
 func artifactClass(err error) (tools.Refusal, bool) {
 	var (
 		moved     *artifactsdomain.VersionMoved

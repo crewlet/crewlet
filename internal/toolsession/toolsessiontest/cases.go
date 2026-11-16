@@ -379,10 +379,8 @@ func testEveryRefusalCarriesItsClass(t *testing.T, factory Factory) {
 }
 
 // AN ANSWER'S IMAGE REACHES THE CLIENT AFTER ITS TEXT, AND NO RECORD KEEPS ITS
-// BYTES. A tool answering text and a picture is answered as one text block and
-// one image block holding the tool's own bytes, wherever its harness runs, so a
-// client that reads no image still reads the text; the dispatcher's record
-// keeps that text as answered and the image's type and size.
+// BYTES: one text block, then one image block with the tool's bytes, wherever
+// its harness runs; the record keeps the text and the image's type and size.
 func testAnAnswersImageReachesTheClientAndNoRecordKeepsItsBytes(t *testing.T, factory Factory) {
 	f := newFixture(t, factory)
 	cs := f.dial(0)

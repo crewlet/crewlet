@@ -7258,10 +7258,7 @@ export interface ArtifactSeenByAnswer {
 /** What a comment thread points at (`commentanchor.Kind`). */
 export type ArtifactCommentAnchorKind = "version" | "html" | "slides" | "design";
 
-/**
- * Where a comment thread points (`commentanchor.Anchor`): a union keyed by
- * `kind`, each kind using its own fields and leaving the others out.
- */
+/** Where a thread points (`commentanchor.Anchor`): keyed by `kind`, each with its own fields. */
 export interface ArtifactCommentAnchor {
   kind: ArtifactCommentAnchorKind;
   /** html: the page's path in the version. */
@@ -7281,10 +7278,7 @@ export interface ArtifactCommentAnchor {
   y?: number;
 }
 
-/**
- * Where a thread is on the version asked: there as made, found again where
- * its content moved, gone from that version, or made on a later one.
- */
+/** Where a thread is on the version asked: as made, moved, gone (outdated), or made later. */
 export type ArtifactCommentPlacement = "here" | "moved" | "outdated" | "later";
 
 /** One remark of a thread. A removed remark keeps its place and author; its words are gone. */
@@ -7329,11 +7323,8 @@ export interface ArtifactCommentThread {
   remarks: ArtifactCommentRemark[];
 }
 
-/**
- * `artifact_comments{id, version}`: every thread on an artifact, placed on
- * the version asked. `open` counts the open threads still placed,
- * `outdated` the open ones whose part is gone, `resolved` every resolved one.
- */
+/** `artifact_comments{id, version}`: every thread, placed on the version asked. `open` counts open
+ *  threads still placed, `outdated` open ones whose part is gone, `resolved` every resolved one. */
 export interface ArtifactCommentsAnswer {
   artifact: string;
   version: number;
@@ -8111,13 +8102,8 @@ export interface ArtifactJoined {
   resync: boolean;
 }
 
-/**
- * What an `artifact_changed` push says moved (`artifactsdomain.MoveKinds`):
- * `folder` is the artifact filed in another folder (a folder's removal moves
- * its artifacts up and pushes nothing per artifact), and `comment` a comment
- * thread opened, a remark added, edited or removed, or a thread resolved or
- * reopened.
- */
+/** What an `artifact_changed` push says moved (`artifactsdomain.MoveKinds`). `folder` is a refiling
+ *  (a folder's removal pushes nothing per artifact); `comment` is any write on a thread. */
 export type ArtifactChangedWhat =
   | "version"
   | "meta"

@@ -185,10 +185,7 @@ export interface CommentOpening {
   crop?: string | undefined;
 }
 
-/**
- * Open a thread with its first remark (`POST /artifacts/{id}/comments`), a
- * commenter's: on a part of the version on show, or on all of it.
- */
+/** Open a thread with its first remark (`POST /artifacts/{id}/comments`), on part or all of it. */
 export function openComment(id: string, opening: CommentOpening): Omit<KeyedRequest, "key"> {
   const crop = opening.crop ? cropBody(opening.crop) : null;
   return {
@@ -241,10 +238,7 @@ export function removeRemark(
   return { method: "DELETE", path: `${thread(id, threadID)}/remarks/${pathSegment(remark)}` };
 }
 
-/**
- * Resolve a thread (`POST …/comments/{thread}/resolve`), naming the version
- * that addressed it where the reader says one.
- */
+/** Resolve a thread (`POST …/comments/{thread}/resolve`), naming the version that addressed it. */
 export function resolveComment(
   id: string,
   threadID: string,
