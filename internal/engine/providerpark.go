@@ -346,8 +346,8 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 
 // unparkReleased undoes a provider park taken on a seat this node no longer
 // holds ([Engine.providerPark]): its hold lifted, its place on the chain's
-// probe left, and the seat said released, as the release says of a park it
-// forgets ([Engine.forgetProviderPark]).
+// probe left, the seat said released and its wait forgotten, as the release
+// does with a park it forgets ([Engine.forgetProviderPark]).
 //
 // WHETHER OR NOT ITS RECORD IS LEFT. The release's forget can land between the
 // park's take and this, dropping the record and lifting the hold, and still
@@ -355,12 +355,18 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 // record to release, the place on the probe stayed, its alarm went on calling
 // the models as the seat, and the seat read parked on every screen while a
 // peer ran it. So the probe is left and the release said either way.
+//
+// AND THE WAIT EITHER WAY. That forget drops the seat's wait before the
+// park's join, which begins one again: left, nothing ended it, so it outlived
+// the seat here, and a park once this node held the seat again carried its
+// start, a seat that had just met the limit reading as waiting since before it
+// let go, past the fifteen minutes `llm_limit_waiting` is judged at.
 func (e *Engine) unparkReleased(ctx context.Context, seat uuid.UUID, handle string, basis providerBasis) {
-	if e.releaseProviderPark(ctx, seat, seatReleasedHere) {
-		return
+	if !e.releaseProviderPark(ctx, seat, seatReleasedHere) {
+		e.leaveLimitProbe(seat, basis)
+		e.publishProviderPark(ctx, handle, types.SeatProviderReleased{Reason: seatReleasedHere})
 	}
-	e.leaveLimitProbe(seat, basis)
-	e.publishProviderPark(ctx, handle, types.SeatProviderReleased{Reason: seatReleasedHere})
+	e.forgetParkWait(seat)
 }
 
 // parkResumeOnLimit parks handle's seat on the limit a resumed segment met
@@ -705,7 +711,8 @@ func (e *Engine) unlessParked(seat uuid.UUID, settle func(p *limitProbes)) {
 }
 
 // forgetParkWait forgets when seat began waiting, whatever park stands: the
-// seat has left this node ([Engine.forgetProviderPark]).
+// seat has left this node ([Engine.forgetProviderPark],
+// [Engine.unparkReleased]).
 func (e *Engine) forgetParkWait(seat uuid.UUID) {
 	p := &e.limitProbes
 	p.mu.Lock()

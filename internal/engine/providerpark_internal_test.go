@@ -866,6 +866,46 @@ func TestAParkItsSeatsReleaseForgotFirstIsUndoneWhole(t *testing.T) {
 	}
 }
 
+// A PARK ITS SEAT'S RELEASE FORGOT FIRST LEAVES NO WAIT BEHIND.
+//
+// The release's forget can land between a park's take and its join of the
+// chain's probe ([Engine.unparkReleased]): it forgets the seat's wait and drops
+// the park's record, and the join after it begins a wait again. The park's
+// undoing left that wait, which nothing then ended: it outlived the seat on
+// this node, and a park once the node held the seat again carried its start,
+// so a seat that had just met the limit read as waiting since before it let
+// go, past the fifteen minutes `llm_limit_waiting` is judged at.
+//
+// Mutation: undo the park without forgetting the seat's wait, and this fails.
+func TestAParkItsSeatsReleaseForgotFirstLeavesNoWaitBehind(t *testing.T) {
+	t.Parallel()
+	r := newProbeRig(t, answers{})
+	lead := seatOf("lead")
+	// WHAT THE PARK LEFT AFTER THE RELEASE'S FORGET: the wait its join began,
+	// its place on the probe, and no record.
+	basis := providerBasis{models: r.e.Company().Models, keys: []string{"default"}}
+	r.e.joinLimitProbe(t.Context(), basis, lead, "lead", parkedAt.Add(time.Hour))
+	r.e.unparkReleased(t.Context(), lead, "lead", basis)
+
+	// THE SEAT HELD HERE AGAIN, a day later, meeting the limit.
+	again := parkedAt.Add(24 * time.Hour)
+	r.at(again)
+	r.park(t, "lead", again.Add(time.Hour))
+	rows := 0
+	var since time.Time
+	for _, row := range r.e.parkedByEntry()["default"] {
+		if row.Seat == lead {
+			rows++
+			since = row.Since
+		}
+	}
+	if rows != 1 || !since.Equal(again) {
+		t.Errorf("the seat parked once this node held it again waits from %v (%d rows), want "+
+			"one new wait from %v: the park its release forgot first left its wait behind",
+			since, rows, again)
+	}
+}
+
 // pastLimit is a model that refuses every call for a limit naming a next try
 // already past: what an entry kept on the monotonic clock said after its host
 // slept inside its window. calls counts what reached it.
