@@ -116,7 +116,17 @@ async function imageOf(
     (body ? xhtml : `<div xmlns="http://www.w3.org/1999/xhtml">${xhtml}</div>`) +
     `</foreignObject></svg>`;
   const img = new Image();
-  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  img.src = `data:image/svg+xml;base64,${base64Of(svg)}`;
   await img.decode();
   return img;
+}
+
+/** Text as base64 of its UTF-8 bytes, in chunks so a long document never overflows the stack. */
+function base64Of(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
 }
