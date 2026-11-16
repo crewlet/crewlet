@@ -2,7 +2,8 @@
 // tree's listing, a file's lines, a diff's stat or one file's patch, how two
 // commits compare, whether a commit landed in a branch and which push landed
 // it, a path's history (log.go) and which commit last changed each line of a
-// file (blame.go) — and of a change's revisions, by the ids their rows record: a
+// file (blame.go), a file found by its name in a commit's tree (find.go) — and
+// of a change's revisions, by the ids their rows record: a
 // revision's facts against its target (facts.go), where lines anchored in one
 // revision are in another (anchor.go), and what a change changed between two
 // revisions (interdiff.go) — and the checks file a commit holds, read whole
@@ -290,6 +291,9 @@
 // write of the page's files and one unit of the share, where each ran its
 // own.
 //
+// A FIND (find.go) keeps nothing of its own: it walks the tree's recursive
+// listing as the memo keeps it, running git at most once per tree.
+//
 // # Measured
 //
 // BenchmarkCodeRead over gittest.History's 32 MB composition — 44 files of one
@@ -361,4 +365,8 @@
 // 1 MiB patch, 170 ms for 16 MiB, 621 ms for 64 MiB and 2.30 s (2.38 at the
 // slowest) for 249 MiB, at MaxPatchIDDiffBytes: some 114 MB of patch a second,
 // so the bound's facts fit a quarter of the read's one budget of git.
+//
+// BenchmarkFind over 100 000 files (twelve vCPUs, git 2.56.0): a tree's first
+// find 407 ms (479 at p95), each later one 77 ms (115 at p95), far inside
+// gitproc.ReadDeadline, so no index of names is kept beside the memo.
 package query

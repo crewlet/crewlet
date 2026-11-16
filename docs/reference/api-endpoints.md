@@ -6125,8 +6125,9 @@ REST route calls, so the two surfaces cannot diverge:
 | `code_change` | `{name, change, part, revision, since_revision, file, file_b64, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/changes/{n}`. One change, a part at a time: its detail and revisions, a part of its conversation, the asker's own standing findings, a revision's files or one file's patch, its findings placed in a revision |
 | `code_change_routing` | `{name, change, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/changes/{n}/routing`. Whom the change's records reached, a whole record a page, its `delivery` telling `nobody` from `swept` |
 | `code_reviews` | `{reviewer, limit, cursor, read_level, …}` | `GET /gitlet/reviews`. The reviews one reviewer gave, newest first, each naming its change |
-| `code_refs` | `{name, prefix, order, moved_since, moved_before, contains, detail, active_since, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/refs`. A repository's live refs under a prefix — see [A repository's content](#a-repositorys-content), which says what the nine content questions answer and which answers never change |
+| `code_refs` | `{name, prefix, order, moved_since, moved_before, contains, detail, active_since, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/refs`. A repository's live refs under a prefix — see [A repository's content](#a-repositorys-content), which says what the ten content questions answer and which answers never change |
 | `code_tree` | `{name, ref, path, path_b64, recursive, cursor, read_level, …}` | `GET /gitlet/repos/{name}/tree`. A directory at a revision, or every file below it |
+| `code_find` | `{name, ref, q, limit, read_level, …}` | `GET /gitlet/repos/{name}/find`. The files of a revision's tree whose path holds a query's characters in order, best first |
 | `code_blob` | `{name, ref, path, path_b64, start_line, end_line, cursor, read_level, …}` | `GET /gitlet/repos/{name}/blob`. A file's lines at a revision, or a blob by its id |
 | `code_log` | `{name, ref, path, path_b64, grep, since, until, pushed_by, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/log`. The commits that changed a path, newest first |
 | `code_blame` | `{name, ref, path, path_b64, start_line, end_line, cursor, read_level, …}` | `GET /gitlet/repos/{name}/blame`. Which commit last changed each line of a file |
@@ -10192,7 +10193,7 @@ change](../guides/gitlet.md#review-a-change).
 
 ### A repository's content
 
-A repository's refs, files, history and diffs are nine more questions,
+A repository's refs, files, history and diffs are ten more questions,
 decided per repository as the rows above are and refused in the same
 vocabulary. All but `code_refs` read the repository's **content**, which its
 home Gitlet node answers by object id — the reads a seat's
@@ -10203,6 +10204,7 @@ implementation:
 |---|---|---|
 | `GET /gitlet/repos/{name}/refs` | `code_refs` | Its live refs under `?prefix=` (`refs/heads/`, the default, `refs/tags/`, or a directory of either ending in `/`), by name, a page at a time (`?limit=` 1–1000, unset or `0` is 200, and `?cursor=`); the first page carries the repository in detail too. `?order=moved` lists the branches by when each last moved, newest first (`refs/heads/` only), `?moved_since=` and `?moved_before=` (RFC 3339) keeping those whose last move is in that window; `?contains=` keeps the refs whose name below the prefix holds it in any case, a page reading at most 10 000 refs and answering `next` however few it kept; `?detail=true` answers `refs_detail` in place of `refs`: each ref's `moved_at`, `moved_by` (the push that set it: `push_id`, `actor`, `actor_kind`, `actor_seat`, `via`; absent past the push history's 181 days, or where one record moved it there twice), `protection` (the matching rules' `patterns` and what they allow together), a branch's `change` (`number`, `title`, `state`: its live change, else its newest) and `may_delete`, or `delete_refusal` with `delete_detail`; `?active_since=` on a first page answers `active_branches` (`count`, and `more` past 1 000), the branches other than the default that moved since |
 | `GET /gitlet/repos/{name}/tree` | `code_tree` | A directory's entries at `?ref=` — its root, or `?path=` (`?path_b64=` for a path's exact bytes) — or, with `?recursive=true`, every file below it, a page at a time (`?cursor=`) |
+| `GET /gitlet/repos/{name}/find` | `code_find` | The files of `?ref=`'s tree whose path holds `?q=`'s characters in order, in any case (each character one of the path's, a space too; at most 256 bytes): `matches`, best first, each its `path` (`path_b64` beside it where it is not UTF-8), `oid`, `mode` and `spans`, the runs of the path's characters matched, as `[start, end)` code points; a file whose name holds the query ranks before one whose directories do, then the closer the characters, the earlier and the shorter the name. `?limit=` (1–100, unset or `0` is 50) bounds them, and fewer are answered where their paths fill one answer; `total` is how many files match and `files` how many the tree holds. One answer, no next page: type on to narrow it. A link is a file; a submodule is not, nor is a path past 4 KiB |
 | `GET /gitlet/repos/{name}/blob` | `code_blob` | A file's lines at `?ref=` and `?path=`, `?start_line=` to `?end_line=`, a page at a time; `?ref=` a blob's own id with no path reads that blob, and a path naming a directory answers its listing |
 | `GET /gitlet/repos/{name}/log` | `code_log` | The commits that changed `?path=` (or every commit) newest first from `?ref=`, each with its parents, its author, its committer, and `engine_committed` where that is the engine's convention, its two dates and its subject: `?limit=` a page (1–100, unset or `0` is 25), `?grep=` a literal its message must hold, `?since=` (RFC 3339) the oldest commit date kept, `?until=` (RFC 3339) the instant every commit kept is before, `?pushed_by=` a seat's handle keeping the commits a push by it brought, with `unjudged` the commits the node's index of pushes could not judge; a history narrowed by `pushed_by` is never immutable, and an `until` that is not after `since` is `bad_params` |
 | `GET /gitlet/repos/{name}/blame` | `code_blame` | Which commit last changed each line of the file `?path=` at `?ref=`, `?start_line=` to `?end_line=` (at most 500 lines a read), a page at a time |
@@ -10252,7 +10254,8 @@ A content question adds these refusals to the code reads':
 - `400 bad_params` for a revision that names nothing, a `code_commit` `sha`
   that is not a whole commit id (an abbreviation is expanded by `code_log`
   with it as `ref` and `limit=1`), a read too large to answer whole — narrow
-  it — and a parameter the read does not take;
+  it — a `code_find` with no `q`, one past 256 bytes, not UTF-8 or holding a
+  NUL, or a `limit` past 100, and a parameter the read does not take;
 - `503 unavailable` where no Gitlet node holding the repository could answer
   in time, which is never an answer about the repository.
 

@@ -142,6 +142,23 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 		q.Cursor = mustRead(t, s, q).Next
 		mustRead(t, s, q)
 	}
+	// A FIND: its query is matched in Go over the tree's listing, which is
+	// listed by the root tree's id, and reaches git as nothing at all: the
+	// check is fed ids, and the listing names the tree.
+	root := strings.TrimSpace(x.git("rev-parse", head+"^{tree}"))
+	for _, fq := range []string{"--output=x", "-r"} {
+		from := rec.count()
+		if f := mustRead(t, s, findQ(repo, head[:7], fq, 0)).Find; f.Total == 0 {
+			t.Errorf("the find of %q found nothing, want the paths spelling it", fq)
+		}
+		for _, r := range rec.since(from) {
+			if !slices.Equal(r.cmd.Args, []string{"cat-file", "--batch-check", "-Z"}) &&
+				!slices.Equal(r.cmd.Args, []string{"rev-parse", "--disambiguate=" + head[:7]}) &&
+				!slices.Equal(r.cmd.Args, []string{"ls-tree", "-z", "-l", "-r", root}) || strings.Contains(r.stdin, fq) {
+				t.Errorf("the find of %q ran git %q fed %q, which is no find's", fq, r.cmd.Args, r.stdin)
+			}
+		}
+	}
 
 	ran := rec.ran()
 	if len(ran) < 20 {

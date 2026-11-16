@@ -28,8 +28,8 @@ var (
 		gitlet.GitCompare: "Compare", gitlet.GitTips: "Tips", gitlet.GitLandedIn: "LandedIn",
 		gitlet.GitRevisionFacts: "RevisionFacts", gitlet.GitReanchor: "Reanchor", gitlet.GitInterdiff: "Diff",
 		gitlet.GitLog: "Log", gitlet.GitBlame: "Blame", gitlet.GitChecksFile: "ChecksFile",
-		gitlet.GitCodeFiles: "CodeFiles", gitlet.GitSearch: "Search"}
-	unkept = []string{"Tips", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles"}
+		gitlet.GitCodeFiles: "CodeFiles", gitlet.GitSearch: "Search", gitlet.GitFind: "Find"}
+	unkept = []string{"Tips", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles", "Find"}
 )
 
 // memoized is every kind memoizable answers from the memo.

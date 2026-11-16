@@ -235,8 +235,9 @@ func New(o Options) (*Server, error) {
 
 // Read answers q: a page of the tree, file, diff, comparison or interdiff it
 // names; a page of a path's history, or of a file's blame; whether a commit
-// landed in a target and the push that landed it; a revision's facts; or
-// where anchored lines are in a revision.
+// landed in a target and the push that landed it; a revision's facts; where
+// anchored lines are in a revision; or the files of a commit's tree whose path
+// holds a find's query (find.go).
 //
 //  1. q is validated (gitlet.GitQuery.Validate), and its cursor read as one its
 //     kind issues.
@@ -527,6 +528,11 @@ func (r *read) compute(ctx context.Context, at cursor) (gitlet.GitAnswer, error)
 		}
 	}
 	r.index(commitsOf(r.q, objs))
+	// A FIND TAKES ITS OWN UNIT, and only for git: its pages are the tree
+	// listing's, read from the memo with none held (find.go).
+	if r.q.Kind == gitlet.GitFind {
+		return r.findRead(ctx, objs)
+	}
 	release, err := r.s.o.Share.Take(ctx, r.q.SeatWork())
 	if err != nil {
 		if gitlet.AnswerDue(ctx) {
