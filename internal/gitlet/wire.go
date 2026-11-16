@@ -1235,6 +1235,10 @@ type ReadQuery struct {
 	// many repositories sort before them: what a picker asks with what was
 	// typed into it, since a company's repositories outnumber one page.
 	Prefix string `json:"prefix,omitempty"`
+	// RefListing orders, narrows and details a refs listing; nil is today's
+	// listing. An estate request's field: an older data node refuses it
+	// (ErrUnknownKeys) and the router asks the next.
+	RefListing *RefListingQuery `json:"ref_listing,omitempty"`
 	// Brief asks a push history for its rows IN BRIEF: the commits each push
 	// introduced counted and not listed, and the commands of a push of more
 	// than [BriefCommands] cut to that many — its refused ones first, each
@@ -1572,10 +1576,15 @@ type ReadAnswer struct {
 	// Pushes is a page of a repository's history, newest first, or of one
 	// executor's pushes, oldest first — each repository the run was given
 	// in its query's order, and each one's pushes in log order.
-	Pushes  []PushRow       `json:"pushes,omitempty"`
-	Refs    []RefRow        `json:"refs,omitempty"`
-	Changes []ChangeSummary `json:"changes,omitempty"`
-	Change  *ChangeDetail   `json:"change,omitempty"`
+	Pushes []PushRow `json:"pushes,omitempty"`
+	Refs   []RefRow  `json:"refs,omitempty"`
+	// RefsDetail is a refs page read in detail, in place of Refs, and
+	// ActiveBranches a first page's count of the branches moved since
+	// [RefListingQuery.ActiveSince].
+	RefsDetail     []RefListing    `json:"refs_detail,omitempty"`
+	ActiveBranches *BranchCount    `json:"active_branches,omitempty"`
+	Changes        []ChangeSummary `json:"changes,omitempty"`
+	Change         *ChangeDetail   `json:"change,omitempty"`
 	// ChangeBrief is a `change` read's change IN BRIEF ([ReadQuery.Brief]):
 	// its row, its repository's name and the asker's access, with no
 	// readiness judged — never "no longer live", which a nil readiness says

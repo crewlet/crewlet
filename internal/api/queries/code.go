@@ -251,6 +251,12 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	if kind == gitlet.ReadRefs || kind == gitlet.ReadRepos {
 		q.Prefix = strings.TrimSpace(p.String("prefix"))
 	}
+	// A REFS LISTING'S ORDER, WINDOW, FIND AND DETAIL, each the reader's to refuse.
+	if kind == gitlet.ReadRefs {
+		if q.RefListing, err = refListingParams(p); err != nil {
+			return gitlet.ReadQuery{}, err
+		}
+	}
 	// A CHANGE IS THE PATH'S TOO, by its number on the repository — web!42's
 	// 42 — on the reads of one change.
 	if kind == gitlet.ReadChange || kind == gitlet.ReadChangeRouting {

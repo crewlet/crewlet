@@ -1104,6 +1104,46 @@ which removes the old remote-tracking ref before it writes the new one. Of two
 creates in one push, or in one batch of the [committer](#the-committer), that
 would sit beside each other, the first stands and the second is refused.
 
+### Listing branches
+
+A repository's refs are listed a page at a time, by name, or its branches by
+when each last moved, newest first (the branches one record moved in reverse
+name order). Only the branches are listed by when they moved, so a repository
+holding thousands of imported tags lists its branches as fast as one holding
+none; a seat's namespace is found by name, or with the find below. The listing
+by move keeps the branches whose last move falls in a window (`moved_since`,
+`moved_before`), which is how the Branches screen tells its active branches
+from its stale ones.
+
+A find (`contains`) keeps the refs whose name below the listing's prefix holds
+what was typed, in any case (`FIX` finds `hotfix`, and `k` finds a name written
+with the Kelvin sign). No index answers a substring, so a page reads at most
+10 000 refs and answers a next page however few it kept, even none; reading
+on reaches every match once.
+
+Read in detail (`detail=true`), each ref also says:
+
+- **When it moved and who moved it**: the push that set its target, read from
+  the push history at the position of the record that moved it. A merge's
+  push names the person or seat that merged it, `via merge`, and a queue
+  landing's `via queue`. Who moved it is unknown once the push history's 181
+  days have removed that push, and when one record moved the branch away from
+  its target and back to it; when it moved is always known.
+- **Its protection**: every rule whose pattern matches it, a glob rule
+  included, and what they allow together: a force-push or a deletion only
+  where every matching rule allows it, and no direct push where any says none.
+- **Its change**: the live change the branch heads, else the newest change
+  opened from it.
+- **Whether the reader may delete it now**, judged by the rules a deletion
+  is judged by, in their order: the repository's state (archived, being
+  imported, a pull mirror), the reader's access, the protections and the
+  default branch, which is never deleted. Where it may not, the answer
+  carries the refusal and its sentence.
+
+A first page can also count the branches other than the default branch that
+moved since an instant (`active_since`), the Overview's "Active branches"; it
+counts up to 1 000 and says when there were more.
+
 ---
 
 ## Compaction

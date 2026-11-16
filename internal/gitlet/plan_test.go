@@ -204,6 +204,25 @@ func TestTheRefConflictProbesStepOverNoTombstone(t *testing.T) {
 	}
 }
 
+// THE MOVED INDEX HOLDS THE LIVE BRANCHES ALONE, its predicate [movedRefs]:
+// the planner prints the same seek without it, so only the declaration shows it.
+// Mutation: declare it without the namespace bounds.
+func TestTheMovedIndexHoldsTheLiveBranchesAlone(t *testing.T) {
+	t.Parallel()
+	db := seededPlanEstate(t)
+	var declared string
+	if err := db.Read(context.Background(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(context.Background(),
+			`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, movedRefsKey).Scan(&declared)
+	}); err != nil {
+		t.Fatalf("read %s's declaration: %v", movedRefsKey, err)
+	}
+	want := "CREATE INDEX " + movedRefsKey + " ON code_refs (repo_id, at, ref) WHERE " + movedRefs
+	if got := strings.Join(strings.Fields(declared), " "); got != want {
+		t.Fatalf("%s is declared\n\t%s\nwant\n\t%s", movedRefsKey, got, want)
+	}
+}
+
 // THE LIVE INDEXES HOLD THE LIVE STATES, SPELLED AS THEIR READERS SPELL THEM.
 // code_changes_open_idx and code_changes_target_idx are each declared partial
 // on [liveChanges] exactly, and [liveChanges] lists every [ChangeState.Live]
@@ -650,6 +669,20 @@ func registeredStatements() map[string]statement {
 		"review row": {reviewRowSQL, []any{"review-1"}, []string{"sqlite_autoindex_code_reviews_1 (id=?)"}},
 		"live change on": {liveChangeOnSQL, []any{"repo-1", "refs/heads/f000001"},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		// A REFS LISTING BY WHEN EACH BRANCH MOVED, its active count, and its
+		// detail's reads: a ref's movers at its position and a branch's change.
+		"refs moved": {refsMovedSQL, []any{"repo-1", 0, int64(math.MaxInt64), 200},
+			[]string{"INDEX " + movedRefsKey + " (repo_id=? AND at<=? AND at>=?)"}},
+		"refs moved after": {refsMovedAfterSQL, []any{"repo-1", 0, 9, 9, "refs/heads/b", 200},
+			[]string{"INDEX " + movedRefsKey + " (repo_id=? AND at<=? AND at>=?)"}},
+		"active branches": {activeBranchesSQL, []any{"repo-1", 0, "refs/heads/main", 1001},
+			[]string{"INDEX " + movedRefsKey + " (repo_id=? AND at>=?)"}},
+		"pushes at a position": {pushesAtSQL, []any{"repo-1", 7},
+			[]string{"code_pushes_repo_idx (repo_id=? AND position=?)"}},
+		"live change of a source": {liveChangeOfSourceSQL, []any{"repo-1", "refs/heads/topic"},
+			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		"newest change of a source": {newestChangeOfSourceSQL, []any{"repo-1", "refs/heads/topic"},
+			[]string{changesSourceKey + " (repo_id=? AND source_ref=?)"}},
 		// A FAILED CHECK A PERSON'S CI REPORTED finds the live change at
 		// its head on its target (checkswriter.go's headChangeIn).
 		"live change at head": {liveChangeAtHeadSQL, []any{"repo-1", "refs/heads/main", oid("head-1-3")},
