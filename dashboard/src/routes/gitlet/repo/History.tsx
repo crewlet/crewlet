@@ -27,26 +27,42 @@
  *
  * Each commit carries its checks for the branch read, the change it merged or landed with,
  * and its tags (`code_commit_marks`, the page's `tagged`).
+ * Narrowed by who pushed, from when, and by words in its message.
  */
 
 import { Fragment, useMemo, type ReactNode } from "react";
-import { Button, IconButtonLink, Skeleton, Tag, VisuallyHidden } from "@crewlethq/ui";
+import {
+  AvatarStack,
+  Button,
+  IconButtonLink,
+  Input,
+  Select,
+  Skeleton,
+  Tag,
+  VisuallyHidden,
+} from "@crewlethq/ui";
 import {
   BookmarkGlyph,
   BotGlyph,
   CodeGlyph,
   GitCommitVerticalGlyph,
   GitMergeGlyph,
+  SearchGlyph,
   UploadGlyph,
+  CalendarGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useDraft, useNavigator, useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
-import { useNow } from "~/lib/clock.ts";
+import { useClock, useNow } from "~/lib/clock.ts";
 import { changePath, noDefaultHead, parseChangeRef, refName, shortOID } from "~/lib/code.ts";
 import { ago } from "~/lib/ago.ts";
 import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
-import { fmtDate, fmtDateTime, plural } from "~/lib/format.ts";
+import { civilAt, civilKey, fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
+import { zone } from "~/lib/prefs.ts";
+import { dayStartIn } from "~/lib/range.ts";
+import { useOrgIndex, useSeatBadgeOf } from "~/lib/seats.ts";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type {
@@ -546,6 +562,81 @@ export function subjectOf(c: { subject?: string; subject_bytes?: number }): stri
   return c.subject_bytes ? `(a subject of ${c.subject_bytes} bytes)` : "(no message)";
 }
 
+/** The windows a history is narrowed to by when each commit was committed: `when=`. */
+const WHEN = [
+  { value: "", label: "Any time", days: 0, words: "" },
+  { value: "today", label: "Today", days: 1, words: "today" },
+  { value: "7d", label: "Last 7 days", days: 7, words: "in the last 7 days" },
+  { value: "30d", label: "Last 30 days", days: 30, words: "in the last 30 days" },
+  { value: "90d", label: "Last 90 days", days: 90, words: "in the last 90 days" },
+] as const;
+
+const DAY_MS = 86_400_000;
+
+/** The first instant of the reader's day `days - 1` days before `today`, RFC 3339; none for any time. */
+export function sinceOf(when: string, today: string): string | undefined {
+  const days = WHEN.find((w) => w.value === when)?.days ?? 0;
+  const todayAt = civilAt(today);
+  if (days === 0 || todayAt === null) return undefined;
+  const start = dayStartIn(civilKey(todayAt - (days - 1) * DAY_MS), zone());
+  return start === null ? undefined : new Date(start).toISOString();
+}
+
+/** "All seats", then every seat of the chart by name, each with its face. */
+function useSeatChoices(pushers: readonly string[]) {
+  const index = useOrgIndex();
+  const badge = useSeatBadgeOf();
+  return useMemo(() => {
+    const faces = pushers.slice(0, 3).map((h) => {
+      const seat = badge(h);
+      return { id: h, ...seatBadge(seat.name || h, seat.kind, seat.avatar) };
+    });
+    const seats = [...index.seats].sort((a, b) => a.name.localeCompare(b.name));
+    return [
+      {
+        value: "",
+        label: "All seats",
+        ...(faces.length > 0
+          ? { leading: <AvatarStack members={faces} max={3} size="xs" decorative /> }
+          : {}),
+      },
+      ...seats.map((s) => ({
+        value: s.handle,
+        label: s.name,
+        text: `${s.name} ${s.handle}`,
+        leading: <Face who={s.handle} />,
+      })),
+    ];
+  }, [index, badge, pushers]);
+}
+
+/** The history's own search: words in a commit's message, asked on Enter. */
+function MessageSearch({ q }: { q: string }) {
+  const nav = useNavigator();
+  const [typed, setTyped] = useDraft(q);
+  return (
+    <form
+      className="code-commits-search"
+      role="search"
+      onSubmit={(e) => {
+        e.preventDefault();
+        nav.submit({ q: typed.trim() || null });
+      }}
+    >
+      <Input
+        type="search"
+        inputSize="sm"
+        width="full"
+        aria-label="Search commit messages"
+        leading={<SearchGlyph size="sm" />}
+        placeholder="Search commit messages"
+        value={typed}
+        onChange={(e) => setTyped(e.target.value)}
+      />
+    </form>
+  );
+}
+
 /**
  * The history at the revision, of the path the address names or of every
  * path, newest first. Its picker lists the branches and tags its page read
@@ -555,9 +646,23 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
   const now = useNow();
   const [rev, setRev] = useParam("ref", "", "filter");
   const [path, setPath] = useParam("path", "", "filter");
+  const [by, setBy] = useParam("by", "", "filter");
+  const [when, setWhen] = useParam("when", "", "filter");
+  const [q] = useParam("q", "", "filter");
+  const nav = useNavigator();
+  // THE READER'S DAY, read again only when it turns, so the window's start holds all day.
+  const today = useClock((t) => readerDay(t));
+  const since = sinceOf(when, today);
   const params = useMemo(
-    () => ({ name: repo.name, ...(rev ? { ref: rev } : {}), ...(path ? { path } : {}) }),
-    [repo.name, rev, path],
+    () => ({
+      name: repo.name,
+      ...(rev ? { ref: rev } : {}),
+      ...(path ? { path } : {}),
+      ...(by ? { pushed_by: by } : {}),
+      ...(since ? { since } : {}),
+      ...(q ? { grep: q } : {}),
+    }),
+    [repo.name, rev, path, by, since, q],
   );
   const first = useCodeQuery("code_log", params, {
     enabled: Boolean(repo.head) || rev !== "",
@@ -593,6 +698,27 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
   const defaultRef = `refs/heads/${repo.default_branch}`;
   const resolvedRef = paged.answers[0]?.resolved?.ref?.ref ?? "";
   const branch = resolvedRef.startsWith("refs/heads/") ? resolvedRef : defaultRef;
+  const whoName = useWhoName();
+  const pushers = useMemo(
+    () => [
+      ...new Set(
+        Object.values(pushedBy)
+          .map((p) => p.principal.seat ?? "")
+          .filter(Boolean),
+      ),
+    ],
+    [pushedBy],
+  );
+  const seatChoices = useSeatChoices(pushers);
+  const walked = paged.answers.reduce((n, a) => n + (a.log?.scanned ?? 0), 0);
+  const unjudged = paged.answers.reduce((n, a) => n + (a.log?.unjudged ?? 0), 0);
+  const complete = paged.answers.some((a) => a.log?.complete) && !paged.more;
+  const filtered = by !== "" || when !== "" || q !== "";
+  const clear = () => nav.filter({ by: null, when: null, q: null });
+  const revWord = revisionWord(repo, rev);
+  const narrowed = `${by ? ` pushed by ${whoName(by)}` : ""}${
+    when ? ` committed ${WHEN.find((w) => w.value === when)?.words ?? when}` : ""
+  }`;
   if (!repo.head && rev === "") {
     // THE DEFAULT BRANCH HOLDS NOTHING: with no branch at all there is no
     // history to read, and with others live the picker reaches theirs.
@@ -611,6 +737,31 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
     <>
       <PageToolbar>
         <RefPicker repo={repo} revisions={revisions} value={rev} onChoose={setRev} />
+        <Select
+          size="sm"
+          width="auto"
+          value={by}
+          onChange={(value) => setBy(String(value))}
+          options={seatChoices}
+          ariaLabel="Pushed by"
+          searchable
+          active={by !== ""}
+        />
+        <span title="By the date each commit was committed.">
+          <Select
+            size="sm"
+            width="auto"
+            value={when}
+            onChange={(value) => setWhen(String(value))}
+            options={WHEN.map((w) => ({
+              value: w.value,
+              label: w.label,
+              leading: <CalendarGlyph size="sm" />,
+            }))}
+            ariaLabel="Committed"
+            active={when !== ""}
+          />
+        </span>
         {path && (
           <span className="row gap-1">
             <span className="t-caption">
@@ -621,6 +772,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
             </Button>
           </span>
         )}
+        <MessageSearch q={q} />
       </PageToolbar>
       {marks.failed && rows.length > 0 && <MarksNote failed={marks.failed} retry={marks.retry} />}
       {paged.loading && rows.length === 0 && (
@@ -639,8 +791,16 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
           rows.length > 0 || paged.more
             ? undefined
             : {
-                title: path ? `No commit changed ${path}` : "No commit",
-                hint: `The history is read from ${revisionWord(repo, rev)}, newest first.`,
+                ...emptyOf({ path, q, by, when, narrowed, revWord, whoName }),
+                ...(filtered
+                  ? {
+                      action: (
+                        <Button size="small" variant="secondary" onClick={clear}>
+                          Clear filters
+                        </Button>
+                      ),
+                    }
+                  : {}),
               }
         }
       >
@@ -650,7 +810,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
           spine={GitCommitVerticalGlyph}
           rowKey={(c) => c.oid}
           rowHref={(c) => commitHref(repo.name, c.oid)}
-          aria-label={`History of ${revisionWord(repo, rev)}`}
+          aria-label={`History of ${revWord}`}
           title={subjectOf}
           titleAfter={(c) =>
             (marks.of(c.oid)?.merged ?? [])
@@ -683,13 +843,84 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
             </>
           )}
           paged={paged}
-          moreLabel="Load older commits"
-          foot={
-            rows.length > 0 &&
-            `${plural(rows.length, "commit")} of ${revisionWord(repo, rev)} loaded, newest first`
-          }
+          // A SEARCH WALKS ON as the reader asks; the walk may have stopped on the read's time.
+          moreLabel={q ? "Keep searching" : "Load older commits"}
+          foot={footOf({ count: rows.length, q, walked, complete, unjudged, narrowed, revWord })}
         />
       </QueryState>
+      {paged.error && filtered && (
+        <Button size="small" variant="secondary" onClick={clear}>
+          Clear filters
+        </Button>
+      )}
+    </>
+  );
+}
+
+/** What a narrowed or searched history says when it holds nothing. */
+function emptyOf(f: {
+  path: string;
+  q: string;
+  by: string;
+  when: string;
+  narrowed: string;
+  revWord: string;
+  whoName: (who: Who) => string;
+}): { title: string; hint: string } {
+  if (f.q) {
+    return {
+      title: `No commit message holds “${f.q}”`,
+      hint: `Searched every commit of ${f.revWord}.`,
+    };
+  }
+  if (f.by) {
+    return {
+      title: `No commit of ${f.revWord} was${f.narrowed}`,
+      hint: "Who pushed each commit is read from the node’s index of pushes.",
+    };
+  }
+  if (f.when) {
+    return {
+      title: `No commit of ${f.revWord} was${f.narrowed}`,
+      hint: "By the date each commit was committed.",
+    };
+  }
+  return {
+    title: f.path ? `No commit changed ${f.path}` : "No commit",
+    hint: `The history is read from ${f.revWord}, newest first.`,
+  };
+}
+
+/** The list's foot: how many are loaded and of what, how far a search walked, what went unjudged. */
+function footOf(f: {
+  count: number;
+  q: string;
+  walked: number;
+  complete: boolean;
+  unjudged: number;
+  narrowed: string;
+  revWord: string;
+}): ReactNode {
+  const searched = f.complete
+    ? `every commit of ${f.revWord} (${f.walked.toLocaleString()})`
+    : `${plural(f.walked, "commit")} of ${f.revWord}`;
+  let words: string;
+  if (f.q && f.count === 0) {
+    words = `No message holds “${f.q}” in the ${plural(f.walked, "commit")} searched so far`;
+  } else if (f.q) {
+    words = `${plural(f.count, "commit")} ${f.count === 1 ? "matches" : "match"} “${f.q}”, searched ${searched}`;
+  } else if (f.count > 0) {
+    words = `${plural(f.count, "commit")} of ${f.revWord}${f.narrowed} loaded, newest first`;
+  } else {
+    return null;
+  }
+  if (f.unjudged === 0) return words;
+  return (
+    <>
+      {words}.{" "}
+      <span title="A commit pushed before the index begins, or in a push too large to list, cannot be judged.">
+        {`${plural(f.unjudged, "commit is", "commits are")} not listed: who pushed them is unknown to this node’s index of pushes.`}
+      </span>
     </>
   );
 }

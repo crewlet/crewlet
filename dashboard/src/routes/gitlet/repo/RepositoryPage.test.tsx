@@ -29,8 +29,11 @@ import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
+import { modules } from "~/test/source.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
+import { sinceOf } from "./History.tsx";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
 beforeEach(() => {
@@ -1336,6 +1339,175 @@ test("a refused marks read is said once, and the rows still draw", async () => {
   expect(marksAsked).toHaveLength(1);
   fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(marksAsked).toHaveLength(2));
+});
+
+/** The engine answering each history page with `page(url)`, every ask kept. */
+function stubLog(page: (url: URL) => Record<string, unknown> | Response) {
+  const asked = stubEngine();
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_log") return engine(input, init);
+      asked.push(url);
+      const answer = page(url);
+      return answer instanceof Response ? answer : json(byRef(url, { kind: "log", ...answer }));
+    }),
+  );
+  return asked;
+}
+
+/** Choose `option` in the toolbar's searchable picker named `name`, a button opening its list. */
+function choose(name: string, option: RegExp) {
+  fireEvent.click(screen.getByRole("button", { name }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: option }));
+}
+
+// A HISTORY IS NARROWED BY WHO PUSHED IT on every page, and what the index cannot judge is
+// counted in words, never hidden. Mutation: drop `pushed_by` from the next page.
+test("a history is narrowed by who pushed it", async () => {
+  const asked = stubLog((url) =>
+    url.searchParams.get("cursor")
+      ? {
+          log: {
+            commits: [logged(OTHER, "Older", "2026-10-21T10:00:00Z")],
+            scanned: 4,
+            unjudged: 5,
+            complete: true,
+          },
+        }
+      : {
+          next: "c1",
+          log: {
+            commits: [logged(HEAD, "Newest", "2026-10-22T10:00:00Z")],
+            scanned: 9,
+            ...(url.searchParams.get("pushed_by") ? { unjudged: 7 } : {}),
+          },
+        },
+  );
+  mount("#/gitlet/repos/web?tab=commits");
+  await rowOf("Newest");
+  choose("Pushed by", /CTO/);
+  await waitFor(() => expect(location.hash).toContain("by=cto"));
+  await waitFor(() =>
+    expect(reads(asked, "code_log").some((u) => u.searchParams.get("pushed_by") === "cto")).toBe(
+      true,
+    ),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Load older commits" }));
+  await rowOf("Older");
+  const next = reads(asked, "code_log").find((u) => u.searchParams.get("cursor") === "c1");
+  expect(next?.searchParams.get("pushed_by")).toBe("cto");
+  const note = document.querySelector(".code-list__note")!;
+  await waitFor(() =>
+    expect(note.textContent).toBe(
+      "2 commits of main pushed by CTO loaded, newest first. 12 commits are not listed: who pushed them is unknown to this node’s index of pushes.",
+    ),
+  );
+});
+
+// A HISTORY IS NARROWED BY WHEN IT WAS COMMITTED, from the first instant of the reader's day
+// six days back for the last seven, and that start holds all day. Mutation: start at now - 7d.
+test("a history is narrowed by when it was committed", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-16T10:00:00Z"));
+  const asked = stubLog(() => ({
+    log: { commits: [logged(HEAD, "Newest", "2026-11-15T10:00:00Z")], scanned: 1, complete: true },
+  }));
+  mount("#/gitlet/repos/web?tab=commits&when=7d");
+  await rowOf("Newest");
+  // THE SUITE'S ZONE IS BERLIN: Nov 10 begins at 23:00 UTC the day before.
+  expect(reads(asked, "code_log")[0]?.searchParams.get("since")).toBe("2026-11-09T23:00:00.000Z");
+  expect(document.querySelector(".code-list__note")?.textContent).toBe(
+    "1 commit of main committed in the last 7 days loaded, newest first",
+  );
+  expect(sinceOf("today", "2026-11-16")).toBe("2026-11-15T23:00:00.000Z");
+  expect(sinceOf("", "2026-11-16")).toBeUndefined();
+  vi.setSystemTime(new Date("2026-11-16T20:00:00Z"));
+  fireEvent.click(screen.getByRole("combobox", { name: "Committed" }));
+  await afterMicrotasks();
+  expect(new Set(reads(asked, "code_log").map((u) => u.searchParams.get("since")))).toEqual(
+    new Set(["2026-11-09T23:00:00.000Z"]),
+  );
+});
+
+// COMMIT MESSAGES ARE SEARCHED ON ENTER, page by page as the reader asks: a page that matched
+// nothing yet has more says how far it searched, and an answer with nothing anywhere is the
+// empty state. Mutation: ask on every keystroke, or drop `grep` from the next page.
+test("commit messages are searched page by page", async () => {
+  const asked = stubLog((url) => {
+    const grep = url.searchParams.get("grep");
+    if (grep === "zzz") return { log: { commits: [], scanned: 40, complete: true } };
+    if (grep !== "cache") {
+      return { log: { commits: [logged(HEAD, "Newest", "2026-10-22T10:00:00Z")], scanned: 1 } };
+    }
+    return url.searchParams.get("cursor")
+      ? {
+          log: {
+            commits: [logged(OTHER, "cache the badge", "2026-10-21T10:00:00Z")],
+            scanned: 30,
+            complete: true,
+          },
+        }
+      : { next: "c1", log: { commits: [], scanned: 25 } };
+  });
+  mount("#/gitlet/repos/web?tab=commits");
+  await rowOf("Newest");
+  const box = screen.getByRole("searchbox", { name: "Search commit messages" });
+  fireEvent.change(box, { target: { value: "cache" } });
+  await afterMicrotasks();
+  expect(reads(asked, "code_log").some((u) => u.searchParams.has("grep"))).toBe(false);
+  fireEvent.submit(box.closest("form")!);
+  await waitFor(() => expect(location.hash).toContain("q=cache"));
+  const more = await screen.findByRole("button", { name: "Keep searching" });
+  expect(document.querySelector(".code-list__note")?.textContent).toBe(
+    "No message holds “cache” in the 25 commits searched so far",
+  );
+  fireEvent.click(more);
+  await rowOf("cache the badge");
+  const next = reads(asked, "code_log").find((u) => u.searchParams.get("cursor") === "c1");
+  expect(next?.searchParams.get("grep")).toBe("cache");
+  await waitFor(() =>
+    expect(document.querySelector(".code-list__note")?.textContent).toBe(
+      "1 commit matches “cache”, searched every commit of main (55)",
+    ),
+  );
+
+  fireEvent.change(box, { target: { value: "zzz" } });
+  fireEvent.submit(box.closest("form")!);
+  expect(await screen.findByText("No commit message holds “zzz”")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  await waitFor(() => expect(location.hash).not.toContain("q="));
+});
+
+// A REFUSED FILTERED HISTORY KEEPS ITS FILTERS IN VIEW, with the refusal and the way back.
+// Mutation: draw the refusal in place of the toolbar.
+test("a refused filtered history keeps its filters in view", async () => {
+  stubLog((url) =>
+    url.searchParams.get("pushed_by")
+      ? json({ error: "bad_params", detail: "pushed_by is not a key this node reads" }, 400)
+      : { log: { commits: [logged(HEAD, "Newest", "2026-10-22T10:00:00Z")], scanned: 1 } },
+  );
+  mount("#/gitlet/repos/web?tab=commits&by=cto");
+  expect(await screen.findByText(/pushed_by is not a key this node reads/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Pushed by" }).textContent).toContain("CTO");
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  await waitFor(() => expect(location.hash).not.toContain("by="));
+  expect(await rowOf("Newest")).toBeTruthy();
+});
+
+// EVERY KEY A LINK MAY WRITE INTO A COMMITS ADDRESS IS ONE COMMITS READS, read off the
+// modules' text as the source gates read. Mutation: rename `by` in RepoAt only.
+test("every Commits key a repository's link can say is read by the history", () => {
+  const text = (path: string) => modules().find((m) => m.path === path)!.text;
+  const at = /export interface RepoAt \{([^}]*)\}/.exec(text("routes/gitlet/paths.ts"))![1]!;
+  const keys = [...at.matchAll(/^\s*(\w+)\?:/gm)].map((m) => m[1]);
+  const history = text("routes/gitlet/repo/History.tsx");
+  for (const key of ["ref", "path", "by", "when", "q"]) {
+    expect(keys, key).toContain(key);
+    expect(history, key).toContain(`useParam("${key}"`);
+  }
 });
 
 // EACH COMMIT COPIES ITS ID AND BROWSES ITS FILES at it, as a real link a
