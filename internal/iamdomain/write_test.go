@@ -344,6 +344,8 @@ func applyLog(t *testing.T, log *js.DomainLog, verifier *recordseal.Verifier,
 		if err != nil {
 			return consumed, fmt.Errorf("decode record %d: %w", seq, err)
 		}
+		// AS THE FRAMEWORK'S LOOP HANDS IT ([statelog.AppliedInstant]).
+		storedAt = statelog.AppliedInstant(storedAt)
 		record := statelog.Record{
 			Envelope: statelog.Envelope{
 				V: env.V, Kind: string(env.Subject.Kind),

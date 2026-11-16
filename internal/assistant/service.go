@@ -203,6 +203,57 @@ const maxProposalTTLSeconds = 3600
 // turnRateScope is the costlimit scope every turn start is taken from.
 const turnRateScope = "assistant.turn"
 
+// strengthOf is the chain a question runs on: the stronger one for Think harder
+// or a decision brief the company routes there, else the quick one. Think
+// harder with no stronger chain is refused rather than quietly answered quick.
+func (s *Service) strengthOf(ts TurnStart, page *wire.PageContext) (Strength, error) {
+	c, _ := s.company()
+	var d *config.AssistantDeliberate
+	if c != nil {
+		d = c.Assistant.Deliberate
+	}
+	switch {
+	case ts.Deliberate && d == nil:
+		return "", invalid("deliberate: %v", config.ErrNoDeliberate)
+	case ts.Deliberate:
+		return Deliberate, nil
+	case d != nil && d.DecisionBriefs && ts.Mode == wire.TurnBrief && page != nil &&
+		page.Selection != nil && page.Selection.Noun == wire.NounDecision:
+		return Deliberate, nil
+	}
+	return Quick, nil
+}
+
+// Deliberates reports whether a question can ask to think harder: the
+// company sets a stronger chain its rules admit ([config.Company.DeliberateChain]).
+func (s *Service) Deliberates() bool {
+	c, _ := s.company()
+	if c == nil {
+		return false
+	}
+	_, err := c.DeliberateChain()
+	return err == nil
+}
+
+// offeredTools is what a turn of person may call: the catalogue's offer (a
+// brief's reads, or every tool with deep work where it runs), less each family
+// `assistant.tools.deny` turns off.
+func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts []string,
+	briefing bool) []catalog.Tool {
+
+	offered := s.catalogue.Offered(person, acts)
+	var tools []catalog.Tool
+	if briefing {
+		tools = briefTools(offered)
+	} else {
+		tools = s.withDeep(ctx, offered)
+	}
+	if c, _ := s.company(); c != nil {
+		tools = catalog.Allowed(tools, c.Assistant.Tools.Deny)
+	}
+	return tools
+}
+
 // Eligible says whether p may use the assistant on this node now, and the
 // first reason not, in the order `/viewer` reports them: the company has not
 // turned it on, it has no usable model chain, or p is not a person signed in
@@ -253,6 +304,8 @@ type TurnStart struct {
 	// Mode is what the question asks for ([wire.TurnRequest.Mode]); empty
 	// is [wire.TurnAsk].
 	Mode wire.TurnMode
+	// Deliberate is the person's Think harder ([wire.TurnRequest.Deliberate]).
+	Deliberate bool
 }
 
 // TurnID is the turn a question asked under the operation key starts: the
@@ -354,6 +407,10 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		return wire.TurnAccepted{}, invalid("mode brief takes no attachments")
 	}
 	briefing := ts.Mode == wire.TurnBrief
+	strength, err := s.strengthOf(ts, page)
+	if err != nil {
+		return wire.TurnAccepted{}, err
+	}
 	input = redact.Secrets(input)
 	ts.Page = page
 	attached, attachErr := s.attachmentsOf(ctx, ts)
@@ -379,7 +436,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	// ([Service.ModelNotice] is the same reading for `/viewer`). After the
 	// retry check above, so a retry of a question that already started is
 	// answered with its turn whatever the model's state now.
-	if refusal := s.modelRefusal(ctx, ts.Person); refusal != nil {
+	if refusal := s.modelRefusal(ctx, ts.Person, strength); refusal != nil {
 		return wire.TurnAccepted{}, refusal
 	}
 
@@ -429,7 +486,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		purpose = types.AuxAssistantBrief
 	}
 	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: purpose, TurnID: id.String()}
-	provider, key, err := s.models.Chain(ctx, ts.Person, use)
+	provider, key, err := s.models.Chain(ctx, ts.Person, use, strength)
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{Cause: err}
 	}
@@ -441,6 +498,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
 	t.brief.on = briefing
+	t.strength = strength
 	var chip *wire.PageChip
 	if ts.Page != nil {
 		chip = &wire.PageChip{Title: ts.Page.Title, Screen: ts.Page.Screen}
@@ -492,12 +550,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 
 	c, organization := s.company()
-	var tools []catalog.Tool
-	if briefing {
-		tools = briefTools(s.catalogue.Offered(ts.Person, acts))
-	} else {
-		tools = s.withDeep(ctx, s.catalogue.Offered(ts.Person, acts))
-	}
+	tools := s.offeredTools(ctx, ts.Person, acts, briefing)
 	earlier := historyEntries(history, ts.Person)
 	t.used(historyApps(earlier))
 	t.deep.attachments = attached
@@ -598,7 +651,7 @@ func (s *Service) newTurn(p iam.Principal, conversation, id uuid.UUID, key strin
 	read exec.Grant, page *wire.PageContext, acts []string) *turn {
 
 	ctx, cancel := context.WithCancelCause(s.base)
-	return &turn{svc: s, person: p, by: iam.ActorFor(p), conversation: conversation, id: id,
+	return &turn{svc: s, strength: Quick, person: p, by: iam.ActorFor(p), conversation: conversation, id: id,
 		key: key, read: read, page: page, acts: acts, boundary: provenance.NewBoundary(),
 		started: s.now(), ctx: ctx, cancel: cancel, done: make(chan struct{})}
 }

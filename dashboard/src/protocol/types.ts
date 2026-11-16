@@ -67,7 +67,12 @@ import type {
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
 import type { SettingsAnswer } from "../contract/settings.ts";
-import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
+import type {
+  DelegatedBranchesAnswer,
+  DelegatedChecksAnswer,
+  DelegatedDecisionsAnswer,
+  DelegatedRepositoriesAnswer,
+} from "../contract/delegated.ts";
 import type {
   AtlasActivityAnswer,
   AtlasEntriesAnswer,
@@ -8111,6 +8116,11 @@ export interface QueryMap {
   /** The rules delegates decide by, and what they decided: an administrator's
    *  and the people a rule escalates to (ADR-0125). */
   delegated_decisions: DelegatedDecisionsAnswer;
+  /** What a rule can name from the company's GitHub: its repositories, one's
+   *  branches and the checks on a branch's newest commit (an administrator's). */
+  delegated_repositories: DelegatedRepositoriesAnswer;
+  delegated_branches: DelegatedBranchesAnswer;
+  delegated_checks: DelegatedChecksAnswer;
   /** The company's atlas (ADR-0126), each read as its asker on the atlas
    *  app: a page of its entries, the map, one entry, a trace from one, and
    *  the counts a filter menu offers. */

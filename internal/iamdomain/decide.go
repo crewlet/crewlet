@@ -1680,7 +1680,7 @@ type SessionStart struct {
 
 	// EnrolmentOnly opens a session that may do nothing but enrol a second
 	// factor — see [Session.EnrolmentOnly]. The SIGN-IN decides it, from
-	// what it proved and the deployment's own `api.auth.totp`.
+	// what it proved and the sign-in policy in force.
 	EnrolmentOnly bool
 
 	// UserAgent and Remote are the browser that asked for the session and

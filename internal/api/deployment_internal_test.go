@@ -14,7 +14,7 @@ import (
 // The deployment's own controls — a backup, the object store's migration, the
 // retention and capacity gestures, the fleet broker's removals, a dead letter's
 // discard — change what the engine does for everybody on it, so each asks for
-// a proof inside `api.auth.session.step_up`; the reads beside them (the
+// a proof inside the step-up window; the reads beside them (the
 // maintenance status, the reanchor confirmation value, the dead letters'
 // listing) change nothing and ask for none. Walked over the routes this
 // surface actually mounts, so a route added later is decided by the same rule

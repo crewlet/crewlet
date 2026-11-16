@@ -43,7 +43,12 @@ import (
 // the oldest release those shapes were measured on. A release it cannot read,
 // or none recorded, is below it ([readsRelease]): every other release check
 // of the package reads an unreadable release as a current one
-// ([releaseAtLeast]), which here would read a writer nobody measured.
+// ([releaseAtLeast]), which here would read a writer nobody measured. The
+// floor is checked here of the session's last writer, the release its row
+// records, before anything is opened; and since a session continued across
+// releases holds the records of each, the reading holds every record it reads
+// to the floor again by the release that record names
+// ([ClaudeCode.readHoldings], [writerBelowFloor]).
 
 // holdingsReader is a harness's reading of its own sessions for which of a
 // round's calls they hold ([Runner.ReadHoldings]).

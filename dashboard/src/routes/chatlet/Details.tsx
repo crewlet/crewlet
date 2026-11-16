@@ -444,6 +444,14 @@ export function followingWords(followsAll: boolean): string {
 }
 
 /**
+ * A member row's second line. An agent's leads with how it follows, which
+ * its switch sets, so a narrow row cuts the team rather than that.
+ */
+export function memberDetail(who: string, following: string | null): string {
+  return following === null ? who : `${following} · ${who}`;
+}
+
+/**
  * The membership a following switch states: the room's members as the pane
  * read them, every one's following said, with `handle`'s set to `on`. The
  * read itself is the expectation it is stated against.
@@ -560,7 +568,7 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
                       )}
                     </>
                   }
-                  detail={follows ? `${who} · ${followingWords(on)}` : who}
+                  detail={memberDetail(who, follows ? followingWords(on) : null)}
                   meta={person.status ? stateWord(person.state) : undefined}
                   tag={
                     channel.created_by === person.handle ? <Tag size="xs">Owner</Tag> : undefined

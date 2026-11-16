@@ -42,6 +42,7 @@ import {
   type JobCategory,
   type SeatJob,
 } from "~/lib/modelUses.ts";
+import { listed } from "~/lib/format.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { ModelHealth } from "~/contract/models.ts";
 import type { ModelsData, ModelView } from "./data.ts";
@@ -244,7 +245,11 @@ export function ByJob({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
   );
 }
 
-/** The Dashboard Assistant's one line: the model it runs on, and, for an admin, a picker of the models that may run it. */
+/**
+ * The Dashboard Assistant's one line: the model it answers with first, and, for
+ * an admin, a picker of the models that may; the fallbacks behind it are named,
+ * since the picker replaces the first and keeps them.
+ */
 function AssistantLine({
   data,
   byKey,
@@ -255,6 +260,7 @@ function AssistantLine({
   onFlow: OnFlow;
 }) {
   const key = data.assistant.key ?? "";
+  const fallbacks = data.assistant.fallbacks;
   const model = byKey.get(key);
   const describe = useId();
   // ONLY A MODEL THAT DENIES WEB TOOLS can run the assistant: the engine
@@ -269,7 +275,6 @@ function AssistantLine({
             <span className="models-roles__picker models-byjob__picker">
               <Select
                 className="models-byjob__select"
-                menuClassName="models-byjob__menu"
                 width="auto"
                 ariaLabel="Model Ask Crewlet runs on"
                 aria-describedby={describe}
@@ -302,6 +307,9 @@ function AssistantLine({
           {model && ALARMING.has(model.entry.health) ? <HealthLine model={model} compact /> : null}
           <Text as="span" variant="caption" tone="secondary" id={describe}>
             {ASSISTANT_USE.hint} Company-wide, so it has no seats.{" "}
+            {fallbacks.length > 0
+              ? `Falls back to ${listed(fallbacks)}${data.admin ? ", which a change here keeps" : ""}. `
+              : null}
             {data.admin ? ASSISTANT_USE.rule : null}
           </Text>
         </span>
@@ -352,7 +360,6 @@ function JobCell({
         <span className="models-byjob__picker">
           <Select
             className="models-byjob__select"
-            menuClassName="models-byjob__menu"
             width="auto"
             ariaLabel={label}
             {...(notes ? { "aria-describedby": noteId } : {})}

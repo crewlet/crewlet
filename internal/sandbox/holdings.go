@@ -23,7 +23,11 @@ import (
 // which of those calls the session holds the logged result of.
 // [Coordinator.HoldingsOf] is that reading, for the relaunch's telling to ask
 // before it writes the brief, and to tell the session exactly the calls it
-// lacks.
+// lacks: internal/agent/runner asks it once per relaunch, through the engine's
+// launcher (runner.HoldingsAsker), only of a capture cut off whose first
+// request it judges, and hands the briefs told by it beside the ones told by
+// the save point ([ExactTelling]), which the launch hands only to a box whose
+// harness answers the release it was read for ([Coordinator.continueKept]).
 //
 // FACTS, AND NEVER A REFUSAL. A reading answers what the archive holds of each
 // call it was asked about ([SessionHoldings]), and one rule turns those facts
@@ -82,18 +86,26 @@ type HoldingsReader interface {
 }
 
 // HoldingsAsk is what a relaunch asks a reading about: the round's listed
-// calls that have an outcome, as the run's log keeps them, the ones its
-// telling asks about marked ([LoggedCall.Asked]). The unasked ones ride it
-// too, so a reader can refuse an ask in which an asked call's id is not that
-// call's alone.
+// calls that have an outcome, as the run's log keeps them, but the ones a
+// person approved, which the engine made on its host and which no session
+// holds; the ones its telling asks about marked ([LoggedCall.Asked]). The
+// unasked ones ride it too, so a reader can refuse an ask in which an asked
+// call's id is not that call's alone.
 type HoldingsAsk struct {
 	// Calls are 1 to [MaxBridgeCalls] calls: a round's log lists at most
 	// that many.
 	Calls []LoggedCall
 
-	// Resumer is the release of the harness that continues the session: the
-	// relaunch box's, as it answered `--version` at its launch, read before
-	// the brief is chosen, in the form [CarryCheck.Version] keeps it
+	// Resumer is the release of the harness that continues the session, as
+	// the relaunch knows it when it writes its briefs: the release that
+	// WROTE the session (the turn's row's, which the job's box answered
+	// `--version` with before its harness started), the relaunch's best word,
+	// since its own box is acquired inside the launch, after its briefs are
+	// written. A brief told by the reading is handed only to a box whose
+	// harness answers exactly this release before its brief is chosen
+	// ([ExactTelling], [Coordinator.continueKept]), so the release that
+	// resumes is the one read for, and every other box is handed the brief
+	// told by the save point. In the form [CarryCheck.Version] keeps it
 	// ("2.1.310", a release [ValidRelease] holds). "" means unread, and no
 	// reader holds it.
 	//
@@ -113,10 +125,13 @@ type LoggedCall struct {
 	// where the log recorded none.
 	ID string
 
-	// Asked marks a call the relaunch's telling asks about: a listed call
-	// after the save point that is neither late nor abandoned, nor the call
-	// a person approved, each of which the telling decides before any
-	// reading.
+	// Asked marks a call the relaunch's telling asks about: one it would
+	// otherwise list after the save point or among the owed reads (a read an
+	// earlier brief counted without listing it, which lies at or below the
+	// point), whose key the reader can name, valid and carried by no other
+	// call of the round (internal/agent/runner's holdingsAsk). Never a late
+	// or an abandoned call, a skipped meta-tool's, nor one the save point
+	// holds, each of which the telling decides before any reading.
 	Asked bool
 
 	// Failed, Output and OutputBytes are the call's outcome as the log keeps

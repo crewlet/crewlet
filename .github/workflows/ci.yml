@@ -14,9 +14,12 @@ permissions:
   contents: read
 
 # A PUSH TO A PULL REQUEST CANCELS THAT PULL REQUEST'S RUN FOR THE COMMIT IT
-# REPLACED, and nothing else is ever cancelled. Nobody can merge the replaced
-# commit, so its run only holds runners — ten jobs of them — that the new
-# commit's run is queueing for.
+# REPLACED. Nobody can merge the replaced commit, so its run only holds
+# runners — two dozen jobs of them — that the new commit's run is queueing
+# for. The one other cancel is ci-cancel.yml's, which stops a pull request's
+# run at its first failed job, by the same reasoning: every job here has to
+# pass before a merge, so a red one already means the push that would cancel
+# the rest.
 #
 # The group is UNIQUE PER RUN for every other event, and that is the half that
 # is easy to get wrong. A group keyed on the ref would put every push to main
@@ -514,14 +517,17 @@ jobs:
   # where `test (race)` took 44 minutes and set every pull request's wait.
   #
   # THE SHARD COUNTS are one line each, `RACE_SHARDS` and `SOLO_SHARDS` below,
-  # and every leg, name and proof follows them. Four for the parallel half,
-  # because it cannot end before its longest package, internal/gitlet/host
-  # (1,735 of the 8,905 seconds), and at four that package's shard carries
-  # about 490 package-seconds beside it, which the runner's three other
-  # workers finish in minutes. Three would put 1,233 beside it; five or six
-  # would save at most those minutes for one or two more runners, each paying
-  # about a minute of setup (checkout, the Go caches, the pinned gits, node)
-  # before its first test.
+  # and every leg, name and proof follows them. Five for the parallel half,
+  # which is CPU-bound: skipgate's CPU line read 3.2-3.7 of 4 CPUs busy on
+  # every race shard, and the four shards of #1283's run used 8,570
+  # CPU-seconds between them. Balanced perfectly on four runners that is
+  # about 535 s of tests each, plus three minutes of setup: twelve minutes
+  # before any package dominates. On five it is about 430 s, ten minutes, and
+  # the partition deals this half by each package's CPU (`go doc
+  # ./internal/solo/partition`), so internal/engine's runner, the heaviest
+  # package's, carries little beside it. A sixth would buy a minute for a
+  # runner more, each paying about a minute of setup (checkout, the Go
+  # caches, the pinned gits, node) before its first test.
   #
   # Three for the solo half, whose shards run at -p 1 and so take the SUM of
   # their packages. internal/gitlet/gitletcluster is a steady 766 to 780
@@ -556,7 +562,7 @@ jobs:
     name: test plan
     runs-on: *linux
     env:
-      RACE_SHARDS: 4
+      RACE_SHARDS: 5
       SOLO_SHARDS: 3
     outputs:
       race: ${{ steps.legs.outputs.race }}
@@ -646,8 +652,11 @@ jobs:
       - *gobuild-save
 
   # ONE SHARD OF THE PARALLEL HALF per leg, as the plan dealt it. fail-fast is
-  # off so a failure in one shard still reports every other's, as the single
-  # job did.
+  # off for main's run, every leg of which runs to the end: a red main records
+  # every failure it has, and each shard saves its build cache and its package
+  # durations, which a cancelled leg never does.
+  # A pull request's run needs no fail-fast either: ci-cancel.yml stops all of
+  # it, not one matrix, at its first failed job.
   test:
     name: test (race) ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: plan
@@ -856,14 +865,15 @@ jobs:
           pattern: test-timings-${{ env.LEGS }}-*
           path: ${{ runner.temp }}/timings
       # skipgate times every package that passed or had no test files, so on a
-      # green run each shard's timings name every package it ran: the lines of
-      # two fields, since a package's top-level tests follow it with three.
+      # green run each shard's timings name every package it ran: the lines
+      # whose second field is a number (a package's wall time), where each of
+      # its top-level tests' names a test.
       - &legs-covered
         name: every package of the half ran in exactly one shard
         shell: bash
         run: |
           set -u
-          awk -F '\t' 'NF == 2 { print $1 }' "$RUNNER_TEMP"/timings/*/test-timings.tsv | sort > "$RUNNER_TEMP/ran.txt"
+          awk -F '\t' '$2 ~ /^[0-9]/ { print $1 }' "$RUNNER_TEMP"/timings/*/test-timings.tsv | sort > "$RUNNER_TEMP/ran.txt"
           twice="$(uniq -d "$RUNNER_TEMP/ran.txt")"
           if [ -n "$twice" ]; then
             echo "::error::run by two shards:"; echo "$twice"; exit 1
@@ -906,7 +916,7 @@ jobs:
       - name: merge them into one measurement
         run: |
           go run ./internal/solo/partition merge "$RUNNER_TEMP"/timings/*/test-timings.tsv > "$RUNNER_TEMP/test-weights.tsv"
-          echo "$(awk -F '\t' 'NF == 2' "$RUNNER_TEMP/test-weights.tsv" | wc -l) packages and $(awk -F '\t' 'NF == 3' "$RUNNER_TEMP/test-weights.tsv" | wc -l) top-level tests timed"
+          echo "$(awk -F '\t' '$2 ~ /^[0-9]/' "$RUNNER_TEMP/test-weights.tsv" | wc -l) packages and $(awk -F '\t' '$2 !~ /^[0-9]/' "$RUNNER_TEMP/test-weights.tsv" | wc -l) top-level tests timed"
       - uses: actions/upload-artifact@v7
         with:
           name: test-weights

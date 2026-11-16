@@ -332,7 +332,7 @@ That makes the rotation a runbook with no window in it:
      unreadable at the next apply.
 5. **Drop** the old key once both halves of step 4 have run, the longest token
    lifetime has passed, every state log has trimmed past the records signed
-   under it, the absolute session lifetime (`api.auth.session.absolute`) has
+   under it, the longest session lifetime (`api.auth.limits.max_session_lifetime`) has
    elapsed since step 3, *and* `crewlet secrets rekey -dry-run`, through a
    running node, reports no outstanding invitation under it — each is redeemed
    or lapses within a week of being issued. It must also report no

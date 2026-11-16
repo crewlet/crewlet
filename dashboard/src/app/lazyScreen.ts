@@ -261,6 +261,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   "mcp-tools": "settings",
   secrets: "settings",
   limits: "settings",
+  "ask-crewlet": "settings",
   spend: "spend",
   "spend-tasks": "spend",
   people: "settings",

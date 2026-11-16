@@ -2130,7 +2130,7 @@ iam token -login` mints one — bound to the human seat you hold: a purge drops
 what nothing brings back, so a token bound to nobody is refused, naming why,
 and so is a seat's tool call. Your grant on the repository must be
 `maintain`, which every person holds. The fresh proof of who you are a purge
-asks of a dashboard session (`api.auth.session.step_up`) is not asked of a
+asks of a dashboard session (`sign_in.step_up_seconds`) is not asked of a
 token, which is stepped up by construction as every machine token is — so a
 token that can purge is one to keep as carefully as your password.
 
@@ -3577,6 +3577,7 @@ expect:
     verdict: 2 things need you    # optional: the verdict the engine counted from the rows it kept
   refusals:                       # what each refused call's answer names, in order
     - [about, "needs[0].do"]      # judged against the scripted model, which hears every answer
+  taint: none                     # the outside surface every proposal names (executor, page_body, ...), or none
 ```
 
 A case is read by the configuration's own strict reader: a member this build does
@@ -3590,7 +3591,9 @@ engine's error envelope, as a route answers a record that is not there. Every
 `expect` field is optional, and a case with none is refused: a case that
 cannot fail measures nothing. A write the model calls is never sent: it
 becomes a proposal, as it does in the dashboard, which is what `proposals`
-counts. `shows` reads the cards the turn drew (a table's title and cells, a
+counts, and `step_up` holds every one of those proposals to whether the engine
+asks the person to confirm it is them before it is approved (approving an
+agent's grant request does), failing a turn that ends with none. `shows` reads the cards the turn drew (a table's title and cells, a
 proposal's rows and note), so a case can hold what the person was shown, not
 only what the answer said: the place a page is proposed in, or the reason a
 read card gives. A `mode: brief` case runs a brief turn (the drawer's "Brief me

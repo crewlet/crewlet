@@ -152,16 +152,18 @@ func (e *ModelNotReady) Unwrap() []error { return []error{ErrUnavailable, e.Caus
 // assistant's chain is known unusable now, or nil when none is known to be.
 // Read from what the node already holds ([Models.Unready]): no model is called.
 func (s *Service) ModelNotice(ctx context.Context, p iam.Principal) *wire.ModelNotice {
-	if problem, _ := s.modelUnready(ctx, p); problem != nil {
+	if problem, _ := s.modelUnready(ctx, p, Quick); problem != nil {
 		return problem.notice()
 	}
 	return nil
 }
 
-// modelUnready is the chain's known problem for p and the failure it reads,
-// or nil for none.
-func (s *Service) modelUnready(ctx context.Context, p iam.Principal) (*modelProblem, error) {
-	err := s.models.Unready(ctx)
+// modelUnready is the known problem of the chain strength names for p and
+// the failure it reads, or nil for none.
+func (s *Service) modelUnready(ctx context.Context, p iam.Principal,
+	strength Strength) (*modelProblem, error) {
+
+	err := s.models.Unready(ctx, strength)
 	if err == nil {
 		return nil, nil
 	}
@@ -176,10 +178,10 @@ func (s *Service) modelUnready(ctx context.Context, p iam.Principal) (*modelProb
 	return &problem, err
 }
 
-// modelRefusal is the refusal of a question asked while the chain is known
-// unusable, or nil.
-func (s *Service) modelRefusal(ctx context.Context, p iam.Principal) error {
-	problem, cause := s.modelUnready(ctx, p)
+// modelRefusal is the refusal of a question asked while the chain it runs on
+// is known unusable, or nil.
+func (s *Service) modelRefusal(ctx context.Context, p iam.Principal, strength Strength) error {
+	problem, cause := s.modelUnready(ctx, p, strength)
 	if problem == nil {
 		return nil
 	}

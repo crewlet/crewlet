@@ -28,3 +28,5 @@ expect:
   calls: [create_task]
   proposals: 1
   state: waiting_for_approval
+  # It read only the company's own chart, so the card carries no caution.
+  taint: none

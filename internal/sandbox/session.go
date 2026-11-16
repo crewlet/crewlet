@@ -606,8 +606,12 @@ type SessionCapture struct {
 	// bound dropped below it — and how many of them the bound dropped from the
 	// middle, exactly (internal/agent/runner's calledAfter). A call after an
 	// earlier read that the session holds all the same — written before its
-	// harness was cut off — is told too: told more than once, never not at
-	// all.
+	// harness was cut off — is told too where no reading of the capture's
+	// archive says so: told more than once, never not at all. Where a reading
+	// finds the session holding a call's logged result ([Coordinator.HoldingsOf]),
+	// a brief told by it leaves that call out, and the launch hands that brief
+	// only to a box whose harness answers the release it was read for
+	// ([ExactTelling]).
 	//
 	// A POINTER, because no call taken is a save point — 0, a session that
 	// holds none of the round's calls — and "not stated" is another fact. A

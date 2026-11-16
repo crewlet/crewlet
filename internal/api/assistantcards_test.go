@@ -172,6 +172,8 @@ func atlasEntryID(k atlas.Kind, key string) string { return atlas.MustRef(k, key
 // answer, because this App does not stand their surface up.
 var heldElsewhere = map[string]bool{
 	"get_org_chart/seats": true, // internal/api/iamapi: TestTheSeatsCardReadsTheSeatsAnswer
+	// internal/api/setupapi: TestTheCatalogueLookupReadsItsRoutesOwnAnswer
+	"search_grant_catalogue/": true,
 }
 
 // ONE AGENT'S LANE is a setup route this App does not stand up, held by

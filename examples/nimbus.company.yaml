@@ -50,6 +50,20 @@ policies:
 # twice a year.  See docs/getting-started/configuration.md.
 timezone: "Europe/Berlin"
 
+# How the company's people sign in, the same on every node and changed from
+# Settings › Sign-in policy without a restart.  Each node holds these within
+# its operator's limits (`api.auth.limits` in nimbus.config.yaml), so a value
+# past one is refused there.  Left out, a session lives 7 days, ends after 12
+# hours unused, a sensitive change asks again after an hour, a password is at
+# least 12 characters and a second factor is required.  This walkthrough runs
+# on loopback, so it lets people sign in with a password alone.
+sign_in:
+  require_second_factor: false
+  # session_lifetime_seconds: 604800
+  # idle_timeout_seconds: 43200
+  # step_up_seconds: 3600
+  # min_password_length: 16
+
 # Company-wide token budget — ceilings on total LLM tokens across EVERY
 # agent (CEO, CTO, PM, DevRel, the three engineers, their sub-agents, and
 # the learning/aux passes), one per calendar WINDOW on the company clock

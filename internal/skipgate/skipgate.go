@@ -80,13 +80,17 @@
 //
 //	go run ./internal/skipgate -timings FILE -- go test -json <packages>
 //
-// writes `importpath<TAB>seconds` into FILE for every package that passed or
-// had no test files, read from the package-level records this program already
-// reads to reach its verdict, and under each such package one
+// writes `importpath<TAB>seconds<TAB>cpu` into FILE for every package that
+// passed or had no test files — its binary's wall time, read from the
+// package-level records this program already reads to reach its verdict, and
+// the CPU its binary used, read at the binary through go test's -exec
+// (cpu.go) — and under each such package one
 // `importpath<TAB>Test<TAB>seconds` line for every TOP-LEVEL test that passed
 // or skipped, from that test's own record. It is the file
-// internal/solo/partition reads with -weights to start the longest packages
-// first, and ci.yml keeps it from each passing run on main as the next run's
+// internal/solo/partition reads with -weights to deal each half across its
+// shards and start the heaviest first — the parallel half by CPU, the solo
+// half, which runs one package at a time and mostly waits, by wall time —
+// and ci.yml keeps it from each passing run on main as the next run's
 // weights; the merged file is the `test-weights` artifact, the one place a
 // person can read which tests a package's time goes to. A FAILED package is
 // left out, its tests with it: its elapsed time stops wherever the failure
@@ -208,6 +212,26 @@ func (s *span) at(action string, now time.Time) {
 			s.running = false
 		}
 	}
+}
+
+// parentOf is the span of the test test is a direct subtest of: the LONGEST
+// prefix of its name, cut at a slash, that names a test still running in pkg.
+//
+// Not the name up to its last slash: a subtest's own name may hold one —
+// `t.Run(mode+"/"+shape, …)` makes ONE subtest, `normal/a_data_node`, under
+// the test that ran it — and cut at its last slash it named a parent that
+// never ran, so its subtests were credited to nobody and the parent read its
+// whole wait for them as its own time (internal/engine's table tests, up to
+// 129 s each for nine cases of a millisecond). A test's ancestors are all
+// still running while it runs, so the longest running prefix is its parent;
+// a name with no running prefix is a top-level test.
+func parentOf(spans map[string]*span, pkg, test string) *span {
+	for i := strings.LastIndex(test, "/"); i > 0; i = strings.LastIndex(test[:i], "/") {
+		if p := spans[pkg+"\x00"+test[:i]]; p != nil {
+			return p
+		}
+	}
+	return nil
 }
 
 // childRun and childEnded read a direct subtest's `run` and its result,
@@ -365,6 +389,11 @@ type report struct {
 	// is no measurement of itself, so neither is here.
 	topLevel map[string]map[string]float64
 
+	// packageCPU is the CPU each package's test binary used, by import path,
+	// as go test's -exec wrapper read it (cpu.go); empty on a run that wrote
+	// no -timings file.
+	packageCPU map[string]float64
+
 	// timed is every test, subtests included, that passed or skipped, with
 	// its seconds: what the slowest-tests list at the end of a run is drawn
 	// from.
@@ -475,10 +504,7 @@ func read(in *bufio.Scanner, out *os.File) report {
 					spans[key] = sp
 				}
 				sp.at(e.Action, e.Time)
-				var parent *span
-				if i := strings.LastIndex(e.Test, "/"); i > 0 {
-					parent = spans[e.Package+"\x00"+e.Test[:i]]
-				}
+				parent := parentOf(spans, e.Package, e.Test)
 				switch e.Action {
 				case "run":
 					if parent != nil {
@@ -596,7 +622,8 @@ func writeTimings(w io.Writer, r report) error {
 	var timings strings.Builder
 	for _, p := range slices.Sorted(maps.Keys(r.finished)) {
 		if f := r.finished[p]; f.action != "fail" {
-			fmt.Fprintf(&timings, "%s\t%s\n", p, strconv.FormatFloat(f.elapsed, 'f', 3, 64))
+			fmt.Fprintf(&timings, "%s\t%s\t%s\n", p, strconv.FormatFloat(f.elapsed, 'f', 3, 64),
+				strconv.FormatFloat(r.packageCPU[p], 'f', 3, 64))
 			for _, test := range slices.Sorted(maps.Keys(r.topLevel[p])) {
 				fmt.Fprintf(&timings, "%s\t%s\t%s\n", p, test, strconv.FormatFloat(r.topLevel[p][test], 'f', 3, 64))
 			}
@@ -607,8 +634,11 @@ func writeTimings(w io.Writer, r report) error {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == execMode {
+		os.Exit(runExec(os.Args[2:]))
+	}
 	fs := flag.NewFlagSet("skipgate", flag.ContinueOnError)
-	timingsPath := fs.String("timings", "", "write how long each package that passed, and each of its top-level tests, took to `file`")
+	timingsPath := fs.String("timings", "", "write how long each package that passed took, the CPU it used, and each of its top-level tests' time, to `file`")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "usage: %s [-timings FILE] -- go test -json <packages>\n", os.Args[0])
 		fs.PrintDefaults()
@@ -635,12 +665,46 @@ func main() {
 		}
 		timings = f
 	}
+	// AND EACH PACKAGE'S CPU, read at its test binary through go test's
+	// -exec (cpu.go): the command is handed this program as its wrapper, and
+	// the wrapper appends to a file of its own.
+	var root, module, cpuPath string
+	var cpuLost bool
+	if timings != nil {
+		var err error
+		if root, err = os.Getwd(); err == nil {
+			module, err = moduleAt(root)
+		}
+		var self string
+		if err == nil {
+			self, err = os.Executable()
+		}
+		if err == nil {
+			argv, err = withExec(argv, self)
+		}
+		var f *os.File
+		if err == nil {
+			f, err = os.CreateTemp("", "skipgate-cpu-*")
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "skipgate: -timings (make's TEST_TIMINGS): %v\n", err)
+			os.Exit(2)
+		}
+		cpuPath = f.Name()
+		_ = f.Close()
+	}
 	// exit fills the timings file, if one was asked for, from what the run
 	// got through, and exits with code — or with 1 if the file could not be
 	// written, since a run whose measurement was lost has not done everything
 	// it was asked. Before the stream is read r is empty, and so is the file.
 	var r report
 	exit := func(code int) {
+		if cpuPath != "" {
+			_ = os.Remove(cpuPath)
+		}
+		if cpuLost {
+			code = max(code, 1)
+		}
 		if timings != nil {
 			err := errors.Join(writeTimings(timings, r), timings.Close())
 			if err != nil {
@@ -653,6 +717,9 @@ func main() {
 
 	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...)
 	cmd.Stderr = os.Stderr
+	if cpuPath != "" {
+		cmd.Env = append(os.Environ(), cpuFileVar+"="+cpuPath)
+	}
 	stream, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skipgate: %v\n", err)
@@ -685,6 +752,14 @@ func main() {
 	// in hand rather than inferred from what it managed to say.
 	producer := cmd.Wait()
 	fmt.Fprintln(os.Stderr, cpuUse(cmd.ProcessState, time.Since(started), runtime.NumCPU()))
+	if cpuPath != "" {
+		cpu, err := readCPU(cpuPath, root, module)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\nskipgate: read each package's CPU: %v\n", err)
+			cpuLost = true
+		}
+		r.packageCPU = cpu
+	}
 	fmt.Fprint(os.Stderr, slowest(r.timed, slowestShown))
 	if scanErr != nil {
 		fmt.Fprintf(os.Stderr, "\nskipgate: reading the test stream: %v\n", scanErr)

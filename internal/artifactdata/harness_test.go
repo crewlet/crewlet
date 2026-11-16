@@ -248,6 +248,8 @@ func (n *node) drain() {
 		if n.storedAt != nil {
 			storedAt = n.storedAt(seq, storedAt)
 		}
+		// AS THE FRAMEWORK'S LOOP HANDS IT ([statelog.AppliedInstant]).
+		storedAt = statelog.AppliedInstant(storedAt)
 		n.applyBody(spec, seq, body, storedAt)
 	}
 }

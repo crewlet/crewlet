@@ -68,7 +68,7 @@ func newSignedIn(t *testing.T) *signedIn {
 	}
 	cookie, err := signer.Mint(session.Mint{
 		Lineage: lineage, Person: personID, Epoch: 3, Generation: 1,
-		StartPosition: startPos, AbsoluteExpiresAt: c.at.Add(absolute),
+		StartPosition: startPos, SignedInAt: c.at, AbsoluteExpiresAt: c.at.Add(absolute),
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -308,8 +308,8 @@ func TestAddingAKeyLogsNobodyOutAndTheReissueMovesThem(t *testing.T) {
 	}
 	cookie, err := before.Mint(session.Mint{
 		Lineage: rig.lineage, Person: personID, Epoch: 3, Generation: 1,
-		StartPosition:     startPos,
-		AbsoluteExpiresAt: rig.clock.now().Add(absolute),
+		StartPosition: startPos,
+		SignedInAt:    rig.clock.now(), AbsoluteExpiresAt: rig.clock.now().Add(absolute),
 	})
 	if err != nil {
 		t.Fatalf("mint under the old key: %v", err)
@@ -349,7 +349,7 @@ func TestAMintMissingAFactANodeNeedsIsRefused(t *testing.T) {
 	rig := newSignedIn(t)
 	for name, in := range map[string]session.Mint{
 		"no lineage at all": {
-			Person: personID, AbsoluteExpiresAt: rig.clock.now().Add(absolute),
+			Person: personID, SignedInAt: rig.clock.now(), AbsoluteExpiresAt: rig.clock.now().Add(absolute),
 		},
 		"no person": {
 			Lineage:           rig.lineage,

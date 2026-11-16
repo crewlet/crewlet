@@ -81,13 +81,16 @@ func (k *keptLog) Open(_ context.Context, row executorkeep.TurnRow) (io.ReadClos
 // last request's context — and the launcher a relaunch of the turn is made
 // through, over an engine whose coordinator continues kept sessions. ceiling
 // caps the seat's day, zero capping nothing; spent is what the day has
-// counted.
+// counted. runners are every harness's runner by name, jobs the Claude Code
+// one's, and sessions the log and store the turn's row and archive are in.
 type keptLaunch struct {
-	e    *Engine
-	l    *agentLauncher
-	jobs *sandbox.FakeRunner
-	kept sandbox.SessionCapture
-	ctx  context.Context
+	e        *Engine
+	l        *agentLauncher
+	jobs     *sandbox.FakeRunner
+	runners  map[string]*sandbox.FakeRunner
+	sessions *keptLog
+	kept     sandbox.SessionCapture
+	ctx      context.Context
 }
 
 func newKeptLaunch(t *testing.T, contextTokens int64, ceiling, spent int) keptLaunch {
@@ -176,7 +179,7 @@ func newKeptLaunchOn(t *testing.T, c *Company, seat *org.Role, contextTokens int
 			t.Fatalf("PostCharge: %v", err)
 		}
 	}
-	return keptLaunch{e: e, l: l, jobs: jobs, kept: kept, ctx: ctx}
+	return keptLaunch{e: e, l: l, jobs: jobs, runners: runners, sessions: sessions, kept: kept, ctx: ctx}
 }
 
 // claimed puts the turn's job under the claim that relaunches it, its box held,
@@ -234,7 +237,8 @@ func (k keptLaunch) relaunch(t *testing.T, basis runner.SessionBasis, inPlace *r
 // newest capture measured, which the in-place floor is made of, the harness that
 // wrote it, which the member the launch picks must run, and the turn whose
 // session it is, which a run that starts one of its own instead is told it may
-// read.
+// read; and the release that wrote it, which a reading of what the session
+// holds is read for.
 //
 // Mutation: drop any of them from the answer, and the brief that continues the
 // session tells it the wrong things, the floor counts nothing, the launch
@@ -245,7 +249,7 @@ func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 	k := newKeptLaunch(t, 40000, 0, 0)
 	got := k.l.ProbeSession(k.ctx)
 	want := runner.SessionBasis{LaunchSeq: k.kept.LaunchSeq, CaptureSeq: 1, SessionID: "s-1",
-		Harness: "claude-code", Through: 2, Owed: []int{1}, NoteCursor: 4, Interrupted: true,
+		Harness: "claude-code", Release: "2.1.310", Through: 2, Owed: []int{1}, NoteCursor: 4, Interrupted: true,
 		CapturedAt: keptAt, Home: "/boxes/4f2a/home", ContextTokens: 40000, CopyContext: 40000, KeptTurn: "t1",
 		// THE WINDOW OF A CHAIN WHOSE ONE MEMBER'S MODEL THIS BUILD DOES NOT KNOW.
 		Window: sandbox.ExecutorWindow{Tokens: sandbox.FallbackExecutorWindow, Standard: sandbox.FallbackExecutorWindow}}

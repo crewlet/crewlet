@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -74,7 +75,7 @@ func TestASignOutEndsTheBearerUnderEitherName(t *testing.T) {
 	const person = "018f3a9c-0000-7000-8000-0000000000a1"
 	bearer, err := signer.Mint(session.Mint{
 		Lineage: lineage, Person: person, StartPosition: 1,
-		AbsoluteExpiresAt: clock.Add(time.Hour),
+		SignedInAt: clock, AbsoluteExpiresAt: clock.Add(time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -160,7 +161,7 @@ func TestASignOutEndsOnlyASessionStillLive(t *testing.T) {
 		rows: func(id *session.Identity) { id.Person.Epoch = 4 },
 	}, {
 		name: "past its idle deadline", rows: func(*session.Identity) {},
-		mintedAgo: session.Idle + time.Minute,
+		mintedAgo: config.DefaultIdleTimeout + time.Minute,
 	}, {
 		name:   "on a node that cannot read its rows",
 		rows:   func(id *session.Identity) { id.Lag = statelog.StallGrace + time.Second },
@@ -193,7 +194,7 @@ func TestASignOutEndsOnlyASessionStillLive(t *testing.T) {
 			}
 			cookie, err := signer.Mint(session.Mint{
 				Lineage: lineage, Person: r.estate.person.ID, StartPosition: 1,
-				Epoch: 3, Generation: 2, AbsoluteExpiresAt: clock.Add(72 * time.Hour),
+				Epoch: 3, Generation: 2, SignedInAt: clock, AbsoluteExpiresAt: clock.Add(72 * time.Hour),
 			})
 			if err != nil {
 				t.Fatalf("mint: %v", err)

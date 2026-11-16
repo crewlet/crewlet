@@ -256,6 +256,40 @@
 // versions its rules on the checkpoint row and re-derives once, at the first
 // boot whose rules differ.
 //
+// # A record's broker instant is one value, however the record arrived
+//
+// The broker's instant for a record is the one instant an applier may write of
+// its own ([ApplyOptions.StoredAt]), and it reaches the loop in two shapes: as
+// the broker client reports it on a record applied as it arrives —
+// nanoseconds, in the node's local zone — and as the deferred table kept it on
+// a record held back and applied later — the store's encoding, UTC at a
+// microsecond. A document encodes the precision and the zone it is handed, so
+// the loop hands every applier the second shape on both paths
+// ([Record.StoredAt]): two nodes in two zones, or one record applied live on
+// one node and reprocessed on another, then write the same bytes. What holds
+// the framework to it is this package's own test, which hands a probe applier
+// records by both paths, the live ones in two zones. statelogtest's broker-instant case runs
+// each domain's own applier the same way and compares the Replicated tables: it
+// goes red for a domain whose suite records reach a document the instant is
+// written into, and cannot see a domain that reads the instant in the
+// process's own zone, since its three nodes share one.
+//
+// NO RECORD VERSION AND NO [Readers] GATE ride on it, because no record
+// changed: a writer publishes the same bytes, and what changed is the value the
+// loop derives from the broker's metadata beside them. A record version would
+// have every node of the earlier build retain every record of every domain over
+// a timestamp it reads perfectly well, which is an outage bought to make a
+// difference in bytes arrive later. So a roll that crosses the change has each
+// node write what its own build derives: a document a node of the earlier build
+// writes from a record it applied as it arrived keeps the nanoseconds and the
+// zone it was handed (one it reprocessed was already in the store's encoding),
+// and its peers on this build write the store's encoding. A later record about
+// the object rewrites only the fields it sets: a field it carries forward from
+// the stored document — a message's or a page's creation instant — keeps the
+// earlier shape for the life of the object. Nothing converts it, because no
+// `v*` tag has shipped this package, so no released build wrote a document a
+// later one owes a migration.
+//
 // # THE FLOOR THEOREM
 //
 // The trim floor is load-bearing for the WRITE path, not only for recovery,

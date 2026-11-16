@@ -213,6 +213,7 @@ func wireAPI(
 		Grants:         e,
 		Holders:        configapi.DirectoryHolders(e.IAM()),
 		CompanyWriters: boot.API.Auth.CompanyWriters,
+		SignInLimits:   boot.API.Auth.Limits,
 		Node:           nodeID,
 	})
 	if err != nil {

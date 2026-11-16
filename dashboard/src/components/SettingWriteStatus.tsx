@@ -17,6 +17,7 @@ export function SettingWriteStatus({
   onReload,
   unchanged = "Already set to that.",
   answersWarning = false,
+  refused,
 }: {
   write: SettingWrite;
   /** Re-read what the page draws: offered where a fresh read is the remedy. */
@@ -28,6 +29,8 @@ export function SettingWriteStatus({
    * control that has no Save button of its own to say it on (a switch).
    */
   answersWarning?: boolean;
+  /** A refusal in the form's own words, where it placed the engine's problems under its fields. */
+  refused?: string | undefined;
 }) {
   const { state } = write;
   return (
@@ -56,7 +59,7 @@ export function SettingWriteStatus({
       )}
       {state.kind === "refused" && (
         <Callout variant="danger" title="Nothing was saved">
-          <span>{state.message}</span>
+          <span>{refused ?? state.message}</span>
           {state.reload && (
             <div className="row gap-2">
               <Button size="small" variant="secondary" onClick={onReload}>

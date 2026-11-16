@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Assistant is the Tier B `assistant:` block: whether the Dashboard Assistant
@@ -63,7 +64,7 @@ type Assistant struct {
 	// the shape a seat's llm_auxiliary takes.
 	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."`
 
-	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30."`
+	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most model rounds one Ask Crewlet turn may take before its answer, each calling any number of tools, 1..40. Absent: 30."`
 	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty" json:"turn_timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900."`
 	ProposalTTLSeconds int `yaml:"proposal_ttl_seconds,omitempty" json:"proposal_ttl_seconds,omitempty" js:"min=0;max=3600" desc:"How long a proposed change waits for approval, 60..3600 seconds. Absent: 900."`
 	RetentionDays      int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0;max=365" desc:"How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30."`
@@ -76,7 +77,54 @@ type Assistant struct {
 	// harness for a task that needs research, scripts, files or many steps
 	// (ADR-0054). Absent: the assistant answers in quick mode only.
 	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."`
+
+	// Tools narrows which tools Ask Crewlet offers anybody; it never widens a person's.
+	Tools AssistantTools `yaml:"tools,omitempty" json:"tools,omitzero" desc:"Which of Ask Crewlet's tools the company turns off for everybody. It only narrows what a person's own permissions already offer."`
+
+	// Deliberate is a stronger chain for a hard question, which a person
+	// asks for one question at a time. Absent: every question runs on LLM.
+	Deliberate *AssistantDeliberate `yaml:"deliberate,omitempty" json:"deliberate,omitempty" desc:"A stronger model chain for hard questions: a person asks for it with Think harder, one question at a time, and briefs of a decision may use it. Held to assistant.llm's rules and charged to the same budgets. Absent: every question runs on assistant.llm."`
 }
+
+// AssistantDeliberate is the `assistant.deliberate` block: a stronger chain
+// for Think harder, held to `assistant.llm`'s rules and charged to its budgets.
+type AssistantDeliberate struct {
+	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys a question asked to think harder runs on, a fallback chain held to assistant.llm's rules: each an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Required."`
+	// DecisionBriefs is whether "Brief me on this decision" runs on this
+	// chain: a decision is the hard question it exists for.
+	DecisionBriefs bool `yaml:"decision_briefs,omitempty" json:"decision_briefs,omitempty" desc:"Run a brief of a decision (Brief me on this decision) on this chain too. Absent or false: briefs run on assistant.llm."`
+}
+
+// AssistantTools is the `assistant.tools` block.
+type AssistantTools struct {
+	Deny []AssistantToolFamily `yaml:"deny,omitempty" json:"deny,omitempty" js:"enum=writes|generic_changes|generic_reads|chat_writes|atlas_writes|agent_controls|page_changes|deep_work" desc:"Tool families Ask Crewlet never offers, each once: writes (every change it could propose, so it only reads), generic_changes (a change to any API route), generic_reads (a read of any API route), chat_writes, atlas_writes, agent_controls (pausing, resuming, steering and answering an agent's run), page_changes (a change to the screen the person has open), deep_work."`
+}
+
+// AssistantToolFamily is a family of Ask Crewlet's tools an administrator can turn off.
+type AssistantToolFamily string
+
+// The families, each a set of tools internal/assistant/catalog's FamiliesOf names.
+const (
+	FamilyWrites         AssistantToolFamily = "writes"
+	FamilyGenericChanges AssistantToolFamily = "generic_changes"
+	FamilyGenericReads   AssistantToolFamily = "generic_reads"
+	FamilyChatWrites     AssistantToolFamily = "chat_writes"
+	FamilyAtlasWrites    AssistantToolFamily = "atlas_writes"
+	FamilyAgentControls  AssistantToolFamily = "agent_controls"
+	FamilyPageChanges    AssistantToolFamily = "page_changes"
+	FamilyDeepWork       AssistantToolFamily = "deep_work"
+)
+
+// AssistantToolFamilies are the families, in declaration order.
+var AssistantToolFamilies = []AssistantToolFamily{FamilyWrites, FamilyGenericChanges,
+	FamilyGenericReads, FamilyChatWrites, FamilyAtlasWrites, FamilyAgentControls,
+	FamilyPageChanges, FamilyDeepWork}
+
+// Valid reports whether f is a family this build knows.
+func (f AssistantToolFamily) Valid() bool { return slices.Contains(AssistantToolFamilies, f) }
+
+// Denies reports whether the company turned family f off.
+func (t AssistantTools) Denies(f AssistantToolFamily) bool { return slices.Contains(t.Deny, f) }
 
 // AssistantDeepWork is the `assistant.deep_work` block.
 //
@@ -177,14 +225,19 @@ func (b assistantBound) value(v int) int {
 	return v
 }
 
-// check reports v when it is set and out of range.
+// rangeOf is b as the settings registry declares it ([settingRanges]); 0 is
+// absent, the default.
+func (b assistantBound) rangeOf() Range {
+	return Range{Min: float64(b.min), Max: atMost(float64(b.max)), OrZero: true}
+}
+
+// check reports v when it is set and out of range; absent (0) is the default.
 func (b assistantBound) check(path Path, v int, p *problems) {
-	if v == 0 || (v >= b.min && v <= b.max) {
+	if v == 0 {
 		return
 	}
-	p.add(at(path, b.key), ErrOutOfRange,
-		"must be %d..%d %s, or absent for the default of %d, got %d",
-		b.min, b.max, b.unit, b.def, v)
+	p.within(at(path, b.key), float64(v), fmt.Sprintf("in %s, or absent for the default of %d",
+		b.unit, b.def))
 }
 
 // On reports whether the company turned the assistant on.
@@ -351,6 +404,29 @@ func (c *Company) AssistantChain() (ProviderKeys, error) {
 	return slices.Clone(c.Assistant.LLM), nil
 }
 
+// ErrNoDeliberate is what [Company.DeliberateChain] answers for a company that
+// sets no `assistant.deliberate` block.
+var ErrNoDeliberate = errors.New("assistant.deliberate is not set, so Ask Crewlet has no " +
+	"stronger model to think harder on: set assistant.deliberate.llm")
+
+// DeliberateChain is the one place `assistant.deliberate.llm` is handed out:
+// [ErrAssistantOff], [ErrNoDeliberate], or the chain held to `assistant.llm`'s rules.
+func (c *Company) DeliberateChain() (ProviderKeys, error) {
+	if !c.Assistant.On() {
+		return nil, ErrAssistantOff
+	}
+	d := c.Assistant.Deliberate
+	if d == nil {
+		return nil, ErrNoDeliberate
+	}
+	if err := c.chainProblems(field("assistant.deliberate.llm"), d.LLM,
+		"Ask Crewlet's stronger chain names no model: list a providers.llm key, e.g. "+
+			"llm: [assistant-strong]"); err != nil {
+		return nil, err
+	}
+	return slices.Clone(d.LLM), nil
+}
+
 // validateAssistant holds the `assistant:` block to its rules.
 //
 // AN ADMISSION RULE, every part of it: nothing about running a SEAT depends on
@@ -377,6 +453,23 @@ func (c *Company) validateAssistant() error {
 		p.wrap(c.assistantChainProblems(path))
 	}
 	p.wrap(c.deepWorkProblems(at(path, "deep_work")))
+	if a.Deliberate != nil {
+		p.wrap(c.chainProblems(at(path, "deliberate.llm"), a.Deliberate.LLM,
+			"assistant.deliberate names no model: list a providers.llm key, e.g. "+
+				"llm: [assistant-strong], or remove the block"))
+	}
+	deny := at(path, "tools.deny")
+	seen := map[AssistantToolFamily]int{}
+	for i, f := range a.Tools.Deny {
+		switch was, dup := seen[f]; {
+		case !f.Valid():
+			p.add(idx(deny, i), ErrUnknownValue, "%q (want %s)", f, words.Or(AssistantToolFamilies))
+		case dup:
+			p.add(idx(deny, i), ErrConflict, "%q is listed twice (first at tools.deny[%d])", f, was)
+		default:
+			seen[f] = i
+		}
+	}
 	return p.err()
 }
 
@@ -385,17 +478,22 @@ func (c *Company) validateAssistant() error {
 // an entry whose merged profile leaves the harness's local or web tools
 // reachable. Each problem names the field to change.
 func (c *Company) assistantChainProblems(path Path) error {
+	return c.chainProblems(at(path, "llm"), c.Assistant.LLM,
+		"Ask Crewlet is enabled but names no model: list a providers.llm "+
+			"key, e.g. llm: [assistant], whose harness's local tools are denied and "+
+			"whose entry has overrides: {web_tools: denied}")
+}
+
+// chainProblems reports every way chain, at llmPath, cannot carry the assistant.
+// Both chains are held to it, so a stronger model is never one the quick chain refuses.
+func (c *Company) chainProblems(llmPath Path, chain ProviderKeys, empty string) error {
 	var p problems
-	llmPath := at(path, "llm")
-	if len(c.Assistant.LLM) == 0 {
-		p.add(llmPath, ErrMissing,
-			"Ask Crewlet is enabled but names no model: list a providers.llm "+
-				"key, e.g. llm: [assistant], whose harness's local tools are denied and "+
-				"whose entry has overrides: {web_tools: denied}")
+	if len(chain) == 0 {
+		p.add(llmPath, ErrMissing, "%s", empty)
 		return p.err()
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
-	for i, key := range c.Assistant.LLM {
+	for i, key := range chain {
 		member := idx(llmPath, i)
 		entry, ok := c.Providers.LLM[key]
 		if !ok {

@@ -394,6 +394,8 @@ func (r *roundTrip) apply(from, last uint64) {
 			r.t.Fatalf("decode record %d: %v", seq, err)
 		}
 		_ = subject
+		// AS THE FRAMEWORK'S LOOP HANDS IT ([statelog.AppliedInstant]).
+		storedAt = statelog.AppliedInstant(storedAt)
 		record := statelog.Record{
 			Envelope: statelog.Envelope{
 				V: env.V, Kind: string(env.Subject.Kind),

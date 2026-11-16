@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -31,31 +32,42 @@ func TestARulesSearchEndsWhateverItsBoundAnswers(t *testing.T) {
 	}
 }
 
-// A JSON WEB TOKEN'S HEADER OF MANY OPENINGS COSTS WHAT ITS BYTES COST: a
-// token whose header and claims run past [MaxReach] is matched from the first
-// `eyJ` from which they fit ([jwtWithin]), and finding it reads the header
-// again once, not once for every `eyJ` in it. Looked for from the place after
-// each match that did not fit, a header 16 KiB past the bound with an `eyJ`
-// every three bytes was read again from each of its five thousand openings
-// before the bound.
-//
-// Timed as linear_test.go's tests are ([withinFactor]): the header of
-// openings against one of the same length with none but its first, which
-// costs one more read past the bound; read once, the two cost the same.
-//
-// Mutation: go on looking from the place after the match's start, and this
-// fails.
+// A JSON WEB TOKEN'S HEADER OF MANY OPENINGS IS READ ONCE ([jwtWithin]),
+// counted by the table's JWT rule asking its bound: twice, not once an opening.
+// Mutation: go on looking past the match's start, and it is asked thousands of times.
 func TestAJSONWebTokensHeaderOfManyOpeningsIsReadOnce(t *testing.T) {
 	t.Parallel()
-	read := func(text string) { _ = Secrets(text) }
+	i := slices.IndexFunc(rules(), func(r rule) bool { return r.pattern.String() == jwtPattern })
+	if i < 0 || rules()[i].bound == nil {
+		t.Fatal("the rules hold no JSON Web Token's rule held to its bound")
+	}
+	matches := func(text string) (int, string) {
+		jwt := rules()[i]
+		bound, asked := jwt.bound, 0
+		jwt.bound = func(text string, start, end int) (bool, int) {
+			asked++
+			return bound(text, start, end)
+		}
+		out := jwt.apply(text)
+		return asked, out
+	}
 	token := func(header string) string {
 		return header + ".eyJ" + strings.Repeat("b", 30) + "." + strings.Repeat("c", 43) + "\n"
 	}
 	n := MaxReach + 16<<10
 	plain := token("eyJ" + strings.Repeat("a", n-3))
 	openings := token(strings.Repeat("eyJ", n/3) + "aaaaaaaa")
-	if ok, plainCost, openingsCost := withinFactor(read, plain, openings, 3); !ok {
-		t.Errorf("%v for a header of openings against %v for one with only its first: the header is "+
-			"read again from each opening", openingsCost, plainCost)
+	if asked, out := matches(plain); asked != 1 || out != plain {
+		t.Errorf("a header with only its first opening was matched %d times and redacted to %d bytes of "+
+			"its %d; want once, and nothing taken, its claims too far from the opening", asked, len(out), len(plain))
+	}
+	asked, out := matches(openings)
+	if asked != 2 {
+		t.Errorf("a header of %d openings was matched %d times; want twice, from its first opening and "+
+			"from the one its claims fit from: the header is read again from each opening", n/3, asked)
+	}
+	if !strings.Contains(out, rules()[i].with) || len(out) >= len(openings) {
+		t.Errorf("the header of openings was redacted to %d bytes of its %d, want the token its claims fit "+
+			"taken", len(out), len(openings))
 	}
 }

@@ -102,6 +102,9 @@ type turn struct {
 	deep deepState
 	// brief is a brief turn's own state ([wire.TurnBrief], brief.go).
 	brief briefState
+	// strength is the chain the turn runs on ([Strength]): kept when it
+	// parks, so the segment an approval resumes answers on the same model.
+	strength Strength
 }
 
 // write is the record caller for this segment, with no step yet.
@@ -130,22 +133,22 @@ func (t *turn) firstOutput() {
 	}
 }
 
-// tainted notes a read whose answer, at the trust it was fenced under,
-// somebody outside the company wrote.
-func (t *turn) tainted(tool catalog.Tool, trust provenance.Trust) {
-	if !tool.Fence || !outsideTrust(trust) {
+// tainted notes an answer from surface src that, at its trust, somebody
+// outside the company wrote.
+func (t *turn) tainted(src provenance.Source, trust provenance.Trust) {
+	if !outsideTrust(trust) {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.outside = tool.Source
+	t.outside = src
 }
 
 // readAnswer notes an answer the turn's model is handed outside a step, a
 // resumed segment's decision ([resultOf]): from src, at the trust it is fenced
 // at, tainting the turn exactly as a step's read does.
 func (t *turn) readAnswer(src provenance.Source, trust provenance.Trust) {
-	t.tainted(catalog.Tool{Fence: true, Source: src}, trust)
+	t.tainted(src, trust)
 }
 
 // taintedBy carries the taint the turn's earlier segment parked with
@@ -162,10 +165,10 @@ func (t *turn) taintedBy(source provenance.Source) {
 }
 
 // taint is the outside source a proposal made now names, "" for none.
-func (t *turn) taint() string {
+func (t *turn) taint() provenance.Source {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return string(t.outside)
+	return t.outside
 }
 
 // stepStart opens one tool step: numbered, labelled from the call's safe
@@ -647,7 +650,8 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 	t.publishAudit(ctx, state, end.ErrorCode, duration)
 	ended := []any{"turn", t.id, "conversation", t.conversation, "state", string(state),
 		"error_code", end.ErrorCode, "steps", end.Steps, "duration_ms", duration.Milliseconds(),
-		"input_tokens", end.InputTokens, "output_tokens", end.OutputTokens}
+		"input_tokens", end.InputTokens, "output_tokens", end.OutputTokens,
+		"strength", string(t.strength)}
 	if end.ErrorCode == string(wire.ErrorBriefInvalid) && err != nil {
 		// A BRIEF THAT COULD NOT BE WRITTEN SAYS WHY where the turn's end is
 		// read: the last refusal's reason, or the brief's own cap.
@@ -772,6 +776,9 @@ type parked struct {
 	// none: the loop a resumed segment continues still holds that answer
 	// ([turn.taintedBy]).
 	Outside string `json:"outside,omitempty"`
+	// Strength is the chain the segment ran on ([Strength]); absent is
+	// [Quick], what every segment ran on before a stronger chain existed.
+	Strength Strength `json:"strength,omitempty"`
 }
 
 // parkedTail is how many frames a segment tells after its park record has
@@ -787,7 +794,7 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
 		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail, Deep: t.deep.parked,
-		Page: t.page, Outside: string(t.outside)}
+		Page: t.page, Outside: string(t.outside), Strength: t.strength}
 	if t.anchor != uuid.Nil {
 		keep.Anchor = t.anchor.String()
 	}

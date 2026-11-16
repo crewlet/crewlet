@@ -46,6 +46,7 @@ import {
 } from "@crewlethq/ui";
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { fieldError, holdReason } from "~/lib/formHold.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
@@ -74,11 +75,9 @@ function reads(containers: boolean): string {
     : "Lists the TCP ports the server listens on. It names no process.";
 }
 
-/** What a refused or failed request says, in the engine's words. */
-function said(err: unknown): string {
-  if (err instanceof RestError) {
-    return [err.sentence, err.detail].filter(Boolean).join(" ") || err.message;
-  }
+/** What a refused or failed request says: the engine's detail, else its code's sentence. */
+export function said(err: unknown): string {
+  if (err instanceof RestError) return err.detail || err.sentence || err.message;
   return String(err);
 }
 
@@ -394,7 +393,8 @@ function ServerDialog({
   const pinnable = (scanned ?? []).filter((k) => !k.problem);
   const fromScan =
     scanned !== null && keyLines(form.keys).join("\n") === pinnable.map((k) => k.line).join("\n");
-  const blocked = serverFormHeld(form, taken, host !== null, fromScan && !compared);
+  const hold = serverFormHeld(form, taken, host !== null, fromScan && !compared);
+  const blocked = holdReason(hold);
 
   async function scan() {
     setScanning(true);
@@ -467,6 +467,7 @@ function ServerDialog({
           <FormField
             label="Name"
             helper="Up to 40 lowercase letters, digits and hyphens. It is part of every certificate for this server, so it stays as it is."
+            error={fieldError(hold, "id")}
           >
             {(field) => (
               <Input
@@ -484,6 +485,7 @@ function ServerDialog({
         <FormField
           label="Address"
           helper="Its host name or IP address, with no scheme, user, port or path."
+          error={fieldError(hold, "address")}
         >
           {(field) => (
             <Input
@@ -497,7 +499,7 @@ function ServerDialog({
             />
           )}
         </FormField>
-        <FormField label="Port" optional helper="Empty is 22.">
+        <FormField label="Port" optional helper="Empty is 22." error={fieldError(hold, "port")}>
           {(field) => (
             <Input
               id={field.id}
@@ -549,6 +551,7 @@ function ServerDialog({
           label="Description"
           optional
           helper="What the server is, shown to agents and approvers."
+          error={fieldError(hold, "description")}
         >
           {(field) => (
             <Input
