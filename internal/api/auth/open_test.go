@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
@@ -32,10 +33,10 @@ func newOpenRig(t *testing.T) *openRig {
 	}
 	// AN ABSOLUTE DEADLINE PAST THE IDLE ONE, so the idle deadline is the
 	// one a tab open past it meets first.
-	absolute := s.at.Add(session.Idle + 12*time.Hour)
+	absolute := s.at.Add(config.DefaultIdleTimeout + 12*time.Hour)
 	cookie, err := signer.Mint(session.Mint{
 		Lineage: s.lineage, Person: sessionPerson, Epoch: 3, Generation: 1,
-		StartPosition: sessionStart, AbsoluteExpiresAt: absolute,
+		StartPosition: sessionStart, SignedInAt: s.at, AbsoluteExpiresAt: absolute,
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -61,7 +62,7 @@ func (o *openRig) handshake() *http.Request {
 // else that ends its session.
 //
 // A socket holds the bearer its handshake presented and can never be re-issued
-// one, so its idle deadline is the handshake's plus [session.Idle] however busy
+// one, so its idle deadline is the handshake's plus the idle limit however busy
 // the tab has been since. Decided on that, a dashboard left open past it would
 // be closed by the first identity event anywhere in the company, while its
 // person was at the screen. The control is the same cookie presented as a
@@ -73,7 +74,7 @@ func TestAnOpenConnectionIsNotEndedByItsIdleDeadline(t *testing.T) {
 	t.Parallel()
 	o := newOpenRig(t)
 	g := o.guard()
-	o.advance(session.Idle + time.Hour)
+	o.advance(config.DefaultIdleTimeout + time.Hour)
 
 	if r, _ := g.Resolve(httptest.NewRecorder(), o.handshake()); func() bool {
 		_, how := iam.From(r.Context())

@@ -31,14 +31,16 @@ const modulePath = "github.com/crewlet/crewlet"
 // the one a conversation's next turn continues, is a model's context before it
 // reads a word of its brief, so the type that names which session is restored
 // into a run (sandbox.CarriedSession, the restore carrier) is an input, and so
-// is the continuation that tells it what it lacks (SessionContinuation): each
+// is the continuation that tells it what it lacks (SessionContinuation, and
+// beside it the briefs told by a reading of what it holds, ExactTelling): each
 // function that chooses either is listed with the tests that hold whose session
 // it is and what it reads.
 var modelInputs = map[string][]string{
 	modulePath + "/internal/providers/llm": {"Request"},
-	modulePath + "/internal/agent/runner":  {"AgentRunRequest", "Continuation", "SessionContinuation"},
+	modulePath + "/internal/agent/runner": {"AgentRunRequest", "Continuation", "SessionContinuation",
+		"ExactTelling"},
 	modulePath + "/internal/sandbox": {"LaunchRequest", "Continuation", "RunRequest", "SessionContinuation",
-		"CarriedSession"},
+		"ExactTelling", "CarriedSession"},
 	modulePath + "/internal/assistant": {"DeepRun"},
 }
 
@@ -214,6 +216,17 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 	}},
+	// AND BESIDE IT THE ONE TOLD BY A READING OF WHAT A CUT-OFF SESSION HOLDS,
+	// composed by the same keptSession before the budget check, its calls
+	// defused under the turn's token and the subagents it names, the box's
+	// words, defused and cut; led only puts the lead in front of them once the
+	// check has passed, and attaches them where their own first request sends
+	// the session whole.
+	"internal/agent/runner/firstrequest.go:led": {tests: []string{
+		"internal/agent/runner.TestACutOffKeptSessionIsToldOnlyTheCallsItsReadingDoesNotHold",
+		"internal/agent/runner.TestASubagentNamedInABriefIsDefusedAndCut",
+		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
+	}},
 	// THE CONTINUATION OF THE SESSION A CONVERSATION'S LAST TURN LEFT: the
 	// engine's own lead — the turn boundary and the new box, the base's turn
 	// and home defused under the launching segment's token, in a schedule's
@@ -229,9 +242,11 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 	}},
 	// AND ITS TRANSPORT to the sandbox layer: the two briefs the runner
-	// composed, each where the box it was written for gets it.
+	// composed, each where the box it was written for gets it, and beside a
+	// kept capture's the two told by a reading of what it holds.
 	"internal/engine/executorrestore.go:sandboxSession": {tests: []string{
 		"internal/engine.TestARelaunchContinuesItsSessionInTheBoxItGetsWithTheBriefForIt",
+		"internal/engine.TestTheBriefToldByAReadingReachesTheSandboxBesideTheOtherTwo",
 		"internal/engine.TestTheFrozenBaseOutlivesASiblingsEnd",
 		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
 	}},
@@ -244,6 +259,7 @@ var modelCalls = map[string]modelCall{
 		"internal/sandbox.TestARestoredSessionIsTheSeatsAndTheTurnsOwn",
 		"internal/sandbox.TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows",
 		"internal/sandbox.TestTheBriefMatchesWhatTheRunHas",
+		"internal/sandbox.TestABriefToldByAReadingIsHandedOnlyToABoxThatAnswersItsRelease",
 		"internal/executordomain.TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor",
 	}},
 	// AND OF THE SESSION A CONVERSATION'S LAST TURN LEFT, the base the turn's

@@ -28,8 +28,8 @@ var (
 		gitlet.GitCompare: "Compare", gitlet.GitTips: "Tips", gitlet.GitTags: "Tags", gitlet.GitLandedIn: "LandedIn",
 		gitlet.GitRevisionFacts: "RevisionFacts", gitlet.GitReanchor: "Reanchor", gitlet.GitInterdiff: "Diff",
 		gitlet.GitLog: "Log", gitlet.GitBlame: "Blame", gitlet.GitChecksFile: "ChecksFile",
-		gitlet.GitCodeFiles: "CodeFiles", gitlet.GitSearch: "Search"}
-	unkept = []string{"Tips", "Tags", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles"}
+		gitlet.GitCodeFiles: "CodeFiles", gitlet.GitSearch: "Search", gitlet.GitFind: "Find"}
+	unkept = []string{"Tips", "Tags", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles", "Find"}
 )
 
 // memoized is every kind memoizable answers from the memo.
@@ -273,12 +273,10 @@ func spell(ty reflect.Type) string {
 }
 
 // memoShapes is the shape of the answers each memoFormat this build reads was
-// written over: a format names one shape, for ever. page/4's was recorded as
-// 4a3450124092111d while the fingerprint spelled each type with its package's
-// name (code.GitAnswer); the same fields, spelled as spell spells them, are
-// 7bc6fe45e8de6b7f.
+// written over: a format names one shape, for ever. page/5 added each
+// commit's committer and engine mark and a narrowed history's unjudged count.
 var memoShapes = map[string]string{
-	"page/4": "7bc6fe45e8de6b7f",
+	"page/5": "3180ddc7fc1c1ff8",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the
@@ -413,9 +411,10 @@ func TestAStatsRunHoldsOnePagesCountsAtATime(t *testing.T) {
 }
 
 // tipsShapes is the shape of gitlet.Tip each tipsMemoFormat this build reads
-// was written over: a format names one shape, for ever.
+// was written over: a format names one shape, for ever. tips/2 added each
+// commit's committer and engine mark.
 var tipsShapes = map[string]string{
-	"tips/1": "f4db88a4765be972",
+	"tips/2": "4d98085adadc82e0",
 }
 
 // A tip's facts, every field set but its counts, read back whole, and an entry

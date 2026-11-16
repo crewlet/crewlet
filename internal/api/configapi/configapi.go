@@ -159,6 +159,7 @@ type Service struct {
 	// tierWarnings is what a company does beside this node's Tier A
 	// ([Options.TierWarnings]); nil answers none.
 	tierWarnings func(*config.Company) []config.Warning
+	signInLimits config.SignInLimits
 	// node is this node's id ([Options.Node]), which an unknown outcome and a
 	// lost race name as the one node holding the revision they stored.
 	node string
@@ -261,6 +262,11 @@ type Options struct {
 	// something else has; it refuses nothing, since a warning never does.
 	TierWarnings func(*config.Company) []config.Warning
 
+	// SignInLimits is Tier A's `api.auth.limits`: a written sign-in value
+	// past one is refused at this node's door (ADR-0152). The one field, for
+	// [Options.CompanyWriters]' reason; the zero limits only the engine's.
+	SignInLimits config.SignInLimits
+
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
 	// Nil skips it: the pointer is the authoritative path and the poll is
@@ -340,6 +346,7 @@ func New(opts Options) (*Service, error) {
 		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
 		writers:      config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
 		tierWarnings: opts.TierWarnings,
+		signInLimits: opts.SignInLimits,
 		node:         opts.Node, raises: opts.Raises, secrets: opts.Secrets, grants: opts.Grants,
 	}
 	if s.raises == nil {

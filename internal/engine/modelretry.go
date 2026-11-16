@@ -314,8 +314,9 @@ func (e *Engine) probeEntry(ctx context.Context, key string, provider llm.Provid
 	return err
 }
 
-// fleetSitsOut reports whether any live node's heartbeat says the entry sits
-// out now. An unreadable lease table is an error, never "nobody does".
+// fleetSitsOut reports whether any live node's status record says the entry
+// sits out now. An unreadable lease table or record store is an error, never
+// "nobody does".
 func (e *Engine) fleetSitsOut(ctx context.Context, key string) (bool, error) {
 	nodes, err := e.liveModelRows(ctx)
 	if err != nil {
@@ -333,45 +334,41 @@ func (e *Engine) fleetSitsOut(ctx context.Context, key string) (bool, error) {
 }
 
 // liveModelRows is every live node's published model rows, by node id; a node
-// whose heartbeat carried no status is absent. With no coordination store,
+// whose status record is not counted is absent. With no coordination store,
 // this node's own rows.
 func (e *Engine) liveModelRows(ctx context.Context) (map[string][]coord.ModelStatus, error) {
 	if e.backends == nil || e.backends.Coord == nil {
 		return map[string][]coord.ModelStatus{e.selfNode(): e.modelStatus(ctx)}, nil
 	}
-	statuses, err := e.liveStatuses(ctx)
+	records, err := e.liveStatusRecords(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string][]coord.ModelStatus, len(statuses))
-	for node, status := range statuses {
-		out[node] = status.Models
+	out := make(map[string][]coord.ModelStatus, len(records))
+	for node, r := range records {
+		out[node] = r.Models
 	}
 	return out, nil
 }
 
-// liveStatuses is every live node's published heartbeat, by node id: one
-// listing of the presence leases. A node whose heartbeat carried no status is
+// liveStatusRecords is every live node's status record, by node id: one
+// listing of the presence leases and one of the records, joined by epoch
+// ([coord.LiveNodeStatuses]). A live node whose record is not counted is
 // absent, never a node with nothing to report; with no coordination store the
-// listing is empty, and a reader that needs this node's own rows reads them.
-func (e *Engine) liveStatuses(ctx context.Context) (map[string]coord.NodeStatus, error) {
-	if e.backends == nil || e.backends.Coord == nil {
-		return map[string]coord.NodeStatus{}, nil
+// answer is empty, and a reader that needs this node's own rows reads them.
+func (e *Engine) liveStatusRecords(ctx context.Context) (map[string]coord.NodeStatusRecord, error) {
+	if e.backends == nil || e.backends.Coord == nil || e.backends.Fleet == nil {
+		return map[string]coord.NodeStatusRecord{}, nil
 	}
 	leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]coord.NodeStatus, len(leases))
-	for _, lease := range leases {
-		status, ok := coord.StatusFromMeta(lease.Meta)
-		if !ok {
-			continue
-		}
-		node, _ := coord.ClassNode.Name(lease.Resource)
-		out[node] = status
+	records, err := e.backends.Fleet.NodeStatusRecords(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	return coord.LiveNodeStatuses(records, leases), nil
 }
 
 // selfNode is this node's id: its node's, or the one a test names.

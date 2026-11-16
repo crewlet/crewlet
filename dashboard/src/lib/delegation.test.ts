@@ -6,6 +6,8 @@ import {
   delegationWaiting,
   escalatedByWords,
   isReleaseAct,
+  kindMeaning,
+  kindsPhrase,
   kindWords,
   mergeMethodWords,
   newestFlag,
@@ -147,10 +149,14 @@ describe("words for the engine's closed words", () => {
   });
 
   test("each act a rule may delegate has its words; an unknown one is said as written", () => {
-    expect(kindWords("ssh_operate")).toBe("Commands on servers");
+    expect(kindWords("ssh_operate")).toBe("Server commands");
     expect(kindWords("pr_merge")).toBe("Merges");
     expect(kindWords("deploy")).toBe("Deploys");
     expect(kindWords("launch" as never)).toBe("launch");
+    expect(kindMeaning("pr_merge")).toBe("An agent merges a pull request or a Gitlet change.");
+    expect(kindMeaning("launch" as never)).toBe("");
+    expect(kindsPhrase(["pr_merge", "deploy"])).toBe("Merges and deploys");
+    expect(kindsPhrase(["ssh_operate"])).toBe("Server commands");
   });
 });
 

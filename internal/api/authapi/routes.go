@@ -178,7 +178,8 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
-	expires := s.now().Add(tokenLifetime)
+	signedIn := s.now()
+	expires := signedIn.Add(tokenLifetime)
 	opID := sessionOpID(lineage)
 	s.endEveryHeld(r)
 	opened, err := s.behalf(principal).OpenSession(r.Context(), iamdomain.SessionStart{
@@ -205,6 +206,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		Lineage: lineage, Person: subject,
 		Epoch: opened.Epoch, Generation: opened.Generation,
 		StartPosition:     uint64(at.Packed()),
+		SignedInAt:        signedIn,
 		AbsoluteExpiresAt: expires,
 	})
 	if err != nil {
@@ -409,6 +411,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		method: types.SignInPassword, factor: factor.factor,
 		stepUp:   true,
 		replaces: replaced.Bearer.Lineage.String(),
+		signedIn: replaced.Bearer.SignedInAt,
 		absolute: replaced.Bearer.AbsoluteExpiresAt,
 	})
 }

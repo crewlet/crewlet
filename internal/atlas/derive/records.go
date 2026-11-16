@@ -26,7 +26,7 @@ type Records struct {
 	ModelCalls   []ModelUse
 	Pushes       []RepoPush
 	Alarms       []Alarm
-	// Fleet is every live node as its presence row says it.
+	// Fleet is every live node as its presence row and its status record say it.
 	Fleet []FleetNode
 }
 

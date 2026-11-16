@@ -80,6 +80,7 @@ func withServingTierA(t *testing.T, boot *config.Bootstrap) {
 	t.Helper()
 	withKeyring(t, boot)
 	withCredential(t, boot)
+	withPasswordAlone(boot)
 }
 
 // present attaches the fixture's credential to a request.

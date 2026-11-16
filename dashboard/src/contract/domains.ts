@@ -80,6 +80,7 @@ export const SESSION_QUERIES = {
     "code_reviews",
     "code_refs",
     "code_tree",
+    "code_find",
     "code_blob",
     "code_log",
     "code_blame",
@@ -92,6 +93,7 @@ export const SESSION_QUERIES = {
     "code_checks",
     "code_check",
     "code_check_log",
+    "code_commit_marks",
     "inbox",
   ],
 } as const;

@@ -14,10 +14,10 @@ import (
 // Nobody: it is each node's own memory of the children it runs (a shared
 // server's one child, each held seat's own), read where it lives when a person
 // opens a server's page, as a turn's detail is (ADR-0021). Neither stored nor
-// on the heartbeat: the heartbeat's per-server row ([MCPServerStatus]) carries
-// the bounded counts every reader needs on every beat, and a row per child
-// would put a company's seat count times its per-agent servers on a lease
-// re-sent every [ReconcileInterval] to answer a question asked a few times a
+// on the node's status record: its per-server row ([MCPServerStatus]) carries
+// the bounded counts every reader needs, and a row per child would put a
+// company's seat count times its per-agent servers on a record rewritten at
+// least every [ReconcileInterval] to answer a question asked a few times a
 // minute. So this type is a WIRE shape between nodes (internal/engine's
 // mcpinstances.go asks and answers it), declared here beside the row it
 // details because both the engine and the API read it.

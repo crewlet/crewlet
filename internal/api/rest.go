@@ -104,6 +104,11 @@ var namedRoutes = []struct {
 	// WHAT DELEGATES DECIDED, the rules and limits they decide under, the
 	// day's digest and the week's spot-checks (ADR-0125).
 	{method: "GET", pattern: "/delegated-decisions", what: "delegated_decisions"},
+	// WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB: its repositories, one's
+	// branches (`repo=`) and the checks on a branch's newest commit (`branch=`).
+	{method: "GET", pattern: "/delegated-decisions/repositories", what: "delegated_repositories"},
+	{method: "GET", pattern: "/delegated-decisions/branches", what: "delegated_branches"},
+	{method: "GET", pattern: "/delegated-decisions/checks", what: "delegated_checks"},
 	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.
@@ -324,13 +329,14 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/changes/{n}", what: "code_change", path: map[string]string{"name": "name", "n": "change"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/changes/{n}/routing", what: "code_change_routing", path: map[string]string{"name": "name", "n": "change"}},
 	{method: "GET", pattern: "/gitlet/reviews", what: "code_reviews"},
-	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file, a path's
-	// history, a file's blame, a diff, many tips at once, its tags by their
-	// date, a comparison with its merge preview and one commit with the changes
-	// it belongs to — each read by object id of the repository's home Gitlet
-	// node, and decided per repository as the rows are.
+	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file found by its
+	// name, a file, a path's history, a file's blame, a diff, many tips at
+	// once, its tags by their date, a comparison with its merge preview and one
+	// commit with the changes it belongs to — each read by object id of the
+	// repository's home Gitlet node, and decided per repository as the rows are.
 	{method: "GET", pattern: "/gitlet/repos/{name}/refs", what: "code_refs", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/tree", what: "code_tree", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/gitlet/repos/{name}/find", what: "code_find", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/blob", what: "code_blob", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/log", what: "code_log", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/blame", what: "code_blame", path: map[string]string{"name": "name"}},
@@ -340,15 +346,17 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/compare", what: "code_compare", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/commits/{sha}", what: "code_commit", path: map[string]string{"name": "name", "sha": "sha"}},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the live queues, the attempts of
-	// checks — a repository's, a change's, a commit's or every repository's
-	// in a window — one attempt whole on its repository's path, and a page of
-	// the log a failed run kept, each decided per repository as the rows are.
-	// The branch an attempt was checked for rides the query as `target`: a
-	// ref's slashes are no path segment's.
+	// checks (a repository's, a change's, a commit's or every repository's
+	// in a window), one attempt whole on its repository's path, a page of
+	// the log a failed run kept, and the marks a history page's commits
+	// carry: their checks and the changes they landed with, each decided per
+	// repository as the rows are. The branch an attempt was checked for rides
+	// the query as `target`: a ref's slashes are no path segment's.
 	{method: "GET", pattern: "/gitlet/queue", what: "code_queue"},
 	{method: "GET", pattern: "/gitlet/checks", what: "code_checks"},
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}", what: "code_check", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", what: "code_check_log", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
+	{method: "GET", pattern: "/gitlet/repos/{name}/commit-marks", what: "code_commit_marks", path: map[string]string{"name": "name"}},
 	// AND A SEARCH OF THEIR LINES, across every repository the caller may
 	// read or the ones its repo: filters name, each decided per repository
 	// by the Gitlet node that answers it.

@@ -278,8 +278,9 @@ type LaunchRequest struct {
 	Base *ConversationBase
 
 	// Decided is told how the launch decided its run takes up a session —
-	// which of the three briefs it hands the run, and whether the session
-	// is the turn's kept capture — once the launch knows the box and before
+	// which of the briefs it hands the run, whether the session is the
+	// turn's kept capture, and whether the brief is one told by a reading of
+	// what that capture holds — once the launch knows the box and before
 	// the run starts there, so what the caller arms for the run (the skills
 	// its session has loaded) and states of it (the prompt it was sent) are
 	// the session's it will run in. Called once per launch that reaches its
@@ -631,6 +632,9 @@ func (r LaunchRequest) toldBounded() error {
 	}
 	if s := r.Session; s != nil {
 		sets = append(sets, told{"session.told", s.Told})
+		if s.Exact != nil {
+			sets = append(sets, told{"session.exact.told", s.Exact.Told})
+		}
 	}
 	for _, t := range sets {
 		if n := len(t.set.Omitted); n > MaxBridgeCalls {

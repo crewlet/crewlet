@@ -171,6 +171,14 @@ var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate, KindDocs, 
 // Valid reports whether k is a kind this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 
+// Trusted is what a read's TrustOf decides: the answer's trust and, where it
+// can tell, the surface its outside text came from, which a later proposal
+// names (D25). The model's fence keeps the tool's own Source.
+type Trusted struct {
+	Trust  provenance.Trust
+	Source provenance.Source
+}
+
 // Tool is one tool the model may be offered.
 type Tool struct {
 	// Name is the model-facing name, snake_case.
@@ -218,8 +226,9 @@ type Tool struct {
 	// TrustOf, for a read whose answer may or may not carry text from
 	// outside the company, decides the answer's trust from what it holds
 	// (a row's origin, the backend that answered) or the call that asked
-	// it (the route a generic read named), in place of Trust.
-	TrustOf func(args Args, answer any) provenance.Trust
+	// it (the route a generic read named), in place of Trust, and names the
+	// surface such text came from where it can tell ([Trusted]).
+	TrustOf func(args Args, answer any) Trusted
 	// Narrow are the arguments that narrow a read to less of what it reads
 	// (a search's words, a filter, a shorter window), named where a read is
 	// too large to show so the model and the person know how to ask for

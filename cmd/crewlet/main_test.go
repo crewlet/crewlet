@@ -68,6 +68,13 @@ const peopleCompanyYAML = companyYAML + `  - name: Founder
     kind: human
 `
 
+// passwordOnly lets people of company sign in on boot's node with a password
+// alone: the operator's limit allows it and the company chooses it.
+func passwordOnly(boot *config.Bootstrap, company *config.Company) {
+	boot.API.Auth.Limits.SecondFactor = iam.SecondFactorOptional
+	company.SignIn.RequireSecondFactor = new(false)
+}
+
 // configPair writes both tiers into a temp directory and returns the flags
 // that point at them.
 func configPair(t *testing.T, bootstrapYAML, company string) []string {

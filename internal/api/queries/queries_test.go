@@ -331,6 +331,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// WHAT DELEGATES DECIDED, read by the people a rule answers to and by
 		// administrators (ADR-0125).
 		"delegated_decisions": "decided_by:" + string(authz.ActionDelegatedRead),
+		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB: the
+		// administrator's, who writes the rule into the document.
+		"delegated_repositories": "admin", "delegated_branches": "admin", "delegated_checks": "admin",
 
 		// THE ARTIFACTS: the listing and the folder tree are everybody's and
 		// filtered row by row and folder by folder;
@@ -388,6 +391,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// again by the Gitlet node that answers a read by object id.
 		"code_refs":    string(iam.GrantGitlet),
 		"code_tree":    string(iam.GrantGitlet),
+		"code_find":    string(iam.GrantGitlet),
 		"code_blob":    string(iam.GrantGitlet),
 		"code_log":     string(iam.GrantGitlet),
 		"code_blame":   string(iam.GrantGitlet),
@@ -400,10 +404,11 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// a listing across repositories keeps the rows of those the caller
 		// reads, and one attempt — and its log — is refused on one it does
 		// not.
-		"code_queue":     string(iam.GrantGitlet),
-		"code_checks":    string(iam.GrantGitlet),
-		"code_check":     string(iam.GrantGitlet),
-		"code_check_log": string(iam.GrantGitlet),
+		"code_queue":        string(iam.GrantGitlet),
+		"code_checks":       string(iam.GrantGitlet),
+		"code_check":        string(iam.GrantGitlet),
+		"code_check_log":    string(iam.GrantGitlet),
+		"code_commit_marks": string(iam.GrantGitlet),
 		// AND A SEARCH OF THEIR LINES, decided per repository alike: an
 		// unfiltered search leaves out what the caller does not read, and a
 		// repo: naming one is refused — by every Gitlet node that answers it.

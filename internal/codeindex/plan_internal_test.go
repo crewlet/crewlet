@@ -9,7 +9,6 @@ import (
 	"math/rand/v2"
 	"regexp"
 	"regexp/syntax"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -432,8 +431,7 @@ func TestAPlanRefusesWhatTheIndexCannotNarrow(t *testing.T) {
 // each hold one of those. The words share no trigram, so what each literal's
 // own lookup costs is the blobs it admits, whichever clause it is in.
 func TestAClauseOfManyLiteralsUnionsTheirBlobsOnce(t *testing.T) {
-	// Not parallel: runtime.MemStats counts every goroutine's allocations,
-	// and a parallel case's would be counted as the plan's.
+	// Not parallel: a parallel case's measured call would be counted as this one's.
 	const blobs = 2048
 	rng := rand.New(rand.NewPCG(20261027, 5))
 	candidates := func(words int) uint64 {
@@ -468,14 +466,12 @@ func TestAClauseOfManyLiteralsUnionsTheirBlobsOnce(t *testing.T) {
 				len(plan.index), len(plan.index[0].alts), words)
 		}
 		s := segmentOf(t, texts, 1, 1)
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		got, err := plan.Candidates(s)
-		runtime.ReadMemStats(&after)
+		var got []OID
+		spent, _ := allocations(t, func() { got, err = plan.Candidates(s) })
 		if err != nil || len(got) != blobs {
 			t.Fatalf("a clause of %d words admits %d of the %d blobs holding one (%v)", words, len(got), blobs, err)
 		}
-		return after.TotalAlloc - before.TotalAlloc
+		return spent
 	}
 	two, many := candidates(2), candidates(64)
 	t.Logf("the candidates of %d blobs allocated %d bytes for a clause of 2 words and %d for one of 64", blobs, two,

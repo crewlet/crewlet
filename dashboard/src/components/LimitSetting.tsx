@@ -78,6 +78,7 @@ export function LimitSetting({
   onApplied,
   off,
   zero,
+  words,
 }: {
   cap: LimitRow;
   /** What the setting is called on its page; its key is drawn beside it. */
@@ -92,8 +93,12 @@ export function LimitSetting({
   off?: string;
   /** What typing 0 does, for a range that admits it beside its scale: "0 to keep messages for ever". */
   zero?: string;
+  /** A count in the page's own words, where a bare number says it badly: "12 characters". */
+  words?: (amount: number) => string;
 }) {
-  const defaultWords = limitAmountWords(cap, cap.default, cap.default_off, off);
+  const amountWords = (row: LimitRow, amount: number, isOff: boolean): string =>
+    words && !isOff ? words(amount) : limitAmountWords(row, amount, isOff, off);
+  const defaultWords = amountWords(cap, cap.default, cap.default_off);
   return (
     <SettingEditor<string, number | null>
       label={label}
@@ -111,9 +116,13 @@ export function LimitSetting({
         const value = saved ? (saved.value ?? cap.default) : cap.value;
         const zeroIsOff = cap.off || cap.default_off || cap.range?.or_zero === true;
         const shown: LimitRow = saved ? { ...cap, value, off: value === 0 && zeroIsOff } : cap;
-        const source = limitSource(shown, off);
+        const source = words
+          ? shown.value === shown.default
+            ? { changed: false, words: "Default" }
+            : { changed: true, words: `Changed from ${defaultWords}` }
+          : limitSource(shown, off);
         return {
-          value: limitAmountWords(shown, shown.value, shown.off, off),
+          value: amountWords(shown, shown.value, shown.off),
           source: source.words,
           changed: source.changed,
         };

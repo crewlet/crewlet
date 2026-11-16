@@ -9,6 +9,7 @@
 
 import { useMemo, useState } from "react";
 import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { fieldError, holdReason } from "~/lib/formHold.ts";
 import { Modal } from "~/components/Modal.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
@@ -50,7 +51,8 @@ function NewRepoDialog({ onClose }: { onClose: () => void }) {
   const [description, setDescription] = useState("");
   const [branch, setBranch] = useState("");
   const [visibility, setVisibility] = useState("");
-  const blocked = createFormHeld(name, owner);
+  const hold = createFormHeld(name, owner);
+  const blocked = holdReason(hold);
   const submit = async () => {
     if (!pressable(write, blocked)) return;
     const made = name.trim();
@@ -94,7 +96,11 @@ function NewRepoDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <Stack gap={3}>
-        <FormField label="Name" helper="Lowercase letters, digits and hyphens.">
+        <FormField
+          label="Name"
+          helper="Lowercase letters, digits and hyphens."
+          error={fieldError(hold, "name")}
+        >
           {(field) => (
             <Input
               id={field.id}

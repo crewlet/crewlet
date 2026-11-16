@@ -172,6 +172,8 @@ func atlasEntryID(k atlas.Kind, key string) string { return atlas.MustRef(k, key
 // answer, because this App does not stand their surface up.
 var heldElsewhere = map[string]bool{
 	"get_org_chart/seats": true, // internal/api/iamapi: TestTheSeatsCardReadsTheSeatsAnswer
+	// internal/api/setupapi: TestTheCatalogueLookupReadsItsRoutesOwnAnswer
+	"search_grant_catalogue/": true,
 }
 
 // ONE AGENT'S LANE is a setup route this App does not stand up, held by
@@ -290,10 +292,18 @@ func filledWorld(t *testing.T) cardsWorld {
 			Zones: []string{atlasZone}}}
 	s.Atlas = atlasDepsOf(atlasCompany, s.Reconciles)
 	status := filled[coord.NodeStatus]()
-	if _, _, err := s.Coord.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+	lease, _, err := s.Coord.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a/1", TTL: time.Hour,
-			Meta: map[string]any{coord.StatusKey: status.Meta()}}); err != nil {
+			Meta: map[string]any{coord.StatusKey: status.Meta()}})
+	if err != nil || lease == nil {
 		t.Fatalf("report node-a to the fleet: %v", err)
+	}
+	// ITS STATUS RECORD AT THAT PRESENCE EPOCH, filled: the rows the MCP,
+	// model and runner questions draw are read off it, never off the lease.
+	record := filled[coord.NodeStatusRecord]()
+	record.Node, record.Epoch = "node-a", lease.Epoch
+	if err := s.plane.PutNodeStatus(t.Context(), record); err != nil {
+		t.Fatalf("write node-a's status record: %v", err)
 	}
 	return cardsWorld{paritySources: s, building: building}
 }

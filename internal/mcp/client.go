@@ -323,7 +323,7 @@ func (c *client) gone() bool {
 }
 
 // deathStory says how the session ended, for a log line, a refusal and the
-// heartbeat: the child's exit status once it has been reaped — the most
+// node's status record: the child's exit status once it has been reaped — the most
 // useful thing an operator can be told — and otherwise the first sign the
 // transport saw. Empty while the session is live.
 //

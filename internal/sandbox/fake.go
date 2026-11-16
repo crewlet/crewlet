@@ -694,9 +694,22 @@ type FakeRunner struct {
 	// answers. Unset, it restores none. Set both before the first launch.
 	Carries  bool
 	CarryWhy string
+	// CarryVersion is the release every box's harness answers when asked
+	// whether it continues a session ([FakeRunner.CheckCarry],
+	// [CarryCheck.Version]), "" for an answer this build cannot read. Set it
+	// before the launch that asks.
+	CarryVersion string
 	// carried is every archive a job was started with, read whole as a
 	// runner writes it into its box.
 	carried []FakeCarried
+
+	// Holdings, when set, is what a reading of what a kept session holds
+	// answers ([FakeRunner.ReadHoldings]), handed the archive and the ask,
+	// once the archive's stream has been read to its end; unset, every
+	// reading answers none. Set it before the relaunch that asks.
+	Holdings func(SessionArchive, HoldingsAsk) (SessionHoldings, error)
+	// holdingsAsks is every ask a reading was handed, in order.
+	holdingsAsks []HoldingsAsk
 
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
@@ -1227,17 +1240,58 @@ func (r *FakeRunner) Restores(archive SessionArchive) (bool, string) {
 }
 
 // CheckCarry answers [FakeRunner.Restores], and then [FakeRunner.CarryWhy] for
-// the box's own harness.
+// the box's own harness, with the release that harness answered
+// ([FakeRunner.CarryVersion]) either way, as a real runner reads it before it
+// decides.
 func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArchive) (CarryCheck, error) {
-	if ok, why := r.Restores(archive); !ok {
-		return CarryCheck{Why: why}, nil
-	}
+	ok, why := r.Restores(archive)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.CarryWhy != "" {
-		return CarryCheck{Why: r.CarryWhy}, nil
+	switch {
+	case !ok:
+		return CarryCheck{Version: r.CarryVersion, Why: why}, nil
+	case r.CarryWhy != "":
+		return CarryCheck{Version: r.CarryVersion, Why: r.CarryWhy}, nil
 	}
-	return CarryCheck{Continues: true}, nil
+	return CarryCheck{Version: r.CarryVersion, Continues: true}, nil
+}
+
+var _ HoldingsReader = (*FakeRunner)(nil)
+
+// ReadHoldings records ask, reads what open streams to its end and closes it,
+// and answers [FakeRunner.Holdings] of archive and ask: a reading as the case
+// scripts it, read through whatever calls it ([Coordinator.HoldingsOf]). Unset,
+// it answers no reading and opens nothing, as a reader that refuses the ask
+// before it opens the archive does.
+func (r *FakeRunner) ReadHoldings(ctx context.Context, archive SessionArchive,
+	open func(context.Context) (io.ReadCloser, error), ask HoldingsAsk) (SessionHoldings, error) {
+
+	r.mu.Lock()
+	r.holdingsAsks = append(r.holdingsAsks, ask)
+	holdings := r.Holdings
+	r.mu.Unlock()
+	if holdings == nil {
+		return SessionHoldings{}, errors.New("fake: this runner reads no session's holdings")
+	}
+	body, err := open(ctx)
+	if err != nil {
+		return SessionHoldings{}, err
+	}
+	_, err = io.Copy(io.Discard, body)
+	if closeErr := body.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return SessionHoldings{}, err
+	}
+	return holdings(archive, ask)
+}
+
+// HoldingsAsks is every ask a reading of this runner was handed, in order.
+func (r *FakeRunner) HoldingsAsks() []HoldingsAsk {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.holdingsAsks)
 }
 
 // Installed reports whether the agent was installed in this box.

@@ -195,3 +195,39 @@ test("a range that also admits zero takes 0 and refuses the hole below its least
     ),
   ).toBe("From 30 days to 3,650 days, or 0 to keep them for ever.");
 });
+
+// A DURATION IS TYPED AS ONE: seconds bare, or minutes, hours and days by their
+// letter, and a whole one opens in its largest unit.
+test("a duration takes a unit letter and opens in its largest whole unit", () => {
+  const d = row({ key: "sign_in.session_lifetime_seconds", unit: "seconds" });
+  expect(readLimit(d, "90")).toEqual({ ok: true, value: 90 });
+  expect(readLimit(d, "15m")).toEqual({ ok: true, value: 900 });
+  expect(readLimit(d, "12 h")).toEqual({ ok: true, value: 43_200 });
+  expect(readLimit(d, "7D")).toEqual({ ok: true, value: 604_800 });
+  expect(readLimit(d, "1.5h")).toEqual({ ok: true, value: 5_400 });
+  expect(readLimit(d, "a week")).toEqual({ ok: false, error: "“a week” is not a duration." });
+  expect(limitText(d, 604_800)).toBe("7d");
+  expect(limitText(d, 5_400)).toBe("90m");
+  expect(limitText(d, 90)).toBe("90");
+});
+
+// A BOUND THIS NODE'S OPERATOR SET is named as theirs.
+test("a bound the node's operator set says so", () => {
+  const d = row({
+    key: "sign_in.session_lifetime_seconds",
+    unit: "seconds",
+    range: { min: 3_600, max: 1_209_600, operator_max: true },
+  });
+  expect(readLimit(d, "30d")).toEqual({
+    ok: false,
+    error: "From 1 hour to 14 days. This node’s operator allows no more.",
+  });
+  const p = row({
+    key: "sign_in.min_password_length",
+    range: { min: 14, max: 256, operator_min: true },
+  });
+  expect(readLimit(p, "12")).toEqual({
+    ok: false,
+    error: "From 14 to 256. This node’s operator allows no less.",
+  });
+});

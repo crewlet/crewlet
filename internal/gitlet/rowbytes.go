@@ -143,6 +143,59 @@ func (r RefRow) encodedBytes() int {
 	return n + field("position", positionBytes(r.Position), false)
 }
 
+// encodedBytes is the length of the ref's JSON encoding in detail.
+func (l RefListing) encodedBytes() int {
+	n := 2 + field("ref", stringBytes(l.Ref), true) + field("oid", stringBytes(l.OID), false) +
+		field("position", positionBytes(l.Position), false) + field("moved_at", timeBytes(l.MovedAt), false)
+	if l.MovedBy != nil {
+		n += field("moved_by", l.MovedBy.encodedBytes(), false)
+	}
+	if l.Protection != nil {
+		n += field("protection", l.Protection.encodedBytes(), false)
+	}
+	if l.Change != nil {
+		n += field("change", l.Change.encodedBytes(), false)
+	}
+	if l.MayDelete {
+		n += field("may_delete", trueBytes, false)
+	}
+	if l.DeleteRefusal != "" {
+		n += field("delete_refusal", stringBytes(string(l.DeleteRefusal)), false)
+	}
+	if l.DeleteDetail != "" {
+		n += field("delete_detail", stringBytes(l.DeleteDetail), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the mover's JSON encoding.
+func (m RefMover) encodedBytes() int {
+	n := 2 + field("push_id", stringBytes(m.PushID), true) + field("actor", stringBytes(m.Actor), false) +
+		field("actor_kind", stringBytes(m.ActorKind), false)
+	if m.ActorSeat != "" {
+		n += field("actor_seat", stringBytes(m.ActorSeat), false)
+	}
+	return n + field("via", stringBytes(string(m.Via)), false)
+}
+
+// encodedBytes is the length of the protection's JSON encoding.
+func (p RefProtection) encodedBytes() int {
+	n := 2 + field("patterns", nullableStringsBytes(p.Patterns), true)
+	if p.AllowForce {
+		n += field("allow_force", trueBytes, false)
+	}
+	if p.AllowDelete {
+		n += field("allow_delete", trueBytes, false)
+	}
+	return n + field("direct_push", stringBytes(string(p.DirectPush)), false)
+}
+
+// encodedBytes is the length of the change's JSON encoding.
+func (c RefChange) encodedBytes() int {
+	return 2 + field("number", intBytes(c.Number), true) + field("title", stringBytes(c.Title), false) +
+		field("state", stringBytes(string(c.State)), false)
+}
+
 // encodedBytes is the length of the principal's JSON encoding.
 func (p Principal) encodedBytes() int {
 	n := 2 + field("kind", stringBytes(string(p.Kind)), true)
@@ -1230,4 +1283,61 @@ func (row PushRow) encodedBytes(commands int) int {
 		n += field("introduced_count", intBytes(int64(row.IntroducedCount)), false)
 	}
 	return n + field("received_at", timeBytes(row.ReceivedAt), false)
+}
+
+// encodedBytes is the length of the rollup's JSON encoding.
+func (c CheckRollup) encodedBytes() int {
+	n := 2 + field("state", stringBytes(string(c.State)), true) +
+		field("counts", c.Counts.encodedBytes(), false) +
+		field("required", intBytes(int64(c.Required)), false) +
+		field("required_passed", intBytes(int64(c.RequiredPassed)), false)
+	if !c.LastEnded.IsZero() {
+		n += field("last_ended", timeBytes(c.LastEnded), false)
+	}
+	if !c.RunningSince.IsZero() {
+		n += field("running_since", timeBytes(c.RunningSince), false)
+	}
+	if len(c.Failing) > 0 {
+		list := 2 + len(c.Failing) - 1
+		for _, f := range c.Failing {
+			list += f.encodedBytes()
+		}
+		n += field("failing", list, false)
+	}
+	if c.FailingMore != 0 {
+		n += field("failing_more", intBytes(int64(c.FailingMore)), false)
+	}
+	if c.More {
+		n += field("more", trueBytes, false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the counts' JSON encoding: every count is
+// omitted at zero.
+func (c CheckCounts) encodedBytes() int {
+	size, first := 2, true
+	for _, s := range []struct {
+		key   string
+		count int
+	}{
+		{"queued", c.Queued}, {"running", c.Running}, {"passed", c.Passed}, {"failed", c.Failed},
+		{"errored", c.Errored}, {"cancelled", c.Cancelled}, {"skipped", c.Skipped}, {"other", c.Other},
+	} {
+		if s.count == 0 {
+			continue
+		}
+		size += field(s.key, intBytes(int64(s.count)), first)
+		first = false
+	}
+	return size
+}
+
+// encodedBytes is the length of the failing check's JSON encoding.
+func (f FailingCheck) encodedBytes() int {
+	n := 2 + field("name", stringBytes(f.Name), true) + field("state", stringBytes(string(f.State)), false)
+	if f.Required {
+		n += field("required", trueBytes, false)
+	}
+	return n
 }

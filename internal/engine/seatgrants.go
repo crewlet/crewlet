@@ -93,6 +93,21 @@ func (a *SeatAccessAPI) GrantRequest(ctx context.Context, id string) (seataccess
 	return requests.Request(ctx, id)
 }
 
+// GrantRequests implements setupapi.Access.
+func (a *SeatAccessAPI) GrantRequests(ctx context.Context, kind integration.Kind) (
+	[]seataccess.GrantRequest, error) {
+
+	requests, err := a.engine.GrantRequests()
+	if err != nil {
+		return nil, err
+	}
+	open, err := requests.Open(ctx, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(open, func(r seataccess.GrantRequest) bool { return r.Kind != kind }), nil
+}
+
 // RecordGrants implements setupapi.Access: one event per grant a save added or
 // removed, as the person who saved it, and each request a grant answered
 // dropped, since the grant now carries it.
@@ -200,6 +215,28 @@ func (d grantDesk) Granted(ctx context.Context, handle, id string, permanent boo
 		}
 	}
 	return false, nil
+}
+
+// GrantSaver saves a chosen request's grant (ADR-0118): the setup surface's.
+type GrantSaver func(ctx context.Context, asker, id string, permanent bool,
+	admit func(raise bool) error) error
+
+// UseGrantSaver installs the grant save, as [Engine.UseConfigWriter] is: the setup
+// surface is built after the engine; until then a choice is refused.
+func (e *Engine) UseGrantSaver(save GrantSaver) { e.grantSaver.Store(&save) }
+
+// ErrNoGrantSaver reports a node whose setup surface installed no grant save.
+var ErrNoGrantSaver = errors.New("engine: this node cannot save a grant yet; its setup surface is not serving")
+
+// Grant implements builtin.GrantDesk through the installed [GrantSaver].
+func (d grantDesk) Grant(ctx context.Context, asker, id string, permanent bool,
+	admit func(raise bool) error) error {
+
+	save := d.e.grantSaver.Load()
+	if save == nil || *save == nil {
+		return ErrNoGrantSaver
+	}
+	return (*save)(ctx, asker, id, permanent, admit)
 }
 
 // Declined implements builtin.GrantDesk.

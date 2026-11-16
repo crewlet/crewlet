@@ -88,7 +88,8 @@ import {
   isRepoName,
   refName,
 } from "~/lib/code.ts";
-import { fmtCount, fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { ago } from "~/lib/ago.ts";
+import { fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -410,7 +411,7 @@ function ChangeCell({ change, now }: { change: CodeChangeSummary; now: number })
         <span>
           opened{" "}
           <time dateTime={change.opened_at} title={fmtDateTime(change.opened_at)}>
-            {relTime(change.opened_at, now)}
+            {ago(change.opened_at, now)}
           </time>{" "}
           by
         </span>

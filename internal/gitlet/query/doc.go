@@ -2,7 +2,8 @@
 // tree's listing, a file's lines, a diff's stat or one file's patch, how two
 // commits compare, whether a commit landed in a branch and which push landed
 // it, a path's history (log.go) and which commit last changed each line of a
-// file (blame.go) — and of a change's revisions, by the ids their rows record: a
+// file (blame.go), a file found by its name in a commit's tree (find.go) — and
+// of a change's revisions, by the ids their rows record: a
 // revision's facts against its target (facts.go), where lines anchored in one
 // revision are in another (anchor.go), and what a change changed between two
 // revisions (interdiff.go) — and the checks file a commit holds, read whole
@@ -49,6 +50,10 @@
 // answered as the repository's home (gitlet.GitQuery.Home) marks its history
 // wanted (cache.Cache.WantHistory), so the one node every walk asks first
 // reads it back, once per fleet, for repositories seats ask about.
+//
+// The index also NARROWS a history (gitlet.LogQuery.PushedBy, log.go), so
+// such a page is the node's and not the ids': never unstamped, never memoized
+// (gitlet.GitQuery.ReadsIndex).
 //
 // A LANDED-IN READ (landed.go) is one ancestry check against the tip the
 // asker resolved and the position it read it at, the copy brought there,
@@ -101,9 +106,9 @@
 // A read's argument lists carry fixed options and validated whole ids —
 // `--disambiguate=` an abbreviation's validated digits, the one option
 // argument a read builds, and numbers the server formats: a history's
-// `--max-age=` and `--skip=`, a blame's `-L` range. A search's text reaches
-// git only as the ONE argument of `-e` — the plan's alternation of its
-// strings, escaped (codeindex.Plan.Grep) — which git reads as a pattern
+// `--max-age=`, `--min-age=` and `--skip=`, a blame's `-L` range. A search's
+// text reaches git only as the ONE argument of `-e` — the plan's alternation
+// of its strings, escaped (codeindex.Plan.Grep) — which git reads as a pattern
 // whatever it spells, and its ref after `--end-of-options`, held to the ref
 // grammar before (search.go). A PATH is data: it
 // reaches git on a standard input — `git cat-file --batch-check -Z`'s, which
@@ -250,27 +255,9 @@
 //
 // # Many tips at once
 //
-// A tips read (tips.go, gitlet.GitTips) answers up to gitlet.MaxTips objects by
-// whole id: ONE objects check gives each one's type and peel, ONE
-// `cat-file --batch` reads every annotated tag (gitref.TagStream), ONE
-// `log --no-walk=unsorted` lists every commit in a history's format, and against
-// a base ONE `rev-list --left-right --count` counts each tip, all under one unit
-// of the share and one budget of git. A count the budget ends ends the page
-// with a cursor at that tip, or, where it is the page's first, answers it with
-// CountsOutOfTime and moves past it, so every page moves on.
-//
-// It is never a page of the memo, so memoFormat holds no tips: each tip's facts
-// are kept under tips/1 by object id and each count by its pair of commits, and
-// recallTips asks the memo for every one before any git runs, so a screen read
-// again runs none and a screen with one branch moved checks its objects and
-// reads and counts that branch alone.
-//
-// BenchmarkTips, over a main of 20 000 commits with 80 branches forking along
-// it and 20 annotated tags, one screen of all 100 against main (-benchtime 20x,
-// git 2.56.0 on twelve vCPUs of an AMD EPYC Rome server, the copy holding its
-// commit-graph): read cold, 1.37 s at the median and 2.04 s at the 95th and
-// 99th percentiles, 13.7 ms a tip, a fifth of gitproc.ReadDeadline; from the
-// memo, 5.5 ms and 12 ms.
+// A tips read (tips.go) answers up to gitlet.MaxTips objects with one objects check,
+// one tag batch, one log and one ahead/behind count under one budget of git, and
+// memoizes each tip's facts and counts, so a screen read again runs no git.
 //
 // # The copy's tags
 //
@@ -301,7 +288,8 @@
 // Every page a read's git cuts — but a landed-in read's, a revision's facts',
 // a re-anchoring's and a checks file's (memoizable says why), and a history's
 // page its budget
-// or its due instant cut short — is kept in the pinned copy's memo (the
+// or its due instant cut short, or one narrowed by who pushed it — is kept
+// in the pinned copy's memo (the
 // cache's, cache.MemoBatch), keyed by everything it is a function of, and a
 // read that
 // asks for a page already cut is answered from it with no git run (memo.go):
@@ -316,6 +304,9 @@
 // once — a review's fan-out right after a push — cost one git process, one
 // write of the page's files and one unit of the share, where each ran its
 // own.
+//
+// A FIND (find.go) keeps nothing of its own: it walks the tree's recursive
+// listing as the memo keeps it, running git at most once per tree.
 //
 // # Measured
 //
@@ -388,4 +379,8 @@
 // 1 MiB patch, 170 ms for 16 MiB, 621 ms for 64 MiB and 2.30 s (2.38 at the
 // slowest) for 249 MiB, at MaxPatchIDDiffBytes: some 114 MB of patch a second,
 // so the bound's facts fit a quarter of the read's one budget of git.
+//
+// BenchmarkFind over 100 000 files (twelve vCPUs, git 2.56.0): a tree's first
+// find 407 ms (479 at p95), each later one 77 ms (115 at p95), far inside
+// gitproc.ReadDeadline, so no index of names is kept beside the memo.
 package query

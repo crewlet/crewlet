@@ -37,7 +37,8 @@ import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { noDefaultHead, refName } from "~/lib/code.ts";
-import { fmtDate, fmtDateTime, plural, readerDay, relTime } from "~/lib/format.ts";
+import { ago } from "~/lib/ago.ts";
+import { fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type {
@@ -315,7 +316,7 @@ function CommitCell({
         <span>
           authored{" "}
           <time dateTime={commit.authored_at} title={fmtDateTime(commit.authored_at)}>
-            {relTime(commit.authored_at, now)}
+            {ago(commit.authored_at, now)}
           </time>
         </span>
         {pushedBySomebodyElse && (

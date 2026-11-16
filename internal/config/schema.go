@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"strconv"
 	"strings"
@@ -505,9 +506,20 @@ func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string, se
 		// A MAP FIELD'S DIRECTIVES ARE ITS VALUES' RULE: a key is any text
 		// the decoder reads, while a value can be a closed set (a tool's
 		// level by its name), which the tag on the field is the one place
-		// to state.
-		return map[string]any{"type": []any{"object", "null"},
-			"additionalProperties": g.fieldSchema(t.Elem(), directives, secret)}
+		// to state. All but `maxkeys`, the one directive about the map
+		// itself: how many keys it may hold, which a value's own rule cannot
+		// say (node.labels).
+		values := directives
+		out := map[string]any{"type": []any{"object", "null"}}
+		if v, ok := directives["maxkeys"]; ok {
+			if n, err := strconv.Atoi(v); err == nil {
+				out["maxProperties"] = n
+			}
+			values = maps.Clone(directives)
+			delete(values, "maxkeys")
+		}
+		out["additionalProperties"] = g.fieldSchema(t.Elem(), values, secret)
+		return out
 	case reflect.Struct:
 		return g.ref(t, secret)
 	case reflect.Interface:
@@ -571,6 +583,15 @@ func (g *schemaGen) textSchema(directives map[string]string) map[string]any {
 			branches = append(branches, map[string]any{"pattern": reference["pattern"]})
 		}
 		out["anyOf"] = branches
+		return out
+	}
+	if reference != nil && len(own) > 0 {
+		// A BOUND WITH NO PATTERN STILL SITS ON THE FIELD'S OWN BRANCH,
+		// never on the whole text: a ${VAR} Tier A admits beside it is as
+		// long as its name, which says nothing about the value it resolves
+		// to, and a schema that refused a long reference would flag a file
+		// the engine runs.
+		out["anyOf"] = []any{own, map[string]any{"pattern": reference["pattern"]}}
 		return out
 	}
 	for k, v := range own {
@@ -718,7 +739,8 @@ func inlined(f reflect.StructField) bool {
 // worse than no rule.
 //
 // THE KEYS THE GENERATOR READS are `required`; for a string `enum`, `pattern`,
-// `maxlen` and `pointer`; and for a number `min` and `max`. A key outside that
+// `maxlen` and `pointer`; for a number `min` and `max`; and for a map
+// `maxkeys`, beside its values' own. A key outside that
 // set, or a bound that is not a number, would be dropped here without a word —
 // a constraint the author meant and the artifact never states — so the suite
 // walks every tag the two tiers carry and refuses both

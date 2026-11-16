@@ -641,8 +641,8 @@ var cacheWriters = []writerRow{
 			"target's; query.TestAPathReachesGitOnlyAsData holds both argument lists to their " +
 			"templates, so no --output can be added unseen", nil},
 	{"internal/gitlet/query/log.go", kindGit + " log",
-		"a path's history: the only arguments not spelled as literals are the format — one of two constants, " +
-			"with or without the message — the --max-age= and --skip= numbers the server formats from a validated " +
+		"a path's history: the only arguments not spelled as literals are the format (one of two constants, " +
+			"with or without the message), the --max-age=, --min-age= and --skip= numbers the server formats from a validated " +
 			"query, the whole commit id a read resolved and, after `--`, the path as a literal pathspec, which git " +
 			"reads as a path whatever it spells (`-- :(literal)--output=x` is the history of that path, measured " +
 			"on 2.56.0); query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no " +

@@ -100,6 +100,7 @@ import {
   type CeilingProposal,
 } from "./assistantActions.ts";
 import { QueryState } from "~/components/common.tsx";
+import { UnreadSetting } from "~/components/SettingEditor.tsx";
 import { TextSetting } from "~/components/TextSetting.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
@@ -319,7 +320,8 @@ function upperFirst(text: string): string {
  * default and changed in place. A change moves every budget window and every
  * schedule without a zone of its own, which the engine's check says before
  * the save asks to go ahead. A reader who may not read the document sees the
- * zone the windows answer was cut on.
+ * zone the windows answer was cut on, with the pencil held and its reason, as
+ * every ceiling's pencil on this page is for them.
  */
 function CompanyClock({ zone }: { zone: string }) {
   const viewer = useViewer();
@@ -341,9 +343,9 @@ function CompanyClock({ zone }: { zone: string }) {
             helper="Where every budget's day, week and month begins, and the clock a schedule without a zone of its own runs on."
           />
         ) : (
-          <SettingsTable.Row label="Time zone" settingKey="timezone">
+          <UnreadSetting label="Time zone" settingKey="timezone">
             {zone || "UTC"}
-          </SettingsTable.Row>
+          </UnreadSetting>
         )}
       </SettingsTable>
     </Card>

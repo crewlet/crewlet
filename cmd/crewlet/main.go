@@ -2210,6 +2210,9 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		TierWarnings: func(c *config.Company) []config.Warning {
 			return append(config.TierWarnings(boot, c), engine.BoxCredentialWarnings(c)...)
 		},
+		// AND THE OPERATOR'S SIGN-IN LIMITS, which a write past one is
+		// refused at this node's door by (ADR-0152).
+		SignInLimits: boot.API.Auth.Limits,
 		// THE ENGINE'S OWN NAME FOR THIS NODE, never boot.Node.ID, which is
 		// empty on a node named through CREWLET_NODE_ID: a write whose
 		// activation goes unanswered names it as the one node holding the
@@ -2545,7 +2548,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// directory's answer, never a field of the chart.
 			Env:   e.LookupSecret,
 			Coord: e.Backends().Coord,
-			Plane: e.Backends().Fleet,
+			// EACH NODE'S MCP, MODEL AND RUNNER ROWS, on its status
+			// record beside its presence, counted against Coord's.
+			NodeStatuses: e.Backends().Fleet,
+			Plane:        e.Backends().Fleet,
 			// The object collector's last report, read from the store
 			// every node reads it from, for the fleet view's card — as a
 			// report on the object store this node agreed with the fleet,
@@ -2991,7 +2997,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// operator timing a boot reads off it.
 	log.InfoContext(ctx, "api_listening", "addr", addr,
 		"external_url", boot.API.ExternalBase(),
-		"second_factor", boot.API.Auth.SecondFactor(),
+		"optional_second_factor_allowed", boot.API.Auth.Limits.OptionalSecondFactor(),
 		// WHERE THE ROUTES OUTSIDE PARTIES CALL ARE SERVED: empty is
 		// api.port itself, which is every deployment without api.public.
 		"public_addr", publicAddr,

@@ -16,7 +16,8 @@ import (
 // A REPOSITORY'S FILES, HISTORY AND DIFFS, AS QUESTIONS: `code_refs`, its live
 // refs under a prefix (GET /gitlet/repos/{name}/refs, the reader's `refs`);
 // `code_tree` and `code_blob`, a directory and a file at a revision (…/tree,
-// …/blob); `code_log` and `code_blame`, a path's history and who last changed
+// …/blob); `code_find`, a file found by its name in a revision's tree
+// (…/find); `code_log` and `code_blame`, a path's history and who last changed
 // each line of a file (…/log, …/blame); `code_diff` and `code_compare`, what
 // changed between two revisions and how they relate, with what merging the
 // one into the other would do (…/diff, …/compare); `code_tips`, many branch
@@ -83,6 +84,7 @@ type CodePage struct {
 	Diff  *gitlet.DiffAnswer  `json:"diff,omitempty"`
 	Log   *gitlet.LogAnswer   `json:"log,omitempty"`
 	Blame *gitlet.BlameAnswer `json:"blame,omitempty"`
+	Find  *gitlet.FindAnswer  `json:"find,omitempty"`
 	// Compare is a comparison's own part, beside its merge preview
 	// ([CodeComparison]).
 	Compare *gitlet.CompareAnswer `json:"compare,omitempty"`
@@ -141,8 +143,9 @@ type CodeCommit struct {
 	Push     *gitlet.PushRow  `json:"push,omitempty"`
 	Coverage *gitlet.Coverage `json:"coverage,omitempty"`
 	// Merged, Revisions and More are the changes it belongs to, as the
-	// reader's `commit` answers them (gitlet.CommitChanges).
-	Merged    []gitlet.ChangeName     `json:"merged,omitempty"`
+	// reader's `commit` answers them (gitlet.CommitChanges): each with how
+	// it landed once merged and the gate it merged through.
+	Merged    []gitlet.ChangeLanding  `json:"merged,omitempty"`
 	Revisions []gitlet.CommitRevision `json:"revisions,omitempty"`
 	More      bool                    `json:"more,omitempty"`
 	Position  statelog.Position       `json:"position"`
@@ -319,15 +322,17 @@ func (g gitAsk) floor(repo gitlet.RepoRef, revs ...*gitRev) statelog.Freshness {
 	return gitlet.RefsFloor(own, refs...)
 }
 
-// read asks q of repo's home Gitlet node as the caller, at the floor of revs —
+// read asks q of repo's home Gitlet node as the caller, at the floor of revs:
 // UNSTAMPED where every revision is a whole object id, and then answered
-// [Immutable] — refused here first where q is one no Gitlet node would take
-// ([ErrBadParams] in the domain's own words), and answered in this surface's
-// vocabulary ([codeRefusal]).
+// [Immutable], unless q reads the node's index of pushes
+// (gitlet.GitQuery.ReadsIndex), which is asked stamped and answered bare. It is
+// refused here first where q is one no Gitlet node would take ([ErrBadParams]
+// in the domain's own words), and answered in this surface's vocabulary
+// ([codeRefusal]).
 func (g gitAsk) read(ctx context.Context, repo gitlet.RepoRef, q gitlet.GitQuery, cursor string,
 	revs ...*gitRev) (CodePage, bool, error) {
 
-	immutable := true
+	immutable := !q.ReadsIndex()
 	for _, r := range revs {
 		immutable = immutable && r.whole()
 	}
@@ -342,7 +347,7 @@ func (g gitAsk) read(ctx context.Context, repo gitlet.RepoRef, q gitlet.GitQuery
 		return CodePage{}, false, codeRefusal(g.name, err)
 	}
 	page := CodePage{Repo: g.name, Kind: a.Kind, Rev: a.Rev, Next: a.Next, Tree: a.Tree, Blob: a.Blob, Diff: a.Diff,
-		Log: a.Log, Blame: a.Blame, Compare: a.Compare, Tips: a.Tips, Tags: a.Tags}
+		Log: a.Log, Blame: a.Blame, Find: a.Find, Compare: a.Compare, Tips: a.Tips, Tags: a.Tags}
 	if immutable {
 		return page, true, nil
 	}
@@ -446,6 +451,42 @@ func (s Sources) codeTree(ctx context.Context, p Params) (any, error) {
 	return answered(page, immutable), nil
 }
 
+// codeFind answers `code_find`: the files of `ref`'s tree (the default branch where
+// none) whose path holds `q`'s characters in order, case-folded, best first, up to
+// `limit`, with how many match. No cursor: a person narrows it by typing on.
+func (s Sources) codeFind(ctx context.Context, p Params) (any, error) {
+	g, err := s.gitAskOf(ctx, p, "code_find")
+	if err != nil {
+		return nil, err
+	}
+	rev, err := revParam(p, "ref", true)
+	if err != nil {
+		return nil, err
+	}
+	f := gitlet.FindQuery{Query: p.String("q")}
+	if f.Query == "" {
+		return nil, fmt.Errorf("%w: q is required: the characters a file's path holds, in order", ErrBadParams)
+	}
+	if p.Has("limit") {
+		n, whole := p.WholeInt("limit")
+		if !whole || n < 0 {
+			return nil, fmt.Errorf("%w: the limit %q is not a whole number of zero or more (0 is the find's "+
+				"own %d)", ErrBadParams, p.String("limit"), gitlet.DefaultFindLimit)
+		}
+		f.Limit = int(n)
+	}
+	repo, err := g.resolve(ctx, rev)
+	if err != nil {
+		return nil, err
+	}
+	f.Rev = rev.oid
+	page, immutable, err := g.read(ctx, repo, gitlet.GitQuery{Kind: gitlet.GitFind, Find: &f}, "", rev)
+	if err != nil {
+		return nil, err
+	}
+	return answered(page, immutable), nil
+}
+
 // codeBlob answers `code_blob`: a file's lines at `ref` and `path` — or a
 // blob by its own id with no path — `start_line` to `end_line`, a page at a
 // time; a path naming a directory answers its listing.
@@ -481,7 +522,9 @@ func (s Sources) codeBlob(ctx context.Context, p Params) (any, error) {
 // codeLog answers `code_log`: the commits that changed `path` — or every
 // commit — newest first from `ref`, `limit` a page (1 to gitlet.MaxLogLimit,
 // gitlet.DefaultLogLimit where it names none), kept to those whose message
-// holds `grep` (a literal) and committed at or after `since` (RFC 3339).
+// holds `grep` (a literal), committed at or after `since` and before `until`
+// (each RFC 3339), and brought by a push of the seat `pushed_by` names (its
+// handle), the commits the node's index cannot judge counted as `unjudged`.
 func (s Sources) codeLog(ctx context.Context, p Params) (any, error) {
 	g, err := s.gitAskOf(ctx, p, "code_log")
 	if err != nil {
@@ -501,6 +544,12 @@ func (s Sources) codeLog(ctx context.Context, p Params) (any, error) {
 			return nil, fmt.Errorf("%w: since %q is not an RFC 3339 instant", ErrBadParams, since)
 		}
 	}
+	if until := strings.TrimSpace(p.String("until")); until != "" {
+		if l.Until, err = time.Parse(time.RFC3339Nano, until); err != nil {
+			return nil, fmt.Errorf("%w: until %q is not an RFC 3339 instant", ErrBadParams, until)
+		}
+	}
+	l.PushedBy = strings.TrimSpace(p.String("pushed_by"))
 	if p.Has("limit") {
 		n, whole := p.WholeInt("limit")
 		if !whole || n < 0 {

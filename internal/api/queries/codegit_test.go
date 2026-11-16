@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -37,6 +38,7 @@ var gitQuestions = []struct {
 	args func(rev string) map[string]any
 }{
 	{"code_tree", func(rev string) map[string]any { return map[string]any{"name": "web", "ref": rev} }},
+	{"code_find", func(rev string) map[string]any { return map[string]any{"name": "web", "ref": rev, "q": "main"} }},
 	{"code_blob", func(rev string) map[string]any {
 		return map[string]any{"name": "web", "ref": rev, "path": "go.mod"}
 	}},
@@ -346,8 +348,8 @@ func TestACommitIsAnsweredWithItsPushAndItsChanges(t *testing.T) {
 				return gitlet.ReadAnswer{Pushes: []gitlet.PushRow{{PushID: q.Push}}}, nil
 			}
 			return gitlet.ReadAnswer{Repo: stubRepo(q.Repo), Position: rowsAt, Level: q.Fresh.Level,
-				Commit: &gitlet.CommitChanges{Commit: q.Commit, Revisions: []gitlet.CommitRevision{{Change: change,
-					N: 2}}}}, nil
+				Commit: &gitlet.CommitChanges{Commit: q.Commit, Revisions: []gitlet.CommitRevision{{
+					Change: gitlet.ChangeLanding{ChangeName: change}, N: 2}}}}, nil
 		},
 		git: func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 			return gitlet.GitAnswer{Kind: q.Kind, Log: &gitlet.LogAnswer{Commits: []gitlet.LogCommit{{OID: q.Log.Rev,
@@ -361,7 +363,7 @@ func TestACommitIsAnsweredWithItsPushAndItsChanges(t *testing.T) {
 	}
 	got, ok := answer.(queries.CodeCommit)
 	if !ok || got.Commit.OID != whole || got.PushedBy == nil || got.Push == nil || got.Push.PushID != "p7" ||
-		len(got.Revisions) != 1 || got.Revisions[0].Change != change || got.Position != rowsAt {
+		len(got.Revisions) != 1 || got.Revisions[0].Change.ChangeName != change || got.Position != rowsAt {
 		t.Fatalf("the commit answered %+v, want it, its push and its revision", answer)
 	}
 	if len(stub.asked) != 2 || stub.asked[0].Kind != gitlet.ReadCommit || stub.asked[0].Commit != whole ||
@@ -474,5 +476,92 @@ func TestATipsQuestionNamesItsTips(t *testing.T) {
 			queries.ErrBadParams) || len(stub.read) != 0 {
 			t.Errorf("%s: answered %v having read %d, want bad_params and nothing read", name, err, len(stub.read))
 		}
+	}
+}
+
+// A HISTORY NARROWED BY WHO PUSHED IT IS NEVER IMMUTABLE: read stamped and answered
+// bare, `until` reaches the read, and a bad `until` or handle is bad_params unread.
+// Mutation: judge immutability by the revisions alone.
+func TestAHistoryNarrowedByWhoPushedIsNeverImmutable(t *testing.T) {
+	t.Parallel()
+	stub := &stubCode{git: stamping}
+	answer, err := askNative(t, queries.Sources{Code: stub}, "code_log", map[string]any{"name": "web",
+		"ref": whole, "pushed_by": " ceo ", "until": "2026-03-01T00:00:00.5Z"})
+	if err != nil {
+		t.Fatalf("code_log narrowed to a seat: %v", err)
+	}
+	if _, immutable := answer.(queries.Immutable); immutable {
+		t.Error("a history narrowed by who pushed it is answered immutable")
+	}
+	until := time.Date(2026, 3, 1, 0, 0, 0, 5e8, time.UTC)
+	if len(stub.read) != 1 || stub.read[0].Unstamped || stub.read[0].Log.PushedBy != "ceo" ||
+		!stub.read[0].Log.Until.Equal(until) {
+		t.Fatalf("the narrowed history was read as %+v, want one read, stamped, pushed by ceo until %s",
+			stub.read, until)
+	}
+	encoded, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"position"`) || !strings.Contains(string(encoded), `"pushed_by"`) {
+		t.Errorf("the narrowed history is answered without what its read stamped: %s", encoded)
+	}
+	plain := &stubCode{git: stamping}
+	if answer, err := askNative(t, queries.Sources{Code: plain}, "code_log", map[string]any{"name": "web",
+		"ref": whole, "until": "2026-03-01T00:00:00Z"}); err != nil || len(plain.read) != 1 ||
+		!plain.read[0].Unstamped {
+		t.Errorf("a history by a whole id with until alone answered %T (%v), read %+v; want it unstamped",
+			answer, err, plain.read)
+	} else if _, immutable := answer.(queries.Immutable); !immutable {
+		t.Error("a history by a whole id with until alone is not immutable")
+	}
+	for _, args := range []map[string]any{
+		{"name": "web", "ref": whole, "until": "yesterday"},
+		{"name": "web", "ref": whole, "since": "2026-03-01T00:00:00Z", "until": "2026-03-01T00:00:00Z"},
+		{"name": "web", "ref": whole, "pushed_by": "Not A Seat"},
+	} {
+		bad := &stubCode{git: stamping}
+		if _, err := askNative(t, queries.Sources{Code: bad}, "code_log", args); !errors.Is(err,
+			queries.ErrBadParams) || len(bad.read) != 0 {
+			t.Errorf("code_log with %v answered %v after %d reads, want bad_params before any", args, err,
+				len(bad.read))
+		}
+	}
+}
+
+// A FIND NAMES ITS QUERY: `q` and `limit` reach the read as the find's query and
+// limit; no `q`, or a limit that is no whole number, is bad_params before any read.
+// Mutation: drop codeFind's check of q, or of its limit being whole.
+func TestAFindNamesItsQuery(t *testing.T) {
+	t.Parallel()
+	stub := &stubCode{}
+	if _, err := askNative(t, queries.Sources{Code: stub}, "code_find", map[string]any{"name": "web",
+		"ref": whole, "q": "cmd/ma", "limit": 7}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.read) != 1 || stub.read[0].Kind != gitlet.GitFind ||
+		*stub.read[0].Find != (gitlet.FindQuery{Rev: whole, Query: "cmd/ma", Limit: 7}) {
+		t.Fatalf("the find was read as %+v, want one find of cmd/ma at %s, limit 7", stub.read, whole)
+	}
+	for _, args := range []map[string]any{
+		{"name": "web", "ref": whole},
+		{"name": "web", "ref": whole, "q": ""},
+		{"name": "web", "ref": "main", "q": "main", "limit": 2.5},
+		{"name": "web", "ref": "main", "q": "main", "limit": -1},
+		{"name": "web", "ref": "main", "q": "main", "limit": "many"},
+	} {
+		none := &stubCode{}
+		_, err := askNative(t, queries.Sources{Code: none}, "code_find", args)
+		if !errors.Is(err, queries.ErrBadParams) || len(none.asked)+len(none.resolved)+len(none.read) != 0 {
+			t.Errorf("a find of %v answered %v having read %d rows, %d resolves and %d reads, want bad_params "+
+				"before anything", args, err, len(none.asked), len(none.resolved), len(none.read))
+		}
+	}
+	past := &stubCode{}
+	if _, err := askNative(t, queries.Sources{Code: past}, "code_find", map[string]any{"name": "web",
+		"ref": whole, "q": "main", "limit": gitlet.MaxFindLimit + 1}); !errors.Is(err, queries.ErrBadParams) ||
+		len(past.read) != 0 {
+		t.Errorf("a find of %d files answered %v having read %d, want bad_params", gitlet.MaxFindLimit+1, err,
+			len(past.read))
 	}
 }

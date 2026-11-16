@@ -545,13 +545,13 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 				path := strings.Replace(strings.TrimPrefix(q.route, "GET "), "{name}", "web", 1)
 				path = strings.Replace(strings.Replace(path, "{n}", "1", 1), "{sha}", fakeCommit, 1)
 				path = strings.NewReplacer("{oid}", fakeCommit, "{check}", "unit", "{attempt}", "1").Replace(path)
-				// A COMPARISON'S AND A DIFF'S TWO REVISIONS, and the branch an
-				// attempt was checked for, which every other question reads
-				// past as no parameter of its own.
+				// A COMPARISON'S AND A DIFF'S TWO REVISIONS, the branch an
+				// attempt was checked for and a find's query, which every
+				// other question reads past as no parameter of its own.
 				for _, at := range []string{path + "?base=HEAD&head=HEAD&path=go.mod&target=refs/heads/main&oids=" +
-					fakeCommit, "/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit +
+					fakeCommit + "&q=main", "/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit +
 					"&base=HEAD&head=HEAD&path=go.mod&oid=" + fakeCommit + "&check=unit&attempt=1" +
-					"&target=refs/heads/main&oids=" + fakeCommit} {
+					"&target=refs/heads/main&oids=" + fakeCommit + "&q=main"} {
 					// EVERY READ OF THE ROWS COUNTED, a resolve of refs as
 					// much as a read of a kind: a question that read its
 					// repository and then resolved would be two.
@@ -599,7 +599,8 @@ type codeQuestion struct {
 // repository, which reads the repository's row by name before its readers,
 // a change's four — the changes, one change (its revisions with its detail,
 // asked of no part), whom its records reached and one reviewer's reviews — a
-// repository's content, and its merge queues and its checks.
+// repository's content, and its merge queues, its checks and the marks of a
+// history page's commits.
 var codeQuestions = []codeQuestion{
 	{"code_repos", "GET /gitlet/repos", gitlet.ReadRepos, "", nil},
 	{"code_repo", "GET /gitlet/repos/{name}", gitlet.ReadRepo, "web", nil},
@@ -617,6 +618,7 @@ var codeQuestions = []codeQuestion{
 	// the repository.
 	{"code_refs", "GET /gitlet/repos/{name}/refs", gitlet.ReadRefs, "web", nil},
 	{"code_tree", "GET /gitlet/repos/{name}/tree", "", "web", []string{gitlet.HeadRef}},
+	{"code_find", "GET /gitlet/repos/{name}/find", "", "web", []string{gitlet.HeadRef}},
 	{"code_blob", "GET /gitlet/repos/{name}/blob", "", "web", []string{gitlet.HeadRef}},
 	{"code_log", "GET /gitlet/repos/{name}/log", "", "web", []string{gitlet.HeadRef}},
 	{"code_blame", "GET /gitlet/repos/{name}/blame", "", "web", []string{gitlet.HeadRef}},
@@ -626,12 +628,14 @@ var codeQuestions = []codeQuestion{
 	{"code_compare", "GET /gitlet/repos/{name}/compare", "", "web", []string{gitlet.HeadRef}},
 	{"code_commit", "GET /gitlet/repos/{name}/commits/{sha}", gitlet.ReadCommit, "web", nil},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the queues and the attempts listed
-	// across repositories where the route names none, one attempt whole, and
-	// a page of its log, read after the attempt that names it.
+	// across repositories where the route names none, one attempt whole, a
+	// page of its log, read after the attempt that names it, and a history
+	// page's marks.
 	{"code_queue", "GET /gitlet/queue", gitlet.ReadQueue, "", nil},
 	{"code_checks", "GET /gitlet/checks", gitlet.ReadChecks, "", nil},
 	{"code_check", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}", gitlet.ReadCheck, "web", nil},
 	{"code_check_log", "GET /gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", gitlet.ReadCheck, "web", nil},
+	{"code_commit_marks", "GET /gitlet/repos/{name}/commit-marks", gitlet.ReadCommitMarks, "web", nil},
 }
 
 // codeSearchQuestion is the code search: a question of its own beside

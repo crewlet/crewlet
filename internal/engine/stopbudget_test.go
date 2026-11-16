@@ -35,7 +35,9 @@ import (
 // allowance rather than added to it. Each step used to wait out a bound of its
 // own, so the stop spent their sum, close to an orchestrator's kill grace and
 // past it once the flushes behind them ran. Here every read and give-back the
-// lease and fleet stores are asked for stalls once the stop begins — until the
+// lease and fleet stores are asked for stalls once the stop begins — the removal
+// of the node's status record among them, whose fallback is its bucket's age
+// and which is a step of the same allowance — until the
 // deadline its context carries or, where it carries none, for a bound of the
 // stand-in's own: a whole lease TTL, past which every lease the stop races has
 // lapsed anyway. The TTL is [startedLeaseTTL], so the allowance is a third of
@@ -119,6 +121,12 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 		t.Fatal("the premise: the integration loop never took a surface's hold, " +
 			"so no pass is in flight for the stop to wait on")
 	}
+	// AND THE NODE HAS WRITTEN ITS STATUS RECORD, which its stop removes:
+	// written as the presence is claimed, waited for like the seats.
+	waitFor(t, "the node's status record to be written", func() bool {
+		records, err := back.Fleet.NodeStatusRecords(t.Context())
+		return err == nil && len(records) > 0
+	})
 
 	e.Stop(context.Background())
 	calls := record.all()
@@ -140,6 +148,7 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 			return c.op == "get" && coord.ClassWorker.Holds(c.resource)
 		}},
 		{"the admission withdrawn", func(c stalled) bool { return c.op == "forget_admission" }},
+		{"the node's status record removed", func(c stalled) bool { return c.op == "delete_node_status" }},
 		{"the held pass's hold given back and ended by the stop", func(c stalled) bool {
 			return c.op == "release" && c.ended == endedByCaller &&
 				strings.HasPrefix(c.resource, coord.WorkerResource("setup-provision-"))
@@ -353,8 +362,8 @@ func (l stallingLeases) Get(ctx context.Context, resource string) (*coord.Lease,
 	return l.coordBackend.Get(ctx, resource)
 }
 
-// stallingFleet is a fleet store whose admission withdrawal stalls once
-// gone answers true.
+// stallingFleet is a fleet store whose admission withdrawal and removals of
+// what a node published of itself stall once gone answers true.
 type stallingFleet struct {
 	fleet
 	gone   func() bool
@@ -366,6 +375,20 @@ func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation 
 		return f.stalls.stall(ctx, "forget_admission", nodeID)
 	}
 	return f.fleet.ForgetAdmission(ctx, nodeID, incarnation)
+}
+
+func (f stallingFleet) DeleteNodeStatus(ctx context.Context, node string, through int64) error {
+	if f.gone() {
+		return f.stalls.stall(ctx, "delete_node_status", node)
+	}
+	return f.fleet.DeleteNodeStatus(ctx, node, through)
+}
+
+func (f stallingFleet) DeleteMCPListing(ctx context.Context, server, node string, version uint64) (bool, error) {
+	if f.gone() {
+		return false, f.stalls.stall(ctx, "delete_mcp_listing", coord.MCPListingKey(server, node))
+	}
+	return f.fleet.DeleteMCPListing(ctx, server, node, version)
 }
 
 // A STOP ON A STREAM THAT WILL NOT ACKNOWLEDGE LEAVES NOTHING HELD.

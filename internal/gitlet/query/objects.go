@@ -105,6 +105,8 @@ func revsOf(q gitlet.GitQuery) []string {
 		revs = []string{q.ChecksFile.Commit}
 	case gitlet.GitCodeFiles:
 		revs = []string{q.CodeFiles.Commit}
+	case gitlet.GitFind:
+		revs = []string{q.Find.Rev}
 	case gitlet.GitReanchor:
 		revs = []string{q.Reanchor.Head}
 		if q.Reanchor.Base != "" {
@@ -157,11 +159,14 @@ func pathOf(q gitlet.GitQuery) string {
 }
 
 // lookedUp reports whether a read of q's kind looks its path up in the batch:
-// a tree's, a file's, a blame's and a checks file's, and the one deploy or
-// dependency file a code files read names (its listing names none).
+// a tree's, a file's, a blame's and a checks file's, the one deploy or
+// dependency file a code files read names (its listing names none), and a
+// find's root tree, which its path, none, names (`<id>^{tree}`): the tree
+// whose listing it reads by that tree's own id.
 func lookedUp(q gitlet.GitQuery) bool {
 	return q.Kind == gitlet.GitTree || q.Kind == gitlet.GitBlob || q.Kind == gitlet.GitBlame ||
-		q.Kind == gitlet.GitChecksFile || (q.Kind == gitlet.GitCodeFiles && q.CodeFiles.File != "")
+		q.Kind == gitlet.GitChecksFile || (q.Kind == gitlet.GitCodeFiles && q.CodeFiles.File != "") ||
+		q.Kind == gitlet.GitFind
 }
 
 // find is step 7: what every revision and the path name, or the first

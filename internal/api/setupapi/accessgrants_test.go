@@ -1,7 +1,10 @@
 package setupapi_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -191,4 +194,111 @@ func TestARequestsGrantIsBuiltFromTheRequest(t *testing.T) {
 			t.Errorf("%s request: PUT = %d %s, want it refused", name, res.Code, res.Body)
 		}
 	}
+}
+
+// founderAsking is an administrator's context, as the answer's route hands it.
+func founderAsking() context.Context {
+	return iam.WithPrincipal(context.Background(), iam.Principal{
+		ID: uuid.MustParse("018f3a9c-0000-7000-8000-00000000f001"), Kind: iam.KindPerson,
+		Login: "founder", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
+		ReauthAt: time.Now().Add(time.Hour), Via: "session:browser",
+	})
+}
+
+// originRequest is a stored request for Origin Rules: Edit on example.com.
+func originRequest(id, handle string) seataccess.GrantRequest {
+	return seataccess.GrantRequest{ID: id, Kind: integration.KindCloudflare, Lane: seataccess.LaneCloudflare,
+		Handle: handle, Permission: "Origin Write", Scope: []string{"example.com"}, Hours: 4,
+		Reason: "add the origin rule for the library route", Item: "ENG-58", Ask: "owner",
+		AskedAt: time.Now().UTC()}
+}
+
+// CHOOSING A REQUEST'S GRANT SAVES THE GRANT THE STORED REQUEST ASKS FOR, once,
+// asking admit before the write. Mutation: ask admit after the write and this fails.
+func TestChoosingARequestsGrantSavesTheGrantItAsked(t *testing.T) {
+	t.Parallel()
+	s := newCloudflareSurface(t)
+	s.access.requests = map[string]seataccess.GrantRequest{"abcde12345": originRequest("abcde12345", "sre")}
+	var raised []bool
+	admit := func(raise bool) error {
+		raised = append(raised, raise)
+		if n := len(s.sreGrants(t)); n != 0 {
+			t.Errorf("admit was asked after %d grants were written", n)
+		}
+		return nil
+	}
+	start := time.Now().UTC()
+	if err := s.setup.SaveRequestedGrant(founderAsking(), "sre", "abcde12345", false, admit); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	grants := s.sreGrants(t)
+	if len(grants) != 1 {
+		t.Fatalf("grants = %+v, want the one the request asked for", grants)
+	}
+	g := grants[0]
+	lapse := g.ExpiresAt.Sub(start) //fixedwait:stated the expiry the save stamped against the instant before it
+	if g.Permission != "Origin Write" || !slices.Equal(g.Scope, []string{"example.com"}) ||
+		g.Request != "abcde12345" || g.Reason != "add the origin rule for the library route" ||
+		g.GrantedBy == "" || lapse < 4*time.Hour || lapse > 4*time.Hour+time.Minute {
+		t.Errorf("grant = %+v, want the request's permission, scope, reason and four hours", g)
+	}
+	if !slices.Equal(raised, []bool{true}) {
+		t.Errorf("admit was handed %v, want one raise for a write permission", raised)
+	}
+	if len(s.access.grants) != 1 || len(s.access.grants[0].Added) != 1 || len(s.access.syncs) != 1 ||
+		!slices.Equal(s.access.syncs[0].Handles, []string{"sre"}) {
+		t.Errorf("recorded %+v and synced %+v, want the grant recorded and the SRE synced",
+			s.access.grants, s.access.syncs)
+	}
+	revision := s.active(t).ID
+	if err := s.setup.SaveRequestedGrant(founderAsking(), "sre", "abcde12345", false, admit); err != nil ||
+		s.active(t).ID != revision || len(raised) != 1 {
+		t.Errorf("choosing it again = %v, revision %s from %s, admit asked %d times; want "+
+			"nothing saved twice", err, s.active(t).ID, revision, len(raised))
+	}
+}
+
+// A REQUEST'S GRANT THAT CANNOT BE SAVED AS ASKED WRITES NOTHING.
+func TestARequestsGrantThatCannotBeSavedWritesNothing(t *testing.T) {
+	t.Parallel()
+	refused := errors.New("refused: step up")
+	dns := originRequest("dnsdnsdns1", "sre")
+	dns.Permission, dns.Scope = "DNS Write", nil
+	for _, c := range []struct {
+		name  string
+		asker string
+		id    string
+		admit error
+		is    func(error) bool
+	}{
+		{"another agent's", "cto", "abcde12345", nil, isGrantRefused},
+		{"lapsed or settled", "sre", "zzzzz99999", nil,
+			func(err error) bool { return errors.Is(err, seataccess.ErrNoRequest) }},
+		{"one the connection lacks", "sre", "dnsdnsdns1", nil, isGrantRefused},
+		{"refused by admit", "sre", "abcde12345", refused,
+			func(err error) bool { return errors.Is(err, refused) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := newCloudflareSurface(t)
+			s.access.requests = map[string]seataccess.GrantRequest{
+				"abcde12345": originRequest("abcde12345", "sre"), "dnsdnsdns1": dns}
+			revision := s.active(t).ID
+			err := s.setup.SaveRequestedGrant(founderAsking(), c.asker, c.id, false,
+				func(bool) error { return c.admit })
+			if !c.is(err) {
+				t.Errorf("save = %v", err)
+			}
+			if s.active(t).ID != revision || len(s.sreGrants(t)) != 0 || len(s.access.grants) != 0 {
+				t.Errorf("a refused save wrote revision %s over %s with grants %+v", s.active(t).ID,
+					revision, s.sreGrants(t))
+			}
+		})
+	}
+}
+
+// isGrantRefused reports a save refused for what it asked.
+func isGrantRefused(err error) bool {
+	var refused *seataccess.GrantRefused
+	return errors.As(err, &refused)
 }

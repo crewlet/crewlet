@@ -964,7 +964,7 @@ func (e *Engine) publishParkNotice(ctx context.Context, ev *events.Event) error 
 }
 
 // parkedByEntry is every seat this node holds parked on a limited chain, under
-// each entry the chain names, ordered by seat id: what the heartbeat's model
+// each entry the chain names, ordered by seat id: what the status record's model
 // rows publish ([coord.ModelStatus.Parked]).
 //
 // UNDER EVERY ENTRY OF THE CHAIN, because a seat parks only once every member

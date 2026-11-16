@@ -8,9 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 )
 
-// FleetNode is one live node as its presence row says it: its id, whether
-// its own broker is a member of the embedded cluster, and what it says of
-// what it runs on. Hosts and names only: the node reduced every URL of its
+// FleetNode is one live node as its presence row and its status record say
+// it: its id, whether its own broker is a member of the embedded cluster, and
+// what it says of what it runs on. Hosts and names only: the node reduced every URL of its
 // own file to a host before publishing, and no credential has a field here.
 type FleetNode struct {
 	ID string

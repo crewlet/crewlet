@@ -16,7 +16,8 @@ import { EmptyValue } from "@crewlethq/ui";
 import { ClockGlyph, HardDriveGlyph, ShieldGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtBytes, fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { ago } from "~/lib/ago.ts";
+import { fmtBytes, fmtDateTime, plural } from "~/lib/format.ts";
 import { importStanding, pullMirrorStanding, pushMirrorStanding } from "~/lib/repoWrites.ts";
 import type { CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
 import { repoHref } from "../paths.ts";
@@ -78,7 +79,7 @@ function Stats({ repo }: { repo: CodeRepoDetail }) {
         <ClockGlyph size="sm" className="code-about__glyph" />
         {repo.last_push_at ? (
           <time dateTime={repo.last_push_at} title={fmtDateTime(repo.last_push_at)}>
-            Pushed {relTime(repo.last_push_at, now)}
+            Pushed {ago(repo.last_push_at, now)}
           </time>
         ) : (
           <span>Never pushed</span>

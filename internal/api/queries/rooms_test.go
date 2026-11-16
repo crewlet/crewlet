@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -116,6 +117,8 @@ func everySeam(t *testing.T) queries.Sources {
 		Channels: fakeChannels{},
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
+		// EACH NODE'S STATUS RECORD, counted against Coord's presence.
+		NodeStatuses: coordmemory.NewFleet(),
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
 		// fleet record, which answers every run `not_running`.
 		ExecutorTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
@@ -145,6 +148,8 @@ func everySeam(t *testing.T) queries.Sources {
 		AgentAccess:  func(context.Context) ([]queries.AgentAccessRow, error) { return nil, nil },
 		// WHAT DELEGATES DECIDED, read off an access log holding nothing.
 		Delegated: emptyVerdicts{},
+		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB.
+		DelegatedGitHub: ruleGitHub{},
 		// THE ATLAS, read off a node that runs no company yet.
 		Atlas:    builtin.AtlasDeps{},
 		Insights: coordmemory.NewFleet(),
@@ -154,9 +159,9 @@ func everySeam(t *testing.T) queries.Sources {
 		// node is wired with them only where the feature is deployed.
 		Artifacts:    &queries.ArtifactsSource{},
 		ArtifactData: &queries.ArtifactDataSource{},
-		// THIS NODE'S SIGN-IN POSTURE, which internal/api fills from the
+		// THIS NODE'S SIGN-IN LIMITS, which internal/api fills from the
 		// Bootstrap on every node that serves the API.
-		SignIn: &queries.SignInPolicy{},
+		SignIn: &config.APIAuth{},
 		// GITLET'S ROWS, which internal/api fills from the code
 		// surface on every node that serves the API.
 		Code: &stubCode{},
@@ -520,6 +525,9 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // `atlas_log` and `atlas_activity`.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
+	// A FILE FOUND BY ITS NAME, read over REST on the path the reference
+	// prints until a finder reads it: its line goes when one does.
+	"code_find": "a script: GET /gitlet/repos/{name}/find, as docs/reference/api-endpoints.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with Gitlet's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and
@@ -527,6 +535,10 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
+	// A HISTORY PAGE'S MARKS, answered ahead of the rooms that draw them: until
+	// the first reads it, a script reads the reference's path.
+	"code_commit_marks": "a script: GET /gitlet/repos/{name}/commit-marks, as docs/reference/api-endpoints.md " +
+		"prints it",
 	// MANY TIPS AT ONCE, answered ahead of the Branches and Tags screens that
 	// draw them: until the first reads it, a script reads the reference's path.
 	"code_tips": "a script: GET /gitlet/repos/{name}/tips, as docs/reference/api-endpoints.md prints it",

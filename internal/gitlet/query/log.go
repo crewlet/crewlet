@@ -16,9 +16,9 @@ import (
 
 // A LOG is ONE `git log` over the whole id of the commit its history is read
 // from — `-z --topo-order --no-mailmap --no-color --no-notes`, a format whose
-// every field ends in a NUL, the window its cursor and Since name, the commit
-// — and, where the read names a path, that path as the one argument after
-// `--`, a LITERAL pathspec (`:(literal)<path>`): git reads every argument
+// every field ends in a NUL, the window its cursor, Since and Until name, the
+// commit — and, where the read names a path, that path as the one argument
+// after `--`, a LITERAL pathspec (`:(literal)<path>`): git reads every argument
 // after `--` as a path and never as an option, and the literal magic makes
 // every byte of it the path's own, so a path that begins with `-` or `:`, or
 // spells `*`, is read as itself. NEVER ON `log --stdin`, whose paths are read
@@ -30,17 +30,18 @@ import (
 // --topo-order walks by generation where the copy holds a commit-graph — every
 // copy its maintainer has written one for, and a copy serving an installed
 // published chain always — every child before its parents, the order a
-// history is read in. Every author is named as its commit states it: `%an`
-// and `%ae` are no `.mailmap`'s (git maps only `%aN` and `%aE`, measured on
-// 2.56.0 against a `.mailmap` at HEAD, which a bare repository reads), and
-// --no-mailmap holds that whatever log.mailmap or a later git makes of them —
+// history is read in. Every author and committer is named as its commit
+// states it: `%an`, `%ae`, `%cn` and `%ce` are no `.mailmap`'s (git maps only
+// `%aN`, `%aE`, `%cN` and `%cE`, measured on 2.56.0 against a `.mailmap` at
+// HEAD, which a bare repository reads), and --no-mailmap holds that whatever
+// log.mailmap or a later git makes of them —
 // a `.mailmap` at some branch would make a page a function of a file at a ref
 // rather than of the commits it names alone.
 //
 // # The framing: a record no message can forge
 //
-// Every field of the format ends in a NUL — `%H %P %an %ae %at %ct %s`, and
-// the whole message (`%B`) where a Grep is set — and `-z` ends each record
+// Every field of the format ends in a NUL — `%H %P %an %ae %cn %ce %at %ct %s`,
+// and the whole message (`%B`) where a Grep is set — and `-z` ends each record
 // with one more, so a record is exactly its fields, each read to its NUL, and
 // one empty field after them. A message may hold any byte but NUL, so a
 // separator of any other byte let a pushed message forge a record git never
@@ -92,6 +93,14 @@ import (
 // streams by (literal.go), so a message of any length is searched whole in
 // memory bounded by the literal, and nothing grep-shaped reaches git.
 //
+// UNTIL is git's --min-age, the last whole second before it: a filter of each
+// commit, not a stop. --skip counts only the commits git outputs, so the
+// `s:<n>` cursor stays the walk's.
+//
+// PUSHED BY keeps a commit the Grep kept whose introducing push, in the copy's
+// index of pushes, holds that seat; one the index cannot judge is counted in
+// Unjudged. Such a page is the index's, so it is never memoized.
+//
 // THE MEMO keeps a page the walk itself ended — at its Limit, its bytes or
 // the history's end — and never one the budget or its due instant cut short,
 // which is a function of the machine and the moment rather than of the ids
@@ -100,8 +109,8 @@ import (
 // logFormat and logFormatBody are the two formats a log runs: every field
 // NUL-terminated, the whole message last where a Grep needs it.
 const (
-	logFormat     = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00"
-	logFormatBody = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00%B%x00"
+	logFormat     = "--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%ct%x00%s%x00"
+	logFormatBody = "--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%ct%x00%s%x00%B%x00"
 )
 
 // The fields of a record, in their order; logBody is carried where a Grep is
@@ -111,6 +120,8 @@ const (
 	logParents
 	logAuthor
 	logEmail
+	logCommitter
+	logCommitterEmail
 	logAuthored
 	logCommitted
 	logSubject
@@ -130,12 +141,16 @@ func logLimitOf(q *gitlet.LogQuery) int {
 }
 
 // logWindow is the arguments that window a log: since as git's --max-age (the
-// unix second the walk stops before, which the server formats from a time the
-// query validated), and the commits a cursor's page skips.
-func logWindow(since time.Time, skip int) []string {
+// unix second the walk stops before) and until as its --min-age (the last
+// second a commit kept is dated at), each formatted by the server from a time
+// the query validated, and the commits a cursor's page skips.
+func logWindow(since, until time.Time, skip int) []string {
 	var out []string
 	if !since.IsZero() {
 		out = append(out, "--max-age="+strconv.FormatInt(sinceSecond(since), 10))
+	}
+	if !until.IsZero() {
+		out = append(out, "--min-age="+strconv.FormatInt(untilSecond(until), 10))
 	}
 	if skip > 0 {
 		out = append(out, "--skip="+strconv.Itoa(skip))
@@ -155,6 +170,11 @@ func sinceSecond(since time.Time) int64 {
 	}
 	return s
 }
+
+// untilSecond is the last whole second before until: git's --min-age is
+// inclusive and Until is not. Validate holds until after the epoch, so this
+// is never the -1 git reads as no bound.
+func untilSecond(until time.Time) int64 { return sinceSecond(until) - 1 }
 
 // errUnparsed is git output that does not parse as the format asked: a page
 // that meets one fails, and is never answered.
@@ -176,8 +196,12 @@ func (r *read) logRead(ctx context.Context, objs found, at cursor, m *memoRun) (
 	envelope := gitlet.GitAnswer{Kind: gitlet.GitLog, Rev: rev.peeled, Next: widestCursor('s', 1),
 		Log: &gitlet.LogAnswer{Path: wire, PathB64: wireB64, Commits: []gitlet.LogCommit{}, Scanned: widest,
 			Complete: true}}
+	if q.PushedBy != "" {
+		most := widest
+		envelope.Log.Unjudged = &most
+	}
 	p := &logPage{r: r, a: a.Log, limit: logLimitOf(q), left: r.room(envelope) - neutralGrowth(wire),
-		grep: q.Grep != ""}
+		filtered: q.Grep != "" || q.PushedBy != "", seat: q.PushedBy}
 	format := logFormat
 	var grep *literal
 	if q.Grep != "" {
@@ -186,7 +210,7 @@ func (r *read) logRead(ctx context.Context, objs found, at cursor, m *memoRun) (
 	stream := newLogStream(grep, p.take)
 
 	skip := at.a // the first page's cursor is the zero one: skip none
-	tail := append(logWindow(q.Since, skip), rev.peeled)
+	tail := append(logWindow(q.Since, q.Until, skip), rev.peeled)
 	if path != "" {
 		tail = append(tail, "--", logLiteral+path)
 	}
@@ -221,16 +245,28 @@ func (r *read) logRead(ctx context.Context, objs found, at cursor, m *memoRun) (
 	}
 	narrow := fmt.Errorf("%w: the history of %s did not reach its first commit in the read's %s of git: "+
 		"narrow it with a path or a later since", gitlet.ErrSliceTooLarge, rev.peeled, r.s.gitBudget)
+	if !q.Until.IsZero() {
+		// A window far back may spend the budget passing over newer commits,
+		// which a later since does not help.
+		narrow = fmt.Errorf("%w: the history of %s before %s did not reach a commit in the read's %s of git: "+
+			"narrow it with a path or a since", gitlet.ErrSliceTooLarge, rev.peeled,
+			q.Until.UTC().Format(time.RFC3339), r.s.gitBudget)
+	}
 	if !cut {
 		if err = r.failed(ctx, "history walk", res, err, narrow); err != nil {
 			return gitlet.GitAnswer{}, err
 		}
 	}
 	a.Log.Scanned = p.scanned
+	if q.PushedBy != "" {
+		n := p.unjudged
+		a.Log.Unjudged = &n
+	}
 	if !a.Log.Complete {
 		a.Next = formatCursor(cursor{letter: 's', a: skip + p.scanned})
 	}
 	if !cut {
+		// A PushedBy read reaches neither: memoizable said no, so m is nil.
 		m.put(at, a, p.left)
 		m.place(gitlet.GitLog, same(memoTail{}))
 	}
@@ -252,21 +288,36 @@ type logPage struct {
 	a     *gitlet.LogAnswer
 	limit int
 	left  int
-	// grep is that a Grep keeps the page's records, so the page ends at its
-	// Limit-th match rather than at a record past it (the doc's "# The
-	// page").
-	grep bool
+	// filtered is that a Grep or a PushedBy keeps the page's records, so the
+	// page ends at its Limit-th kept record rather than at a record past it
+	// (the doc's "# The page").
+	filtered bool
+	// seat is the PushedBy, "" for none, and unjudged how many records the
+	// Grep kept whose push the index could not name.
+	seat     string
+	unjudged int
 	// scanned is how many records of the walk the page covers so far, and
-	// ended that the page found its own end — the record past its last, or a
-	// Grep's Limit-th match — and ended the walk there.
+	// ended that the page found its own end (the record past its last, or a
+	// filtered page's Limit-th kept record) and ended the walk there.
 	scanned int
 	ended   bool
 }
 
-// take places one record of the walk on the page — or passes it, unmatched
-// by the Grep — or ends the page before it: errStop, which ends the walk. A
-// Grep's page ends at its Limit-th match, the one it places.
+// take places one record of the walk on the page, passes it (unmatched, pushed by
+// another seat, or counted as unjudged), or ends the page before it with errStop;
+// a filtered page ends at its Limit-th kept record.
 func (p *logPage) take(rec *logRecord) error {
+	// The seat after the Grep, so Unjudged counts only commits every other
+	// narrowing kept.
+	if rec.matched && p.seat != "" {
+		switch by, judged := p.r.introducedBy(rec.oid); {
+		case !judged:
+			p.unjudged++
+			rec.matched = false
+		case by.Principal.Seat != p.seat:
+			rec.matched = false
+		}
+	}
 	if !rec.matched {
 		p.scanned++
 		return nil
@@ -296,7 +347,7 @@ func (p *logPage) take(rec *logRecord) error {
 	p.a.Commits = append(p.a.Commits, c)
 	p.left -= cost + pushed
 	p.scanned++
-	if p.grep && len(p.a.Commits) == p.limit {
+	if p.filtered && len(p.a.Commits) == p.limit {
 		p.ended = true
 		return errStop
 	}
@@ -330,14 +381,26 @@ func (r *read) pushCost(id string) (int, func()) {
 	return jsonLen(entry) - len("{}") + len(","), name
 }
 
+// introducedBy is the push that introduced commit id as the copy's index names
+// it, and whether it names one. A node with no readable index judges nothing
+// rather than refusing: the index decorates, and no read waits on it.
+func (r *read) introducedBy(id string) (gitlet.PushedBy, bool) {
+	if !r.prov.Indexed() {
+		return gitlet.PushedBy{}, false
+	}
+	return r.prov.Commit(id)
+}
+
 // logRecord is one commit as the walk wrote it, its fields read and held to
 // their bounds.
 type logRecord struct {
-	oid      string
-	parents  parentList
-	author   heldText
-	email    heldText
-	authored time.Time
+	oid            string
+	parents        parentList
+	author         heldText
+	email          heldText
+	committer      heldText
+	committerEmail heldText
+	authored       time.Time
 	// committed is the commit's own date; subject its message's first
 	// paragraph as %s joins it; matched whether the Grep kept it — every
 	// record, where there is none.
@@ -361,12 +424,24 @@ func (rec *logRecord) commit() (gitlet.LogCommit, int) {
 	growth += g
 	c.AuthorEmail, c.AuthorEmailBytes, g = rec.email.described(gitlet.MaxLogPersonBytes)
 	growth += g
+	c.Committer, c.CommitterBytes, g = rec.committer.described(gitlet.MaxLogPersonBytes)
+	growth += g
+	c.CommitterEmail, c.CommitterEmailBytes, g = rec.committerEmail.described(gitlet.MaxLogPersonBytes)
+	growth += g
+	c.EngineCommitted = engineCommitted(&rec.committer, &rec.committerEmail)
 	c.Subject, c.SubjectBytes, g = rec.subject.described(gitlet.MaxLogSubjectBytes)
 	growth += g
 	if c.Subject != "" {
 		growth += fenceCost[provenance.SourceRepoCommit]
 	}
 	return c, growth
+}
+
+// engineCommitted is the engine's mark for a committer name at email; a field
+// held past its cap is never the convention, its bytes not all here.
+func engineCommitted(name, email *heldText) *bool {
+	engine := !name.long() && !email.long() && gitlet.EngineCommitted(string(name.buf), string(email.buf))
+	return &engine
 }
 
 // heldText is a field's bytes up to a cap, and its whole length past it: a
@@ -386,6 +461,9 @@ func (h *heldText) add(b []byte) {
 	}
 }
 
+// long reports a field that ran past its cap: its bytes are not all held.
+func (h *heldText) long() bool { return h.n > len(h.buf) }
+
 // reset empties the field for the next record, keeping its cap.
 func (h *heldText) reset() { h.buf, h.n = h.buf[:0], 0 }
 
@@ -394,7 +472,7 @@ func (h *heldText) reset() { h.buf, h.n = h.buf[:0], 0 }
 // none and its size in bytes — and what neutralising the text adds to its
 // encoding.
 func (h *heldText) described(bound int) (text string, size, growth int) {
-	if h.n > len(h.buf) {
+	if h.long() {
 		return "", h.n, 0
 	}
 	s := string(h.buf)
@@ -488,6 +566,7 @@ func newLogStream(grep *literal, take func(*logRecord) error) *logStream {
 		s.last = logBody
 	}
 	s.rec.author.cap, s.rec.email.cap = gitlet.MaxLogPersonBytes, gitlet.MaxLogPersonBytes
+	s.rec.committer.cap, s.rec.committerEmail.cap = gitlet.MaxLogPersonBytes, gitlet.MaxLogPersonBytes
 	s.rec.subject.cap = gitlet.MaxLogSubjectBytes
 	return s
 }
@@ -529,6 +608,10 @@ func (s *logStream) add(b []byte) {
 		s.rec.author.add(b)
 	case logEmail:
 		s.rec.email.add(b)
+	case logCommitter:
+		s.rec.committer.add(b)
+	case logCommitterEmail:
+		s.rec.committerEmail.add(b)
 	case logSubject:
 		s.rec.subject.add(b)
 	case logBody:
@@ -589,6 +672,8 @@ func (s *logStream) next() {
 	s.rec.parents.reset()
 	s.rec.author.reset()
 	s.rec.email.reset()
+	s.rec.committer.reset()
+	s.rec.committerEmail.reset()
 	s.rec.subject.reset()
 }
 
