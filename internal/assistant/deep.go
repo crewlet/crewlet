@@ -553,6 +553,9 @@ func (s *Service) ReadsImages() bool {
 func (s *Service) withConfigured(ctx context.Context, tools []catalog.Tool) []catalog.Tool {
 	if c, _ := s.company(); c != nil && len(c.Assistant.ResearchHosts()) > 0 {
 		tools = append(slices.Clone(tools), catalog.FetchWebPageTool())
+		if c.Assistant.Research.Search != nil {
+			tools = append(tools, catalog.SearchWebTool())
+		}
 	}
 	if s.deepAvailable(ctx) != nil {
 		return tools

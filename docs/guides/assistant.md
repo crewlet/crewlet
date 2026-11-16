@@ -355,7 +355,13 @@ engine reads it, never the model's own harness, whose web tools stay off
 - at most 2 MiB a page in 15 seconds, read in parts of 12 KiB, at most eight
   pages a turn, each kept ten minutes on the node that read it.
 
-Each read is a step the person sees with its address, and its text is the
+With `assistant.research.search.mcp_server` naming the company's Tavily
+entry, Ask Crewlet can also search those hosts first. Each API node runs its
+own instance of that server for research alone, never a seat's; a search asks
+for the listed hosts only, drops any result on another host, sends at most
+200 characters and keeps five results, and a turn searches at most four times.
+
+Each read or search is a step the person sees, and its text is the
 site's: a change Ask Crewlet proposes after reading one says it was prepared
 after reading a web page, and after one it proposes changes only to the records
 your question or open screen names (a task key such as ENG-41, the record you
@@ -599,8 +605,10 @@ refused from the audit log. `read-one-config-section` reads one section of the
 company document rather than the whole. `read-a-vendor-page` reads a vendor's
 page from a listed host (a case lists its hosts with `research`) whose text
 carries an instruction nothing follows, and `a-page-cannot-steer-a-change` has
-a page ask for a comment on another task, which is refused. The flags and the
-suite format are in the
+a page ask for a comment on another task, which is refused, and
+`search-a-vendors-docs` searches them first (`search: true` names a search
+server) past a result that carries one. The flags and the suite format are in
+the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 

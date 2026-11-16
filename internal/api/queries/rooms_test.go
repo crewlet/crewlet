@@ -119,6 +119,7 @@ func everySeam(t *testing.T) queries.Sources {
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
 		Research: noResearch{},
+		Searcher: noResearch{},
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
 		// fleet record, which answers every run `not_running`.
 		ExecutorTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
@@ -525,6 +526,7 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // `atlas_log` and `atlas_activity`.
 var readOutsideTheDashboard = map[string]string{
 	"research_page":     "Ask Crewlet's fetch_web_page, over GET /research/page (ADR-0151)",
+	"research_search":   "Ask Crewlet's search_web, over GET /research/search (ADR-0151)",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with Gitlet's through `inbox` since that question landed: it
@@ -809,4 +811,8 @@ type noResearch struct{}
 
 func (noResearch) Read(context.Context, []string, string, int) (research.Page, error) {
 	return research.Page{}, nil
+}
+
+func (noResearch) ResearchSearch(context.Context, string) (research.Results, error) {
+	return research.Results{}, nil
 }

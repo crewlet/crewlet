@@ -68,6 +68,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/research"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -946,6 +947,10 @@ type Engine struct {
 	// engine rather than one per epoch: the children are processes, and an
 	// apply that replaced the bridge would orphan every one of them.
 	mcp *mcp.Bridge
+	// research is this node's research instance of the company's search server
+	// (ADR-0151), on a bridge of its own; made at its first search.
+	research     *research.Searcher
+	researchOnce sync.Once
 
 	// mcpFileMu serialises filing the shared bridge's catalogue into an
 	// epoch's registry outside an apply's own build: what the bridge's

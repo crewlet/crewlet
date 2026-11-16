@@ -274,7 +274,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"executors":  "everybody", "company_feed": "everybody",
 		"decisions": "everybody",
 		// A page from a host the company lists, for whoever Ask Crewlet acts for.
-		"research_page": "everybody",
+		"research_page":   "everybody",
+		"research_search": "everybody",
 		// The other half of `decisions`: a person's own asks need no app.
 		"answered_decisions": "everybody",
 		// Each model's condition and uses, in two readings: a member's names no

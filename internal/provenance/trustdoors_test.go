@@ -134,6 +134,10 @@ var trustDoors = map[string]trustDoor{
 		"internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites",
 		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
 	}},
+	"internal/assistant/catalog/research.go:searchWeb": {vendor, []string{
+		"internal/assistant.TestATurnSearchesAFewTimesFencedAsTheSites",
+		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
+	}},
 	"internal/assistant/catalog/atlasread.go:atlasReads": {vendor, []string{
 		"internal/assistant/catalog.TestAnAtlasSearchIsATableOfEntriesWithTheMapToOpen",
 		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",

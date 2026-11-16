@@ -36,7 +36,9 @@ type Case struct {
 	Mode    wire.TurnMode `yaml:"mode"`
 	Answers []CaseAnswer  `yaml:"answers"`
 	// Research are the hosts the company lists for web research; none is off.
+	// Search names a search server for them too.
 	Research []string    `yaml:"research"`
+	Search   bool        `yaml:"search"`
 	Script   []CaseRound `yaml:"script"`
 	Expect   Expect      `yaml:"expect"`
 
@@ -251,18 +253,24 @@ func (c Case) Validate() error {
 			fail("answers[%d].status: %d is not an HTTP status", i, a.Status)
 		}
 	}
+	if c.Search && len(c.Research) == 0 {
+		fail("search: a search needs the research hosts it keeps to")
+	}
+	offered := func(tool string) bool { // the web reads the case's company is offered
+		return tool == catalog.FetchWebPageToolName && len(c.Research) > 0 ||
+			tool == catalog.SearchWebToolName && c.Search
+	}
 	for i, r := range c.Script {
 		switch {
 		case (r.Call == "") == (r.Say == ""):
 			fail("script[%d]: give exactly one of call and say", i)
-		case r.Call != "" && !known(r.Call) &&
-			(len(c.Research) == 0 || r.Call != catalog.FetchWebPageToolName):
+		case r.Call != "" && !known(r.Call) && !offered(r.Call):
 			fail("script[%d].call: %q is not a catalogue tool", i, r.Call)
 		}
 	}
 	for field, tools := range map[string][]string{"calls": c.Expect.Calls, "never": c.Expect.Never} {
 		for _, tool := range tools {
-			if !known(tool) && tool != catalog.FetchWebPageToolName {
+			if !known(tool) && tool != catalog.FetchWebPageToolName && tool != catalog.SearchWebToolName {
 				fail("expect.%s: %q is not a catalogue tool", field, tool)
 			}
 		}

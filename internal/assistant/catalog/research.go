@@ -59,3 +59,53 @@ func FetchWebPageTool() Tool {
 	}
 	return t
 }
+
+// SearchWebToolName searches the hosts the company lists (ADR-0151).
+const SearchWebToolName = "search_web"
+
+// webSearchesPerTurn is the most searches one turn makes: a hard vendor
+// question needed two.
+const webSearchesPerTurn = 4
+
+var searchWeb = sync.OnceValues(func() (Tool, error) {
+	t := Tool{
+		Name: SearchWebToolName, Kind: KindRead, Tier: TierRead,
+		Phrase: "search the web",
+		Description: "Search the hosts the company lists for research, through its own " +
+			"search server: the results' titles, addresses and a snippet each, on those " +
+			"hosts alone. Read a result whole with " + FetchWebPageToolName + ". Never put " +
+			"the company's data (names, keys, addresses) in a query.",
+		schema: object([]string{"query"}, map[string]*schema{
+			"query": text("What to find, in a few plain words.", 200),
+		}),
+		Routes: []string{"GET /research/search"}, Fence: true, PerTurn: webSearchesPerTurn,
+		Source: provenance.SourceWebPage, Trust: provenance.TrustExternal,
+		Build: func(a map[string]any) (exec.Request, error) {
+			return get("GET /research/search", nil, query(a).str("query", "q").values())
+		},
+		Cards: one(cards.Spec{Table: &cards.Table{Title: "Search results", Rows: "results",
+			Brief: []string{"title", "address"},
+			Columns: []cards.Column{prose("title", "Title", "title"),
+				{Key: "address", Label: "Address", Path: "url", Type: tText},
+				prose("snippet", "Snippet", "snippet")}}}),
+		Label: func(a map[string]any) string {
+			return "Searching the web for “" + Args(a).String("query") + "”"
+		},
+		Scope: func(a Args) string { return "“" + a.String("query") + "”" },
+	}
+	t.Parameters = t.schema.JSON()
+	if err := t.validate(); err != nil {
+		return Tool{}, fmt.Errorf("catalog: %s: %w", t.Name, err)
+	}
+	return t, nil
+})
+
+// SearchWebTool is the web search. It is never in [Tools]: the orchestrator
+// offers it while the company names a search server.
+func SearchWebTool() Tool {
+	t, err := searchWeb()
+	if err != nil {
+		panic(err)
+	}
+	return t
+}

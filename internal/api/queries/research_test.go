@@ -52,3 +52,40 @@ func TestAPageIsReadOnlyFromTheHostsTheCompanyLists(t *testing.T) {
 		})
 	}
 }
+
+// searcherOf answers a search as err, or with one result.
+type searcherOf struct{ err error }
+
+func (s searcherOf) ResearchSearch(_ context.Context, q string) (research.Results, error) {
+	if s.err != nil {
+		return research.Results{}, s.err
+	}
+	return research.Results{Query: q, Results: []research.Result{{Title: "Rules"}}}, nil
+}
+
+// A search is refused naming the setting while none is configured, a query
+// out of bounds is refused, and a server that fails is unavailable.
+func TestASearchAnswersOrSaysWhyNot(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err, want error
+	}{
+		"found":       {nil, nil},
+		"off":         {research.ErrSearchOff, queries.ErrBadParams},
+		"long query":  {research.ErrQuery, queries.ErrBadParams},
+		"server down": {research.ErrSearch, queries.ErrUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := viewerSources(t, &stubWork{})
+			s.Searcher = searcherOf{tc.err}
+			got, err := askAsSeat(t, s, "ana", "research_search", map[string]any{"q": "origin rules"})
+			switch {
+			case tc.want == nil && (err != nil || got.(research.Results).Query != "origin rules"):
+				t.Errorf("the search answered %v, %v", got, err)
+			case tc.want != nil && !errors.Is(err, tc.want):
+				t.Errorf("the search answered %v, %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+}

@@ -100,7 +100,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	person := Person("eval", "eval", c.Person.Apps...)
 	company, err := Company(true, person.Seat)
 	if len(c.Research) > 0 {
-		company, err = ResearchCompany(c.Research, person.Seat)
+		company, err = ResearchCompany(c.Research, c.Search, person.Seat)
 	}
 	if err != nil {
 		return Trial{}, err

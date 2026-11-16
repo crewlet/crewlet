@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -94,7 +95,60 @@ type Assistant struct {
 // AssistantResearch is the `assistant.research` block (ADR-0151).
 type AssistantResearch struct {
 	Hosts []string `yaml:"hosts" json:"hosts" desc:"The hosts Ask Crewlet may read pages from over https, each a host name alone (docs.example.com), at most 50. Required."`
+
+	// Search is the company's search server Ask Crewlet searches the hosts with.
+	Search *ResearchSearch `yaml:"search,omitempty" json:"search,omitempty" desc:"Web search over the listed hosts, through the company's own search tool server. Absent: Ask Crewlet reads pages it is given but searches none."`
 }
+
+// ResearchSearch is the `assistant.research.search` block (ADR-0151).
+type ResearchSearch struct {
+	MCPServer string `yaml:"mcp_server" json:"mcp_server" desc:"The mcp_servers entry Ask Crewlet searches through: a shared, enabled entry the curated catalogue recognises as Tavily, whose tavily_search is not blocked. Each node serving the API runs its own instance of it for research alone. Required."`
+}
+
+// SearchServerCatalogueID is the curated entry a research search server must be.
+const SearchServerCatalogueID = "tavily"
+
+// searchProblems reports a search block naming no entry, one the document does not
+// hold, or one that is not a shared, enabled Tavily server allowed to search.
+func (c *Company) searchProblems(path Path) error {
+	r := c.Assistant.Research
+	if r == nil || r.Search == nil {
+		return nil
+	}
+	var p problems
+	serverPath := at(path, "mcp_server")
+	name := r.Search.MCPServer
+	i := slices.IndexFunc(c.MCPServers, func(m MCPServer) bool { return m.Name == name })
+	switch {
+	case name == "":
+		p.add(serverPath, ErrMissing, "research search names no tool server: name the mcp_servers "+
+			"entry that runs Tavily")
+	case i < 0:
+		p.add(serverPath, ErrUnknownValue, "%q is not an mcp_servers entry", name)
+	default:
+		m := &c.MCPServers[i]
+		entry, known := catalogue.Recognise(m.Launch())
+		level := m.Tools.Levels[researchSearchTool]
+		if level == "" {
+			level = m.Tools.Default
+		}
+		switch {
+		case !known || entry.ID != SearchServerCatalogueID:
+			p.add(serverPath, ErrConflict, "%s is not the curated Tavily server (tavily-mcp), the "+
+				"one search Ask Crewlet knows how to ask", name)
+		case !m.IsShared() || !m.IsEnabled():
+			p.add(serverPath, ErrConflict, "%s must be shared and enabled: research searches as the "+
+				"company, with the entry's own key", name)
+		case level == MCPToolBlocked:
+			p.add(serverPath, ErrConflict, "%s blocks %s, the tool a research search calls", name,
+				researchSearchTool)
+		}
+	}
+	return p.err()
+}
+
+// researchSearchTool is the tool a research search calls (internal/research).
+const researchSearchTool = "tavily_search"
 
 // MaxResearchHosts bounds the list a person confirms host by host.
 const MaxResearchHosts = 50
@@ -529,6 +583,7 @@ func (c *Company) validateAssistant() error {
 		}
 	}
 	p.wrap(a.Research.problems(at(path, "research")))
+	p.wrap(c.searchProblems(at(path, "research.search")))
 	return p.err()
 }
 

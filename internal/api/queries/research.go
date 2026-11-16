@@ -14,6 +14,24 @@ type ResearchReader interface {
 	Read(ctx context.Context, hosts []string, url string, from int) (research.Page, error)
 }
 
+// ResearchSearcher searches the hosts the company lists through its search server.
+type ResearchSearcher interface {
+	ResearchSearch(ctx context.Context, query string) (research.Results, error)
+}
+
+// researchSearch answers `research_search`: the results of a search on the
+// company's listed hosts, any result on another host dropped by the engine.
+func (s Sources) researchSearch(ctx context.Context, p Params) (any, error) {
+	results, err := s.Searcher.ResearchSearch(ctx, p.String("q"))
+	switch {
+	case errors.Is(err, research.ErrSearchOff), errors.Is(err, research.ErrQuery):
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return results, nil
+}
+
 // researchPage answers `research_page`: one part of a web page on a host
 // `assistant.research` lists, read by the engine, never by the caller.
 func (s Sources) researchPage(ctx context.Context, p Params) (any, error) {
