@@ -267,14 +267,17 @@ test("a rule is removed after asking, and the later rules move up", async () => 
 test("a reader without the grant sees every control disabled with the reason", async () => {
   await show(READER_VIEWER);
   const reason = CONFIG_WRITE_REASONS.no_grant;
+  const described = (control: HTMLElement) =>
+    document.getElementById(control.getAttribute("aria-describedby")?.split(" ").pop() ?? "")
+      ?.textContent;
   for (const control of [
     screen.getByRole("button", { name: /Add rule/ }),
     screen.getByRole("button", { name: "Edit rule 1" }),
     screen.getByRole("button", { name: "Remove rule 2" }),
+    screen.getByRole("switch", { name: "On" }),
   ]) {
-    expect(control.getAttribute("title")).toBe(reason);
+    expect(described(control)).toBe(reason);
   }
-  expect(screen.getByRole("switch", { name: "On" }).getAttribute("title")).toBe(reason);
 });
 
 /** Opens one limit's field from its pencil, types `value` and submits it. */
