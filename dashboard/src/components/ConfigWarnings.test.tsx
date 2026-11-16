@@ -16,5 +16,7 @@ test("a sentence opening on a word is raised, and a backticked key is code", () 
 });
 
 test("a message opening on a field path keeps the key's case", () => {
-  expect(drawn("units[0].roles[0].goal: missing").textContent).toBe("units[0].roles[0].goal: missing");
+  expect(drawn("units[0].roles[0].goal: missing").textContent).toBe(
+    "units[0].roles[0].goal: missing",
+  );
 });

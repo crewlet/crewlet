@@ -147,6 +147,8 @@ describe("the builder's warnings", () => {
     expect(notices[0]!.subject).toBe("CEO");
     expect(text(notices[0]!.title)).toBe("Schedules run 12 or more times a day");
     expect(text(notices[0]!.detail)).toBe("Each run starts a turn.");
-    expect(notices[0]!.lines).toEqual([{ items: ["health-check (24 a day)", "release (12 a day)"] }]);
+    expect(notices[0]!.lines).toEqual([
+      { items: ["health-check (24 a day)", "release (12 a day)"] },
+    ]);
   });
 });

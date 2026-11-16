@@ -18,7 +18,10 @@ export interface DraftWarnings {
   readonly seat: SeatNamer;
 }
 
-export function warningsOf(placed: readonly PlacedProblem[], derived: Derived | null): DraftWarnings {
+export function warningsOf(
+  placed: readonly PlacedProblem[],
+  derived: Derived | null,
+): DraftWarnings {
   const links = new Map<ConfigWarning, ProblemLink | null>();
   for (const p of placed) {
     if (p.severity === "warning") links.set(p.source as ConfigWarning, p.link);

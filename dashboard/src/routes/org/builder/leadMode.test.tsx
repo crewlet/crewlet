@@ -206,7 +206,9 @@ describe("a lead's draft", () => {
     await checkChange();
     await waitFor(() => expect(screen.getByTestId("problems QA").textContent).toBe("1"));
     expect(screen.getByTestId("problems Dev").textContent).toBe("0");
-    const refused = await screen.findByRole("group", { name: "Problems with the whole configuration" });
+    const refused = await screen.findByRole("group", {
+      name: "Problems with the whole configuration",
+    });
     expect(refused.textContent).toContain("units[0].roles[0].goal: missing");
   });
 
