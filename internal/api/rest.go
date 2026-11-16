@@ -361,6 +361,8 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}", what: "code_check", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", what: "code_check_log", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/commit-marks", what: "code_commit_marks", path: map[string]string{"name": "name"}},
+	// AND GITLET'S SECTION COUNTS: a scope's changes by state, every readable repository's or `?repo=`'s.
+	{method: "GET", pattern: "/gitlet/counts", what: "code_counts"},
 	// AND A SEARCH OF THEIR LINES, across every repository the caller may
 	// read or the ones its repo: filters name, each decided per repository
 	// by the Gitlet node that answers it.

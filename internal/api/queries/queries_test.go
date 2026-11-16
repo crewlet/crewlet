@@ -414,6 +414,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_check":        string(iam.GrantGitlet),
 		"code_check_log":    string(iam.GrantGitlet),
 		"code_commit_marks": string(iam.GrantGitlet),
+		// AND GITLET'S SECTION COUNTS, decided per repository alike: the company's leave out what the caller
+		// does not read.
+		"code_counts": string(iam.GrantGitlet),
 		// AND A SEARCH OF THEIR LINES, decided per repository alike: an
 		// unfiltered search leaves out what the caller does not read, and a
 		// repo: naming one is refused — by every Gitlet node that answers it.

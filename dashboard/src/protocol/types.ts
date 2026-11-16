@@ -8339,6 +8339,17 @@ export interface CodeRepoSummary {
   pushes: number;
   /** Absent for a repository nobody pushed to. */
   last_push_at?: string;
+  /** Its changes by state, where `repo_facts=true` asks (`gitlet.RepoSummary.ChangeCounts`). */
+  change_counts?: CodeChangeCounts;
+}
+
+/** Changes by state (`gitlet.ChangeCounts`); `live` is the draft and the open together. */
+export interface CodeChangeCounts {
+  live: number;
+  draft: number;
+  open: number;
+  closed: number;
+  merged: number;
 }
 
 /** One ref update a push asked for, and what became of it (`gitlet.Command`). */
@@ -9459,6 +9470,18 @@ export interface CodeCommitMarksAnswer {
   level: ReadLevel;
 }
 
+/** A counts read's parts, each absent where not asked (`gitlet.Counts`). */
+export interface CodeCounts {
+  changes?: CodeChangeCounts;
+}
+
+/** `code_counts`: a scope's counts, the parts it was asked. */
+export interface CodeCountsAnswer {
+  counts?: CodeCounts;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
 /**
  * `code_commit`: one commit by its whole id (`queries.CodeCommit`) — as the
  * history lists it, the push that introduced it (by the Gitlet node's index, and
@@ -9644,6 +9667,7 @@ export interface CodeQueryMap {
   code_check: CodeCheckAnswer;
   code_check_log: CodeCheckLogPage;
   code_commit_marks: CodeCommitMarksAnswer;
+  code_counts: CodeCountsAnswer;
   code_commit: CodeCommitAnswer;
   code_diff: CodeGitAnswer;
   code_tips: CodeGitAnswer;

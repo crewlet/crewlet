@@ -544,6 +544,9 @@ var readOutsideTheDashboard = map[string]string{
 	// the first reads it, a script reads the reference's path.
 	"code_commit_marks": "a script: GET /gitlet/repos/{name}/commit-marks, as docs/reference/api-endpoints.md " +
 		"prints it",
+	// GITLET'S SECTION COUNTS, answered ahead of the tabs that draw them: until the first reads it, a script
+	// reads the reference's path.
+	"code_counts": "a script: GET /gitlet/counts, as docs/reference/api-endpoints.md prints it",
 	// MANY TIPS AT ONCE, answered ahead of the Branches and Tags screens that
 	// draw them: until the first reads it, a script reads the reference's path.
 	"code_tips": "a script: GET /gitlet/repos/{name}/tips, as docs/reference/api-endpoints.md prints it",
