@@ -2810,7 +2810,10 @@ var table = []rule{
 		// failure at the classification the give-up reads, so the rule fires
 		// at any count (ADR-0015). Read fleet-wide off the heartbeat of the
 		// node holding the seat, which may evaluate no table of its own.
-		kind: KindExecutorResumeBlocked,
+		kind:  KindExecutorResumeBlocked,
+		title: "An agent's finished work is stuck",
+		person: "An agent's finished work waits, and the agent takes nothing new, until a server is fixed. " +
+			"Fix that server's disk, file limit, keys or version.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d run(s) of seats finished their executor's job but cannot be resumed "+
 					"until an operator clears a condition (the longest: %s's, held by %s, on %s, for %s)",
