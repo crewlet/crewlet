@@ -138,8 +138,7 @@ func opener(op OpKind, via NotifyReason, meta map[string]string) string {
 // thread, changing the artifact on its current version, answering on the
 // thread and resolving it citing the version that addressed it.
 func handling(op OpKind, meta map[string]string) string {
-	switch op {
-	case OpCommentResolve:
+	if op == OpCommentResolve {
 		return "This is news, not a request: the thread is closed. Act only if the version it " +
 			"cites leaves something of yours undone."
 	}

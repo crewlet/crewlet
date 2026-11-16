@@ -19,11 +19,8 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, c applyContext) 
 	if err != nil {
 		return 0, err
 	}
-	artifact, thread, splitErr := SplitCommentID(c.record.Subject.ID)
-	if splitErr != nil {
-		return 0, nil
-	}
-	if _, parseErr := uuid.Parse(thread); parseErr != nil {
+	artifact, thread, ok := commentSubjectIDs(c.record.Subject.ID)
+	if !ok {
 		return 0, nil
 	}
 	head, found, err := readHead(ctx, tx, artifact)
@@ -58,7 +55,7 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, c applyContext) 
 func openThread(ctx context.Context, tx *sql.Tx, c applyContext, artifact, thread string,
 	p CommentOpenPayload) (int, error) {
 
-	if _, err := uuid.Parse(p.Remark); err != nil || p.MaxThreads <= 0 {
+	if !isUUID(p.Remark) || p.MaxThreads <= 0 {
 		return 0, nil
 	}
 	if _, found, err := readThreadTx(ctx, tx, artifact, thread); err != nil || found {
@@ -97,7 +94,7 @@ func openThread(ctx context.Context, tx *sql.Tx, c applyContext, artifact, threa
 func addRemark(ctx context.Context, tx *sql.Tx, c applyContext, artifact, thread string,
 	p CommentReplyPayload) (int, error) {
 
-	if _, err := uuid.Parse(p.Remark); err != nil || p.MaxRemarks <= 0 {
+	if !isUUID(p.Remark) || p.MaxRemarks <= 0 {
 		return 0, nil
 	}
 	if _, found, err := readThreadTx(ctx, tx, artifact, thread); err != nil || !found {
@@ -249,4 +246,16 @@ func encodeMentions(mentions []string) (string, error) {
 		return "", fmt.Errorf("artifactsdomain: encode a remark's mentions: %w", err)
 	}
 	return string(out), nil
+}
+
+// commentSubjectIDs splits a thread's subject id; false for one the writer never makes.
+func commentSubjectIDs(id string) (artifact, thread string, ok bool) {
+	artifact, thread, err := SplitCommentID(id)
+	return artifact, thread, err == nil && isUUID(thread)
+}
+
+// isUUID reports whether s is a well-formed id.
+func isUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
 }

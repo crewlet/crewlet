@@ -73,7 +73,7 @@ func readThreads(ctx context.Context, tx *sql.Tx, id artifacts.ID, only string) 
 	out := []CommentThread{}
 	at := map[string]int{}
 	for rows.Next() {
-		t, err := scanThread(rows, id)
+		t, err := scanThread(rows, id) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			_ = rows.Close()
 			return nil, err
@@ -81,7 +81,7 @@ func readThreads(ctx context.Context, tx *sql.Tx, id artifacts.ID, only string) 
 		at[t.ID.String()] = len(out)
 		out = append(out, t)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		_ = rows.Close()
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func readThreads(ctx context.Context, tx *sql.Tx, id artifacts.ID, only string) 
 			removed                                 int
 			m                                       Remark
 		)
-		if err := remarks.Scan(&thread, &remark, &m.Author.Name, &kind, &m.Body, &mentions,
+		if err = remarks.Scan(&thread, &remark, &m.Author.Name, &kind, &m.Body, &mentions,
 			&replyTo, &created, &edited, &removed, &m.Position); err != nil {
 			return nil, fmt.Errorf("artifactsdomain: read %s's remarks: %w", id, err)
 		}

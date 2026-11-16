@@ -344,14 +344,14 @@ func (d ArtifactDeps) headView(ctx context.Context, tool string, h artifactsdoma
 	src := toolVersionSource{ctx: ctx, m: v.Manifest, deps: d}
 	switch {
 	case slices.Contains(accepted, commentanchor.KindSlides):
-		deck, err := slideformat.Read(src)
+		deck, err := slideformat.Read(src) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			r := sourceFailure(ctx, tool, slideformat.IndexPath, err)
 			return headView{}, &r
 		}
 		return headView{index: commentanchor.IndexSlides(deck), deck: &deck}, nil
 	case slices.Contains(accepted, commentanchor.KindDesign):
-		canvas, err := canvasformat.Read(src, v.Manifest)
+		canvas, err := canvasformat.Read(src, v.Manifest) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			r := sourceFailure(ctx, tool, canvasformat.Path, err)
 			return headView{}, &r
@@ -699,7 +699,7 @@ func (t *resolveArtifactComment) CallForTurn(ctx context.Context, turn *turnctx.
 		return *refusal, nil
 	}
 	if reopen {
-		out, err := t.deps.Comments.Reopen(ctx, call, artifactsdomain.ReopenInput{
+		out, err := t.deps.Comments.Reopen(ctx, call, artifactsdomain.ReopenInput{ //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			Artifact: tg.h.ID, Thread: thread, Notify: notify})
 		return t.deps.commentAnswer(ctx, turn, t.Name(), tg, out.Result, err, map[string]any{
 			"thread": thread.String(), "status": string(artifactsdomain.ThreadOpen)})
