@@ -9,8 +9,11 @@
 // crossing ([Across.Holds]).
 //
 // ONE HELPER FOR EVERY PACKAGE whose writes of the store cross a leaf's link —
-// the sandbox's run rows, and the engine's writes of them — so the cases share
-// one topology rather than each standing up its own copy of it.
+// the sandbox's run rows, and the engine's writes of them — and for a package
+// whose own traffic shares that link with the store's, such as the object
+// store's uploads ahead of a fleet-store read ([Across.LeafBroker],
+// [Across.MemberBroker]), so the cases share one topology rather than each
+// standing up its own copy of it.
 // internal/coord/kv's own cases keep theirs, since a test of package kv cannot
 // import a package that imports it.
 package kvtest
@@ -50,9 +53,14 @@ type Across struct {
 
 	// LeafBroker is the leaf's own broker, the store's connection one of its
 	// clients: a case dials another connection of it to put another
-	// subsystem's traffic on the same link as the store's, as a node's queue
-	// connection shares its leaf link with its coordination connection.
+	// subsystem's traffic on the same link as the store's, as everything a
+	// node without `data` sends shares its one leaf link.
 	LeafBroker *js.Server
+
+	// MemberBroker is the member's own broker, the far end of the link: a
+	// case dials a connection of it to see, in the order they arrive, what the
+	// leaf's connections sent across the link.
+	MemberBroker *js.Server
 }
 
 // SlowLeaf starts a member serving leaves, a link in front of its leaf
@@ -82,9 +90,10 @@ func SlowLeaf(t testing.TB, rate int64) Across {
 	// THE MEMBER'S FIRST, which creates the buckets; the leaf's adopts
 	// them, asked across its link once it is up.
 	return Across{
-		Member:     open(t, client(t, "member", member), kv.InProcess),
-		Leaf:       open(t, client(t, "leaf", leaf), kv.AcrossLink),
-		LeafBroker: leaf,
+		Member:       open(t, client(t, "member", member), kv.InProcess),
+		Leaf:         open(t, client(t, "leaf", leaf), kv.AcrossLink),
+		LeafBroker:   leaf,
+		MemberBroker: member,
 	}
 }
 
