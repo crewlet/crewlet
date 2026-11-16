@@ -2275,6 +2275,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	} else {
 		e.startRoutedDirectory(ctx)
 	}
+	// AFTER THE LOGS, so a raise of the bucket is weighed against every
+	// reservation they hold and never takes one a log being created needed.
+	e.raiseObjectsAtBoot(ctx, opts.Bootstrap, incarnation)
 	// THE BOUNDARY: everything above is what this node holds, recovered;
 	// everything below is what its company configures. See
 	// [Options.Recovered]. Logged, because it is the line a deployment sizes

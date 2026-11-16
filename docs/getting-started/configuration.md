@@ -1577,11 +1577,13 @@ store:
                                     #   the broker, 1 GiB..64 TiB. Unset
                                     #   derives the smaller of a quarter of the
                                     #   broker's limit and what its state logs'
-                                    #   half and a 1 GiB coordination floor
-                                    #   leave. A full bucket refuses uploads,
-                                    #   never the fleet's leases. An existing
-                                    #   bucket keeps the reservation it was
-                                    #   created with. REFUSED with backend s3
+                                    #   five eighths and a 1 GiB coordination
+                                    #   floor leave. A full bucket refuses
+                                    #   uploads, never the fleet's leases. A
+                                    #   data node raises an existing bucket to
+                                    #   a larger figure at boot where the
+                                    #   broker has room, and never lowers it.
+                                    #   REFUSED with backend s3
   #   s3:                           #   REFUSED unless backend is s3
   #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
                                     #   S3's own for the region. R2, MinIO,
