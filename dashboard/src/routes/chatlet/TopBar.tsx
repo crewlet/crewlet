@@ -419,15 +419,14 @@ export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined
             <RoomActions tight={tight} />
           </>
         ) : (
-          <Tooltip content="Search Chatlet">
-            <IconButton
-              label="Search Chatlet"
-              size="header"
-              variant="ghost"
-              icon={<SearchGlyph />}
-              onClick={() => nav.go({ kind: "search" })}
-            />
-          </Tooltip>
+          <IconButton
+            label="Search Chatlet"
+            size="header"
+            variant="ghost"
+            icon={<SearchGlyph />}
+            tooltip
+            onClick={() => nav.go({ kind: "search" })}
+          />
         )}
       </span>
     </div>
