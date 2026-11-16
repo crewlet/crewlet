@@ -98,7 +98,8 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	}
 	b.WriteString("\n## Get full context\nRead the thread with `" + listCommentsTool + "` (`artifact: " +
 		meta[MetaArtifact] + "`, `thread: " + meta[MetaThread] + "`) before you act: it places the " +
-		"thread on the current version and shows what it points at.\n")
+		"thread on the current version, shows what it points at and the picture its writer " +
+		"attached, if any.\n")
 	b.WriteString("\n## How to handle this\n" + handling(OpKind(n.EventType), meta) + "\n")
 	return b.String()
 }

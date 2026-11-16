@@ -1,7 +1,10 @@
 package builtin_test
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/png"
 	"slices"
 	"strings"
 	"testing"
@@ -252,3 +255,37 @@ func TestAnAgentDoesNotAskAPersonInAnArtifactComment(t *testing.T) {
 type mentionsOf []string
 
 func (m mentionsOf) Mentions(string) []string { return m }
+
+// A THREAD'S PICTURE REACHES A MODEL AFTER WORDS NAMING WHOSE IT IS, and only
+// when that thread is read alone. Mutation: drop the image or its note and
+// this goes red.
+func TestAThreadsPictureReachesAModelNamedAsItsWriters(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
+	turn, _ := readerTurn(t)
+	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil,
+		[2]string{"index.html", `<section data-crewlet-anchor="pricing"></section>`})
+	th := r.f.comment(h.ID, commentanchor.Anchor{Kind: commentanchor.KindHTML, Page: "index.html",
+		Name: "pricing"}, "", remark("founder", iam.ActorHuman, "Say what annual saves."))
+	var pic bytes.Buffer
+	if err := png.Encode(&pic, image.NewRGBA(image.Rect(0, 0, 4, 3))); err != nil {
+		t.Fatal(err)
+	}
+	r.f.threads[h.ID][0].Crop, r.f.threads[h.ID][0].CropType = pic.Bytes(), "image/png"
+
+	one := r.call(t, turn, builtin.ListArtifactCommentsTool,
+		map[string]any{"artifact": h.ID.String(), "thread": th.ID.String()})
+	if one.Failed {
+		t.Fatalf("list_artifact_comments failed: %s", one.Output)
+	}
+	if len(one.Images) != 1 || one.Images[0].MIMEType != "image/png" || !bytes.Equal(one.Images[0].Data, pic.Bytes()) {
+		t.Fatalf("one thread's read carries %d images, want its own picture", len(one.Images))
+	}
+	if !strings.Contains(one.Output, "picture founder attached") {
+		t.Errorf("the answer does not name whose picture follows it: %s", one.Output)
+	}
+	all := r.call(t, turn, builtin.ListArtifactCommentsTool, map[string]any{"artifact": h.ID.String()})
+	if all.Failed || len(all.Images) != 0 {
+		t.Errorf("a listing of every thread carries %d images, want none", len(all.Images))
+	}
+}
