@@ -309,6 +309,10 @@
 // conversation counts, its reviewers' faces, its head's [CheckRollup] and a recent
 // ejection, a statement a part over the page's ids and one rollup a head.
 //
+// A CHANGE'S PAGE (changepage.go): its detail names its participants, a reviewer row when the
+// record behind it landed (one notice of that record, none past the notices' horizon), a finding
+// when its review landed, and [ReadQuery.FindingPaths] counts its findings by path.
+//
 // # A change wakes the seats its records concern
 //
 // Every record about a change that concerns anybody carries whom it concerns,
