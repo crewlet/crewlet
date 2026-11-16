@@ -225,7 +225,7 @@ func memoizable(q gitlet.GitQuery) bool {
 		gitlet.GitCodeFiles:
 		return false
 	case gitlet.GitTips:
-		// Kept a tip at a time under tips/1 (tips.go), never as a page.
+		// Kept a tip at a time under tipsMemoFormat (tips.go), never as a page.
 		return false
 	}
 	return true

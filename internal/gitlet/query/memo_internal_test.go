@@ -410,9 +410,10 @@ func TestAStatsRunHoldsOnePagesCountsAtATime(t *testing.T) {
 }
 
 // tipsShapes is the shape of gitlet.Tip each tipsMemoFormat this build reads
-// was written over: a format names one shape, for ever.
+// was written over: a format names one shape, for ever. tips/2 added each
+// commit's committer and engine mark.
 var tipsShapes = map[string]string{
-	"tips/1": "f4db88a4765be972",
+	"tips/2": "4d98085adadc82e0",
 }
 
 // A tip's facts, every field set but its counts, read back whole, and an entry

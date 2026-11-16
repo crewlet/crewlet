@@ -16,7 +16,7 @@ import (
 // tipsMemoFormat names what a tips entry of this build holds (encodeTipFact,
 // encodeSides) and is the first part of its key, as memoFormat is a page's:
 // TestATipsEntrysShapeIsItsFormat holds it to a fingerprint of gitlet.Tip.
-const tipsMemoFormat = "tips/1"
+const tipsMemoFormat = "tips/2"
 
 // tipFactKey keys an object's facts, and tipSidesKey the counts of a tip's
 // commit against a base commit.
