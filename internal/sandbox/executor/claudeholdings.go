@@ -1237,35 +1237,18 @@ func (w *holdingsWalk) legResult(line threadLine, call threadCall, alone bool, r
 
 // notification files line, a user record of the main thread whose
 // message is message, record in its chain, as a task notification of a
-// subagent's leg where it is one: a text whose origin says so, its lines
-// naming the subagent and a leg whose call was read ([textNotice]), and
-// whether it carries a handback ([textHandback]), each read as the text will
-// stream, a piece at a time.
+// subagent's leg where it is one: a text whose origin says so, naming the
+// subagent and a leg whose call was read ([threadMessage.Notification]), and
+// whether it carries a handback ([threadMessage.NamesHandback]).
 func (w *holdingsWalk) notification(line threadLine, message threadMessage, record int32) error {
-	text, ok := message.Text()
-	if !ok {
+	if !message.IsText() || originOf(line) != claudeTaskNotification {
 		return nil
 	}
-	if originOf(line) != claudeTaskNotification {
-		return nil
-	}
-	var (
-		notice   textNotice
-		handback textHandback
-	)
-	cut := textCut{text: text}
-	for p := cut.next(); p != nil && !(notice.done && handback.named); p = cut.next() {
-		notice.write(p)
-		handback.write(p)
-	}
-	notice.end()
-	// The agent and the leg are strings of the notice's own, never pieces of
-	// the text, which a kept substring would hold until the walk ends.
-	agent, leg, ok := notice.notice()
+	agent, leg, ok := message.Notification()
 	if !ok || w.legs[leg] == nil {
 		return nil
 	}
-	if handback.named {
+	if message.NamesHandback() {
 		w.legs[leg].handback = true
 	}
 	key := legNotice{agent: agent, leg: leg}
@@ -1563,7 +1546,7 @@ func (a *subagentFacts) notWhole(why string, cause error) {
 // alone, so a text, a list of no blocks, or a block of another kind, the
 // subagent's prompt and every message sent to it among them.
 func legStart(message threadMessage) bool {
-	if _, text := message.Text(); text {
+	if message.IsText() {
 		return true
 	}
 	kinds := message.Kinds()

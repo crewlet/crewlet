@@ -78,13 +78,16 @@ import (
 //     but a call's, through [threadMessage.Calls], and an attachment's
 //     `toolUseID` leaves it only as a key ([threadLine.AttachmentToolUseID]),
 //     since a PostToolUse hook's firing carries the id of the call it
-//     followed. An id written inside a record's text (a task notification's
-//     `<tool-use-id>`, a tool's output, a call's input) leaves it as bytes
-//     in a line's Raw and a message's Text, its reader's to parse and to
-//     hold to a rule of its own, or not at all: of a call's input, a
-//     result's text and a record's own toolUseResult the layer hands out
-//     only the facts it reads of them ([threadCall], [threadLine.HandsBack],
-//     [threadLine.AgentAnswer]).
+//     followed. An id written inside a record's text (a tool's output, a
+//     call's input) leaves it as bytes in a line's Raw, its reader's to
+//     parse and to hold to a rule of its own, or not at all: of a call's
+//     input, a result's text, a record's own toolUseResult and a message's
+//     text the layer hands out only the facts it reads of them
+//     ([threadCall], [threadLine.HandsBack], [threadLine.AgentAnswer],
+//     [threadMessage.NamesHandback]). A task notification's
+//     `<tool-use-id>`, the text's own claim, leaves it as the leg it names
+//     ([threadMessage.Notification]), which its one reader matches only
+//     against a call it read.
 //
 // What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
 // as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
@@ -558,14 +561,15 @@ func (e *threadLineError) Unwrap() error { return e.Err }
 // bytes rather than a copy of them.
 //
 // A VALUE AS LONG AS A LINE IT READS FOR ITS READERS, never hands out: what a
-// call's input, a result's text and a record's own toolUseResult are read for
-// (the subagent a SendMessage sends to, a result's length and digests, a
-// handback and what an answer says of a subagent's leg) the layer reads
-// itself, by its readers' own rules, a shape a rule does not read answered by
-// that rule rather than with an error, so a release that reshapes one costs
-// that reader alone, as a key one reader reads does, and what it hands out is
-// facts of a fixed size ([threadCall], [threadLine.HandsBack],
-// [threadLine.AgentAnswer]).
+// call's input, a result's text, a record's own toolUseResult and a message's
+// text are read for (the subagent a SendMessage sends to, a result's length
+// and digests, a handback and what an answer says of a subagent's leg, the
+// subagent and the leg a task notification names) the layer reads itself, by
+// its readers' own rules, a shape a rule does not read answered by that rule
+// rather than with an error, so a release that reshapes one costs that reader
+// alone, as a key one reader reads does, and what it hands out is facts of a
+// bounded size ([threadCall], [threadLine.HandsBack],
+// [threadLine.AgentAnswer], [threadMessage.Notification]).
 //
 // A KEY ONLY ONE READER READS IS HELD TO ITS TYPE IN THAT READER'S ACCESSOR,
 // never in the head: a release that reshapes it is that accessor's error and
@@ -1366,12 +1370,20 @@ const (
 )
 
 // threadMessage is a user or assistant record's message as its one decode
-// left it: its content as one string, or its blocks.
+// left it: what its readers ask of its content where that is one string (that
+// it is one, the subagent and the leg a task notification names, whether it
+// names the handback tool), or its blocks. IT HOLDS NO TEXT: a prompt or a
+// notification is as long as whatever wrote it made it, and each fact its
+// readers ask of one is read as the text streams ([textNotice],
+// [textHandback], [textSays]).
 type threadMessage struct {
-	text   string
 	isText bool
-	kinds  []string
-	calls  []threadCall
+	// notification and namesHandback are [threadMessage.Notification]'s and
+	// [threadMessage.NamesHandback]'s.
+	notification  taskNotice
+	namesHandback bool
+	kinds         []string
+	calls         []threadCall
 	// saysText and saysAny are [threadMessage.Says]'s.
 	saysText, saysAny bool
 }
@@ -1502,13 +1514,23 @@ func messageContent(content json.RawMessage, call string) (threadMessage, error)
 		if err := wireDecode(content, &text); err != nil {
 			return threadMessage{}, fmt.Errorf("content: %w", err)
 		}
-		// READ AS IT WILL STREAM ([textSays]), a piece at a time.
-		var says textSays
+		// READ AS IT WILL STREAM ([textSays], [textNotice], [textHandback]),
+		// a piece at a time, until all three are decided.
+		var (
+			says     textSays
+			notice   textNotice
+			handback textHandback
+		)
 		cut := textCut{text: text}
-		for p := cut.next(); p != nil && !says.any; p = cut.next() {
+		for p := cut.next(); p != nil && !(says.any && notice.done && handback.named); p = cut.next() {
 			says.write(p)
+			notice.write(p)
+			handback.write(p)
 		}
-		return threadMessage{text: text, isText: true, saysAny: says.any}, nil
+		notice.end()
+		m := threadMessage{isText: true, saysAny: says.any, namesHandback: handback.named}
+		m.notification.agent, m.notification.leg, m.notification.ok = notice.notice()
+		return m, nil
 	}
 	// A BLOCK AT A TIME ([eachElement]), and the kinds and the calls grown
 	// from what was accepted, never sized from the list's length, which only
@@ -1689,12 +1711,38 @@ func callID(key string, raw json.RawMessage) (string, error) {
 	return id, err
 }
 
-// Text is the message's content where it is one string.
-func (m threadMessage) Text() (string, bool) { return m.text, m.isText }
+// taskNotice is the subagent and the leg a task notification's text names
+// ([textNotice]), each a string of its own of at most 64 bytes, never a piece
+// of the text; ok where it names them.
+type taskNotice struct {
+	agent, leg string
+	ok         bool
+}
+
+// IsText reports whether the message's content is one string: a prompt, a
+// task notification or a message sent to a subagent, rather than blocks.
+func (m threadMessage) IsText() bool { return m.isText }
+
+// Notification is the subagent and the leg the message's text names where it
+// is a TASK NOTIFICATION's ([textNotice]): its lines `<task-notification>`,
+// `<task-id>A</task-id>`, `<tool-use-id>L</tool-use-id>`, any output files'
+// and `<status>completed</status>`, A an agent ([validClaudeAgent]) and L an
+// id the call-id rule keeps ([sandbox.ValidCallID]); ok false for any other
+// text, and for a message of blocks. It is the text's own claim, whatever
+// record holds it: its reader takes it for a notification only where the
+// record's origin says so, and matches the leg only against a call it read.
+func (m threadMessage) Notification() (agent, leg string, ok bool) {
+	return m.notification.agent, m.notification.leg, m.notification.ok
+}
+
+// NamesHandback reports whether the message's text names the handback tool
+// ([claudeToolHandback]) anywhere ([textHandback]): what marks a task
+// notification's leg as answered by a handback. False for a message of blocks.
+func (m threadMessage) NamesHandback() bool { return m.namesHandback }
 
 // Kinds is each content block's type, in order. It is nil exactly where the
-// message holds no list: a content that is one string ([threadMessage.Text]
-// says so), and the zero message every record but a user's or an assistant's
+// message holds no list: a content that is one string
+// ([threadMessage.IsText] says so), and the zero message every record but a user's or an assistant's
 // reads as; an empty list is an empty Kinds, never nil. A reader tells a
 // turn's own message from the results of its calls by it: a user record whose
 // blocks are tool_result alone, or not. A kind the layer does not name is

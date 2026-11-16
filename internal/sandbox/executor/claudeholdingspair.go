@@ -214,7 +214,7 @@ func plainReply(line threadLine) bool {
 // where its accessor cannot read it, and an origin of any kind, or one whose
 // kind does not decode, as one.
 func plainResults(line threadLine, m threadMessage) bool {
-	if _, text := m.Text(); text || len(m.Kinds()) == 0 {
+	if m.IsText() || len(m.Kinds()) == 0 {
 		return false
 	}
 	for _, kind := range m.Kinds() {

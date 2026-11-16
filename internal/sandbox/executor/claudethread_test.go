@@ -1389,8 +1389,9 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	origin := ctLine(t, strings.Replace(notification, ctNotificationOrigin, `"origin":"task-notification"`, 1))
 	if m, err := origin.Message(); err != nil {
 		t.Errorf("a notification whose origin is no object reads no message: %v", err)
-	} else if text, isText := m.Text(); !isText || text != ctNotificationText {
-		t.Errorf("a notification whose origin is no object reads its message as %q", text)
+	} else if agent, leg, ok := m.Notification(); !m.IsText() || !ok || agent != ctAgent || leg != "toolu_test_agent" {
+		t.Errorf("a notification whose origin is no object reads its message as a text %t naming %q's leg %q (%t)",
+			m.IsText(), agent, leg, ok)
 	}
 	if _, err := origin.OriginKind(); err == nil {
 		t.Error("an origin that is no object reads as a kind")
@@ -1479,16 +1480,24 @@ func ctAllButUUID(l threadLine) string {
 	fmt.Fprintf(&b, "head: type %q, subtype %q, parent %s, sidechain %s, agent %q, replaces a span %t\n",
 		h.Type, h.Subtype, ctRaw(h.Parent), side, h.AgentID, h.ReplacesSpan)
 	m, err := l.Message()
-	text, isText := m.Text()
-	fmt.Fprintf(&b, "message: text %q (%t), kinds %q; %v\n", text, isText, strings.Join(m.Kinds(), " "), err)
-	for _, c := range m.Calls() {
-		ctCallFacts(&b, c)
-	}
+	ctMessage(&b, m, err)
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
 	ctLegAnswer(&b, l)
 	ctFacts(&b, l, m)
 	return b.String()
+}
+
+// ctMessage writes to b what a message m, read with err, hands out: whether it
+// is one text, the subagent and the leg a task notification's text names,
+// whether it names the handback tool, its blocks' kinds, and its calls.
+func ctMessage(b *strings.Builder, m threadMessage, err error) {
+	agent, leg, notice := m.Notification()
+	fmt.Fprintf(b, "message: a text %t, a notification %t of %q's leg %q, naming the handback %t, kinds %q; %v\n",
+		m.IsText(), notice, agent, leg, m.NamesHandback(), strings.Join(m.Kinds(), " "), err)
+	for _, c := range m.Calls() {
+		ctCallFacts(b, c)
+	}
 }
 
 // ctCallFacts writes to b everything a call hands out: its kind, its id, its
@@ -1888,11 +1897,7 @@ func ctOutcome(t *testing.T, record string) string {
 	uuid, err := l.UUID()
 	fmt.Fprintf(&b, "uuid: %q; %v\n", uuid, err)
 	m, err := l.Message()
-	text, isText := m.Text()
-	fmt.Fprintf(&b, "message: text %q (%t), kinds %q; %v\n", text, isText, strings.Join(m.Kinds(), " "), err)
-	for _, c := range m.Calls() {
-		ctCallFacts(&b, c)
-	}
+	ctMessage(&b, m, err)
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
 	ctLegAnswer(&b, l)
@@ -2167,8 +2172,9 @@ func TestAStringClaudeCodeWroteBrokenReadsAsTheReplacementCharacter(t *testing.T
 		if brief, ok := read(ctReplace(t, ctBrief(ctUUID(1)), `"content":"the brief\n"`, `"content":`+tc.written)); ok {
 			if m, err := brief.Message(); err != nil {
 				t.Errorf("%s: a brief holding it reads no message: %v", name, err)
-			} else if text, isText := m.Text(); !isText || text != tc.text {
-				t.Errorf("%s: a brief holding it reads as %q (%t), want %q", name, text, isText, tc.text)
+			} else if _, says := m.Says(); !m.IsText() || !says {
+				t.Errorf("%s: a brief holding it reads as a text %t that says something %t; want both", name,
+					m.IsText(), says)
 			}
 		}
 		if result, ok := read(ctResult(ctUUID(4), ctUUID(5), ctReplace(t, ctResultBody, `"content":"b1"`,
@@ -2743,40 +2749,64 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	}
 }
 
-// A MESSAGE SAYS ITS CONTENT'S SHAPE: content that is one string is Text, with
-// no blocks; content that is a list is each block's type, in order, and no
-// Text, and an empty list is an empty Kinds, never the nil one a content that
-// is no list reads as. Every user and assistant record measured holds one
-// block a record; the API's own messages hold several, which a list of two
-// holds to its order.
+// A MESSAGE SAYS ITS CONTENT'S SHAPE: content that is one string is one text,
+// with no blocks, and what its readers ask of it (the subagent and the leg a
+// task notification names, whether it names the handback tool, wherever the
+// name falls) is read off it; content that is a list is each block's type, in
+// order, and no text, a notification's words in a block naming none, and an
+// empty list is an empty Kinds, never the nil one a content that is no list
+// reads as. Every user and assistant record measured holds one block a
+// record; the API's own messages hold several, which a list of two holds to
+// its order.
 //
 // Mutation: read content as one shape, and a string content is no message;
-// start a list's kinds at nil, and an empty list reads as no list.
+// start a list's kinds at nil, and an empty list reads as no list; read a
+// text's notification, or its handback's name, as none, and a notification
+// names no leg, or no handback; stop reading a text once it says something,
+// and a handback named past its first piece is missed.
 func TestAMessageSaysItsContentsShape(t *testing.T) {
 	t.Parallel()
+	notification := ctNotification(ctUUID(1), ctUUID(3))
+	handback := ctReplace(t, notification, `</task-notification>"`,
+		`<result>`+claudeToolHandback+` delivered the report</result>\n</task-notification>"`)
+	// late names the handback tool past the first piece its text is read in
+	// ([textPieceBytes]), where whether it says anything is long decided.
+	late := ctReplace(t, notification, `</task-notification>"`, `<result>`+strings.Repeat("x", 2*textPieceBytes)+
+		claudeToolHandback+`</result>\n</task-notification>"`)
+	inBlock := `[{"type":"text","text":"` + strings.ReplaceAll(ctNotificationText, "\n", `\n`) + `"}]`
 	for name, tc := range map[string]struct {
 		record string
-		text   string
-		kinds  []string
+		// notice is whether its text names a leg, the notification's own;
+		// handback whether it names the handback tool.
+		notice, handback bool
+		kinds            []string
 	}{
-		"a brief":           {record: ctBrief(ctUUID(1)), text: "the brief\n"},
-		"a notification":    {record: ctNotification(ctUUID(1), ctUUID(3)), text: ctNotificationText},
-		"a model's text":    {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`), kinds: []string{"text"}},
-		"a call's result":   {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), kinds: []string{blockToolResult}},
-		"a skill's text":    {record: ctSkillText(ctUUID(4), ctUUID(5)), kinds: []string{"text"}},
-		"a text and a call": {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+ctUseContent[1:]), kinds: []string{"text", blockToolUse}},
-		"an empty list":     {record: ctAssistant(ctUUID(2), ctUUID(3), `[]`), kinds: []string{}},
+		"a brief":                      {record: ctBrief(ctUUID(1))},
+		"a notification":               {record: notification, notice: true},
+		"a notification of a handback": {record: handback, notice: true, handback: true},
+		"a notification of a handback named late": {record: late, notice: true, handback: true},
+		"a model's text":                    {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`), kinds: []string{"text"}},
+		"a notification's words in a block": {record: ctAssistant(ctUUID(2), ctUUID(3), inBlock), kinds: []string{"text"}},
+		"a call's result":                   {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), kinds: []string{blockToolResult}},
+		"a skill's text":                    {record: ctSkillText(ctUUID(4), ctUUID(5)), kinds: []string{"text"}},
+		"a text and a call":                 {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."},`+ctUseContent[1:]), kinds: []string{"text", blockToolUse}},
+		"an empty list":                     {record: ctAssistant(ctUUID(2), ctUUID(3), `[]`), kinds: []string{}},
 	} {
 		m, err := ctLine(t, tc.record).Message()
 		if err != nil {
 			t.Errorf("%s reads no message: %v", name, err)
 			continue
 		}
-		text, isText := m.Text()
-		if isText != (tc.kinds == nil) || text != tc.text || !slices.Equal(m.Kinds(), tc.kinds) ||
+		if m.IsText() != (tc.kinds == nil) || !slices.Equal(m.Kinds(), tc.kinds) ||
 			(tc.kinds == nil) != (m.Kinds() == nil) {
-			t.Errorf("%s reads as the text %q (%t) and the blocks %q, want %q and %q", name, text, isText,
-				strings.Join(m.Kinds(), " "), tc.text, strings.Join(tc.kinds, " "))
+			t.Errorf("%s reads as a text %t and the blocks %q, want a text %t and %q", name, m.IsText(),
+				strings.Join(m.Kinds(), " "), tc.kinds == nil, strings.Join(tc.kinds, " "))
+		}
+		agent, leg, ok := m.Notification()
+		if ok != tc.notice || (ok && (agent != ctAgent || leg != "toolu_test_agent")) || (!ok && agent+leg != "") ||
+			m.NamesHandback() != tc.handback {
+			t.Errorf("%s names %q's leg %q (%t) and the handback %t; want a notification %t, the handback %t", name,
+				agent, leg, ok, m.NamesHandback(), tc.notice, tc.handback)
 		}
 	}
 }

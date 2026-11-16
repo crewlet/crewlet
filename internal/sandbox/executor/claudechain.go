@@ -1423,7 +1423,7 @@ func (c *threadChain) file(line threadLine, m threadMessage, mErr error) chainHa
 	if mErr != nil {
 		c.cannotTell(whyAdmission)
 	}
-	if _, isText := m.Text(); isText && head.Type == recordAssistant {
+	if m.IsText() && head.Type == recordAssistant {
 		c.cannotTell(whyAdmission)
 	}
 	if head.Type == recordAssistant {
