@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -426,6 +427,89 @@ func TestAnAdmissionHookFailureDoesNotAbortTheHeartbeat(t *testing.T) {
 	faulty.Break(nil)
 	wantStrings(t, h.Heartbeat(f.ctx), nil, "lost")
 	wantHeld(t, h, "ceo", "eng")
+}
+
+// panicky is a store that, once armed, panics renewing one seat, or claiming
+// the presence: a defect in a client the pass calls on a goroutine of its own.
+type panicky struct {
+	coord.Backend
+	armed    atomic.Bool
+	seat     string
+	presence bool
+}
+
+func (b *panicky) Renew(ctx context.Context, resource, owner string, epoch int64,
+	ttl time.Duration) (bool, error) {
+
+	if b.armed.Load() && resource == b.seat {
+		panic("the store's client dereferenced a nil reply")
+	}
+	return b.Backend.Renew(ctx, resource, owner, epoch, ttl)
+}
+
+func (b *panicky) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	if b.armed.Load() && b.presence && coord.IsNodeResource(resource) {
+		panic("the store's client dereferenced a nil reply")
+	}
+	return b.Backend.TryAcquire(ctx, resource, opts)
+}
+
+// A PANIC IN A PASS COSTS ONLY WHAT PANICKED: a renewal that panics costs its
+// own seat that renewal — kept, as one the store did not answer, with its
+// admission off — and a presence claim that panics costs the presence; every
+// other seat is renewed, and the process lives.
+//
+// The pass runs both on goroutines of its own, where a panic nobody recovers
+// ends the process; renewed in line, the loop's own recovery caught it and lost
+// the rest of the pass instead.
+//
+// Mutation: recover neither (the test binary dies).
+func TestAPanicInAPassCostsOnlyWhatPanicked(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		seat     string
+		presence bool
+		renewed  []string
+		unproven []string
+	}{
+		{name: "a seat's renewal", seat: "eng", renewed: []string{"ceo", "ops"},
+			unproven: []string{"eng:false"}},
+		{name: "the presence's claim", presence: true, renewed: []string{"ceo", "eng", "ops"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			store := &panicky{Backend: f.store, presence: tc.presence}
+			if tc.seat != "" {
+				store.seat = seatResource(tc.seat)
+			}
+			hooks := &hookLog{}
+			h := f.newHost("node-a", Config{Backend: store, Hooks: hooks, TTL: 30 * time.Second})
+			h.renewNodePresence(f.ctx)
+			h.Sweep(f.ctx)
+			before := map[string]time.Time{}
+			for _, handle := range h.Held() {
+				before[handle] = f.leaseOf(seatResource(handle)).ExpiresAt
+			}
+
+			f.clock.Advance(5 * time.Second)
+			store.armed.Store(true)
+			wantStrings(t, h.Heartbeat(f.ctx), nil, "lost")
+
+			wantHeld(t, h, "ceo", "eng", "ops")
+			for _, handle := range tc.renewed {
+				after := f.leaseOf(seatResource(handle)).ExpiresAt
+				//fixedwait:stated two lease deadlines the store counted on the fleet's fake clock
+				if !after.After(before[handle]) {
+					t.Errorf("%s was not renewed beside the panic", handle)
+				}
+			}
+			wantStrings(t, hooks.admissioned(), tc.unproven, "admission changes")
+		})
+	}
 }
 
 // --- the heartbeat's own bookkeeping ---------------------------------------
