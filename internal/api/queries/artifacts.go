@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // THE ARTIFACTS' READ QUESTIONS: the gallery's listing, one artifact's head,
@@ -45,6 +46,17 @@ type ArtifactsReader interface {
 type ArtifactsSource struct {
 	Gate  artifactsapi.Gate
 	Reads ArtifactsReader
+
+	// Comments answers an artifact's comment threads placed on a version:
+	// the artifacts surface, which caches each version's anchor index.
+	Comments CommentAnswers
+}
+
+// CommentAnswers answers every thread on an artifact placed on one version, as
+// p reads it ([artifactsapi.Service.Comments]).
+type CommentAnswers interface {
+	Comments(ctx context.Context, p iam.Principal, id artifacts.ID, version int) (
+		artifactsapi.CommentsAnswer, error)
 }
 
 // artifactsAnswers is the source as the questions answer from it, on the one
@@ -69,6 +81,9 @@ func registerArtifacts(r *Registry, src ArtifactsSource, now func() time.Time) {
 	r.Register("artifact_assets", DecidedBy(authz.ActionArtifactRead), s.assets)
 	r.Register("artifact_seen_by", DecidedBy(authz.ActionArtifactRead), s.seenBy)
 	r.Register("artifact_access", DecidedBy(authz.ActionArtifactRead), s.access)
+	// THE COMMENT THREADS, placed on the version asked: reading them is
+	// reading the artifact's content (ADR-0153).
+	r.Register("artifact_comments", DecidedBy(authz.ActionArtifactRead), s.comments)
 	// THE COMPANY'S ARTIFACTS against its plan quota: the deployment's own
 	// machinery, so the usage verb's (admin's).
 	r.Register("artifact_usage", DecidedBy(authz.ActionArtifactUsage), s.usage)
@@ -312,6 +327,33 @@ func (s artifactsAnswers) seenBy(ctx context.Context, p Params) (any, error) {
 	}
 	seen, err := s.Gate.SeenBy(ctx, s.Reads, asking, id)
 	return seen, artifactFailure("artifact_seen_by", err)
+}
+
+// comments answers every thread on an artifact placed on `version` (absent
+// for the head), each with its label, placement and remarks, the counts per
+// filter, and whether the reader may comment.
+func (s artifactsAnswers) comments(ctx context.Context, p Params) (any, error) {
+	id, err := artifactID(p)
+	if err != nil {
+		return nil, err
+	}
+	version := 0
+	if p.String("version") != "" {
+		n, ok := p.WholeInt("version")
+		if !ok || n < 1 {
+			return nil, fmt.Errorf("%w: the version parameter is a version number, 1 or more", ErrBadParams)
+		}
+		version = int(n)
+	}
+	asking, err := caller(ctx, "artifact_comments")
+	if err != nil {
+		return nil, err
+	}
+	if s.Comments == nil {
+		return nil, fmt.Errorf("%w: this node answers no comment threads", ErrUnavailable)
+	}
+	answer, err := s.Comments.Comments(ctx, asking, id, version)
+	return answer, artifactFailure("artifact_comments", err)
 }
 
 // access answers who holds an artifact and through what: the share dialog's
