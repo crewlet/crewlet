@@ -542,6 +542,9 @@ var readOutsideTheDashboard = map[string]string{
 	// MANY TIPS AT ONCE, answered ahead of the Branches and Tags screens that
 	// draw them: until the first reads it, a script reads the reference's path.
 	"code_tips": "a script: GET /gitlet/repos/{name}/tips, as docs/reference/api-endpoints.md prints it",
+	// A DIRECTORY'S LAST COMMITS: the first room that reads them deletes this line.
+	"code_tree_commits": "a script: GET /gitlet/repos/{name}/tree-commits, as docs/reference/api-endpoints.md " +
+		"prints it",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.

@@ -46,6 +46,7 @@ var gitQuestions = []struct {
 	{"code_blame", func(rev string) map[string]any {
 		return map[string]any{"name": "web", "ref": rev, "path": "go.mod"}
 	}},
+	{"code_tree_commits", func(rev string) map[string]any { return map[string]any{"name": "web", "ref": rev} }},
 	{"code_diff", func(rev string) map[string]any {
 		return map[string]any{"name": "web", "base": rev, "head": rev}
 	}},
@@ -563,5 +564,50 @@ func TestAFindNamesItsQuery(t *testing.T) {
 		len(past.read) != 0 {
 		t.Errorf("a find of %d files answered %v having read %d, want bad_params", gitlet.MaxFindLimit+1, err,
 			len(past.read))
+	}
+}
+
+// A CUT TREE-COMMITS PAGE IS NEVER IMMUTABLE: a page of a directory's last
+// commits its read's budget ended, asked by a whole id, is answered bare and
+// unstamped in both its shapes (a prefix of answered entries with a next, and
+// a first entry out of time), and the same page unmarked is immutable.
+// Mutation: answer the page immutable whatever its mark.
+func TestACutTreeCommitsPageIsNeverImmutable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		page gitlet.TreeCommitsAnswer
+		next string
+		cut  bool
+	}{
+		{"a prefix", gitlet.TreeCommitsAnswer{Tree: whole, Entries: []gitlet.TreeCommit{{Path: "a", Commit: whole}},
+			Total: 2, OutOfTime: true}, "e:1", true},
+		{"a first entry out of time", gitlet.TreeCommitsAnswer{Tree: whole,
+			Entries: []gitlet.TreeCommit{{Path: "a", OutOfTime: true}}, Total: 2, OutOfTime: true}, "e:1", true},
+		{"unmarked", gitlet.TreeCommitsAnswer{Tree: whole, Entries: []gitlet.TreeCommit{{Path: "a", Commit: whole}},
+			Total: 1}, "", false},
+	} {
+		stub := &stubCode{git: func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
+			page := tc.page
+			return gitlet.GitAnswer{Kind: q.Kind, Rev: whole, Next: tc.next, TreeCommits: &page}, nil
+		}}
+		answer, err := askNative(t, queries.Sources{Code: stub}, "code_tree_commits",
+			map[string]any{"name": "web", "ref": whole})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if _, immutable := answer.(queries.Immutable); immutable == tc.cut {
+			t.Errorf("%s: answered immutable %t, want %t", tc.name, immutable, !tc.cut)
+		}
+		if len(stub.read) != 1 || !stub.read[0].Unstamped || stub.read[0].TreeCommits == nil {
+			t.Fatalf("%s: read as %+v, want one unstamped read of the directory's last commits", tc.name, stub.read)
+		}
+		encoded, err := json.Marshal(answer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), `"position"`) || strings.Contains(string(encoded), `"pushed_by"`) {
+			t.Errorf("%s: answered with a stamp: %s", tc.name, encoded)
+		}
 	}
 }

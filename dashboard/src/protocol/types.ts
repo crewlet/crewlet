@@ -9199,6 +9199,25 @@ export interface CodeBlameAnswer {
   commits: Record<string, CodeBlameCommit> | null;
 }
 
+/** One entry's last commit (`gitlet.TreeCommit`): none for a directory that never held a file, or with `out_of_time`. */
+export interface CodeTreeCommit {
+  path: string;
+  path_b64?: string;
+  commit?: string;
+  out_of_time?: boolean;
+}
+
+/** One page of a directory's last commits (`gitlet.TreeCommitsAnswer`), in the listing's order; `out_of_time` where the read's time ended it early. */
+export interface CodeTreeCommitsAnswer {
+  tree: string;
+  path?: string;
+  path_b64?: string;
+  entries: CodeTreeCommit[] | null;
+  commits: CodeLogCommit[] | null;
+  total: number;
+  out_of_time?: boolean;
+}
+
 /**
  * A repository's content as a code question answers it (`queries.CodePage`):
  * the repository by the name it was asked by, the read's kind and its part,
@@ -9223,6 +9242,8 @@ export interface CodeGitAnswer {
   compare?: CodeCompareFacts;
   /** A `code_tips` page (kind `tips`). */
   tips?: CodeTipsAnswer;
+  /** A `code_tree_commits` page (kind `tree_commits`). */
+  tree_commits?: CodeTreeCommitsAnswer;
   resolved?: Record<string, CodeResolved>;
   position?: LogPosition;
   pushed_by?: Record<string, CodePushedBy>;
@@ -9596,6 +9617,7 @@ export interface CodeQueryMap {
   code_blob: CodeGitAnswer;
   code_log: CodeGitAnswer;
   code_blame: CodeGitAnswer;
+  code_tree_commits: CodeGitAnswer;
   code_pushes: CodePushesAnswer;
   code_changes: CodeChangesAnswer;
   code_change: CodeChangeAnswer;
