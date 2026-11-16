@@ -73,7 +73,7 @@
 import { useState } from "react";
 import { Button, Callout, Checkbox, InlineCode, Input, Tag } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
-import { ClockGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
+import { ServerGlyph } from "@crewlethq/icons/glyphs";
 import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
 import { keepsOperation, newGateOpID, pathSegment, rest, RestError } from "~/protocol/index.ts";
 import type { RetentionGateDomain, RetentionGateResult } from "~/protocol/index.ts";
@@ -430,7 +430,7 @@ export function GateDialog({
       )}
 
       {gesture?.unanswered && (
-        <Callout variant="warning" role="alert" icon={<ClockGlyph size="md" />}>
+        <Callout variant="warning" role="alert">
           <span className="col" style={{ gap: 6 }}>
             <span>
               <strong>No answer</strong> ({gesture.unanswered}). Finish it with the same operation
@@ -535,7 +535,7 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
     // record already on the log that this node has not reached yet, so the
     // glyph that says "wait" is the honest one.
     summary = (
-      <Callout variant="warning" role="status" icon={<ClockGlyph size="md" />}>
+      <Callout variant="warning" role="status">
         <span className="col" style={{ gap: 6 }}>
           <span>
             <strong>Recorded on every log, still applying here</strong> on{" "}

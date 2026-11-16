@@ -233,7 +233,7 @@ function facts(dialog: HTMLElement): Record<string, string> {
 
 const fiveAlarms = {
   ...healthy,
-  alarms: { count: 5, worst: "backup_age" },
+  alarms: { count: 5, worst: "backup_age", worst_title: "No recent backup" },
 };
 
 const twoAlarms = {
@@ -300,7 +300,7 @@ describe("the row", () => {
       within(alarms)
         .getAllByRole("listitem")
         .map((item) => item.textContent),
-    ).toEqual(["Backup age", "Trim blocked"]);
+    ).toEqual(["No recent backup", "Log cleanup is stuck"]);
     expect(within(dialog).getByRole("link", { name: "Open alarms" }).getAttribute("href")).toBe(
       "#/settings/backups?at=alarms",
     );
@@ -320,7 +320,7 @@ describe("the row", () => {
       within(within(dialog).getByRole("list"))
         .getAllByRole("listitem")
         .map((item) => item.textContent),
-    ).toEqual(["Backup age", "4 more"]);
+    ).toEqual(["No recent backup", "4 more"]);
   });
 
   test("asks for the names again when the count beside them moves", async () => {

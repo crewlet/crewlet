@@ -66,7 +66,6 @@ import {
   CircleQuestionMarkGlyph,
   PackageGlyph,
   SquareTerminalGlyph,
-  TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { WITHHELD_WHY, WITHHELD_WORDS, questionWithheld } from "~/lib/access.ts";
@@ -317,7 +316,7 @@ export function AwaitingBanner({
   const seat = nameOf(run.agent_handle) || run.role || run.agent_handle;
   const audience = (run.audience_handles ?? []).map(nameOf);
   return (
-    <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
+    <Callout variant="warning">
       <span className="col gap-2 run-awaiting">
         <strong>
           <RunQuestionLine
@@ -998,7 +997,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
         loading={loading}
       >
         {unread && (
-          <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+          <Callout variant="warning">
             {unread === "board"
               ? "Couldn’t read the executor’s record. Showing what the turn holds."
               : "Couldn’t read the turn. Showing the executor’s record."}
@@ -1307,7 +1306,7 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
           // it ended are what explain it — and a log that silently skips is a
           // log that lies about what it did. WHAT they were, too, by tool, off
           // the identities the engine keeps of every call it drops.
-          <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+          <Callout variant="warning">
             {plural(elided, "call")} from the middle {elided === 1 ? "isn’t" : "aren’t"} shown.
             {droppedWords(run.bridge_elided_calls ?? [])}
           </Callout>

@@ -25,12 +25,13 @@ import {
   InlineCode,
   Link,
   Meter,
+  NoticeList,
+  PageNote,
   SettingsTable,
   StatCard,
   StatGroup,
   TableDateCell,
   TableTextCell,
-  PageNote,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
@@ -361,24 +362,17 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
       <PassesCard node={reported.node}>
         {lost > 0 && (
           <Card.Body padding="md">
-            <Callout variant="danger" role="alert">
-              <div className="col gap-2">
-                <span>
-                  {plural(lost, "file")} can’t be read: missing, damaged or unanswered by the store.
-                  Check its health, then restore {lost === 1 ? "it" : "them"} from a backup or
-                  upload {lost === 1 ? "it" : "them"} again.
-                </span>
-                <ul className="col gap-1">
-                  {shown.map((m) => (
-                    <li key={m.object}>
-                      <InlineCode>{m.named_by}</InlineCode>{" "}
-                      <span className="secondary">
-                        {m.finding} · {m.object}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            <Callout variant="danger" role="alert" title={`${plural(lost, "file")} can’t be read`}>
+              Missing, damaged or unanswered by the store. Check its health, then restore{" "}
+              {lost === 1 ? "it" : "them"} from a backup or upload {lost === 1 ? "it" : "them"}{" "}
+              again.
+              <NoticeList
+                notices={shown.map((m) => ({
+                  key: m.object,
+                  subject: <InlineCode>{m.named_by}</InlineCode>,
+                  title: `${m.finding} · ${m.object}`,
+                }))}
+              />
             </Callout>
           </Card.Body>
         )}

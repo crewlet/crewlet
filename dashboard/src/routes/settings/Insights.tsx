@@ -210,20 +210,24 @@ function Consent({
           </Text>
         )}
         {stale && (
-          <Callout variant="warning" title="Nothing is shared until you accept this list">
-            This engine&rsquo;s list of patterns differs from the one you accepted, so it shares
-            nothing until you accept it.{" "}
-            <Button
-              size="small"
-              disabled={!access.can}
-              onClick={() =>
-                write.submit(
-                  insightsPlan({ accepted: answer.schema }, "Accepted the usage insights list"),
-                )
-              }
-            >
-              Accept this list
-            </Button>
+          <Callout
+            variant="warning"
+            title="Nothing is shared until you accept this list"
+            action={
+              <Button
+                size="small"
+                disabled={!access.can}
+                onClick={() =>
+                  write.submit(
+                    insightsPlan({ accepted: answer.schema }, "Accepted the usage insights list"),
+                  )
+                }
+              >
+                Accept this list
+              </Button>
+            }
+          >
+            This engine&rsquo;s list of patterns differs from the one you accepted.
           </Callout>
         )}
         {mark && (

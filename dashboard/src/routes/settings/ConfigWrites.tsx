@@ -44,6 +44,7 @@ import {
   FormField,
   InlineCode,
   Input,
+  NoticeList,
   Skeleton,
   SourceEditor,
   useToast,
@@ -65,7 +66,8 @@ import { DiffView } from "~/components/DiffView.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { configHunks } from "~/lib/configHunks.ts";
 import { configRefusalWords, type RefusalWords } from "~/lib/configRefusal.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtDateTime, plural } from "~/lib/format.ts";
+import { accepted, ConfigWarnings, engineWords } from "~/components/ConfigWarnings.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { isUnsealedRefusal } from "~/protocol/configAnswer.ts";
 import {
@@ -87,15 +89,20 @@ const REREAD = "Reload to see the configuration as it is now.";
 /** A refused write as the dialog draws it. */
 function Refused({ words, onReload }: { words: RefusalWords; onReload?: () => void }) {
   return (
-    <Callout variant="danger" title="Nothing was saved" role="alert">
-      <span>{words.message}</span>
-      {words.reload && onReload && (
-        <div className="row gap-2">
+    <Callout
+      variant="danger"
+      title="Nothing was saved"
+      role="alert"
+      action={
+        words.reload &&
+        onReload && (
           <Button size="small" variant="secondary" onClick={onReload}>
             Reload
           </Button>
-        </div>
-      )}
+        )
+      }
+    >
+      {words.message}
     </Callout>
   );
 }
@@ -792,30 +799,25 @@ function CheckResult({
         </Callout>
       )}
       {checked.kind === "valid" && checked.warnings.length > 0 && (
-        <Callout variant="warning" title="The engine accepts this, with a warning">
-          <ul className="ceiling-warnings">
-            {checked.warnings.map((w) => (
-              <li key={`${w.path}:${w.message}`}>{w.message}</li>
-            ))}
-          </ul>
-        </Callout>
+        <ConfigWarnings warnings={checked.warnings} title={accepted} operator />
       )}
       {checked.kind === "problems" && (
-        <Callout variant="danger" title="The engine refuses this document">
-          <ul className="ceiling-warnings">
-            {checked.problems.map((p, i) => (
-              <li key={`${i}:${p.path}`}>
-                {typeof p.line === "number" && (
-                  <>
-                    <button type="button" className="t-link" onClick={() => onReveal(p.line!)}>
-                      Line {p.line}
-                    </button>{" "}
-                  </>
-                )}
-                {p.message}
-              </li>
-            ))}
-          </ul>
+        <Callout
+          variant="danger"
+          title={`The engine refuses this document: ${plural(checked.problems.length, "problem")}`}
+        >
+          <NoticeList
+            notices={checked.problems.map((p, i) => ({
+              key: `${i}:${p.path}`,
+              title: engineWords(p.message),
+              action:
+                typeof p.line === "number" ? (
+                  <Button size="small" variant="ghost" onClick={() => onReveal(p.line!)}>
+                    Line {p.line}
+                  </Button>
+                ) : undefined,
+            }))}
+          />
         </Callout>
       )}
       {checked.kind === "refused" && <Refused words={checked.words} />}

@@ -46,17 +46,18 @@ import {
   Callout,
   Card,
   Checkbox,
+  type DataGridColumn,
   EmptyState,
   EmptyValue,
   InlineCode,
   Input,
-  Tag,
+  NoticeList,
   TableKeyCell,
   TableTagsCell,
-  type DataGridColumn,
+  Tag,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
-import { NetworkGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
+import { NetworkGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { QueryState } from "~/components/common.tsx";
@@ -281,30 +282,29 @@ export function BrokerMembership({
                 </span>
               </Callout>
             )}
-            {answer.findings.map((f) => (
-              <Callout
-                key={`${f.kind}:${f.node}:${f.peer ?? ""}`}
-                variant={f.kind === "dead_member" ? "warning" : "info"}
-                role={f.kind === "dead_member" ? "alert" : "status"}
-                icon={<TriangleAlertGlyph size="md" />}
-              >
-                <span className="row wrap gap-2 baseline">
-                  <span>
-                    <strong>{FINDING_TITLE[f.kind] ?? f.kind}</strong>{" "}
-                    <InlineCode close=":">{voterLabel(f.node, f.peer)}</InlineCode> {f.detail}.
-                  </span>
-                  {f.kind === "dead_member" && (
+            {answer.findings.length > 0 && (
+              <NoticeList
+                notices={answer.findings.map((f) => ({
+                  key: `${f.kind}:${f.node}:${f.peer ?? ""}`,
+                  tone: f.kind === "dead_member" ? "warning" : "info",
+                  subject: FINDING_TITLE[f.kind] ?? f.kind,
+                  title: (
+                    <>
+                      <InlineCode close=":">{voterLabel(f.node, f.peer)}</InlineCode> {f.detail}.
+                    </>
+                  ),
+                  action: f.kind === "dead_member" && (
                     <Button
-                      variant="ghost"
+                      variant="secondary"
                       size="small"
                       onClick={() => setRemoving({ node: f.node, peer: f.peer ?? "" })}
                     >
                       Remove from the group
                     </Button>
-                  )}
-                </span>
-              </Callout>
-            ))}
+                  ),
+                }))}
+              />
+            )}
           </div>
         </Card.Body>
       )}
@@ -522,7 +522,7 @@ export function BrokerRemoveDialog({
         </Callout>
       )}
       {heard?.kind === "unanswered" && (
-        <Callout variant="warning" role="alert" icon={<ClockGlyph size="md" />}>
+        <Callout variant="warning" role="alert">
           <span>
             <strong>No answer</strong> ({heard.why}). Check the panel before sending again.
           </span>

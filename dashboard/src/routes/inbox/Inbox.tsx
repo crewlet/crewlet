@@ -627,11 +627,12 @@ export function Inbox() {
         </Callout>
       ) : null}
       {holding && (
-        <Callout variant="info" className="inbox-callout">
-          {holding}{" "}
-          <Link href={href(["me", "holding-up"])} size="inherit">
-            See what they wait on
-          </Link>
+        <Callout
+          variant="info"
+          className="inbox-callout"
+          action={<Link href={href(["me", "holding-up"])}>See what they wait on</Link>}
+        >
+          {holding}
         </Callout>
       )}
 

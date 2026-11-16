@@ -2662,6 +2662,8 @@ const (
 	// 133,990 of them the kit's coding-harness vendor marks in the icons chunk: 6506 KiB.
 	// The Settings polish, on kit 0.141.1: 6488.7 KiB (6,644,388 bytes), 116,550 over main, the
 	// kit's newer components most of it: 6489 KiB.
+	// One notice system, on kit 0.142.0: 6511.6 KiB (6,667,924 bytes), 140,086 over main, about
+	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
 	treeBudget = 5<<20 + 1255<<10
 )
 

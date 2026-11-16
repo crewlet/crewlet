@@ -421,7 +421,7 @@ every other route.
 | `GET` | `/delegated-decisions/branches` | One of those repositories' branches, `repo=owner/name`: `{repo, branches, more, unread?}`, the first 300 in GitHub's order, `more` saying GitHub holds more. A `repo` that is not `owner/name` is `400 bad_params`; one under an owner the company's GitHub does not name, or no agent's app covers, answers no branches and `unread` saying so. **Takes `admin`** |
 | `GET` | `/delegated-decisions/checks` | The check names a rule can require of one branch, `repo=owner/name&branch=`: `{repo, branch, checks, unread?}`, each name once from the check runs on the branch's newest commit, leaving out any an agent's own app or no app reported, since neither passes a declared check. An app without Checks (Read-only) answers no checks and `unread` naming the permission; a `branch` that is not a branch name is `400 bad_params`. **Takes `admin`** |
 | `GET` | `/advisor/review` | What each agent may do and where it runs, as its next turn is told: per agent (`seat`, `name`), its `access`, the integrations with their levels and permissions, the MCP servers with the tools at each level, and the boxes its runs use with their memory and, once a run has read the box, its browser and container runtime. The go-live check's review. **Takes `admin`** |
-| `GET` | `/advisor` | The [setup advisor](../guides/advisor.md): every finding about the fleet's company, its integrations' last reconcile and the patterns the engine read in its last 7 days of work, the most costly first, each with its class, severity, actor, source, subject, title, why, the document path it sits at, its evidence and the records behind it, and its fix, the `revision` every change was built from, the `notices` that reach every administrator's Inbox (a finding that blocks the company and is the owner's to fix, and an alarm standing on any node past the deferral grace, each `{class, subject, since, nodes}`, open while its condition holds), and `unread` naming what the server could not read (`integrations`, `alarms`, `atlas`, `atlas_sources`). What the company's [atlas](../guides/advisor.md#what-the-atlas-shows) shows needs a person is listed too (`atlas.*`, `source: atlas`): each names at most five `entries` (`{id, kind, key, name, owner}`) to a caller who holds `atlas` and counts them all in its `entries` fact, and names none to a caller who does not. **Takes `admin`**. A fix is never applied here: a change is a `PUT /config/{entity}/{id}` the caller previews with `dry_run=true` and sends with `If-Match` on the entity's own tag from its `GET`, and an `atlas_act` fix is the atlas tool its `act` names (`{tool, args, asks}`), which the caller completes and sends through `POST /operator/act` |
+| `GET` | `/advisor` | The [setup advisor](../guides/advisor.md): every finding about the fleet's company, its integrations' last reconcile and the patterns the engine read in its last 7 days of work, the most costly first, each with its class, severity, actor, source, subject, title, why (the same for every finding of one class), `item` (the one thing within its subject, such as a schedule's name and how often it runs) and `names` (the agents a finding about several holds, by name), the document path it sits at, its evidence and the records behind it, and its fix, the `revision` every change was built from, the `notices` that reach every administrator's Inbox (a finding that blocks the company and is the owner's to fix, and an alarm standing on any node past the deferral grace, each `{class, subject, since, nodes}`, an alarm's also with its `title` and `person`, open while its condition holds), and `unread` naming what the server could not read (`integrations`, `alarms`, `atlas`, `atlas_sources`). What the company's [atlas](../guides/advisor.md#what-the-atlas-shows) shows needs a person is listed too (`atlas.*`, `source: atlas`): each names at most five `entries` (`{id, kind, key, name, owner}`) to a caller who holds `atlas` and counts them all in its `entries` fact, and names none to a caller who does not. **Takes `admin`**. A fix is never applied here: a change is a `PUT /config/{entity}/{id}` the caller previews with `dry_run=true` and sends with `If-Match` on the entity's own tag from its `GET`, and an `atlas_act` fix is the atlas tool its `act` names (`{tool, args, asks}`), which the caller completes and sends through `POST /operator/act` |
 | `GET` | `/diagnostics/issue-reports` | The company's [engine issue reports](../guides/engine-issue-reports.md): whether they are on, the relay, every report sent with its status, the bytes it sent and the issue the relay named, and what a report of each class would say. **Takes `admin`**. The setting itself is `diagnostics.issue_reports.enabled`, written under `/config` |
 | `GET` | `/diagnostics/insights` | The company's [operating insights](../guides/operating-insights.md): the consent (`share`, `accepted`, and `always`, the classes sent without review), this build's catalogue schema and catalogue, the relay, and every record the fleet keeps with its status (`observed`, `queued`, `scheduled`, `sending`, `sent`, `failed` or `declined`), when it is due, the relay's last status code (`answer`) and the record itself. A send that never settled reads as `failed` after an hour. **Takes `admin`**. The setting itself is `diagnostics.insights`, written under `/config` |
 | `POST` | `/diagnostics/insights/decisions` | An administrator's answer to a queued insight record, `{"class", "week", "choice": "send" or "decline"}`: send schedules it at its own random time within a day. **Takes `admin` and a step-up**. Refused `409` when the record is not waiting for a decision (sharing is not in review mode, or it was decided) |
@@ -2096,7 +2096,10 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
       "kind": "dangling_reference", "ref": "manages",
       "path": "roles[0].manages[1]", "segments": ["roles", 0, "manages", 1],
       "seat": "ceo", "unit": "", "from": "ceo", "to": "ghost",
-      "message": "seat \"ceo\" manages \"ghost\", which is neither a seat's handle nor a unit's key, so the entry manages nobody. ..."
+      "message": "seat \"ceo\" manages \"ghost\", which is neither a seat's handle nor a unit's key, so the entry manages nobody. ...",
+      "title": "Seats managing someone not in the chart",
+      "person": "This seat manages a name that matches no seat or team, so that entry manages nobody. Correct it or remove it.",
+      "item": "ghost"
     }
   ],
   "derived": {"seats": [...], "units": [...]}
@@ -2107,7 +2110,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
   - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key) or `manages` (one `manages` entry, a seat handle or a unit key, at the index it was written).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company a newer peer admitted under other rules answers with one, one beside each entity the violation names.
   - `advisory`: a setting that is valid and worth knowing before it runs — the company's own (a human seat with no account on the Mattermost or Slack workspace the company talks on, which nobody can @-mention there; a token ceiling another ceiling makes unable to refuse a turn; a `${VAR}` nothing supplies; a repository or a seat's `code.access` that will not do what it seems to), or what the company does together with the Tier A of the node that served the write. `path` and `message` locate and say it; `ref`, `from` and `to` are empty. Every node also logs each of the company's own when it applies the revision, as a [`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing) line, so the answer is not the only place it is said. The cross-tier ones are [Warnings across the two tiers](../concepts/configuration.md#warnings-across-the-two-tiers): a fleet hosting code on the default `nats` object store (`store.objects.backend`), and a Gitlet node whose explicit `gitlet.cache_max_bytes` is below `code.limits.repo_max_bytes`. **They are judged against the Tier A of the node that answered the write**, so the same `PUT /config` can answer them on a Gitlet node and not on an ingress node without the `gitlet` role, and a write answers a budget only where it is set explicitly — a derived one is a share of a volume the write never sees, which each Gitlet node compares itself when it applies the revision (`config_tier_warning`).
-  - An advisory the [setup advisor](../guides/advisor.md) acts on also carries its `class` (`grant.health_unheld`, `learning.auxiliary_model`, `schedule.frequent` or `sandbox.direct_box`) and `person`: the same warning in the words of the person who owns the company, naming no document key, which the dashboard draws where `message` is the operator's. `person` is the same for every warning of one class about a different seat (named apart in `seat`), so a screen says it once for all of them; a schedule's names the schedule. Every other warning carries neither.
+  - Every advisory and dangling reference also carries `title`, what it is about in a few words, and `person`, the same warning in the words of the person who owns the company (what is wrong and what it costs, then the fix), naming no document key, which the dashboard draws where `message` is the operator's. Both are the same for every warning one rule raises: what it is about is named apart, in `seat` or `unit` and in `item`, the one thing within it as a person reads it in a list (a schedule's name and how often it runs, `poll (24 a day)`; a repository; a server; a variable), so a screen says the words once and lists what they apply to. An admission warning carries `person` where its rule wrote words for a person (a problem's `said`), and no `title`. An advisory the [setup advisor](../guides/advisor.md) builds a fix for also carries its `class` (`grant.health_unheld`, `learning.auxiliary_model`, `schedule.frequent` or `sandbox.direct_box`).
 - **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
 
 #### A write that changes nothing
@@ -2982,7 +2985,8 @@ knows".
     "used_by": [{"seat": "pm", "job": "executor", "position": 0, "written": false, "source": "default-entry"}],
     "device_sign_in": null
   }],
-  "alarms": [{"kind": "llm_credential_expiring", "detail": "…", "remedy": "…", "entries": [...]}]
+  "alarms": [{"kind": "llm_credential_expiring", "title": "A model sign-in expires soon", "person": "…",
+              "detail": "…", "remedy": "…", "entries": [...]}]
 }
 ```
 
@@ -3008,7 +3012,9 @@ knows".
   wrote the field; `source` the level that decided it: `seat`, `executor`,
   `default-entry`, `first-entry`), and `{"assistant": "chat" | "deep_work",
   "position": n}` for Ask Crewlet.
-- `alarms` is this node's latest evaluation of the five model alarms.
+- `alarms` is this node's latest evaluation of the five model alarms, each with
+  its `title` and `person` (the kind's words for a company owner) beside its
+  `detail` and `remedy`.
 
 **A member's reading** (`"reading": "member"`) keeps each entry's `key`,
 `harness`, `model`, `health`, `sign_in.route` and `sign_in.resolves`,
@@ -5253,7 +5259,7 @@ is the `admin` [`fleet`](#get-fleet) answer, and what each alarm measured is
   "identity_duty_seconds": {"iam_sweep": 3600},
   "unproven_seconds": {"eng": 312.5},
   "nodes": 3,
-  "alarms": {"count": 1, "worst": "trim_blocked"},
+  "alarms": {"count": 1, "worst": "trim_blocked", "worst_title": "Log cleanup is stuck"},
   "seeded_from": {
     "nodes": [
       {"id": "core-1", "answered": true, "error": ""},
@@ -5301,7 +5307,7 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: when its last beat is older than the beat interval it keeps (a second at the shipped lease TTL, which is how often a turning duty beats), and then how long since that beat, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. Absent on a node whose duty is on its beat, so its presence is what to alert on. |
 | `identity` | Whether this company has its **first person**: `ready` once a person is enrolled, `unclaimed` while nobody is — a service account alone signs nobody in with a password, so it does not count — a fresh install waiting for [its first person](../concepts/identity-and-access.md#how-the-first-person-exists) to be invited into, or created on, a human seat its company declares, under a Tier A token. A person an administrator creates makes it `ready` the moment the create lands, before they have spent the first password link it handed back: it says somebody exists, not that they have chosen a password yet. It is `unknown` where this node cannot read its identity estate **or has not applied all of it** — a node that has just joined a fleet holds empty rows until its applier catches up, so "nobody" is proved against the identity log's end — which is never reported as `unclaimed`, because a dashboard told nobody is in would tell an operator to put a first person into a company that may have started. Every node answers it, one with no company included: the identity estate runs from boot, so such a node answers for the fleet's. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
 | `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it); never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
-| `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, one per kind however many logs it stands on, and `worst`, the one that has been firing **longest** (absent when `count` is 0); the table asserts no severity of its own, and the condition that has gone unanswered longest is the one the dashboard's engine panel names first. `worst` is a KIND and names no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`) lists them in its `domains`, each entry a measurement with the logs it was taken on, on the operator-only [`/worklet/retention`](#get-workletretention-what-the-log-is-holding) answer, which this public body points at rather than restates. From the **same** evaluation the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines come from (and a condition that is a property of a log writes those lines per log, so a second log joining an alarm already up, and the first one leaving it, are each said), which runs every ten seconds on every node running a state log. **Absent** before that evaluation first runs, and on a node running none, one without the `data` role: neither has looked, and `{count: 0}` would read as healthy. |
+| `alarms` | `{count, worst, worst_title}`: how many of this node's [alarms](alarms.md) are firing, one per kind however many logs it stands on, `worst`, the one that has been firing **longest**, and `worst_title`, its title in words for a company owner (both absent when `count` is 0); the table asserts no severity of its own, and the condition that has gone unanswered longest is the one the dashboard's engine panel names first. `worst` is a KIND and names no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown` and `census_drift`) lists them in its `domains`, each entry a measurement with the logs it was taken on, on the operator-only [`/worklet/retention`](#get-workletretention-what-the-log-is-holding) answer, which this public body points at rather than restates. From the **same** evaluation the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines come from (and a condition that is a property of a log writes those lines per log, so a second log joining an alarm already up, and the first one leaving it, are each said), which runs every ten seconds on every node running a state log. **Absent** before that evaluation first runs, and on a node running none, one without the `data` role: neither has looked, and `{count: 0}` would read as healthy. |
 | `seeded_from` | Which nodes this node's live projection was seeded from at boot (the activity feed and each seat's last turn, which the pushed screens start from, and the live spend window behind the [`tokens` push](#pushes)), in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until a seed has landed. A seed that failed or missed a node is read again until it completes ([Live-state projection](#live-state-projection-apistream--livestate)), and this is the latest attempt's coverage: `complete` turns `true` once one attempt was answered by every node. Until then those surfaces are short, and this is where that stays visible after the log line has scrolled away. |
 | `objects` | `{direct_upload}`: whether an upload may go straight to the object store's S3 bucket on a presigned put. `available`, or `unavailable (<reason>)`: always so on the default `nats` backend, whose bucket only the fleet reaches, and on an `s3` bucket whose provider the boot probe could not prove refuses a body that does not match its `x-amz-checksum-sha256` and a second put under `If-None-Match: *` (see [The boot probe](../concepts/object-store.md#the-boot-probe-and-direct-uploads)). Unavailable is no fault: every upload then streams through the engine. Absent on a node running no object store. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
@@ -8604,7 +8610,8 @@ is three per-node facts attributed to a fleet.
   "snapshots": [...],
   "replica": {"store_bytes": 10415140864, "projected_join_seconds": 308,
               "rejoin_window_seconds": 1800},
-  "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "...",
+  "alarms": [{"kind": "backup_age", "title": "No recent backup", "person": "...",
+              "detail": "...", "remedy": "...",
               "domains": [{"domains": ["tracker"],
                            "detail": "the newest verified backup is 97h 14m old, and the policy asks for 24h; the trim has not advanced for 73h 14m, and the log is keeping up to 1840 record(s) older than its 24h replay window",
                            "term": "backup_floor", "since": "2031-03-30T02:00:00Z"}]}]
@@ -8615,8 +8622,10 @@ is three per-node facts attributed to a fleet.
 lists: one that holds nothing is `[]`, never `null`, so a node with no alarm
 standing answers `"alarms": []`.
 
-**`alarms`** holds each standing [alarm](alarms.md) once: `kind`, `detail` (the
-measurement, in the units of the thing measured) and `remedy`. A condition that
+**`alarms`** holds each standing [alarm](alarms.md) once: `kind`, `title` and
+`person` (what is wrong, what it affects and what to do, the kind's own words
+for a company owner), `detail` (the measurement, in the units of the thing
+measured) and `remedy` (the operator's steps). A condition that
 is a property of a log names every log it stands on in **`domains`**: each entry
 is one measurement, its `detail`, and the logs it was taken on, its own
 **`domains`** list — one log for a held trim, with the `term` holding it and
@@ -11321,6 +11330,7 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
   ],
   "alarms": [
     {"kind": "mcp_server_partial",
+     "title": "A tool server is down for some agents", "person": "…",
      "detail": "1 of 4 instances of github is not serving, and one has been down for 7m 50s (backend-dev's, on node-2, credential_rejected): 401 Bad credentials",
      "remedy": "The agents and nodes whose instance serves are not affected. …",
      "entries": [
@@ -11377,8 +11387,9 @@ an empty list.
 `alarms`, in an administrator's reading only, are the [MCP alarms](alarms.md)
 standing on the answering node's latest evaluation, in the table's order: the evaluation the node's health
 count, its `crewlet.alarm.active` gauge and its alarm log lines were told, so
-this answer and those can never disagree. Each is the table's `kind`, the
-longest-standing server's `detail`, the `remedy`, and `entries`, one per
+this answer and those can never disagree. Each is the table's `kind`, its
+`title` and `person` for a company owner, the longest-standing server's
+`detail`, the `remedy`, and `entries`, one per
 server it stands on in name order: `key` (the server), that server's own
 `detail`, `since` (when the instance down longest went down, or the wait held
 longest began; `null` for a refused name, which carries no instant), `seat`
@@ -12621,9 +12632,11 @@ a takeover, and on the same node re-claiming after its own lease lapsed.
 
 Each node row carries `alarms` — **what is firing on that node**, off the
 same heartbeat: every [alarm](alarms.md) its own table has up, one entry per
-kind, each `{"kind", "since"}`, `since` being when the node raised it, an
-RFC 3339 UTC time on that node's clock, to the second (for a kind standing on
-several logs, the oldest of them). The longest-standing comes first, the alarm
+kind, each `{"kind", "since", "title", "person"}`, `since` being when the
+node raised it, an RFC 3339 UTC time on that node's clock, to the second (for a
+kind standing on several logs, the oldest of them), and `title` and `person`
+the answering node's words for the kind, for a company owner, absent for a kind
+its build does not raise. The longest-standing comes first, the alarm
 that node's own `/health` names as `worst`. It is the one answer that holds
 every node's alarms at once, since `/health` counts only those of the node
 that served it. An empty list is a node that evaluated its table and found
@@ -12647,7 +12660,8 @@ own `alarm_raised` log line.
       "in_flight": 1, "draining": false, "started_at": "2026-09-23T08:01:57Z",
       "posture": "serve", "appliers_ready": 13, "appliers_total": 13,
       "admin": "serve",
-      "alarms": [{"kind": "backup_age", "since": "2026-09-23T08:10:02Z"}]
+      "alarms": [{"kind": "backup_age", "since": "2026-09-23T08:10:02Z",
+                  "title": "No recent backup", "person": "…"}]
     }
   ],
   "seats": [

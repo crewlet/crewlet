@@ -1,6 +1,7 @@
 package queries_test
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -96,6 +97,33 @@ func TestTheMCPAnswerCarriesItsAlarmsWithTheGestureThatFixesEach(t *testing.T) {
 	quiet := askMCPStatus(t, mcpSources(t, mcpFleet(t)))
 	if quiet.Alarms == nil || len(quiet.Alarms) != 0 {
 		t.Errorf("with no evaluation the answer carries %#v, want an empty list", quiet.Alarms)
+	}
+}
+
+// AN MCP ALARM IS ANSWERED WITH ITS KIND'S WORDS FOR A PERSON, its title and
+// person sentence, as the table's evaluation raised it: the answer builds its
+// own alarm, and a field it left behind would leave the page only the kind.
+//
+// Mutation: drop Title or Person from the answer's copy, and this fails.
+func TestTheMCPAnswerCarriesEachAlarmsWordsForAPerson(t *testing.T) {
+	t.Parallel()
+	src := mcpSources(t, mcpFleet(t))
+	src.Alarms = func() []statelog.Alarm {
+		return statelog.Evaluate(statelog.Reading{MCPServersAt: alarmsDown,
+			MCPServers: []statelog.MCPServerCondition{{Server: "linear", Started: 1,
+				Refused: []string{"lin_a"}, RefusedCount: 1}}})
+	}
+	var body struct {
+		Alarms []map[string]any `json:"alarms"`
+	}
+	if err := json.Unmarshal(mustJSON(t, askMCPStatus(t, src)), &body); err != nil {
+		t.Fatal(err)
+	}
+	title, person, _ := statelog.PersonWords(statelog.KindMCPToolsRefused)
+	if len(body.Alarms) != 1 || body.Alarms[0]["kind"] != string(statelog.KindMCPToolsRefused) ||
+		title == "" || body.Alarms[0]["title"] != title || body.Alarms[0]["person"] != person {
+		t.Errorf("the answer's alarms are %+v, want %s with its title %q and person %q",
+			body.Alarms, statelog.KindMCPToolsRefused, title, person)
 	}
 }
 

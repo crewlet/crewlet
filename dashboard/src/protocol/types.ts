@@ -1709,12 +1709,18 @@ export interface ConfigWarning {
   /**
    * The warning in the words of the person who owns the company, beside
    * `message`, which is the operator's: what it risks and what to do, naming
-   * no document key. Every classed advisory carries it and no other warning
-   * does; it is the same for every warning of one class about another seat
-   * (`seat` names which), so a screen says it once. Read through
-   * `warningWords`.
+   * no document key. Every advisory carries it, the same for every warning of
+   * one rule (`seat`, `unit` and `item` name what each is about), so a screen
+   * says it once. Read through `warningWords`.
    */
   person?: string;
+  /**
+   * What an advisory is about in a few words, the same for every warning of
+   * its rule: a list's title, with `person` as the explanation.
+   */
+  title?: string;
+  /** The one thing within the seat or unit it is about: a schedule's name and how often it runs. */
+  item?: string;
   /**
    * On a dry run's answer only: whether THIS write brings the warning, rather
    * than the active revision already carrying it (`configapi.checkedWarning`).
@@ -2238,6 +2244,9 @@ export interface FleetNode {
 /** One alarm firing on a node, as the fleet's node row carries it. */
 export interface FleetNodeAlarm {
   kind: string;
+  /** The kind's words for a company owner; absent for a kind this build does not raise. */
+  title?: string;
+  person?: string;
   /** When it was raised, empty where the node did not say. */
   since: string;
 }
@@ -2615,6 +2624,10 @@ export interface RetentionReplica {
  */
 export interface RetentionAlarm {
   kind: string;
+  /** What is wrong, for a company owner: the same for every alarm of the kind. */
+  title: string;
+  /** What it affects and what to do, in a sentence or two; `detail` and `remedy` are the operator's. */
+  person: string;
   /** The measurement, or the most pressing log's where it stands on several. */
   detail: string;
   remedy: string;

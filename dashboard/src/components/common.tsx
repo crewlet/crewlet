@@ -22,9 +22,7 @@ import {
 } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
-  PlugGlyph,
   KeyGlyph,
-  ClockGlyph,
   RefreshCwGlyph,
   ShieldUserGlyph,
   TriangleAlertGlyph,
@@ -348,7 +346,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     // that used to push the button there has nothing left to do.
     <Callout
       variant="warning"
-      icon={<KeyGlyph size="md" />}
+
       action={
         // A BANNER THAT NAMES A REPAIR OFFERS IT. The sign-in comes back to
         // this screen, so somebody who holds the access lands where the
@@ -371,9 +369,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
   unknown_query: <Callout variant="neutral">Not available on this node.</Callout>,
   bad_params: <Callout variant="warning">The engine refused this request.</Callout>,
   unavailable: (
-    <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
-      Still catching up. This screen retries on its own.
-    </Callout>
+    <Callout variant="neutral">Still catching up. This screen retries on its own.</Callout>
   ),
   not_found: <Callout variant="neutral">Not found. It may have been removed.</Callout>,
   artifact_trashed: (
@@ -416,9 +412,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
   closed: (
     // A SOCKET, drawn as one. `plug` was ours; `Cable` is the nearest thing
     // uilet vendors and says the same thing about a connection that went away.
-    <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
-      Connection lost. The screen reloads when it’s back.
-    </Callout>
+    <Callout variant="neutral">Connection lost. The screen reloads when it’s back.</Callout>
   ),
 };
 
@@ -430,7 +424,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
 function FailedRead({ code, again }: { code: "timeout" | "query_failed"; again: boolean }) {
   const action = again ? <TryAgain /> : undefined;
   return code === "timeout" ? (
-    <Callout variant="warning" icon={<ClockGlyph size="md" />} action={action}>
+    <Callout variant="warning" action={action}>
       This didn’t load: the engine didn’t answer in time.
     </Callout>
   ) : (
@@ -481,7 +475,7 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
   return (
     <Callout
       variant="warning"
-      icon={<KeyGlyph size="md" />}
+
       action={remedy.action ? <AuthorityRemedy action={remedy.action} /> : undefined}
     >
       {authorityWords("This answer", refusal)}{" "}
@@ -532,14 +526,10 @@ function AuthorityRemedy({ action }: { action: AuthorityAction }) {
  */
 function RefusedByTheNode({ refusal }: { refusal: LogRefusal }) {
   if (refusal.retryAfter > 0) {
-    return (
-      <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
-        {refusal.detail}
-      </Callout>
-    );
+    return <Callout variant="neutral">{refusal.detail}</Callout>;
   }
   return (
-    <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+    <Callout variant="warning">
       {refusal.detail ?? "Couldn’t load this here, and waiting won’t change that."}
     </Callout>
   );

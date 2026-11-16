@@ -591,14 +591,10 @@ export function DesignCreate() {
                         ? "The design is made, and its task was not filed"
                         : "The task was not filed"
                     }
+                    action={made && <Link href={href(artifactPath(made))}>Open the design</Link>}
                   >
-                    <p>{ask.refusal.sentence}</p>
-                    {made && (
-                      <p>
-                        Press Ask again to file it, or{" "}
-                        <Link href={href(artifactPath(made))}>open the design</Link>.
-                      </p>
-                    )}
+                    {ask.refusal.sentence}
+                    {made && " Press Ask again to file it."}
                   </Callout>
                 )}
               </>

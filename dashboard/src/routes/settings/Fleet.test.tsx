@@ -268,23 +268,26 @@ describe("whether a node runs the fleet's revision", () => {
     const card = (await screen.findByText("Not running anywhere")).closest<HTMLElement>(
       ".crewlet-card",
     )!;
+    const item = (handle: string) =>
+      [...card.querySelectorAll<HTMLElement>(".crewlet-notice-list__item")].find(
+        (c) => c.querySelector(".crewlet-notice-list__subject")?.textContent === handle,
+      )!;
     const said = (handle: string) =>
-      [...card.querySelectorAll<HTMLElement>(".crewlet-callout")]
-        .find((c) => c.textContent?.startsWith(handle))
-        ?.textContent?.replace(/\s+/g, " ");
+      item(handle).querySelector(".crewlet-notice-list__detail")?.textContent?.replace(/\s+/g, " ");
     expect(view.container.textContent).not.toContain("[object Object]");
-    expect(said("pinned")).toBe(
-      "pinned can’t be placed: no live node that runs seats is named nowhere-1.",
+    expect(item("pinned").querySelector(".crewlet-notice-list__title")?.textContent).toBe(
+      "pinned: Can’t be placed",
     );
+    expect(said("pinned")).toBe("Because no live node that runs seats is named nowhere-1.");
     expect(said("labelled")).toBe(
-      "labelled can’t be placed: no live node that runs seats carries the labels gpu=true and zone=us.",
+      "Because no live node that runs seats carries the labels gpu=true and zone=us.",
     );
     expect(said("both")).toBe(
-      "both can’t be placed: no live node that runs seats is named n9 and carries the label zone=eu.",
+      "Because no live node that runs seats is named n9 and carries the label zone=eu.",
     );
-    expect(within(card).getByRole("link", { name: "pinned" }).getAttribute("href")).toBe(
-      "#/company/org/seats/pinned",
-    );
+    expect(
+      within(item("pinned")).getByRole("link", { name: "Open the seat" }).getAttribute("href"),
+    ).toBe("#/company/org/seats/pinned");
   });
 
   // THE WAY TO BACKUPS WAITS FOR THE PAGE: painted under the loading

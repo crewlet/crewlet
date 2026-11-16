@@ -512,7 +512,7 @@ test("a comparison reads what head changed since the merge base, and its preview
   mount(<ComparePage repo="web" />, "#/gitlet/repos/web/compare?head=retry");
 
   expect(await screen.findByText("Conflicts")).toBeTruthy();
-  expect(screen.getByText(/conflicts in:/)).toBeTruthy();
+  expect(screen.getByText(/conflicts in \d+ paths?$/)).toBeTruthy();
   await waitFor(() => expect(reads(asked, "code_diff").length).toBeGreaterThan(0));
   const stat = reads(asked, "code_diff").find((u) => !u.searchParams.has("file"));
   expect(stat?.searchParams.get("base")).toBe(PARENT);

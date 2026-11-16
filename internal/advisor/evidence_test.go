@@ -451,14 +451,21 @@ func TestASeatPausedForAFailureIsOneFindingPerKind(t *testing.T) {
 	}
 	box := byClass[advisor.ClassSandboxUnstartable]
 	if box.Severity != advisor.SeverityBlocks || box.Actor != advisor.ActorOwner ||
-		box.Subject.Kind != advisor.SubjectCompany || !strings.Contains(box.Title, "App and Ops are paused") ||
+		box.Subject.Kind != advisor.SubjectCompany || !slices.Equal(box.Names, []string{"App", "Ops"}) ||
 		box.Fix.Kind != advisor.FixOpenSetting || box.Fix.Setting != "providers.sandbox" {
 		t.Errorf("the sandbox finding = %+v, want the owner's block naming both, opening the sandbox", box)
 	}
 	models := byClass[advisor.ClassModelsCredential]
-	if models.Subject.Seat != "pm" || !strings.Contains(models.Title, "PM is paused") ||
+	if models.Subject.Seat != "pm" || !slices.Equal(models.Names, []string{"PM"}) ||
 		models.Fix.Kind != advisor.FixExternalStep || !strings.Contains(models.Fix.Sentence, "Settings, Models") {
 		t.Errorf("the models finding = %+v, want PM's, its credentials replaced under Settings", models)
+	}
+	// ITS WORDS ARE THE KIND'S, whoever it holds: the agents are its Names.
+	for _, f := range found {
+		if strings.Contains(f.Title+f.Why, "App") || strings.Contains(f.Title+f.Why, "PM") ||
+			f.Why != box.Why {
+			t.Errorf("%s names whom it holds in its words: %q / %q", f.Class, f.Title, f.Why)
+		}
 	}
 	ev.PausesUnread = true
 	if found := advisor.Detect(ev, kindOf); len(found) != 0 {
@@ -481,8 +488,7 @@ func TestARunStoppedForMemoryTwiceIsTheOwnersToSize(t *testing.T) {
 	f := found[0]
 	if f.Class != advisor.ClassSandboxOutOfMemory || f.Actor != advisor.ActorOwner ||
 		f.Subject.Seat != "app" || f.Fix.Kind != advisor.FixOpenSetting ||
-		f.Fix.Setting != "providers.sandbox" || !strings.Contains(f.Title, "2 times") ||
-		!strings.Contains(f.Why, "at its 2 GB ceiling") {
+		f.Fix.Setting != "providers.sandbox" || f.Item != "2 runs stopped at its 2 GB ceiling" {
 		t.Errorf("finding = %+v, want the owner's, about app's 2 GB box, opening the sandbox", f)
 	}
 	ev.RunsUnread = true

@@ -374,11 +374,7 @@ function Design({
         <Callout
           variant={merge.overlaps.length > 0 ? "warning" : "info"}
           title={`Moved onto version ${base.number}`}
-          action={
-            <Button size="small" variant="ghost" onClick={() => setMerge(null)}>
-              Dismiss
-            </Button>
-          }
+          onDismiss={() => setMerge(null)}
         >
           {merge.overlaps.length > 0
             ? `Somebody published while you were editing, and changed ${merge.overlaps.join(", ")} too. Your changes to those are kept. Save again to publish both.`

@@ -45,16 +45,17 @@ import {
   EmptyState,
   FilterPill,
   Highlight,
+  highlightTerms,
+  InlineCode,
   KeyChip,
   Link,
   List,
   ListItem,
   Menu,
+  NoticeList,
   SegmentedControl,
   Skeleton,
   Text,
-  highlightTerms,
-  InlineCode,
 } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
@@ -1151,16 +1152,13 @@ export function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
     // THE READER'S ACCESS, not the company's search: said in the words every
     // lock uses, with nothing to configure.
     return (
-      <Callout variant="neutral" icon={<BookOpenGlyph size="md" />}>
+      <Callout variant="neutral">
         <span>{needsWords("Search", [DOCLET])}</span>
       </Callout>
     );
   }
   return (
-    <Callout
-      variant={building ? "warning" : "neutral"}
-      icon={building ? <ClockGlyph size="md" /> : <BookOpenGlyph size="md" />}
-    >
+    <Callout variant={building ? "warning" : "neutral"}>
       {/* NOT A MISCONFIGURATION: this node joined recently and is still
           indexing what it holds. Nothing is lost and nothing needs fixing. */}
       {building ? (
@@ -1276,16 +1274,13 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
       {partial && (
         <Callout variant="warning">
           {partial.sentence}
-          {partial.nodes.length > 0 && (
-            <ul className="coverage-nodes">
-              {partial.nodes.map((n) => (
-                <li key={n.id}>
-                  <InlineCode>{n.id}</InlineCode>
-                  {n.error ? `: ${n.error}` : ""}
-                </li>
-              ))}
-            </ul>
-          )}
+          <NoticeList
+            notices={partial.nodes.map((n) => ({
+              key: n.id,
+              subject: <InlineCode>{n.id}</InlineCode>,
+              title: n.error || "did not answer",
+            }))}
+          />
         </Callout>
       )}
       <QueryState
@@ -1471,11 +1466,15 @@ function ResultPreview({ hit, terms }: { hit: KnowledgeHit; terms: readonly stri
   const detail = page.data;
   if (hit.url) {
     return (
-      <Callout variant="neutral" icon={<ExternalLinkGlyph size="md" />}>
-        <a className="prose-link" href={hit.url} target="_blank" rel="noreferrer">
-          Open this result in the wiki
-        </a>
-        .
+      <Callout
+        variant="neutral"
+        action={
+          <a className="t-link" href={hit.url} target="_blank" rel="noreferrer">
+            Open in the wiki
+          </a>
+        }
+      >
+        This result is a page in the wiki, so it is read there.
       </Callout>
     );
   }
