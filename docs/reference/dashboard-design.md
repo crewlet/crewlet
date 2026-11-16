@@ -11966,17 +11966,19 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
                             doclet, artifacts, brand, spend, settings,
                             account), with
                             one file per screen inside it and an index.ts
-                            naming what its chunk exports. Four things sit
+                            naming what its chunk exports. Five things sit
                             outside that shape: NotFound, which belongs to no
                             directory and is what the dispatch falls through
                             to; routes/org/, the organization builder, one
                             screen big enough to be a directory, and a chunk,
                             of its own; routes/signin/, the screens drawn
                             outside the frame, a chunk the idle prefetch
-                            leaves alone; and
-                            routes/artifacts/new/, where each kind's create
-                            page is a chunk of its own, never prefetched either
-                            (see below)
+                            leaves alone; routes/gitlet/repo/ and
+                            routes/gitlet/change/, Gitlet's repository and
+                            change pages, each a chunk beside its section
+                            pages'; and routes/artifacts/new/, where each
+                            kind's create page is a chunk of its own, never
+                            prefetched either (see below)
   src/styles/               tokens, base, components, shell, frame, screens —
                             what the design system does not draw
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
@@ -12176,7 +12178,8 @@ tree above lists (`routes/<dir>/index.ts`, held to `ScreenDir` by
 `app/lazy.test.tsx` in both directions), plus one for the org builder, which is
 Company › Structure and larger than any whole workspace, one for the
 sign-in screens drawn outside the frame, and one for each kind's create page
-(`routes/artifacts/new/`). The entry the shell loads holds
+(`routes/artifacts/new/`). Gitlet is three chunks, by address: its section
+pages, a repository's pages and a change's page with its peek. The entry the shell loads holds
 the frame (the sidebar, the page header, the socket client) and nothing a
 screen draws, so a reader who came to read the Inbox parses the Inbox and not
 the org builder. The command palette and Ask Crewlet's panel are layers

@@ -2776,6 +2776,34 @@ func TestTheDashboardFitsItsBudget(t *testing.T) {
 	}
 }
 
+// TestGitletIsThreeChunks holds Gitlet to three lazy chunks, by address (app/lazyScreen.ts): its
+// section pages, a repository's and a change's, each named by Rolldown after its index.ts's
+// directory. One that folded back would grow the first click into Gitlet.
+func TestGitletIsThreeChunks(t *testing.T) {
+	t.Parallel()
+	c := embeddedDashboard.crawl
+	initial := initialLoad(c)
+	named := regexp.MustCompile(`^/static/dashboard/assets/(gitlet|repo|change)-[A-Za-z0-9_-]{8}\.js$`)
+	found := map[string][]string{}
+	for _, f := range c.files {
+		m := named.FindStringSubmatch(f.url)
+		if m == nil {
+			continue
+		}
+		found[m[1]] = append(found[m[1]], f.url)
+		if initial[f.url] {
+			t.Errorf("%s is in the initial load; Gitlet's chunks are fetched by its screens", f.url)
+		}
+		t.Logf("%s: %s gzipped", f.url, kib(servedSize(t, embeddedDashboard.app, f.url)))
+	}
+	for _, chunk := range []string{"gitlet", "repo", "change"} {
+		if len(found[chunk]) != 1 {
+			t.Errorf("the crawl reached %d %s-*.js chunks, want exactly one: %v",
+				len(found[chunk]), chunk, found[chunk])
+		}
+	}
+}
+
 // TestTheDesignReferenceQuotesTheBudgets holds the design reference's budget
 // table (docs/reference/dashboard-design.md, "The bundle has a budget") to the
 // four constants above: a row for each and none other, each quoting its
