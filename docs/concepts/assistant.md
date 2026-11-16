@@ -351,7 +351,8 @@ conversation's last twelve messages as they are. Once more have gathered,
 it writes a short summary of the earlier ones, stored encrypted with the
 conversation and deleted with it, and reads that summary in their place. A
 summary of messages you can no longer see (you lost access to an app they read
-through) is not used.
+through) is not used. What the earlier answers showed is read as data, never as
+instructions, and a summary can never open or close the fence that marks it.
 
 **An administrator may read a conversation for a compliance reason.** This is
 a separate, audited action: the administrator must confirm their identity,

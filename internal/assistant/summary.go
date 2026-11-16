@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -86,33 +87,17 @@ func (s *Service) summarizeConversation(ctx context.Context, t *turn,
 	if err = toolloop.Refusal(ctx, meter); err != nil {
 		return err
 	}
-	var in strings.Builder
-	if prior != nil {
-		fmt.Fprintf(&in, "The summary so far:\n%s\n\n", prior.Text)
-	}
-	in.WriteString("The messages to fold in, oldest first:\n")
 	for _, e := range entries[from:through] {
-		who := "Person"
-		if e.Role == wire.RoleAssistant {
-			who = "Ask Crewlet"
-		}
-		text := e.Text
-		for _, card := range e.Cards {
-			text += "\n" + card
-		}
-		fmt.Fprintf(&in, "\n%s: %s\n", who, textcut.Within(text, summaryEntryBytes))
 		apps = append(apps, e.Apps...)
 	}
+	fence := provenance.NewBoundary()
 	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantSummary,
 		TurnID: t.id.String()}
 	provider, _, err := s.models.Chain(ctx, t.person, use)
 	if err != nil {
 		return err
 	}
-	completion, err := provider.Complete(ctx, llm.Request{Messages: []llm.Message{
-		{Role: llm.RoleSystem, Content: summaryInstruction},
-		{Role: llm.RoleUser, Content: in.String()},
-	}})
+	completion, err := provider.Complete(ctx, summaryRequest(fence, prior, entries[from:through]))
 	if completion != nil && meter != nil {
 		if _, spendErr := meter.Spend(context.WithoutCancel(ctx),
 			completion.InputTokens+completion.OutputTokens); spendErr != nil {
@@ -122,7 +107,9 @@ func (s *Service) summarizeConversation(ctx context.Context, t *turn,
 	if err != nil {
 		return err
 	}
-	text := textcut.Within(redact.Secrets(strings.TrimSpace(completion.Content)), summaryTextBytes)
+	// Defused: the summary is read again by every later turn.
+	text := textcut.Within(redact.Secrets(provenance.Neutralise(fence,
+		strings.TrimSpace(completion.Content))), summaryTextBytes)
 	if text == "" {
 		return errors.New("the model answered no summary")
 	}
@@ -133,6 +120,38 @@ func (s *Service) summarizeConversation(ctx context.Context, t *turn,
 	}
 	return s.records.SummarizeConversation(ctx, Write{Owner: t.person.ID, By: t.by, Key: t.key,
 		Steps: []string{"summary", fmt.Sprint(through)}}, t.conversation, string(raw), through)
+}
+
+// summaryRequest is the summary call's input: the cards each message showed are
+// fenced under fence as what was read, and nothing else can open or close one.
+func summaryRequest(fence provenance.Boundary, prior *historySummary,
+	entries []historyEntry) llm.Request {
+
+	var in strings.Builder
+	if prior != nil {
+		fmt.Fprintf(&in, "The summary so far:\n%s\n\n", provenance.Neutralise(fence, prior.Text))
+	}
+	in.WriteString("The messages to fold in, oldest first:\n")
+	for _, e := range entries {
+		who := "Person"
+		if e.Role == wire.RoleAssistant {
+			who = "Ask Crewlet"
+		}
+		fmt.Fprintf(&in, "\n%s: %s\n", who,
+			provenance.Neutralise(fence, textcut.Within(e.Text, summaryEntryBytes)))
+		if len(e.Cards) > 0 {
+			var read strings.Builder
+			for _, card := range e.Cards {
+				read.WriteString(card + "\n")
+			}
+			in.WriteString(provenance.Fence(fence, provenance.SourceAPIAnswer, provenance.TrustExternal,
+				nil, textcut.Within(strings.TrimSuffix(read.String(), "\n"), summaryEntryBytes)) + "\n")
+		}
+	}
+	return llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleSystem, Content: summaryInstruction + "\n\n" + provenance.StandingInstruction},
+		{Role: llm.RoleUser, Content: in.String()},
+	}}
 }
 
 // summaryInstruction is the summary call's whole instruction.
