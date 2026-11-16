@@ -3798,9 +3798,9 @@ from the older would have taken itself to know what the newer held. That no
 longer holds, since every continuation is told the calls after its own save
 point, read off what the capture holds where its archive is read for the
 calls (the amendment on a cut-off session's archive) and off the save point
-otherwise, and so is never told a call its session did not see. The
-relaunch continues the kept capture past a newer one that will not be kept
-(refused; begun past a capture's budget, by the one age rule,
+otherwise, and so is told every call its session did not see and counts none
+of them held. The relaunch continues the kept capture past a newer one that
+will not be kept (refused; begun past a capture's budget, by the one age rule,
 `SessionCapture.keeping`; unanswered past the window a record may name its
 object in), and past one still in flight once its wait for it has run out: it
 still waits its short wait for a newer capture or save of that job, asks one

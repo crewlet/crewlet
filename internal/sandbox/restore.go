@@ -356,14 +356,14 @@ func ContinuityOf(row executorkeep.TurnRow, run *PendingRun, follows int64,
 // that job's newest kept. A newer one that will never land went further than
 // the kept one, and the continuation is told what came after the capture it
 // continues (the calls after its save point, and that its run went on past
-// it), so it is never told a call its session did not see. One that may still
-// land is the relaunch's to wait for and to ask first
-// ([Coordinator.ContinuedCapture]), and a reader's to call undecided while it
-// may ([relaunchContinuity]); this reads neither its state nor any age. One
-// that lands moves the kept capture, and one the log took ahead of its stamp
-// is named by the turn's row, which [ContinuityOf] then finds is not the kept
-// one: either way the launch's own check refuses the capture chosen here
-// ([Coordinator.continueKept]).
+// it), so it is told every call its session did not see and counts none of
+// them held. One that may still land is the relaunch's to wait for and to ask
+// first ([Coordinator.ContinuedCapture]), and a reader's to call undecided
+// while it may ([relaunchContinuity]); this reads neither its state nor any
+// age. One that lands moves the kept capture, and one the log took ahead of
+// its stamp is named by the turn's row, which [ContinuityOf] then finds is not
+// the kept one: either way the launch's own check refuses the capture chosen
+// here ([Coordinator.continueKept]).
 //
 // A KEPT CAPTURE THAT STATES NO SAVE POINT ([SessionCapture.Through]) IS NOT
 // CONTINUED: an older build stamped it, placing it by the places it read the
