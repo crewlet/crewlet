@@ -355,8 +355,8 @@ func TestACardSaysALiveChangeWasTakenOutOfItsQueueWithinADay(t *testing.T) {
 	requireRecorded(t, res, err)
 
 	got := cardOf(t, n, 1).Ejected
-	if got == nil || got.Reason != gitlet.EjectCheckFailed || got.At.Before(harnessAt) ||
-		!got.At.Before(harnessAt.Add(time.Hour)) || !slices.Equal(got.Checks, failed[:gitlet.MaxCardEjectionChecks]) ||
+	if got == nil || got.Reason != gitlet.EjectCheckFailed || got.At.Before(harnessAt) || //fixedwait:stated a record instant the case's storedAt hook states
+		!got.At.Before(harnessAt.Add(time.Hour)) || !slices.Equal(got.Checks, failed[:gitlet.MaxCardEjectionChecks]) || //fixedwait:stated the same stated instant
 		got.ChecksMore != 2 {
 		t.Fatalf("the ejected change carries %+v, want check_failed at its record's instant, naming %v and 2 more",
 			got, failed[:gitlet.MaxCardEjectionChecks])
