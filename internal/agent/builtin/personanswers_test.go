@@ -152,6 +152,19 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 		t.Fatalf("%s: %v", builtin.CodeMarkInboxTool, err)
 	}
 	out[builtin.CodeMarkInboxTool] = marked
+	// AND THE PERSON'S OWN COMMENT MARK, served beside the artifacts tools.
+	f := newFakeArtifacts()
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Artifacts: artifactDeps(f, artifactChart{}, requesters{}), Authorize: builtin.Decide(artifactChart{})}) {
+		if tool.Name() != builtin.ArtifactMarkInboxTool {
+			continue
+		}
+		commented, err := tool.Call(asBoundPerson(), map[string]any{"read": []any{"r-1"}})
+		if err != nil {
+			t.Fatalf("%s: %v", builtin.ArtifactMarkInboxTool, err)
+		}
+		out[builtin.ArtifactMarkInboxTool] = commented
+	}
 
 	// THE OPERATOR'S OWN VERBS.
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusReseed)}}

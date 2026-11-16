@@ -334,8 +334,10 @@ var subjectOf = map[string]subject{
 	worklet.MyWorkTool:    {kind: authz.KindPerson},
 	worklet.MarkInboxTool: {kind: authz.KindPerson},
 	worklet.SetPinsTool:   {kind: authz.KindPerson},
-	// AND THE CODE LOG'S HALF OF AN INBOX'S MARKS, a person's own alike.
-	CodeMarkInboxTool: {kind: authz.KindPerson},
+	// AND THE CODE LOG'S AND THE ARTIFACTS LOG'S HALVES OF AN INBOX'S MARKS,
+	// a person's own alike.
+	CodeMarkInboxTool:     {kind: authz.KindPerson},
+	ArtifactMarkInboxTool: {kind: authz.KindPerson},
 
 	// AND THE ONES THAT DO ARE DECIDED ON WHOSE RECORD THE NAME IS, NOT ON
 	// WHAT WAS TYPED. Each tool resolves its `handle` first
@@ -484,6 +486,7 @@ var ownBookkeeping = map[string]bool{
 	worklet.MarkInboxTool:    true,
 	worklet.SetPinsTool:      true,
 	CodeMarkInboxTool:        true,
+	ArtifactMarkInboxTool:    true,
 	chatlet.MarkChatReadTool: true,
 }
 
