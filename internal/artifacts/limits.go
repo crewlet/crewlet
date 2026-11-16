@@ -364,3 +364,76 @@ const (
 	// names the documents and the client re-reads.
 	PushFrameMaxBytes = 64 * kiB
 )
+
+// Render bounds: what one render_artifact call may cost the browser it drives
+// and the box it writes its screenshots to (internal/artifactrender).
+const (
+	// TurnRenders bounds the renders one turn segment makes: a check after
+	// each of the ten publishes one artifact may take, less the first two,
+	// which an author renders once it has something to look at. A looping
+	// turn is held to eight renders of RenderTimeout each.
+	TurnRenders = 8
+
+	// RenderTimeout bounds one render from its first command to its last
+	// shot: four page loads (two widths, two themes) and twelve shots take
+	// under thirty seconds on a pool beside the engine, and three times
+	// that covers a busy one. Well under the bridge's call floor.
+	RenderTimeout = 90 * time.Second
+
+	// RenderConcurrency is how many renders one node drives at once, and
+	// RenderQueueWait how long a further one waits for a turn before it is
+	// refused as busy: each holds a page of the pool's for up to
+	// RenderTimeout, and a node's seats share one pool with every node's.
+	RenderConcurrency = 2
+	RenderQueueWait   = 20 * time.Second
+
+	// RenderLoadTimeout bounds one load of the page: its frame's hello and
+	// the document's own load. A version is served from the engine itself,
+	// so a load slower than this is a page that never finishes loading.
+	RenderLoadTimeout = 20 * time.Second
+
+	// RenderQuiet is how long the engine waits with no request of the page
+	// in flight before a shot, and RenderSettleTimeout the most it waits
+	// for that quiet: a page that never stops requesting is shot as it is.
+	RenderQuiet         = 300 * time.Millisecond
+	RenderSettleTimeout = 5 * time.Second
+
+	// RenderShots bounds the screenshots one render takes: two widths, two
+	// themes and three scroll positions, the review a charter asks for.
+	RenderShots = 12
+
+	// RenderMinWidth and RenderMaxWidth bound a shot's width in CSS pixels:
+	// the narrowest phone a page is laid out for, and a wide desktop.
+	RenderMinWidth = 320
+	RenderMaxWidth = 1920
+
+	// RenderPhoneBelow is the width under which a render lays the page out
+	// as a phone does (its viewport meta honoured), at RenderPhoneHeight;
+	// at or above it, at RenderDesktopHeight. Common devices' CSS heights.
+	RenderPhoneBelow    = 600
+	RenderPhoneHeight   = 844
+	RenderDesktopHeight = 900
+
+	// RenderActions bounds the clicks and keys one render plays before its
+	// shots: a menu opened, a tab chosen, a dialog shown.
+	RenderActions = 10
+
+	// RenderShotBytes bounds one screenshot, a PNG of at most 1920 by 900
+	// CSS pixels: a photograph-heavy page measures under 4 MiB there.
+	RenderShotBytes = 8 * miB
+
+	// RenderBoxBytes bounds what one render writes into the calling run's
+	// box: twelve shots at a busy page's size.
+	RenderBoxBytes = 48 * miB
+
+	// RenderServedBytes bounds what the engine serves one render's page
+	// across its loads: a whole version's bytes, since a page loads what it
+	// references and the runtime and kit are small. A page that asks for
+	// more is reading without end, and the render stops.
+	RenderServedBytes = MaxVersionBytes
+
+	// RenderFindings bounds the lines of one kind a render reports (console
+	// lines, failed requests, unresolved properties, links): what a reader
+	// fixes in one pass; the rest are counted.
+	RenderFindings = 50
+)
