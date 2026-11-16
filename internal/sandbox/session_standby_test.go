@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
@@ -1085,4 +1086,123 @@ func TestAReadStandingByTakesOverACaptureBegunPastItsBudget(t *testing.T) {
 		}
 		keptByTheStandby(t, rig, writes, keep)
 	})
+}
+
+// A READ STANDING BY KEEPS NOTHING WHERE THE LOG TOOK THE CAPTURE IT STOOD BY
+// FOR. The read holding the place is node-a's, whose taker lease still holds
+// while none of its stamps reaches the run's row (its coordination store
+// answering its leases and not its runs), and whose record the executor log
+// may have taken all the same. Once that capture has stood begun past what a
+// capture can take, the standby reads the turn's row on the log once before it
+// takes the place after it: where the row names that capture, it is settled
+// landed from the row and the standby keeps nothing, the session uploaded
+// once; where the log holds no record of it, the standby takes the place after
+// it and keeps its own; and where the log does not answer, the standby keeps
+// its own all the same, a session that may be kept twice rather than one
+// nobody keeps. Every way the log is read at that last decision alone, never
+// while the capture is still within its budget.
+//
+// IN A SYNCTEST BUBBLE, so the standby's wait ticks on the bubble's clock; the
+// coordinator's own clock moves past the capture's budget only once the wait
+// has ticked beside a capture still being kept and every goroutine of the case
+// is blocked.
+//
+// Mutation: decide the takeover by the capture's age alone, the log unread,
+// and the standby uploads the session a second time beside the record the log
+// took; settle a held taker's capture landed where the row does not name it,
+// or stand the standby down once it has read the log, or where the log does
+// not answer, and it keeps nothing where nobody may have kept the session;
+// read the log for a held taker at every pass of the wait, or once at the
+// standby's first pass whatever the capture's age, and it is read while the
+// capture is still within its budget. (A takeover asked after the settle
+// whatever it found is refused by the store, which takes over no capture that
+// landed: [PendingStore.TakeOver].)
+func TestAReadStandingByKeepsNothingWhereTheLogTookTheCaptureItStoodByFor(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// took puts node-a's record on the turn's row on the log.
+		took bool
+		// unread is every read's answer from the log: a log that does not
+		// answer.
+		unread error
+	}{
+		{name: "the log took the capture's record, its stamp never on the run's row", took: true},
+		{name: "the log holds no record of the capture"},
+		{name: "the log does not answer", unread: errors.New("the executor log did not answer")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			inBubble(t, func(t *testing.T) {
+				store := newTakerStore()
+				rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
+				run := rig.launchKept(t, "t1")
+				lease := claimTaker(t, store, takingProcess)
+				begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
+					State: CaptureBegun, Final: true, At: rig.coordinator.now(), Taker: takingProcess,
+					TakerEpoch: lease.Epoch, Harness: "claude-code", SessionID: "s-1"}
+				if took, err := rig.pending.StampCapture(t.Context(), "t1", begun); err != nil || !took {
+					t.Fatalf("stamping node-a's begun capture = %v, %v", took, err)
+				}
+				restore := &keptRestore{rows: map[string]executorkeep.TurnRow{}, noRowFound: true,
+					unreadRows: c.unread}
+				row := landedRow(t, begun)
+				if c.took {
+					onTheLog(restore, row)
+				}
+				rig.coordinator.restore = restore
+				standby := standingBy(t, rig, run, bytes.NewReader(standbyArchive))
+				if standby == nil || !standby.standby {
+					t.Fatalf("this node's read beside node-a's capture spooled %+v, want it standing by", standby)
+				}
+				clock := &stepClock{at: rig.now}
+				rig.coordinator.now = clock.now
+				kept := make(chan *SessionKept, 1)
+				go func() { kept <- rig.coordinator.keepCapture(t.Context(), standby) }()
+				time.Sleep(3 * captureWaitTick)
+				synctest.Wait()
+				if read := restore.askedFor(); len(read) != 0 {
+					t.Fatalf("the turn's row on the log was read %v while node-a's capture was within its "+
+						"budget, want it read only at the standby's last decision", read)
+				}
+				clock.advance(SessionCaptureBudget)
+				got := <-kept
+				if held := heldBy(t, store, takingProcess); held == nil || held.Epoch != lease.Epoch {
+					t.Fatalf("the premise: node-a's taker lease is %+v, want it still held at %d", held, lease.Epoch)
+				}
+				if read := restore.askedFor(); len(read) != 1 {
+					t.Errorf("the turn's row on the log was read %v, want once, at the standby's last decision",
+						read)
+				}
+				if !c.took {
+					if got == nil || got.NotKept != "" {
+						t.Fatalf("the standby's keep came to %+v, want its own session kept in the next place", got)
+					}
+					keptByTheStandby(t, rig, writes, keep)
+					return
+				}
+				if got != nil {
+					t.Errorf("the standby's keep came to %+v, want nothing kept beside the record the log took", got)
+				}
+				if uploads := keep.uploads(); len(uploads) != 0 {
+					t.Errorf("uploaded %q, want nothing: the log took node-a's session already", uploads)
+				}
+				if captured := writes.captured(); len(captured) != 0 {
+					t.Errorf("recorded %d captures, want none beside the record the log took", len(captured))
+				}
+				now := rig.get("t1")
+				if now.Kept == nil || !now.Kept.samePlace(begun) || now.Kept.State != CaptureLanded ||
+					now.Kept.Object != row.Object.Key.String() || now.Kept.Taker != takingProcess {
+					t.Errorf("the row keeps %+v, want node-a's capture settled landed as the log's row names it",
+						now.Kept)
+				}
+				if captureInFlight(now, clock.now()) {
+					t.Errorf("a capture is still in flight once the standby stood down: %+v", now.Capture)
+				}
+				if left := rig.spools(t); len(left) > 0 {
+					t.Errorf("spools were left behind: %v", left)
+				}
+			})
+		})
+	}
 }

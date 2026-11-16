@@ -114,10 +114,12 @@ import (
 // read's upload of the job's session, never two. Where it does not — the read
 // holding the place had its scrub refused, its seal or its upload fail, its
 // node stop mid-keep, or its record go unanswered and then refused, asked
-// again ([Coordinator.settleCapture]) — the standby takes the place after it
-// ([PendingStore.TakeOver]) and keeps its own. So a session one read took
-// whole is kept wherever either read could have kept it, where the read that
-// walked away once left a failed place to keep nothing — and that holds of
+// again ([Coordinator.settleCapture]), or begun past its budget and not
+// settled landed by the one read of the turn's row on the executor log the
+// standby then makes ([Coordinator.awaitStood]) — the standby takes the place
+// after it ([PendingStore.TakeOver]) and keeps its own. So a session one read
+// took whole is kept wherever either read could have kept it, where the read
+// that walked away once left a failed place to keep nothing — and that holds of
 // every read that finds its place taken: a stop's, a collection's and a
 // loss's, its reservation refused, found begun, or never answered
 // ([Coordinator.abandonPlace]). A read of the job ENDED beside a capture taken
@@ -177,8 +179,11 @@ import (
 // taker that holds its lease may still send its record: the turn's end at most
 // once every [heldRowPace] of its wait, and a relaunch once, after its wait
 // has run out, for a capture of the job it follows whatever its age
-// ([Coordinator.ContinuedCapture]). A stamp that names no taker is not read
-// so.
+// ([Coordinator.ContinuedCapture]), and a read standing by once, for the
+// capture it stands by for once that is begun past its budget, before it takes
+// the place after it ([Coordinator.awaitStood]), so the session is not
+// uploaded a second time beside a record the log took. A stamp that names no
+// taker is not read so.
 //
 // THAT IS WHAT THE FENCE BUYS. A keep checks its own lease before its upload
 // and again before every attempt at its record, from its own renewals rather
@@ -1893,8 +1898,9 @@ func (c *Coordinator) standDown(ctx context.Context, by time.Time, run PendingRu
 // read's upload of one job's session, never two. One REFUSED — its scrub, its
 // seal, its upload or its record, or its node stopped mid-keep, its record
 // never answered and refused once asked again — or begun past what a capture
-// can take, is a session the read that held the place did not keep, which this
-// one does.
+// can take and not settled landed by the one read of the turn's row on the
+// executor log its wait then makes ([Coordinator.awaitStood]), is a session
+// the read that held the place did not keep, which this one does.
 func (c *Coordinator) takeOver(ctx context.Context, spooled *spooledCapture) bool {
 	run, standby := spooled.run, spooled.stamp
 	wait, cancel := context.WithTimeout(ctx, standbyBudget)
@@ -1988,9 +1994,26 @@ func (c *Coordinator) tookOver(ctx context.Context, run PendingRun, standby, ove
 // left that record asked no more — the turn's end asks only its newest
 // capture — so where the log then refused the takeover, the end named the
 // turn's last word unkept and the turn gone on past a session that was it.
+//
+// ONE BEGUN PAST ITS BUDGET IS READ ON THE LOG ONCE before the standby takes
+// the place after it, whether or not its taker holds its lease, through the
+// settle every wait makes, with its held arm ([Coordinator.settleGone]'s
+// readHeld): a host whose coordination store answers its leases and not its
+// runs holds its taker lease while no stamp of its own reaches the row, its
+// record all the same the log's, and a takeover beside it uploaded the session
+// a second time and both records landed. Where the turn's row names that
+// capture, it is settled landed and the standby keeps nothing. Once, at that
+// last decision alone: before it the capture is a keep the wait holds for,
+// read on the log at a pass only once its taker is gone. A log that does not
+// answer, a lease the store cannot say of, a stamp naming no taker and a
+// settle the store does not take leave the takeover as before, the stamp read
+// by its age alone, so there the session can still be uploaded twice.
 func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby SessionCapture) (SessionCapture,
 	bool, string) {
 
+	// readLog is whether the wait has read the turn's row on the log for a
+	// capture begun past its budget: once, at its last decision.
+	readLog := false
 	for {
 		current, found, err := c.pending.Get(ctx, run.TurnID)
 		if err == nil {
@@ -2010,6 +2033,28 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 				case CaptureRefused:
 					return settled, true, ""
 				}
+			case newest.State == CaptureBegun && !newest.keeping(c.now()) && !readLog:
+				// THE STANDBY'S LAST READ, before it takes the place after a
+				// capture begun past its budget: the turn's row on the log,
+				// once, whether or not that capture's taker holds its lease,
+				// so one the log took is settled landed and this read keeps
+				// nothing. Held to the standby's own wait (ctx,
+				// [standbyBudget] from its keep's start), so it never moves
+				// the takeover past that wait's end, its settle given a
+				// stamp's room of its own past it
+				// ([Coordinator.settleContext]). Its room is NOT counted in
+				// [standbyBudget], whose one read of the run's row between the
+				// capture's budget and the takeover's stamp is the tick's: a
+				// slow read moves the takeover past standbyBudget from the
+				// standby's instant by as much as it took beyond that one,
+				// where a wait reading the standby's age
+				// ([SessionCapture.standing]), the end's ([endCaptureWait])
+				// among them, has read it gone.
+				readLog = true
+				if _, found = c.settleGone(ctx, time.Time{}, current, true); !found {
+					return SessionCapture{}, false, "the run's record is gone"
+				}
+				continue
 			case newest.State != CaptureBegun || !newest.keeping(c.now()):
 				return *newest, true, ""
 			}
@@ -3074,10 +3119,11 @@ func takerStoppedWhy(taker string) string {
 // host started without a capture the log had kept. The refused arm stays a
 // gone taker's: a taker that holds its lease may still send its record. The
 // read is the caller's to pace (readHeld): a live keep is read again only
-// where it has had a record's budget to land ([Coordinator.awaitCapture]), or
-// once its relaunch's wait has run out ([Coordinator.ContinuedCapture]); and
-// a stamp that names no taker is never read so, as [Coordinator.takerGone]
-// asks nothing of one.
+// where it has had a record's budget to land ([Coordinator.awaitCapture]),
+// once its relaunch's wait has run out ([Coordinator.ContinuedCapture]), or
+// once past its budget, before a read standing by for it takes the place
+// after it ([Coordinator.awaitStood]); and a stamp that names no taker is
+// never read so, as [Coordinator.takerGone] asks nothing of one.
 //
 // THE SAVE AS MUCH AS THE NEWEST: a save a final take overtook is out of the
 // newest place while its taker may have stopped mid-keep, and every wait reads
