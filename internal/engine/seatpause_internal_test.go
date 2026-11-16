@@ -770,6 +770,146 @@ func saysHeldAgain(t *testing.T, lines func(string) []map[string]any, msg, key, 
 	}
 }
 
+// A LIFT WHOSE SEAT WAS LET GO IN ITS WINDOW SAYS NOTHING HOLDS IT.
+//
+// A lift takes back the hold of a pause or park recorded while its queue call
+// was in flight, for the attachment the seat holds, and says whether it did
+// (held_again). A seat let go meanwhile has ended that attachment, or this
+// node records none for it: the queue refuses the hold, or none is asked for,
+// and nothing holds the inbox here. So the lift's line says its hold is
+// lifted, never that the inbox stays held for a seat this node no longer
+// serves.
+//
+// NOT PARALLEL: it reads the process's log, which [logging.Configure] owns.
+//
+// Mutation: report a hold the queue refused, or one no attachment was asked
+// for, as taken back, in any of the three lifts, and its subtest fails.
+func TestALiftWhoseSeatWasLetGoInItsWindowSaysNothingHoldsIt(t *testing.T) {
+	// letGo ends the seat's attachment as the node's release does: the
+	// queue's detach, and, released, the engine's record of it.
+	letGo := func(ctx context.Context, t *testing.T, e *Engine, q queue.EventQueue, seat uuid.UUID,
+		released bool) {
+		t.Helper()
+		if _, err := q.Detach(ctx, topics.AgentInbox(seat), topics.AgentInboxGroup(seat)); err != nil {
+			t.Errorf("Detach: %v", err)
+		}
+		if released {
+			e.detachInbox(seat)
+		}
+	}
+	for _, released := range []bool{false, true} {
+		name := "a person's pause, the seat's inbox detached"
+		if released {
+			name = "a person's pause, the seat released"
+		}
+		t.Run(name, func(t *testing.T) {
+			live := t.Context()
+			lines := processLog(t)
+			e, q := engineOn(t)
+			e.adoptSeatPauses(live, map[uuid.UUID]coord.SeatPause{})
+			pause := coord.SeatPause{Seat: ceoSeat, By: "jane", ByKind: iam.ActorHuman, Reason: "looping"}
+			e.applySeatPause(live, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &pause})
+			again := coord.SeatPause{Seat: ceoSeat, By: "pat", ByKind: iam.ActorHuman, Reason: "still looping"}
+			staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(ceoSeat), hold: seatPauseHold,
+				fold: func() {
+					e.applySeatPause(live, coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &again})
+					letGo(live, t, e, q, ceoSeat, released)
+				}}
+			e.backends.Queue = staged
+			e.applySeatPause(live, coord.SeatPauseUpdate{Seat: ceoSeat})
+			if !staged.fired.Load() {
+				t.Fatal("the resume lifted no pause hold, so nothing was staged in its window")
+			}
+			saysNothingHolds(t, lines, "seat_pause_lifted", "agent_id", ceoSeat.String())
+		})
+	}
+	t.Run("a park", func(t *testing.T) {
+		live := t.Context()
+		lines := processLog(t)
+		e, q := engineOn(t)
+		park := func() {
+			t.Helper()
+			if err := e.providerParks.take(live, e, providerParkSpec, ceoSeat, "ceo", providerBasis{},
+				time.Time{}, "every model is limited"); err != nil {
+				t.Errorf("take: %v", err)
+			}
+		}
+		park()
+		staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(ceoSeat),
+			hold: providerParkSpec.hold, fold: func() { park(); letGo(live, t, e, q, ceoSeat, false) }}
+		e.backends.Queue = staged
+		if !e.providerParks.release(live, e, providerParkSpec, ceoSeat, "a probe was answered") {
+			t.Fatal("the release lifted nothing")
+		}
+		if !staged.fired.Load() {
+			t.Fatal("the release lifted no park hold, so nothing was staged in its window")
+		}
+		saysNothingHolds(t, lines, providerParkSpec.released, "agent_id", ceoSeat.String())
+	})
+	t.Run("the no-model pause", func(t *testing.T) {
+		live := t.Context()
+		lines := processLog(t)
+		e, q := engineOn(t)
+		noModel := e.Company()
+		withModel := companyFor(t, `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    zulu:
+      model: claude-sonnet-5
+roles:
+  - name: CEO
+    handle: ceo
+  - name: CTO
+    handle: cto
+`)
+		pause := func() {
+			t.Helper()
+			e.epoch.current.Store(noModel)
+			if err := e.pause(live, "ceo", "no turn engine"); err != nil {
+				t.Errorf("pause: %v", err)
+			}
+		}
+		pause()
+		e.epoch.current.Store(withModel)
+		staged := &foldAtResume{EventQueue: q, subject: topics.AgentInbox(ceoSeat),
+			hold: pauseReasonNoTurnEngine, fold: func() { pause(); letGo(live, t, e, q, ceoSeat, false) }}
+		e.backends.Queue = staged
+		e.releaseModelHolds(live)
+		if !staged.fired.Load() {
+			t.Fatal("the release lifted no no-model hold, so nothing was staged in its window")
+		}
+		saysNothingHolds(t, lines, "seat_inbox_resumed", "handle", "ceo")
+	})
+}
+
+// saysNothingHolds holds a lift's one line for one seat (key, value) to saying
+// its hold is lifted: held_again false, and no word of an inbox that stays
+// held.
+func saysNothingHolds(t *testing.T, lines func(string) []map[string]any, msg, key, value string) {
+	t.Helper()
+	n := 0
+	var said map[string]any
+	for _, line := range lines(msg) {
+		if line[key] == value {
+			n++
+			said = line
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d %s lines for %s, want the one lift's", n, msg, value)
+	}
+	if again, ok := said["held_again"].(bool); !ok || again {
+		t.Errorf("the lift whose seat was let go in its window logs %s with held_again=%v, "+
+			"want false: nothing holds the inbox of a seat this node no longer serves: %v",
+			msg, said["held_again"], said)
+	}
+	if detail, _ := said["detail"].(string); strings.Contains(detail, "stays held") {
+		t.Errorf("the lift whose seat was let go in its window says %q, want its hold lifted", detail)
+	}
+}
+
 // foldAtResume is a queue that runs fold once, at the resume of hold on one
 // inbox and before that resume reaches the queue: the window a lift leaves
 // between dropping its record under its lock and its queue call outside it.
