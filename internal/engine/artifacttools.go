@@ -16,6 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE ARTIFACTS TOOLS' ENGINE WIRING: the same deps for a seat's registry and
@@ -44,7 +46,8 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 	}
 	estate := e.router.Artifacts()
 	deps := builtin.ArtifactDeps{
-		Reader: estate, Writer: estate, Publisher: publisher,
+		Reader: estate, Writer: estate, Publisher: publisher, Comments: estate,
+		Routing:      ArtifactCommentRouter(e),
 		Chart:        ChartAuthorityOf(e),
 		Requesters:   turnRequesters{engine: e},
 		Limits:       e.artifactLimits,
@@ -65,6 +68,51 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 		deps.Presence = e.presence
 	}
 	return deps
+}
+
+// ArtifactCommentRouter is who a comment on an artifact wakes and tells, as
+// this node decides it when the record is formed: the chart now, the seats a
+// remark names on it, and the assignees of the artifact's work items read
+// through the router. EXPORTED for the artifacts API, which forms the same
+// records from a person's gestures.
+func ArtifactCommentRouter(e *Engine) builtin.ArtifactCommentRouter {
+	return builtin.ArtifactCommentRouter{Org: e.currentOrg, Mentions: LiveMentions(e),
+		Assignees: artifactAssignees{engine: e}}
+}
+
+// artifactAssignees reads the assignee of every work item an artifact was made
+// for or linked to, through the router: the items from the artifacts log, each
+// assignee from Worklet's. A company that keeps its work items elsewhere, and a
+// node not yet handed one, has no Worklet item to read, so nobody is added.
+type artifactAssignees struct{ engine *Engine }
+
+func (a artifactAssignees) Assignees(ctx context.Context, id artifacts.ID) ([]string, error) {
+	if a.engine.router == nil || !a.engine.NativeStarted() {
+		return nil, nil
+	}
+	work, ok := OperatorWork(a.engine)
+	if !ok {
+		return nil, nil
+	}
+	items, err := a.engine.router.Artifacts().WorkItems(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	fresh := statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)}
+	var out []string
+	for _, item := range items {
+		detail, err := work.Task(ctx, item, worklet.DetailWants{}, fresh)
+		switch {
+		case errors.Is(err, worklet.ErrNoTask):
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("engine: read work item %s's assignee: %w", item, err)
+		case detail.Task.Removed != nil || detail.Task.Assignee == "":
+			continue
+		}
+		out = append(out, detail.Task.Assignee)
+	}
+	return out, nil
 }
 
 // artifactsManageOthers is the company's `artifacts.agents_manage_others` as

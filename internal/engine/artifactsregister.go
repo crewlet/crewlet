@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -19,8 +20,9 @@ import (
 // identity estate's, so it states a barrier (a `linearizable` read of an
 // artifact is a quorum-committed position), its own generation record, and the
 // node gate's writer: the trim counts nodes on this log, so one the gate could
-// not write would keep an evicted node counted here for ever. It declares no
-// wake feed: no record on it wakes a seat in this release.
+// not write would keep an evicted node counted here for ever. And its wake
+// feed: a comment record carries whom it wakes, and the feed derives each wake
+// from the committed record (ADR-0012, ADR-0153).
 func artifactsRegistrations() []registration {
 	return []registration{{
 		Domain: artifactsdomain.Domain{},
@@ -82,6 +84,12 @@ func artifactsRegistrations() []registration {
 			}, nil
 		},
 		OpsRetention: statelog.OpsRetention,
+		// THE WAKE FEED, over the log's own fleet-wide group: a comment's
+		// wake is derived from the committed record, never published by the
+		// writer's goroutine. See domainfeed.go.
+		Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
+			return artifactsdomain.NewTranslator(), artifactsdomain.FeedSource{Log: records}
+		},
 		Ceiling: func(stream config.Stream, free int64) domainCeiling {
 			bytes, derived := stream.ArtifactsMaxBytes(free)
 			return domainCeiling{Bytes: bytes,
