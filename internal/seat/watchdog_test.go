@@ -6,10 +6,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 )
 
 // fakePulse is a duty whose beat and liveness the test sets directly.
@@ -434,19 +437,39 @@ func TestAWedgedHeartbeatPassIsWhatTheWatchdogSees(t *testing.T) {
 	}
 }
 
-// unansweredRenew is a store that answers no renew: each waits out its read's
-// whole bound — on the fake clock — and comes back unknown, as every renew does
-// on a node whose link to the broker is down, and has the case judge the
-// watchdog as it returns.
-type unansweredRenew struct {
+// watchedPass is a watchdog over h's heartbeat at threshold, on the clock of
+// the bubble it is called in, with h's pulse as a started host's — live, and
+// beaten now — and how many times it has fired. The loops Start spins would
+// race the pass a case drives itself, so the host is marked running by hand.
+func watchedPass(h *Host, threshold time.Duration) (*Watchdog, *atomic.Int32) {
+	var fired atomic.Int32
+	w := newWatchdog(threshold, time.Now, func(Stall) { fired.Add(1) })
+	w.Watch("seat-heartbeat", h)
+	h.mu.Lock()
+	h.running = true
+	h.mu.Unlock()
+	h.stampBeat()
+	return w, &fired
+}
+
+// unansweredRenews is a store that, once armed, answers no renewal: each waits
+// out its read's whole bound — the case's to play, on its bubble's clock — and
+// comes back unknown, as every renewal does on a node whose link to the broker
+// is down, and has the case judge the watchdog as it returns.
+type unansweredRenews struct {
 	coord.Backend
-	bound time.Duration
-	clock *fakeClock
+	armed atomic.Bool
+	bound func()
 	judge func()
 }
 
-func (b unansweredRenew) Renew(context.Context, string, string, int64, time.Duration) (bool, error) {
-	b.clock.Advance(b.bound)
+func (b *unansweredRenews) Renew(ctx context.Context, resource, owner string, epoch int64,
+	ttl time.Duration) (bool, error) {
+
+	if !b.armed.Load() {
+		return b.Backend.Renew(ctx, resource, owner, epoch, ttl)
+	}
+	b.bound()
 	b.judge()
 	return false, errors.Join(coord.ErrUnavailable, errors.New("the store did not answer the renew"))
 }
@@ -455,43 +478,42 @@ func (b unansweredRenew) Renew(context.Context, string, string, int64, time.Dura
 // so.
 //
 // A renew the store leaves unanswered is held to its read's whole bound — five
-// seconds where nothing set a deadline — so a heartbeat pass over a node's
-// seats while its link to the broker is down spends a bound per seat, keeping
-// each seat until its own lease's TTL and then dropping it, which is what an
-// unreachable store asks of it. The beat was stamped only once the whole pass
-// had answered, so twelve seats' bounds read as a wedge forty-five seconds in
-// and the watchdog ended a process that was doing its job. Stamped as each
-// renew is asked, the beat is never older than one renew's bound.
+// seconds where nothing set a deadline — so a heartbeat pass while a node's
+// link to the broker is down spends a bound per batch of [renewConcurrency]
+// seats, keeping each seat until its own lease's TTL and then dropping it,
+// which is what an unreachable store asks of it. The beat was stamped only
+// once the whole pass had answered, so bounds that summed past the TTL read
+// as a wedge and the watchdog ended a process that was doing its job. Here
+// four batches at the floor TTL, on a bubble's clock: three of 64 and one
+// more seat, twenty seconds against fifteen, the last seat sent fifteen
+// seconds in and dropped. Stamped as each renew is asked and answers, the
+// beat is never older than one bound.
+//
+// Mutation: stamp the beat only once the pass is done (the watchdog fires
+// twenty seconds in).
 func TestAPassOfUnansweredRenewsIsStillTurning(t *testing.T) {
 	t.Parallel()
-	const ttl, bound = 45 * time.Second, 5 * time.Second
-	f := newFleet(t)
-	h := f.newHost("node-a", Config{Seats: numberedSeats(12), ClaimLimit: 12, TTL: ttl,
-		HeartbeatInterval: 15 * time.Second})
-	h.renewNodePresence(f.ctx)
-	h.Sweep(f.ctx)
-	if held := len(h.Held()); held != 12 {
-		t.Fatalf("the host claimed %d seats, want all 12", held)
-	}
-	fired, onStall := caught()
-	w := newWatchdog(ttl, f.clock.Now, onStall)
-	w.Watch("seat-heartbeat", h)
-	// A STARTED HOST'S PULSE, which is live and has beaten: the loops Start
-	// spins would race the pass this case drives itself.
-	h.mu.Lock()
-	h.running = true
-	h.mu.Unlock()
-	h.stampBeat()
+	synctest.Test(t, func(t *testing.T) {
+		const ttl, bound = 15 * time.Second, 5 * time.Second
+		const seats = 3*renewConcurrency + 1
+		store := &unansweredRenews{Backend: memory.New(), bound: func() { time.Sleep(bound) }}
+		h := holdingWith(t, Config{Backend: store, TTL: ttl}, seats)
+		w, fired := watchedPass(h, ttl)
+		store.judge = func() { w.check() }
 
-	h.backend = unansweredRenew{Backend: f.store, bound: bound, clock: f.clock,
-		judge: func() { w.check() }}
-	h.Heartbeat(f.ctx)
-	select {
-	case stall := <-fired:
-		t.Fatalf("the watchdog fired (%+v) on a pass whose every renew returned "+
-			"inside its %v bound", stall, bound)
-	default:
-	}
+		store.armed.Store(true)
+		start := time.Now()
+		lost := h.Heartbeat(t.Context())
+		if took := time.Since(start); took <= ttl || len(lost) != 1 {
+			t.Fatalf("the premise: a pass of %d unanswered renewals took %v against a %v TTL "+
+				"and dropped %v, want longer than the TTL and the one seat sent at it",
+				seats, took, ttl, lost)
+		}
+		if n := fired.Load(); n != 0 {
+			t.Fatalf("the watchdog fired on a pass whose every renew returned inside its %v "+
+				"bound", bound)
+		}
+	})
 }
 
 // A HEALTHY DUTY IS NOT BEHIND, and its lag is not reported.

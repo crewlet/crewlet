@@ -67,10 +67,20 @@ func (r *roundTrips) mostInFlight() int {
 // store is armed.
 func holding(t *testing.T, store *roundTrips, n int) *Host {
 	t.Helper()
-	h, err := New(Config{
-		Backend: store, Owner: "node-a:1", NodeID: "node-a",
-		Seats: numberedSeats(n), ClaimLimit: n, TTL: SeatLeaseTTL,
-	})
+	return holdingWith(t, Config{Backend: store}, n)
+}
+
+// holdingWith is a host built from cfg — its backend, hooks and TTL, the
+// shipped TTL where it names none — holding n seats, every one claimed in one
+// sweep on the clock of the bubble it is called in.
+func holdingWith(t *testing.T, cfg Config, n int) *Host {
+	t.Helper()
+	cfg.Owner, cfg.NodeID = "node-a:1", "node-a"
+	cfg.Seats, cfg.ClaimLimit = numberedSeats(n), n
+	if cfg.TTL == 0 {
+		cfg.TTL = SeatLeaseTTL
+	}
+	h, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
