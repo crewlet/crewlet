@@ -32,7 +32,7 @@ import (
 //     seals its credential under the variable the seat points at — is claimed
 //     before that pass has run: on every first boot, and for every seat a
 //     revision adds. The child is NOT STARTED, and that is not a failure:
-//     the heartbeat counts it as waiting, with a sentence naming the variable
+//     its status record counts it as waiting, with a sentence naming the variable
 //     and the integration that mints it, and the log says so once per pass at
 //     info. It starts once the seal reaches this node (below). Only a seat's
 //     values can be this: a pass mints per seat, so a shared server has
@@ -62,8 +62,9 @@ import (
 // store and tells the operator to reload, which is an apply. A timer would
 // retry nothing that could start. What a person does at an integration is the
 // one thing no pass here can see, which is why a child held back on one is
-// judged again on every heartbeat against the integration's last report rather
-// than on its own pass alone ([Engine.mcpStatus]).
+// judged again on every pass of the status record's writer against the
+// integration's last report rather than on its own pass alone
+// ([Engine.mcpStatus]).
 //
 // # A key that may go without its value is declared, and left out
 //
@@ -734,8 +735,8 @@ func beforeIdentities(p integration.Phase) bool {
 }
 
 // reason says what is missing and how to supply it, or what is awaited — no
-// value, only variables and keys. Failures first, because the heartbeat bounds
-// the sentence ([coord.MaxMCPErrorBytes]) and what somebody has to act on is
+// value, only variables and keys. Failures first, because the status record
+// bounds the sentence ([coord.MaxMCPErrorBytes]) and what somebody has to act on is
 // the part that must survive the cut.
 func (m *credentialMissing) reason() string {
 	var parts []string
@@ -825,7 +826,7 @@ func (m *credentialMissing) optionalRemedy() string {
 		m.reader, plural(keys, "it", "them"), words.And(lists))
 }
 
-// Error is the sentence the heartbeat carries and the log writes: why the
+// Error is the sentence the status record carries and the log writes: why the
 // child is not started, and — for a child that is only waiting — when it
 // starts.
 func (m *credentialMissing) Error() string {

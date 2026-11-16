@@ -59,7 +59,7 @@ func TestEachEntrysRowIsItsSignInsStateOnThisNode(t *testing.T) {
 		seat, "swe", time.Now().Add(time.Hour))
 	t.Cleanup(func() { e.leaveLimitProbe(seat, providerBasis{models: c.Models, keys: []string{"plan", "spare"}}) })
 
-	rows := beatOf(t, e).Models
+	rows := statusRecordOf(t, e).Models
 	if len(rows) != 2 {
 		t.Fatalf("rows = %+v, want one per entry", rows)
 	}
@@ -89,7 +89,7 @@ func TestEachEntrysRowIsItsSignInsStateOnThisNode(t *testing.T) {
 // never as a list of empty rows.
 func TestANodeWithNoModelsPublishesNoRows(t *testing.T) {
 	t.Parallel()
-	if rows := beatOf(t, &Engine{}).Models; rows != nil {
+	if rows := statusRecordOf(t, &Engine{}).Models; rows != nil {
 		t.Fatalf("a node with no revision published %+v", rows)
 	}
 }
@@ -116,7 +116,7 @@ func statusHarness(t *testing.T, key string, code int) *harness.Provider {
 
 // THE LOGIN WATCHER SAYS WHAT THE HARNESS SAYS OF ITS LOGIN, for an entry that
 // signs in with one, and only for such an entry: a person's check answers the
-// status command's verdict now and the heartbeat carries it from then on; an
+// status command's verdict now and the status record carries it from then on; an
 // entry on a key has no login to check, and an entry the revision does not
 // have is not found.
 //
@@ -150,7 +150,7 @@ func TestTheLoginWatcherSaysWhatTheHarnessSaysOfItsLogin(t *testing.T) {
 	}
 
 	e.checkHostLogins(t.Context(), true)
-	rows := beatOf(t, e).Models
+	rows := statusRecordOf(t, e).Models
 	if row := rowOf(t, rows, "gone"); row.HostLogin == nil || row.HostLogin.State != coord.HostSignedOut {
 		t.Errorf("the signed-out entry's row = %+v, want its harness's signed_out", row.HostLogin)
 	}
@@ -159,8 +159,8 @@ func TestTheLoginWatcherSaysWhatTheHarnessSaysOfItsLogin(t *testing.T) {
 	}
 }
 
-// beatOf is the rows e's next status record carries ([Engine.statusRecordRows]).
-func beatOf(t *testing.T, e *Engine) coord.NodeStatusRecord {
+// statusRecordOf is the rows e's next status record carries ([Engine.statusRecordRows]).
+func statusRecordOf(t *testing.T, e *Engine) coord.NodeStatusRecord {
 	t.Helper()
 	return e.statusRecordRows(t.Context())
 }

@@ -2666,8 +2666,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// handed meets a node that already knows. Bounded: past its budget the
 	// watch keeps trying and the screening defers until it answers.
 	e.startSeatPauses(ctx)
-	// WHERE THIS NODE CAN START A BOX, probed now and kept: what the
-	// heartbeat tells the Models page.
+	// WHERE THIS NODE CAN START A BOX, probed now and kept: what its
+	// status record tells the Models page.
 	e.startRunnerProbe(ctx)
 	e.startHostLogins(ctx)
 	// THE RETRIES PEOPLE ASKED FOR, applied as every node hears them.

@@ -18,11 +18,12 @@ import (
 // ([statelog.KindMCPServerFailing] and the three beside it).
 //
 // FLEET-WIDE AND NOTHING ELSE: an instance is down on the node running it and a
-// wait is held on the node holding its seat, and every node publishes its
-// servers on every beat, so one listing of the presence leases is every
-// server's condition, and every data node judges the same one. Read off the same
-// listing as the model alarms ([Engine.entriesReading]), which carries the last
-// good one across a blip.
+// wait is held on the node holding its seat, and every node writes its servers
+// on its status record within a renew period of a change, so one listing of the
+// records, joined to the presence leases, is every server's condition, and
+// every data node judges the same one. Read off the same listing as the model
+// alarms ([Engine.entriesReading]), which carries the last good one across a
+// blip of either.
 //
 // THE SUMS ARE THE ANSWER'S: `mcp_servers_status` decides a server's state from
 // the same three counts over the same rows, so the alarm and the page cannot

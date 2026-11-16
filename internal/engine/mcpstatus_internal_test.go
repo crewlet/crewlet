@@ -54,13 +54,13 @@ roles:
 	return company
 }
 
-// A SERVER THAT WOULD NOT START IS ON THE HEARTBEAT, which is the one row an
+// A SERVER THAT WOULD NOT START IS ON THE STATUS RECORD, which is the one row an
 // operator opening the settings screen is looking for. A seat's bridge keeps
 // nothing of a failed start, so a status read off the bridge alone would show
 // that server as never configured; the shared bridge keeps it to retry, and
 // reports it down with why — and a released seat's failures, and a server the
-// next revision dropped, must leave the heartbeat with them.
-func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
+// next revision dropped, must leave the record with them.
+func TestAFailedMCPStartReachesTheStatusRecordAndLeavesWithItsOwner(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	e := &Engine{}
@@ -73,7 +73,7 @@ func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
 	e.startSeatServers(ctx, "ceo")
 	rows := e.statusRecordRows(ctx).MCP
 	if len(rows) != 2 {
-		t.Fatalf("heartbeat carries %d mcp rows, want the shared and the per-role server: %+v", len(rows), rows)
+		t.Fatalf("the status record carries %d mcp rows, want the shared and the per-role server: %+v", len(rows), rows)
 	}
 	search, tracker := rows[0], rows[1]
 	if search.Server != "search" || !search.Shared || search.Failed != 1 || search.Started != 0 ||
@@ -89,20 +89,20 @@ func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
 
 	e.stopSeatServers(ctx, "ceo")
 	if rows := e.statusRecordRows(ctx).MCP; len(rows) != 1 || rows[0].Server != "search" {
-		t.Errorf("after the seat was released the heartbeat carries %+v, want only the shared server", rows)
+		t.Errorf("after the seat was released the status record carries %+v, want only the shared server", rows)
 	}
 
 	e.startSharedServers(ctx, mcpStatusCompany(t, false))
 	if rows := e.statusRecordRows(ctx).MCP; len(rows) != 0 {
-		t.Errorf("after a revision dropped the shared server the heartbeat carries %+v", rows)
+		t.Errorf("after a revision dropped the shared server the status record carries %+v", rows)
 	}
 }
 
 // ONE ROW PER SERVER, its instances counted. A per-role template has a child
 // per seat this node holds, and a row per child would put the company's seat
-// count on a payload re-sent every heartbeat. The reported failure is the
-// first by the seat's agent id, so two beats with the same facts send the same
-// bytes.
+// count on a record rewritten at least every reconcile interval. The reported
+// failure is the first by the seat's agent id, so two passes with the same
+// facts build the same bytes and the record is not written again.
 func TestMCPStatusIsOneRowPerServerWithItsInstancesCounted(t *testing.T) {
 	t.Parallel()
 	// Ids ordered swe < pm, the reverse of their handles, so a first

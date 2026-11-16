@@ -31,8 +31,8 @@ import (
 //
 // # Derived at each beat, written when it changes
 //
-// The listing is read off the bridges at every beat, as the heartbeat's MCP
-// rows are ([Engine.mcpStatus]): an apply, a claim, a release, a restart that
+// The listing is read off the bridges at every beat, as the status record's
+// MCP rows are ([Engine.mcpStatus]): an apply, a claim, a release, a restart that
 // lists differently and a seat's pass each move it, and a publisher hooked
 // into each of them would be one hook short the day a sixth appears. What
 // goes to the store is only a listing whose content moved since this node

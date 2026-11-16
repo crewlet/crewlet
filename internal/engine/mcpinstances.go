@@ -25,15 +25,15 @@ import (
 // EACH MCP INSTANCE'S HEALTH, read where it lives.
 //
 // A node knows its own children (the shared servers' and each held seat's)
-// and nothing of a peer's, and that is where it stays: the heartbeat carries
-// each server's bounded counts per node ([coord.MCPServerStatus]), and a
-// server's page asks the nodes that hold its instances for the rest when a
+// and nothing of a peer's, and that is where it stays: the node's status record
+// carries each server's bounded counts per node ([coord.MCPServerStatus]), and
+// a server's page asks the nodes that hold its instances for the rest when a
 // person opens it, as a turn's detail is read (ADR-0021). Nothing is stored
-// and nothing rides the heartbeat that a seat count multiplies.
+// and nothing rides the status record that a seat count multiplies.
 //
 // # One reading, two readers
 //
-// The heartbeat's row and the page's instances are read off the same
+// The status record's row and the page's instances are read off the same
 // [mcpReading] of each instance, so a server the row calls failing on a node
 // is one whose instances on that node read failed, with the same reason.
 //

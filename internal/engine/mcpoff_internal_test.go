@@ -44,7 +44,7 @@ roles:
 
 // A SERVER TURNED OFF IS NOBODY'S MISSING CREDENTIAL. Its references are not
 // resolved at all, so one that resolves to nothing is not held back, logged or
-// reported as waiting for a value: the heartbeat carries no row for either
+// reported as waiting for a value: the status record carries no row for either
 // server, and nothing reaches a bridge.
 func TestAServerTurnedOffIsNotHeldBackForItsCredentials(t *testing.T) {
 	t.Parallel()
@@ -59,7 +59,7 @@ func TestAServerTurnedOffIsNotHeldBackForItsCredentials(t *testing.T) {
 	e.startSeatServers(ctx, "ceo")
 	t.Cleanup(func() { e.stopSeatServers(context.Background(), "ceo") })
 	if rows := e.statusRecordRows(ctx).MCP; len(rows) != 0 {
-		t.Errorf("the heartbeat carries %+v for servers turned off, want nothing", rows)
+		t.Errorf("the status record carries %+v for servers turned off, want nothing", rows)
 	}
 	if running := e.mcp.Servers(); len(running) != 0 {
 		t.Errorf("the company bridge was handed %v", running)
