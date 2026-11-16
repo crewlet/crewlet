@@ -258,3 +258,74 @@ func lapsesBeforeRenewing(t *testing.T, resource string) {
 			"lease is not renewable", resource, renewed, err)
 	}
 }
+
+// RENEWALS OF KNOWN RECORDS GO TO THE BROKER TOGETHER: nothing in the store
+// holds one renewal's write while another's is in flight, so a pass that sends
+// its renewals together has them in flight together — which counting their
+// messages cannot tell, since renewals sent one at a time send as many. Each
+// renewal is held at its write until every one of them has reached it, which
+// only renewals running at once can do.
+//
+// Mutation: hold one lock across a known renewal's write (the first renewal
+// waits alone, until the case gives up on the others).
+func TestRenewalsOfKnownRecordsAreInFlightTogether(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, embeddedNATS(t), knownTTL)
+	const owner = "node-a:1"
+	const together = 16
+	leases := make([]*coord.Lease, together)
+	for i := range leases {
+		leases[i] = claimUngated(ctx, t, s, knownSeat(i), owner, knownTTL)
+	}
+
+	// THE CASE'S PATIENCE, a liveness bound that decides nothing: renewals
+	// in flight together all reach their writes at once, and only renewals
+	// that cannot leave the first waiting for it to run out.
+	giveUp, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var (
+		mu      sync.Mutex
+		arrived int
+		gaveUp  bool
+	)
+	all := make(chan struct{})
+	s.beforeKnownWrite = func(string) {
+		mu.Lock()
+		if arrived++; arrived == together {
+			close(all)
+		}
+		mu.Unlock()
+		select {
+		case <-all:
+		case <-giveUp.Done():
+			mu.Lock()
+			gaveUp = true
+			mu.Unlock()
+		}
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, together)
+	for i, l := range leases {
+		wg.Go(func() {
+			ok, err := s.Renew(ctx, l.Resource, owner, l.Epoch, knownTTL)
+			if err == nil && !ok {
+				err = errors.New("answered false")
+			}
+			errs[i] = err
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("renewal %d of %d at once: %v", i, together, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gaveUp || arrived != together {
+		t.Fatalf("of %d renewals of records the store knows, %d reached their writes, and "+
+			"never all in flight at once: the store sends them one at a time", together, arrived)
+	}
+}

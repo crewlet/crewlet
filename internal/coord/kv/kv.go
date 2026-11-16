@@ -566,6 +566,10 @@ type Store struct {
 	// that won its record is about to advance the counter: how the shared
 	// conformance suite holds a claim mid-mint. Nil in every running store.
 	beforeMint func(ctx context.Context, resource string)
+	// beforeKnownWrite, set only by this package's tests, is called as a
+	// renewal of a known record is about to send its write: how a case
+	// holds renewals in flight together. Nil in every running store.
+	beforeKnownWrite func(resource string)
 }
 
 var _ coord.Backend = (*Store)(nil)
@@ -1480,6 +1484,9 @@ func (s *Store) renewKnown(ctx context.Context, l *lane, key string, known entry
 	data, err := encodeValue(value)
 	if err != nil {
 		return false, true, err
+	}
+	if s.beforeKnownWrite != nil {
+		s.beforeKnownWrite(known.resource)
 	}
 	rev, err := l.kv.Update(ctx, key, data, known.revision)
 	switch {
