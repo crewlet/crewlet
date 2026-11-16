@@ -16,14 +16,11 @@ import (
 // the commit itself. The repository in detail, as a read of one repository
 // answers it, and in the same snapshot every change the commit belongs to:
 // each whose merge it is (code_changes_merge_idx) and each revision it heads
-// (code_revisions_head_idx), "revision 2 of web!42". Each change carries how
-// it landed once merged ([ChangeLanding]): the commit its target was merged
-// at, when, which way and by whom, a person's reason for merging past its
-// gate, and, merged through its gate, that gate as the rows keep it
-// ([LandingGate]). Held to the asker's grant on the repository as that read
-// is. The commit itself, and the push that introduced it, are the
-// repository's content and its Gitlet node's index, never these rows: a
-// question asks them by object id beside this read.
+// (code_revisions_head_idx), "revision 2 of web!42", each with how it landed
+// and the gate it passed ([ChangeLanding], [LandingGate]). Held to the asker's
+// grant on the repository as that read is. The commit itself, and the push
+// that introduced it, are the repository's content and its Gitlet node's index,
+// never these rows: a question asks them by object id beside this read.
 //
 // A commit belongs to a handful of changes in practice (two branches at one
 // head, a change reopened from the same commit) and to any number in the
@@ -48,10 +45,8 @@ const MaxCommitChanges = 50
 type CommitChanges struct {
 	// Commit is the commit, its whole id.
 	Commit string `json:"commit"`
-	// Merged is every change whose merge is the commit (the merge record's
-	// commit, the queue's landing, or the head a push into its target merged
-	// it at) by its number, each with how it landed and its gate; at most
-	// MaxCommitChanges.
+	// Merged is every change whose merge is the commit, by its number, each with
+	// how it landed and its gate; at most MaxCommitChanges.
 	Merged []ChangeLanding `json:"merged,omitempty"`
 	// Revisions is every revision the commit is the head of, at most
 	// MaxCommitChanges, in the order code_revisions_head_idx keeps them, each
@@ -67,11 +62,9 @@ type CommitRevision struct {
 	N      int64         `json:"n"`
 }
 
-// ChangeLanding is a change as a commit's page names it: its name and, once
-// merged, how it landed: the commit its target was merged at, when, by which
-// way and by whom (each as its row keeps it, ChangeRow's columns); and, on a
-// `commit` read alone, a person's reason for merging past its gate and the
-// gate as the rows keep it. A `commit_marks` read carries neither.
+// ChangeLanding is a change as a commit's page names it and, once merged, how it
+// landed (ChangeRow's columns); a `commit` read alone adds a person's override
+// reason and the gate, a `commit_marks` read neither.
 type ChangeLanding struct {
 	ChangeName
 	MergeOID     string    `json:"merge_oid,omitempty"`

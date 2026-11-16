@@ -213,13 +213,9 @@ func TestAChecksListingNamesItsNarrowing(t *testing.T) {
 	}
 }
 
-// A HISTORY PAGE'S MARKS ARE THE READER'S ANSWER: `commits` (comma-separated
-// or a frame's list) reach one `commit_marks` read at the caller's freshness,
-// answered bare, and a session read with no floor is refused.
-//
-// Mutations: drop `commits` from codeReadQuery: the reader is asked no
-// commit, red; answer the read Immutable: red; split no comma: one id
-// "a,b", red.
+// A HISTORY PAGE'S MARKS ARE THE READER'S ANSWER: `commits` (comma-separated or a
+// frame's list) reach one bare `commit_marks` read; a session read with no floor is refused.
+// Mutation: drop `commits` from codeReadQuery, answer it Immutable, or split no comma.
 func TestCommitMarksAreTheReadersAnswer(t *testing.T) {
 	t.Parallel()
 	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)

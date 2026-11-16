@@ -151,13 +151,9 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	}
 }
 
-// A HISTORY PAGE'S STATEMENTS READ NO UNNESTED AGGREGATE: a planner rewriting
-// latestOnly's NOT EXISTS would read every attempt of every commit. A control
-// the driver does unnest proves the check sees the rewrite.
-//
-// Mutation: hold a statement to the check with Decorrelated's answer
-// ignored, or plan the control as one of the page's statements: the control
-// reads as not unnested, red.
+// A HISTORY PAGE'S STATEMENTS READ NO UNNESTED AGGREGATE, which would read every
+// attempt of every commit; a control the driver does unnest proves the check sees it.
+// Mutation: ignore Decorrelated's answer, or plan the control as a page statement.
 func TestTheCommitMarksStatementsReadNoUnnestedAggregate(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
@@ -1227,13 +1223,9 @@ func registeredStatements() map[string]statement {
 			[]string{commitMergedKey + " (repo_id=? AND merge_oid=?)"}},
 		"revisions a commit heads": {commitHeadsSQL, []any{oid("head-1-1"), "repo-1", MaxCommitChanges + 1},
 			[]string{commitHeadsKey + " (head_oid=?)", changeKey + " (id=?)"}},
-		// A HISTORY PAGE'S MARKS AND A MERGE'S GATE (commitmarks.go,
-		// commitread.go, checkrollup.go): each check's latest attempt of a
-		// commit, for every branch or one, a walk of code_checks' key kept
-		// to the latest by one seek of its prefix above each attempt; a
-		// merged change's approvals, a range of its participants;
-		// and the landing a queue made of it, one seek of the change's
-		// landings, whose record's tip is "a landing record's tip".
+		// A HISTORY PAGE'S MARKS AND A MERGE'S GATE (commitmarks.go, commitread.go,
+		// checkrollup.go): each check's latest attempt, a merged change's approvals
+		// and the landing a queue made of it, each one walk or seek.
 		"a commit's latest checks, every branch": {latestChecksOfCommitSQL,
 			[]any{"repo-1", oid("c"), MaxMarkTargets*maxRollupChecks + 1},
 			[]string{checksKey + " (repo_id=? AND commit_oid=?)",

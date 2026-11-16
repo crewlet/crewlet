@@ -1612,10 +1612,8 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.noticeCards(ctx, tx, q, chart, &out) }
 	case ReadCommitMarks:
-		// A SET READ of the repository's rows and its checks, as a listing
-		// of its checks is: an attempt or a change a deferred record holds
-		// back is read as its row stands, and a history page polled each
-		// minute is not refused for it.
+		// A SET READ, as a listing of its checks is: a deferred attempt or change is
+		// read as its row stands, so a history page polled each minute is not refused.
 		query = fresh.Resolved(checksResolver(q.Repo), true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.commitMarks(ctx, tx, q, chart, &out) }
 	case ReadExpungeTips:

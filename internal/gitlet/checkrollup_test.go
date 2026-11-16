@@ -7,14 +7,9 @@ import (
 	"time"
 )
 
-// A ROLLUP JUDGES A CHECK AS THE GATE DOES (gatejudge.go's check
-// precondition): requeued errors, cancelled sets, skipped required checks,
-// unknown states, the failing order and an empty set.
-//
-// Mutation: count an errored attempt of the home's requeue as failing at any
-// attempt: the first set reads failing, red; let a skipped required check
-// count as not passed: 0 of 1, red; sort the failing checks by name alone:
-// the optional one leads, red; answer a rollup of nothing as passed: red.
+// A ROLLUP JUDGES A CHECK AS THE GATE DOES (gatejudge.go): requeued errors, cancelled
+// sets, skipped required checks, unknown states, the failing order and an empty set.
+// Mutation: fail a requeued error or a skipped required check, sort by name, pass nothing.
 func TestARollupJudgesACheckAsTheGateDoes(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)

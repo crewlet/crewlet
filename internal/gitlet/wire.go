@@ -1136,13 +1136,9 @@ const (
 	// composed, for the changes of the code notices the page kept, and only
 	// by a read that draws them: an `inbox` read carries none of it.
 	ReadNoticeCards ReadKind = "notice_cards"
-	// ReadCommitMarks is WHAT A HISTORY PAGE DRAWS BESIDE ITS COMMITS
-	// (commitmarks.go): for each commit [ReadQuery.CommitMarks] names, by its
-	// whole id and in that order, where its checks stand for each branch it
-	// was checked for ([TargetChecks]), the changes whose merge commit it is
-	// and the revisions it heads, each with how its change landed
-	// ([ChangeLanding]), read in one snapshot and held to the asker's grant
-	// on the repository, from the rows alone.
+	// ReadCommitMarks is what a history page draws beside its commits
+	// (commitmarks.go): each commit's checks per branch and the changes it landed
+	// with, in one snapshot and held to the asker's grant on the repository.
 	ReadCommitMarks ReadKind = "commit_marks"
 )
 
@@ -1546,11 +1542,9 @@ type ReadQuery struct {
 	// record's, so it takes no versionedFields row: a node of a build that
 	// predates the kind refuses the read as a kind it does not know.
 	NoticeCards []string `json:"notice_cards,omitempty"`
-	// CommitMarks is a `commit_marks` read's commits, each a WHOLE id, once,
-	// 1 to [MaxCommitMarks] of them: REQUIRED for that kind and refused on
-	// every other. An estate request's field and no record's, so it takes no
-	// versionedFields row: a node of a build that predates the kind refuses
-	// the read as a kind it does not know, and the router asks the next.
+	// CommitMarks is a `commit_marks` read's commits: 1 to [MaxCommitMarks] whole
+	// ids, once each, required for that kind and refused on every other. A request
+	// field, no record's, so no versionedFields row: an older build refuses the kind.
 	CommitMarks []string `json:"commit_marks,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
@@ -1715,10 +1709,8 @@ type ReadAnswer struct {
 	// ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
 	// only that kind answers it, which a build that predates it refuses.
 	NoticeCards map[string]*NoticeChange `json:"notice_cards,omitempty"`
-	// CommitMarks is a `commit_marks` read's answer: one mark a commit, in
-	// the query's order ([CommitMark]). AN ESTATE ANSWER'S FIELD, NOT A
-	// RECORD'S: only that kind answers it, which a build that predates it
-	// refuses.
+	// CommitMarks is a `commit_marks` read's answer, one mark a commit in the
+	// query's order; an answer's field, no record's.
 	CommitMarks []CommitMark `json:"commit_marks,omitempty"`
 	Next        string       `json:"next,omitempty"`
 	// TipsNext is a `checks_due` page of one repository's tip work cut at its

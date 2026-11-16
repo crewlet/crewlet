@@ -52,11 +52,9 @@ const (
 	// RollupPending is a set with a check queued, errored and queued again
 	// by the home, or in a state a later build records, and none running.
 	RollupPending CheckRollupState = "pending"
-	// RollupCancelled is a set whose checks all ended, one of them
-	// cancelled and none failing: a head its next push moved on from, which
-	// a history row does not draw red. The gate's own reading stays in
-	// Required and RequiredPassed, where a cancelled required check has
-	// not passed.
+	// RollupCancelled is a set whose checks all ended, one cancelled and none
+	// failing: a head its next push moved on from, which a history row does not
+	// draw red. Required and RequiredPassed still count it as not passed.
 	RollupCancelled CheckRollupState = "cancelled"
 	// RollupPassed is a set whose every check passed or was skipped.
 	RollupPassed CheckRollupState = "passed"
@@ -132,10 +130,8 @@ type rollupRow struct {
 	startedAt, finishedAt time.Time
 }
 
-// failing reports an attempt that did not pass and that nobody but the
-// change's owner moves on: failed, or errored where the home does not queue
-// it again (its infrastructure's ending past AutoRequeueAttempts, or one the
-// commit or its definition caused), as the gate's check precondition reads it.
+// failing reports an attempt only the change's owner moves on: failed, or errored
+// where the home does not queue it again, as the gate's check precondition reads it.
 func (r rollupRow) failing() bool {
 	switch r.state {
 	case CheckStateFailed:
@@ -225,11 +221,9 @@ func rollUp(rows []rollupRow, more bool) *CheckRollup {
 // order.
 const rollupColumns = `k.name, k.attempt, k.state, k.reason, k.required, k.started_at, k.finished_at`
 
-// A ROLLUP'S READS, each a walk of code_checks' key (checksKey) kept to each
-// check's latest attempt by latestOnly's one seek above it, in the key's own
-// order: the PRIMARY KEY holds every attempt, where code_checks_requeue_idx
-// holds only the errored ones the home queues again. Each read one row past
-// its bound to say More. Registered in plan_test.go.
+// A ROLLUP'S READS walk code_checks' primary key (checksKey: the requeue index holds
+// only errored attempts), kept to each check's latest attempt by latestOnly's one
+// seek and read one row past the bound to say More. Registered in plan_test.go.
 const (
 	// latestChecksOfTargetSQL is each check's latest attempt of one commit
 	// for one branch, by name: the rollup of a merge's gate, of a branch's

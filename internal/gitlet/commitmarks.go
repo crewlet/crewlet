@@ -19,10 +19,8 @@ const (
 	// MaxCommitMarks is the most commits one read marks: a history page's,
 	// MaxLogLimit, the most one log page lists.
 	MaxCommitMarks = MaxLogLimit
-	// MaxMarkTargets is the most branches one commit's checks are rolled up
-	// for: a commit is checked for the target of each change it heads and,
-	// landed, as its branch's tip; four holds a release branch, its main and
-	// two changes, and a row draws one.
+	// MaxMarkTargets is the most branches one commit's checks are rolled up for:
+	// a release branch, its main and two changes; a row draws one.
 	MaxMarkTargets = 4
 	// MaxMarkChanges is the most changes each of a mark's two lists names: a
 	// row draws one pill; four holds two branches at one head and a change
@@ -30,24 +28,19 @@ const (
 	MaxMarkChanges = 4
 )
 
-// CommitMark is what a history page draws beside one commit.
-//
-// A READ'S ANSWER, NOT A RECORD'S, so it takes no versionedFields row: only
-// the `commit_marks` kind answers it, which a build that predates it refuses
-// whole ([ReadKinds]).
+// CommitMark is what a history page draws beside one commit: a read's answer, not a
+// record's, so it takes no versionedFields row ([ReadKinds] refuses it to older builds).
 type CommitMark struct {
 	// Commit is the commit, its whole id, as the query named it.
 	Commit string `json:"commit"`
-	// Checks is, for each branch the commit was checked for, in branch
-	// order, where its checks stand; ChecksMore that more branches may follow
-	// (past MaxMarkTargets, or past the walk's bound). None where no attempt
-	// is kept: never checked, or its attempts ended past CheckHistory.
+	// Checks is where the commit's checks stand for each branch it was checked
+	// for, in branch order; ChecksMore that more branches may follow. None where
+	// no attempt is kept.
 	Checks     []TargetChecks `json:"checks,omitempty"`
 	ChecksMore bool           `json:"checks_more,omitempty"`
-	// Merged is each change whose merge commit it is, and Heads each
-	// revision it heads, at most MaxMarkChanges of each; More that either
-	// holds more. Neither carries an override reason or a gate, which
-	// code_commit answers.
+	// Merged is each change whose merge commit it is and Heads each revision it
+	// heads, at most MaxMarkChanges each; More that either holds more. No reason
+	// or gate: code_commit answers those.
 	Merged []ChangeLanding  `json:"merged,omitempty"`
 	Heads  []CommitRevision `json:"heads,omitempty"`
 	More   bool             `json:"more,omitempty"`
@@ -60,10 +53,8 @@ type TargetChecks struct {
 	CheckRollup
 }
 
-// validateCommitMarks is [ReadQuery.validate] for a `commit_marks` read: the
-// commits it names, each a WHOLE id (the rows record whole ids, and an
-// abbreviation is the repository's content to expand), once, at most
-// MaxCommitMarks of them, and no page: a history page's marks are its rows.
+// validateCommitMarks is [ReadQuery.validate] for a `commit_marks` read: 1 to
+// MaxCommitMarks whole ids (the rows record whole ids), each once, and no page.
 func (q ReadQuery) validateCommitMarks() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
@@ -86,11 +77,9 @@ func (q ReadQuery) validateCommitMarks() error {
 	return nil
 }
 
-// commitMarks serves a `commit_marks` read ([ReadCommitMarks]): the
-// repository q names, judged for the asker as a read of its changes is
-// ([readableIn], no detail answered: a hundred commits' marks need none of
-// it), then each commit's mark in the query's order, three walks a commit in
-// one transaction.
+// commitMarks serves a `commit_marks` read: the repository judged for the asker as
+// a read of its changes is ([readableIn]), then each commit's mark in the query's
+// order, three walks a commit in one transaction.
 func (r *Reader) commitMarks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	repo, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
 	if err != nil {

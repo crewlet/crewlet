@@ -530,10 +530,8 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
-	// A HISTORY PAGE'S MARKS, which the engine answers ahead of the rooms
-	// that draw them (a history list's check and merged pill, a branch's
-	// head row, the commit page's "landed with"): until the first of them
-	// reads it, a script reads it on the path the reference prints.
+	// A HISTORY PAGE'S MARKS, answered ahead of the rooms that draw them: until
+	// the first reads it, a script reads the reference's path.
 	"code_commit_marks": "a script: GET /gitlet/repos/{name}/commit-marks, as docs/reference/api-endpoints.md " +
 		"prints it",
 	// MANY TIPS AT ONCE, answered ahead of the Branches and Tags screens that

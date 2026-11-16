@@ -100,13 +100,9 @@ func commitOf(t *testing.T, n *node, repo, commit string) *gitlet.CommitChanges 
 	return a.Commit
 }
 
-// A COMMIT'S MARK COUNTS EACH CHECK'S LATEST ATTEMPT: unit failed then
-// passed, lint running and e2e queued roll up from unit's second attempt, the
-// whole running.
-//
-// Mutation: drop latestOnly from latestChecksOfCommitSQL: unit's failed
-// first attempt is counted and the rollup reads failing; judge running below
-// pending in rollUp: the state reads pending.
+// A COMMIT'S MARK COUNTS EACH CHECK'S LATEST ATTEMPT: unit failed then passed, lint
+// running and e2e queued roll up as running.
+// Mutation: drop latestOnly from latestChecksOfCommitSQL, or rank running below pending.
 func TestACommitsMarkCountsEachChecksLatestAttempt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -131,11 +127,8 @@ func TestACommitsMarkCountsEachChecksLatestAttempt(t *testing.T) {
 	}
 }
 
-// A COMMIT'S MARK ROLLS UP EACH BRANCH APART: main and release each carry a
-// rollup of their own attempts, and of five branches four are named with more.
-//
-// Mutation: roll the commit's attempts up as one set (group every row into
-// the first branch): one rollup, failing, red.
+// A COMMIT'S MARK ROLLS UP EACH BRANCH APART, and of five branches names four with more.
+// Mutation: roll every attempt up as one set.
 func TestACommitsMarkRollsUpEachBranchApart(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -171,11 +164,9 @@ func TestACommitsMarkRollsUpEachBranchApart(t *testing.T) {
 	}
 }
 
-// A COMMIT'S MARK NAMES THE CHANGES IT LANDED WITH, each with how it landed
-// and no gate or reason; another repository's change is not named, and of
-// five changes merged at one commit four are named with more.
-//
-// Mutation: drop the bound on the merged list: five, red.
+// A COMMIT'S MARK NAMES THE CHANGES IT LANDED WITH, with no gate or reason, never
+// another repository's, and of five merged at one commit four with more.
+// Mutation: drop the bound on the merged list.
 func TestACommitsMarkNamesTheChangesItLandedWith(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -228,14 +219,9 @@ func TestACommitsMarkNamesTheChangesItLandedWith(t *testing.T) {
 	}
 }
 
-// A DIRECT MERGE'S GATE IS ITS HEAD'S CHECKS AND ITS APPROVALS of the merged
-// revision; a history page's mark names the landing alone, and a person's
-// merge past the gate carries their reason.
-//
-// Mutations: roll up the merge commit's checks rather than the head's (read
-// l.MergeOID in gateOf): the gate names no checks, red; carry the landing on
-// a mark as a commit's page reads it (skip belonging.marked): M's mark names
-// the gate, red; drop changeApprovalsSQL's revision term: cto is named, red.
+// A DIRECT MERGE'S GATE IS ITS HEAD'S CHECKS AND ITS APPROVALS of the merged revision;
+// a mark names the landing alone, and a merge past the gate carries its reason.
+// Mutation: roll up the merge commit's checks, skip belonging.marked, or drop the revision term.
 func TestADirectMergesGateIsItsHeadsChecksAndItsApprovals(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -309,12 +295,9 @@ func TestADirectMergesGateIsItsHeadsChecksAndItsApprovals(t *testing.T) {
 	}
 }
 
-// landedTrain is a repository named name whose two changes (dev's from
-// feature, head B, and from release, head R), each approved by plat-lead and
-// enqueued by ada into main, were landed by ONE land record of a train of
-// two candidates (M1, then M2) whose required check passed on M2 alone, the
-// tip the record left main at: the repository and the two changes, in the
-// landing's order.
+// landedTrain seeds repository name with two changes (from feature, head B, and
+// release, head R) landed into main by ONE land record of a two-candidate train
+// whose required check passed on M2 alone; it returns the repository and changes.
 func landedTrain(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.ChangeWriter,
 	name string) (repo string, changes [2]string) {
 
@@ -350,12 +333,9 @@ func landedTrain(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.ChangeWri
 	return repo, changes
 }
 
-// A QUEUE LANDING'S GATE IS ITS LAND RECORD'S TIP: both changes of a
-// two-entry train name the checks on M2, the tip the land left main at, and
-// their enqueuer as who merged them.
-//
-// Mutation: read a queue landing's gate on its own merge commit (skip
-// landedTip): the first change's gate names no checks, red.
+// A QUEUE LANDING'S GATE IS ITS LAND RECORD'S TIP: both changes of a two-entry train
+// name the checks on M2 and their enqueuer as who merged them.
+// Mutation: read a queue landing's gate on its own merge commit (skip landedTip).
 func TestAQueueLandingsGateIsItsLandRecordsTip(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -388,14 +368,9 @@ func TestAQueueLandingsGateIsItsLandRecordsTip(t *testing.T) {
 	}
 }
 
-// A LANDING PAST THE HISTORY READS GONE: with its checks and landing rows
-// swept, a gate reads gone once its merged revision's push is CheckHistory
-// old, not before, and names an attempt still kept.
-//
-// Mutations: read Gone by age alone: the merge past the history whose head
-// is checked again reads gone, red; read it by absence alone: the merge
-// inside the history reads gone, red; age it from merged_at: the revision
-// pushed ten days before its merge is not gone, red.
+// A LANDING PAST THE HISTORY READS GONE once its merged revision's push is
+// CheckHistory old, not before, and names an attempt still kept.
+// Mutation: read Gone by age alone, by absence alone, or age it from merged_at.
 func TestALandingPastTheHistoryReadsGone(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -458,13 +433,9 @@ func TestALandingPastTheHistoryReadsGone(t *testing.T) {
 	}
 }
 
-// A COMMIT MARKS READ IS BOUNDED AND REFUSES WHAT IT CANNOT READ: a full page
-// is marked in order, each invalid query is refused naming its field, and a
-// seat outside a unit repository is refused.
-//
-// Mutation: drop the duplicate check from validateCommitMarks: a commit
-// named twice is answered, red; judge no grant in commitMarks: vp-sales
-// reads plat-private's marks, red.
+// A COMMIT MARKS READ IS BOUNDED AND REFUSES WHAT IT CANNOT READ: a full page marked
+// in order, each invalid query refused by field, a seat outside a unit repository refused.
+// Mutation: drop validateCommitMarks' duplicate check, or judge no grant in commitMarks.
 func TestACommitMarksReadIsBoundedAndRefusesWhatItCannotRead(t *testing.T) {
 	t.Parallel()
 	n, _ := grantedChanges(t)

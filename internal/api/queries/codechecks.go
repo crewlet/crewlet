@@ -32,12 +32,9 @@ import (
 //     its repository's path by its commit, its check and its attempt, beside
 //     the branch it was checked for (`target`);
 //   - `code_check_log`, a page of that log's bytes;
-//   - `code_commit_marks`, what a history page draws beside up to a page of
-//     commits named by their whole ids (`commits`): each one's checks rolled
-//     up for each branch it was checked for, and the changes it merged and
-//     heads with how each landed. The reader's `commit_marks` answered bare
-//     ([Sources.codeRead]), read where it is asked, never held immutable:
-//     a commit's checks and landings move after it is listed.
+//   - `code_commit_marks`, a history page's commits (`commits`, whole ids) with
+//     their checks per branch and the changes they landed with; read bare and
+//     never held immutable, since a commit's checks and landings move.
 //
 // Each is decided PER REPOSITORY as every code question is: registered
 // [Requires] the gitlet app, and held to the grant the serving node derives
