@@ -23,7 +23,7 @@ type PausedSeat struct {
 }
 
 // pausedFailure is one failure kind's finding: what paused the agents, and
-// the fix. because finishes "Agents paused because ...".
+// the fix. because finishes "Paused because ...", after the agents' names.
 type pausedFailure struct {
 	class   Class
 	because string
@@ -52,7 +52,7 @@ var pausedFailures = map[string]pausedFailure{
 				"paused agent from its page."},
 	},
 	"models_refused": {
-		class: ClassModelsCredential, because: "no model would accept its credential",
+		class: ClassModelsCredential, because: "no model accepted the credential",
 		fix: Fix{Kind: FixExternalStep, Setting: "providers.llm",
 			Sentence: "Replace the models' credentials under Settings, Models, then resume each " +
 				"paused agent from its page. Changing the models they run on resumes them as well."},
@@ -105,7 +105,7 @@ func pausedSeats(ev Evidence) []Finding {
 		out = append(out, Finding{
 			Class: f.class, Severity: SeverityBlocks, Actor: ActorOwner, Source: SourceEvidence,
 			Area: AreaSetup, Subject: subject,
-			Title: fmt.Sprintf("Agents paused because %s.", f.because),
+			Title: fmt.Sprintf("Paused because %s.", f.because),
 			Why: "The engine pauses an agent after the same failure twice in a row, since another " +
 				"try would fail the same way. Work sent to it waits and nothing is dropped.",
 			Names:    names,

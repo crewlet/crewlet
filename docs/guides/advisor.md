@@ -78,14 +78,14 @@ Beside the document's findings, the advisor reads what the company did over the 
 
 One finding read from the engine's own state is yours: **Your company has no recent verified backup** (`durability.no_verified_backup`, `blocks`), listed while the `backup_age` alarm stands, at the backup policy's own age. Its fix is a step taken on a page of the dashboard (`fix.kind: open_page`, `fix.page: backups`): the row's **Take a backup** opens Backups & retention's own dialog to take one now; then schedule backups that are copied off the server ([Backups](backup.md)). A fix of this kind names the page its step is taken on, never a command, since the dashboard takes the step with one press.
 
-So is an agent the engine paused. When a failure a retry cannot cure happens twice in a row, the engine pauses the agent rather than retrying it ([ADR-0117](../../adr/0117-a-failure-a-retry-cannot-cure-pauses-its-seat.md)), and the advisor lists it as a blocking finding (`blocks`), one per kind of failure, its title the kind's (**Agents paused because** the sandbox could not start as configured, for example) and every agent it holds in its `names`:
+So is an agent the engine paused. When a failure a retry cannot cure happens twice in a row, the engine pauses the agent rather than retrying it ([ADR-0117](../../adr/0117-a-failure-a-retry-cannot-cure-pauses-its-seat.md)), and the advisor lists it as a blocking finding (`blocks`), one per kind of failure, its title the kind's (**Paused because** the sandbox could not start as configured, for example) and every agent it holds in its `names`:
 
 | Finding | The fix |
 |---|---|
 | The sandbox could not start as configured (`sandbox.image_unstartable`) | Correct the sandbox settings (`providers.sandbox`), such as its image or template. Saving the change resumes the agents. If the fix was made at the provider instead, resume each agent from its page. |
 | The sandbox provider refused the engine's credential (`sandbox.credential_refused`) | Replace the provider's key, then resume each agent from its page. |
 | The sandbox provider refused for billing (`sandbox.billing_refused`) | Settle the account's billing with the provider, then resume each agent from its page. |
-| No model would accept its credential (`models.credential_refused`) | Replace the models' credentials under Settings, Models, then resume each agent from its page. Changing the models they run on resumes them as well. |
+| No model accepted the credential (`models.credential_refused`) | Replace the models' credentials under Settings, Models, then resume each agent from its page. Changing the models they run on resumes them as well. |
 
 Work sent to a paused agent waits; nothing is dropped.
 

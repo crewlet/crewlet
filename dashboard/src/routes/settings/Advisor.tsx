@@ -204,10 +204,8 @@ const PAGE_FIXES: Readonly<
  *
  * WHAT TO DO, where it is a step rather than a change to send (outside the
  * engine, or on a page of this dashboard), is read without opening the row.
- * Elsewhere the row names what it is about, UNLESS THE TITLE ALREADY DOES: the
- * engine writes a seat's finding with the seat in its title ("Agent CEO learns
- * on the model it works on."), and the name again under it said one fact twice
- * on every row.
+ * Elsewhere the row names what it is about, UNLESS THE TITLE ALREADY DOES: a
+ * finding whose title names its subject would say it twice.
  */
 export function findingMeta(f: AdvisorFinding): string | undefined {
   if (f.fix.kind === "external_step" || f.fix.kind === "open_page") return f.fix.sentence;
@@ -265,12 +263,15 @@ function groupItem(
     }),
     { count: (s) => plural(s.length, "agent") },
   )[0]!;
+  // THE META NAMES THE SUBJECT on a lone finding; with the subject before the title it would say it twice.
+  const said =
+    group.length > 1 || (notice.subject !== undefined && item.meta === first.subject.name);
   return {
     ...item,
     key: `${item.key}\u0000${group.length}`,
     subject: notice.subject,
     lines: notice.lines,
-    meta: group.length > 1 ? undefined : item.meta,
+    meta: said ? undefined : item.meta,
   };
 }
 
