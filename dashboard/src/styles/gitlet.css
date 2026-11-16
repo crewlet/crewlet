@@ -4,10 +4,9 @@
    first module that draws a `code-` class rather than in the first paint.
 
    Laid out as a code host is laid out, and coloured by the one rule: nothing
-   here spends a hue but a state — a change merged, a meter met — and a diff
-   spends none at all (`diff.css`). A directory and a file are told apart by
-   their glyphs and their names, a seat by its own face, a picked line by a
-   rule at its edge. */
+   here spends a hue but a state — a change merged, a meter met. A directory
+   and a file are told apart by their glyphs and their names, a seat by its
+   own face, a picked line by a rule at its edge. */
 
 /* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
    move on its own, above the grid. A ruled box rather than a callout, since
@@ -1046,9 +1045,8 @@
   background: var(--color-surface-hover);
 }
 
-/* A PICKED LINE IS RULED, not tinted, as a picked line of a diff is: a pick
-   is the reader's place, not the line's state. Forced colours drop the rule
-   and paint its outline. */
+/* A PICKED LINE IS RULED, not tinted: a pick is the reader's place, not the
+   line's state. Forced colours drop the rule and paint its outline. */
 .code-source__line[data-picked],
 .code-blame tr[data-picked] {
   box-shadow: inset 2px 0 0 var(--color-border-strong);

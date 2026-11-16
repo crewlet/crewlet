@@ -8,6 +8,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { InertWebSocket, LayoutClient } from "~/test/layout.tsx";
 import { eventually } from "~/test/settle.ts";
+import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { ComparePage } from "./commit/ComparePage.tsx";
 import { RepositoryPage } from "./repo/RepositoryPage.tsx";
 
@@ -227,3 +228,61 @@ for (const width of [1440, 390]) {
     expect(box.right).toBeLessThanOrEqual(Math.ceil(under.right));
   });
 }
+
+// A CODED DIFF'S BAND HOLDS ITS NUMBERS AND STOPS BEFORE THE SIGN, and a changed
+// run keeps a visible underline. Mutation: a narrower `--diff-gutter`, or a
+// transparent run decoration, fails it.
+test("a coloured diff's band holds its numbers, and a changed run keeps its underline", async () => {
+  const hunks: DiffHunk[] = [
+    {
+      skipped: 9,
+      lines: [
+        { kind: "same", text: "keep", before: 10, after: 10 },
+        { kind: "remove", text: "paid in any order", before: 11, after: null },
+        { kind: "add", text: "paid in join order", before: null, after: 11 },
+        { kind: "add", text: "ties are rare", before: null, after: 12 },
+      ],
+    },
+  ];
+  for (const layout of ["unified", "split"] as const) {
+    mount(<DiffView hue="code" hunks={hunks} layout={layout} />);
+    const changed = await eventually(() => {
+      const found = [
+        ...document.querySelectorAll<HTMLElement>(
+          '.diff-view--code .diff-view__line:is([data-kind="add"], [data-kind="remove"])',
+        ),
+      ];
+      expect(found).toHaveLength(3);
+      if (layout === "split") expect(document.querySelector(".diff-view--split")).not.toBeNull();
+      return found;
+    });
+    for (const line of changed) {
+      const style = getComputedStyle(line);
+      const band = Number(/(-?[\d.]+)px/.exec(style.boxShadow)?.[1]);
+      expect(band, `${layout}: ${style.boxShadow}`).toBeGreaterThan(0);
+      const left = line.getBoundingClientRect().left + parseFloat(style.borderLeftWidth);
+      const numbers = line.querySelectorAll(".diff-view__number");
+      const last = numbers[numbers.length - 1]!.getBoundingClientRect();
+      const mark = line.querySelector(".diff-view__mark")!.getBoundingClientRect();
+      expect(left + band, `${layout}: the band holds the numbers`).toBeGreaterThanOrEqual(
+        last.right - 0.5,
+      );
+      expect(left + band, `${layout}: the band stops before the sign`).toBeLessThanOrEqual(
+        mark.left + 0.5,
+      );
+    }
+    const runs = document.querySelectorAll(".diff-view--code .diff-view__run");
+    expect(runs.length, `${layout}: the edited line draws its runs`).toBeGreaterThan(0);
+    for (const run of runs) {
+      const style = getComputedStyle(run);
+      expect(style.textDecorationLine, `${layout}: a run's underline`).toContain("underline");
+      expect(style.textDecorationColor, `${layout}: a run's underline colour`).not.toBe(
+        "rgba(0, 0, 0, 0)",
+      );
+    }
+    flushSync(() => root?.unmount());
+    host?.remove();
+    root = null;
+    host = null;
+  }
+});

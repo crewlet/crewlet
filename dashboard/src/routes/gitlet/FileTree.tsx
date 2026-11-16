@@ -10,9 +10,8 @@
  * directories in the order their first file arrived — so a page loaded later
  * lands each file in its own directory and moves no row a reader has read.
  *
- * NO HUE: an added or a removed line is not a state (`docs/reference/
- * dashboard-design.md`, "Diffs carry no hue"), so the counts are words in
- * the tertiary ink and the status a letter, each with its word in the title.
+ * THE STATUS IS A LETTER AND THE COUNTS ARE WORDS, in the tertiary ink, each
+ * with its word in the title (`dashboard-design.md#the-gitlet-workspace`).
  */
 
 import { useMemo } from "react";

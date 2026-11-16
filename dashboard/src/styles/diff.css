@@ -1,9 +1,9 @@
 /* ---- The one diff (`components/DiffView.tsx`) --------------------------------
-   EVERY DIFF IS `components/DiffView.tsx`, AND IT CARRIES NO HUE ("Diffs
-   carry no hue" in docs/reference/dashboard-design.md). A line's kind is its
-   glyph, the word read in its place, and one of two surface steps off the
-   diff's own ground: an added line RAISED one rung, a removed one SUNK one.
-   Nothing here names a state, a data series or an identity's hue, which
+   EVERY DIFF IS `components/DiffView.tsx`, AND OUTSIDE GITLET IT CARRIES NO
+   HUE (`dashboard-design.md#a-diff-carries-no-hue-outside-gitlet`). A line's
+   kind is its glyph, the word read in its place, and one of two surface steps
+   off the diff's own ground: an added line RAISED one rung, a removed one SUNK
+   one. Nothing here names a state, a data series or an identity's hue, which
    `styles/diffs.test.ts` holds over every rule that names a diff, and it
    measures the two steps against the ground in every theme.
 
@@ -106,9 +106,9 @@
   color: var(--color-text-primary);
   text-decoration-line: underline;
 }
-/* A PICKED LINE IS RULED, not tinted: a hue here would be a state, and a pick
-   is the reader's place, not the line's. Forced colours drop the rule and
-   paint the transparent outline. */
+/* A PICKED LINE IS RULED, not tinted, in a diff with no hue: a pick is the
+   reader's place, not the line's. Forced colours drop the rule and paint the
+   transparent outline. */
 .diff-view__line[data-picked] {
   box-shadow: inset 2px 0 0 var(--color-border-strong);
   outline: 2px solid transparent;
@@ -196,4 +196,61 @@
   .diff-view--keyed .diff-view__text {
     grid-column: 2;
   }
+}
+
+/* ---- Code read in Gitlet (`hue="code"`) -------------------------------------
+   The kit's diff colours, the seventh exception: tints over the card ground,
+   the numbers on a band in the sign's ink, a changed run on its word tint. */
+/* The numbers' band: the start padding, their tracks and half the gap after. */
+.diff-view--code.diff-view--numbered .diff-view__line {
+  --diff-gutter: calc(var(--spacing-2) * 2.5 + var(--diff-digits) * 2ch);
+}
+.diff-view--code.diff-view--numbered.diff-view--split .diff-view__line {
+  --diff-gutter: calc(var(--spacing-2) * 1.5 + var(--diff-digits) * 1ch);
+}
+/* The band is an inset shadow over the row, so forced colours drop it. */
+.diff-view--code .diff-view__line[data-kind="add"] {
+  background: var(--color-diff-added-row);
+  box-shadow: inset var(--diff-gutter, 0) 0 0 var(--color-diff-added-gutter);
+}
+.diff-view--code .diff-view__line[data-kind="remove"] {
+  background: var(--color-diff-removed-row);
+  box-shadow: inset var(--diff-gutter, 0) 0 0 var(--color-diff-removed-gutter);
+}
+.diff-view--code .diff-view__line[data-kind="add"] .diff-view__mark {
+  color: var(--color-diff-added-sign);
+}
+.diff-view--code .diff-view__line[data-kind="remove"] .diff-view__mark {
+  color: var(--color-diff-removed-sign);
+}
+/* A pickable number keeps this ink under the pointer: its underline answers. */
+.diff-view--code .diff-view__line[data-kind="add"]:not([data-picked]) .diff-view__number {
+  color: var(--color-diff-added-sign);
+}
+.diff-view--code .diff-view__line[data-kind="remove"]:not([data-picked]) .diff-view__number {
+  color: var(--color-diff-removed-sign);
+}
+/* A changed run: its tint under the code's own text, its underline kept. */
+.diff-view--code .diff-view__line[data-kind="add"] .diff-view__run {
+  background: var(--color-diff-added-word);
+  color: var(--color-text-primary);
+}
+.diff-view--code .diff-view__line[data-kind="remove"] .diff-view__run {
+  background: var(--color-diff-removed-word);
+  color: var(--color-text-primary);
+}
+.diff-view--code .diff-view__skip {
+  background: var(--color-diff-hunk-row);
+}
+/* A PICK: the selected tint in place of the line's tints and band; its sign,
+   its run's underline and an accent bar stay, and forced colours paint its
+   outline. */
+.diff-view--code .diff-view__line[data-kind][data-picked] {
+  background: var(--color-surface-selected);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+}
+.diff-view--code .diff-view__line[data-kind][data-picked] .diff-view__run {
+  background: none;
 }
