@@ -195,8 +195,7 @@ func ArtifactPublic(h http.Header, secure bool) {
 // ArtifactInert is the policy of a response nothing may run in: a subresource
 // opened on its own, an embedded runtime or kit file, and every refusal the
 // artifact origin answers.
-const ArtifactInert = "default-src 'none'; base-uri 'none'; form-action 'none'; " +
-	"frame-ancestors 'none'; sandbox"
+const ArtifactInert = Inert
 
 // artifactRobots keeps every response off search engines and archives: a
 // ticketed URL is a credential, and even a public runtime file is nothing a

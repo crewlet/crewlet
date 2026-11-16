@@ -108,7 +108,8 @@ const (
 	// socket.
 	ActionCodeRead Action = "code.read"
 	// ActionCodeGit admits the git transport — the advertisement, a
-	// fetch's upload-pack and a push's receive-pack — whose grant then
+	// fetch's upload-pack and a push's receive-pack — and its two
+	// downloads, a file's bytes and a commit's ZIP, whose grant then
 	// decides by service: a push is refused at its advertisement to a
 	// principal that may push nothing, and every command it carries is
 	// judged by the grant's ref rule.

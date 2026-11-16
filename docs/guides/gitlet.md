@@ -357,6 +357,42 @@ is never said of a push that is merely on its way. Every other condition, the
 exact line git prints and what to do about it is in [What git prints, and what
 it means](../concepts/gitlet.md#what-git-prints-and-what-it-means).
 
+## Download a file or a commit
+
+Anybody who may fetch a repository may download one file of a commit, or the
+whole commit as a ZIP, without git: from the dashboard, signed in, once its
+code screens offer the buttons, or from a script with a token. Name the commit
+by its whole id:
+
+```sh
+curl -fsS -H "Authorization: Bearer $CREWLET_TOKEN" -o web.zip \
+  "https://crewlet.example.com/git/web/-/archive.zip?rev=$(git rev-parse HEAD)"
+curl -fsS -H "Authorization: Bearer $CREWLET_TOKEN" \
+  "https://crewlet.example.com/git/web/-/raw?rev=$(git rev-parse HEAD)&path=docs%2FREADME.md"
+```
+
+- **The token goes with the request.** A download never asks for a password,
+  so a browser never prompts: send the token as a bearer, or as the Basic
+  password up front (`curl -u :$CREWLET_TOKEN` does). A client that sends
+  Basic only after a challenge, such as `wget` without
+  `--auth-no-challenge`, sends nothing and is refused `401`.
+- **Percent-encode the path**: `/` as `%2F` or as itself, `+` as `%2B`, and a
+  name that is not UTF-8 byte by byte. Add `&download=1` to have even a text
+  file saved rather than shown.
+- **A ZIP is every file as committed**: no `.gitattributes` rule is applied,
+  so `export-ignore`d files are in it and `export-subst` placeholders are as
+  written. It is byte for byte what `git archive --worktree-attributes
+  --format=zip --prefix=web-<first seven digits>/ <commit>` writes in a bare
+  clone on the same git, with no global, system or `info/attributes` file of
+  your own.
+- **Limits.** A commit past a million entries, 4 GiB of files or 64 MiB of
+  paths, or holding a path too long for a ZIP, is refused `400`: clone it
+  instead, `git clone --depth 1`. One ZIP at a time for each of you on a node
+  (a second is `429`); a large one waits for one of the node's places for
+  large ZIPs, and a `503` with `Retry-After` says to try again shortly or
+  against another node. What each costs is in [Downloading a file or a
+  commit](../concepts/gitlet.md#downloading-a-file-or-a-commit).
+
 ## Open a change from a push
 
 A push opens a [change](../concepts/gitlet.md#changes) — `web!42`,
@@ -1423,11 +1459,11 @@ reaches the 100 000 live refs it may hold ([alarms](../reference/alarms.md)).
 
 ## Who read a unit's repository
 
-Every clone and fetch that sends a `visibility: unit` repository's contents,
-and every server-side read of one, is recorded — whoever made it: a person, a
-token or a seat. An admin asks who read one, from a script with a token that
-carries `admin`, or from their own assistant with `code_repo_readers`, a page
-at a time:
+Every clone, fetch and download that sends a `visibility: unit` repository's
+contents, and every server-side read of one, is recorded — whoever made it: a
+person, a token or a seat. An admin asks who read one, from a script with a
+token that carries `admin`, or from their own assistant with
+`code_repo_readers`, a page at a time:
 
 ```sh
 curl -s -H "Authorization: Bearer $CREWLET_TOKEN" \
@@ -1437,11 +1473,11 @@ curl -s -H "Authorization: Bearer $CREWLET_TOKEN" \
 ```
 
 Each reader — a credential and the person it acted as, or a seat — comes with
-how it read (`git` or `tool`), how often, how many bytes it was sent and when
-it last read, summed over every node and every day of the range: the thirty
-company days ending today unless you name `from` and `to`, and at most 181.
-Hand a page's `next` back as `?cursor=` for the page after it. A
-`visibility: company` repository's readers are every seat and nobody records
+how it read (`git` or `tool`; a download reads as `git`), how often, how many
+bytes it was sent and when it last read, summed over every node and every day of
+the range: the thirty company days ending today unless you name `from` and `to`,
+and at most 181. Hand a page's `next` back as `?cursor=` for the page after it.
+A `visibility: company` repository's readers are every seat and nobody records
 them; its answer says so. What counts as a read, how long it is kept and why
 only an admin may ask are in [Who read
 it](../concepts/gitlet.md#who-read-it).

@@ -300,13 +300,14 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | `/mcp/{token}` (its MCP servers, its notes route and its skill route included) and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls, the notes and the spans of executors launched before the drain. An [executor in its box](../concepts/code-sandbox.md) outlives the turn segment that launched it, so the drain never waits on one, and refusing these would shorten no drain and only break an executor mid-flight. A tool call whose executor's seat is held by another node is relayed there, as it is outside a drain. |
 | A git fetch already begun: `POST /git/{repo}/git-upload-pack` | Served, and finished before the listener closes | The upload `POST` continues a fetch whose advertisement was answered before the drain — on this node or a peer, since git keeps no state between an exchange's requests — and refusing it would break the fetch half done. It is the one request under `/git/` a draining node serves, and like the sandbox edges above it continues work already under way. A box's `POST /box/git/{repo}/git-upload-pack` — a coding box's or a check's — is the same request, and served the same. |
 | A new git fetch: `GET`/`HEAD /git/{repo}/info/refs` asking for `git-upload-pack` (or no service) | `503`, `text/plain` | The advertisement is where every fetch begins, and a fetch is not a read that starts nothing: it runs git's upload-pack on this node, after syncing the repository from the object store, which is new work the shutdown would have to wait out. Refused at its first request, a clone fails at once and is retried against a peer, rather than cut part way and begun again from nothing. A box's under `/box/git/` — a coding box's or a check's — is the same. |
-| A git push: `GET`/`HEAD /git/{repo}/info/refs` asking for any other service, `POST /git/{repo}/git-receive-pack`, and every other path under `/git/` | `503`, `text/plain` | Every request of a push is refused, its advertisement included, because the `GET` is where git prints the reason (`remote: this node is draining …`); on the `POST` it prints only `RPC failed; HTTP 503`. In git's own form rather than the JSON below, which git prints as nothing. A coding box's push under `/box/git/` is refused the same. |
+| A download: `GET /git/{repo}/-/raw`, `GET /git/{repo}/-/archive.zip` | `503`, `text/plain` | New work: a sync and a git process on the transfer lane. One begun before the drain is finished before the listener closes. |
+| A git push: `GET`/`HEAD /git/{repo}/info/refs` asking for any other service, `POST /git/{repo}/git-receive-pack`, and every other path under `/git/` but the two downloads | `503`, `text/plain` | Every request of a push is refused, its advertisement included, because the `GET` is where git prints the reason (`remote: this node is draining …`); on the `POST` it prints only `RPC failed; HTTP 503`. In git's own form rather than the JSON below, which git prints as nothing. A coding box's push under `/box/git/` is refused the same. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/worklet/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. `POST /secrets/reveal` rides with them although it changes nothing — it is a `POST` so the names it reads travel in a body — and the CLI run asking it is told to try another node, as a write is. |
 
 `/operator/mcp` serves only `POST` — it is served [statelessly](#every-call-is-decided-by-the-request-that-carries-it) and keeps no session, so there is no `GET` stream to open and no session to end — and every JSON-RPC call it carries, reads and a new listening stream included, is refused with the writes: telling a listing from a filed task would mean reading the body, which is the per-route carve-out refusing by default avoids. An assistant asking a draining node is told to retry elsewhere, like the dashboard. A stream an assistant opened BEFORE the drain is kept for the whole drain, and goes on hearing every other node's rebuild of its tools ([`/operator/mcp`](#operatormcp--your-own-assistant)): ending it at the drain's first moment would cut a client that does not open a new stream — the Go SDK's does not — off for the drain's whole length rather than for none of it. It is answered, and so ends, as the listener starts to close, so it never holds the listener's five seconds. `/mcp/{token}` is not split, because the whole prefix is served: an executor's tool calls are the one thing on this listener the node must not break.
 
-A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and — everywhere but `/git/*`, whose refusal is the one `text/plain` line `this node is draining for a shutdown and begins no new fetch or push: retry in 30 s, against another node or once it has restarted` — a body the CLI and the dashboard both render:
+A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and — everywhere but `/git/*`, whose refusal is the one `text/plain` line `this node is draining for a shutdown and begins no new fetch or push: retry in 30 s, against another node or once it has restarted` (a download's says `begins no new download`) — a body the CLI and the dashboard both render:
 
 ```json
 {
@@ -319,7 +320,7 @@ A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load ba
 
 A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close — except an assistant's listening stream, which is answered the moment the listener starts to close, and a connection that has not sent a request, which is closed then, so `api_shutdown_failed` keeps meaning that a request was stuck.
 
-**A git request is finished, not cut.** A clone or a push cut part way is not resumed — git begins it again from nothing, against a peer, so every rolling restart would pay for each one twice — and five seconds is a REST read's grace, not a transfer's. So once the turns have finished, and before the listener starts to close, the node waits for every git request it is serving: a push or a fetch already running when the drain began, and a fetch's upload `POST` served during it. Because git keeps no state between an exchange's requests, it then goes on listening for five seconds after the last of them has ended — git's own keepalive interval, many times the pause between two requests of one exchange — so a fetch between two of its rounds is not left facing a closed port. The drain begins no fetch or push here, but it goes on serving every upload `POST` that reaches it — a fetch begun on a peer, which a load balancer goes on sending here until it has acted on `/ready` (or, under Kubernetes, until the pod is out of its Service's endpoints) — so what it waits for can grow while it waits, and the wait ends once that traffic has moved and what was running is done. The deployment guide's [`preStop` sleep](../guides/deployment.md#separate-processes-a-split-deployment) is how a deployment makes that window short. The node logs `git_draining` with the count when there is something to wait for and `git_drain_complete` when it is done. Like the wait for the turns, this one has no deadline of its own: what bounds it is the supervisor's kill grace or a second interrupt — see [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown) for sizing that grace.
+**A git request is finished, not cut.** A clone or a push cut part way is not resumed — git begins it again from nothing, against a peer, so every rolling restart would pay for each one twice — and five seconds is a REST read's grace, not a transfer's. So once the turns have finished, and before the listener starts to close, the node waits for every git request it is serving: a push, a fetch or a download already running when the drain began, and a fetch's upload `POST` served during it. Because git keeps no state between an exchange's requests, it then goes on listening for five seconds after the last of them has ended — git's own keepalive interval, many times the pause between two requests of one exchange — so a fetch between two of its rounds is not left facing a closed port. The drain begins no fetch or push here, but it goes on serving every upload `POST` that reaches it — a fetch begun on a peer, which a load balancer goes on sending here until it has acted on `/ready` (or, under Kubernetes, until the pod is out of its Service's endpoints) — so what it waits for can grow while it waits, and the wait ends once that traffic has moved and what was running is done. The deployment guide's [`preStop` sleep](../guides/deployment.md#separate-processes-a-split-deployment) is how a deployment makes that window short. The node logs `git_draining` with the count when there is something to wait for and `git_drain_complete` when it is done. Like the wait for the turns, this one has no deadline of its own: what bounds it is the supervisor's kill grace or a second interrupt — see [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown) for sizing that grace.
 
 A node with a [public listener](#which-listener-serves-what) drains both by this one table — its webhooks are refused on `api.public` and its sandbox endpoints served there — and closes `api.public` first, then `api.port`, each with its own five seconds, so `/health` answers until the very end even while an open bridge session holds the public listener for its whole grace.
 
@@ -9976,11 +9977,12 @@ which may still be refused there.
 
 A company that sets [`code.backend: gitlet`](../concepts/gitlet.md) hosts its git
 repositories in the engine. A person reaches them with git's own smart HTTP
-under `/git/`, on any node whose `node.roles` name `gitlet` (by default a node
-has every role), and anybody the guard resolves who holds the Gitlet permission
-(`gitlet`) reads the rows under `/gitlet/` on every node, each answer holding
-to the repositories they may read — all but who read a `visibility: unit`
-repository and a verify, which are an admin's
+under `/git/`, and downloads a file or a commit's files as a ZIP beside it
+([below](#a-files-bytes-and-a-commits-zip)), on any node whose `node.roles` name
+`gitlet` (by default a node has every role), and anybody the guard resolves who
+holds the Gitlet permission (`gitlet`) reads the rows under `/gitlet/` on every
+node, each answer holding to the repositories they may read — all but who read a
+`visibility: unit` repository and a verify, which are an admin's
 ([below](#get-gitletreposnamereaders)). A caller without the permission is
 refused `403 unauthorized`, naming `gitlet`, on every other route of both
 prefixes and every `code_*` question before any repository is read
@@ -9991,7 +9993,8 @@ for git, a [machine token](#post-iamcredentials-mints-a-machine-token) acting
 as them — is what reaches them, and that socket serves only outside parties,
 who hold none. On `/git/` — and on no other route — the token may arrive as
 the password of a Basic credential, which is the only way a git client sends
-one ([the auth note under Routes](#routes)). Who may push is the person the
+one ([the auth note under Routes](#routes)); and `/git/` takes the dashboard's
+session cookie, as every guarded route does. Who may push is the person the
 credential resolves to: see
 [Persons and their tokens](../concepts/gitlet.md#persons-and-their-tokens).
 
@@ -10069,6 +10072,70 @@ What a route answers before git is reached:
 - **A draining node** finishes a fetch already begun and refuses a new fetch
   and every request of a push, `503` with `Retry-After: 30` ([During a
   drain](#during-a-drain)).
+
+### A file's bytes and a commit's ZIP
+
+| Method | Path | What it is |
+|---|---|---|
+| `GET` | `/git/{repo}/-/raw?rev=<commit>&path=<path>[&download=1]` | One file's bytes exactly, as `git cat-file blob` writes them |
+| `GET` | `/git/{repo}/-/archive.zip?rev=<commit>` | Every file of the commit as a ZIP, as `git archive --worktree-attributes --format=zip --prefix=<repo>-<short>/ <commit>` writes it in a bare clone with no global, system or `info/attributes` file |
+
+`{repo}` is the repository's name, with or without `.git`. Decided as a fetch
+is: the Gitlet permission (`code.git`), then the caller's grant on the
+repository. The credential may be the session cookie, a bearer token, or a
+token as the Basic password sent with the request; a download is never
+challenged.
+
+**Parameters**, each at most once, and no other key (`400` naming the key and
+the route's set):
+
+- `rev`: a commit's whole id, 40 lowercase hex digits, or a tag of one. No
+  abbreviation, ref, tree or blob.
+- `path` (raw only): the file's path, percent-encoded (`+` as `%2B`, a byte
+  that is not UTF-8 encoded byte by byte), clean and relative, at most 4 KiB.
+- `download` (raw only): `1` to have any file sent as an attachment.
+
+**Answers.** Every refusal is one `text/plain` line, a path in it quoted.
+
+| Status | When |
+|---|---|
+| `200` | The bytes, with the headers below |
+| `304` | Raw: `If-None-Match` names the file's `ETag` (or `*`). Answered without reading the file, though the lookup still runs; a `visibility: unit` repository records it as a read of 0 bytes |
+| `400` | An unreadable query, an unknown or repeated key, a `rev` that is no whole commit id, a bad `path`, `download` other than `1`; a ZIP of a commit past 1 000 000 entries, 4 GiB of files or 64 MiB of entry names, or holding a path whose ZIP name passes 65 535 bytes, each naming the bound and `git clone --depth 1` |
+| `401` | No credential, or a refused one; no `WWW-Authenticate` |
+| `403` | No Gitlet permission, or a grant that reads nothing |
+| `404` | No such repository, a deleted one, no such commit after one sync at the log's head, no file at the path, a directory, or a submodule. An older Gitlet node, or a node without the role, answers the router's `404 no_route` |
+| `405` | `HEAD`, with `Allow: GET`, before any repository is read: the probe a client uses to tell this build from an older one |
+| `429` | A ZIP asked by a principal already making one on this node; `Retry-After: 10` |
+| `503` | A draining or stopping node, the code log or the object store unavailable, every transfer slot busy, a lookup or measure ended by its deadline, a damaged copy no repair ended, or every archive place busy for 10 s; each with its `Retry-After` |
+
+**Headers of a `200`.** Never a type read from a file's name
+([ADR-0153](../../adr/0153-a-repositorys-bytes-are-served-inert-on-the-dashboards-origin.md)):
+
+| Header | Raw file | ZIP |
+|---|---|---|
+| `Content-Type` | `text/plain; charset=utf-8` for a text file (no NUL in its first 8 000 bytes) not asked to download, else `application/octet-stream` | `application/zip` |
+| `Content-Disposition` | `inline` for the text answer, else `attachment`, with the file's name | `attachment; filename=<repo>-<short>.zip` |
+| `Content-Length` | the file's size | none (chunked) |
+| `ETag` | `"<blob id>"` | none |
+| `Cache-Control` | `private, no-store` | the same |
+| `Content-Security-Policy` | `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox` | the same |
+| `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Cross-Origin-Resource-Policy` | `nosniff`, `DENY`, `no-referrer`, `same-origin` | the same |
+
+`<short>` is the commit's first seven digits. **A ZIP holds** a folder
+`<repo>-<short>/` with every directory, every file and symbolic link as its
+blob's bytes (a link as a link), every submodule as an empty folder, each dated
+by the commit, and the commit's id as its comment. No `.gitattributes` rule is
+applied: `export-ignore`, `export-subst`, `ident` and line-ending conversion
+are not. A large ZIP waits for one of the node's archive places; one whose
+output is at most 64 MiB takes none ([what a download
+costs](../concepts/gitlet.md#downloading-a-file-or-a-commit)). A download that
+fails after its first byte is cut, never ended cleanly.
+
+```sh
+curl -fsS -H "Authorization: Bearer $CREWLET_TOKEN" -o web.zip \
+  "https://crewlet.example.com/git/web/-/archive.zip?rev=<commit>"
+```
 
 ### The code reads
 
