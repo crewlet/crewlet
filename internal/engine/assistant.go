@@ -47,12 +47,12 @@ type assistantModels struct{ e *Engine }
 // EVERY MEMBER IS RECORDED UNDER ITS OWN KEY, then chained, so a round a
 // fallback served is filed under the entry that served it.
 func (m assistantModels) Chain(_ context.Context, person iam.Principal,
-	use auxspend.Use) (llm.Provider, string, error) {
+	use auxspend.Use, strength assistant.Strength) (llm.Provider, string, error) {
 
 	if err := use.Validate(); err != nil {
 		return nil, "", err
 	}
-	c, keys, providers, err := m.entries()
+	c, keys, providers, err := m.entries(strength)
 	if err != nil {
 		return nil, "", err
 	}
@@ -85,8 +85,8 @@ func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 // members know without a call ([chain.Unready] over the entries
 // `assistant.llm` names, as this node built them), or nil when any may answer
 // or the chain does not resolve.
-func (m assistantModels) Unready(ctx context.Context) error {
-	_, _, providers, err := m.entries()
+func (m assistantModels) Unready(ctx context.Context, strength assistant.Strength) error {
+	_, _, providers, err := m.entries(strength)
 	if err != nil {
 		// A chain that does not resolve is the turn's own refusal
 		// ([assistantModels.Chain]) and `/viewer`'s no_model, not a state
@@ -96,16 +96,21 @@ func (m assistantModels) Unready(ctx context.Context) error {
 	return chain.Unready(ctx, providers)
 }
 
-// entries resolves `assistant.llm` through the ONE accessor that hands it out
-// ([config.Company.AssistantChain]) to the entries this node built, in order:
-// the company, the keys and each key's provider as built, unwrapped.
-func (m assistantModels) entries() (*Company, []string, []llm.Provider, error) {
+// entries resolves the chain strength names through its one accessor
+// (AssistantChain or DeliberateChain) to the providers this node built.
+func (m assistantModels) entries(strength assistant.Strength) (*Company, []string,
+	[]llm.Provider, error) {
+
 	c := m.e.Company()
 	if c == nil || c.Config == nil {
 		return nil, nil, nil, errors.New("engine: this node runs no company yet, so it has " +
 			"no assistant to run")
 	}
-	keys, err := c.Config.AssistantChain()
+	chainOf, named := c.Config.AssistantChain, "assistant.llm"
+	if strength == assistant.Deliberate {
+		chainOf, named = c.Config.DeliberateChain, "assistant.deliberate.llm"
+	}
+	keys, err := chainOf()
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -116,8 +121,8 @@ func (m assistantModels) entries() (*Company, []string, []llm.Provider, error) {
 	for _, key := range keys {
 		provider, ok := c.Models.Provider(key)
 		if !ok {
-			return nil, nil, nil, fmt.Errorf("engine: assistant.llm names %q, which the "+
-				"running company does not build", key)
+			return nil, nil, nil, fmt.Errorf("engine: %s names %q, which the "+
+				"running company does not build", named, key)
 		}
 		providers = append(providers, provider)
 	}

@@ -52,6 +52,7 @@ export function TextSetting({
   helper,
   placeholder,
   choices,
+  switchWords = { on: "On", off: "Off" },
 }: {
   row: SettingRow;
   /** What the setting is called on its page; its key is drawn beside it. */
@@ -74,6 +75,8 @@ export function TextSetting({
   placeholder?: string;
   /** Values a list offers to pick from, beside what is typed: the spaces there are. */
   choices?: readonly string[];
+  /** What a switch's two choices are called, where On and Off say it badly: Required, Optional. */
+  switchWords?: { readonly on: string; readonly off: string };
 }) {
   const defaultWords = words(row.default);
   // A KEY OR A DOMAIN IS A MACHINE VALUE, drawn as one.
@@ -101,11 +104,8 @@ export function TextSetting({
         const off = row.has_off && value === "";
         return {
           value: drawValue(value, off),
-          source: !set
-            ? "Default"
-            : sameValue(value, row.default)
-              ? "Set"
-              : `Changed from ${defaultWords}`,
+          // Provenance only: a text default can be long; the editor names it.
+          source: !set ? "Default" : sameValue(value, row.default) ? "Set" : "Changed",
           changed: set,
         };
       }}
@@ -181,9 +181,12 @@ export function TextSetting({
                   semantics="radio"
                   value={state.mode === "value" ? (state.value ? "on" : "off") : "default"}
                   options={[
-                    { value: "default", label: `Default (${defaultWords})` },
-                    { value: "on", label: "On" },
-                    { value: "off", label: "Off" },
+                    {
+                      value: "default",
+                      label: `Default (${row.default === true ? switchWords.on : switchWords.off})`,
+                    },
+                    { value: "on", label: switchWords.on },
+                    { value: "off", label: switchWords.off },
                   ]}
                   onValueChange={(next) =>
                     set(

@@ -162,6 +162,40 @@ type AssistantProposalScope = "server" | "page";
 /** How much care a proposal asks of the person approving it; absent for an ordinary change. */
 type AssistantProposalRisk = "destructive";
 
+/** The surface whose outside text a turn read before proposing (`provenance.Sources`). */
+export type AssistantTaintSource =
+  | "page_body"
+  | "page_comment"
+  | "work_description"
+  | "work_comment"
+  | "project_file"
+  | "chat_thread"
+  | "chat_room"
+  | "artifact_file"
+  | "artifact_row"
+  | "change_note"
+  | "alert"
+  | "notification"
+  | "a2a_message"
+  | "executor"
+  | "executor_session"
+  | "brand_voice"
+  | "api_answer"
+  | "page_context"
+  | "deep_work"
+  | "repo_file"
+  | "repo_patch"
+  | "repo_commit"
+  | "change_description"
+  | "change_review"
+  | "change_comment"
+  | "check_log"
+  | "turn_ending"
+  | "server_output"
+  | "delegated_request"
+  | "atlas"
+  | "web_page";
+
 /** One row of a proposal's change list, in the before and after grammar. */
 type AssistantChangeKind = "fact" | "changed" | "added" | "removed" | "text";
 
@@ -432,6 +466,8 @@ export interface AssistantTableCard {
   as_of: string;
   exports?: AssistantExports;
   open?: AssistantLink;
+  /** A step the person takes outside Crewlet, at an address the engine built. */
+  outside?: AssistantOutside;
 }
 
 /** A table card's column. */
@@ -455,6 +491,12 @@ interface AssistantLink {
   label: string;
   screen: string;
   href: string;
+}
+
+/** A step outside Crewlet at an https address the engine built, opened through the interstitial. */
+export interface AssistantOutside {
+  label: string;
+  url: string;
 }
 
 /** One record, or a list of records. */
@@ -485,6 +527,8 @@ export interface AssistantEntityCard {
   /** What one item and several are called ("policy", "policies"), where the card has a list. */
   items_noun?: AssistantNoun;
   open?: AssistantLink;
+  /** A step the person takes outside Crewlet, at an address the engine built. */
+  outside?: AssistantOutside;
 }
 
 /** What one thing and several are called, in the lower case a count is said with. */
@@ -532,7 +576,9 @@ export interface AssistantProposalCard {
   /** The exact request, for an approver who administers the company; absent for everybody else. */
   technical?: AssistantTechnicalRequest;
   audience?: string[];
-  taint?: string;
+  /** The surface of the outside text the turn read before proposing; absent for none. */
+  taint?: AssistantTaintSource;
+  /** Approving asks the person to confirm it is them first. */
   step_up?: boolean;
   digest: string;
   expires_at: string;
@@ -745,6 +791,8 @@ export interface AssistantTurnRequest {
   page_context: AssistantPageContext | null;
   /** What the question asks for; absent is `ask`. A brief needs the page context. */
   mode?: AssistantTurnMode;
+  /** Think harder: this one question runs on the company's stronger chain. */
+  deliberate?: boolean;
   // --- deep work (im-deep) ---
   /** Files uploaded to the conversation for this question. */
   attachments?: string[];
@@ -896,6 +944,8 @@ export interface AssistantViewerAssistant {
   model?: AssistantModelNotice;
   /** A question's images are read: only deep work reads them, so absent where the company has none. */
   reads_images?: boolean;
+  /** The company sets a stronger chain a question can ask for: the composer offers Think harder. */
+  deliberate?: boolean;
 }
 
 /**

@@ -313,7 +313,7 @@ func (t *turn) runDeep(ctx context.Context, dc deepCall) (toolloop.ToolResult, e
 	t.svc.deep.Discard(context.WithoutCancel(ctx), outcome.Box)
 	state, stepState, summary, reason := deepEnding(outcome, len(files))
 	run.end(state, stepState, summary, reason)
-	t.tainted(catalog.Tool{Fence: true, Source: deepReport.Source}, deepReport.Trust)
+	t.tainted(deepReport.Source, deepReport.Trust)
 	return toolloop.ToolResult{Output: deepAnswer(t.boundary, outcome, files, notes),
 		Failed: state != wire.DeepFinished, Cause: deepCause(outcome)}, nil
 }
@@ -534,6 +534,9 @@ func (s *Service) deepConfig() (config.AssistantDeepWork, error) {
 	}
 	if _, _, err := c.AssistantDeepWork(); err != nil {
 		return config.AssistantDeepWork{}, err
+	}
+	if c.Assistant.Tools.Denies(config.FamilyDeepWork) {
+		return config.AssistantDeepWork{}, errors.New("assistant.tools.deny turns deep work off")
 	}
 	return *c.Assistant.DeepWork, nil
 }

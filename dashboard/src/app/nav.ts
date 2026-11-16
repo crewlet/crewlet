@@ -1178,6 +1178,17 @@ export const WORKSPACES: WorkspaceRow[] = [
         // the page is an admin's (`llm_entries`' two readings).
       },
       {
+        key: "ask-crewlet",
+        label: "Ask Crewlet",
+        icon: "wand-sparkles",
+        path: ["settings", "ask-crewlet"],
+        hint: "Ask Crewlet's models, bounds, tools and deep work",
+        keywords: ["assistant", "ask", "drawer", "think harder", "deep work", "chat model"],
+        group: "Runtime",
+        // ADMIN'S: read off the company document, which only an admin reads.
+        grants: ["admin"],
+      },
+      {
         key: "mcp-tools",
         label: "MCP & tools",
         icon: "wrench",
@@ -1540,6 +1551,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "models",
   "secrets",
   "limits",
+  "ask-crewlet",
   "nodes",
   "config",
   "revisions",

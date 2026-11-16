@@ -246,7 +246,7 @@ func (s *Service) nameConversation(ctx context.Context, t *turn, question, answe
 	}
 	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantTitle,
 		TurnID: t.id.String()}
-	provider, _, err := s.models.Chain(ctx, t.person, use)
+	provider, _, err := s.models.Chain(ctx, t.person, use, Quick)
 	if err != nil {
 		return err
 	}

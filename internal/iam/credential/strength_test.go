@@ -56,7 +56,7 @@ func TestTwelveCharactersIsTheOnlyRule(t *testing.T) {
 
 // A DEPLOYMENT'S FLOOR RAISES THE ENGINE'S, AND NOTHING LOWERS IT.
 //
-// `api.auth.min_password_length` was validated and enforced by nothing,
+// The password floor setting was validated and enforced by nothing,
 // so a company that asked for twenty accepted fifteen. The floor handed in is
 // what is refused below — and the refusal names it, because the person choosing
 // a password has to know what would satisfy it — while zero, or anything under

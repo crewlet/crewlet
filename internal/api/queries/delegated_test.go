@@ -113,6 +113,13 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 	}
 	body := asMap(t, raw)
 	holdShape(t, "DelegatedDecisionsAnswer", []map[string]any{body}, false)
+	// THE SPOT-CHECK RATE'S RANGE AND DEFAULT ARE THE ENGINE'S, so a form
+	// never offers a rate the document refuses.
+	if sample := asMap(t, body["sample"]); sample["default"] != float64(delegated.DefaultSampleOneIn) ||
+		sample["min"] != float64(1) || sample["max"] != float64(1000) {
+		t.Errorf("the answer's sample is %v, want default %d within 1 to 1000", sample,
+			delegated.DefaultSampleOneIn)
+	}
 	rules := rowsOf(t, body["rules"])
 	holdShape(t, "DelegatedRule", rules, false)
 	if len(rules) != 2 || len(rowsOf(t, rules[1]["required_checks"])) != 1 {
@@ -164,6 +171,48 @@ func TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends(t *testing.T) {
 		if want := slices.Sorted(slices.Values(engine)); !slices.Equal(got, want) {
 			t.Errorf("the dashboard's %s is %v; the engine sends %v", name, got, want)
 		}
+	}
+}
+
+// The rule form reads its three GitHub answers as `contract/delegated.ts`
+// declares them, over an answer that read and one that could not.
+//
+// Mutation: rename `default_branch` or `more` on either side, or answer an
+// unread list without saying why, and this is red.
+func TestTheRuleFormReadsWhatItsGitHubAnswersSend(t *testing.T) {
+	t.Parallel()
+	shapes := map[string][]map[string]any{}
+	add := func(iface string, g ruleGitHub, what string, params map[string]any) map[string]any {
+		body, err := askRuleGitHub(t, g, what, params)
+		if err != nil {
+			t.Fatalf("%s %v: %v", what, params, err)
+		}
+		shapes[iface] = append(shapes[iface], body)
+		return body
+	}
+	read := add("DelegatedRepositoriesAnswer", ruleGitHub{}, "delegated_repositories", nil)
+	add("DelegatedRepositoriesAnswer", ruleGitHub{off: true}, "delegated_repositories", nil)
+	add("DelegatedRepositoriesAnswer", ruleGitHub{noApps: true}, "delegated_repositories", nil)
+	shapes["DelegatedRepository"] = rowsOf(t, read["repos"])
+	add("DelegatedBranchesAnswer", ruleGitHub{}, "delegated_branches", map[string]any{"repo": "acme/api"})
+	add("DelegatedBranchesAnswer", ruleGitHub{}, "delegated_branches", map[string]any{"repo": "acme/gone"})
+	add("DelegatedChecksAnswer", ruleGitHub{}, "delegated_checks", map[string]any{"repo": "acme/api", "branch": "main"})
+	add("DelegatedChecksAnswer", ruleGitHub{}, "delegated_checks",
+		map[string]any{"repo": "acme/locked", "branch": "main"})
+	// AN ANSWER WITH NOTHING TO OFFER SAYS WHY, except a company with no
+	// GitHub, which says it is not connected.
+	for iface, rows := range shapes {
+		for _, row := range rows {
+			for _, key := range []string{"repos", "branches", "checks"} {
+				if list, ok := row[key].([]any); ok && len(list) == 0 && row["unread"] == nil &&
+					row["connected"] != false {
+					t.Errorf("%s offered nothing and said nothing: %v", iface, row)
+				}
+			}
+		}
+	}
+	for iface, rows := range shapes {
+		holdShape(t, iface, rows, false)
 	}
 }
 

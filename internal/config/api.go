@@ -594,31 +594,19 @@ type APIAuth struct {
 	// out of a node they meant to sign in on.
 	Admin iam.AdminPosture `yaml:"admin,omitempty" json:"admin,omitempty" js:"enum=serve|refuse" desc:"Whether this node grants admin to those who hold it (serve), or clamps admin away and keeps every app (refuse). Required once the API is served."`
 
-	// Session bounds how long a proof of identity lasts.
-	Session APISession `yaml:"session,omitempty" json:"session,omitzero"`
+	// Limits bound the company's sign-in policy on this node (ADR-0152).
+	// See [SignInLimits].
+	Limits SignInLimits `yaml:"limits,omitempty" json:"limits,omitzero"`
 
 	// Audit is how long the identity estate keeps what happened.
 	Audit APIAudit `yaml:"audit,omitempty" json:"audit,omitzero"`
 
-	// TOTP is whether a second factor is REQUIRED of a person who signs in
-	// with a password, or merely offered.
-	//
-	// UNSET IS REQUIRED, the secure value, so a deployment that says
-	// nothing gets a second factor and `optional` is the explicit — and,
-	// off loopback, acknowledged and logged — weakening. It used to have no
-	// default and refuse its zero, which made sense only while the block it
-	// sat in was itself optional and its absence meant nobody signed in at
-	// all; with password sign-in always on, a refusal of the zero would make
-	// every deployment write the one line that should be the default. See
-	// [APIAuth.SecondFactor], which reads the zero as required.
-	TOTP iam.SecondFactor `yaml:"totp,omitempty" json:"totp,omitempty" js:"enum=required|optional" desc:"Whether a second factor is required of a person signing in with a password (default required). optional off loopback needs accept_insecure."`
-
 	// AcceptInsecure is the deliberate acknowledgement that this
 	// deployment is reachable off loopback with a posture that should not
-	// be. It is what lets `totp: optional` stand on an address a browser
-	// reaches over the network, which [APIAuth.validatePasswords] refuses
-	// without it, and it is logged at WARN on every start for the whole
-	// life of the deployment.
+	// be. It is what lets `limits.second_factor: optional` stand on an
+	// address a browser reaches over the network, which
+	// [APIAuth.validateSecondFactor] refuses without it, and it is logged at
+	// WARN on every start for the whole life of the deployment.
 	//
 	// NOT what lets an `http://` external URL stand: plain http off
 	// loopback is a warning with or without it ([API.warnings]), never a
@@ -631,12 +619,6 @@ type APIAuth struct {
 	// to be presented, which a staging deployment may genuinely want to
 	// carry in its own config.
 	AcceptInsecure bool `yaml:"accept_insecure,omitempty" json:"accept_insecure,omitempty" desc:"Acknowledge an insecure posture on a routable address. Logged at WARN on every start."`
-
-	// MinPasswordLength raises the floor above [iam.MinPasswordChars].
-	// Zero takes that floor; anything below it is refused rather than
-	// clamped, because a file asking for eight is a file whose writer
-	// believes eight is enough.
-	MinPasswordLength int `yaml:"min_password_length,omitempty" json:"min_password_length,omitempty" js:"min=0;max=256" desc:"Minimum password length. 0 takes the engine's floor of 12."`
 
 	// Tokens are this deployment's own machine credentials: break-glass,
 	// the operator CLI, a CI pipeline. At least one is REQUIRED once the
@@ -710,115 +692,6 @@ func (a *APIAuth) MayWriteCompany(by iam.Actor) bool {
 	return false
 }
 
-// SecondFactor is whether a second factor is required here, with the default
-// applied: `optional` where the file says so, and `required` everywhere else.
-//
-// AN ALLOWLIST OF ONE, for [iam.Stage.MayAct]'s reason turned round: a value
-// this build does not know reads as REQUIRED, because the safe direction for
-// "must you prove more" is yes. It is the ONE reading of the setting — the
-// sign-in that enforces it and the posture read that reports it both ask it.
-func (a APIAuth) SecondFactor() iam.SecondFactor {
-	if a.TOTP == iam.SecondFactorOptional {
-		return iam.SecondFactorOptional
-	}
-	return iam.SecondFactorRequired
-}
-
-// Passwords is the effective minimum password length.
-func (a APIAuth) Passwords() int {
-	if a.MinPasswordLength == 0 {
-		return iam.MinPasswordChars
-	}
-	return a.MinPasswordLength
-}
-
-// APISession bounds how long a proof of identity lasts.
-//
-// EVERY FIELD HERE IS AN UPPER BOUND, never a schedule. The IDLE deadline —
-// twelve hours from the last use — is deliberately not here: it is a constant
-// in internal/iam/session, because it is a property of how long a browser tab
-// may sit unattended rather than of this deployment's policy, and a company
-// that wants a shorter one wants a shorter `absolute`.
-type APISession struct {
-	// AbsoluteRaw is the longest a session may live from sign-in,
-	// whatever it is used for. Default 168h.
-	//
-	// SEVEN DAYS is the working week, and it is the same horizon the
-	// invitation expiry and the sweep's grace already use — one number
-	// for "how long is this company willing to remember something".
-	//
-	// THE FLOOR IS ONE HOUR because the default step-up window is one
-	// hour: below that a person re-proves their identity and is signed
-	// out inside the same window, which makes the step-up unreachable.
-	// THE CEILING IS THIRTY DAYS because the deadline is inside the
-	// SIGNED bearer and therefore cannot be shortened after issue —
-	// lowering this setting does not touch a session already minted, and
-	// only a revocation epoch bump ends one early. A month is how long a
-	// deployment can stand not being able to shorten.
-	AbsoluteRaw string `yaml:"absolute,omitempty" json:"absolute,omitempty" desc:"Longest a session may live from sign-in (default 168h, 1h..720h)."`
-
-	// StepUpRaw is how long after proving identity a step-up gesture is
-	// allowed without proving it again. Default 1h.
-	//
-	// ONE WINDOW OVER EVERY SENSITIVE GESTURE — revealing a secret,
-	// changing somebody's authority or how they prove who they are, ending
-	// every session in the company, writing the configuration or the
-	// credential store — as GitHub's sudo mode applies one window
-	// to all of its sensitive actions. An hour keeps the stricter end of
-	// that practice. A second, shorter window for some of the gestures was
-	// tried and went: it sent an administrator who had proved half an hour
-	// earlier to prove again between one screen and the next, while what
-	// actually keeps those gestures from a stolen credential is not a
-	// proof's age — internal/authz refuses them to any request a machine
-	// token presented, and internal/iamdomain refuses an administrative
-	// record written through one.
-	//
-	// THE FLOOR IS FIVE MINUTES because below it an administrator
-	// re-proves between one screen and the next, and THE CEILING A DAY
-	// because past it a step-up is not one.
-	StepUpRaw string `yaml:"step_up,omitempty" json:"step_up,omitempty" desc:"How long a proof of identity authorises a step-up gesture (default 1h, 5m..24h)."`
-}
-
-// Session defaults, and the bounds around them.
-const (
-	DefaultSessionAbsolute = 168 * time.Hour
-	SessionAbsoluteFloor   = time.Hour
-	SessionAbsoluteCeiling = 720 * time.Hour
-
-	DefaultSessionStepUp = time.Hour
-	SessionStepUpFloor   = 5 * time.Minute
-	SessionStepUpCeiling = 24 * time.Hour
-)
-
-// Absolute is the longest a session may live, with the default applied.
-func (s APISession) Absolute() time.Duration {
-	return durationOr(s.AbsoluteRaw, DefaultSessionAbsolute)
-}
-
-// StepUp is the step-up window, with the default applied.
-func (s APISession) StepUp() time.Duration {
-	return durationOr(s.StepUpRaw, DefaultSessionStepUp)
-}
-
-// IsZero lets an unset block drop out of a JSON round trip.
-func (s APISession) IsZero() bool {
-	return s.AbsoluteRaw == "" && s.StepUpRaw == ""
-}
-
-func (s APISession) validate(path Path) error {
-	var p problems
-	check := func(name, raw string, lo, hi time.Duration, why string) {
-		checkDurationRange(&p, at(path, name), raw, lo, hi, why)
-	}
-	check("absolute", s.AbsoluteRaw, SessionAbsoluteFloor, SessionAbsoluteCeiling,
-		"under an hour ends sessions too soon, and over a month keeps old "+
-			"sessions alive after you change it")
-	check("step_up", s.StepUpRaw, SessionStepUpFloor, SessionStepUpCeiling,
-		"under five minutes asks people to confirm it's them too often, and "+
-			"over a day doesn't protect anything")
-	return p.err()
-}
-
 // APIAudit is how long the identity estate keeps what happened.
 //
 // TWO HORIZONS AND NOT ONE, because the two answer different questions and a
@@ -888,45 +761,24 @@ func (a APIAudit) validate(path Path) error {
 	return p.err()
 }
 
-// MaxPasswordLength is the ceiling under [APIAuth.MinPasswordLength].
+// MaxPasswordLength is the ceiling under a password floor ([SignIn.MinPasswordLength]).
 //
 // A MINIMUM THAT NOBODY CAN SATISFY IS A DEPLOYMENT NOBODY CAN ENROL IN, and
 // 256 is already far past any memorable passphrase — so a larger number here
 // is a unit mistake rather than a policy.
 const MaxPasswordLength = 256
 
-// validatePasswords is what a person signing in with a password is asked: the
-// second factor and the password floor.
-func (a *APIAuth) validatePasswords(path Path, api API, serving bool) error {
+// validateSecondFactor is the acknowledgement an optional second factor needs
+// off loopback, judged where a browser reaches this deployment rather than on
+// the bind address, which a hardened node keeps on loopback behind its proxy.
+func (a *APIAuth) validateSecondFactor(path Path, api API, serving bool) error {
 	var p problems
-	if a.TOTP != "" && !a.TOTP.Valid() {
-		p.add(at(path, "totp"), ErrUnknownValue,
-			"%q (want %s or %s; unset is %s)", a.TOTP, iam.SecondFactorRequired,
-			iam.SecondFactorOptional, iam.SecondFactorRequired)
-	}
-	// AN OPTIONAL SECOND FACTOR OFF LOOPBACK IS A FAULT unless somebody
-	// said so out loud. The judgement is on where a BROWSER reaches this
-	// deployment, not on the bind address: a hardened node binds loopback
-	// behind its proxy, so a bind check would permit the insecure posture
-	// in exactly the deployment that must refuse it.
-	if a.TOTP == iam.SecondFactorOptional && serving &&
+	if a.Limits.OptionalSecondFactor() && serving &&
 		!api.externalLoopback() && !a.AcceptInsecure {
-		p.add(at(path, "totp"), ErrConflict,
-			"`optional` allows password-only sign-in at %s. Remove the line "+
-				"to require two-step verification, or set `accept_insecure: true`",
+		p.add(at(path, "limits.second_factor"), ErrConflict,
+			"`optional` lets the company allow password-only sign-in at %s. Remove the "+
+				"line to require two-step verification, or set `accept_insecure: true`",
 			api.ExternalBase())
-	}
-	if n := a.MinPasswordLength; n != 0 {
-		switch {
-		case n < iam.MinPasswordChars:
-			p.add(at(path, "min_password_length"), ErrOutOfRange,
-				"%d is below the minimum of %d. Remove the line to use the "+
-					"minimum", n, iam.MinPasswordChars)
-		case n > MaxPasswordLength:
-			p.add(at(path, "min_password_length"), ErrOutOfRange,
-				"%d is over the maximum of %d. Nobody could set a password that "+
-					"long", n, MaxPasswordLength)
-		}
 	}
 	return p.err()
 }
@@ -975,9 +827,9 @@ func (a *APIAuth) validate(path Path, api API, serving bool) error {
 	var p problems
 
 	p.wrap(a.validateAdmin(path, serving))
-	p.wrap(a.Session.validate(at(path, "session")))
+	p.wrap(a.Limits.validate(at(path, "limits")))
 	p.wrap(a.Audit.validate(at(path, "audit")))
-	p.wrap(a.validatePasswords(path, api, serving))
+	p.wrap(a.validateSecondFactor(path, api, serving))
 	p.wrap(a.validateTokens(path, serving))
 	p.wrap(a.validateWriters(path))
 

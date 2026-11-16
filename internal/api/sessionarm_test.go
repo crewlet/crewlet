@@ -132,7 +132,7 @@ func (c *cookieArm) mintAt(t *testing.T, at time.Time) minted {
 	person := uuid.Must(uuid.NewV7()).String()
 	bearer, err := signerAt(t, at).Mint(session.Mint{
 		Lineage: lineage, Person: person, Epoch: 1, Generation: 1,
-		StartPosition: 1, AbsoluteExpiresAt: at.Add(8 * time.Hour),
+		StartPosition: 1, SignedInAt: at, AbsoluteExpiresAt: at.Add(8 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)

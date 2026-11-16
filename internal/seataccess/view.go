@@ -40,6 +40,31 @@ type LaneView struct {
 	Account string    `json:"account,omitempty"`
 	Tool    ToolState `json:"tool"`
 
+	// Grants is each grant the seat holds beside its level, one sentence each.
+	Grants string `json:"grants,omitempty"`
+
+	// Requests is each open request on the lane (ADR-0118) with its two grant options.
+	Requests string `json:"requests,omitempty"`
+
+	// Grantable counts the catalogue beside the seat's level and what the connection
+	// lacks; CatalogueReadAt is when it was read.
+	Grantable       string    `json:"grantable,omitempty"`
+	CatalogueReadAt time.Time `json:"catalogue_read_at,omitzero"`
+
+	// Permissions words each entry the grants and requests name, with what a person
+	// adds at the vendor and where.
+	Permissions string `json:"permissions,omitempty"`
+
+	// Lookup is the entries [ViewQuery.Lookup] matched, at most [MaxLookup];
+	// LookupNote says why none did.
+	Lookup     []LookupEntry `json:"lookup,omitempty"`
+	LookupMore bool          `json:"lookup_more,omitempty"`
+	LookupNote string        `json:"lookup_note,omitempty"`
+
+	// AtVendor is what a person adds to the company's connection at the vendor
+	// before a permission named here can be granted; nil where nothing is missing.
+	AtVendor *VendorStep `json:"at_vendor,omitempty"`
+
 	// CheckedAt is when a pass last read the vendor for this lane, a dry run
 	// included; AppliedAt when a sync last wrote it, Outcome how that ended
 	// and Refusal the vendor's reason with its remedy where it failed.
@@ -52,9 +77,21 @@ type LaneView struct {
 	Plan []Step `json:"plan"`
 }
 
+// ViewQuery is what [ViewOf] words beside the answer.
+type ViewQuery struct {
+	// Requests are the store's open requests; the view keeps the seat's own.
+	Requests []GrantRequest
+
+	// Lookup is part of a permission's name to find ("Origin Rules"), or empty.
+	Lookup string
+
+	// Now is when a grant is read as live or lapsed.
+	Now time.Time
+}
+
 // ViewOf is the lane of the agent seat with handle in answer, worded, or false
 // where the answer lists no such seat or the seat has left the document.
-func ViewOf(answer Answer, handle string, lane Lane) (LaneView, bool) {
+func ViewOf(answer Answer, handle string, lane Lane, q ViewQuery) (LaneView, bool) {
 	var seat *SeatAnswer
 	for i := range answer.Seats {
 		if s := &answer.Seats[i]; s.Handle == handle && !s.Departed {
@@ -103,6 +140,7 @@ func ViewOf(answer Answer, handle string, lane Lane) (LaneView, bool) {
 	if want.Enabled && (offer.Scoped || len(want.Scope) > 0) {
 		out.Scope = scopeWords(offer, want.Scope)
 	}
+	wordGrants(&out, offer, la, q)
 	if s := la.Sync; s != nil {
 		out.AppliedAt, out.Outcome = s.At, outcomeWords(s.Outcome)
 		if s.Error != nil {

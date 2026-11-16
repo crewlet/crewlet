@@ -20,6 +20,7 @@ import { useNavigator } from "~/app/router.tsx";
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName, repoPath } from "~/lib/code.ts";
+import { fieldError, formHeld, holdReason } from "~/lib/formHold.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
@@ -88,10 +89,11 @@ function DetailsDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () =>
   const [defaultBranch, setDefaultBranch] = useState(repo.default_branch);
   const [owner, setOwner] = useState(ownerKey(repo.owner));
   const [visibility, setVisibility] = useState(repo.visibility);
-  const blocked =
+  const hold =
     refs.loading && !refs.data
-      ? "Reading its branches…"
+      ? formHeld("Reading its branches…")
       : detailsFormHeld(repo, { description, defaultBranch, owner, visibility }, branches);
+  const blocked = holdReason(hold);
   const ownerOptions = units.map((u) => ({
     value: ownerKey({ kind: "unit", ref: u.id }),
     label: u.name,
@@ -167,6 +169,7 @@ function DetailsDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () =>
         <FormField
           label="Default branch"
           helper="What a clone checks out and a change is proposed into. The branch it replaces stays, and can then be deleted."
+          error={fieldError(hold, "defaultBranch")}
         >
           {(field) => (
             <Select
@@ -245,7 +248,9 @@ function RenameDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () => 
   const write = useAct("code_update_repo");
   const nav = useNavigator();
   const [name, setName] = useState(repo.name);
-  const blocked = renameFormHeld(repo, name);
+  // A name in the wrong shape is said under the field and holds Rename.
+  const hold = renameFormHeld(repo, name);
+  const blocked = holdReason(hold);
   const submit = async () => {
     if (!pressable(write, blocked)) return;
     const to = name.trim();
@@ -285,6 +290,7 @@ function RenameDialog({ repo, onClose }: { repo: CodeRepoDetail; onClose: () => 
       <FormField
         label="New name"
         helper="Clones, pushes and links to the old name keep reaching it for a while, then the old name is released."
+        error={fieldError(hold, "name")}
       >
         {(field) => (
           <Input
@@ -469,7 +475,8 @@ function MirrorDialog({
   );
   const [as, setAs] = useState(to?.as ?? "");
   const [refs, setRefs] = useState((to?.refs ?? []).join(", "));
-  const blocked = mirrorFormHeld(kind, url, credential, as);
+  const hold = mirrorFormHeld(kind, url, credential, as);
+  const blocked = holdReason(hold);
   const submit = async () => {
     if (blocked !== undefined) return;
     const ref = credentialRef(credential) ?? "";
@@ -526,20 +533,32 @@ function MirrorDialog({
             ? "A source it does not follow yet is imported first (its branches and tags, but a seat's own, become the source's, and one the source lacks is deleted), and then it moves only by Gitlet's syncs from it, every 15 minutes, and takes no push of its own."
             : "Gitlet pushes these refs there as the seat you name: that seat's own identity at the other host, never a bot."}
         </p>
-        <Input
-          aria-label="URL"
-          placeholder="https://forge.example.com/acme/web.git"
-          value={url}
-          onChange={(event) => setURL(event.target.value)}
-        />
-        <Input
-          aria-label="Credential"
-          placeholder={
-            kind === "pull" ? "Variable holding the token (optional)" : "Variable holding the token"
-          }
-          value={credential}
-          onChange={(event) => setCredential(event.target.value)}
-        />
+        <FormField label="URL" hideLabel error={fieldError(hold, "url")}>
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              placeholder="https://forge.example.com/acme/web.git"
+              value={url}
+              onChange={(event) => setURL(event.target.value)}
+            />
+          )}
+        </FormField>
+        <FormField label="Credential" hideLabel error={fieldError(hold, "credential")}>
+          {(field) => (
+            <Input
+              id={field.id}
+              aria-describedby={field.describedBy}
+              placeholder={
+                kind === "pull"
+                  ? "Variable holding the token (optional)"
+                  : "Variable holding the token"
+              }
+              value={credential}
+              onChange={(event) => setCredential(event.target.value)}
+            />
+          )}
+        </FormField>
         {kind === "push" && (
           <>
             <Input

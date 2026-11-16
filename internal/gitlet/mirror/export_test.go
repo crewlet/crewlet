@@ -16,6 +16,15 @@ import (
 // the rows an attempt left once it has ended.
 func (m *Mirrors) Wait() { m.wg.Wait() }
 
+// Attempted is what the worker remembers of repoID's attempts in or out: one
+// running, failures in a row, and when the last ended.
+func (m *Mirrors) Attempted(repoID string, out bool) (running bool, failures int, ended time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := mirrorKey{repo: repoID, out: out}
+	return m.running[key], m.memory[key].failures, m.memory[key].ended
+}
+
 // Steps is what [steps] lands of outs and cmds where each record takes take of
 // the commands offered to it, as an attempt's land takes what its record
 // carries: each record's outputs and commands, in its order. A record that

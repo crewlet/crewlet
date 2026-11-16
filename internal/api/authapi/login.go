@@ -859,10 +859,11 @@ type signIn struct {
 	// stepUp marks a signed-in person confirming who they are again, which
 	// announces itself as a step-up rather than as a fresh sign-in; replaces
 	// is the session the confirmation was made from, which is ENDED before
-	// its replacement opens, and absolute is that session's own deadline,
-	// which the replacement keeps — see [Service.StepUp].
+	// its replacement opens, and signedIn and absolute are that session's
+	// sign-in and deadline, which the replacement keeps — see [Service.StepUp].
 	stepUp   bool
 	replaces string
+	signedIn time.Time
 	absolute time.Time
 
 	// provedAt is when this sign-in's person proved who they are, where
@@ -891,7 +892,7 @@ type signIn struct {
 //
 // # A sign-in that proved a password and nothing else, where one is required
 //
-// `api.auth.totp: required` says nobody signs in on a password alone. So
+// A required second factor says nobody signs in on a password alone. So
 // a sign-in THIS SURFACE verified — the password route, a password step-up, a
 // password change, an invitation's redemption — that proved no second factor
 // opens a restricted session. Proving none means holding none: the password
@@ -916,15 +917,11 @@ func (s *Service) enrolmentOnly(how signIn) bool {
 	return false
 }
 
-// secondFactorRequired reports whether this deployment requires a second factor
-// of somebody who signs in with a password: `api.auth.totp`, whose unset value
-// is required.
-//
-// THE SAME READING `/auth/config` reports ([config.APIAuth.SecondFactor]), so
-// what the posture read tells a sign-in page and what the sign-in enforces
-// cannot disagree about the default.
+// secondFactorRequired reports whether the company's sign-in policy, as this
+// node holds it, requires a second factor of a password sign-in: the reading
+// `/auth/config` reports, so a sign-in page and the sign-in cannot disagree.
 func (s *Service) secondFactorRequired() bool {
-	return s.boot.API.Auth.SecondFactor() == iam.SecondFactorRequired
+	return s.policy().SecondFactor == iam.SecondFactorRequired
 }
 
 // proofOf is the instant a sign-in proved who somebody is: the replaced
@@ -995,9 +992,12 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return loginResponse{}, false
 	}
-	expires := s.now().Add(s.boot.API.Auth.Session.Absolute())
+	// A REPLACEMENT CONTINUES ITS SESSION'S SIGN-IN AND DEADLINE, so a step-up
+	// never stretches a session past the lifetime it signed in under.
+	signedIn := s.now()
+	expires := signedIn.Add(s.policy().SessionLifetime)
 	if !how.absolute.IsZero() {
-		expires = how.absolute
+		signedIn, expires = how.signedIn, how.absolute
 	}
 	if how.replaces != "" {
 		// THE SESSION BEING REPLACED ENDS FIRST, and a failure to end it
@@ -1114,6 +1114,7 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		Lineage: lineage, Person: held.ID,
 		Epoch: opened.Epoch, Generation: opened.Generation,
 		StartPosition:     uint64(at.Packed()),
+		SignedInAt:        signedIn,
 		AbsoluteExpiresAt: expires,
 		// AND THE BEARER CARRIES THE RESTRICTION TOO, signed: the record
 		// above did not wait, so no node has the row yet — this one
@@ -1153,15 +1154,15 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 	}, true
 }
 
-// passwordFloor is the shortest password this deployment accepts: its own
-// `api.auth.min_password_length`, or the engine's twelve.
+// passwordFloor is the shortest password this deployment accepts: the
+// company's `sign_in.min_password_length` held within this node's limit.
 //
 // ONE READING FOR EVERY SITE THAT SETS OR DESCRIBES A PASSWORD — the two
 // enrolments that choose one and the two answers that tell a form what to
 // refuse before it posts — so a form can never be told one number while the
 // route enforces another. That was the shape before this: every site said
 // twelve, and none read the setting.
-func (s *Service) passwordFloor() int { return s.boot.API.Auth.Passwords() }
+func (s *Service) passwordFloor() int { return s.policy().MinPasswordLength }
 
 // sourceOf is the source the throttle keys on, beside what was typed.
 //

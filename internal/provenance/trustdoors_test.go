@@ -107,6 +107,11 @@ var trustDoors = map[string]trustDoor{
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
 		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
 	}},
+	// A permission looked up in a catalogue: its name and reasons are the vendor's.
+	"internal/assistant/catalog/seataccess.go:grantCatalogueSearch": {vendor, []string{
+		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
+		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
+	}},
 	"internal/assistant/catalog/api.go:read": {hosted, []string{
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
 	}},

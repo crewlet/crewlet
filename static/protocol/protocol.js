@@ -3875,8 +3875,8 @@ var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 /**
 * Keeping a tab's session alive while it only listens.
 *
-* A session ends after twelve hours with nothing happening on it
-* (`session.Idle`), and what counts as something happening is a REQUEST: the
+* A session ends once unused for the company's idle limit
+* (`sign_in.idle_timeout_seconds`), and what counts as something happening is a REQUEST: the
 * engine re-issues the cookie with a fresh idle deadline on any answer to a
 * request carrying one that is five minutes old (`session.ReissueAfter`). The
 * live socket neither enforces nor extends that deadline — it is authenticated
@@ -4922,6 +4922,7 @@ var ACT_ERRORS = {
 	csrf_origin: "The engine refused a change sent from another site. Make it from this page's own address.",
 	unauthorized: "You don’t have access to this.",
 	step_up_required: "Confirm it’s you first.",
+	token_refused: "This needs you here in person, signed in as yourself.",
 	unknown_tool: "This engine does not support that change. It may be running a different version. Reload the page.",
 	read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
 	unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",

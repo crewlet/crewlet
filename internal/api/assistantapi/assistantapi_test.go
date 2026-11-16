@@ -358,7 +358,45 @@ func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 			if got.ReadsImages {
 				t.Errorf("viewer = %+v, which says images are read without deep work", got)
 			}
+			// NO STRONGER CHAIN HERE, so Think harder is not offered.
+			if got.Deliberate {
+				t.Errorf("viewer = %+v, which offers Think harder with no stronger chain", got)
+			}
 		})
+	}
+}
+
+// Think harder is offered only where the company sets a stronger chain, and
+// asking it of a company that sets none is refused 400, naming the setting.
+func TestTheViewerOffersThinkHarderOnlyWithAStrongerChain(t *testing.T) {
+	t.Parallel()
+	company, err := evals.DeliberateCompany(false, "grace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := newSite(t, evals.RigOptions{Company: company}).surface.Viewer(t.Context(),
+		evals.Person("grace", "grace"))
+	if !got.Available || !got.Deliberate {
+		t.Errorf("viewer = %+v, want Think harder offered", got)
+	}
+	// Still offered while the quick chain sits out: the stronger one may answer.
+	quick := evals.NewModel()
+	quick.SetUnready(&llm.Error{Kind: llm.KindRateLimit, Key: "assistant",
+		Err: errors.New("Usage limit reached")})
+	got = newSite(t, evals.RigOptions{Company: company, Models: &evals.Models{Model: quick,
+		Key: "assistant", Strong: evals.NewModel(), StrongKey: "strong"}}).surface.Viewer(
+		t.Context(), evals.Person("grace", "grace"))
+	if got.Reason != wire.ViewerModelNotReady || !got.Deliberate {
+		t.Errorf("viewer with the quick chain spent = %+v, want Think harder offered", got)
+	}
+
+	s := newSite(t, evals.RigOptions{})
+	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
+		s.rig.Conversation.String()+"/turns", wire.TurnRequest{
+		ProtocolVersion: wire.ProtocolVersion, Input: wire.TurnInput{Text: "Think about it"},
+		Deliberate: true}, map[string]string{"Idempotency-Key": opKey})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "assistant.deliberate") {
+		t.Fatalf("Think harder with no stronger chain = %d %s", rec.Code, rec.Body)
 	}
 }
 

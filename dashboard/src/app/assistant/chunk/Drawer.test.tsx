@@ -129,6 +129,7 @@ function mount(
   model: AssistantModelProblem | null = null,
   admin = false,
   attach: AttachClosed | null = null,
+  deliberate = false,
 ) {
   const store = new Store();
   store.applyOrg(withDerived({ name: "Nimbus", roles: [] }));
@@ -145,6 +146,7 @@ function mount(
                 unavailable={unavailable}
                 model={model}
                 attach={attach}
+                deliberate={deliberate}
                 admin={admin}
                 onClose={() => {}}
                 initialFocus="composer"
@@ -251,6 +253,33 @@ test("a follow-up typed fast under a turn with cards keeps every keystroke and r
   expect(threadRenders.count).toBe(0);
   expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).not.toBe(
     "true",
+  );
+});
+
+// Think harder is offered only where the company sets a stronger chain, and
+// asks for it on the next question alone.
+test("Think harder sends the next question to the stronger chain, and only that one", async () => {
+  mount();
+  expect(screen.queryByRole("button", { name: "Think harder" })).toBeNull();
+  cleanup();
+
+  const sent = engine();
+  mount(null, null, false, null, true);
+  const harder = screen.getByRole("button", { name: "Think harder" });
+  expect(harder.getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(harder);
+  expect(harder.getAttribute("aria-pressed")).toBe("true");
+
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  fireEvent.change(box, { target: { value: "Which way should we route it?" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await waitFor(() => expect(sent.some((r) => r.url.endsWith("/turns"))).toBe(true));
+  const turns = () => sent.filter((r) => new URL(r.url).pathname.endsWith("/turns"));
+  expect(JSON.parse(String(turns()[0]!.init.body))).toMatchObject({ deliberate: true });
+  expect(screen.getByRole("button", { name: "Think harder" }).getAttribute("aria-pressed")).toBe(
+    "false",
   );
 });
 

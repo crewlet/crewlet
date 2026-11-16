@@ -104,6 +104,11 @@ var namedRoutes = []struct {
 	// WHAT DELEGATES DECIDED, the rules and limits they decide under, the
 	// day's digest and the week's spot-checks (ADR-0125).
 	{method: "GET", pattern: "/delegated-decisions", what: "delegated_decisions"},
+	// WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB: its repositories, one's
+	// branches (`repo=`) and the checks on a branch's newest commit (`branch=`).
+	{method: "GET", pattern: "/delegated-decisions/repositories", what: "delegated_repositories"},
+	{method: "GET", pattern: "/delegated-decisions/branches", what: "delegated_branches"},
+	{method: "GET", pattern: "/delegated-decisions/checks", what: "delegated_checks"},
 	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.

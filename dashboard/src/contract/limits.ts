@@ -5,7 +5,8 @@
  * Settings › Limits draws the first four; `delegated` is what every delegate
  * is held to, answered on `delegated_decisions` beside its rules; `inbox`,
  * `atlas`, `code` and `chat` are the settings Worklet, Atlas, Gitlet and
- * Chatlet change in place.
+ * Chatlet change in place; `sign_in` is the company's sign-in policy, answered
+ * on `sign_in_policy`; `assistant` is Ask Crewlet's, on its settings page.
  */
 type LimitGroup =
   | "turn"
@@ -16,7 +17,9 @@ type LimitGroup =
   | "inbox"
   | "atlas"
   | "code"
-  | "chat";
+  | "chat"
+  | "sign_in"
+  | "assistant";
 
 /** What a limit's number counts. COPIES of `queries.LimitUnits`. */
 type LimitUnit = "count" | "seconds" | "fraction" | "per_second" | "days";
@@ -39,6 +42,10 @@ export interface SettingRange {
    * days is refused).
    */
   or_zero?: boolean;
+  /** `min` is this node's operator's floor (its own file), above the engine's. */
+  operator_min?: boolean;
+  /** `max` is this node's operator's ceiling (its own file), below the engine's. */
+  operator_max?: boolean;
 }
 
 /**

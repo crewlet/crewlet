@@ -1012,7 +1012,7 @@ test("Doclet's settings are the engine's rows, each beside its default, and chan
   expect(within(pages).getByText("Default")).toBeTruthy();
   const skills = screen.getByRole("row", { name: /Tool skills/ });
   expect(within(skills).getByText("Off")).toBeTruthy();
-  expect(within(skills).getByText("Changed from TS")).toBeTruthy();
+  expect(within(skills).getByText("Changed")).toBeTruthy();
   const reach = screen.getByRole("row", { name: /Search reaches/ });
   expect(within(reach).getByText("ENG, PROD")).toBeTruthy();
   const meaning = screen.getByRole("row", { name: /Search by meaning/ });

@@ -13,12 +13,15 @@
  * Which mention is a chip is `mentions.ts`'s rule, on the rendered text.
  */
 
-import { useMemo, type MouseEvent, type ReactNode } from "react";
+import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import {
+  Button,
   ButtonLink,
   DataGrid,
   DownloadButton,
   EntityList,
+  externalUrl,
+  LinkInterstitial,
   PropertyList,
   RecordChip,
   RecordChipList,
@@ -46,6 +49,7 @@ import {
 import type {
   AssistantCardEvent,
   AssistantEntityCard,
+  AssistantOutside,
   AssistantTableCard,
 } from "~/contract/assistant.ts";
 import { exportFile } from "~/protocol/assistant.ts";
@@ -140,6 +144,35 @@ function OpenLink({ read, on }: { read: Read; on: CardHandlers }) {
     >
       {words}
     </ButtonLink>
+  );
+}
+
+/** A step outside Crewlet at an engine-built address, opened only through the kit's interstitial. */
+export function OutsideLink({ outside, source }: { outside: AssistantOutside; source: string }) {
+  const [opening, setOpening] = useState(false);
+  // The kit's own check, as for an artifact's links: absolute, no user name.
+  const url = externalUrl(outside.url);
+  if (!url) return null;
+  return (
+    <>
+      <Button
+        size="small"
+        variant="ghost"
+        onClick={() => setOpening(true)}
+        trailingIcon={<ArrowUpRightGlyph size="sm" />}
+      >
+        {outside.label}
+      </Button>
+      <LinkInterstitial
+        url={opening ? url : null}
+        source={source}
+        labels={{
+          intro: () =>
+            `${outside.label}. This is the vendor's own page, outside Crewlet: a person makes the change there, and Crewlet reads it again within a minute.`,
+        }}
+        onClose={() => setOpening(false)}
+      />
+    </>
   );
 }
 
@@ -297,9 +330,11 @@ export function ReadChip({
   const card = read.event.card;
   const keyed = said ? said.by === "key" : read.key !== undefined;
   const text = said?.text ?? read.label;
+  const outside = card.type === "table" ? card.table?.outside : card.entity?.outside;
   const actions = (
     <>
       <OpenLink read={read} on={on} />
+      {outside ? <OutsideLink outside={outside} source={read.label} /> : null}
       {card.type === "table" && card.table ? (
         <Downloads table={card.table} fallback={read.event.card_id} />
       ) : null}

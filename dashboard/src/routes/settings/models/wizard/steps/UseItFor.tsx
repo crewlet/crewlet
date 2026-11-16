@@ -45,6 +45,7 @@ import {
   CATEGORY_JOBS,
   CATEGORY_ORDER,
   SEAT_JOBS,
+  assistantChain,
   categoryState,
   intentOf,
   usesForIntent,
@@ -135,7 +136,15 @@ export function seatChangesOf(
   }
   if (next.assistant && !was.assistant) {
     const today = data.assistant.enabled ? data.assistant.key : null;
-    lines.push(`Ask Crewlet: ${today && today !== key ? today : "no model"} → ${name}`);
+    // THE FALLBACKS STAY, and are named, so a change of the model it answers
+    // with first never reads as a change of its whole chain.
+    const chain = data.assistant.key ? [data.assistant.key, ...data.assistant.fallbacks] : [];
+    const kept = assistantChain(chain, key).slice(1);
+    lines.push(
+      `Ask Crewlet: ${today && today !== key ? today : "no model"} → ${name}${
+        kept.length > 0 ? `, still falling back to ${listed(kept)}` : ""
+      }`,
+    );
   }
   return lines;
 }

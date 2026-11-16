@@ -626,6 +626,16 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	return runner.Launched{LaunchID: result.LaunchID, BridgeFrom: bridgeFrom}, nil
 }
 
+// floorUnusedOutcome is what a launch whose floor drops the briefs told by a
+// reading alone offers instead ([agentLauncher.continuedFloor]).
+//
+// AN OFFER, NEVER A HAND: the floor is judged before the box is acquired, and
+// the session itself may still not be continued (another member's harness, a
+// carry its box refuses, a fetch that fails), which
+// `executor_session_not_continued` then says.
+const floorUnusedOutcome = "the launch offers the session told without the reading; " +
+	"executor_session_not_continued says so where the session itself is not continued"
+
 // continuedFloor is req as the seat's budget lets it be launched on member (the
 // member the launch picked, nil where it could pick none) and the floor it is
 // held to ([launchFloor]): the largest floor of every brief the launch may hand
@@ -673,6 +683,14 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 // of its own on its fresh brief's floor, which a capped window can always be
 // given: where that floor is past the most room a window can leave the launch,
 // it is held at the static floor, or at the room where that is below it.
+//
+// AND THE BRIEFS TOLD BY A READING OF A KEPT CAPTURE ARE DROPPED ALONE
+// ([runner.SessionContinuation.Exact]): counted in that session's floor
+// ([keptFloor]), since its box may be handed them, and where they are what
+// makes that floor one the launch cannot carry, the session is still offered,
+// told by its save point, held to the floor of its own briefs, and the line
+// (`executor_session_holdings_unused`) says why; where its own briefs cannot be
+// carried either, the session is dropped whole, as above.
 //
 // AND A LAUNCH WHOSE EARLIER TRY WAS REFUSED BELOW ITS FLOOR waits for that
 // floor one turnover at most ([agentLauncher.refusedIn], [meter.turnedOver]):
@@ -735,11 +753,36 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 			stillShort = func(f launchFloor) string { return f.stillShort(left, waited) }
 		}
 	}
+	carried := func(f launchFloor) string {
+		if why := uncarried(member, room, f); why != "" {
+			return why
+		}
+		return stillShort(f)
+	}
 	var keptWhy, inPlaceWhy string
 	if s := req.Session; s != nil {
 		kept := keptFloor(static, s)
-		if keptWhy = uncarried(member, room, kept); keptWhy == "" {
-			keptWhy = stillShort(kept)
+		keptWhy = carried(kept)
+		// THE BRIEFS TOLD BY A READING DROPPED ALONE where theirs is the floor
+		// that cannot be carried and the session's own briefs' can: the
+		// session is still continued, told by its save point, which tells
+		// more and never less. On a copy of the session, never the caller's,
+		// whose continuation the runner still holds.
+		//
+		// AND WHERE THEIRS FAILS TOO, the session is dropped by its own
+		// briefs' floor, which its line names: the floor with the briefs told
+		// by a reading is one the session alone never needed.
+		if keptWhy != "" && s.Exact != nil {
+			without := *s
+			without.Exact = nil
+			told := keptFloor(static, &without)
+			if whyTold := carried(told); whyTold != "" {
+				keptWhy = whyTold
+			} else {
+				log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
+					"turn_id", l.turn.RunID, "detail", keptWhy, "outcome", floorUnusedOutcome)
+				req.Session, kept, keptWhy = &without, told, ""
+			}
 		}
 		if keptWhy == "" {
 			floor = floor.atLeast(kept)
@@ -747,10 +790,7 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	}
 	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
 		inPlace := static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief))
-		if inPlaceWhy = uncarried(member, room, inPlace); inPlaceWhy == "" {
-			inPlaceWhy = stillShort(inPlace)
-		}
-		if inPlaceWhy == "" {
+		if inPlaceWhy = carried(inPlace); inPlaceWhy == "" {
 			floor = floor.atLeast(inPlace)
 		}
 	}
@@ -836,13 +876,20 @@ func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 
 // keptFloor is the floor of a launch that continues s, the session it was asked
 // to continue in any box ([runner.AgentRunRequest.Session]): the turn's kept
-// capture, in the longer of its two briefs, or the session its conversation's
-// last turn left, in its one; static where s names neither.
+// capture, in the longest of its briefs (its two, and the two told by a
+// reading of what it holds where it carries them,
+// [runner.SessionContinuation.Exact], since which box the launch gets, and
+// which release that box's harness answers, are the launch's to learn), or the
+// session its conversation's last turn left, in its one; static where s names
+// neither.
 func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
 	switch {
 	case s.Basis.Continues():
-		return static.continuing(s.Basis.ContextTokens,
-			max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced)))
+		brief := max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))
+		if x := s.Exact; x != nil {
+			brief = max(brief, harness.EstimateTokens(x.Brief), harness.EstimateTokens(x.Replaced))
+		}
+		return static.continuing(s.Basis.ContextTokens, brief)
 	case s.Basis.ContinuesBase():
 		// THE BASE'S OWN CONTEXT, never the job before's: that one sizes the
 		// in-place floor, and a base is continued only in a box of its own,

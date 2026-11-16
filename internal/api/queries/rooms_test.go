@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -147,6 +148,8 @@ func everySeam(t *testing.T) queries.Sources {
 		AgentAccess:  func(context.Context) ([]queries.AgentAccessRow, error) { return nil, nil },
 		// WHAT DELEGATES DECIDED, read off an access log holding nothing.
 		Delegated: emptyVerdicts{},
+		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB.
+		DelegatedGitHub: ruleGitHub{},
 		// THE ATLAS, read off a node that runs no company yet.
 		Atlas:    builtin.AtlasDeps{},
 		Insights: coordmemory.NewFleet(),
@@ -156,9 +159,9 @@ func everySeam(t *testing.T) queries.Sources {
 		// node is wired with them only where the feature is deployed.
 		Artifacts:    &queries.ArtifactsSource{},
 		ArtifactData: &queries.ArtifactDataSource{},
-		// THIS NODE'S SIGN-IN POSTURE, which internal/api fills from the
+		// THIS NODE'S SIGN-IN LIMITS, which internal/api fills from the
 		// Bootstrap on every node that serves the API.
-		SignIn: &queries.SignInPolicy{},
+		SignIn: &config.APIAuth{},
 		// GITLET'S ROWS, which internal/api fills from the code
 		// surface on every node that serves the API.
 		Code: &stubCode{},

@@ -80,8 +80,12 @@ func lostRelaunchWith(t *testing.T, opts buildOpts, basis runner.SessionBasis, h
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 	relauncher := &probingLauncher{basis: basis}
+	var asked runner.AgentLauncher = relauncher
+	if opts.reads != nil {
+		asked = readingLauncher{probingLauncher: relauncher, reads: opts.reads}
+	}
 	round.State, round.Lost = parked.State, &runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
-	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: asked,
 		resume: &round, conversation: opts.conversation, boundary: opts.boundary})
 	if _, _, err := collector.Resume(t.Context(), history); err != nil {
 		t.Fatalf("Resume: %v", err)

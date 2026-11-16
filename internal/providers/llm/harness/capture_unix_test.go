@@ -73,6 +73,93 @@ func fakeInvocation(t *testing.T, env map[string]string) invocation {
 	}
 }
 
+// floodLead is how many mebibytes a gated flood may run past the reader's
+// place at the watcher's last measure ([floodGate]).
+const floodLead = 3
+
+// floodGate paces a fake flood (FAKE_FLOOD_GATE) by the engine's reading, not
+// the wall clock: mebibyte i goes once a watcher measure saw the reader within
+// floodLead of it, so the writer never gets far ahead of the reader or the watcher.
+type floodGate struct {
+	stream string
+	mib    int
+	chunk  int64 // bytes of one mebibyte of the flood's whole lines
+	path   string
+	gate   *os.File
+
+	mu                  sync.Mutex
+	delivered, measured int64 // the reader's place, now and at the last measure
+	sent                int   // mebibytes let go
+}
+
+// newFloodGate is the gate of a flood of mib mebibytes of line on stream, the
+// first thing written on it.
+func newFloodGate(t *testing.T, stream, line string, mib int) *floodGate {
+	t.Helper()
+	g := &floodGate{stream: stream, mib: mib, chunk: int64(len(floodChunk(line))),
+		path: filepath.Join(t.TempDir(), "flood-gate")}
+	if err := syscall.Mkfifo(g.path, 0o600); err != nil {
+		t.Fatalf("the flood's gate: %v", err)
+	}
+	// Read and write, so the open never waits for the fake's.
+	gate, err := os.OpenFile(g.path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("the flood's gate: %v", err)
+	}
+	t.Cleanup(func() { _ = gate.Close() })
+	g.gate = gate
+	g.mu.Lock()
+	g.releaseLocked()
+	g.mu.Unlock()
+	return g
+}
+
+// env is extra with the flood's size and gate.
+func (g *floodGate) env(extra map[string]string) map[string]string {
+	env := map[string]string{"FAKE_FLOOD_MIB": strconv.Itoa(g.mib), "FAKE_FLOOD_GATE": g.path}
+	maps.Copy(env, extra)
+	return env
+}
+
+// hooks is h (a new one where nil) telling the gate the reader's place and the
+// watcher's measures; h's own watched is still told.
+func (g *floodGate) hooks(h *captureHooks) *captureHooks {
+	if h == nil {
+		h = &captureHooks{}
+	}
+	watched := h.watched
+	h.delivered = func(stream string, at int64) {
+		if stream == g.stream {
+			g.mu.Lock()
+			g.delivered = at
+			g.mu.Unlock()
+		}
+	}
+	h.watched = func(stream string, size, allocated int64) {
+		if watched != nil {
+			watched(stream, size, allocated)
+		}
+		if stream == g.stream {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			g.measured = g.delivered
+			g.releaseLocked()
+		}
+	}
+	return h
+}
+
+// releaseLocked lets go every mebibyte the last measure allows; a refused
+// write is the case over. Called with mu held.
+func (g *floodGate) releaseLocked() {
+	for g.sent < g.mib && int64(g.sent-floodLead)*g.chunk <= g.measured {
+		if _, err := g.gate.Write([]byte{1}); err != nil {
+			return
+		}
+		g.sent++
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 8.1: a stand-in cut through a pipe arrives whole.
 // ---------------------------------------------------------------------------
@@ -513,27 +600,28 @@ func TestAPromptHeldUnreadCostsOneGrace(t *testing.T) {
 // its stdout, 60 MiB of an event no rule reads and then its answer: every line
 // reaches the record's reader, past the bound too, as a pipe's did; the first
 // 32 MiB are kept for the end; and what was read past them is given back, so
-// the capture's blocks never take more than 64 MiB — the kept head and the
-// room ahead — and a tick's slack.
+// the capture's blocks never take more than 64 MiB (the kept head and the
+// room ahead) and a measure's slack. The flood is paced by the reading
+// ([floodGate]), whatever the runner's load.
 //
 // Mutation: give nothing back, and the blocks grow with the record; read the
 // record as one answer, and the run is ended at 32 MiB.
 func TestARecordPastTheBoundIsReadWholeAndGivenBack(t *testing.T) {
 	t.Parallel()
 	noise := `{"type":"noise","said":"` + strings.Repeat("n", 100) + `"}`
-	in := fakeInvocation(t, map[string]string{
-		"FAKE_FLOOD": "stdout", "FAKE_FLOOD_MIB": "60", "FAKE_FLOOD_PACE_MS": "20", "FAKE_FLOOD_LINE": noise,
-		"FAKE_STDOUT": textEvent("the answer") + "\n",
-	})
+	gate := newFloodGate(t, "stdout", noise, 60)
+	in := fakeInvocation(t, gate.env(map[string]string{
+		"FAKE_FLOOD": "stdout", "FAKE_FLOOD_LINE": noise, "FAKE_STDOUT": textEvent("the answer") + "\n",
+	}))
 	var lines atomic.Int64
 	var most atomic.Int64
 	in.readToEnd, in.lineStream = true, true
 	in.onLine = func(string) { lines.Add(1) }
-	in.hooks = &captureHooks{watched: func(stream string, _, allocated int64) {
+	in.hooks = gate.hooks(&captureHooks{watched: func(stream string, _, allocated int64) {
 		if stream == "stdout" && allocated > most.Load() {
 			most.Store(allocated)
 		}
-	}}
+	}})
 	res, err := run(t.Context(), in)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -559,7 +647,8 @@ func TestARecordPastTheBoundIsReadWholeAndGivenBack(t *testing.T) {
 // A STDERR PAST THE BOUND LEAVES THE ANSWER STANDING. 40 MiB on stderr costs
 // only diagnosis: the answer stands, and the first 32 MiB of stderr are kept;
 // and a failure marker written after 33 MiB still stops the run, since every
-// line is delivered to the markers, past what is kept.
+// line is delivered to the markers, past what is kept. Each flood is paced by
+// the reading ([floodGate]).
 //
 // Mutation: read stderr as one answer, and the run is refused at 32 MiB; read
 // the markers only from the kept bytes, and the late marker goes unseen.
@@ -567,13 +656,18 @@ func TestAStderrPastTheBoundLeavesTheAnswerStanding(t *testing.T) {
 	t.Parallel()
 	t.Run("40 MiB of it", func(t *testing.T) {
 		t.Parallel()
-		flood := map[string]string{"FAKE_FLOOD": "stderr", "FAKE_FLOOD_MIB": "40", "FAKE_FLOOD_PACE_MS": "20",
-			"FAKE_STDOUT": "the answer"}
-		comp, err := ask(t, fakeProvider(t, flood, nil), llm.Request{})
+		flood := map[string]string{"FAKE_FLOOD": "stderr", "FAKE_STDOUT": "the answer"}
+		asked := newFloodGate(t, "stderr", "", 40)
+		p := fakeProvider(t, asked.env(flood), nil)
+		p.hooks = asked.hooks(nil)
+		comp, err := ask(t, p, llm.Request{})
 		if err != nil || comp.Content != "the answer" {
 			t.Fatalf("Complete = %v, %v; want the answer standing", comp, err)
 		}
-		res, err := run(t.Context(), fakeInvocation(t, flood))
+		ran := newFloodGate(t, "stderr", "", 40)
+		in := fakeInvocation(t, ran.env(flood))
+		in.hooks = ran.hooks(nil)
+		res, err := run(t.Context(), in)
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -584,10 +678,12 @@ func TestAStderrPastTheBoundLeavesTheAnswerStanding(t *testing.T) {
 	})
 	t.Run("a marker after 33 MiB", func(t *testing.T) {
 		t.Parallel()
-		in := fakeInvocation(t, map[string]string{
-			"FAKE_FLOOD": "stderr", "FAKE_FLOOD_PACE_MS": "20", "FAKE_FLOOD_AFTER": "CONFINEMENT_FAILED: no policy\n",
+		gate := newFloodGate(t, "stderr", "", 33)
+		in := fakeInvocation(t, gate.env(map[string]string{
+			"FAKE_FLOOD": "stderr", "FAKE_FLOOD_AFTER": "CONFINEMENT_FAILED: no policy\n",
 			"FAKE_STDOUT": "the answer",
-		})
+		}))
+		in.hooks = gate.hooks(nil)
 		in.failOn = []string{"CONFINEMENT_FAILED"}
 		res, err := run(t.Context(), in)
 		if err != nil {
@@ -674,7 +770,8 @@ func TestAChildWhoseRoomCannotBeReservedIsNotStarted(t *testing.T) {
 // A ROOM REFUSED MID-RUN ENDS IT. A stream read to its end is given room
 // ahead of its reader as it goes; a volume that refuses it once stderr has
 // passed what it keeps ends the run as a server failure naming the volume and
-// state_dir.
+// state_dir. The flood is paced by the reading ([floodGate]), so only the
+// refusal ends the run.
 //
 // Mutation: ignore the refusal of the room ahead, and the run goes on to its
 // timeout.
@@ -682,18 +779,19 @@ func TestARoomRefusedMidRunEndsIt(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	helperPid := filepath.Join(dir, "helper.pid")
-	p := fakeProvider(t, map[string]string{
-		"FAKE_FLOOD": "stderr", "FAKE_FLOOD_MIB": "40", "FAKE_FLOOD_PACE_MS": "20", "FAKE_FLOOD_HOLD": "1",
+	gate := newFloodGate(t, "stderr", "", 40)
+	p := fakeProvider(t, gate.env(map[string]string{
+		"FAKE_FLOOD": "stderr", "FAKE_FLOOD_HOLD": "1",
 		"FAKE_PIDFILE":     helperPid,
 		"FAKE_TERM_MARKER": filepath.Join(dir, "terminated"),
-	}, nil)
+	}), nil)
 	p.timeout = 15 * time.Second
-	p.hooks = &captureHooks{reserve: func(f *os.File, off, n int64) error {
+	p.hooks = gate.hooks(&captureHooks{reserve: func(f *os.File, off, n int64) error {
 		if info, err := f.Stat(); err == nil && off > 0 && info.Size() > maxOutput {
 			return syscall.ENOSPC
 		}
 		return reserveRoom(f, off, n)
-	}}
+	}})
 	_, err := ask(t, p, llm.Request{})
 	t.Cleanup(func() { reapTree(awaitPidFile(t, helperPid)) })
 	if got := llm.KindOf(err); got != llm.KindServer {

@@ -257,7 +257,9 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 			summary = noMatches
 		}
 		s.t.stepEnd(ctx, step, wire.StepDone, summary, nil, resp.Status, len(resp.Body))
-		s.t.tainted(tool, shaped.Trust)
+		if tool.Fence {
+			s.t.tainted(shaped.Source, shaped.Trust)
+		}
 		s.t.used(appNames(tool.Apps))
 	}
 	briefing := s.t.briefing()

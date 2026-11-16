@@ -95,7 +95,7 @@ func newAssistAppWith(t *testing.T, grants []iam.Grant, more func(*api.Options))
 	}
 	out.person = uuid.Must(uuid.NewV7()).String()
 	bearer, err := signer.Mint(session.Mint{Lineage: lineage, Person: out.person, Epoch: 1,
-		Generation: 1, StartPosition: 1, AbsoluteExpiresAt: clock.Add(8 * time.Hour)})
+		Generation: 1, StartPosition: 1, SignedInAt: clock, AbsoluteExpiresAt: clock.Add(8 * time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}

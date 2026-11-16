@@ -366,3 +366,38 @@ test("the total is a summary row under the rows, on the same columns", () => {
   expect(total.textContent).toContain("Total");
   expect(total.textContent).toContain("1,500");
 });
+
+const access = (url: string) =>
+  event({
+    type: "entity",
+    entity: {
+      kind: "seat",
+      id: "sre",
+      title: "Site Reliability Engineer",
+      subtitle: "Cloudflare",
+      facts: [{ label: "Add at the vendor first", value: "Origin Rules: Edit" }],
+      outside: { label: "Add to the company's connection at Cloudflare", url },
+    },
+  });
+
+test("a step a read names outside Crewlet opens only through the interstitial, naming where it goes", async () => {
+  draw("The Site Reliability Engineer needs it.", [
+    access("https://dash.cloudflare.com/profile/api-tokens"),
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: /Site Reliability Engineer/ }));
+  const peek = screen.getByRole("dialog", { name: /Site Reliability Engineer/ });
+  expect(within(peek).queryByRole("link", { name: /Add to the company/ })).toBeNull();
+  fireEvent.click(
+    within(peek).getByRole("button", { name: "Add to the company's connection at Cloudflare" }),
+  );
+  const stop = await screen.findByRole("dialog", { name: "Open an external link?" });
+  expect(within(stop).getByText("dash.cloudflare.com")).toBeTruthy();
+  expect(within(stop).getByText(/the vendor's own page, outside Crewlet/)).toBeTruthy();
+});
+
+test("an outside step whose address is not an absolute web address draws nothing", () => {
+  draw("The Site Reliability Engineer needs it.", [access("javascript:alert(1)")]);
+  fireEvent.click(screen.getByRole("button", { name: /Site Reliability Engineer/ }));
+  const peek = screen.getByRole("dialog", { name: /Site Reliability Engineer/ });
+  expect(within(peek).queryByRole("button", { name: /Add to the company/ })).toBeNull();
+});
