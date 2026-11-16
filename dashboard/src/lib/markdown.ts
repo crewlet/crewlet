@@ -410,8 +410,7 @@ export interface RenderOptions {
   scoped?: boolean;
   /**
    * Draws each run of a block's inline text in place of [renderInline], in
-   * `inlineRuns`' order (`lib/markdownText.ts`): a change marks the words it
-   * added and removed.
+   * [inlineRuns]' order: a change marks the words it added and removed.
    */
   inline?: (text: string, key: string, options: InlineOptions) => ReactNode;
   /**
@@ -714,6 +713,28 @@ interface Rendering extends RenderOptions {
 
 function inlineOf(options: RenderOptions): NonNullable<RenderOptions["inline"]> {
   return options.inline ?? renderInline;
+}
+
+/**
+ * A block's runs of inline text in the order [renderBlock] draws them, which
+ * is the order [RenderOptions.inline] is called in.
+ */
+export function inlineRuns(block: MarkdownBlock): string[] {
+  switch (block.kind) {
+    case "heading":
+    case "paragraph":
+      return [block.text];
+    case "quote":
+    case "callout":
+      return block.blocks.flatMap(inlineRuns);
+    case "list":
+      return block.items.flatMap((item) => item.blocks.flatMap(inlineRuns));
+    case "table":
+      return [...block.head, ...block.rows.flat()];
+    case "code":
+    case "rule":
+      return [];
+  }
 }
 
 /**

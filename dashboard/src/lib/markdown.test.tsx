@@ -6,6 +6,7 @@ import {
   type RenderOptions,
   nestSections,
   outline,
+  inlineRuns,
   renderBlocks,
   renderInline,
   renderMarkdown,
@@ -15,7 +16,7 @@ import {
   linkTargets,
   shownImage,
 } from "./markdown.ts";
-import { inlineRuns, plainText } from "./markdownText.ts";
+import { plainText } from "./markdownText.ts";
 // THE FIXTURES ARE REAL FILES, imported verbatim rather than inlined as
 // template literals: a document written in a `.md` file is a document
 // somebody can read and edit as markdown, and a fixture that only exists

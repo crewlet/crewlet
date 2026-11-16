@@ -17,7 +17,8 @@
 import { markdownInline, parseMarkdown, type MarkdownBlock } from "@crewlethq/ui";
 import { compareSequences, MAX_COMPARE_LINES, MAX_EDITS, type Uncompared } from "./lineDiff.ts";
 import { inlineTokens } from "./inlineTokens.ts";
-import { inlineRuns, inlineText } from "./markdownText.ts";
+import { inlineRuns } from "./markdown.ts";
+import { inlineText } from "./markdownText.ts";
 import { tokens } from "./wordDiff.ts";
 
 /** One run of a block's inline markdown: kept (`=`), added (`+`) or removed (`-`). */
