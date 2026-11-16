@@ -97,9 +97,9 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 	}
 	var opened ChangeCounts
 	opened.add(state, 1)
-	tallied, err := countChanges(ctx, tx, o.RepoID, opened)
-	if err != nil {
-		return 0, fmt.Errorf("%w (the open at %s)", err, at.position)
+	tallied, countErr := countChanges(ctx, tx, o.RepoID, opened)
+	if countErr != nil {
+		return 0, fmt.Errorf("%w (the open at %s)", countErr, at.position)
 	}
 	return rows + 3 + tallied, nil
 }
@@ -254,9 +254,9 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 	}
 	var moved ChangeCounts
 	moved.move(row.state, next.state)
-	tallied, err := countChanges(ctx, tx, repoID, moved)
-	if err != nil {
-		return 0, fmt.Errorf("%w (the record at %s)", err, at.position)
+	tallied, countErr := countChanges(ctx, tx, repoID, moved)
+	if countErr != nil {
+		return 0, fmt.Errorf("%w (the record at %s)", countErr, at.position)
 	}
 	return rows + 1 + tallied, nil
 }

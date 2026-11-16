@@ -480,9 +480,8 @@ func TestAHomesQueueReadIsReadWholeOrRefused(t *testing.T) {
 	}
 }
 
-// A COUNTS PART THIS BUILD DOES NOT DECLARE IS REFUSED UNREAD: each part is a key of its own, so a
-// newer asker's part reaches this build's data node as a member it refuses naming it, its code half
-// never asked, and the walk asks another; the same read without it is asked.
+// A COUNTS PART THIS BUILD DOES NOT DECLARE IS REFUSED UNREAD: it reaches the data node as a key
+// it refuses by name, the code half never asked, so the walk asks another; without it, it is asked.
 // Mutation: carry the parts as a list, and the unknown part is answered ErrInvalid, which ends the walk.
 func TestACountsPartThisBuildDoesNotDeclareIsRefusedUnread(t *testing.T) {
 	t.Parallel()

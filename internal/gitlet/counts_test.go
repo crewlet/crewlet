@@ -67,13 +67,9 @@ func counted(t *testing.T, n *node, asker gitlet.Principal, ceiling, repo string
 	return answer.Counts.Changes, nil
 }
 
-// COUNTS ARE WHAT THE LISTINGS LIST: for every asker (a person, seats of three units, a seat
-// reading for a ceiling seat of another) the company's counts of each state equal the changes
-// the listing of that state lists paged to its end, live is the draft and the open together,
-// and each repository's named counts equal its own listing's, a deleted one's included; a
-// repository the asker does not read is refused by both.
-// Mutation: drop visibility from the tally key, or judge the key by the asker alone, and an
-// outsider counts a unit repository's changes.
+// COUNTS ARE WHAT THE LISTINGS LIST: for each asker the company's and each repository's counts
+// equal what the state listings list paged to their end, and an unreadable repository is refused.
+// Mutation: drop visibility from the tally key, or judge it by the asker alone, and outsiders count.
 func TestCountsAreWhatTheListingsList(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -143,13 +139,13 @@ func TestCountsAreWhatTheListingsList(t *testing.T) {
 				t.Errorf("%s counting %q: live %d, want the draft and the open, %d", who.name, repo, got.Live,
 					got.Draft+got.Open)
 			}
-			for state, n := range byState(got) {
+			for state, kept := range byState(got) {
 				want, err := listed(who.asker, who.ceiling, repo, state)
 				if err != nil {
 					t.Fatalf("%s listing %q's %s changes: %v", who.name, repo, state, err)
 				}
-				if n != int64(want) {
-					t.Errorf("%s counts %d %s changes of %q, and the listing lists %d", who.name, n, state,
+				if kept != int64(want) {
+					t.Errorf("%s counts %d %s changes of %q, and the listing lists %d", who.name, kept, state,
 						repo, want)
 				}
 			}
@@ -191,9 +187,8 @@ func TestACountsReadIsHeldToItsScope(t *testing.T) {
 	}
 }
 
-// A COUNTS READ IS REFUSED WHERE IT MEANS NOTHING: no part, a query asking none, a cursor, a
-// limit, counts on another kind, a repository's facts on a read that answers none, and a name
-// that is no repository's, each ErrInvalid naming its field.
+// A COUNTS READ IS REFUSED WHERE IT MEANS NOTHING: no part, a cursor, a limit, counts on another
+// kind, facts on a read with none and an unknown name are each ErrInvalid naming the field.
 // Mutation: a refusal relaxed into an empty answer.
 func TestACountsReadIsRefusedWhereItMeansNothing(t *testing.T) {
 	t.Parallel()
@@ -220,10 +215,8 @@ func TestACountsReadIsRefusedWhereItMeansNothing(t *testing.T) {
 	}
 }
 
-// A REPOSITORY LISTING ANSWERS ITS CHANGE COUNTS WHEN ASKED: a listing and a detail asking
-// repo_facts answer each repository's counts as a counts read of it does, a page of them cut by
-// its bytes with the facts in; and every fact is a pointer left nil on a read that does not ask,
-// the only fields of a summary the flag changes.
+// A REPOSITORY LISTING ANSWERS ITS CHANGE COUNTS WHEN ASKED: with repo_facts a listing and a
+// detail answer each repository's counts as a counts read does, and without it every fact is nil.
 // Mutation: answer the facts unasked, read them after the page is cut, or add a fact as a value.
 func TestARepositoryListingAnswersItsChangeCountsWhenAsked(t *testing.T) {
 	t.Parallel()
@@ -301,9 +294,9 @@ func TestARepositoryListingAnswersItsChangeCountsWhenAsked(t *testing.T) {
 	}
 }
 
-// EVERY COUNT PART IS A KEY OF ITS OWN: each part names one bool key of CountsQuery and one
-// pointer key of Counts by the same JSON name, Ask sets it, and neither holds a key no part names.
-// Mutation: a part added as a value of a shared list.
+// EVERY COUNT PART IS A KEY OF ITS OWN: each part names one bool key of CountsQuery and one pointer
+// key of Counts by one JSON name, Ask sets it and the reader reads it as asked; no key is spare.
+// Mutation: a part added as a value of a shared list, or one Ask sets that asks leaves out.
 func TestEveryCountPartIsAKeyOfItsOwn(t *testing.T) {
 	t.Parallel()
 	keys := func(typ reflect.Type, kind reflect.Kind) map[string]string {
@@ -329,12 +322,15 @@ func TestEveryCountPartIsAKeyOfItsOwn(t *testing.T) {
 		if !ok || !q.Ask(p) || !reflect.ValueOf(q).FieldByName(field).Bool() || !p.Valid() {
 			t.Errorf("the part %s is no key of CountsQuery that Ask sets", p)
 		}
+		if !gitlet.CountsAsks(q) {
+			t.Errorf("a query asking only %s is refused as naming no part", p)
+		}
 		if _, ok := answered[string(p)]; !ok {
 			t.Errorf("the part %s is no key of Counts", p)
 		}
 	}
 	var q gitlet.CountsQuery
-	if q.Ask("later") || gitlet.CountPart("later").Valid() {
+	if q.Ask("later") || gitlet.CountPart("later").Valid() || gitlet.CountsAsks(q) {
 		t.Error("a part this build does not count was asked")
 	}
 }

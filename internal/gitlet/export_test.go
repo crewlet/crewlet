@@ -376,6 +376,9 @@ func RecountChanges(t testing.TB, db store.ReplicatedHandle) {
 	}
 }
 
+// CountsAsks reports whether q asks a part, as the reader's refusal of a query naming none reads it.
+func CountsAsks(q CountsQuery) bool { return q.asks() }
+
 // ChangeCountsDrift names the first difference between db's change counts and its rows, "" for none.
 func ChangeCountsDrift(t testing.TB, db store.ReplicatedHandle) string {
 	t.Helper()

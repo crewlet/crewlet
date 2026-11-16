@@ -1,7 +1,7 @@
 -- A repository counts its changes by state, and the repositories in use are tallied by who may read them.
 --
 -- WHO HAS TO AGREE ON IT: every data node, identically; the applier keeps the counts and re-derives them (gitlet.DerivationVersion), so this file fills nothing.
--- Four integers a repository and about 100 bytes a tally row; a record that moves a change's state moves its repository's row and one tally row, a settings change, delete or restore two.
+-- Four integers a repository and about 100 bytes a tally row; a record that moves a change's state moves its repository's row and one tally row, a settings change that moves its owner or visibility two, a delete or a restore one.
 -- Class: code_repos stays reproducible, and code_change_tallies is reproducible (gitlet.ReproducibleTables).
 
 ALTER TABLE code_repos ADD COLUMN draft_changes  INTEGER NOT NULL DEFAULT 0;

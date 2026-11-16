@@ -151,7 +151,7 @@ func changesByState(ctx context.Context, tx *sql.Tx, repoID string) (ChangeCount
 }
 
 // tallyRows is the tally row a record that moves a repository's changes writes, and
-// tallyMoveRows the two a record moving a repository between owners or out of use writes.
+// tallyMoveRows the two a record moving a repository between owners or visibilities writes.
 const (
 	tallyRows     = 1
 	tallyMoveRows = 2

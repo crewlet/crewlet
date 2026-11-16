@@ -430,8 +430,9 @@ func (p MergeProposal) JudgesChart() bool { return true }
 // mergeDecidedRows is the most rows a merge's OWN writes make its apply touch,
 // beside the push it lands ([Applier.applyMerge]): the change's row, its live
 // queue entry, its stored readiness ([clearReadiness]), the target's landing
-// row, its green row and the tally row its merge moves (apply_counts.go).
-const mergeDecidedRows = 5 + tallyRows + routingNoticeRows
+// row, its green row and the tip work its green row pays ([advanceGreen]), and
+// the tally row its merge moves (apply_counts.go).
+const mergeDecidedRows = 6 + tallyRows + routingNoticeRows
 
 // mergeRecordRows is the most rows one merge record makes its apply write
 // before its horizons: its own ([mergeDecidedRows]); its push's row, its two

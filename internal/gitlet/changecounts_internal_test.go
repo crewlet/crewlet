@@ -228,11 +228,9 @@ var (
 	ccQA  = Owner{Kind: OwnerUnit, Ref: "QA"}
 )
 
-// EACH RECORD MOVES THE COUNTS IT SHOULD: every writer of a change's state, and of a
-// repository's status, owner or visibility, from a known estate, leaves its repository's four
-// counts and the tally rows as the case states, and the counts the rows themselves imply.
-// Mutation: any arm of the writers dropped, or a delete, restore or settings change that moves
-// no tally row, and the case's counts or tallies differ.
+// EACH RECORD MOVES THE COUNTS IT SHOULD: every writer of a change's state or a repository's
+// standing leaves the counts and tally rows the case states, and those the rows imply.
+// Mutation: drop a writer's arm, or a delete's, restore's or settings change's tally move.
 func TestEachRecordMovesTheCountsItShould(t *testing.T) {
 	t.Parallel()
 	const repo = "repo-c"
@@ -424,28 +422,30 @@ func TestEachRecordMovesTheCountsItShould(t *testing.T) {
 	})
 }
 
-// A RECORD WRITES NO MORE ROWS THAN ITS DECIDE COUNTS: each lifecycle record at its widest,
-// in a repository in use, reports exactly what ChangeProposal.decidedRows holds it to, its
-// tally row with it; and a push book that merges one change and closes another holds the
-// apply to its decidedRows, its rows and its tally row together.
-// Mutation: leave tallyRows out of either decidedRows, or the readiness row out of a close's,
-// and the record reports one row more than it was counted.
+// A RECORD WRITES NO MORE ROWS THAN ITS DECIDE COUNTS: each change record, merge, landing
+// and push book at its widest writes exactly the rows its decide counts, its tally row with them.
+// Mutation: drop tallyRows, a readiness row or the tip work row from a bound, and one row is over.
 func TestARecordWritesNoMoreRowsThanItsDecideCounts(t *testing.T) {
 	t.Parallel()
 	const repo = "repo-c"
-	given := func(t *testing.T, draft bool) *estate {
+	// queued opens, enqueues and stores an answered readiness for each change n, which a close,
+	// a merge and a landing clear.
+	queued := func(t *testing.T, draft bool, changes ...int) *estate {
 		e := openApplyEstate(t)
-		e.apply(create(t, repo, "c"), ccBranches(t, repo, "p0", 1), ccOpen(t, repo, 1, draft),
-			ccRecord(t, repo, OpEnqueue, Enqueue{RepoID: repo, EntryID: ccChange(101), ChangeID: ccChange(1),
-				TargetRef: ccMain, HeadOID: ccHead(1), Method: MergeMethodMerge, Principal: ccSeat}))
-		// A STORED READINESS WITH AN ANSWER, which a close and a landing clear.
-		e.exec(`INSERT INTO code_mergeability (change_id, revision, target_ref, target_oid, target_position,
-			state, conflicts_count, node, bytes, position, at, change_version, readiness_version, checks_position,
-			chart_epoch, ready, waits_person, conflicts)
-			VALUES (?, 1, ?, ?, 1, 'clean', 0, 'node-a', 0, 1, 0, 1, 1, 0, 0, 1, 0, '')`,
-			ccChange(1), ccMain, oid("base"))
+		e.apply(create(t, repo, "c"), ccBranches(t, repo, "p0", changes...))
+		for _, n := range changes {
+			e.apply(ccOpen(t, repo, n, draft), ccRecord(t, repo, OpEnqueue, Enqueue{RepoID: repo,
+				EntryID: ccChange(100 + n), ChangeID: ccChange(n), TargetRef: ccMain, HeadOID: ccHead(n),
+				Method: MergeMethodMerge, Principal: ccSeat}))
+			e.exec(`INSERT INTO code_mergeability (change_id, revision, target_ref, target_oid,
+				target_position, state, conflicts_count, node, bytes, position, at, change_version,
+				readiness_version, checks_position, chart_epoch, ready, waits_person, conflicts)
+				VALUES (?, 1, ?, ?, 1, 'clean', 0, 'node-a', 0, 1, 0, 1, 1, 0, 0, 1, 0, '')`,
+				ccChange(n), ccMain, oid("base"))
+		}
 		return e
 	}
+	given := func(t *testing.T, draft bool) *estate { return queued(t, draft, 1) }
 	body := "what it does"
 	moved := oid("moved")
 	for _, tc := range []struct {
@@ -489,6 +489,39 @@ func TestARecordWritesNoMoreRowsThanItsDecideCounts(t *testing.T) {
 		})
 	}
 
+	// A green merge or landing pays main's owed tip work. Each one's pushes write 4 rows beside its own:
+	// a merge's ref, pack, push row and counters; a landing's two push rows, main's ref and the counters.
+	const pushRows = 4
+	t.Run("a green merge of a queued change", func(t *testing.T) {
+		t.Parallel()
+		e := given(t, false)
+		e.exec(`INSERT INTO code_tips_due (repo_id, target_ref) VALUES (?, ?)`, repo, ccMain)
+		got := e.applyCounting(ccRecord(t, repo, OpMerge, Merge{RepoID: repo, MergeID: ccChange(300),
+			ChangeID: ccChange(1), Method: MergeMethodMerge, TargetRef: ccMain, BaseOID: oid("base"),
+			HeadOID: ccHead(1), CommitOID: oid("merged"), Pack: packOf(ccChange(300)), Node: "git-a",
+			ReceivedAt: applyClock, Principal: ccSeat, Protected: true, Green: true}))
+		if own, want := got-pushRows, mergeDecidedRows-routingNoticeRows; own != want {
+			t.Errorf("the merge wrote %d rows of its own and its decide counted %d", own, want)
+		}
+		e.changeCountsMatchRows()
+	})
+	t.Run("a landing of two queued changes", func(t *testing.T) {
+		t.Parallel()
+		e := queued(t, false, 1, 2)
+		e.exec(`INSERT INTO code_tips_due (repo_id, target_ref) VALUES (?, ?)`, repo, ccMain)
+		l := Land{RepoID: repo, LandID: ccChange(400), TargetRef: ccMain, BaseOID: oid("base"),
+			Node: "git-a", ReceivedAt: applyClock, Entries: []LandEntry{
+				{EntryID: ccChange(101), ChangeID: ccChange(1), Commit: oid("landed-1")},
+				{EntryID: ccChange(102), ChangeID: ccChange(2), Commit: oid("landed-2")}}}
+		l.TipOID = l.Entries[1].Commit
+		got := e.applyCounting(ccRecord(t, repo, OpLand, l))
+		// No candidates or queue history are seeded, so the bound's train and horizon terms are 0.
+		if own, want := got-pushRows, landDecidedRows(2)-MaxQueueDepth-queueHorizonRows; own != want {
+			t.Errorf("the landing wrote %d rows of its own and its decide counted %d", own, want)
+		}
+		e.changeCountsMatchRows()
+	})
+
 	t.Run("a push merging one change and closing another", func(t *testing.T) {
 		t.Parallel()
 		e := openApplyEstate(t)
@@ -525,12 +558,9 @@ func TestARecordWritesNoMoreRowsThanItsDecideCounts(t *testing.T) {
 	})
 }
 
-// THE TALLY ROWS TAKE NOTHING FROM THE HORIZONS: with a backlog that fills a record's horizons,
-// a push merging a live change and a merge record of one sweep exactly the tombstones a build
-// without the counts sweeps, and a push forgets exactly the drops it would: the record touches
-// MaxRecordRows and its tally row on top.
-// Mutation: add the tally rows to landPushes' rows or to a merge's spent, and each record
-// sweeps or forgets one fewer and touches exactly MaxRecordRows.
+// THE TALLY ROWS TAKE NOTHING FROM THE HORIZONS: under a full backlog a push and a merge sweep or
+// forget what a build without counts does, touching MaxRecordRows and their tally row on top.
+// Mutation: charge the tally rows to landPushes or a merge's spent, and each sweeps one fewer.
 func TestTheTallyRowsTakeNothingFromTheHorizons(t *testing.T) {
 	t.Parallel()
 	const repo, waiting = "repo-c", MaxRecordRows + 500
@@ -671,11 +701,9 @@ var writesCounted = regexp.MustCompile(`(?s)(INSERT INTO|DELETE FROM) code_(chan
 	`UPDATE code_changes SET\s((?:[^W]|W[^H])*?)\bstate\s*=|` +
 	`UPDATE code_repos SET\s((?:[^W]|W[^H])*?)\b(status|owner|owner_kind|visibility)\s*=`)
 
-// EVERY WRITER OF A COUNTED ROW SAYS HOW IT COUNTS: the package's functions that hold or name a
-// statement writing a change's state or a repository's standing, and those calling one whose
-// callers count, are exactly countedWriters, and each calls the counting function it names.
-// Mutation: a new function writing a change's state or a repository's owner, an entry for a
-// function that no longer writes, or a dropped countChanges call, fails.
+// EVERY WRITER OF A COUNTED ROW SAYS HOW IT COUNTS: the functions writing a change's state or a
+// repository's standing are exactly countedWriters, each calling the counting function it names.
+// Mutation: a new uncounted writer, a stale entry or a dropped countChanges call fails.
 func TestEveryWriterOfACountedRowSaysHowItCounts(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
@@ -872,14 +900,9 @@ func TestChangeCountsCountEveryState(t *testing.T) {
 	}
 }
 
-// THE CHANGE COUNTS ARE THE ROWS: random records over random repositories (owners, visibility,
-// imports and mirrors, deletes, restores and purges) leave the counts what the rows imply after
-// every record; an upgraded node's re-derivation in the middle goes on from the same rows; a
-// replay of the records from zero writes the same counts; and a re-derivation of the end writes
-// nothing, and of the end forgotten writes the same counts again.
-// Mutation: drop the tally move from applyDelete, count a push's open as open whatever its draft
-// flag, leave purgeChanges' decrement out, skip the prune in retally, or let Rederive tally a
-// repository that is not in use, and a step, the replay or the re-derivation differs.
+// THE CHANGE COUNTS ARE THE ROWS: random records leave the counts what the rows imply after each
+// one, through a re-derivation midway, a replay from zero and a re-derivation of the end.
+// Mutation: drop a tally move, a draft check, a purge's decrement or retally's prune, and one differs.
 func TestTheChangeCountsAreTheRows(t *testing.T) {
 	t.Parallel()
 	applied := map[string]bool{}
