@@ -40,9 +40,9 @@ const (
 	// treeWalkMemoRecords is the records of the group walk that probe the
 	// memo for windows: one probe each until one hits.
 	treeWalkMemoRecords = 64
-	// treeCommitsLogShare: the walks leave a tenth of the read's budget for
+	// treeCommitsLogReserve: the walks leave a tenth of the read's budget for
 	// the log of the page's commits.
-	treeCommitsLogShare = 10
+	treeCommitsLogReserve = 10
 )
 
 // treeWindowFormat names a window entry: windowStart's rule (FNV-1a 64 of the
@@ -565,7 +565,7 @@ func (rt *router) answer(i int, commit string) { rt.res.commits[rt.l.want[i].nam
 // the read's budget less the share kept for the page's log, or false where
 // none is left, which ends the routing as the budget's end does.
 func (rt *router) routeBudget() (time.Duration, bool) {
-	left := rt.r.gitLeft - rt.r.s.gitBudget/treeCommitsLogShare
+	left := rt.r.gitLeft - rt.r.s.gitBudget/treeCommitsLogReserve
 	return left, left > 0
 }
 
