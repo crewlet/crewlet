@@ -102,3 +102,36 @@ func TestABatchAnnouncesEachPersonOnceWithItsNewestNotice(t *testing.T) {
 		t.Errorf("a drained batch announced %+v again", again)
 	}
 }
+
+// A notice whose words the batch took away moves its recipient's inbox and
+// counts nothing, and never displaces the arrival of the same notice in the
+// same batch: a reply and the removal of its remark, applied together, still
+// told the person of one new notice.
+//
+// Mutation: let a change count, let it replace a held note, or rank it with an
+// arrival, and a step fails.
+func TestAChangedNoticeMovesAnInboxAndCountsNothing(t *testing.T) {
+	t.Parallel()
+	at := time.Unix(1_700_000_000, 0).UTC()
+	var b inbox.Batch
+	for _, n := range []inbox.Note{
+		{Record: "r-1", Handle: "bo", Subject: "a-1", Reason: "owner", Position: 1, At: at},
+		// THE SAME NOTICE'S WORDS TAKEN AWAY later in the batch.
+		{Record: "r-1", Handle: "bo", Subject: "a-1", Reason: "owner", Position: 1, At: at, Changed: true},
+		// AN OLDER NOTICE CHANGED, at a later position than the arrival.
+		{Record: "r-0", Handle: "bo", Subject: "a-0", Reason: "mention", Position: 5, At: at, Changed: true},
+		// A NOTICE ONLY CHANGED moves its recipient's inbox.
+		{Record: "r-0", Handle: "ana", Subject: "a-0", Reason: "participant", Position: 5, At: at,
+			Changed: true},
+	} {
+		b.Note(n)
+	}
+	got := b.Drain("artifacts")
+	want := []inbox.Movement{
+		{Source: "artifacts", Handle: "ana", UnreadDelta: 0, Subject: "a-0", Reason: "participant", At: at},
+		{Source: "artifacts", Handle: "bo", UnreadDelta: 1, Subject: "a-1", Reason: "owner", At: at},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the batch announced %+v, want %+v", got, want)
+	}
+}
