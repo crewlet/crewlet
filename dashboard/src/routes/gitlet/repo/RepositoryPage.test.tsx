@@ -28,6 +28,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
+import { engineJson } from "~/test/engineAnswer.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
@@ -475,6 +476,8 @@ function stubEngine(
           );
         case "/query/code_pushes":
           return json({ position: POSITION, level: "session" });
+        case "/query/code_commit_marks":
+          return json({ commit_marks: [], position: POSITION, level: "session" });
       }
       return json({}, 404);
     }),
@@ -982,6 +985,357 @@ test("each commit says how it reached its branch", async () => {
   expect(chip("Pushed by another")?.getAttribute("title")).toBe("through session:abc");
   expect(chip("Unknown push")).toBeNull();
   expect(chip("Own push")?.textContent).toBe("pushed by CTO");
+});
+
+/** A rollup of `target`'s checks of one commit, passed unless a case says otherwise. */
+const checked = (target: string, extra: Record<string, unknown> = {}) => ({
+  target,
+  state: "passed",
+  counts: { passed: 2 },
+  required: 2,
+  required_passed: 2,
+  ...extra,
+});
+
+/** A change a mark names. */
+const landing = (n: number, state: string, extra: Record<string, unknown> = {}) => ({
+  repo: "web",
+  ref: `web!${n}`,
+  title: `change ${n}`,
+  state,
+  ...extra,
+});
+
+/**
+ * The engine answering one history page of `commits` with who pushed each and their tags,
+ * and each commit's marks from `marks` (held until `held` settles); every marks ask kept.
+ */
+function stubMarked(opts: {
+  commits: unknown[];
+  pushedBy?: Record<string, unknown>;
+  tagged?: Record<string, unknown>;
+  marks?: Record<string, Record<string, unknown>>;
+  marksAnswer?: () => Response;
+  held?: Promise<void>;
+}) {
+  const asked = stubHistory(opts.commits, opts.pushedBy);
+  const marksAsked: URL[] = [];
+  const history = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/query/code_log" && opts.tagged) {
+        const answer = (await (await history(input, init)).json()) as Record<string, unknown>;
+        return json({ ...answer, tagged: opts.tagged });
+      }
+      if (url.pathname !== "/query/code_commit_marks") return history(input, init);
+      marksAsked.push(url);
+      await opts.held;
+      if (opts.marksAnswer) return opts.marksAnswer();
+      const oids = (url.searchParams.get("commits") ?? "").split(",");
+      return json({
+        commit_marks: oids
+          .filter((oid) => opts.marks?.[oid])
+          .map((oid) => ({ commit: oid, ...opts.marks![oid] })),
+        position: POSITION,
+        level: "session",
+      });
+    }),
+  );
+  return { asked, marksAsked };
+}
+
+/** The history row of the commit whose subject is `subject`. */
+const rowOf = async (subject: string) => {
+  const history = await screen.findByRole("group", { name: /History of/ });
+  return (await within(history).findByText(subject)).closest<HTMLElement>(".code-list__row")!;
+};
+
+// EACH COMMIT CARRIES ITS CHECK FOR THE BRANCH READ: the marks are asked once per page, by
+// that page's whole ids; a feature branch's history takes its own rollup, the default's
+// history the main one. Mutation: pick the first rollup, or ask every page again.
+test("each commit carries its check for the branch read", async () => {
+  const asked = stubEngine();
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  const marks: Record<string, unknown>[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_commit_marks") return engine(input, init);
+      asked.push(url);
+      const failing = checked("refs/heads/main", {
+        state: "failing",
+        counts: { passed: 1, failed: 1 },
+        required_passed: 1,
+        failing: [{ name: "e2e", state: "failed", required: true }],
+      });
+      marks.push({ commits: url.searchParams.get("commits") });
+      return json({
+        commit_marks: [{ commit: HEAD, checks: [checked("refs/heads/feature"), failing] }],
+        position: POSITION,
+        level: "session",
+      });
+    }),
+  );
+  mount("#/gitlet/repos/web?tab=commits");
+  const row = await rowOf("Start the storefront");
+  const mark = await within(row).findByText("e2e failed");
+  expect(mark.closest(".code-check-mark")?.getAttribute("title")).toBe(
+    "2 checks: 1 passed, 1 failed. 1 of 2 required passed.",
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Load older commits" }));
+  await rowOf("Older work");
+  await waitFor(() => expect(marks).toHaveLength(2));
+  expect(marks).toEqual([{ commits: HEAD }, { commits: OTHER }]);
+
+  cleanup();
+  mount("#/gitlet/repos/web?tab=commits&ref=feature");
+  const feature = await rowOf("Start the storefront");
+  expect(await within(feature).findByText("Passed")).toBeTruthy();
+  expect(within(feature).queryByText("e2e failed")).toBeNull();
+});
+
+// THE MARKS DO NOT MOVE A ROW'S ID: the check's slot is drawn, empty, before they answer, and
+// holds the mark after; its width is the layout case's. Mutation: draw the slot only once known.
+test("the marks do not move a row's id", async () => {
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  stubMarked({
+    commits: [logged(HEAD, "Newest", "2026-10-22T10:00:00Z")],
+    marks: { [HEAD]: { checks: [checked("refs/heads/main")] } },
+    held,
+  });
+  mount("#/gitlet/repos/web?tab=commits");
+  const row = await rowOf("Newest");
+  const facts = row.querySelector(".code-list__facts")!;
+  expect(facts.firstElementChild?.className).toBe("code-commit-check");
+  expect(facts.firstElementChild?.textContent).toBe("");
+  release();
+  await waitFor(() => expect(facts.firstElementChild?.textContent).toBe("Passed"));
+  expect(facts.children[1]?.className).toContain("code-sha");
+});
+
+/** A push the index holds, by `seat`, `via` how. */
+const pushed = (seat: string, via: string, at = "2026-10-22T10:00:00Z") => ({
+  push_id: "p",
+  position: POSITION,
+  at,
+  principal: { kind: "agent", seat },
+  via,
+});
+
+// A MERGE COMMIT GITLET WROTE IS GITLET'S: its mark, "Gitlet committed" at its committer
+// date, and the chip naming the merger and the change; a queue landing says the queue; a squash,
+// or a merge the engine did not commit, keeps its author. Mutation: decide by `via` alone.
+test("a merge commit Gitlet wrote is drawn as Gitlet's, and a squash keeps its author", async () => {
+  const MERGE = "c".repeat(40);
+  const SQUASH = "d".repeat(40);
+  const QUEUED = "e".repeat(40);
+  const OWN = "f".repeat(40);
+  stubMarked({
+    commits: [
+      {
+        ...logged(MERGE, "Merge change web!41", "2026-10-22T08:00:00Z", "CTO"),
+        committed_at: "2026-10-22T10:00:00Z",
+        parent_count: 2,
+        committer: "Crewlet",
+        engine_committed: true,
+      },
+      { ...logged(SQUASH, "cache the badge", "2026-10-22T09:00:00Z", "Ada"), parent_count: 1 },
+      {
+        ...logged(QUEUED, "Merge change web!44", "2026-10-22T07:00:00Z", "CTO"),
+        parent_count: 2,
+        engine_committed: true,
+      },
+      {
+        ...logged(OWN, "Merge branch feature", "2026-10-22T06:00:00Z", "Ada"),
+        parent_count: 2,
+        engine_committed: false,
+      },
+    ],
+    pushedBy: {
+      [MERGE]: pushed("cto", "merge"),
+      [SQUASH]: pushed("cto", "merge"),
+      [QUEUED]: pushed("cto", "queue"),
+      [OWN]: pushed("cto", "merge"),
+    },
+    marks: {
+      [MERGE]: { merged: [landing(41, "merged", { merge_oid: MERGE })] },
+      [SQUASH]: { merged: [landing(43, "merged", { merge_oid: SQUASH })] },
+      [QUEUED]: { merged: [landing(44, "merged", { merge_oid: QUEUED })] },
+    },
+  });
+  mount("#/gitlet/repos/web?tab=commits");
+  const merge = await rowOf("Merge change web!41");
+  const meta = merge.querySelector(".code-list__meta")!;
+  expect(meta.querySelector(".code-face svg")).toBeTruthy();
+  expect(meta.querySelector(".crewlet-avatar")).toBeNull();
+  expect(meta.querySelector(".code-commit-meta__who")?.textContent).toBe("Gitlet");
+  expect(meta.textContent).toContain("committed");
+  expect(meta.querySelector("time")?.getAttribute("dateTime")).toBe("2026-10-22T10:00:00Z");
+  const chip = meta.querySelector(".code-commit-prov")!;
+  expect(chip.textContent).toBe("merged by Gitlet for CTO");
+  await waitFor(() =>
+    expect(chip.getAttribute("title")).toBe(
+      "Gitlet wrote this merge commit when CTO merged web!41 through its gate",
+    ),
+  );
+  const squash = (await rowOf("cache the badge")).querySelector(".code-list__meta")!;
+  expect(squash.querySelector(".code-face")).toBeNull();
+  expect(squash.querySelector(".code-commit-meta__who")?.textContent).toBe("Ada");
+  expect(squash.querySelector(".code-commit-prov")?.textContent).toBe("merged by Gitlet for CTO");
+  const queued = (await rowOf("Merge change web!44")).querySelector(".code-list__meta")!;
+  expect(queued.querySelector(".code-commit-meta__who")?.textContent).toBe("Gitlet");
+  const landed = queued.querySelector(".code-commit-prov")!;
+  expect(landed.textContent).toBe("landed by Gitlet from the queue for CTO");
+  await waitFor(() =>
+    expect(landed.getAttribute("title")).toBe(
+      "Gitlet wrote this commit when web!44 landed from the merge queue, queued by CTO",
+    ),
+  );
+  const own = (await rowOf("Merge branch feature")).querySelector(".code-list__meta")!;
+  expect(own.querySelector(".code-face")).toBeNull();
+  expect(own.querySelector(".code-commit-meta__who")?.textContent).toBe("Ada");
+  expect(own.textContent).toContain("authored");
+});
+
+// A MERGE COMMIT WEARS ITS CHANGE'S PILL, a head reads landed with, a live change's head its
+// revision, and an inner commit nothing. Mutation: draw "landed with" on the merge commit too.
+test("a merge commit wears its change's pill, and a head reads landed with", async () => {
+  const [merge, head, live, inner, gone] = ["1", "2", "3", "4", "5"].map((n) => n.repeat(40)) as [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  stubMarked({
+    commits: [
+      logged(merge, "Merge change web!41", "2026-10-22T10:00:00Z"),
+      logged(head, "cache the badge", "2026-10-22T09:00:00Z"),
+      logged(live, "stream the shell", "2026-10-22T08:00:00Z"),
+      logged(inner, "an inner commit", "2026-10-22T07:00:00Z"),
+      logged(gone, "a dropped idea", "2026-10-22T06:00:00Z"),
+    ],
+    marks: {
+      [merge]: {
+        merged: [landing(41, "merged", { merge_oid: merge })],
+        heads: [{ change: landing(41, "merged"), n: 1 }],
+      },
+      [head]: { heads: [{ change: landing(41, "merged"), n: 1 }] },
+      [live]: { heads: [{ change: landing(42, "open"), n: 3 }] },
+      [gone]: { heads: [{ change: landing(40, "closed"), n: 2 }] },
+    },
+  });
+  mount("#/gitlet/repos/web?tab=commits");
+  const mergeRow = await rowOf("Merge change web!41");
+  const pill = await waitFor(() => {
+    const a = mergeRow.querySelector<HTMLElement>("a.code-change-ref");
+    expect(a).toBeTruthy();
+    return a!;
+  });
+  expect(pill.getAttribute("href")).toBe("#/gitlet/repos/web/changes/41");
+  expect(pill.closest(".code-list__title")).toBeTruthy();
+  expect(mergeRow.querySelector(".code-commit-landed")).toBeNull();
+  const landed = (await rowOf("cache the badge")).querySelector(".code-commit-landed");
+  expect(landed?.textContent).toBe("landed with web!41");
+  expect(
+    within(landed as HTMLElement)
+      .getByRole("link")
+      .getAttribute("href"),
+  ).toBe("#/gitlet/repos/web/changes/41");
+  expect((await rowOf("stream the shell")).querySelector(".code-commit-landed")?.textContent).toBe(
+    "revision 3 of web!42",
+  );
+  expect((await rowOf("a dropped idea")).querySelector(".code-commit-landed")?.textContent).toBe(
+    "revision 2 of web!40, closed",
+  );
+  const innerRow = await rowOf("an inner commit");
+  expect(innerRow.querySelector(".code-commit-landed")).toBeNull();
+  expect(innerRow.querySelector(".code-change-ref")).toBeNull();
+});
+
+// A COMMIT'S TAGS ARE CHIPS from the page's own decoration; a page with none says nothing.
+// Mutation: draw "no tags" where the decoration is absent.
+test("a commit's tags are chips, and an unknown decoration draws none", async () => {
+  stubMarked({
+    commits: [logged(HEAD, "Newest", "2026-10-22T10:00:00Z")],
+    tagged: { commits: { [HEAD]: { refs: ["refs/tags/v2", "refs/tags/v1"], more: 1 } } },
+  });
+  mount("#/gitlet/repos/web?tab=commits");
+  const meta = (await rowOf("Newest")).querySelector(".code-list__meta")!;
+  await waitFor(() => expect(meta.querySelectorAll(".code-tag-chip")).toHaveLength(2));
+  expect([...meta.querySelectorAll(".code-tag-chip")].map((a) => a.getAttribute("href"))).toEqual([
+    "#/gitlet/repos/web?ref=refs%2Ftags%2Fv2",
+    "#/gitlet/repos/web?ref=refs%2Ftags%2Fv1",
+  ]);
+  expect(meta.textContent).toContain("+1 more tag");
+
+  cleanup();
+  stubMarked({ commits: [logged(HEAD, "Untagged", "2026-10-22T10:00:00Z")] });
+  mount("#/gitlet/repos/web?tab=commits");
+  const bare = (await rowOf("Untagged")).querySelector(".code-list__meta")!;
+  expect(bare.querySelector(".code-tag-chip")).toBeNull();
+  expect(bare.textContent).not.toContain("tag");
+});
+
+// CHECKS OLDER THAN THE CHECKS KEPT SAY SO, never a cross; a recent commit with none says
+// nothing. Mutation: draw a cross for an absence.
+test("checks older than the checks kept say so", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-30T12:00:00Z"));
+  stubMarked({
+    commits: [
+      logged(HEAD, "Long ago", "2026-10-21T10:00:00Z"),
+      logged(OTHER, "Lately", "2026-11-20T10:00:00Z"),
+    ],
+    pushedBy: {
+      [HEAD]: pushed("cto", "git", "2026-10-21T10:00:00Z"),
+      [OTHER]: pushed("cto", "git", "2026-11-20T10:00:00Z"),
+    },
+    marks: {},
+  });
+  mount("#/gitlet/repos/web?tab=commits");
+  const old = (await rowOf("Long ago")).querySelector(".code-commit-check")!;
+  await waitFor(() => expect(old.textContent).toBe("Checks no longer kept"));
+  expect(old.querySelector("svg")).toBeNull();
+  expect(old.firstElementChild?.getAttribute("title")).toBe("Checks are kept 30 days.");
+  expect((await rowOf("Lately")).querySelector(".code-commit-check")?.textContent).toBe("");
+});
+
+// A REFUSED MARKS READ IS SAID ONCE, and the rows still draw. Mutation: a line per row.
+test("a refused marks read is said once, and the rows still draw", async () => {
+  stubMarked({
+    commits: [
+      logged(HEAD, "Newest", "2026-10-22T10:00:00Z"),
+      logged(OTHER, "Older", "2026-10-21T10:00:00Z"),
+    ],
+    marksAnswer: () =>
+      engineJson({ error: "unavailable", detail: "this node answers no marks yet" }, 503),
+  });
+  mount("#/gitlet/repos/web?tab=commits");
+  const note = await screen.findByText(
+    "Checks and the changes each commit landed with are unavailable: this node answers no marks yet.",
+  );
+  expect(note.getAttribute("role")).toBe("status");
+  expect(document.querySelectorAll(".code-commit-note")).toHaveLength(1);
+  expect(await rowOf("Older")).toBeTruthy();
+  expect(document.querySelector(".code-check-mark")).toBeNull();
+
+  cleanup();
+  const { marksAsked } = stubMarked({
+    commits: [logged(HEAD, "Newest", "2026-10-22T10:00:00Z")],
+    marksAnswer: () => engineJson({ error: "query_failed" }, 500),
+  });
+  mount("#/gitlet/repos/web?tab=commits");
+  const failed = await screen.findByText(
+    "Checks and the changes each commit landed with could not be read.",
+  );
+  expect(marksAsked).toHaveLength(1);
+  fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(marksAsked).toHaveLength(2));
 });
 
 // EACH COMMIT COPIES ITS ID AND BROWSES ITS FILES at it, as a real link a

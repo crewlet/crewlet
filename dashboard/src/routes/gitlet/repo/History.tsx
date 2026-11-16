@@ -24,27 +24,35 @@
  *
  * A TIMELINE OF THE READER'S DAYS each commit was AUTHORED, in git's order: a
  * day met again after another opens its own heading.
+ *
+ * Each commit carries its checks for the branch read, the change it merged or landed with,
+ * and its tags (`code_commit_marks`, the page's `tagged`).
  */
 
-import { useMemo, type ReactNode } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import { Button, IconButtonLink, Skeleton, Tag, VisuallyHidden } from "@crewlethq/ui";
 import {
   BookmarkGlyph,
   BotGlyph,
   CodeGlyph,
   GitCommitVerticalGlyph,
+  GitMergeGlyph,
   UploadGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { useParam } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { noDefaultHead, refName, shortOID } from "~/lib/code.ts";
+import { changePath, noDefaultHead, parseChangeRef, refName, shortOID } from "~/lib/code.ts";
 import { ago } from "~/lib/ago.ts";
+import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
 import { fmtDate, fmtDateTime, plural } from "~/lib/format.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type {
+  CodeChangeLanding,
+  CodeCommitMark,
+  CodeCommitTags,
   CodeGitAnswer,
   CodeLogCommit,
   CodePushedBy,
@@ -54,7 +62,18 @@ import type {
 } from "~/protocol/index.ts";
 import { CodeList, useDayGroups, type ListDay } from "../CodeList.tsx";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
-import { BranchChip, Face, ShaChip, useWhoName } from "../ui.tsx";
+import { ChangeRefPill } from "../Changes.tsx";
+import {
+  BranchChip,
+  CheckRollupMark,
+  Face,
+  GITLET,
+  ShaChip,
+  TagChip,
+  useWhoName,
+  type Who,
+} from "../ui.tsx";
+import { useCommitMarks, type MarksFailure } from "./marks.ts";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
 import { ProtectButton } from "./Protect.tsx";
 import { RefPicker, revisionWord, type Revisions } from "./refs.tsx";
@@ -281,21 +300,27 @@ function branchRev(repo: CodeRepoDetail, r: CodeRefRow): string {
 
 /** How a commit reached its branch, as its chip says it: a glyph and its words. */
 export interface Provenance {
-  glyph: "run" | "push";
+  glyph: "run" | "push" | "merge";
   words: ReactNode;
 }
 
 /**
- * How the push the index holds brought a commit: a run for its work item, the
- * author with git, or who pushed it. None where the index holds no push.
+ * How the push the index holds brought a commit: Gitlet merging or landing a
+ * change for its merger, a run for its work item, the author with git, or who
+ * pushed it. None where the index holds no push.
  */
 export function provenanceOf(
   by: CodePushedBy | undefined,
   author: string,
-  whoName: (who: string) => string,
+  whoName: (who: Who) => string,
 ): Provenance | null {
   if (!by) return null;
   const pusher = by.principal.seat ?? by.principal.operator_id ?? "";
+  const forWhom = pusher ? ` for ${whoName(pusher)}` : "";
+  if (by.via === "merge") return { glyph: "merge", words: `merged by Gitlet${forWhom}` };
+  if (by.via === "queue") {
+    return { glyph: "merge", words: `landed by Gitlet from the queue${forWhom}` };
+  }
   const work = by.principal.run?.work_key;
   const theAuthor = pusher !== "" && whoName(pusher) === whoName(author);
   if (work) {
@@ -316,44 +341,184 @@ export function provenanceOf(
   return { glyph: "push", words: `pushed by ${whoName(pusher)}` };
 }
 
-/** One commit's meta line: who wrote it and when, then how it reached its branch. */
+/** How many parents a commit has, or null where the page says neither. */
+const parentsOf = (c: CodeLogCommit): number | null => c.parent_count ?? c.parents?.length ?? null;
+
+/** Gitlet wrote this merge commit: two parents or more, brought by a merge or a queue landing. */
+export function gitletWrote(c: CodeLogCommit, by: CodePushedBy | undefined): boolean {
+  const merged = by?.via === "merge" || by?.via === "queue";
+  return merged && (parentsOf(c) ?? 0) >= 2 && c.engine_committed !== false;
+}
+
+/** The merge chip's title: which change Gitlet merged or landed, and for whom. */
+function mergeTitle(
+  c: CodeLogCommit,
+  by: CodePushedBy,
+  mark: CodeCommitMark | null | undefined,
+  whoName: (who: Who) => string,
+): string {
+  const pusher = by.principal.seat ?? by.principal.operator_id ?? "";
+  const who = pusher ? whoName(pusher) : "a person";
+  const change = mark?.merged?.[0]?.ref ?? mark?.heads?.[0]?.change.ref ?? "a change";
+  if (by.via === "queue") {
+    return `Gitlet wrote this commit when ${change} landed from the merge queue, queued by ${who}`;
+  }
+  const what = (parentsOf(c) ?? 0) >= 2 ? "merge commit" : "commit";
+  return `Gitlet wrote this ${what} when ${who} merged ${change} through its gate`;
+}
+
+/** A change a commit names, as a link to its page. */
+function ChangeLink({ change }: { change: CodeChangeLanding }) {
+  const at = parseChangeRef(change.ref);
+  return at ? (
+    <a className="prose-link" href={href(changePath(at.repo, at.number))} title={change.title}>
+      {change.ref}
+    </a>
+  ) : (
+    <span>{change.ref}</span>
+  );
+}
+
+/** The changes whose revision this commit heads: "landed with web!41", "revision 3 of web!42". */
+function Landed({ repo, commit, mark }: { repo: string; commit: string; mark: CodeCommitMark }) {
+  const merged = new Set((mark.merged ?? []).map((m) => m.ref));
+  const heads = (mark.heads ?? []).filter((h) => !merged.has(h.change.ref));
+  if (heads.length === 0 && !mark.more) return null;
+  return (
+    <span className="code-commit-landed">
+      {heads.map((h, i) => (
+        <Fragment key={h.change.ref}>
+          {i > 0 && ", "}
+          {h.change.state === "merged" ? (
+            <>
+              landed with <ChangeLink change={h.change} />
+            </>
+          ) : (
+            <>
+              revision {h.n} of <ChangeLink change={h.change} />
+              {h.change.state === "closed" && ", closed"}
+            </>
+          )}
+        </Fragment>
+      ))}
+      {mark.more && (
+        <>
+          {heads.length > 0 && ", "}
+          <a className="prose-link" href={commitHref(repo, commit)}>
+            and more
+          </a>
+        </>
+      )}
+    </span>
+  );
+}
+
+/** One commit's meta line: who wrote it and when, how it reached its branch, its change and its tags. */
 function CommitMeta({
+  repo,
   commit,
   by,
+  mark,
+  tags,
   now,
 }: {
+  repo: string;
   commit: CodeLogCommit;
   by: CodePushedBy | undefined;
+  mark: CodeCommitMark | null | undefined;
+  tags: CodeCommitTags | undefined;
   now: number;
 }) {
   const whoName = useWhoName();
   const author = commit.author ?? `(${commit.author_bytes ?? 0} bytes)`;
+  // GITLET IS THE WRITER of a merge commit it built, dated when it committed it.
+  const byGitlet = gitletWrote(commit, by);
+  const writer: Who = byGitlet ? GITLET : author;
+  const at = byGitlet ? commit.committed_at : commit.authored_at;
   const prov = provenanceOf(by, author, whoName);
-  const Glyph = prov?.glyph === "run" ? BotGlyph : UploadGlyph;
+  const Glyph =
+    prov?.glyph === "run" ? BotGlyph : prov?.glyph === "merge" ? GitMergeGlyph : UploadGlyph;
+  const provTitle =
+    prov?.glyph === "merge" && by
+      ? mergeTitle(commit, by, mark, whoName)
+      : by?.principal.operator_id
+        ? `through ${by.principal.operator_id}`
+        : undefined;
   return (
     <>
-      <Face who={author} />
-      <span className="code-commit-meta__who" title={commit.author_email}>
-        {whoName(author)}
+      <Face who={writer} />
+      <span className="code-commit-meta__who" title={byGitlet ? undefined : commit.author_email}>
+        {whoName(writer)}
       </span>
       <span>
-        authored{" "}
-        <time dateTime={commit.authored_at} title={fmtDateTime(commit.authored_at)}>
-          {ago(commit.authored_at, now)}
+        {byGitlet ? "committed" : "authored"}{" "}
+        <time dateTime={at} title={fmtDateTime(at)}>
+          {ago(at, now)}
         </time>
       </span>
       {prov && (
-        <span
-          className="code-commit-prov"
-          title={by?.principal.operator_id ? `through ${by.principal.operator_id}` : undefined}
-        >
+        <span className="code-commit-prov" title={provTitle}>
           <Glyph size="xs" aria-hidden />
           <span>{prov.words}</span>
         </span>
       )}
+      {mark && <Landed repo={repo} commit={commit.oid} mark={mark} />}
+      {tags?.refs.map((ref) => (
+        <TagChip key={ref} repo={repo} gitRef={ref} />
+      ))}
+      {tags?.more ? <span>{`+${plural(tags.more, "more tag", "more tags")}`}</span> : null}
     </>
   );
 }
+
+/** The commit's checks for the branch read, or that they are no longer kept; nothing until known. */
+function CommitCheck({
+  mark,
+  by,
+  branch,
+  defaultRef,
+  now,
+}: {
+  mark: CodeCommitMark | null | undefined;
+  by: CodePushedBy | undefined;
+  branch: string;
+  defaultRef: string;
+  now: number;
+}) {
+  if (mark === undefined) return null;
+  const rollup = rollupFor(mark, branch, defaultRef);
+  if (rollup) return <CheckRollupMark rollup={rollup} title={rollupTitle(rollup, branch, now)} />;
+  const pushed = Date.parse(by?.at ?? "");
+  if (!Number.isNaN(pushed) && now - pushed > CHECK_HISTORY_DAYS * 86_400_000) {
+    return (
+      <span className="t-caption" title={`Checks are kept ${CHECK_HISTORY_DAYS} days.`}>
+        Checks no longer kept
+      </span>
+    );
+  }
+  return null;
+}
+
+/** Why the marks are missing, said once above the rows. */
+function MarksNote({ failed, retry }: { failed: MarksFailure; retry: () => void }) {
+  const what = "Checks and the changes each commit landed with";
+  const refused = REFUSED_CODES.has(failed.code);
+  return (
+    <p className="code-commit-note" role="status">
+      {refused
+        ? `${what} are unavailable${failed.sentence ? `: ${failed.sentence}` : ""}.`
+        : `${what} could not be read.`}
+      {!refused && (
+        <Button size="small" variant="ghost" onClick={retry}>
+          Retry
+        </Button>
+      )}
+    </p>
+  );
+}
+
+/** The refusals a retry does not change: the engine said no, or this fleet answers no marks yet. */
+const REFUSED_CODES = new Set(["unavailable", "bad_params", "not_found", "unauthorized"]);
 
 /** The commit's files, browsed at it. */
 function BrowseAt({ repo, oid }: { repo: string; oid: string }) {
@@ -413,6 +578,21 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
   }, [paged.answers]);
   const rows = paged.items;
   const groups = useDayGroups(rows, authoredAt, dayHeading);
+  // EACH PAGE'S MARKS, asked once per page by its whole ids; its tags ride the page itself.
+  const pages = useMemo(
+    () => paged.answers.map((a) => (a.log?.commits ?? []).map((c) => c.oid)),
+    [paged.answers],
+  );
+  const marks = useCommitMarks(repo.name, pages);
+  const tagged = useMemo(() => {
+    const all: Record<string, CodeCommitTags> = {};
+    for (const a of paged.answers) Object.assign(all, a.tagged?.commits ?? {});
+    return all;
+  }, [paged.answers]);
+  // THE BRANCH READ, whose checks a row draws: a tag's or a commit's history reads the default's.
+  const defaultRef = `refs/heads/${repo.default_branch}`;
+  const resolvedRef = paged.answers[0]?.resolved?.ref?.ref ?? "";
+  const branch = resolvedRef.startsWith("refs/heads/") ? resolvedRef : defaultRef;
   if (!repo.head && rev === "") {
     // THE DEFAULT BRANCH HOLDS NOTHING: with no branch at all there is no
     // history to read, and with others live the picker reaches theirs.
@@ -442,6 +622,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
           </span>
         )}
       </PageToolbar>
+      {marks.failed && rows.length > 0 && <MarksNote failed={marks.failed} retry={marks.retry} />}
       {paged.loading && rows.length === 0 && (
         <Skeleton
           variant="text"
@@ -471,9 +652,32 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
           rowHref={(c) => commitHref(repo.name, c.oid)}
           aria-label={`History of ${revisionWord(repo, rev)}`}
           title={subjectOf}
-          meta={(c) => <CommitMeta commit={c} by={pushedBy[c.oid]} now={now} />}
+          titleAfter={(c) =>
+            (marks.of(c.oid)?.merged ?? [])
+              .filter((m) => m.merge_oid === c.oid)
+              .map((m) => <ChangeRefPill key={m.ref} change={m} />)
+          }
+          meta={(c) => (
+            <CommitMeta
+              repo={repo.name}
+              commit={c}
+              by={pushedBy[c.oid]}
+              mark={marks.of(c.oid)}
+              tags={tagged[c.oid]}
+              now={now}
+            />
+          )}
           facts={(c) => (
             <>
+              <span className="code-commit-check">
+                <CommitCheck
+                  mark={marks.of(c.oid)}
+                  by={pushedBy[c.oid]}
+                  branch={branch}
+                  defaultRef={defaultRef}
+                  now={now}
+                />
+              </span>
               <ShaChip oid={c.oid} />
               <BrowseAt repo={repo.name} oid={c.oid} />
             </>

@@ -1575,6 +1575,27 @@
   color: var(--color-text-primary);
 }
 
+/* A ROW'S CHECK keeps its width while the marks are read, so the id never moves under the pointer. */
+.code-commit-check {
+  display: inline-flex;
+  min-inline-size: calc(4 * var(--size-control-sm));
+}
+
+.code-commit-landed {
+  color: var(--color-text-secondary);
+}
+
+/* WHY A HISTORY'S MARKS ARE MISSING, said once above its rows. */
+.code-commit-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0 0 var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
 /* ---- A commit's page (`routes/gitlet/commit/`) --------------------------- */
 
 /* THE BYLINE under its subject: who wrote it and when, its repository, its

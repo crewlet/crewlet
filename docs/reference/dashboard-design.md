@@ -66,6 +66,8 @@ a placeholder image rather than as Datadog. Crewlet's own services carry their
 service's name, the one place the brand's violet is identity rather than a
 token. SSH, a protocol with no vendor, carries the kit's own key mark
 (`VendorMark vendor="ssh"`) in the same violet, on the same terms.
+Gitlet, writing a merge commit or moving a branch, is drawn with its product
+mark beside its name, where a seat would show its face.
 
 The second exception is the organization as **Company › Structure** draws it,
 on its Org chart and its Table, the way the console's org chart does:
@@ -8932,7 +8934,7 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   (`state=`, every state among them, since the repository narrows the walk),
   with the way to Gitlet › Changes narrowed alike. **Commits** is the history at a revision, of the path the
   address names or of every path, as a timeline of the reader's days each commit was authored: a heading per run of one day, so git's order is never re-sorted to fit.
-  Each commit is its subject, its author's face, name and when, how it reached its branch (a run for its work item, pushed with git, or who pushed it) where the answering node's index holds the push, its id with its copy, and a way to browse its files; Load older commits pages on. **Pushes** is the repository's push history, as Gitlet ›
+  Each commit is its subject, its author's face, name and when, how it reached its branch (a run for its work item, pushed with git, or who pushed it) where the answering node's index holds the push, its id with its copy, and a way to browse its files; Load older commits pages on. Each commit also carries its checks for the branch read, the change it merged or landed with, and its tags; a merge commit Gitlet wrote is drawn with Gitlet's mark. **Pushes** is the repository's push history, as Gitlet ›
   Pushes draws it. **Branches** lists the live branches, each its name as a
   branch chip and its marks, and writes them:
   **New branch** (`code_create_branch`, a name and where it starts, the
