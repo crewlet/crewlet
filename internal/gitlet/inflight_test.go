@@ -13,13 +13,16 @@ import (
 // reconcileInFlight is held to the widest record a reconcile writes, measured
 // here as the applier counts it: a create of a repository holding its bound of
 // rules and of path owners, a settings change replacing every one of each, and
-// a restore doing the same. The settings change and the restore are what
-// reconcileRecordRows states, exactly, and reconcileInFlight is the most of
-// them one transaction holds.
+// a restore doing the same, of a repository holding an open change, each
+// under another owner. The settings change is what reconcileRecordRows states,
+// exactly, its change's count moved between two tally rows; the restore one
+// tally row fewer, since a deleted repository is in no tally; and
+// reconcileInFlight is the most of them one transaction holds.
 //
 // Mutations: thirty-two in flight, the width before the path owners' rows —
 // 8 224 rows, red; leave the path owners out of reconcileRecordRows — the
-// measured records touch more than it states, red.
+// measured records touch more than it states, red; leave the tally rows out of
+// it, and the settings change touches more than it states, red.
 func TestAReconcileInFlightFitsOneApplyTransaction(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -27,7 +30,7 @@ func TestAReconcileInFlightFitsOneApplyTransaction(t *testing.T) {
 	// named after tag, so settings of another tag replace every one of each.
 	full := func(tag string, epoch int64) RepoSettings {
 		s := settingsFor("")
-		s.ConfigEpoch = epoch
+		s.ConfigEpoch, s.Owner = epoch, Owner{Kind: OwnerUnit, Ref: "unit-" + tag}
 		s.Protections = nil
 		for i := range MaxProtectionsPerRepo {
 			s.Protections = append(s.Protections, Protection{PushRule: PushRule{
@@ -45,6 +48,13 @@ func TestAReconcileInFlightFitsOneApplyTransaction(t *testing.T) {
 	const id = "repo-a"
 	created := e.applyCounting(rec(t, NameSubject("web"), OpCreate, Scope{NamePath(NameToken("web")), RepoPath(id)},
 		CreateRepo{RepoID: id, Name: "web", Settings: full("a", 1)}))
+	// AN OPEN CHANGE, which every owner's tally counts while the repository is in use.
+	e.apply(pushOf(t, id, pushEntry("p1", move("refs/heads/main", ZeroOID, oid("main")),
+		move("refs/heads/feature", ZeroOID, oid("feature")))),
+		rec(t, RepoSubject(id), OpChangeOpen, Scope{RepoPath(id)}, ChangeOpen{RepoID: id,
+			ChangeID: "0192f6c1-0000-7000-8000-000000000001", SourceRef: "refs/heads/feature",
+			TargetRef: "refs/heads/main", Head: oid("feature"), Title: "Retry the upload",
+			Owner: Principal{Kind: PrincipalAgent, Seat: "dev"}}))
 	settled := e.applyCounting(rec(t, RepoSubject(id), OpSettings, Scope{RepoPath(id)},
 		SettingsRecord{RepoID: id, Settings: full("b", 1)}))
 	e.apply(rec(t, RepoSubject(id), OpDelete, Scope{RepoPath(id)}, LifecycleRecord{RepoID: id, ConfigEpoch: 1}))
@@ -52,10 +62,11 @@ func TestAReconcileInFlightFitsOneApplyTransaction(t *testing.T) {
 	restored := e.applyCounting(rec(t, RepoSubject(id), OpRestore, Scope{RepoPath(id)},
 		LifecycleRecord{RepoID: id, ConfigEpoch: 2, Settings: &back}))
 	widest := max(created, settled, restored)
-	if settled != reconcileRecordRows || restored != reconcileRecordRows || created > reconcileRecordRows {
+	if settled != reconcileRecordRows || restored != reconcileRecordRows-tallyRows ||
+		created > reconcileRecordRows {
 		t.Errorf("a create touches %d rows, a settings change %d and a restore %d; reconcileRecordRows states "+
-			"%d as the most, which the settings change and the restore reach", created, settled, restored,
-			reconcileRecordRows)
+			"%d as the most, which the settings change reaches and the restore, one tally row short of it, "+
+			"does not pass", created, settled, restored, reconcileRecordRows)
 	}
 	if reconcileInFlight*widest > statelog.ApplyTxRowBudget {
 		t.Errorf("%d decisions in flight (reconcileInFlight) of the widest record a reconcile writes — %d rows "+

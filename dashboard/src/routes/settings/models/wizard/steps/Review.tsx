@@ -31,6 +31,7 @@ import {
   STEP_LABELS,
   canExecute,
   credentialValues,
+  factsOf,
   fieldOf,
   messageOf,
   modelId,
@@ -38,6 +39,7 @@ import {
   type Draft,
 } from "../draft.ts";
 import type { WizardStep } from "../../parts.tsx";
+import { methodWords } from "./SignInStep.tsx";
 import { Waiting } from "../../Waiting.tsx";
 import { webToolsWords } from "./LimitsStep.tsx";
 import { seatChangesOf, summaryOf } from "./UseItFor.tsx";
@@ -213,7 +215,7 @@ export function Review({
       </>
     );
   const method = {
-    "api-key": stored("API key"),
+    "api-key": stored(methodWords(draft.harness, "api-key").label),
     token: stored("Subscription token"),
     cloud: CLOUD_FIELDS[draft.cloud].label,
     "host-login": editing
@@ -264,6 +266,12 @@ export function Review({
         dense
         items={[
           ["Method", method] as const,
+          ...(factsOf(draft.harness).efforts.length > 0
+            ? [["Reasoning effort", draft.effort || "Harness default"] as const]
+            : []),
+          ...(draft.harness === "qwen-code" && draft.endpoint.trim()
+            ? [["Endpoint", draft.endpoint.trim()] as const]
+            : []),
           ...(canExecute(draft)
             ? [
                 [

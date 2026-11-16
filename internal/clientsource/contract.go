@@ -294,6 +294,7 @@ var contract = []Entry{
 	{"DEFAULT_HARNESS_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"MODEL_KEY_PATTERN", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"HARNESS_PRODUCTS", ReadLiteral, "internal/config.TestEveryBuiltInHarnessHasAProductName"},
+	{"HARNESS_FACTS", ReadLiteral, "internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads"},
 	{"ModelJob", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"RunnerCellName", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"SEAT_JOB_FIELDS", ReadLiteral, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},

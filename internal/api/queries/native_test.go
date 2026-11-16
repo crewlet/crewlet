@@ -1799,6 +1799,9 @@ var sessionQuestions = []sessionQuestion{
 	{"code_commit_marks", []string{"code"}, map[string]any{"name": "web", "commits": stubOID},
 		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
 		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_counts", []string{"code"}, map[string]any{"parts": "changes"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
 	// THE COMPOSED INBOX: the tracker's notices and Gitlet's, each
 	// half at the floor of its own log, so a "mark all read" that wrote a
 	// record on each is read back past both (inbox.go).

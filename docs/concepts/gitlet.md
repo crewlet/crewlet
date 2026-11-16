@@ -1921,8 +1921,9 @@ repository, as the repository's own reads are ([Who may read and
 push](#who-may-read-and-push)):
 
 - A listing that names no repository lists the changes of every repository
-  the reader may read — and of an active or archived one only: a deleted
-  repository's changes are no work anybody can do until it is restored.
+  the reader may read, and of one in use only (importing, active or
+  archived): a deleted repository's changes are no work anybody can do until
+  it is restored.
 - A listing that names a repository, and a read of one change, are refused
   `not_permitted` where the reader may not read the repository, naming the
   visibility and who does read it — a number in it too, which is never
@@ -1956,6 +1957,30 @@ the revision asked about ([Where lines are in another
 revision](#where-lines-are-in-another-revision)), its reviews and its
 comments — each page cut whole-row at one tool answer and resumed after the
 last row it kept.
+
+### Counting changes
+
+Gitlet answers how many changes a scope holds in each state: draft, open,
+closed and merged, and `live`, the draft and the open together. The scope is
+the company's, every repository in use the reader may read, or one
+repository named, whatever its state, as a listing naming it lists it. A
+count is never narrowed by a listing's other filters: it is the section's
+total, not a page's.
+
+The counts are kept, never walked. Each repository's row counts its changes
+by state, moved by every record that opens a change, moves its state or
+purges it. The company's are tallied by owner and visibility, which are what
+decides who may read a repository, so a count sums the tallies the reader's
+grant reads and costs the same however many changes the company holds. A
+build that changes how they are counted recounts them from the changes at
+its first boot, on every data node.
+
+A deleted repository's changes leave the company's count, and a restore
+brings them back under the owner it returns with. A count is exact at the
+position it is read at, so a `session` read after a write includes it. A
+listing of repositories and one repository's detail answer each one's counts
+where `repo_facts=true` asks
+([`GET /gitlet/counts`](../reference/api-endpoints.md#the-code-reads)).
 
 ---
 

@@ -692,6 +692,10 @@ const (
 	// for either.
 	ActionArtifactList Action = "list_artifacts"
 	ActionArtifactRead Action = "get_artifact"
+	// ActionArtifactRender renders a version in the engine's browser as a
+	// viewer sees it: a read of everything get_artifact reads, its data
+	// included, that writes nothing.
+	ActionArtifactRender Action = toolname.RenderArtifact
 	// THE DASHBOARD SOURCE CATALOGUE is the engine's own vocabulary, read
 	// before a board exists, so it is everybody's: what a source ANSWERS is
 	// decided as each board's viewer, never by who listed it.
@@ -2042,6 +2046,8 @@ var rules = map[Action]rule{
 	ActionDashboardSourceRead: {class: ClassApp, app: iam.GrantArtifacts, recency: iam.RecencyAny,
 		assist: AssistRead},
 	ActionArtifactRead: {class: ClassShared, minRole: artifacts.RoleViewer,
+		recency: iam.RecencyAny, assist: AssistRead},
+	ActionArtifactRender: {class: ClassShared, minRole: artifacts.RoleViewer,
 		recency: iam.RecencyAny, assist: AssistRead},
 	// CREATING IS THE APP AND NOTHING ELSE: there is no artifact yet to hold
 	// a relation to, and its creator becomes its owner.

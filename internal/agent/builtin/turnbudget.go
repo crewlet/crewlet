@@ -114,3 +114,19 @@ func NewFolderTurns(now func() time.Time) *FolderTurns {
 func (g *FolderTurns) spend(turn, key string) (refund func(), used int, ok bool) {
 	return g.budget.spend(turn, key, 1)
 }
+
+// RenderTurns is this node's tally of the renders each agent turn segment
+// makes: at most [artifacts.TurnRenders], so a turn looping on its own page
+// holds the node's browser for a bounded time.
+type RenderTurns struct{ budget *turnBudget }
+
+// NewRenderTurns is an empty tally on now; nil is the wall clock.
+func NewRenderTurns(now func() time.Time) *RenderTurns {
+	return &RenderTurns{budget: newTurnBudget(artifacts.TurnRenders, now)}
+}
+
+// spend charges one render to turn: every call is one, a retry included,
+// since each drives the browser again.
+func (g *RenderTurns) spend(turn string) (refund func(), used int, ok bool) {
+	return g.budget.spend(turn, "", 1)
+}

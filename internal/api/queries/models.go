@@ -838,34 +838,48 @@ type ModelAliasRow struct {
 
 // catalogueProviders is the catalogue provider each harness reads, where it reads
 // one fixed provider: the ids its vendor's harness takes as model arguments.
-// OpenCode names its provider in the model argument itself, so a caller
-// names it.
-var catalogueProviders = map[string]string{"claude-code": "anthropic", "codex": "openai"}
+var catalogueProviders = map[string]string{"claude-code": "anthropic", "codex": "openai",
+	"gemini-cli": "google", "grok": "xai"}
+
+// namedProvider is the harnesses that name their provider in the model, so a
+// caller names it: OpenCode and Pi as `<provider>/<model>`.
+var namedProvider = []string{"opencode", "pi"}
 
 // llmModels answers the models one harness can be given: the catalogue's list for
 // the harness's provider, the aliases the harness resolves itself and its vendor's own
 // page. No credential is read or sent (decision D1): the list is the public
-// catalogue's, and the test call is what says whether a plan reaches a model.
+// catalogue's, and the test call is what says whether a plan reaches a model. A
+// harness with no one catalogue provider (its vendor's own names, or a provider
+// its sign-in picks) answers its aliases and page alone.
 func (s Sources) llmModels(ctx context.Context, p Params) (any, error) {
 	harness := p.String("harness")
 	profile, known := harnessprofile.Builtin(harness)
-	if harness == "" || !known || !slices.Contains([]string{"claude-code", "codex", "opencode"}, harness) {
-		return nil, fmt.Errorf("%w: harness must be claude-code, codex or opencode", ErrBadParams)
+	if harness == "" || !known || harness == "custom" {
+		return nil, fmt.Errorf("%w: harness must be a built-in harness other than custom", ErrBadParams)
 	}
 	provider := catalogueProviders[harness]
-	if harness == "opencode" {
+	named := slices.Contains(namedProvider, harness)
+	if named {
 		provider = p.String("provider")
 		if provider == "" {
-			return nil, fmt.Errorf("%w: opencode names its provider in the model argument, so "+
-				"provider is required (openrouter, anthropic, ...)", ErrBadParams)
+			return nil, fmt.Errorf("%w: %s names its provider in the model argument, so "+
+				"provider is required (openrouter, anthropic, ...)", ErrBadParams, harness)
 		}
 	}
-	answer, err := s.Catalogue.Provider(ctx, provider)
-	if err != nil {
-		if errors.Is(err, modelcatalog.ErrUnknownProvider) {
+	answer := modelcatalog.Answer{Source: modelcatalog.SourceNone, Models: []modelcatalog.Model{},
+		Reason: "the harness names its own models"}
+	if provider != "" {
+		fetched, err := s.Catalogue.Provider(ctx, provider)
+		switch {
+		case errors.Is(err, modelcatalog.ErrUnknownProvider) && named:
 			return nil, &UnknownProviderError{Provider: provider}
+		case errors.Is(err, modelcatalog.ErrUnknownProvider):
+			answer.Reason = "the catalogue lists no provider " + strconv.Quote(provider)
+		case err != nil:
+			return nil, err
+		default:
+			answer = fetched
 		}
-		return nil, err
 	}
 	out := ModelsAnswer{Source: answer.Source, Provider: provider, Aliases: []ModelAliasRow{},
 		Models: answer.Models, DocsURL: profile.ModelsDocs, Reason: answer.Reason}
@@ -876,8 +890,8 @@ func (s Sources) llmModels(ctx context.Context, p Params) (any, error) {
 	for _, a := range profile.ModelAliases {
 		out.Aliases = append(out.Aliases, ModelAliasRow{ID: a.ID, Name: a.Name, Detail: a.Detail})
 	}
-	if harness == "opencode" {
-		// OPENCODE TAKES <provider>/<model>, so that is the id it is offered.
+	if named {
+		// SUCH A HARNESS TAKES <provider>/<model>, so that is the id it is offered.
 		models := make([]modelcatalog.Model, 0, len(out.Models))
 		for _, m := range out.Models {
 			m.ID = provider + "/" + m.ID

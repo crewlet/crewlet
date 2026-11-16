@@ -742,7 +742,17 @@ func (s RepoSummary) encodedBytes() int {
 	if !s.LastPushAt.IsZero() {
 		n += field("last_push_at", timeBytes(s.LastPushAt), false)
 	}
+	if s.ChangeCounts != nil {
+		n += field("change_counts", s.ChangeCounts.encodedBytes(), false)
+	}
 	return n
+}
+
+// encodedBytes is the length of the counts' JSON encoding, every field written.
+func (c ChangeCounts) encodedBytes() int {
+	return 2 + field("live", intBytes(c.Live), true) + field("draft", intBytes(c.Draft), false) +
+		field("open", intBytes(c.Open), false) + field("closed", intBytes(c.Closed), false) +
+		field("merged", intBytes(c.Merged), false)
 }
 
 // members is the length of the change's own members, without the braces that

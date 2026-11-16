@@ -631,7 +631,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			}
 		}
 		own := entryRows(entry)
-		if recordRows(rows+own+book.rowCount()) > MaxRecordRows {
+		if recordRows(rows+own+book.decidedRows()) > MaxRecordRows {
 			// ALONE is the push leading the next record, the entries before
 			// it landed: what it would cost there decides whether it can
 			// land at all.
@@ -655,7 +655,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			return nil, nil, batchMoves{}, 0, routeErr
 		}
 		fits, rest, fitErr := room.fit(i, len(entries) == 0, routings,
-			MaxRecordRows-recordRows(rows+own+book.rowCount()))
+			MaxRecordRows-recordRows(rows+own+book.decidedRows()))
 		if fitErr != nil {
 			return nil, nil, batchMoves{}, 0, fitErr
 		}
@@ -674,7 +674,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		entries = append(entries, entry)
 	}
 	ejected, _, _ := book.queueEnds()
-	return entries, answers, batchMoves{rows: book.rowCount(), ejected: ejected}, repo.version, nil
+	return entries, answers, batchMoves{rows: book.decidedRows(), ejected: ejected}, repo.version, nil
 }
 
 // seatQuota is one round's count of each seat's pushes on the deciding

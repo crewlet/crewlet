@@ -40,7 +40,9 @@ import (
 // repository alike; AND A SEARCH OF ITS LINES
 // (codesearch.go): `code_search`, decided per repository alike by every Gitlet
 // node that answers a part of it, and read back at no session floor, since it
-// answers at the tip it names.
+// answers at the tip it names; AND GITLET'S SECTION COUNTS (codecounts.go):
+// `code_counts`, a scope's changes by state, the company's or one
+// repository's, decided per repository alike.
 //
 // AND WHO READ A UNIT'S REPOSITORY, `code_repo_readers`: the operator tool's
 // one answer (builtin.ReadersOf) — the repository read by name as the asker,
@@ -245,6 +247,12 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 		if q.Checks, err = checkAttempt(p); err != nil {
 			return gitlet.ReadQuery{}, err
 		}
+	case gitlet.ReadCounts:
+		// A SCOPE AND ITS PARTS: one repository by name, or none for every one the caller reads.
+		q.Repo = p.String("repo")
+		if q.Counts, err = countsParams(p); err != nil {
+			return gitlet.ReadQuery{}, err
+		}
 	default:
 		q.Repo = p.String("name")
 	}
@@ -313,6 +321,10 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	// many repositories no rule protects, and on any other read the filter
 	// is the reader's to refuse, naming it.
 	if q.Protected, err = askedFor(p, "protected"); err != nil {
+		return gitlet.ReadQuery{}, err
+	}
+	// A REPOSITORY'S FACTS, asked for: the reader refuses them on any read but a listing and a detail.
+	if q.RepoFacts, err = askedFor(p, "repo_facts"); err != nil {
 		return gitlet.ReadQuery{}, err
 	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {
@@ -515,5 +527,6 @@ func registerCode(r *Registry, s Sources) {
 	r.Register("code_check", gated, s.codeRead(gitlet.ReadCheck, "code_check"))
 	r.Register("code_check_log", gated, s.codeCheckLog)
 	r.Register("code_commit_marks", gated, s.codeRead(gitlet.ReadCommitMarks, "code_commit_marks"))
+	r.Register("code_counts", gated, s.codeRead(gitlet.ReadCounts, "code_counts"))
 	r.Register("code_search", gated, s.codeSearch)
 }

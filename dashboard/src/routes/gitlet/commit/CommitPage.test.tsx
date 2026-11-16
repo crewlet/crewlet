@@ -275,6 +275,38 @@ test("a commit's page says who pushed it, from which turn and run, and its chang
   expect(screen.getByText("Retry the flaky upload")).toBeTruthy();
 });
 
+// THE CHANGES CARD WEARS EACH CHANGE'S STATE PILL, and "Refs it moved" draws a
+// branch as its chip with its glyph and a tag as its name, a comma between.
+// Mutation: drop the comma, draw the tag as a chip, or the chip without its glyph.
+test("a commit's changes wear their state pill, and the refs it moved a branch chip", async () => {
+  const command = (ref: string, result = "ok") => ({ ref, old: PARENT, new: SHA, result });
+  stubEngine({
+    commitAnswer: commit({
+      push: {
+        commands: [
+          command("refs/heads/main"),
+          command("refs/tags/v1.2"),
+          command("refs/heads/held", "ng"),
+        ],
+      },
+    }),
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const changes = await screen.findByRole("region", { name: "Changes" });
+  const pill = within(changes).getByText("Merged").closest<HTMLElement>(".code-state");
+  expect(pill?.dataset.state).toBe("merged");
+  const pushed = screen.getByRole("region", { name: "Pushed" });
+  const value = within(pushed).getByText("v1.2").parentElement!;
+  expect(value.textContent).toBe("main, v1.2");
+  const chips = [...value.querySelectorAll(".code-branch-chip")];
+  expect(chips.map((c) => c.textContent)).toEqual(["main"]);
+  expect(chips[0]!.querySelector("svg")).not.toBeNull();
+  const tag = within(pushed).getByText("v1.2");
+  expect(tag.classList.contains("code-branch-chip")).toBe(false);
+  expect(tag.querySelector("svg")).toBeNull();
+});
+
 // A COMMIT'S DIFF IS AGAINST ITS FIRST PARENT, read by both whole ids, and
 // its first file's patch is drawn in the one DiffView. Mutation: diff against
 // the default branch, or against the commit itself, and this fails.
