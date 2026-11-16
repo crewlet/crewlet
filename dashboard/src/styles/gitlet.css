@@ -1511,38 +1511,29 @@
   }
 }
 
-/* ONE COMMIT OF THE HISTORY: its subject, then who wrote it, when, who
-   pushed it and its work item, on a second line that wraps. */
-.code-log-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding-block: var(--spacing-1);
-}
-
-.code-log-row__subject {
-  font-weight: var(--font-weight-medium);
+/* A HISTORY ROW'S META: who wrote the commit and when, then how it reached its branch. */
+.code-commit-meta__who {
   color: var(--color-text-primary);
-  overflow-wrap: anywhere;
+  font-weight: var(--font-weight-medium);
 }
 
-.code-log-row__by {
-  display: flex;
-  flex-wrap: wrap;
+.code-commit-prov {
+  display: inline-flex;
   align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-}
-
-.code-log-row__author {
-  color: var(--color-text-primary);
+  gap: var(--spacing-1);
+  padding: calc(var(--spacing-1) / 2) var(--spacing-2) calc(var(--spacing-1) / 2) var(--spacing-1);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
   font-weight: var(--font-weight-medium);
 }
 
-.code-log-row__work {
+.code-commit-prov > svg {
+  flex: none;
   color: var(--color-text-tertiary);
+}
+
+.code-commit-prov__key {
+  color: var(--color-text-primary);
 }
 
 /* ---- A commit's page (`routes/gitlet/commit/`) --------------------------- */

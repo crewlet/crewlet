@@ -18,7 +18,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Announcer } from "@crewlethq/ui";
 import { onTheRight } from "~/test/codeScreens.tsx";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -30,6 +30,11 @@ import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
+
+beforeEach(() => {
+  // jsdom implements no scrolling, and a history row the keys or Load more reach scrolls into view.
+  Element.prototype.scrollIntoView = () => {};
+});
 
 afterEach(() => {
   cleanup();
@@ -502,7 +507,7 @@ test("the revision picker's branches and tags are read once while the reader mov
   act(() => {
     location.hash = "#/gitlet/repos/web?tab=commits";
   });
-  expect(await screen.findByRole("table", { name: "History of main" })).toBeTruthy();
+  expect(await screen.findByRole("group", { name: "History of main" })).toBeTruthy();
 
   const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
   expect(listings.sort()).toEqual([null, "refs/tags/"]);
@@ -740,9 +745,9 @@ test("the history is read at the revision and the path, with who pushed each com
   const asked = stubEngine();
   mount("#/gitlet/repos/web?tab=commits&ref=feature&path=src");
 
-  const grid = await screen.findByRole("table", { name: "History of feature" });
+  const grid = await screen.findByRole("group", { name: "History of feature" });
   expect(within(grid).getByText("Start the storefront")).toBeTruthy();
-  expect(within(grid).getByText("CTO")).toBeTruthy();
+  expect(within(grid).getByText("pushed by CTO")).toBeTruthy();
   // EACH COMMIT OPENS ITS OWN PAGE, by its whole id.
   expect(
     within(grid)
@@ -753,7 +758,7 @@ test("the history is read at the revision and the path, with who pushed each com
   expect(first?.searchParams.get("ref")).toBe("feature");
   expect(first?.searchParams.get("path")).toBe("src");
 
-  fireEvent.click(await screen.findByRole("button", { name: /load more/i }));
+  fireEvent.click(await screen.findByRole("button", { name: "Load older commits" }));
   expect(await within(grid).findByText("Older work")).toBeTruthy();
   expect(reads(asked, "code_log").some((u) => u.searchParams.get("cursor") === "c1")).toBe(true);
 });
@@ -764,15 +769,144 @@ test("a history row says when its commit was authored in words", async () => {
   vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
   stubEngine();
   mount("#/gitlet/repos/web?tab=commits");
-  const grid = await screen.findByRole("table", { name: /History of/ });
+  const grid = await screen.findByRole("group", { name: /History of/ });
   await waitFor(() =>
     expect(
       within(grid)
         .getByText("Start the storefront")
-        .closest(".code-log-row")
-        ?.querySelector(".code-log-row__by time")?.textContent,
+        .closest(".code-list__row")
+        ?.querySelector(".code-list__meta time")?.textContent,
     ).toBe("6 days ago"),
   );
+});
+
+/** A commit of a history page, authored at `at`. */
+const logged = (oid: string, subject: string, at: string, author = "Ada") => ({
+  oid,
+  author,
+  authored_at: at,
+  committed_at: at,
+  subject,
+});
+
+/** The engine answering one history page of `commits`, with who pushed each. */
+function stubHistory(commits: unknown[], pushedBy: Record<string, unknown> = {}) {
+  const asked = stubEngine();
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_log") return engine(input, init);
+      asked.push(url);
+      return json(
+        byRef(url, {
+          kind: "log",
+          log: { commits, scanned: commits.length, complete: true },
+          pushed_by: pushedBy,
+        }),
+      );
+    }),
+  );
+  return asked;
+}
+
+const THIRD = "fedcba9876543210fedcba9876543210fedcba98";
+
+// A HISTORY IS A TIMELINE OF THE READER'S DAYS, in git's order: a day met again
+// after another opens its own heading. Mutation: group by day across the page.
+test("a history is a timeline of the reader's days, a day met again opening its own heading", async () => {
+  stubHistory([
+    logged(HEAD, "Newest", "2026-10-22T10:00:00Z"),
+    logged(OTHER, "Older", "2026-10-21T10:00:00Z"),
+    logged(THIRD, "Merged in", "2026-10-22T09:00:00Z"),
+  ]);
+  mount("#/gitlet/repos/web?tab=commits");
+  const history = await screen.findByRole("group", { name: /History of/ });
+  const headings = within(history).getAllByRole("heading", { level: 3 });
+  expect(headings.map((h) => h.textContent)).toEqual([
+    "Commits on Oct 22, 2026",
+    "Commits on Oct 21, 2026",
+    "Commits on Oct 22, 2026",
+  ]);
+  expect(within(history).getByRole("list", { name: "Commits on Oct 21, 2026" })).toBeTruthy();
+  expect(history.querySelector(".code-list__note")?.textContent).toBe(
+    "3 commits of main loaded, newest first",
+  );
+});
+
+// EACH COMMIT SAYS HOW IT REACHED ITS BRANCH, from the push the index holds:
+// a run for its work item, the author with git, or who pushed it; nothing
+// where the index holds no push. Mutation: read the pusher off the author line.
+test("each commit says how it reached its branch", async () => {
+  const push = (principal: Record<string, unknown>, via = "engine") => ({
+    push_id: "p",
+    position: POSITION,
+    at: "2026-10-22T10:00:00Z",
+    principal,
+    via,
+  });
+  const run = { turn_id: "t", work_backend: "worklet", work_key: "ENG-399" };
+  const ids = ["1", "2", "3", "4", "5", "6"].map((n) => n.repeat(40));
+  stubHistory(
+    [
+      logged(ids[0]!, "Own run", "2026-10-22T10:00:00Z", "CTO"),
+      logged(ids[1]!, "Other run", "2026-10-22T09:00:00Z", "Ada"),
+      logged(ids[2]!, "With git", "2026-10-22T08:00:00Z", "CTO"),
+      logged(ids[3]!, "Pushed by another", "2026-10-22T07:00:00Z", "Ada"),
+      logged(ids[4]!, "Unknown push", "2026-10-22T06:00:00Z", "Ada"),
+      logged(ids[5]!, "Own push", "2026-10-22T05:00:00Z", "CTO"),
+    ],
+    {
+      [ids[0]!]: push({ kind: "agent", seat: "cto", run }),
+      [ids[1]!]: push({ kind: "agent", seat: "cto", run }),
+      [ids[2]!]: push({ kind: "agent", seat: "cto" }, "git"),
+      [ids[3]!]: push({ kind: "operator", operator_id: "session:abc", seat: "cto" }, "git"),
+      [ids[5]!]: push({ kind: "agent", seat: "cto" }),
+    },
+  );
+  mount("#/gitlet/repos/web?tab=commits");
+  const history = await screen.findByRole("group", { name: /History of/ });
+  const chip = (subject: string) =>
+    within(history)
+      .getByText(subject)
+      .closest(".code-list__row")
+      ?.querySelector(".code-commit-prov");
+  await waitFor(() => expect(chip("Own run")?.textContent).toBe("pushed by a run for ENG-399"));
+  expect(chip("Other run")?.textContent).toBe("pushed by a run of CTO for ENG-399");
+  expect(chip("With git")?.textContent).toBe("pushed with git");
+  expect(chip("Pushed by another")?.textContent).toBe("pushed by CTO");
+  expect(chip("Pushed by another")?.getAttribute("title")).toBe("through session:abc");
+  expect(chip("Unknown push")).toBeNull();
+  expect(chip("Own push")?.textContent).toBe("pushed by CTO");
+});
+
+// EACH COMMIT COPIES ITS ID AND BROWSES ITS FILES at it, as a real link a
+// modified press opens in a tab. Mutation: browse the branch, not the commit.
+test("each commit copies its id and browses its files", async () => {
+  stubEngine();
+  mount("#/gitlet/repos/web?tab=commits");
+  const history = await screen.findByRole("group", { name: /History of/ });
+  const row = (await within(history).findByText("Start the storefront")).closest("li")!;
+  expect(within(row).getByRole("button", { name: "Copy the commit id 0123456" })).toBeTruthy();
+  expect(
+    within(row).getByRole("link", { name: "Browse the files at 0123456" }).getAttribute("href"),
+  ).toBe(`#/gitlet/repos/web?ref=${HEAD}`);
+});
+
+// J OPENS THE HISTORY'S COMMITS FROM THE KEYBOARD, as the grid's did: j focuses
+// the first commit's link and Enter elsewhere opens it. Mutation: drop the keys.
+test("j opens the history's commits from the keyboard", async () => {
+  stubEngine();
+  mount("#/gitlet/repos/web?tab=commits");
+  const history = await screen.findByRole("group", { name: /History of/ });
+  await within(history).findByText("Start the storefront");
+  fireEvent.keyDown(window, { key: "j" });
+  const link = within(history).getByRole("link", { name: "Start the storefront" });
+  expect(document.activeElement).toBe(link);
+  link.blur();
+  fireEvent.keyDown(window, { key: "Enter" });
+  await waitFor(() => expect(location.hash).toBe(`#/gitlet/repos/web/commits/${HEAD}`));
 });
 
 // A DECLARED REPOSITORY'S SETTINGS ARE SHOWN, NEVER EDITED: the rules and

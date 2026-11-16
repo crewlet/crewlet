@@ -22,23 +22,26 @@
  * walk covered, so one can be short with more to come, and each page is joined
  * to the one before it (`lib/usePaged.ts`).
  *
- * BANDED BY THE READER'S DAY each commit was AUTHORED, in git's order: a band
- * is a run of consecutive commits on one day, so a history git orders by
- * generation — where a merged branch's older commit can follow a newer one —
- * is never re-sorted to fit its bands; a day met again after another opens
- * a band of its own.
+ * A TIMELINE OF THE READER'S DAYS each commit was AUTHORED, in git's order: a
+ * day met again after another opens its own heading.
  */
 
-import { useMemo } from "react";
-import { Button, Skeleton, Tag, VisuallyHidden, type DataGridBand } from "@crewlethq/ui";
-import { BookmarkGlyph } from "@crewlethq/icons/glyphs";
+import { useMemo, type ReactNode } from "react";
+import { Button, IconButtonLink, Skeleton, Tag, VisuallyHidden } from "@crewlethq/ui";
+import {
+  BookmarkGlyph,
+  BotGlyph,
+  CodeGlyph,
+  GitCommitVerticalGlyph,
+  UploadGlyph,
+} from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { noDefaultHead, refName } from "~/lib/code.ts";
+import { noDefaultHead, refName, shortOID } from "~/lib/code.ts";
 import { ago } from "~/lib/ago.ts";
-import { fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
+import { fmtDate, fmtDateTime, plural } from "~/lib/format.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type {
@@ -49,6 +52,7 @@ import type {
   CodeRefsAnswer,
   CodeRepoDetail,
 } from "~/protocol/index.ts";
+import { CodeList, useDayGroups, type ListDay } from "../CodeList.tsx";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
 import { BranchChip, Face, ShaChip, useWhoName } from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
@@ -275,20 +279,45 @@ function branchRev(repo: CodeRepoDetail, r: CodeRefRow): string {
   return name === repo.default_branch ? "" : name;
 }
 
-/** Who pushed a commit, by its push, in a reader's words: the seat, or the credential's own name. */
-function pusherOf(by: CodePushedBy | undefined): string {
-  if (!by) return "";
-  return by.principal.seat ?? by.principal.operator_id ?? "";
+/** How a commit reached its branch, as its chip says it: a glyph and its words. */
+export interface Provenance {
+  glyph: "run" | "push";
+  words: ReactNode;
 }
 
 /**
- * One commit of the history: its subject, then who wrote it and when — and,
- * where the push that introduced it is known, who pushed it where that is
- * somebody else, and the work item a seat's push was charged to.
- *
- * NO LINK INSIDE: the row is the link to the commit's page.
+ * How the push the index holds brought a commit: a run for its work item, the
+ * author with git, or who pushed it. None where the index holds no push.
  */
-function CommitCell({
+export function provenanceOf(
+  by: CodePushedBy | undefined,
+  author: string,
+  whoName: (who: string) => string,
+): Provenance | null {
+  if (!by) return null;
+  const pusher = by.principal.seat ?? by.principal.operator_id ?? "";
+  const work = by.principal.run?.work_key;
+  const theAuthor = pusher !== "" && whoName(pusher) === whoName(author);
+  if (work) {
+    const key = <span className="code-commit-prov__key mono">{work}</span>;
+    return {
+      glyph: "run",
+      words: theAuthor ? (
+        <>pushed by a run for {key}</>
+      ) : (
+        <>
+          pushed by a run of {whoName(pusher)} for {key}
+        </>
+      ),
+    };
+  }
+  if (theAuthor && by.via === "git") return { glyph: "push", words: "pushed with git" };
+  if (pusher === "") return null;
+  return { glyph: "push", words: `pushed by ${whoName(pusher)}` };
+}
+
+/** One commit's meta line: who wrote it and when, then how it reached its branch. */
+function CommitMeta({
   commit,
   by,
   now,
@@ -299,59 +328,52 @@ function CommitCell({
 }) {
   const whoName = useWhoName();
   const author = commit.author ?? `(${commit.author_bytes ?? 0} bytes)`;
-  const pusher = pusherOf(by);
-  // SAID ONLY WHERE IT IS NEWS: a commit pushed by the seat or person who
-  // wrote it says who wrote it once.
-  const pushedBySomebodyElse = pusher !== "" && whoName(pusher) !== whoName(author);
-  const work = by?.principal.run?.work_key;
+  const prov = provenanceOf(by, author, whoName);
+  const Glyph = prov?.glyph === "run" ? BotGlyph : UploadGlyph;
   return (
-    <span className="code-log-row">
-      <span className="code-log-row__subject">{subjectOf(commit)}</span>
-      <span className="code-log-row__by">
-        <Face who={author} />
-        <span className="code-log-row__author" title={commit.author_email}>
-          {whoName(author)}
-        </span>
-        <span>
-          authored{" "}
-          <time dateTime={commit.authored_at} title={fmtDateTime(commit.authored_at)}>
-            {ago(commit.authored_at, now)}
-          </time>
-        </span>
-        {pushedBySomebodyElse && (
-          <span
-            title={by?.principal.operator_id ? `through ${by.principal.operator_id}` : undefined}
-          >
-            pushed by <span className="code-log-row__author">{whoName(pusher)}</span>
-          </span>
-        )}
-        {work && <span className="code-log-row__work mono">{work}</span>}
+    <>
+      <Face who={author} />
+      <span className="code-commit-meta__who" title={commit.author_email}>
+        {whoName(author)}
       </span>
-    </span>
+      <span>
+        authored{" "}
+        <time dateTime={commit.authored_at} title={fmtDateTime(commit.authored_at)}>
+          {ago(commit.authored_at, now)}
+        </time>
+      </span>
+      {prov && (
+        <span
+          className="code-commit-prov"
+          title={by?.principal.operator_id ? `through ${by.principal.operator_id}` : undefined}
+        >
+          <Glyph size="xs" aria-hidden />
+          <span>{prov.words}</span>
+        </span>
+      )}
+    </>
   );
 }
 
-/** The history's bands: each run of consecutive commits authored on one of the reader's days. */
-function byDay(rows: readonly CodeLogCommit[]): DataGridBand<CodeLogCommit>[] {
-  const bands: DataGridBand<CodeLogCommit>[] = [];
-  for (const commit of rows) {
-    const at = Date.parse(commit.authored_at);
-    const day = Number.isNaN(at) ? "" : readerDay(at);
-    const last = bands[bands.length - 1];
-    if (last && last.key.startsWith(`${day}#`)) {
-      last.rows.push(commit);
-    } else {
-      // A DAY MET AGAIN after another keeps its band apart: the key carries
-      // the run's place in the history.
-      bands.push({
-        key: `${day}#${bands.length}`,
-        label: day ? `Commits on ${fmtDate(commit.authored_at)}` : "Commits",
-        rows: [commit],
-      });
-    }
-  }
-  return bands;
+/** The commit's files, browsed at it. */
+function BrowseAt({ repo, oid }: { repo: string; oid: string }) {
+  return (
+    <IconButtonLink
+      href={repoHref(repo, { ref: oid })}
+      icon={<CodeGlyph />}
+      label={`Browse the files at ${shortOID(oid)}`}
+      size="sm"
+      variant="ghost"
+    />
+  );
 }
+
+/** When a commit was authored, the day its heading groups it by. */
+const authoredAt = (c: CodeLogCommit) => c.authored_at;
+
+/** A day's heading: the day its commits were authored, or "Commits" where the time does not parse. */
+const dayHeading = (day: ListDay | null, c: CodeLogCommit) =>
+  day ? `Commits on ${fmtDate(c.authored_at)}` : "Commits";
 
 /** A commit's subject, or what git left of one past its bound. */
 export function subjectOf(c: { subject?: string; subject_bytes?: number }): string {
@@ -390,7 +412,7 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
     return all;
   }, [paged.answers]);
   const rows = paged.items;
-  const bands = useMemo(() => byDay(rows), [rows]);
+  const groups = useDayGroups(rows, authoredAt, dayHeading);
   if (!repo.head && rev === "") {
     // THE DEFAULT BRANCH HOLDS NOTHING: with no branch at all there is no
     // history to read, and with others live the picker reaches theirs.
@@ -441,35 +463,29 @@ export function Commits({ repo, revisions }: { repo: CodeRepoDetail; revisions: 
               }
         }
       >
-        <DataGrid<CodeLogCommit>
-          bands={bands}
+        <CodeList<CodeLogCommit>
+          groups={groups}
+          look="timeline"
+          spine={GitCommitVerticalGlyph}
           rowKey={(c) => c.oid}
-          // GIT'S ORDER: every parent after every child.
-          serverSorted
           rowHref={(c) => commitHref(repo.name, c.oid)}
-          onLoadMore={paged.more ? paged.next : undefined}
-          loadedNote={paged.more ? `${plural(rows.length, "commit")} loaded` : undefined}
           aria-label={`History of ${revisionWord(repo, rev)}`}
-          columns={[
-            {
-              key: "commit",
-              header: "Commit",
-              floor: "16rem",
-              phoneLead: true,
-              cell: (c) => <CommitCell commit={c} by={pushedBy[c.oid]} now={now} />,
-            },
-            {
-              key: "id",
-              header: <VisuallyHidden>Commit id</VisuallyHidden>,
-              label: "Commit id",
-              shrink: true,
-              action: true,
-              cell: (c) => <ShaChip oid={c.oid} />,
-            },
-          ]}
+          title={subjectOf}
+          meta={(c) => <CommitMeta commit={c} by={pushedBy[c.oid]} now={now} />}
+          facts={(c) => (
+            <>
+              <ShaChip oid={c.oid} />
+              <BrowseAt repo={repo.name} oid={c.oid} />
+            </>
+          )}
+          paged={paged}
+          moreLabel="Load older commits"
+          foot={
+            rows.length > 0 &&
+            `${plural(rows.length, "commit")} of ${revisionWord(repo, rev)} loaded, newest first`
+          }
         />
       </QueryState>
-      {paged.pageError && <PageFailed error={paged.pageError} />}
     </>
   );
 }
