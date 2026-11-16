@@ -150,11 +150,9 @@ roles:
 	}
 }
 
-// THE MODELS SCREEN KNOWS EVERY HARNESS AS ITS PROFILE READS: for each built-in
-// harness bar `custom`, the sign-ins its wizard offers are the ones the engine
-// runs, its key variable and login are the profile's, and the effort levels it
-// offers, and the models that narrow them, are the profile's own. So the wizard
-// never offers a sign-in or a level the engine would refuse or drop.
+// THE MODELS SCREEN KNOWS EVERY HARNESS AS ITS PROFILE READS: the sign-ins, key
+// variable, login, web and Ask Crewlet rules, and effort levels HARNESS_FACTS
+// gives each built-in harness are its profile's, so the wizard offers nothing the engine refuses.
 func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "HARNESS_FACTS")
@@ -255,10 +253,9 @@ func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 	}
 }
 
-// EVERY SIGN-IN THE MODELS WIZARD OFFERS WRITES AN ENTRY THE ENGINE TAKES, on
-// every harness and at the harness's first effort level: the shape the wizard
-// writes for each method (draft.ts entityOf) passes every runnable and
-// admission rule, so the wizard never offers a mode the engine refuses.
+// EVERY SIGN-IN THE MODELS WIZARD OFFERS WRITES AN ENTRY THE ENGINE TAKES: the
+// shape draft.ts entityOf writes for each method, on every harness at its first
+// effort level, passes every runnable and admission rule.
 func TestEverySignInTheModelsWizardOffersIsOneTheEngineTakes(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "HARNESS_FACTS")

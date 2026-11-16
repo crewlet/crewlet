@@ -10,12 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Effort is how a harness takes a reasoning effort, and the levels it takes,
-// in its own spelling. A profile with none has no such setting.
-//
-// The level goes wherever {effort} stands: in Args, after the model's; in
-// ModelSuffix, added to the model's value (OpenCode's `provider/model#variant`);
-// or in Env, on the call's environment.
+// Effort is how a harness takes a reasoning effort, and the levels it takes in
+// its own spelling: {effort} stands in Args (after the model's), ModelSuffix
+// (OpenCode's `provider/model#variant`) or Env. Nil: the harness has none.
 type Effort struct {
 	// Args carry the level after the model's.
 	Args []string `yaml:"args,omitempty"`

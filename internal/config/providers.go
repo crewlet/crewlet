@@ -876,13 +876,9 @@ func (c *Company) validateLLMModels() error {
 	return p.err()
 }
 
-// validateEffort holds an entry's effort to the levels its merged profile says
-// the harness takes on its model ([harnessprofile.Profile.EffortProblem]), so a
-// level the harness would ignore, or a harness with no such setting, is refused
-// rather than silently dropped. A `${VAR}` model is judged on the harness alone.
-//
-// ADMISSION, like validateModel: the levels are a vendor fact a newer peer may
-// know more of, so a write is refused and an apply only warns.
+// validateEffort refuses an effort the entry's harness would drop: a level its
+// merged profile does not take on the model, or any on a harness with none.
+// ADMISSION, like validateModel: the levels are a vendor fact a newer peer may know.
 func (l *LLMProvider) validateEffort(path Path) error {
 	if l.Effort == "" || (l.Harness != "" && !l.Harness.Valid()) {
 		return nil

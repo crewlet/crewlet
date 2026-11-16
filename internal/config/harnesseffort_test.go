@@ -38,10 +38,9 @@ func TestAnEffortTheHarnessTakesIsAdmitted(t *testing.T) {
 	}
 }
 
-// AN EFFORT THAT WOULD REACH NOTHING IS REFUSED, NEVER DROPPED: a harness with
-// no setting the engine passes, a level the harness does not take, and a level
-// the harness does not take on the entry's model. Each refusal says why, and is
-// an admission rule: the levels are a vendor fact a newer peer may know more of.
+// AN EFFORT THAT WOULD REACH NOTHING IS REFUSED, NEVER DROPPED: on a harness with
+// no setting, a level the harness does not take, or one it does not take on the
+// model. Each refusal says why, as an admission rule.
 func TestAnEffortThatWouldReachNothingIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
