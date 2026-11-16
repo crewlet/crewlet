@@ -60,13 +60,16 @@ const (
 // codeChangePart is a part of one change the `code_change` question answers:
 // the reader's own parts (gitlet.ChangeParts) — its revisions with its detail
 // by default — and the three read by object id: `files`, `diff` and
-// `findings`, its findings placed in the revision asked about.
+// `findings`, its findings placed in the revision asked about. `finding_paths`,
+// its findings counted by path, is asked by gitlet.ReadQuery.FindingPaths.
 type codeChangePart string
 
 const (
 	partFiles    codeChangePart = "files"
 	partDiff     codeChangePart = "diff"
 	partFindings codeChangePart = "findings"
+	// partFindingPaths is asked of the reader by its own key, so an older build refuses it unread.
+	partFindingPaths codeChangePart = "finding_paths"
 )
 
 // codeChangeParts is every part the question answers, the reader's first.
@@ -75,7 +78,7 @@ func codeChangeParts() []string {
 	for _, p := range gitlet.ChangeParts() {
 		out = append(out, string(p))
 	}
-	return append(out, string(partFiles), string(partDiff))
+	return append(out, string(partFiles), string(partDiff), string(partFindingPaths))
 }
 
 // CodeChangeFiles is the `files` and `diff` parts' answer: a revision's files
@@ -183,7 +186,11 @@ func (s Sources) codeChange(ctx context.Context, p Params) (any, error) {
 	case partFindings:
 		return g.findings(ctx, call)
 	}
-	q.Part = gitlet.ChangePart(call.part)
+	if codeChangePart(call.part) == partFindingPaths {
+		q.FindingPaths = true
+	} else {
+		q.Part = gitlet.ChangePart(call.part)
+	}
 	answer, err := reads.Read(ctx, q)
 	if err != nil {
 		return nil, codeRefusal(q.Repo, err)

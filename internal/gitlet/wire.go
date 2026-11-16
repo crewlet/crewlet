@@ -1453,6 +1453,10 @@ type ReadQuery struct {
 	// versionedFields row. The domain landed on main with it
 	// ([RecordVersion]).
 	FindingIDs []string `json:"finding_ids,omitempty"`
+	// FindingPaths asks a `change` read for its findings counted by path, state and revision
+	// ([ReadAnswer.FindingPaths]), paged by Limit and Cursor; refused on every other kind and beside
+	// a part, detail_only, brief or finding_ids. A key of its own, so an older build refuses it unread.
+	FindingPaths bool `json:"finding_paths,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
@@ -1636,17 +1640,19 @@ type ReadAnswer struct {
 	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row. The domain landed on main with it, as with
 	// [ReadQuery.Resolve].
-	Resolved   *RepoRef               `json:"resolved,omitempty"`
-	Revisions  []RevisionRow          `json:"revisions,omitempty"`
-	Reviewers  []ReviewerRow          `json:"reviewers,omitempty"`
-	Comments   []CommentRow           `json:"comments,omitempty"`
-	Reviews    []ReviewRow            `json:"reviews,omitempty"`
-	Findings   []FindingRow           `json:"findings,omitempty"`
-	Routed     *RoutedPage            `json:"routed,omitempty"`
-	Introduced []IntroducedRow        `json:"introduced,omitempty"`
-	Due        []CompactionCandidate  `json:"due,omitempty"`
-	Publish    []PublicationCandidate `json:"publish,omitempty"`
-	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
+	Resolved  *RepoRef      `json:"resolved,omitempty"`
+	Revisions []RevisionRow `json:"revisions,omitempty"`
+	Reviewers []ReviewerRow `json:"reviewers,omitempty"`
+	Comments  []CommentRow  `json:"comments,omitempty"`
+	Reviews   []ReviewRow   `json:"reviews,omitempty"`
+	Findings  []FindingRow  `json:"findings,omitempty"`
+	// FindingPaths is a `finding_paths` page of a change ([ReadQuery.FindingPaths]).
+	FindingPaths []FindingPathRow       `json:"finding_paths,omitempty"`
+	Routed       *RoutedPage            `json:"routed,omitempty"`
+	Introduced   []IntroducedRow        `json:"introduced,omitempty"`
+	Due          []CompactionCandidate  `json:"due,omitempty"`
+	Publish      []PublicationCandidate `json:"publish,omitempty"`
+	Expunge      []ExpungeCandidate     `json:"expunge,omitempty"`
 	// Imports is an `imports_due` read's page, Mirrors a `mirrors_due`
 	// read's.
 	Imports []ImportCandidate `json:"imports,omitempty"`
@@ -2818,6 +2824,9 @@ type ChangeDetail struct {
 	// no revision of yet. One of an earlier revision than the change's head,
 	// or into another branch, is the home's to merge again.
 	Mergeability *MergeabilityRow `json:"mergeability,omitempty"`
+	// Participants is who takes part in its conversation (code_participants), by handle, at
+	// most MaxDetailParticipants; nil where not answered.
+	Participants *ParticipantList `json:"participants,omitempty"`
 }
 
 // ConversationRow is a change's conversation's counters
@@ -2969,6 +2978,8 @@ type FindingRow struct {
 	ResolvedCommit   string            `json:"resolved_commit,omitempty"`
 	ResolvedPosition statelog.Position `json:"resolved_position,omitzero"`
 	Position         statelog.Position `json:"position"`
+	// RaisedAt is the broker instant of the review that raised it (code_reviews.at).
+	RaisedAt time.Time `json:"raised_at,omitzero"`
 }
 
 // ReviewerRow is one reviewer a change has asked (code_reviewers): a seat by
@@ -2984,6 +2995,9 @@ type ReviewerRow struct {
 	RequestedByKind PartyKind         `json:"requested_by_kind"`
 	Note            string            `json:"note,omitempty"`
 	Position        statelog.Position `json:"position"`
+	// At is when the record at Position landed, read from one of its notices on the change;
+	// zero where none is kept (past the notices' horizon, or a record that told nobody).
+	At time.Time `json:"at,omitzero"`
 }
 
 // CommentRow is one comment on a change (code_comments): its thread — its own

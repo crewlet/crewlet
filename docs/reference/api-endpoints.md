@@ -10258,6 +10258,16 @@ refuses `cards` and another answers; a card never reads as zeros where it was
 not answered. `cards=` other than `true` or `false` is `400 bad_params`, and
 `cards=true` on any other question is refused naming it.
 
+`?part=finding_paths` on `GET /gitlet/repos/{name}/changes/{n}` answers
+`finding_paths`: the change's findings counted by `path`, `state` and
+`revision` (`findings`), in that order (`?limit=` 1 to 1 000, unset or `0` is
+500, and `?cursor=`); `revision` and `file` beside it are `400 bad_params`. An
+older data node refuses it and another answers. The detail carries
+`participants` (`rows` of `handle`, `kind`, `verdict` and `verdict_revision`,
+at most 32, and `omitted`), each reviewer row `at`, when the record that last
+moved it landed (absent past the notices' horizon), and each finding
+`raised_at`, when the review that raised it landed.
+
 A part read by object id — `files`, `diff`, and `findings`' placing — reads
 the change's rows first, at the caller's freshness, then every other row it
 needs at `session` floored at that first read's position, and asks the

@@ -2139,6 +2139,11 @@ changes](#reading-changes)).
   findings, its standing blockers and its requests for changes, and the
   version and position of its last record — the floor a read of its parts is
   asked at, so a comment just written is read back with the change.
+- **The detail names its participants**: everyone who takes part in its
+  conversation (each reviewer asked, each author of a comment, each reviewer
+  who reviewed and everyone a record mentioned), by handle, with each one's
+  standing verdict and the revision it judged; 32 at most, with how many
+  more. The change's opener and pushers are its authors.
 - **Comments come a thread at a time**: a thread's first comment and then its
   replies in the order they were said, threads in the order they started; a
   page holds 50 unless asked for fewer or more, 200 at most, and ends at the
@@ -2148,14 +2153,18 @@ changes](#reading-changes)).
   points at, and whether its thread is resolved and by whom.
 - **Reviewers come by handle**, a withdrawn ask among them, 200 a page and
   1 000 at most: who was asked, by whom, with what note, and whether the ask
-  stands.
+  stands. Each row says when the record that last moved it landed, read from
+  that record's notices on the change: known while one of them is kept (a
+  person's inbox horizon, a seat's thirty days) and unknown after, which the
+  page words "asked earlier". Two data nodes may answer differently close to
+  that horizon, since each sweeps its own notices.
 - **Reviews come in the order they were given**, 50 a page and 200 at most:
   the revision each judged, who reviewed, its verdict, its summary and how
   many findings it raised.
 - **Findings come by id** — the order the reviews that raised them were given
   — each with its text and its suggestion, its state and its last answer, 50
   a page and 200 at most, ending at the reply's byte budget first where
-  suggestions are long.
+  suggestions are long, each with when the review that raised it landed.
 - **Standing findings are the reader's own**, by id, paged as findings are:
   every finding they raised that still stands — open, resolved, won't fix or
   disputed — which is exactly what a review of theirs carries or, of a later
@@ -2163,6 +2172,11 @@ changes](#reading-changes)).
   to no seat. It is what a review dialog reads to its last page before it
   sends, where the findings part, oldest first, would have left a reviewer's
   newest standing findings past its first page.
+- **A change's findings by path** (`finding_paths`): how many of its findings
+  stand in each state on each path, by the revision they were raised on, in
+  path order, 500 a page and 1 000 at most: what a changed file's badge
+  counts. It is asked by a key of its own, never as a part, so a data node
+  that predates it refuses it and another answers.
 
 ### Asking for review
 

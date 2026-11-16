@@ -1128,7 +1128,11 @@ func (r ReviewerRow) encodedBytes() int {
 	if r.Note != "" {
 		n += field("note", stringBytes(r.Note), false)
 	}
-	return n + field("position", positionBytes(r.Position), false)
+	n += field("position", positionBytes(r.Position), false)
+	if !r.At.IsZero() {
+		n += field("at", timeBytes(r.At), false)
+	}
+	return n
 }
 
 // encodedBytes is the length of the comment's JSON encoding.
@@ -1273,7 +1277,19 @@ func (f FindingRow) encodedBytes() int {
 	if !f.ResolvedPosition.IsZero() {
 		n += field("resolved_position", positionBytes(f.ResolvedPosition), false)
 	}
-	return n + field("position", positionBytes(f.Position), false)
+	n += field("position", positionBytes(f.Position), false)
+	if !f.RaisedAt.IsZero() {
+		n += field("raised_at", timeBytes(f.RaisedAt), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the group's JSON encoding.
+func (p FindingPathRow) encodedBytes() int {
+	return 2 + field("path", stringBytes(p.Path), true) +
+		field("state", stringBytes(string(p.State)), false) +
+		field("revision", intBytes(p.Revision), false) +
+		field("findings", intBytes(p.Findings), false)
 }
 
 // encodedBytes is the length of the anchor's JSON encoding.
