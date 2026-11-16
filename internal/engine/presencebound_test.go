@@ -43,7 +43,7 @@ import (
 // ways: a new alarm kind or a new core field that pushes the worst case past
 // it fails here, as a bound left larger than its derivation does.
 //
-// Mutations: the bound at design.md's 4 KiB, the encoder escaping HTML, the
+// Mutations: the bound at 4 KiB, the encoder escaping HTML, the
 // build left uncut, or MaxLabels raised — each red.
 func TestThePresenceLeaseAtItsWorstFitsItsBound(t *testing.T) {
 	t.Parallel()
@@ -60,13 +60,13 @@ func TestThePresenceLeaseAtItsWorstFitsItsBound(t *testing.T) {
 		ID:     "node-a",
 		Roles:  placement.Roles(placement.Vocabulary()...),
 		Labels: labels,
-		Broker: longest(t, placement.BrokerMember, placement.BrokerLeaf, placement.BrokerClient),
+		Broker: longest(t, placement.BrokerKinds()...),
 	}
 	widest := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 	status := coord.NodeStatus{
 		InFlight:           math.MaxInt64,
 		Draining:           false, // "false" is the longer of the two
-		Posture:            string(longest(t, configplane.PostureServe, configplane.PostureWait, configplane.PostureShed, configplane.PostureStuck, configplane.PostureIsolated)),
+		Posture:            string(longest(t, configplane.Postures()...)),
 		StartedAt:          widest,
 		Build:              strings.Repeat(costliestByte(t), 16*coord.MaxBuildBytes),
 		ParkedStateVersion: math.MaxInt64,
