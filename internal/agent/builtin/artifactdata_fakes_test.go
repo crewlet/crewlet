@@ -138,6 +138,22 @@ func (f *fakeData) Schema(context.Context, artifacts.ID) ([]artifacts.Collection
 
 // CarriedSchema is the schema as read_artifact_data hands it to a model to send
 // back: the same collections, which in this fake no wire stands between.
+// State is the reading's own per-viewer keys: the rows of the state
+// collection the reading's record wrote, keyed by their id.
+func (f *fakeData) State(_ context.Context, _ artifacts.ID, rd artifactdata.Reading) (
+	[]artifactdata.StateEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readings = append(f.readings, rd)
+	out := []artifactdata.StateEntry{}
+	for _, d := range f.rows[artifactdata.StateCollection] {
+		if d.CreatedBy.Name == rd.Record && !d.Deleted {
+			out = append(out, artifactdata.StateEntry{Key: d.ID, Value: d.Fields, Version: d.Version})
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeData) CarriedSchema(ctx context.Context, id artifacts.ID) ([]artifacts.Collection, error) {
 	return f.Schema(ctx, id)
 }

@@ -394,3 +394,7 @@ as any page, framed on its own.
   what you tried and the last refusal, finish what does not depend on it and
   end the turn.
 <!-- contract:end -->
+
+## Before you ask for review
+
+Before you ask anybody to review a page or a design's artboard, run `render_artifact` on the version you published and fix what it finds: open every shot it writes to your box (1440 and 390 pixels wide, light and dark), and check that no custom property resolves to nothing, no sticky bar is see-through or hides a heading or a link, the console is clean, no request failed, every link goes somewhere the version holds, and every in-page link lands in view.

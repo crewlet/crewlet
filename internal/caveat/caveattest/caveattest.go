@@ -42,7 +42,7 @@ var modelVocabulary = []struct {
 // app's, chat's included: the tools a seat holds there and the gestures only
 // a person is given.
 var toolNames = slices.Concat(builtin.WorkTools(), builtin.PageTools(),
-	builtin.ArtifactTools(), builtin.ArtifactDataTools(), chatlet.Tools(),
+	builtin.ArtifactTools(), builtin.RenderTools(), builtin.ArtifactDataTools(), chatlet.Tools(),
 	chatlet.OperatorOnlyTools())
 
 // Problems is every reason text is not worded for a person, or none. It names
