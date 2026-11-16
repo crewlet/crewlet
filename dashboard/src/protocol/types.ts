@@ -8502,6 +8502,8 @@ export interface CodeRepoSummary {
   pushes: number;
   /** Absent for a repository nobody pushed to. */
   last_push_at?: string;
+  /** Its pushes on each of the asker's days, oldest first, zeros included, where `repo_facts=true` asks with `day_bounds` (`gitlet.RepoSummary.Spark`); absent where not answered. */
+  spark?: number[];
   /** Its changes by state, where `repo_facts=true` asks (`gitlet.RepoSummary.ChangeCounts`). */
   change_counts?: CodeChangeCounts;
   /** Its card, where `repo_facts=true` asks (`gitlet.RepoSummary.Card`); absent is not answered. */
@@ -8658,6 +8660,8 @@ export interface CodeReposAnswer extends CodePage {
 export interface CodePushesAnswer extends CodePage {
   /** Absent on a page that holds none. */
   pushes?: CodePushRow[];
+  /** The repository's pushes on each of the asker's days, oldest first, zeros included, where `day_bounds` asks (`gitlet.ReadAnswer.PushDays`); absent where not answered, as an older node answers. */
+  push_days?: number[];
 }
 
 /**
@@ -9233,12 +9237,32 @@ export interface CodeRepoDetail extends CodeRepoSummary {
   path_owners?: CodePathOwner[];
   gates?: CodeRuleGate[];
   rule_sources?: CodeRuleSource[];
+  /** Who pushed to it on the whole UTC days that begin within its `day_bounds`, where `repo_facts=true` asks with them; absent where not answered. */
+  pushers?: CodePushers;
   /** Where its expunges stand (`gitlet.ExpungeState`); absent for one never purged with none asked. */
   expunge?: CodeExpungeState;
   /** Where it stands with other hosts (`gitlet.RemoteState`); absent for none. */
   remotes?: CodeRemoteState;
   /** The record that last moved it (`gitlet.RepoDetail.Version`); absent from an older node. */
   version?: LogPosition;
+}
+
+/** Who pushed to a repository on whole UTC days, from `from` up to `until` (`gitlet.Pushers`). */
+export interface CodePushers {
+  from: string;
+  until: string;
+  /** Most pushes first; absent where nobody pushed. */
+  top?: CodePusher[];
+  /** The pushers past the ones named, and their pushes together; absent at zero. */
+  omitted?: number;
+  omitted_pushes?: number;
+}
+
+/** One pusher (`gitlet.PusherPushes`): a seat by its handle, a person by the human seat they hold, or Gitlet. */
+export interface CodePusher {
+  kind: "agent" | "person" | "gitlet" | (string & {});
+  handle?: string;
+  pushes: number;
 }
 
 /** A repository's expunges (`gitlet.ExpungeState`): the one open, the purge asked, the last committed. */

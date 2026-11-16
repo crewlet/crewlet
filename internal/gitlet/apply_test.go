@@ -721,6 +721,7 @@ func (e *estate) seed(id string, pushes, refs, packs int) {
 	}
 	e.exec(`UPDATE code_repos SET refs = refs + ?, branches = branches + ? WHERE id = ?`, refs, refs, id)
 	e.seedPacks(id, 0, packs)
+	e.recountActivity(id)
 }
 
 // seedPacks writes n live packs of a repository straight into the estate, the
@@ -758,6 +759,7 @@ func (e *estate) seedWeighed(id string, n, width int) {
 			received_at, row_bytes)
 		SELECT printf('%s-weighed-%06d', ?, i), ?, i + 1, i, 'seed', 'operator', 'git', '[]', 0, ? FROM k`,
 		n, id, id, width)
+	e.recountActivity(id)
 }
 
 // exec runs one statement in a writer transaction — a case's hand-built row,
@@ -1110,7 +1112,8 @@ func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 		Purge{RepoID: "repo-a", Name: "a", Reason: "past retention"})
 	e.apply(purge)
 	for _, table := range []string{"code_repos", "code_refs", "code_packs", "code_pushes", "code_protections",
-		"code_packs_retired", "code_ref_drops", "code_layers", "code_layer_parts", "code_tips_due"} {
+		"code_packs_retired", "code_ref_drops", "code_layers", "code_layer_parts", "code_tips_due",
+		"code_push_days", "code_pusher_days"} {
 		column := "repo_id"
 		if table == "code_repos" {
 			column = "id"

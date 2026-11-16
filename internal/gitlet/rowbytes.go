@@ -134,6 +134,18 @@ func stringsBytes(ss []string) int {
 	return n
 }
 
+// int64sBytes is the length of a list of numbers.
+func int64sBytes(ns []int64) int {
+	n := 2
+	for i, v := range ns {
+		if i > 0 {
+			n++
+		}
+		n += intBytes(v)
+	}
+	return n
+}
+
 // encodedBytes is the length of the ref's JSON encoding.
 func (r RefRow) encodedBytes() int {
 	n := 2 + field("ref", stringBytes(r.Ref), true)
@@ -741,6 +753,9 @@ func (s RepoSummary) encodedBytes() int {
 	n += field("pushes", intBytes(s.Pushes), false)
 	if !s.LastPushAt.IsZero() {
 		n += field("last_push_at", timeBytes(s.LastPushAt), false)
+	}
+	if len(s.Spark) > 0 {
+		n += field("spark", int64sBytes(s.Spark), false)
 	}
 	if s.ChangeCounts != nil {
 		n += field("change_counts", s.ChangeCounts.encodedBytes(), false)
