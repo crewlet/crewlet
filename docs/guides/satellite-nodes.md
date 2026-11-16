@@ -474,8 +474,12 @@ the dependency surface before choosing a host for it:
   is still answered inside its five-second term at any rate the engine
   allows; with an upload and a hydration both in flight, a request whose
   bytes wait behind the one and whose reply waits behind the other can take
-  up to 7.75 seconds at the floor, past its term
-  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). Meanwhile the
+  7.75 seconds at the floor beyond its own round trip, past its term. Nothing
+  windows a download, which holds four 128 KiB messages in hand, fifteen
+  seconds at the floor, nor an event delivered to one of the node's seats, so
+  a reply crossing behind them waits for all of it, and a hydration that hears
+  nothing for its stall meanwhile is refused and taken again at the next
+  sweep ([#1035](https://github.com/crewlet/crewlet/issues/1035)). Meanwhile the
   node's placement pass waits for it (see
   [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
   A restart costs that

@@ -1180,8 +1180,8 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 // has out, which the acknowledgement queues behind on the same connection
 // ([Syncer.endBarrierArrival]) — so an end barrier is presumed lost after
 // about 9.0 seconds in a member's own process at the transport's bound and
-// asked again at 10, and across a link at the window after about 16.5 seconds
-// and asked again at 17.5, rather than asked again behind the bytes the first
+// asked again at 10, and across a link at the window after about 5.2 seconds
+// and asked again at 6.2, rather than asked again behind the bytes the first
 // is waiting on; the identity reads and the hydration's first barrier, which
 // wait behind no pull, are asked every two seconds. Only the stream's leader takes a publish — no other member
 // subscribes to the stream's subjects (nats-server stream.go, setLeader) — and

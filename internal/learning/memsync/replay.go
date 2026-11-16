@@ -376,13 +376,20 @@ func (s *Syncer) pullBytes() int {
 // # What the window does not cover
 //
 // The window is this hydration's alone: the object store's upload window is a
-// budget of its own on the same link (natsobj, linkWindow), and an upload's
-// bytes cross the link outbound while a pull's cross it inbound, so a request
-// whose bytes cross behind an upload's window and whose reply crosses behind a
-// pull's waits behind both — up to 7.75 seconds at the floor, past its term.
-// (A node hydrates one seat at a time: the seat host's placement pass claims
-// them one after another.) One row larger than the window crosses alone,
-// holding the link for its own crossing.
+// budget of its own on the same connection (natsobj, linkWindow), and an
+// upload's bytes cross the link outbound while a pull's cross it inbound, so a
+// request whose bytes cross behind an upload's window and whose reply crosses
+// behind a pull's waits behind both — 7.75 seconds at the floor beyond its own
+// round trip, past its term. (A node hydrates one seat at a time: the seat
+// host's placement pass claims them one after another.) Nothing windows the
+// rest of what crosses the link toward the node: a download holds four of the
+// object store's 128 KiB messages in hand (natsobj, readAhead), fifteen
+// seconds at the floor, for each download in flight, and an event delivered
+// to one of the node's seats crosses whole. A reply queued behind them waits
+// for all of it — a pull's next row among them, which past the replay's stall
+// ([Syncer.stall], 9.1 s across a link) refuses the seat, to be taken again
+// from the start of its memory (crewlet/crewlet#1035). One row larger than the
+// window crosses alone, holding the link for its own crossing.
 func (s *Syncer) pullBound() int {
 	bound := s.pullBytes()
 	if s.window > 0 {

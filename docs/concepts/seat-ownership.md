@@ -378,14 +378,14 @@ leads after an election does, is published again, as a read the leader did not
 answer is asked again: the hydration's first barrier two seconds later, and an
 end barrier, whose acknowledgement queues behind the rest of its replay's
 pull, once that pull's bytes could have arrived too (asked again at 10 seconds
-in a member's own process at the broker's limit, and at 17.5 across a link at
+in a member's own process at the broker's limit, and at 6.2 across a link at
 the window below). Published twice, it is one barrier, the later.
 
 **A hydration has no deadline: it takes what its bytes take.** Time refuses it
 only where nothing arrives. A pull that hears nothing at all (no row, no
 barrier, no heartbeat, no status) for its **stall**, the client's five-second
 request term and what the pull's bytes take to arrive, refuses the seat: 13
-seconds in a member's own process, 20.5 across a link at the window below, and
+seconds in a member's own process, 9.1 across a link at the window below, and
 about 253 for a pull of one row at the broker's limit across a link at the
 floor of thirty seconds a mebibyte. The stall counts from the pull's last word
 or the return of the replay's own end barrier, never from before it, and a
@@ -448,9 +448,15 @@ broker's limit. The window's price is round trips on a fast distant link: a
 year of episodes takes 1,380 pulls, about two and a half minutes with its
 writes across 100 ms at 100 Mbit/s. What it does not cover: the window is the
 hydration's own, and the object store's upload window is another on the same
-link, so a request whose bytes cross behind an upload and whose reply crosses
-behind a pull waits behind both, up to 7.75 seconds at the floor, past its
-term, a lease renewal sent there among them
+connection, so a request whose bytes cross behind an upload and whose reply
+crosses behind a pull waits behind both, 7.75 seconds at the floor beyond its
+own round trip, past its term, a lease renewal sent there among them; nothing
+windows the rest of what crosses the link toward the node — a download holds
+four of the object store's 128 KiB messages in hand, fifteen seconds at the
+floor, for each download in flight, and an event for one of the node's seats
+crosses whole — so a pull's next row can wait behind them past the 9.1
+seconds a hydration across a link waits for one, which refuses the seat until
+the next placement sweep takes it again
 ([#1035](https://github.com/crewlet/crewlet/issues/1035)); and one row larger
 than the window holds the link for its own crossing. A memory row is bounded only by the broker (an episode keeps its ask whole), so a pull
 bounded by its rows alone
