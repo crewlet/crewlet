@@ -2667,7 +2667,9 @@ const (
 	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0:
 	// 6521.2 KiB (6,677,673 bytes), 149,862 over main: 6522 KiB.
-	treeBudget = 5<<20 + 1402<<10
+	// Gitlet's commits as a timeline on one list, Gitlet split into three chunks, on kit 0.144.0:
+	// 6538.4 KiB (6,695,296 bytes), 17,623 over main: 6539 KiB.
+	treeBudget = 5<<20 + 1419<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
