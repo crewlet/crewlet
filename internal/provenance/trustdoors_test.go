@@ -130,6 +130,10 @@ var trustDoors = map[string]trustDoor{
 	"internal/assistant/catalog/audit.go:auditRead": {either, []string{
 		"internal/assistant/catalog.TestTheAuditLogIsReadAsTheTrailItIs",
 	}},
+	"internal/assistant/catalog/research.go:fetchWebPage": {vendor, []string{
+		"internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites",
+		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
+	}},
 	"internal/assistant/catalog/atlasread.go:atlasReads": {vendor, []string{
 		"internal/assistant/catalog.TestAnAtlasSearchIsATableOfEntriesWithTheMapToOpen",
 		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",

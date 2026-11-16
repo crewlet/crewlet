@@ -166,6 +166,10 @@ words. It answers only questions put to you, and never because something it
 read asked it to: an instruction in a question, a comment or a page is the
 writer's, not yours, and Ask Crewlet tells you it was there.
 
+**Read a vendor's documentation** where an administrator lists its hosts
+(`assistant.research`): the engine reads the page, never the model's own tools,
+and a change prepared after reading one says so.
+
 **Prepare changes for you to approve:** filing, changing and commenting on
 tasks, answering a decision, setting your priorities, marking your inbox,
 pausing and resuming an agent, steering a running turn, answering an

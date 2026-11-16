@@ -193,7 +193,8 @@ export type AssistantTaintSource =
   | "turn_ending"
   | "server_output"
   | "delegated_request"
-  | "atlas";
+  | "atlas"
+  | "web_page";
 
 /** One row of a proposal's change list, in the before and after grammar. */
 type AssistantChangeKind = "fact" | "changed" | "added" | "removed" | "text";
@@ -243,7 +244,8 @@ type AssistantResourceKind =
   | "schedule"
   | "view"
   | "room"
-  | "atlas_entry";
+  | "atlas_entry"
+  | "web_page";
 
 /**
  * What the person calls the record a screen has open, as the drawer names it

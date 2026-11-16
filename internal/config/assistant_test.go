@@ -401,3 +401,36 @@ func TestToolsDenyTakesEachKnownFamilyOnce(t *testing.T) {
 		})
 	}
 }
+
+// Research lists bare host names: none, a scheme, a port, a path, a wildcard, an
+// upper-case name or a repeat is refused naming the entry; absent, it is off.
+func TestResearchListsBareHostNames(t *testing.T) {
+	t.Parallel()
+	ok, err := ParseCompany([]byte(assistantCompany("",
+		"  research:\n    hosts: [developers.cloudflare.com, docs.github.com]\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ok.Assistant.ResearchHosts(); len(got) != 2 {
+		t.Errorf("research hosts read as %v", got)
+	}
+	off, err := ParseCompany([]byte("name: Acme\n"))
+	if err != nil || off.Assistant.ResearchHosts() != nil {
+		t.Errorf("a company with no research block reads hosts %v (%v)",
+			off.Assistant.ResearchHosts(), err)
+	}
+	for name, tc := range map[string]struct{ hosts, path string }{
+		"none":       {"[]", "assistant.research.hosts"},
+		"a scheme":   {"[https://docs.github.com]", "assistant.research.hosts[0]"},
+		"a port":     {"[docs.github.com:443]", "assistant.research.hosts[0]"},
+		"a path":     {"[docs.github.com/en]", "assistant.research.hosts[0]"},
+		"a wildcard": {"['*.github.com']", "assistant.research.hosts[0]"},
+		"upper case": {"[Docs.GitHub.com]", "assistant.research.hosts[0]"},
+		"a repeat":   {"[docs.github.com, docs.github.com]", "assistant.research.hosts[1]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rejects(t, assistantCompany("", "  research:\n    hosts: "+tc.hosts+"\n"), tc.path)
+		})
+	}
+}

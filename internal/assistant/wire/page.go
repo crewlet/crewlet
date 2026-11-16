@@ -449,9 +449,9 @@ func text(s string, max int) bool {
 }
 
 func (r ResourceRef) validate() error {
-	if !r.Kind.Valid() {
+	if !slices.Contains(ScreenKinds, r.Kind) {
 		return fmt.Errorf("%w: resource kind %q is not one of %s", ErrInvalid, r.Kind,
-			words.Or(ResourceKinds))
+			words.Or(ScreenKinds))
 	}
 	if r.ID == "" || !plain(r.ID, PageIDMaxBytes) {
 		return fmt.Errorf("%w: a %s resource id is empty or not plain text of at most %d bytes",

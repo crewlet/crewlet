@@ -37,6 +37,7 @@ import {
   FileTextGlyph,
   FolderGlyph,
   FolderKanbanGlyph,
+  GlobeGlyph,
   LayersGlyph,
   ListFilterGlyph,
   MapGlyph,
@@ -78,6 +79,7 @@ const KIND_GLYPH: Record<EntityKind, () => ReactNode> = {
   view: () => <ListFilterGlyph size="xs" />,
   room: () => <MessageSquareGlyph size="xs" />,
   atlas_entry: () => <MapGlyph size="xs" />,
+  web_page: () => <GlobeGlyph size="xs" />,
 };
 
 /** What a record's kind is called, at the head of its peek: "Task", "Agent". */

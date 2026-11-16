@@ -245,6 +245,9 @@ type Tool struct {
 	// Title is an inferred read's card title where its call names no route
 	// (a curated read of an answer with no fixed shape).
 	Title func(args Args) string
+
+	// PerTurn is the most calls of the tool one turn makes; zero is no bound.
+	PerTurn int
 	// Label renders the step's sentence from the call's safe arguments.
 	Label func(args map[string]any) string
 	// Scope is what the call's arguments narrowed a read to, in a few words

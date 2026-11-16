@@ -164,6 +164,22 @@ test("a chat room's chip is its name, and its peek says it is a room and opens i
   expect(open.getAttribute("href")).toBe(`#/chatlet/${id}`);
 });
 
+test("a web page the engine read is listed by its title, and its peek says it is a web page", () => {
+  const rules = event({
+    type: "entity",
+    entity: {
+      kind: "web_page",
+      id: "https://docs.example.com/rules",
+      title: "Origin rules",
+      facts: [{ label: "Address", value: "https://docs.example.com/rules" }],
+    },
+  });
+  draw("Overrides need the Enterprise plan.", [rules]);
+  const line = screen.getByRole("list", { name: "Also looked up" });
+  fireEvent.click(within(line).getByRole("button", { name: /Origin rules/ }));
+  expect(within(screen.getByRole("dialog")).getByText("Web page")).toBeTruthy();
+});
+
 test("a table's peek holds its rows, its downloads and the way to its page", () => {
   draw("", [waiting]);
   fireEvent.click(screen.getByRole("button", { name: "Decisions waiting on you (1)" }));
