@@ -35,14 +35,9 @@ func excerpts(p artifactsdomain.InboxPage) []string {
 	return out
 }
 
-// A PERSON'S ARTIFACTS INBOX reads their notices newest first, each with the
-// artifact as it stands and the person's own marks, split by the default
-// primary reasons; a page closes at its limit with a cursor past its last
-// notice; and the heads it carries are the LIVE artifacts' alone, so a notice
-// on one in the trash is shown to nobody.
-//
-// Mutation: read oldest first, drop the default split, page from the wrong
-// end, or carry a trashed artifact's head, and a line goes red.
+// A PERSON'S ARTIFACTS INBOX reads their notices newest first, with each live
+// artifact and their marks, split by the default primary reasons, paged at its
+// limit; a notice on an artifact in the trash is shown to nobody.
 func TestAPersonsArtifactsInboxReadsNewestFirstWithItsArtifacts(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -103,14 +98,9 @@ func TestAPersonsArtifactsInboxReadsNewestFirstWithItsArtifacts(t *testing.T) {
 	}
 }
 
-// A PERSON MARKS THEIR OWN NOTICES, one gesture at a time, by internal/inbox's
-// rules on the artifacts log: read, snoozed and read through, each read back
-// by the page and by its filters in the scan; a gesture naming a notice that is
-// not theirs, or asked by a seat that is no person, is refused; one that moves
-// nothing publishes nothing.
-//
-// Mutation: ignore a mark in the scan, accept another person's notice, or let
-// an agent mark, and a line goes red.
+// A PERSON MARKS THEIR OWN NOTICES, one gesture at a time, read back by the
+// page and its scan filters; marking another's notice, or as a seat, is
+// refused, and a gesture that moves nothing publishes nothing.
 func TestAPersonMarksTheirOwnCommentNotices(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -178,12 +168,8 @@ func TestAPersonMarksTheirOwnCommentNotices(t *testing.T) {
 	}
 }
 
-// A CARD READS ITS THREAD AS IT STANDS: its status and who resolved it, its
-// quote and how many remarks are not removed, in the order named, and nothing
-// for a thread no row holds.
-//
-// Mutation: count removed remarks, keep a reopened thread's resolver, or
-// answer out of order, and a line goes red.
+// A CARD READS ITS THREAD AS IT STANDS: status and resolver, quote and live
+// remark count, in the order named, and nothing for a missing thread.
 func TestACardReadsItsThreadAsItStands(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)

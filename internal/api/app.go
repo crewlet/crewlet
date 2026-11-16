@@ -1683,12 +1683,9 @@ func (a *App) pushInboxGap(source string) {
 	a.stream.InboxReread(source, app, relational)
 }
 
-// inboxHalf is who hears a domain's half of a person's inbox: the app the
-// tracker's (Worklet) and the code log's (Gitlet, ADR-0110) are about, or,
-// for the artifacts' comments, no app and every watcher, told no subject
-// ([stream.InboxChange.Relational]); "" and false for a domain that keeps
-// none, whose movement then reaches nobody. Named by the state log's name an
-// [inbox.Movement] carries.
+// inboxHalf is who hears a domain's half of a person's inbox: the tracker's or
+// the code log's app, or for the artifacts' comments no app and every watcher
+// ([stream.InboxChange.Relational]); "" and false for a domain keeping none.
 func inboxHalf(source string) (iam.Grant, bool) {
 	switch source {
 	case worklet.Domain{}.Name():

@@ -1972,10 +1972,8 @@ describe("the pane", () => {
     ]);
   });
 
-  // A COMMENT ON AN ARTIFACT IS ONE ROW SAYING WHO DID WHAT TO WHICH ARTIFACT,
-  // with the remark as words under it, and it is marked through the artifacts'
-  // own tool at its own position. Mutations: mark it with mark_inbox, or drop
-  // its `seen`, red; draw the remark as markup and the asterisks are read out.
+  // A COMMENT ON AN ARTIFACT IS ONE ROW SAYING WHO DID WHAT TO WHICH ARTIFACT, the remark as plain
+  // words under it, marked through the artifacts' own tool at its own position.
   test("a comment on an artifact is listed beside the others and marked through its own tool", async () => {
     location.hash = "#/inbox?row=artifact%3Aa-5";
     mount({
@@ -2005,11 +2003,8 @@ describe("the pane", () => {
     ]);
   });
 
-  // ITS CARD: who, on which artifact and why, what they did with the remark
-  // quoted under it, the text the thread was made on and where it stands, and
-  // the way to the thread on the artifact's own page. Every word is the
-  // notice's, so opening it asks nothing. Mutations: open the artifact without
-  // its comments panel or its thread, drop the quote or the status, red.
+  // ITS CARD: who, which artifact and why, the remark quoted, the thread's text and status, and the
+  // way to the thread on the artifact's page; every word is the notice's, so opening asks nothing.
   test("a comment on an artifact opens as its card, with the thread one press away", async () => {
     location.hash = "#/inbox?row=artifact%3Aa-5";
     mount({
@@ -2238,10 +2233,9 @@ describe("the pane", () => {
     expect(fetched.filter((url) => url.includes("/query/code_"))).toEqual([]);
   });
 
-  // MARK ALL READ SENDS ONE MARK A SOURCE, each at its own newest notice.
-  // Mutations: read every source through the newest notice of any, and Gitlet
-  // is sent a Worklet position; leave the artifacts out, and their comments
-  // stay unread, red.
+  // MARK ALL READ SENDS ONE MARK A SOURCE, each at its own newest notice. Mutations: read every
+  // source through the newest notice of any, and Gitlet is sent a Worklet position; leave the
+  // artifacts out, and their comments stay unread, red.
   test("Mark all read reads each source through its own newest update", async () => {
     mount({
       services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
@@ -3626,10 +3620,8 @@ describe("who is looking", () => {
   });
 });
 
-// EVERY COMPANY KEEPS ARTIFACTS, so a company running neither Worklet nor
-// Gitlet still has updates: the comments on the reader's artifacts, listed and
-// marked as anywhere else. Mutation: ask the notices only where Worklet or
-// Gitlet runs, and nothing is asked or listed, red.
+// EVERY COMPANY KEEPS ARTIFACTS, so a company running neither Worklet nor Gitlet still lists and
+// marks the comments on the reader's artifacts.
 test("on a company running neither Worklet nor Gitlet the comments on artifacts still arrive", async () => {
   mount({
     services: { tracker: "jira", knowledge: "doclet", chat: "chatlet", code: "none" },

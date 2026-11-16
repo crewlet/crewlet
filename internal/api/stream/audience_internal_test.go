@@ -139,14 +139,9 @@ func TestAnInboxFrameNeedsNoApp(t *testing.T) {
 	}
 }
 
-// A RELATIONAL HALF OF AN INBOX REACHES EVERY WATCHER AND NAMES NO OBJECT: the
-// artifacts' comments are gated by no app, each notice held by the read to its
-// artifact's relation, which a frame cannot decide, so every watcher is told
-// the half moved and none which artifact. An app's half still reaches its
-// holders alone.
-//
-// Mutation: keep the subject, or gate the relational half on an app, and a
-// line goes red.
+// A RELATIONAL HALF OF AN INBOX REACHES EVERY WATCHER AND NAMES NO OBJECT: a
+// frame cannot decide an artifact's relation, so every watcher hears the half
+// moved and none which artifact; an app's half still reaches its holders alone.
 func TestARelationalInboxHalfReachesEveryWatcherNamingNoObject(t *testing.T) {
 	t.Parallel()
 	moved := InboxChange{Source: "artifacts", Handle: "ana", UnreadDelta: 1, Subject: "artifact-1",

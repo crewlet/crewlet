@@ -10,20 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE NOTICES' SWEEP: the one write of the replicated estate this domain makes
-// outside its applier, and why it may. artifact_notifications is DIVERGENT
-// (apply_notices.go): whether a record writes a notice depends on the batch's
-// instant and the horizon its epoch states, so two nodes legitimately hold
-// different rows and deleting on this node's own authority diverges nothing,
-// Gitlet's notice sweep's argument, which internal/store's applier gate names
-// beside this file.
+// THE NOTICES' SWEEP, the one estate write outside the applier: the notices
+// table is DIVERGENT (apply_notices.go), so deleting on this node's own
+// authority diverges nothing, as with Gitlet's notice sweep.
 
-// NoticeJobs is the sweep of the notices this node's applier wrote, over the
-// replicated estate db: one job deleting the rows past the company's inbox
-// horizon, asked at every sweep (persons), as the applier reads it off every
-// batch's epoch. PER NODE ([maintenance.NodeLocal]): the table is divergent,
-// so each node holds its own rows. The zero handle is a node with no estate,
-// which contributes no job.
+// NoticeJobs is the per-node sweep ([maintenance.NodeLocal]) of the notices
+// past the company's inbox horizon, over the replicated estate db; a zero
+// handle, a node with no estate, contributes no job.
 func NoticeJobs(db store.ReplicatedHandle, persons maintenance.Horizon) []maintenance.Job {
 	if db.IsZero() {
 		return nil

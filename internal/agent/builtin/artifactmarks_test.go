@@ -9,15 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A COMMENT MARK IS A PERSON'S OWN, FROM THEIR ASSISTANT OR SCREEN: the
-// operator catalogue serves artifact_mark_inbox and a seat's registry never
-// holds it; a person's mark reaches the artifacts as the human seat they hold,
-// with its gesture and its `seen` floor on the artifacts log; and a floor on
-// another log, or a gesture marking nothing, is refused before anything is
-// asked.
-//
-// Mutation: register the tool for seats, drop the floor, or accept a position
-// on another log, and a line goes red.
+// A COMMENT MARK IS A PERSON'S OWN: only the operator catalogue serves
+// artifact_mark_inbox, a mark carries its gesture and `seen` floor, and a
+// floor on another log or a gesture marking nothing is refused unasked.
 func TestACommentMarkIsAPersonsOwnFromTheirAssistant(t *testing.T) {
 	t.Parallel()
 	f := newFakeArtifacts()

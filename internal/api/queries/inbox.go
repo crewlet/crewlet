@@ -146,10 +146,9 @@ func reasonNames() []string {
 // ([authz.ActionInboxRead], `work_inbox`'s own rule); Gitlet's where the
 // company hosts code and the caller holds the gitlet permission (ADR-0110),
 // each notice held by Gitlet to the caller's grant on its repository; the
-// artifacts' wherever the company keeps artifacts, under no app (a comment is
-// a relation, never an app), each notice held to the caller's access to its
-// artifact as it stands. A source the caller may not read is not asked, and
-// the answer's `sources` says which were.
+// artifacts' under no app, each held to the caller's access to its artifact. A
+// source the caller may not read is not asked, and the answer's `sources`
+// says which were.
 //
 // # One floor per log
 //
@@ -391,9 +390,8 @@ func (c codeInbox) Cards(ctx context.Context, page inbox.SourcePage, notices []i
 }
 
 // artifactsInbox is the artifacts' half of a composed inbox: a page of the
-// person's comment notices at the floor the caller named on the artifacts log,
-// each held to the caller's access to its artifact as the page's snapshot held
-// it, so no title or excerpt of an artifact they can no longer read is shown.
+// person's comment notices, each held to the caller's access to its artifact
+// in the page's snapshot, so nothing of an artifact they cannot read shows.
 type artifactsInbox struct {
 	reads ArtifactsReader
 	gate  artifactsapi.Gate

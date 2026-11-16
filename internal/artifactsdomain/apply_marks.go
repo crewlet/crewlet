@@ -9,15 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/inbox"
 )
 
-// A PERSON'S MARKS, APPLIED: a marks record's gesture laid over the row the
-// person's last record left, the applier's write of artifact_person_marks and
-// no other code's. marks.go has the record, its decide and why the apply reads
-// no notice.
+// A PERSON'S MARKS, APPLIED: a marks record's gesture laid over the person's
+// last row, the only write of artifact_person_marks (see marks.go).
 
-// applyMarks applies one marks record: the gesture it carries, with the
-// positions its decide found, to the row the person's last record left, at the
-// record's broker instant. A record whose payload names another person than
-// its subject writes nothing, as a refusal does.
+// applyMarks applies one marks record's gesture, with its decided positions, to
+// the person's last row at the broker instant; a payload naming another person
+// than its subject writes nothing.
 func (a *Applier) applyMarks(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	payload, err := DecodeMutation(c.record)
 	if err != nil {

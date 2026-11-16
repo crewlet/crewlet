@@ -1,10 +1,9 @@
 /**
  * What a reader does with an update: mark it read (or unread again), put it
  * off, or bring it back. Each is ONE gesture on this person's own inbox,
- * naming exactly the one notice that is open, through ITS SOURCE'S tool:
- * `mark_inbox` for a tracker notice, `code_mark_inbox` for Gitlet's and
- * `artifact_mark_inbox` for a comment on an artifact, since each domain keeps
- * the marks over its own notices on its own log.
+ * naming exactly the one notice that is open, through ITS SOURCE'S tool: `mark_inbox` for a
+ * tracker notice, `code_mark_inbox` for Gitlet's and `artifact_mark_inbox` for an artifact's
+ * comment, since each domain keeps the marks over its own notices on its own log.
  *
  * A GESTURE, NEVER THE DOCUMENT. Marking read marks this record and nothing
  * else: every other mark, every snooze and the read position stay where they

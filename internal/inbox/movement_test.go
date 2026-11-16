@@ -104,12 +104,7 @@ func TestABatchAnnouncesEachPersonOnceWithItsNewestNotice(t *testing.T) {
 }
 
 // A notice whose words the batch took away moves its recipient's inbox and
-// counts nothing, and never displaces the arrival of the same notice in the
-// same batch: a reply and the removal of its remark, applied together, still
-// told the person of one new notice.
-//
-// Mutation: let a change count, let it replace a held note, or rank it with an
-// arrival, and a step fails.
+// counts nothing, never displacing that notice's arrival in the same batch.
 func TestAChangedNoticeMovesAnInboxAndCountsNothing(t *testing.T) {
 	t.Parallel()
 	at := time.Unix(1_700_000_000, 0).UTC()

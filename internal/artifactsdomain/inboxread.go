@@ -20,40 +20,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// ONE PERSON'S ARTIFACTS INBOX: the notices the applier wrote for them, one
-// row per comment record that told them (artifact_notifications, apply_notices.go),
-// newest first on the artifacts log, read beside their own marks
-// (artifact_person_marks, marks.go) in ONE snapshot, each notice marked by
-// internal/inbox's one rule.
-//
-// # Every narrowing is in the scan
-//
-// The snooze scope, `unread` and `primary_only` are predicates on the one
-// index range the read walks, artifact_notifications_inbox_idx, each bound
-// from the person's own marks, which the same transaction read first: so a
-// page holds `limit` notices whenever the table holds them, and every set it
-// binds is the Classifier's ([inbox.Classifier]), the lookups the page is then
-// marked by. Under `unread` the range starts at the person's seen-through
-// position, and the few notices below it an unread mark brings back are sought
-// by their key beside it, Gitlet's reading of the same rule.
-//
-// # The artifact as it stands, and who may read it
-//
-// A notice is about a comment on an artifact, and its asker may no longer
-// read that artifact: a share withdrawn, an owner changed, the artifact in the
-// trash. So the page carries, beside its notices, the head of every LIVE
-// artifact they name, read in the same snapshot, and the surface holds each
-// notice to its asker's access to that head (internal/api/queries) before it
-// shows a word of it. A notice whose artifact is not live has no head and is
-// shown to nobody. The page's cursor is still the last notice it SCANNED, so
-// a page the surface left notices out of resumes below them.
-//
-// # A card is read only where one is drawn
-//
-// A notice carries the artifact's title and kind. What its CARD draws beside,
-// the thread as it stands (its status, its quote, how many remarks it holds),
-// is a read of its own ([Reader.NoticeThreads]), asked after a composed page is
-// cut, for the notices it kept (internal/inbox's Carded).
+// ONE PERSON'S ARTIFACTS INBOX: their notices newest first, with their marks
+// and the head of each live artifact named, in ONE snapshot; the caller holds
+// each notice to that head, and every filter is in the one index scan.
 
 // InboxQuery is an artifacts inbox read's question.
 type InboxQuery struct {
@@ -371,9 +340,8 @@ func scanInbox(ctx context.Context, tx *sql.Tx, handle, statement string, args .
 }
 
 // inboxScanOf is the scan q asks for, its filters bound from the person's
-// marks, and false where the filters select nothing at all: a primary half
-// with no reason in it, or only the snoozed notices of a person who snoozed
-// none.
+// marks, and false where they select nothing (a primary half with no reason,
+// or the snoozed notices of a person who snoozed none).
 func inboxScanOf(q InboxQuery, marks inbox.Classifier, now time.Time) (inboxScan, bool, error) {
 	s := inboxScan{handle: q.Handle, before: math.MaxInt64, restricted: q.PrimaryOnly, unread: q.Unread,
 		scope: string(q.Snoozed)}
@@ -473,19 +441,9 @@ func (r *Reader) NoticeThreads(ctx context.Context, refs []ThreadRef, fresh stat
 	return out, nil
 }
 
-// The inbox's statements.
-//
-// inboxScanSQL is ONE range of artifact_notifications_inbox_idx, the person's
-// notices below the cursor and above the floor, newest first, with every
-// filter bound and a filter not asked bound to pass: the primary half (a flag
-// and its reasons), `unread` by internal/inbox's rule as SQL (an unread mark
-// outranks everything; otherwise a notice is read when the read list names it
-// or the seen-through position covers it ON THE SAME STREAM, compared packed),
-// and the snooze scope. inboxMarkedSQL is the notices the person's unread list
-// names below that position, one seek of the notice table's key each, held to
-// the read's bounds and filters; the read merges them into the range's page.
-// noticeThreadsSQL is each named thread's row by its key, with its live
-// remarks counted by their thread's range.
+// The inbox's statements: inboxScanSQL is one range of the inbox index with
+// every filter bound (`unread` is internal/inbox's rule in SQL), inboxMarkedSQL
+// the unread-listed notices below it, noticeThreadsSQL each named thread.
 const (
 	inboxColumns = `n.record_id, n.log_seq, n.log_stream, n.log_generation, n.created_at, n.reason,
 			n.addressed, n.op, n.artifact_id, n.thread_id, n.remark_id, n.excerpt, n.actor, n.actor_kind`

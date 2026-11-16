@@ -12,31 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// WHOM A COMMENT RECORD TOLD: the artifacts half of a person's inbox.
-//
-// A comment record that opens a thread, replies in one, resolves or reopens
-// one carries its routing snapshot ([CommentNotify]), computed by the API when
-// the record was formed. Its agents are woken through this log's feed; its
-// PEOPLE are told here: the applier writes ONE ROW PER (record, person) in
-// artifact_notifications (replicated 0175), never to the record's own author,
-// as Gitlet writes code_notifications. A person's artifacts inbox is read from
-// these rows (inboxread.go) and each committed batch announces whose inbox its
-// rows moved ([inbox.Movement], [Applier.Committed]).
-//
-// # Kept the company's inbox horizon, and none past it
-//
-// A notice is kept the company's `inbox.retention_days` ([inbox.Horizon], read
-// off the epoch the batch is applied under). The applier writes no row past it
-// and each node sweeps its own rows past it ([NoticeJobs]), so a replay of the
-// whole log rebuilds no notice the sweep would delete. The table is DIVERGENT
-// for that reason: whether a row is written depends on the batch's instant and
-// the epoch's horizon, which two nodes may not share.
-//
-// # What a removal and a purge take
-//
-// A remark's removal clears the excerpt of every notice its record wrote, so
-// the words its author took back are kept nowhere; an artifact's purge deletes
-// every notice about it. Each moves the inbox of the person it told.
+// WHOM A COMMENT RECORD TOLD: the applier writes one artifact_notifications row
+// per person its [CommentNotify] names, never its author, and none past the
+// company's inbox horizon; the table is DIVERGENT, each node sweeping its own.
 
 // NoticesTable is the table a comment record's notices are kept in: DIVERGENT
 // ([Domain.Tables]), neither reproducible nor the log's machinery.
@@ -48,9 +26,8 @@ const NoticesTable = "artifact_notifications"
 const MaxNoticeExcerpt = 600
 
 // DefaultPrimaryReasons is the split a person who declared none is read with:
-// a comment on what they own, one that names them, and one on an artifact made
-// for their work are theirs to act on; a reply in a thread they are in is
-// context.
+// their own artifact, a mention and their work's artifact are primary; a reply
+// in their thread is context.
 var DefaultPrimaryReasons = []NotifyReason{NotifyOwner, NotifyMention, NotifyAssignee}
 
 // noticed is what one comment record says to the people it tells.
@@ -81,10 +58,9 @@ func noticeOf(artifact, thread string, op OpKind, payload any) (noticed, bool) {
 	return n, true
 }
 
-// writeNotices writes the notices of one applied comment record: a row for
-// every person it tells but its own author, once each, within the horizon,
-// each noted for the batch's movements where this transaction wrote it, so a
-// redelivery writes nothing and moves nobody's inbox.
+// writeNotices writes one applied comment record's notices: a row per person
+// it tells but its author, within the horizon, each noted for the batch's
+// movements, so a redelivery writes nothing and moves no inbox.
 func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, c applyContext, n noticed) (int, error) {
 	if pastHorizon(c, inbox.Horizon(c.epoch)) {
 		return 0, nil
@@ -127,10 +103,8 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, c applyContext, 
 	return written, nil
 }
 
-// pastHorizon reports a record whose broker instant is older than its batch's
-// instant less horizon: a notice the sweep would delete, which the applier
-// never writes. A horizon of none keeps everything, and a batch with no
-// instant dates nothing.
+// pastHorizon reports a record older than its batch's instant less horizon, a
+// notice the sweep would delete; with no horizon or no batch instant, none is.
 func pastHorizon(c applyContext, horizon time.Duration) bool {
 	return horizon > 0 && !c.now.IsZero() && c.brokerAt.Before(c.now.Add(-horizon))
 }
@@ -186,10 +160,8 @@ func (a *Applier) noted(ctx context.Context, tx *sql.Tx, c applyContext, like in
 }
 
 // The applier's notice statements: the write in three parts for
-// [store.InsertRowsReturning], a conflict on the key a skip and the recipients
-// it wrote its answer; a removed remark's excerpts cleared and a purged
-// artifact's notices deleted, each by artifact_notifications_remark_idx and
-// each answering the notices it touched.
+// [store.InsertRowsReturning], a key conflict skipped; a removed remark's
+// excerpt clear and a purge's delete use artifact_notifications_remark_idx.
 const (
 	addNoticesSQL = `INSERT INTO artifact_notifications (record_id, recipient, artifact_id, thread_id, remark_id,
 			op, reason, addressed, excerpt, actor, actor_kind, created_at, log_seq, log_stream, log_generation)

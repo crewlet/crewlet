@@ -5871,10 +5871,8 @@ export interface CodeInboxNotice {
   snoozed_until?: string;
 }
 
-/** Why a comment on an artifact reached a person: they own the artifact, they
- *  are assigned the work item it is for, it mentions them, or they are already
- *  in the thread. The first three are primary by default; `participant` is
- *  context. */
+/** Why a comment on an artifact reached a person: owner, assignee of its work item, mentioned, or
+ *  already in the thread. The first three are primary by default; `participant` is context. */
 export type ArtifactInboxReason = "owner" | "assignee" | "mention" | "participant";
 
 /** What the record behind an artifact notice did to its comment thread. */

@@ -856,9 +856,9 @@ func (a *Applier) applyPurgeBegin(ctx context.Context, tx *sql.Tx, c applyContex
 // no foreign key and a cascade is a delete nobody committed: its versions, its
 // objects (which become unnamed, and the collector reclaims their files after
 // its grace), its assets, shares, pins, reads, source claim, history, comment
-// threads and the notices they wrote. The MARKER IS WRITTEN WHETHER OR NOT THE
-// ROW IS HERE, so a record about the artifact that arrives later is gated on
-// every data node alike. A purge writes no
+// threads and the notices they wrote. The
+// MARKER IS WRITTEN WHETHER OR NOT THE ROW IS HERE, so a record about the
+// artifact that arrives later is gated on every data node alike. A purge writes no
 // history row of its own: the history goes with the artifact, and the marker
 // names the purge's operation, which is what its writer reads back.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id string) (int, error) {

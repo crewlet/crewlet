@@ -17,12 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A PERSON'S MARKS OVER THEIR COMMENT NOTICES: the operator tool
-// `artifact_mark_inbox`, the artifacts log's half of what `mark_inbox` is on
-// Worklet's and `code_mark_inbox` on Gitlet's, one gesture read by the one
-// parser ([gestureOf]) and decided on the person's own reader subject
-// (artifactsdomain's MarkInbox), the caller's `seen` floor travelling with it.
-// A person's alone: a seat is woken, never shown an inbox.
+// A PERSON'S MARKS OVER THEIR COMMENT NOTICES: `artifact_mark_inbox`, the
+// artifacts log's `mark_inbox`, decided on the person's own reader subject
+// with the caller's `seen` floor. A person's alone: a seat has no inbox.
 
 // ArtifactMarkInboxTool is the tool's name, its authority row's action.
 const ArtifactMarkInboxTool = string(authz.ActionArtifactMarkInbox)

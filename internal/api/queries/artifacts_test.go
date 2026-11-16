@@ -386,13 +386,8 @@ func (e *artifactsEstate) NoticeThreads(_ context.Context, refs []artifactsdomai
 }
 
 // THE ARTIFACTS' HALF OF AN INBOX IS EVERY PERSON'S, under no app, and each
-// notice is held to its reader's access to its artifact as it stands: bob
-// reads the comment on the page shared with him and nothing, not a title nor a
-// word, of kim's private page; its cursor still resumes below what was left
-// out, and a card carries the thread as it stands.
-//
-// Mutation: show a notice whose artifact the reader may not open, gate the
-// half behind an app, or drop the card's thread, and a line goes red.
+// notice is held to its reader's access to its artifact as it stands; the
+// cursor still resumes below what was left out.
 func TestTheArtifactsHalfOfAnInboxShowsOnlyWhatItsReaderMayOpen(t *testing.T) {
 	t.Parallel()
 	s, _, _ := inboxSources(t)

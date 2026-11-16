@@ -19,11 +19,10 @@
  * opened: a filter bar is read every time, and these are opened rarely.
  *
  * EVERY NATIVE DOMAIN'S NOTICES, ONE LIST. The engine composes the inbox
- * (`inbox`): Worklet's notices, Gitlet's and the artifacts' comments,
- * interleaved by when each happened, each source read under its own
- * permission. A Worklet notice is a `notice` row as it always was, its own
- * shape in the composed notice's `extra`; a code notice is a `change` row, and
- * a comment on an artifact an `artifact` row. Each domain keeps the marks over
+ * (`inbox`): Worklet's notices, Gitlet's and the artifacts' comments (each an `artifact` row),
+ * interleaved by when each happened, each source read under its own permission. A Worklet notice
+ * is a `notice` row as it always was, its own shape in the composed notice's
+ * `extra`; a code notice is a `change` row. Each domain keeps the marks over
  * its own notices on its own log, so a row is marked through its own source's
  * tool, and "Mark all read" reads each source through its own newest notice.
  *
@@ -614,13 +613,8 @@ export function changeWords(notice: CodeInboxNotice): { text: string; excerpt?: 
   return said ? { text, excerpt: said } : { text };
 }
 
-/**
- * What an artifact notice says: what its author did, "commented on Q3 plan",
- * which its row reads as one run after their name; the same deed as a
- * heading, "Commented"; and the remark the record made, flattened to words,
- * as the quieter words under it. A remark is Markdown a person wrote, and is
- * read as words here, never as markup.
- */
+/** What an artifact notice says: the deed after its author's name ("commented on Q3 plan"), the
+ *  same as a heading ("Commented"), and the remark flattened to words, never read as markup. */
 export function artifactWords(notice: ArtifactInboxNotice): {
   did: string;
   heading: string;
@@ -635,11 +629,8 @@ export function artifactWords(notice: ArtifactInboxNotice): {
   return said ? { ...words, excerpt: said } : words;
 }
 
-/**
- * An artifact notice's card: why it reached the reader, and, where the read
- * carried the thread (`thread_state`, a card's alone), the text it was made on
- * and where it stands; and the address that opens the artifact on it.
- */
+/** An artifact notice's card: why it reached the reader, the thread's text and status where the
+ *  read carried it (`thread_state`, a card's alone), and the address that opens it. */
 export interface ArtifactCard {
   /** Why it reached the reader, in their own voice ("On your artifact"). */
   why: string;

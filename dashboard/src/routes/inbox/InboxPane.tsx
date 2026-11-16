@@ -524,17 +524,8 @@ function ChangeNoticePane({
   );
 }
 
-/**
- * A comment on an artifact, drawn as its card ([artifactCard]) in the shape of
- * a Worklet notice's: who, on which artifact and why it reached the reader,
- * what they did, and the remark quoted under it; then, where the read carried
- * the thread, the text it was made on and where it stands. The thread is one
- * press away on the artifact's own page, and the reader's own marks close the
- * card (`artifact_mark_inbox`).
- *
- * THE LIST ASKS NOTHING: every word is the notice's, read with the inbox page,
- * so a list of cards costs no read per card.
- */
+/** A comment on an artifact as a card shaped like a Worklet notice's ([artifactCard]), its thread
+ *  one press away; every word is the notice's, so the list asks nothing per card. */
 function ArtifactNoticePane({
   notice,
   frame,

@@ -31,17 +31,14 @@
  *
  * # Whatever runs the tracker
  *
- * Updates, Snoozed and Earlier are the native domains' notices, composed by
- * the engine (`inbox`): Worklet's where the company runs it, Gitlet's where it
- * hosts code, and the comments on its artifacts, which every company keeps.
- * So they are asked for every reader with a record of their own, and Mark all
- * read marks them, whatever runs the tracker (`lib/services.ts`). Needs you
- * stays as well, because what fills it without Worklet still arrives: the
- * seats stopped on a spent budget and the engine's conditions (the agents and
- * budget pushes) and the executors parked on a question (`decisions`, which
- * answers them whatever runs the tracker). So does Answered, for the
- * executors' questions the person answered (`answered_decisions`, which lists
- * those on every company).
+ * Updates, Snoozed and Earlier are the native domains' notices, composed by the engine (`inbox`):
+ * Worklet's, Gitlet's and the comments on artifacts every company keeps, so every reader with a
+ * record is asked whatever runs the tracker; Mark all read marks them. Needs you stays, because
+ * what fills it without Worklet still arrives: the seats stopped on a
+ * spent budget and the engine's conditions (the agents and budget pushes) and
+ * the executors parked on a question (`decisions`, which answers them
+ * whatever runs the tracker). So does Answered, for the executors' questions
+ * the person answered (`answered_decisions`, which lists those on every company).
  *
  * # What is answered moves to Answered, and the next item opens
  *
@@ -214,10 +211,9 @@ export function Inbox() {
   // reconnect is never sent again.
   const owner = viewer.owner;
   const bound = owner !== "";
-  // THE NOTICES ARE EVERY NATIVE DOMAIN'S, composed by the engine (`inbox`),
-  // each under its own permission: Worklet's, Gitlet's, and the comments on
-  // the artifacts every company keeps, so they are asked for every reader with
-  // a record, whatever the company runs.
+  // THE NOTICES ARE EVERY NATIVE DOMAIN'S, composed by the engine (`inbox`), each under its own
+  // permission: Worklet's, Gitlet's and the comments on artifacts every company keeps, so they are
+  // asked for every reader with a record, whatever the company runs.
   const runs = useServicesRun();
   // EVERY LIST A ROW OPENS FROM ASKS FOR `cards`: what an opened code notice
   // draws beyond the notice — the change's description, its open findings and
@@ -758,10 +754,9 @@ const NOTHING_TO_READ: ReadThrough = { tracker: null, code: null, artifacts: nul
  * "Mark all read", which reads EACH SOURCE through the NEWEST UPDATE LOADED of
  * its and nothing past it: an update that arrived after this page was drawn
  * is one the person has not seen. Each domain keeps its own marks on its own
- * log, so the gesture is one write to each source with anything unread here:
- * `mark_inbox` for Worklet's notices, `code_mark_inbox` for Gitlet's and
- * `artifact_mark_inbox` for the artifacts' comments. The list is re-read past
- * every one.
+ * log, so the gesture is one write to each source with anything unread here: `mark_inbox` for
+ * Worklet's notices, `code_mark_inbox` for Gitlet's and `artifact_mark_inbox` for the artifacts'
+ * comments. The list is re-read past every one.
  */
 function MarkAllRead({ through }: { through: ReadThrough }) {
   const tracker = useAct("mark_inbox");

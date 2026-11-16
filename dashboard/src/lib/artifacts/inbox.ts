@@ -1,11 +1,5 @@
-/**
- * A comment on an artifact as the Inbox says it: why it reached the reader,
- * what its record did to the thread, and the address that opens the thread.
- *
- * RECORDS OVER THE CONTRACT'S UNIONS, as `words.ts` keeps them, so a reason or
- * an operation the protocol grows is a compile error here until it has words;
- * one a newer engine sends before this build knows it is said in its own.
- */
+/** A comment on an artifact as the Inbox says it: why it reached the reader, what it did, and its
+ *  thread's address. Records over the contract's unions, so a new reason needs words here. */
 
 import { href } from "~/app/router.tsx";
 import { artifactPath } from "~/app/routes.ts";
@@ -42,10 +36,7 @@ export function artifactCommentVerb(op: string): string {
 /** The query value that opens an artifact on its comments. */
 export const COMMENTS_PANEL = "comments";
 
-/**
- * An artifact opened on one of its comment threads: its own page with the
- * comments panel open (`panel=`) on that thread (`thread=`).
- */
+/** An artifact's own page opened on one comment thread (`panel=comments`, `thread=`). */
 export function artifactThreadHref(artifact: string, thread: string): string {
   return href(artifactPath(artifact), { panel: COMMENTS_PANEL, thread });
 }

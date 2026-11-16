@@ -52,12 +52,8 @@ func (n *node) notices() []string {
 }
 
 // A COMMENT RECORD TELLS THE PEOPLE ITS SNAPSHOT NAMES, AND NEVER ITS AUTHOR:
-// one row a person for an open, a reply, a resolve and a reopen, with the
-// reason, whether it asks, the remark's words and who wrote it; an edit tells
-// nobody; and each committed batch says whose inbox its rows moved.
-//
-// Mutation: write a row for the author, skip a kind of record, drop the
-// excerpt, or announce no movement, and a line goes red.
+// one row a person for an open, reply, resolve or reopen, none for an edit,
+// and each committed batch says whose inbox its rows moved.
 func TestACommentRecordTellsThePeopleItNamesButNeverItsAuthor(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -124,12 +120,8 @@ func mapsEqual(a, b map[string]int) bool {
 	return true
 }
 
-// A REMOVED REMARK'S WORDS ARE KEPT NOWHERE: its removal clears the excerpt of
-// every notice its record wrote, and tells the people it told that their inbox
-// moved, counting nothing. A purge takes every notice about the artifact.
-//
-// Mutation: leave the excerpt, clear another remark's, count the change as an
-// arrival, or let a purge keep its notices, and a line goes red.
+// A REMOVED REMARK'S WORDS ARE KEPT NOWHERE: its removal clears its notices'
+// excerpts and moves their inboxes, counting nothing; a purge takes them all.
 func TestARemovedRemarkLeavesItsNoticesAndAPurgeTakesThem(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -176,13 +168,8 @@ func TestARemovedRemarkLeavesItsNoticesAndAPurgeTakesThem(t *testing.T) {
 	}
 }
 
-// NO NOTICE IS WRITTEN PAST THE INBOX HORIZON the epoch states: a record the
-// batch applies more than that long after its broker instant tells nobody,
-// so a replay rebuilds no notice the sweep would delete, while the thread is
-// written all the same. The sweep deletes what has aged past the horizon.
-//
-// Mutation: ignore the epoch's horizon, or skip the thread with the notice,
-// and a line goes red.
+// NO NOTICE IS WRITTEN PAST THE INBOX HORIZON the epoch states, though the
+// thread is, so a replay rebuilds no notice the sweep would delete.
 func TestNoNoticeIsWrittenPastTheInboxHorizon(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)

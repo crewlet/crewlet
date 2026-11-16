@@ -14,36 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A PERSON'S MARKS OVER THEIR COMMENT NOTICES: how far they have read on the
-// artifacts log, the notices they marked read out of order or unread again,
-// the ones they put off, and which reasons are theirs to act on. The
-// artifacts' half of a person's inbox, kept by internal/inbox's one set of
-// rules on this log, beside the notices it marks (apply_notices.go), as Gitlet keeps
-// its own on the code log.
-//
-// # Decided on the person's own reader subject, one gesture at a time
-//
-// A screen says what a person did, never the lists ([inbox.Gesture]). The
-// writer resolves the gesture inside ONE snapshot under
-// [statelog.PatternArbitrated] on the person's reader subject, beside their
-// pins: the marks row their last record left, and where each notice the
-// gesture names sits, read from the notice's own row for this person, so a
-// mark carries the position its notice sits at and is never pruned by a
-// position a caller got wrong.
-//
-// # The record carries the gesture and the positions, the apply the rules
-//
-// The notice rows are DIVERGENT and the marks row is not, so the apply never
-// reads a notice: the record carries the positions its decide found, and every
-// node applies the same gesture with them to the same prior row at the
-// record's broker instant. A gesture the rules refuse at the apply (a snooze
-// the decide saw as live, due by the broker's instant) writes nothing on every
-// node alike.
-//
-// # Only the person's own
-//
-// A gesture is a PERSON'S, on their own record: the writer refuses a mark
-// asked by anybody but a person, and marks the record of the person asking.
+// A PERSON'S MARKS OVER THEIR COMMENT NOTICES, by internal/inbox's rules: a
+// gesture decided on their own reader subject, the record carrying the notice
+// positions it found, since the apply reads no notice (that table diverges).
 
 // MarkGesture is one gesture over a person's comment notices, as a marks
 // record and an estate request carry it: [inbox.Gesture] over [NotifyReason],
@@ -84,9 +57,8 @@ func MarkGestureOf(g inbox.Gesture[NotifyReason]) MarkGesture {
 }
 
 // PersonMarks is a marks record's payload ([OpInboxMarks]): whose record, the
-// gesture, and the PACKED position of every notice the gesture names as the
-// decide read it from the notice's own row, which the apply resolves the
-// gesture with, since it reads no notice.
+// gesture, and the PACKED position of each notice it names as the decide read
+// it, which the apply uses since it reads no notice.
 type PersonMarks struct {
 	V         int               `json:"v"`
 	Handle    string            `json:"handle"`
@@ -94,14 +66,9 @@ type PersonMarks struct {
 	Positions map[string]uint64 `json:"positions,omitempty"`
 }
 
-// MarkInput is one gesture a person makes over their own comment notices, and
-// Seen, the position on the artifacts log the asker last read.
-//
-// SEEN IS THE ASKER'S FLOOR, which the decide waits for before it opens its
-// snapshot: the inbox page that showed a notice may have been read from a
-// node ahead of the one deciding the mark, and a decide below the notice's
-// record would refuse it as none of the person's. The zero position waits for
-// nothing.
+// MarkInput is one gesture over a person's own comment notices, and Seen, the
+// asker's floor on the artifacts log, which the decide waits for: the page may
+// come from a node ahead of this one. The zero position waits for nothing.
 type MarkInput struct {
 	Gesture MarkGesture       `json:"gesture"`
 	Seen    statelog.Position `json:"seen,omitzero"`
@@ -228,11 +195,9 @@ func marksIn(ctx context.Context, tx *sql.Tx, handle string) (inbox.Marks[Notify
 	return normalMarks(m), position, nil
 }
 
-// noticePositionsIn is the packed position of every notice ids names among
-// handle's own comment notices, and the first id that is none of them, ""
-// when every one is: ONE STATEMENT for the gesture, one seek of the notice
-// table's key an id, since the decide runs again on every round the broker
-// refuses.
+// noticePositionsIn is the packed position of each of ids among handle's own
+// comment notices, and the first id that is none ("" if all are): one
+// statement, as the decide reruns on every round the broker refuses.
 func noticePositionsIn(ctx context.Context, tx *sql.Tx, handle string, ids []string) (map[string]uint64, string,
 	error) {
 

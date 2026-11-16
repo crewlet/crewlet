@@ -65,10 +65,9 @@ export type PushKind =
  * may count one twice — so no screen adds it to a badge.
  */
 export interface InboxChange {
-  /** The domain whose part of the inbox moved, `tracker`, `code` or
-   *  `artifacts`, on a movement and on a re-read alike. Either way the screen
-   *  re-reads the composed `inbox` question: `work_inbox` answers the
-   *  tracker's alone. */
+  /** The domain whose part of the inbox moved, `tracker`, `code` or `artifacts`, on a movement
+   *  and on a re-read alike. Either way the screen re-reads the composed `inbox` question:
+   *  `work_inbox` answers the tracker's alone. */
   source: string;
   handle: string;
   unread_delta: number;
