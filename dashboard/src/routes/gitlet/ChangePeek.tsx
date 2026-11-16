@@ -20,6 +20,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodePrecondition, CodeReadiness } from "~/protocol/index.ts";
 import { ChangeStateTag } from "./Changes.tsx";
 import { preconditionSentence, readinessCount, readinessNext } from "./readinessWords.ts";
+import { BranchChip } from "./ui.tsx";
 import "~/styles/gitlet.css";
 
 /**
@@ -79,11 +80,13 @@ function ChangeReading({ change }: { change: CodeChangeDetail }) {
           {
             label: "Branches",
             value: (
-              <span className="mono">
-                {refName(change.source_ref).name} → {refName(change.target_ref).name}
-              </span>
+              <>
+                <BranchChip name={refName(change.source_ref).name} />
+                {" → "}
+                <BranchChip name={refName(change.target_ref).name} />
+              </>
             ),
-            token: true,
+            set: true,
           },
           {
             label: "Owner",

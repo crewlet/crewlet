@@ -131,11 +131,13 @@ filled only from a value that passed the design system's `#rrggbb` gate, never
 from raw CSS; and drawn with an edge of its own, so a colour that matches the
 ground is still a swatch.
 
-The seventh is **code read in Gitlet**: its diffs (`hue="code"`) wear the kit's
-code host colours, each hue a kind beside its sign or word: never done, a fault
-or an action.
+The seventh is **code read in Gitlet**: its diffs (`hue="code"`), a change's
+state pill and a branch chip wear the kit's code host colours, each hue a kind
+beside its sign, word or glyph: never done, a fault or an action.
 
-Outside Gitlet no diff wears them (`styles/diffs.test.ts`, `tone.test.ts`).
+Outside Gitlet no diff wears them; the pill and chip appear only in its
+Changes grid (a task, a seat, My work), its peek, Home's code card and the
+Inbox's code notice (`styles/diffs.test.ts`, `codehost.test.ts`, `tone.test.ts`).
 
 A seat's badge takes one of three **status glyphs**, or none, from what it is DOING,
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
@@ -320,10 +322,11 @@ spends a state's, a chart series' or an identity's hue, only
 underline away), in the palette (the two steps are the rungs either side of
 the ground, measured off it in every state of every theme, and the coloured
 steps are the kit's, on a ground it measures them on) and in the tree (every
-diff Gitlet draws passes `hue="code"` and no other does; nothing reaches the package's diffs —
-by name, by their own modules, or through a namespace, a dynamic import or a
-re-export of any module that hands them on in the package as installed — and
-no `VersionCompare` is handed the two texts that would make it draw one);
+diff Gitlet draws passes `hue="code"` and no other does; nothing reaches the
+package's diffs — by name, by their own modules, or through a namespace, a
+dynamic import or a re-export of any module that hands them on in the package
+as installed — and no `VersionCompare` is handed the two texts that would make
+it draw one);
 `lib/lineDiff.test.ts` holds the same of the package's `diffLines`, which
 nothing compares with; `components/DiffView.test.tsx` holds what it draws.
 
@@ -412,10 +415,13 @@ Only `--color-brand-accent` is ever a fill behind a word, under
 `--color-text-on-accent` (and the danger fill behind a destructive action's
 label, `--color-text-on-danger`, which the package measures to 4.5:1; a theme
 whose accent is light labels it dark, so the danger fill and the scrim have
-labels of their own). A state is a soft tint
-carrying its own ink step, never a solid block with a label on it, which is
-also what lets the state fills be light enough to read as marks on a dark
-ground.
+labels of their own; and, in Gitlet, a change's state pill (below)). A state
+is a soft tint carrying its own ink step, never a solid block with a label on
+it, which is also what lets the state fills be light enough to read as marks
+on a dark ground.
+In Gitlet a change's state is the one state drawn as a solid block with a label
+(the seventh exception): the kit's `--color-change-*-fill` under its `-label`,
+pairs the package measures.
 
 ### The ground
 
@@ -3259,9 +3265,10 @@ company did.** That is Home until its reader arranges it (see
   told a review is asked of a seat, and asked nothing) and *Waiting on a
   person* (`needs=person`: a change whose first unmet precondition only a
   person can settle — a person's approval, a blocker a person raised), each
-  row its reference, title and the sentence its readiness leads with, opening
-  the change in the peek. Three rows, as Needs your decision draws, and
-  **Open Gitlet** is Gitlet › Changes narrowed to what waits on a person. A
+  row its reference, title, state pill and the sentence its readiness leads
+  with, opening the change in the peek. Three rows, as Needs your decision
+  draws, and **Open Gitlet** is Gitlet › Changes narrowed to what waits on a
+  person. A
   listing is a page the engine read, never a total, so the card counts
   nothing; and a page is the rows it read, not the rows it kept (a change of
   a repository the reader may not read, one that has ended, one whose
@@ -3477,8 +3484,9 @@ the opening of the description its author wrote (marked "…" where the engine
 cut it at a kibibyte), and only then what the record said, quoted. **Where it
 stands** follows: the engine's one sentence of where a live change's merge
 stands ("no approval counts on revision 2: it waits on ada"), or, for a
-change that merges nothing, what became of it (Merged, Closed); and the
-findings seats raised that stand open, by weight with the heaviest first
+change that merges nothing, what became of it in its state pill (Merged,
+Closed); and the findings seats raised that stand open, by weight with the
+heaviest first
 ("Open agent findings: Blocker 1 · Nit 2"), in words and never in a hue.
 **Open the diff** is one press to the change's page on its Files tab. The
 byline's note says why it reached the reader in Gitlet's own words
@@ -8539,9 +8547,11 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   peek's owner and work item) and are said in the bar with a Clear. **A row is
   a change as a code host lists it**: its title, then the line that places it
   — its reference, when it was opened and by whom (their face and name), the
-  branch it proposes into which, and its revision once it has had more than
-  one — each in the grid's one cell, since the row around it is the link to
-  the peek. **A row's
+  branch it proposes into which (each a branch chip), and its revision once it
+  has had more than one — each in the grid's one cell, since the row around it
+  is the link to the peek. **Its state** is the kit's change pill with its
+  glyph (solid, a draft's outlined), as every screen that names a change's
+  state draws it. **A row's
   readiness is the engine's judgement**, made again on the read that answered
   it against its own chart (`gitlet.ReadinessOf`): a Meter of the preconditions
   met of how many, drawn as done only when every one is, and titled by the
@@ -8576,12 +8586,12 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
 - **A change's page**, `#/gitlet/repos/{name}/changes/{n}` — the address its
   reference is short for, which mirrors the engine's own REST path
   (`/gitlet/repos/{name}/changes/{n}`) — is laid out as a code host lays one
-  out. Its header is its reference, title and state, beside a live change's
-  readiness meter (the one every listing draws), and a byline: who wants to
-  merge which revision of which branch into which — or merged it, or closed
-  it — and when, the two branches chips that open their code, with its
-  repository and its work item. Its tabs each wear a glyph. It reads the change a
-  part at a time (`code_change`): its detail rides the first page of its
+  out. Its header is its reference, title and state (that pill), beside a live
+  change's readiness meter (the one every listing draws), and a byline: who
+  wants to merge which revision of which branch into which — or merged it, or
+  closed it — and when, the two branches as chips that open their code, with
+  its repository and its work item. Its tabs each wear a glyph. It reads the
+  change a part at a time (`code_change`): its detail rides the first page of its
   revisions, and each tab asks the part it draws, every one a code question at
   the tab's floor. The detail is the one read on a clock, every minute; a part
   is asked again only when the detail says what it reads moved — for a
@@ -8608,9 +8618,9 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   change or its conversation moves, and paged), each with their latest verdict
   among the reviews loaded or that they are asked and have not answered, and
   a reviewer nobody asked listed by their review; its owner, its authors, its
-  work item, its branches, its head, and whether its latest revision merges
-  into its target as its home recorded it — cleanly, in the success state's
-  tone, or conflicting, in the danger state's, with the paths. The engine pages reviews and comments oldest
+  work item, its branches as chips, its head, and whether its latest
+  revision merges into its target as its home recorded it — cleanly, in the
+  success state's tone, or conflicting, in the danger state's, with the paths. The engine pages reviews and comments oldest
   first, so what one page leaves out is the newest: **Load more** under the
   timeline asks each part's page after the cursor its last one ended at, and
   the timeline is built over every page loaded, so a reply on a later page
@@ -8827,8 +8837,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   push and that is somebody else (who pushed, which the commit's own author
   line is not), the work item a seat's push was charged to, and its id with
   its copy. **Pushes** is the repository's push history, as Gitlet ›
-  Pushes draws it. **Branches** lists the live branches, each its glyph,
-  its name and its marks, and writes them:
+  Pushes draws it. **Branches** lists the live branches, each its name as a
+  branch chip and its marks, and writes them:
   **New branch** (`code_create_branch`, a name and where it starts, the
   default branch when left empty), and on each row **Protect**, which opens
   the protection form on that branch's ref (a branch a rule names already is
@@ -9124,9 +9134,10 @@ a seat's Code section and My work's Reviews each mount one fixed listing
 (`routes/gitlet/ChangeList.tsx`): the filter is the screen's, so there is no bar
 to narrow it, and its rows are `ChangesGrid`, the very grid Gitlet › Changes
 draws, paged the same way and read again every minute while its first page is
-the only one loaded. A change reads the same reference, readiness, owner and
-blockers wherever it is listed. A seat's reviews are the one listing of
-reviews (`code_reviews?reviewer=`), its rows naming the change each judged.
+the only one loaded. A change reads the same reference, state, branches,
+readiness, owner and blockers wherever it is listed. A seat's reviews are the
+one listing of reviews (`code_reviews?reviewer=`), its rows naming the change
+each judged.
 
 **Settings › Gitlet is Gitlet as an administrator runs it**
 (`#/settings/gitlet`, Admin's, beside the rest of the Engine group, and hidden
@@ -13116,6 +13127,8 @@ to.
 3. **A fill step is never text and an `-ink` step is never a background.** The
    palette suite measures both; an inline `background:` carrying a hue token is
    the specific mistake it exists to catch.
+   Gitlet's open pill stands on `--color-change-open-fill`, the success ink,
+   which the package measures as that pill's ground (`styles/codehost.test.ts`).
 4. **Nothing animates on a data push.** Entrances, control states and the
    steady-state pulse on something live now — and under reduced motion every
    pulse is static and every entrance ends on its first frame

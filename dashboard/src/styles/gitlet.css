@@ -1,12 +1,14 @@
 /* THE GITLET WORKSPACE (`routes/gitlet/`), and every screen that draws one of
    its marks elsewhere (Home's changes waiting on a person, Settings › Gitlet,
-   a task's and a seat's changes): a sheet of its own, which arrives with the
-   first module that draws a `code-` class rather than in the first paint.
+   a task's and a seat's changes, My work's reviews, the Inbox's code notice):
+   a sheet of its own, which arrives with the first module that draws a
+   `code-` class rather than in the first paint.
 
    Laid out as a code host is laid out, and coloured by the one rule: nothing
-   here spends a hue but a state — a change merged, a meter met. A directory
-   and a file are told apart by their glyphs and their names, a seat by its
-   own face, a picked line by a rule at its edge. */
+   here spends a hue but a state (a meter met) and the kit's code host colours
+   (a change's state, a branch), the seventh exception. A directory and a file
+   are told apart by their glyphs and their names, a seat by its own face, a
+   picked line by a rule at its edge. */
 
 /* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
    move on its own, above the grid. A ruled box rather than a callout, since
@@ -55,14 +57,54 @@
   margin-block-start: var(--spacing-1);
 }
 
+/* A BRANCH: the kit's code-ref chip beside its glyph; its transparent edge is
+   what forced colours paint. */
 .code-branch-chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  max-width: 100%;
   padding: 0 var(--spacing-1);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--color-surface-inset);
+  background: var(--color-code-ref-fill);
+  color: var(--color-code-ref-ink);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+/* On a selected row the chip draws no ground: its ink is on the row's tint. */
+[role="row"]:is([aria-current="true"], :has([aria-current="true"])) .code-branch-chip {
+  background: none;
+}
+
+/* A CHANGE'S STATE: the kit's change colours on the kit's pill, beside the
+   state's glyph and word (the seventh exception). */
+.code-state[data-state="open"] {
+  border-color: transparent;
+  background: var(--color-change-open-fill);
+  color: var(--color-change-open-label);
+}
+.code-state[data-state="merged"] {
+  border-color: transparent;
+  background: var(--color-change-merged-fill);
+  color: var(--color-change-merged-label);
+}
+.code-state[data-state="closed"] {
+  border-color: transparent;
+  background: var(--color-change-closed-fill);
+  color: var(--color-change-closed-label);
+}
+.code-state[data-state="draft"] {
+  border-color: var(--color-change-draft-edge);
+  background: var(--color-change-draft-fill);
+  color: var(--color-change-draft-label);
+}
+/* The word stays centred on its glyph where the kit's stacked grid sets a
+   pictured value's words on their baseline. */
+.code-state[data-state] > :last-child {
+  align-self: center;
 }
 
 /* THE DESCRIPTION: a card its owner opened, the first thing on the page. */
@@ -478,7 +520,7 @@
 .code-rail__branches {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: var(--spacing-1);
   margin: 0;
   font-size: var(--font-size-sm);
@@ -703,7 +745,11 @@
 }
 
 .code-change-cell__branches {
-  overflow-wrap: anywhere;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
 }
 
 /* PROVENANCE: a label and its value a row, the labels one column. */
@@ -1205,8 +1251,9 @@
 /* A REF OF THE BRANCHES AND TAGS: its glyph, its name, its marks. */
 .code-ref {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-2);
+  gap: var(--spacing-1) var(--spacing-2);
   min-width: 0;
 }
 
