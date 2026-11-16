@@ -8396,7 +8396,10 @@ export interface CodeRepoKindCounts {
   scratch: CodeRepoCounts;
 }
 
-/** A listing's whole, all its pages (`gitlet.ReposTotal`); `live_bytes` absent past the size bound. */
+/**
+ * A listing's whole, all its pages (`gitlet.ReposTotal`); `live_bytes` absent where the company
+ * holds more than 10 000 repositories of its kinds and statuses, whatever the caller reads.
+ */
 export interface CodeReposTotal {
   repos: number;
   live_bytes?: number;

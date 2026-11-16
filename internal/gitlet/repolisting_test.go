@@ -463,8 +463,9 @@ func TestARepositoryCardSaysItsDefaultBranchsChecks(t *testing.T) {
 // A REPOSITORY LISTING'S FIRST PAGE TOTALS THE WHOLE LISTING: for each kind, a status and each
 // asker, the first page's count is every repository paged to the end, and its size theirs summed;
 // a later page, a prefix's and the protected ones' carry none, nor a listing that asks no facts;
-// and past the size bound the count stays exact and the size is left out.
-// Mutation: count the tallies the asker does not read, sum the page alone, or answer a partial size.
+// and past the size bound, the company's whatever the asker reads, the count stays exact and the size
+// is left out. Mutation: count the tallies the asker does not read, sum the page alone, answer a
+// partial size, or hold only the readable repositories to the bound.
 func TestARepositoryListingsFirstPageTotalsTheWholeListing(t *testing.T) {
 	t.Parallel()
 	n := listingNode(t)
@@ -503,15 +504,24 @@ func TestARepositoryListingsFirstPageTotalsTheWholeListing(t *testing.T) {
 			t.Errorf("%s first page totals %+v, %v; want none", name, answer.ReposTotal, err)
 		}
 	}
-	// PAST THE SIZE BOUND: ten repositories in use are past a bound of nine, and within one of ten.
+	// PAST THE SIZE BOUND: the company's ten repositories in use are past a bound of nine and within
+	// one of ten, whatever share of them an asker reads.
+	const inUse = 10
+	narrower := false
 	for _, bound := range []int{9, 10} {
 		gitlet.SetRepoListingBounds(n.reader, bound, gitlet.MaxLastPushWalk)
-		listed, first := pagedRepos(t, n, gitlet.ReadQuery{Asker: ada, RepoFacts: true, Limit: 1})
-		if got := first.ReposTotal; got == nil || got.Repos != int64(len(listed)) ||
-			(got.LiveBytes == nil) != (bound < len(listed)) {
-			t.Errorf("with a bound of %d, %d repositories total %+v: want their count, and a size only "+
-				"within the bound", bound, len(listed), got)
+		for _, who := range listingAskers {
+			listed, first := pagedRepos(t, n, gitlet.ReadQuery{Asker: who.asker, RepoFacts: true, Limit: 1})
+			narrower = narrower || len(listed) <= 9
+			if got := first.ReposTotal; got == nil || got.Repos != int64(len(listed)) ||
+				(got.LiveBytes == nil) != (bound < inUse) {
+				t.Errorf("with a bound of %d, %s's %d repositories total %+v: want their count, and a size "+
+					"only where the company's %d are within the bound", bound, who.name, len(listed), got, inUse)
+			}
 		}
+	}
+	if !narrower {
+		t.Error("no asker reads fewer repositories than the bound of nine")
 	}
 }
 

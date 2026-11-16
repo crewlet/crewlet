@@ -39,8 +39,8 @@ func RepoSorts() []RepoSort { return []RepoSort{RepoSortName, RepoSortPushed} }
 func (s RepoSort) Valid() bool { return slices.Contains(RepoSorts(), s) }
 
 const (
-	// MaxReposSized is the most repositories a listing's total sums the size of: config.CodeMaxRepos,
-	// so a listing of projects is summed whole; a larger one answers its count and no size.
+	// MaxReposSized is the most repositories of a listing's kinds and statuses, readable or not, whose
+	// size its total sums: config.CodeMaxRepos, so projects are summed whole; past it, no size.
 	MaxReposSized = config.CodeMaxRepos
 	// MaxLastPushWalk is the most push rows a card walks back past expiries: enough expiry pushes
 	// to delete every seat branch a repository holds, and the push before them.
@@ -75,7 +75,8 @@ type LastPush struct {
 type ReposTotal struct {
 	// Repos is counted from the tallies, exact at any size.
 	Repos int64 `json:"repos"`
-	// LiveBytes is summed at read time; nil where the listing holds more than MaxReposSized.
+	// LiveBytes is summed at read time; nil where the company holds more than MaxReposSized
+	// repositories of the listing's kinds and statuses, whatever the asker reads.
 	LiveBytes *int64 `json:"live_bytes,omitempty"`
 }
 

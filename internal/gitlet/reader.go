@@ -2624,8 +2624,9 @@ func limitOr(limit, fallback int) int {
 }
 
 // repos serves a listing of repositories, by name or by last push
-// ([reposListed]), of those the asker may read — and, where it reads for a seat its turn is acting for, that seat may
-// read too ([JudgeRead]) — each carrying the asker's access to it.
+// ([reposListed]), of those the asker may read and, where it reads for a seat
+// its turn is acting for, that seat may read too ([JudgeRead]), each carrying
+// the asker's access to it.
 //
 // THE PAGE IS WHAT WAS SCANNED, NOT WHAT WAS KEPT: a repository the asker may
 // not read, or its ceiling may not, is left out, and the cursor is still the

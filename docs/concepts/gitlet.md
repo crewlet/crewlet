@@ -1168,8 +1168,9 @@ Asked for its facts (`repo_facts=true`), each row also says:
 
 A first page asked for its facts also carries the whole listing's count and
 live size, all its pages together, where it is narrowed by nothing but its
-kind and statuses. The size is summed for a listing of up to 10 000
-repositories and left out above it; the count is always exact.
+kind and statuses. The size is left out where the company holds more than
+10 000 repositories of the listing's kinds and statuses, whatever the reader
+may read, so its walk stays bounded; the count is always exact.
 
 Gitlet also counts the repositories: `code_counts` part `repos` answers every
 repository the reader may read, by kind and by status (importing, active,
