@@ -491,6 +491,19 @@ the dependency surface before choosing a host for it:
   every lap of the seats
   ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+- **An uplink that queues no more than four seconds of its own bytes.** The
+  satellite windows what it sends in bulk — an upload one 128 KiB message at
+  a time, a memory replay's pulls four seconds of the floor at a time — so a
+  small request behind them is answered inside its five-second term even at
+  thirty seconds a mebibyte. What it sends whole, an event or a dead letter of
+  up to 8 MiB or a fleet record of up to 6 MiB, keeps a first-in-first-out
+  queue on the path full for as long as it crosses, and a request at that
+  queue waits as long as the queue takes to drain: a 256 KiB buffer is 7.5
+  seconds at the floor, a cellular modem's buffer of megabytes minutes. So
+  the satellite's uplink queue must be fair (`fq_codel` or CAKE, the default
+  queue discipline of most Linux distributions), which sends a sparse flow's
+  packets ahead of a bulk flow's, or no deeper than four seconds of the
+  link's own rate (140 KB at the floor).
 - **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
   is a harness the node runs, and it calls its own vendor over outbound HTTPS. A
