@@ -2658,7 +2658,9 @@ const (
 	// The Gitlet code host colours train, on kit 0.137.0: 6374.8 KiB (6,527,838 bytes), 3,079 over main: 6375 KiB.
 	// Gitlet's code coloured by kind in its file view and blame, on kit 0.137.0:
 	// 6410.9 KiB (6,564,755 bytes), 36,917 bytes over main: 6411 KiB.
-	treeBudget = 5<<20 + 1291<<10
+	// Gitlet's diffs and search hits coloured by kind, on kit 0.137.0: 6413.4 KiB
+	// (6,567,361 bytes), 2,596 bytes over the file view's colours: 6414 KiB.
+	treeBudget = 5<<20 + 1294<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
