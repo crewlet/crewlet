@@ -120,8 +120,15 @@ const deploymentURL = "https://crewlet.example.com"
 // configuration `crewlet validate` would accept with a port set.
 func withSignIn(boot *config.Bootstrap) {
 	boot.API.ExternalURL = deploymentURL
-	boot.API.Auth.Limits.SecondFactor = iam.SecondFactorOptional
+	withPasswordAlone(boot)
 	boot.API.Auth.AcceptInsecure = true
+}
+
+// withPasswordAlone lets the company drop the second factor, as the golden
+// company does ([companyDoc]); a node whose operator requires one refuses that
+// document as a write.
+func withPasswordAlone(boot *config.Bootstrap) {
+	boot.API.Auth.Limits.SecondFactor = iam.SecondFactorOptional
 }
 
 // Who signs in, and what they are given.

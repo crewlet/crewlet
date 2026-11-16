@@ -93,8 +93,7 @@ units:
     purpose: keeps the lights on
     project: OPS
     lead: ceo
-# PASSWORD ALONE where a node's operator allows it ([withSignIn]); every other
-# node holds the company to a second factor.
+# PASSWORD ALONE, which every node this suite serves allows ([withPasswordAlone]).
 sign_in:
   require_second_factor: false
 turn_engine:
