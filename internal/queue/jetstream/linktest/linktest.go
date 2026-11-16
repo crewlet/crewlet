@@ -51,12 +51,26 @@
 // s2 stream where the link negotiated compression, which nats-server does by
 // default — and acts on one account's links alone: [Link.Drop] closes them
 // and lets them redial, [Link.Cut] closes them and refuses them until
-// [Link.Mend], and [Link.Blackhole] stops carrying them either way without
+// [Link.Mend], and [Link.Blackhole] stops reading them either way without
 // closing them, until [Link.Mend]. A connection that binds no account — a
 // client's CONNECT names none, and a TLS or websocket link shows the relay
 // none — is never one of them. Every link the package builds does this, and
 // for a leaf that dials again only behind a member that advertises the link
 // ([Link]'s "The link is the only way").
+//
+// # What a node's socket says, against what the link carried
+//
+// A case that reads a node's own socket — how much of what it wrote the far
+// end has acknowledged — reads it against the link: [Link.Count] is what the
+// link has read and carried of an account's connections each way,
+// [Link.Watch] hands a case each piece the link writes to the far side as it
+// writes it, and [Link.Unread] is what waits in the relay's receive buffers.
+// Those buffers are PINNED to [SocketBuffer], and [Link.Buffers] is what the
+// kernel granted: a sender's kernel counts a byte as delivered once the
+// relay's kernel has taken it, so a node's acknowledged bytes run ahead of
+// what the link has read by up to [Buffers.Receive], exactly that and no
+// more, and a blackholed account's run ahead of it by that and then stand
+// still, because a blackhole stops reading rather than read and hold.
 package linktest
 
 import (
@@ -66,8 +80,11 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -85,6 +102,30 @@ const Quantum = 1460
 // read held, and a link that paces each connection alone carries a read at
 // its rate.
 const readChunk = 64 << 10
+
+// SocketBuffer is the receive buffer and the send buffer the relay asks the
+// kernel for on every socket it carries over, its listener's and every one
+// it dials, and what a case allows for wherever an assertion rests on what a
+// kernel holds that the relay has not read ([Link]'s "Its sockets' buffers
+// are pinned"; [Link.Buffers] is what the kernel granted).
+//
+// 64 KiB, THE SMALLEST THAT TAKES A WHOLE LOOPBACK SEGMENT: loopback's MTU of
+// 65,536 bytes makes a segment 65,483, and Linux grants twice what is asked
+// and advertises about half of what it grants, so a smaller ask would hold a
+// loopback sender to segments of less than one and slow every link the
+// package builds. It is no larger, because every byte of it is a byte a
+// sender's kernel counts as delivered that the relay never carried: a case
+// that reads a node's acknowledged bytes off its socket allows for it
+// whole.
+const SocketBuffer = 64 << 10
+
+// Buffers is what the kernel holds a socket the relay carries over to, in
+// bytes: what it takes in that the relay has not read, and what it keeps of
+// what the relay wrote that the far end has not taken.
+type Buffers struct {
+	Receive int
+	Send    int
+}
 
 // Link is a TCP relay a case puts between a node and the broker it
 // reaches across a link — a leaf and its member's leaf listener, a client and
@@ -116,6 +157,21 @@ const readChunk = 64 << 10
 // is the bottleneck it plays, whose senders' socket buffers fill once their
 // window is out, and its doc says what a case keeps clear of.
 //
+// # Its sockets' buffers are pinned
+//
+// to [SocketBuffer] each way, its listener's before it listens and every
+// socket it dials before it connects, and [Link.Buffers] is what the kernel
+// granted. A sender's kernel counts a byte as delivered once the RELAY'S
+// kernel has taken it, not once the relay has read it, so what a node's
+// socket says it has delivered runs ahead of what the link has carried by up
+// to the relay's receive buffer. Left to the kernel that buffer starts at
+// 128 KiB on Linux and grows with the traffic to 6 MiB, and a case could not
+// say by how much; pinned, a case allows for [Buffers.Receive] exactly: a
+// node's acknowledged bytes are at most what the relay has read
+// ([Link.Count]) plus it. The send buffer bears where the relay writes to a
+// side that is slow to read it: what the relay has carried runs ahead of
+// what that side has read by up to [Buffers.Send].
+//
 // # The link is the only way
 //
 // only while the broker tells the node of no other. A member hands every leaf
@@ -136,6 +192,8 @@ const readChunk = 64 << 10
 // carries and every goroutine it runs.
 type Link struct {
 	ln net.Listener
+	// buffers is what the kernel granted the relay's sockets ([pin]).
+	buffers Buffers
 	// dial opens the relay's own connection to the broker for each one it
 	// carries.
 	dial func(context.Context) (net.Conn, error)
@@ -162,6 +220,9 @@ type Link struct {
 	// accounts is what a case has done to each account's links: cut,
 	// blackholed, and how many of its connections the link refused.
 	accounts map[string]*accountState
+	// watch is called each time the link writes a piece of a connection's
+	// bytes to the far side ([Link.Watch]); nil for no one watching.
+	watch func(Crossing)
 }
 
 // carrier is how a link carries one direction's bytes.
@@ -188,6 +249,44 @@ type accountState struct {
 	// refused counts the connections the link closed because the account
 	// was cut when they bound it.
 	refused int
+	// ended is what the account's connections that have ended read and
+	// carried, each way.
+	ended map[Way]Count
+}
+
+// Way is a direction across a link.
+type Way string
+
+const (
+	// ToBroker is what the node sends, carried to the broker.
+	ToBroker Way = "to the broker"
+	// ToNode is what the broker sends back, carried to the node.
+	ToNode Way = "to the node"
+)
+
+// Valid reports whether w is one of the two ways.
+func (w Way) Valid() bool { return w == ToBroker || w == ToNode }
+
+// Count is what a link has done with the bytes of some connections in one
+// way, in bytes.
+type Count struct {
+	// Read is what the link has taken off the sender's socket.
+	Read int64
+	// Carried is what it has written to the far side's socket, once the
+	// link's pace let it cross.
+	Carried int64
+}
+
+// Crossing is a piece of a connection's bytes the link has just written to
+// the far side, and the count of its account's connections in its way once it
+// has ([Link.Watch]).
+type Crossing struct {
+	// Account is the one the connection binds, the empty name for none.
+	Account string
+	Way     Way
+	// Bytes is how many the piece held.
+	Bytes int
+	Count Count
 }
 
 // Slow listens on a loopback port and carries every connection made to it on
@@ -304,17 +403,31 @@ func open(t testing.TB, target string, toward, back carrier) *Link {
 	// cleanups (this link's close among them): a connection it dialled
 	// outlives it, as a dialled connection does its dial's context.
 	ctx := t.Context()
-	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	// PINNED BEFORE IT LISTENS, so the window every connection it accepts
+	// negotiates is the pinned buffer's, and each accepted socket takes the
+	// listener's buffers (Linux's sk_clone_lock, darwin's sonewconn).
+	ln, err := (&net.ListenConfig{Control: pin}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("bind the link: %v", err)
 	}
+	raw, err := ln.(*net.TCPListener).SyscallConn()
+	if err != nil {
+		_ = ln.Close()
+		t.Fatalf("read the link's socket: %v", err)
+	}
+	got, err := granted(raw)
+	if err != nil {
+		_ = ln.Close()
+		t.Fatalf("read the link's socket buffers: %v", err)
+	}
 	l := newLink(nil, toward, back)
-	l.ln, l.target, l.dial = ln, target, l.dialTarget
+	l.ln, l.buffers, l.target, l.dial = ln, got, target, l.dialTarget
 	l.start(t)
 	return l
 }
 
-// dialTarget dials the broker the link carries to, in ctx.
+// dialTarget dials the broker the link carries to, in ctx, its socket's
+// buffers pinned as the listener's are.
 func (l *Link) dialTarget(ctx context.Context) (net.Conn, error) {
 	l.mu.Lock()
 	target := l.target
@@ -322,7 +435,7 @@ func (l *Link) dialTarget(ctx context.Context) (net.Conn, error) {
 	if target == "" {
 		return nil, errNoTarget
 	}
-	return (&net.Dialer{}).DialContext(ctx, "tcp", target)
+	return (&net.Dialer{Control: pin}).DialContext(ctx, "tcp", target)
 }
 
 // errNoTarget refuses a connection made to a link before the case named the
@@ -365,6 +478,101 @@ func (l *Link) start(t testing.TB) {
 
 // Addr is the host and port the node dials to cross the link.
 func (l *Link) Addr() string { return l.ln.Addr().String() }
+
+// Buffers is what the kernel granted each socket the relay carries over, for
+// [SocketBuffer] asked of each: what a case allows for where an assertion
+// rests on what a kernel holds that the relay has not read or the far side
+// has not taken ([Link]'s "Its sockets' buffers are pinned").
+func (l *Link) Buffers() Buffers { return l.buffers }
+
+// Count is what the link has done with the bytes of every connection that
+// binds account in way, those that have ended included: the empty name counts
+// the connections that bind none.
+func (l *Link) Count(account string, way Way) Count {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.countLocked(account, way)
+}
+
+// countLocked is [Link.Count]; l.mu held.
+func (l *Link) countLocked(account string, way Way) Count {
+	c := l.account(account).ended[way]
+	for p := range l.pairs {
+		if p.account != account {
+			continue
+		}
+		for _, g := range p.legs {
+			if g.way == way {
+				c.Read += g.taken.Load()
+				c.Carried += g.carried.Load()
+			}
+		}
+	}
+	return c
+}
+
+// Unread is how many bytes of every connection that binds account wait in
+// way's receive buffers of the relay's sockets, taken in by the kernel and
+// not yet read by the relay: what a blackholed account's senders have sent it
+// since ([Link.Blackhole]), at most [Buffers.Receive] a connection. A
+// connection carried over no socket (a case's in-memory pipe) holds none.
+func (l *Link) Unread(account string, way Way) (int, error) {
+	var srcs []net.Conn
+	l.mu.Lock()
+	for p := range l.pairs {
+		if p.account != account {
+			continue
+		}
+		for _, g := range p.legs {
+			if g.way == way {
+				srcs = append(srcs, g.src)
+			}
+		}
+	}
+	l.mu.Unlock()
+	total := 0
+	for _, c := range srcs {
+		sc, ok := c.(syscall.Conn)
+		if !ok {
+			continue
+		}
+		raw, err := sc.SyscallConn()
+		if err != nil {
+			return 0, err
+		}
+		var (
+			n    int
+			rerr error
+		)
+		// THROUGH THE CONNECTION'S OWN DESCRIPTOR, held open for the
+		// call, so a read racing the connection's close fails rather than
+		// reads another socket.
+		if err := raw.Control(func(fd uintptr) { n, rerr = unreadOn(fd) }); err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				continue
+			}
+			return 0, err
+		}
+		if rerr != nil {
+			return 0, rerr
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// Watch calls f each time the link writes a piece of a connection's bytes to
+// the far side, from then until the case ends, with the count of its
+// account's connections in its way once it has: so a case reads what a node's
+// socket says at the moment the link has carried a known count, in the order
+// the link carried it. The direction it was carried in waits for f to
+// return, the other carries on; a shared link's pacer carries the next piece
+// meanwhile, and writes it once f returns.
+func (l *Link) Watch(f func(Crossing)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.watch = f
+}
 
 // To names target as the broker every connection the link takes from now on
 // is carried to: for a link opened with no target, which refuses every
@@ -417,24 +625,39 @@ func (l *Link) Cut(account string) {
 	}
 }
 
-// Blackhole stops carrying what every connection that binds account sends,
+// Blackhole stops reading what every connection that binds account sends,
 // either way, from now on and for every one that binds it later, until
 // [Link.Mend], without closing any of them: a path that drops every packet.
-// What they send is read as fast as it comes and held, and [Link.Mend]
-// carries it on in order, as the senders' retransmissions arrive once a path
-// heals; the link answers nothing meanwhile, so whatever liveness the two
-// ends keep is what notices.
+// It returns once the link reads none of them any more, so [Link.Count]'s
+// Read stands still from then on, and what they had sent before is carried
+// as it would have been.
+//
+// IT STOPS READING, RATHER THAN READ AND HOLD, because a sender's kernel
+// counts what the relay's kernel takes as delivered: a link that read on
+// would let a node's socket say it delivered everything it sent across a
+// link that carries nothing. Stopped, the relay's kernel takes what fits its
+// pinned receive buffer ([Link.Unread], at most [Buffers.Receive]) and then
+// shuts its window, and the rest waits in the sender's socket, as behind a
+// path that drops every packet the sender's own retransmissions wait. A read
+// the link was in when it was called is held, and [Link.Mend] carries it on
+// first and then reads on, in order; the link answers nothing meanwhile, so
+// whatever liveness the two ends keep is what notices.
 func (l *Link) Blackhole(account string) {
-	for _, p := range l.bound(account, func(a *accountState) { a.silent = true }) {
-		p.silence(true)
+	ps := l.bound(account, func(a *accountState) { a.silent = true })
+	for _, p := range ps {
+		p.hush()
+	}
+	for _, p := range ps {
+		p.quiet()
 	}
 }
 
 // Mend undoes [Link.Cut] and [Link.Blackhole] for account: its links are
-// taken again, and what a blackholed one held is carried on, in order.
+// taken again, and a blackholed one carries on what it held and reads on, in
+// order.
 func (l *Link) Mend(account string) {
 	for _, p := range l.bound(account, func(a *accountState) { a.cut, a.silent = false, false }) {
-		p.silence(false)
+		p.unhush()
 	}
 }
 
@@ -475,8 +698,10 @@ func (l *Link) bind(p *pair, name string) bool {
 		p.close()
 		return false
 	}
+	// UNDER THE LINK'S LOCK, so a Mend of the account either finds the
+	// pair bound and silenced or leaves it never silenced.
 	if a.silent {
-		p.silence(true)
+		p.hush()
 	}
 	l.mu.Unlock()
 	return true
@@ -521,11 +746,22 @@ func (l *Link) track(p *pair) bool {
 	return true
 }
 
-// untrack forgets p once it has ended.
+// untrack forgets p once it has ended, keeping what it read and carried in
+// its account's count.
 func (l *Link) untrack(p *pair) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.pairs, p)
+	a := l.account(p.account)
+	if a.ended == nil {
+		a.ended = map[Way]Count{}
+	}
+	for _, g := range p.legs {
+		c := a.ended[g.way]
+		c.Read += g.taken.Load()
+		c.Carried += g.carried.Load()
+		a.ended[g.way] = c
+	}
 }
 
 // carry relays in to a connection of its own to the target, dialled in ctx,
@@ -536,18 +772,19 @@ func (l *Link) carry(ctx context.Context, in net.Conn) {
 		_ = in.Close()
 		return
 	}
-	p := &pair{in: in, out: out, stop: make(chan struct{})}
+	p := newPair(in, out)
+	// EITHER SIDE ENDING ENDS THE OTHER: closing the pair fails the read or
+	// the write each of its goroutines is blocked in, and stops every wait
+	// on the link's pace. Its legs are whole before the link tracks it, so
+	// a count reads them without the pair's lock.
+	toward := l.leg(p, ToBroker, in, out, l.toward)
+	toward.sniff = &sniffer{}
+	back := l.leg(p, ToNode, out, in, l.back)
 	if !l.track(p) {
 		p.close()
 		return
 	}
 	defer l.untrack(p)
-	// EITHER SIDE ENDING ENDS THE OTHER: closing the pair fails the read or
-	// the write each of its goroutines is blocked in, and stops every wait
-	// on the link's pace.
-	toward := l.leg(p, in, out, l.toward)
-	toward.sniff = &sniffer{}
-	back := l.leg(p, out, in, l.back)
 	var wg sync.WaitGroup
 	for _, g := range []*leg{toward, back} {
 		wg.Go(func() {
@@ -576,12 +813,26 @@ type pair struct {
 	bound   bool
 
 	mu sync.Mutex
-	// silent holds what either side sends rather than carrying it
-	// ([Link.Blackhole]).
-	silent bool
-	// legs are the pair's two directions, for silence to carry on what they
-	// held and close to take off the shared pacers.
+	// silent stops either side being read ([Link.Blackhole]); audible is
+	// closed once it is not, for a reader waiting on it.
+	silent  bool
+	audible chan struct{}
+	// reading is how many of the pair's directions are in a read of their
+	// source, and quieted is signalled, under mu, as each leaves it.
+	reading int
+	quieted *sync.Cond
+	// legs are the pair's two directions, whole before the link tracks
+	// the pair.
 	legs []*leg
+}
+
+// newPair is the pair carrying in, the node's connection, over out, the
+// relay's own to the broker.
+func newPair(in, out net.Conn) *pair {
+	p := &pair{in: in, out: out, stop: make(chan struct{}), audible: make(chan struct{})}
+	close(p.audible)
+	p.quieted = sync.NewCond(&p.mu)
+	return p
 }
 
 // close ends the pair: both its connections, every wait on its behalf, and its
@@ -602,29 +853,93 @@ func (p *pair) close() {
 	})
 }
 
-// silence holds what the pair carries, or carries on what it held, in the
-// order it was sent.
-func (p *pair) silence(on bool) {
+// longAgo is a read deadline already passed, which ends a read a source is
+// blocked in at once.
+var longAgo = time.Unix(1, 0)
+
+// hush stops both of the pair's sources being read: a read either is in ends
+// at once, through a deadline already passed, and none starts until
+// [pair.unhush].
+func (p *pair) hush() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.silent = on
-	if on {
+	if p.silent {
 		return
 	}
+	p.silent, p.audible = true, make(chan struct{})
+	for _, g := range p.legs {
+		_ = g.src.SetReadDeadline(longAgo)
+	}
+}
+
+// quiet returns once neither of the pair's directions is in a read of its
+// source, which after [pair.hush] none starts again: what the pair has read is
+// then what it will have read until it is unhushed.
+func (p *pair) quiet() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for p.reading > 0 {
+		p.quieted.Wait()
+	}
+}
+
+// unhush carries on what the pair held of the reads it was in when hushed, in
+// the order they were sent, and lets its sources be read again.
+func (p *pair) unhush() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.silent {
+		return
+	}
+	p.silent = false
 	for _, g := range p.legs {
 		for _, c := range g.parked {
 			g.send(c)
 		}
 		g.parked = nil
+		_ = g.src.SetReadDeadline(time.Time{})
 	}
+	close(p.audible)
+}
+
+// startRead waits until the pair's sources may be read and counts one more
+// direction reading; false once stop is closed.
+func (p *pair) startRead(stop <-chan struct{}) bool {
+	for {
+		p.mu.Lock()
+		if !p.silent {
+			p.reading++
+			p.mu.Unlock()
+			return true
+		}
+		audible := p.audible
+		p.mu.Unlock()
+		select {
+		case <-audible:
+		case <-stop:
+			return false
+		}
+	}
+}
+
+// endRead counts a direction's read of its source ended.
+func (p *pair) endRead() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reading--
+	p.quieted.Broadcast()
 }
 
 // leg is one direction of a carried connection: what src sends, carried to
 // dst.
 type leg struct {
 	p        *pair
+	way      Way
 	src, dst net.Conn
 	how      carrier
+	// taken is what the leg has read of its source, and carried what it
+	// has written to its destination.
+	taken, carried atomic.Int64
 	// sniff reads the account the connection binds out of what the node
 	// sends; nil once that is decided, and on the broker's direction.
 	sniff *sniffer
@@ -633,14 +948,16 @@ type leg struct {
 	own *backlog
 	// flow is the leg's place on the shared pacer, where it is.
 	flow *flow
-	// parked is what the leg read while the pair was silent, in order;
-	// written under the pair's lock.
+	// parked is what the leg's read returned once the pair was silenced
+	// while the leg was in it, in order: at most the one read; written
+	// under the pair's lock.
 	parked []chunk
 }
 
-// leg is the direction from src to dst of p, carried as how says.
-func (l *Link) leg(p *pair, src, dst net.Conn, how carrier) *leg {
-	g := &leg{p: p, src: src, dst: dst, how: how}
+// leg is the direction from src to dst of p, the way way, carried as how
+// says.
+func (l *Link) leg(p *pair, way Way, src, dst net.Conn, how carrier) *leg {
+	g := &leg{p: p, way: way, src: src, dst: dst, how: how}
 	if how.shared != nil {
 		g.flow = how.shared.join()
 	} else {
@@ -654,7 +971,7 @@ func (l *Link) leg(p *pair, src, dst net.Conn, how carrier) *leg {
 
 // read takes what the leg's source sends, as fast as it comes, or as fast as a
 // first-in, first-out link lets it, and hands each read on, until the source
-// ends or the pair does.
+// ends or the pair does; while the pair is silent it reads nothing.
 func (l *Link) read(g *leg) {
 	for {
 		n := readChunk
@@ -664,8 +981,13 @@ func (l *Link) read(g *leg) {
 				return
 			}
 		}
+		if !g.p.startRead(g.p.stop) {
+			return
+		}
 		buf := make([]byte, n)
 		k, err := g.src.Read(buf)
+		g.taken.Add(int64(k))
+		g.p.endRead()
 		if k > 0 {
 			c := chunk{bytes: buf[:k]}
 			if g.how.lagging {
@@ -683,13 +1005,16 @@ func (l *Link) read(g *leg) {
 			}
 			g.admit(c)
 		}
-		if err != nil {
+		// A DEADLINE IS ONLY EVER THE PAIR'S HUSH, which the next read
+		// waits out; anything else ends the source.
+		if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
 			return
 		}
 	}
 }
 
-// admit carries c on, or holds it while the pair is silent.
+// admit carries c on, or holds it while the pair is silent: the read the leg
+// was in when the pair was silenced.
 func (g *leg) admit(c chunk) {
 	g.p.mu.Lock()
 	defer g.p.mu.Unlock()
@@ -720,10 +1045,26 @@ func (g *leg) deliver(l *Link, stop <-chan struct{}) {
 		// THE SHARED PACER DECIDES WHEN; this writes what it has carried
 		// at once, so a destination slow to read holds back its own
 		// connection and none of the others.
-		g.flow.out.deliver(g.dst, 0, stop, nil)
+		g.flow.out.deliver(g.dst, 0, stop, nil, func(n int) { g.wrote(l, n) })
 		return
 	}
-	g.own.deliver(g.dst, g.how.rate, stop, hold)
+	g.own.deliver(g.dst, g.how.rate, stop, hold, func(n int) { g.wrote(l, n) })
+}
+
+// wrote counts n bytes the leg has written to its destination, and hands the
+// crossing to whoever watches the link ([Link.Watch]), waiting for it.
+func (g *leg) wrote(l *Link, n int) {
+	g.carried.Add(int64(n))
+	l.mu.Lock()
+	watch := l.watch
+	var c Crossing
+	if watch != nil {
+		c = Crossing{Account: g.p.account, Way: g.way, Bytes: n, Count: l.countLocked(g.p.account, g.way)}
+	}
+	l.mu.Unlock()
+	if watch != nil {
+		watch(c)
+	}
 }
 
 // close ends the link: no connection is taken or carried after it, and it
@@ -1027,8 +1368,9 @@ func (b *backlog) next(stop <-chan struct{}) (chunk, bool) {
 // no burst through at once; a rate of 0 carries it at once. hold, where it is
 // not nil, is how long a chunk is still to be held back before it starts to
 // cross ([Link.Delay]), and a chunk with a due instant is held until it
-// ([Link.Lag]). It returns once stop is closed or a write fails.
-func (b *backlog) deliver(dst io.Writer, rate int64, stop <-chan struct{}, hold func() time.Duration) {
+// ([Link.Lag]). wrote is told each chunk's size once it is written. It
+// returns once stop is closed or a write fails.
+func (b *backlog) deliver(dst io.Writer, rate int64, stop <-chan struct{}, hold func() time.Duration, wrote func(int)) {
 	for {
 		c, ok := b.next(stop)
 		if !ok {
@@ -1069,6 +1411,7 @@ func (b *backlog) deliver(dst io.Writer, rate int64, stop <-chan struct{}, hold 
 		if _, err := dst.Write(c.bytes); err != nil {
 			return
 		}
+		wrote(len(c.bytes))
 	}
 }
 

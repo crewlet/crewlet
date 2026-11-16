@@ -285,6 +285,62 @@ func TestAFIFOLinkQueuesNoMoreThanItsInflightOfOneConnection(t *testing.T) {
 	})
 }
 
+// A WATCHER IS HANDED EACH PIECE A LINK CARRIES AS IT CARRIES IT: across a
+// first-in, first-out link, every quantum the far side is written is one
+// crossing, a quantum's time after the one before, its count of what was
+// carried one quantum more, and what was read never more than the
+// connection's inflight ahead of it — what a case reads a node's socket
+// against at the instant the link has carried a known count. The count
+// keeps a connection's bytes once it has ended.
+//
+// Red first: with no count of what the link carried, a case could read a
+// node's socket only against what it had itself sent. Mutants: the link
+// counts as carried what it reads, and the first crossing reports all of it;
+// the watcher is told once a read rather than once a piece, and the
+// crossings are not one a quantum.
+func TestAWatcherIsHandedEachPieceALinkCarriesAsItCarriesIt(t *testing.T) {
+	const pieces, inflight = 16, 8 * ethernetSegment
+	synctest.Test(t, func(t *testing.T) {
+		toward, back := sharedFIFO(floorRate, inflight)
+		l, far := bubbleLink(t, toward, back)
+		var seen []Crossing
+		var at []time.Duration
+		start := time.Now()
+		l.Watch(func(c Crossing) {
+			seen = append(seen, c)
+			at = append(at, time.Since(start))
+		})
+		node, broker := far.connect(t, l)
+		done := whenRead(broker, pieces*ethernetSegment)
+		write(node, pieces*ethernetSegment)
+		<-done
+		synctest.Wait()
+		if len(seen) != pieces {
+			t.Fatalf("the watcher was handed %d crossings, want %d: one a quantum", len(seen), pieces)
+		}
+		for i, c := range seen {
+			if c.Account != "" || c.Way != ToBroker || c.Bytes != ethernetSegment {
+				t.Errorf("crossing %d is %+v, want %d bytes of no account %s", i, c, ethernetSegment, ToBroker)
+			}
+			if want := int64((i + 1) * ethernetSegment); c.Count.Carried != want {
+				t.Errorf("crossing %d counts %d bytes carried, want %d", i, c.Count.Carried, want)
+			}
+			if ahead := c.Count.Read - c.Count.Carried; ahead < 0 || ahead > inflight {
+				t.Errorf("crossing %d counts %d bytes read ahead of what was carried, want at most the inflight of %d",
+					i, ahead, inflight)
+			}
+			if want := time.Duration(i+1) * quantum; at[i] != want {
+				t.Errorf("crossing %d came at %v, want %v: as the piece crossed", i, at[i], want)
+			}
+		}
+		_ = node.Close()
+		synctest.Wait()
+		if got, want := l.Count("", ToBroker), (Count{Read: pieces * ethernetSegment, Carried: pieces * ethernetSegment}); got != want {
+			t.Errorf("the link counts %+v once the connection ended, want %+v: kept", got, want)
+		}
+	})
+}
+
 // fastRate is the rate a case carries a real leaf's links at, where what it
 // is about is not the pace: a handshake crosses in microseconds.
 const fastRate = 8 << 20
@@ -452,22 +508,6 @@ func (l *Link) refused(name string) int {
 	return l.account(name).refused
 }
 
-// parked is how many bytes the link holds of the connections binding name,
-// either way, while they are silent.
-func (l *Link) parked(name string) int {
-	var n int
-	for _, p := range l.bound(name, func(*accountState) {}) {
-		p.mu.Lock()
-		for _, g := range p.legs {
-			for _, c := range g.parked {
-				n += len(c.bytes)
-			}
-		}
-		p.mu.Unlock()
-	}
-	return n
-}
-
 // boundAccounts is the account each connection the link carries binds, by
 // how many bind it.
 func (l *Link) boundAccounts() map[string]int {
@@ -546,28 +586,49 @@ func TestADroppedAccountsLinkDialsAgainAndTheOtherStays(t *testing.T) {
 }
 
 // A BLACKHOLED ACCOUNT'S LINK CARRIES NOTHING UNTIL IT IS MENDED, AND IS NOT
-// CLOSED: a request from the global account is read by the link and held,
-// the other account's requests are answered meanwhile, and once mended the
-// held request crosses and is answered over the same connection.
+// CLOSED: a request from the global account reaches the relay's socket and
+// waits there unread, within the pinned buffer, while the link reads none of
+// the account's bytes and the other account's requests are answered; once
+// mended the request crosses and is answered over the same connection.
 //
-// Mutant: Blackhole holds nothing, and the link never holds the request.
+// Red first: a Blackhole that read and held what the leaf sent took the
+// request off the socket, and nothing ever waited there unread. Mutant:
+// Blackhole holds nothing, and the request crosses and nothing waits.
 func TestABlackholedAccountCarriesNothingUntilMended(t *testing.T) {
 	for _, kind := range kinds {
 		t.Run(kind.name, func(t *testing.T) {
 			f := newLeafFleet(t, kind.open, server.CompressionS2Auto)
 			before := f.links(t)
 			f.link.Blackhole(server.DEFAULT_GLOBAL_ACCOUNT)
+			read := f.link.Count(server.DEFAULT_GLOBAL_ACCOUNT, ToBroker).Read
 			answered := make(chan error, 1)
 			go func() {
 				_, err := f.clients[server.DEFAULT_GLOBAL_ACCOUNT].Request("echo", []byte("held"), 30*time.Second)
 				answered <- err
 			}()
-			// THE LINK HOLDS WHAT CARRIES THE REQUEST: the interest in its
-			// reply first, then the request, read and held in order.
-			eventually(t, "the blackholed link holding the request", func() bool {
-				return f.link.parked(server.DEFAULT_GLOBAL_ACCOUNT) > len("held")
+			// WHAT CARRIES THE REQUEST WAITS IN THE RELAY'S SOCKET, the
+			// interest in its reply first and then the request, unread.
+			eventually(t, "the request waiting unread in the blackholed link's socket", func() bool {
+				unread, err := f.link.Unread(server.DEFAULT_GLOBAL_ACCOUNT, ToBroker)
+				if err != nil {
+					t.Fatalf("read the link's socket: %v", err)
+				}
+				if most := f.link.Buffers().Receive; unread > most {
+					t.Fatalf("%d bytes wait unread in the blackholed link's socket, want at most its pinned receive buffer's %d",
+						unread, most)
+				}
+				return unread > len("held")
 			})
+			if got := f.link.Count(server.DEFAULT_GLOBAL_ACCOUNT, ToBroker).Read; got != read {
+				t.Fatalf("the blackholed link read %d bytes of the account, %d when the blackhole began: it reads none",
+					got, read)
+			}
 			f.answers(t, leases)
+			select {
+			case err := <-answered:
+				t.Fatalf("the request across the blackholed link was answered before it was mended: %v", err)
+			default:
+			}
 			f.link.Mend(server.DEFAULT_GLOBAL_ACCOUNT)
 			if err := <-answered; err != nil {
 				t.Fatalf("the request held on the blackholed link, once mended: %v", err)
