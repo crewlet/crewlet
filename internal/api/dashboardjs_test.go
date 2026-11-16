@@ -2666,7 +2666,7 @@ const (
 	// One notice system, on kit 0.142.0: 6511.6 KiB (6,667,924 bytes), 140,086 over main, about
 	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0:
-	// 6521.2 KiB (6,677,683 bytes), 149,872 over main: 6522 KiB.
+	// 6521.2 KiB (6,677,673 bytes), 149,862 over main: 6522 KiB.
 	treeBudget = 5<<20 + 1402<<10
 )
 
