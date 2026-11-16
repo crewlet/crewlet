@@ -57,7 +57,7 @@ func TestALabelValueIsPrintableBoundedAndHasNoWhitespaceAroundIt(t *testing.T) {
 		"a trailing space":            "eu ",
 		"an inner tab":                "eu\twest",
 		"an inner no-break space":     "eu\u00a0west",
-		"a line separator":            "eu west",
+		"a line separator":            "eu\u2028west",
 		"a control character":         "e\x00u",
 		"invalid UTF-8":               "e\xffu",
 		"a multi-byte value too long": strings.Repeat("é", MaxLabelValueBytes/2+1),

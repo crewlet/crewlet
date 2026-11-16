@@ -1182,8 +1182,14 @@ func (h *Host) presenceMeta(ctx context.Context, logger *slog.Logger) map[string
 	if err == nil && size <= coord.MaxLeaseMetaBytes {
 		return whole
 	}
+	// Each attribute only where it says something: a size for a presence
+	// that measured, an error for one that did not.
+	why := slog.Int("bytes", size)
+	if err != nil {
+		why = slog.Any("error", err)
+	}
 	logger.ErrorContext(ctx, "node_presence_status_dropped", "node", h.nodeID,
-		"bytes", size, "bound", coord.MaxLeaseMetaBytes, "error", err,
+		why, "bound", coord.MaxLeaseMetaBytes,
 		"hint", "this node's presence was published without its status, which would carry it "+
 			"past what a lease holds; shrinking node.labels makes room, and a status this "+
 			"large beside labels Tier A allows is an engine defect worth reporting")
