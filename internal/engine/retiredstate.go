@@ -112,12 +112,12 @@ func (e *Engine) resumableElsewhere(ctx context.Context, run sandbox.PendingRun)
 }
 
 // parkedStateVersion is the version a parked state was written at, read
-// alone ([execstate.VersionOf]): never a decode of the whole state, which a
-// failure that counts nothing would otherwise make on every attempt beside
-// the resume's own. False for none, or for bytes that are no state. A state of
-// this build's version whose body this build refuses still names the version
-// another node reads: its body's own failure is met, and counted, where a
-// node decodes it.
+// alone ([execstate.VersionOf]): never a decode of the whole state, which
+// every failure another node or build may get past would otherwise make
+// beside the resume's own. False for none, or for bytes that are no state. A
+// state of this build's version whose body this build refuses still names the
+// version another node reads: its body's own failure is met, and counted,
+// where a node decodes it.
 func parkedStateVersion(blob json.RawMessage) (int, bool) {
 	version, parked, err := execstate.VersionOf(blob)
 	return version, parked && err == nil

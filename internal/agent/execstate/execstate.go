@@ -492,13 +492,13 @@ func Decode(blob json.RawMessage) (State, bool, error) {
 // VersionOf reads the version a state was written at, and nothing else of it:
 // the step [Decode] takes first, for a caller that asks only which build may
 // read a state (internal/engine's parkedStateVersion, on every resume failure
-// that counts nothing, which would otherwise decode a state that may be large
-// once more beside the resume's own). parked is false for no state at all, as
-// Decode reads one: no bytes, a JSON null or an object with no keys. An object
-// is the version it names, and zero where it names none or names it as no
-// number, which no build has ever written. Bytes that are no JSON object are
-// an error. A state whose body this build would refuse still names its
-// version here.
+// another node or build may get past, which would otherwise decode a state
+// that may be large once more beside the resume's own). parked is false for no
+// state at all, as Decode reads one: no bytes, a JSON null or an object with no
+// keys. An object is the version it names, and zero where it names none or
+// names it as no number, which no build has ever written. Any other bytes,
+// JSON that is no object or no JSON at all, are an error. A state whose body
+// this build would refuse still names its version here.
 func VersionOf(blob json.RawMessage) (version int, parked bool, err error) {
 	if len(blob) == 0 {
 		return 0, false, nil
