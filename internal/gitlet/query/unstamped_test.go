@@ -140,7 +140,7 @@ func TestOnlyAPageIsReadUnstamped(t *testing.T) {
 		}
 	}
 	for _, q := range []gitlet.GitQuery{treeQ(repo, gitlet.TreeQuery{Rev: oid}), logQ(repo, gitlet.LogQuery{Rev: oid}),
-		compareQ(repo, oid, oid), findQ(repo, oid, "main", 0)} {
+		compareQ(repo, oid, oid), findQ(repo, oid, "main", 0), treeCommitsQ(repo, oid, "d")} {
 		q.Unstamped = true
 		if err := q.Validate(); err != nil {
 			t.Errorf("an unstamped %s read refused: %v", q.Kind, err)

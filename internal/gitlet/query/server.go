@@ -47,6 +47,9 @@ type Cache interface {
 	// MemoGet is the page the pinned copy's memo keeps under a key, or false
 	// (step 6).
 	MemoGet(s cache.Synced, k cache.MemoKey) ([]byte, bool)
+	// MemoProbe is MemoGet for a part of an answer a read looks for under
+	// several keys, counted apart (cache's MemoProbe).
+	MemoProbe(s cache.Synced, k cache.MemoKey) ([]byte, bool)
 	// Memo is a batch of the pages a run cuts, to memoize in the pinned copy
 	// once its git has answered whole (step 8) — nil where it keeps none.
 	Memo(s cache.Synced) *cache.MemoBatch
@@ -137,8 +140,10 @@ type Server struct {
 	// patchBytes the diff its patch-id is taken of (MaxPatchIDDiffBytes), and
 	// classedBlob and classedBytes the Go its classification lexes, a
 	// version and in all (gitlet.MaxClassedBlobBytes, gitlet.MaxClassedBytes),
-	// and searchBudget what one search may spend (gitlet.SearchBudget) —
-	// fields so this package's tests can scale them (export_test.go).
+	// and searchBudget what one search may spend (gitlet.SearchBudget), and
+	// treeWalk the bounds of a directory's last commits' walks
+	// (treecommits.go): fields so this package's tests can scale them
+	// (export_test.go).
 	syncWait     time.Duration
 	searchBudget time.Duration
 	gitBudget    time.Duration
@@ -149,6 +154,7 @@ type Server struct {
 	patchBytes   int64
 	classedBlob  int64
 	classedBytes int64
+	treeWalk     treeWalkBounds
 	// flights is every page a read of this node is cutting that its copy's
 	// memo held none of, by repository and the page's memo key: a read that
 	// misses the same page waits for that read's run and asks the memo again,
@@ -229,7 +235,7 @@ func New(o Options) (*Server, error) {
 	return &Server{o: o, life: life, end: end, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
 		pageBytes: gitlet.MaxGitAnswerBytes, probes: MaxLandedProbes, touchedPaths: gitlet.MaxTouchedPaths,
 		touchedBytes: gitlet.MaxTouchedBytes, patchBytes: MaxPatchIDDiffBytes, classedBlob: gitlet.MaxClassedBlobBytes,
-		classedBytes: gitlet.MaxClassedBytes, searchBudget: gitlet.SearchBudget,
+		classedBytes: gitlet.MaxClassedBytes, searchBudget: gitlet.SearchBudget, treeWalk: defaultTreeWalk,
 		patchSpools: make(chan struct{}, MaxPatchSpools), patchSpoolWait: gitlet.GitShareWait}, nil
 }
 
@@ -907,6 +913,8 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (gitlet.GitAns
 		return r.logRead(ctx, objs, at, m)
 	case gitlet.GitBlame:
 		return r.blameRead(ctx, objs, at, m)
+	case gitlet.GitTreeCommits:
+		return r.treeCommitsRead(ctx, objs, at, m)
 	case gitlet.GitChecksFile:
 		return r.checksFileRead(ctx, objs)
 	case gitlet.GitCodeFiles:
@@ -1029,6 +1037,9 @@ func cursorOf(q gitlet.GitQuery) (cursor, error) {
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'t': 1})
 	case gitlet.GitBlame:
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'l': 1})
+	case gitlet.GitTreeCommits:
+		// A directory's last commits begin at its listing's n-th entry.
+		return parseCursor(q.Cursor, q.Kind, map[byte]int{'e': 1})
 	}
 	// A comparison answers its first page of files and no more — a diff of
 	// its merge base and head reads the rest — a landed-in read one answer

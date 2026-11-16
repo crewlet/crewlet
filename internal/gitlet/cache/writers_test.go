@@ -660,6 +660,12 @@ var cacheWriters = []writerRow{
 			"spells (`blame <id> -- --output=x` answers that no such path exists, measured on 2.56.0); " +
 			"query.TestAPathReachesGitOnlyAsData holds the argument list to its template, so no --output can be " +
 			"added unseen", nil},
+	{"internal/gitlet/query/treecommits.go", kindGit + " log",
+		"a directory's last commits: the only arguments not spelled as literals are the log formats, constants, " +
+			"the whole commit ids a read checked or its walks printed and, after `--`, the directory or entries " +
+			"of it as literal pathspecs, which git reads as paths whatever they spell; " +
+			"query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no --output can " +
+			"be added unseen", nil},
 }
 
 type writerKey struct{ file, kind string }

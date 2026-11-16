@@ -676,6 +676,8 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/gitlet/query/tips.go", "cat-file", queryServes},
 	{"internal/gitlet/query/tips.go", "log", queryServes},
 	{"internal/gitlet/query/tree.go", "ls-tree", queryServes},
+	{"internal/gitlet/query/treecommits.go", "log", queryServes},
+	{"internal/gitlet/query/treecommits.go", "ls-tree", queryServes},
 }
 
 // A CHECK IS CHARGED FOR THE DROPPING VIEW IT WALKS. Verify's connectivity

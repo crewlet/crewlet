@@ -24,13 +24,14 @@ import (
 // copy's memo with no git run — the same page — and the run that misses cuts
 // every page after the asked one too, so a read paged through costs one run.
 
-// memoless is a node's cache with its memo hidden: every lookup misses and no
-// run memoizes anything, so every page a server over it answers is one read
-// from its cursor cut — the reference a memoized page is held to.
+// memoless is a node's cache with its memo hidden: every lookup and probe
+// misses and no run memoizes anything, so every page a server over it answers
+// is one read from its cursor cut: the reference a memoized page is held to.
 type memoless struct{ query.Cache }
 
-func (memoless) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
-func (memoless) Memo(cache.Synced) *cache.MemoBatch                 { return nil }
+func (memoless) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool)   { return nil, false }
+func (memoless) MemoProbe(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
+func (memoless) Memo(cache.Synced) *cache.MemoBatch                   { return nil }
 
 // unstamped is a with every field Read stamps on an answer cleared — its
 // position, the push each commit came in by, what the index holds, and Memo —
@@ -406,5 +407,48 @@ func TestTwoReadsOfOnePageNoMemoHoldsRunOneGit(t *testing.T) {
 	}
 	if !reflect.DeepEqual(unstamped(answers[0]), unstamped(answers[1])) {
 		t.Errorf("the second read answered\n%+v\nwant the page the first cut\n%+v", answers[1], answers[0])
+	}
+}
+
+// A WINDOW PROBE IS NO PAGE LOOKUP: a cold read of a directory's last commits
+// and one derived from its windows each count their page's one lookup as a
+// miss, and their windows' probes as probe_miss and probe_hit, so the lookups'
+// misses still count pages computed.
+// Mutation: probe windows with MemoGet.
+func TestAWindowProbeIsNoPageLookup(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
+	x.commit(map[string]string{"d/a": "1\n", "d/b": "1\n", "top": "1\n"}, "one")
+	second := x.commit(map[string]string{"d/a": "2\n"}, "two")
+	third := x.commit(map[string]string{"top": "3\n"}, "three")
+	repo := x.repo(gitlettest.RepoName)
+	s := x.server(0, query.Options{})
+	count := func() map[string]uint64 {
+		out := map[string]uint64{}
+		for _, o := range []string{"hit", "miss", "probe_hit", "probe_miss"} {
+			out[o] = counter(x.f.Nodes()[0].Metrics(), metrics.CodeCacheMemoLookups, map[string]string{"outcome": o})
+		}
+		return out
+	}
+	moved := func(before map[string]uint64) map[string]uint64 {
+		out := map[string]uint64{}
+		for o, n := range count() {
+			out[o] = n - before[o]
+		}
+		return out
+	}
+	before := count()
+	mustRead(t, s, treeCommitsQ(repo, second, "d"))
+	if got, want := moved(before), map[string]uint64{"miss": 1, "probe_miss": 2, "hit": 0,
+		"probe_hit": 0}; !reflect.DeepEqual(got, want) {
+		t.Errorf("a cold read counted %v, want %v: its page's miss, and a probe missed at each of its two records",
+			got, want)
+	}
+	before = count()
+	mustRead(t, s, treeCommitsQ(repo, third, "d"))
+	if got, want := moved(before), map[string]uint64{"miss": 1, "probe_hit": 1, "hit": 0,
+		"probe_miss": 0}; !reflect.DeepEqual(got, want) {
+		t.Errorf("a derived read counted %v, want %v: its page's miss, and its window found at its first record",
+			got, want)
 	}
 }
