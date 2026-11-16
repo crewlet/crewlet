@@ -16,6 +16,7 @@ export const TAINT_SOURCE_WORDS: Readonly<Record<AssistantTaintSource, string>> 
   chat_room: "a chat room's topic",
   artifact_file: "an artifact's file",
   artifact_row: "an artifact's data",
+  artifact_comment: "a comment on an artifact",
   change_note: "a note about a change",
   alert: "a monitoring alert",
   notification: "a message from an integration",

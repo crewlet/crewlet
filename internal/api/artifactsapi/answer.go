@@ -255,7 +255,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		failClient(httpjson.CodePolicyRefused)
 	case errors.Is(err, artifactupload.ErrMediaType):
 		fail(http.StatusUnsupportedMediaType, httpjson.CodeMediaTypeRefused)
-	case errors.Is(err, artifactupload.ErrCredential):
+	case errors.Is(err, artifactupload.ErrCredential), errors.Is(err, artifactsdomain.ErrCommentCredential):
 		failClient(httpjson.CodeCredentialRefused)
 	case errors.Is(err, artifactupload.ErrCapabilityUnknown):
 		detail["capabilities"] = artifacts.Capabilities
@@ -282,8 +282,11 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		fail(http.StatusConflict, httpjson.CodeArtifactTrashed)
 	case errors.Is(err, artifactsdomain.ErrPurging):
 		fail(http.StatusConflict, httpjson.CodeArtifactPurging)
-	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
+	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged),
+		errors.Is(err, artifactsdomain.ErrCommentNotFound):
 		fail(http.StatusNotFound, httpjson.CodeNotFound)
+	case errors.Is(err, artifactsdomain.ErrCommentLimit):
+		fail(http.StatusConflict, httpjson.CodeConflict)
 	case errors.Is(err, artifactsdomain.ErrFolderNotFound):
 		fail(http.StatusNotFound, httpjson.CodeFolderNotFound)
 	case errors.Is(err, artifactsdomain.ErrFolderNameTaken):
@@ -302,7 +305,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		detail["candidates"] = candidates
 		failClient(httpjson.CodeFolderAmbiguous)
 	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
-		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
+		errors.Is(err, artifactsdomain.ErrAboveOwnRole), errors.Is(err, artifactsdomain.ErrNotTheAuthor):
 		fail(http.StatusForbidden, httpjson.CodeForbidden)
 	case errors.Is(err, artifactsdomain.ErrConflict):
 		fail(http.StatusConflict, httpjson.CodeConflict)

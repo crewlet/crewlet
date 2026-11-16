@@ -426,6 +426,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 	case k == KindReader && (op == OpPin || op == OpUnpin || op == OpOpened ||
 		op == OpReadElevated):
 		return decodePayload[ReaderPayload](rec)
+	case k == KindReader && op == OpInboxMarks:
+		return decodePayload[PersonMarks](rec)
 	case k == KindEviction && op == OpEviction:
 		return decodePayload[Eviction](rec)
 	case k == KindGeneration && op == OpGeneration:
@@ -442,6 +444,16 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[BrandAdoptPayload](rec)
 	case k == KindBrand && op == OpClear:
 		return decodePayload[BrandClearPayload](rec)
+	case k == KindComment && op == OpCommentOpen:
+		return decodePayload[CommentOpenPayload](rec)
+	case k == KindComment && op == OpCommentReply:
+		return decodePayload[CommentReplyPayload](rec)
+	case k == KindComment && op == OpCommentEdit:
+		return decodePayload[CommentEditPayload](rec)
+	case k == KindComment && op == OpCommentRemove:
+		return decodePayload[CommentRemovePayload](rec)
+	case k == KindComment && (op == OpCommentResolve || op == OpCommentReopen):
+		return decodePayload[CommentStatusPayload](rec)
 	case k == KindBarrier && op == OpBarrier, k == KindTrimmed && op == OpTrimmed:
 		// THE TWO PAYLOAD-FREE RECORDS, and nil is their value rather than
 		// an absence: the applier has a case for each that writes nothing

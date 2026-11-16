@@ -978,6 +978,7 @@ describe("every class the dashboard names", () => {
 // the create pages', `charter.css`, the Principles editor's, `brand.css`, the
 // brand's (Company › Brand, a kit's view and its gallery cover),
 // `folders.css`, the folders' (their tiles, dialogs, row and fact),
+// `comments.css`, the comments' (the pin layer, Comment mode and the panel),
 // `models.css`, Settings › Models' (its list, model page, wizard and By job),
 // `integrations.css`, Company › Integrations' (the directory's detail, an
 // app's tabs, its setup form and disconnect dialog), `access.css`, the
@@ -990,7 +991,9 @@ describe("every class the dashboard names", () => {
 // change's conversation and files, the listings), which every module drawing
 // a `code-` class imports — Home's changes waiting on a person and Settings ›
 // Gitlet among them — and `diff.css`, the one diff's, which every screen
-// drawing a diff reaches through `components/DiffView.tsx`. Each is appended after the entry's sheets, so
+// drawing a diff reaches through `components/DiffView.tsx`; and
+// `gitlet-code.css`, code coloured by kind in Gitlet, which
+// `routes/gitlet/syntax.tsx` imports. Each is appended after the entry's sheets, so
 // each of its rules must select a class of the screen it arrives with, or a
 // tie it wins would change other screens from the moment a reader first
 // opened that one.
@@ -1035,6 +1038,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
     importer: "routes/settings/mcp-tools/McpTools.tsx",
     owns: /\.mcp-[a-z_-]+\b/,
   },
+  "comments.css": {
+    importer: "routes/artifacts/comments/state.tsx",
+    owns: /\.artifact-(?:comments?(?:-[a-z-]+)?|frame-stage)\b/,
+  },
   "folders.css": {
     importer: "routes/artifacts/MoveDialog.tsx",
     owns: /\.(?:artifacts-(?:folders?|folder-[a-z-]+|move(?:-[a-z]+)?|selection|empty-actions)|artifact-folder-fact)\b/,
@@ -1050,6 +1057,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "gitlet.css": {
     importer: "routes/gitlet/ui.tsx",
     owns: /\.code-[a-z_-]+\b/,
+  },
+  "gitlet-code.css": {
+    importer: "routes/gitlet/syntax.tsx",
+    owns: /\.code-syn-[a-z]+(?![\w-])/,
   },
 };
 

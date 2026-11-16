@@ -2530,13 +2530,14 @@ func (o *binding) conclude(c *bridgedCall, r ran) (answer, func()) {
 	}
 	after := o.record(Call{
 		Call: tools.Call{Name: r.name, Args: recorded, Output: output, Failed: res.Failed,
-			Cause: res.Cause},
+			Images: crewletmcp.ImageRecords(res.Images), Cause: res.Cause},
 		Seq: r.seq, StartedAt: r.started.UTC(), Duration: r.took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
 		Digest: digest, CallID: r.callID, Absorbed: res.Absorbed, Committed: r.written.Since(r.before),
 		Abandoned: abandoned,
 	}, r.until)
-	return answer{result: toolsession.Result{Output: res.Output, Failed: res.Failed}, own: own}, after
+	return answer{result: toolsession.Result{Output: res.Output, Failed: res.Failed, Images: res.Images},
+		own: own}, after
 }
 
 // claim decides who answers c now that its tool has returned, once, under the

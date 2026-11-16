@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
+	"github.com/crewlet/crewlet/internal/artifacts/commentanchor"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -142,42 +143,45 @@ func TestTheDashboardDrawsEachKindAsTheKindTableSays(t *testing.T) {
 func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 	t.Parallel()
 	for name, engine := range map[string]int{
-		"ARTIFACT_TITLE_MAX_BYTES":       artifacts.MaxTitleBytes,
-		"ARTIFACT_DESCRIPTION_MAX_BYTES": artifacts.MaxDescriptionBytes,
-		"ARTIFACT_ICON_MAX_BYTES":        artifacts.MaxIconBytes,
-		"ARTIFACT_LABEL_MAX_BYTES":       artifacts.MaxLabelBytes,
-		"ARTIFACT_CHECK_MAX_FILES":       artifactupload.MaxCheckFiles,
-		"ARTIFACT_CHECK_MAX_BYTES":       artifactupload.MaxCheckBytes,
-		"DOC_MAX_TABS":                   docindex.MaxTabs,
-		"DOC_TAB_TITLE_MAX_BYTES":        docindex.MaxTitleBytes,
-		"DECK_PLAN_MAX_SLIDES":           slideformat.MaxPlanSlides,
-		"DECK_SLIDE_TITLE_MAX_BYTES":     slideformat.MaxSlideTitleBytes,
-		"DECK_TITLE_MAX_BYTES":           slideformat.MaxTitleBytes,
-		"DECK_NOTES_MAX_RUNES":           slideformat.MaxNotesRunes,
-		"CANVAS_MIN_SIDE":                canvasformat.MinSide,
-		"CANVAS_MAX_SIDE":                canvasformat.MaxSide,
-		"CANVAS_MAX_NOTES":               canvasformat.MaxNotes,
-		"DESIGN_MAX_BOARDS":              canvasformat.MaxBoards,
-		"BOARD_BRIEF_MAX_BYTES":          canvasformat.MaxBriefBytes,
-		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
-		"ARTIFACT_FOLDER_NAME_MAX_BYTES": artifacts.MaxFolderNameBytes,
-		"ARTIFACT_FOLDER_MAX_DEPTH":      artifacts.MaxFolderDepth,
-		"ARTIFACT_MOVE_MAX_ITEMS":        artifacts.MaxMovesPerCall,
-		"ARTIFACT_LIST_MAX":              artifactsdomain.MaxListLimit,
-		"BRAND_NAME_MAX_BYTES":           brandformat.MaxNameBytes,
-		"BRAND_TAGLINE_MAX_BYTES":        brandformat.MaxTaglineBytes,
-		"BRAND_VOICE_SUMMARY_MAX_BYTES":  brandformat.MaxVoiceSummaryBytes,
-		"BRAND_VOICE_MAX_EXAMPLES":       brandformat.MaxVoiceExamples,
-		"BRAND_VOICE_EXAMPLE_MAX_BYTES":  brandformat.MaxVoiceExampleBytes,
-		"BRAND_FAMILY_NAME_MAX_BYTES":    brandformat.MaxFamilyNameBytes,
-		"BRAND_FONT_FILES_MAX":           brandformat.MaxFontFilesPerFamily,
-		"BRAND_FONT_FILE_MAX_BYTES":      brandformat.MaxFontFileBytes,
-		"BRAND_SVG_MAX_BYTES":            brandformat.MaxSVGBytes,
-		"BRAND_IMAGE_MAX_BYTES":          brandformat.MaxImageBytes,
-		"BRAND_IMAGE_MAX_SIDE":           brandformat.MaxImageSide,
-		"BRAND_FONT_WEIGHT_MIN":          brandformat.MinFontWeight,
-		"BRAND_FONT_WEIGHT_MAX":          brandformat.MaxFontWeight,
-		"BRAND_FONT_WEIGHT_STEP":         brandformat.FontWeightStep,
+		"ARTIFACT_TITLE_MAX_BYTES":         artifacts.MaxTitleBytes,
+		"ARTIFACT_DESCRIPTION_MAX_BYTES":   artifacts.MaxDescriptionBytes,
+		"ARTIFACT_ICON_MAX_BYTES":          artifacts.MaxIconBytes,
+		"ARTIFACT_LABEL_MAX_BYTES":         artifacts.MaxLabelBytes,
+		"ARTIFACT_CHECK_MAX_FILES":         artifactupload.MaxCheckFiles,
+		"ARTIFACT_CHECK_MAX_BYTES":         artifactupload.MaxCheckBytes,
+		"DOC_MAX_TABS":                     docindex.MaxTabs,
+		"DOC_TAB_TITLE_MAX_BYTES":          docindex.MaxTitleBytes,
+		"DECK_PLAN_MAX_SLIDES":             slideformat.MaxPlanSlides,
+		"DECK_SLIDE_TITLE_MAX_BYTES":       slideformat.MaxSlideTitleBytes,
+		"DECK_TITLE_MAX_BYTES":             slideformat.MaxTitleBytes,
+		"DECK_NOTES_MAX_RUNES":             slideformat.MaxNotesRunes,
+		"CANVAS_MIN_SIDE":                  canvasformat.MinSide,
+		"CANVAS_MAX_SIDE":                  canvasformat.MaxSide,
+		"CANVAS_MAX_NOTES":                 canvasformat.MaxNotes,
+		"DESIGN_MAX_BOARDS":                canvasformat.MaxBoards,
+		"BOARD_BRIEF_MAX_BYTES":            canvasformat.MaxBriefBytes,
+		"ARTIFACT_TRASH_RETENTION_DAYS":    int(artifacts.TrashRetention / (24 * time.Hour)),
+		"ARTIFACT_FOLDER_NAME_MAX_BYTES":   artifacts.MaxFolderNameBytes,
+		"ARTIFACT_FOLDER_MAX_DEPTH":        artifacts.MaxFolderDepth,
+		"ARTIFACT_MOVE_MAX_ITEMS":          artifacts.MaxMovesPerCall,
+		"ARTIFACT_LIST_MAX":                artifactsdomain.MaxListLimit,
+		"ARTIFACT_COMMENT_QUOTE_MAX_BYTES": int(artifacts.MaxCommentQuoteBytes),
+		"ARTIFACT_COMMENT_CROP_MAX_BYTES":  int(artifacts.MaxCommentCropBytes),
+		"ARTIFACT_COMMENT_CROP_MAX_SIDE":   artifacts.MaxCommentCropSide,
+		"BRAND_NAME_MAX_BYTES":             brandformat.MaxNameBytes,
+		"BRAND_TAGLINE_MAX_BYTES":          brandformat.MaxTaglineBytes,
+		"BRAND_VOICE_SUMMARY_MAX_BYTES":    brandformat.MaxVoiceSummaryBytes,
+		"BRAND_VOICE_MAX_EXAMPLES":         brandformat.MaxVoiceExamples,
+		"BRAND_VOICE_EXAMPLE_MAX_BYTES":    brandformat.MaxVoiceExampleBytes,
+		"BRAND_FAMILY_NAME_MAX_BYTES":      brandformat.MaxFamilyNameBytes,
+		"BRAND_FONT_FILES_MAX":             brandformat.MaxFontFilesPerFamily,
+		"BRAND_FONT_FILE_MAX_BYTES":        brandformat.MaxFontFileBytes,
+		"BRAND_SVG_MAX_BYTES":              brandformat.MaxSVGBytes,
+		"BRAND_IMAGE_MAX_BYTES":            brandformat.MaxImageBytes,
+		"BRAND_IMAGE_MAX_SIDE":             brandformat.MaxImageSide,
+		"BRAND_FONT_WEIGHT_MIN":            brandformat.MinFontWeight,
+		"BRAND_FONT_WEIGHT_MAX":            brandformat.MaxFontWeight,
+		"BRAND_FONT_WEIGHT_STEP":           brandformat.FontWeightStep,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
@@ -191,6 +195,15 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 			t.Errorf("the dashboard bounds %s at %d and the engine at %d: change "+
 				"%s to the engine's figure", name, client, engine, contractFile(name))
 		}
+	}
+	// The page and the host read an anchor's name by the engine's own grammar.
+	raw, err := clientsource.Scalar(clientsource.Tree(t), "ARTIFACT_COMMENT_ANCHOR_NAME")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw != commentanchor.NamePattern {
+		t.Errorf("the dashboard reads an anchor name as %q and the engine as %q: change "+
+			"ARTIFACT_COMMENT_ANCHOR_NAME to the engine's", raw, commentanchor.NamePattern)
 	}
 }
 

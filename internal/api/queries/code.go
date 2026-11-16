@@ -238,7 +238,7 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 	case gitlet.ReadChanges:
 		q.Repo, q.State, q.Owner = p.String("repo"), gitlet.ChangeState(p.String("state")), p.String("owner")
 		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), gitlet.Need(p.String("needs"))
-		q.Window = gitlet.ChangeWindow(p.String("window"))
+		q.Window, q.ChangeSort = gitlet.ChangeWindow(p.String("window")), gitlet.ChangeSort(p.String("sort"))
 	case gitlet.ReadReviews:
 		q.Reviewer = p.String("reviewer")
 	case gitlet.ReadQueue:

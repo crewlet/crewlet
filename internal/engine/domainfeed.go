@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -81,15 +82,16 @@ type domainFeed struct {
 // own consumer seam is asserted here rather than left to whichever register
 // entry happens to hand it over.
 var (
-	_ worklet.DomainConsumer = domainFeed{}
-	_ doclet.DomainConsumer  = domainFeed{}
-	_ chatlet.DomainConsumer = domainFeed{}
-	_ gitlet.DomainConsumer  = domainFeed{}
+	_ worklet.DomainConsumer         = domainFeed{}
+	_ doclet.DomainConsumer          = domainFeed{}
+	_ chatlet.DomainConsumer         = domainFeed{}
+	_ gitlet.DomainConsumer          = domainFeed{}
+	_ artifactsdomain.DomainConsumer = domainFeed{}
 )
 
 // Consume implements each feed-declaring domain's DomainConsumer —
-// [worklet.DomainConsumer], [doclet.DomainConsumer], [chatlet.DomainConsumer]
-// and [gitlet.DomainConsumer].
+// [worklet.DomainConsumer], [doclet.DomainConsumer], [chatlet.DomainConsumer],
+// [gitlet.DomainConsumer] and [artifactsdomain.DomainConsumer].
 //
 // A GROUP THIS OPEN CREATES starts after the fleet's recorded floor
 // ([feedPosition.start]), and every open records the floor as it advances

@@ -159,6 +159,17 @@ func (f *fakeArtifacts) Brand(context.Context, statelog.Freshness) (artifactsdom
 	return *f.adoption, true, nil
 }
 
+// MarkInbox records a person's mark over their comment notices.
+func (f *fakeArtifacts) MarkInbox(_ context.Context, c artifactsdomain.Call, in artifactsdomain.MarkInput) (
+	artifactsdomain.Written, error) {
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, c)
+	f.marks = append(f.marks, in)
+	return artifactsdomain.Written{Result: f.result()}, nil
+}
+
 // CreateFolders makes the missing tail of in.Names beneath in.Parent, as the
 // domain's `mkdir -p` does: an existing name is reused, and a chain that
 // exists already writes nothing.

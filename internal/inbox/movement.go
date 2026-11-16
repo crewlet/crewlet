@@ -111,6 +111,11 @@ type Note struct {
 	// It moves its recipient's inbox and adds nothing to
 	// [Movement.UnreadDelta].
 	Removed bool
+
+	// Changed is a notice the batch kept and changed what it says: the words
+	// of a removed remark taken out of its excerpt. It moves its recipient's
+	// inbox, adds nothing, and never displaces a note the batch holds for it.
+	Changed bool
 }
 
 // Batch is the notices one applier's transactions wrote or deleted, until the
@@ -131,11 +136,18 @@ type Batch struct {
 // call would announce the re-run's notice as a second one. A written notice
 // and a deleted one never share a key, because a purge deletes only the
 // notices of records before its own.
+//
+// A CHANGE DISPLACES NOTHING: a notice the batch wrote and then changed is
+// still an arrival, and one it deleted is still gone.
 func (b *Batch) Note(n Note) {
 	if b.notes == nil {
 		b.notes = map[[2]string]Note{}
 	}
-	b.notes[[2]string{n.Record, n.Handle}] = n
+	key := [2]string{n.Record, n.Handle}
+	if _, held := b.notes[key]; held && n.Changed {
+		return
+	}
+	b.notes[key] = n
 }
 
 // Drain is the batch's notices as one movement per handle, each naming
@@ -155,7 +167,7 @@ func (b *Batch) Drain(source string) []Movement {
 			m = &Movement{Source: source, Handle: n.Handle}
 			byHandle[n.Handle] = m
 		}
-		if !n.Removed {
+		if n.arrived() {
 			m.UnreadDelta++
 		}
 		if !n.At.IsZero() && (m.At.IsZero() || n.At.Before(m.At)) {
@@ -180,12 +192,15 @@ func (b *Batch) Drain(source string) []Movement {
 	return out
 }
 
+// arrived reports a notice the batch wrote, neither deleted nor changed.
+func (n Note) arrived() bool { return !n.Removed && !n.Changed }
+
 // newerNote is whether n names a batch's movement for its recipient ahead of
-// held: an arrival before a removal, then the later position, then the larger
-// record id.
+// held: an arrival before a removal or a change, then the later position, then
+// the larger record id.
 func newerNote(n, held Note) bool {
-	if n.Removed != held.Removed {
-		return !n.Removed
+	if n.arrived() != held.arrived() {
+		return n.arrived()
 	}
 	if n.Position != held.Position {
 		return n.Position > held.Position

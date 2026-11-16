@@ -197,7 +197,7 @@ func TestTheRelayedBridgeKeepsTheToolSessionContract(t *testing.T) {
 				var out []toolsessiontest.Recorded
 				for _, row := range calls.rows() {
 					out = append(out, toolsessiontest.Recorded{Seq: row.Seq, Name: row.Name,
-						Output: row.Output, Failed: row.Failed, Class: row.Refusal()})
+						Output: row.Output, Failed: row.Failed, Images: row.Images, Class: row.Refusal()})
 				}
 				return out
 			},

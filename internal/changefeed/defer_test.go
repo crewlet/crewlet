@@ -16,6 +16,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -793,6 +794,7 @@ func TestEveryFeedKeepsItsDeadLettersOnASubjectOfItsOwn(t *testing.T) {
 	for _, src := range []changefeed.Source{
 		worklet.NewTranslator().Source(), doclet.NewTranslator(nil).Source(),
 		chatlet.NewTranslator(nil).Source(), gitlet.NewTranslator().Source(),
+		artifactsdomain.NewTranslator().Source(),
 	} {
 		subject := changefeed.DeadLetterSubject(src)
 		if !strings.HasPrefix(subject, topics.DeadLetterPrefix+"changefeed."+src.Name+".") {

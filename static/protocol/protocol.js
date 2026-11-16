@@ -176,7 +176,8 @@ var SESSION_QUERIES = {
 		"code_commit_marks",
 		"code_counts",
 		"inbox"
-	]
+	],
+	artifacts: ["inbox"]
 };
 // src/protocol/session.ts
 /**
@@ -4437,6 +4438,20 @@ var ACTIONS = {
 		],
 		domain: "code",
 		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	artifact_mark_inbox: {
+		args: [
+			"read",
+			"unread",
+			"snooze",
+			"unsnooze",
+			"read_through",
+			"seen"
+		],
+		domain: "artifacts",
+		apps: [],
 		refreshes: [],
 		scope: "person"
 	},

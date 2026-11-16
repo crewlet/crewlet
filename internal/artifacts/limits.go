@@ -166,6 +166,19 @@ const (
 	MaxMovesPerCall = 25
 )
 
+// Comment bounds (ADR-0154). The writer holds every one from its snapshot; the
+// thread and remark counts are also stamped into the record, so the applier
+// enforces the bound a record was decided under.
+const (
+	MaxCommentBytes       = 16 * kiB // one remark's Markdown: a long review note, never a pasted file
+	MaxCommentQuoteBytes  = 1 * kiB  // the selected text a thread quotes, enough to find it again by eye
+	MaxCommentCropBytes   = 64 * kiB // the picture of the region a thread opened on, kept on its row
+	MaxCommentCropSide    = 800      // the crop's longer side in pixels, what a side panel draws at twice its width
+	MaxCommentMentions    = 32       // seats one remark names, each one a wake
+	MaxThreadsPerArtifact = 2000     // threads one artifact keeps, the whole list read at once by the panel
+	MaxRemarksPerThread   = 500      // remarks in one thread, a conversation rather than a log
+)
+
 // Retention.
 const (
 	// VersionsKeptUnlabelled is how many unlabelled versions an artifact
