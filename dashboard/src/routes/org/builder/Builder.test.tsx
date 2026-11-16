@@ -741,7 +741,7 @@ describe("checking the draft", () => {
     expect(banner.className).toContain("warning");
     expect(banner.className).not.toContain("danger");
     expect(banner.getAttribute("role")).toBe("group");
-    expect(within(banner).getByText(/The engine runs this company, with 1 warning/)).toBeDefined();
+    expect(within(banner).getByText("1 warning to know about")).toBeDefined();
     expect(within(banner).getByText(/runs as the engine/).textContent).toMatch(/^A /);
     expect(within(banner).getByRole("link", { name: "Open Models" }).getAttribute("href")).toBe(
       href(["settings", "models"]),
@@ -806,13 +806,13 @@ describe("checking the draft", () => {
     const lines = (list: HTMLElement) =>
       within(list)
         .getAllByRole("listitem")
-        .map((li) => li.textContent);
+        .map((li) => [...li.querySelectorAll("p, a")].map((e) => e.textContent).join(" / "));
     const said = [
-      "Agents run their work directly on the engine's own server. Open Models",
-      "2 agents: Reflection and summaries run on the same model as the agent's own work. Open Models",
+      "Agents run their work directly on the engine's own server. / Open Models",
+      "2 agents: Reflection and summaries run on the same model as the agent's own work. / CEO, Designer / Open Models",
     ];
     const banner = await screen.findByRole("group", { name: "Warnings about the configuration" });
-    expect(within(banner).getByText(/The engine runs this company, with 2 warnings/)).toBeDefined();
+    expect(within(banner).getByText("2 warnings to know about")).toBeDefined();
     expect(lines(banner)).toEqual(said);
     expect(banner.textContent).not.toMatch(/providers|llm_|direct`|container`/);
 
@@ -821,7 +821,7 @@ describe("checking the draft", () => {
     await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
-    const warnings = within(dialog).getByRole("region", { name: "Warnings" });
+    const warnings = within(dialog).getByRole("group", { name: "Warnings" });
     expect(warnings.textContent).toContain("The engine will run this, with 2 warnings");
     expect(lines(warnings)).toEqual(said);
   });

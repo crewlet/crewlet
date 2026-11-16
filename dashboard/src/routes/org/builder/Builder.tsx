@@ -44,7 +44,6 @@
  * from a canvas alone would open invisibly behind it.
  */
 
-import { engineSentence } from "./EngineSentence.tsx";
 import {
   useCallback,
   useEffect,
@@ -157,8 +156,9 @@ import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, heldEdits, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { PROBLEM_LINKS, ScreenLink, WarningLines, screenPath } from "./dialogParts.tsx";
-import { draftWarningLines, type WarningLine } from "./model/warnings.ts";
+import { BuilderWarnings, PROBLEM_LINKS, ScreenLink, screenPath } from "./dialogParts.tsx";
+import { draftWarnings, type DraftWarnings } from "./model/warnings.ts";
+import { engineWords } from "~/components/ConfigWarnings.tsx";
 import { chartKindOf } from "~/ui/orgNodes.tsx";
 import {
   type GlyphProps,
@@ -190,6 +190,8 @@ import {
   cx,
   Disclosure,
   EmptyState,
+  groupNotices,
+  NoticeList,
   IconButton,
   Kbd,
   LayerHost,
@@ -1718,9 +1720,9 @@ function BuilderScreen({
   const documentRefusals = problemsCurrent
     ? state.check.problems.document.filter((p) => p.severity === "problem")
     : [];
-  // ONE LIST FOR THE BANNER AND THE REVIEW ([draftWarningLines]). Read after
+  // ONE LIST FOR THE BANNER AND THE REVIEW ([draftWarnings]). Read after
   // the screen's early returns, so it is a plain call and no hook.
-  const warnings = draftWarningLines(state);
+  const warnings = draftWarnings(state);
 
   /*
    * WHAT THE CHART DRAWS IN ITS OWN CORNER. The console chart keeps one group
@@ -2460,7 +2462,7 @@ function ReviewPanel({
       changes={changes}
       rules={rules}
       status={status}
-      warnings={draftWarningLines(state)}
+      warnings={draftWarnings(state)}
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
       phase={phase}
@@ -2552,72 +2554,45 @@ function DialogHost({
 }
 
 /**
- * What the engine said about the configuration as a whole.
- *
- * A REFUSAL AND AN ADVISORY ARE TWO BANNERS. A check that passed still
- * answers its advisories (a setting that is valid and carries a consequence),
- * and the engine runs the company with them; drawn in the critical tone they
- * read as a configuration the engine refused. So the refusals keep the danger
- * tone, and the advisories are a warning under a plain title
- * that says the engine runs this, each with the link to where it is set.
- *
- * THE REFUSALS ARE THE ONES ON NO NODE, because a node's own is drawn on the
- * node and stops the save there. THE WARNINGS ARE ALL OF THEM, grouped
- * ([draftWarningLines]): the review lists every warning of the same check, and
- * a banner counting only the ones on no node said "1 warning" over a review of
- * nine.
+ * What the engine said about the configuration as a whole: its refusals (on no
+ * node; a node's own stop the save on the node) in the danger tone, and every
+ * warning of the check, merged by kind, in the warning tone under a title that
+ * says the engine runs it.
  */
 function DocumentProblems({
   refusals,
   warnings,
 }: {
   refusals: readonly PlacedProblem[];
-  warnings: readonly WarningLine[];
+  warnings: DraftWarnings;
 }) {
+  const refused = groupNotices(
+    refusals.map((p) => ({
+      kind: `${p.link ?? ""}\u0000${p.message}`,
+      title: engineWords(p.message),
+      action:
+        p.link === null ? null : (
+          <ScreenLink to={p.link} standalone>
+            {PROBLEM_LINKS[p.link]}
+          </ScreenLink>
+        ),
+    })),
+    { count: (s) => plural(s.length, "seat") },
+  );
   return (
     <>
-      {refusals.length > 0 && (
+      {refused.length > 0 && (
         <Callout
           variant="danger"
-          className="org-builder-problems"
           role="group"
           aria-label="Problems with the whole configuration"
-          icon={<CircleAlertGlyph size="sm" />}
+          title={`The engine refuses ${refused.length === 1 ? "this" : `this for ${refused.length} reasons`}`}
         >
-          <ProblemItems problems={refusals} />
+          <NoticeList label="Problems" notices={refused} />
         </Callout>
       )}
-      {warnings.length > 0 && (
-        <Callout
-          variant="warning"
-          className="org-builder-problems"
-          role="group"
-          aria-label="Warnings about the configuration"
-          icon={<TriangleAlertGlyph size="sm" />}
-          title={`The engine runs this company, with ${plural(warnings.length, "warning")} to know about`}
-        >
-          <WarningLines lines={warnings} />
-        </Callout>
-      )}
+      <BuilderWarnings draft={warnings} label="Warnings about the configuration" />
     </>
-  );
-}
-
-function ProblemItems({ problems }: { problems: readonly PlacedProblem[] }) {
-  return (
-    <ul className="col gap-1">
-      {problems.map((p, i) => (
-        <li key={i}>
-          <span>{engineSentence(p.message)}</span>
-          {p.link !== null && (
-            <>
-              {" "}
-              <ScreenLink to={p.link}>{PROBLEM_LINKS[p.link]}</ScreenLink>
-            </>
-          )}
-        </li>
-      ))}
-    </ul>
   );
 }
 

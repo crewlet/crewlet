@@ -26,8 +26,8 @@ import type { Acknowledgement } from "./model/changes.ts";
 import type { Segment } from "./model/document.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
-import type { WarningLine } from "./model/warnings.ts";
-import { engineSentence } from "./EngineSentence.tsx";
+import type { DraftWarnings } from "./model/warnings.ts";
+import { ConfigWarnings } from "~/components/ConfigWarnings.tsx";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { workingNote } from "./nodeFacts.ts";
 import {
@@ -636,28 +636,31 @@ export const PROBLEM_LINKS: Readonly<Record<ProblemLink, string>> = {
   models: "Open Models",
 };
 
-/**
- * What the engine will run the company with, one line for each thing to know
- * ([warningLines]): who it is about, what it risks and what to do, and where
- * it is changed when the builder does not change it. The banner over the chart
- * and a save's review draw it from the same lines, so they say the same.
- */
-export function WarningLines({ lines }: { lines: readonly WarningLine[] }) {
+/** A builder's warnings in the shared renderer, each with its one link. */
+export function BuilderWarnings({
+  draft,
+  title,
+  label,
+}: {
+  draft: DraftWarnings;
+  title?: (count: number) => ReactNode;
+  label?: string;
+}) {
   return (
-    <ul className="col gap-1">
-      {lines.map((line, i) => (
-        <li key={i}>
-          {line.who !== null && <strong>{line.who}: </strong>}
-          <span>{engineSentence(line.words)}</span>
-          {line.link !== null && (
-            <>
-              {" "}
-              <ScreenLink to={line.link}>{PROBLEM_LINKS[line.link]}</ScreenLink>
-            </>
-          )}
-        </li>
-      ))}
-    </ul>
+    <ConfigWarnings
+      warnings={draft.warnings}
+      seat={draft.seat}
+      title={title}
+      label={label}
+      action={(w) => {
+        const link = draft.linkOf(w);
+        return link === null ? null : (
+          <ScreenLink to={link} standalone>
+            {PROBLEM_LINKS[link]}
+          </ScreenLink>
+        );
+      }}
+    />
   );
 }
 

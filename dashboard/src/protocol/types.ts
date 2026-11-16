@@ -1716,6 +1716,13 @@ export interface ConfigWarning {
    */
   person?: string;
   /**
+   * What a classed advisory is about in a few words, the same for every
+   * warning of its class: a list's title, with `person` as the explanation.
+   */
+  title?: string;
+  /** The one thing within the seat or unit it is about: a schedule's name and how often it runs. */
+  item?: string;
+  /**
    * On a dry run's answer only: whether THIS write brings the warning, rather
    * than the active revision already carrying it (`configapi.checkedWarning`).
    * A write's own answer and every other reader leave it out.
