@@ -5656,7 +5656,7 @@ a tool arrives in it with the control that sends it. The controls
 | Rename | A page's More | `POST /doclet/pages/{id}/rename {title}`, keyed |
 | Labels · Move | A page's More | `save_page{page, base_version, labels}` / `{page, base_version, parent}` |
 | Move to trash · Restore · Delete permanently | A page's More; a trashed page's notice | `DELETE /doclet/pages/{id}` / `POST …/restore` / `POST …/purge?confirm=<title>&reason=…`, each keyed; the purge an administrator's |
-| Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
+| Watch · Unwatch | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
 | New repository | Gitlet › Repositories | `code_create_repo{name, owner, description?, default_branch?, visibility?}`: a project a unit owns; an applied create opens its page |
 | Delete repository · Restore repository | A repository's Settings tab; a deleted repository's page | `code_delete_repo{repo, reason?}`, asked once its name is typed · `code_restore_repo{repo}` |
@@ -5679,7 +5679,7 @@ a tool arrives in it with the control that sends it. The controls
 | New room | The Rooms switcher's and the Rooms panel's foot, and Browse rooms | `create_channel{channel, kind, topic?, members?}`: the name is claimed, never renamed, and a name somebody holds goes back to its field; the visibility opens on the company's own default. **How agents follow it** opens on **Agents answer when named**, which sends each chosen agent as a bare handle; **Agents get every message** makes a team room, says that each message is then a turn for every one of them, and sends each as `{handle, follow_all: true}`. People are always bare handles |
 | A new message | **New message** (`#/chatlet/new`) | `open_dm{to}`, then `post_message` to the conversation it answers: only once there is something to say; the people chosen may already share a conversation, which the view shows and sending adds to |
 | Add people | A room's details (Members), its first-step card and More | `add_channel_members{channel, members}`: never on a unit's room (the org chart's) or a direct conversation (its people are its identity); the answer names who it actually put in. Leaving a new room's dialog with nobody chosen asks once |
-| Gets every message (a switch on each agent) | A room's details (Members) | `set_channel_members{channel, members, expected_members}`: every member's following as the pane read it with the one agent moved, stated against that read, so a change somebody made meanwhile is refused as a conflict, said in the pane and read again rather than written over. Each agent's row says "Gets every message" or "Answers when named". Refused where Add people is: a team's room shows its agents as the org chart sets them, the switch held with that reason, and a direct conversation, an archived room and a room you are not in offer no change. People have no switch |
+| Every message (a switch on each agent, its words drawn) | A room's details (Members) | `set_channel_members{channel, members, expected_members}`: every member's following as the pane read it with the one agent moved, stated against that read, so a change somebody made meanwhile is refused as a conflict, said in the pane and read again rather than written over. Each agent's row says "Gets every message" or "Answers when named". Refused where Add people is: a team's room shows its agents as the org chart sets them, the switch held with that reason, and a direct conversation, an archived room and a room you are not in offer no change. People have no switch |
 | Remove (on each other member) | A room's details (Members) | `set_channel_members{channel, members, expected_members}`: every member as the pane read them, without the one taken out, stated against that read, so a change somebody made meanwhile is refused as a conflict and said in the dialog. It asks first, saying what it costs: in a private room they can no longer read it, in a public one it leaves their room list and they can join again. Held, with the reason, where Add people is refused (a team's room, whose members are the org chart's, an archived room, or a room you are not in); a direct conversation draws none, and your own row has none, since leaving is About's Leave |
 | When new agents and people join, add them | Add people, to an admin, on a public room | `update_channel{channel, auto_join}`: an admin's alone, on a public room alone; it adds the seats that join the company from then on and nobody already in it |
 | Archive room · Reopen room, then Archive or Reopen in its dialog | A named room's More and its details (About) | `update_channel{channel, archived}`: its creator's, its team's lead's (or a team above's) or an admin's, and held with that sentence for anybody else; an archived room is read and searched for ever and takes no new messages, and Browse rooms › Archived lists it |
@@ -9177,7 +9177,7 @@ a reply box at the foot, however tall each grows as it is typed in
   one star, and on a phone one "…", the room's.
   On a view beside the rooms (Activity, Threads, Drafts and sent, Saved, New
   message, Search, Browse rooms) the bar also carries the view's own tools
-  (Activity's Unread only, Browse rooms' New room) before Search, so no view
+  (Activity's Unread filter, Browse rooms' New room) before Search, so no view
   draws a row of its own (`routes/chatlet/ViewHead.tsx`). The bar draws no
   title: the page trail's last crumb names the view and is the page's one
   `h1`. Focus a removed control or a move drops (the last card's Unfollow or
@@ -9576,12 +9576,14 @@ deeper one stepping from it (`renderMarkdown`'s `headingsFrom`). A title drawn
 as a second `h1` gave a screen reader two page titles, and a body written from
 `##` opened two levels under it.
 
-- **The page bar**: the eye, **History**, **Edit** and **More**. The eye
-  watches or stops watching as the person (a `save_page` carrying nothing but
+- **The page bar**: **Watch** (or **Unwatch**), **History**, **Edit** and
+  **More**. Watch is words, as a task's Watch is, since an eye alone can
+  read as a preview; it watches or stops watching as the person (a `save_page` carrying nothing but
   `watch`), and the count beside it opens who is told: the watchers less the
-  ones who muted the page, since an unwatch mutes rather than deletes. A watch
+  ones who muted the page, since an unwatch mutes rather than deletes, drawn as
+  "N watching". A watch
   is kept under the seat the person acts as, because a wake reaches a seat and
-  nothing else, so for a credential the directory binds to no seat the eye is
+  nothing else, so for a credential the directory binds to no seat Watch is
   drawn disabled with that reason (the engine subscribes it to nothing). More
   holds **Star this page**, **New sub-page**, **Publish** on a draft or
   **Move back to draft** on a published page, **Rename**, **Labels**,
