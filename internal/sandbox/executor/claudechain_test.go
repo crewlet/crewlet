@@ -332,7 +332,10 @@ func rcChainEnding(ctx context.Context, t *testing.T, agent string, lines ...str
 	got := rcRead{c: newThreadChain(agent), handles: map[int]chainHandle{}}
 	r := newThreadReader(strings.NewReader(text), threadPlainMax)
 	for {
-		line, err := r.Next(t.Context())
+		// READ UNDER THE TEST'S OWN CONTEXT, never ctx, which is End's alone:
+		// a reading that looked at it would spend the looks a case counts for
+		// End's walk (rcCancelledAfter).
+		line, err := r.Next(t.Context()) //nolint:contextcheck // ctx is End's alone; see the paragraph above
 		var broken *threadLineError
 		switch {
 		case err == nil:

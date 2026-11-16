@@ -229,7 +229,7 @@ func ltSeeds() []string {
 		ltNotification("a b", nil, done, ""),
 		strings.Replace(ltNotification(leg, nil, done, ""), ctAgent, strings.Repeat("a", claudeAgentMaxBytes), 1),
 		strings.Replace(ltNotification(leg, nil, done, ""), ctAgent, strings.Repeat("a", claudeAgentMaxBytes+1), 1),
-		strings.Replace(ltNotification(leg, nil, done, ""), "\n", "\r\n", -1),
+		strings.ReplaceAll(ltNotification(leg, nil, done, ""), "\n", "\r\n"),
 		strings.Replace(ltNotification(leg, nil, done, ""), "<task-notification>", "<task-notification> ", 1),
 		"<task-notification>", "<task-notification>\n", "\n<task-notification>\n",
 		"SubagentHandback", "a SubagentHandbac", "ubagentHandback", "SubagentHandbackSubagentHandback",
