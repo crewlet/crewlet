@@ -226,6 +226,10 @@ type Fact struct {
 	// Entries, where set, writes a value that is a list of records entry by
 	// entry ([Entries]), as a column's does.
 	Entries *Entries
+	// Flag, where set, makes the fact a FLAG, as [Items.Flag] makes an
+	// item's: a value that is true reads these words, and anything else is
+	// no fact at all.
+	Flag string
 }
 
 // Items is the list an entity card carries beneath its record.
@@ -242,6 +246,10 @@ type Items struct {
 	// ID, Label, Fact and Depth are paths within one item; Depth, when
 	// named, indents a tree.
 	ID, Label, Fact, Depth string
+	// Else, where named, is the path an item's label is read from where
+	// Label holds nothing: a task's link to a page has no title of its own
+	// to be listed by, and is listed by what it is instead.
+	Else string
 	// Flag, where set, makes Fact a FLAG: an item whose fact is true reads
 	// these words, and one whose fact is false or absent reads nothing. A
 	// bare "true" beside a name says nothing to the person reading the card
@@ -352,7 +360,7 @@ func (s Spec) Paths() []Path {
 		if it := e.Items; it != nil {
 			add("", it.Path)
 			add("item", it.Expand)
-			for _, p := range []string{it.ID, it.Label, it.Fact, it.Depth} {
+			for _, p := range []string{it.ID, it.Label, it.Else, it.Fact, it.Depth} {
 				add("item", p)
 			}
 			for _, f := range it.Facts {
@@ -454,6 +462,10 @@ func (s Spec) Validate() error {
 				return fmt.Errorf("cards: the items at %q word a flag but name no fact "+
 					"path to read it from", it.Path)
 			}
+			if it.Else != "" && it.Label == "" {
+				return fmt.Errorf("cards: the items at %q name an Else for a label they "+
+					"never read", it.Path)
+			}
 			if err := validFacts(it.Facts); err != nil {
 				return err
 			}
@@ -478,8 +490,12 @@ func validFacts(facts []Fact) error {
 		if f.Label == "" || f.Path == "" || !f.Type.Valid() {
 			return fmt.Errorf("cards: fact %q needs a label, a path and a type", f.Label)
 		}
-		if f.Entries != nil && f.Type != wire.ColumnText {
-			return fmt.Errorf("cards: fact %q lists entries and is not text", f.Label)
+		if (f.Entries != nil || f.Flag != "") && f.Type != wire.ColumnText {
+			return fmt.Errorf("cards: fact %q lists entries or words a flag and is not "+
+				"text", f.Label)
+		}
+		if f.Entries != nil && f.Flag != "" {
+			return fmt.Errorf("cards: fact %q both lists entries and words a flag", f.Label)
 		}
 		if err := f.Entries.validate(f.Label); err != nil {
 			return err
@@ -729,6 +745,9 @@ func buildEntity(e *Entity, doc any, o Options) (Built, error) {
 			item := wire.EntityItem{Kind: it.Kind, ID: text(field(raw, it.ID)),
 				Label: text(field(raw, it.Label)), Fact: text(field(raw, it.Fact)),
 				Facts: factsOf(it.Facts, raw, true)}
+			if item.Label == "" {
+				item.Label = text(field(raw, it.Else))
+			}
 			if it.Flag != "" {
 				item.Fact = flagged(item.Fact, it.Flag)
 			}
@@ -879,8 +898,11 @@ func factsOf(facts []Fact, record any, detail bool) []wire.Fact {
 	for _, f := range facts {
 		v := lookup(record, f.Path)
 		value := factValue(f.Type, v)
-		if f.Entries != nil {
+		switch {
+		case f.Entries != nil:
 			value = f.Entries.write(v)
+		case f.Flag != "":
+			value = flagged(value, f.Flag)
 		}
 		if value == "" {
 			continue

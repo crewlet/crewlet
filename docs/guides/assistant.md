@@ -559,7 +559,9 @@ one card draws the grant in the engine's words and asks the person to confirm
 it is them, `step_up: true`). `answer-a-question-by-its-option` measures a
 question put to the person: what waits on them lists the question with its
 options by id, the recommendation and what it cites, and the answer is
-proposed by the option chosen. The flags and the suite format are in the
+proposed by the option chosen, and `what-a-task-waits-on` reads a task with
+the task it is filed under and both directions of its links. The flags and the
+suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 
