@@ -1,9 +1,12 @@
 // @vitest-environment node
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { CHANGE_DRAFT_CHIP, CHANGE_STATES, CODE_REF } from "@crewlethq/tokens/test/palette";
 
 import { declared, sheetRules, type SheetRule } from "../test/sheets.ts";
 import {
+  SRC,
   classWrites,
   lineOf,
   memberName,
@@ -265,6 +268,41 @@ export function miscastSteps(rules: readonly SheetRule[]): string[] {
   return out;
 }
 
+/** A grammar module: each is its own chunk, fetched by the registry. */
+const GRAMMAR = /^lib\/syntax\/lang-[\w-]+\.ts$/;
+const REGISTRY = "lib/syntax/index.ts";
+
+/**
+ * Where a module reaches a grammar other than through the registry's `import()`:
+ * a static import or re-export (only another grammar may), or an `import()` elsewhere.
+ */
+export function grammarImports(path: string, text: string, lang: Lang): string[] {
+  const line = lineOf(text);
+  const out: string[] = [];
+  walk(parse(text, lang), (node: Node) => {
+    const source = (node.source as Node | null | undefined)?.value;
+    if (typeof source !== "string") return;
+    if (!GRAMMAR.test(resolveSource(path, source) ?? "")) return;
+    const at = `${path}:${line(node.start)}`;
+    if (node.type === "ImportExpression") {
+      if (path !== REGISTRY) out.push(`${at} fetches ${source}`);
+    } else if (node.importKind !== "type" && node.exportKind !== "type" && !GRAMMAR.test(path)) {
+      out.push(`${at} imports ${source}`);
+    }
+  });
+  return out;
+}
+
+/** The grammars the registry fetches, as paths under `src/`. */
+function fetched(registry: Module): string[] {
+  const out: string[] = [];
+  walk(parse(registry.text, registry.lang), (node: Node) => {
+    const source = node.type === "ImportExpression" ? stringValue(node.source as Node) : null;
+    if (source !== null) out.push(resolveSource(registry.path, source) ?? source);
+  });
+  return out;
+}
+
 describe("in the sheets", () => {
   test("only Gitlet's sheet reads the change, syntax, ref and file colours", () => {
     expect(familyRules(sheetRules())).toEqual([]);
@@ -313,6 +351,18 @@ describe("in the tree", () => {
         else expect(writes, `${m.path} writes ${name}`).toEqual([]);
       }
     }
+  });
+  test("each grammar is its own chunk, fetched only by the registry", () => {
+    expect(modules().flatMap((m) => grammarImports(m.path, m.text, m.lang))).toEqual([]);
+    const grammars = modules()
+      .filter((m) => GRAMMAR.test(m.path))
+      .map((m) => m.path);
+    const registry = modules().find((m) => m.path === REGISTRY);
+    expect(registry, `${REGISTRY} is gone`).toBeDefined();
+    const named = fetched(registry!);
+    expect(grammars.length).toBeGreaterThanOrEqual(16);
+    for (const g of grammars) expect(named, `${g} is never fetched`).toContain(g);
+    for (const n of named) expect(existsSync(join(SRC, n)), `${n} does not exist`).toBe(true);
   });
 });
 
@@ -527,6 +577,27 @@ describe("it can tell", () => {
     ).toEqual([
       "x.css .x color -> --color-diff-added-row",
       "x.css .x background -> --color-diff-added-sign",
+    ]);
+  });
+
+  test("a grammar reached past the registry's own fetch", () => {
+    const go = 'import { go } from "~/lib/syntax/lang-go.ts";';
+    expect(grammarImports("routes/gitlet/repo/Files.tsx", go, "tsx")).toEqual([
+      "routes/gitlet/repo/Files.tsx:1 imports ~/lib/syntax/lang-go.ts",
+    ]);
+    const typed = 'import type { go } from "~/lib/syntax/lang-go.ts";';
+    expect(grammarImports("routes/gitlet/repo/Files.tsx", typed, "tsx")).toEqual([]);
+    const shell = 'import { shellFrom } from "./lang-shell.ts";';
+    expect(grammarImports("lib/syntax/lang-makefile.ts", shell, "ts")).toEqual([]);
+    const reexport = 'export { go } from "./lang-go.ts";';
+    expect(grammarImports(REGISTRY, reexport, "ts")).toEqual([
+      "lib/syntax/index.ts:1 imports ./lang-go.ts",
+    ]);
+    const fetch = 'const g = () => import("./lang-go.ts");';
+    expect(grammarImports(REGISTRY, fetch, "ts")).toEqual([]);
+    const elsewhere = 'const g = () => import("~/lib/syntax/lang-go.ts");';
+    expect(grammarImports("routes/gitlet/syntax.tsx", elsewhere, "tsx")).toEqual([
+      "routes/gitlet/syntax.tsx:1 fetches ~/lib/syntax/lang-go.ts",
     ]);
   });
 });
