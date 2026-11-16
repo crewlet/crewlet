@@ -198,6 +198,7 @@ func TestEveryArtifactsQuestionDeclaresWhoAsksIt(t *testing.T) {
 		"artifact_assets":   "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_seen_by":  "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_access":   "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_comments": "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_usage":    "decided_by:" + string(authz.ActionArtifactUsage),
 		"artifact_trail":    "decided_by:" + string(authz.ActionAuditRead),
 		"brand":             "decided_by:" + string(authz.ActionBrandRead),
