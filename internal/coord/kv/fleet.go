@@ -430,8 +430,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           (its MCP, model and runner rows and its infra summary) is
 //	           rewritten at least every reconcile interval, four times inside
 //	           the age, so a live node's never ages out and a dead node's
-//	           goes with no sweep — and readers stopped counting it a minute
-//	           earlier, when its presence lapsed (coord's nodestatusrecord.go)
+//	           goes with no sweep — and readers stopped counting it before
+//	           then, when its presence lapsed (coord's nodestatusrecord.go)
 //	config     none at all: the activation pointer is the fencing sequence,
 //	           and a pointer that expired would restart the epoch
 //	budgets    the longest calendar window and a day, thirty-two days: a

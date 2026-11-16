@@ -56,17 +56,18 @@ import (
 // counts it only while that node holds its presence AT THAT EPOCH
 // ([LiveNodeStatuses]), the rule MCP listings already follow
 // ([LiveMCPListings]). A node that died stops counting the moment its presence
-// lapses, a minute before its record ages out; a node that restarted, or lapsed
-// and claimed its presence again, is a new incarnation whose record is not
-// counted until it writes it, which it does on its next pass. A reader never
+// lapses, before its record ages out; a node that restarted, or lapsed and
+// claimed its presence again, is a new incarnation whose record is not counted
+// until it writes it, which it does as the presence is claimed. A reader never
 // draws a row a node's earlier incarnation said.
 
 // NodeStatusRecord is one node's status record: the rows it reports of itself
 // beside its presence, under the presence epoch it wrote them at.
 //
 // It carries no struct tags: the wire shape is [NodeStatusRecord.Encode] and
-// [DecodeNodeStatusRecord], written by hand over the row encoders a key this
-// build does not know passes through, for the reason [StatusFromMeta] is.
+// [DecodeNodeStatusRecord], written by hand over the row encoders, so a key this
+// build does not know is ignored rather than refused, for the reason
+// [StatusFromMeta] gives.
 type NodeStatusRecord struct {
 	// Node is the node the record describes. A store files the record under
 	// it and stamps it from the key, so a node can describe only itself.
@@ -505,9 +506,9 @@ type MCPServerStatus struct {
 
 	// DownSince is when the longest-failed instance on this node stopped
 	// serving, or first failed to start; zero when none has failed. What an
-	// alarm measures a server's outage against, and the same instant on
-	// record of one outage, so a record re-sending the same facts sends the
-	// same bytes.
+	// alarm measures a server's outage against, and the same instant in
+	// every record written during one outage, so a record carrying the same
+	// facts is the same bytes and its writer does not write it again.
 	DownSince time.Time
 
 	// Restarts is how many times this node brought the server's instances
