@@ -1715,6 +1715,8 @@ nothing to sort, which is a table in the sense the element means rather than a
 list of objects. (The retention screen's per-domain terms were the other one;
 they are a description list now.)
 
+**Gitlet's lists are rows of sentences, not a grid.** Its commits, changes, repositories and pushes are drawn by `CodeList`, which keeps the grid's `j`, `k` and Enter, the peek, a phone row, Load more and the address.
+
 **Including Worklet's own list and table, which are one grid with two
 column sets.** They were two components over one answer, and the cost was
 exactly what two renderers of one row always costs: the list had none of the
