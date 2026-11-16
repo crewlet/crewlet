@@ -856,6 +856,14 @@
         },
         "labels": {
           "additionalProperties": {
+            "anyOf": [
+              {
+                "maxLength": 64
+              },
+              {
+                "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+              }
+            ],
             "type": [
               "string",
               "number",
@@ -863,7 +871,8 @@
               "null"
             ]
           },
-          "description": "Free-form node facts a seat's placement selector matches on.",
+          "description": "Free-form node facts a seat's placement selector matches on: at most 16, each value at most 64 bytes of printable text.",
+          "maxProperties": 16,
           "type": [
             "object",
             "null"

@@ -1217,7 +1217,13 @@ type Node struct {
 	// gpu: "true"), matched exactly by a seat's role.placement selector.
 	// Nothing here means anything to the engine on its own — the org
 	// decides what to select on.
-	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" desc:"Free-form node facts a seat's placement selector matches on."`
+	//
+	// At most placement.MaxLabels of them, each value at most
+	// placement.MaxLabelValueBytes printable bytes ([placement.CheckLabelValue]):
+	// they ride the presence lease on every heartbeat, whose size the store
+	// bounds. The js tag states both literally; TestTheSchemaBoundsLabelsWhereTheValidatorDoes
+	// holds it to the constants.
+	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" js:"maxkeys=16;maxlen=64" desc:"Free-form node facts a seat's placement selector matches on: at most 16, each value at most 64 bytes of printable text."`
 
 	// MaxConcurrent bounds how many agent turns this PROCESS runs at
 	// once. Zero — the shape an absent key takes — means the engine's
@@ -1304,11 +1310,29 @@ func (n *Node) validate(path Path) error {
 	// Sorted, so a file with several bad keys reports them in the same order
 	// on every run rather than in map order — as role.placement's selector
 	// does, the other half of the same match.
+	//
+	// THE COUNT AND THE VALUES ARE BOUNDED TOO, by the same package: every
+	// label rides this node's presence lease, rewritten on every heartbeat
+	// and held to coord.MaxLeaseMetaBytes, so an unbounded map would be a
+	// presence the store refuses — this node gone from its peers' count —
+	// rather than a refusal here, where the file names the fix.
+	if len(n.Labels) > placement.MaxLabels {
+		p.add(at(path, "labels"), ErrOutOfRange,
+			"%d labels, at most %d: every label is re-sent on each heartbeat of this "+
+				"node's presence, whose size is bounded; keep the facts a role's "+
+				"placement selects on", len(n.Labels), placement.MaxLabels)
+	}
 	for _, key := range slices.Sorted(maps.Keys(n.Labels)) {
 		switch err := placement.CheckLabelKey(key); {
 		case key == "":
 			p.add(at(path, "labels"), ErrMissing, "label keys must not be empty")
 		case err != nil:
+			p.add(entry(at(path, "labels"), key), ErrUnknownValue, "%v", err)
+		}
+		if key == "" {
+			continue
+		}
+		if err := placement.CheckLabelValue(n.Labels[key]); err != nil {
 			p.add(entry(at(path, "labels"), key), ErrUnknownValue, "%v", err)
 		}
 	}

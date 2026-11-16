@@ -4906,6 +4906,7 @@
       "properties": {
         "labels": {
           "additionalProperties": {
+            "maxLength": 64,
             "type": [
               "string",
               "number",
@@ -4913,7 +4914,8 @@
               "null"
             ]
           },
-          "description": "Node labels that must all match.",
+          "description": "Node labels that must all match: at most 16, each value at most 64 bytes of printable text.",
+          "maxProperties": 16,
           "type": [
             "object",
             "null"

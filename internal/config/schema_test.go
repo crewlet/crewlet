@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -955,6 +956,42 @@ units:
 			name: "node facts YAML reads as other types", tier: TierBootstrap,
 			yaml: "node:\n  id: 7\n  labels: {gpu: true, rack: 12}\n",
 		},
+		// A LABEL VALUE IS BOUNDED IN BYTES and the schema counts characters,
+		// so a multi-byte value inside the schema's count is the validator's
+		// alone to refuse; and a ${VAR} longer than the bound is let through,
+		// since it is its value, resolved, that is bounded.
+		{
+			name: "as many node labels as a node carries, each at its widest", tier: TierBootstrap,
+			yaml: "node:\n  labels:\n" + labelLines("    ", 16, strings.Repeat("v", 64)),
+		},
+		{
+			name: "a node label value written as a long reference", tier: TierBootstrap,
+			yaml: "node:\n  labels: {zone: \"${" + strings.Repeat("Z", 80) + "}\"}\n",
+			env:  map[string]string{strings.Repeat("Z", 80): "eu"},
+		},
+		{
+			name: "one node label more than a node carries", tier: TierBootstrap, editorCatches: true,
+			yaml: "node:\n  labels:\n" + labelLines("    ", 17, "eu"),
+		},
+		{
+			name: "a node label value past its bound", tier: TierBootstrap, editorCatches: true,
+			yaml: "node:\n  labels: {zone: " + strings.Repeat("v", 65) + "}\n",
+		},
+		{
+			name: "a node label value inside the schema's characters and past its bytes",
+			tier: TierBootstrap, validatorOnly: true,
+			yaml: "node:\n  labels: {zone: " + strings.Repeat("é", 64) + "}\n",
+		},
+		{
+			name: "a selector naming more labels than a node carries", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - name: Builder\n    placement:\n      labels:\n" +
+				labelLines("        ", 17, "eu"),
+		},
+		{
+			name: "a selector value past its bound", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: Builder, placement: {labels: {zone: " +
+				strings.Repeat("v", 65) + "}}}\n",
+		},
 
 		// A BOOLEAN READS YAML 1.1's WORDS too — the decoder keeps them.
 		{name: "a flag written as a word", tier: TierBootstrap, yaml: "stream:\n  debug: off\n  store_dir: /var/lib/crewlet/stream\n"},
@@ -1446,6 +1483,47 @@ func TestTheSchemaBoundsATokenIDWhereTheValidatorDoes(t *testing.T) {
 	}
 }
 
+// LABELS ARE BOUNDED IN THE ARTIFACT WHERE THE VALIDATOR BOUNDS THEM, on the
+// node and on the selector: how many a map holds, and how long each value is.
+// A struct tag is a literal that cannot name placement's constants, so this
+// holds the literals to them. The value's bound sits on its own branch in
+// Tier A, never on the ${VAR} branch beside it, whose length says nothing
+// about the value it resolves to.
+//
+// Mutation: drop either tag's maxkeys or maxlen, or set one to a figure the
+// constants do not carry, and the arm for that field fails.
+func TestTheSchemaBoundsLabelsWhereTheValidatorDoes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		tier       Tier
+		def, field string
+	}{
+		{TierBootstrap, "Node", "labels"},
+		{TierCompany, "RolePlacement", "labels"},
+	} {
+		defs, _ := schemaDoc(t, tc.tier)["$defs"].(map[string]any)
+		def, _ := defs[tc.def].(map[string]any)
+		props, _ := def["properties"].(map[string]any)
+		labels, _ := props[tc.field].(map[string]any)
+		if got, _ := labels["maxProperties"].(float64); int(got) != placement.MaxLabels {
+			t.Errorf("%s.%s: the schema holds %v labels, the validator %d", tc.def, tc.field,
+				labels["maxProperties"], placement.MaxLabels)
+		}
+		value, _ := labels["additionalProperties"].(map[string]any)
+		bound := value["maxLength"]
+		for _, branch := range anyOf(value) {
+			own, _ := branch.(map[string]any)
+			if own["maxLength"] != nil {
+				bound = own["maxLength"]
+			}
+		}
+		if got, _ := bound.(float64); int(got) != placement.MaxLabelValueBytes {
+			t.Errorf("%s.%s: the schema bounds a value at %v, the validator at %d bytes",
+				tc.def, tc.field, bound, placement.MaxLabelValueBytes)
+		}
+	}
+}
+
 // A KEYRING KEY'S ID IS BOUNDED WHERE A SEALED STREAM CAN NAME IT, in the
 // validator and in the artifact alike: a sealed stream's header names its key
 // in one length byte (secrets.MaxStreamKeyIDBytes), and an id past it refused
@@ -1661,4 +1739,13 @@ func TestEveryByteCeilingHasItsBoundsHeld(t *testing.T) {
 			"holds %v — every *_max_bytes field needs a row there, and every "+
 			"row a field", declared, held)
 	}
+}
+
+// labelLines is n label lines at indent, keyed k00 onward, each holding value.
+func labelLines(indent string, n int, value string) string {
+	var b strings.Builder
+	for i := range n {
+		fmt.Fprintf(&b, "%sk%02d: %s\n", indent, i, value)
+	}
+	return b.String()
 }
