@@ -160,6 +160,8 @@ type promptInput struct {
 
 	// History is the conversation so far, oldest first.
 	History []historyEntry
+	// Summary is the usable summary of History's first messages, nil for none.
+	Summary *historySummary
 
 	// Page is the page context the question carried, nil when removed.
 	Page     *wire.PageContext
@@ -202,15 +204,22 @@ func buildMessages(in promptInput) []llm.Message {
 	}
 
 	out := []llm.Message{{Role: llm.RoleSystem, Content: system.String()}}
-	out = append(out, historyMessages(in.History)...)
+	out = append(out, historyMessages(in.History, in.Summary)...)
 	out = append(out, llm.Message{Role: llm.RoleUser, Content: questionBlock(in)})
 	return out
 }
 
-// historyMessages is block 5: the conversation's last [HistoryMessages]
-// messages, each card as its one-line summary, and the older ones counted.
-func historyMessages(history []historyEntry) []llm.Message {
+// historyMessages is block 5: the summary of the conversation's first messages
+// where one is usable, then its last [HistoryMessages] messages, each card as
+// its one-line summary, and any older ones the summary does not cover counted.
+func historyMessages(history []historyEntry, summary *historySummary) []llm.Message {
 	var out []llm.Message
+	if summary != nil && summary.Through <= len(history) {
+		out = append(out, llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf(
+			"(A summary you wrote of this conversation's first %d messages, which are "+
+				"not shown:)\n%s", summary.Through, summary.Text)})
+		history = history[summary.Through:]
+	}
 	if omitted := len(history) - HistoryMessages; omitted > 0 {
 		out = append(out, llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf(
 			"(%d earlier messages of this conversation are not shown.)", omitted)})

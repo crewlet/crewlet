@@ -136,6 +136,8 @@ const (
 	// AuxAssistantTitle names a person's assistant conversation after its
 	// first answer.
 	AuxAssistantTitle AuxPurpose = "assistant_title"
+	// AuxAssistantSummary folds a long conversation's earlier messages into its summary.
+	AuxAssistantSummary AuxPurpose = "assistant_summary"
 	// AuxAssistantDeepWork is a person's deep-work run: a harness's own
 	// loop, recorded once when it ends with every token it reported, and
 	// charged to the company's windows by the turn's meter (ADR-0054).
@@ -173,7 +175,7 @@ var auxPurposes = []AuxPurpose{
 	AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
 	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion, AuxProviderProbe,
 	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle, AuxAssistantDeepWork,
-	AuxAssistantBrief,
+	AuxAssistantBrief, AuxAssistantSummary,
 }
 
 // AuxPurposes is every purpose this build publishes, compactions included.

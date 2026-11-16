@@ -496,7 +496,11 @@ changed. **Clear** in the panel purges one at once.
 Removing a person from the directory erases every conversation they own in one
 record. Messages, cards and previews are sealed under the fleet keyring in the
 replicated estate, and nothing a person did not see is stored, apart from the
-bounded context a turn waiting on an approval resumes from.
+bounded context a turn waiting on an approval resumes from and a long
+conversation's summary of its earlier messages. That summary is written by the
+quick chain after a turn once eight messages past the last twelve have
+gathered, charged to the person's budget as `assistant_summary`, sealed beside
+the conversation and purged with it.
 
 Files go with their conversation. An image a person attaches and a file a
 deep-work run delivers are kept in the fleet's

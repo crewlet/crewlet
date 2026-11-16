@@ -655,6 +655,9 @@ func (t *turn) run(r loopRun) {
 	if r.fresh && end.State == wire.TurnCompleted && !t.briefing() {
 		t.svc.title(ctx, t, r.question, t.answerText(), r.meter)
 	}
+	if end.State == wire.TurnCompleted && !t.briefing() {
+		t.svc.summarize(ctx, t, r.meter)
+	}
 }
 
 // conclude ends the segment: it records the answer, parks or closes the turn,

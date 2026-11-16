@@ -226,6 +226,11 @@ var trustDoors = map[string]trustDoor{
 	"internal/agent/prompts/endings.go:endingAccounts": {vendor, []string{
 		"internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken",
 	}},
+	// The cards an assistant conversation's earlier messages showed, as its
+	// summary call reads them: the record keeps no writer, so the least trust.
+	"internal/assistant/summary.go:summaryRequest": {vendor, []string{
+		"internal/assistant.TestASummaryReadsWhatItsMessagesShowedFencedUnderATokenOfItsOwn",
+	}},
 }
 
 // The rules each family is: the hosted rule's two functions, and the vendor
