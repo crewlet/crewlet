@@ -8021,15 +8021,30 @@ export interface ArtifactJoined {
   resync: boolean;
 }
 
+/**
+ * What an `artifact_changed` push says moved (`artifactsdomain.MoveKinds`):
+ * `folder` is the artifact filed in another folder (a folder's removal moves
+ * its artifacts up and pushes nothing per artifact), and `comment` a comment
+ * thread opened, a remark added, edited or removed, or a thread resolved or
+ * reopened.
+ */
+export type ArtifactChangedWhat =
+  | "version"
+  | "meta"
+  | "share"
+  | "asset"
+  | "trash"
+  | "restore"
+  | "purge"
+  | "transfer"
+  | "folder"
+  | "comment"
+  | "reset";
+
 /** An `artifact_changed` push (`stream.ArtifactChange`): a hint, never content. */
 export interface ArtifactChangedPush {
   artifact: string;
-  /**
-   * `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`,
-   * `transfer`, `reset` or `folder` (it was filed in another folder; a
-   * folder's removal moves its artifacts up and pushes nothing per artifact).
-   */
-  what: string;
+  what: ArtifactChangedWhat;
   head?: number;
   position: LogPosition;
 }
