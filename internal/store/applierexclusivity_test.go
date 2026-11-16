@@ -605,7 +605,8 @@ var allowedReplicatedWriter = []allowance{
 			"a person's marks over their own code notices on their own " +
 			"subject (apply_marks.go), and the counts of a repository's " +
 			"changes and their tallies by owner, and their re-derivation " +
-			"(apply_counts.go).",
+			"(apply_counts.go), and the repositories tallied by owner, " +
+			"visibility, kind and status (apply_repotallies.go).",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,
