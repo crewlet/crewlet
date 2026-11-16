@@ -54,8 +54,8 @@ import {
  *   module the package says exports them — and nothing hands its
  *   `VersionCompare` the two texts that would make it draw one.
  * - IN GITLET: only `.diff-view--code` reads the diff colours, every Gitlet
- *   diff passes `hue="code"` and no other does, and the steps it paints are
- *   the kit's measured ones.
+ *   diff passes `hue="code"` and no other passes it or `tokens`, no rule colours
+ *   code inside a changed run, and the steps it paints are the kit's measured ones.
  *
  * The accent is not among the hues forbidden: it says where the reader is (a
  * focus ring, a range they picked), which is never a line's kind.
@@ -122,6 +122,20 @@ export function uncodedDiffRules(rules: readonly SheetRule[]): string[] {
   });
 }
 
+/**
+ * Every rule colouring code inside a changed run, as `file selector`: the kit
+ * measures a changed word in the code's own text only.
+ */
+export function runSyntaxRules(rules: readonly SheetRule[]): string[] {
+  return rules
+    .filter((rule) =>
+      splitSelectors(rule.selector).some(
+        (s) => /\.diff-view__run(?![\w-])/.test(s) && /\.code-syn-/.test(s),
+      ),
+    )
+    .map((rule) => `${rule.file} ${rule.selector}`);
+}
+
 /** Every rule that takes a changed run's underline away, as `file selector`. */
 export function runUnderlineRemovals(rules: readonly SheetRule[]): string[] {
   return rules
@@ -174,6 +188,32 @@ describe("in Gitlet's sheets", () => {
     // A VACUITY FLOOR: the base run and the two coloured kinds'.
     expect(runs.length).toBeGreaterThanOrEqual(3);
     expect(runUnderlineRemovals(sheetRules())).toEqual([]);
+  });
+
+  test("no rule colours code inside a changed run", () => {
+    expect(runSyntaxRules(sheetRules())).toEqual([]);
+  });
+
+  test("it can tell: code coloured inside a changed run is reported", () => {
+    expect(
+      runSyntaxRules([
+        {
+          file: "gitlet-code.css",
+          selector: ".diff-view__run .code-syn-keyword",
+          body: "color: var(--color-syntax-keyword);",
+        },
+        {
+          file: "gitlet-code.css",
+          selector: ".code-syn-keyword, .diff-view--code .diff-view__run .code-syn-type",
+          body: "color: var(--color-syntax-type);",
+        },
+        { file: "gitlet-code.css", selector: ".code-syn-keyword", body: "color: red;" },
+        { file: "diff.css", selector: ".diff-view__run", body: "color: inherit;" },
+      ]),
+    ).toEqual([
+      "gitlet-code.css .diff-view__run .code-syn-keyword",
+      "gitlet-code.css .code-syn-keyword, .diff-view--code .diff-view__run .code-syn-type",
+    ]);
   });
 
   test("it can tell: a run's underline taken away is reported", () => {
@@ -665,20 +705,23 @@ export function drawsDiffView(path: string, text: string, lang: Lang): boolean {
 
 /**
  * Where a module draws the tree's DiffView against the rule: in Gitlet without
- * `hue="code"`, outside it with a hue, or anywhere through a spread.
+ * `hue="code"`, outside it with a hue or tokens, or anywhere through a spread.
  */
-export function hueSites(path: string, text: string, lang: Lang): string[] {
+export function codeSites(path: string, text: string, lang: Lang): string[] {
   const line = lineOf(text);
   const out: string[] = [];
   for (const element of diffElements(path, text, lang)) {
     const at = `${path}:${line(element.start)}`;
     let hue: Node | null = null;
+    let tokens: Node | null = null;
     for (const attribute of element.attributes as Node[]) {
       if (attribute.type === "JSXSpreadAttribute") out.push(`${at} spreads into DiffView`);
       else if ((attribute.name as Node).name === "hue") hue = attribute;
+      else if ((attribute.name as Node).name === "tokens") tokens = attribute;
     }
     if (!inGitlet(path)) {
       if (hue) out.push(`${at} passes hue to DiffView`);
+      if (tokens) out.push(`${at} passes tokens to DiffView`);
       continue;
     }
     if (!hue) {
@@ -696,8 +739,8 @@ export function hueSites(path: string, text: string, lang: Lang): string[] {
 }
 
 describe("in Gitlet's tree", () => {
-  test('every Gitlet diff passes hue="code", and no other diff passes a hue', () => {
-    expect(modules().flatMap((m) => hueSites(m.path, m.text, m.lang))).toEqual([]);
+  test('every Gitlet diff passes hue="code", and no other diff passes a hue or tokens', () => {
+    expect(modules().flatMap((m) => codeSites(m.path, m.text, m.lang))).toEqual([]);
   });
 
   test("every Gitlet module that draws a DiffView is listed, and every listed one still draws one", () => {
@@ -716,42 +759,49 @@ describe("in Gitlet's tree", () => {
     }
   });
 
-  test("it can tell: a hue outside Gitlet, a spread, a Gitlet diff without it and a hand-written class are reported", () => {
+  test("it can tell: a hue or tokens outside Gitlet, a spread, a Gitlet diff without its hue and a hand-written class are reported", () => {
     const named = 'import { DiffView } from "~/components/DiffView.tsx";';
     expect(
-      hueSites(
+      codeSites(
+        "routes/settings/Config.tsx",
+        `${named}\nconst A = () => <DiffView hunks={h} tokens={t} />;`,
+        "tsx",
+      ),
+    ).toEqual(["routes/settings/Config.tsx:2 passes tokens to DiffView"]);
+    expect(
+      codeSites(
         "routes/settings/Config.tsx",
         `${named}\nconst A = () => <DiffView hunks={h} hue="code" />;`,
         "tsx",
       ),
     ).toEqual(["routes/settings/Config.tsx:2 passes hue to DiffView"]);
     expect(
-      hueSites(
+      codeSites(
         "routes/doclet/X.tsx",
         'import * as d from "../../components/DiffView.tsx";\nconst A = () => <d.DiffView hue="code" />;',
         "tsx",
       ),
     ).toEqual(["routes/doclet/X.tsx:2 passes hue to DiffView"]);
     expect(
-      hueSites(
+      codeSites(
         "routes/doclet/X.tsx",
         'import { DiffView as Diff } from "~/components/DiffView.tsx";\nconst A = () => <Diff {...p} />;',
         "tsx",
       ),
     ).toEqual(["routes/doclet/X.tsx:2 spreads into DiffView"]);
     const files = "routes/gitlet/change/Files.tsx";
-    expect(hueSites(files, `${named}\nconst A = () => <DiffView hunks={h} />;`, "tsx")).toEqual([
+    expect(codeSites(files, `${named}\nconst A = () => <DiffView hunks={h} />;`, "tsx")).toEqual([
       `${files}:2 draws DiffView without hue="code"`,
     ]);
-    expect(hueSites(files, `${named}\nconst A = () => <DiffView hue={pick} />;`, "tsx")).toEqual([
+    expect(codeSites(files, `${named}\nconst A = () => <DiffView hue={pick} />;`, "tsx")).toEqual([
       `${files}:2 passes a hue other than "code"`,
     ]);
     const talk = "routes/gitlet/change/Conversation.tsx";
-    expect(hueSites(talk, `${named}\nconst A = () => <DiffView hunks={h} />;`, "tsx")).toEqual([
+    expect(codeSites(talk, `${named}\nconst A = () => <DiffView hunks={h} />;`, "tsx")).toEqual([
       `${talk}:2 draws DiffView without hue="code"`,
     ]);
     expect(
-      hueSites(
+      codeSites(
         "routes/gitlet/commit/DiffFiles.tsx",
         `${named}\nconst A = () => <DiffView hunks={h} hue="code" />;`,
         "tsx",

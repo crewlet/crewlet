@@ -11,7 +11,7 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { MAX_COMPARE_LINES, MAX_EDITS } from "~/lib/lineDiff.ts";
-import { changedRuns } from "~/lib/wordDiff.ts";
+import { changedRuns, type DiffSpan } from "~/lib/wordDiff.ts";
 import { sheetRules, splitSelectors } from "~/test/sheets.ts";
 import { DiffView, WINDOW_BLOCK_ROWS, WINDOW_FROM_ROWS, type DiffHunk } from "./DiffView.tsx";
 
@@ -612,6 +612,106 @@ describe("in Gitlet", () => {
     expect(read(coded.container)).toEqual(before);
     expect(before.skips).toHaveLength(1);
     expect(before.runs.length).toBeGreaterThan(0);
+    // A host with no spans for a line draws exactly the uncoloured line.
+    const html = coded.container.innerHTML;
+    coded.unmount();
+    const spanless = render(<DiffView hunks={hunks} hue="code" tokens={() => null} />);
+    expect(spanless.container.innerHTML).toBe(html);
+  });
+
+  /** A Go line's spans as a grammar would cut them: the keyword, then plain. */
+  const GO: DiffHunk[] = [
+    {
+      skipped: 0,
+      lines: [
+        same(1, 1, "defer close(ch)"),
+        removed(2, "func Get(id int) {"),
+        added(2, "func Find(id int) {"),
+      ],
+    },
+  ];
+  const goSpans = (text: string): DiffSpan[] => {
+    const word = text.indexOf(" ");
+    return [
+      { end: word, className: "code-syn-keyword" },
+      { end: word + 1, className: null },
+      { end: text.indexOf("("), className: "code-syn-function" },
+      { end: text.length, className: null },
+    ];
+  };
+  /** Each side's text by number, the way a host reads its blobs. */
+  const SIDES = {
+    before: ["defer close(ch)", "func Get(id int) {"],
+    after: ["defer close(ch)", "func Find(id int) {"],
+  };
+  const classed = (root: ParentNode) =>
+    [...root.querySelectorAll<HTMLElement>(".diff-view__text [class]")].map((el) => [
+      el.closest<HTMLElement>(".diff-view__line")?.dataset.kind,
+      el.className,
+      el.textContent,
+    ]);
+
+  // Mutation: asking a removed line on the `after` side fails this case.
+  test.each(["unified", "split"] as const)(
+    "a %s code diff draws its host's spans around the changed run, and the run stays the code's own text",
+    (layout) => {
+      const asked: string[] = [];
+      const tokens = vi.fn((side: "before" | "after", n: number) => {
+        asked.push(`${side} ${n}`);
+        return goSpans(SIDES[side][n - 1]!);
+      });
+      const plain = render(<DiffView hunks={GO} hue="code" layout={layout} />);
+      const texts = lines(plain.container);
+      plain.unmount();
+      const { container } = render(
+        <DiffView hunks={GO} hue="code" layout={layout} tokens={tokens} />,
+      );
+      expect(lines(container)).toEqual(texts);
+      // THE RUN IS ONE ELEMENT HOLDING ITS TEXT, never a span of syntax.
+      expect(runs(container)).toEqual([
+        ["remove", "Get"],
+        ["add", "Find"],
+      ]);
+      for (const run of container.querySelectorAll(".diff-view__run")) {
+        expect(run.childElementCount).toBe(0);
+      }
+      expect(classed(container)).toEqual(
+        layout === "unified"
+          ? [
+              ["same", "code-syn-keyword", "defer"],
+              ["same", "code-syn-function", "close"],
+              ["remove", "code-syn-keyword", "func"],
+              ["remove", "diff-view__run", "Get"],
+              ["add", "code-syn-keyword", "func"],
+              ["add", "diff-view__run", "Find"],
+            ]
+          : [
+              ["same", "code-syn-keyword", "defer"],
+              ["same", "code-syn-function", "close"],
+              ["same", "code-syn-keyword", "defer"],
+              ["same", "code-syn-function", "close"],
+              ["remove", "code-syn-keyword", "func"],
+              ["remove", "diff-view__run", "Get"],
+              ["add", "code-syn-keyword", "func"],
+              ["add", "diff-view__run", "Find"],
+            ],
+      );
+      // A REMOVED LINE IS THE OLDER BLOB'S, an added the newer's; an unchanged
+      // one the newer's, but on a split's left the older's.
+      expect(asked.sort()).toEqual(
+        layout === "unified"
+          ? ["after 1", "after 2", "before 2"]
+          : ["after 1", "after 2", "before 1", "before 2"],
+      );
+    },
+  );
+
+  // Mutation: dropping the hue check fails this case.
+  test("spans are drawn only under the code hue", () => {
+    const tokens = vi.fn((side: "before" | "after", n: number) => goSpans(SIDES[side][n - 1]!));
+    const { container } = render(<DiffView hunks={GO} tokens={tokens} />);
+    expect(container.querySelector(".code-syn-keyword")).toBeNull();
+    expect(tokens).not.toHaveBeenCalled();
   });
 });
 
@@ -848,6 +948,37 @@ describe("a long diff", () => {
       observer.say([{ block: 0, near: true }]);
       expect(read).toHaveBeenCalledTimes(3 * pairsABlock);
       expect(runs(container)).toHaveLength(2 * 3 * pairsABlock);
+    } finally {
+      restore();
+    }
+  });
+
+  // Mutation: computing spans for every line in DiffView's render fails this case.
+  test("asks for the spans of the rows it draws, and once a mounted line", () => {
+    const restore = installObserver();
+    try {
+      const calls = new Map<number, number>();
+      const tokens = vi.fn((_: "before" | "after", n: number) => {
+        calls.set(n, (calls.get(n) ?? 0) + 1);
+        return [{ end: 4, className: "code-syn-keyword" }];
+      });
+      const { container } = render(
+        <DiffView hunks={longDiff(30 * WINDOW_BLOCK_ROWS)} hue="code" tokens={tokens} />,
+      );
+      expect(container.querySelectorAll(".code-syn-keyword")).toHaveLength(WINDOW_BLOCK_ROWS);
+      expect([...calls.keys()].sort((a, b) => a - b)).toEqual(
+        Array.from({ length: WINDOW_BLOCK_ROWS }, (_, i) => i + 1),
+      );
+      const observer = Observer.made[0]!;
+      observer.say([
+        { block: 0, near: true, height: 2400 },
+        { block: 7, near: true },
+      ]);
+      // THE WINDOW REDRAWS THE BLOCK IT KEPT, which asks its lines nothing again.
+      expect(calls.size).toBe(2 * WINDOW_BLOCK_ROWS);
+      expect(calls.has(7 * WINDOW_BLOCK_ROWS + 1)).toBe(true);
+      expect([...calls.values()].every((n) => n === 1)).toBe(true);
+      expect(container.querySelectorAll(".code-syn-keyword")).toHaveLength(2 * WINDOW_BLOCK_ROWS);
     } finally {
       restore();
     }
