@@ -149,3 +149,180 @@ roles:
 		}
 	}
 }
+
+// THE MODELS SCREEN KNOWS EVERY HARNESS AS ITS PROFILE READS: for each built-in
+// harness bar `custom`, the sign-ins its wizard offers are the ones the engine
+// runs, its key variable and login are the profile's, and the effort levels it
+// offers, and the models that narrow them, are the profile's own. So the wizard
+// never offers a sign-in or a level the engine would refuse or drop.
+func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "HARNESS_FACTS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := slices.DeleteFunc(harnessprofile.BuiltinNames(), func(name string) bool {
+		return name == string(config.HarnessCustom)
+	})
+	if !slices.Equal(slices.Sorted(slices.Values(keys)), want) {
+		t.Fatalf("HARNESS_FACTS names %v, want exactly the built-in profiles %v", keys, want)
+	}
+	one := func(facts clientsource.Body, name string) string {
+		values := clientsource.Scalars(facts, name)
+		if len(values) == 0 {
+			return ""
+		}
+		return values[0]
+	}
+	for _, name := range keys {
+		p, err := harnessprofile.Load(name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		facts, err := clientsource.Property(body, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var signIns []string
+		if p.APIKeyEnv != "" || p.EnvSignIn {
+			signIns = append(signIns, "api-key")
+		}
+		if p.KeepsLogin() {
+			signIns = append(signIns, "host-login")
+		}
+		if p.TokenEnv != "" {
+			signIns = append(signIns, "token")
+		}
+		if len(p.DeviceLoginArgs) > 0 {
+			signIns = append(signIns, "device")
+		}
+		if len(p.SignInEnv) > 0 {
+			signIns = append(signIns, "cloud")
+		}
+		listed, err := clientsource.Property(facts, "signIns")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := clientsource.Strings(listed); !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(signIns))) {
+			t.Errorf("%s: signIns %v, want the engine's %v", name, got, signIns)
+		}
+		login := ""
+		if p.KeepsLogin() {
+			login = "adopt"
+			if len(p.LoginArgs) > 0 {
+				login = "command"
+			}
+		}
+		for _, tc := range []struct{ field, got, want string }{
+			{"binary", one(facts, "binary"), string(p.Binary)},
+			{"keyEnv", one(facts, "keyEnv"), p.APIKeyEnv},
+			{"keyShared", one(facts, "keyShared"), map[bool]string{true: "true"}[p.APIKeyEnvShared]},
+			{"providerKeys", one(facts, "providerKeys"), map[bool]string{true: "true"}[p.EnvSignIn]},
+			{"login", one(facts, "login"), login},
+			{"effortNote", one(facts, "effortNote"), p.EffortNote},
+			{"webDeniable", one(facts, "webDeniable"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.WebDeniable(), name)]},
+			{"assistant", one(facts, "assistant"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.AssistantEligible(), name)]},
+		} {
+			if tc.got != tc.want {
+				t.Errorf("%s: %s %q, want the profile's %q", name, tc.field, tc.got, tc.want)
+			}
+		}
+		levels, _ := p.EffortLevels("")
+		efforts, err := clientsource.Property(facts, "efforts")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := clientsource.Strings(efforts); !slices.Equal(got, levels) {
+			t.Errorf("%s: efforts %v, want the profile's %v", name, got, levels)
+		}
+		// Each rule as its strings in order: the match, then its levels.
+		var wantRules, gotRules []string
+		if p.Effort != nil {
+			for _, rule := range p.Effort.Models {
+				wantRules = append(append(wantRules, rule.Match), rule.Levels...)
+			}
+		}
+		if models, err := clientsource.Property(facts, "effortModels"); err == nil {
+			gotRules = clientsource.Strings(models)
+		}
+		if !slices.Equal(gotRules, wantRules) {
+			t.Errorf("%s: effortModels %q, want the profile's %q", name, gotRules, wantRules)
+		}
+	}
+}
+
+// EVERY SIGN-IN THE MODELS WIZARD OFFERS WRITES AN ENTRY THE ENGINE TAKES, on
+// every harness and at the harness's first effort level: the shape the wizard
+// writes for each method (draft.ts entityOf) passes every runnable and
+// admission rule, so the wizard never offers a mode the engine refuses.
+func TestEverySignInTheModelsWizardOffersIsOneTheEngineTakes(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "HARNESS_FACTS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What entityOf writes for each method, as YAML flow.
+	shapes := map[string]func(name string, p harnessprofile.Profile) string{
+		"api-key": func(name string, p harnessprofile.Profile) string {
+			if p.EnvSignIn {
+				return `env: {OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"}`
+			}
+			out := `auth: {mode: api-key, api_key: "${MODEL_KEY}"}`
+			if name == "qwen-code" {
+				out += "\n      env: {OPENAI_BASE_URL: https://dashscope-intl.aliyuncs.com/compatible-mode/v1}"
+			}
+			return out
+		},
+		"host-login": func(string, harnessprofile.Profile) string { return "auth: {mode: subscription}" },
+		"device":     func(string, harnessprofile.Profile) string { return "auth: {mode: subscription}" },
+		"token": func(string, harnessprofile.Profile) string {
+			return `auth: {mode: subscription, token: "${CLAUDE_CODE_OAUTH_TOKEN}"}`
+		},
+		"cloud": func(string, harnessprofile.Profile) string {
+			return "auth: {mode: env}\n      env: {CLAUDE_CODE_USE_BEDROCK: \"1\", AWS_REGION: us-west-2, " +
+				`AWS_BEARER_TOKEN_BEDROCK: "${AWS_BEARER_TOKEN_BEDROCK_M}"}`
+		},
+	}
+	for _, name := range keys {
+		p, err := harnessprofile.Load(name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		facts, err := clientsource.Property(body, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed, err := clientsource.Property(facts, "signIns")
+		if err != nil {
+			t.Fatal(err)
+		}
+		effort := ""
+		if levels, _ := p.EffortLevels(""); len(levels) > 0 {
+			effort = "\n      effort: " + levels[0]
+		}
+		model := "m"
+		if p.ModelNamesProvider {
+			model = "openrouter/m"
+		}
+		for _, method := range clientsource.Strings(listed) {
+			shape, ok := shapes[method]
+			if !ok {
+				t.Errorf("%s offers %q, which this gate has no entry shape for", name, method)
+				continue
+			}
+			doc := "name: Acme\nproviders:\n  llm:\n    m:\n      harness: " + name +
+				"\n      model: " + model + effort + "\n      " + shape(name, p) + "\n"
+			if _, err := config.ParseCompany([]byte(doc)); err != nil {
+				t.Errorf("%s by %s: the entry the wizard writes is refused:\n%s\n%v", name, method, doc, err)
+			}
+		}
+	}
+}
