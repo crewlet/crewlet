@@ -447,7 +447,7 @@ var opArtifactWorkItems = define("artifacts.work_items", opRead, artifactsDomain
 
 // ---- a person's comment inbox: reads ------------------------------------- //
 
-var opArtifactInbox = define("artifacts.inbox", opRead, artifactsDomain, false,
+var opArtifactInbox = define("artifacts.read_inbox", opRead, artifactsDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q artifactsdomain.InboxQuery) (artifactsdomain.InboxPage, error) {
 		r, err := b.artifactsReader()
 		if err != nil {
