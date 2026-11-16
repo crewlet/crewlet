@@ -606,7 +606,8 @@ var allowedReplicatedWriter = []allowance{
 			"a person's marks over their own code notices on their own " +
 			"subject (apply_marks.go), and the counts of a repository's " +
 			"changes and their tallies by owner, and their re-derivation " +
-			"(apply_counts.go).",
+			"(apply_counts.go), and the repositories tallied by owner, " +
+			"visibility, kind and status (apply_repotallies.go).",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,
@@ -726,8 +727,8 @@ var allowedReplicatedWriter = []allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// THE EXCEPTIONS. Three writes that are not a record, each because no
-	// record could own what it touches. Read these before adding a fourth.
+	// THE EXCEPTIONS. Four writes that are not a record, each because no
+	// record could own what it touches. Read these before adding a fifth.
 	// -----------------------------------------------------------------
 	{
 		Prefix: "internal/worklet/duty.go", Kind: exception,
@@ -750,6 +751,15 @@ var allowedReplicatedWriter = []allowance{
 			"recipient kind's horizon, and the table is statelog.Divergent " +
 			"for tracker_notifications' reason: whether a record writes a " +
 			"notice depends on the batch's instant and the epoch's inbox " +
+			"horizon, so two nodes legitimately hold different rows and " +
+			"deleting on this node's own authority diverges nothing.",
+	},
+	{
+		Prefix: "internal/artifactsdomain/noticesweep.go", Kind: exception,
+		Why: "NoticeJobs range-deletes `artifact_notifications` past the " +
+			"company's inbox horizon, and the table is statelog.Divergent " +
+			"for code_notifications' reason: whether a comment record writes " +
+			"a notice depends on the batch's instant and the epoch's inbox " +
 			"horizon, so two nodes legitimately hold different rows and " +
 			"deleting on this node's own authority diverges nothing.",
 	},

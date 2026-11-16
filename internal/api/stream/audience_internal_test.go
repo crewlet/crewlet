@@ -139,6 +139,27 @@ func TestAnInboxFrameNeedsNoApp(t *testing.T) {
 	}
 }
 
+// A RELATIONAL HALF OF AN INBOX REACHES EVERY WATCHER AND NAMES NO OBJECT: a
+// frame cannot decide an artifact's relation, so every watcher hears the half
+// moved and none which artifact; an app's half still reaches its holders alone.
+func TestARelationalInboxHalfReachesEveryWatcherNamingNoObject(t *testing.T) {
+	t.Parallel()
+	moved := InboxChange{Source: "artifacts", Handle: "ana", UnreadDelta: 1, Subject: "artifact-1",
+		Reason: "mention", Relational: true}
+	for name, a := range map[string]Audience{"Worklet": NewAudience(workletPrincipal, nil),
+		"no app at all": NewAudience(overviewPrincipal, nil)} {
+		_, data, ok := moved.ForReader(Reader{Audience: a})
+		got, _ := data.(InboxChange)
+		if !ok || got.Subject != "" || got.UnreadDelta != 1 || got.Source != "artifacts" {
+			t.Errorf("%s was handed %+v (%v), want the movement with no subject", name, data, ok)
+		}
+	}
+	code := InboxChange{Source: "code", Handle: "ana", Subject: "change-1", App: iam.GrantGitlet}
+	if _, _, ok := code.ForReader(Reader{Audience: NewAudience(overviewPrincipal, nil)}); ok {
+		t.Error("a watcher without Gitlet was handed the code half's movement")
+	}
+}
+
 // THE SNAPSHOT IS WHAT THE PUSHES WOULD BE, key by key.
 //
 // Every key the service builds names the push it stands in for, and a reader

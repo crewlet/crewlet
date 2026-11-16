@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/clientsource"
@@ -93,7 +94,8 @@ var attentionTools = []string{chatlet.MarkChatReadTool}
 // actionLog is the state log a tool's write lands on, by the family the tool
 // is registered under — the work tools on the tracker's, the page tools on
 // the knowledge base's, the chat tools on chat's, the code tools (a code
-// inbox mark among them) on Gitlet's — or "" for a write that
+// inbox mark among them) on Gitlet's, the comment inbox mark on the artifacts
+// log's — or "" for a write that
 // lands on none: a pause, a steer, a run's answer, a question answered, a
 // person's attention.
 //
@@ -120,6 +122,8 @@ func actionLog(tool string) string {
 		return "chat"
 	case in(builtin.CodeToolNames(), builtin.CodeWrites(), []string{builtin.CodeMarkInboxTool}):
 		return "code"
+	case tool == builtin.ArtifactMarkInboxTool:
+		return "artifacts"
 	}
 	return ""
 }
@@ -381,6 +385,12 @@ func fullSurface(t *testing.T) *operator.Server {
 			// hosting code serves.
 			Code: builtin.CodeDeps{Code: code, Requesters: noRequesters{}, Chart: authz.NoChart{},
 				Writer: code, Holder: code},
+			// THE ARTIFACTS, so the Inbox's `artifact_mark_inbox` is held to the
+			// catalogue every company serves.
+			Artifacts: builtin.ArtifactDeps{Reader: struct{ builtin.ArtifactReader }{},
+				Writer: struct{ builtin.ArtifactWriter }{}, Publisher: struct{ builtin.ArtifactPublisher }{},
+				Chart: authz.NoChart{}, Requesters: noRequesters{},
+				Limits: func() artifacts.Limits { return artifacts.Limits{} }},
 			// THE ATLAS WITH ITS WRITES, so Company › Atlas's rows are held to
 			// the catalogue a node that reaches the atlas's log serves.
 			Atlas: builtin.AtlasDeps{Settings: func(context.Context) (builtin.AtlasSettings, bool) {

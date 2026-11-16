@@ -59,7 +59,7 @@ const RevisionPeek = lazyScreen("settings", (m) => m.RevisionPeek);
 const PersonPeek = lazyScreen("settings", (m) => m.PersonPeek);
 const PagePeek = lazyScreen("doclet", (m) => m.PagePeek);
 const ContainerPeek = lazyScreen("doclet", (m) => m.ContainerPeek);
-const ChangePeek = lazyScreen("gitlet", (m) => m.ChangePeek);
+const ChangePeek = lazyScreen("gitlet-change", (m) => m.ChangePeek);
 const AtlasPeek = lazyScreen("atlas", (m) => m.AtlasPeek);
 
 /**

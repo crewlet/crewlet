@@ -493,7 +493,7 @@ func (s *Store) DeleteRepos(ctx context.Context, a Activation, ids []string) ([]
 // whose person's git waits on its row — waits on each. The widest record a
 // reconcile writes is a settings change or a restore that replaces every rule
 // and every path owner of a repository holding its bound of each
-// ([reconcileRecordRows], 259 rows), so fifteen are 3 885 rows
+// ([reconcileRecordRows], 261 rows), so fifteen are 3 915 rows
 // (TestAReconcileInFlightFitsOneApplyTransaction measures the three records a
 // reconcile writes a repository's settings with, and holds the product). It
 // was thirty-two while the widest was taken to be a create of 66 rows, when a
@@ -506,11 +506,13 @@ const reconcileInFlight = statelog.ApplyTxRowBudget / reconcileRecordRows
 // repository's rules and its path owners and writes the new ones — at most
 // [MaxProtectionsPerRepo] and [MaxPathOwners] rows each way — and moves the
 // repository's row, which carries the digests of both in the same statement
-// ([rowDigests]), and the two tally rows a change of its owner or visibility
-// moves its changes' counts between (apply_counts.go). A create writes at most
-// 131, its claim, its row and its kind's count beside the rules and owners, and
-// a deletion two, its row and its tally row.
-const reconcileRecordRows = 2*(MaxProtectionsPerRepo+MaxPathOwners) + 1 + tallyMoveRows
+// ([rowDigests]), the two tally rows a change of its owner or visibility
+// moves its changes' counts between (apply_counts.go), and the two repository
+// tally rows it moves the repository between (apply_repotallies.go). A create
+// writes at most 132, its claim, its row, its kind's count and its repository
+// tally row beside the rules and owners, and a deletion three, its row and its
+// two tally rows.
+const reconcileRecordRows = 2*(MaxProtectionsPerRepo+MaxPathOwners) + 1 + tallyMoveRows + repoTallyMoveRows
 
 // decideEach runs decide for every k in [0, n), up to [reconcileInFlight] at
 // once, as a CLOSED LOOP — a decision begins only when one in flight has

@@ -20,8 +20,9 @@ var ReproducibleTables = []string{
 	// retained version or a live asset still names.
 	"artifact_objects", "artifact_assets",
 
-	// Access and per-person state.
-	"artifact_shares", "artifact_pins", "artifact_reads",
+	// Access and per-person state: a person's marks over their notices
+	// included (the notices themselves are divergent, apply_notices.go).
+	"artifact_shares", "artifact_pins", "artifact_reads", "artifact_person_marks",
 
 	// What happened, and the counters the stamped quotas are enforced
 	// against.
@@ -36,6 +37,10 @@ var ReproducibleTables = []string{
 	// third table that NAMES OBJECTS, declared in
 	// internal/objstore/references), and every adoption and clear.
 	"artifact_brand", "artifact_brand_files", "artifact_brand_history",
+
+	// Comment threads (ADR-0154): each thread with its anchor and status,
+	// and every remark in it.
+	"artifact_comment_threads", "artifact_comments",
 
 	// The gate tables, which outlive the records that wrote them, and the
 	// reanchor's audit row.

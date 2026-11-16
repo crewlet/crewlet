@@ -10,6 +10,9 @@ var DecodeAct = decodeAct
 // AuditOutcomeOf is the audit's reading of what became of one call.
 var AuditOutcomeOf = auditOutcome
 
+// MCPAnswer is the MCP transport's answer to one call.
+var MCPAnswer = mcpAnswer
+
 // WorkActor, PageActor and ChatActor are the actors this surface hands the
 // tracker's, the knowledge base's and chat's tools, and WithKey marks a
 // context with the operation one call's transport named — what

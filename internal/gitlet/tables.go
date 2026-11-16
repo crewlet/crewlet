@@ -95,6 +95,10 @@ var ReproducibleTables = []string{
 	// kept with code_changes by the applies and re-derived by the applier (apply_counts.go).
 	"code_change_tallies",
 
+	// The repositories by owner, visibility, kind and status: kept by the lifecycle applies and
+	// re-derived by the applier (apply_repotallies.go).
+	"code_repo_tallies",
+
 	// A person's marks over their code notices — how far they have read on
 	// this log, what they marked out of order or put off, which reasons are
 	// theirs — written by the records on the person's own subject alone,

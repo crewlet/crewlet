@@ -760,6 +760,9 @@ func (s RepoSummary) encodedBytes() int {
 	if s.ChangeCounts != nil {
 		n += field("change_counts", s.ChangeCounts.encodedBytes(), false)
 	}
+	if s.Card != nil {
+		n += field("card", s.Card.encodedBytes(), false)
+	}
 	return n
 }
 
@@ -768,6 +771,34 @@ func (c ChangeCounts) encodedBytes() int {
 	return 2 + field("live", intBytes(c.Live), true) + field("draft", intBytes(c.Draft), false) +
 		field("open", intBytes(c.Open), false) + field("closed", intBytes(c.Closed), false) +
 		field("merged", intBytes(c.Merged), false)
+}
+
+// encodedBytes is the length of the card's JSON encoding: each part omitted where absent, the
+// first written one opening the object.
+func (c RepoCard) encodedBytes() int {
+	n, first := 2, true
+	if c.PushMirrored {
+		n += field("push_mirrored", trueBytes, first)
+		first = false
+	}
+	if c.LastPush != nil {
+		n += field("last_push", c.LastPush.encodedBytes(), first)
+		first = false
+	}
+	if c.TipChecks != nil {
+		n += field("tip_checks", c.TipChecks.encodedBytes(), first)
+	}
+	return n
+}
+
+// encodedBytes is the length of the last push's JSON encoding.
+func (p LastPush) encodedBytes() int {
+	n := 2 + field("push_id", stringBytes(p.PushID), true) + field("at", timeBytes(p.At), false) +
+		field("actor", stringBytes(p.Actor), false) + field("actor_kind", stringBytes(p.ActorKind), false)
+	if p.ActorSeat != "" {
+		n += field("actor_seat", stringBytes(p.ActorSeat), false)
+	}
+	return n + field("via", stringBytes(string(p.Via)), false) + field("outcome", p.Outcome.encodedBytes(), false)
 }
 
 // members is the length of the change's own members, without the braces that
@@ -1112,7 +1143,11 @@ func (r ReviewerRow) encodedBytes() int {
 	if r.Note != "" {
 		n += field("note", stringBytes(r.Note), false)
 	}
-	return n + field("position", positionBytes(r.Position), false)
+	n += field("position", positionBytes(r.Position), false)
+	if !r.At.IsZero() {
+		n += field("at", timeBytes(r.At), false)
+	}
+	return n
 }
 
 // encodedBytes is the length of the comment's JSON encoding.
@@ -1257,7 +1292,19 @@ func (f FindingRow) encodedBytes() int {
 	if !f.ResolvedPosition.IsZero() {
 		n += field("resolved_position", positionBytes(f.ResolvedPosition), false)
 	}
-	return n + field("position", positionBytes(f.Position), false)
+	n += field("position", positionBytes(f.Position), false)
+	if !f.RaisedAt.IsZero() {
+		n += field("raised_at", timeBytes(f.RaisedAt), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the group's JSON encoding.
+func (p FindingPathRow) encodedBytes() int {
+	return 2 + field("path", stringBytes(p.Path), true) +
+		field("state", stringBytes(string(p.State)), false) +
+		field("revision", intBytes(p.Revision), false) +
+		field("findings", intBytes(p.Findings), false)
 }
 
 // encodedBytes is the length of the anchor's JSON encoding.

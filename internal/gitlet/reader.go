@@ -61,9 +61,14 @@ type Reader struct {
 	// tipWindow bounds the landings one target's tip work reads above its
 	// green: MaxTipLandings, and a test's smaller value (export_test.go).
 	tipWindow int
+	// reposSized and lastPushWalk bound a listing's total and its cards: MaxReposSized and
+	// MaxLastPushWalk, or a test's.
+	reposSized, lastPushWalk int
 	// refsScanned and activeCounted bound a refs listing's scan and its active
 	// count: MaxRefsScanned and MaxActiveBranchesCounted, or a test's.
 	refsScanned, activeCounted int
+	// spokenScanned bounds a live state's conversation side: MaxSpokenScanned, or a test's.
+	spokenScanned int
 }
 
 // ReaderOptions configure a reader.
@@ -101,13 +106,14 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 	}
 	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, now: o.Now, pageRows: MaxSnapshotItems,
 		pageBytes: MaxPageBytes, tipWindow: MaxTipLandings, refsScanned: MaxRefsScanned,
-		activeCounted: MaxActiveBranchesCounted}
+		activeCounted: MaxActiveBranchesCounted, spokenScanned: MaxSpokenScanned}
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}
 	if r.now == nil {
 		r.now = time.Now
 	}
+	r.reposSized, r.lastPushWalk = MaxReposSized, MaxLastPushWalk
 	return r, nil
 }
 
@@ -150,7 +156,7 @@ func (r *Reader) chartFor(asker Principal, readiness bool) (Roster, error) {
 // which the chart judges: a listing of changes, and a change's first page of
 // its revisions, which carries its detail.
 func (q ReadQuery) judgesReadiness() bool {
-	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.Part.detailed() && !q.Brief
+	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.pagesDetail() && !q.Brief
 }
 
 // resolves reports a read that may resolve the repository it names
@@ -1479,7 +1485,7 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// deferrals order them — unless it resolves the repository, a point
 		// read of it whatever its page, as a `repo` read is
 		// ([ReadQuery.Resolve]).
-		query = fresh.Resolved(resolver(q.Repo), !q.Resolve && (q.Cursor != "" || !q.Part.detailed()))
+		query = fresh.Resolved(resolver(q.Repo), !q.Resolve && (q.Cursor != "" || !q.pagesDetail()))
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.change(ctx, tx, q, chart, cp, &out) }
 	case ReadChangeRouting:
 		// A SET READ of the repository whose records write the change, as a
@@ -1841,6 +1847,9 @@ func (q ReadQuery) validate() error {
 	case len(q.FindingIDs) > 0 && q.Limit != 0:
 		return fmt.Errorf("%w: finding_ids: the findings named are the read's rows, which no limit cuts",
 			ErrInvalid)
+	case q.FindingPaths && (q.Part != "" || q.DetailOnly || q.Brief || len(q.FindingIDs) > 0):
+		return fmt.Errorf("%w: finding_paths: a change's findings by path are a page of their own, "+
+			"named by no part, detail_only, brief or finding_ids", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
@@ -1866,6 +1875,10 @@ func (q ReadQuery) validate() error {
 		}
 	}
 	switch q.Kind {
+	case ReadRepos:
+		if err := q.validateRepos(); err != nil {
+			return err
+		}
 	case ReadRefs:
 		if q.RefListing != nil {
 			if err := q.validateRefListing(); err != nil {
@@ -1923,7 +1936,7 @@ func (q ReadQuery) validate() error {
 		}
 	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
-		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage(),
+		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.changePageMax(),
 		ReadChangeRouting: MaxRoutedRecordsPerPage, ReadReviews: MaxReviewsPerPage,
 		ReadChecks: MaxChecksPerPage, ReadQueue: MaxQueueRowsPerPage, ReadLandings: MaxLandingsPerPage,
 		ReadInbox: inbox.MaxRows}[q.Kind]
@@ -1942,7 +1955,8 @@ func (q ReadQuery) validate() error {
 // kindOwnedField refuses a field that one kind a principal reads alone reads
 // (a commit, an inbox, an inbox page's cards, a history page's commits, the
 // narrowing of a listing of repositories to the ones a rule protects, the
-// parts a counts read names, a repository's facts) on a read of any other
+// parts a counts read names, a repository's facts, a listing of changes'
+// order, a change's findings by path) on a read of any other
 // kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
@@ -1953,11 +1967,16 @@ func (q ReadQuery) kindOwnedField() error {
 		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	case q.Cards && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: cards: only a listing of changes carries each change's card", ErrInvalid)
+	case q.FindingPaths && q.Kind != ReadChange:
+		return fmt.Errorf("%w: finding_paths: only a change read counts its findings by path", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
 		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
 		return fmt.Errorf("%w: notice_cards: only a notice_cards read names the changes whose cards it reads",
 			ErrInvalid)
+	case q.ChangeSort != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: change_sort: only a listing of changes is ordered by when its changes were "+
+			"opened or last moved", ErrInvalid)
 	case q.RefListing != nil && q.Kind != ReadRefs:
 		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
 			ErrInvalid)
@@ -1972,6 +1991,11 @@ func (q ReadQuery) kindOwnedField() error {
 	case q.RepoFacts && q.Kind != ReadRepos && q.Kind != ReadRepo:
 		return fmt.Errorf("%w: repo_facts: only a listing of repositories and a read of one answer a "+
 			"repository's facts", ErrInvalid)
+	case q.RepoKind != "" && q.Kind != ReadRepos:
+		return fmt.Errorf("%w: repo_kind: only a listing of repositories is narrowed to one kind", ErrInvalid)
+	case q.RepoSort != "" && q.Kind != ReadRepos:
+		return fmt.Errorf("%w: repo_sort: only a listing of repositories is ordered by name or last push",
+			ErrInvalid)
 	}
 	return nil
 }
@@ -2621,9 +2645,10 @@ func limitOr(limit, fallback int) int {
 	return limit
 }
 
-// repos serves a listing of repositories, by name, of those the asker may
-// read — and, where it reads for a seat its turn is acting for, that seat may
-// read too ([JudgeRead]) — each carrying the asker's access to it.
+// repos serves a listing of repositories, by name or by last push
+// ([reposListed]), of those the asker may read and, where it reads for a seat
+// its turn is acting for, that seat may read too ([JudgeRead]), each carrying
+// the asker's access to it.
 //
 // THE PAGE IS WHAT WAS SCANNED, NOT WHAT WAS KEPT: a repository the asker may
 // not read, or its ceiling may not, is left out, and the cursor is still the
@@ -2654,93 +2679,41 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		// The sparks' read is measured at this page at most, whatever the default.
 		limit = min(limit, MaxSparkReposPerPage)
 	}
-	// THE PROTECTED ONES BY THEIR OWN INDEX ([ReadQuery.Protected]): the
-	// same rows in the same order, walked by an index that holds no
-	// repository a rule does not protect. AND THE NAMES A PREFIX BEGINS
-	// ([ReadQuery.Prefix]) in one range of either index, from the prefix
-	// itself to its end — so a picker finds the repository typed into it
-	// however many sort before it — past a cursor that must be one of them.
-	var (
-		listing string
-		args    []any
-	)
-	switch {
-	case q.Prefix == "":
-		listing, args = reposSQL, []any{list, q.Cursor, limit}
-		if q.Protected {
-			listing = protectedReposSQL
-		}
-	case q.Cursor == "":
-		listing, args = reposUnderFirstSQL, []any{list, q.Prefix, prefixEnd(q.Prefix), limit}
-		if q.Protected {
-			listing = protectedReposUnderFirstSQL
-		}
-	case !strings.HasPrefix(q.Cursor, q.Prefix):
-		return fmt.Errorf("%w: %q is not a repository name beginning %q", ErrBadCursor, q.Cursor, q.Prefix)
-	default:
-		listing, args = reposUnderAfterSQL, []any{list, q.Cursor, prefixEnd(q.Prefix), limit}
-		if q.Protected {
-			listing = protectedReposUnderAfterSQL
-		}
-	}
-	rows, err := tx.QueryContext(ctx, listing, args...)
+	listed, err := reposListed(ctx, tx, q, list, limit)
 	if err != nil {
-		return fmt.Errorf("gitlet: list repositories: %w", err)
+		return err
 	}
-	var (
-		ids         []string
-		scanned     int
-		lastScanned string
-	)
-	for rows.Next() {
-		var (
-			v                                                 repoView
-			status, managed, kind, owners, visibility, search string
-			deleted                                           sql.NullInt64
-			active                                            int64
-			head                                              sql.NullString
-		)
-		if err := rows.Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &kind, &owners, &v.ref.Owner.Ref,
-			&visibility, &search, &v.ref.Mirrored, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &active,
-			&v.ref.Refs,
-			&v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects, &v.ref.DropEpoch, &v.pushes, &v.lastPushAt,
-			&head); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("gitlet: list repositories: %w", err)
-		}
-		scanned, lastScanned = scanned+1, v.ref.Name
-		v.ref.Status, v.ref.ManagedBy, v.ref.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
-		v.ref.Kind, v.ref.Visibility, v.ref.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
-		v.ref.LastActivityAt = activityAt(active)
-		g, refused := JudgeRead(q.Asker, q.CeilingSeat, v.ref, chart)
+	ids := make([]string, 0, len(listed))
+	cursors := make([]string, 0, len(listed))
+	for _, l := range listed {
+		g, refused := JudgeRead(q.Asker, q.CeilingSeat, l.v.ref, chart)
 		if refused != nil {
 			continue
 		}
-		if deleted.Valid {
-			v.ref.DeletedAt = store.DecodeTime(deleted.Int64)
-		}
-		v.ref.Position = cp
-		s := v.summary(head.String)
+		l.v.ref.Position = cp
+		s := l.v.summary(l.head)
 		s.Access = g.Access.String()
 		out.Repos = append(out.Repos, s)
 		ids = append(ids, s.ID)
+		cursors = append(cursors, l.cursor)
 	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("gitlet: list repositories: %w", err)
-	}
-	_ = rows.Close()
-	if err := protectionsOf(ctx, tx, ids, out.Repos); err != nil {
+	if err = protectionsOf(ctx, tx, ids, out.Repos); err != nil {
 		return err
 	}
-	// ITS FACTS WHERE ASKED, read before the page is cut so it is measured with them.
+	// ITS FACTS WHERE ASKED, read before the page is cut so it is measured with them, and
+	// on a first page of a listing narrowed by its kind and statuses alone, its whole.
 	if q.RepoFacts {
-		listed := make([]*RepoSummary, len(out.Repos))
+		facts := make([]*RepoSummary, len(out.Repos))
 		for i := range out.Repos {
-			listed[i] = &out.Repos[i]
+			facts[i] = &out.Repos[i]
 		}
-		if err := withFacts(ctx, tx, listed); err != nil {
+		if err = withFacts(ctx, tx, facts); err != nil {
 			return err
+		}
+		if q.Cursor == "" && q.Prefix == "" && !q.Protected {
+			if out.ReposTotal, err = r.reposTotal(ctx, tx, q, chart, statuses, list); err != nil {
+				return err
+			}
 		}
 	}
 	// ITS PUSHES ON THE ASKER'S DAYS where DayBounds asks, before the cut so the page is measured with them.
@@ -2757,19 +2730,25 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	// whole page and are most of a row's bytes when a repository has many:
 	// counted before them, a page of 500 repositories at 64 long rules each
 	// was ten megabytes past a budget it believed it kept. The page is cut at
-	// the row that fills it, and the cursor is that row's name; a page cut at
-	// no kept row is full when the statement filled its limit, and its cursor
-	// the last row scanned.
+	// the row that fills it, and the cursor is that row's; a page cut at no
+	// kept row is full when the statement filled its limit, and its cursor the
+	// last row scanned. EACH ROW'S CARD is read as the page fills, the push
+	// rows it walks charged to the page, so a row past the cut reads none.
 	pg := page{maxRows: limit, maxB: r.pageBytes}
-	for i, s := range out.Repos {
-		if pg.add(s.encodedBytes()) {
-			out.Next = s.Name
+	for i := range out.Repos {
+		if q.RepoFacts {
+			if err = r.carded(ctx, tx, &out.Repos[i], &pg); err != nil {
+				return err
+			}
+		}
+		if pg.add(out.Repos[i].encodedBytes()) {
+			out.Next = cursors[i]
 			out.Repos = out.Repos[:i+1]
 			return nil
 		}
 	}
-	if scanned == limit {
-		out.Next = lastScanned
+	if len(listed) == limit {
+		out.Next = listed[len(listed)-1].cursor
 	}
 	return nil
 }
@@ -2878,6 +2857,9 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	// AND ITS FACTS ONLY TO A READ THAT ASKS ([ReadQuery.RepoFacts]).
 	if q.RepoFacts {
 		if err = withFacts(ctx, tx, []*RepoSummary{&out.Repo.RepoSummary}); err != nil {
+			return err
+		}
+		if err = r.carded(ctx, tx, &out.Repo.RepoSummary, nil); err != nil {
 			return err
 		}
 	}

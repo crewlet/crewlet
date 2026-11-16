@@ -23,6 +23,11 @@ type Result struct {
 	// Output is fed back to the model as the tool message's content.
 	Output string
 
+	// Images are pictures a first-party tool hands the model beside Output,
+	// whose text says whose picture each is ([CheckImages]). A record keeps
+	// their [ImageRecords], never their bytes.
+	Images []Image
+
 	// Failed marks a tool that reported failure. The output still goes back —
 	// that is the point — but a reader can tell a tool that ran from one that
 	// refused.

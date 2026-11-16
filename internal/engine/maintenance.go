@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/a2a"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -220,6 +221,10 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// at every sweep as the tracker's is, a seat's at the
 			// turn-detail horizon (gitlet.NoticeJobs).
 			jobs = append(jobs, gitlet.NoticeJobs(e.backends.Store.Replicated(), e.inboxRetention)...)
+			// AND THE ARTIFACTS LOG'S, for the same reason: its applier writes
+			// a person's notice per comment record into a DIVERGENT table,
+			// swept per node at the company's inbox horizon.
+			jobs = append(jobs, artifactsdomain.NoticeJobs(e.backends.Store.Replicated(), e.inboxRetention)...)
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its absence
 			// is a consequence rather than an omission. Its three passes
 			// were a change retention, a revision prune and an orphan

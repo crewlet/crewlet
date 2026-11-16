@@ -5884,10 +5884,67 @@ export interface CodeInboxNotice {
   snoozed_until?: string;
 }
 
+/** Why a comment on an artifact reached a person: owner, assignee of its work item, mentioned, or
+ *  already in the thread. The first three are primary by default; `participant` is context. */
+export type ArtifactInboxReason = "owner" | "assignee" | "mention" | "participant";
+
+/** What the record behind an artifact notice did to its comment thread. */
+export type ArtifactCommentOp =
+  "comment_open" | "comment_reply" | "comment_resolve" | "comment_reopen";
+
+/** A comment thread as it stands, read with the page where the read asked for
+ *  `cards` (`artifactsdomain.NoticeThread`): a card's alone. */
+export interface ArtifactNoticeThread {
+  status: "open" | "resolved";
+  /** The version the thread was made on. */
+  version: number;
+  /** The text the commenter selected, where they selected any. */
+  quote?: string;
+  /** The remarks the thread still holds. */
+  remarks: number;
+  resolved_by?: string;
+  resolved_version?: number;
+}
+
+/** One notice about a comment on an artifact (`artifactsdomain.InboxNotice`).
+ *  Commenting is a relation to the artifact, so no app holds it. */
+export interface ArtifactInboxNotice {
+  /** The record on the artifacts log, and what a mark names. */
+  record_id: string;
+  log_seq: number;
+  log_stream: string;
+  log_generation: number;
+  at: string;
+  reason: ArtifactInboxReason;
+  primary: boolean;
+  addressed: boolean;
+  op: ArtifactCommentOp;
+  /** The artifact's id. */
+  artifact: string;
+  /** The thread's id. */
+  thread: string;
+  /** The remark the record made, for an open or a reply. */
+  remark?: string;
+  /** Its first 600 bytes; absent for a resolve or a reopen, and once removed. */
+  excerpt?: string;
+  actor: string;
+  actor_kind: string;
+  /** The artifact's title and kind as they stand, read with the page; absent
+   *  where the page's heads hold none. */
+  title?: string;
+  artifact_kind?: string;
+  thread_state?: ArtifactNoticeThread;
+  read: boolean;
+  snoozed?: boolean;
+  snoozed_until?: string;
+}
+
 /** One notice of a person's COMPOSED inbox (`inbox.Notice`): what every source
  *  says alike, and the source's own notice whole in `extra`. */
 export type InboxNotice =
-  InboxNoticeOf<"tracker", WorkInboxNotice> | InboxNoticeOf<"code", CodeInboxNotice>;
+  | InboxNoticeOf<"tracker", WorkInboxNotice>
+  | InboxNoticeOf<"code", CodeInboxNotice>
+  | InboxNoticeOf<"artifacts", ArtifactInboxNotice>;
 
 export interface InboxNoticeOf<S extends string, E> {
   source: S;
@@ -5912,7 +5969,8 @@ export interface InboxNoticeOf<S extends string, E> {
 
 /** One source a composed inbox read, and what it said of the person's marks. */
 export interface InboxSourceState {
-  name: "tracker" | "code";
+  /** Worklet's, Gitlet's, or the artifacts', each counted on its own log. */
+  name: "tracker" | "code" | "artifacts";
   seen_through?: InboxPosition;
   primary_reasons: string[];
   /** The newest notice of this source the page carries. */
@@ -7268,6 +7326,87 @@ export interface ArtifactSeenByAnswer {
   reads: { seat: string; opened_at: string }[];
 }
 
+/** What a comment thread points at (`commentanchor.Kind`). */
+export type ArtifactCommentAnchorKind = "version" | "html" | "slides" | "design";
+
+/** Where a thread points (`commentanchor.Anchor`): keyed by `kind`, each with its own fields. */
+export interface ArtifactCommentAnchor {
+  kind: ArtifactCommentAnchorKind;
+  /** html: the page's path in the version. */
+  page?: string;
+  /** html: a name the page declares. */
+  name?: string;
+  /** html: a point as fractions (0..1) of the page document, where no name is. */
+  point?: { x: number; y: number };
+  /** slides: the slide's id, the element's path of child indexes ("0/2/1"), its tag and first 200 characters. */
+  slide?: string;
+  path?: string;
+  tag?: string;
+  text?: string;
+  /** design: the artboard's file, and a point in its own pixels (0 is left out on the wire). */
+  board?: string;
+  x?: number;
+  y?: number;
+}
+
+/** Where a thread is on the version asked: as made, moved, gone (outdated), or made later. */
+export type ArtifactCommentPlacement = "here" | "moved" | "outdated" | "later";
+
+/** One remark of a thread. A removed remark keeps its place and author; its words are gone. */
+export interface ArtifactCommentRemark {
+  id: string;
+  author: string;
+  author_kind: string;
+  /** Markdown, as its author wrote it. */
+  body: string;
+  mentions?: string[];
+  reply_to?: string;
+  created_at: string;
+  edited_at?: string;
+  removed?: boolean;
+}
+
+/** One thread, placed on the version asked. */
+export interface ArtifactCommentThread {
+  id: string;
+  /** The version it was made on. */
+  version: number;
+  anchor: ArtifactCommentAnchor;
+  /** Where it points, in words, as the engine says it to people and agents alike. */
+  label: string;
+  placement: ArtifactCommentPlacement;
+  /** The anchor as found on the version asked; absent when outdated. */
+  place?: ArtifactCommentAnchor;
+  /** The anchored part's words as the commenter saw them. */
+  quote?: string;
+  /** A picture of the part as the commenter saw it, as a data URL. */
+  crop?: string;
+  status: "open" | "resolved";
+  resolved_by?: string;
+  resolved_by_kind?: string;
+  resolved_at?: string;
+  /** The version that addressed it. */
+  resolved_version?: number;
+  created_by: string;
+  created_by_kind: string;
+  created_at: string;
+  updated_at: string;
+  remarks: ArtifactCommentRemark[];
+}
+
+/** `artifact_comments{id, version}`: every thread, placed on the version asked. `open` counts open
+ *  threads still placed, `outdated` open ones whose part is gone, `resolved` every resolved one. */
+export interface ArtifactCommentsAnswer {
+  artifact: string;
+  version: number;
+  head: number;
+  counts: { open: number; resolved: number; outdated: number };
+  /** The reader may comment: commenter or above, on a live artifact. */
+  can_comment: boolean;
+  role: ArtifactRole;
+  threads: ArtifactCommentThread[];
+}
+
 /** One share and the seats a unit share reaches today (`artifactsapi.ShareAccess`). */
 export interface ArtifactShareAccess extends ArtifactShare {
   members?: string[];
@@ -8034,15 +8173,25 @@ export interface ArtifactJoined {
   resync: boolean;
 }
 
+/** What an `artifact_changed` push says moved (`artifactsdomain.MoveKinds`). `folder` is a refiling
+ *  (a folder's removal pushes nothing per artifact); `comment` is any write on a thread. */
+export type ArtifactChangedWhat =
+  | "version"
+  | "meta"
+  | "share"
+  | "asset"
+  | "trash"
+  | "restore"
+  | "purge"
+  | "transfer"
+  | "folder"
+  | "comment"
+  | "reset";
+
 /** An `artifact_changed` push (`stream.ArtifactChange`): a hint, never content. */
 export interface ArtifactChangedPush {
   artifact: string;
-  /**
-   * `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`,
-   * `transfer`, `reset` or `folder` (it was filed in another folder; a
-   * folder's removal moves its artifacts up and pushes nothing per artifact).
-   */
-  what: string;
+  what: ArtifactChangedWhat;
   head?: number;
   position: LogPosition;
 }
@@ -8234,6 +8383,7 @@ export interface QueryMap {
   artifact_assets: ArtifactAssetsAnswer;
   artifact_seen_by: ArtifactSeenByAnswer;
   artifact_access: ArtifactAccessAnswer;
+  artifact_comments: ArtifactCommentsAnswer;
   artifact_usage: ArtifactUsageAnswer;
   artifact_trail: ArtifactTrailAnswer;
   artifact_data: DataDocPage;
@@ -8356,6 +8506,8 @@ export interface CodeRepoSummary {
   spark?: number[];
   /** Its changes by state, where `repo_facts=true` asks (`gitlet.RepoSummary.ChangeCounts`). */
   change_counts?: CodeChangeCounts;
+  /** Its card, where `repo_facts=true` asks (`gitlet.RepoSummary.Card`); absent is not answered. */
+  card?: CodeRepoCard;
 }
 
 /** Changes by state (`gitlet.ChangeCounts`); `live` is the draft and the open together. */
@@ -8365,6 +8517,44 @@ export interface CodeChangeCounts {
   open: number;
   closed: number;
   merged: number;
+}
+
+/** What a listing's row draws of a repository (`gitlet.RepoCard`); each part absent where unknown or none. */
+export interface CodeRepoCard {
+  push_mirrored?: boolean;
+  last_push?: CodeLastPush;
+  tip_checks?: CodeCheckRollup;
+}
+
+/** Its newest push that was no expiry (`gitlet.LastPush`), with what became of its commands. */
+export interface CodeLastPush extends CodeRefMover {
+  at: string;
+  outcome: CodePushCounts;
+}
+
+/** Repositories by status (`gitlet.RepoCounts`); `live` is the importing, active and archived together. */
+export interface CodeRepoCounts {
+  live: number;
+  importing: number;
+  active: number;
+  archived: number;
+  deleted: number;
+  purging: number;
+}
+
+/** Repositories by kind, each by status (`gitlet.RepoKindCounts`). */
+export interface CodeRepoKindCounts {
+  project: CodeRepoCounts;
+  scratch: CodeRepoCounts;
+}
+
+/**
+ * A listing's whole, all its pages (`gitlet.ReposTotal`); `live_bytes` absent where the company
+ * holds more than 10 000 repositories of its kinds and statuses, whatever the caller reads.
+ */
+export interface CodeReposTotal {
+  repos: number;
+  live_bytes?: number;
 }
 
 /** One ref update a push asked for, and what became of it (`gitlet.Command`). */
@@ -8458,10 +8648,12 @@ interface CodePage {
   level: ReadLevel;
 }
 
-/** `code_repos`: the repositories the asker may read, by name. */
+/** `code_repos`: the repositories the asker may read, by name or by last push. */
 export interface CodeReposAnswer extends CodePage {
   /** Absent on a page that holds none, which may still carry a `next`. */
   repos?: CodeRepoSummary[];
+  /** The whole listing, on a first page `repo_facts=true` asks. */
+  repos_total?: CodeReposTotal;
 }
 
 /** `code_pushes`: one repository's pushes, newest first in log order. */
@@ -8697,6 +8889,8 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   conversation?: CodeConversationRow;
   /** Absent for a change its home has merged no revision of yet. */
   mergeability?: CodeMergeabilityRow;
+  /** Who takes part in its conversation, by handle (`gitlet.ParticipantList`); absent where not answered. */
+  participants?: CodeParticipantList;
 }
 
 /** A revision's facts, as its home Gitlet node recorded them (`gitlet.RevisionFactsRow`). */
@@ -8750,6 +8944,8 @@ export interface CodeReviewerRow {
   requested_by_kind: CodePartyKind;
   note?: string;
   position: LogPosition;
+  /** When the record at `position` landed; absent past the notices' horizon or for a record that told nobody. */
+  at?: string;
 }
 
 /** A verdict a review gives (`gitlet.Verdicts`). */
@@ -8831,6 +9027,8 @@ export interface CodeFindingRow {
   resolved_by_kind?: CodePartyKind;
   resolved_commit?: string;
   position: LogPosition;
+  /** When the review that raised it landed. */
+  raised_at?: string;
 }
 
 /**
@@ -8881,8 +9079,10 @@ export interface CodeDiffAnswer {
  * own page beside the change — its reviewers, comments, reviews or findings,
  * or the asker's own standing findings (`standing`, in `findings`);
  * `files` and `diff` a revision's files or one file's patch (`diff`), read by
- * object id on its home Gitlet node; and `findings` placed in the revision asked
- * about (`placed`, by the finding's id).
+ * object id on its home Gitlet node; `findings` placed in the revision asked
+ * about (`placed`, by the finding's id); `finding_paths`, its findings counted
+ * by path, state and revision; and `excerpts`, the lines around each finding of
+ * a findings page as its own revision's diff marks them.
  */
 export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
@@ -8891,12 +9091,61 @@ export interface CodeChangeAnswer extends CodePage {
   comments?: CodeCommentRow[];
   reviews?: CodeReviewRow[];
   findings?: CodeFindingRow[];
+  /** The `finding_paths` part: its findings counted by path, state and revision. */
+  finding_paths?: CodeFindingPathRow[];
   /** The `files` and `diff` parts: the revision read at, and the one read since. */
   revision?: number;
   since_revision?: number;
   diff?: CodeDiffAnswer;
   /** The `findings` part's placing of each finding, by its id. */
   placed?: Record<string, CodeFindingPlace>;
+  /** The `excerpts` part: each finding's excerpt by its id, and the context applied. */
+  excerpts?: Record<string, CodeExcerpt>;
+  context?: number;
+}
+
+/** One line of a finding's excerpt (`gitlet.ExcerptLine`). */
+export interface CodeExcerptLine {
+  /** " " both sides hold it, "+" the revision adds it, "-" it deletes it. */
+  mark: " " | "+" | "-" | (string & {});
+  old?: number;
+  new?: number;
+  text?: string;
+  /** Its size where its text was too long to show. */
+  text_bytes?: number;
+}
+
+/** The lines around a finding's range, marked as its revision's diff marks them (`gitlet.Excerpt`). */
+export interface CodeExcerpt {
+  id: string;
+  /** A, D, M or R as the revision changes the file; absent for a file it leaves as it was. */
+  status?: string;
+  binary?: boolean;
+  lines: CodeExcerptLine[];
+  /** The window held more lines than an excerpt shows. */
+  more?: boolean;
+}
+
+/** One participant of a change's conversation (`gitlet.ParticipantRow`). */
+export interface CodeParticipantRow {
+  handle: string;
+  kind: CodePartyKind;
+  verdict?: CodeVerdict;
+  verdict_revision?: number;
+}
+
+/** A change's participants, at most 32, and how many more (`gitlet.ParticipantList`). */
+export interface CodeParticipantList {
+  rows: CodeParticipantRow[];
+  omitted?: number;
+}
+
+/** How many of a change's findings on one path stand in one state, raised on one revision. */
+export interface CodeFindingPathRow {
+  path: string;
+  state: string;
+  revision: number;
+  findings: number;
 }
 
 /** One handle a record about a change reached (`gitlet.RoutedRecipient`). */
@@ -9062,6 +9311,8 @@ export interface CodeRemoteState {
 /** `code_repo`: one repository, by its name — or by an old one a rename left redirecting. */
 export interface CodeRepoAnswer extends CodePage {
   repo?: CodeRepoDetail;
+  /** The address a person's git clones it from, on this deployment's own address. */
+  clone_url?: string;
 }
 
 /** One live ref (`gitlet.RefRow`): its whole name, the object it points at, and where its last move landed. */
@@ -9547,6 +9798,7 @@ export interface CodeCommitMarksAnswer {
 /** A counts read's parts, each absent where not asked (`gitlet.Counts`). */
 export interface CodeCounts {
   changes?: CodeChangeCounts;
+  repos?: CodeRepoKindCounts;
 }
 
 /** `code_counts`: a scope's counts, the parts it was asked. */

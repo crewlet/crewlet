@@ -19,8 +19,8 @@
  * opened: a filter bar is read every time, and these are opened rarely.
  *
  * EVERY NATIVE DOMAIN'S NOTICES, ONE LIST. The engine composes the inbox
- * (`inbox`): Worklet's notices and Gitlet's, interleaved by when
- * each happened, each source read under its own permission. A Worklet notice
+ * (`inbox`): Worklet's notices, Gitlet's and the artifacts' comments (each an `artifact` row),
+ * interleaved by when each happened, each source read under its own permission. A Worklet notice
  * is a `notice` row as it always was, its own shape in the composed notice's
  * `extra`; a code notice is a `change` row. Each domain keeps the marks over
  * its own notices on its own log, so a row is marked through its own source's
@@ -45,6 +45,11 @@ import { companyZone } from "~/lib/companyDay.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import { codeReasonPhrase, parseChangeRef, severityWord } from "~/lib/code.ts";
+import {
+  artifactCommentVerb,
+  artifactReasonPhrase,
+  artifactThreadHref,
+} from "~/lib/artifacts/inbox.ts";
 import { FINDING_SEVERITIES } from "~/contract/code.ts";
 import { changeDiffHref } from "~/routes/gitlet/paths.ts";
 import {
@@ -77,6 +82,7 @@ import type {
   AnsweredDecision,
   AnsweredDecisionsAnswer,
   AnsweredWorkAsk,
+  ArtifactInboxNotice,
   CodeChangeAnswer,
   CodeCheckRow,
   CodeInboxNotice,
@@ -101,6 +107,7 @@ export type InboxRow =
   | { kind: "condition"; key: string; at?: string; item: Attention }
   | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice }
   | { kind: "change"; key: string; at: string; notice: CodeInboxNotice }
+  | { kind: "artifact"; key: string; at: string; notice: ArtifactInboxNotice }
   /**
    * An ask put to the reader and closed in the last week, or an executor's
    * question they answered in it, from `answered_decisions`. An ask is keyed
@@ -111,12 +118,12 @@ export type InboxRow =
    */
   | { kind: "answered"; key: string; at: string; answered: AnsweredDecision };
 
-/** A row a reader marks: an update from either source. */
-export type NoticeRow = Extract<InboxRow, { kind: "notice" | "change" }>;
+/** A row a reader marks: an update from any source. */
+export type NoticeRow = Extract<InboxRow, { kind: "notice" | "change" | "artifact" }>;
 
-/** Whether a row is an update a reader marks, from either source. */
+/** Whether a row is an update a reader marks, from any source. */
 export function isNoticeRow(row: InboxRow): row is NoticeRow {
-  return row.kind === "notice" || row.kind === "change";
+  return row.kind === "notice" || row.kind === "change" || row.kind === "artifact";
 }
 
 /**
@@ -125,6 +132,11 @@ export function isNoticeRow(row: InboxRow): row is NoticeRow {
  */
 export function changeRowKey(recordId: string): string {
   return `change:${recordId}`;
+}
+
+/** An artifact notice's row key, behind its own prefix for [changeRowKey]'s reason. */
+export function artifactRowKey(recordId: string): string {
+  return `artifact:${recordId}`;
 }
 
 /** One record the Inbox shows, as the assistant's page context names it. */
@@ -172,8 +184,9 @@ export function inboxSelection(row: InboxRow | null): InboxSelection | null {
     case "notice":
       return of("task", taskId(noticeItem(row.notice)), "update");
     case "change":
-      // A CODE NOTICE NAMES NO RECORD the page context reads: its change's
-      // own page is where what was said on it lives.
+    case "artifact":
+      // A CODE OR ARTIFACT NOTICE NAMES NO RECORD the page context reads: its
+      // change's or its artifact's own page is where what was said lives.
       return null;
     case "answered":
       return "run" in row.answered
@@ -276,14 +289,19 @@ export function inboxRows(input: {
 /**
  * Notices as rows, for Updates and for the Snoozed and Earlier links, in the
  * order the engine composed them: a Worklet notice as a `notice` row, a code
- * notice as a `change` row.
+ * notice as a `change` row, a comment on an artifact as an `artifact` row.
  */
 export function noticeRows(notices: readonly InboxNotice[]): InboxRow[] {
-  return notices.map((n): InboxRow =>
-    n.source === "code"
-      ? { kind: "change", key: changeRowKey(n.record_id), at: n.at, notice: n.extra }
-      : { kind: "notice", key: n.record_id, at: n.at, notice: n.extra },
-  );
+  return notices.map((n): InboxRow => {
+    switch (n.source) {
+      case "code":
+        return { kind: "change", key: changeRowKey(n.record_id), at: n.at, notice: n.extra };
+      case "artifacts":
+        return { kind: "artifact", key: artifactRowKey(n.record_id), at: n.at, notice: n.extra };
+      case "tracker":
+        return { kind: "notice", key: n.record_id, at: n.at, notice: n.extra };
+    }
+  });
 }
 
 /**
@@ -320,18 +338,16 @@ export function nextAfter(
 }
 
 /** Where "Mark all read" reads each source through, where it has anything unread. */
-export interface ReadThrough {
-  tracker: string | null;
-  code: string | null;
-}
+export type ReadThrough = Record<InboxNotice["source"], string | null>;
 
 /**
  * Where "Mark all read" reads through: for EACH SOURCE, the newest position
  * among its notices LOADED, as `<stream>@<generation>:<sequence>`.
  *
  * ONE POSITION PER SOURCE, because each domain counts its own log: a
- * position on Worklet's log says nothing about the code log's, so the
- * gesture is two writes, each through its own source's newest notice.
+ * position on Worklet's log says nothing about the code log's or the
+ * artifacts', so the gesture is a write a source, each through its own
+ * source's newest notice.
  *
  * THE NEWEST LOADED, never "everything": a notice that arrived after this
  * page was drawn is one the person has not seen, and reading through it on
@@ -339,7 +355,11 @@ export interface ReadThrough {
  * loaded unread, since its gesture would change nothing.
  */
 export function readThrough(notices: readonly InboxNotice[]): ReadThrough {
-  const newest: Record<"tracker" | "code", InboxNotice | null> = { tracker: null, code: null };
+  const newest: Record<InboxNotice["source"], InboxNotice | null> = {
+    tracker: null,
+    code: null,
+    artifacts: null,
+  };
   for (const n of notices) {
     if (n.read) continue;
     const held = newest[n.source];
@@ -353,13 +373,18 @@ export function readThrough(notices: readonly InboxNotice[]): ReadThrough {
     }
   }
   const spelled = (n: InboxNotice | null) => (n ? spelledPosition(n.position) : null);
-  return { tracker: spelled(newest.tracker), code: spelled(newest.code) };
+  return {
+    tracker: spelled(newest.tracker),
+    code: spelled(newest.code),
+    artifacts: spelled(newest.artifacts),
+  };
 }
 
 /**
  * A notice's position as a write's argument spells one,
  * `<stream>@<generation>:<sequence>` — what `read_through` reads through and
- * a mark's `seen` waits for (`mark_inbox`, `code_mark_inbox`).
+ * a mark's `seen` waits for (`mark_inbox`, `code_mark_inbox`,
+ * `artifact_mark_inbox`).
  */
 export function spelledPosition(p: InboxPosition): string {
   return `${p.stream}@${p.generation ?? 0}:${p.seq}`;
@@ -474,6 +499,12 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
       // A CODE NOTICE NAMES NOBODY: Gitlet keeps who it reached and
       // why, and the change's own page says who said what.
       return null;
+    case "artifact": {
+      // AN ARTIFACT'S COMMENT NAMES ITS AUTHOR, drawn as a Worklet notice's is.
+      const n = row.notice;
+      if (n.actor_kind === "system") return null;
+      return whoOf(index, n.actor, n.actor_kind);
+    }
   }
   return null;
 }
@@ -529,6 +560,9 @@ export function rowItem(row: InboxRow): ItemRef | null {
       // THE WORK ITEM THE CHANGE IMPLEMENTS is the row's task, as a turn's is
       // a run's: the intent the change serves, one click from the card.
       return changeItem(row.notice);
+    case "artifact":
+      // ABOUT AN ARTIFACT, NEVER A TASK: its card opens the thread instead.
+      return null;
   }
   return null;
 }
@@ -562,6 +596,8 @@ export function rowKey(row: InboxRow): string {
       return row.notice.subject_key ?? "";
     case "change":
       return row.notice.change?.work_item?.key ?? "";
+    case "artifact":
+      return "";
   }
   return "";
 }
@@ -575,6 +611,60 @@ export function changeWords(notice: CodeInboxNotice): { text: string; excerpt?: 
   const text = notice.change?.title || notice.change_ref;
   const said = plainText(notice.excerpt ?? "");
   return said ? { text, excerpt: said } : { text };
+}
+
+/** What an artifact notice says: the deed after its author's name ("commented on Q3 plan"), the
+ *  same as a heading ("Commented"), and the remark flattened to words, never read as markup. */
+export function artifactWords(notice: ArtifactInboxNotice): {
+  did: string;
+  heading: string;
+  excerpt?: string;
+} {
+  const verb = artifactCommentVerb(notice.op);
+  const words = {
+    did: `${verb} on ${notice.title || "an artifact"}`,
+    heading: capital(verb),
+  };
+  const said = plainText(notice.excerpt ?? "");
+  return said ? { ...words, excerpt: said } : words;
+}
+
+/** An artifact notice's card: why it reached the reader, the thread's text and status where the
+ *  read carried it (`thread_state`, a card's alone), and the address that opens it. */
+export interface ArtifactCard {
+  /** Why it reached the reader, in their own voice ("On your artifact"). */
+  why: string;
+  /** The thread as it stands, or null where the read carried none. */
+  thread: {
+    /** The text the commenter selected, or "" for a comment on the whole. */
+    quote: string;
+    resolved: boolean;
+    /** "Open", or "Resolved by Maya Ops". */
+    status: string;
+    /** "3 remarks · started on version 2". */
+    facts: string;
+  } | null;
+  /** The artifact's page, its comments open on this thread. */
+  href: string;
+}
+
+/** An artifact notice as its card draws it ([ArtifactCard]). */
+export function artifactCard(notice: ArtifactInboxNotice, index: OrgIndex): ArtifactCard {
+  const t = notice.thread_state;
+  const resolved = t?.status === "resolved";
+  const by = t?.resolved_by ? (whoOf(index, t.resolved_by)?.name ?? t.resolved_by) : "";
+  return {
+    why: artifactReasonPhrase(notice.reason),
+    thread: t
+      ? {
+          quote: t.quote ?? "",
+          resolved,
+          status: resolved ? (by ? `Resolved by ${by}` : "Resolved") : "Open",
+          facts: `${plural(t.remarks, "remark")} · started on version ${t.version}`,
+        }
+      : null,
+    href: artifactThreadHref(notice.artifact, notice.thread),
+  };
 }
 
 /** How many open agent findings stand on a change at one weight. */

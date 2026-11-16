@@ -67,7 +67,8 @@ type found struct {
 	// placed is, for a re-anchoring, the object at each anchor's path in the
 	// commit its side names, in the query's order — absent where the path
 	// names nothing there, which places the anchor nowhere (gone) rather than
-	// refusing the read.
+	// refusing the read. For an excerpts read it is each anchor's other side
+	// (excerptOthersAt), absent where there is none.
 	placed []object
 }
 
@@ -118,6 +119,14 @@ func revsOf(q gitlet.GitQuery) []string {
 				revs = append(revs, a.BlobOID)
 			}
 		}
+	case gitlet.GitExcerpts:
+		for _, a := range q.Excerpts.Anchors {
+			for _, id := range []string{a.Head, a.Base, a.BlobOID} {
+				if id != "" && !slices.Contains(revs, id) {
+					revs = append(revs, id)
+				}
+			}
+		}
 	}
 	return slices.Compact(revs)
 }
@@ -136,6 +145,27 @@ func placedAt(q *gitlet.ReanchorQuery, whole map[string]string) []string {
 		lines[i] = at + ":" + p
 	}
 	return lines
+}
+
+// excerptOthersAt is, for an excerpts read, the batch's line of each anchor's other side: the
+// object at its path in the base for a new-side anchor, in the head for an old-side one. of
+// is each anchor's line, -1 for a new-side anchor with no base.
+func excerptOthersAt(q *gitlet.ExcerptsQuery, whole map[string]string) (lines []string, of []int) {
+	of = make([]int, len(q.Anchors))
+	for i, a := range q.Anchors {
+		at := whole[a.Base]
+		if a.Side == gitlet.SideOld {
+			at = whole[a.Head]
+		}
+		of[i] = -1
+		if a.Base == "" {
+			continue
+		}
+		p, _ := gitlet.GitPath("path", a.Path, a.PathB64, false)
+		of[i] = len(lines)
+		lines = append(lines, at+":"+p)
+	}
+	return lines, of
 }
 
 // pathOf is the path a tree, a file, a blame or a directory's last commits'
@@ -219,8 +249,14 @@ func (r *read) find(ctx context.Context) (objs found, absent string, err error) 
 		}
 	}
 	placedLine := len(in)
-	if r.q.Kind == gitlet.GitReanchor {
+	var others []int
+	switch r.q.Kind {
+	case gitlet.GitReanchor:
 		in = append(in, placedAt(r.q.Reanchor, whole)...)
+	case gitlet.GitExcerpts:
+		var lines []string
+		lines, others = excerptOthersAt(r.q.Excerpts, whole)
+		in = append(in, lines...)
 	}
 	got, err := r.check(ctx, in)
 	if err != nil {
@@ -241,8 +277,16 @@ func (r *read) find(ctx context.Context) (objs found, absent string, err error) 
 	if pathLine >= 0 {
 		objs.target = got[pathLine]
 	}
-	if r.q.Kind == gitlet.GitReanchor {
+	switch r.q.Kind {
+	case gitlet.GitReanchor:
 		objs.placed = got[placedLine:]
+	case gitlet.GitExcerpts:
+		objs.placed = make([]object, len(others))
+		for i, at := range others {
+			if at >= 0 {
+				objs.placed[i] = got[placedLine+at]
+			}
+		}
 	}
 	return objs, "", nil
 }

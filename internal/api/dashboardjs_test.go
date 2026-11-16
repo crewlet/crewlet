@@ -1475,7 +1475,8 @@ const (
 	// Doclet's newest change read as the page reads, on kit 0.141.1, whose one sheet adds its new parts: 420.3 KiB: 421 KiB, 2.30 seconds.
 	// The Settings polish, on kit 0.143.0: 420.2 KiB, the kit's shared chunk most of it: 421 KiB, 2.30 seconds.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0: 422.2 KiB: 423 KiB, 2.31 seconds.
-	initialBudget = 423 << 10
+	// Gitlet's commits as a timeline on one list, on kit 0.144.0: 423.1 KiB: 424 KiB, 2.32 seconds.
+	initialBudget = 424 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2667,7 +2668,16 @@ const (
 	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0:
 	// 6521.2 KiB (6,677,673 bytes), 149,862 over main: 6522 KiB.
-	treeBudget = 5<<20 + 1402<<10
+	// Anchored comments on kit 0.139.0: 6523.1 KiB (6,679,624 bytes); its vendor marks are 130.8 KiB: 6524 KiB.
+	// The artifacts' half of a person's inbox: 6525.6 KiB (6,682,224 bytes): 6526 KiB.
+	// Gitlet's code coloured by kind in its file view and blame, on kit 0.137.0:
+	// 6410.9 KiB (6,564,755 bytes), 36,917 bytes over main: 6411 KiB.
+	// The artifact comments, their inbox, Gitlet syntax and harness marks train, on kit 0.144.0:
+	// 6595.4 KiB (6,753,705 bytes), 76,032 over main: 6596 KiB.
+	// Gitlet's diffs and search hits coloured by kind: 6598.0 KiB (6,756,345 bytes), 2,640 over main: 6598 KiB.
+	// Gitlet's commits as a timeline on one list, Gitlet split into three chunks:
+	// 6615.3 KiB (6,774,070 bytes), 17,725 over main: 6616 KiB.
+	treeBudget = 5<<20 + 1496<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
@@ -2773,6 +2783,34 @@ func TestTheDashboardFitsItsBudget(t *testing.T) {
 	if tree > treeBudget {
 		t.Errorf("static/dashboard is %s, over its %s: every engine binary and image carries "+
 			"it, opened or not", kib(tree), kib(treeBudget))
+	}
+}
+
+// TestGitletIsThreeChunks holds Gitlet to three lazy chunks, by address (app/lazyScreen.ts): its
+// section pages, a repository's and a change's, each named by Rolldown after its index.ts's
+// directory. One that folded back would grow the first click into Gitlet.
+func TestGitletIsThreeChunks(t *testing.T) {
+	t.Parallel()
+	c := embeddedDashboard.crawl
+	initial := initialLoad(c)
+	named := regexp.MustCompile(`^/static/dashboard/assets/(gitlet|repo|change)-[A-Za-z0-9_-]{8}\.js$`)
+	found := map[string][]string{}
+	for _, f := range c.files {
+		m := named.FindStringSubmatch(f.url)
+		if m == nil {
+			continue
+		}
+		found[m[1]] = append(found[m[1]], f.url)
+		if initial[f.url] {
+			t.Errorf("%s is in the initial load; Gitlet's chunks are fetched by its screens", f.url)
+		}
+		t.Logf("%s: %s gzipped", f.url, kib(servedSize(t, embeddedDashboard.app, f.url)))
+	}
+	for _, chunk := range []string{"gitlet", "repo", "change"} {
+		if len(found[chunk]) != 1 {
+			t.Errorf("the crawl reached %d %s-*.js chunks, want exactly one: %v",
+				len(found[chunk]), chunk, found[chunk])
+		}
 	}
 }
 

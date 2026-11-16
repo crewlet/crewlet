@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api/artifactsapi"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/gitlet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -128,8 +131,8 @@ func reasonNames() []string {
 }
 
 // composedInbox answers `inbox`: one page of a person's notices from EVERY
-// native domain that told them something — the tracker's and Gitlet's
-// — interleaved by when each happened ([inbox.Compose]).
+// native domain that told them something — the tracker's, Gitlet's and the
+// artifacts' comments — interleaved by when each happened ([inbox.Compose]).
 //
 // # Open to every signed-in person, each source under its own permission
 //
@@ -142,7 +145,8 @@ func reasonNames() []string {
 // runs Worklet and the caller holds the worklet permission on that record
 // ([authz.ActionInboxRead], `work_inbox`'s own rule); Gitlet's where the
 // company hosts code and the caller holds the gitlet permission (ADR-0110),
-// each notice held by Gitlet to the caller's grant on its repository. A
+// each notice held by Gitlet to the caller's grant on its repository; the
+// artifacts' under no app, each held to the caller's access to its artifact. A
 // source the caller may not read is not asked, and the answer's `sources`
 // says which were.
 //
@@ -184,7 +188,7 @@ func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = fresh.OnlyOn(topics.TrackerLogStream, topics.CodeLogStream); err != nil {
+	if err = fresh.OnlyOn(topics.TrackerLogStream, topics.CodeLogStream, topics.ArtifactsLogStream); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	var sources []inbox.Source
@@ -228,10 +232,17 @@ func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 				fresh: fresh.On(topics.CodeLogStream), now: s.clock()})
 		}
 	}
+	if s.Artifacts != nil && s.Artifacts.Reads != nil {
+		gate := s.Artifacts.Gate
+		gate.Now = s.clock
+		sources = append(sources, artifactsInbox{reads: s.Artifacts.Reads, gate: gate, asker: principal,
+			fresh: fresh.On(topics.ArtifactsLogStream), now: s.clock()})
+	}
 	page, err := inbox.Compose(ctx, q, sources)
 	var refused codeReadRefused
 	switch {
-	case errors.Is(err, inbox.ErrBadCursor), errors.Is(err, worklet.ErrBadQuery):
+	case errors.Is(err, inbox.ErrBadCursor), errors.Is(err, worklet.ErrBadQuery),
+		errors.Is(err, artifactsdomain.ErrBadCursor):
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	case errors.As(err, &refused):
 		return nil, codeRefusal("", refused.err)
@@ -371,6 +382,105 @@ func (c codeInbox) Cards(ctx context.Context, page inbox.SourcePage, notices []i
 		if card, found := answer.NoticeCards[said.ChangeID]; found && card != nil {
 			said.Change = card
 			n.Subject.Title = card.Title
+			n.Extra = said
+		}
+		out[i] = n
+	}
+	return out, nil
+}
+
+// artifactsInbox is the artifacts' half of a composed inbox: a page of the
+// person's comment notices, each held to the caller's access to its artifact
+// in the page's snapshot, so nothing of an artifact they cannot read shows.
+type artifactsInbox struct {
+	reads ArtifactsReader
+	gate  artifactsapi.Gate
+	asker iam.Principal
+	fresh statelog.Freshness
+	now   time.Time
+}
+
+func (artifactsInbox) Name() string { return artifactsdomain.Domain{}.Name() }
+
+func (a artifactsInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
+	got, err := a.reads.Inbox(ctx, artifactsdomain.InboxQuery{Handle: q.Handle, Unread: q.Unread,
+		PrimaryOnly: q.PrimaryOnly, Snoozed: q.Snoozed, Limit: q.Limit, Cursor: q.Cursor, Now: a.now,
+		Fresh: a.fresh})
+	if err != nil {
+		return inbox.SourcePage{}, err
+	}
+	// A PAGE MAY LEAVE NOTICES OUT, and resumes below them at its own cursor
+	// (internal/inbox's head): one decision an artifact the page names.
+	shown := map[string]bool{}
+	for id, head := range got.Heads {
+		kept, err := a.gate.Visible(ctx, a.asker, []artifactsdomain.ListItem{{Head: head}})
+		if err != nil {
+			return inbox.SourcePage{}, fmt.Errorf("%w: decide who reads the artifacts an inbox page names: %w",
+				ErrUnavailable, err)
+		}
+		shown[id] = len(kept) == 1
+	}
+	page := inbox.SourcePage{Next: got.Next, SeenThrough: got.SeenThrough, PrimaryReasons: []string{},
+		Notices: make([]inbox.Notice, 0, len(got.Notices)), Level: got.Level, Complete: got.Complete,
+		At: got.Position}
+	for _, r := range got.PrimaryReasons {
+		page.PrimaryReasons = append(page.PrimaryReasons, string(r))
+	}
+	for _, n := range got.Notices {
+		if !shown[n.Artifact] {
+			continue
+		}
+		page.Notices = append(page.Notices, inbox.Notice{RecordID: n.RecordID,
+			Position: inbox.Position{Stream: n.LogStream, Generation: n.LogGeneration, Seq: n.LogSeq},
+			At:       n.At, Reason: string(n.Reason), Primary: n.Primary, Addressed: n.Addressed,
+			Kind: string(artifactsdomain.KindComment), Subject: inbox.Subject{ID: n.Artifact, Title: n.Title},
+			Excerpt: n.Excerpt, Actor: n.Actor, ActorKind: string(n.ActorKind), Read: n.Read, Snoozed: n.Snoozed,
+			SnoozedUntil: n.SnoozedUntil, Extra: n})
+	}
+	return page, nil
+}
+
+// Cards is each kept notice with its thread as it stands: ONE read of the
+// page's threads, floored at the position the page was read at. A thread no
+// row holds any more keeps what its notice carried.
+func (a artifactsInbox) Cards(ctx context.Context, page inbox.SourcePage, notices []inbox.Notice) ([]inbox.Notice,
+	error) {
+
+	saids := make([]artifactsdomain.InboxNotice, len(notices))
+	var refs []artifactsdomain.ThreadRef
+	for i, n := range notices {
+		said, ok := n.Extra.(artifactsdomain.InboxNotice)
+		if !ok {
+			return nil, fmt.Errorf("queries: an artifacts notice carries %T, not the artifacts' notice", n.Extra)
+		}
+		saids[i] = said
+		ref := artifactsdomain.ThreadRef{Artifact: said.Artifact, Thread: said.Thread}
+		if !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	if len(refs) == 0 {
+		return notices, nil
+	}
+	fresh := a.fresh
+	if !page.At.IsZero() {
+		fresh.Floors = []statelog.Position{page.At}
+	}
+	threads, err := a.reads.NoticeThreads(ctx, refs, fresh)
+	if err != nil {
+		return nil, err
+	}
+	byRef := make(map[artifactsdomain.ThreadRef]*artifactsdomain.NoticeThread, len(refs))
+	for i, ref := range refs {
+		if i < len(threads) {
+			byRef[ref] = threads[i]
+		}
+	}
+	out := make([]inbox.Notice, len(notices))
+	for i, n := range notices {
+		said := saids[i]
+		if t := byRef[artifactsdomain.ThreadRef{Artifact: said.Artifact, Thread: said.Thread}]; t != nil {
+			said.ThreadState = t
 			n.Extra = said
 		}
 		out[i] = n

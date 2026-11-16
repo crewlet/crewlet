@@ -25,6 +25,11 @@
 // subject and by nothing else, receive-pack never runs in a cache, and git is
 // told `ok` only from a push's applied row (ADR-0084).
 //
+// A LISTING OF REPOSITORIES (repolisting.go, apply_repotallies.go) is read by name or by last
+// push over an index of each kind, with each row's card read where asked; code_repo_tallies
+// counts the repositories by owner, visibility, kind and status, kept by the lifecycle applies
+// and re-derived by the applier.
+//
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
 // One object a push — one PUT, and one GET on every Gitlet node that installs it,
@@ -162,7 +167,9 @@
 // state (replicated 0097), a repository's, the company's in a state —
 // newest first, testing every filter that index does not seek on the rows the
 // page read, so a page is the rows it read and never scans past its limit
-// for the few it keeps. One change ([ReadChange]) is read by its number on
+// for the few it keeps. A live state asked by when its changes moved
+// ([ChangeSortUpdated]) walks its lifecycle's and its conversations' indexes
+// in step (changesort.go). One change ([ReadChange]) is read by its number on
 // its repository, its revisions paged newest first beside it. Both are held to
 // the asker's grant on the change's repository ([JudgeRead]): a listing that
 // names a repository, and a read of one change, are refused whole where the
@@ -306,6 +313,10 @@
 // A LISTING'S CARDS (changecards.go): asked with [ReadQuery.Cards], each listed change's
 // conversation counts, its reviewers' faces, its head's [CheckRollup] and a recent
 // ejection, a statement a part over the page's ids and one rollup a head.
+//
+// A CHANGE'S PAGE (changepage.go): its detail names its participants, a reviewer row when the
+// record behind it landed (one notice of that record, none past the notices' horizon), a finding
+// when its review landed, and [ReadQuery.FindingPaths] counts its findings by path.
 //
 // # A change wakes the seats its records concern
 //
@@ -950,15 +961,17 @@
 //
 // # A change's revisions are read by the ids their rows record
 //
-// Three of those reads are of a change's revisions: a revision's FACTS against
+// Four of those reads are of a change's revisions: a revision's FACTS against
 // its target ([GitRevisionFacts]) — its merge base, the trees of its base and
 // its head, the files it touches and their classes, and the patch-id of its
 // diff, the engine's own read, which its repository's home asks naming no
 // asker ([GitReadKind.EnginesOwn]) — where lines anchored in
-// one revision are in another ([GitReanchor]), and what the change changed
-// between two ([GitInterdiff]). Each names its commits by the whole ids the
-// rows record, never an abbreviation: an interdiff compares two revisions'
-// bases as ids, which an abbreviation would make two spellings of one commit.
+// one revision are in another ([GitReanchor]), what the change changed
+// between two ([GitInterdiff]), and the lines around a finding's range with
+// that revision's diff marks ([GitExcerpts]). Each names its commits by the
+// whole ids the rows record, never an abbreviation: an interdiff compares two
+// revisions' bases as ids, which an abbreviation would make two spellings of
+// one commit.
 // A revision's touched list is bounded by [MaxTouchedPaths] and by
 // [MaxTouchedBytes] of JSON, so the facts that carry it are one page; past
 // either the revision touches all. And [Reanchor] is the one rule that places

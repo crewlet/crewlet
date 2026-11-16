@@ -1144,6 +1144,42 @@ A first page can also count the branches other than the default branch that
 moved since an instant (`active_since`), the Overview's "Active branches"; it
 counts up to 1 000 and says when there were more.
 
+### Listing repositories
+
+The repositories are listed a page at a time by name, or by last push
+(`sort=pushed`): newest first, the repositories pushed at one instant by name,
+highest first, then those never pushed, by name. Only the repositories in use
+(importing, active and archived) are listed by last push. `kind=project` or
+`kind=scratch` lists one kind, each read as one range of an index of its own
+kind, so a company's scratch repositories cost its Projects tab nothing.
+Neither a kind nor the order by last push combines with a prefix or with the
+protected repositories.
+
+Asked for its facts (`repo_facts=true`), each row also says:
+
+- **Whether it is a push mirror**: its home pushes it to another host.
+- **Who pushed last**: the newest push of its history that was no expiry, with
+  what became of its commands; a command refused beside those that landed
+  counts as refused. It is known while the push history keeps that push (181
+  days) and while no more than about a hundred expiries followed it, and its
+  instant is always the repository's last push.
+- **Where its default branch's checks stand**: each check's latest attempt at
+  the branch's head for that branch, judged as the merge gate judges.
+
+A first page asked for its facts also carries the whole listing's count and
+live size, all its pages together, where it is narrowed by nothing but its
+kind and statuses. The size is left out where the company holds more than
+10 000 repositories of the listing's kinds and statuses, whatever the reader
+may read, so its walk stays bounded; the count is always exact.
+
+Gitlet also counts the repositories: `code_counts` part `repos` answers every
+repository the reader may read, by kind and by status (importing, active,
+archived, deleted, purging, and `live`, the first three together). The counts
+are kept as repositories are created, change owner, visibility or state, and
+are purged, tallied by owner and visibility as the change counts are
+([Counting changes](#counting-changes)), and recounted at the first boot of a
+build that changes how.
+
 ---
 
 ## Compaction
@@ -1819,9 +1855,10 @@ answer that holds every record the code log had committed when it was asked.
   changes are kept by state, so an owner's are listed in a state, or in a
   repository, or on a work item. A repository's changes are listed by
   number; a reviewer's by the change's id, which is minted as the change is
-  opened; a window's, where nothing else leads it, by when each change last
-  moved; every other listing — a live state's in a window among them — in
-  the order the records that opened its changes landed on the code log. Every change it lists says how many of its
+  opened; a window's, where nothing else leads it, and a live state's asked
+  for by when its changes moved (`sort=updated`), by when each change last
+  moved; every other listing, a live state's in a window among them, in the
+  order the records that opened its changes landed on the code log. Every change it lists says how many of its
   findings stand open — none of its authors has answered them — and **when it
   last moved**.
 - **When a change last moved** is the later of two instants, one a subject it
@@ -1844,7 +1881,10 @@ answer that holds every record the code log had committed when it was asked.
   live changes, where the window's hold every change that moved, the merged
   among them: in a company that merges far more changes than it keeps open,
   the open changes of a month's window walked by the window would cost a page
-  for every few that are kept.
+  for every few that are kept. Asked for by when its changes last moved
+  (`sort=updated`), a live state walks its own changes by their lifecycle's
+  last move and the conversations by when somebody last spoke, together,
+  newest first, each change once.
 - **The changes waiting on a reviewer** are a listing that names a
   `reviewer` — the changes whose ask of that reviewer still **waits** — or
   `needs=review`, the **live** ones alone, the asker's own where it names no
@@ -1927,6 +1967,24 @@ and a reader pages until no cursor comes back. A page reads 50 changes unless
 asked for fewer or more, 200 at most; a change's revisions come 200 a page,
 1 000 at most.
 
+**A live state by when its changes last moved** (`sort=updated` beside
+`state=draft` or `state=open`, and optionally a repository, an owner, a work
+item or a window) reads two indexes in step: its own changes by their
+lifecycle's last move, which hold the live changes alone, and the
+conversations by when somebody last spoke in them, which hold every change
+anybody ever discussed, the merged and closed among them, which the walk steps
+over. It reads no conversation spoken before the oldest live change a full
+page read, or before the window's start where one is named and the page read
+fewer, none once a page has read every live change left (unless a window is
+named), and at most 1 000 a page, so where many ended changes were discussed
+after the live ones last moved a page can be short, or empty with a cursor. An
+owner and a work item are tested on the changes the page read. `sort=opened`
+is the order every listing but a window's own reads in, and a window nothing
+else leads, already by last move, refuses it; `sort=updated` is refused beside
+a reviewer or what the changes wait on, whose walks keep their own order, and
+where neither a live state nor such a window is named. The instant is the one
+a row says it last moved.
+
 **Every read of changes is held to the reader's grant** on the change's
 repository, as the repository's own reads are ([Who may read and
 push](#who-may-read-and-push)):
@@ -1990,7 +2048,8 @@ A deleted repository's changes leave the company's count, and a restore
 brings them back under the owner it returns with. A count is exact at the
 position it is read at, so a `session` read after a write includes it. A
 listing of repositories and one repository's detail answer each one's counts
-where `repo_facts=true` asks
+and their card ([Listing repositories](#listing-repositories)) where
+`repo_facts=true` asks
 ([`GET /gitlet/counts`](../reference/api-endpoints.md#the-code-reads)).
 
 ---
@@ -2080,6 +2139,11 @@ changes](#reading-changes)).
   findings, its standing blockers and its requests for changes, and the
   version and position of its last record — the floor a read of its parts is
   asked at, so a comment just written is read back with the change.
+- **The detail names its participants**: everyone who takes part in its
+  conversation (each reviewer asked, each author of a comment, each reviewer
+  who reviewed and everyone a record mentioned), by handle, with each one's
+  standing verdict and the revision it judged; 32 at most, with how many
+  more. The change's opener and pushers are its authors.
 - **Comments come a thread at a time**: a thread's first comment and then its
   replies in the order they were said, threads in the order they started; a
   page holds 50 unless asked for fewer or more, 200 at most, and ends at the
@@ -2089,14 +2153,18 @@ changes](#reading-changes)).
   points at, and whether its thread is resolved and by whom.
 - **Reviewers come by handle**, a withdrawn ask among them, 200 a page and
   1 000 at most: who was asked, by whom, with what note, and whether the ask
-  stands.
+  stands. Each row says when the record that last moved it landed, read from
+  that record's notices on the change: known while one of them is kept (a
+  person's inbox horizon, a seat's thirty days) and unknown after, which the
+  page words "asked earlier". Two data nodes may answer differently close to
+  that horizon, since each sweeps its own notices.
 - **Reviews come in the order they were given**, 50 a page and 200 at most:
   the revision each judged, who reviewed, its verdict, its summary and how
   many findings it raised.
 - **Findings come by id** — the order the reviews that raised them were given
   — each with its text and its suggestion, its state and its last answer, 50
   a page and 200 at most, ending at the reply's byte budget first where
-  suggestions are long.
+  suggestions are long, each with when the review that raised it landed.
 - **Standing findings are the reader's own**, by id, paged as findings are:
   every finding they raised that still stands — open, resolved, won't fix or
   disputed — which is exactly what a review of theirs carries or, of a later
@@ -2104,6 +2172,11 @@ changes](#reading-changes)).
   to no seat. It is what a review dialog reads to its last page before it
   sends, where the findings part, oldest first, would have left a reviewer's
   newest standing findings past its first page.
+- **A change's findings by path** (`finding_paths`): how many of its findings
+  stand in each state on each path, by the revision they were raised on, in
+  path order, 500 a page and 1 000 at most: what a changed file's badge
+  counts. It is asked by a key of its own, never as a part, so a data node
+  that predates it refuses it and another answers.
 
 ### Asking for review
 
@@ -2260,6 +2333,16 @@ answer, and what each answer does:
   or disputing is refused `not_author` to anybody else, and dismissing
   `not_raiser`. An answer that asks for what every finding already says
   changes nothing and appends nothing.
+
+**A finding's excerpt** is the lines of the blob it points at around its
+range, three either side unless the reader asks for up to ten, marked as the
+change's Files tab marks that file: added, deleted or kept, the deleted lines
+of the old side shown between the new side's, and a file the revision renamed
+diffed against where it was. An excerpt holds at most 40 lines, so a longer
+range shows its first, and each line up to 1 KiB; a longer line is described
+by its size. A finding on a revision whose facts its home has not recorded
+has no excerpt yet. The excerpt is read on the repository's Gitlet node by
+object ids and kept there, so a page of findings read again costs no git.
 
 A write of a conversation that is refused appends nothing, and says why in one
 sentence:

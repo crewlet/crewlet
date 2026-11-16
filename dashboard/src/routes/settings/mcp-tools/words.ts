@@ -367,6 +367,10 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
     detail: "Editors of the artifact who hold Artifacts access, and its owner.",
   },
   artifact_owner: { label: "Its owner", detail: "The artifact's owner." },
+  artifact_commenter: {
+    label: "Its commenters",
+    detail: "Anyone the artifact is shared with as a commenter or above.",
+  },
   health_tools: {
     label: "Health grant",
     detail:

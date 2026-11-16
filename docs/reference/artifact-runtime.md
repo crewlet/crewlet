@@ -95,6 +95,7 @@ interface Crewlet {
   openLink(url: string): Promise<boolean>;   // always available
   print(): Promise<boolean>;                 // always available; a design's artboards print
   readonly theme: ThemeApi;                  // always available
+  readonly comments: CommentsApi;            // always available
 }
 
 type Capability = "db" | "state" | "identity" | "presence" | "assets";
@@ -430,6 +431,41 @@ interface ThemeApi {
 An artifact follows its reader's own appearance setting. The kit's `theme.js`
 applies it before first paint; `crewlet.theme` is for a page that draws its
 own charts.
+
+### Comments
+
+```ts
+interface CommentsApi {
+  anchor(name: string, element: Element): Unsubscribe;  // name: [a-z0-9][a-z0-9._-]{0,63}
+}
+```
+
+A reader comments on an artifact from the dashboard, on a part of the page or
+on the whole version ([Comments](../concepts/artifacts.md#comments)). A page
+names the parts worth commenting on as **anchors**, and a thread pinned to one
+follows it into every later version that declares the same name:
+
+```html
+<section data-crewlet-anchor="pricing">…</section>
+```
+
+The attribute is the declaration. `crewlet.comments.anchor(name, element)` is
+the same from script: it checks the name (rejecting with `invalid`), sets the
+attribute and returns a function that removes it. Declare names as literals,
+in the markup or in the call: the engine finds a version's anchors in its
+files when it places threads on it, so a name built at run time is one it
+cannot find, and its threads read as outdated on the next version. Without an
+anchor, a comment on a page is a point, as fractions of the page's width and
+height, which moves when the page reflows.
+
+The page takes no part in a comment and gains nothing from one. While the
+reader has comments on show, the runtime tells the host where each declared
+anchor is drawn (`comments.layout`); in Comment mode it reports the reader's
+click, the innermost anchor under it and that anchor's text, up to 1 KiB
+(`comments.pick`), and on the host's request it draws a picture of the region
+(`comments.crop`). None of these needs a capability. The host checks every
+value, and writes the comment itself, as the reader, from its own composer; a
+page never sees a comment's words, never writes one and cannot open one.
 
 ---
 

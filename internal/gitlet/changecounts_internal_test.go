@@ -37,11 +37,12 @@ func (e *estate) rederive() int {
 }
 
 // forgetChangeCounts leaves the counts as a node upgraded to them holds them before its
-// first re-derivation: every column zero and no tally row.
+// first re-derivation: every column zero and no change or repository tally row.
 func (e *estate) forgetChangeCounts() {
 	e.t.Helper()
 	e.exec(`UPDATE code_repos SET draft_changes = 0, open_changes = 0, closed_changes = 0, merged_changes = 0`)
 	e.exec(`DELETE FROM code_change_tallies`)
+	e.exec(`DELETE FROM code_repo_tallies`)
 }
 
 // changeCountsMatchRows fails the test where the counts are not what the rows imply.
@@ -66,8 +67,9 @@ func (e *estate) changeCountsDrift() string {
 }
 
 // changeCountsDrift names the first difference between the counts and the rows, "" for none:
-// each repository's four columns against its changes counted by state, and the tally rows
-// against the changes of the repositories in use grouped by visibility and owner, no zero row.
+// each repository's four columns against its changes counted by state, the tally rows against
+// the changes of the repositories in use grouped by visibility and owner, no zero row, and the
+// repository tallies ([repoTalliesDrift]).
 func changeCountsDrift(ctx context.Context, tx *sql.Tx) (string, error) {
 	type repo struct {
 		id     string
@@ -77,7 +79,7 @@ func changeCountsDrift(ctx context.Context, tx *sql.Tx) (string, error) {
 		counts ChangeCounts
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, status, visibility, owner_kind, owner, draft_changes,
-		open_changes, closed_changes, merged_changes FROM code_repos ORDER BY id`)
+		open_changes, closed_changes, merged_changes, kind FROM code_repos ORDER BY id`)
 	if err != nil {
 		return "", err
 	}
@@ -120,7 +122,7 @@ func changeCountsDrift(ctx context.Context, tx *sql.Tx) (string, error) {
 		return fmt.Sprintf("the change tallies hold %s and the repositories in use %s", tallyText(held),
 			tallyText(wanted)), nil
 	}
-	return "", nil
+	return repoTalliesDrift(ctx, tx)
 }
 
 // changesCountedBy is repoID's changes counted by state with a statement of the test's own.
@@ -717,10 +719,10 @@ var countedWriters = map[string]string{
 	"(*Applier).applyRestore":     "retally",
 	"writeChanges":                callersCount,
 	"(*changeBook).write":         callersCount,
-	"(*Applier).applyCreate":      "none: a new repository holds no change",
-	"(*Applier).applyImportDone":  "none: importing to active, in use both, under one owner",
-	"(*Applier).applyPurgePart":   "none: deleted to purging, in use neither; purgeChanges counts its changes out",
-	"(*Applier).applyPurge":       "none: the row goes with its counts, and a purged repository is in no tally",
+	"(*Applier).applyCreate":      "retally",
+	"(*Applier).applyImportDone":  "retally",
+	"(*Applier).applyPurgePart":   "retally",
+	"(*Applier).applyPurge":       "retally",
 }
 
 // callersCount marks a writer whose every caller counts what it writes.
@@ -977,14 +979,19 @@ func TestTheChangeCountsAreTheRows(t *testing.T) {
 	}
 }
 
-// countsTables is the counts' rows whole: every repository's four columns and every tally row.
+// countsTables is the counts' rows whole: every repository's four columns, every change tally
+// row and every repository tally row.
 func countsTables(e *estate) string {
 	e.t.Helper()
 	return e.str(`SELECT COALESCE((SELECT group_concat(r, ',') FROM (SELECT id || ':' || draft_changes || '/' ||
 			open_changes || '/' || closed_changes || '/' || merged_changes AS r FROM code_repos ORDER BY id)), '')
 		|| ' | ' || COALESCE((SELECT group_concat(r, ',') FROM (SELECT visibility || '/' || owner_kind || '/' ||
 			owner || ':' || draft_changes || '/' || open_changes || '/' || closed_changes || '/' || merged_changes
-			AS r FROM code_change_tallies ORDER BY visibility, owner_kind, owner)), '')`)
+			AS r FROM code_change_tallies ORDER BY visibility, owner_kind, owner)), '')
+		|| ' | ' || COALESCE((SELECT group_concat(r, ',') FROM (SELECT visibility || '/' || owner_kind || '/' ||
+			owner || '/' || kind || ':' || importing_repos || '/' || active_repos || '/' || archived_repos || '/' ||
+			deleted_repos || '/' || purging_repos AS r FROM code_repo_tallies
+			ORDER BY visibility, owner_kind, owner, kind)), '')`)
 }
 
 // countsWorld is one seed's estate, the records applied to it in order, and the ops that

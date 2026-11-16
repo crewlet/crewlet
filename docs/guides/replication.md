@@ -802,7 +802,8 @@ hand-off count on each history row, and when a task last changed
 (`updated_at`); in the identity estate, the seat an invitation holds
 (`iam_invites.seat_id`, read out of the invitation's own document so a seat
 hold is one indexed lookup); in Gitlet, each repository's changes by state
-and their tallies by owner and visibility, and its pushes by day and
+and their tallies by owner and visibility, the repositories tallied by
+owner, visibility, kind and status, and each repository's pushes by day and
 quarter-hour and by pusher and day. The apply maintains each one as it goes. When the rules that
 compute them differ from the ones a node's rows were derived under — a build
 that adds such a column or changes how one is computed, a node that just

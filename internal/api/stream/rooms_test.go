@@ -381,6 +381,25 @@ func TestARevokedShareDropsFromTheRoom(t *testing.T) {
 	}
 }
 
+// A COMMENT IS PUSHED TO THE ROOM as `comment`, with the head it was applied
+// at, so an open page reads its threads again; whether it narrows the room is
+// [TestEveryMovementSaysWhetherItNarrowsTheRoom]'s.
+func TestACommentIsPushedToTheRoom(t *testing.T) {
+	t.Parallel()
+	acc := newAccess()
+	acc.set("dana", sheet, artifacts.RoleCommenter)
+	n := newRoomNode(t, memory.NewBroker(), "node-a", acc, people)
+	dana := n.open(t, "dana")
+	join(t, dana, sheet, 0)
+
+	n.svc.ArtifactsMoved([]artifactsdomain.Moved{{Artifact: sheet,
+		What: artifactsdomain.MoveComment, AccessEpoch: 1, Head: 3}})
+	changed := nextOf(t, dana, stream.KindArtifactChanged)
+	if data, _ := changed["data"].(map[string]any); data["what"] != "comment" || data["head"] != float64(3) {
+		t.Fatalf("the comment was pushed as %v", changed)
+	}
+}
+
 // THE TRASH IS SAID AS THE TRASH: a member of a room whose artifact is binned
 // is withdrawn with `artifact_trashed`, and a join while it is binned is
 // refused with it, where a reader the artifact is not disclosed to is still
