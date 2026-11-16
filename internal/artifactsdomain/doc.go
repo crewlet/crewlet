@@ -84,9 +84,9 @@
 // version, a narrowing's access epoch, a trash, a purge), built from the rows it
 // wrote, and the engine fans it out to the serving origin's authorization cache
 // and the socket hub ([Moved]). A batch that retained a record this build cannot
-// read moves everything ([MoveReset]). The domain declares no feed: a comment
-// record carries who it wakes ([CommentNotify]), and the feed that delivers it
-// is declared with that delivery.
+// read moves everything ([MoveReset]). A comment record carries who it wakes
+// ([CommentNotify]), and the domain's wake feed ([FeedGroup]) derives each wake
+// from it.
 //
 // # An artifact lives in one folder, and a folder grants nothing
 //
