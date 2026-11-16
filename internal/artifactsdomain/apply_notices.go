@@ -18,7 +18,7 @@ import (
 // one carries its routing snapshot ([CommentNotify]), computed by the API when
 // the record was formed. Its agents are woken through this log's feed; its
 // PEOPLE are told here: the applier writes ONE ROW PER (record, person) in
-// artifact_notifications (replicated 0173), never to the record's own author,
+// artifact_notifications (replicated 0175), never to the record's own author,
 // as Gitlet writes code_notifications. A person's artifacts inbox is read from
 // these rows (inboxread.go) and each committed batch announces whose inbox its
 // rows moved ([inbox.Movement], [Applier.Committed]).
