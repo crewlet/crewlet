@@ -156,19 +156,27 @@ type heartbeatTarget struct {
 // renewConcurrency is how many of a pass's renewals are in flight at once.
 //
 // A pass renewed its seats one after another, so its length was the seat count
-// times a renewal's round trip: across a link of a hundred milliseconds,
-// twenty seats filled the floor TTL's four-second renew period and seventy-five
+// times a renewal's round trips — two, a read and a write, before a renewal
+// was one: across a link whose round trip is a hundred milliseconds, twenty
+// seats filled the floor TTL's four-second renew period and seventy-five
 // outran the fifteen-second TTL itself, so their leases lapsed between
-// renewals. Sent together, a pass takes the round trips of its slowest batch.
+// renewals. Sent together, a pass takes the round trips of its batches.
 //
 // 64 IS ABOVE WHAT THE SLOWEST LINK THE ENGINE ALLOWS CAN CARRY AT ONCE, so on
 // such a link the link sets the pace and never this bound: at the object
 // store's floor, thirty seconds a mebibyte (34,952.5 bytes a second), and a
 // satellite's 0.6 s round trip, the link holds 0.6 × 34,952.5 ≈ 20,972 bytes
 // in flight, about 36 renewals of some 573 bytes each. On a fast link a pass
-// of N seats is ⌈N/64⌉ round trips: a hundred seats at 100 ms, 0.2 s. And it
-// is a bound, so a node holding thousands of seats holds 64 goroutines and 64
-// requests on its connection for its pass, not thousands.
+// of N seats is ⌈N/64⌉ round trips: a hundred seats at 100 ms, 0.2 s.
+//
+// AND FAR BELOW WHAT THAT LINK'S REQUEST TERM COULD CARRY: a batch's last
+// renewal waits behind the other 63's bytes, 63 × 573 ≈ 36 KB, about 1.03 s at
+// the floor, where what a request may wait behind and still be answered inside
+// its term is its term less a read's (jsapi.RequestTerm − jsprovision.ReadTerm,
+// 4 s) — room for some 244 renewals' bytes. So the bound is never what makes a
+// renewal late on a link the engine allows, and it is a bound: a node holding
+// thousands of seats holds 64 goroutines and 64 requests on its connection for
+// its pass, not thousands.
 const renewConcurrency = 64
 
 // renewal is one seat's renewal as the store answered it.

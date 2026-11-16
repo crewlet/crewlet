@@ -271,9 +271,9 @@ holding a record for every resource the deployment has ever leased, which used
 to be read whole every five seconds to find one node's seats.
 
 **Every read of one key is the leader's too**, not only a certification's. A
-claim reads its own write back to learn the store's deadline, a renew and a
-release read the lease before they write, and the fleet's records are read by
-key — and each of those, answered by a replica that had not applied the write
+claim reads its own write back to learn the store's deadline, a release —
+and a renewal whose record moved since this node wrote it — reads the lease
+before it writes, and the fleet's records are read by key — and each of those, answered by a replica that had not applied the write
 yet, told its caller the write was never made. On a three-member cluster with
 a hundred nodes claiming at once, 743 of 10,000 claims on fresh seats answered
 "not held" for a lease that was then theirs until its TTL — a singleton duty
@@ -283,8 +283,12 @@ node acts on by shedding the seat. So every single-key read goes to the stream
 leader, and one the leader cannot answer — none elected, none reachable — is
 **unavailable**, never "absent". It costs the hop to the leader: measured
 in-process, 40–220 µs at the median where a replica's read took 25–135 µs, and
-about half the read throughput through one node's connection — a few percent
-of it spent by ten thousand seats renewing on the fifteen-second heartbeat.
+about half the read throughput through one node's connection. Ten thousand
+seats renewing on the fifteen-second heartbeat used to spend a few percent of
+it, a read a renewal; a renewal of a lease the node wrote last now reads
+nothing ([below](#a-renewal-of-its-own-write-is-one-round-trip)), so what is
+left is each presence's read-back and the reads of a renewal whose record
+moved.
 
 There is deliberately **no all-classes listing**. A class is one segment of a
 name, so the empty one addresses nothing, and a read of it would answer with

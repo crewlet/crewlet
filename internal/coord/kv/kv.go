@@ -288,9 +288,9 @@
 // the fifteen-second seat heartbeat asked for under seven hundred a second: a
 // few percent of that ceiling. A renewal of a record this store last wrote
 // reads nothing now (above), so what remains is the presence's read-back and
-// the reads of a renewal whose record moved. What a direct get would buy back is served by
-// nothing here, because every read in this package is one a caller acts on as
-// current — which is why none of them stays direct.
+// the reads of a renewal whose record moved. What a direct get would buy back
+// is served by nothing here, because every read in this package is one a
+// caller acts on as current — which is why none of them stays direct.
 //
 // # A fleet record's writes are coalesced per key
 //

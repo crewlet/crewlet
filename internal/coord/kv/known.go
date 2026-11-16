@@ -47,8 +47,10 @@ import (
 // write at its revision could only be refused. That clock decides nothing
 // about ownership — the compare-and-set does — it only spares a write that
 // cannot land. An entry is stamped when its write is answered, after the
-// broker stamped the record, so the age read here never undercounts the
-// broker's; at worst the write is sent and refused.
+// broker stamped the record, so the age read here never overcounts the
+// broker's: an entry is never set aside while its record can still be there.
+// It may read younger than the record, and then the write is sent and refused
+// — at worst, one round trip.
 //
 // Bounded by the resources the seat lease bucket holds — this node's seats and
 // its own presence — so an entry left by a lease this node stopped renewing
