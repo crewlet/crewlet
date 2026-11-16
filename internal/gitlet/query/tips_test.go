@@ -322,10 +322,7 @@ func TestATipsPageIsCutByItsBytes(t *testing.T) {
 		return nil
 	})
 	x.push(gitlettest.RepoName, "main", "refs/tags/*:refs/tags/*")
-	var oids []string
-	for _, line := range strings.Fields(x.git("for-each-ref", "--format=%(objectname)", "refs/tags")) {
-		oids = append(oids, line)
-	}
+	oids := strings.Fields(x.git("for-each-ref", "--format=%(objectname)", "refs/tags"))
 	if len(oids) != gitlet.MaxTips {
 		t.Fatalf("the premise: %d tags, want %d", len(oids), gitlet.MaxTips)
 	}

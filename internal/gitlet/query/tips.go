@@ -44,9 +44,8 @@ func (r *read) recallTips(ctx context.Context, at cursor) (gitlet.GitAnswer, boo
 			gitlet.ErrBadCursor, start, len(q.OIDs))
 	}
 	r.tips = &tipsWarm{facts: map[string]gitlet.Tip{}, sides: map[[2]string][2]int{}}
-	// A refused grant is objects' to judge at the log's head, and an
-	// abbreviated base is expanded there.
 	if r.grant() != nil || (q.Base != "" && !gitref.ValidOID(q.Base)) {
+		//nolint:nilerr // a refused grant is objects' to judge at the log's head, and an abbreviated base is expanded there.
 		return gitlet.GitAnswer{}, false, nil
 	}
 	whole := true
@@ -65,8 +64,8 @@ func (r *read) recallTips(ctx context.Context, at cursor) (gitlet.GitAnswer, boo
 	}
 	if base, ok := r.tips.facts[q.Base]; ok && base.PeeledType == "commit" {
 		for _, id := range q.OIDs[start:] {
-			tip, ok := r.tips.facts[id]
-			if !ok || tip.PeeledType != "commit" || tip.Peeled == base.Peeled {
+			tip, known := r.tips.facts[id]
+			if !known || tip.PeeledType != "commit" || tip.Peeled == base.Peeled {
 				continue
 			}
 			pair := [2]string{base.Peeled, tip.Peeled}
@@ -337,11 +336,10 @@ func (r *read) readCommits(ctx context.Context, ids []string) (map[string]gitlet
 		out[rec.oid], _ = rec.commit()
 		return nil
 	})
-	args := append([]string{"log", "-z", "--no-walk=unsorted", "--no-mailmap", "--no-color", "--no-notes",
-		logFormat}, ids...)
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Dropping: r.synced.Dropping, Args: args, Config: r.s.o.Cache.ServeConfig(),
-		Stdout: stream, Class: gitproc.ClassRead, Deadline: deadline,
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args:   append([]string{"log", "-z", "--no-walk=unsorted", "--no-mailmap", "--no-color", "--no-notes", logFormat}, ids...),
+		Config: r.s.o.Cache.ServeConfig(), Stdout: stream, Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	if res.Damage == nil && errors.Is(err, errUnparsed) {
 		r.charge(res)

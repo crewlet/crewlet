@@ -74,9 +74,7 @@ func BenchmarkTips(b *testing.B) {
 	for i := range tipsBenchBranches {
 		oids = append(oids, rows.Refs[fmt.Sprintf("refs/heads/b%03d", i)])
 	}
-	for _, id := range strings.Fields(p.Git().Run(b, src, "for-each-ref", "--format=%(objectname)", "refs/tags")) {
-		oids = append(oids, id)
-	}
+	oids = append(oids, strings.Fields(p.Git().Run(b, src, "for-each-ref", "--format=%(objectname)", "refs/tags"))...)
 	if len(oids) != gitlet.MaxTips {
 		b.Fatalf("the screen names %d tips, want %d", len(oids), gitlet.MaxTips)
 	}
