@@ -279,9 +279,9 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 		return false
 	}
 	heldAgain := p.reholdParked(ctx, e, spec, seat)
-	// SAID WITH THE RELEASE, because the park that holds the seat again
-	// logged its own line before this one: without it the seat's last line
-	// read released while its inbox was held.
+	// SAID WITH THE RELEASE, because the park that holds the seat again can
+	// have logged its own line before this one: without it the seat's last
+	// line read released while its inbox was held.
 	detail := "this park's hold is lifted from the seat's inbox"
 	if heldAgain {
 		detail = "a park taken while this release was in flight holds the seat again, " +

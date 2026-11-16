@@ -591,9 +591,9 @@ func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) 
 		heldAgain = e.takePauseHoldLocked(ctx, seat)
 	}
 	e.pauses.mu.Unlock()
-	// SAID WITH THE LIFT, because the pause that holds the seat again logged
-	// `seat_paused` before this line: without it the seat's last line read
-	// lifted while its inbox was held.
+	// SAID WITH THE LIFT, because the pause that holds the seat again can
+	// have logged its line before this one: without it the seat's last line
+	// read lifted while its inbox was held.
 	detail := "this pause's hold is lifted from the seat's inbox"
 	if heldAgain {
 		detail = "a pause placed while this lift was in flight holds the seat again, " +

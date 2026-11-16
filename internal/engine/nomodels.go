@@ -191,8 +191,8 @@ func (e *Engine) releaseModelHolds(ctx context.Context) {
 		}
 		heldAgain := e.reholdModelHold(ctx, id)
 		// SAID WITH THE LIFT, because the pause that holds the seat again
-		// logged `seat_inbox_paused` before this line: without it the
-		// seat's last line read resumed while its inbox was held.
+		// can have logged `seat_inbox_paused` before this line: without it
+		// the seat's last line read resumed while its inbox was held.
 		detail := "this seat's no-model pause is lifted from its inbox"
 		if heldAgain {
 			detail = "a no-model pause taken while this lift was in flight holds the seat " +
