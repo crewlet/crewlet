@@ -342,9 +342,9 @@ shards, heaviest first, each package to the shard carrying the least so far;
 without weights the deal is by package count. A package weighs its CPU in
 `make test`'s half, whose runners are CPU-bound, so a package's wall time
 there grows with whatever shares the machine with it, and its wall time in
-`make test-solo`'s, which runs one package at a time; skipgate estimates a
-package's CPU as its share of the run's CPU by its share of the tests' busy
-time. The file must exist
+`make test-solo`'s, which runs one package at a time; skipgate reads a
+package's CPU at its test binary, through go test's `-exec`, which it hands
+the `go test` it runs whenever `TEST_TIMINGS` is set. The file must exist
 (`internal/solo/partition` refuses one it cannot open rather than guess), and
 an empty file is `go list`'s order. CI's weights are the shards' timings from
 the last passing run on `main`, merged by `go run ./internal/solo/partition
