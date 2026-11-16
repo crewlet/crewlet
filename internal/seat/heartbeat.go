@@ -215,13 +215,17 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 	// THE PRESENCE BESIDE THE SEATS, never after them: its claim is two
 	// round trips and its status hook may spend a fifth of the heartbeat
 	// ([StatusBudgetRatio]), and neither is a reason for a seat's renewal
-	// to wait. It counts the seats the node held as the pass began; one
-	// this pass loses leaves that count on the next pass's renewal.
+	// to wait. It counts the seats the node holds as it is sent, so a pass
+	// that takes a seat out of the count renews it once more below.
 	var presence sync.WaitGroup
 	presence.Go(func() {
 		h.safely("seat_presence_renew_failed", func() { h.renewNodePresence(ctx) })
 	})
 	defer presence.Wait()
+	// recounted is whether this pass took a seat out of what the presence
+	// advertises (placedCount): lost it, or released or stopped renewing an
+	// undead one.
+	recounted := false
 
 	answers, wait := h.renewAll(ctx, targets)
 	defer wait()
@@ -264,7 +268,9 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 				// Still ours, so try again to close it. This is the only way
 				// an undead seat ever returns to the fleet short of
 				// restarting the process.
-				h.retryUndeadTeardown(ctx, t.handle)
+				if h.retryUndeadTeardown(ctx, t.handle) {
+					recounted = true
+				}
 				continue
 			}
 			h.noteAdmission(ctx, t.seat, true)
@@ -277,6 +283,7 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 			h.mu.Lock()
 			if cur := h.undead[t.handle]; cur != nil && cur.held == t.entry {
 				delete(h.undead, t.handle)
+				recounted = true
 			}
 			h.mu.Unlock()
 			log.ErrorContext(ctx, "seat_undead_lease_lost", "seat", t.handle, "epoch", t.lease.Epoch,
@@ -318,6 +325,18 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 		h.mu.Unlock()
 	}
 	presence.Wait()
+	if recounted || len(lost) > 0 {
+		// THE COUNT THIS PASS LEAVES, advertised now rather than at the
+		// next pass: the claim beside the seats may have read the count
+		// before this pass took a seat out of it, and while the presence
+		// still counted a seat this node gave back or lost, a peer with
+		// room read the fleet as full and the seat sat unclaimed for a
+		// renew period ([Host.fleetHoldsEverySeat]). Once, and only when
+		// the count moved, so a pass that changed nothing costs nothing
+		// more.
+		h.stampBeat()
+		h.safely("seat_presence_recount_failed", func() { h.renewNodePresence(ctx) })
+	}
 	h.stampBeat()
 	return lost
 }
