@@ -406,8 +406,8 @@ func heldBy(t *testing.T, dir string) int64 {
 			t.Fatal(err)
 		}
 	}
-	// And the cache's own derived files, the index of pushes' runs under
-	// crewlet/ — none before a delta has folded a push.
+	// And the cache's own files under crewlet/: the tag index from the first
+	// round, the index of pushes' runs once a delta has folded a push.
 	if statOK(t, filepath.Join(dir, "crewlet")) {
 		for _, name := range names(t, filepath.Join(dir, "crewlet")) {
 			info, err := os.Stat(filepath.Join(dir, "crewlet", name))

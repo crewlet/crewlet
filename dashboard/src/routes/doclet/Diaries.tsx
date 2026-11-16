@@ -62,8 +62,9 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime, tsKey, fmtCount } from "~/lib/format.ts";
+import { plural, tsKey, fmtCount } from "~/lib/format.ts";
 import type { MemoryOverviewSeat } from "~/contract/memory.ts";
+import { ago } from "~/lib/ago.ts";
 
 /**
  * How often the list and a diary re-read: a minute, the Doclet workspace's
@@ -250,7 +251,7 @@ export function Diary({ handle }: { handle: string }) {
     <div className="col gap-4">
       {/* WHEN IT LAST WROTE, and not where it runs: see the module doc. */}
       {data && data.held_by !== "none" && data.latest_reflection && (
-        <PageNote>Last written {relTime(data.latest_reflection.created_at, now)}.</PageNote>
+        <PageNote>Last written {ago(data.latest_reflection.created_at, now)}.</PageNote>
       )}
       {!seat && org && (
         <Callout variant="info" icon={<CircleAlertGlyph size="md" />}>

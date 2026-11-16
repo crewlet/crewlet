@@ -93,7 +93,7 @@ import { SNAPSHOT_DONORS_REQUIRED } from "~/contract/retention.ts";
 import { andList } from "~/lib/words.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
-import { asSentence, fmtBytes, fmtDateTime, fmtDuration, fmtExact, relTime } from "~/lib/format.ts";
+import { asSentence, fmtBytes, fmtDateTime, fmtDuration, fmtExact } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { marked } from "~/ui/Problems.tsx";
 import type {
@@ -110,6 +110,7 @@ import type {
 } from "~/protocol/index.ts";
 import { finishable, GateDialog } from "./GateDialog.tsx";
 import type { GateGesture } from "./GateDialog.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** Sixty seconds: this document is assembled from coordination and three
  *  loops, and none of them moves faster than a tick. */
@@ -892,7 +893,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
         <span>
           <strong>Maintenance on {op.stream}</strong>: no node starts in service until it closes.
           Phase <InlineCode close=",">{op.phase}</InlineCode> attempt {op.attempt}, since{" "}
-          {relTime(op.since, now)}
+          {ago(op.since, now, { since: true, clock: true })}
           {/* NOT IN PARENTHESES: the author's credential is in its own. */}
           {op.by && <>, run by {authorLabel(op.by, op.operator_id)}</>}. Resizing{" "}
           {fmtBytes(op.original_max_bytes)} to {fmtBytes(op.target_max_bytes)}.

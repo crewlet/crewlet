@@ -4,7 +4,7 @@
  * The meters printed the wire's own values: the window's key (`2026-W45`) in
  * each bar's name, and the refusal and the reset as ISO stamps in UTC
  * ("Last refused 2026-11-06T11:30:27.555936Z. Resets 2026-11-07T07:00:00Z."),
- * where Budgets said "Last refused a call 36m ago" of the same window.
+ * where Budgets said "Last refused a call 36 minutes ago" of the same window.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
@@ -55,7 +55,7 @@ test("a full window says when it last refused and when it resets, in words", () 
     },
   ]);
   const text = container.textContent ?? "";
-  expect(text).toContain("Last refused a call 36m ago. Resets today at midnight.");
+  expect(text).toContain("Last refused a call 36 minutes ago. Resets today at midnight.");
   expect(text).not.toMatch(/\d{4}-\d\d-\d\dT/);
   expect(text).not.toContain("2026-W45");
   expect(text).toContain("Week 45");

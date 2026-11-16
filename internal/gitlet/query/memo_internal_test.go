@@ -23,13 +23,13 @@ import (
 // the field each kind answers in, an interdiff in a diff's; and unkept is
 // every part no page holds, since its kind is never memoized (memoizable).
 var (
-	stamped = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage"}
+	stamped = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage", "Tagged"}
 	partOf  = map[gitlet.GitReadKind]string{gitlet.GitTree: "Tree", gitlet.GitBlob: "Blob", gitlet.GitDiff: "Diff",
-		gitlet.GitCompare: "Compare", gitlet.GitTips: "Tips", gitlet.GitLandedIn: "LandedIn",
+		gitlet.GitCompare: "Compare", gitlet.GitTips: "Tips", gitlet.GitTags: "Tags", gitlet.GitLandedIn: "LandedIn",
 		gitlet.GitRevisionFacts: "RevisionFacts", gitlet.GitReanchor: "Reanchor", gitlet.GitInterdiff: "Diff",
 		gitlet.GitLog: "Log", gitlet.GitBlame: "Blame", gitlet.GitChecksFile: "ChecksFile",
 		gitlet.GitCodeFiles: "CodeFiles", gitlet.GitSearch: "Search", gitlet.GitFind: "Find"}
-	unkept = []string{"Tips", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles", "Find"}
+	unkept = []string{"Tips", "Tags", "LandedIn", "RevisionFacts", "Reanchor", "ChecksFile", "CodeFiles", "Find"}
 )
 
 // memoized is every kind memoizable answers from the memo.
@@ -314,6 +314,7 @@ func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.
 func (fakeCache) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
 	return nil, false
 }
+func (fakeCache) Tags(cache.Synced) (*cache.TagIndex, bool) { return nil, false }
 
 // A PAGE FROM THE MEMO FITS WHATEVER IT IS STAMPED WITH. A page carries its
 // budget — the most the fields Read stamps may encode to and the page still

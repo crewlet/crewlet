@@ -377,8 +377,9 @@ func TestAFirstRoundChecksEveryIndexFileItDidNotWrite(t *testing.T) {
 				t.Errorf("the round replaced %s, which was sound", name)
 			}
 		}
-		if got := len(cache.Vouched(c, h.repo)); got != files {
-			t.Errorf("the round vouched for %d files, want the %d it checked", got, files)
+		// And the tag index, which the round's tag step read whole, not its check.
+		if got := len(cache.Vouched(c, h.repo)); got != files+1 {
+			t.Errorf("the round vouched for %d files, want the %d it checked and the tag index", got, files)
 		}
 		for _, bad := range wrong(t, w, c, s.Dir, h) {
 			t.Errorf("a sound copy: %s", bad)

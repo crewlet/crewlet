@@ -52,6 +52,7 @@ import {
   reliedOn,
   reliedOnBy,
 } from "./words.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** The address of an entry's page. */
 export function entryPath(id: string): string[] {
@@ -294,7 +295,7 @@ export function Signals({ entry, now }: { entry: AtlasEntry; now: number }) {
     key: `${signal.kind}:${signal.alarm ?? ""}`,
     tone: signal.severity,
     title: signal.alarm ? `${SIGNALS[signal.kind]}: ${signal.alarm}` : SIGNALS[signal.kind],
-    meta: signal.since ? `Since ${relTime(signal.since, now)}` : undefined,
+    meta: signal.since ? `Since ${ago(signal.since, now, { since: true })}` : undefined,
   }));
   if (items.length === 0) {
     return (

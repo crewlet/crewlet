@@ -15,7 +15,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { companyDateLabel, relTime } from "~/lib/format.ts";
+import { companyDateLabel } from "~/lib/format.ts";
 import { PROJECT_PAGE } from "~/contract/work.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -32,6 +32,7 @@ import {
   type WidgetChoices,
 } from "~/routes/home/board/kit.tsx";
 import { MoreLink, ROWS, TaskList, countLabel } from "~/routes/worklet/taskRows.tsx";
+import { ago } from "~/lib/ago.ts";
 
 const POLL_MS = 60_000;
 
@@ -223,7 +224,7 @@ function Project({ params }: { params: Readonly<Record<string, string>> }) {
           {[
             whole === 0 ? "No work yet" : censusLine(done, active, todo),
             project.target_date && `Target ${companyDateLabel(project.target_date)}`,
-            project.last_change && `Changed ${relTime(project.last_change.at, now)}`,
+            project.last_change && `Changed ${ago(project.last_change.at, now)}`,
           ]
             .filter(Boolean)
             .join(" · ")}

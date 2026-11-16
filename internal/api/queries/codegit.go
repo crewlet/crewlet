@@ -21,7 +21,8 @@ import (
 // each line of a file (…/log, …/blame); `code_diff` and `code_compare`, what
 // changed between two revisions and how they relate, with what merging the
 // one into the other would do (…/diff, …/compare); `code_tips`, many branch
-// heads and tags at once with how far each is from a base (…/tips); and
+// heads and tags at once with how far each is from a base (…/tips);
+// `code_tags`, its tags newest first by their own date (…/tags); and
 // `code_commit`, one commit with the push that introduced it and the changes
 // it belongs to (…/commits/{sha}). Each is decided per repository by the grant
 // the serving node derives, as every code question is (code.go), and read at
@@ -71,7 +72,8 @@ const headRev = gitlet.HeadRef
 // kind's own part — and, on a read naming a ref or an abbreviation, which is
 // never immutable, what the read stamped: every ref it resolved by the
 // parameter that named it, the answering copy's position, and the push that
-// introduced each commit the page names with what the node's index covers.
+// introduced each commit the page names with what the node's index covers,
+// and the tags naming each commit a history's page names.
 type CodePage struct {
 	Repo  string              `json:"repo"`
 	Kind  gitlet.GitReadKind  `json:"kind"`
@@ -88,11 +90,16 @@ type CodePage struct {
 	Compare *gitlet.CompareAnswer `json:"compare,omitempty"`
 	// Tips is a tips read's part (code_tips).
 	Tips *gitlet.TipsAnswer `json:"tips,omitempty"`
+	// Tags is a tags read's part (code_tags).
+	Tags *gitlet.TagsAnswer `json:"tags,omitempty"`
 
 	Resolved map[string]CodeResolved    `json:"resolved,omitempty"`
 	Position statelog.Position          `json:"position,omitzero"`
 	PushedBy map[string]gitlet.PushedBy `json:"pushed_by,omitempty"`
 	Coverage *gitlet.Coverage           `json:"coverage,omitempty"`
+	// Tagged is the tags naming each commit a history's page names, where the
+	// answering node's tag index holds them.
+	Tagged *gitlet.TagMarks `json:"tagged,omitempty"`
 }
 
 // CodeResolved is a ref a request's revision named, as it was resolved: its
@@ -143,6 +150,9 @@ type CodeCommit struct {
 	More      bool                    `json:"more,omitempty"`
 	Position  statelog.Position       `json:"position"`
 	Level     statelog.ReadLevel      `json:"level"`
+	// Tagged is the tags naming the commit, from the answering node's tag
+	// index, read at the repository's last record or later.
+	Tagged *gitlet.TagMarks `json:"tagged,omitempty"`
 }
 
 // gitRev is one revision a request names: the parameter that named it, its
@@ -205,6 +215,9 @@ type gitAsk struct {
 	asker gitlet.Principal
 	name  string
 	fresh statelog.Freshness
+	// listed is the repository's own last record, where a read lists what its
+	// refs hold.
+	listed statelog.Position
 }
 
 // gitAskOf is the git question p asks as the caller, the source asked first
@@ -250,16 +263,11 @@ func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (gitlet.RepoRef, e
 		}
 	}
 	if len(names) == 0 {
-		a, err := g.reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadRepo, Repo: g.name, Asker: g.asker,
-			Fresh: g.fresh})
+		d, err := g.detail(ctx)
 		if err != nil {
-			return gitlet.RepoRef{}, codeRefusal(g.name, err)
+			return gitlet.RepoRef{}, err
 		}
-		if a.Repo == nil {
-			return gitlet.RepoRef{}, fmt.Errorf("queries: Gitlet answered repository %s's read with no "+
-				"detail", g.name)
-		}
-		return a.Repo.RepoRef, nil
+		return d.RepoRef, nil
 	}
 	a, err := g.reads.ResolveRef(ctx, gitlet.RefQuery{Repo: g.name, Refs: names, Fresh: g.fresh, Asker: g.asker})
 	if err != nil {
@@ -282,12 +290,27 @@ func (g gitAsk) resolve(ctx context.Context, revs ...*gitRev) (gitlet.RepoRef, e
 	return a.Repo, nil
 }
 
+// detail is the repository the question names, read alone at the caller's
+// freshness.
+func (g gitAsk) detail(ctx context.Context) (*gitlet.RepoDetail, error) {
+	a, err := g.reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadRepo, Repo: g.name, Asker: g.asker,
+		Fresh: g.fresh})
+	if err != nil {
+		return nil, codeRefusal(g.name, err)
+	}
+	if a.Repo == nil {
+		return nil, fmt.Errorf("queries: Gitlet answered repository %s's read with no detail", g.name)
+	}
+	return a.Repo, nil
+}
+
 // floor is what a read by object id of repo's revs is asked at: the furthest
 // of this node's own writes to the repository, the caller's own floor on the
-// code log, and the record that last moved each ref a revision resolved
-// through (gitlet.RefsFloor) — so the copy that answers holds what the caller
-// wrote and what the refs named — or none, which reads the copy as it stands:
-// an object id names one object at every position.
+// code log, and, for a listing of the refs, the repository's own last record,
+// and the record that last moved each ref a revision resolved through
+// (gitlet.RefsFloor) — so the copy that answers holds what the caller wrote
+// and what the refs named — or none, which reads the copy as it stands: an
+// object id names one object at every position.
 func (g gitAsk) floor(repo gitlet.RepoRef, revs ...*gitRev) statelog.Freshness {
 	var refs []gitlet.ResolvedRef
 	for _, r := range revs {
@@ -295,7 +318,7 @@ func (g gitAsk) floor(repo gitlet.RepoRef, revs ...*gitRev) statelog.Freshness {
 			refs = append(refs, *r.ref)
 		}
 	}
-	own := statelog.Later(g.reads.FloorOf(repo.ID), g.fresh.Floor(topics.CodeLogStream))
+	own := statelog.Later(statelog.Later(g.reads.FloorOf(repo.ID), g.fresh.Floor(topics.CodeLogStream)), g.listed)
 	return gitlet.RefsFloor(own, refs...)
 }
 
@@ -313,6 +336,8 @@ func (g gitAsk) read(ctx context.Context, repo gitlet.RepoRef, q gitlet.GitQuery
 	for _, r := range revs {
 		immutable = immutable && r.whole()
 	}
+	// A kind no page of which is cut unstamped, the tags, is asked stamped.
+	immutable = immutable && q.Kind.Unstampable()
 	q.RepoID, q.Asker, q.Fresh, q.Cursor, q.Unstamped = repo.ID, g.asker, g.floor(repo, revs...), cursor, immutable
 	if err := q.Validate(); err != nil {
 		return CodePage{}, false, fmt.Errorf("%w: %w", ErrBadParams, err)
@@ -322,11 +347,12 @@ func (g gitAsk) read(ctx context.Context, repo gitlet.RepoRef, q gitlet.GitQuery
 		return CodePage{}, false, codeRefusal(g.name, err)
 	}
 	page := CodePage{Repo: g.name, Kind: a.Kind, Rev: a.Rev, Next: a.Next, Tree: a.Tree, Blob: a.Blob, Diff: a.Diff,
-		Log: a.Log, Blame: a.Blame, Find: a.Find, Compare: a.Compare, Tips: a.Tips}
+		Log: a.Log, Blame: a.Blame, Find: a.Find, Compare: a.Compare, Tips: a.Tips, Tags: a.Tags}
 	if immutable {
 		return page, true, nil
 	}
 	page.Position, page.PushedBy, page.Coverage = a.Position, a.PushedBy, a.Coverage
+	page.Tagged = a.Tagged
 	for _, r := range revs {
 		if r.ref == nil {
 			continue
@@ -712,13 +738,43 @@ func (s Sources) codeTips(ctx context.Context, p Params) (any, error) {
 	return answered(page, immutable), nil
 }
 
+// codeTags answers `code_tags`: the repository's tags newest first by their
+// own date, `limit` a page (1 to gitlet.MaxTagsLimit, gitlet.DefaultTagsLimit
+// where it names none) from `cursor`; never immutable, since the tags move.
+func (s Sources) codeTags(ctx context.Context, p Params) (any, error) {
+	g, err := s.gitAskOf(ctx, p, "code_tags")
+	if err != nil {
+		return nil, err
+	}
+	q := gitlet.TagsQuery{}
+	if p.Has("limit") {
+		n, whole := p.WholeInt("limit")
+		if !whole || n < 0 {
+			return nil, fmt.Errorf("%w: the limit %q is not a whole number of zero or more (0 is a page of %d)",
+				ErrBadParams, p.String("limit"), gitlet.DefaultTagsLimit)
+		}
+		q.Limit = int(n)
+	}
+	d, err := g.detail(ctx)
+	if err != nil {
+		return nil, err
+	}
+	g.listed = d.Version
+	page, _, err := g.read(ctx, d.RepoRef, gitlet.GitQuery{Kind: gitlet.GitTags, Tags: &q}, p.String("cursor"))
+	if err != nil {
+		return nil, err
+	}
+	return page, nil
+}
+
 // codeCommit answers `code_commit`: the commit `sha` — a WHOLE id, which is
 // what a commit's page is linked by; an abbreviation is expanded by asking
 // `code_log` with it as `ref` and a `limit` of 1 — as the repository's history
 // lists it, the push that introduced it, and every change it belongs to. The
 // rows first, at the caller's freshness — the repository and the commit's
 // changes, in one snapshot (the reader's `commit`) — then the commit, asked of
-// the repository's home Gitlet node, and the push the node's index names,
+// the repository's home Gitlet node at the repository's own last record, so
+// the tags naming it are the rows' too, and the push the node's index names,
 // read whole at `session` floored at the later of the rows' read and the
 // push's own record.
 func (s Sources) codeCommit(ctx context.Context, p Params) (any, error) {
@@ -741,6 +797,9 @@ func (s Sources) codeCommit(ctx context.Context, p Params) (any, error) {
 			sha, g.name)
 	}
 	repo := rows.Repo.RepoRef
+	// At the repository's own last record, so the copy holds every tag the
+	// rows' position does.
+	g.listed = rows.Repo.Version
 	q := gitlet.GitQuery{Kind: gitlet.GitLog, RepoID: repo.ID, Asker: g.asker, Fresh: g.floor(repo),
 		Log: &gitlet.LogQuery{Rev: sha, Limit: 1}}
 	a, err := g.reads.GitRead(ctx, q)
@@ -753,6 +812,7 @@ func (s Sources) codeCommit(ctx context.Context, p Params) (any, error) {
 	}
 	out := CodeCommit{Repo: g.name, Commit: a.Log.Commits[0], Coverage: a.Coverage, Merged: rows.Commit.Merged,
 		Revisions: rows.Commit.Revisions, More: rows.Commit.More, Position: rows.Position, Level: rows.Level}
+	out.Tagged = a.Tagged
 	by, pushed := a.PushedBy[sha]
 	if !pushed {
 		return out, nil

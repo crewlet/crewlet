@@ -48,6 +48,7 @@ import { ATLAS_POLL_MS } from "./filters.ts";
 import { sourceName } from "./words.ts";
 // THE ATLAS'S OWN SHEET, for a reader who opens this page first.
 import "~/styles/atlas.css";
+import { ago } from "~/lib/ago.ts";
 
 const NO_PARAMS = {};
 
@@ -69,10 +70,12 @@ export function readLine(source: AtlasSourceStanding, now: number): string {
   const read =
     source.state === "failed"
       ? source.last_complete_at
-        ? `Tried ${relTime(source.last_attempt_at, now)}, last read whole ${relTime(source.last_complete_at, now)}`
-        : `Tried ${relTime(source.last_attempt_at, now)}, never read whole`
-      : `Read ${relTime(source.last_attempt_at, now)}`;
-  const next = source.next_read_at ? `next read ${relTime(source.next_read_at, now)}` : "due now";
+        ? `Tried ${ago(source.last_attempt_at, now)}, last read whole ${ago(source.last_complete_at, now)}`
+        : `Tried ${ago(source.last_attempt_at, now)}, never read whole`
+      : `Read ${ago(source.last_attempt_at, now)}`;
+  const next = source.next_read_at
+    ? `next read ${ago(source.next_read_at, now, { due: true })}`
+    : "due now";
   return `${read}, ${next}.`;
 }
 
@@ -80,8 +83,7 @@ export function readLine(source: AtlasSourceStanding, now: number): string {
 export function refreshBlocked(source: AtlasSourceStanding, now: number): string | undefined {
   if (source.refresh_requested_at) return "A read is already asked for";
   const at = source.refreshable_at ? Date.parse(source.refreshable_at) : 0;
-  if (at > now)
-    return `Read moments ago. It can be read again ${relTime(source.refreshable_at, now)}`;
+  if (at > now) return `Read moments ago. It can be read again ${ago(source.refreshable_at, now)}`;
   return undefined;
 }
 
@@ -215,8 +217,8 @@ function SourceCard({ source, now }: { source: AtlasSourceStanding; now: number 
             <Text variant="body" tone="secondary">
               {source.refresh_requested_by
                 ? // WHO ASKED, BY THEIR NAME: the engine records the seat's handle.
-                  `${seatBadge(source.refresh_requested_by).name} asked for a read ${relTime(source.refresh_requested_at, now)}.`
-                : `A read was asked for ${relTime(source.refresh_requested_at, now)}.`}{" "}
+                  `${seatBadge(source.refresh_requested_by).name} asked for a read ${ago(source.refresh_requested_at, now)}.`
+                : `A read was asked for ${ago(source.refresh_requested_at, now)}.`}{" "}
               It is made within a minute.
             </Text>
           )}
