@@ -123,12 +123,15 @@ logs survive, on the same members:
   them; an upload holds one message's worth of memory at a time.
 - **A node's uploads share one window of messages out.** Every upload a
   node makes — a person's file, a push's bundle, a seat's file — rides the
-  connection its events ride, so the messages they have sent and the broker
-  has not yet acknowledged are counted for the connection, not for each
-  upload. Across a leaf's link, or to an external cluster, every request the
-  node sends after them on that link waits behind them: a read or a small
-  write of its own, and a lease renewal wherever the renewals share the link
-  or wait at a bottleneck on it that queues first in first out. Each of those
+  connection the node's coordination store rides, which every lease renewal
+  of the node rides too (on an external broker that is the queue's own
+  connection, which its events ride as well), so the messages they have sent
+  and the broker has not yet acknowledged are counted for the connection,
+  not for each upload. Across a leaf's link, or to an external cluster,
+  every request the node sends after them on that link waits behind them: a
+  read, a small write or a lease renewal on the same connection, or on
+  another one crossing the same link or a bottleneck on it that queues first
+  in first out. Each of those
   is held to a five-second term, so the window is **one 128 KiB message**,
   which crosses the floor of thirty seconds a mebibyte in 3.75 seconds: a
   request sent behind a full window still has the second its own round trip
@@ -148,9 +151,10 @@ logs survive, on the same members:
   messages are out — or, waiting for a place, nothing of the node's at all;
   a put waiting on the person's own slow upload is not waiting on the
   broker. No message waits behind more than the window, so across a link at
-  the floor each is acknowledged within four seconds of being sent — a
-  leaf's compressed link, which delivers what it flushed as one block,
-  included.
+  the floor each one's bytes have crossed within four seconds of being sent
+  — a leaf's compressed link, which delivers what it flushed as one block,
+  included — and its acknowledgement follows a round trip later, behind
+  whatever the link is carrying back to the node.
   An upload crossing a slow link is never failed for being slow — the floor
   of thirty seconds a mebibyte included — where the client library's own put
   failed any message the broker had not acknowledged five seconds after it

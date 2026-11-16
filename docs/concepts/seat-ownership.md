@@ -437,9 +437,10 @@ of the changelog's rows at once, and all it holds of them: an ordinary row of
 some 10 KiB fills a pull's bytes at about 795 rows, so a year of episodes takes
 23 pulls in a member's own process. **Across a link a pull carries a window**,
 what the link carries in four seconds at the floor of thirty seconds a mebibyte
-(139,810 bytes), because every request the node sends after a pull on that link
-waits behind whatever of it is still crossing — a read, a small write, and a
-lease renewal wherever the renewals share the link — and each is held to a
+(139,810 bytes), because the answer to every request the node sends after a pull
+on that link waits behind whatever of it is still crossing — a read, a small
+write or a lease renewal, on the coordination connection the replay and every
+renewal ride or on another crossing the same link — and each is held to a
 five-second term: a request behind a full window still has the second its own
 round trip needs, at every lease TTL, as the object store windows an upload. A
 row larger than the window crosses alone, in a pull of one message at the

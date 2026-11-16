@@ -393,7 +393,8 @@ func TestAPutLeavesNoSubscriptionBehind(t *testing.T) {
 // PUTS ON ONE CONNECTION SHARE ONE WINDOW: with the broker's answers stopped,
 // three puts at once publish the connection's window of pieces BETWEEN them —
 // counted where the broker takes them — and no more before they stall. What
-// the window protects is the connection the node's leases and events ride, so a
+// the window protects is the connection the bucket is opened on, which the
+// node's coordination store and every lease renewal of the node ride, so a
 // link that freezes holds one window of the node's uploads however many are
 // under way, never one a put. Across a link it is [natsobj.LinkWindow]; on a
 // member's own client, [natsobj.MemberWindow].

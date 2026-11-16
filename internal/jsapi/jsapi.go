@@ -166,17 +166,19 @@ const RequestTerm = 5 * time.Second
 //
 // # The request's term, never the lease's heartbeat
 //
-// What waits behind a window is any request sent after it on the link: a read
-// or a small write on the same connection, and a lease renewal on a connection
-// beside it wherever the two share the link, or a bottleneck on it that queues
-// first in first out. Every one of them is held to this term, whatever lease
-// the node holds, and one not answered inside it is unknown — a renewal's seat
-// deferring until the next lands, a read asked again with its reply crossing
-// again. Sized by a lease's heartbeat instead, as the windows once were, a
-// window at the shipped lease held such a request fifteen seconds at the floor,
-// past its term three times over. One read term is the least the request's own
-// round trip is given anywhere: a read unanswered that long is presumed lost
-// and asked again ([jsprovision.ReadTerm]).
+// What waits behind a window is any request sent after it on the link, or
+// whose answer crosses back after it: a read, a small write or a lease renewal
+// on the same connection — both windows ride the coordination store's, which
+// every lease renewal of the node rides — or on another connection crossing
+// the same link or a bottleneck on it that queues first in first out. Every
+// one of them is held to this term, whatever lease the node holds, and one not
+// answered inside it is unknown — a renewal's seat deferring until the next
+// lands, a read asked again with its reply crossing again. Sized by a lease's
+// heartbeat instead, as the windows once were, a window at the shipped lease
+// held such a request fifteen seconds at the floor, past its term three times
+// over. One read term is the least the request's own round trip is given
+// anywhere: a read unanswered that long is presumed lost and asked again
+// ([jsprovision.ReadTerm]).
 const WindowCrossing = RequestTerm - jsprovision.ReadTerm
 
 // Client is a JetStream client over nc that speaks this API, its every

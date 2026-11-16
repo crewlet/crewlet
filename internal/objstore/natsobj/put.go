@@ -31,14 +31,14 @@ const messageCrossing = objstore.MiBPace * MessageBytes / objstore.MiB
 //
 // SIZED BY THE REQUESTS QUEUED BEHIND IT. A link carries what the node sends
 // in the order it was sent, so a request sent while the window is full crosses
-// only once the window has: a read or a small write on the same connection,
-// and a lease renewal on a connection beside it wherever the two share the
-// link, or a bottleneck on it that queues first in first out. Every one of
-// them is held to its term
-// ([jsapi.RequestTerm]) and is unknown past it, so the window crosses the
-// floor within what that term leaves after the request's own round trip,
-// [jsapi.WindowCrossing]: four seconds, at every lease TTL, and inside every
-// heartbeat config allows (config.MinLeaseTTL's, five seconds), so a renewal
+// only once the window has: a read, a small write or a lease renewal on the
+// same connection — the coordination store's, which every lease renewal of
+// the node rides ([window]) — or on another connection crossing the same link
+// or a bottleneck on it that queues first in first out. Every one of them is
+// held to its term ([jsapi.RequestTerm]) and is unknown past it, so the window
+// crosses the floor within what that term leaves after the request's own round
+// trip, [jsapi.WindowCrossing]: four seconds, at every lease TTL, and inside
+// every heartbeat config allows (config.MinLeaseTTL's, five seconds), so a renewal
 // behind a full window still lands within its heartbeat too. Sized by the
 // node's lease heartbeat instead, as it was, the shipped lease's window of four
 // messages held such a request fifteen seconds at the floor, past its term.
@@ -55,9 +55,10 @@ const messageCrossing = objstore.MiBPace * MessageBytes / objstore.MiB
 // there.
 //
 // It is also what keeps a stall honest across the link: no message waits
-// behind more than the window, so at the floor every one is acknowledged
-// within four seconds of its publish, and a leaf's compressed link, which
-// delivers what it flushed as one block, never more than the window in one.
+// behind more than the window, so at the floor every one's bytes have crossed
+// within four seconds of its publish, its acknowledgement a round trip
+// behind them, and a leaf's compressed link, which delivers what it flushed
+// as one block, never more than the window in one.
 //
 // What a window of one costs is throughput on a fast link (the package doc's
 // figures, through a leaf on loopback at `stream.sync: always`): measured
@@ -97,9 +98,12 @@ const memberWindow = 16
 //
 // THE CONNECTION'S, NEVER A PUT'S, because what it protects is shared: every
 // put a node makes — a person's upload, a push's bundle, a seat's file — goes
-// out on the one connection its events ride ([Backend.Put]), across a link
-// every request sent after it on that link waits behind what it has out, and
-// a window counted per put let K puts at once hold K windows on it.
+// out on the one connection the bucket was opened on ([Backend.Put]), which
+// the engine opens on the connection its coordination store rides, beside
+// every lease renewal the node makes (on an external broker, the queue's own,
+// which its events ride as well); across a link every request sent after it
+// on that link waits behind what it has out, and a window counted per put let
+// K puts at once hold K windows on it.
 //
 // FIRST COME, FIRST SERVED, A PLACE AT A TIME, so puts sharing the window
 // interleave rather than one taking it whole: a put asks for a place for each
@@ -287,10 +291,13 @@ const purgeWait = 5 * time.Second
 // — nothing out — is not waiting on the broker; nor is one waiting for a place
 // in the window, which ends only when the connection has had nothing
 // acknowledged for the minute ([window]). No message waits behind more than
-// the window, so across a link at the floor each is acknowledged within four
-// seconds of its publish ([linkWindow]) — a leaf's compressed link, which
-// delivers what it flushed as one block, included: a window of two mebibytes,
-// a member's, came in blocks up to 26.4 s apart there (3.1 s over TCP).
+// the window, so across a link at the floor each one's bytes have crossed
+// within four seconds of its publish ([linkWindow]), and its acknowledgement
+// follows a round trip later, behind whatever the link carries back — a
+// leaf's compressed link, which delivers what it flushed as one block,
+// included: sixteen messages out through a leaf at the floor, two mebibytes,
+// the window a member's own client is given, were acknowledged in blocks up
+// to 26.4 s apart (3.1 s over TCP), under the minute.
 //
 // # A failed put leaves nothing a stat or a listing finds
 //

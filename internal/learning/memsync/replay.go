@@ -354,12 +354,14 @@ func (s *Syncer) pullBytes() int {
 //
 // # Why the window
 //
-// A replay rides the coordination connection (ADR-0001), and across a link
-// every request the node sends after a pull — a read, a small write, and a
-// lease renewal wherever the renewals share the link, or a bottleneck on it
-// that queues first in first out — waits behind whatever of the pull's reply
-// is still crossing. A pull of the transport's 8 MiB at the floor every link
-// is promised ([objstore.MiBPace]) holds such a request four minutes.
+// A replay rides the coordination connection (ADR-0001), which every lease
+// renewal of the node rides too, and across a link every request the node
+// sends after a pull — a read, a small write or a lease renewal, on that
+// connection or on another crossing the same link or a bottleneck on it that
+// queues first in first out — has its answer wait behind whatever of the
+// pull's reply is still crossing. A pull of the transport's 8 MiB at the
+// floor every link is promised ([objstore.MiBPace]) holds such a request four
+// minutes.
 // Windowed, it waits behind at most four seconds of this hydration's pulls at
 // the floor, since a replay keeps one pull out at a time ([tableReplay.pull]),
 // and is still answered inside its term: the rule internal/objstore/natsobj
