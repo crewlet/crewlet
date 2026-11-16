@@ -107,7 +107,8 @@ func TestAPersonsCommentIsAnsweredByTheAgentThatOwnsTheArtifact(t *testing.T) {
 		t.Errorf("the thread was resolved by %+v citing version %d, want the agent citing version 2",
 			got.ResolvedBy, got.ResolvedVersion)
 	}
-	if head, _, err := arts.Artifact(t.Context(), made.Artifact, statelog.Freshness{}); err != nil ||
+	if head, _, err := arts.Artifact(t.Context(), made.Artifact,
+		statelog.Freshness{Level: statelog.ReadLinearizable}); err != nil ||
 		head.HeadNumber != 2 {
 		t.Errorf("the doc's head is %d (%v), want the version the turn published", head.HeadNumber, err)
 	}
