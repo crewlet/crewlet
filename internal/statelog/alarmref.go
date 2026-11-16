@@ -308,17 +308,19 @@ var alarmMeaning = map[Kind]string{
 		"not level either, and is counted all the same.",
 	KindExecutorResumeBlocked: "A seat's executor finished its job, but the " +
 		"resume of the turn it belongs to keeps failing on a condition only " +
-		"an operator clears: this node's disk full, mounted read-only or " +
-		"failing, its limit of open files reached, or the fleet's nodes " +
-		"holding different keys or running different builds. The resume " +
-		"give-up never ends such a run, since the failure is the node's, so " +
-		"the run and its seat wait for the operator, the job's completion " +
-		"coming round on each announcement. Raised by the node holding the " +
-		"seat, from its own memory of the run's resumes: it clears once a " +
-		"resume of the run gets past the condition or fails for anything " +
-		"else, once the run ends, and once the seat moves, whose next holder " +
-		"raises it again from its own attempts. A node that restarts raises it " +
-		"again at the run's next failed attempt.",
+		"an operator clears: the disk of the node holding the seat full, " +
+		"mounted read-only or failing, its limit of open files reached, or " +
+		"the fleet's nodes holding different keys or running different " +
+		"builds. The resume give-up never ends such a run, since the failure " +
+		"is the node's, so the run and its seat wait for the operator, the " +
+		"job's completion coming round on each announcement. The node holding " +
+		"the seat counts the run from its own memory of its resumes and says " +
+		"so on its heartbeat, and every data node raises the alarm from there, " +
+		"so a seat a satellite holds is raised too: it clears once a resume " +
+		"of the run gets past the condition or fails for anything else, once " +
+		"the run ends, and once the seat moves, whose next holder says it " +
+		"again from its own attempts. A node that restarts says it again at " +
+		"the run's next failed attempt.",
 	KindMCPServerFailing: "No instance of an MCP server is serving, and one has been down " +
 		"for longer than the restart schedule's ceiling plus a heartbeat. No agent is " +
 		"offered the server's tools.",

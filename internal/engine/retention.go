@@ -200,9 +200,9 @@ type retention struct {
 	feeds func(now time.Time, out *statelog.Reading)
 
 	// executors fills the executor runtime's half of a reading: the runs of
-	// seats this node holds whose resume waits for an operator
+	// seats whose resume waits for an operator, across the fleet
 	// ([Engine.executorReading]). Nil reads as nothing to report.
-	executors func(now time.Time, out *statelog.Reading)
+	executors func(ctx context.Context, now time.Time, out *statelog.Reading)
 
 	// feedSources is the wake feed each log declares, by domain — the
 	// source whose dead-letter subject its row reads — and feedLetters the

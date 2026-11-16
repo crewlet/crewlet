@@ -366,7 +366,7 @@ func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) 
 // is the node's), so its seat waits for as long as the condition lasts, and
 // each attempt's error line, repeated on every announcement, was the only
 // sign of it. The coordinator counts the run with its seat, the condition's
-// kind and how long since the first such failure in a row, an attempt that
+// kind and when the first such failure in a row was met, an attempt that
 // meets the condition again keeping that instant; and takes it out once a
 // resume gets past the condition, once one fails for anything else, once the
 // run settles, and once the seat is let go of. AN ATTEMPT WHOSE OWN HAND-BACK
@@ -403,13 +403,15 @@ func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 	}
 	blockedFor := func(t *testing.T, rig *coordRig, want ResumesBlocked) {
 		t.Helper()
-		if got := rig.coordinator.ResumesBlocked(rig.now); got != want {
+		got := rig.coordinator.ResumesBlocked()
+		if got.Runs != want.Runs || got.Seat != want.Seat || got.Kind != want.Kind || !got.Since.Equal(want.Since) {
 			t.Fatalf("resumes waiting for an operator = %+v, want %+v", got, want)
 		}
 	}
 	waiting := func(t *testing.T, rig *coordRig) {
 		t.Helper()
 		rig.resumer.failWith(fmt.Errorf("resuming t1: %w", full))
+		first := rig.now
 		for i, after := range []time.Duration{0, 20 * time.Minute, 20 * time.Minute} {
 			rig.now = rig.now.Add(after)
 			if err := attempt(t, rig); err == nil {
@@ -419,7 +421,7 @@ func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 		if rig.gone("t1") || rig.get("t1").Launch.ResumeFailures != 0 {
 			t.Fatal("the premise: a resume only the operator can unblock is never counted or ended")
 		}
-		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", For: 40 * time.Minute})
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: first})
 	}
 	t.Run("a resume that gets past it", func(t *testing.T) {
 		t.Parallel()

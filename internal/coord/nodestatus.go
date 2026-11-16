@@ -231,6 +231,21 @@ type NodeStatus struct {
 	// as its runner probe last found it. Nil is a node that has not probed
 	// (one that runs no executor, or one still booting).
 	Runners *RunnerStatus
+
+	// ResumesBlocked is the runs of seats this node holds whose executor's
+	// job finished and whose last resume here failed on a condition only an
+	// operator clears ([ResumesBlocked]). Nil is a node holding no such run,
+	// or one that does not say: one running no executor, or a build from
+	// before it.
+	//
+	// ON THE HEARTBEAT, because the node holding the seat is the only one
+	// that knows, and it may be one with no alarm table to raise it on: a
+	// satellite (`roles: [seats]`) runs no state log, so it evaluates none.
+	// So the executor_resume_blocked alarm is judged by every data node off
+	// the live leases, as the model and MCP alarms are. THE COUNT, AND THE RUN
+	// WAITING LONGEST BY ITS SEAT, ITS CONDITION AND SINCE WHEN, never how
+	// long, which moves on every beat.
+	ResumesBlocked *ResumesBlocked
 	// Alarms are the alarms this node's own table has firing as of the
 	// beat: ONE MARK PER KIND however many logs a kind stands on, the
 	// longest-standing first — the order the node's health envelope takes
@@ -434,6 +449,29 @@ func (s RunnerState) Valid() bool {
 	}
 	return false
 }
+
+// ResumesBlocked is what a node says of the runs of seats it holds whose
+// executor's job finished and whose last resume there failed on a condition
+// only an operator clears ([NodeStatus.ResumesBlocked]): internal/sandbox's
+// Coordinator.ResumesBlocked, as the heartbeat carries it.
+type ResumesBlocked struct {
+	// Runs is how many there are; at least one wherever the row says any.
+	Runs int
+
+	// Seat is the handle of the seat whose run has waited longest, bounded
+	// to [iam.MaxLogin], the longest handle a chart may name; Kind the
+	// condition its last resume failed on, one of internal/agent/builtin's
+	// kinds, bounded to [MaxResumeBlockedKindBytes]; and Since when the first
+	// such failure in a row was met, on the node's own clock.
+	Seat  string
+	Kind  string
+	Since time.Time
+}
+
+// MaxResumeBlockedKindBytes bounds [ResumesBlocked.Kind] on the wire: 64
+// bytes, past the longest kind internal/agent/builtin names (24), so a build
+// that adds one travels whole and a value nothing names cannot grow the beat.
+const MaxResumeBlockedKindBytes = 64
 
 // RunnerStatus is each executor cell's readiness on one node.
 type RunnerStatus struct {
@@ -751,6 +789,16 @@ func (s NodeStatus) Meta() map[string]any {
 		}
 		out["models"] = rows
 	}
+	if b := s.ResumesBlocked; b != nil && b.Runs > 0 {
+		// OMITTED WHERE NOTHING WAITS, which is every beat of a node whose
+		// seats wait for no operator: absent reads as none.
+		out["resumes_blocked"] = map[string]any{
+			"runs":  b.Runs,
+			"seat":  textcut.Within(b.Seat, iam.MaxLogin),
+			"kind":  textcut.Within(b.Kind, MaxResumeBlockedKindBytes),
+			"since": stamp(b.Since),
+		}
+	}
 	if s.Runners != nil {
 		out["runners"] = map[string]any{
 			"direct":    s.Runners.Direct.meta(),
@@ -964,8 +1012,25 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 			E2B:       cellFromMeta(runners["e2b"]),
 		}
 	}
+	status.ResumesBlocked = resumesBlockedFromMeta(raw["resumes_blocked"])
 	status.Alarms, status.AlarmsEvaluated = alarmsFromMeta(raw["alarms"])
 	return status, true
+}
+
+// resumesBlockedFromMeta reads a status's runs waiting for an operator, nil
+// where it names none: no row, one that is not a map, or one counting no run,
+// which no build writes.
+func resumesBlockedFromMeta(v any) *ResumesBlocked {
+	row, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	runs := intFromMeta(row["runs"])
+	if runs <= 0 {
+		return nil
+	}
+	return &ResumesBlocked{Runs: runs, Seat: stringFromMeta(row["seat"]), Kind: stringFromMeta(row["kind"]),
+		Since: instant(row["since"])}
 }
 
 // alarmsFromMeta reads a status's alarm marks, and whether it carried a list

@@ -453,6 +453,10 @@ type Engine struct {
 	// ([Engine.entriesReading]).
 	entryInputs entryInputs
 
+	// blockedSaid is the last word of each live node on the runs of its
+	// seats waiting for an operator ([Engine.executorReading]).
+	blockedSaid blockedSaid
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
@@ -4281,6 +4285,11 @@ func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()
 	}
+	// AND THE RUNS OF ITS SEATS WAITING FOR AN OPERATOR, from the executor
+	// coordinator's memory, which no read can overrun: what every data node
+	// raises executor_resume_blocked from, since this node may evaluate no
+	// alarm table of its own ([Engine.executorReading]).
+	status.ResumesBlocked = e.resumesBlocked()
 	if n := e.node; n != nil {
 		if host := n.Host(); host != nil {
 			status.Draining = host.Draining()

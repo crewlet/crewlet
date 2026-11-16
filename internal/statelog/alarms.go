@@ -1080,24 +1080,27 @@ type Reading struct {
 	CodeMirrorFailingRepo string
 	CodeMirrorFailingFor  time.Duration
 
-	// ExecutorResumesBlocked is how many runs of seats this node holds
-	// finished their executor's job and failed their last resume here on a
-	// condition only an operator clears: this node's disk full, read-only or
-	// failing, its limit of open files reached, or the fleet's nodes holding
-	// different keys or running different builds (internal/sandbox's
-	// Coordinator.ResumesBlocked). ExecutorResumeBlockedSeat is the seat of
-	// the run waiting longest, ExecutorResumeBlockedKind the condition its
-	// last resume failed on, and ExecutorResumeBlockedFor how long since the
-	// first such failure in a row.
+	// ExecutorResumesBlocked is how many runs of seats, across the fleet,
+	// finished their executor's job and failed their last resume on a
+	// condition only an operator clears: the disk of the node holding the
+	// seat full, read-only or failing, its limit of open files reached, or the
+	// fleet's nodes holding different keys or running different builds
+	// (internal/sandbox's Coordinator.ResumesBlocked, which each node says on
+	// its heartbeat). ExecutorResumeBlockedSeat is the seat of the run waiting
+	// longest, ExecutorResumeBlockedNode the node holding it,
+	// ExecutorResumeBlockedKind the condition its last resume failed on, and
+	// ExecutorResumeBlockedFor how long since the first such failure in a row.
 	//
 	// THE GIVE-UP NEVER ENDS SUCH A RUN, so this is the wait's one signal: the
 	// failure is the node's, the run and its seat wait for the operator, and
 	// the sandbox judged each failure at the classification the give-up
-	// itself reads, so the rule fires at any count (ADR-0015). Raised by the
-	// node holding the seat alone, from its own memory of its attempts. All
-	// zero on a node holding no such run.
+	// itself reads, so the rule fires at any count (ADR-0015). FLEET-WIDE, off
+	// the live leases, because the node holding the seat may evaluate no table
+	// of its own: a satellite runs no state log. All zero where no node holds
+	// such a run.
 	ExecutorResumesBlocked    int
 	ExecutorResumeBlockedSeat string
+	ExecutorResumeBlockedNode string
 	ExecutorResumeBlockedKind string
 	ExecutorResumeBlockedFor  time.Duration
 
@@ -2632,22 +2635,22 @@ var table = []rule{
 			"\"Mirrors and imports\".",
 	},
 	{
-		// A run of a seat this node holds whose finished job cannot be
-		// resumed until an operator clears a condition: the give-up never
-		// ends it, so its seat waits as long as the condition lasts. The
-		// sandbox judged each failure at the classification the give-up
-		// reads, so the rule fires at any count (ADR-0015). A node's
-		// condition, raised by the node holding the seat.
+		// A run of a seat whose finished job cannot be resumed until an
+		// operator clears a condition: the give-up never ends it, so its
+		// seat waits as long as the condition lasts. The sandbox judged each
+		// failure at the classification the give-up reads, so the rule fires
+		// at any count (ADR-0015). Read fleet-wide off the heartbeat of the
+		// node holding the seat, which may evaluate no table of its own.
 		kind: KindExecutorResumeBlocked,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d run(s) of seats this node holds finished their executor's job but "+
-					"cannot be resumed until an operator clears a condition (the longest: %s's, on %s, for %s)",
-					r.ExecutorResumesBlocked, r.ExecutorResumeBlockedSeat, r.ExecutorResumeBlockedKind,
-					spoken(r.ExecutorResumeBlockedFor)),
+			return fmt.Sprintf("%d run(s) of seats finished their executor's job but cannot be resumed "+
+					"until an operator clears a condition (the longest: %s's, held by %s, on %s, for %s)",
+					r.ExecutorResumesBlocked, r.ExecutorResumeBlockedSeat, r.ExecutorResumeBlockedNode,
+					r.ExecutorResumeBlockedKind, spoken(r.ExecutorResumeBlockedFor)),
 				r.ExecutorResumesBlocked > 0
 		},
-		remedy: "Read the node's `sandbox_resume_failed` lines for the seat: each " +
-			"names the condition in its `error`. A disk that is full " +
+		remedy: "Read the `sandbox_resume_failed` lines of the node holding the seat, which " +
+			"the alarm's line names: each names the condition in its `error`. A disk that is full " +
 			"(`disk_full`), mounted read-only (`disk_read_only`) or failing to " +
 			"read or write (`disk_failed`) is the host's: make room on it, " +
 			"remount it read-write or replace it. A process at its limit of " +

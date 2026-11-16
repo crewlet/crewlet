@@ -848,16 +848,18 @@ can holds the seat. Once no live node reads it, as after a rollback, it counts
 like the run's own, so a state nobody running can read holds the seat no longer
 than the give-up does. A reply kind is no part of that version, so one this
 build does not read waits only while a live node runs another build, and
-counts once every live node runs this one. A condition only an operator clears (this node's disk
-full, read-only or failing, its open files at their limit, the fleet's nodes
-holding different keys or running different builds) is the node's too, so the
-give-up never ends a run held by one: the run and its seat wait for the
-operator, and a turn with a wall-clock cap still ends at it. What the operator
-sees is the [`executor_resume_blocked`](../reference/alarms.md) alarm, raised
-by the node holding the seat while such a run waits, naming the seat waiting
-longest, the condition and for how long, and cleared once a resume gets past
-it; each attempt's `sandbox_resume_failed` line, at error, its `error` naming
-the condition; and for a full volume holding the node's databases the
+counts once every live node runs this one. A condition only an operator clears
+(this node's disk full, read-only or failing, its open files at their limit,
+the fleet's nodes holding different keys or running different builds) is the
+node's too, so the give-up never ends a run held by one: the run and its seat
+wait for the operator, and a turn with a wall-clock cap still ends at it. What
+the operator sees is the [`executor_resume_blocked`](../reference/alarms.md)
+alarm while such a run waits, raised by every data node from the heartbeat of
+the node holding the seat, so a seat a satellite holds is raised too, naming
+the seat waiting longest, the node holding it, the condition and for how long,
+and cleared once a resume gets past it; each attempt's `sandbox_resume_failed`
+line, at error, on the node holding the seat, its `error` naming the condition;
+and for a full volume holding the node's databases the
 [`volume_low`](../reference/alarms.md) alarm besides.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:

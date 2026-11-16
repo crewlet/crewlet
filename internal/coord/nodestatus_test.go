@@ -194,6 +194,69 @@ func TestAStatusCarriesItsFiringAlarms(t *testing.T) {
 	}
 }
 
+// A NODE SAYS WHICH OF ITS SEATS' RUNS WAIT FOR AN OPERATOR, so a node with no
+// alarm table of its own (a satellite) is raised by those that have one: the
+// count and the run waiting longest, its seat, its condition and since when,
+// read back as written on both sides of the store's JSON round trip; the seat
+// and the kind bounded on the wire, since a beat is re-sent for as long as the
+// wait lasts. Nothing waiting is nothing on the wire, and a row that counts no
+// run, or is no row, names none.
+//
+// Mutation: leave the row off the wire, read it back without its instant, or
+// carry a seat past its bound, and a case goes red.
+func TestAStatusCarriesTheResumesWaitingForAnOperator(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 3, 4, 5, 6, 7, 891, time.UTC)
+	want := coord.NodeStatus{InFlight: 1, ResumesBlocked: &coord.ResumesBlocked{
+		Runs: 2, Seat: "swe", Kind: "disk_full", Since: since}}
+	raw, err := json.Marshal(map[string]any{coord.StatusKey: want.Meta()})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(raw, &round); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for side, meta := range map[string]map[string]any{
+		"as written": {coord.StatusKey: want.Meta()}, "after a round trip": round,
+	} {
+		got, ok := coord.StatusFromMeta(meta)
+		if !ok || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: read back %+v (%v), want %+v", side, got.ResumesBlocked, ok, want.ResumesBlocked)
+		}
+	}
+
+	long := coord.NodeStatus{ResumesBlocked: &coord.ResumesBlocked{Runs: 1,
+		Seat: strings.Repeat("s", 4*iam.MaxLogin), Kind: strings.Repeat("k", 4*coord.MaxResumeBlockedKindBytes),
+		Since: since}}
+	got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: long.Meta()})
+	if b := got.ResumesBlocked; b == nil || len(b.Seat) > iam.MaxLogin || len(b.Kind) > coord.MaxResumeBlockedKindBytes {
+		t.Errorf("a seat of %d bytes and a kind of %d crossed as %+v, want them bounded to %d and %d",
+			len(long.ResumesBlocked.Seat), len(long.ResumesBlocked.Kind), b, iam.MaxLogin,
+			coord.MaxResumeBlockedKindBytes)
+	}
+
+	for name, status := range map[string]coord.NodeStatus{
+		"nothing waiting": {InFlight: 1},
+		"a row counting no run": {InFlight: 1, ResumesBlocked: &coord.ResumesBlocked{Seat: "swe",
+			Kind: "disk_full", Since: since}},
+	} {
+		if wire, _ := json.Marshal(status.Meta()); strings.Contains(string(wire), "resumes_blocked") {
+			t.Errorf("%s: published a row of runs waiting for an operator: %s", name, wire)
+		}
+	}
+	for name, row := range map[string]any{
+		"a row that is no map":  "swe",
+		"a row counting no run": map[string]any{"runs": 0, "seat": "swe", "kind": "disk_full"},
+		"a row counting less":   map[string]any{"runs": -1, "seat": "swe", "kind": "disk_full"},
+	} {
+		got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: map[string]any{"resumes_blocked": row}})
+		if got.ResumesBlocked != nil {
+			t.Errorf("%s: read as %+v, want no run named", name, got.ResumesBlocked)
+		}
+	}
+}
+
 // THE SAME MAP IS READ BOTH SIDES OF A STORE ROUND TRIP, where an int
 // becomes a float64. A reader that knew only the local shape would report
 // every peer's in-flight count as zero — which is the one number this

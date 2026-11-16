@@ -563,7 +563,7 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		r.feeds(now, &out)
 	}
 	if r.executors != nil {
-		r.executors(now, &out)
+		r.executors(ctx, now, &out)
 	}
 	r.refsReading(&out)
 	r.space(&out, now)

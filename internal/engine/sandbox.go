@@ -50,7 +50,6 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -2933,24 +2932,6 @@ func seatSandbox(c *Company, handle string) *org.RoleSandbox {
 type sandboxRuntime struct {
 	pending     sandbox.PendingStore
 	coordinator *sandbox.Coordinator
-}
-
-// executorReading fills the alarm reading's runs of seats this node holds whose
-// finished job's resume waits for an operator
-// ([sandbox.Coordinator.ResumesBlocked]), which raise executor_resume_blocked
-// on this node. Read from the PUBLISHED runtime at each evaluation, never
-// captured: a runtime may arrive by an apply. A node with none leaves the
-// fields zero, which the table reads as nothing wrong here.
-func (e *Engine) executorReading(now time.Time, out *statelog.Reading) {
-	rt := e.sandbox.Load()
-	if rt == nil || rt.coordinator == nil {
-		return
-	}
-	blocked := rt.coordinator.ResumesBlocked(now)
-	out.ExecutorResumesBlocked = blocked.Runs
-	out.ExecutorResumeBlockedSeat = blocked.Seat
-	out.ExecutorResumeBlockedKind = blocked.Kind
-	out.ExecutorResumeBlockedFor = blocked.For
 }
 
 // sandboxManager is this node's current sandbox manager, or nil where no

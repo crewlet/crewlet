@@ -279,9 +279,10 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a finished job's resume waiting for an operator": {
 			statelog.KindExecutorResumeBlocked,
 			statelog.Reading{ExecutorResumesBlocked: 1, ExecutorResumeBlockedSeat: "swe",
-				ExecutorResumeBlockedKind: "disk_full", ExecutorResumeBlockedFor: 40 * time.Minute},
-			"1 run(s) of seats this node holds finished their executor's job but cannot be resumed until " +
-				"an operator clears a condition (the longest: swe's, on disk_full, for 40m)",
+				ExecutorResumeBlockedNode: "sat-1", ExecutorResumeBlockedKind: "disk_full",
+				ExecutorResumeBlockedFor: 40 * time.Minute},
+			"1 run(s) of seats finished their executor's job but cannot be resumed until an operator " +
+				"clears a condition (the longest: swe's, held by sat-1, on disk_full, for 40m)",
 		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,

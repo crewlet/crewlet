@@ -104,9 +104,10 @@ func InfrastructureKind(kind string) bool {
 // A FINISHED JOB WHOSE RESUME FAILS ON ONE WAITS FOR THE OPERATOR: the resume
 // give-up counts no failure of the node's (internal/sandbox's resumeGivenUp),
 // so the run and its seat wait for as long as the condition lasts, and
-// nothing ends it but a turn's deadline. So it is said: the node holding the
-// seat raises executor_resume_blocked while one such run waits
-// (internal/sandbox's Coordinator.ResumesBlocked). False for every other kind,
+// nothing ends it but a turn's deadline. So it is said: while one such run
+// waits, the node holding the seat says so on its heartbeat
+// (internal/sandbox's Coordinator.ResumesBlocked), and every data node raises
+// executor_resume_blocked from there. False for every other kind,
 // one that clears when a store, a log or a broker answers again included,
 // and for anything that is no kind of a condition.
 func OperatorKind(kind string) bool {
