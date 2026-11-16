@@ -2655,7 +2655,8 @@ const (
 	// The model effort and every harness train, on kit 0.137.0: 6371.8 KiB (6,524,759 bytes), 16,686 over main: 6372 KiB.
 	// Gitlet's code host colours (diffs, change states, branches), on kit 0.137.0:
 	// 6358.5 KiB (6,511,153 bytes), 3,100 bytes over main: 6359 KiB.
-	treeBudget = 5<<20 + 1252<<10
+	// The Gitlet code host colours train, on kit 0.137.0: 6374.8 KiB (6,527,838 bytes), 3,079 over main: 6375 KiB.
+	treeBudget = 5<<20 + 1255<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
