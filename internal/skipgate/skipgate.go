@@ -83,8 +83,8 @@
 // writes `importpath<TAB>seconds<TAB>cpu` into FILE for every package that
 // passed or had no test files — its binary's wall time, read from the
 // package-level records this program already reads to reach its verdict, and
-// its share of the CPU the run used ([cpuShares]) — and under each such
-// package one
+// the CPU its binary used, read at the binary through go test's -exec
+// (cpu.go) — and under each such package one
 // `importpath<TAB>Test<TAB>seconds` line for every TOP-LEVEL test that passed
 // or skipped, from that test's own record. It is the file
 // internal/solo/partition reads with -weights to deal each half across its
@@ -389,10 +389,10 @@ type report struct {
 	// is no measurement of itself, so neither is here.
 	topLevel map[string]map[string]float64
 
-	// cpu is the CPU the command and every test binary it waited for used
-	// (os.ProcessState's UserTime and SystemTime), set once it has exited:
-	// what the -timings file's package lines share out ([cpuShares]).
-	cpu time.Duration
+	// packageCPU is the CPU each package's test binary used, by import path,
+	// as go test's -exec wrapper read it (cpu.go); empty on a run that wrote
+	// no -timings file.
+	packageCPU map[string]float64
 
 	// timed is every test, subtests included, that passed or skipped, with
 	// its seconds: what the slowest-tests list at the end of a run is drawn
@@ -619,12 +619,11 @@ func flush(out *os.File, buffered map[string][]string, pkg string) int {
 // the partition's, and a file a different writer produced is offered only
 // while the new code has none, and dropped if the reader refuses it.
 func writeTimings(w io.Writer, r report) error {
-	cpu := cpuShares(r)
 	var timings strings.Builder
 	for _, p := range slices.Sorted(maps.Keys(r.finished)) {
 		if f := r.finished[p]; f.action != "fail" {
 			fmt.Fprintf(&timings, "%s\t%s\t%s\n", p, strconv.FormatFloat(f.elapsed, 'f', 3, 64),
-				strconv.FormatFloat(cpu[p], 'f', 3, 64))
+				strconv.FormatFloat(r.packageCPU[p], 'f', 3, 64))
 			for _, test := range slices.Sorted(maps.Keys(r.topLevel[p])) {
 				fmt.Fprintf(&timings, "%s\t%s\t%s\n", p, test, strconv.FormatFloat(r.topLevel[p][test], 'f', 3, 64))
 			}
@@ -634,43 +633,10 @@ func writeTimings(w io.Writer, r report) error {
 	return err
 }
 
-// cpuShares is each package's share of the CPU the run used: the run's CPU
-// ([report.cpu]) shared out by each package's busy time, the sum of its
-// top-level tests' ([span]), over every package's, failed ones' included,
-// since their tests used the CPU too.
-//
-// AN ESTIMATE, AND THE RIGHT ONE FOR THE PARALLEL HALF'S DEAL. go test
-// reports no package's CPU, only the process tree's, and a package's wall
-// time measures the wrong thing on a CPU-bound runner: it grows with what
-// shared the machine with it, so internal/engine read 804 s beside 1,440 s
-// of other packages it was dealt beside on a shard that ran 3.4 of 4 CPUs
-// busy, and the deal, balancing those walls, put the most work beside the
-// package that could least afford it. The busy time is wall time while a
-// test held a slot, so where every running test shares the CPU, a
-// package's share of the busy time is its share of the CPU; a test that sat
-// waiting on I/O while it held its slot is counted as though it computed,
-// and what go test spent linking is shared out with the rest. A package with
-// no busy time (no test files, or none that ran) is given none.
-func cpuShares(r report) map[string]float64 {
-	busy := map[string]float64{}
-	var total float64
-	for pkg, tests := range r.topLevel {
-		for _, s := range tests {
-			busy[pkg] += s
-			total += s
-		}
-	}
-	out := make(map[string]float64, len(busy))
-	if total == 0 {
-		return out
-	}
-	for pkg, b := range busy {
-		out[pkg] = r.cpu.Seconds() * b / total
-	}
-	return out
-}
-
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == execMode {
+		os.Exit(runExec(os.Args[2:]))
+	}
 	fs := flag.NewFlagSet("skipgate", flag.ContinueOnError)
 	timingsPath := fs.String("timings", "", "write how long each package that passed took, the CPU it used, and each of its top-level tests' time, to `file`")
 	fs.Usage = func() {
@@ -699,12 +665,46 @@ func main() {
 		}
 		timings = f
 	}
+	// AND EACH PACKAGE'S CPU, read at its test binary through go test's
+	// -exec (cpu.go): the command is handed this program as its wrapper, and
+	// the wrapper appends to a file of its own.
+	var root, module, cpuPath string
+	var cpuLost bool
+	if timings != nil {
+		var err error
+		if root, err = os.Getwd(); err == nil {
+			module, err = moduleAt(root)
+		}
+		var self string
+		if err == nil {
+			self, err = os.Executable()
+		}
+		if err == nil {
+			argv, err = withExec(argv, self)
+		}
+		var f *os.File
+		if err == nil {
+			f, err = os.CreateTemp("", "skipgate-cpu-*")
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "skipgate: -timings (make's TEST_TIMINGS): %v\n", err)
+			os.Exit(2)
+		}
+		cpuPath = f.Name()
+		_ = f.Close()
+	}
 	// exit fills the timings file, if one was asked for, from what the run
 	// got through, and exits with code — or with 1 if the file could not be
 	// written, since a run whose measurement was lost has not done everything
 	// it was asked. Before the stream is read r is empty, and so is the file.
 	var r report
 	exit := func(code int) {
+		if cpuPath != "" {
+			_ = os.Remove(cpuPath)
+		}
+		if cpuLost {
+			code = max(code, 1)
+		}
 		if timings != nil {
 			err := errors.Join(writeTimings(timings, r), timings.Close())
 			if err != nil {
@@ -717,6 +717,9 @@ func main() {
 
 	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...)
 	cmd.Stderr = os.Stderr
+	if cpuPath != "" {
+		cmd.Env = append(os.Environ(), cpuFileVar+"="+cpuPath)
+	}
 	stream, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skipgate: %v\n", err)
@@ -749,8 +752,13 @@ func main() {
 	// in hand rather than inferred from what it managed to say.
 	producer := cmd.Wait()
 	fmt.Fprintln(os.Stderr, cpuUse(cmd.ProcessState, time.Since(started), runtime.NumCPU()))
-	if cmd.ProcessState != nil {
-		r.cpu = cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()
+	if cpuPath != "" {
+		cpu, err := readCPU(cpuPath, root, module)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\nskipgate: read each package's CPU: %v\n", err)
+			cpuLost = true
+		}
+		r.packageCPU = cpu
 	}
 	fmt.Fprint(os.Stderr, slowest(r.timed, slowestShown))
 	if scanErr != nil {
