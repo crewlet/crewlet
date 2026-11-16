@@ -4128,7 +4128,7 @@ model chosen is not a fast one, and never refuses it. A model
 Ask Crewlet already runs on keeps it until another model is chosen for
 Ask Crewlet.
 
-**Status comes from every node's heartbeat.** Each node publishes, per model,
+**Status comes from every node's status record.** Each node publishes, per model,
 how it signs in there, whether it sits out a vendor's limit and until when,
 when it last answered and last failed, the seats parked on it and, for a model
 signed in with a harness login, that login's state on its disk. The page joins them:
@@ -4136,7 +4136,8 @@ a model is `sitting_out` while any live node sits it out, `no_sign_in` when
 nothing signs it in on the node answering, `rejected` after a refusal newer than
 its last answer or past its credential's expiry, `expiring` within seven days of
 that expiry, `untested` before anything said whether it works, and `ready`
-otherwise. A node whose beat carried no report is shown as one that did not say,
+otherwise. A live node with no [status record](coordination.md#its-status-record)
+counted is shown as one that did not say,
 never as a node where nothing happened. Members read every model's condition;
 only an admin reads the credential's name, its hint, who stored it and when, the
 account a login names and the vendor's own sentence.

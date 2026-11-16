@@ -334,7 +334,7 @@ roles:
 // vendor's server refuses that: every first boot under provisioning logged
 // each seat's server failed and retried it on the restart schedule for a
 // credential the engine knew it had not minted. Here nothing may reach a
-// bridge before the seal, the heartbeat must count the CEO's child as waiting
+// bridge before the seal, the status record must count the CEO's child as waiting
 // — not as failed, which it is not — with the sentence naming what it waits
 // for, and the CTO's as failed with the variable to set. Neither arms a
 // retry, since nothing changes either until the snapshot does; and the pass

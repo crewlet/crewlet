@@ -1,7 +1,6 @@
 package coord_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -14,8 +13,8 @@ import (
 // server lists as many tools as it likes, and a long prefix can refuse every
 // one of them, so a row names at most MaxMCPToolNotes of each, every name cut
 // to MaxMCPToolNameBytes, and carries how many there are in all. Through the
-// JSON round trip a lease store makes, where a count becomes a float64 and a
-// list of maps a list of anything.
+// bytes a store keeps a node's status record as, where a count becomes a
+// float64 and a list of maps a list of anything.
 //
 // Mutation: drop the bound on either list, or the cut on a name, or read a
 // count back as its list's length, and this is red.
@@ -27,22 +26,13 @@ func TestAServersRefusedAndShadowedToolsTravelBoundedAndCounted(t *testing.T) {
 	}
 	long := strings.Repeat("n", 3*coord.MaxMCPToolNameBytes)
 	refused[0].Tool = long
-	status := coord.NodeStatus{MCP: []coord.MCPServerStatus{{
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1, MCP: []coord.MCPServerStatus{{
 		Server: "docs", Shared: true, Started: 1, Tools: 3,
 		Refused: refused, RefusedCount: len(refused),
 		Shadowed:      []coord.MCPToolShadow{{Tool: "search", By: "handbook"}},
 		ShadowedCount: 1,
-	}}}
-	raw, err := json.Marshal(map[string]any{coord.StatusKey: status.Meta()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var meta map[string]any
-	if err := json.Unmarshal(raw, &meta); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := coord.StatusFromMeta(meta)
-	if !ok || len(got.MCP) != 1 {
+	}}})
+	if len(got.MCP) != 1 {
 		t.Fatalf("decoded %+v", got)
 	}
 	row := got.MCP[0]
@@ -62,24 +52,26 @@ func TestAServersRefusedAndShadowedToolsTravelBoundedAndCounted(t *testing.T) {
 	}
 }
 
-// A ROW WITH NOTHING REFUSED OR SHADOWED CARRIES NEITHER KEY: the beat of a
+// A ROW WITH NOTHING REFUSED OR SHADOWED CARRIES NEITHER KEY: the record of a
 // company whose names are in order is what it was before either existed.
 func TestARowWithEveryToolOfferedCarriesNoNotes(t *testing.T) {
 	t.Parallel()
-	status := coord.NodeStatus{MCP: []coord.MCPServerStatus{{Server: "docs", Shared: true, Started: 1, Tools: 3}}}
-	rows, _ := status.Meta()["mcp"].([]map[string]any)
+	wire := wireOf(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
+		MCP: []coord.MCPServerStatus{{Server: "docs", Shared: true, Started: 1, Tools: 3}}})
+	rows, _ := wire["mcp"].([]any)
 	if len(rows) != 1 {
-		t.Fatalf("mcp rows = %v", status.Meta()["mcp"])
+		t.Fatalf("mcp rows = %v", wire["mcp"])
 	}
+	row, _ := rows[0].(map[string]any)
 	for _, key := range []string{"refused", "refused_count", "shadowed", "shadowed_count"} {
-		if _, ok := rows[0][key]; ok {
+		if _, ok := row[key]; ok {
 			t.Errorf("a row with every tool offered carries %q", key)
 		}
 	}
 	// A count a peer wrote short of its own list is read as at least the list.
-	got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: map[string]any{"mcp": []any{
+	got := decoded(t, map[string]any{"epoch": 1, "mcp": []any{
 		map[string]any{"server": "docs", "refused": []any{map[string]any{"tool": "a", "reason": "characters"}}},
-	}}})
+	}})
 	if row := got.MCP[0]; row.RefusedCount != 1 {
 		t.Errorf("a list of one with no count read as %d refused", row.RefusedCount)
 	}

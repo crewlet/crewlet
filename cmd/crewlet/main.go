@@ -2548,7 +2548,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// directory's answer, never a field of the chart.
 			Env:   e.LookupSecret,
 			Coord: e.Backends().Coord,
-			Plane: e.Backends().Fleet,
+			// EACH NODE'S MCP, MODEL AND RUNNER ROWS, on its status
+			// record beside its presence, counted against Coord's.
+			NodeStatuses: e.Backends().Fleet,
+			Plane:        e.Backends().Fleet,
 			// The object collector's last report, read from the store
 			// every node reads it from, for the fleet view's card — as a
 			// report on the object store this node agreed with the fleet,

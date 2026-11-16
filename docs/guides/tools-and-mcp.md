@@ -921,13 +921,14 @@ server's own page:
 Those two are the whole grammar. A server that fails to start is visible as a
 server with no tools rather than its tools quietly going absent from the
 built-ins, and as a row of its own: every node re-publishes its MCP servers as
-they are at each beat on its presence heartbeat (per server, its instances
-counted), so the **Servers** tab shows each server as *Running*, *Partial*,
+they are on its [status record](../concepts/coordination.md#its-status-record)
+within a renew period of a change (per server, its instances counted), so the
+**Servers** tab shows each server as *Running*, *Partial*,
 *Failed*, *Waiting*, *Not started*, *Not reported* or *Disabled* (turned off,
 [below](#turning-a-server-off)), with what last went wrong in its
 [class's](#why-a-server-failed) few words (`GET /mcp-servers`, everybody's,
 though only an administrator reads each server's launch and the sentences: see
-[Who sees what](#who-sees-what); the heartbeat carries each reason bounded,
+[Who sees what](#who-sees-what); the record carries each reason bounded,
 and the whole text is the node's `mcp_server_failed` log line, or
 `server_exited` for one that
 [went down after starting](#a-server-that-dies-or-will-not-start)). Clicking a
@@ -1858,7 +1859,7 @@ offered in its place: among one node's servers the first server by name keeps
 it, and in a seat's surface a shared server's tool keeps it against the seat's
 own server's. A `tool_prefix` on either server offers both.
 
-Each node reports these per server on its heartbeat, at most 8 of each with
+Each node reports these per server on its status record, at most 8 of each with
 how many there are in all, and
 [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers) gives each
 server's `refused_tools` and `shadowed_tools` across the fleet, each with a
@@ -2258,7 +2259,7 @@ into the new spec, as it does a running child whose spec moved, since a restart
 from the old spec would bring back what the revision replaced. A child whose
 start failed is the reconcile's to retry, as before.
 
-On the [heartbeat](../concepts/coordination.md#what-a-node-says-about-itself),
+On the node's [status record](../concepts/coordination.md#its-status-record),
 and so on the **Servers** tab of Settings › MCP & tools (`GET /mcp-servers`), a
 server that is down counts as failed, with what took it down, until it is back.
 
@@ -2284,7 +2285,7 @@ that cannot start at all, which is the same diagnosis as a failed first start
 Every node keeps each instance it runs in its own memory (a shared server's
 one child, and each held seat's own), and a server's page asks the nodes
 holding its instances when you open it, rather than every node publishing
-every child on every heartbeat. So
+every child on its status record. So
 [`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname)
 lists each **instance**: the seat it runs for, the node running it, whether it
 is running, failed or waiting, since when, how many times it was restarted,
@@ -2293,7 +2294,7 @@ back, and when it last answered (a start that listed its tools, or a tool call
 that came back). Each node asked is named with whether it answered within two
 seconds; a node that did not is never read as one holding nothing.
 
-The heartbeat still carries what every reader needs on every beat, bounded:
+The status record still carries what every reader needs, bounded:
 per node and server, since when its longest-failed instance has been down
 (the same instant across every retry of one outage), the class of the failure
 it names, and how many times its instances came back. A count that climbs
@@ -2366,7 +2367,7 @@ A server that stays down, an agent whose instance waits too long for its
 credential, a tool no agent can be handed, a call waiting too long for a
 person's approval, and a tool held because the server changed it each raise an
 [alarm](../reference/alarms.md), one per kind listing every server it stands
-on. Every data node judges them from every live node's heartbeat, so they read
+on. Every data node judges them from every live node's status record, so they read
 the same whichever node you ask, and a server turned off raises none.
 
 | Alarm | Raised when |
@@ -2848,7 +2849,7 @@ re-activation. A shared server held back is therefore never handed to its
 bridge, whose supervision would retry it, and starts on the apply that follows
 its secret's arrival. What a person does at an integration is the one change
 no pass sees, which is why a held-back child's row is judged again on every
-heartbeat against what the integration last reported. A server already
+pass of the node's status record against what the integration last reported. A server already
 running whose credential stops resolving — a sealed token deleted by a
 disconnect that removed the seats' accounts, or by hand — is
 stopped by the same rule (`mcp_server_retired`, naming the variable), rather

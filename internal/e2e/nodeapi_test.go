@@ -314,6 +314,9 @@ func wireAPI(
 			Coord:   backends.Coord,
 			Plane:   backends.Fleet,
 			Objects: backends,
+			// EACH NODE'S MCP, MODEL AND RUNNER ROWS, on its status record
+			// beside its presence, as cmd/crewlet hands them.
+			NodeStatuses: backends.Fleet,
 			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
 			// and every seat's live meter read.
 			Budget: backends.Fleet,
