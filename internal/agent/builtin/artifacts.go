@@ -91,7 +91,8 @@ const (
 	MoveArtifactTool         = string(authz.ActionArtifactMove)
 )
 
-// ArtifactTools are the thirteen, reads first.
+// ArtifactTools are the thirteen, reads first: the ones a seat and the
+// operator catalogue share. render_artifact is a seat's alone ([RenderTools]).
 func ArtifactTools() []string {
 	return []string{ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, ArtifactFormatTool, CompanyBrandTool,
 		CreateArtifactTool, PublishArtifactTool, UpdateArtifactTool, ShareArtifactTool,
@@ -361,12 +362,14 @@ func artifactToolSet(a ArtifactDeps) []candidate {
 // them ([mcp.WritesToSharedSurface]), and handed the five reads.
 func artifactAnnotations(name string) (tools.Annotations, bool) {
 	switch name {
-	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, ArtifactFormatTool, CompanyBrandTool:
+	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, ArtifactFormatTool, CompanyBrandTool,
+		RenderArtifactTool:
 		// Reads, and idempotent. get_artifact may condense a long file a
 		// colleague wrote through the auxiliary model, which is a read's
 		// cost the way query_episodes' condensing is, and writes nothing a
 		// person reads (an administrator's elevated-read record is the
-		// engine's audit, never a shared surface).
+		// engine's audit, never a shared surface). render_artifact writes
+		// its screenshots into the caller's own box, which nobody else reads.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}, true
 	case CreateArtifactTool, UploadArtifactAssetTool:
 		// Additive, and NOT idempotent as tools: a second call with other

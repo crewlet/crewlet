@@ -180,7 +180,7 @@ func toolsWithArguments() []tools.Callable {
 		&removeWorkItem{}, &restoreWorkItem{}, &moveWorkItem{},
 		&pauseSeat{}, &resumeSeat{}, &steerTurn{}, &runSchedule{},
 		&answerExecutor{}, &removeProjectFile{},
-		&getArtifact{}, &publishArtifact{}, &updateArtifact{},
+		&getArtifact{}, &renderArtifact{}, &publishArtifact{}, &updateArtifact{},
 		&shareArtifact{}, &unshareArtifact{}, &uploadArtifactAsset{}, &moveArtifact{},
 		&readArtifactData{}, &queryArtifactData{}, &writeArtifactData{}, &setArtifactSchema{},
 		&editMessage{}, &deleteMessage{}, &markChatRead{},
