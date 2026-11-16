@@ -33,6 +33,36 @@ const (
 	stageStep    = stageAdvance + stageReach
 )
 
+// holdBytes is H, how far the keys' stage lets the text run past a window
+// before it decides the window whatever the claims there say: the claims'
+// lag, a step, a piece and the longest marker a rule writes for every rule
+// in the table, the term the stream's memory figure counts for the keys'
+// stage waiting on its claims ([keyStage.frontier]). Every token's and AWS
+// secret's claim is known within it ([ruleStage.markerToStepAt]), and so is
+// every run's end but a Google token's before dots that run on past it, so a
+// window it decides early can be wrong only on what the password's reader, or
+// an AWS secret's quoted key, decides past it, and on where such a Google
+// token ends.
+//
+// A smaller H holds less of the text and decides more windows early, so more
+// texts are refused ([ErrDecidedEarly]); a larger one the reverse. At this one
+// no text the package's corpus, its generators or its benchmark writes
+// decides a window early.
+var holdBytes = sync.OnceValue(func() int {
+	longest := 0
+	for _, r := range rules() {
+		longest = max(longest, len(r.with))
+	}
+	return len(rules()) * (stageStep + pieceBytes + longest)
+})
+
+// earlyWindows is how many windows decided early wait at once for the claims
+// over them to be known ([keyStage.wait]): 64, 2 KiB, which cover 8 MiB of
+// armoured text whose claims trail it past H, and only a text built for it
+// reaches; one more merges the two oldest, which makes the check coarser and
+// never blind.
+const earlyWindows = 64
+
 // pieceBytes is the most a stage hands the next at once, and the most of a
 // write a stream hands its stages at once: what a stage holds past its window
 // waiting to step is at most this.
@@ -53,13 +83,47 @@ const (
 // every stage at once, with no window held.
 const wholeBytes = stageStep
 
+// ErrDecidedEarly is what a [Stream] answers, wrapped with the first byte of
+// the text from which what it wrote may differ from [Secrets], once it finds
+// it decided a window of its text before what the rules claim
+// there was known, and a claim it read then came otherwise: what it wrote is
+// not [Secrets] of the text and may hold what Secrets redacts, so the caller
+// must neither keep nor show any of it. A text gets it only where a key's
+// block is read beside a password's key, or an AWS secret's quoted key, whose
+// claim is decided more than the claims' lag past it, or beside a Google
+// token whose dots run on past the lag, whose end before them is set only once
+// they stop: texts no credential's format writes.
+var ErrDecidedEarly = errors.New("redact: the stream decided a window before a claim it read was known")
+
+// decidedEarly is [ErrDecidedEarly] and the first byte of the text from which
+// what the stream wrote may differ from [Secrets] ([keyStage.miss]).
+type decidedEarly struct{ at int }
+
+func (e *decidedEarly) Error() string {
+	return fmt.Sprintf("%v (from byte %d of the text): what the stream wrote is not the text redacted, and may hold what the redaction takes out, so neither keep nor show any of it", ErrDecidedEarly, e.at)
+}
+
+func (e *decidedEarly) Unwrap() error { return ErrDecidedEarly }
+
 // errStreamClosed is what a write after [Stream.Close] answers.
 var errStreamClosed = errors.New("redact: write to a closed stream")
 
 // Stream redacts a text written to it in pieces, writing the redacted text to
-// the writer it was made with: what it writes, put together, is exactly
-// [Secrets] of everything written to it, however the text is cut into writes,
-// and redacting that again changes nothing.
+// the writer it was made with, in one pass and bounded memory, or refuses it.
+// For every text, however it is cut into writes: it holds no more than its
+// stages' windows; whether it refuses depends on the text alone; and where
+// Close answers nil, what it wrote, put together, is exactly [Secrets] of
+// everything written to it, which redacting again changes as it would change
+// Secrets': not at all, but for what Secrets' own doc names.
+//
+// A REFUSAL IS [ErrDecidedEarly], from Close and from every write once the
+// stream finds it: its keys' stage decided a window before what the rules
+// claim there was known, and a claim it read came otherwise. What the stream
+// wrote is then not the text redacted, and may hold what the redaction takes
+// out, so the caller must neither keep nor show any of it. Only a text built
+// against the password's rule, or an AWS secret's quoted key, or a Google
+// token followed by dots past the claims' lag, beside a key's armour is
+// refused (the package doc's "A text that arrives in pieces").
 //
 // HOW THE TEXT IS CUT INTO WRITES CHANGES NOTHING IT DOES: it hands its stages
 // the text a piece at a time at the text's own offsets, each piece ending at a
@@ -67,14 +131,14 @@ var errStreamClosed = errors.New("redact: write to a closed stream")
 // ([pipeline.feed]), so every stage is handed the same pieces, and steps where
 // it steps, however the text arrives.
 //
-// ITS MEMORY IS ITS STAGES' WINDOWS and the piece it carries, but for the
-// texts the package doc's "A text that arrives in pieces" names, which hold
-// what the claims there wait on, so a text of any length, a whole PDF's base64
-// on one line of a transcript, is redacted without being held whole. What it writes trails what
-// it is written by those windows: nothing is written until a text passes
-// [wholeBytes], which a shorter one is redacted whole by, and then each stage
-// writes on what it decides as it decides it, the last some MiB behind. Close
-// writes the rest.
+// ITS MEMORY IS ITS STAGES' WINDOWS and the piece it carries, whatever the
+// text: its keys' stage holds a text no further past a window than the claims'
+// lag ([holdBytes]) before it decides the window, so a text of any length, a
+// whole PDF's base64 on one line of a transcript, is redacted without being
+// held whole. What it writes trails what it is written by those windows:
+// nothing is written until a text passes [wholeBytes], which a shorter one is
+// redacted whole by, and then each stage writes on what it decides as it
+// decides it, the last some MiB behind. Close writes the rest.
 //
 // A WRITE TO ITS WRITER IS CUT AT ANY BYTE, inside a rune too: each is a piece
 // of the redacted text, and the pieces put together are text. A writer that
@@ -91,16 +155,26 @@ type Stream struct {
 	// observe is handed to the keys' stage the stream makes, where a test
 	// sets one ([keyObserver]).
 	observe *keyObserver
+	// hold is how far the keys' stage lets the text run past a window
+	// before it decides it ([holdBytes]).
+	hold int
 }
 
 // NewStream is a Stream that writes what it redacts to w.
 func NewStream(w io.Writer) *Stream {
-	return &Stream{w: w}
+	return newStreamHolding(w, holdBytes())
+}
+
+// newStreamHolding is a Stream whose keys' stage decides a window once the
+// text has run h past it: [holdBytes] in every stream, and a test's own, so
+// a shape that decides early costs it megabytes rather than the claims' lag.
+func newStreamHolding(w io.Writer, h int) *Stream {
+	return &Stream{w: w, hold: h}
 }
 
 // Write redacts p as the next piece of the text. It takes the whole of p,
-// and answers the first error the writer gave, after which the stream writes
-// nothing more.
+// and answers the first error the writer gave, or [ErrDecidedEarly], after
+// which the stream writes nothing more.
 func (s *Stream) Write(p []byte) (int, error) {
 	switch {
 	case s.closed:
@@ -109,6 +183,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 		return 0, s.err
 	case s.p != nil:
 		s.p.feed(p)
+		s.stopOnMiss()
 		return len(p), s.err
 	}
 	// Held only up to the byte that passes the length a text is redacted
@@ -117,28 +192,50 @@ func (s *Stream) Write(p []byte) (int, error) {
 	n := min(len(p), wholeBytes+1-len(s.head))
 	s.head = append(s.head, p[:n]...)
 	if len(s.head) > wholeBytes {
-		s.p = newPipeline(s.emit, true)
+		s.p = newPipeline(s.emit, true, s.hold)
 		s.p.keys.observe = s.observe
 		s.p.feed(s.head)
 		s.head = nil
 		s.p.feed(p[n:])
+		s.stopOnMiss()
 	}
 	return len(p), s.err
 }
 
-// Close writes the rest of the redacted text, and answers the first error the
-// writer gave.
+// stopOnMiss stops the stream where its keys' stage found a window it decided
+// early read a claim otherwise than it came: it writes nothing more, lets its
+// stages go, and answers [ErrDecidedEarly] from then on. Running on would buy
+// nothing, since what it wrote is wrong already and nothing reads the text
+// again to correct it.
+func (s *Stream) stopOnMiss() {
+	if s.p != nil && s.p.keys != nil && s.p.keys.missed != nil {
+		if s.err == nil {
+			s.err = s.p.keys.missed
+		}
+		s.p = nil
+	}
+}
+
+// Close writes the rest of the redacted text, and answers nil, the first error
+// the writer gave, or [ErrDecidedEarly], whose stream's text the caller must
+// neither keep nor show.
 func (s *Stream) Close() error {
 	if s.closed {
 		return s.err
 	}
 	s.closed = true
+	if s.err != nil {
+		s.p, s.head = nil, nil
+		return s.err
+	}
 	if s.p == nil {
 		s.emit(Secrets(string(s.head)))
 		s.head = nil
 		return s.err
 	}
 	s.p.close()
+	s.stopOnMiss()
+	s.p = nil
 	return s.err
 }
 
@@ -168,8 +265,9 @@ type pipeline struct {
 }
 
 // newPipeline is the stages, writing what they redact to out: the rules alone
-// where keys is false, for a text that holds no key's armour.
-func newPipeline(out func(string), keys bool) *pipeline {
+// where keys is false, for a text that holds no key's armour; the keys' stage
+// deciding a window once the text has run hold past it ([holdBytes]).
+func newPipeline(out func(string), keys bool, hold int) *pipeline {
 	table := rules()
 	// The rules over what the keys' stage writes, last first.
 	var next sink = outSink(out)
@@ -205,7 +303,7 @@ func newPipeline(out func(string), keys bool) *pipeline {
 		claims = stage
 		p.claims = stage
 	}
-	p.keys = &keyStage{to: next, sources: p.sources}
+	p.keys = &keyStage{to: next, sources: p.sources, hold: hold}
 	for _, src := range p.sources {
 		src.keys = p.keys
 	}
@@ -238,9 +336,12 @@ func (p *pipeline) feed(b []byte) {
 		p.write(string(p.carry))
 		p.carry = p.carry[:0]
 	}
-	for len(b) >= pieceBytes {
+	for len(b) >= pieceBytes && !p.missed() {
 		p.write(string(b[:pieceBytes]))
 		b = b[pieceBytes:]
+	}
+	if p.missed() {
+		return
 	}
 	if len(b) > 0 {
 		if p.carry == nil {
@@ -259,7 +360,16 @@ func (p *pipeline) write(s string) {
 	}
 	p.keys.arrived += len(s)
 	p.claims.take(s, nil)
+	if p.missed() {
+		return
+	}
 	p.keys.take(s)
+}
+
+// missed reports whether the keys' stage found a miss ([Stream.stopOnMiss]):
+// the stages are handed nothing more.
+func (p *pipeline) missed() bool {
+	return p.keys != nil && p.keys.missed != nil
 }
 
 // close ends the text, handing the stages what it carried first.
@@ -272,7 +382,13 @@ func (p *pipeline) close() {
 		p.rules.close()
 		return
 	}
+	if p.missed() {
+		return
+	}
 	p.claims.close()
+	if p.missed() {
+		return
+	}
 	p.keys.close()
 }
 
@@ -446,7 +562,7 @@ type claimSource struct {
 
 // token claims t, a token's stretch, its end -1 while to come.
 func (c *claimSource) token(t [2]int) {
-	c.changed(t[0])
+	c.keys.handed(c, t[0], t[1], false, 0)
 	if t[1] < 0 || t[1] > c.keys.floor {
 		c.tokens = append(c.tokens, t)
 	}
@@ -455,7 +571,11 @@ func (c *claimSource) token(t [2]int) {
 // word claims w, a key, its separator's end and its value's end, the last -1
 // while to come.
 func (c *claimSource) word(w [3]int) {
-	c.changed(w[0])
+	end := max(w[1], w[2])
+	if w[1] < 0 || w[2] < 0 {
+		end = -1
+	}
+	c.keys.handed(c, w[0], end, true, w[2])
 	if w[2] < 0 || w[2] > c.keys.floor {
 		c.words = append(c.words, w)
 	}
@@ -463,8 +583,9 @@ func (c *claimSource) word(w [3]int) {
 
 // endToken sets the end of the token claimed last, claimed while open.
 func (c *claimSource) endToken(end int) {
-	c.tokens[len(c.tokens)-1][1] = end
-	c.changed(end)
+	t := &c.tokens[len(c.tokens)-1]
+	t[1] = end
+	c.keys.ended(c, t[0], end)
 }
 
 // endWord sets the ends of the word claimed last, claimed while open: its
@@ -475,15 +596,7 @@ func (c *claimSource) endWord(sep, end int) {
 		w[1] = sep
 	}
 	w[2] = end
-	c.changed(end)
-}
-
-// changed tells the keys' stage's observer, where a test sets one, that a
-// claim changed at place: where it begins, or the end set.
-func (c *claimSource) changed(place int) {
-	if o := c.keys.observe; o != nil && o.changed != nil {
-		o.changed(c, place)
-	}
+	c.keys.ended(c, w[0], end)
 }
 
 // prune lets go of the claims that end at or before lo.
@@ -1396,20 +1509,142 @@ type keyStage struct {
 	// piece the claims stages are being handed included: what a claim's
 	// change trails the text by is arrived less where it lies.
 	arrived int
+	// hold is how far the text runs past a window before the stage decides
+	// it whatever its claims say ([holdBytes]); early the windows it so
+	// decided while the claims over them were still to be known, each its
+	// start and end and the FOOTPRINT of what it asked of them, the hull
+	// of the claims its answers read ([claims.asked]), waiting for them
+	// ([keyStage.handed]).
+	hold  int
+	early [][4]int
+	// forgot is the furthest end of a block read forward that the stage
+	// let go ([keyStage.write]).
+	forgot int
+	// missed is the miss the stage found, after which it decides nothing.
+	missed *decidedEarly
 	// observe is told what the stage and its claims do, where a test sets
 	// it; nil in every stream.
 	observe *keyObserver
 }
 
 // keyObserver is what a test is told of a keys' stage: each claim that
-// changes, the source and the place it changed at ([claimSource.changed]).
+// changes, the source and the place it changed at (where it begins, or the end
+// set); each block it writes; and each window it decides early.
 type keyObserver struct {
 	changed func(c *claimSource, place int)
+	wrote   func(block [2]int)
+	decided func(lo, hi int)
+}
+
+// A WINDOW DECIDED EARLY IS CHECKED BY THE CLAIMS THAT COME AFTER IT. The keys'
+// stage decides a window once the text has run [holdBytes] past it, whatever
+// its claims' frontier says ([keyStage.frontier]), so the claims over it may
+// still change: a claim is handed, or one of its ends set, more than the hold
+// past where it lies, a LATE change, and only a late change can concern a
+// window so decided. The window's answers depend on the claims over its
+// footprint alone, and on nothing else, so a late change that meets it is
+// a MISS: the window may have decided otherwise than the whole text does,
+// and the stream is refused ([ErrDecidedEarly]). A claim the window read open
+// read as running past it ([keyStage.claimsIn]), so its end set inside the
+// window is checked over all it read the claim to cover. One that meets
+// none decided what the whole text does, by induction over the windows in
+// order.
+
+// handed checks a claim handed at a, its extent ending at end (-1 while to
+// come), a word's value ending at value, against the windows decided early;
+// and a late word against the blocks read forward the stage let go.
+func (k *keyStage) handed(c *claimSource, a, end int, word bool, value int) {
+	if o := k.observe; o != nil && o.changed != nil {
+		o.changed(c, a)
+	}
+	if k.arrived-a <= k.hold || k.missed != nil {
+		return
+	}
+	if word && a < k.forgot && (value < 0 || value > k.floor) {
+		// A word whose key a block read forward may hold, which the
+		// stage let go before it came: a later window reads its value
+		// as claimed where the whole text's block cuts it ([claims.take]).
+		k.miss(a)
+		return
+	}
+	for _, w := range k.early {
+		if a > w[1] {
+			continue
+		}
+		to := w[1] + 1
+		if end >= 0 {
+			to = min(end, to)
+		}
+		if a < w[3] && w[2] < to {
+			k.miss(w[0])
+			return
+		}
+	}
+}
+
+// ended checks the end e set on a claim at a, read open by any window
+// decided early that it ends inside: the window read the claim as running to
+// one past its end, so what it read and what is true differ from e to there,
+// and the two together run from a.
+func (k *keyStage) ended(c *claimSource, a, e int) {
+	if o := k.observe; o != nil && o.changed != nil {
+		o.changed(c, e)
+	}
+	if k.arrived-e <= k.hold || k.missed != nil {
+		return
+	}
+	for _, w := range k.early {
+		if e > w[1] || a > w[1] {
+			continue
+		}
+		if a < w[3] && w[2] <= w[1] {
+			k.miss(w[0])
+			return
+		}
+	}
+}
+
+// miss is a miss found at, in the text (the window's start, or a late word's
+// key): the first the stage keeps, named from the start of the first window
+// it decided early that still waits on its claims where that comes before.
+//
+// NOT FROM at ALONE: the stream stops at the first miss it finds, and a window
+// decided early before it whose late claim has yet to come may have decided
+// otherwise too, unseen. Every window before the first that waits had its
+// claims known when it was decided, or has had them since, so what the stream
+// wrote is the whole text's up to the byte named, and from there on it is not
+// known to be.
+func (k *keyStage) miss(at int) {
+	if k.missed != nil {
+		return
+	}
+	for _, w := range k.early {
+		at = min(at, w[0])
+	}
+	k.missed = &decidedEarly{at: at}
+}
+
+// wait keeps a window decided early, w, until the claims over it are known:
+// the oldest two merged where [earlyWindows] wait already.
+func (k *keyStage) wait(w [4]int) {
+	if len(k.early) == earlyWindows {
+		a, b := k.early[0], k.early[1]
+		k.early[1] = [4]int{min(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), max(a[3], b[3])}
+		k.early = slices.Delete(k.early, 0, 1)
+	}
+	k.early = append(k.early, w)
+}
+
+// settle lets go of the windows decided early whose claims are all known.
+func (k *keyStage) settle() {
+	f := k.frontier()
+	k.early = slices.DeleteFunc(k.early, func(w [4]int) bool { return w[1] < f })
 }
 
 // take hands the stage the next stretch of the text.
 func (k *keyStage) take(text string) {
 	k.in.add(text)
+	k.settle()
 	for k.step() {
 	}
 }
@@ -1419,7 +1654,9 @@ func (k *keyStage) close() {
 	k.in.eof = true
 	for k.step() {
 	}
-	k.to.close()
+	if k.missed == nil {
+		k.to.close()
+	}
 }
 
 // frontier is where what the rules claim stops being known ([claimSource]).
@@ -1437,7 +1674,7 @@ func (k *keyStage) frontier() int {
 func (k *keyStage) step() bool {
 	end := k.in.end
 	hi := k.read + stageAdvance + keyAhead
-	if k.done || !k.in.eof && end < hi {
+	if k.done || k.missed != nil || !k.in.eof && end < hi {
 		return false
 	}
 	eof := k.in.eof && end <= hi
@@ -1451,10 +1688,14 @@ func (k *keyStage) step() bool {
 	}
 	text := k.in.window(lo, hi)
 	if strings.Contains(text[k.read-lo:min(len(text), readTo-lo+len(keyArmour)+64)], keyArmour) {
-		if k.frontier() <= hi {
+		early := k.frontier() <= hi
+		if early && k.arrived-k.hold <= hi {
 			return false
 		}
-		k.readArmours(text, lo, readTo)
+		k.readArmours(text, lo, readTo, early)
+		if k.missed != nil {
+			return false
+		}
 	}
 	k.read = readTo
 	writeTo := readTo - keyReach
@@ -1466,9 +1707,33 @@ func (k *keyStage) step() bool {
 	return true
 }
 
-// readArmours reads the blocks of the armours that begin in [k.read, readTo).
-func (k *keyStage) readArmours(text string, lo, readTo int) {
+// readArmours reads the blocks of the armours that begin in [k.read, readTo),
+// early where the claims over the window are still to be known.
+//
+// A SPAN AN EARLY WINDOW READS ENDING AT OR BEFORE ITS START, or beginning
+// before what the stage has written, is a reading of claims the whole text
+// does not have: a token's run ends at an armour's dashes
+// ([ruleStage.carryToken]), so no claim the whole text has covers a block's
+// end from before its start. It is a miss, and is never written: written, it
+// would slice the text backwards.
+//
+// The second comes of no reading the code makes now: a span begins at a
+// BEGIN the window reads, at or past where it reads from, or within [keyReach]
+// before an END it reads, and the stage writes no further than keyReach short
+// of where it reads from ([keyStage.step]); [claims.shortOfNames] moves a
+// span's end alone. It is checked all the same, at the one place a reading of
+// claims the whole text does not have is written, since a span that began
+// before what is written would panic the stage, and with it the goroutine the
+// stream runs in.
+func (k *keyStage) readArmours(text string, lo, readTo int, early bool) {
 	c := k.claimsIn(text, lo)
+	foot := [2]int{len(text) + 1, -1}
+	if early {
+		c.footprint = &foot
+		if o := k.observe; o != nil && o.decided != nil {
+			o.decided(lo, lo+len(text))
+		}
+	}
 	r := keyReading{open: -1}
 	for _, f := range k.forward {
 		r.forward = append(r.forward, [2]int{f[0] - lo, f[1] - lo})
@@ -1487,9 +1752,16 @@ func (k *keyStage) readArmours(text string, lo, readTo int) {
 	c.take(r.forward)
 	spans := append(slices.Clone(r.forward[carried:]), r.ends(text, c, begins, keyEnd.FindAllStringIndex(text, -1), from, to)...)
 	for _, s := range c.shortOfNames(spans) {
+		if early && (s[1] <= s[0] || s[0]+lo < k.pos) {
+			k.miss(lo)
+			return
+		}
 		k.pending = append(k.pending, [2]int{s[0] + lo, s[1] + lo})
 	}
 	k.pending = mergeSpans(k.pending)
+	if early && foot[0] < foot[1] {
+		k.wait([4]int{lo, lo + len(text), lo + foot[0], lo + foot[1]})
+	}
 	for _, f := range r.forward[carried:] {
 		k.forward = append(k.forward, [2]int{f[0] + lo, f[1] + lo})
 	}
@@ -1554,6 +1826,9 @@ func (k *keyStage) write(text string, lo, writeTo int) {
 	at, n := k.pos, 0
 	for ; n < len(k.pending) && k.pending[n][1] <= writeTo; n++ {
 		s := k.pending[n]
+		if o := k.observe; o != nil && o.wrote != nil {
+			o.wrote(s)
+		}
 		piece(text[at-lo : s[0]-lo])
 		piece(keyMarker)
 		at = s[1]
@@ -1581,7 +1856,13 @@ func (k *keyStage) write(text string, lo, writeTo int) {
 	}
 	if len(k.forward) > 1 {
 		last := k.forward[len(k.forward)-1]
-		k.forward = slices.DeleteFunc(k.forward[:len(k.forward)-1], func(f [2]int) bool { return f[1] <= keepFrom })
+		k.forward = slices.DeleteFunc(k.forward[:len(k.forward)-1], func(f [2]int) bool {
+			if f[1] <= keepFrom {
+				k.forgot = max(k.forgot, f[1])
+				return true
+			}
+			return false
+		})
 		k.forward = append(k.forward, last)
 	}
 }

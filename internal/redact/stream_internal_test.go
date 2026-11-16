@@ -148,7 +148,7 @@ func parted(got, want string) string {
 func staged(text string) string {
 	var b strings.Builder
 	b.Grow(len(text))
-	p := newPipeline(func(s string) { b.WriteString(s) }, strings.Contains(text, keyArmour))
+	p := newPipeline(func(s string) { b.WriteString(s) }, strings.Contains(text, keyArmour), holdBytes())
 	for at := 0; at < len(text); at += pieceBytes {
 		p.write(text[at:min(len(text), at+pieceBytes)])
 	}
@@ -416,7 +416,7 @@ func (p *pipeline) held() streamHeld {
 	if p.keys != nil {
 		walk(p.claims)
 		h.text += p.keys.in.held()
-		h.entries += 16*(len(p.keys.pending)+len(p.keys.forward)) + 8*len(p.keys.closed)
+		h.entries += 16*(len(p.keys.pending)+len(p.keys.forward)) + 8*len(p.keys.closed) + 32*len(p.keys.early)
 	}
 	return h
 }
@@ -424,7 +424,18 @@ func (p *pipeline) held() streamHeld {
 // streamWindow is the most a rule's stage holds of its input between two
 // writes: [stageReach] behind where it resumes, less than [stageStep] past it,
 // and the piece handed last, [pieceBytes] and a marker past it at most.
-const streamWindow = stageReach + stageStep + pieceBytes + len(Marker+"secret-access-key]")
+var streamWindow = stageReach + stageStep + pieceBytes + longestMarker()
+
+// longestMarker is the longest marker a rule writes ([ruleMarkers]), read
+// from the table so that a rule added with a longer one moves the figure: a
+// DigitalOcean token's, a byte longer than an AWS secret's.
+func longestMarker() int {
+	n := 0
+	for _, m := range ruleMarkers() {
+		n = max(n, len(m))
+	}
+	return n
+}
 
 // streamBound is the most a [Stream]'s stages hold between two writes, as the
 // text they hold and as the entries they keep beside it (values, edits,
@@ -438,8 +449,9 @@ const streamWindow = stageReach + stageStep + pieceBytes + len(Marker+"secret-ac
 // a reader keeps stands for a marker, fifteen bytes of its input at least (a
 // JSON Web Token's and one byte), at 32 bytes; a value the password's stage
 // and reader keep, six bytes (a key, its operator, a byte and a space), at 16,
-// as many again while it trims them; and a claim the keys' stage may still
-// ask of, five bytes of what it holds (`pwd:` and a break), at 24.
+// as many again while it trims them; a claim the keys' stage may still ask
+// of, five bytes of what it holds (`pwd:` and a break), at 24; and the
+// windows it decided early that wait on their claims, [earlyWindows] at 32.
 func streamBound() (text, entries int) {
 	table := len(rules())
 	readers := 1
@@ -450,9 +462,9 @@ func streamBound() (text, entries int) {
 	}
 	tracking := table - 1 + readers
 	keys := pieceBytes + 4*keyReach + stageAdvance + keyAhead
-	lag := (table - 1 + 1) * (stageStep + pieceBytes + len(Marker+"secret-access-key]"))
+	lag := (table - 1 + 1) * (stageStep + pieceBytes + longestMarker())
 	text = (table+tracking)*streamWindow + keys + lag + pieceBytes
-	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*24/5
+	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*24/5 + 32*earlyWindows
 	return text, entries
 }
 
@@ -465,8 +477,9 @@ func streamBound() (text, entries int) {
 // JSON Web Token every fifteen bytes), over values a reach below their keys
 // that run on past a window, and over the runs a stage counts rather than
 // holds, a Google token's dots and the backslashes an escaped break ends a
-// value before, each a MiB long. Not over the texts the package doc's "A text
-// that arrives in pieces" names, which hold what the claims there wait on.
+// value before, each a MiB long. The texts that held a stream past its
+// windows before its keys' stage decided a window early ([holdBytes]) are
+// TestNoTextHoldsAStreamPastItsWindowsAndItsHold's.
 //
 // Mutation: hand a stage's output on a step at a time rather than a piece at a
 // time ([ruleStage.pass]), write a run's counted dots or backslashes out at
@@ -477,7 +490,7 @@ func streamBound() (text, entries int) {
 func TestAStreamHoldsNoMoreThanItsStagesWindows(t *testing.T) {
 	t.Parallel()
 	boundText, boundEntries := streamBound()
-	marker := len(Marker + "secret-access-key]")
+	marker := longestMarker()
 	boundEdits := (stageStep+pieceBytes+2*marker)/15 + 1
 	r := rand.New(rand.NewPCG(1170, 2))
 	// Each stage trails its input by a step, so a text reaches the last of

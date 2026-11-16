@@ -271,3 +271,44 @@ func keptSession(n int) []byte {
 	}
 	return b[:n]
 }
+
+// AN ORDINARY TEXT NEVER DECIDES EARLY at the stream's own hold: no window of
+// the package's keys in every wrapping set among texts of every shape a
+// stage carries ([redact.StreamText]), of such texts alone, keys' armours
+// among such texts, or tokens back to back after an armour, each longer than
+// the least text in which a window can be decided early at that hold
+// ([redact.EarlyReach]), or of what a kept session holds is decided before
+// the claims over it are known ([redact.EarlyWindows]), so the early path runs
+// only on texts built against the password's rule, an AWS secret's quoted key
+// or a Google token's dots, and only those can be refused.
+//
+// Mutation: hold less than the claims' lag ([holdBytes]), or decide a window
+// with an armour in it early whenever the text has run the hold past it,
+// whatever its claims' frontier says ([keyStage.step]), and a window of a
+// text here past the least text is decided early.
+func TestAnOrdinaryTextNeverDecidesEarly(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1170, 5))
+	texts := streamCorpus(r)
+	for i := range 3 {
+		texts[fmt.Sprintf("shapes %d", i)] = redact.StreamText(r, 3*redact.MaxReach+r.IntN(8*redact.MaxReach))
+	}
+	texts["a kept session"] = string(keptSession(1 << 20))
+	// Past the least text that can decide a window early, so a hold or a
+	// trigger that decides one here is seen.
+	long := map[string]string{
+		"an armour and every shape, past the hold":         "-----BEGIN RSA PRIVATE KEY-----\n" + redact.StreamText(r, 8<<20),
+		"an armour and tokens back to back, past the hold": string(denseTokens(8 << 20)),
+	}
+	for name, text := range long {
+		if len(text) <= redact.EarlyReach() {
+			t.Errorf("%s (%d KiB): no longer than the %d KiB in which a window can be decided early", name, len(text)>>10, redact.EarlyReach()>>10)
+		}
+		texts[name] = text
+	}
+	for name, text := range texts {
+		if n, err := redact.EarlyWindows(text); n > 0 || err != nil {
+			t.Errorf("%s (%d KiB): %d windows decided early, Close answered %v", name, len(text)>>10, n, err)
+		}
+	}
+}
