@@ -50,6 +50,7 @@ import {
 // RELATIVE, as in the bridge: the runtime is built alone, where the `~` alias does not exist.
 import { RUNTIME_CONTRACT } from "../contract/artifactsworkspace.ts";
 import { pathSegment } from "../lib/segment.ts";
+import { PageComments } from "./comments.ts";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type Unsubscribe = () => void;
@@ -227,14 +228,27 @@ if (window.parent !== window && fragment.nonce) {
   );
 }
 
+// THE COMMENT LAYER: what the host asks on the `comments` topic, answered
+// with the page's own geometry, words and pixels (`comments.ts`).
+const comments = new PageComments({
+  call: (method, params) => bridge.call(method, params),
+  refuse: (code, message) => new RuntimeError(code, message),
+});
+bridge.onEvent.add((event) => {
+  if (event.topic === "comments") comments.receive(event);
+});
+
 // A PAGE THAT TRAPS TAB still lets its reader out: Mod+Escape hands focus back
-// to the viewer around the frame.
+// to the viewer around the frame. A bare Escape while the reader is placing a
+// comment ends Comment mode, which is the host's.
 window.addEventListener(
   "keydown",
   (event: KeyboardEvent) => {
     if (event.key === "Escape" && (event.metaKey || event.ctrlKey) && !event.defaultPrevented) {
       bridge.focusExit();
+      return;
     }
+    comments.onKey(event);
   },
   true,
 );
@@ -623,6 +637,11 @@ const crewlet = Object.freeze({
       themeListeners.add(cb);
       return () => void themeListeners.delete(cb);
     },
+  }),
+  // A PART A READER CAN COMMENT ON, declared as the attribute is: the name is
+  // checked (`invalid`), and the returned call lets the element go.
+  comments: Object.freeze({
+    anchor: (name: string, element: Element): Unsubscribe => comments.anchor(name, element),
   }),
 });
 
