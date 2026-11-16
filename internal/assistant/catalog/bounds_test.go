@@ -76,7 +76,7 @@ var readBounds = map[string]bound{
 	"list_projects":          {kind: boundPage},
 	"list_projects/one":      {kind: boundRecord, record: "key"},
 	"get_workload":           {kind: boundConfig, why: "one row per seat"},
-	"list_decisions":         {kind: boundCapped, why: "decisions answers at most 50, newest first, with its total"},
+	"list_decisions":         {kind: boundPage},
 	"list_agents":            {kind: boundConfig, why: "one row per agent seat"},
 	"get_agent/activity":     {kind: boundWindow},
 	"get_agent/detail": {kind: boundRecord, record: "handle",

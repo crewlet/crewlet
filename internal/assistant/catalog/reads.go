@@ -85,6 +85,59 @@ func taskTable(title, rows string) cards.Spec {
 		Open:  &cards.Open{Screen: "worklet-tasks"}}}
 }
 
+// decisionColumns are a question's decision (ADR-0023) at path, or at alt, as detail
+// columns: its options by the id answer_decision and answer_executor take as choice.
+func decisionColumns(path, alt string) []cards.Column {
+	at := func(field string) string { return path + "." + field }
+	or := func(field string) string {
+		if alt == "" {
+			return ""
+		}
+		return alt + "." + field
+	}
+	return []cards.Column{
+		{Key: "decision", Label: "Decision", Path: at("question"), Else: or("question"),
+			Type: tText, Prose: true},
+		{Key: "options", Label: "Options", Path: at("options"), Else: or("options"),
+			Type: tText, Prose: true, Entries: &optionEntries},
+		{Key: "recommended", Label: "Recommended", Path: at("recommended"),
+			Else: or("recommended"), Type: tText},
+		{Key: "rationale", Label: "Why recommended", Path: at("rationale"),
+			Else: or("rationale"), Type: tText, Prose: true},
+		{Key: "evidence", Label: "Evidence", Path: at("evidence"), Else: or("evidence"),
+			Type: tText, Prose: true, Entries: &evidenceEntries},
+		{Key: "role", Label: "Asked as", Path: at("role"), Else: or("role"), Type: tLabel},
+	}
+}
+
+// decisionFacts are [decisionColumns] as the facts of a comment that asks a
+// question, its `decision` (worklet.Comment).
+func decisionFacts() []cards.Fact {
+	at := func(field string) string { return "decision." + field }
+	return []cards.Fact{
+		{Label: "Decision", Path: at("question"), Type: tText},
+		{Label: "Options", Path: at("options"), Type: tText, Entries: &optionEntries},
+		{Label: "Recommended", Path: at("recommended"), Type: tText},
+		{Label: "Why recommended", Path: at("rationale"), Type: tText},
+		{Label: "Evidence", Path: at("evidence"), Type: tText, Entries: &evidenceEntries},
+		{Label: "Asked as", Path: at("role"), Type: tLabel},
+	}
+}
+
+// A decision's options by id, label and detail, and its evidence by kind, reference
+// and label.
+var (
+	optionEntries   = cards.Entries{Lead: "id", Words: []string{"label", "detail"}}
+	evidenceEntries = cards.Entries{Lead: "kind", Words: []string{"ref", "label"}}
+)
+
+// decisionsPage is the route's page (worklet.MaxDecisions); decisionsDefault is
+// what a read asks for unless told, ten, which fits one step whole.
+const (
+	decisionsPage    = 50
+	decisionsDefault = 10
+)
+
 var workletApp = []iam.Grant{iam.GrantWorklet}
 var docletApp = []iam.Grant{iam.GrantDoclet}
 var adminOnly = []iam.Grant{iam.GrantAdmin}
@@ -188,8 +241,10 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_task_thread", Phrase: "read this task's comments",
-			Description: "Read a task's comments, newest last, with any question somebody asked " +
-				"on it.",
+			Description: "Read a task's comments, newest last. A comment that asks a question " +
+				"says whom it asks and carries its decision: the options by id, the one its " +
+				"asker recommends and why, and what it cites. An answer says which comment it " +
+				"answers and the option it chose.",
 			schema: object([]string{"item"}, map[string]*schema{
 				"item":  text("The task's key or id.", nameBytes),
 				"limit": positive("How many comments, at most.", 50),
@@ -203,7 +258,14 @@ func readTools() []Tool {
 				Key: "key", Title: "title", Prose: true,
 				Items: &cards.Items{Path: "comments", Kind: wire.ResourceTask, ID: "id",
 					Label: "body", Fact: "author", Prose: true, More: "next_cursor",
-					Noun: wire.Noun{One: "comment", Many: "comments"}},
+					Noun: wire.Noun{One: "comment", Many: "comments"},
+					// THE QUESTION A COMMENT ASKS AND THE CHOICE AN ANSWER
+					// MADE, which a comment read as its words and its author
+					// alone dropped (worklet.Comment).
+					Facts: append([]cards.Fact{{Label: "Asks", Path: "ask", Type: tText},
+						{Label: "Answers", Path: "answers", Type: tText, Mono: true},
+						{Label: "Chose", Path: "choice", Type: tText, Mono: true}},
+						decisionFacts()...)},
 				Open: &cards.Open{Screen: "item", Params: map[string]string{"id": "item"},
 					LabelFrom: "key"}}}),
 			Label: func(a map[string]any) string {
@@ -264,11 +326,16 @@ func readTools() []Tool {
 				"priorities": taskTable("Your priorities", "priorities"),
 				"asked": {Table: &cards.Table{Title: "Asked of you", Rows: "asked_of_me",
 					Brief: []string{"title", "asked_by", "asked_at"},
-					Columns: []cards.Column{col("key", "Key", "key", tText),
+					Columns: append([]cards.Column{col("key", "Key", "key", tText),
 						prose("title", "Title", "title"),
 						seat("asked_by", "Asked by", "asked_by"),
 						col("asked_at", "Asked", "asked_at", tDatetime),
-						prose("question", "Question", "body")},
+						prose("question", "Question", "body"),
+						// A BODY PAST THE ANSWER'S BUDGET IS LEFT OUT and says
+						// so, rather than reading as a question with no words.
+						col("left_out", "Question left out", "body_not_included", tText),
+						col("comment", "Comment", "comment", tText)},
+						decisionColumns("decision", "")...),
 					Open: &cards.Open{Screen: "me"}}},
 				"inbox": {Table: &cards.Table{Title: "Inbox", Rows: "notices",
 					Brief: []string{"excerpt", "reason", "at"},
@@ -359,25 +426,37 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_decisions", Phrase: "list what waits on you",
-			Description: "What is waiting on the person: questions asked of them on tasks, and " +
-				"executors parked on a question for them. With list_agents' stopped seats, this " +
-				"is the Inbox screen's Needs you.",
-			schema: object(nil, map[string]*schema{}),
+			Description: "What is waiting on the person, newest first: questions asked of them " +
+				"on tasks, and executors parked on a question for them. Each question carries " +
+				"its options by id, the one its asker recommends and why, and what it cites; " +
+				"a task's question its comment id (answer_decision's answers), an executor's " +
+				"its turn and launch ids (" + answerExecutorTool + "'s). With list_agents' " +
+				"stopped seats, " +
+				"this is the Inbox screen's Needs you.",
+			schema: object(nil, map[string]*schema{
+				"limit": positive("How many, at most. Default 10.", decisionsPage),
+			}),
 			Routes: []string{"GET /worklet/decisions"}, Fence: true,
 			// An ask is a colleague's; an executor's is not, and is read by
 			// the one rule for an executor's words (provenance.Executor).
 			TrustOf: outsideWhere(decisionRows, runAskField),
-			Build: func(map[string]any) (exec.Request, error) {
-				return get("GET /worklet/decisions", nil, nil)
+			Build: func(a map[string]any) (exec.Request, error) {
+				return get("GET /worklet/decisions", nil,
+					query(a).num("limit", "limit", decisionsDefault).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Waiting on you", Rows: "items",
-				Brief: []string{"title", "kind", "at"},
-				Columns: []cards.Column{col("kind", "Kind", "kind", tLabel),
+				Brief: []string{"title", "kind", "at"}, More: "more",
+				Columns: append(append([]cards.Column{col("kind", "Kind", "kind", tLabel),
 					col("at", "Since", "at", tDatetime), col("key", "Task", "ask.key", tText),
 					prose("title", "Title", "ask.title"), prose("question", "Question", "ask.body"),
 					seat("asked_by", "Asked by", "ask.asked_by"),
+					col("comment", "Comment", "ask.comment", tText),
 					seat("agent", "Executor", "run.agent_handle"),
-					prose("run_question", "Executor's question", "run.question")},
+					prose("run_question", "Executor's question", "run.question"),
+					prose("run_context", "Executor's context", "run.question_context")},
+					decisionColumns("ask.decision", "run.decision")...),
+					col("turn", "Executor's turn", "run.turn_id", tText),
+					col("launch", "Executor's launch", "run.launch_id", tText)),
 				Open: &cards.Open{Screen: "inbox"}}}),
 			Label: func(map[string]any) string { return "Reading what waits on you" },
 		},
@@ -575,9 +654,11 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_executors", Phrase: "list executors",
-			Description: "Seats' executors in flight and recent, including any parked on a question.",
-			schema:      object(nil, map[string]*schema{}),
-			Routes:      []string{"GET /executors"}, Fence: true,
+			Description: "Seats' executors in flight and recent, including any parked on a " +
+				"question: its options by id, the one recommended and why, and the turn and " +
+				"launch ids " + answerExecutorTool + " takes.",
+			schema: object(nil, map[string]*schema{}),
+			Routes: []string{"GET /executors"}, Fence: true,
 			// AN EXECUTOR'S QUESTION IS THE HARNESS'S, a third party's model
 			// working from a brief that may be an outside chat message or a
 			// webhook's payload, read by the one rule for an executor's
@@ -588,7 +669,7 @@ func readTools() []Tool {
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Executors", Rows: "runs",
 				Brief: []string{"agent", "status", "task", "started"},
-				Columns: []cards.Column{seat("agent", "Seat", "agent_handle"),
+				Columns: append([]cards.Column{seat("agent", "Seat", "agent_handle"),
 					// THE TASK IS THE ITEM THE LAUNCHING TURN WAS CHARGED TO
 					// (`work_item`); `work_key` is the turn's delivery identity
 					// (internal/workkey), which no person reads as a task.
@@ -597,7 +678,13 @@ func readTools() []Tool {
 					col("harness", "Harness", "harness", tText),
 					col("started", "Started", "started_at", tDatetime),
 					col("updated", "Updated", "updated_at", tDatetime),
-					prose("question", "Question", "question"), col("turn", "Turn", "turn_id", tText)},
+					prose("question", "Question", "question"),
+					prose("context", "Context", "question_context"),
+					col("turn", "Turn", "turn_id", tText),
+					// THE JOB THE QUESTION IS ASKED FROM, which
+					// answer_executor names beside the turn.
+					col("launch", "Launch", "launch_id", tText)},
+					decisionColumns("decision", "")...),
 				Open: &cards.Open{Screen: "live"}}}),
 			Label: func(map[string]any) string { return "Listing executors" },
 		},

@@ -186,7 +186,10 @@ type EntityItem struct {
 	Label string       `json:"label"`
 	Fact  string       `json:"fact,omitempty"`
 	Depth int          `json:"depth,omitempty"`
-	Open  *Link        `json:"open,omitempty"`
+	// Facts are details the drawer leaves out and the model reads (a comment's
+	// question and options); absent on an item with none.
+	Facts []Fact `json:"facts,omitempty"`
+	Open  *Link  `json:"open,omitempty"`
 }
 
 // ProposalCard is a change waiting on the person, rendered from the server's
@@ -399,6 +402,12 @@ func (c Card) Validate() error {
 			if item.Kind != "" && !item.Kind.Valid() {
 				return fmt.Errorf("%w: entity item kind %q is not one of %s", ErrInvalid,
 					item.Kind, words.Or(ResourceKinds))
+			}
+			for _, f := range item.Facts {
+				if f.Type != "" && !f.Type.Valid() {
+					return fmt.Errorf("%w: entity item fact %q type %q is not one of %s",
+						ErrInvalid, f.Label, f.Type, words.Or(ColumnTypes))
+				}
 			}
 		}
 		return c.Entity.Outside.validate()
