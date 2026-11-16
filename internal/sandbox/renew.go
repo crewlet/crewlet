@@ -151,12 +151,14 @@ import (
 // seat's budget, whose delivery the hold spends where no clock runs: kept
 // unheld, re-fired at the hold's instant and never sooner, since no claim wins
 // before it, and on its condition's signal once its own lift of the hold has
-// landed ([Coordinator.keepHeldOnRow]), kept through a delivery of it or a
-// re-fire that meets the hold ([Coordinator.forgetAdmitted],
-// [Coordinator.keepHeldClaim]), and kept again by the seat's recovery from the
-// row ([Coordinator.keepHeldRows]); nothing else announced the job once its
-// hold had lifted while that host's store was silent. Its re-fire's
-// collection starts the clock where the silence still stands.
+// landed ([Coordinator.keepHeldOnRow]), every lift of a hold the signal makes
+// re-firing the job besides ([Coordinator.refireLifted]), kept through a
+// delivery of it or a re-fire that meets the hold
+// ([Coordinator.forgetAdmitted], [Coordinator.keepHeldClaim]), and kept again
+// by the seat's recovery from the row ([Coordinator.keepHeldRows]); nothing
+// else announced the job once its hold had lifted while that host's store was
+// silent. Its re-fire's collection starts the clock where the silence still
+// stands.
 //
 // WHAT IT COSTS: a hand-back that settles nothing for as long as it lasts is
 // NAK'd again at the queue's backoff, at most every thirty seconds, each

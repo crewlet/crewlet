@@ -946,6 +946,34 @@ func (c *Coordinator) liftAndRefire(kept refusedCompletion) {
 	c.refire(kept)
 }
 
+// refireLifted re-fires the completion of run's job once a signal's lift of
+// the hold on its row for cond has landed ([Coordinator.liftHoldsLocked]), on
+// a goroutine of the coordinator's own lifetime, as the lift of a hold this
+// node keeps the completion for re-fires it ([Coordinator.liftAndRefire]).
+//
+// # Why every lift re-fires
+//
+// The completion's delivery was spent by the hold, and the waiter that drives
+// the job's box, which announces the job once its hold has lifted, reads the
+// run's row through its host's coordination store, whose silence has no bound.
+// A lift that found nothing kept here for the job left it to that waiter
+// alone: a signal that landed while the seat's recovery ran, its lift landing
+// before the recovery's fence read the row ([Coordinator.RecoverSeat]), so the
+// row the recovery took over was held no longer and nothing was kept for it;
+// or a keep replaced by a refusal's ([Coordinator.keepRefused]), whose re-fire
+// waits for that refusal's own signal or backstop. A lift that finds the
+// completion kept re-fires it beside that keep's own re-fire, and the claim is
+// at-most-once.
+func (c *Coordinator) refireLifted(run PendingRun, cond Condition) {
+	ev, trigger := announcementOf(run)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.refireLocked(refusedCompletion{cond: cond, ev: ev, trigger: trigger})
+}
+
 // refireLocked re-fires one kept completion on a goroutine of the
 // coordinator's own lifetime, which [Coordinator.Stop] waits for. The caller
 // holds c.mu and has checked the coordinator is not closed.

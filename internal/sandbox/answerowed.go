@@ -2100,10 +2100,11 @@ func (c *Coordinator) owedRefused(ctx context.Context, run PendingRun, refusal R
 // cond, at its gate or held here after its claim ([Coordinator.keepRefused]),
 // which is re-fired at once rather than at the waiter's next announcement of
 // it, and a resume held on cond on its run's row after its run was collected
-// ([PendingRun.HeldFor]), whose hold is lifted so the waiter announces the job
-// again on its schedule ([Coordinator.liftHoldsLocked]), and whose completion,
-// kept here for that hold ([Coordinator.keepHeldOnRow]), is re-fired once its
-// own lift has landed ([Coordinator.liftAndRefire]).
+// ([PendingRun.HeldFor]), whose hold is lifted and its job re-fired once the
+// lift has landed ([Coordinator.liftHoldsLocked]), and whose completion, kept
+// here for that hold ([Coordinator.keepHeldOnRow]), is re-fired once its own
+// lift has landed besides ([Coordinator.liftAndRefire]), so a listing of the
+// holds the store does not answer still releases it.
 //
 // Safe from any goroutine, and cheap enough to call on every occurrence of the
 // event: with nothing waiting it is one pass over this node's owed answers and
@@ -2132,8 +2133,9 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 
 // liftHoldsLocked lifts, in the background, every hold on cond this node's
 // seats' runs are under ([PendingRun.HeldFor]) — the seats named, or every
-// seat — so the waiter announces those jobs' completions again on its
-// schedule. The caller holds c.mu.
+// seat — and re-fires the completion of each job whose hold it lifted
+// ([Coordinator.refireLifted]), which the waiter would announce again on its
+// schedule only while its host's store answers it. The caller holds c.mu.
 //
 // THE ROWS ARE THE RECORD, not a list in memory: a hold is written on the run
 // and survives the node, so a node that took the seat over since lifts what
@@ -2179,6 +2181,7 @@ func (c *Coordinator) liftHoldsLocked(cond Condition, handles []string) {
 			case lifted:
 				log.InfoContext(ctx, "sandbox_resume_hold_lifted", "turn_id", run.TurnID,
 					"agent", run.AgentHandle, "condition", string(cond))
+				c.refireLifted(run, cond)
 			}
 		}
 	}()

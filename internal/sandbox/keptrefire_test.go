@@ -423,6 +423,22 @@ func (s *unliftedHolds) LiftHold(ctx context.Context, turnID string, cond Condit
 	return s.PendingStore.LiftHold(ctx, turnID, cond)
 }
 
+// signalledOnRecovery is a run store that runs signal once, as soon as a
+// listing of one seat's runs has been answered, and answers every call as the
+// store beneath it does: a signal that lands while a recovery of the seat is
+// under way, after it read the seat's runs.
+type signalledOnRecovery struct {
+	PendingStore
+	signal func()
+	once   sync.Once
+}
+
+func (s *signalledOnRecovery) ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error) {
+	runs, err := s.PendingStore.ListActiveForSeat(ctx, handle)
+	s.once.Do(s.signal)
+	return runs, err
+}
+
 // countedCalls is a run store that counts its reads of one run's row and its
 // claims of a run for its resume, and answers every call as the store beneath
 // it does.
@@ -509,7 +525,8 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 // is kept on this node, unheld: re-fired at the hold's instant and never
 // sooner, since before it the claim takes nothing; and on its condition's
 // signal once the lift of the hold has landed, and not before, since a re-fire
-// beside the lift met the hold still standing and dropped the keep. A claim the
+// beside the lift met the hold still standing and dropped the keep; and every
+// lift its signal makes re-fires the job, whatever is kept for it. A claim the
 // hold refuses leaves it kept: a delivery queued behind the resume that held
 // the job leaves it standing, and the re-fire of whatever was kept in its place
 // keeps it again from the row.
@@ -528,8 +545,10 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 // anything for the backstop where that claim's row is not read or its hold
 // lifted between the claim and the read; keep it for the backstop whatever
 // lease owns the row, and a node whose lease the row has passed keeps re-firing
-// a job another holder owns; leave a held row out of a recovery, and nothing is
-// kept.
+// a job another holder owns; lift a hold on its signal and leave the job to the
+// waiter, and a lift with nothing kept for the job, whether dropped or never
+// made by a recovery the signal raced, leaves it unannounced; leave a held row
+// out of a recovery, and nothing is kept.
 func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 	t.Parallel()
 
@@ -818,6 +837,45 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		if resumed := rig.resumer.calls(); len(resumed) != 1 {
 			t.Fatalf("the turn resumed %d times at the hold's instant after the restart; want it carried once",
 				len(resumed))
+		}
+	})
+
+	t.Run("re-fired on its signal where nothing is kept for it", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+		// NOTHING KEPT HERE FOR THE JOB: the signal's lift of the row's hold
+		// is all that releases it.
+		rig.coordinator.forgetRefused("t1")
+		rig.coordinator.Readmit("budget", "swe")
+		rig.coordinator.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) once its signal lifted the hold; want it carried once by "+
+				"the lift, not left to a waiter that announces nothing", len(resumed), resumed)
+		}
+	})
+
+	t.Run("re-fired on a signal that lands while the seat's recovery runs", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+		rig.restart(t, rig.queue, "", rigLease, nil)
+		// THE CONDITION IS SIGNALLED once the recovery has read the seat's
+		// runs: the signal's lift of every hold on the condition lands on
+		// the row before the recovery's fence reads it again, or after, and
+		// nothing is kept yet for the signal to re-fire either way.
+		restarted := rig.coordinator
+		restarted.pending = &signalledOnRecovery{PendingStore: restarted.pending,
+			signal: func() { restarted.Readmit("budget", "swe") }}
+		if err := rig.recoverSeat(live, rigLease.Owner, rigLease.Epoch); err != nil {
+			t.Fatalf("recovering the seat: %v", err)
+		}
+		restarted.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) on a signal that landed while the seat's recovery ran; "+
+				"want it carried once, not kept for an instant its row no longer holds it to", len(resumed),
+				resumed)
 		}
 	})
 
