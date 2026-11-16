@@ -2641,6 +2641,8 @@ const (
 	// The Ask Crewlet, sign-in policy, settings and Delegated decisions train,
 	// on kit 0.134.0, measures 6342.3 KiB (6,494,479 bytes), 29,554 bytes over
 	// main's 6313.4 KiB: 6343 KiB.
+	// Saying a time inside Gitlet's sentences in words added 742 bytes and
+	// took it to 6314.1 KiB (6,465,667 bytes): 6315 KiB.
 	treeBudget = 5<<20 + 1223<<10
 )
 
