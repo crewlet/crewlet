@@ -9114,6 +9114,14 @@ export interface CodeLogCommit {
   author_bytes?: number;
   author_email?: string;
   author_email_bytes?: number;
+  /** Who committed it, as the commit states it; absent past its bound with `committer_bytes` its size. */
+  committer?: string;
+  committer_bytes?: number;
+  committer_email?: string;
+  committer_email_bytes?: number;
+  /** The engine's committer convention (`Crewlet` at `engine@` on any domain), which authenticates
+   *  nothing; absent from a build that names no committer. */
+  engine_committed?: boolean;
   authored_at: string;
   committed_at: string;
   /** The message's first paragraph; absent past its bound with `subject_bytes` its size. */
@@ -9127,6 +9135,9 @@ export interface CodeLogAnswer {
   commits: CodeLogCommit[] | null;
   scanned: number;
   complete?: boolean;
+  /** On a page narrowed by `pushed_by`: the commits the node's index could not judge, neither listed nor
+   *  ruled out. Absent from every other page. */
+  unjudged?: number;
 }
 
 /** One line of a blame (`gitlet.BlameLine`): its number, the commit that last changed it, and its text. */
@@ -9143,6 +9154,12 @@ export interface CodeBlameLine {
 export interface CodeBlameCommit {
   author?: string;
   author_email?: string;
+  /** Who committed it, as `CodeLogCommit` names it, with the engine's convention marked. */
+  committer?: string;
+  committer_bytes?: number;
+  committer_email?: string;
+  committer_email_bytes?: number;
+  engine_committed?: boolean;
   authored_at: string;
   /** The message's first LINE, as git's blame names it. */
   subject?: string;

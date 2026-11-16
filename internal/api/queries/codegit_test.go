@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -473,6 +474,58 @@ func TestATipsQuestionNamesItsTips(t *testing.T) {
 		if _, err := askNative(t, queries.Sources{Code: stub}, "code_tips", args); !errors.Is(err,
 			queries.ErrBadParams) || len(stub.read) != 0 {
 			t.Errorf("%s: answered %v having read %d, want bad_params and nothing read", name, err, len(stub.read))
+		}
+	}
+}
+
+// A HISTORY NARROWED BY WHO PUSHED IT IS NEVER IMMUTABLE: by a whole id it is
+// read stamped and answered bare, `until` reaches the read, and a bad `until`
+// or handle is bad_params before any read.
+//
+// Mutation: immutability judged by the revisions alone → red.
+func TestAHistoryNarrowedByWhoPushedIsNeverImmutable(t *testing.T) {
+	t.Parallel()
+	stub := &stubCode{git: stamping}
+	answer, err := askNative(t, queries.Sources{Code: stub}, "code_log", map[string]any{"name": "web",
+		"ref": whole, "pushed_by": " ceo ", "until": "2026-03-01T00:00:00.5Z"})
+	if err != nil {
+		t.Fatalf("code_log narrowed to a seat: %v", err)
+	}
+	if _, immutable := answer.(queries.Immutable); immutable {
+		t.Error("a history narrowed by who pushed it is answered immutable")
+	}
+	until := time.Date(2026, 3, 1, 0, 0, 0, 5e8, time.UTC)
+	if len(stub.read) != 1 || stub.read[0].Unstamped || stub.read[0].Log.PushedBy != "ceo" ||
+		!stub.read[0].Log.Until.Equal(until) {
+		t.Fatalf("the narrowed history was read as %+v, want one read, stamped, pushed by ceo until %s",
+			stub.read, until)
+	}
+	encoded, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"position"`) || !strings.Contains(string(encoded), `"pushed_by"`) {
+		t.Errorf("the narrowed history is answered without what its read stamped: %s", encoded)
+	}
+	plain := &stubCode{git: stamping}
+	if answer, err := askNative(t, queries.Sources{Code: plain}, "code_log", map[string]any{"name": "web",
+		"ref": whole, "until": "2026-03-01T00:00:00Z"}); err != nil || len(plain.read) != 1 ||
+		!plain.read[0].Unstamped {
+		t.Errorf("a history by a whole id with until alone answered %T (%v), read %+v; want it unstamped",
+			answer, err, plain.read)
+	} else if _, immutable := answer.(queries.Immutable); !immutable {
+		t.Error("a history by a whole id with until alone is not immutable")
+	}
+	for _, args := range []map[string]any{
+		{"name": "web", "ref": whole, "until": "yesterday"},
+		{"name": "web", "ref": whole, "since": "2026-03-01T00:00:00Z", "until": "2026-03-01T00:00:00Z"},
+		{"name": "web", "ref": whole, "pushed_by": "Not A Seat"},
+	} {
+		bad := &stubCode{git: stamping}
+		if _, err := askNative(t, queries.Sources{Code: bad}, "code_log", args); !errors.Is(err,
+			queries.ErrBadParams) || len(bad.read) != 0 {
+			t.Errorf("code_log with %v answered %v after %d reads, want bad_params before any", args, err,
+				len(bad.read))
 		}
 	}
 }

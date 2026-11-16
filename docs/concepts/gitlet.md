@@ -5487,12 +5487,13 @@ commit — newest first from a commit: one `git log --topo-order` over the copy,
 walking by generation where the copy holds a commit-graph, and reading the
 graph's changed-path filters, so a commit that touched nothing under the path
 is passed over without a diff. Each commit is named with its parents, its
-author and address as the commit states them — never a `.mailmap`'s, so the
-answer is a function of the commits alone — its two dates, its subject (the
-message's first paragraph) and the push that introduced it. The path is the
-history as git keeps it: a file renamed is listed under each name for the
-commits that touched that name, the rename among the old name's, and a file
-deleted since keeps the history it had.
+author and its committer, as the commit states them (never a `.mailmap`'s, so
+the answer is a function of the commits alone), `engine_committed`, set where
+the committer is [the engine's convention](#who-a-commit-names), its two dates,
+its subject (the message's first paragraph) and the push that introduced it.
+The path is the history as git keeps it: a file renamed is listed under each
+name for the commits that touched that name, the rename among the old name's,
+and a file deleted since keeps the history it had.
 
 **A literal, matched on the node.** `grep` keeps the commits whose whole
 message holds its words, in any case, matched by the node over each message as
@@ -5500,6 +5501,22 @@ it streams by — never handed to git as a pattern — so a message of any lengt
 is searched in memory the size of the words, and a dot is a dot. `since` keeps
 the commits committed from a time on, as git's `--since` does: the walk stops
 at a commit committed before it on each line of history it reaches.
+
+**Narrowed by time and by who pushed.** `until` keeps the commits committed
+before it, a filter of each commit the walk reaches rather than a stop, so a
+commit dated before it is kept whatever its children's dates; `since`, by
+contrast, stops the walk at an older commit on each line, so the two together
+are a window only on a history whose dates follow its order. `pushed_by` keeps
+the commits whose introducing push a seat made (a person's through the human
+seat their credential is bound to, a merge's and a queue landing's by their
+merger), read from the node's [index of pushes](#which-push-landed-a-commit).
+A commit that index cannot judge (pushed before it begins, or one of a push
+whose commits were too many to list) is never listed and never silently
+dropped: the page counts it in `unjudged`, which a page asked without
+`pushed_by` leaves out. Such a page is a function of the node's index rather
+than of the ids it names, so it is never kept in the [memo](#the-memo), never
+read unstamped and never answered immutable. It ends at its `limit`-th kept
+commit, as a `grep` page does.
 
 **A page ends where the history says.** A page holds as many commits as
 `limit` asks and its 56 KiB hold — every subject counted fenced, as the tools
@@ -5515,7 +5532,8 @@ complete one. A walk that runs the
 read's ten seconds of git — a `grep` that matches little in a long history —
 answers what it found with its cursor past it, never an error and never a
 claim that nothing more matches; one that reached no commit at all in that
-time is too large, naming the narrowing (a path, a later `since`).
+time is too large, naming the narrowing (a path, a later `since`; for an
+`until`, a path or a `since`).
 
 **A record no message can forge.** Every field of a commit ends in a NUL
 byte, which no message holds — Gitlet's own check of every push and
@@ -5530,20 +5548,22 @@ fails the page, logged `code_git_unparsed`, and is never answered.
 one `git blame --porcelain` of a range of at most 500 lines, its path the one
 argument after `--`. Each line comes with its commit, the line it was in that
 commit, and the path it had there where the file was renamed since; each commit
-once a page, with its author as the commit states it — a blame in a bare
-repository would read the `.mailmap` at the default branch, which the node
-turns off — its date, its subject (the message's first line) and the push that
-introduced it. A blame's cost is the walk of the file's history for the lines
-it names, so a range is read in pages by one blame: the run that cuts the first
-page cuts every page of the range, and the rest are answered from the
-[memo](#the-memo). A range that begins past the file's end is refused naming
-how many lines the file has; a path that names a directory or nothing is
-refused; an empty file has no lines.
+once a page, with its author and its committer as the commit states them (a
+blame in a bare repository would read the `.mailmap` at the default branch,
+which the node turns off), `engine_committed` as a history marks it, its date,
+its subject (the message's first line) and the push that introduced it. A
+blame's cost is the walk of the file's history for the lines it names, so a
+range is read in pages by one blame: the run that cuts the first page cuts
+every page of the range, and the rest are answered from the [memo](#the-memo).
+A range that begins past the file's end is refused naming how many lines the
+file has; a path that names a directory or nothing is refused; an empty file
+has no lines.
 
-**Described, never cut.** A subject past 4 KiB, an author's name or address
-past 1 KiB and a line past 8 KiB — each measured as the tools send it, a
-control byte six bytes and a fence's marker its escape — are answered absent,
-beside their size (`subject_bytes`, `author_bytes`, `author_email_bytes`,
+**Described, never cut.** A subject past 4 KiB, an author's or a committer's
+name or address past 1 KiB and a line past 8 KiB, each measured as the tools
+send it (a control byte six bytes and a fence's marker its escape), are
+answered absent, beside their size (`subject_bytes`, `author_bytes`,
+`author_email_bytes`, `committer_bytes`, `committer_email_bytes`,
 `text_bytes`), in a history and a blame alike, and so are a merge's parents
 past 64 (`parent_count`): so the widest commit, and the widest line with its
 commit, always fit a page, and no page carries half a field read as the whole.
@@ -8019,7 +8039,11 @@ history its caller never saw, and one that creates a branch needs it absent.
   principal and, for a seat, the turn that made it. A [coding
   box](#coding-boxes)'s push carrying a commit under it that the repository
   does not already hold is refused (`forged_committer`), while a person's or
-  an import's may carry one.
+  an import's may carry one. A history and a blame name each commit's
+  committer and mark a commit `engine_committed` where it is `Crewlet` at
+  `engine@` on any domain, the convention and nothing more: judged from the
+  commit alone, so a commit the engine built before the identity domain moved
+  is still marked.
 - **Its author date is the instant the writer acted** — the instant the
   write's operation was minted, to the second — and its committer date is
   that instant, or its parent's committer date where the parent is dated

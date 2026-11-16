@@ -50,6 +50,10 @@
 // wanted (cache.Cache.WantHistory), so the one node every walk asks first
 // reads it back, once per fleet, for repositories seats ask about.
 //
+// The index also NARROWS a history (gitlet.LogQuery.PushedBy, log.go), so
+// such a page is the node's and not the ids': never unstamped, never memoized
+// (gitlet.GitQuery.ReadsIndex).
+//
 // A LANDED-IN READ (landed.go) is one ancestry check against the tip the
 // asker resolved and the position it read it at, the copy brought there,
 // then a segmented binary search of the branch's moves in the index — never a
@@ -97,9 +101,9 @@
 // A read's argument lists carry fixed options and validated whole ids —
 // `--disambiguate=` an abbreviation's validated digits, the one option
 // argument a read builds, and numbers the server formats: a history's
-// `--max-age=` and `--skip=`, a blame's `-L` range. A search's text reaches
-// git only as the ONE argument of `-e` — the plan's alternation of its
-// strings, escaped (codeindex.Plan.Grep) — which git reads as a pattern
+// `--max-age=`, `--min-age=` and `--skip=`, a blame's `-L` range. A search's
+// text reaches git only as the ONE argument of `-e` — the plan's alternation
+// of its strings, escaped (codeindex.Plan.Grep) — which git reads as a pattern
 // whatever it spells, and its ref after `--end-of-options`, held to the ref
 // grammar before (search.go). A PATH is data: it
 // reaches git on a standard input — `git cat-file --batch-check -Z`'s, which
@@ -269,7 +273,8 @@
 // Every page a read's git cuts — but a landed-in read's, a revision's facts',
 // a re-anchoring's and a checks file's (memoizable says why), and a history's
 // page its budget
-// or its due instant cut short — is kept in the pinned copy's memo (the
+// or its due instant cut short, or one narrowed by who pushed it — is kept
+// in the pinned copy's memo (the
 // cache's, cache.MemoBatch), keyed by everything it is a function of, and a
 // read that
 // asks for a page already cut is answered from it with no git run (memo.go):

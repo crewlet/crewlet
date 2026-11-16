@@ -3163,10 +3163,10 @@ const MaxLogGrepBytes = 256
 // (LogCommit.SubjectBytes).
 const MaxLogSubjectBytes = 4 << 10
 
-// MaxLogPersonBytes is the most a commit's author's name, or address, may
-// encode to and be answered. A JUDGMENT: git and fsck bound neither, RFC 5321
-// bounds an address at 254 octets, and 1 KiB holds every real name and
-// address with room; past it each is described by its size.
+// MaxLogPersonBytes is the most a commit's author's or committer's name, or
+// address, may encode to and be answered. A JUDGMENT: git and fsck bound
+// neither, RFC 5321 bounds an address at 254 octets, and 1 KiB holds every
+// real name and address with room; past it each is described by its size.
 const MaxLogPersonBytes = 1 << 10
 
 // MaxLogParents is the most parents a commit's answer lists: an octopus
@@ -3322,6 +3322,11 @@ func (q GitQuery) SeatWork() SeatWork {
 	}
 	return SeatWorkRead
 }
+
+// ReadsIndex reports a read whose page is a function of the node's index of
+// pushes, not of the ids alone ([LogQuery.PushedBy]): never Unstamped, never
+// memoized, never answered Immutable.
+func (q GitQuery) ReadsIndex() bool { return q.Kind == GitLog && q.Log != nil && q.Log.PushedBy != "" }
 
 // GitQuery is one read of a repository by object id: exactly the sub-query of
 // its Kind is set.
@@ -3684,6 +3689,14 @@ type LogQuery struct {
 	// history it reaches, so a commit dated after it whose every line runs
 	// through an older one is not listed. Zero keeps every one.
 	Since time.Time `json:"since,omitzero"`
+	// Until keeps the commits committed BEFORE it: a filter of each commit
+	// the walk reaches, not a stop as Since is. Zero keeps every one; else
+	// after the epoch, after Since, and no further ahead than Since may be.
+	Until time.Time `json:"until,omitzero"`
+	// PushedBy, a seat's handle, keeps the commits whose introducing push in
+	// the node's index of pushes holds that seat ([Principal.Seat]); a commit
+	// the index cannot judge is counted in [LogAnswer.Unjudged].
+	PushedBy string `json:"pushed_by,omitempty"`
 	// Limit is the most commits a page lists, 1 to MaxLogLimit; zero is
 	// DefaultLogLimit. A page past the answer's bytes holds fewer.
 	Limit int `json:"limit,omitempty"`
@@ -3886,6 +3899,10 @@ func (q GitQuery) Validate() error {
 	}
 	if q.Unstamped && !q.Kind.Unstampable() {
 		return fmt.Errorf("%w: unstamped: a %s read answers no page to cut unstamped", ErrInvalid, q.Kind)
+	}
+	if q.Unstamped && q.ReadsIndex() {
+		return fmt.Errorf("%w: unstamped: a history narrowed by who pushed it reads this node's index of "+
+			"pushes, which an unstamped page names nothing of", ErrInvalid)
 	}
 	switch q.Kind {
 	case GitTree:
@@ -4189,6 +4206,25 @@ func (q LogQuery) validate() error {
 		return fmt.Errorf("%w: log.since: %s is not yet: give a date in the past", ErrInvalid,
 			q.Since.UTC().Format(time.RFC3339))
 	}
+	// Until and PushedBy are judged whatever Since is: the switch above
+	// ends at its first arm that holds, a Since left out included.
+	switch {
+	case q.Until.IsZero():
+	case !q.Until.After(time.Unix(0, 0)):
+		// At the epoch the second before it is -1, which git reads as no
+		// bound at all.
+		return fmt.Errorf("%w: log.until: %s is not after 1970-01-01T00:00:00Z: a commit is kept only before an "+
+			"instant after the epoch", ErrInvalid, q.Until.UTC().Format(time.RFC3339Nano))
+	case q.Until.After(time.Now().Add(logSinceAhead)):
+		return fmt.Errorf("%w: log.until: %s is not yet: give a date no further than a day ahead", ErrInvalid,
+			q.Until.UTC().Format(time.RFC3339))
+	case !q.Since.IsZero() && !q.Until.After(q.Since):
+		return fmt.Errorf("%w: log.until: %s is not after since %s: the window holds no instant", ErrInvalid,
+			q.Until.UTC().Format(time.RFC3339Nano), q.Since.UTC().Format(time.RFC3339Nano))
+	}
+	if q.PushedBy != "" && !org.ValidHandle(q.PushedBy) {
+		return fmt.Errorf("%w: log.pushed_by: %q is not a seat's handle", ErrInvalid, q.PushedBy)
+	}
 	return nil
 }
 
@@ -4371,6 +4407,10 @@ type LogAnswer struct {
 	// last match rather than walking on to find one more, so the page after
 	// it may list nothing and be the complete one.
 	Complete bool `json:"complete,omitempty"`
+	// Unjudged is, on a page asked with [LogQuery.PushedBy], how many commits
+	// every other narrowing kept that the node's index could not attribute.
+	// Set, zero included, on every such page; nil on every other.
+	Unjudged *int `json:"unjudged,omitempty"`
 }
 
 // LogCommit is one commit of a history. Every field git leaves unbounded is
@@ -4390,6 +4430,17 @@ type LogCommit struct {
 	AuthorBytes      int    `json:"author_bytes,omitempty"`
 	AuthorEmail      string `json:"author_email,omitempty"`
 	AuthorEmailBytes int    `json:"author_email_bytes,omitempty"`
+	// Committer and CommitterEmail are who committed it as it states them,
+	// each past MaxLogPersonBytes absent with its size in CommitterBytes or
+	// CommitterEmailBytes.
+	Committer           string `json:"committer,omitempty"`
+	CommitterBytes      int    `json:"committer_bytes,omitempty"`
+	CommitterEmail      string `json:"committer_email,omitempty"`
+	CommitterEmailBytes int    `json:"committer_email_bytes,omitempty"`
+	// EngineCommitted says the committer spells the engine's convention
+	// ([EngineCommitted]), which authenticates nothing. Nil from a build
+	// that names no committer.
+	EngineCommitted *bool `json:"engine_committed,omitempty"`
 	// AuthoredAt and CommittedAt are the commit's two dates, to the second.
 	AuthoredAt  time.Time `json:"authored_at"`
 	CommittedAt time.Time `json:"committed_at"`
@@ -4435,15 +4486,22 @@ type BlameLine struct {
 	TextBytes int    `json:"text_bytes,omitempty"`
 }
 
-// BlameCommit is a commit a blame's lines name: its author as it states them
-// (never a `.mailmap`'s), the date it was authored and its subject, each
-// described past its bound as a LogCommit's is.
+// BlameCommit is a commit a blame's lines name: its author and its committer
+// as it states them (never a `.mailmap`'s), the date it was authored and its
+// subject, each described past its bound as a LogCommit's is.
 type BlameCommit struct {
-	Author           string    `json:"author,omitempty"`
-	AuthorBytes      int       `json:"author_bytes,omitempty"`
-	AuthorEmail      string    `json:"author_email,omitempty"`
-	AuthorEmailBytes int       `json:"author_email_bytes,omitempty"`
-	AuthoredAt       time.Time `json:"authored_at"`
+	Author           string `json:"author,omitempty"`
+	AuthorBytes      int    `json:"author_bytes,omitempty"`
+	AuthorEmail      string `json:"author_email,omitempty"`
+	AuthorEmailBytes int    `json:"author_email_bytes,omitempty"`
+	// Committer, CommitterEmail and their sizes, and EngineCommitted, are
+	// as a LogCommit's.
+	Committer           string    `json:"committer,omitempty"`
+	CommitterBytes      int       `json:"committer_bytes,omitempty"`
+	CommitterEmail      string    `json:"committer_email,omitempty"`
+	CommitterEmailBytes int       `json:"committer_email_bytes,omitempty"`
+	EngineCommitted     *bool     `json:"engine_committed,omitempty"`
+	AuthoredAt          time.Time `json:"authored_at"`
 	// Subject is the message's first LINE, as git's blame names it — not
 	// the first paragraph a log's subject is — absent past
 	// MaxLogSubjectBytes with SubjectBytes its size, and empty for a

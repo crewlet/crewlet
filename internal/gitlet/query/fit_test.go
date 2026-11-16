@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -121,6 +122,55 @@ func TestEveryAnswerFitsAPage(t *testing.T) {
 	}
 	if a := mustRead(t, s, reanchorQ(repo, gitlet.ReanchorQuery{Head: atBound, Anchors: anchors})); encoded(t, a) > limit {
 		t.Errorf("the re-anchoring of %d anchors encodes to %d bytes, past %d", len(anchors), encoded(t, a), limit)
+	}
+
+	// A HISTORY OF THE WIDEST COMMITS: every person field at its encoded bound
+	// in `&` (six bytes encoded; git strips `<` from an ident), every other
+	// commit the engine's convention: each page fits, every commit whole.
+	wide := func(prefix string) string {
+		amps := (gitlet.MaxLogPersonBytes - len(prefix)) / 6
+		return prefix + strings.Repeat("&", amps) + strings.Repeat("w", gitlet.MaxLogPersonBytes-len(prefix)-6*amps)
+	}
+	person, address := wide(""), wide("a@")
+	engine := wide(gitlet.EngineCommitterLocal + "@")
+	subject := strings.Repeat("&", gitlet.MaxLogSubjectBytes/6) + strings.Repeat("s", gitlet.MaxLogSubjectBytes%6)
+	marked := map[string]bool{}
+	for i := range gitlet.MaxLogLimit {
+		name, email, convention := person, address, i%2 == 1
+		if convention {
+			name, email = gitlet.EngineCommitterName, engine
+		}
+		id := x.p.Git().Env("GIT_AUTHOR_NAME="+person, "GIT_AUTHOR_EMAIL="+address, "GIT_COMMITTER_NAME="+name,
+			"GIT_COMMITTER_EMAIL="+email).Commit(t, x.work, map[string]string{"history.txt": strconv.Itoa(i)},
+			subject)
+		marked[id] = convention
+	}
+	x.push(gitlettest.RepoName, "main")
+	tip, _ = x.tip("refs/heads/main")
+	history := pages(t, s, logQ(repo, gitlet.LogQuery{Rev: tip, Path: "history.txt", Limit: gitlet.MaxLogLimit}),
+		limit)
+	listed := 0
+	for _, p := range history {
+		for _, c := range p.Log.Commits {
+			listed++
+			switch {
+			case c.Author != person || c.AuthorEmail != address || c.Subject != subject:
+				t.Errorf("commit %s at its bounds reads author %d bytes, address %d, subject %d", c.OID,
+					len(c.Author), len(c.AuthorEmail), len(c.Subject))
+			case marked[c.OID] && (c.Committer != gitlet.EngineCommitterName || c.CommitterEmail != engine):
+				t.Errorf("commit %s reads committer %q <%d bytes>, want the engine's at its bound", c.OID,
+					c.Committer, len(c.CommitterEmail))
+			case !marked[c.OID] && (c.Committer != person || c.CommitterEmail != address):
+				t.Errorf("commit %s reads committer %d bytes <%d bytes>, want the person's at its bound", c.OID,
+					len(c.Committer), len(c.CommitterEmail))
+			case c.EngineCommitted == nil || *c.EngineCommitted != marked[c.OID]:
+				t.Errorf("commit %s is marked %v, want %t", c.OID, c.EngineCommitted, marked[c.OID])
+			}
+		}
+	}
+	if listed != gitlet.MaxLogLimit || len(history) < 2 {
+		t.Errorf("the widest history's %d pages list %d commits, want all %d in several", len(history), listed,
+			gitlet.MaxLogLimit)
 	}
 }
 

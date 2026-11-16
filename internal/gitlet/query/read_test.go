@@ -51,11 +51,13 @@ import (
 // lex a Go file's two versions — `--output=y.go`'s — from blobs a batch is
 // fed by id, anchors on them are found by the batch and diffed by pairs
 // numbered rather than named, and an interdiff kept to them looks its touched
-// paths up as `<id>:<path>` lines of a lookup's batch, no pathspec.
+// paths up as `<id>:<path>` lines of a lookup's batch, no pathspec. A
+// history's until reaches git as a formatted number, its seat not at all.
 //
 // Mutations: the log's path before `--`, or `--output=x` added to the log's
 // or the blame's arguments → red; an interdiff kept to its touched paths that
-// walks the heads rather than look them up → red.
+// walks the heads rather than look them up → red; the seat handed to git as
+// an argument → red.
 func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
@@ -122,6 +124,9 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 		}
 	}
 	mustRead(t, s, logQ(repo, gitlet.LogQuery{Rev: head, Grep: "head", Limit: 1}))
+	// A WINDOW AND A SEAT: formatted numbers, and no seat, reach git.
+	mustRead(t, s, logQ(repo, gitlet.LogQuery{Rev: head, Path: "--output=x/f", Since: historyDay,
+		Until: time.Now(), PushedBy: "ceo"}))
 	// A SEARCH: its text is the argument of -e, where git reads a pattern
 	// whatever it spells — an option's name, `-O` (--open-files-in-pager)
 	// folded — its paths filtered here, over git's answer, and a clause git
@@ -226,18 +231,19 @@ var templates = [][]string{
 // logLiteralTemplate is the magic a history's path follows `--` with.
 const logLiteralTemplate = ":(literal)"
 
-// historyTemplates are a history's argument lists — its fixed options, its
-// format with or without the message, its window (a since, a skip, both or
-// neither), the commit, and its path as a literal pathspec, the one argument
-// after `--`, or none — and a blame's: its range, the commit, and its path,
-// the one argument after `--`. "<since>" and "<skip>" are the numbers the
-// server formats, "<literal>" the literal magic and any path, "<path>" any
-// path, "<lines>" two line numbers.
+// historyTemplates are a history's argument lists (its fixed options, its
+// format with or without the message, its window: every combination, in
+// order, of a since, an until and a skip, the commit, and its path as a
+// literal pathspec, the one argument after `--`, or none) and a blame's: its
+// range, the commit, and its path, the one argument after `--`. "<since>",
+// "<until>" and "<skip>" are the numbers the server formats, "<literal>" the
+// literal magic and any path, "<path>" any path, "<lines>" two line numbers.
 func historyTemplates() [][]string {
 	var out [][]string
-	for _, format := range []string{"--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00",
-		"--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00%B%x00"} {
-		for _, window := range [][]string{{}, {"<since>"}, {"<skip>"}, {"<since>", "<skip>"}} {
+	for _, format := range []string{"--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%ct%x00%s%x00",
+		"--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%ct%x00%s%x00%B%x00"} {
+		for _, window := range [][]string{{}, {"<since>"}, {"<until>"}, {"<skip>"}, {"<since>", "<until>"},
+			{"<since>", "<skip>"}, {"<until>", "<skip>"}, {"<since>", "<until>", "<skip>"}} {
 			for _, path := range [][]string{{}, {"--", "<literal>"}} {
 				out = append(out, slices.Concat([]string{"log", "-z", "--topo-order", "--no-mailmap", "--no-color",
 					"--no-notes", format}, window, []string{"<oid>"}, path))
@@ -306,6 +312,10 @@ func fits(args, tmpl []string) bool {
 			}
 		case "<since>":
 			if n, ok := strings.CutPrefix(args[i], "--max-age="); !ok || !digits(n) {
+				return false
+			}
+		case "<until>":
+			if n, ok := strings.CutPrefix(args[i], "--min-age="); !ok || !digits(n) {
 				return false
 			}
 		case "<skip>":

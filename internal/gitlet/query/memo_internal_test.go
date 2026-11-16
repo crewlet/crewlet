@@ -273,12 +273,10 @@ func spell(ty reflect.Type) string {
 }
 
 // memoShapes is the shape of the answers each memoFormat this build reads was
-// written over: a format names one shape, for ever. page/4's was recorded as
-// 4a3450124092111d while the fingerprint spelled each type with its package's
-// name (code.GitAnswer); the same fields, spelled as spell spells them, are
-// 7bc6fe45e8de6b7f.
+// written over: a format names one shape, for ever. page/5 added each
+// commit's committer and engine mark and a narrowed history's unjudged count.
 var memoShapes = map[string]string{
-	"page/4": "7bc6fe45e8de6b7f",
+	"page/5": "3180ddc7fc1c1ff8",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the

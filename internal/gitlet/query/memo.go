@@ -88,7 +88,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/4"
+const memoFormat = "page/5"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -168,14 +168,18 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 			strconv.FormatBool(f.filters()), strconv.Itoa(len(f.paths)))
 		parts = append(parts, f.paths...)
 	case gitlet.GitLog:
-		// Since as the second its walk stops before, the limit as the page
-		// applies it, and the cost the page's fields were measured at.
+		// Since as the second its walk stops before, Until as the last
+		// second it keeps, the limit as the page applies it, and the cost the
+		// page's fields were measured at. A PushedBy read is never memoized.
 		path, _ := gitlet.GitPath("log.path", q.Log.Path, q.Log.PathB64, true)
-		since := ""
+		since, until := "", ""
 		if !q.Log.Since.IsZero() {
 			since = strconv.FormatInt(sinceSecond(q.Log.Since), 10)
 		}
-		parts = append(parts, whole[q.Log.Rev], path, q.Log.Grep, since, strconv.Itoa(logLimitOf(q.Log)),
+		if !q.Log.Until.IsZero() {
+			until = strconv.FormatInt(untilSecond(q.Log.Until), 10)
+		}
+		parts = append(parts, whole[q.Log.Rev], path, q.Log.Grep, since, until, strconv.Itoa(logLimitOf(q.Log)),
 			costModel)
 	case gitlet.GitBlame:
 		start, end := q.Blame.Range()
@@ -211,6 +215,11 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 // the memo would hold for nobody else; and a commit's deploy and dependency
 // files, asked once a tip by the scan that records what they declare.
 func memoizable(q gitlet.GitQuery) bool {
+	// A HISTORY NARROWED BY WHO PUSHED IT is a function of the node's index
+	// of pushes, which moves, never of the ids alone (gitlet.GitQuery.ReadsIndex).
+	if q.ReadsIndex() {
+		return false
+	}
 	switch q.Kind {
 	case gitlet.GitLandedIn, gitlet.GitRevisionFacts, gitlet.GitReanchor, gitlet.GitChecksFile,
 		gitlet.GitCodeFiles:
@@ -424,6 +433,23 @@ func (w *pageWriter) flag(v bool) {
 	}
 }
 
+// optBool and optInt write a field an answer may leave out: whether it is
+// set, and its value where it is, so an absent one reads back absent and
+// never as false or zero.
+func (w *pageWriter) optBool(v *bool) {
+	w.flag(v != nil)
+	if v != nil {
+		w.flag(*v)
+	}
+}
+
+func (w *pageWriter) optInt(v *int) {
+	w.flag(v != nil)
+	if v != nil {
+		w.int(*v)
+	}
+}
+
 // encodePage is p's encoding: a memo body's first part, which its tail and
 // counts are appended to (appendTail, appendCounts).
 func encodePage(p memoPage) []byte {
@@ -499,6 +525,9 @@ func encodePage(p memoPage) []byte {
 		}
 		w.int(l.Scanned)
 		w.flag(l.Complete)
+		// Never set on a page the memo keeps (memoizable), and written all
+		// the same: an entry holds every field of its answer.
+		w.optInt(l.Unjudged)
 	case gitlet.GitBlame:
 		b := a.Blame
 		w.str(b.Path)
@@ -524,6 +553,8 @@ func encodePage(p memoPage) []byte {
 			w.int(c.AuthorBytes)
 			w.str(c.AuthorEmail)
 			w.int(c.AuthorEmailBytes)
+			appendCommitter(&w, c.Committer, c.CommitterBytes, c.CommitterEmail, c.CommitterEmailBytes,
+				c.EngineCommitted)
 			w.time(c.AuthoredAt)
 			w.str(c.Subject)
 			w.int(c.SubjectBytes)
@@ -545,6 +576,16 @@ func encodePage(p memoPage) []byte {
 		}
 	}
 	return w
+}
+
+// appendCommitter writes a history's or a blame's commit's committer: the name
+// and the address, each with its size, and the engine's mark.
+func appendCommitter(w *pageWriter, name string, nameBytes int, email string, emailBytes int, engine *bool) {
+	w.str(name)
+	w.int(nameBytes)
+	w.str(email)
+	w.int(emailBytes)
+	w.optBool(engine)
 }
 
 // appendFile writes one diff file: its counts too where with is set (a
@@ -693,6 +734,24 @@ func (r *pageReader) flag() bool {
 	return v
 }
 
+// optBool and optInt read a field as pageWriter's optBool and optInt wrote
+// it: nil where it was left out.
+func (r *pageReader) optBool() *bool {
+	if !r.flag() {
+		return nil
+	}
+	v := r.flag()
+	return &v
+}
+
+func (r *pageReader) optInt() *int {
+	if !r.flag() {
+		return nil
+	}
+	v := r.int()
+	return &v
+}
+
 // maxInt is the largest int, which a count read back may not pass.
 const maxInt = int(^uint(0) >> 1)
 
@@ -763,7 +822,7 @@ func decodePage(body []byte) (memoPage, error) {
 				l.Commits[i] = readLogCommit(r)
 			}
 		}
-		l.Scanned, l.Complete = r.int(), r.flag()
+		l.Scanned, l.Complete, l.Unjudged = r.int(), r.flag(), r.optInt()
 		a.Log = l
 	case gitlet.GitBlame:
 		b := &gitlet.BlameAnswer{Path: r.str(), PathB64: r.str(), StartLine: r.int(), EndLine: r.int(),
@@ -779,7 +838,9 @@ func decodePage(body []byte) (memoPage, error) {
 			for range n {
 				id := r.str()
 				b.Commits[id] = gitlet.BlameCommit{Author: r.str(), AuthorBytes: r.int(), AuthorEmail: r.str(),
-					AuthorEmailBytes: r.int(), AuthoredAt: r.time(), Subject: r.str(), SubjectBytes: r.int()}
+					AuthorEmailBytes: r.int(), Committer: r.str(), CommitterBytes: r.int(), CommitterEmail: r.str(),
+					CommitterEmailBytes: r.int(), EngineCommitted: r.optBool(), AuthoredAt: r.time(),
+					Subject: r.str(), SubjectBytes: r.int()}
 			}
 			if len(b.Commits) != n {
 				r.err = errMemoPage // an id twice: no page this build writes
@@ -818,6 +879,9 @@ func readLogCommit(r *pageReader) gitlet.LogCommit {
 	c.ParentCount = r.int()
 	c.Author, c.AuthorBytes = r.str(), r.int()
 	c.AuthorEmail, c.AuthorEmailBytes = r.str(), r.int()
+	c.Committer, c.CommitterBytes = r.str(), r.int()
+	c.CommitterEmail, c.CommitterEmailBytes = r.str(), r.int()
+	c.EngineCommitted = r.optBool()
 	c.AuthoredAt, c.CommittedAt = r.time(), r.time()
 	c.Subject, c.SubjectBytes = r.str(), r.int()
 	return c
@@ -836,6 +900,7 @@ func appendLogCommit(w *pageWriter, c gitlet.LogCommit) {
 	w.int(c.AuthorBytes)
 	w.str(c.AuthorEmail)
 	w.int(c.AuthorEmailBytes)
+	appendCommitter(w, c.Committer, c.CommitterBytes, c.CommitterEmail, c.CommitterEmailBytes, c.EngineCommitted)
 	w.time(c.AuthoredAt)
 	w.time(c.CommittedAt)
 	w.str(c.Subject)

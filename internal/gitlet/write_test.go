@@ -368,3 +368,41 @@ func TestATreePathGitWouldRefuseIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// THE ENGINE'S COMMITTER IS A CONVENTION, read exactly: `Crewlet` at `engine@`
+// on any domain; another case, more name, no domain, a second `@` or padding
+// marks nothing.
+//
+// Mutation: strings.EqualFold on the name, a split at the last `@`, or a
+// TrimSpace → the `crewlet`, two-`@` or padded rows marked, red.
+func TestEngineCommittedIsTheConvention(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, email string
+		marked      bool
+	}{
+		{"Crewlet", "engine@seats.example", true},
+		{"Crewlet", "engine@other.example", true},
+		{gitlet.EngineCommitterName, gitlet.EngineCommitterLocal + "@x", true},
+		{"crewlet", "engine@x.example", false},
+		{"CREWLET", "engine@x.example", false},
+		{"Crewlet", "Engine@x.example", false},
+		{"Crewlet Bot", "engine@x.example", false},
+		{" Crewlet", "engine@x.example", false},
+		{"Crewlet", " engine@x.example", false},
+		{"Crewlet", "engine@x.example ", false},
+		{"Crewlet", "engine@", false},
+		{"Crewlet", "engine", false},
+		{"Crewlet", "@x.example", false},
+		{"Crewlet", "engine@a@x.example", false},
+		{"Crewlet", "engine+ci@x.example", false},
+		{"Crewlet", "engine@x .example", false},
+		{"Crewlet", "engine@x.example\x7f", false},
+		{"Crewlet", "", false},
+		{"", "engine@x.example", false},
+	} {
+		if got := gitlet.EngineCommitted(tc.name, tc.email); got != tc.marked {
+			t.Errorf("EngineCommitted(%q, %q) = %t, want %t", tc.name, tc.email, got, tc.marked)
+		}
+	}
+}
