@@ -61,6 +61,8 @@ export interface ModelView {
   runIn: string | null;
   timeoutSeconds: number | null;
   maxConcurrent: number | null;
+  /** The reasoning effort the entry sets, or null for the harness's default. */
+  effort: string | null;
   webDenied: boolean;
   /** The document entry as written, for an edit. Null for a member, who reads no document. */
   raw: Record<string, unknown> | null;
@@ -156,6 +158,7 @@ export function modelViews(
       runIn: typeof raw?.run_in === "string" ? raw.run_in : null,
       timeoutSeconds: typeof raw?.timeout_seconds === "number" ? raw.timeout_seconds : null,
       maxConcurrent: typeof raw?.max_concurrent === "number" ? raw.max_concurrent : null,
+      effort: typeof raw?.effort === "string" ? raw.effort : null,
       webDenied: overrides.web_tools === "denied",
       raw,
     };

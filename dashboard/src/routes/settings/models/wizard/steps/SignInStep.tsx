@@ -10,16 +10,19 @@
  */
 
 import { Callout, ChoiceList, Copyable, FormField, Select, Text, ValueField } from "@crewlethq/ui";
+import type { ReactNode } from "react";
 import { listed } from "~/lib/format.ts";
 import { HostLogin } from "../../HostLogin.tsx";
 import type { ModelView } from "../../data.ts";
 import { product } from "../../words.ts";
 import {
   CLOUD_FIELDS,
-  OPENCODE_PROVIDERS,
+  canExecute,
   credentialWord,
+  factsOf,
   methodsFor,
   pastesCredential,
+  providersFor,
   type Cloud,
   type Draft,
   type Method,
@@ -55,6 +58,46 @@ export const METHOD_WORDS: Record<Method, { label: string; detail: string }> = {
     label: "As Configuration sets it",
     detail: "This model's sign-in is written in Configuration, and the wizard keeps it as it is.",
   },
+};
+
+/** A method in the words of the draft's harness, where they differ from the general ones. */
+export function methodWords(harness: string, method: Method): { label: string; detail: ReactNode } {
+  const facts = factsOf(harness);
+  if (method === "api-key" && facts.providerKeys)
+    return {
+      label: "A provider's API key",
+      detail: `A key from the model provider ${product(harness)} calls, billed per token. Allowed on any engine.`,
+    };
+  if (method === "api-key" && harness === "copilot")
+    return {
+      label: "GitHub token",
+      detail: "A GitHub token with Copilot access. Allowed on any engine.",
+    };
+  if (method === "api-key" && harness === "qwen-code")
+    return {
+      label: "API key",
+      detail:
+        "A key for an OpenAI-compatible endpoint, such as DashScope's. Allowed on any engine.",
+    };
+  if (method === "host-login" && facts.login === "adopt")
+    return {
+      label: METHOD_WORDS["host-login"].label,
+      detail: (
+        <>
+          You sign in with <span className="mono">{facts.binary}</span> yourself on the engine host,
+          and the model uses that login. This page shows whether it is signed in.
+        </>
+      ),
+    };
+  return METHOD_WORDS[method];
+}
+
+/** The key field's placeholder: the vendor's own prefix where it has one. */
+const KEY_PLACEHOLDER: Readonly<Record<string, string>> = {
+  "claude-code": "sk-ant-api03-…",
+  codex: "sk-…",
+  copilot: "github_pat_…",
+  grok: "xai-…",
 };
 
 /** What the credential field says, by whether it is new or replaces a stored one. */
@@ -100,6 +143,10 @@ export function SignInStep({
 }) {
   const methods = methodsFor(draft);
   const word = credentialWord(draft);
+  const providers = providersFor(draft.harness);
+  // OPENCODE'S AND PI'S MODEL NAMES ITS PROVIDER, so a login's model needs one too.
+  const namesItsProvider = draft.harness === "opencode" || draft.harness === "pi";
+  const facts = factsOf(draft.harness);
   // A REVOKED KEY IS NOT ONE TO KEEP (design QA Minor 4): the option to go
   // back to it is offered only while the stored one still signs in.
   const canKeep = !!editing && editing.entry.health !== "rejected";
@@ -113,18 +160,21 @@ export function SignInStep({
         onChange={(v) => onChange({ method: v as Method, credential: "" })}
         options={methods.map((m) => ({
           value: m,
-          label: METHOD_WORDS[m].label,
-          detail: METHOD_WORDS[m].detail,
+          label: methodWords(draft.harness, m).label,
+          detail: methodWords(draft.harness, m).detail,
         }))}
       />
 
-      {draft.harness === "opencode" ? (
-        <FormField label="Provider" helper="The provider OpenCode sends the model's calls to.">
+      {providers.length > 0 && (draft.method === "api-key" || namesItsProvider) ? (
+        <FormField
+          label="Provider"
+          helper={`The provider ${product(draft.harness)} sends the model's calls to.`}
+        >
           {(field) => (
             <Select
               id={field.id}
               value={draft.provider}
-              options={OPENCODE_PROVIDERS.map((p) => ({ value: p.value, label: p.label }))}
+              options={providers.map((p) => ({ value: p.value, label: p.label }))}
               onChange={(v) => onChange({ provider: String(v) })}
             />
           )}
@@ -176,16 +226,20 @@ export function SignInStep({
             ) : null}
             <ValueField
               kind="secret"
-              label={word === "token" ? "Token" : "API key"}
+              label={
+                word === "token"
+                  ? "Token"
+                  : draft.harness === "copilot"
+                    ? "GitHub token"
+                    : "API key"
+              }
               value={draft.credential}
               required
               onChange={(v) => onChange({ credential: v })}
               placeholder={
                 word === "token"
                   ? "sk-ant-oat01-…"
-                  : draft.harness === "claude-code"
-                    ? "sk-ant-api03-…"
-                    : "sk-…"
+                  : (KEY_PLACEHOLDER[draft.harness] ?? "Paste the key")
               }
               help={credentialHelp(draft, replacing)}
               error={errors.credential}
@@ -211,6 +265,17 @@ export function SignInStep({
             )}
           </div>
         )
+      ) : null}
+
+      {draft.harness === "qwen-code" && draft.method === "api-key" ? (
+        <ValueField
+          kind="text"
+          label="Endpoint"
+          value={draft.endpoint}
+          placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+          help="The OpenAI-compatible address Qwen Code calls. Empty uses the harness's own."
+          onChange={(v) => onChange({ endpoint: v })}
+        />
       ) : null}
 
       {draft.method === "cloud" ? (
@@ -261,11 +326,23 @@ export function SignInStep({
         </div>
       ) : draft.method === "host-login" ? (
         <Callout variant="info" title="You sign in, on the host">
-          After you create the model, run{" "}
-          <span className="mono">crewlet llm login {draft.key || "<model>"}</span> in a terminal on
-          the engine host and finish the vendor's sign-in in your browser. The model's page then
-          shows whether it is signed in. A harness login stays on its node and never travels to an
-          E2B sandbox.
+          {facts.login === "adopt" ? (
+            <>
+              After you create the model, sign in with <span className="mono">{facts.binary}</span>{" "}
+              in a terminal on the engine host, then run{" "}
+              <span className="mono">crewlet llm login {draft.key || "<model>"} -from-host</span>.
+            </>
+          ) : (
+            <>
+              After you create the model, run{" "}
+              <span className="mono">crewlet llm login {draft.key || "<model>"}</span> in a terminal
+              on the engine host and finish the vendor's sign-in.
+            </>
+          )}{" "}
+          The model's page then shows whether it is signed in.
+          {canExecute(draft)
+            ? " A harness login stays on its node and never travels to an E2B sandbox."
+            : ""}
         </Callout>
       ) : null}
 

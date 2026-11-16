@@ -12,9 +12,16 @@ import { describe, expect, test } from "vitest";
 import { noUses, usesForIntent } from "~/lib/modelUses.ts";
 import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import type { ModelView } from "../data.ts";
+import { HARNESS_FACTS } from "~/contract/harnesses.ts";
 import {
+  HARNESSES,
   baseOf,
   credentialValues,
+  effortLevels,
+  factsOf,
+  methodOf,
+  methodsOf,
+  providersFor,
   distinctProblems,
   draftOf,
   draftProblems,
@@ -59,6 +66,7 @@ function view(patch: Partial<ModelView> & { raw: Record<string, unknown> }): Mod
     runIn: null,
     timeoutSeconds: null,
     maxConcurrent: null,
+    effort: null,
     webDenied: false,
     ...patch,
   };
@@ -257,5 +265,77 @@ describe("a pasted credential", () => {
 
   test("of only whitespace keeps what is stored", () => {
     expect(credentialValues(draft({ credential: " \n " }))).toEqual({});
+  });
+});
+
+// EVERY BUILT-IN HARNESS IS OFFERED, with the sign-ins the engine runs for it, and
+// each writes the entry shape internal/config's gate holds the engine to.
+describe("every harness", () => {
+  test("is offered, and none the engine does not ship", () => {
+    expect([...HARNESSES].sort()).toEqual(Object.keys(HARNESS_FACTS).sort());
+  });
+
+  test.each([...HARNESSES])("%s writes each of its sign-ins as the engine reads it", (harness) => {
+    for (const method of methodsOf(harness)) {
+      const provider = providersFor(harness)[0]?.value ?? "anthropic";
+      const effort = factsOf(harness).efforts[0] ?? "";
+      const d = draft({ harness, method, provider, variable: "MODEL_KEY", model: "m", effort });
+      const entity = entityOf(d);
+      expect(entity.harness).toBe(harness);
+      expect(entity.effort).toBe(effort || undefined);
+      const auth = entity.auth as Record<string, unknown> | undefined;
+      const env = (entity.env ?? {}) as Record<string, string>;
+      if (method === "api-key" && factsOf(harness).providerKeys) {
+        expect(auth).toBeUndefined();
+        expect(env[providersFor(harness)[0]!.variable]).toBe("${MODEL_KEY}");
+      } else if (method === "api-key") {
+        expect(auth).toEqual({ mode: "api-key", api_key: "${MODEL_KEY}" });
+      } else if (method === "token") {
+        expect(auth).toEqual({ mode: "subscription", token: "${MODEL_KEY}" });
+      } else if (method === "cloud") {
+        expect(auth).toEqual({ mode: "env" });
+      } else {
+        expect(auth).toEqual({ mode: "subscription" });
+      }
+    }
+  });
+
+  test("a provider key on Hermes reads back as a key, its provider kept", () => {
+    const d = draft({
+      harness: "hermes",
+      method: "api-key",
+      provider: "xai",
+      variable: "XAI_API_KEY",
+    });
+    const raw = entityOf(d);
+    const back = draftOf(view({ harness: "hermes", model: "m", raw }));
+    expect(methodOf(view({ harness: "hermes", model: "m", raw }))).toBe("api-key");
+    expect(back.provider).toBe("xai");
+  });
+
+  test("Qwen Code's endpoint is written to its variable and read back", () => {
+    const d = draft({
+      harness: "qwen-code",
+      method: "api-key",
+      variable: "QWEN_API_KEY",
+      endpoint: "https://example.com/v1",
+    });
+    const raw = entityOf(d);
+    expect(raw.env).toEqual({ OPENAI_BASE_URL: "https://example.com/v1" });
+    expect(draftOf(view({ harness: "qwen-code", model: "m", raw })).endpoint).toBe(
+      "https://example.com/v1",
+    );
+  });
+
+  test("an effort the model does not take is a problem on the Model step", () => {
+    expect(effortLevels(draft({ model: "claude-opus-4-5" }))).toEqual(["low", "medium", "high"]);
+    const problems = draftProblems(draft({ model: "claude-opus-4-5", effort: "max" }), []);
+    const effort = problems.find((p) => p.segments?.at(-1) === "effort");
+    expect(effort && stepOf(effort, "sonnet-key")).toBe("model");
+    expect(
+      draftProblems(draft({ model: "opus", effort: "max" }), []).some((p) =>
+        p.segments?.includes("effort"),
+      ),
+    ).toBe(false);
   });
 });

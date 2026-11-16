@@ -142,6 +142,7 @@ func (p Profile) Clone() Profile {
 	out.VersionArgs = append([]string(nil), p.VersionArgs...)
 	out.CompleteArgs = append([]string(nil), p.CompleteArgs...)
 	out.ModelArgs = append([]string(nil), p.ModelArgs...)
+	out.Effort = p.Effort.clone()
 	out.SystemPrompt = p.SystemPrompt.clone()
 	out.AppendSystemPrompt = p.AppendSystemPrompt.clone()
 	out.PromptArgs = append([]string(nil), p.PromptArgs...)

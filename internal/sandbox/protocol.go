@@ -1366,6 +1366,10 @@ type RunRequest struct {
 	// inside the box.
 	Model string
 
+	// Effort is the entry's reasoning effort, in its harness's own levels, which
+	// the runner passes its harness its own way. Empty: the harness's default.
+	Effort string
+
 	// MCPServers are the MCP servers the engine hands the run, keyed by
 	// server name: its tool bridge, and the seat's servers that run in its
 	// box. SERVER-LEVEL ONLY — there is no per-tool allowlist, because the
