@@ -746,6 +746,12 @@ and nobody else's, and takes `gitlet` as `mark_inbox` takes `worklet`: a person
 without it is listed no code notice to mark. A seat is never offered it: a seat
 is woken, never shown an inbox ([How a person learns they have work](../concepts/humans-in-the-org.md#how-a-person-learns-they-have-work)).
 
+**Nor is `artifact_mark_inbox`**, which the operator catalogue serves beside the
+artifacts tools: a person's own marks over their comment notices, the ones the
+`inbox` question answers under `source: "artifacts"`, on the artifacts log and
+by the same rules. It names no app, since commenting on an artifact is a
+relation to it, and writes the caller's own record alone.
+
 ### The deployment's health
 
 Two read-only tools, `fleet_health` and `code_status`, read the deployment as

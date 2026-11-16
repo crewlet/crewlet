@@ -155,6 +155,10 @@ const (
 	// own log (internal/inbox), so each domain's are written by a verb of
 	// its own.
 	ActionCodeMarkInbox Action = "code_mark_inbox"
+	// ActionArtifactMarkInbox is a person's gesture over their own COMMENT
+	// notices, the artifacts log's half (the operator tool
+	// `artifact_mark_inbox`), under no app: a comment is a relation.
+	ActionArtifactMarkInbox Action = "artifact_mark_inbox"
 
 	// THE CODE WRITE TOOLS, a seat's and a person's assistant's, named after
 	// the tools and decided as the git transport's push is: admitted for
@@ -1414,6 +1418,8 @@ var rules = map[Action]rule{
 	// (ADR-0110), so no code notice is theirs to list, count or mark.
 	ActionCodeMarkInbox: {class: ClassOwnRecord, app: iam.GrantGitlet, humanOnly: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionArtifactMarkInbox: {class: ClassOwnRecord, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// --- reading the atlas ------------------------------------------- //
 	//

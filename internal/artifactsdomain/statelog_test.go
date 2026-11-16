@@ -29,7 +29,7 @@ func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
 			Domain:  artifactsdomain.Domain{},
-			Applier: artifactsdomain.NewApplier("suite-node", nil),
+			Applier: artifactsdomain.NewApplier("suite-node", nil, nil),
 			// Migrate is nil: these tables ship in the replicated estate's
 			// own migration (0043), so a fresh store already has them.
 			Encode: encodeSuiteRecord,
@@ -62,7 +62,7 @@ func TestTheArtifactsGateReaderKeepsTheSharedRule(t *testing.T) {
 		return statelogtest.GateCandidate{
 			Candidate: statelogtest.Candidate{
 				Domain:  artifactsdomain.Domain{},
-				Applier: artifactsdomain.NewApplier("suite-node", nil),
+				Applier: artifactsdomain.NewApplier("suite-node", nil, nil),
 				// RAW IDS: the family asks the reader about the very ids it
 				// handed out, so a record about one must name it on its
 				// subject as given.
@@ -293,6 +293,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		subject = artifactsdomain.CommentSubject(mustID(artifact),
 			uuid.NewSHA1(suiteNamespace, []byte("thread-carrying")))
 		op, payload = artifactsdomain.OpCommentOpen, commentOpenPayload("carrying")
+	case "RecordEnvelope.Op inbox_marks":
+		subject, op = artifactsdomain.ReaderSubject("suite"), artifactsdomain.OpInboxMarks
+		payload = artifactsdomain.PersonMarks{V: 1, Handle: "suite", Gesture: artifactsdomain.MarkGesture{
+			Read: []string{"suite-notice"}}, Positions: map[string]uint64{"suite-notice": 1}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

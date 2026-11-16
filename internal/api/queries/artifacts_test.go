@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -35,6 +36,8 @@ var (
 type artifactsEstate struct {
 	elevated []int
 	trails   []artifactsdomain.TrailQuery
+	inboxes  []artifactsdomain.InboxQuery
+	cards    []statelog.Freshness
 }
 
 func (e *artifactsEstate) heads() map[artifacts.ID]artifactsdomain.Head {
@@ -202,6 +205,8 @@ func TestEveryArtifactsQuestionDeclaresWhoAsksIt(t *testing.T) {
 		"artifact_usage":    "decided_by:" + string(authz.ActionArtifactUsage),
 		"artifact_trail":    "decided_by:" + string(authz.ActionAuditRead),
 		"brand":             "decided_by:" + string(authz.ActionBrandRead),
+		// AND THE COMPOSED INBOX, whose comment notices are the artifacts'.
+		"inbox": "decided_by:" + string(authz.ActionInbox),
 	}
 	bare, r := queries.NewRegistry(), queries.NewRegistry()
 	queries.Register(bare, queries.Sources{})
@@ -333,5 +338,91 @@ func TestTheCompanyTrailListsEveryArtifactsRecordsToAnAdministrator(t *testing.T
 		strings.Contains(detail, "invalid") {
 		t.Errorf("an op the log does not record is told %q, want the reader's "+
 			"sentence alone", detail)
+	}
+}
+
+// inboxThread is the thread every comment notice of the fixture is about.
+const inboxThread = "6f1c2a0e-6c0a-5d0e-9b8e-3f0d1c2b3a49"
+
+// Inbox answers bob's comment notices: one on the page shared with him, one on
+// kim's private page, which he no longer reads, and the heads of both.
+func (e *artifactsEstate) Inbox(_ context.Context, q artifactsdomain.InboxQuery) (artifactsdomain.InboxPage, error) {
+	e.inboxes = append(e.inboxes, q)
+	at := time.Date(2031, 4, 2, 9, 30, 0, 0, time.UTC)
+	notice := func(record string, id artifacts.ID, seq uint64, said string) artifactsdomain.InboxNotice {
+		return artifactsdomain.InboxNotice{RecordID: record, LogStream: "CREWLET_ARTIFACTS_LOG", LogGeneration: 1,
+			LogSeq: seq, At: at.Add(time.Duration(seq) * time.Minute), Reason: artifactsdomain.NotifyMention,
+			Addressed: true, Op: artifactsdomain.OpCommentReply, Artifact: id.String(), Thread: inboxThread,
+			Excerpt: said, Actor: "jane", ActorKind: iam.ActorHuman, Title: e.heads()[id].Title}
+	}
+	h := e.heads()
+	return artifactsdomain.InboxPage{Handle: q.Handle, Notices: []artifactsdomain.InboxNotice{
+		notice("a-2", qaPrivate, 7, "kim's words"), notice("a-1", qaPage, 5, "Looks right")},
+		Heads:          map[string]artifactsdomain.Head{qaPage.String(): h[qaPage], qaPrivate.String(): h[qaPrivate]},
+		PrimaryReasons: artifactsdomain.DefaultPrimaryReasons, Next: "CREWLET_ARTIFACTS_LOG@1:5",
+		Level: q.Fresh.Level, Complete: true}, nil
+}
+
+// lastInbox is the last inbox read asked, the zero query where none was.
+func (e *artifactsEstate) lastInbox() artifactsdomain.InboxQuery {
+	if len(e.inboxes) == 0 {
+		return artifactsdomain.InboxQuery{}
+	}
+	return e.inboxes[len(e.inboxes)-1]
+}
+
+// NoticeThreads answers the fixture's thread resolved, and nothing else.
+func (e *artifactsEstate) NoticeThreads(_ context.Context, refs []artifactsdomain.ThreadRef,
+	fresh statelog.Freshness) ([]*artifactsdomain.NoticeThread, error) {
+	e.cards = append(e.cards, fresh)
+	out := make([]*artifactsdomain.NoticeThread, len(refs))
+	for i, ref := range refs {
+		if ref.Thread == inboxThread {
+			out[i] = &artifactsdomain.NoticeThread{Status: artifactsdomain.ThreadResolved, Remarks: 3,
+				ResolvedBy: "jane"}
+		}
+	}
+	return out, nil
+}
+
+// THE ARTIFACTS' HALF OF AN INBOX IS EVERY PERSON'S, under no app, and each
+// notice is held to its reader's access to its artifact as it stands; the
+// cursor still resumes below what was left out.
+func TestTheArtifactsHalfOfAnInboxShowsOnlyWhatItsReaderMayOpen(t *testing.T) {
+	t.Parallel()
+	s, _, _ := inboxSources(t)
+	e := &artifactsEstate{}
+	s.Artifacts = artifactsSeam(e)
+	page := composed(t, s, "bob")
+	if got := sourcesOf(page); !slices.Equal(got, []string{"artifacts"}) {
+		t.Fatalf("a person with no app read the sources %v, want the artifacts'", got)
+	}
+	if len(page.Notices) != 1 || page.Notices[0].RecordID != "a-1" || page.Notices[0].Subject.Title != "Page" ||
+		page.Notices[0].Kind != "comment" || page.Notices[0].Excerpt != "Looks right" {
+		t.Fatalf("bob reads %+v, want the comment on the shared page alone", page.Notices)
+	}
+	for _, n := range page.Notices {
+		if strings.Contains(fmt.Sprint(n), "kim's words") || strings.Contains(fmt.Sprint(n), "Private") {
+			t.Errorf("a notice of an artifact bob may not open leaked: %+v", n)
+		}
+	}
+	if len(e.inboxes) != 1 || e.inboxes[0].Handle != "bob" || e.inboxes[0].Snoozed != "exclude" {
+		t.Errorf("the artifacts were asked %+v, want bob's inbox, snoozed notices hidden", e.inboxes)
+	}
+	if page.NextCursor == "" {
+		t.Error("a page that left a notice out answered no cursor past it")
+	}
+	got, err := askHolding(t, s, "bob", "inbox", map[string]any{"cards": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	carded := got.(inbox.Page)
+	said, ok := carded.Notices[0].Extra.(artifactsdomain.InboxNotice)
+	if !ok || said.ThreadState == nil || said.ThreadState.Status != artifactsdomain.ThreadResolved ||
+		said.ThreadState.Remarks != 3 {
+		t.Errorf("the card reads %+v, want the thread resolved with its three remarks", carded.Notices[0].Extra)
+	}
+	if len(e.cards) != 1 || len(e.cards[0].Floors) != 0 && e.cards[0].Floors[0].Stream != "CREWLET_ARTIFACTS_LOG" {
+		t.Errorf("the cards were read at %+v", e.cards)
 	}
 }

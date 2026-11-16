@@ -50,6 +50,7 @@ import {
   answerWords,
   answeredPreview,
   answeredTexts,
+  artifactWords,
   askPreview,
   askTexts,
   budgetLine,
@@ -143,7 +144,6 @@ export function InboxColumn({
   more,
   bound,
   refusal,
-  elsewhere = null,
 }: {
   needs: readonly InboxRow[];
   /**
@@ -190,12 +190,6 @@ export function InboxColumn({
   bound: boolean;
   /** A read's refusal, drawn where its rows would be. */
   refusal?: ReactNode;
-  /**
-   * Where the company runs no Worklet: the line saying where asks and
-   * mentions go instead, drawn in place of every tracker pane. Null where it
-   * runs it.
-   */
-  elsewhere?: string | null;
 }) {
   const [closing, closed] = useClosing(settled);
   // AN ARRIVAL IS WASHED WHERE IT IS SEEN TO LAND. One the list is first
@@ -239,11 +233,6 @@ export function InboxColumn({
         <InboxGroup label={OTHERS_LABEL} count={others.filter((r) => !settled.has(r.key)).length}>
           {others.map((row) => item(row))}
         </InboxGroup>
-      )}
-      {elsewhere && (
-        <Text as="p" variant="caption" className="inbox-note">
-          {elsewhere}
-        </Text>
       )}
       {updates.rows.length > 0 && (
         // CLOSED UNTIL OPENED, and counted, on every visit: notices are many,
@@ -400,8 +389,11 @@ function LaterRows({
  * names the row opening.
  */
 export function rowSpoken(row: InboxRow, index: OrgIndex): string {
+  const name = rowName(row, rowWho(row, index));
+  // A NAME AND WHAT THEY DID are one run of words, as the row draws them.
+  if (row.kind === "artifact") return `${name} ${artifactWords(row.notice).did}`;
   // THE LABEL'S COLON is for the eye, before the excerpt; spoken alone it ends the sentence.
-  return `${rowName(row, rowWho(row, index))}: ${rowWords(row, index).text.replace(/:$/, "")}`;
+  return `${name}: ${rowWords(row, index).text.replace(/:$/, "")}`;
 }
 
 /** What a row says under the name, and the quieter words after it. */
@@ -439,12 +431,20 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
     }
     case "change":
       return changeWords(row.notice);
+    case "artifact": {
+      // WHAT THEY DID IS THE QUALIFIER after their name ([qualifierOf]), so the
+      // row's words are the remark alone, quiet as every notice's excerpt.
+      const said = artifactWords(row.notice).excerpt;
+      return said ? { text: "", excerpt: said } : { text: "" };
+    }
   }
   return { text: "" };
 }
 
 /** The word after the name, where the row is not a plain question or update. */
 function qualifierOf(row: InboxRow): { word: string; danger: boolean } | null {
+  // "commented on Q3 plan": the kit reads a name and its qualifier as one run.
+  if (row.kind === "artifact") return { word: artifactWords(row.notice).did, danger: false };
   if (row.kind !== "decision") return null;
   if (row.subject.kind === "run") return { word: "executor", danger: false };
   if (row.subject.kind === "seat") return { word: "stopped", danger: true };

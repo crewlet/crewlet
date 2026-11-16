@@ -194,7 +194,9 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 // from the record and same-log rows alone, with broker instants, so two nodes at
 // one checkpoint hold the same bytes. The ledger is Divergent: it travels so an
 // adopter can answer a retry of anything its donor applied, and its
-// `applied_at` is each data node's own.
+// `applied_at` is each data node's own. So are a comment record's notices
+// (apply_notices.go): whether one is written depends on the batch's instant and the
+// epoch's inbox horizon, which two nodes applying one record need not share.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))
@@ -205,6 +207,7 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		out[table] = statelog.Local
 	}
 	out[Domain{}.OpsTable()] = statelog.Divergent
+	out[NoticesTable] = statelog.Divergent
 	return out
 }
 

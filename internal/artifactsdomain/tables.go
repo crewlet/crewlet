@@ -20,8 +20,9 @@ var ReproducibleTables = []string{
 	// retained version or a live asset still names.
 	"artifact_objects", "artifact_assets",
 
-	// Access and per-person state.
-	"artifact_shares", "artifact_pins", "artifact_reads",
+	// Access and per-person state: a person's marks over their notices
+	// included (the notices themselves are divergent, apply_notices.go).
+	"artifact_shares", "artifact_pins", "artifact_reads", "artifact_person_marks",
 
 	// What happened, and the counters the stamped quotas are enforced
 	// against.

@@ -56,6 +56,7 @@ type fakeArtifacts struct {
 	adoption      *artifactsdomain.Adoption
 	folderCreates []artifactsdomain.FolderCreateInput
 	moves         [][2]string
+	marks         []artifactsdomain.MarkInput
 	queries       []artifactsdomain.ListQuery
 	prefixes      []artifactsdomain.CommonPrefix
 

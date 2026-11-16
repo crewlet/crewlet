@@ -360,8 +360,12 @@ version.
   assigned to each work item the artifact is linked to, agents mentioned, and
   agents already in the thread when a person replies, are woken the way a
   work-item comment wakes them. People are told in their inbox: a person
-  owner of a new thread, the people in a thread of a reply or a resolution,
-  and anybody mentioned.
+  owner of a new thread, the people in a thread of a reply, a resolve or a
+  reopen, and anybody mentioned, never of what they wrote themselves. Each
+  notice is shown only while its reader may open the artifact, keeps the
+  first 600 bytes of the remark until its author removes it, is marked with
+  `artifact_mark_inbox` and goes with the artifact's purge (see [How a person
+  learns they have work](humans-in-the-org.md#how-a-person-learns-they-have-work)).
 - **Bounded.** Each node takes at most 30 comment writes a minute from one
   person or agent on one artifact, and 120 on one artifact, refusing the rest
   with when to try again.

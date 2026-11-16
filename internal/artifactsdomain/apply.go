@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -23,7 +24,9 @@ import (
 //  1. IT READS NO CONFIG, NO CLOCK AND NO OTHER DOMAIN. Whatever needs Tier A,
 //     IAM or the chart (the quota limits, the caller's role and kind) was
 //     decided at the API and STAMPED into the record; every instant written is
-//     the broker's ([statelog.ApplyOptions.StoredAt]).
+//     the broker's ([statelog.ApplyOptions.StoredAt]). The one exception is
+//     the DIVERGENT notice table (apply_notices.go), whose rows the batch's instant
+//     and the epoch's inbox horizon decide, outside the identity claim.
 //  2. IT APPLIES NO RULE A LATER BUILD MAY CHANGE. The media table, the path
 //     grammar and every bound in internal/artifacts/limits.go are the
 //     writer's to enforce: an older node applying a newer node's record under
@@ -226,22 +229,33 @@ type Applier struct {
 	// a mutex: an applier is ONE writer, and Apply and Committed run on one
 	// goroutine with the commit in between.
 	moved []Moved
+
+	// inboxMoved is told, after a committed batch, whose inbox its notices
+	// moved on this node (apply_notices.go); nil is legal. inboxed is those
+	// notices, filled and drained as moved is ([inbox.Batch]).
+	inboxMoved func([]inbox.Movement)
+	inboxed    inbox.Batch
 }
 
 var _ statelog.RetentionHook = (*Applier)(nil)
 
 // NewApplier builds the artifacts applier for one node. committed is called
-// after a committed batch that moved anything, AFTER the commit and never
-// inside the transaction: the store re-runs the body of an attempt that failed
+// after a committed batch that moved anything, and inboxMoved after one whose
+// notices moved somebody's inbox, each AFTER the commit and never inside the
+// transaction: the store re-runs the body of an attempt that failed
 // transiently, and a listener told about rows that then rolled back would
 // decide from rows no node holds.
-func NewApplier(nodeID string, committed func([]Moved)) *Applier {
-	return &Applier{NodeID: nodeID, committed: committed}
+func NewApplier(nodeID string, committed func([]Moved), inboxMoved func([]inbox.Movement)) *Applier {
+	return &Applier{NodeID: nodeID, committed: committed, inboxMoved: inboxMoved}
 }
 
-// Committed is the post-commit half: what the batch moved, told once. It must
-// not block, and neither may the listener.
+// Committed is the post-commit half: what the batch moved, and whose inbox its
+// notices moved, each told once. It must not block, and neither may a
+// listener.
 func (a *Applier) Committed(context.Context) {
+	if inboxed := a.inboxed.Drain(Domain{}.Name()); len(inboxed) > 0 && a.inboxMoved != nil {
+		a.inboxMoved(inboxed)
+	}
 	if len(a.moved) == 0 {
 		return
 	}
@@ -370,6 +384,11 @@ type applyContext struct {
 	// maxVariables sizes a multi-row insert. It decides how many statements
 	// a collection is written in, never which rows land.
 	maxVariables int
+
+	// now is the batch's instant and epoch the configuration it is applied
+	// under: read by the divergent notice table alone (apply_notices.go).
+	now   time.Time
+	epoch map[string]any
 }
 
 // at is the broker instant as it is stored.
@@ -386,7 +405,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	}
 	c := applyContext{
 		record: record, position: rec.Position, packed: rec.Position.Packed(),
-		brokerAt: opts.StoredAt, maxVariables: opts.MaxVariables,
+		brokerAt: opts.StoredAt, maxVariables: opts.MaxVariables, now: opts.Now, epoch: opts.Epoch,
 	}
 	var rows int
 	switch record.Subject.Kind {

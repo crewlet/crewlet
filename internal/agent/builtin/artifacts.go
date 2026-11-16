@@ -128,6 +128,7 @@ type ArtifactWriter interface {
 	CreateFolders(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.FolderCreateInput) (
 		artifactsdomain.FolderCreated, error)
 	Move(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, folder string) (artifactsdomain.Written, error)
+	MarkInbox(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.MarkInput) (artifactsdomain.Written, error)
 }
 
 // ArtifactPublisher is THE publish pipeline (internal/artifactupload's
@@ -340,7 +341,9 @@ func artifactOperatorCandidates(deps OperatorDeps) []candidate {
 	if a.Org == nil {
 		a.Org = deps.Org
 	}
-	return artifactToolSet(a)
+	// AND A PERSON'S MARKS OVER THEIR COMMENT NOTICES, which no seat is given:
+	// a seat is woken, never shown an inbox (artifactmarks.go).
+	return append(artifactToolSet(a), candidate{&artifactMarkInbox{deps: a}, a.serves()})
 }
 
 func artifactToolSet(a ArtifactDeps) []candidate {

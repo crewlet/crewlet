@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE ARTIFACTS' READ QUESTIONS: the gallery's listing, one artifact's head,
@@ -39,6 +40,11 @@ type ArtifactsReader interface {
 	Assets(ctx context.Context, id artifacts.ID) ([]artifactsdomain.Asset, error)
 	Usage(ctx context.Context) (artifactsdomain.Usage, error)
 	Trail(ctx context.Context, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error)
+
+	// A person's comment inbox and its cards' threads (inbox.go).
+	Inbox(ctx context.Context, q artifactsdomain.InboxQuery) (artifactsdomain.InboxPage, error)
+	NoticeThreads(ctx context.Context, refs []artifactsdomain.ThreadRef, fresh statelog.Freshness) (
+		[]*artifactsdomain.NoticeThread, error)
 }
 
 // ArtifactsSource is what the artifacts' questions read: the admission and the

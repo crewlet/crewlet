@@ -30,7 +30,8 @@ import (
 //     a create files into, a create of the `brand` artifact kind (a brand
 //     kit), and the `brand` stylesheet a version pins.
 //   - 3: comment threads (ADR-0154): the `comment` subject kind and every op
-//     on it.
+//     on it, and a person's marks over the notices they write: a reader's
+//     `inbox_marks`.
 const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format. The barrier, the trim's
@@ -71,6 +72,7 @@ var versionedFields = statelog.RecordFields{
 		Equals: string(artifacts.KindBrand)},
 	{Name: "VersionPayload.Brand", Since: 2, Path: []string{"mutation", "version", "brand"}},
 	{Name: "Subject.Kind comment", Since: 3, Path: []string{"subject", "k"}, Equals: string(KindComment)},
+	{Name: "RecordEnvelope.Op inbox_marks", Since: 3, Path: []string{"op"}, Equals: string(OpInboxMarks)},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -183,6 +185,10 @@ const (
 	OpCommentRemove  OpKind = "comment_remove"
 	OpCommentResolve OpKind = "comment_resolve"
 	OpCommentReopen  OpKind = "comment_reopen"
+
+	// OpInboxMarks moves a person's marks over their comment notices by one
+	// gesture, on the person's own reader subject (marks.go).
+	OpInboxMarks OpKind = "inbox_marks"
 )
 
 // OpKinds are every op, in the order they are documented.
@@ -195,7 +201,7 @@ var OpKinds = []OpKind{
 	OpTrash, OpRestore, OpPurgeBegin, OpPurge, OpRemove, OpPin, OpUnpin, OpOpened, OpLinkWorkItem,
 	OpReadElevated, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpMove, OpRename,
 	OpAdopt, OpClear, OpCommentOpen, OpCommentReply, OpCommentEdit, OpCommentRemove,
-	OpCommentResolve, OpCommentReopen,
+	OpCommentResolve, OpCommentReopen, OpInboxMarks,
 }
 
 // CommentOps are every op on a comment thread's subject, in the order they are

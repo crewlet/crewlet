@@ -46,8 +46,19 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, c applyContext) 
 	if err != nil || rows == 0 {
 		return rows, err
 	}
+	// WHOM IT TOLD, once the thread's rows say it applied (apply_notices.go): a
+	// removal takes its remark's words out of the notices that quoted them.
+	var told int
+	if p, removal := payload.(CommentRemovePayload); removal {
+		told, err = a.clearNoticeExcerpts(ctx, tx, c, artifact, p.Remark)
+	} else if n, tells := noticeOf(artifact, thread, c.record.Op, payload); tells {
+		told, err = a.writeNotices(ctx, tx, c, n)
+	}
+	if err != nil {
+		return 0, err
+	}
 	a.move(c, artifact, MoveComment, head.epoch, head.head)
-	return rows, nil
+	return rows + told, nil
 }
 
 // openThread writes a thread and its first remark, refused past the thread

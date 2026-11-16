@@ -725,8 +725,8 @@ var allowedReplicatedWriter = []allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// THE EXCEPTIONS. Three writes that are not a record, each because no
-	// record could own what it touches. Read these before adding a fourth.
+	// THE EXCEPTIONS. Four writes that are not a record, each because no
+	// record could own what it touches. Read these before adding a fifth.
 	// -----------------------------------------------------------------
 	{
 		Prefix: "internal/worklet/duty.go", Kind: exception,
@@ -749,6 +749,15 @@ var allowedReplicatedWriter = []allowance{
 			"recipient kind's horizon, and the table is statelog.Divergent " +
 			"for tracker_notifications' reason: whether a record writes a " +
 			"notice depends on the batch's instant and the epoch's inbox " +
+			"horizon, so two nodes legitimately hold different rows and " +
+			"deleting on this node's own authority diverges nothing.",
+	},
+	{
+		Prefix: "internal/artifactsdomain/noticesweep.go", Kind: exception,
+		Why: "NoticeJobs range-deletes `artifact_notifications` past the " +
+			"company's inbox horizon, and the table is statelog.Divergent " +
+			"for code_notifications' reason: whether a comment record writes " +
+			"a notice depends on the batch's instant and the epoch's inbox " +
 			"horizon, so two nodes legitimately hold different rows and " +
 			"deleting on this node's own authority diverges nothing.",
 	},

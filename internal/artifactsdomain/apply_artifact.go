@@ -855,7 +855,8 @@ func (a *Applier) applyPurgeBegin(ctx context.Context, tx *sql.Tx, c applyContex
 // EVERY ROW OF THE ARTIFACT GOES IN THIS STATEMENT LIST, since the estate keeps
 // no foreign key and a cascade is a delete nobody committed: its versions, its
 // objects (which become unnamed, and the collector reclaims their files after
-// its grace), its assets, shares, pins, reads, source claim and history. The
+// its grace), its assets, shares, pins, reads, source claim, history, comment
+// threads and the notices they wrote. The
 // MARKER IS WRITTEN WHETHER OR NOT THE ROW IS HERE, so a record about the
 // artifact that arrives later is gated on every data node alike. A purge writes no
 // history row of its own: the history goes with the artifact, and the marker
@@ -892,6 +893,12 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 	if err != nil {
 		return 0, err
 	}
+	// ITS NOTICES FIRST, each noted for the inbox it leaves (apply_notices.go).
+	told, err := a.removeNotices(ctx, tx, c, id)
+	if err != nil {
+		return 0, err
+	}
+	rows += told
 	for _, stmt := range []string{
 		`DELETE FROM artifact_versions WHERE artifact_id = ?`,
 		`DELETE FROM artifact_objects WHERE artifact_id = ?`,
