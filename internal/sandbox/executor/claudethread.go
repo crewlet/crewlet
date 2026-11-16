@@ -75,8 +75,10 @@ import (
 //     assistant record of that thread, and takes its error as that line's, no
 //     record, as it takes a *threadLineError, never as a line with no calls.
 //   - A HOOK'S FIRING IS NEVER A CALL'S ID: no id leaves this layer AS an id
-//     but a firing through [threadLine.Hook] and a call's through
-//     [threadMessage.Calls] ([threadHook.Firing]). An id written inside a
+//     but a call's, through [threadMessage.Calls], and an attachment's
+//     `toolUseID` leaves it only as a key ([threadLine.AttachmentToolUseID]),
+//     since a PostToolUse hook's firing carries the id of the call it
+//     followed. An id written inside a
 //     record's text (a task notification's `<tool-use-id>`, a tool's output,
 //     a call's input) is bytes the layer hands out raw, in a line's Raw, a
 //     message's Text, a call's Input and Content and a record's
@@ -549,22 +551,21 @@ func (e *threadLineError) Unwrap() error { return e.Err }
 // line's one decode.
 //
 // WHAT IT HANDS OUT RAW IS VALID UNTIL THE READER'S NEXT [threadReader.Next]:
-// the line's Raw, a hook's Content and Stdout, a call's Input and Content, and
-// ToolUseResult, as a refused line's Raw is ([threadLineError]). A reader that
+// the line's Raw, a call's Input and Content, and ToolUseResult, as a refused line's Raw is ([threadLineError]). A reader that
 // keeps any of them past that copies it, since the layer may hand out a
 // line's own bytes rather than a copy of them.
 //
 // AND IT HANDS THEM OUT RAW ON PURPOSE: each has one reader, which holds it to
-// the shape that reader reads (a SendMessage's `input.to`, a result's text, a
-// hook's answer) under the layer's own options ([threadDecoding]) and walk
+// the shape that reader reads (a SendMessage's `input.to`, a result's text, an
+// agent's answer) under the layer's own options ([threadDecoding]) and walk
 // ([eachElement]), so a release that reshapes one costs that reader alone, as
 // a key one reader reads does.
 //
 // A KEY ONLY ONE READER READS IS HELD TO ITS TYPE IN THAT READER'S ACCESSOR,
 // never in the head: a release that reshapes it is that accessor's error and
 // costs the reader that asks, so a reshaped attachment never blinds a reader
-// of calls, a reshaped origin never blinds a reader of hooks, and a reshaped
-// uuid blinds neither. A key a reader comes to need is added beside these,
+// of calls, a reshaped origin never blinds a reader of attachments, and a
+// reshaped uuid blinds neither. A key a reader comes to need is added beside these,
 // read off the same decode, with its own accessor and its own error.
 type threadLine struct {
 	// N is the line's place among the member's whole lines, from 1.
@@ -576,13 +577,13 @@ type threadLine struct {
 	// Head is what every reader needs of the line.
 	Head threadHead
 
-	uuid, message, attachment, origin, toolUseID, toolUseResult json.RawMessage
-	apiError, replacements, leafUUID, explicit, rewound         json.RawMessage
-	compactMetadata, retracted                                  json.RawMessage
-	isVirtual, interruptedByShutdown, isCompactSummary          json.RawMessage
-	taskDelivery, batchToolUses                                 json.RawMessage
-	timestamp, isMeta, sourceToolAssistantUUID                  json.RawMessage
-	version                                                     json.RawMessage
+	uuid, message, attachment, origin, toolUseResult    json.RawMessage
+	apiError, replacements, leafUUID, explicit, rewound json.RawMessage
+	compactMetadata, retracted                          json.RawMessage
+	isVirtual, interruptedByShutdown, isCompactSummary  json.RawMessage
+	taskDelivery, batchToolUses                         json.RawMessage
+	timestamp, isMeta, sourceToolAssistantUUID          json.RawMessage
+	version                                             json.RawMessage
 }
 
 // threadWire is a whole line as its one decode ([wireDecode]) leaves it: every
@@ -601,7 +602,6 @@ type threadWire struct {
 	Message       json.RawMessage `json:"message"`
 	Attachment    json.RawMessage `json:"attachment"`
 	Origin        json.RawMessage `json:"origin"`
-	ToolUseID     json.RawMessage `json:"toolUseID"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
 	APIError      json.RawMessage `json:"isApiErrorMessage"`
 	LeafUUID      json.RawMessage `json:"leafUuid"`
@@ -647,7 +647,7 @@ func decodeThreadLine(n int, raw []byte) (threadLine, error) {
 	return threadLine{
 		N: n, Raw: raw, Head: head,
 		uuid: w.UUID, message: w.Message, attachment: w.Attachment, origin: w.Origin,
-		toolUseID: w.ToolUseID, toolUseResult: w.ToolUseResult, apiError: w.APIError,
+		toolUseResult: w.ToolUseResult, apiError: w.APIError,
 		leafUUID: w.LeafUUID, explicit: w.Explicit, rewound: w.Rewound, compactMetadata: w.Compacted,
 		retracted: w.Retracted, replacements: w.Replacements,
 		isVirtual: w.IsVirtual, interruptedByShutdown: w.Shutdown, isCompactSummary: w.Summary,
@@ -861,10 +861,11 @@ func (h threadHead) Main() bool { return h.Sidechain != nil && !*h.Sidechain && 
 //     and `toolUseId` apart. encoding/json's own decode takes a key that
 //     differs from a field's name only in case for that field, the last of the
 //     two written winning: decoded so, a line carrying `parentUuid` and then
-//     `ParentUuid` would read as the second, and a hook's record carrying its
-//     firing's `toolUseID` and then a `toolUseId` would hand the second out as
-//     its firing, a spelling 2.1.322 already writes, where a subagent's
-//     metadata names the call that started it.
+//     `ParentUuid` would read as the second, and an attachment carrying a
+//     hook's firing as its `toolUseID` and then a `toolUseId` would key the
+//     second as the call it followed ([threadLine.AttachmentToolUseID]), a
+//     spelling 2.1.322 already writes, where a subagent's metadata names the
+//     call that started it.
 //   - A KEY WRITTEN TWICE ALLOWED, AND READ BY ITS LAST VALUE (jsontext's
 //     AllowDuplicateNames, on), as JSON.parse allows and reads it. Refusing
 //     it, a decoder keeps every name of every object it reads, a cost a key,
@@ -1196,8 +1197,8 @@ func (l threadLine) UUID() (string, error) { return wireString("uuid", l.uuid) }
 //
 // IN AN ACCESSOR, NEVER THE HEAD: one reader reads it, the reading of which
 // calls a kept session holds ([writerBelowFloor]), so a release that reshapes
-// it costs that reading alone, never a reader of hooks or of a transcript's
-// words.
+// it costs that reading alone, never a reader of attachments or of a
+// transcript's words.
 func (l threadLine) Version() (string, error) { return wireString("version", l.version) }
 
 // ToolUseResult is a user record's own `toolUseResult`, raw (an object, a list
@@ -1264,27 +1265,18 @@ const (
 	// subtypeMicrocompactBoundary is a microcompaction's boundary, which no
 	// release measured writes ([threadRestarts.See]).
 	subtypeMicrocompactBoundary = "microcompact_boundary"
-	// hookStopSummary is the summary a Stop firing ends with: a system record
-	// of this subtype, and the [threadHook.Record] it is read as.
-	hookStopSummary = "stop_hook_summary"
 
 	// editClearToolUses is the server's context edit that clears the content
 	// of old tool results ([threadLine.ToolResultsCleared]).
 	editClearToolUses = "clear_tool_uses_20250919"
 )
 
-// The hook attachments [threadLine.Hook] reads: what a hook's firing records.
+// The attachments whose payloads Claude Code's resume holds to a shape
+// ([threadLine.AttachmentWellFormed]): two of the records of a hook's firing,
+// its success and its additional context, and the others.
 const (
-	hookSuccess           = "hook_success"
-	hookSystemMessage     = "hook_system_message"
-	hookAdditionalContext = "hook_additional_context"
-	hookCancelled         = "hook_cancelled"
-)
-
-// The other attachments whose payloads Claude Code's resume holds to a shape
-// ([threadLine.AttachmentWellFormed]), beside a hook's success and its
-// additional context.
-const (
+	hookSuccess              = "hook_success"
+	hookAdditionalContext    = "hook_additional_context"
 	attachmentInvokedSkills  = "invoked_skills"
 	attachmentSkillListing   = "skill_listing"
 	attachmentTaskReminder   = "task_reminder"
@@ -1302,154 +1294,6 @@ const (
 	skillListingMaxNames     = 4096
 	skillListingMaxNameUnits = 512
 )
-
-// threadHook is what a hook's record says of the firing it records.
-type threadHook struct {
-	// Record is the attachment's type, or [hookStopSummary].
-	Record string
-	// Event is the attachment's `hookEvent`. "" on a summary, which carries
-	// none (34 of 34 measured): a summary's event is its firing's, which that
-	// firing's attachments name under the same Firing.
-	Event string
-	// Firing is Claude Code's own id of ONE FIRING of a hook, which every
-	// record of that firing shares: the attachment's `toolUseID`, or a
-	// summary's top-level one. `hook-<uuid>` after a batch, a bare uuid at
-	// Stop (328 of 328 attachments and 34 of 34 summaries measured).
-	//
-	// NEVER A CALL'S ID, although the key says tool use, and although a
-	// PostToolUse hook's firing carries the id of the model's call it
-	// followed (`toolu_…`, measured on a skill's hook): so a firing leaves
-	// this layer here alone, and a call's id only through
-	// [threadMessage.Calls], with no accessor of "a line's ids" that would
-	// hand a reader of calls a hook's firing, or a reader of firings a call.
-	Firing string
-	// Command is the attachment's `command`, where it has one.
-	Command string
-	// Content is the attachment's `content`, raw: a string on a success and a
-	// system message, a list on an additional context. Valid until the
-	// reader's next Next ([threadLine]).
-	Content json.RawMessage
-	// Stdout is a success's `stdout`, raw: the hook's whole answer, as text.
-	// Valid until the reader's next Next ([threadLine]).
-	Stdout json.RawMessage
-}
-
-// Hook is what a HOOK's record says of the firing it records: the
-// hook_success, hook_system_message, hook_additional_context and
-// hook_cancelled attachments, and a system stop_hook_summary. False for every
-// other record, whatever `toolUseID` it carries.
-//
-// An error for an attachment record whose `attachment` is no object or whose
-// type is no string (it may be a hook's, and cannot be read as one), and for a
-// hook's record whose fields are not of their type: an attachment's event and
-// firing, and a summary's firing, strings that name something, an empty one
-// refused (a summary names no event, and none is asked of it); an
-// attachment's command a string where present; a success's stdout a string,
-// and its content a string where present; a system message's content a
-// string, and an additional context's a list. A firing whose record was
-// reshaped is never read as one that recorded nothing.
-//
-// A TOP-LEVEL `toolUseID` IS READ ON A SUMMARY ALONE, the one record measured
-// to carry its firing there: on any other, a later release could carry a
-// call's id at the top, and a reader would be handed it under a hook's name.
-func (l threadLine) Hook() (threadHook, bool, error) {
-	switch {
-	case l.Head.Type == recordAttachment:
-		return attachmentHook(l.attachment)
-	case l.Head.Type == recordSystem && l.Head.Subtype == hookStopSummary:
-		firing, err := wireRequiredString("toolUseID", l.toolUseID)
-		if err == nil && firing == "" {
-			err = errors.New("toolUseID names no firing")
-		}
-		if err != nil {
-			return threadHook{}, false, fmt.Errorf("a %s: %w", hookStopSummary, err)
-		}
-		return threadHook{Record: hookStopSummary, Firing: firing}, true, nil
-	}
-	return threadHook{}, false, nil
-}
-
-// attachmentHook is the hook an attachment records, raw the record's
-// `attachment` ([threadLine.Hook]).
-func attachmentHook(raw json.RawMessage) (threadHook, bool, error) {
-	if !wireObject(raw) {
-		return threadHook{}, false, fmt.Errorf("an attachment record's attachment is %s, not an object", wireKind(raw))
-	}
-	var a struct {
-		Type      json.RawMessage `json:"type"`
-		HookEvent json.RawMessage `json:"hookEvent"`
-		ToolUseID json.RawMessage `json:"toolUseID"`
-		Command   json.RawMessage `json:"command"`
-		Content   json.RawMessage `json:"content"`
-		Stdout    json.RawMessage `json:"stdout"`
-	}
-	if err := wireDecode(raw, &a); err != nil {
-		return threadHook{}, false, fmt.Errorf("an attachment: %w", err)
-	}
-	record, err := wireRequiredString("attachment.type", a.Type)
-	if err != nil {
-		return threadHook{}, false, err
-	}
-	switch record {
-	case hookSuccess, hookSystemMessage, hookAdditionalContext, hookCancelled:
-	default:
-		return threadHook{}, false, nil
-	}
-	h, err := hookFields(record, a.HookEvent, a.ToolUseID, a.Command)
-	if err != nil {
-		return threadHook{}, false, fmt.Errorf("a %s: %w", record, err)
-	}
-	h.Content, h.Stdout = a.Content, a.Stdout
-	if err = hookShape(record, a.Content, a.Stdout); err != nil {
-		return threadHook{}, false, fmt.Errorf("a %s: %w", record, err)
-	}
-	return h, true, nil
-}
-
-// hookFields is a hook attachment's firing: its event and its firing,
-// strings that are there and say something, and its command, a string where
-// present.
-func hookFields(record string, event, firing, command json.RawMessage) (threadHook, error) {
-	h := threadHook{Record: record}
-	var err error
-	if h.Event, err = wireRequiredString("hookEvent", event); err != nil {
-		return threadHook{}, err
-	}
-	if h.Firing, err = wireRequiredString("toolUseID", firing); err != nil {
-		return threadHook{}, err
-	}
-	switch {
-	case h.Event == "":
-		return threadHook{}, errors.New("hookEvent names no event")
-	case h.Firing == "":
-		return threadHook{}, errors.New("toolUseID names no firing")
-	}
-	if h.Command, err = wireString("command", command); err != nil {
-		return threadHook{}, err
-	}
-	return h, nil
-}
-
-// hookShape holds a hook attachment's content and stdout to the types its
-// record gives them ([threadLine.Hook]).
-func hookShape(record string, content, stdout json.RawMessage) error {
-	switch record {
-	case hookSuccess:
-		if _, err := wireRequiredString("stdout", stdout); err != nil {
-			return err
-		}
-		_, err := wireString("content", content)
-		return err
-	case hookSystemMessage:
-		_, err := wireRequiredString("content", content)
-		return err
-	case hookAdditionalContext:
-		if len(content) == 0 || content[0] != '[' {
-			return fmt.Errorf("content is %s, not a list", wireKind(content))
-		}
-	}
-	return nil
-}
 
 // threadMessage is a user or assistant record's message as its one decode
 // left it: its content as one string, or its blocks.
@@ -1668,9 +1512,8 @@ func contentBlock(raw json.RawMessage) (threadCall, json.RawMessage, error) {
 }
 
 // callID is raw, a call block's key named key, held to a string that names a
-// call. AN ID THAT NAMES NONE IS REFUSED, as a hook's record whose firing
-// names none is ([threadLine.Hook]): the API names every call a model makes,
-// no block measured carries an empty id (811 calls and 744 results, every
+// call. AN ID THAT NAMES NONE IS REFUSED: the API names every call a model
+// makes, no block measured carries an empty id (811 calls and 744 results, every
 // thread the probes kept), and handed out, a call whose id names none is one
 // no reader could match against a call it knows.
 func callID(key string, raw json.RawMessage) (string, error) {
@@ -1695,8 +1538,10 @@ func (m threadMessage) Text() (string, bool) { return m.text, m.isText }
 func (m threadMessage) Kinds() []string { return m.kinds }
 
 // Calls is the message's call blocks: an assistant's tool_use blocks, a user's
-// tool_result blocks. THE ONLY WAY A CALL'S ID LEAVES THIS LAYER
-// ([threadHook.Firing]).
+// tool_result blocks. THE ONLY WAY A CALL'S ID LEAVES THIS LAYER: no accessor
+// hands out "a line's ids", which would hand a reader of calls a hook's
+// firing, and an attachment's `toolUseID` leaves only as a key
+// ([threadLine.AttachmentToolUseID]).
 func (m threadMessage) Calls() []threadCall { return m.calls }
 
 // Says reports whether the message SAYS ANYTHING, as Claude Code reads a

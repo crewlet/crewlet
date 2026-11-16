@@ -183,6 +183,17 @@ const (
 	ctMCPResult  = `[{"tool_use_id":"` + ctMCPCall + `","type":"tool_result","content":` + ctMCPBlocks + `}]`
 )
 
+// The records of a hook's firing the layer reads by no name, beside the two
+// [threadLine.AttachmentWellFormed] reads (hookSuccess and
+// hookAdditionalContext): a system message a firing writes, a firing past its
+// timeout, and the summary a Stop firing ends with, a system record of this
+// subtype.
+const (
+	hookSystemMessage = "hook_system_message"
+	hookCancelled     = "hook_cancelled"
+	hookStopSummary   = "stop_hook_summary"
+)
+
 // The notes' hook records, each its attachment: at a batch (a `hook-<uuid>`
 // firing) a success holding the hook's whole answer, a system message and an
 // additional context; a firing past the hook's timeout, cancelled; and the same
@@ -1037,22 +1048,22 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 }
 
 // A KEY ONLY ONE READER READS COSTS THAT READER ALONE: an attachment that is
-// no object leaves the record's head and its message whole and is refused by
-// Hook alone, and an origin that is no object leaves the message and the hooks
-// whole and is refused by OriginKind alone. A reply's stop_reason that is no
+// no object leaves the record's head, its message, its origin and its
+// checkpoint whole and is refused by AttachmentType alone, never read as one
+// of no type, and an origin that is no object leaves the message whole and is
+// refused by OriginKind alone. A reply's stop_reason that is no
 // string, null among them, leaves its message, its report of the edits
-// applied, its usage, its model, its id and its hooks whole, and is refused
+// applied, its usage, its model and its id whole, and is refused
 // by StopReason alone, never read as ""; its report of the edits applied, of
 // the wrong shape, leaves its message, its stop_reason, its usage, its model
 // and its id whole and is refused by ToolResultsCleared alone; its usage of
-// the wrong shape leaves its message, its stop_reason, its report, its model,
-// its id and its hooks whole and is refused by Usage alone; and its model or
+// the wrong shape leaves its message, its stop_reason, its report, its model
+// and its id whole and is refused by Usage alone; and its model or
 // its id of the wrong type, each a key two readers read, leaves its message
 // and its stop_reason whole and is refused by those two alone, Usage and
 // Model, or Usage and MessageID. A reply's mark of an API error that is no
 // boolean leaves its message, its stop_reason, its model and its usage whole
-// and is refused by APIError alone. An attachment that is no object is refused
-// by AttachmentType too, never read as one of no type; a checkpoint whose
+// and is refused by APIError alone. A checkpoint whose
 // leafUuid is neither a string nor null leaves its head whole and is refused
 // by Checkpoint and LeafKeyed alone; and a compaction's metadata of the wrong
 // shape leaves its boundary's head and uuid whole and is refused by Preserved
@@ -1097,9 +1108,6 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	}
 	if kind, err := attachment.OriginKind(); kind != "" || err != nil {
 		t.Errorf("a record whose attachment is no object reads its origin as %q, %v", kind, err)
-	}
-	if _, _, err := attachment.Hook(); err == nil {
-		t.Error("an attachment that is no object reads as a hook's record or none, never as one it cannot read")
 	}
 	if kind, err := attachment.AttachmentType(); err == nil {
 		t.Errorf("an attachment that is no object reads as one of the type %q, never as one it cannot read", kind)
@@ -1223,49 +1231,6 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 			}
 		}
 	}
-	summary := ctSummary(ctUUID(15), ctUUID(16))
-	for name, record := range map[string]string{
-		"a system message whose content is a list": strings.Replace(ctBatchSystem,
-			`"content":"crewlet: a note reached the run"`, `"content":["crewlet: a note reached the run"]`, 1),
-		"an additional context whose content is a string": strings.Replace(ctBatchContext, `"content":["## A note"]`,
-			`"content":"## A note"`, 1),
-		"an additional context with no content": strings.Replace(ctBatchContext, `"content":["## A note"],`, "", 1),
-		"a success with no stdout":              strings.Replace(ctBatchSuccess, `"stdout":`+ctAnswer+`,`, "", 1),
-		"a success whose stdout is an object":   strings.Replace(ctBatchSuccess, `"stdout":`+ctAnswer, `"stdout":{}`, 1),
-		"a success whose content is a number":   strings.Replace(ctBatchSuccess, `"content":""`, `"content":0`, 1),
-		"a firing that is a number": strings.Replace(ctBatchSystem, `"toolUseID":"`+ctBatchFire+`"`,
-			`"toolUseID":7`, 1),
-		"a firing that names none": strings.Replace(ctBatchSystem, `"toolUseID":"`+ctBatchFire+`"`,
-			`"toolUseID":""`, 1),
-		"a firing with no event": strings.Replace(ctBatchContext, `"hookEvent":"PostToolBatch",`, "", 1),
-		"a firing whose event names none": strings.Replace(ctBatchContext, `"hookEvent":"PostToolBatch"`,
-			`"hookEvent":""`, 1),
-		"a cancellation whose command is a number": strings.Replace(ctCancelled, `"command":"crewlet/steer_take"`,
-			`"command":7`, 1),
-		"an attachment whose type is a number": strings.Replace(ctBatchSystem, `"type":"hook_system_message"`,
-			`"type":7`, 1),
-		"an attachment with no type": strings.Replace(ctBatchSystem, `"type":"hook_system_message",`, "", 1),
-	} {
-		line := ctLine(t, ctAttachment(ctUUID(6), ctUUID(7), record, ""))
-		if hook, isHook, err := line.Hook(); err == nil {
-			t.Errorf("%s reads as the hook %+v (%t), want an error", name, hook, isHook)
-		}
-		if m, err := line.Message(); err != nil || line.Head.Type != recordAttachment || !line.Head.Main() {
-			t.Errorf("%s reads with the head %+v and the message %+v, %v", name, line.Head, m, err)
-		}
-	}
-	for name, record := range map[string]string{
-		"a summary whose firing is a number": strings.Replace(summary, `"toolUseID":"`+ctStopFire+`"`,
-			`"toolUseID":7`, 1),
-		"a summary with no firing": strings.Replace(summary, `"toolUseID":"`+ctStopFire+`",`, "", 1),
-		"a summary whose firing names none": strings.Replace(summary, `"toolUseID":"`+ctStopFire+`"`,
-			`"toolUseID":""`, 1),
-	} {
-		if hook, isHook, err := ctLine(t, record).Hook(); err == nil {
-			t.Errorf("%s reads as the hook %+v (%t), want an error", name, hook, isHook)
-		}
-	}
-
 	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
 	for name, reason := range map[string]string{
 		"null":      `null`,
@@ -1281,9 +1246,6 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		}
 		if cleared, err := line.ToolResultsCleared(); cleared || err != nil {
 			t.Errorf("a reply whose stop_reason is %s reads as cleared %t, %v; want no clearing", name, cleared, err)
-		}
-		if _, isHook, err := line.Hook(); isHook || err != nil {
-			t.Errorf("a reply whose stop_reason is %s reads as a hook's record %t, %v", name, isHook, err)
 		}
 		if usage, ok, err := line.Usage(); !ok || err != nil || usage.ID != "msg_test" || usage.Input != 100 {
 			t.Errorf("a reply whose stop_reason is %s says its request took %+v (%t), %v; want its usage", name,
@@ -1340,9 +1302,6 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 		}
 		if cleared, err := line.ToolResultsCleared(); cleared || err != nil {
 			t.Errorf("a reply whose usage is %s reads as cleared %t, %v; want no clearing", name, cleared, err)
-		}
-		if _, isHook, err := line.Hook(); isHook || err != nil {
-			t.Errorf("a reply whose usage is %s reads as a hook's record %t, %v", name, isHook, err)
 		}
 		if model, err := line.Model(); model != "claude-sonnet-4-5" || err != nil {
 			t.Errorf("a reply whose usage is %s was written by %q, %v; want its model", name, model, err)
@@ -1432,9 +1391,6 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	} else if text, isText := m.Text(); !isText || text != ctNotificationText {
 		t.Errorf("a notification whose origin is no object reads its message as %q", text)
 	}
-	if _, isHook, err := origin.Hook(); isHook || err != nil {
-		t.Errorf("a notification whose origin is no object reads as a hook's record %t, %v", isHook, err)
-	}
 	if _, err := origin.OriginKind(); err == nil {
 		t.Error("an origin that is no object reads as a kind")
 	}
@@ -1486,7 +1442,7 @@ func ctReplace(t *testing.T, record, from, to string) string {
 }
 
 // ctAll is everything a line hands out through every accessor, as text: its
-// head, its own uuid, its hook, its message and its calls, its origin's kind,
+// head, its own uuid, its message and its calls, its origin's kind,
 // its own toolUseResult, whether it says tool results were cleared, why its
 // reply stopped, whether its harness wrote it for a failed request, the model
 // that wrote it, the reply it is, what its request took, what it says a
@@ -1516,9 +1472,6 @@ func ctAllButUUID(l threadLine) string {
 	}
 	fmt.Fprintf(&b, "head: type %q, subtype %q, parent %s, sidechain %s, agent %q, replaces a span %t\n",
 		h.Type, h.Subtype, ctRaw(h.Parent), side, h.AgentID, h.ReplacesSpan)
-	hook, isHook, err := l.Hook()
-	fmt.Fprintf(&b, "hook %t: record %q, event %q, firing %q, command %q, content %s, stdout %s; %v\n", isHook,
-		hook.Record, hook.Event, hook.Firing, hook.Command, ctRaw(hook.Content), ctRaw(hook.Stdout), err)
 	m, err := l.Message()
 	text, isText := m.Text()
 	fmt.Fprintf(&b, "message: text %q (%t), kinds %q; %v\n", text, isText, strings.Join(m.Kinds(), " "), err)
@@ -1618,11 +1571,12 @@ func ctRaw(v json.RawMessage) string {
 // another key, after that one or before it, and alone it leaves that one
 // absent; and a key written twice holds its last value. Every object the layer
 // reads is held so: a line's head and the keys only one reader reads (its own
-// uuid, a message, an attachment, an origin, a firing at the top, a record's
+// uuid, a message, an attachment, an origin, a record's
 // own toolUseResult, a reply's mark of an API error, a checkpoint's leaf and
 // its marks, a compaction's metadata, the uuids a record retracts, a record's
 // replacements, the marks of a record no plain one, a batch's list, its time,
-// its meta mark, a result's source), a hook's attachment, an origin, a
+// its meta mark, a result's source), a hook's attachment (its type, its
+// firing and its content), an origin, a
 // message (its content, its stop_reason, its id, its model and its usage), a
 // message's blocks, its usage's counts and iterations, each iteration's type
 // and counts, its report of the context edits applied, each edit the report
@@ -1709,10 +1663,6 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `,"Attachment":` + strings.Replace(ctBatchSuccess, ctBatchFire, other, 1) + `,"type":"attachment"`},
 		"an origin, then Origin": {record: notification, from: ctNotificationOrigin,
 			to: ctNotificationOrigin + `,"Origin":{"kind":"coordinator"}`},
-		"a summary's firing, then a call's toolUseId": {record: summary, from: `"toolUseID":"` + ctStopFire + `"`,
-			to: `"toolUseID":"` + ctStopFire + `","toolUseId":"` + other + `"`},
-		"a summary's firing spelled ToolUseID alone": {record: ctReplace(t, summary, `"toolUseID":"`+ctStopFire+`",`, ""),
-			from: `"hookCount":1`, to: `"hookCount":1,"ToolUseID":"` + ctStopFire + `"`},
 		"a toolUseResult, then ToolUseResult": {record: result, from: `"toolUseResult":` + ctResultOwn,
 			to: `"toolUseResult":` + ctResultOwn + `,"ToolUseResult":{"stdout":"other"}`},
 		"ToolUseResult null alone": {record: brief, from: `"isSidechain":false`,
@@ -1798,13 +1748,7 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"hookName":"PostToolBatch","TOOLUSEID":"` + ctBatchFire + `"`},
 		"an attachment's type, then Type": {record: hook, from: `"type":"hook_success"`,
 			to: `"type":"hook_success","Type":"hook_cancelled"`},
-		"an attachment's hookEvent, then HookEvent": {record: hook, from: `"hookEvent":"PostToolBatch"`,
-			to: `"hookEvent":"PostToolBatch","HookEvent":"Stop"`},
-		"an attachment's command, then Command": {record: hook, from: `"command":"crewlet/steer_take"`,
-			to: `"command":"crewlet/steer_take","Command":"crewlet/other"`},
-		"an attachment's content, then Content": {record: hook, from: `"content":""`, to: `"content":"","Content":"other"`},
-		"an attachment's stdout, then Stdout": {record: hook, from: `"stdout":` + ctAnswer,
-			to: `"stdout":` + ctAnswer + `,"Stdout":"other"`},
+		"an attachment's content, then Content": {record: hook, from: `"content":""`, to: `"content":"","Content":7`},
 		// An origin.
 		"an origin's kind, then Kind": {record: notification, from: `"kind":"task-notification"`,
 			to: `"kind":"task-notification","Kind":"coordinator"`},
@@ -1907,7 +1851,7 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 // target a call sends to, a result's text, what an answer says); where it is
 // none, its fault, the type it names and its error. A line's place and size
 // are left out, so two lines that differ in nothing a reader reads print
-// alike, and so is a hook's record, which no case here reads.
+// alike.
 func ctOutcome(t *testing.T, record string) string {
 	t.Helper()
 	got := ctRead(ctThread(record), threadPlainMax)
@@ -2239,9 +2183,11 @@ func TestAStringClaudeCodeWroteBrokenReadsAsTheReplacementCharacter(t *testing.T
 		}
 		if note, ok := read(ctAttachment(ctUUID(6), ctUUID(7), ctReplace(t, ctBatchSystem,
 			`"content":"crewlet: a note reached the run"`, `"content":`+tc.written), "")); ok {
-			if hook, isHook, err := note.Hook(); !isHook || err != nil || hook.Firing != ctBatchFire ||
-				string(hook.Content) != tc.written {
-				t.Errorf("%s: a hook's record holding it reads as the hook %+v (%t, %v)", name, hook, isHook, err)
+			kind, err := note.AttachmentType()
+			if key, keyed := note.AttachmentToolUseID(); kind != hookSystemMessage || err != nil || !keyed ||
+				key != sha256.Sum256([]byte(ctBatchFire)) {
+				t.Errorf("%s: a hook's record holding it reads as the attachment %q (%v), keyed %t", name, kind, err,
+					keyed)
 			}
 		}
 		if output, ok := read(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctReplace(t, ctResultOwn, `"stdout":"b1"`,
@@ -2547,74 +2493,58 @@ type ctID struct {
 	id   string
 }
 
-// A HOOK'S FIRING IS NEVER A CALL'S ID: Hook reads each of the notes' hook
-// records and a Stop's summary, the firing it records and its fields as
-// written, and nothing else; a top-level toolUseID on any record but a summary
-// names no firing; and a skill's PostToolUse hook, whose firing IS the id of
-// the call it followed, hands that id out of Hook alone, never Calls. Over a
-// whole thread, the firings come only from hook records, and the calls only
-// from the model's messages and their results.
+// A HOOK'S FIRING IS NEVER A CALL'S ID: each of the notes' hook records and a
+// Stop's summary hands out no call, and an attachment among them hands its
+// firing out only as a key (AttachmentToolUseID), a summary's firing at the
+// top never; and a skill's PostToolUse hook, whose firing IS the id of the
+// call it followed, hands that id out of Calls never, only as its key. Over a
+// whole thread, the calls come only from the model's messages and their
+// results, and the firings only as the keys of hook attachments.
 //
-// Mutation: read a firing off every record that carries a top-level
-// toolUseID, or hand a hook record's firing out as a call (one accessor of a
-// line's ids), and a record's id comes out of the other accessor.
+// Mutation: hand an attachment's toolUseID out as a call (one accessor of a
+// line's ids), or key a summary's firing at the top, and a record's id comes
+// out where this says it never does.
 func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		record string
-		want   threadHook
+		kind   string // its attachment's type, or a summary's subtype
+		firing string // what it keys, or "" for nothing
 	}{
-		"a batch's success": {record: ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, ""), want: threadHook{
-			Record: hookSuccess, Event: "PostToolBatch", Firing: ctBatchFire, Command: "crewlet/steer_take",
-			Content: []byte(`""`), Stdout: []byte(ctAnswer)}},
-		"a batch's system message": {record: ctAttachment(ctUUID(6), ctUUID(7), ctBatchSystem, ""), want: threadHook{
-			Record: hookSystemMessage, Event: "PostToolBatch", Firing: ctBatchFire,
-			Content: []byte(`"crewlet: a note reached the run"`)}},
+		"a batch's success": {record: ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, ""), kind: hookSuccess,
+			firing: ctBatchFire},
+		"a batch's system message": {record: ctAttachment(ctUUID(6), ctUUID(7), ctBatchSystem, ""),
+			kind: hookSystemMessage, firing: ctBatchFire},
 		"a batch's additional context": {record: ctAttachment(ctUUID(7), ctUUID(8), ctBatchContext, ctBatchRendered),
-			want: threadHook{Record: hookAdditionalContext, Event: "PostToolBatch", Firing: ctBatchFire,
-				Content: []byte(`["## A note"]`)}},
-		"a firing past its timeout": {record: ctAttachment(ctUUID(10), ctUUID(11), ctCancelled, ""), want: threadHook{
-			Record: hookCancelled, Event: "PostToolBatch", Firing: ctLateFire, Command: "crewlet/steer_take"}},
-		"a Stop's success": {record: ctAttachment(ctUUID(12), ctUUID(13), ctStopSuccess, ""), want: threadHook{
-			Record: hookSuccess, Event: "Stop", Firing: ctStopFire, Command: "crewlet/steer_take",
-			Content: []byte(`""`), Stdout: []byte(ctStopAnswer)}},
-		"a Stop's system message": {record: ctAttachment(ctUUID(13), ctUUID(14), ctStopSystem, ""), want: threadHook{
-			Record: hookSystemMessage, Event: "Stop", Firing: ctStopFire,
-			Content: []byte(`"crewlet: a note reached the run as it was finishing"`)}},
+			kind: hookAdditionalContext, firing: ctBatchFire},
+		"a firing past its timeout": {record: ctAttachment(ctUUID(10), ctUUID(11), ctCancelled, ""),
+			kind: hookCancelled, firing: ctLateFire},
+		"a Stop's success": {record: ctAttachment(ctUUID(12), ctUUID(13), ctStopSuccess, ""), kind: hookSuccess,
+			firing: ctStopFire},
+		"a Stop's system message": {record: ctAttachment(ctUUID(13), ctUUID(14), ctStopSystem, ""),
+			kind: hookSystemMessage, firing: ctStopFire},
 		"a Stop's additional context": {record: ctAttachment(ctUUID(14), ctUUID(15), ctStopContext, ctStopRendered),
-			want: threadHook{Record: hookAdditionalContext, Event: "Stop", Firing: ctStopFire,
-				Content: []byte(`["## A note"]`)}},
-		"a Stop's summary": {record: ctSummary(ctUUID(15), ctUUID(16)), want: threadHook{
-			Record: hookStopSummary, Firing: ctStopFire}},
-		"a skill's PostToolUse success": {record: ctSkillHook(ctUUID(4), ctUUID(5)), want: threadHook{
-			Record: hookSuccess, Event: "PostToolUse", Firing: ctSkillCall, Command: "crewlet/skill_loaded",
-			Content: []byte(`"PostToolUse:Skill completed"`), Stdout: []byte(`""`)}},
+			kind: hookAdditionalContext, firing: ctStopFire},
+		"a Stop's summary":              {record: ctSummary(ctUUID(15), ctUUID(16)), kind: hookStopSummary},
+		"a skill's PostToolUse success": {record: ctSkillHook(ctUUID(4), ctUUID(5)), kind: hookSuccess, firing: ctSkillCall},
 	} {
 		line := ctLine(t, tc.record)
-		got, isHook, err := line.Hook()
-		if !isHook || err != nil || got.Record != tc.want.Record || got.Event != tc.want.Event ||
-			got.Firing != tc.want.Firing || got.Command != tc.want.Command ||
-			!bytes.Equal(got.Content, tc.want.Content) || !bytes.Equal(got.Stdout, tc.want.Stdout) {
-			t.Errorf("%s reads as the hook %+v (%t, %v), want %+v", name, got, isHook, err, tc.want)
+		kind, err := line.AttachmentType()
+		if line.Head.Type == recordSystem {
+			kind = line.Head.Subtype
+		}
+		if kind != tc.kind || err != nil {
+			t.Errorf("%s reads as the record %q, %v; want %q", name, kind, err, tc.kind)
+		}
+		want := [32]byte{}
+		if tc.firing != "" {
+			want = sha256.Sum256([]byte(tc.firing))
+		}
+		if key, keyed := line.AttachmentToolUseID(); keyed != (tc.firing != "") || key != want {
+			t.Errorf("%s keys %x (%t); want the key of %q", name, key, keyed, tc.firing)
 		}
 		if m, err := line.Message(); err != nil || m.Calls() != nil {
 			t.Errorf("%s hands out the calls %+v, %v", name, m.Calls(), err)
-		}
-	}
-
-	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
-	for name, record := range map[string]string{
-		"a result carrying it": strings.Replace(result, `"toolUseResult":`, `"toolUseID":"`+ctCall+`","toolUseResult":`, 1),
-		"a model's call carrying it": strings.Replace(ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), `"apiBlockIndex"`,
-			`"toolUseID":"`+ctCall+`","apiBlockIndex"`, 1),
-		"an attachment of no hook carrying it": strings.Replace(
-			ctAttachment(ctUUID(1), ctUUID(2), ctTokens, ctTokensRendered), `"type":"attachment"`,
-			`"toolUseID":"`+ctCall+`","type":"attachment"`, 1),
-		"a system record of another subtype": strings.Replace(ctSummary(ctUUID(15), ctUUID(16)),
-			`"subtype":"stop_hook_summary"`, `"subtype":"informational"`, 1),
-	} {
-		if hook, isHook, err := ctLine(t, record).Hook(); isHook || err != nil {
-			t.Errorf("%s reads as the hook %+v (%t, %v), want none", name, hook, isHook, err)
 		}
 	}
 
@@ -2623,12 +2553,18 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 	if len(got.lines) != len(lines) {
 		t.Fatalf("%d of %d lines read", len(got.lines), len(lines))
 	}
+	firings := map[[32]byte]string{}
+	for _, id := range []string{ctBatchFire, ctLateFire, ctStopFire, ctSkillCall} {
+		firings[sha256.Sum256([]byte(id))] = id
+	}
 	var ids []ctID
 	for _, line := range got.lines {
-		if hook, isHook, err := line.Hook(); err != nil {
-			t.Fatalf("line %d reads no hook: %v", line.N, err)
-		} else if isHook {
-			ids = append(ids, ctID{line.N, "firing", hook.Firing})
+		if key, keyed := line.AttachmentToolUseID(); keyed {
+			id, known := firings[key]
+			if !known {
+				t.Fatalf("line %d keys %x, no firing of the thread's", line.N, key)
+			}
+			ids = append(ids, ctID{line.N, "key", id})
 		}
 		m, err := line.Message()
 		if err != nil {
@@ -2640,10 +2576,10 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 	}
 	want := []ctID{
 		{8, blockToolUse, ctCall}, {10, blockToolResult, ctCall},
-		{11, "firing", ctBatchFire}, {12, "firing", ctBatchFire}, {13, "firing", ctBatchFire},
-		{16, blockToolUse, ctMCPCall}, {17, blockToolResult, ctMCPCall}, {18, "firing", ctLateFire},
-		{20, "firing", ctStopFire}, {21, "firing", ctStopFire}, {22, "firing", ctStopFire}, {23, "firing", ctStopFire},
-		{26, "firing", ctSkillCall},
+		{11, "key", ctBatchFire}, {12, "key", ctBatchFire}, {13, "key", ctBatchFire},
+		{16, blockToolUse, ctMCPCall}, {17, blockToolResult, ctMCPCall}, {18, "key", ctLateFire},
+		{20, "key", ctStopFire}, {21, "key", ctStopFire}, {22, "key", ctStopFire},
+		{26, "key", ctSkillCall},
 	}
 	if !slices.Equal(ids, want) {
 		t.Errorf("the thread hands out the ids %+v, want %+v", ids, want)
