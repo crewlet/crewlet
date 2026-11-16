@@ -6135,7 +6135,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `code_pushes` | `{name, limit, cursor, brief, push, read_level, …}` | `GET /gitlet/repos/{name}/pushes`. One repository's push history, newest first in log order — in brief with `brief`, or one push of it, whole, with `push` |
 | `code_repo_readers` | `{name, from, to, cursor}` | [`GET /gitlet/repos/{name}/readers`](#get-gitletreposnamereaders). Who read a `visibility: unit` repository's contents over a range of company days, a page at a time. **An admin's**, decided before anything is read; it takes none of the freshness keys |
 | `code_changes` | `{repo, state, owner, work, reviewer, needs, window, cards, sort, limit, cursor, read_level, …}` | `GET /gitlet/changes`. A listing of changes — see [A change's questions](#a-changes-questions), which say what the four change questions answer |
-| `code_change` | `{name, change, part, revision, since_revision, file, file_b64, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/changes/{n}`. One change, a part at a time: its detail and revisions, a part of its conversation, the asker's own standing findings, a revision's files or one file's patch, its findings placed in a revision |
+| `code_change` | `{name, change, part, revision, since_revision, file, file_b64, context, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/changes/{n}`. One change, a part at a time: its detail and revisions, a part of its conversation, the asker's own standing findings, a revision's files or one file's patch, its findings placed in a revision |
 | `code_change_routing` | `{name, change, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/changes/{n}/routing`. Whom the change's records reached, a whole record a page, its `delivery` telling `nobody` from `swept` |
 | `code_reviews` | `{reviewer, limit, cursor, read_level, …}` | `GET /gitlet/reviews`. The reviews one reviewer gave, newest first, each naming its change |
 | `code_refs` | `{name, prefix, order, moved_since, moved_before, contains, detail, active_since, limit, cursor, read_level, …}` | `GET /gitlet/repos/{name}/refs`. A repository's live refs under a prefix — see [A repository's content](#a-repositorys-content), which says what the eleven content questions answer and which answers never change |
@@ -10281,6 +10281,18 @@ first read saw. A change's question adds these refusals to the code reads':
 - `400 bad_params` for a parameter its part does not take: a `revision` to the
   revisions, a `file` to `files`, a `since_revision` that is not earlier, a
   `diff` naming no file.
+
+`?part=excerpts` pages the change's findings as `findings` does and answers
+`excerpts`, each finding's [excerpt](../concepts/gitlet.md#findings) by its
+id, read at the finding's own revision: `status` (`A`, `D`, `M` or `R` as the
+revision changes the file, absent for one it leaves as it was), `binary`,
+`lines` (each `mark`, `" "`, `"+"` or `"-"`, its `old` and `new` numbers, and
+`text`, or `text_bytes` where the line is longer than an excerpt shows) and
+`more` where the window held more than 40 lines. Beside them it answers
+`context`, the lines shown either side of each range (`?context=` 0 to 10, 3
+when unset), and the findings page's `next`. A finding whose revision's facts
+its home has not recorded has no excerpt. `context` on another part is
+`400 bad_params`. An older Gitlet node refuses the read and another answers.
 
 ```sh
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \

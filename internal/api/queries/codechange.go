@@ -14,9 +14,10 @@ import (
 // A CHANGE'S ROWS AND ITS ROUTING, AS QUESTIONS: `code_changes`, a listing of
 // changes across repositories or of one (GET /gitlet/changes); `code_change`,
 // one change a part at a time (GET /gitlet/repos/{name}/changes/{n}) — its rows,
-// a revision's files and one file's patch, and its findings each placed in the
-// revision asked about; `code_change_routing`, whom its records reached
-// (…/routing); and `code_reviews`, the reviews one reviewer gave
+// a revision's files and one file's patch, its findings each placed in the
+// revision asked about, and the lines around each finding (`excerpts`);
+// `code_change_routing`, whom its records reached (…/routing); and
+// `code_reviews`, the reviews one reviewer gave
 // (GET /gitlet/reviews). Each is decided per repository by the grant the
 // serving node derives (gitlet.GrantOf, ADR-0088), as every code question is,
 // and read at the caller's own freshness: a screen reads a change back at
@@ -59,14 +60,16 @@ const (
 
 // codeChangePart is a part of one change the `code_change` question answers:
 // the reader's own parts (gitlet.ChangeParts) — its revisions with its detail
-// by default — and the three read by object id: `files`, `diff` and
-// `findings`, its findings placed in the revision asked about.
+// by default — and the four read by object id: `files`, `diff`, `findings`,
+// its findings placed in the revision asked about, and `excerpts`, the lines
+// around each finding.
 type codeChangePart string
 
 const (
 	partFiles    codeChangePart = "files"
 	partDiff     codeChangePart = "diff"
 	partFindings codeChangePart = "findings"
+	partExcerpts codeChangePart = "excerpts"
 )
 
 // codeChangeParts is every part the question answers, the reader's first.
@@ -75,7 +78,7 @@ func codeChangeParts() []string {
 	for _, p := range gitlet.ChangeParts() {
 		out = append(out, string(p))
 	}
-	return append(out, string(partFiles), string(partDiff))
+	return append(out, string(partFiles), string(partDiff), string(partExcerpts))
 }
 
 // CodeChangeFiles is the `files` and `diff` parts' answer: a revision's files
@@ -108,6 +111,8 @@ type changeCall struct {
 	revision      int64
 	since         int64
 	file, fileB64 string
+	// context is the lines an excerpt shows either side of its range, nil for the default.
+	context *int
 }
 
 // changeCallOf reads a call's part and the parameters that go with it, or
@@ -130,6 +135,14 @@ func changeCallOf(p Params) (changeCall, error) {
 		}
 		*n.to = v
 	}
+	if p.Has("context") {
+		v, whole := p.WholeInt("context")
+		if !whole || v < 0 || v > gitlet.MaxExcerptContext {
+			return changeCall{}, fmt.Errorf("%w: context %q is not a number of lines from 0 to %d", ErrBadParams,
+				p.String("context"), gitlet.MaxExcerptContext)
+		}
+		call.context = new(int(v))
+	}
 	takes := func(ps ...codeChangePart) bool { return slices.Contains(ps, codeChangePart(call.part)) }
 	switch {
 	case call.part != "" && !slices.Contains(codeChangeParts(), call.part):
@@ -150,6 +163,9 @@ func changeCallOf(p Params) (changeCall, error) {
 			ErrBadParams)
 	case takes(partDiff) && call.file == "" && call.fileB64 == "":
 		return changeCall{}, badParams("file", "", nil)
+	case p.Has("context") && !takes(partExcerpts):
+		return changeCall{}, fmt.Errorf("%w: context is the lines around each finding an excerpts part shows",
+			ErrBadParams)
 	}
 	return call, nil
 }
@@ -182,6 +198,8 @@ func (s Sources) codeChange(ctx context.Context, p Params) (any, error) {
 		return g.files(ctx, call)
 	case partFindings:
 		return g.findings(ctx, call)
+	case partExcerpts:
+		return g.excerpts(ctx, call)
 	}
 	q.Part = gitlet.ChangePart(call.part)
 	answer, err := reads.Read(ctx, q)
@@ -370,6 +388,118 @@ func (g changeAsk) findings(ctx context.Context, call changeCall) (any, error) {
 		return nil, err
 	}
 	return CodeChangeFindings{ReadAnswer: page, Revision: rev.N, Placed: placed}, nil
+}
+
+// CodeChangeExcerpts is the `excerpts` part's answer: each finding of a page of them, by its
+// id, with the lines around its range as its revision's diff marks them; a finding its
+// revision's facts cannot place yet carries none.
+type CodeChangeExcerpts struct {
+	Excerpts map[string]gitlet.Excerpt `json:"excerpts"`
+	Context  int                       `json:"context"`
+	Next     string                    `json:"next,omitempty"`
+}
+
+// excerpts answers the `excerpts` part: a page of the change's findings read as the findings
+// part reads it, each excerpted at its own revision, in reads of at most
+// gitlet.MaxExcerptAnchors anchors asked at once, each page of each followed.
+func (g changeAsk) excerpts(ctx context.Context, call changeCall) (any, error) {
+	d, head, first, err := g.head(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := g.q
+	q.Part, q.Fresh = gitlet.PartFindings, statelog.FloorAt(statelog.ReadSession, first)
+	page, err := g.reads.Read(ctx, q)
+	if err != nil {
+		return nil, codeRefusal(q.Repo, err)
+	}
+	// EACH FINDING'S OWN REVISION, every distinct one read at once.
+	revs := map[int64]gitlet.RevisionRow{head.N: head}
+	var ns []int64
+	for _, f := range page.Findings {
+		if _, ok := revs[f.Revision]; !ok && !slices.Contains(ns, f.Revision) {
+			ns = append(ns, f.Revision)
+		}
+	}
+	rows := make([]gitlet.RevisionRow, len(ns))
+	reads := make([]func() error, len(ns))
+	for i, n := range ns {
+		reads[i] = func() (err error) {
+			rows[i], err = g.revision(ctx, n, d.Revision, first)
+			return err
+		}
+	}
+	if len(reads) > 0 {
+		if err = gitlet.AtOnce(reads...); err != nil {
+			return nil, err
+		}
+	}
+	for i, n := range ns {
+		revs[n] = rows[i]
+	}
+	var anchors []gitlet.ExcerptAnchor
+	var named []gitlet.RevisionRow
+	for _, f := range page.Findings {
+		rev := revs[f.Revision]
+		if gap := rev.FilesGap(d.State, false); gap != "" {
+			continue // not excerpted yet, or never: its facts are not recorded
+		}
+		a := gitlet.ExcerptAnchor{LineAnchor: gitlet.LineAnchor{ID: f.ID, Path: f.Path, Side: f.Side,
+			BlobOID: f.BlobOID, Start: f.LineStart, End: f.LineEnd}}
+		switch {
+		case f.Side == gitlet.SideNew:
+			a.Head, a.Base = f.CommitOID, rev.Facts.BaseOID
+		case rev.Facts.BaseOID == "":
+			continue // an old side of a revision sharing no history with its target holds no file
+		default:
+			a.Base, a.Head = f.CommitOID, rev.Head
+		}
+		anchors = append(anchors, a)
+		named = append(named, rev)
+	}
+	out := CodeChangeExcerpts{Excerpts: map[string]gitlet.Excerpt{}, Next: page.Next,
+		Context: gitlet.ExcerptsQuery{Context: call.context}.ContextOf()}
+	var chunks [][]gitlet.ExcerptAnchor
+	var floors []statelog.Freshness
+	for i := 0; i < len(anchors); i += gitlet.MaxExcerptAnchors {
+		end := min(i+gitlet.MaxExcerptAnchors, len(anchors))
+		chunks = append(chunks, anchors[i:end])
+		floors = append(floors, gitlet.ObjectFloor(g.reads.FloorOf(d.RepoID), named[i:end]...))
+	}
+	got := make([][]gitlet.Excerpt, len(chunks))
+	asks := make([]func() error, len(chunks))
+	for i, chunk := range chunks {
+		asks[i] = func() error {
+			gq := gitlet.GitQuery{Kind: gitlet.GitExcerpts, RepoID: d.RepoID, Asker: g.q.Asker, Fresh: floors[i],
+				Excerpts: &gitlet.ExcerptsQuery{Anchors: chunk, Context: call.context}}
+			for {
+				answer, readErr := g.gitRead(ctx, gq)
+				if readErr != nil {
+					return readErr
+				}
+				if answer.Excerpts == nil {
+					return fmt.Errorf("queries: %s: a Gitlet node answered an excerpts read with no excerpts",
+						g.ref())
+				}
+				got[i] = append(got[i], answer.Excerpts.Excerpts...)
+				if answer.Next == "" {
+					return nil
+				}
+				gq.Cursor = answer.Next
+			}
+		}
+	}
+	if len(asks) > 0 {
+		if err = gitlet.AtOnce(asks...); err != nil {
+			return nil, err
+		}
+	}
+	for _, excerpts := range got {
+		for _, e := range excerpts {
+			out.Excerpts[e.ID] = e
+		}
+	}
+	return out, nil
 }
 
 // gitRead asks q of the repository's home Gitlet node, refused here first where
