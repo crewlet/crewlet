@@ -18,6 +18,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import { draftsKey } from "~/lib/reviewDrafts.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -736,6 +737,19 @@ test("the conversation asks its reviews and comments again only when somebody wr
   await waitFor(() => expect(asked("reviews")).toBe(2));
   await waitFor(() => expect(asked("reviews", "r1")).toBe(2));
   await waitFor(() => expect(asked("comments")).toBe(2));
+});
+
+// A byline is a sentence: its time is said in words, the exact instant kept in its title.
+test("the header says when the change was opened in words", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  stubEngine(detail(), () => json({}));
+  mount();
+  await waitFor(() => {
+    const when = document.querySelector(".code-change-byline .code-byline__when");
+    expect(when?.textContent).toBe("yesterday at 11:00");
+    expect(when?.getAttribute("title")).toBe(fmtDateTime("2026-10-27T10:00:00Z"));
+  });
 });
 
 // A FINISHED CHANGE OFFERS ONLY WHAT STILL APPLIES: a merged change takes no

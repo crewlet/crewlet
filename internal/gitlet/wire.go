@@ -1136,6 +1136,10 @@ const (
 	// composed, for the changes of the code notices the page kept, and only
 	// by a read that draws them: an `inbox` read carries none of it.
 	ReadNoticeCards ReadKind = "notice_cards"
+	// ReadCommitMarks is what a history page draws beside its commits
+	// (commitmarks.go): each commit's checks per branch and the changes it landed
+	// with, in one snapshot and held to the asker's grant on the repository.
+	ReadCommitMarks ReadKind = "commit_marks"
 )
 
 // ReadKinds is the closed set.
@@ -1154,14 +1158,15 @@ const (
 // [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
 // that read [ReadQuery.Target], `commit` the only one that reads
 // [ReadQuery.Commit], `inbox` the only one that reads [ReadQuery.Inbox],
-// and `notice_cards` the only one that reads [ReadQuery.NoticeCards].
+// `notice_cards` the only one that reads [ReadQuery.NoticeCards], and
+// `commit_marks` the only one that reads [ReadQuery.CommitMarks].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
 		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed, ReadDefaultTips,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
-		ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards}
+		ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards, ReadCommitMarks}
 }
 
 // Valid reports a kind this build knows.
@@ -1235,6 +1240,10 @@ type ReadQuery struct {
 	// many repositories sort before them: what a picker asks with what was
 	// typed into it, since a company's repositories outnumber one page.
 	Prefix string `json:"prefix,omitempty"`
+	// RefListing orders, narrows and details a refs listing; nil is today's
+	// listing. An estate request's field: an older data node refuses it
+	// (ErrUnknownKeys) and the router asks the next.
+	RefListing *RefListingQuery `json:"ref_listing,omitempty"`
 	// Brief asks a push history for its rows IN BRIEF: the commits each push
 	// introduced counted and not listed, and the commands of a push of more
 	// than [BriefCommands] cut to that many — its refused ones first, each
@@ -1533,6 +1542,10 @@ type ReadQuery struct {
 	// record's, so it takes no versionedFields row: a node of a build that
 	// predates the kind refuses the read as a kind it does not know.
 	NoticeCards []string `json:"notice_cards,omitempty"`
+	// CommitMarks is a `commit_marks` read's commits: 1 to [MaxCommitMarks] whole
+	// ids, once each, required for that kind and refused on every other. A request
+	// field, no record's, so no versionedFields row: an older build refuses the kind.
+	CommitMarks []string `json:"commit_marks,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -1572,10 +1585,15 @@ type ReadAnswer struct {
 	// Pushes is a page of a repository's history, newest first, or of one
 	// executor's pushes, oldest first — each repository the run was given
 	// in its query's order, and each one's pushes in log order.
-	Pushes  []PushRow       `json:"pushes,omitempty"`
-	Refs    []RefRow        `json:"refs,omitempty"`
-	Changes []ChangeSummary `json:"changes,omitempty"`
-	Change  *ChangeDetail   `json:"change,omitempty"`
+	Pushes []PushRow `json:"pushes,omitempty"`
+	Refs   []RefRow  `json:"refs,omitempty"`
+	// RefsDetail is a refs page read in detail, in place of Refs, and
+	// ActiveBranches a first page's count of the branches moved since
+	// [RefListingQuery.ActiveSince].
+	RefsDetail     []RefListing    `json:"refs_detail,omitempty"`
+	ActiveBranches *BranchCount    `json:"active_branches,omitempty"`
+	Changes        []ChangeSummary `json:"changes,omitempty"`
+	Change         *ChangeDetail   `json:"change,omitempty"`
 	// ChangeBrief is a `change` read's change IN BRIEF ([ReadQuery.Brief]):
 	// its row, its repository's name and the asker's access, with no
 	// readiness judged — never "no longer live", which a nil readiness says
@@ -1691,7 +1709,10 @@ type ReadAnswer struct {
 	// ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
 	// only that kind answers it, which a build that predates it refuses.
 	NoticeCards map[string]*NoticeChange `json:"notice_cards,omitempty"`
-	Next        string                   `json:"next,omitempty"`
+	// CommitMarks is a `commit_marks` read's answer, one mark a commit in the
+	// query's order; an answer's field, no record's.
+	CommitMarks []CommitMark `json:"commit_marks,omitempty"`
+	Next        string       `json:"next,omitempty"`
 	// TipsNext is a `checks_due` page of one repository's tip work cut at its
 	// bound: the target it ended at, which the next page goes on after
 	// ([ChecksDueQuery.TipsAfter]) before any head — so a repository whose
@@ -3142,10 +3163,10 @@ const MaxLogGrepBytes = 256
 // (LogCommit.SubjectBytes).
 const MaxLogSubjectBytes = 4 << 10
 
-// MaxLogPersonBytes is the most a commit's author's name, or address, may
-// encode to and be answered. A JUDGMENT: git and fsck bound neither, RFC 5321
-// bounds an address at 254 octets, and 1 KiB holds every real name and
-// address with room; past it each is described by its size.
+// MaxLogPersonBytes is the most a commit's author's or committer's name, or
+// address, may encode to and be answered. A JUDGMENT: git and fsck bound
+// neither, RFC 5321 bounds an address at 254 octets, and 1 KiB holds every
+// real name and address with room; past it each is described by its size.
 const MaxLogPersonBytes = 1 << 10
 
 // MaxLogParents is the most parents a commit's answer lists: an octopus
@@ -3185,6 +3206,9 @@ const (
 	// contains which, the commits each has that the other lacks, and the
 	// first page of what head changed since the merge base.
 	GitCompare GitReadKind = "compare"
+	// GitTips is many branch heads and tags at once: what each peels to, an
+	// annotated tag's facts, its commit, and how far it is from a base (tips.go).
+	GitTips GitReadKind = "tips"
 	// GitLandedIn is whether a commit is in a ref's history, and the push
 	// that put it there and kept it there: the one question about history a
 	// seat asks the server rather than a clone.
@@ -3236,6 +3260,10 @@ const (
 	// node keeps one, and otherwise git grep — at most MaxSearchHits of
 	// them, in one answer with no next page (search.go).
 	GitSearch GitReadKind = "search"
+	// GitFind is the files of a commit's tree whose path holds a query's characters in
+	// order, case-folded, best first, with how many match (find.go): read over the
+	// tree's memoized listing, so a person typing runs no git after the first query.
+	GitFind GitReadKind = "find"
 )
 
 // GitReadKinds is the closed set.
@@ -3245,8 +3273,8 @@ const (
 // the code log names one, so a kind added here moves no RecordVersion and
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
-	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn, GitRevisionFacts, GitReanchor,
-		GitInterdiff, GitLog, GitBlame, GitChecksFile, GitCodeFiles, GitSearch}
+	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitLandedIn, GitRevisionFacts,
+		GitReanchor, GitInterdiff, GitLog, GitBlame, GitChecksFile, GitCodeFiles, GitSearch, GitFind}
 }
 
 // Valid reports a kind this build answers.
@@ -3266,16 +3294,18 @@ func (k GitReadKind) EnginesOwn() bool {
 	return k == GitRevisionFacts || k == GitChecksFile || k == GitCodeFiles
 }
 
-// Unstampable reports a kind whose answer is a PAGE of the repository's
-// content — a listing, a file's lines, a diff, a comparison, an interdiff, a
-// history or a blame — which a read may ask cut and answered with no stamp
-// ([GitQuery.Unstamped]). Never a landed-in read, whose answer IS what the
+// Unstampable reports a kind whose answer is a PAGE of the repository's content
+// — a listing, a file's lines, a diff, a comparison, many tips, an interdiff, a
+// history, a blame or a find — which a read may ask cut and answered with no
+// stamp ([GitQuery.Unstamped]). A find's answer is a function of the tree, the
+// query, the limit and the build, so a browser may keep a find by whole ids
+// for a typing session. Never a landed-in read, whose answer IS what the
 // node's index says of a push; nor a revision's facts, a re-anchoring or a
-// checks file, which the engine and a change's own reads ask, never a
-// question that keeps a page.
+// checks file, which the engine and a change's own reads ask, never a question
+// that keeps a page.
 func (k GitReadKind) Unstampable() bool {
 	switch k {
-	case GitTree, GitBlob, GitDiff, GitCompare, GitInterdiff, GitLog, GitBlame:
+	case GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitInterdiff, GitLog, GitBlame, GitFind:
 		return true
 	}
 	return false
@@ -3298,6 +3328,11 @@ func (q GitQuery) SeatWork() SeatWork {
 	}
 	return SeatWorkRead
 }
+
+// ReadsIndex reports a read whose page is a function of the node's index of
+// pushes, not of the ids alone ([LogQuery.PushedBy]): never Unstamped, never
+// memoized, never answered Immutable.
+func (q GitQuery) ReadsIndex() bool { return q.Kind == GitLog && q.Log != nil && q.Log.PushedBy != "" }
 
 // GitQuery is one read of a repository by object id: exactly the sub-query of
 // its Kind is set.
@@ -3409,6 +3444,7 @@ type GitQuery struct {
 	Blob          *BlobQuery          `json:"blob,omitempty"`
 	Diff          *DiffQuery          `json:"diff,omitempty"`
 	Compare       *CompareQuery       `json:"compare,omitempty"`
+	Tips          *TipsQuery          `json:"tips,omitempty"`
 	LandedIn      *LandedInQuery      `json:"landed_in,omitempty"`
 	RevisionFacts *RevisionFactsQuery `json:"revision_facts,omitempty"`
 	Reanchor      *ReanchorQuery      `json:"reanchor,omitempty"`
@@ -3418,6 +3454,7 @@ type GitQuery struct {
 	ChecksFile    *ChecksFileQuery    `json:"checks_file,omitempty"`
 	CodeFiles     *CodeFilesQuery     `json:"code_files,omitempty"`
 	Search        *SearchQuery        `json:"search,omitempty"`
+	Find          *FindQuery          `json:"find,omitempty"`
 }
 
 // CodeFilesQuery reads a commit's deploy and dependency files
@@ -3659,6 +3696,14 @@ type LogQuery struct {
 	// history it reaches, so a commit dated after it whose every line runs
 	// through an older one is not listed. Zero keeps every one.
 	Since time.Time `json:"since,omitzero"`
+	// Until keeps the commits committed BEFORE it: a filter of each commit
+	// the walk reaches, not a stop as Since is. Zero keeps every one; else
+	// after the epoch, after Since, and no further ahead than Since may be.
+	Until time.Time `json:"until,omitzero"`
+	// PushedBy, a seat's handle, keeps the commits whose introducing push in
+	// the node's index of pushes holds that seat ([Principal.Seat]); a commit
+	// the index cannot judge is counted in [LogAnswer.Unjudged].
+	PushedBy string `json:"pushed_by,omitempty"`
 	// Limit is the most commits a page lists, 1 to MaxLogLimit; zero is
 	// DefaultLogLimit. A page past the answer's bytes holds fewer.
 	Limit int `json:"limit,omitempty"`
@@ -3782,13 +3827,15 @@ func WirePath(p string) (text, b64 string) {
 // Validate refuses a read the Gitlet node cannot answer as asked ([ErrInvalid],
 // naming the field): a kind this build does not know, a repository id that is
 // not canonical, an asker no principal is, a turn beside an asker that is no
-// seat or past a turn id's bounds, a sub-query other than its kind's
-// or none, a revision [ValidRev] refuses, a path [GitPath] refuses — or none
+// seat or past a turn id's bounds, a sub-query other than its kind's or none, a
+// revision [ValidRev] refuses, tips that are not whole ids, named twice or past
+// MaxTips, or a base [ValidRev] refuses, a path [GitPath] refuses — or none
 // where a blame names its file — a line range that runs backwards or past a
 // blame's MaxBlameLines, a diff naming both a file and paths, a log whose
-// literal, limit or date no log takes, and a read made for a check that names
-// an asker or reads anything but its check's commit. A cursor longer than any
-// a Gitlet node issues is [ErrBadCursor]; whether a shorter one is the kind's own
+// literal, limit or date no log takes, a find whose query or limit no find
+// takes, and a read made for a check that names an asker or reads anything
+// but its check's commit. A cursor longer than any a Gitlet node issues is
+// [ErrBadCursor]; whether a shorter one is the kind's own
 // is the Gitlet node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
@@ -3841,11 +3888,11 @@ func (q GitQuery) Validate() error {
 		kind    GitReadKind
 		present bool
 	}{{GitTree, q.Tree != nil}, {GitBlob, q.Blob != nil}, {GitDiff, q.Diff != nil},
-		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil},
+		{GitCompare, q.Compare != nil}, {GitTips, q.Tips != nil}, {GitLandedIn, q.LandedIn != nil},
 		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
 		{GitChecksFile, q.ChecksFile != nil}, {GitCodeFiles, q.CodeFiles != nil},
-		{GitSearch, q.Search != nil}} {
+		{GitSearch, q.Search != nil}, {GitFind, q.Find != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -3861,6 +3908,10 @@ func (q GitQuery) Validate() error {
 	if q.Unstamped && !q.Kind.Unstampable() {
 		return fmt.Errorf("%w: unstamped: a %s read answers no page to cut unstamped", ErrInvalid, q.Kind)
 	}
+	if q.Unstamped && q.ReadsIndex() {
+		return fmt.Errorf("%w: unstamped: a history narrowed by who pushed it reads this node's index of "+
+			"pushes, which an unstamped page names nothing of", ErrInvalid)
+	}
 	switch q.Kind {
 	case GitTree:
 		return q.Tree.validate()
@@ -3868,6 +3919,8 @@ func (q GitQuery) Validate() error {
 		return q.Blob.validate()
 	case GitDiff:
 		return q.Diff.validate()
+	case GitTips:
+		return q.Tips.validate()
 	case GitLandedIn:
 		return q.LandedIn.validate()
 	case GitRevisionFacts:
@@ -3886,6 +3939,8 @@ func (q GitQuery) Validate() error {
 		return q.CodeFiles.validate()
 	case GitSearch:
 		return q.Search.validate()
+	case GitFind:
+		return q.Find.validate()
 	}
 	return q.Compare.validate()
 }
@@ -4161,6 +4216,25 @@ func (q LogQuery) validate() error {
 		return fmt.Errorf("%w: log.since: %s is not yet: give a date in the past", ErrInvalid,
 			q.Since.UTC().Format(time.RFC3339))
 	}
+	// Until and PushedBy are judged whatever Since is: the switch above
+	// ends at its first arm that holds, a Since left out included.
+	switch {
+	case q.Until.IsZero():
+	case !q.Until.After(time.Unix(0, 0)):
+		// At the epoch the second before it is -1, which git reads as no
+		// bound at all.
+		return fmt.Errorf("%w: log.until: %s is not after 1970-01-01T00:00:00Z: a commit is kept only before an "+
+			"instant after the epoch", ErrInvalid, q.Until.UTC().Format(time.RFC3339Nano))
+	case q.Until.After(time.Now().Add(logSinceAhead)):
+		return fmt.Errorf("%w: log.until: %s is not yet: give a date no further than a day ahead", ErrInvalid,
+			q.Until.UTC().Format(time.RFC3339))
+	case !q.Since.IsZero() && !q.Until.After(q.Since):
+		return fmt.Errorf("%w: log.until: %s is not after since %s: the window holds no instant", ErrInvalid,
+			q.Until.UTC().Format(time.RFC3339Nano), q.Since.UTC().Format(time.RFC3339Nano))
+	}
+	if q.PushedBy != "" && !org.ValidHandle(q.PushedBy) {
+		return fmt.Errorf("%w: log.pushed_by: %q is not a seat's handle", ErrInvalid, q.PushedBy)
+	}
 	return nil
 }
 
@@ -4224,14 +4298,14 @@ func TouchedCost(touched []string) int {
 }
 
 // GitAnswer answers a [GitQuery]: exactly the field of its Kind is set — a
-// file read whose path names a directory answers Kind tree, and an interdiff
-// (Kind interdiff) sets Diff, being one. Its JSON is at most
-// MaxGitAnswerBytes.
+// file read whose path names a directory answers Kind tree, an interdiff
+// (Kind interdiff) sets Diff, being one, and a find (Kind find) sets Find. Its
+// JSON is at most MaxGitAnswerBytes.
 type GitAnswer struct {
 	Kind   GitReadKind `json:"kind"`
 	RepoID string      `json:"repo_id"`
-	// Rev is the object a tree or a file read was asked of, as its whole id
-	// — a tag's is the commit or tree it names. A diff, a comparison, an
+	// Rev is the object a tree, a file or a find read was asked of, as its
+	// whole id — a tag's is the commit or tree it names. A diff, a comparison, an
 	// interdiff and a revision's facts name their commits in their own
 	// answer, and a re-anchoring names none.
 	Rev string `json:"rev,omitempty"`
@@ -4262,6 +4336,7 @@ type GitAnswer struct {
 	Blob          *BlobAnswer          `json:"blob,omitempty"`
 	Diff          *DiffAnswer          `json:"diff,omitempty"`
 	Compare       *CompareAnswer       `json:"compare,omitempty"`
+	Tips          *TipsAnswer          `json:"tips,omitempty"`
 	LandedIn      *LandedInAnswer      `json:"landed_in,omitempty"`
 	RevisionFacts *RevisionFactsAnswer `json:"revision_facts,omitempty"`
 	Reanchor      *ReanchorAnswer      `json:"reanchor,omitempty"`
@@ -4270,6 +4345,7 @@ type GitAnswer struct {
 	ChecksFile    *ChecksFileAnswer    `json:"checks_file,omitempty"`
 	CodeFiles     *CodeFilesAnswer     `json:"code_files,omitempty"`
 	Search        *SearchAnswer        `json:"search,omitempty"`
+	Find          *FindAnswer          `json:"find,omitempty"`
 }
 
 // CodeFilesAnswer is a commit's deploy and dependency files: its LISTING, at
@@ -4342,6 +4418,10 @@ type LogAnswer struct {
 	// last match rather than walking on to find one more, so the page after
 	// it may list nothing and be the complete one.
 	Complete bool `json:"complete,omitempty"`
+	// Unjudged is, on a page asked with [LogQuery.PushedBy], how many commits
+	// every other narrowing kept that the node's index could not attribute.
+	// Set, zero included, on every such page; nil on every other.
+	Unjudged *int `json:"unjudged,omitempty"`
 }
 
 // LogCommit is one commit of a history. Every field git leaves unbounded is
@@ -4361,6 +4441,17 @@ type LogCommit struct {
 	AuthorBytes      int    `json:"author_bytes,omitempty"`
 	AuthorEmail      string `json:"author_email,omitempty"`
 	AuthorEmailBytes int    `json:"author_email_bytes,omitempty"`
+	// Committer and CommitterEmail are who committed it as it states them,
+	// each past MaxLogPersonBytes absent with its size in CommitterBytes or
+	// CommitterEmailBytes.
+	Committer           string `json:"committer,omitempty"`
+	CommitterBytes      int    `json:"committer_bytes,omitempty"`
+	CommitterEmail      string `json:"committer_email,omitempty"`
+	CommitterEmailBytes int    `json:"committer_email_bytes,omitempty"`
+	// EngineCommitted says the committer spells the engine's convention
+	// ([EngineCommitted]), which authenticates nothing. Nil from a build
+	// that names no committer.
+	EngineCommitted *bool `json:"engine_committed,omitempty"`
 	// AuthoredAt and CommittedAt are the commit's two dates, to the second.
 	AuthoredAt  time.Time `json:"authored_at"`
 	CommittedAt time.Time `json:"committed_at"`
@@ -4406,15 +4497,22 @@ type BlameLine struct {
 	TextBytes int    `json:"text_bytes,omitempty"`
 }
 
-// BlameCommit is a commit a blame's lines name: its author as it states them
-// (never a `.mailmap`'s), the date it was authored and its subject, each
-// described past its bound as a LogCommit's is.
+// BlameCommit is a commit a blame's lines name: its author and its committer
+// as it states them (never a `.mailmap`'s), the date it was authored and its
+// subject, each described past its bound as a LogCommit's is.
 type BlameCommit struct {
-	Author           string    `json:"author,omitempty"`
-	AuthorBytes      int       `json:"author_bytes,omitempty"`
-	AuthorEmail      string    `json:"author_email,omitempty"`
-	AuthorEmailBytes int       `json:"author_email_bytes,omitempty"`
-	AuthoredAt       time.Time `json:"authored_at"`
+	Author           string `json:"author,omitempty"`
+	AuthorBytes      int    `json:"author_bytes,omitempty"`
+	AuthorEmail      string `json:"author_email,omitempty"`
+	AuthorEmailBytes int    `json:"author_email_bytes,omitempty"`
+	// Committer, CommitterEmail and their sizes, and EngineCommitted, are
+	// as a LogCommit's.
+	Committer           string    `json:"committer,omitempty"`
+	CommitterBytes      int       `json:"committer_bytes,omitempty"`
+	CommitterEmail      string    `json:"committer_email,omitempty"`
+	CommitterEmailBytes int       `json:"committer_email_bytes,omitempty"`
+	EngineCommitted     *bool     `json:"engine_committed,omitempty"`
+	AuthoredAt          time.Time `json:"authored_at"`
 	// Subject is the message's first LINE, as git's blame names it — not
 	// the first paragraph a log's subject is — absent past
 	// MaxLogSubjectBytes with SubjectBytes its size, and empty for a

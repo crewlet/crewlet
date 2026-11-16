@@ -525,6 +525,9 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // `atlas_log` and `atlas_activity`.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
+	// A FILE FOUND BY ITS NAME, read over REST on the path the reference
+	// prints until a finder reads it: its line goes when one does.
+	"code_find": "a script: GET /gitlet/repos/{name}/find, as docs/reference/api-endpoints.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with Gitlet's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and
@@ -532,6 +535,13 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
+	// A HISTORY PAGE'S MARKS, answered ahead of the rooms that draw them: until
+	// the first reads it, a script reads the reference's path.
+	"code_commit_marks": "a script: GET /gitlet/repos/{name}/commit-marks, as docs/reference/api-endpoints.md " +
+		"prints it",
+	// MANY TIPS AT ONCE, answered ahead of the Branches and Tags screens that
+	// draw them: until the first reads it, a script reads the reference's path.
+	"code_tips": "a script: GET /gitlet/repos/{name}/tips, as docs/reference/api-endpoints.md prints it",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.
