@@ -32,6 +32,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -60,7 +61,10 @@ func runExec(argv []string) int {
 		fmt.Fprintln(os.Stderr, "skipgate exec: no test binary to run")
 		return 2
 	}
-	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // go test hands the wrapper its own test binary
+	// ON NO CONTEXT OF ITS OWN, Background's: the binary lives exactly as long
+	// as go test lets it, which ends it through the signals handed on below,
+	// never through a deadline of the wrapper's.
+	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...) //nolint:gosec // go test hands the wrapper its own test binary
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	signals := make(chan os.Signal, 4)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
