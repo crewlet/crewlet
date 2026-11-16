@@ -41,6 +41,7 @@ type Store struct {
 	// outside the lock, so a suite can act in the moment after the row says
 	// the turn runs.
 	afterOpen func()
+	onSummary func()
 }
 
 type storedConversation struct {
@@ -49,6 +50,9 @@ type storedConversation struct {
 	steps    []wire.StepEvent
 	cards    []assistantdomain.Card
 	turns    []uuid.UUID
+	// summary and summaryThrough are the conversation's summary record.
+	summary        string
+	summaryThrough int
 }
 
 type storedTurn struct{ assistantdomain.Turn }
@@ -80,6 +84,23 @@ func (s *Store) Seed(owner, id uuid.UUID, title string) {
 	at := s.now().UTC()
 	s.conversations[id] = &storedConversation{Conversation: assistantdomain.Conversation{
 		ID: id, Owner: owner, Title: title, CreatedAt: at, UpdatedAt: at, LastActivityAt: at}}
+}
+
+// SeedHistory gives a seeded conversation earlier messages, alternating the
+// person's and the assistant's, each read through apps.
+func (s *Store) SeedHistory(owner, id uuid.UUID, apps []string, texts ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.conversations[id]
+	for i, text := range texts {
+		role := wire.RoleUser
+		if i%2 == 1 {
+			role = wire.RoleAssistant
+		}
+		c.messages = append(c.messages, assistantdomain.Message{
+			ID: ID(fmt.Sprintf("seeded/%s/%d", id, i)), Role: role, Text: text,
+			CreatedAt: s.now().UTC(), Apps: slices.Clone(apps)})
+	}
 }
 
 // keep records one write, refusing a write that names no operation.
@@ -158,7 +179,7 @@ func (s *Store) Transcript(_ context.Context, owner, id uuid.UUID) (assistantdom
 	}
 	t := assistantdomain.Transcript{Conversation: c.Conversation,
 		Messages: slices.Clone(c.messages), Steps: slices.Clone(c.steps),
-		Cards: slices.Clone(c.cards)}
+		Cards: slices.Clone(c.cards), Summary: c.summary, SummaryThrough: c.summaryThrough}
 	for _, turn := range c.turns {
 		t.Turns = append(t.Turns, s.turns[turn].Turn)
 	}
@@ -246,6 +267,25 @@ func (s *Store) TitleConversation(_ context.Context, w assistant.Write, id uuid.
 	return nil
 }
 
+// SummarizeConversation implements [assistant.Records].
+func (s *Store) SummarizeConversation(_ context.Context, w assistant.Write, id uuid.UUID,
+	summary string, through int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.keep(w, "conversation_summarized", summary); err != nil {
+		return err
+	}
+	c, err := s.owned(w.Owner, id)
+	if err != nil {
+		return err
+	}
+	c.summary, c.summaryThrough = summary, through
+	if s.onSummary != nil {
+		s.onSummary()
+	}
+	return nil
+}
+
 // ClearConversation implements [assistant.Records].
 func (s *Store) ClearConversation(_ context.Context, w assistant.Write, id uuid.UUID) (assistant.Written, error) {
 	s.mu.Lock()
@@ -263,6 +303,13 @@ func (s *Store) ClearConversation(_ context.Context, w assistant.Write, id uuid.
 	}
 	delete(s.conversations, id)
 	return assistant.Written{Outcome: "applied", Position: "CREWLET_ASSISTANT_LOG@1:1"}, nil
+}
+
+// OnSummary makes every recorded summary call fn once it is stored.
+func (s *Store) OnSummary(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSummary = fn
 }
 
 // AfterOpen makes every landed turn opening call fn before it answers.

@@ -1104,6 +1104,46 @@ which removes the old remote-tracking ref before it writes the new one. Of two
 creates in one push, or in one batch of the [committer](#the-committer), that
 would sit beside each other, the first stands and the second is refused.
 
+### Listing branches
+
+A repository's refs are listed a page at a time, by name, or its branches by
+when each last moved, newest first (the branches one record moved in reverse
+name order). Only the branches are listed by when they moved, so a repository
+holding thousands of imported tags lists its branches as fast as one holding
+none; a seat's namespace is found by name, or with the find below. The listing
+by move keeps the branches whose last move falls in a window (`moved_since`,
+`moved_before`), which is how the Branches screen tells its active branches
+from its stale ones.
+
+A find (`contains`) keeps the refs whose name below the listing's prefix holds
+what was typed, in any case (`FIX` finds `hotfix`, and `k` finds a name written
+with the Kelvin sign). No index answers a substring, so a page reads at most
+10 000 refs and answers a next page however few it kept, even none; reading
+on reaches every match once.
+
+Read in detail (`detail=true`), each ref also says:
+
+- **When it moved and who moved it**: the push that set its target, read from
+  the push history at the position of the record that moved it. A merge's
+  push names the person or seat that merged it, `via merge`, and a queue
+  landing's `via queue`. Who moved it is unknown once the push history's 181
+  days have removed that push, and when one record moved the branch away from
+  its target and back to it; when it moved is always known.
+- **Its protection**: every rule whose pattern matches it, a glob rule
+  included, and what they allow together: a force-push or a deletion only
+  where every matching rule allows it, and no direct push where any says none.
+- **Its change**: the live change the branch heads, else the newest change
+  opened from it.
+- **Whether the reader may delete it now**, judged by the rules a deletion
+  is judged by, in their order: the repository's state (archived, being
+  imported, a pull mirror), the reader's access, the protections and the
+  default branch, which is never deleted. Where it may not, the answer
+  carries the refusal and its sentence.
+
+A first page can also count the branches other than the default branch that
+moved since an instant (`active_since`), the Overview's "Active branches"; it
+counts up to 1 000 and says when there were more.
+
 ---
 
 ## Compaction
@@ -2659,6 +2699,12 @@ grant on the repository as every other read of it is:
 - **`check`**: one attempt whole, named by its commit, its target branch, its
   check and its number — its row, the definition it ran under, the last of
   its output, the failures its ending named and its kept log;
+- **`commit_marks`**: what a history page draws beside up to 100 commits of
+  one repository, in one snapshot: for each branch a commit was checked for,
+  where its checks stand, each check's latest attempt rolled up as a merge
+  gate reads it, and the changes whose merge commit it is and the revisions
+  it heads, each with how it landed ([What a history page
+  carries](#what-a-history-page-carries));
 - **`checks_due`**: the engine's own, which no person or seat may make — the
   work the repository's home polls for: the live changes whose head has no
   **dispatch** for its target naming the checks file the target's reading
@@ -2685,6 +2731,54 @@ and its kept log 32 KiB a page from the object store — and
 `code_get_change`'s `checks` part a change's head's attempts in a line each,
 every word a check printed fenced as `check_log`, text nobody in the company
 wrote ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
+
+### What a history page carries
+
+A list of commits draws, beside each one, where its checks stand and the
+change it landed with, read for a whole page of commits at once from the
+rows (`commit_marks`, the `code_commit_marks` question). The commits are the
+page's own, named by their whole ids; the read never asks git whether one
+exists, and a commit the rows name nothing of carries nothing.
+
+**Where its checks stand** is a **rollup** of each check's latest attempt of
+the commit for one branch, one for each branch it was checked for (at most
+four). Every screen that draws a set of checks reads the same rollup, judged
+as the merge gate judges a check, so a row never says "passing" where the
+gate waits:
+
+- its one word, the first that holds: **failing** (a check failed, or
+  errored where the home does not queue it again), **running**, **pending**
+  (queued, errored and queued again by the home, or in a state a later
+  build records), **cancelled** (a head its next push moved on from, which a
+  row does not draw red), then **passed**;
+- how many of the required checks passed or were skipped, of how many
+  ("Passed 2 of 2"), which is the gate's own reading: a cancelled required
+  check has not passed;
+- the counts by state, the newest ending, the oldest start of one still
+  running, and the failing checks by name, required first.
+
+**The change it landed with** is each change whose merge commit it is and
+each revision it heads, with how it landed once merged: the merge commit,
+when, which way (`push`, `direct` or `queue`) and by whom. A row names a
+few (four of each); a commit's page names them all.
+
+**A commit's page** (`code_commit`) names, beside each change merged
+through its gate, that **gate** as the rows keep it, since the merge record
+keeps no snapshot of it:
+
+- the approvals of the revision it merged at. An approval of an earlier
+  revision is not named, though the gate counts one whose code the merged
+  revision kept unchanged;
+- the checks that gated it: a direct merge's on the change's head for its
+  target, which the gate judged; a queue landing's on the tip its land
+  record left the branch at, since a queue lands a train's tested prefix on
+  that tip's checks. An entry inside a train names the train's checks, and
+  its own commit carries none. The candidates a landing landed are removed
+  with it, so the tip is read from the landing rows, which the queue keeps
+  as long as the checks are kept;
+- a person's reason for merging past the gate, where one did.
+
+A push's merge has no gate: who pushed it is the push's.
 
 ### Check boxes
 
@@ -2993,6 +3087,13 @@ past.
   day.
 - **A check queued and never ended is kept** until it ends, or its repository
   is purged.
+- **A history page reads what is kept.** A commit whose attempts all ended
+  more than 30 days ago carries no checks on a history page, which says
+  nothing about whether it was checked; and a merge whose merged revision was
+  pushed more than 30 days ago, and whose gate's checks no row keeps, names
+  them as no longer kept (`gone`): the rows that named them, the attempts
+  and the queue's landings, keep the same 30 days, and the attempts ended
+  after that push.
 - **A repository's purge takes its checks and their logs** with the rest of
   it, and a check record about a purged repository — a runner ending a check
   its repository's purge outran — writes nothing on any node.
@@ -5190,10 +5291,13 @@ clone: a tree's listing, a file's lines, a diff — its per-file stat, or one
 file's patch — how two commits compare (their merge base, which contains
 which, the commits each has that the other lacks, and what one changed since
 the merge base), a path's history ([A path's history](#a-paths-history)),
+a file found by its name in a commit's tree ([Finding a file](#finding-a-file)),
 which commit last changed each line of a file
 ([Who changed a line](#who-changed-a-line)), whether a commit landed in a
 branch and which push landed it (`landed_in`,
-[Which push landed a commit](#which-push-landed-a-commit)), and what a change's
+[Which push landed a commit](#which-push-landed-a-commit)), many branch heads
+and tags at once, each with the commit it names and how far it is from a base
+([Many tips at once](#many-tips-at-once)), and what a change's
 revisions are: a revision's facts against its target, where lines anchored in
 one revision are in another, and what the change changed between two
 ([A revision's facts](#a-revisions-facts)), and which lines of a commit a
@@ -5346,6 +5450,37 @@ even where git answered anyway — it reads around a damaged index from the
 packs and exits as if it had not — and the cache repairs what it reported
 while other nodes answer.
 
+### Many tips at once
+
+`code_tips` reads up to 100 objects at once, each named by its whole id as a
+ref's row names it: a screen of branches or tags. Each one is answered with its
+type and what it peels to; an annotated tag with its own tagger, date and
+subject, the subject read as a commit's is (the message's first paragraph, a
+signature no part of it); and the commit it is or names as a history lists it.
+With a base, each commit also carries `behind` and `ahead`, git's three-dot
+counts: the commits the base has that it lacks, and the reverse. A tip that
+peels to a tree or a blob has no commit and no counts.
+
+**One process of each kind, and one walk a tip.** A read checks what every tip
+names in one batch, reads every annotated tag in one `cat-file --batch` and
+every commit in one `log --no-walk`, then counts each tip with one
+`rev-list --left-right --count`, all under one unit of the share and one budget
+of git. Each tip's facts are kept in the [memo](#the-memo) by its object id and
+each count by its pair of commits, and the memo is asked for every one before
+any git runs: a screen read again runs no git at all, and after one branch
+moved its next read checks the objects, reads the one new commit and counts it
+alone.
+
+**A page that runs out of time goes on.** A page holds as many tips as its
+56 KiB hold, in the order asked, with a cursor at the first one left out. A page
+whose budget runs out while counting ends there with a cursor at the tip it was
+counting; where that is the page's first tip, it is answered with
+`counts_out_of_time` and no counts and the cursor moves past it, so every page
+moves on. Measured over a main of 20 000 commits with 80 branches forking along
+it and 20 annotated tags, a screen of all 100 read cold takes 1.4 s at the
+median and 2.0 s at the slowest, some 14 ms a tip, inside the read's ten seconds
+of git; read again it takes 5.5 ms.
+
 ### A path's history
 
 `code_log` asks for the commits that changed a file or a directory — or every
@@ -5353,12 +5488,13 @@ commit — newest first from a commit: one `git log --topo-order` over the copy,
 walking by generation where the copy holds a commit-graph, and reading the
 graph's changed-path filters, so a commit that touched nothing under the path
 is passed over without a diff. Each commit is named with its parents, its
-author and address as the commit states them — never a `.mailmap`'s, so the
-answer is a function of the commits alone — its two dates, its subject (the
-message's first paragraph) and the push that introduced it. The path is the
-history as git keeps it: a file renamed is listed under each name for the
-commits that touched that name, the rename among the old name's, and a file
-deleted since keeps the history it had.
+author and its committer, as the commit states them (never a `.mailmap`'s, so
+the answer is a function of the commits alone), `engine_committed`, set where
+the committer is [the engine's convention](#who-a-commit-names), its two dates,
+its subject (the message's first paragraph) and the push that introduced it.
+The path is the history as git keeps it: a file renamed is listed under each
+name for the commits that touched that name, the rename among the old name's,
+and a file deleted since keeps the history it had.
 
 **A literal, matched on the node.** `grep` keeps the commits whose whole
 message holds its words, in any case, matched by the node over each message as
@@ -5366,6 +5502,22 @@ it streams by — never handed to git as a pattern — so a message of any lengt
 is searched in memory the size of the words, and a dot is a dot. `since` keeps
 the commits committed from a time on, as git's `--since` does: the walk stops
 at a commit committed before it on each line of history it reaches.
+
+**Narrowed by time and by who pushed.** `until` keeps the commits committed
+before it, a filter of each commit the walk reaches rather than a stop, so a
+commit dated before it is kept whatever its children's dates; `since`, by
+contrast, stops the walk at an older commit on each line, so the two together
+are a window only on a history whose dates follow its order. `pushed_by` keeps
+the commits whose introducing push a seat made (a person's through the human
+seat their credential is bound to, a merge's and a queue landing's by their
+merger), read from the node's [index of pushes](#which-push-landed-a-commit).
+A commit that index cannot judge (pushed before it begins, or one of a push
+whose commits were too many to list) is never listed and never silently
+dropped: the page counts it in `unjudged`, which a page asked without
+`pushed_by` leaves out. Such a page is a function of the node's index rather
+than of the ids it names, so it is never kept in the [memo](#the-memo), never
+read unstamped and never answered immutable. It ends at its `limit`-th kept
+commit, as a `grep` page does.
 
 **A page ends where the history says.** A page holds as many commits as
 `limit` asks and its 56 KiB hold — every subject counted fenced, as the tools
@@ -5381,7 +5533,8 @@ complete one. A walk that runs the
 read's ten seconds of git — a `grep` that matches little in a long history —
 answers what it found with its cursor past it, never an error and never a
 claim that nothing more matches; one that reached no commit at all in that
-time is too large, naming the narrowing (a path, a later `since`).
+time is too large, naming the narrowing (a path, a later `since`; for an
+`until`, a path or a `since`).
 
 **A record no message can forge.** Every field of a commit ends in a NUL
 byte, which no message holds — Gitlet's own check of every push and
@@ -5396,20 +5549,22 @@ fails the page, logged `code_git_unparsed`, and is never answered.
 one `git blame --porcelain` of a range of at most 500 lines, its path the one
 argument after `--`. Each line comes with its commit, the line it was in that
 commit, and the path it had there where the file was renamed since; each commit
-once a page, with its author as the commit states it — a blame in a bare
-repository would read the `.mailmap` at the default branch, which the node
-turns off — its date, its subject (the message's first line) and the push that
-introduced it. A blame's cost is the walk of the file's history for the lines
-it names, so a range is read in pages by one blame: the run that cuts the first
-page cuts every page of the range, and the rest are answered from the
-[memo](#the-memo). A range that begins past the file's end is refused naming
-how many lines the file has; a path that names a directory or nothing is
-refused; an empty file has no lines.
+once a page, with its author and its committer as the commit states them (a
+blame in a bare repository would read the `.mailmap` at the default branch,
+which the node turns off), `engine_committed` as a history marks it, its date,
+its subject (the message's first line) and the push that introduced it. A
+blame's cost is the walk of the file's history for the lines it names, so a
+range is read in pages by one blame: the run that cuts the first page cuts
+every page of the range, and the rest are answered from the [memo](#the-memo).
+A range that begins past the file's end is refused naming how many lines the
+file has; a path that names a directory or nothing is refused; an empty file
+has no lines.
 
-**Described, never cut.** A subject past 4 KiB, an author's name or address
-past 1 KiB and a line past 8 KiB — each measured as the tools send it, a
-control byte six bytes and a fence's marker its escape — are answered absent,
-beside their size (`subject_bytes`, `author_bytes`, `author_email_bytes`,
+**Described, never cut.** A subject past 4 KiB, an author's or a committer's
+name or address past 1 KiB and a line past 8 KiB, each measured as the tools
+send it (a control byte six bytes and a fence's marker its escape), are
+answered absent, beside their size (`subject_bytes`, `author_bytes`,
+`author_email_bytes`, `committer_bytes`, `committer_email_bytes`,
 `text_bytes`), in a history and a blame alike, and so are a merge's parents
 past 64 (`parent_count`): so the widest commit, and the widest line with its
 commit, always fit a page, and no page carries half a field read as the whole.
@@ -5453,6 +5608,47 @@ ready. An answer the search read to its end — every matching line, or as
 many as its limit — is kept in the [memo](#the-memo), keyed by the commit,
 the ref that named it and every part of the search; one the five seconds cut
 is kept nowhere.
+
+### Finding a file
+
+`code_find` is a finder's "go to file": the files of a commit's tree (its
+default branch's tip unless the question names a ref or a commit) whose path
+holds a query's characters in order. Each character of the query matches one
+character of the path, in any case (Unicode's simple case folding, as
+`strings.EqualFold` folds, so `k` finds a name spelled with the Kelvin sign
+and `ß` is not `ss`); a space is a character like any other, and a byte of a
+path that is not text matches nothing. A query is 1 to 256 bytes of UTF-8,
+and it never reaches git: it is matched in Go.
+
+**How it ranks.** A file whose name (the part of its path after the last `/`)
+holds the query comes before one whose directories alone do; then the closer
+together the matched characters, the earlier the match begins in the name,
+the shorter the name, the shorter the path, and last the path's bytes, so two
+nodes rank a tree the same. Searching `main` answers `x/main.go` before
+`cmd/web/main.go`, both before `main.go.orig`, then `src/domain.go`, and
+`main/readme.md` last.
+
+**What it answers.** The best `limit` files (1 to 100, 50 unless the question
+names one), fewer where their paths fill one answer, each with its path, its
+blob, its mode and `spans`, the runs of the path's characters the query
+matched as `[start, end)` code points, which a finder draws in bold; then
+`total`, how many files of the tree match, and `files`, how many it holds.
+One answer, with no next page: a person narrows the list by typing on. A
+symbolic link is a file; a submodule is not, having no file to open, and
+neither is a path longer than 4 KiB, which no read can name.
+
+**What it costs.** A find reads the tree's recursive listing as the
+[memo](#the-memo) keeps it, by the tree's own id rather than the commit's, so
+every commit holding the tree, and every reader, shares one set of pages. The
+first query of a tree lists it once, under one unit of the node's seat
+git-work share, and stages its pages; every later query of that tree, from
+any commit holding it, runs no git but the read's check of the commit, and
+ranks every file in Go. Nothing is kept per query. Where a page is gone from the
+memo, trimmed with its cohort, the find lists the tree from that page on, once,
+and puts the pages back. A tree whose listing does not finish in the read's
+ten seconds of git is refused as too large, never answered with a ranking of
+part of it. Measured over one commit of 100 000 files in 1 000 directories
+on twelve vCPUs: the first query 407 ms at the median, every later one 77 ms.
 
 ### Code search
 
@@ -5601,8 +5797,9 @@ patch's, a blame's range — and the memo keeps each: reading a file page by
 page streams it once, listing that tree page by page runs `ls-tree` once, and
 blaming a range page by page blames it once. A comparison is kept whole; a
 history's page is its walk's own, kept where the walk ended it and never where
-the read's ten seconds of git did; whether a commit landed in a branch never
-is, since its answer moves with the branch. A read that misses a page another read on the node is
+the read's ten seconds of git did; a tips read is kept a tip at a time rather
+than as a page ([Many tips at once](#many-tips-at-once)); whether a commit
+landed in a branch never is, since its answer moves with the branch. A read that misses a page another read on the node is
 cutting waits for it and is answered from what that read kept, so the seats a
 push's review reaches, all asking for the same diff at once, cost the node one
 git process rather than one each.
@@ -7884,7 +8081,11 @@ history its caller never saw, and one that creates a branch needs it absent.
   principal and, for a seat, the turn that made it. A [coding
   box](#coding-boxes)'s push carrying a commit under it that the repository
   does not already hold is refused (`forged_committer`), while a person's or
-  an import's may carry one.
+  an import's may carry one. A history and a blame name each commit's
+  committer and mark a commit `engine_committed` where it is `Crewlet` at
+  `engine@` on any domain, the convention and nothing more: judged from the
+  commit alone, so a commit the engine built before the identity domain moved
+  is still marked.
 - **Its author date is the instant the writer acted** — the instant the
   write's operation was minted, to the second — and its committer date is
   that instant, or its parent's committer date where the parent is dated

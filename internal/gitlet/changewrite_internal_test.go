@@ -122,7 +122,7 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 		roots := changeIndexRoots(ctx, t, tx)
 		// THE READING, ON WRITES WHOSE VERDICT IS KNOWN: a write of every
 		// column a change's lifecycle may move keeps every index but the
-		// number's, whose key no write moves — so a reading that found
+		// number's and the source's, whose keys no write moves, so a reading that found
 		// nothing, which every case below expecting no index would pass, is
 		// caught here — and a write of the title alone keeps none.
 		for _, control := range []struct {

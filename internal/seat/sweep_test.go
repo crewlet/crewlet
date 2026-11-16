@@ -1,9 +1,14 @@
 package seat
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"reflect"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,6 +59,78 @@ func TestPresenceOmitsStatusWhenTheNodeHasNone(t *testing.T) {
 
 	if _, ok := coord.StatusFromMeta(presenceOf(t, f, "node-a").Meta); ok {
 		t.Error("a node with no status hook published one")
+	}
+}
+
+// A PRESENCE TOO LARGE FOR ITS BOUND IS PUBLISHED WITHOUT ITS STATUS, and said.
+// The store refuses a Meta past coord.MaxLeaseMetaBytes; a beat that sent one
+// would renew nothing, and the node would leave its peers' count over a
+// display column. So the status goes, as a hook that did not answer goes —
+// the placement half is renewed, with the withdrawal and the Gitlet budget a
+// slow control plane must never drop for a beat — and an ERROR line names the
+// size, the bound and the remedy. No legal configuration reaches it; a status
+// hook handing over a thousand alarm marks, where the table holds one a kind,
+// does.
+//
+// Mutation: publish the whole presence whatever its size and the store
+// refuses it — no presence lease at all, red; rebuild the placement half
+// without the withdrawal or the budget, red; drop the line, or its size, and
+// its arm is red.
+func TestAPresenceTooLargeForItsBoundIsPublishedWithoutItsStatus(t *testing.T) {
+	t.Parallel()
+	marks := make([]coord.AlarmMark, 1000)
+	since := time.Date(2026, 11, 15, 17, 34, 5, 0, time.UTC)
+	for i := range marks {
+		marks[i] = coord.AlarmMark{Kind: fmt.Sprintf("alarm_kind_%04d", i), Since: since}
+	}
+	const budget = int64(3) << 30
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{
+		Seats:         seatsNamed("ceo"),
+		GitBackground: func() int64 { return budget },
+		Status: func(context.Context) (coord.NodeStatus, error) {
+			return coord.NodeStatus{InFlight: 3, AlarmsEvaluated: true, Alarms: marks}, nil
+		},
+	})
+	git := budget
+	whole := PresenceMeta(h.profile, 0, true, &git, &coord.NodeStatus{
+		InFlight: 3, AlarmsEvaluated: true, Alarms: marks})
+	size, err := coord.LeaseMetaBytes(whole)
+	if err != nil || size <= coord.MaxLeaseMetaBytes {
+		t.Fatalf("the control: the whole presence is %d bytes (%v), not past the %d bound",
+			size, err, coord.MaxLeaseMetaBytes)
+	}
+
+	h.setWithdrawn(f.ctx, true) // renews the presence, as the change is told at once
+
+	lease := presenceOf(t, f, "node-a")
+	if profile, ok := placement.FromLease(lease); !ok || profile.ID != "node-a" {
+		t.Errorf("the placement half was not renewed: %v", lease.Meta)
+	}
+	if _, ok := lease.Meta[placement.HeldKey]; !ok {
+		t.Errorf("the held count went with the status: %v", lease.Meta)
+	}
+	if lease.Meta[placement.WithdrawnKey] != true {
+		t.Errorf("the withdrawal went with the status: %v", lease.Meta)
+	}
+	if got, says := coord.GitBackgroundFromMeta(lease.Meta); !says || got != budget {
+		t.Errorf("the Gitlet budget went with the status: %d (says %v), want %d", got, says, budget)
+	}
+	if _, ok := coord.StatusFromMeta(lease.Meta); ok {
+		t.Error("a status past what a lease holds was published")
+	}
+
+	var line bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&line, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	h.presenceMeta(f.ctx, logger)
+	for _, want := range []string{"level=ERROR", "msg=node_presence_status_dropped", "node=node-a",
+		"bytes=" + strconv.Itoa(size), "bound=" + strconv.Itoa(coord.MaxLeaseMetaBytes), "node.labels"} {
+		if !strings.Contains(line.String(), want) {
+			t.Errorf("the drop was logged as %q, want %s in it", line.String(), want)
+		}
+	}
+	if strings.Contains(line.String(), "error=") {
+		t.Errorf("the drop of a presence that measured was logged with an error: %q", line.String())
 	}
 }
 

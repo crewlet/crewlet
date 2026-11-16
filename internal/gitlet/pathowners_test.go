@@ -330,6 +330,7 @@ func everyReadAsked(id string) map[gitlet.ReadKind]gitlet.ReadQuery {
 		gitlet.ReadGreen:         {Asker: asker, Repo: "web"},
 		gitlet.ReadInbox:         {Asker: asker, Inbox: &gitlet.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}},
 		gitlet.ReadNoticeCards:   {Asker: asker, NoticeCards: []string{"0192f4c8-0000-7000-8000-000000000001"}},
+		gitlet.ReadCommitMarks:   {Asker: asker, Repo: "web", CommitMarks: []string{strings.Repeat("6", 40)}},
 	}
 }
 
@@ -397,9 +398,10 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 
 // A FIELD ONE KIND READS IS REFUSED ON EVERY OTHER, the engine's own reads
 // included: a read of each kind this build reads, as everyReadAsked asks it,
-// that also names a commit, an inbox, an inbox page's cards or the narrowing
-// to protected repositories — fields only a `commit`, an `inbox`, a
-// `notice_cards` and a `repos` read read — is refused naming the field, never
+// that also names a commit, an inbox, an inbox page's cards, a history
+// page's commits or the narrowing to protected repositories (fields only a
+// `commit`, an `inbox`, a `notice_cards`, a `commit_marks` and a `repos` read
+// read) is refused naming the field, never
 // answered with it ignored. The engine's own reads validate
 // against lists of their own, and a field added after a list was written
 // passed it unseen.
@@ -423,6 +425,9 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 		}},
 		{"notice_cards", gitlet.ReadNoticeCards, func(q *gitlet.ReadQuery) {
 			q.NoticeCards = []string{"0192f4c8-0000-7000-8000-000000000001"}
+		}},
+		{"commit_marks", gitlet.ReadCommitMarks, func(q *gitlet.ReadQuery) {
+			q.CommitMarks = []string{strings.Repeat("6", 40)}
 		}},
 		{"protected", gitlet.ReadRepos, func(q *gitlet.ReadQuery) { q.Protected = true }},
 	} {

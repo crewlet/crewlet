@@ -37,6 +37,7 @@ export const TAINT_SOURCE_WORDS: Readonly<Record<AssistantTaintSource, string>> 
   server_output: "a server's output",
   delegated_request: "an agent's delegated request",
   atlas: "the Atlas",
+  web_page: "a web page",
 };
 
 /** The sentence a proposal prepared after reading outside text leads with. */

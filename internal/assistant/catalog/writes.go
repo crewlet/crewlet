@@ -158,7 +158,7 @@ func writeTools() []Tool {
 				"turn_id": text("The running turn's id.", nameBytes),
 				"note":    text("The note, verbatim.", 8<<10),
 			})),
-		answersRun(write(answerExecutorTool, authz.ActionExecutorAnswer, false, "answer executors",
+		answersRun(write(AnswerExecutorTool, authz.ActionExecutorAnswer, false, "answer executors",
 			"Propose an answer to an executor parked on a question for the person.",
 			object([]string{"turn_id", "launch_id"}, map[string]*schema{
 				"turn_id": text("The executor's turn id.", nameBytes),
@@ -183,11 +183,11 @@ func writeTools() []Tool {
 				"message":   text("One line on why the page exists.", lineBytes),
 			})),
 		write("edit_page", authz.ActionPageSave, true, "edit pages",
-			"Propose a new version of a page. Read it with "+getPageTool+" first and pass "+
+			"Propose a new version of a page. Read it with "+GetPageTool+" first and pass "+
 				"its version as base_version.",
 			object([]string{"page", "base_version", "body"}, map[string]*schema{
 				"page":         text("The page's id.", nameBytes),
-				"base_version": positive("The page's version from "+getPageTool+".", 1<<30),
+				"base_version": positive("The page's version from "+GetPageTool+".", 1<<30),
 				"body":         text("The whole new body, in Markdown.", bodyBytes),
 				"title":        text("A new title.", lineBytes),
 				"message":      text("One line on what changed and why.", lineBytes),

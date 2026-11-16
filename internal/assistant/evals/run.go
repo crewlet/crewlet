@@ -99,6 +99,9 @@ func RunSuite(ctx context.Context, cases []Case, o Options) ([]Result, error) {
 func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	person := Person("eval", "eval", c.Person.Apps...)
 	company, err := Company(true, person.Seat)
+	if len(c.Research) > 0 {
+		company, err = ResearchCompany(c.Research, c.Search, person.Seat)
+	}
 	if err != nil {
 		return Trial{}, err
 	}
@@ -316,6 +319,11 @@ func judge(e Expect, frames []wire.Frame, refusals []string, heard bool) Trial {
 	}
 	if e.Taint != "" {
 		judgeTaint(e.Taint, taints, fail)
+	}
+	for _, s := range e.NeverShows {
+		if strings.Contains(cardText, strings.ToLower(s)) {
+			fail("never_shows: %q on a card", s)
+		}
 	}
 	if e.Brief != nil {
 		judgeBrief(*e.Brief, brief, fail)

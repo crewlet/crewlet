@@ -127,6 +127,17 @@ var trustDoors = map[string]trustDoor{
 	// writer earns (a vendor's integration names what it reports); one
 	// entry says its sources, and is a vendor's where an integration is
 	// among them and the company's own words otherwise.
+	"internal/assistant/catalog/audit.go:auditRead": {either, []string{
+		"internal/assistant/catalog.TestTheAuditLogIsReadAsTheTrailItIs",
+	}},
+	"internal/assistant/catalog/research.go:fetchWebPage": {vendor, []string{
+		"internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites",
+		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
+	}},
+	"internal/assistant/catalog/research.go:searchWeb": {vendor, []string{
+		"internal/assistant.TestATurnSearchesAFewTimesFencedAsTheSites",
+		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
+	}},
 	"internal/assistant/catalog/atlasread.go:atlasReads": {vendor, []string{
 		"internal/assistant/catalog.TestAnAtlasSearchIsATableOfEntriesWithTheMapToOpen",
 		"internal/assistant/catalog.TestEveryAssistantToolResultIsFenced",
@@ -214,6 +225,11 @@ var trustDoors = map[string]trustDoor{
 	// from whoever wrote it, as an executor's words are (Executor).
 	"internal/agent/prompts/endings.go:endingAccounts": {vendor, []string{
 		"internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken",
+	}},
+	// The cards an assistant conversation's earlier messages showed, as its
+	// summary call reads them: the record keeps no writer, so the least trust.
+	"internal/assistant/summary.go:summaryRequest": {vendor, []string{
+		"internal/assistant.TestASummaryReadsWhatItsMessagesShowedFencedUnderATokenOfItsOwn",
 	}},
 }
 

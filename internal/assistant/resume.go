@@ -169,6 +169,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	// the turn as a read does: a proposal this segment makes after it names
 	// the outside source its model holds, whichever segment read it (D25).
 	t.taintedBy(provenance.Source(keep.Outside))
+	t.subjects = keep.Subjects
 	decision, screen := resultOf(r, t.boundary, t.readAnswer), ""
 	if fresh {
 		screen = screenNow(t.boundary, page)

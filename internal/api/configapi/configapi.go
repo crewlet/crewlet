@@ -545,6 +545,10 @@ func (s *Service) getActive(w http.ResponseWriter, r *http.Request) {
 		if serveConditional(w, r, revision) {
 			return
 		}
+		if section := r.URL.Query().Get("section"); section != "" {
+			s.writeSection(w, r, company, section)
+			return
+		}
 		s.writeDocument(w, r, company)
 	}
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/issuereport"
 	"github.com/crewlet/crewlet/internal/learning/memread"
+	"github.com/crewlet/crewlet/internal/research"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -117,6 +118,8 @@ func everySeam(t *testing.T) queries.Sources {
 		Channels: fakeChannels{},
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
+		Research: noResearch{},
+		Searcher: noResearch{},
 		// EACH NODE'S STATUS RECORD, counted against Coord's presence.
 		NodeStatuses: coordmemory.NewFleet(),
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
@@ -524,7 +527,12 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // its band, catalogue and timeline then deleted those of the atlas's own log,
 // `atlas_log` and `atlas_activity`.
 var readOutsideTheDashboard = map[string]string{
+	"research_page":     "Ask Crewlet's fetch_web_page, over GET /research/page (ADR-0151)",
+	"research_search":   "Ask Crewlet's search_web, over GET /research/search (ADR-0151)",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
+	// A FILE FOUND BY ITS NAME, read over REST on the path the reference
+	// prints until a finder reads it: its line goes when one does.
+	"code_find": "a script: GET /gitlet/repos/{name}/find, as docs/reference/api-endpoints.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with Gitlet's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and
@@ -532,6 +540,13 @@ var readOutsideTheDashboard = map[string]string{
 	// prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
+	// A HISTORY PAGE'S MARKS, answered ahead of the rooms that draw them: until
+	// the first reads it, a script reads the reference's path.
+	"code_commit_marks": "a script: GET /gitlet/repos/{name}/commit-marks, as docs/reference/api-endpoints.md " +
+		"prints it",
+	// MANY TIPS AT ONCE, answered ahead of the Branches and Tags screens that
+	// draw them: until the first reads it, a script reads the reference's path.
+	"code_tips": "a script: GET /gitlet/repos/{name}/tips, as docs/reference/api-endpoints.md prints it",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.
@@ -801,4 +816,15 @@ func (emptyVerdicts) Verdicts(context.Context, accessdomain.VerdictQuery, statel
 
 func (emptyVerdicts) OpenVerdict(accessdomain.VerdictRow) (string, string, []string, error) {
 	return "", "", nil, nil
+}
+
+// noResearch reads no page, for the sweep that only needs the seat filled.
+type noResearch struct{}
+
+func (noResearch) Read(context.Context, []string, string, int) (research.Page, error) {
+	return research.Page{}, nil
+}
+
+func (noResearch) ResearchSearch(context.Context, string) (research.Results, error) {
+	return research.Results{}, nil
 }

@@ -3554,6 +3554,8 @@ page:                             # optional: the page chip, as the dashboard se
   title: Spend
   source_revision: spend@1
 question: Who spent the most tokens this week?
+research: [docs.example.com]      # optional: hosts listed for web research (fetch_web_page)
+search: true                      # optional: a search server too (search_web); needs research
 mode: ask                         # ask (default) or brief, which needs the page
 answers:                          # what each request Ask Crewlet sends answers
   - route: GET /tokens/breakdown  # a route pattern, {name} matching one segment
@@ -3571,6 +3573,7 @@ expect:
   says: [ada]                     # text the answer contains, ignoring case
   never_says: ["http"]            # text it must not contain, ignoring case
   shows: [Spend by agent]         # text the turn's cards carry, ignoring case
+  never_shows: [Budgets]          # text no card of the turn carries, ignoring case
   brief:                          # a brief turn's card (mode: brief only)
     needs: [ENG-42, qa]           # the records its rows cite, in order; [] is "Nothing needs you"
     tones: [warning, danger]      # optional: each row's tone, in the same order
@@ -3596,7 +3599,8 @@ asks the person to confirm it is them before it is approved (approving an
 agent's grant request does), failing a turn that ends with none. `shows` reads the cards the turn drew (a table's title and cells, a
 proposal's rows and note), so a case can hold what the person was shown, not
 only what the answer said: the place a page is proposed in, or the reason a
-read card gives. A `mode: brief` case runs a brief turn (the drawer's "Brief me
+read card gives; `never_shows` holds what no card may carry, such as an option
+row on an answer given in the person's own words. A `mode: brief` case runs a brief turn (the drawer's "Brief me
 on this page"), whose script ends with an `answer_brief` call; `brief` holds the
 card the engine drew from it, after the engine dropped every row whose record
 the turn did not read or the person may not open, and drew a danger tone only

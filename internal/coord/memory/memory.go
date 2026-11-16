@@ -197,6 +197,11 @@ func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.Ac
 	if err := validateTTL(resource, opts.Owner, opts.TTL); err != nil {
 		return nil, "", err
 	}
+	// THE STORE'S BOUND ON A META, refused before anything is decided, as
+	// the KV backend refuses it before anything is sent.
+	if err := coord.HoldLeaseMeta(resource, opts.Meta); err != nil {
+		return nil, "", err
+	}
 	// Meta crosses a wire on every real backend, so it crosses one here.
 	// See wireCopy: an in-process shortcut past this is a divergence the
 	// twin would certify rather than catch.

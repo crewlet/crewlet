@@ -33,6 +33,7 @@ import { RepositoryPage } from "./RepositoryPage.tsx";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -441,6 +442,18 @@ test("the code tab is the root's files, its latest commit and its README, at one
   expect(screen.getByRole("table", { name: "Files" })).toBeTruthy();
 });
 
+// The About rail's sentence says its time in words; the latest commit's chip keeps the short form.
+test("the About rail says when the repository was pushed in words, the latest commit in short", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  stubEngine();
+  mount("#/gitlet/repos/web");
+  expect(await screen.findByText("Pushed yesterday")).toBeTruthy();
+  await waitFor(() =>
+    expect(document.querySelector(".code-latest__when")?.textContent).toBe("6d ago"),
+  );
+});
+
 // A PATH IS ONE READ, AT THE ADDRESS'S REVISION: a directory under the root
 // is asked as a file and drawn as the listing it is, each entry opening its
 // own path at the same revision. Mutation: drop `ref` from the read, or link
@@ -562,6 +575,20 @@ test("the blame is read at the file's commit and heads each run of lines once", 
   );
   await waitFor(() => expect(reads(asked, "code_blame").length).toBeGreaterThan(0));
   expect(reads(asked, "code_blame")[0]?.searchParams.get("ref")).toBe(HEAD);
+});
+
+// The blame column is a cell, so its times keep the short form.
+test("the blame column says each run's time in the short form", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  stubEngine();
+  mount("#/gitlet/repos/web?path=src%2Fapp.go&lens=blame");
+  await screen.findByRole("table", { name: /Who last changed each line/ });
+  await waitFor(() =>
+    expect(
+      [...document.querySelectorAll(".code-blame__when")].map((t) => t.textContent).sort(),
+    ).toEqual(["7d ago", "8d ago"]),
+  );
 });
 
 /** Watch what is scrolled into view: jsdom lays nothing out, and has no scrollIntoView. */
@@ -722,6 +749,23 @@ test("the history is read at the revision and the path, with who pushed each com
   fireEvent.click(await screen.findByRole("button", { name: /load more/i }));
   expect(await within(grid).findByText("Older work")).toBeTruthy();
   expect(reads(asked, "code_log").some((u) => u.searchParams.get("cursor") === "c1")).toBe(true);
+});
+
+// A history row is a sentence: who authored the commit and when, in words.
+test("a history row says when its commit was authored in words", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  stubEngine();
+  mount("#/gitlet/repos/web?tab=commits");
+  const grid = await screen.findByRole("table", { name: /History of/ });
+  await waitFor(() =>
+    expect(
+      within(grid)
+        .getByText("Start the storefront")
+        .closest(".code-log-row")
+        ?.querySelector(".code-log-row__by time")?.textContent,
+    ).toBe("6 days ago"),
+  );
 });
 
 // A DECLARED REPOSITORY'S SETTINGS ARE SHOWN, NEVER EDITED: the rules and
