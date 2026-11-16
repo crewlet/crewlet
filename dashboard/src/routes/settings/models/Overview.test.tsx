@@ -239,11 +239,12 @@ test("a member reads the list without a credential, a cost or an action", () => 
   expect(document.body.textContent).not.toContain("ANTHROPIC_API_KEY");
 });
 
-test("with no model, the list says so and offers to add one", () => {
+test("with no model, the list says so and the page's one Add model adds one", () => {
   const onFlow = mount(modelsData({ entries: [] }));
   expect(screen.getByText("No model yet")).toBeDefined();
   const buttons = screen.getAllByRole("button", { name: "Add model" });
-  fireEvent.click(buttons[buttons.length - 1]!);
+  expect(buttons).toHaveLength(1);
+  fireEvent.click(buttons[0]!);
   expect(onFlow).toHaveBeenCalledWith("add");
 });
 
