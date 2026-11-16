@@ -1824,6 +1824,17 @@ func (c *Coordinator) takeOver(ctx context.Context, spooled *spooledCapture) boo
 // WALKED AWAY FROM, a takeover the store had made left its place begun under a
 // lease that still holds, with no keep behind it: the turn's end waited out a
 // capture's whole budget for it, and named it begun and never finished.
+//
+// THE READ OF THE ROW IS HELD TO ONE CHANGE OF IT: a record's budget and this
+// node's crossing of the row at its bound ([Coordinator.rowContext]), as each
+// stamp of the takeover is. It is a step of the takeover's life, between its
+// instant and the stamp of what came of it, which every reader of a begun
+// capture holds to a bound; and the store's contract promises no bound to a
+// caller that sets none, while the keep's own context has no deadline before
+// its budget starts, after this read. Held to that context alone, a store that
+// never answered the read held the standby's place begun, and the keep behind
+// it, for as long as it did not. A read so cut is a row unread: the standby
+// keeps nothing, as where the read failed.
 func (c *Coordinator) tookOver(ctx context.Context, run PendingRun, standby, over SessionCapture, cause error) bool {
 	why := "the next place could not be taken on the run's record: " + cause.Error()
 	if c.settleStamp(ctx, time.Time{}, run.TurnID, standby, c.pending.StandDown) {
@@ -1831,7 +1842,9 @@ func (c *Coordinator) tookOver(ctx context.Context, run PendingRun, standby, ove
 			"launch_seq", standby.LaunchSeq, "capture_seq", standby.CaptureSeq, "detail", stampReason(why))
 		return false
 	}
-	current, found, err := c.pending.Get(ctx, run.TurnID)
+	read, cancel := c.rowContext(ctx, c.recordBudget)
+	current, found, err := c.pending.Get(read, run.TurnID)
+	cancel()
 	if err == nil && found && current.Capture != nil && current.Capture.sameTake(over) &&
 		current.Capture.State == CaptureBegun {
 		return true
