@@ -365,6 +365,15 @@ version.
 - **Bounded.** Each node takes at most 30 comment writes a minute from one
   person or agent on one artifact, and 120 on one artifact, refusing the rest
   with when to try again.
+- **An agent answers on the artifact.** A comment wakes the agent with the
+  thread in its prompt: who wrote it, on which artifact and version, where
+  (the thread's label) and the quoted text, each fenced as somebody else's
+  words. The agent reads the thread with `list_artifact_comments`, publishes a
+  new version with `publish_artifact` on the current head, answers with
+  `comment_on_artifact` and resolves the thread with
+  `resolve_artifact_comment` citing the version that addressed it. A comment
+  and a resolve count as answering the person who woke it. A burst of comments
+  on one artifact is one turn.
 
 ---
 
@@ -700,6 +709,10 @@ for the authority verb it asks:
 | `upload_artifact_asset` | Adds an asset, when the head declares `assets` |
 | `create_artifact_folder` | Creates a folder, or a chain of them, inside a folder that exists |
 | `move_artifact` | Files up to 25 artifacts in a folder, or takes them to the top level, each decided on its own |
+| `list_artifact_comments` | Reads the comment threads, each placed on the current version with its label, quote and the element's source |
+| `comment_on_artifact` | Opens a thread, on the whole version or an anchor, or replies in one; states `asks` |
+| `resolve_artifact_comment` | Resolves a thread citing the version that addressed it, or reopens one |
+| `edit_artifact_comment`, `remove_artifact_comment` | Edits or removes the seat's own remark |
 | `read_artifact_data`, `query_artifact_data` | Reads a store's documents |
 | `write_artifact_data` | Writes a batch of ops |
 | `set_artifact_schema` | Declares collections and columns |

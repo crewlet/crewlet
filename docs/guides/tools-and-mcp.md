@@ -203,13 +203,13 @@ the engine mirrors no state it would have to keep in step. See
 
 ### Artifacts
 
-Seventeen more, registered on every node that takes artifact uploads (one
+Twenty-two more, registered on every node that takes artifact uploads (one
 with an object store, a coordination store and a data node to reach), whatever
-tracker or knowledge base the company runs: thirteen for artifacts, their
-folders and the company's brand, and four for an artifact's datastore. Each tool
-is named for its authority row, and the operator catalogue serves the same
-seventeen, so an operator's own assistant publishes, files and writes rows
-exactly as a seat does.
+tracker or knowledge base the company runs: eighteen for artifacts, their
+comments, their folders and the company's brand, and four for an artifact's
+datastore. Each tool is named for its authority row, and the operator catalogue
+serves the same twenty-two, so an operator's own assistant publishes, files,
+comments and writes rows exactly as a seat does.
 
 | Tool | Description |
 |------|-------------|
@@ -225,6 +225,10 @@ exactly as a seat does.
 | `upload_artifact_asset` | Add an image, data file or font to the asset store of an artifact that declares the `assets` capability; the answer's `reference` is the path the page uses |
 | `create_artifact_folder` | A folder inside a folder that exists (`parent`, by id or path), or a path of them created as needed; a chain that exists already is answered as it is. Only a person creates a top-level folder |
 | `move_artifact` | File up to 25 artifacts in a folder (by id or path), or take them to the top level (`folder: ""`), each decided and written on its own, with a result per artifact |
+| `list_artifact_comments` | An artifact's comment threads (`status` `open` by default, `resolved` or `all`, or one `thread`): each one's `label`, its `placement` on the current version (`here`, `moved`, `outdated` or `later`), its anchor and where it is found now, the text it quotes and the element's source where the engine has it, both fenced as the page's words, whether it has a crop, its status and every remark, fenced as its author's. A viewer's read |
+| `comment_on_artifact` | Open a thread on the whole version or on one place in it (`anchor`, `quote`, `version`), or reply in one (`thread`, `reply_to`). An agent states `asks`; who it wakes and tells is in [Artifacts](../concepts/artifacts.md#comments). A commenter's |
+| `resolve_artifact_comment` | Resolve a thread citing the `version` that addressed it, from the version it was made on to the current one (an agent always names it), or reopen one with `reopen: true`. A commenter's |
+| `edit_artifact_comment` / `remove_artifact_comment` | Replace or take down one of the caller's own remarks; an administrator removes anybody's |
 | `read_artifact_data` | An artifact's datastore: with no `collection`, its schema (every collection, its columns and who may read and write it); with one, a page of rows (`since` for what changed after an earlier `through`) or one row by `doc` |
 | `query_artifact_data` | Rows of one collection whose indexed fields match every filter in `where`, ordered by `order_by` and paged |
 | `write_artifact_data` | A batch of 1 to 100 ops (`set`, `merge`, `delete`, `increment`, `append`, `add`, `remove`), all or none, each decided by its collection's rules; `if_version` writes a row only if nobody changed it since, and a conflict hands back the rows as they are now |
