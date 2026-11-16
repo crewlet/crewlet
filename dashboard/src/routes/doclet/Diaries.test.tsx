@@ -164,8 +164,9 @@ test("a holder that did not answer is named, and its agent draws no zeros", asyn
   });
   await settle();
   const callout = screen
-    .getByText(/Diaries is missing 1 node\. Its agents are listed without counts:/)
+    .getByText("Diaries is missing 1 node")
     .closest(".coverage-note") as HTMLElement;
+  expect(callout.textContent).toContain("Its agents are listed without counts.");
   expect(within(callout).getByText("node-c")).toBeTruthy();
   expect(callout.textContent).toContain("node-c: no answer within the 2s read budget");
   const silent = rowOf("Agent 01");

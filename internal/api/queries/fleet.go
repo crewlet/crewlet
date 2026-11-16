@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The fleet, read from the LEASE TABLE rather than from a fan-out of /health
@@ -196,9 +197,13 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			if live.AlarmsEvaluated {
 				marks := make([]map[string]any, 0, len(live.Alarms))
 				for _, m := range live.Alarms {
-					marks = append(marks, map[string]any{
-						"kind": m.Kind, "since": isoOrEmpty(m.Since),
-					})
+					mark := map[string]any{"kind": m.Kind, "since": isoOrEmpty(m.Since)}
+					// THIS BUILD'S WORDS for the kind, absent for one it does
+					// not raise: a newer node's, partway through a roll.
+					if title, person, ok := statelog.PersonWords(statelog.Kind(m.Kind)); ok {
+						mark["title"], mark["person"] = title, person
+					}
+					marks = append(marks, mark)
 				}
 				row["alarms"] = marks
 			}

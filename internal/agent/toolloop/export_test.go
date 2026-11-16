@@ -3,6 +3,7 @@ package toolloop
 import (
 	"runtime"
 
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -48,6 +49,8 @@ type RecordedCall struct {
 	Seq    int
 	Name   string
 	Result ToolResult
+	// Images is what the record keeps of the answer's images.
+	Images []mcp.ImageRecord
 }
 
 // Recorded is the record the dispatcher serving host keeps of every call it
@@ -62,7 +65,7 @@ func Recorded(host llm.ToolHost) []RecordedCall {
 	var out []RecordedCall
 	for _, c := range d.calls {
 		if c.settled {
-			out = append(out, RecordedCall{Seq: c.seq, Name: c.recorded(), Result: c.result})
+			out = append(out, RecordedCall{Seq: c.seq, Name: c.recorded(), Result: c.result, Images: c.images})
 		}
 	}
 	return out

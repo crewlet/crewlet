@@ -294,6 +294,7 @@ var contract = []Entry{
 	{"DEFAULT_HARNESS_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"MODEL_KEY_PATTERN", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"HARNESS_PRODUCTS", ReadLiteral, "internal/config.TestEveryBuiltInHarnessHasAProductName"},
+	{"HARNESS_FACTS", ReadLiteral, "internal/config.TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads"},
 	{"ModelJob", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"RunnerCellName", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"SEAT_JOB_FIELDS", ReadLiteral, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
@@ -549,6 +550,7 @@ var contract = []Entry{
 	// signin.ts
 	{"SignInPolicyAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 	{"SignInPolicy", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
+	{"SignInLimits", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 	{"SecondFactorRule", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 
 	// health.ts
@@ -592,6 +594,7 @@ var contract = []Entry{
 	{"AssistantProposalState", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantProposalScope", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantProposalRisk", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
+	{"AssistantTaintSource", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantChangeKind", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantWordOp", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantColumnType", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
@@ -657,6 +660,7 @@ var contract = []Entry{
 	{"AssistantColumn", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantExports", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantLink", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
+	{"AssistantOutside", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantEntityCard", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantFact", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantEntityItem", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
@@ -772,6 +776,10 @@ var contract = []Entry{
 	{"ARTIFACT_LIST_MAX", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 
 	// artifactsworkspace.ts: what only the artifacts workspace reads
+	{"ARTIFACT_COMMENT_QUOTE_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"ARTIFACT_COMMENT_CROP_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"ARTIFACT_COMMENT_CROP_MAX_SIDE", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
+	{"ARTIFACT_COMMENT_ANCHOR_NAME", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_KIND_SPECS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardDrawsEachKindAsTheKindTableSays"},
 	{"SLIDE_ELEMENTS", ReadLiteral, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
 	{"SLIDE_STYLE_PROPERTIES", ReadLiteral, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
@@ -1015,6 +1023,11 @@ var contract = []Entry{
 		"internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
 	{"DelegatedGiver", ReadUnion, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
 	{"DelegatedPath", ReadUnion, "internal/api/queries.TestTheDelegatedDecisionsScreenReadsWhatTheAnswerSends"},
+	{"DelegatedRepositoriesAnswer", ReadInterface,
+		"internal/api/queries.TestTheRuleFormReadsWhatItsGitHubAnswersSend"},
+	{"DelegatedRepository", ReadInterface, "internal/api/queries.TestTheRuleFormReadsWhatItsGitHubAnswersSend"},
+	{"DelegatedBranchesAnswer", ReadInterface, "internal/api/queries.TestTheRuleFormReadsWhatItsGitHubAnswersSend"},
+	{"DelegatedChecksAnswer", ReadInterface, "internal/api/queries.TestTheRuleFormReadsWhatItsGitHubAnswersSend"},
 	{"HeldDelegation", ReadInterface, "internal/api/queries.TestAHeldCallsCardReadsWhatItsDelegationSends"},
 	{"HeldDelegateAnswer", ReadInterface, "internal/api/queries.TestAHeldCallsCardReadsWhatItsDelegationSends"},
 	{"HeldEscalation", ReadInterface, "internal/api/queries.TestAHeldCallsCardReadsWhatItsDelegationSends"},

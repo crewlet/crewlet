@@ -53,3 +53,30 @@ func TestAnImmutableAnswersTagIsItsOwnBytesDigest(t *testing.T) {
 			rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
 	}
 }
+
+// IF-NONE-MATCH IS PARSED, never split: a weak tag names its strong twin, `*`
+// names any, a comma inside a tag is the tag's, and a header that is no list
+// of tags names nothing.
+//
+// Mutation: split the header on commas, and the tag holding one never matches.
+func TestNoneMatchReadsEntityTags(t *testing.T) {
+	t.Parallel()
+	const tag = `"a,b"`
+	for header, want := range map[string]bool{
+		`"a,b"`:          true,
+		`W/"a,b"`:        true,
+		`*`:              true,
+		` "x", W/"a,b"`:  true,
+		`"x"`:            false,
+		`"a"`:            false,
+		`a,b`:            false,
+		`"a,b`:           false,
+		``:               false,
+		`"x", garbage`:   false,
+		`garbage, "a,b"`: false,
+	} {
+		if got := httpjson.NoneMatch(header, tag); got != want {
+			t.Errorf("NoneMatch(%q, %s) = %v, want %v", header, tag, got, want)
+		}
+	}
+}

@@ -13,6 +13,7 @@ import { fmtDate } from "~/lib/format.ts";
 import { CATEGORY_ORDER, type JobCategory } from "~/lib/modelUses.ts";
 import type { ModelView } from "./data.ts";
 import { HEALTH, ROUTE, WINDOW } from "./words.ts";
+import { AgoTime } from "~/components/AgoTime.tsx";
 
 /** The flows the page opens, by the `flow` parameter. `edit` is the model wizard, opened at a step. */
 export type Flow = "add" | "remove" | "test" | "retry" | "device" | "edit";
@@ -174,7 +175,7 @@ export function HealthLine({ model, compact = false }: { model: ModelView; compa
     detail = (
       <>
         {compact ? "back " : `${WINDOW[entry.sitting_out.window]}, back `}
-        <RelativeTime value={entry.sitting_out.until} />
+        <AgoTime value={entry.sitting_out.until} />
       </>
     );
   } else if (entry.health === "expiring" && model.admin?.sign_in.expires_at) {
@@ -184,7 +185,7 @@ export function HealthLine({ model, compact = false }: { model: ModelView; compa
   } else if (entry.health === "ready" && entry.last_success && !compact) {
     detail = (
       <>
-        answered <RelativeTime value={entry.last_success} />
+        answered <AgoTime value={entry.last_success} />
       </>
     );
   }

@@ -136,7 +136,7 @@ func auxiliaryFix(c *config.Company, p place, w config.Warning) Fix {
 			continue
 		}
 		fix.Options = append(fix.Options, Option{
-			Label: fmt.Sprintf("Learn on %s", modelName(c, key)),
+			Label: fmt.Sprintf("Learn on %s", c.ModelName(key)),
 			Change: Change{Entity: EntityRoles, ID: handle,
 				Set:     map[string]any{"llm_auxiliary": org.ProviderKeys{key}},
 				Summary: fmt.Sprintf("Run %s's learning on providers.llm.%s", handle, key)},

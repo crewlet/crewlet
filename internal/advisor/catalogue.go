@@ -1,9 +1,7 @@
 package advisor
 
 import (
-	"fmt"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
@@ -26,8 +24,8 @@ type entry struct {
 var catalogue = map[Class]entry{
 	ClassHealthUnheld: {
 		severity: SeverityCosts, area: AreaAccess, company: true,
-		words: func(*config.Company, place, config.Warning) (string, string) {
-			return "No agent watches the engine's own alarms.",
+		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
+			return sentence(w.Title),
 				"An alarm that fires on a server wakes the agents allowed to read the " +
 					"engine's health, and none is, so it reaches nobody until a person " +
 					"opens the dashboard."
@@ -36,57 +34,65 @@ var catalogue = map[Class]entry{
 	},
 	ClassAuxiliaryModel: {
 		severity: SeverityNote, area: AreaLearning,
-		words: func(c *config.Company, p place, _ config.Warning) (string, string) {
-			name, model := p.role.Name, executorModel(c, p.role)
-			return fmt.Sprintf("%s learns on the model it works on.", name),
-				fmt.Sprintf("Reflection, summaries and memory run after %s's turns on %s, "+
-					"the model its own work runs on, so learning costs a share of its "+
-					"spend at that model's price.", name, model)
+		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
+			return sentence(w.Title),
+				"Reflection, summaries and memory run after the agent's turns on the model its " +
+					"own work runs on, so learning costs a share of its spend at that model's price."
 		},
 		fix: auxiliaryFix,
 	},
 	ClassScheduleFrequent: {
 		severity: SeverityNote, area: AreaSchedules,
-		words: func(_ *config.Company, p place, _ config.Warning) (string, string) {
-			s, _ := p.theSchedule()
-			fires, _ := config.ScheduleFiresPerDay(s)
-			window := float64(fires) * float64(PlanWindow) / float64(24*time.Hour)
-			return fmt.Sprintf("%s runs %d times a day.", s.Name, fires),
-				fmt.Sprintf("Each run starts a turn on the agent's models whether or not "+
-					"anything changed: about %s turns in every five-hour plan window. A check "+
-					"that waits for something to happen, such as a deploy or a merge, is "+
-					"better as a work item dated for when to look.", oneDecimal(window))
+		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
+			return sentence(w.Title),
+				"Each run starts a turn on the agent's models whether or not anything changed. " +
+					"A check that waits for something to happen, such as a deploy or a merge, is " +
+					"better as a work item dated for when to look."
 		},
 		fix: scheduleFix,
 	},
 	ClassDirectBox: {
 		severity: SeverityNote, area: AreaSetup,
 		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
-			return "Agents run directly on the engine's own server.", w.Person
+			return sentence(w.Title), w.Person
 		},
 		fix: settingFix,
 	},
 	ClassConfigAdvisory: {
 		severity: SeverityNote, area: AreaSetup,
 		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
-			return "A setting worth checking.", sentence(w.Message)
+			return ownWords("A setting worth checking.", w)
 		},
 		fix: settingFix,
 	},
 	ClassConfigReference: {
 		severity: SeverityCosts, area: AreaSetup,
 		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
-			return "A setting names something that does not exist.", sentence(w.Message)
+			return ownWords("A setting names something that does not exist.", w)
 		},
 		fix: settingFix,
 	},
 	ClassConfigAdmission: {
 		severity: SeverityCosts, area: AreaSetup,
 		words: func(_ *config.Company, _ place, w config.Warning) (string, string) {
-			return "A setting breaks a rule a new change would be refused for.", sentence(w.Message)
+			return ownWords("A setting breaks a rule a new change would be refused for.", w)
 		},
 		fix: settingFix,
 	},
+}
+
+// ownWords is an unclassed warning's title and why: its rule's title and
+// person words where it carries them ([config.Warning.Person]), else title and
+// the operator's sentence.
+func ownWords(title string, w config.Warning) (string, string) {
+	why := sentence(w.Message)
+	if w.Person != "" {
+		why = w.Person
+	}
+	if w.Title != "" {
+		title = sentence(w.Title)
+	}
+	return title, why
 }
 
 // sentence is a warning's message as a sentence: capitalised and stopped.
@@ -105,18 +111,9 @@ func sentence(message string) string {
 // executorModel is the model a seat's executor runs on, as a person reads it.
 func executorModel(c *config.Company, r *config.Role) string {
 	if key := executorEntry(c, r); key != "" {
-		return modelName(c, key)
+		return c.ModelName(key)
 	}
 	return "its executor's model"
-}
-
-// modelName is a providers.llm entry as a person reads it: its model, or its
-// key where it names none.
-func modelName(c *config.Company, key string) string {
-	if m := c.Providers.LLM[key].Model; m != "" {
-		return m
-	}
-	return key
 }
 
 // agentSeats is every agent seat, in the chart's order.

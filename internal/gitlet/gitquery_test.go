@@ -90,7 +90,7 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 			Compare: &gitlet.CompareQuery{Base: id, Head: "HEAD"}}, "compare.head", gitlet.ErrInvalid},
 		{"a cursor longer than any", func() gitlet.GitQuery {
 			q := tree(func(*gitlet.TreeQuery) {})
-			q.Cursor = strings.Repeat("9", 65)
+			q.Cursor = strings.Repeat("9", 385)
 			return q
 		}(), "cursor", gitlet.ErrBadCursor},
 		// ONLY A SEAT READS FOR ANOTHER SEAT, named by its handle: a person's
@@ -147,11 +147,15 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 // clean path or none (every commit), a literal of at most MaxLogGrepBytes that
 // is UTF-8 holding no NUL, a page of up to MaxLogLimit commits (none the
 // default), and a Since no earlier than the first instant a commit's date can
-// name and no later than a day past the node's clock — a year typed wrong is
-// told so rather than answered an empty history. A blame names a commit, a
-// file (never the root), and a range of at most MaxBlameLines lines counted
-// from 1, its end at or after its start; a start with no end is a range all
-// the same, however far out. Each refusal names its field.
+// name and no later than a day past the node's clock (a year typed wrong is
+// told so rather than answered an empty history). An Until is after the epoch,
+// after a Since and no later than a day ahead, and a PushedBy is a seat's
+// handle, whether a Since is set or not. A blame names a commit, a file (never
+// the root), and a range of at most MaxBlameLines lines counted from 1, its end
+// at or after its start; a start with no end is a range all the same, however
+// far out. Each refusal names its field.
+//
+// Mutation: the Until and PushedBy arms inside the Since switch → accepted with no since, red.
 func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
 	t.Parallel()
 	const id = "0123456789abcdef0123456789abcdef01234567"
@@ -182,6 +186,12 @@ func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
 		{"the most commits", history(func(q *gitlet.LogQuery) { q.Limit = gitlet.MaxLogLimit }), ""},
 		{"since the epoch", history(func(q *gitlet.LogQuery) { q.Since = time.Unix(0, 0) }), ""},
 		{"since later today", history(func(q *gitlet.LogQuery) { q.Since = time.Now().Add(12 * time.Hour) }), ""},
+		{"until a second after the epoch", history(func(q *gitlet.LogQuery) { q.Until = time.Unix(1, 0) }), ""},
+		{"until later today", history(func(q *gitlet.LogQuery) { q.Until = time.Now().Add(12 * time.Hour) }), ""},
+		{"a window", history(func(q *gitlet.LogQuery) {
+			q.Since, q.Until = time.Unix(1_700_000_000, 0), time.Unix(1_700_000_000, 1)
+		}), ""},
+		{"a seat's handle", history(func(q *gitlet.LogQuery) { q.PushedBy = "ceo" }), ""},
 		{"a ref", history(func(q *gitlet.LogQuery) { q.Rev = "main" }), "log.rev"},
 		{"a path up", history(func(q *gitlet.LogQuery) { q.Path = "../a" }), "log.path"},
 		{"a literal past its bound", history(func(q *gitlet.LogQuery) {
@@ -194,6 +204,21 @@ func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
 		{"since before 1970", history(func(q *gitlet.LogQuery) { q.Since = time.Unix(-1, 0) }), "log.since"},
 		{"since a year not yet", history(func(q *gitlet.LogQuery) { q.Since = time.Now().AddDate(1, 0, 0) }),
 			"log.since"},
+		{"until at the epoch", history(func(q *gitlet.LogQuery) { q.Until = time.Unix(0, 0) }), "log.until"},
+		{"until before 1970", history(func(q *gitlet.LogQuery) { q.Until = time.Unix(-1, 0) }), "log.until"},
+		{"until a year not yet", history(func(q *gitlet.LogQuery) { q.Until = time.Now().AddDate(1, 0, 0) }),
+			"log.until"},
+		{"until at since", history(func(q *gitlet.LogQuery) {
+			q.Since, q.Until = time.Unix(1_700_000_000, 0), time.Unix(1_700_000_000, 0)
+		}), "log.until"},
+		{"until before since", history(func(q *gitlet.LogQuery) {
+			q.Since, q.Until = time.Unix(1_700_000_000, 0), time.Unix(1_600_000_000, 0)
+		}), "log.until"},
+		{"a pushed_by that is no handle", history(func(q *gitlet.LogQuery) { q.PushedBy = "Not A Seat" }),
+			"log.pushed_by"},
+		{"a pushed_by that is no handle, beside a since", history(func(q *gitlet.LogQuery) {
+			q.Since, q.PushedBy = time.Unix(1_700_000_000, 0), "Not A Seat"
+		}), "log.pushed_by"},
 		{"a blame beside it", func() gitlet.GitQuery {
 			q := history(func(*gitlet.LogQuery) {})
 			q.Blame = &gitlet.BlameQuery{Rev: id, Path: "a"}

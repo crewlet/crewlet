@@ -21,7 +21,8 @@ var ErrPartialLine = errors.New("gitproc: git's output ended inside a line")
 var ErrLineTooLong = errors.New("gitproc: git wrote a line longer than gitproc.MaxLine")
 
 // Lines is a Cmd.Stdout that hands each complete line, without its "\n", to fn
-// as it arrives.
+// as it arrives; or, made by [NewRecords], each NUL-terminated record, as git's
+// -z and -Z write them.
 //
 // It is the shape for every output that grows with a push or a repository —
 // cat-file --batch-check over a want list, show-index of a push's pack,
@@ -33,6 +34,7 @@ var ErrLineTooLong = errors.New("gitproc: git wrote a line longer than gitproc.M
 // wrapping fn's error — the early stop a scan wants at its first offender,
 // rather than reading a gigabyte of output to the end to report one line.
 type Lines struct {
+	sep     byte
 	fn      func(line []byte) error
 	pending []byte
 	err     error
@@ -40,7 +42,13 @@ type Lines struct {
 
 // NewLines is a Lines handing each line to fn.
 func NewLines(fn func(line []byte) error) *Lines {
-	return &Lines{fn: fn}
+	return &Lines{sep: '\n', fn: fn}
+}
+
+// NewRecords is a Lines handing fn each record git ends with a NUL (-z, -Z),
+// under every rule of [NewLines]: [MaxLine], [ErrLineTooLong], [ErrPartialLine].
+func NewRecords(fn func(rec []byte) error) *Lines {
+	return &Lines{sep: 0, fn: fn}
 }
 
 // Write splits p into lines, carrying a partial one into the next Write.
@@ -50,7 +58,7 @@ func (l *Lines) Write(p []byte) (int, error) {
 	}
 	n := len(p)
 	for len(p) > 0 {
-		i := bytes.IndexByte(p, '\n')
+		i := bytes.IndexByte(p, l.sep)
 		if i < 0 {
 			if len(l.pending)+len(p) > MaxLine {
 				l.err = ErrLineTooLong
@@ -81,7 +89,7 @@ func (l *Lines) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// Close reports output that did not end in a newline ([ErrPartialLine]) or the
+// Close reports output that did not end in its separator ([ErrPartialLine]) or the
 // first error fn returned. Call it after Run.
 func (l *Lines) Close() error {
 	if l.err != nil {

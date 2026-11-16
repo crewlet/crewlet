@@ -136,7 +136,7 @@ func (e *estate) applyRows(b built) (int, error) {
 }
 
 // countersMatchRows holds every count code_repos keeps of a repository's refs
-// to a COUNT of the rows themselves.
+// and of its changes by state to a COUNT of the rows themselves.
 func (e *estate) countersMatchRows(id string) {
 	e.t.Helper()
 	for counter, count := range map[string]string{
@@ -149,6 +149,13 @@ func (e *estate) countersMatchRows(id string) {
 		rows := e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND `+count, id)
 		if kept != rows {
 			e.t.Errorf("%s counts %d %s and its refs hold %d", id, kept, counter, rows)
+		}
+	}
+	for i, state := range []ChangeState{ChangeStateDraft, ChangeStateOpen, ChangeStateClosed, ChangeStateMerged} {
+		kept := e.changeCountsOf(id)[i]
+		rows := e.num(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ? AND state = ?`, id, string(state))
+		if kept != rows {
+			e.t.Errorf("%s counts %d %s changes and its changes hold %d", id, kept, state, rows)
 		}
 	}
 }
@@ -964,6 +971,7 @@ func TestAPurgePartIsBoundedByWhatItsChangesWeigh(t *testing.T) {
 			}
 			e.seedWeighedChanges("repo-a", seeded, width)
 			e.apply(partOf(t, "repo-a", 1))
+			e.changeCountsMatchRows()
 			if left := e.num(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = 'repo-a'`); left != 0 {
 				t.Fatalf("the part left %d of its %d pushes, which fit its bytes and go first", left, tc.pushes)
 			}

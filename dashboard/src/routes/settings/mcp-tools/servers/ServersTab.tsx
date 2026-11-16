@@ -21,15 +21,7 @@ import {
   Tooltip,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import {
-  ActivityGlyph,
-  PencilGlyph,
-  PlusGlyph,
-  ServerGlyph,
-  ShieldCheckGlyph,
-  TriangleAlertGlyph,
-  WrenchGlyph,
-} from "@crewlethq/icons/glyphs";
+import { PencilGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import type { McpMemberServerStatus } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href } from "~/app/router.tsx";
@@ -137,7 +129,6 @@ function ServersSummary({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
         <Card padding="none">
           <StatGroup columns={admin ? 4 : 3}>
             <StatCard
-              icon={<ServerGlyph size="xs" />}
               label="Servers"
               value={servers.length}
               sub={
@@ -147,7 +138,6 @@ function ServersSummary({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
               }
             />
             <StatCard
-              icon={<ActivityGlyph size="xs" />}
               label="Running"
               value={running}
               unit={`of ${enabled.length}`}
@@ -161,7 +151,6 @@ function ServersSummary({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
               subTone={notRunning > 0 ? "warning" : undefined}
             />
             <StatCard
-              icon={<WrenchGlyph size="xs" />}
               label="MCP tools"
               value={tools}
               sub={
@@ -177,13 +166,6 @@ function ServersSummary({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
               neither, so the figure is not theirs to read. */}
             {admin ? (
               <StatCard
-                icon={
-                  waiting + changed > 0 ? (
-                    <TriangleAlertGlyph size="xs" />
-                  ) : (
-                    <ShieldCheckGlyph size="xs" />
-                  )
-                }
                 label="Waiting on you"
                 value={waiting + changed}
                 sub={
@@ -219,15 +201,6 @@ function ServersTable({ data, onFlow }: { data: McpData; onFlow: OnFlow }) {
           ? "Add one from the catalogue, by its address, or as a local command."
           : "An admin adds the servers the agents use.",
         icon: "server",
-        ...(admin
-          ? {
-              action: (
-                <Button variant="primary" size="small" onClick={() => onFlow("add")}>
-                  Add server
-                </Button>
-              ),
-            }
-          : {}),
       }}
       columns={[
         {
@@ -328,9 +301,6 @@ export function ServersTab({ data, onFlow }: { data: McpData; onFlow: OnFlow }) 
     <div className="mcp-page">
       <ServersSummary data={data} onFlow={onFlow} />
       <Card padding="none">
-        <Card.Header icon={<ServerGlyph size="sm" />}>
-          <Card.Title>Servers</Card.Title>
-        </Card.Header>
         <ServersTable data={data} onFlow={onFlow} />
       </Card>
     </div>

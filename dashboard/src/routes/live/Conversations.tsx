@@ -348,9 +348,7 @@ export function ChannelPeek({ id }: { id: string }) {
       {loading && !data && <Skeleton variant="text" rows={5} label="Loading the channel" />}
       <QueryState error={error} refusal={refusal} loading={loading}>
         {data?.available === false && (
-          <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-            Can’t read channels from this node right now.
-          </Callout>
+          <Callout variant="neutral">Can’t read channels from this node right now.</Callout>
         )}
         {data?.available !== false && !channel && (
           <EmptyState
@@ -449,9 +447,7 @@ export function Conversations() {
 
       {channels.loading && <Skeleton variant="text" rows={4} label="Loading channels" />}
       {channels.data?.available === false ? (
-        <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-          Can’t read channels from this node right now.
-        </Callout>
+        <Callout variant="neutral">Can’t read channels from this node right now.</Callout>
       ) : (
         <QueryState
           error={channels.error}
@@ -599,9 +595,7 @@ export function ChannelScreen({ id }: { id: string }) {
             store", "the record holds no such channel" and "here it is" — and
             the second is guarded on a record that was actually read. */}
         {channels.data?.available === false && (
-          <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-            Can’t read channels from this node right now.
-          </Callout>
+          <Callout variant="neutral">Can’t read channels from this node right now.</Callout>
         )}
         {missing && !eventsCard && (
           <EmptyState
@@ -616,7 +610,7 @@ export function ChannelScreen({ id }: { id: string }) {
           />
         )}
         {missing && eventsCard && (
-          <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
+          <Callout variant="neutral">
             The channel is gone, but its messages are still in the log.
           </Callout>
         )}

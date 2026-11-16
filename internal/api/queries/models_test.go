@@ -78,7 +78,7 @@ func modelSources(t *testing.T, backend coord.Backend) queries.Sources {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return queries.Sources{Coord: backend, Company: companySource(t, cfg), NodeID: "node-a",
+	return queries.Sources{Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg), NodeID: "node-a",
 		Models: fakeModels{
 			local: []queries.LocalModel{
 				{Key: "default", Route: "token", Variable: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -121,20 +121,20 @@ func entryOf(t *testing.T, answer queries.ModelEntriesAnswer, key string) querie
 	return queries.ModelEntry{}
 }
 
-// A MODEL'S STATE IS THE FLEET'S HEARTBEATS, JOINED.
+// A MODEL'S STATE IS THE FLEET'S STATUS RECORDS, JOINED.
 //
-// Each node publishes what it knows of each model on its presence lease; the
+// Each node publishes what it knows of each model on its status record; the
 // answer is the join: the latest sit-out window and every node sitting it out,
 // the latest answer and the latest failure (named by its node), and the seats
-// parked on it, by handle. A node whose beat carried no report is a column of
-// its own, never a row of zeros.
-func TestModelStateIsTheFleetsHeartbeats(t *testing.T) {
+// parked on it, by handle. A node with no record counted is a column of its
+// own, never a row of zeros.
+func TestModelStateIsTheFleetsStatusRecords(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
 	s := modelSources(t, backend)
 	qa := agentIDOf(t, s, "qa")
 	soon, later := pinned.Add(time.Hour), pinned.Add(3*time.Hour)
-	presentNode(t, backend, "node-a", &coord.NodeStatus{Models: []coord.ModelStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Models: []coord.ModelStatus{
 		{Key: "default", Plan: "3f9a1c0e22b1", SignIn: "token", Resolves: true,
 			LastAnswer: pinned.Add(-time.Hour),
 			SittingOut: &coord.ModelSitOut{Until: soon, Since: pinned.Add(-time.Minute),
@@ -144,7 +144,7 @@ func TestModelStateIsTheFleetsHeartbeats(t *testing.T) {
 				Said: "Not logged in"},
 			HostLogin: &coord.HostLogin{State: coord.HostSignedOut, CheckedAt: pinned}},
 	}})
-	presentNode(t, backend, "node-b", &coord.NodeStatus{Models: []coord.ModelStatus{
+	presentNode(t, backend, "node-b", &coord.NodeStatusRecord{Models: []coord.ModelStatus{
 		{Key: "default", Plan: "3f9a1c0e22b1", SignIn: "token", Resolves: true,
 			LastAnswer: pinned.Add(-10 * time.Minute),
 			SittingOut: &coord.ModelSitOut{Until: later, Since: pinned.Add(-time.Minute),
@@ -203,7 +203,7 @@ func TestModelStateIsTheFleetsHeartbeats(t *testing.T) {
 func TestAStoredTokensExpiryIsComputedFromItsRow(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{Models: []coord.ModelStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Models: []coord.ModelStatus{
 		{Key: "default", SignIn: "token", Resolves: true, LastAnswer: pinned.Add(-time.Hour)},
 	}})
 	got := answer(t, modelSources(t, backend), "llm_entries", nil).(queries.ModelEntriesAnswer)
@@ -232,7 +232,7 @@ func TestAStoredTokensExpiryIsComputedFromItsRow(t *testing.T) {
 func TestAModelsUsersAreTheEnginesResolution(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{})
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{})
 	got := answer(t, modelSources(t, backend), "llm_entries", nil).(queries.ModelEntriesAnswer)
 
 	uses := func(key string) []string {
@@ -267,7 +267,7 @@ func TestAModelsUsersAreTheEnginesResolution(t *testing.T) {
 func TestAMemberReadsNoCredentialAccountOrSentence(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{Models: []coord.ModelStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Models: []coord.ModelStatus{
 		{Key: "default", Plan: "3f9a1c0e22b1", SignIn: "token", Resolves: true,
 			SittingOut: &coord.ModelSitOut{Until: pinned.Add(time.Hour), Window: "session",
 				Said: "You've hit your session limit"},
@@ -334,7 +334,7 @@ func TestAModelsHealthIsTheFirstThatHolds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			backend := coordmemory.New()
-			presentNode(t, backend, "node-a", &coord.NodeStatus{Models: []coord.ModelStatus{tc.row}})
+			presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Models: []coord.ModelStatus{tc.row}})
 			s := modelSources(t, backend)
 			// NO STORED TOKEN, so the expiry plays no part here.
 			s.Secrets = fakeSecretRows{}
@@ -350,7 +350,7 @@ func TestAModelsHealthIsTheFirstThatHolds(t *testing.T) {
 func TestRunnersAreEachNodesProbe(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{Runners: &coord.RunnerStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Runners: &coord.RunnerStatus{
 		Direct:    coord.RunnerCell{State: coord.RunnerReady, Detail: "Landlock", CheckedAt: pinned},
 		Container: coord.RunnerCell{State: coord.RunnerNotReady, Detail: "no docker", Fix: "Install Docker"},
 		E2B:       coord.RunnerCell{State: coord.RunnerUnconfigured},
@@ -402,7 +402,22 @@ func TestAModelStepIsOfferedTheCataloguesModels(t *testing.T) {
 
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	for _, params := range []map[string]any{{"harness": "gemini-cli"}, {"harness": "opencode"}, {}} {
+	// EVERY BUILT-IN HARNESS IS ANSWERED: its own page and aliases, a catalogue
+	// where one provider serves it, and Pi's provider's models in its grammar.
+	got = answer(t, s, "llm_models", map[string]any{"harness": "gemini-cli"}).(queries.ModelsAnswer)
+	if got.Provider != "google" || len(got.Models) != 1 {
+		t.Errorf("gemini-cli = %+v", got)
+	}
+	got = answer(t, s, "llm_models", map[string]any{"harness": "cursor-agent"}).(queries.ModelsAnswer)
+	if got.Source != "none" || got.Provider != "" || len(got.Models) != 0 || got.Reason == "" {
+		t.Errorf("cursor-agent = %+v, want no catalogue and a reason", got)
+	}
+	got = answer(t, s, "llm_models", map[string]any{"harness": "pi", "provider": "anthropic"}).(queries.ModelsAnswer)
+	if got.Models[0].ID != "anthropic/m-1" {
+		t.Errorf("pi's model id = %q, want <provider>/<id>", got.Models[0].ID)
+	}
+	for _, params := range []map[string]any{{"harness": "custom"}, {"harness": "nope"},
+		{"harness": "opencode"}, {"harness": "pi"}, {}} {
 		if _, err := r.Answer(everyGrant(t), "llm_models", params); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%v = %v, want bad params", params, err)
 		}

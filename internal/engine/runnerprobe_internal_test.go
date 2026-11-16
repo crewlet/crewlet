@@ -52,7 +52,7 @@ func TestEveryCellIsAnsweredAndOnlyADeclaredOneIsProbed(t *testing.T) {
 	}
 }
 
-// THE HEARTBEAT CARRIES THE LATEST PROBE, and an apply asks for a new one: a
+// THE STATUS RECORD CARRIES THE LATEST PROBE, and an apply asks for a new one: a
 // revision that declares a cell is answered for at once, not five minutes
 // later.
 //
@@ -63,7 +63,7 @@ func TestEveryCellIsAnsweredAndOnlyADeclaredOneIsProbed(t *testing.T) {
 //
 // Mutation: drop the store, or the kick's probe, and the beat carries no
 // answer or the boot probe's.
-func TestTheHeartbeatCarriesTheLatestProbeAndAnApplyProbesAgain(t *testing.T) {
+func TestTheStatusRecordCarriesTheLatestProbeAndAnApplyProbesAgain(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		e := &Engine{}
@@ -77,12 +77,12 @@ func TestTheHeartbeatCarriesTheLatestProbeAndAnApplyProbesAgain(t *testing.T) {
 		e.startRunnerProbe(t.Context())
 		t.Cleanup(e.stopRunnerProbe)
 		synctest.Wait()
-		if got := beatOf(t, e).Runners; got == nil || got.Direct.State != coord.RunnerUnconfigured {
+		if got := statusRecordOf(t, e).Runners; got == nil || got.Direct.State != coord.RunnerUnconfigured {
 			t.Fatalf("the beat carries %+v, want the boot probe's answer", got)
 		}
 		e.kickRunnerProbe()
 		synctest.Wait()
-		if got := beatOf(t, e).Runners; got == nil || got.Direct.State != coord.RunnerReady {
+		if got := statusRecordOf(t, e).Runners; got == nil || got.Direct.State != coord.RunnerReady {
 			t.Fatalf("the beat carries %+v after an apply's probe, want its answer", got)
 		}
 	})

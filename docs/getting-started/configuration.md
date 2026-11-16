@@ -423,31 +423,44 @@ providers:
 assistant:
   enabled: true                         # absent or false: off
   llm: [assistant]                      # providers.llm keys, a fallback chain
-  max_steps: 30                         # tool steps per turn, 1..40
+  max_steps: 30                         # model rounds per turn, 1..40
   turn_timeout_seconds: 900             # longest turn, 30..1200
   proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
   retention_days: 30                    # conversation history, 1..365
   token_budget: { day: 200000 }         # per person, optional
+  deliberate:                           # optional: a stronger model for hard questions
+    llm: [assistant-strong]             # held to llm's rules, same budgets
+    decision_briefs: true               # Brief me on this decision uses it too
+  tools:
+    deny: [chat_writes]                 # optional: tool families turned off for everybody
   deep_work:                            # optional: absent is quick mode only
     llm: assistant-deep                 # a Claude Code entry (harness: claude-code)
     timeout_seconds: 1200               # one run's wall clock, 60..1200
     max_steps: 150                      # rounds and Crewlet calls a task makes, 10..400
     max_tokens: 3000000                 # tokens a task may spend, 10000..20000000
+  research:                             # optional: absent reads no web page
+    hosts: [developers.cloudflare.com, docs.github.com]
+    search: { mcp_server: tavily }      # optional: an mcp_servers entry running tavily-mcp
 ```
 
 | Field | Default | Meaning |
 |---|---|---|
 | `enabled` | off | Runs Ask Crewlet. A pointer, so an absent key and `false` both mean off. |
 | `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
-| `max_steps` | 30 | The most tool steps one turn may take: enough to look a route up, read what it touches and propose the change. |
+| `max_steps` | 30 | The most model rounds one turn may take before its answer, each calling any number of tools: enough to look a route up, read what it touches and propose the change. |
 | `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a harness launch of fifteen to twenty-five seconds. |
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
+| `deliberate.llm` | none | A stronger chain for hard questions, first key first. A person asks for it one question at a time with **Think harder** in the drawer, which is offered only when this is set. Every member is held to `llm`'s rules below, and its rounds are charged to the same budgets. Required when `deliberate` is set. |
+| `deliberate.decision_briefs` | false | **Brief me on this decision** runs on `deliberate.llm` too. |
+| `tools.deny` | none | Tool families Ask Crewlet never offers anybody, each once. It only narrows what a person's own permissions offer, never widens them. `writes` turns off every change it could propose, so it only reads; `generic_changes` the change to any API route; `generic_reads` the read of any API route; `chat_writes`, `atlas_writes` and `agent_controls` (pausing, resuming, steering and answering an agent's run) those writes; `page_changes` a change to the screen the person has open; `deep_work` the escalation into deep work, and so reading images. |
 | `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`harness: claude-code`), run as its harness's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
 | `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
 | `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
 | `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
+| `research.hosts` | none | The hosts Ask Crewlet may read web pages from, through the engine, over `https`: each a host name alone, at most 50. Absent, it reads no web page ([Web research](../guides/assistant.md#web-research)). |
+| `research.search.mcp_server` | none | The `mcp_servers` entry Ask Crewlet searches those hosts through: a shared, enabled entry the curated catalogue recognises as Tavily (`tavily-mcp`), whose `tavily_search` is not blocked. Each API node runs its own instance of it for research alone, never a seat's. Absent, Ask Crewlet only reads pages it is given or finds by address. |
 
 A numeric field left out, or `0`, takes its default; a value outside its range
 is refused naming the field.
@@ -548,6 +561,11 @@ providers:
                                         #   breach is a retryable `timeout`. An executor run is
                                         #   not on this clock: its rounds are capped only where
                                         #   providers.sandbox.default_max_turns sets a cap
+      effort: high                      # optional: reasoning effort, in the harness's own levels
+                                        #   (claude-code: low | medium | high | xhigh | max). Absent
+                                        #   passes none, so the harness runs at its default. Refused
+                                        #   on a harness with no such setting or a level it does not
+                                        #   take. See LLM Backends, "Reasoning effort"
       max_concurrent: 4                 # optional — live harness processes on this host at once
                                         #   (default 4). Each is a 200-400 MB runtime that holds
                                         #   its slot for its whole run, and subscription plans
@@ -1564,11 +1582,13 @@ store:
                                     #   the broker, 1 GiB..64 TiB. Unset
                                     #   derives the smaller of a quarter of the
                                     #   broker's limit and what its state logs'
-                                    #   half and a 1 GiB coordination floor
-                                    #   leave. A full bucket refuses uploads,
-                                    #   never the fleet's leases. An existing
-                                    #   bucket keeps the reservation it was
-                                    #   created with. REFUSED with backend s3
+                                    #   five eighths and a 1 GiB coordination
+                                    #   floor leave. A full bucket refuses
+                                    #   uploads, never the fleet's leases. A
+                                    #   data node raises an existing bucket to
+                                    #   a larger figure at boot where the
+                                    #   broker has room, and never lowers it.
+                                    #   REFUSED with backend s3
   #   s3:                           #   REFUSED unless backend is s3
   #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
                                     #   S3's own for the region. R2, MinIO,
@@ -1759,33 +1779,26 @@ api:
     admin: serve        # serve | refuse. Required once port is set: whether
                         #   THIS node grants admin to those who hold it.
                         #   refuse clamps admin away here and keeps every app
-    session:
-      absolute: 168h          # 1h..720h (default 168h)
-      step_up: 1h             # 5m..24h  (default 1h): how recent a proof of
-                              #   identity every step-up gesture asks for — a
-                              #   config, setup, credential, deployment or
-                              #   /iam write, revealing a secret, changing
-                              #   how somebody proves who they are. ONE window,
-                              #   as GitHub's sudo mode keeps one. A Tier A
-                              #   token or a machine token is fresh by
-                              #   construction
+    limits:             # THIS node's bounds on the company's sign-in
+                        #   policy (Tier B `sign_in`). A company value past
+                        #   one is refused by this node's writes and held to
+                        #   the limit by its sign-ins
+      second_factor: required    # required (default): the company may not
+                                 #   drop the second factor | optional: it
+                                 #   may. optional off loopback is refused
+                                 #   without accept_insecure
+      min_password_length: 12    # 12..256 (default 12): the lowest password
+                                 #   floor the company may set
+      max_session_lifetime: 720h # 1h..720h (default 720h)
+      max_idle_timeout: 720h     # 15m..720h (default 720h)
+      max_step_up: 24h           # 5m..24h (default 24h)
     audit:
       changes: 9600h    # 2160h..24000h (default 9600h = 400 days)
       sessions: 2160h   # 168h..9600h   (default 2160h = 90 days), and never
                         #   longer than `changes`
-    # People always sign in with a login and a password; these three say
-    #   what that asks of them.
-    totp: required      # required (the default when unset) | optional.
-                        #   required: a password sign-in by somebody who
-                        #   holds no second factor opens a session that may
-                        #   only enrol one (POST /auth/totp). optional off
-                        #   loopback is refused without accept_insecure
-    accept_insecure: false   # acknowledge an insecure posture off loopback
-    min_password_length: 12  # 12..256; 0 takes the engine's floor of 12.
-                             #   Enforced wherever a person sets a password —
-                             #   an invitation's redemption, a change, a reset
-                             #   or first password link — and what
-                             #   /auth/config tells a form to refuse
+    accept_insecure: false   # acknowledge an insecure posture off loopback:
+                             #   what lets limits.second_factor: optional
+                             #   stand on a routable address
     tokens:             # the DEPLOYMENT's machine credentials. At least one
                         #   is required once port is set
       - id: founder     # acts under the login token:founder — lowercase
@@ -1832,7 +1845,7 @@ retention:
                                   #   that intends to keep working
 ```
 
-**The sign-in settings are readable from the dashboard, not editable there.** `api.auth.totp`, `min_password_length` and `session` are this node's own file, so an administrator reads what THIS node enforces through the [`sign_in_policy`](../reference/api-endpoints.md#queries) question, every value as the engine applies it (an unset setting arrives as its default) and the session's idle lifetime beside them, which is a constant of the engine. Nodes of one fleet may disagree, and the answer names the node it describes. Changing any of them is an edit to this file and a restart.
+**The sign-in policy is the company's, and `api.auth.limits` bounds it on this node.** Whether a second factor is required, the shortest password, the session lifetime, the idle limit and the step-up window are Tier B (`sign_in`, see [Sign-in](#sign-in)), changed from Settings › Sign-in policy without a restart; an administrator reads them, this node's limits and what this node enforces through the [`sign_in_policy`](../reference/api-endpoints.md#queries) question. Changing a limit is an edit to this file and a restart.
 
 **`crewlet validate` prints warnings as well as refusals**, and they are
 separate on purpose: the exit code turns on refusals alone, so a CI step gates
@@ -2193,7 +2206,7 @@ units:
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
 | `sandbox` | dict | no | What this seat's [executor box](../concepts/code-sandbox.md#a-seats-own-box-settings--rolesandbox) reads beyond `providers.sandbox`. Every agent seat's executor is its harness's own run in a box, placed by the `run_in` of the `providers.llm` entry the launch picks (empty takes `providers.sandbox.default_run_in`), so the block places nothing and gates nothing: **absent means the engine-wide settings alone**. Six keys: `setup`, per-seat provisioning applied after `providers.sandbox.setup`; `env`, the environment injected into the run and where external-service tokens are declared — a `${VAR}` in it that resolves to nothing is left out and the run still starts, its start logging `sandbox_env_unresolved` naming the key ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)); `optional_keys`, the keys of `env` whose absence is expected and so left out without that line — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers`, which of the seat's MCP servers the harness gets beside its tool bridge; `pause_ttl_seconds`, how long a box blocked on a person's answer stays paused (unset inherits `providers.sandbox.default_pause_ttl_seconds`, `0` never holds a paused box, negative refused); and `max_turns`, the agentic-round cap on one of the seat's runs (unset inherits `providers.sandbox.default_max_turns`, 96 when that is unset too; `0` uncapped; negative refused). Any other key is refused as unknown. A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
-| `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). Agent seats only: a human seat is never claimed, so one carrying a placement is refused. `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
+| `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). Agent seats only: a human seat is never claimed, so one carrying a placement is refused. `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** is at most 64 bytes of printable characters: it may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. A selector names **at most 16 labels**, as many as a node can carry. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
 ### Worker templates
@@ -2412,6 +2425,24 @@ Everything else a tracker could be told is either a fact about the **operator** 
 **Every broker member needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded member with no `stream.store_dir` — a single node included — keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot. A node without `data` is no member: it joins the members' broker as a leaf and keeps no stream of its own, so it is refused a `store_dir` instead, and a node dialling an external cluster keeps nothing either — that cluster's storage is its operator's.
 
 It applies whatever backends a company names, and whether the node has a company at all. Worklet, Doclet or Chatlet puts its items, its pages or its messages there, but the **identity estate** (the people who can sign in) is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+
+### Sign-in
+
+```yaml
+sign_in:
+  require_second_factor: true            # default true: a password sign-in also
+                                         #   gives a code from an authenticator app.
+                                         #   false needs the node's
+                                         #   api.auth.limits.second_factor: optional
+  min_password_length: 12                # 12..256 (default 12)
+  session_lifetime_seconds: 604800       # 3600..2592000 (default 7 days): from sign-in
+  idle_timeout_seconds: 43200            # 900..2592000 (default 12 hours): unused
+  step_up_seconds: 3600                  # 300..86400 (default 1 hour): how long a
+                                         #   proof of identity authorises a sensitive
+                                         #   change before it is asked again
+```
+
+How the company's people sign in is the **company's**, the same on every node and changed from Settings › Sign-in policy without a restart. Each node holds it within its operator's [`api.auth.limits`](#tier-a), so a value past one is refused by a write to that node and enforced at the limit if it was set before the operator lowered it. A change asks for a recent proof and is recorded in the revision history and the audit log, and a change that weakens the policy is checked with a warning saying what it allows. A lower lifetime or idle limit ends a live session at its next request; a higher one reaches only sessions signed in after it. Requiring a second factor applies at each person's next sign-in, and a higher password floor to the next password they set. See [Identity and access § The company sets its sign-in policy](../concepts/identity-and-access.md#the-company-sets-its-sign-in-policy-within-each-nodes-limits).
 
 ### Delegated decisions
 

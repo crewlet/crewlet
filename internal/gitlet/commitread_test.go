@@ -9,18 +9,21 @@ import (
 )
 
 // A COMMIT NAMES THE CHANGE IT BELONGS TO. A commit's page reads, beside the
-// repository's detail and in its snapshot, every revision the commit heads —
-// "revision 2 of web!1" — and every change whose merge it is, each by the
-// repository's name, its reference, its title and its state: here a change
-// opened at feature's B, moved to C by a push to its source and merged by a
-// push setting main to C. B heads the first revision, C the second and is the
-// change's merge, and a commit no change names — or one another repository's
-// change heads — belongs to none of this repository's. A commit is named by
-// its whole id, and the read is not paged.
+// repository's detail and in its snapshot, every revision the commit heads
+// ("revision 2 of web!1") and every change whose merge it is, each by the
+// repository's name, its reference, its title and its state, and how it
+// landed: here a change opened at feature's B, moved to C by a push to its
+// source and merged by a push setting main to C. B heads the first revision,
+// C the second and is the change's merge, each naming the change merged at C
+// by a push at the instant its row holds, with no one who merged it through
+// a gate and no gate; and a commit no change names (or one another
+// repository's change heads) belongs to none of this repository's. A commit
+// is named by its whole id, and the read is not paged.
 //
-// Mutation: drop the repository from commitHeadsSQL's join — api's change at
+// Mutation: drop the repository from commitHeadsSQL's join: api's change at
 // B is named in web's answer; read Merged by the head index rather than the
-// merge's — C's merge is never named.
+// merge's: C's merge is never named; drop merged_at from landingColumns'
+// scan: the landing carries no instant.
 func TestACommitNamesTheChangeItBelongsTo(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -47,14 +50,20 @@ func TestACommitNamesTheChangeItBelongsTo(t *testing.T) {
 		}
 		return a
 	}
-	merged := gitlet.ChangeName{Repo: "web", Ref: "web!1", Title: "Retry the upload", State: gitlet.ChangeStateMerged}
+	at := n.mergedAt(opened.ChangeID)
+	if at.IsZero() {
+		t.Fatal("web!1's row holds no instant it merged at")
+	}
+	merged := gitlet.ChangeLanding{ChangeName: gitlet.ChangeName{Repo: "web", Ref: "web!1",
+		Title: "Retry the upload", State: gitlet.ChangeStateMerged}, MergeOID: oidOf("C"), MergedAt: at,
+		MergedVia: gitlet.MergedViaPush}
 	for _, tc := range []struct {
 		commit    string
-		merged    []gitlet.ChangeName
+		merged    []gitlet.ChangeLanding
 		revisions []gitlet.CommitRevision
 	}{
 		{oidOf("B"), nil, []gitlet.CommitRevision{{Change: merged, N: 1}}},
-		{oidOf("C"), []gitlet.ChangeName{merged}, []gitlet.CommitRevision{{Change: merged, N: 2}}},
+		{oidOf("C"), []gitlet.ChangeLanding{merged}, []gitlet.CommitRevision{{Change: merged, N: 2}}},
 		{oidOf("Z"), nil, nil},
 	} {
 		got := read(tc.commit).Commit

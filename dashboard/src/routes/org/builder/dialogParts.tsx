@@ -21,13 +21,13 @@ import type { HumanContactKey } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 import { ConfigField } from "~/components/ConfigField.tsx";
 
-import { Problems } from "~/ui/Problems.tsx";
+import { plural } from "~/lib/format.ts";
 import type { Acknowledgement } from "./model/changes.ts";
 import type { Segment } from "./model/document.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
-import type { WarningLine } from "./model/warnings.ts";
-import { engineSentence } from "./EngineSentence.tsx";
+import type { DraftWarnings } from "./model/warnings.ts";
+import { ConfigWarnings, engineWords } from "~/components/ConfigWarnings.tsx";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { workingNote } from "./nodeFacts.ts";
 import {
@@ -35,9 +35,11 @@ import {
   CharacterPicker,
   FactList,
   FormField,
+  groupNotices,
   HuePicker,
   InlineCode,
   Input,
+  NoticeList,
   SegmentedControl,
 } from "@crewlethq/ui";
 import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
@@ -457,15 +459,30 @@ export function ContactField({
 export function StrandedNotes({ stranded }: { stranded: readonly StrandedSchedule[] }) {
   if (stranded.length === 0) return null;
   return (
-    <Callout variant="warning">
-      <ul className="builder-list">
-        {stranded.map((s) => (
-          <li key={`${s.unit}/${s.schedule}`}>{strandedSentence(s)}</li>
-        ))}
-      </ul>
-      <ScreenLink to="schedules" standalone>
-        Open Schedules
-      </ScreenLink>
+    <Callout
+      variant="warning"
+      action={
+        <ScreenLink to="schedules" standalone>
+          Open Schedules
+        </ScreenLink>
+      }
+    >
+      {stranded.length === 1 ? (
+        strandedSentence(stranded[0]!)
+      ) : (
+        <NoticeList
+          notices={groupNotices(
+            stranded.map((s) => ({
+              kind: "stranded",
+              subject: s.unitName,
+              item: s.schedule,
+              title: "Schedules would have nobody to run them",
+              detail: "Disable them or give them a runner.",
+            })),
+            { count: (units) => plural(units.length, "unit") },
+          )}
+        />
+      )}
     </Callout>
   );
 }
@@ -478,11 +495,17 @@ export function WorkingNotes({ names }: { names: readonly string[] }) {
       {names.length === 1 ? (
         workingNote(names[0]!)
       ) : (
-        <ul className="builder-list">
-          {names.map((name) => (
-            <li key={name}>{workingNote(name)}</li>
-          ))}
-        </ul>
+        <NoticeList
+          notices={[
+            {
+              key: "working",
+              subject: plural(names.length, "seat"),
+              title: "Working now",
+              lines: [{ items: names }],
+              detail: "The change applies to each one's next turn.",
+            },
+          ]}
+        />
       )}
     </Callout>
   );
@@ -636,28 +659,31 @@ export const PROBLEM_LINKS: Readonly<Record<ProblemLink, string>> = {
   models: "Open Models",
 };
 
-/**
- * What the engine will run the company with, one line for each thing to know
- * ([warningLines]): who it is about, what it risks and what to do, and where
- * it is changed when the builder does not change it. The banner over the chart
- * and a save's review draw it from the same lines, so they say the same.
- */
-export function WarningLines({ lines }: { lines: readonly WarningLine[] }) {
+/** A builder's warnings in the shared renderer, each with its one link. */
+export function BuilderWarnings({
+  draft,
+  title,
+  label,
+}: {
+  draft: DraftWarnings;
+  title?: (count: number) => ReactNode;
+  label?: string;
+}) {
   return (
-    <ul className="col gap-1">
-      {lines.map((line, i) => (
-        <li key={i}>
-          {line.who !== null && <strong>{line.who}: </strong>}
-          <span>{engineSentence(line.words)}</span>
-          {line.link !== null && (
-            <>
-              {" "}
-              <ScreenLink to={line.link}>{PROBLEM_LINKS[line.link]}</ScreenLink>
-            </>
-          )}
-        </li>
-      ))}
-    </ul>
+    <ConfigWarnings
+      warnings={draft.warnings}
+      seat={draft.seat}
+      title={title}
+      label={label}
+      actionFor={(w) => {
+        const link = draft.linkOf(w);
+        return link === null ? null : (
+          <ScreenLink to={link} standalone>
+            {PROBLEM_LINKS[link]}
+          </ScreenLink>
+        );
+      }}
+    />
   );
 }
 
@@ -675,25 +701,27 @@ export function WarningLines({ lines }: { lines: readonly WarningLine[] }) {
 export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] }) {
   if (problems.length === 0) return null;
   const critical = problems.some((p) => p.severity === "problem");
-  const links = [...new Set(problems.map((p) => p.link))].filter(
-    (link): link is ProblemLink => link !== null,
-  );
   return (
     // ANNOUNCED WHEN IT IS A REFUSAL, and only then. A Callout is silent by
     // default, because a screen reader arriving at a page would otherwise read
     // out every static banner on it; this one appears in ANSWER to a check the
     // operator just ran, and a refusal is what stops the save.
     <Callout variant={critical ? "danger" : "warning"} role={critical ? "alert" : undefined}>
-      <Problems detail={problems.map((p) => p.message).join("\n")} />
-      {links.length > 0 && (
-        <p className="row wrap gap-3">
-          {links.map((link) => (
-            <ScreenLink key={link} to={link} standalone>
-              {PROBLEM_LINKS[link]}
-            </ScreenLink>
-          ))}
-        </p>
-      )}
+      <NoticeList
+        notices={groupNotices(
+          problems.map((p) => ({
+            kind: `${p.link ?? ""}\u0000${p.message}`,
+            title: engineWords(p.message),
+            action:
+              p.link === null ? null : (
+                <ScreenLink to={p.link} standalone>
+                  {PROBLEM_LINKS[p.link]}
+                </ScreenLink>
+              ),
+          })),
+          { count: (s) => plural(s.length, "seat") },
+        )}
+      />
     </Callout>
   );
 }

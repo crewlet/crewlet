@@ -37,6 +37,23 @@ import (
 // push — its proposal and its row, whose shapes are the domain's own — so no
 // field here takes a versionedFields row.
 
+// EngineCommitterName and EngineCommitterLocal spell the committer of every
+// engine-built commit, `Crewlet <engine@<code.identity_domain>>`: a convention
+// that authenticates nothing (ADR-0092), shared by the signer and the reads.
+const (
+	EngineCommitterName  = "Crewlet"
+	EngineCommitterLocal = "engine"
+)
+
+// EngineCommitted reports a committer that spells the convention exactly, on
+// ANY domain: a read by whole ids is immutable, so it cannot depend on the
+// domain configured now. Nothing is trimmed or case-folded.
+func EngineCommitted(name, email string) bool {
+	local, domain, ok := strings.Cut(email, "@")
+	return ok && name == EngineCommitterName && local == EngineCommitterLocal && domain != "" &&
+		!strings.ContainsFunc(domain, func(r rune) bool { return r == '@' || r <= ' ' || r == 0x7f })
+}
+
 // Source is Gitlet as a delivery's SURFACE: the name a seat's code
 // write delivers to (internal/agent/builtin registers every code write tool
 // with tools.DeliversTo(Source)), and the notification source the code feed

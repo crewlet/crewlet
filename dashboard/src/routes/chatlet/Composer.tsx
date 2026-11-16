@@ -648,6 +648,8 @@ export function MessageBox({
                 label="More formatting"
                 size="sm"
                 variant="ghost"
+                title=""
+                tooltip={false}
                 icon={<EllipsisGlyph size="sm" />}
               />
             </Tooltip>
@@ -681,6 +683,8 @@ export function MessageBox({
               label="Attach a task, page or artifact"
               size="sm"
               variant="ghost"
+              title=""
+              tooltip={false}
               icon={<PlusGlyph size="sm" />}
             />
           </Tooltip>
@@ -714,17 +718,16 @@ export function MessageBox({
           },
         ]}
       />
-      <Tooltip content={format ? "Hide formatting" : "Show formatting"}>
-        <IconButton
-          label="Formatting"
-          size="sm"
-          variant="ghost"
-          pressed={format}
-          className="chat-composer-format"
-          icon={<BaselineGlyph size="sm" />}
-          onClick={toggleFormat}
-        />
-      </Tooltip>
+      <IconButton
+        label="Formatting"
+        size="sm"
+        variant="ghost"
+        pressed={format}
+        className="chat-composer-format"
+        icon={<BaselineGlyph size="sm" />}
+        tooltip={format ? "Hide formatting" : "Show formatting"}
+        onClick={toggleFormat}
+      />
       <EmojiPicker
         entrance="instant"
         label="Insert an emoji"
@@ -742,15 +745,14 @@ export function MessageBox({
           />
         )}
       />
-      <Tooltip content="Mention someone">
-        <IconButton
-          label="Mention someone"
-          size="sm"
-          variant="ghost"
-          icon={<AtSignGlyph size="sm" />}
-          onClick={() => insert(value && !/\s$/.test(value.slice(0, caret)) ? " @" : "@")}
-        />
-      </Tooltip>
+      <IconButton
+        label="Mention someone"
+        size="sm"
+        variant="ghost"
+        icon={<AtSignGlyph size="sm" />}
+        tooltip
+        onClick={() => insert(value && !/\s$/.test(value.slice(0, caret)) ? " @" : "@")}
+      />
       {extraTools}
     </>
   );
@@ -838,14 +840,13 @@ function FormatTool({
   onPress: (kind: FormatControl["kind"]) => void;
 }) {
   return (
-    <Tooltip content={control.label}>
-      <IconButton
-        label={control.label}
-        size="sm"
-        variant="ghost"
-        icon={control.glyph}
-        onClick={() => onPress(control.kind)}
-      />
-    </Tooltip>
+    <IconButton
+      label={control.label}
+      size="sm"
+      variant="ghost"
+      icon={control.glyph}
+      tooltip
+      onClick={() => onPress(control.kind)}
+    />
   );
 }

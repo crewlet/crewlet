@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
@@ -68,14 +70,13 @@ const mib64 = 64 << 20
 // each read in full through a 32 KiB p, and a value nested MaxDepth deep, each allocate no more than New's
 // buffer and the scanner's few KiB of state, from New to io.EOF; so do a 64 MiB string passed over by Skip,
 // and one captured past a 1 MiB bound, beside what growing its capture to the bound takes (at most twice
-// the bound, by doubling, of which the bound at most is held). Measured as the bytes allocated in all,
-// which a held value cannot pass under, however briefly it was held.
+// the bound, by doubling, of which the bound at most is held). Measured as the bytes allocated in all by
+// the package's code (allocatedByTheScan), which a held value cannot pass under, however briefly it was held.
 //
 // Mutation: hold a string's text until its closing quote, keep a growing stack of containers, or let a
 // capture grow past its bound, and this fails naming the input.
 func TestAScanHoldsItsBufferWhateverTheInput(t *testing.T) {
-	// Not parallel: runtime.MemStats counts every goroutine's allocations, and a parallel case's would be
-	// counted as the scan's.
+	// Not parallel: a parallel case's scan would be counted as this one's.
 	readEvery := func(s *jsonscan.Scanner, p []byte) error {
 		for {
 			k, err := s.Next()
@@ -162,19 +163,56 @@ func TestAScanHoldsItsBufferWhateverTheInput(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r := c.text()
 			p := make([]byte, 32<<10)
-			runtime.GC()
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
-			err := c.read(jsonscan.New(r), p)
-			runtime.ReadMemStats(&after)
+			allocated, err := allocatedByTheScan(func() error { return c.read(jsonscan.New(r), p) })
 			if err != nil {
 				t.Fatalf("reading it: %v", err)
 			}
-			allocated := after.TotalAlloc - before.TotalAlloc
 			t.Logf("allocated %d bytes", allocated)
+			if allocated < jsonscan.ReadBufferSize {
+				t.Fatalf("the reading saw %d bytes, less than New's own %d-byte buffer: it missed the scan",
+					allocated, jsonscan.ReadBufferSize)
+			}
 			if allocated > c.ceiling {
 				t.Fatalf("the scan allocated %d bytes, past the %d its doc states", allocated, c.ceiling)
 			}
 		})
 	}
+}
+
+// allocatedByTheScan is the bytes scan allocates with the package's code on the stack, from a memory profile
+// of every allocation. runtime.MemStats would also count the runtime's own meanwhile, such as a new thread's.
+func allocatedByTheScan(scan func() error) (uint64, error) {
+	defer func(rate int) { runtime.MemProfileRate = rate }(runtime.MemProfileRate)
+	runtime.MemProfileRate = 1
+	before := profiledInThePackage()
+	err := scan()
+	return profiledInThePackage() - before, err
+}
+
+// profiledInThePackage is the bytes the memory profile records allocated under a jsonscan frame, after a GC
+// publishes every allocation made before it.
+func profiledInThePackage() uint64 {
+	runtime.GC()
+	pkg := reflect.TypeFor[jsonscan.Scanner]().PkgPath() + "."
+	var records []runtime.MemProfileRecord
+	n, ok := runtime.MemProfile(nil, true)
+	for !ok {
+		records = make([]runtime.MemProfileRecord, n+64)
+		n, ok = runtime.MemProfile(records, true)
+	}
+	var total uint64
+	for _, r := range records[:n] {
+		frames := runtime.CallersFrames(r.Stack())
+		for {
+			f, more := frames.Next()
+			if strings.HasPrefix(f.Function, pkg) {
+				total += uint64(r.AllocBytes)
+				break
+			}
+			if !more {
+				break
+			}
+		}
+	}
+	return total
 }

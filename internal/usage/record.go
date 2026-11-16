@@ -145,7 +145,8 @@ const (
 
 	// KindRepoRead is one `visibility: unit` repository's READERS on one
 	// node's day: every credential and seat that read its contents there —
-	// a git fetch that carried a pack, a code tool's answer — and how much
+	// a git fetch that carried a pack, a code tool's answer, a download of a
+	// file or a commit's ZIP (Kind raw or archive) — and how much
 	// (types.CodeFetched). ONE SUBJECT PER (node, day, repository), carrying
 	// every reader, rather than one per reader: the compacted stream keeps a
 	// subject index every broker member holds in memory, so its subjects are

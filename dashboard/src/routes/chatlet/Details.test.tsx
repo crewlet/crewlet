@@ -182,8 +182,9 @@ describe("Members", () => {
         },
       ),
     });
-    const toggle = await screen.findByRole("switch", { name: "Ops Agent gets every message" });
-    expect(screen.getByText(/Answers when named/)).toBeTruthy();
+    const toggle = await screen.findByRole("switch", { name: "Every message to Ops Agent" });
+    // The follow rule leads the line, so a narrow row cuts the team instead.
+    expect(screen.getByText(/^Answers when named · /)).toBeTruthy();
     // A PERSON IS NEVER WOKEN by a message, so a person's row has no switch.
     expect(screen.getAllByRole("switch")).toHaveLength(1);
     // HELD UNTIL THE ROOM'S OWN ANSWER SAYS IT TAKES THE CHANGE.
@@ -216,7 +217,7 @@ describe("Members", () => {
       ),
     });
     const toggle = (await screen.findByRole("switch", {
-      name: "Ops Agent gets every message",
+      name: "Every message to Ops Agent",
     })) as HTMLInputElement;
     expect(toggle.checked).toBe(true);
     expect(toggle.getAttribute("aria-disabled")).toBe("true");
@@ -228,7 +229,7 @@ describe("Members", () => {
 
   test.each(WRITE_READERS)("an agent's switch is drawn for $who, held with why", async (reader) => {
     open("members", { viewer: reader.viewer });
-    const toggle = await screen.findByRole("switch", { name: "Ops Agent gets every message" });
+    const toggle = await screen.findByRole("switch", { name: "Every message to Ops Agent" });
     const reason = document.getElementById(toggle.getAttribute("aria-describedby") ?? "");
     await waitFor(() => expect(reason?.textContent).toBe(reader.reason));
   });

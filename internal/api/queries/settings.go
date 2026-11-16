@@ -20,10 +20,13 @@ const (
 	// SettingKnowledge is the knowledge base's: where its pages live and
 	// how it is searched.
 	SettingKnowledge SettingGroup = "knowledge"
+	// SettingSignIn is the company's sign-in policy, answered on
+	// `sign_in_policy`.
+	SettingSignIn SettingGroup = "sign_in"
 )
 
 // SettingGroups are every group.
-var SettingGroups = []SettingGroup{SettingCompany, SettingCode, SettingKnowledge}
+var SettingGroups = []SettingGroup{SettingCompany, SettingCode, SettingKnowledge, SettingSignIn}
 
 // SettingKind is what a setting's value is, and so how a screen types it.
 type SettingKind string

@@ -56,6 +56,7 @@ import {
   Card,
   EmptyState,
   EmptyValue,
+  NoticeList,
   SegmentedMeter,
   Skeleton,
   Tag,
@@ -416,31 +417,28 @@ function Elapsed({
 /** What the queue put out lately, each in the danger tone with what the engine found. */
 function Ejected({ repo, rows }: { repo: string; rows: readonly CodeEjectedRow[] }) {
   return (
-    <div className="col gap-2" aria-label="Put out lately">
-      <strong>{`Put out in the last day: ${rows.length}`}</strong>
-      {rows.map((e) => (
-        <Callout key={e.entry_id} variant="danger">
-          <span className="col gap-1">
-            <span className="row gap-1 wrap">
-              <Tag variant="danger">ejected</Tag>
-              <a className="t-link mono" href={href(changePath(repo, e.number))}>
-                {changeRef(repo, e.number)}
-              </a>
-              <span>{ejectReasonWord(e.reason)}</span>
-            </span>
-            {(e.checks?.length ?? 0) > 0 && (
-              <span className="t-caption">
-                Failed: <span className="mono">{e.checks!.join(", ")}</span>
-              </span>
-            )}
-            {(e.paths?.length ?? 0) > 0 && (
-              <span className="t-caption">
-                Conflicted on: <span className="mono">{e.paths!.join(", ")}</span>
-              </span>
-            )}
-          </span>
-        </Callout>
-      ))}
-    </div>
+    <Callout
+      variant="danger"
+      role="group"
+      aria-label="Put out lately"
+      title={`${plural(rows.length, "change")} put out of the queue in the last day`}
+    >
+      <NoticeList
+        notices={rows.map((e) => ({
+          key: e.entry_id,
+          subject: changeRef(repo, e.number),
+          title: ejectReasonWord(e.reason),
+          lines: [
+            ...((e.checks?.length ?? 0) > 0 ? [{ subject: "Failed", items: e.checks! }] : []),
+            ...((e.paths?.length ?? 0) > 0 ? [{ subject: "Conflicted on", items: e.paths! }] : []),
+          ],
+          action: (
+            <a className="t-link" href={href(changePath(repo, e.number))}>
+              Open the change
+            </a>
+          ),
+        }))}
+      />
+    </Callout>
   );
 }

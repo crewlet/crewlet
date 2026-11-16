@@ -94,11 +94,19 @@ func (a *Applier) applyImportDone(ctx context.Context, tx *sql.Tx, at applyConte
 		return remoteNotApplied(ctx, at, d.RepoID, fmt.Sprintf("its import has landed %d chunks, and its "+
 			"end names %d", s.importSeq, d.Seq))
 	}
-	if _, err := tx.ExecContext(ctx, importDoneSQL, at.at(), d.Error, d.DefaultBranch, d.DefaultBranch, d.Error,
+	before, err := tallyStandingIn(ctx, tx, d.RepoID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = tx.ExecContext(ctx, importDoneSQL, at.at(), d.Error, d.DefaultBranch, d.DefaultBranch, d.Error,
 		at.at(), at.packed, d.RepoID); err != nil {
 		return 0, fmt.Errorf("gitlet: end %s's import at %s: %w", d.RepoID, at.position, err)
 	}
-	return 1, nil
+	moved, err := retally(ctx, tx, d.RepoID, before)
+	if err != nil {
+		return 0, err
+	}
+	return 1 + moved, nil
 }
 
 // applyMirrorSync lands one sync of a pull mirror: the repository's

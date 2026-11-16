@@ -290,7 +290,8 @@ const (
 	// handle its routing tells and each change's count of them
 	// (noticeWrites): at their widest — a push whose routing fills what its
 	// own rows leave, 3 904 notices — they hold the lane 143 ms (doc.go's
-	// measured section).
+	// measured section). A record's change tallies come on top of it: its horizons
+	// are given what an older build's rows leave them (record.go).
 	MaxRecordRows = statelog.ApplyTxRowBudget
 
 	// MaxCommandsPerPush is the most ref updates one push carries. A push's

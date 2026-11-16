@@ -690,9 +690,8 @@ describe("a human seat with no contact identity", () => {
     await screen.findByText("Configuration OK");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
-    const warnings = within(dialog).getByRole("region", { name: "Warnings" });
-    // IN THE ENGINE'S WORDS, AS THE REVIEW DRAWS EVERY ONE: in sentence
-    // case (`EngineSentence.tsx`), its first word raised.
+    const warnings = within(dialog).getByRole("group", { name: "Warnings" });
+    // IN THE ENGINE'S WORDS, its first word raised.
     expect(warnings.textContent).toContain(advisory.charAt(0).toUpperCase() + advisory.slice(1));
   });
 });

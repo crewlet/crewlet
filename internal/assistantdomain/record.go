@@ -24,7 +24,8 @@ import (
 // # What each version added
 //
 //   - 1: every shape this domain has.
-const RecordVersion = 1
+//   - 2: conversation_summarized, a conversation's summary of its earlier messages.
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format. A reanchor's generation and
 // every gate are pinned at it for ever: an older node retains what it cannot
@@ -37,10 +38,12 @@ const GateRecordVersion = 1
 
 // versionedFields is every field an assistant record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
-// EMPTY: every field this build writes is in the base format. Adding one is a
-// row here, [RecordVersion] moved to its version, and a conformance candidate
-// that carries it.
-var versionedFields = statelog.RecordFields{}
+// Adding one is a row here, [RecordVersion] moved to its version, and a
+// conformance candidate that carries it.
+var versionedFields = statelog.RecordFields{
+	{Name: "RecordEnvelope.Op conversation_summarized", Since: 2, Path: []string{"op"},
+		Equals: string(OpConversationSummarized)},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -56,6 +59,9 @@ const (
 
 	// OpConversationTitled sets a conversation's title.
 	OpConversationTitled OpKind = "conversation_titled"
+
+	// OpConversationSummarized sets a conversation's summary of its earlier messages.
+	OpConversationSummarized OpKind = "conversation_summarized"
 
 	// OpConversationPurged removes a conversation and everything in it for
 	// good, and INSTALLS A GATE by its op: its subject is an ordinary
@@ -131,7 +137,7 @@ const (
 
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
-	OpConversationCreated, OpConversationTitled, OpConversationPurged,
+	OpConversationCreated, OpConversationTitled, OpConversationSummarized, OpConversationPurged,
 	OpConversationAuditRead, OpFileStored, OpTurnOpened, OpTurnParked, OpTurnResumed, OpTurnClosed,
 	OpMessageRecorded, OpStepRecorded, OpCardRecorded, OpProposalCreated,
 	OpProposalApproved, OpProposalExecuting, OpProposalDeclined, OpProposalExpired,

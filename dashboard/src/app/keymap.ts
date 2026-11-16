@@ -318,6 +318,23 @@ const PAGE: KeyRow[] = [
     does: "Show or hide its data, where it keeps any",
     by: "dashboard",
   },
+  // COMMENTS AND COMMENT MODE SHARE THEIR LETTER, the panel bare and placing
+  // a comment with Shift, so each names its Shift: a window chord compares
+  // Shift only for a row that says it.
+  {
+    id: "artifact.comments",
+    scope: "artifact",
+    presses: [{ key: "c", shift: false }],
+    does: "Show or hide its comments",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.comment",
+    scope: "artifact",
+    presses: [{ key: "c", shift: true }],
+    does: "Comment on a part of it: a page's section or point, a slide's element, a board's point",
+    by: "dashboard",
+  },
   {
     id: "artifact.people",
     scope: "artifact",

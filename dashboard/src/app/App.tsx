@@ -93,12 +93,12 @@ const WorkSearch = lazyScreen("worklet", (m) => m.WorkSearch);
 const Project = lazyScreen("worklet", (m) => m.Project);
 const WorkItem = lazyScreen("worklet", (m) => m.WorkItem);
 const Changes = lazyScreen("gitlet", (m) => m.Changes);
-const ChangePage = lazyScreen("gitlet", (m) => m.ChangePage);
+const ChangePage = lazyScreen("gitlet-change", (m) => m.ChangePage);
 const Repositories = lazyScreen("gitlet", (m) => m.Repositories);
 const CodeSearch = lazyScreen("gitlet", (m) => m.Search);
-const RepositoryPage = lazyScreen("gitlet", (m) => m.RepositoryPage);
-const CommitPage = lazyScreen("gitlet", (m) => m.CommitPage);
-const ComparePage = lazyScreen("gitlet", (m) => m.ComparePage);
+const RepositoryPage = lazyScreen("gitlet-repo", (m) => m.RepositoryPage);
+const CommitPage = lazyScreen("gitlet-repo", (m) => m.CommitPage);
+const ComparePage = lazyScreen("gitlet-repo", (m) => m.ComparePage);
 const Pushes = lazyScreen("gitlet", (m) => m.Pushes);
 const Queue = lazyScreen("gitlet", (m) => m.Queue);
 const Checks = lazyScreen("gitlet", (m) => m.Checks);
@@ -153,6 +153,7 @@ const Models = lazyScreen("settings", (m) => m.Models);
 const McpTools = lazyScreen("settings", (m) => m.McpTools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
 const Limits = lazyScreen("settings", (m) => m.Limits);
+const AssistantSettings = lazyScreen("settings", (m) => m.AssistantSettings);
 const People = lazyScreen("settings", (m) => m.People);
 const ServiceAccounts = lazyScreen("settings", (m) => m.ServiceAccounts);
 const ApiTokens = lazyScreen("settings", (m) => m.ApiTokens);
@@ -333,6 +334,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Secrets key={route.name ?? ""} name={route.name} />;
     case "limits":
       return <Limits />;
+    case "ask-crewlet":
+      return <AssistantSettings />;
     case "spend":
       return <Spend />;
     case "spend-tasks":

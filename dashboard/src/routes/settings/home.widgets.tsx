@@ -26,7 +26,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { DIRECTORY_READ, useHumanSeats } from "~/components/people.tsx";
-import { alarmKindTitle, alarmsLink } from "~/lib/alarms.ts";
+import { alarmTitle, alarmsLink } from "~/lib/alarms.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { configStanding, offRevision } from "~/lib/configStanding.ts";
@@ -56,6 +56,7 @@ import {
   defineWidgets,
   gapsOf,
 } from "~/routes/home/board/kit.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** The rows a widget lists before it says how many more its page holds. */
 const ROWS = 4;
@@ -117,7 +118,7 @@ function Backups() {
                 href={href(link.path, link.query)}
                 leading={<Tag variant="warning">Alarm</Tag>}
               >
-                {alarmKindTitle(a.kind)}
+                {alarmTitle(a)}
               </ListItem>
             ))}
           </List>
@@ -479,7 +480,7 @@ function Configuration() {
             value={active ? active.revision_id.slice(0, 8) : EMPTY_VALUE}
             sub={
               active
-                ? `${relTime(active.activated_at ?? active.created_at, now)} by ${
+                ? `${ago(active.activated_at ?? active.created_at, now)} by ${
                     active.created_by || "an unnamed author"
                   }`
                 : "none active"

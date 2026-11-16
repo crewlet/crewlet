@@ -64,6 +64,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// held note's life after they were first held (learning.HeldNoteLife).
 		"agent_diary_held",
 		"agent_diary_long",
+		// A COMMENT RECORD'S NOTICES to people, divergent, each node's own,
+		// swept at the company's inbox horizon (artifactsdomain.NoticeJobs).
+		"artifact_notifications",
 		// THE DATASTORE LOG'S operation ledger, the per-node table every
 		// strict state log keeps, swept for the pages log's reason below.
 		// Its documents, history and tombstones are NOT here: all

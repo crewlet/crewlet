@@ -553,3 +553,6 @@ export function introducedWarnings(
 export function warningWords(w: Pick<ConfigWarning, "message" | "person">): string {
   return w.person || w.message;
 }
+
+/** Who a warning's seat handle names, as the reader knows them. */
+export type SeatNamer = (handle: string) => { name: string; agent: boolean } | undefined;

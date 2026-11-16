@@ -407,8 +407,8 @@ type Guard struct {
 	// [Guard.principalFor].
 	admin iam.AdminPosture
 
-	// proof is `api.auth.session.step_up`: how long a proof of identity
-	// authorises a step-up gesture. See [proofWindow].
+	// proof is how long a proof of identity authorises a step-up gesture,
+	// read per request. See [proofWindow] and [Guard.WithSignIn].
 	proof proofWindow
 
 	// now is the clock, injectable so a case can pin what a principal's
@@ -483,7 +483,7 @@ func New(b *config.Bootstrap) *Guard {
 		// AND NO ADMIN POSTURE, whose zero confers nothing rather than
 		// everything — see [iam.AdminPosture.Effective] for why that
 		// direction is the only safe one.
-		return &Guard{now: time.Now}
+		return &Guard{now: time.Now, proof: windowOf(config.DefaultSignInPolicy)}
 	}
 	auth := b.API.Auth
 	tokens := tokensOf(b)
@@ -493,9 +493,20 @@ func New(b *config.Bootstrap) *Guard {
 	}
 	return &Guard{
 		tokens: tokens, admin: auth.Admin,
-		proof: windowOf(auth.Session), now: time.Now,
-		clients: NewClients(b),
+		// THE NODE WITH NO COMPANY'S READING until [Guard.WithSignIn] hands
+		// it the company's: the engine's defaults within this node's limits.
+		proof: windowOf(func() config.SignInPolicy { return auth.SignInPolicy(nil) }),
+		now:   time.Now, clients: NewClients(b),
 	}
+}
+
+// WithSignIn reads the step-up window from policy, the company's sign-in policy
+// as this node holds it, on every request; called once, at wiring time.
+func (g *Guard) WithSignIn(policy func() config.SignInPolicy) *Guard {
+	if policy != nil {
+		g.proof = windowOf(policy)
+	}
+	return g
 }
 
 // Mux is what a surface mounts routes on.
@@ -781,6 +792,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		if how != iam.Resolved {
+			git := GitAccess(r)
 			// A LOG LINE, AND DELIBERATELY NOT AN EVENT. Whoever can
 			// reach this listener authors the rate of these, with no
 			// credential and no identity — so no per-attempt event
@@ -805,7 +817,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 					// proxy, which is the one address that tells an
 					// operator nothing about who is guessing.
 					"remote", g.Client(r))
-			case GitAccess(r) != GitNone:
+			case git == GitFetch, git == GitPush:
 				// A GIT CLIENT'S FIRST REQUEST PRESENTS NOTHING BY DESIGN:
 				// git asks its credential helper only once a 401 carrying
 				// a challenge arrives, so every clone and push begins
@@ -830,7 +842,12 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			// code belongs to or where the sentence beside it
 			// comes from. A caller refused here and refused by a
 			// route reads one body.
-			if GitAccess(r) != GitNone {
+			switch git {
+			case GitDownload:
+				// A download is never challenged: a browser would prompt.
+				DownloadUnauthorized(w)
+				return
+			case GitFetch, GitPush:
 				// EXCEPT A GIT CLIENT, which is CHALLENGED: it asks its
 				// credential helper for a token only after a 401 carrying
 				// one, and prints nothing of a JSON body. The protocol's

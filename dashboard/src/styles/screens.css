@@ -877,10 +877,6 @@
 .live-card > .coverage-note {
   margin: var(--spacing-3) var(--spacing-4) 0;
 }
-.coverage-nodes {
-  margin: var(--spacing-1) 0 0;
-  padding-inline-start: var(--spacing-5);
-}
 
 /* ---- Backups & retention ------------------------------------------------ */
 
@@ -1958,7 +1954,6 @@ a.prof-row:hover {
   }
 }
 
-.org-builder-problems ul,
 .org-builder-list {
   margin: 0;
   padding: 0;
@@ -2781,16 +2776,40 @@ a.prof-row:hover {
   white-space: nowrap;
 }
 
-/* THE NEWEST CHANGE: the page's head and title, who changed it and when, what
-   each save said, the lines it changed, and the page's opening under a rule. */
+/* THE NEWEST CHANGE: which page, the writer's note, who, when and how much,
+   then the change as the page reads and the page's earlier saves. */
 .knowledge-latest {
   grid-area: latest;
   gap: var(--spacing-3);
 }
-.knowledge-latest-who {
+.knowledge-latest-head {
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.knowledge-latest-where {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* The save's own words lead what is said about it. */
+.knowledge-latest-note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+.knowledge-latest-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
   margin: 0;
   min-width: 0;
   font-size: var(--font-size-compact);
@@ -2800,35 +2819,57 @@ a.prof-row:hover {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
 }
-.knowledge-latest-who > time {
+.knowledge-latest-facts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-2);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.knowledge-latest-notes {
+.knowledge-latest-earlier {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+}
+/* On the rows' own edge: the tiles' day headings are inset to their rows. */
+.knowledge-latest-earlier-title {
+  padding-inline: 0;
+}
+.knowledge-latest-saves {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.knowledge-latest-note {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: baseline;
-  gap: var(--spacing-3);
+/* AN EARLIER SAVE, said as the newest is: its note, then who, when and how much. */
+.knowledge-latest-save {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.knowledge-latest-save-note {
+  margin: 0;
   font-size: var(--font-size-compact);
   color: var(--color-text-primary);
+  overflow-wrap: anywhere;
 }
-.knowledge-latest-note > time {
+.knowledge-latest-save-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-2);
+  margin: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 .knowledge-latest-opening {
-  padding-top: var(--spacing-3);
-  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-1);
 }
 
 .knowledge-section-title {
@@ -4338,6 +4379,27 @@ a.knowledge-reader-how:hover {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+/* A type's words wrap as one block beside its actions, so a narrow dialog cuts neither. */
+.task-type-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.task-type-words {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+}
+.task-type-slug {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.task-type-actions {
+  flex: none;
 }
 
 .work-col-head {
@@ -8929,10 +8991,6 @@ a.live-row:hover {
 .ceiling-status:empty {
   display: none;
 }
-.ceiling-warnings {
-  margin: 0 0 var(--spacing-2);
-  padding-left: 1.1em;
-}
 
 /* SETTINGS › CONFIGURATION, THE DOCUMENT EDITOR: the summary takes the row
    and Save stands at its end, level with the field rather than its label. */
@@ -8953,37 +9011,83 @@ a.live-row:hover {
 }
 
 /* SETTINGS › DELEGATED DECISIONS: what the switch's change came to, under the
-   card's head, and one required-checks entry as a row (the repository, its
-   branch, the checks taking what is left, its bin). */
+   card's head. */
 .delegated-rules-status {
   padding: var(--spacing-2) var(--spacing-3);
 }
 .delegated-rules-status:has(> .ceiling-status:empty) {
   display: none;
 }
-/* The kinds a rule decides: a group of checkboxes named by its label, with
-   none of the browser's frame around a fieldset. */
+/* One rule as a sentence: what and who on the first line, the rest under it. */
+.delegated-rule {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.delegated-rule-head,
+.delegated-rule-meta {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--spacing-2);
+  row-gap: var(--spacing-1);
+}
+.delegated-rule-arrow {
+  align-self: center;
+  color: var(--color-text-tertiary);
+}
+.delegated-rule-meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+/* The dot trails its item, so a wrapped line never starts with one. */
+.delegated-rule-meta > :not(:last-child)::after {
+  content: "·";
+  margin-left: var(--spacing-2);
+  color: var(--color-text-tertiary);
+}
+/* The sheet's groups, a rule between each. */
+.delegated-form-group + .delegated-form-group {
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-4);
+}
 .delegated-kinds {
   margin: 0;
   padding: 0;
   border: 0;
   min-width: 0;
 }
-.delegated-kinds > legend {
-  padding: 0;
-  margin-bottom: var(--spacing-1);
+.delegated-field-error {
+  color: var(--color-feedback-danger-ink);
 }
+.delegated-sample-custom {
+  align-items: center;
+}
+/* One required-checks entry: the repository, its branch and its bin on a row
+   that wraps, the checks under them. */
 .delegated-checks-entry {
-  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
 }
-.delegated-checks-entry > :nth-child(1),
-.delegated-checks-entry > :nth-child(2) {
-  flex: 0 0 9rem;
-  min-width: 0;
+.delegated-checks-target {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr) auto;
+  gap: var(--spacing-2);
+  align-items: center;
 }
-.delegated-checks-entry > :nth-child(3) {
-  flex: 1 1 auto;
-  min-width: 0;
+@media (width < 640px) {
+  .delegated-checks-target {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .delegated-checks-target > :nth-child(2) {
+    grid-row: 2;
+  }
 }
 
 /* SETTINGS › CONFIGURATION › ENTITIES: a list and the one it opened. A fixed
@@ -9304,14 +9408,6 @@ a.live-row:hover {
   .app .crewlet-app-shell__content:has(.artifacts-selection) {
     padding-bottom: calc(var(--size-control-lg) + var(--spacing-8));
   }
-}
-
-/* THE QUOTA'S KEY on Settings › File storage, quiet under its figure, as a
-   settings table draws a key. */
-.storage-quota-key {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
 }
 
 /* AN ARTIFACT THE READER CANNOT OPEN, refused or in the trash: one

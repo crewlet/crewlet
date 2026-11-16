@@ -24,7 +24,7 @@
 import { useState } from "react";
 import { Button, Callout, Checkbox, InlineCode } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
-import { CheckGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { reloadFailure } from "./secretReload.ts";
 
@@ -146,7 +146,7 @@ export function RemoveSecretDialog({
           colour carries state. The tick is the mark our own banner drew, so it
           is passed rather than taking Callout's neutral info glyph. */}
       {!referenced && !unchecked && (
-        <Callout variant="neutral" icon={<CheckGlyph size="md" />}>
+        <Callout variant="neutral">
           <span>Nothing uses it.</span>
         </Callout>
       )}

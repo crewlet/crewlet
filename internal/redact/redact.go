@@ -84,17 +84,20 @@
 // # A text that arrives in pieces
 //
 // [Stream] redacts a text written to it in pieces and writes, put together,
-// exactly what [Secrets] returns for the whole, without holding it: a whole
-// PDF's base64 on one line of a transcript is redacted in what a few hundred
-// KiB a pass hold. It runs the passes Secrets makes, the keys' blocks and then
-// each rule in order, as STAGES, each reading what the one before it wrote,
-// and each deciding with the code Secrets decides with, so the two answer
-// alike: every stage steps by its own input alone, deciding a window once it
-// holds a step past where it resumes or the text has ended, and by exactly
-// that window however much more it holds, so how the text is cut into writes
-// changes nothing. Secrets itself reads its text whole at any length: its
-// caller holds the text already, and read by the stages, a text that needs
-// none of their windows paid for them.
+// exactly what [Secrets] returns for the whole, without holding it, or
+// refuses the text (below): a whole PDF's base64 on one line of a transcript
+// is redacted in what a few hundred KiB a pass hold. It runs the passes
+// Secrets makes, the keys' blocks and then each rule in order, as STAGES, each
+// reading what the one before it wrote, and each deciding with the code
+// Secrets decides with, so the two answer alike: every stage steps by its own
+// input alone, deciding a window once it holds a step past where it resumes
+// or the text has ended, or, a stage claiming in the text as written, short
+// of that at the last marker it holds (below), and by exactly that window
+// however much more it holds. The stages are handed the text a piece at a
+// time at its own offsets, so what each holds when it steps is the text's
+// alone, and how the text is cut into writes changes nothing. Secrets itself
+// reads its text whole at any length: its caller holds the text already, and
+// read by the stages, a text that needs none of their windows paid for them.
 //
 // A stage decides with the whole-text code over its window ([rule.decide],
 // [keyReading]) and trusts a decision only where the window holds all it read.
@@ -109,28 +112,57 @@
 // run's own test rather than held, the dots a Google token may end before and
 // the backslashes a value may end before counted rather than held, and
 // written out a piece at a time once the run ends. Each stage reads its own
-// input, since a marker stands for a run of any length.
+// input, since a marker stands for a run of any length; and so a stage that
+// claims tokens or AWS secrets in the text as written, holding markers that
+// stand for more of it than a step, or one that is still being read, decides
+// up to the last marker it holds, since no token's or AWS secret's read
+// crosses a marker's `[` ([ruleStage.markerToStepAt]).
 //
 // The keys' blocks read what the rules claim in the text as written
 // ([claims]), so the rules run twice: as a second instance of the same stages
 // over the text as written, running ahead of the keys' stage and keeping where
 // each place of what they write stands in that text, and over what the keys'
 // stage writes. The keys' stage reads an armour's block once the claims
-// through its window are decided.
+// through its window are decided, or once the text has run the claims' lag
+// past the window, whatever they say (below).
 //
-// A STREAM'S MEMORY IS ITS STAGES' WINDOWS. A rule's stage holds MaxReach
-// behind where it resumes and a step past it, about 290 KiB, and the keys'
-// stage four blocks' reach behind where it reads and a step past it; with
-// every rule run twice, and the readers of the claims, that is at most about
-// 21 MiB of text, and at most about as much again of the edits, values and
-// claims the stages keep beside it, where a text is markers end to end (a JSON
-// Web Token every fifteen bytes). A test holds both. Two texts hold more: a
-// key's armour within a window of a run a claims stage is reading on, whose
-// marker the stages after it cannot decide what lies within reach before
-// until the run ends, so the keys' stage waits on those claims and the stream
-// holds the run; and an AWS secret's key quoted and followed by spaces past a
-// window, whose claim waits on where they end. Neither is a credential's
-// format, and what the stream holds there is what the whole text is.
+// A STREAM'S MEMORY IS ITS STAGES' WINDOWS, WHATEVER THE TEXT. A rule's stage
+// holds MaxReach behind where it resumes and a step past it, about 290 KiB;
+// the keys' stage four blocks' reach behind where it reads and a step past
+// it, and, while it waits on the claims through its window, the text they
+// trail it by, which it caps at the claims' lag: once the text has run that
+// far past a window, about 5.3 MiB, it decides the window whatever its claims
+// say. With every rule run twice, and the readers of the claims, that is at
+// most about 21 MiB of text, and at most about as much again of the edits,
+// values and claims the stages keep beside it, where a text is markers end
+// to end (a JSON Web Token every fifteen bytes). A test holds both, over a
+// shape of each kind of hold a stream was found to have, at a hold small
+// enough that each costs a MiB, and over an armour beside a run past the
+// stream's own hold.
+//
+// A WINDOW DECIDED EARLY IS CHECKED, AND A STREAM THAT FINDS IT READ A CLAIM
+// OTHERWISE REFUSES ([ErrDecidedEarly]). Every token's and AWS secret's claim
+// is known within the claims' lag, and so is every run's end but one, so a
+// window decided early reads a claim otherwise than the whole text has it
+// only where it is decided further past it: by the password's reader, which
+// decides a key before a marker only with what follows the marker, a run of
+// any length, and holds a step of its own input, which tokens the rules before
+// it collapse into markers make as long as the collapse; and by an AWS
+// secret's reader, which claims a quoted key where the blanks after it end.
+// The one run's end that comes later than the lag, a Google token's before
+// the dots it may end on, which its stage counts while they run and sets only
+// once they stop, is read otherwise by a window that read the token open only
+// from that end on, over the dots, and is checked over that alone
+// ([keyStage.ended]). The keys' stage keeps what each such window asked of
+// the claims, and a claim that then comes, or ends, otherwise over it stops
+// the stream: what it wrote is not Secrets of the text and may hold what
+// Secrets redacts, so its caller neither keeps nor shows it. A text gets that
+// only where a key's block is read beside such a claim: a password's key on a
+// line that ends in a key's END, with a run longer than the lag straight after
+// its value's line, which one such key is enough for; many password's keys
+// between an armour and a run longer than the lag; or armours among long
+// tokens each with a password's key after it. None is a credential's format. A window decided early that read no claim otherwise decided what
+// the whole text does.
 //
 // # What a password's rule still publishes
 //
@@ -2808,11 +2840,13 @@ const maxKeyLine = 76 + 1
 // and read whole, clean text costs a scan per rule and no copy. [Stream] runs
 // the same passes as stages over a text it does not hold, each deciding with
 // this code over its window ([rule.decide], [keyReading]); they write what
-// this does, which the stream's tests hold over texts of every shape a stage
-// carries across its window, each window's edge at every byte around the
-// shapes there. Read by the stages too, a text past a window paid for
-// windows it did not need, the redaction 3.4 to 4.4 times as slow, and about
-// 75 bytes allocated a byte of it, where clean text here allocates none.
+// this does, or refuse a text built against the password's rule or an AWS
+// secret's quoted key beside a key's armour ([ErrDecidedEarly]), which the
+// stream's tests hold over texts of every shape a stage carries across its
+// window, each window's edge at every byte around the shapes there. Read by the stages too, a text past a
+// window paid for windows it did not need, the redaction 3.4 to 4.4 times as
+// slow, and about 75 bytes allocated a byte of it, where clean text here
+// allocates none.
 func Secrets(text string) string {
 	if text == "" {
 		return text
@@ -4435,6 +4469,17 @@ type claims struct {
 	// taken are the blocks read forward from a BEGIN ([claims.take]).
 	taken [][2]int
 	read  bool
+	// footprint, where a stream's keys' stage asks for one, is the hull of
+	// what its answers read of the claims ([claims.asked]).
+	footprint *[2]int
+}
+
+// asked widens the footprint, where one is asked for, by [start, end): the
+// claims over it are what an answer read ([keyStage.handed]).
+func (c *claims) asked(start, end int) {
+	if f := c.footprint; f != nil {
+		f[0], f[1] = min(f[0], start), max(f[1], end)
+	}
 }
 
 // any reports whether the rules replace any of text[start:end], a run of
@@ -4442,6 +4487,7 @@ type claims struct {
 // ([claims.glued]).
 func (c *claims) any(start, end int) bool {
 	c.load()
+	c.asked(start, end)
 	return overlaps(c.whole, start, end) || c.glued(start, end)
 }
 
@@ -4451,6 +4497,7 @@ func (c *claims) any(start, end int) bool {
 // short last line, redacted with it.
 func (c *claims) names(start, end int) bool {
 	c.load()
+	c.asked(start, end)
 	return overlaps(c.named, start, end)
 }
 
@@ -4596,9 +4643,15 @@ func (c *claims) shortOfNames(spans [][2]int) [][2]int {
 	}
 	c.load()
 	for i, s := range spans {
-		if n, ok := within(c.named, s[1]); ok {
-			spans[i][1] = n[0]
+		n, ok := within(c.named, s[1])
+		if !ok {
+			c.asked(s[1], s[1]+1)
+			continue
 		}
+		// From the range's start: a claim merging with it there moves the
+		// start without covering the place asked of.
+		c.asked(n[0], s[1]+1)
+		spans[i][1] = n[0]
 	}
 	return spans
 }

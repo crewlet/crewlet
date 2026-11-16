@@ -135,11 +135,11 @@ func TestACompanyOffChatletIsServedNoneOfIt(t *testing.T) {
 	t.Parallel()
 	port := reservePort(t)
 	boot := bootstrapFor(t, port)
-	boot.API.Auth.TOTP = iam.SecondFactorOptional
 	company, err := config.ParseCompany([]byte(peopleCompanyYAML + "chat:\n  backend: none\n"))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
+	passwordOnly(boot, company)
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)

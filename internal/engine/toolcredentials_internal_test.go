@@ -463,7 +463,7 @@ mcp_servers:
 
 // A HELD-BACK SERVER'S SENTENCE REACHES THE SCREEN WHOLE.
 //
-// The heartbeat bounds it ([coord.MaxMCPErrorBytes]) and Settings › Tools & MCP
+// The status record bounds it ([coord.MaxMCPErrorBytes]) and Settings › Tools & MCP
 // reads what survives. At 240 bytes the remedy the guide's own host-setting
 // case needs — the key to declare optional — was always the part cut, and the
 // row ended "…, l…". Asserted on the wire form, as a peer reads it.
@@ -504,14 +504,13 @@ func TestAHeldBackServersSentenceReachesTheScreenWhole(t *testing.T) {
 			if m == nil || !strings.Contains(m.Error(), tc.says) {
 				t.Fatalf("the sentence %v does not say %q", m, tc.says)
 			}
-			sent, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: coord.NodeStatus{
-				MCP: []coord.MCPServerStatus{{Server: m.server, Failed: 1, Error: m.Error()}},
-			}.Meta()})
-			if !ok || len(sent.MCP) != 1 {
-				t.Fatalf("the heartbeat's status did not read back: %+v", sent)
+			sent := recordedRows(t, coord.NodeStatusRecord{Node: "node-a", Epoch: 1,
+				MCP: []coord.MCPServerStatus{{Server: m.server, Failed: 1, Error: m.Error()}}})
+			if len(sent.MCP) != 1 {
+				t.Fatalf("the status record did not read back: %+v", sent)
 			}
 			if got := sent.MCP[0].Error; got != m.Error() {
-				t.Errorf("the heartbeat carried %q of the %d-byte sentence %q", got, len(m.Error()), m.Error())
+				t.Errorf("the status record carried %q of the %d-byte sentence %q", got, len(m.Error()), m.Error())
 			}
 		})
 	}
@@ -627,7 +626,7 @@ func TestAMintIsStoppedOnlyWhereTheIntegrationsLastPassSaysAPersonMustAct(t *tes
 // after the integration says so, and waiting again once it no longer does.
 //
 // The claim's pass runs before the integration's first, so all it can say is
-// waiting; only the heartbeat sees the integration's later report. Read once at
+// waiting; only the status record sees the integration's later report. Read once at
 // the claim, a company whose Atlassian organization key nobody set showed every
 // seat's server as waiting for credentials for ever, in a neutral tone, beside
 // an integration card reporting the failure.
@@ -1129,21 +1128,16 @@ roles:
 		t.Fatalf("the shared bridge holds %v: a server whose key is unset was handed to "+
 			"the supervision that retries it", held)
 	}
-	// AS A PEER READS IT, off the heartbeat, which bounds the sentence.
-	status, err := e.nodeStatus(ctx)
-	if err != nil {
-		t.Fatalf("node status: %v", err)
-	}
-	sent, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: status.Meta()})
-	rows := sent.MCP
+	// AS A PEER READS IT, off the status record, which bounds the sentence.
+	rows := recordedRows(t, e.statusRecordRows(ctx)).MCP
 	if len(rows) != 1 || rows[0].Server != "search" || rows[0].Failed != 1 ||
 		rows[0].Waiting != 0 || rows[0].Started != 0 {
-		t.Fatalf("heartbeat = %+v: want the shared server failed, once", rows)
+		t.Fatalf("status record = %+v: want the shared server failed, once", rows)
 	}
 	for _, said := range []string{"${SHARED_SEARCH_KEY} is not set",
 		"list SEARCH_KEY under mcp_servers.search.optional_keys"} {
 		if !strings.Contains(rows[0].Error, said) {
-			t.Errorf("the heartbeat's sentence %q does not say %q", rows[0].Error, said)
+			t.Errorf("the status record's sentence %q does not say %q", rows[0].Error, said)
 		}
 	}
 	if missing := logs.serverRecords("mcp_server_credential_missing", "search"); len(missing) != 1 ||

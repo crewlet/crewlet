@@ -1427,12 +1427,15 @@ actually choose from (everybody appends `1!`), an attacker who knows the rule
 enumerates it, and they push people to write the result down. Length is the
 only property that buys entropy from a human at no cost to them.
 
-Twelve is the engine's floor and a deployment may raise it with
-`api.auth.min_password_length`; nothing lowers it. The raised floor is
-the one every password is held to — every redemption's and every change of a
-password — and the one `GET /auth/config` and an invitation's view
-report, so a form refuses exactly what the route would. It used to be validated
-and reported as twelve whatever it said, and enforced by nothing.
+Twelve is the engine's floor. The company may raise it
+(`sign_in.min_password_length`, see [The company sets its sign-in
+policy](#the-company-sets-its-sign-in-policy-within-each-nodes-limits)), and a
+node's operator may hold it higher still (`api.auth.limits.min_password_length`);
+nothing lowers it. The floor in force is the one every password is held to —
+every redemption's and every change of a password — and the one `GET
+/auth/config` and an invitation's view report, so a form refuses exactly what
+the route would. A raised floor applies to the next password a person sets: a
+password set under a lower floor still signs in.
 
 Behind that floor there is a small blocklist, and it is deliberately hundreds
 of entries rather than a published top-ten-thousand corpus: those lists are
@@ -1630,7 +1633,9 @@ link's two are marked `first`.
 
 ### A required second factor is enrolled before anything else
 
-`api.auth.totp: required` — the default, when the line is absent — means
+`sign_in.require_second_factor: true` — the default, when the line is absent,
+and the only value a node allows unless its operator sets
+`api.auth.limits.second_factor: optional` — means
 **nobody acts on a password alone**. A
 person who holds a second factor is asked for it at every password sign-in and
 step-up, as they always were. A person who holds **none** — freshly invited
@@ -2103,6 +2108,53 @@ credential that is fine is broken.
 
 ---
 
+## The company sets its sign-in policy, within each node's limits
+
+How people sign in is the company's, written in its document under `sign_in`
+and changed from **Settings › Sign-in policy** without a restart, so every node
+enforces the same values (ADR-0152):
+
+| Setting | Default | Engine range |
+|---|---|---|
+| `require_second_factor` | `true` | |
+| `min_password_length` | 12 | 12 to 256 characters |
+| `session_lifetime_seconds` | 604800 (7 days) | 1 hour to 30 days |
+| `idle_timeout_seconds` | 43200 (12 hours) | 15 minutes to 30 days |
+| `step_up_seconds` | 3600 (1 hour) | 5 minutes to 1 day |
+
+**Each node holds them within its operator's limits**, `api.auth.limits` in its
+own file: `max_session_lifetime`, `max_idle_timeout`, `max_step_up`,
+`min_password_length`, and `second_factor`, whose default `required` keeps the
+company from dropping the second factor. A write past the answering node's
+limit is refused at the setting's path, naming the limit, and a value set
+before an operator lowered a limit is enforced at the limit. So an
+administrator, or a stolen administrator session, cannot weaken sign-in past
+what the operator set.
+
+**A change asks for a recent proof and is recorded**, as every configuration
+write is: in the revision history and the audit log. A change that weakens
+the policy (a second factor dropped, a lower password floor, a longer
+lifetime, idle limit or step-up window) is checked with a warning saying what
+it allows, which the page asks you to confirm before it saves.
+
+**What a change does to people already signed in:**
+
+- A **shorter lifetime or idle limit** ends a live session at its next request
+  once it is past the new limit, measured from its sign-in or its last use.
+- A **longer lifetime or idle limit** reaches only sessions signed in after
+  it: a live session keeps the shorter limits it signed in under.
+- The **step-up window** is measured from a session's proof on every request,
+  so a change to it applies at the next request either way.
+- **Requiring a second factor** applies at each person's next sign-in, and a
+  **raised password floor** to the next password they set. To make everybody
+  sign in again now, sign everybody out (`crewlet iam invalidate-all`).
+
+What stays in each node's file is what a node needs before it can read any
+company, or what a company must not change about the node that serves it:
+the API tokens and the keyring, `admin`, `allowed_origins`,
+`company_writers`, `accept_insecure` and the `audit` horizons, which an
+administrator shortening could use to erase the trail of what they did.
+
 ## The session cookie
 
 A signed-in browser holds one cookie, and it is **signature-stateless and
@@ -2113,7 +2165,7 @@ database read for every forged cookie an attacker sends, and has nothing to say
 at all until the row it names has been applied on the node the request reached.
 
 ```
-__Host-crewlet_session=v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>].<mac>
+__Host-crewlet_session=v4.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<signed in>.<absolute expiry>.<issued>.<idle expiry>[.<scope>].<mac>
                         Path=/; HttpOnly; Secure; SameSite=Lax
 ```
 
@@ -2189,9 +2241,11 @@ to know it:
 | person | So a node can read their row without first reading the session's |
 | epoch | The person's revocation epoch at sign-in: a node that has **not yet applied** the session's start record still holds proof the sign-in happened |
 | start position | What turns "no row" into the two answers it actually is |
-| absolute expiry | Never moved by a re-issue |
-| idle expiry | Moved by every re-issue, with no store write at all |
-| scope | **Present only on a session that may do less than everything**: `enrol`, one that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else). Signed with the rest and carried through every re-issue, so a node that has not applied the session's row still knows what it may reach. Absent on a whole session, which is why an ordinary cookie is the same nine fields every build reads, and a scoped one — or a scope a build cannot name — is refused by any build that does not know it rather than served whole |
+| signed in | When the sign-in this session continues happened: a step-up's or a password change's replacement carries it, so a lowered lifetime is measured from the sign-in |
+| absolute expiry | The lifetime it signed in under. Never moved by a re-issue |
+| issued | When this cookie was signed: every re-issue moves it, so a lowered idle limit is measured from the last use |
+| idle expiry | The idle limit it was issued under. Moved by every re-issue, with no store write at all, never past the window it was issued with |
+| scope | **Present only on a session that may do less than everything**: `enrol`, one that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else). Signed with the rest and carried through every re-issue, so a node that has not applied the session's row still knows what it may reach. Absent on a whole session, which is why an ordinary cookie is the same eleven fields every build reads, and a scoped one — or a scope a build cannot name — is refused by any build that does not know it rather than served whole |
 
 Nothing in it is secret and nothing in it grants anything alone: a bearer in a
 proxy log discloses a lineage, a person id, two deadlines and whether the
@@ -2324,7 +2378,7 @@ route's:
 | **Edit** | One edit carrying only what changed: their name (emptied, it clears it), their login, their seat and their access. A name this node's keyring cannot open is not offered for change, since the field would open on nothing and a save would write over a name nobody read. A person's seat is chosen among the vacant human seats and their own, with no "No seat": it is moved, never cleared; a service account's may be none. Lowering what somebody holds reaches every token they minted, which carries only what its owner still holds. Taking Admin from yourself, suspending yourself or removing yourself while you are the only active person holding it says so first: afterwards nobody but the deployment's own token (`api.auth.tokens`) could administer people |
 | **Suspend** · **Reactivate** | A suspended person may not act, every session, token and password reset link they hold ends, and their seat — which they keep — is withheld from contact routing; reactivating restores the routing and lets them sign in again, and brings back none of what the suspension ended |
 | **Get reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold. Every gesture that ends their sessions ends it too, so it is issued after them |
-| **Reset two-step verification** | Clears their authenticator and recovery codes and ends every session, token and password reset link they hold; where `api.auth.totp` is `required` they enrol again at their next sign-in, and where it is `optional` they sign in on their password alone until they set one up |
+| **Reset two-step verification** | Clears their authenticator and recovery codes and ends every session, token and password reset link they hold; where a second factor is required they enrol again at their next sign-in, and where it is optional they sign in on their password alone until they set one up |
 | **Sign out everywhere** | Moves their revocation epoch: every session — and every personal token and password reset link — they hold ends |
 | **Revoke** (a credential) | Ends that one credential — a token, a reset link, or how they prove who they are |
 | **Remove** | Typed back by login. Deletes the person, frees their seat, which stands vacant in the org chart, and [erases what is theirs](#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows); undone only by inviting or creating them on a seat again |
@@ -2352,8 +2406,8 @@ written it, from its own clock: the rule fired on two hosts' clocks
 disagreeing and on nothing else, and its answer signed an honest person out of
 every session and machine token they held. It is gone, along with
 `session.rotate_after`. What bounds a captured cookie is what always did: the
-**idle deadline** (twelve hours from the last use), the **absolute deadline**
-(`session.absolute`), and one write — the person's revocation epoch through
+**idle deadline** (from the last use), the **absolute deadline** (from the
+sign-in), both the company's ([below](#the-company-sets-its-sign-in-policy-within-each-nodes-limits)), and one write — the person's revocation epoch through
 **sign out everywhere**, or the fleet's generation — which ends it everywhere
 at once.
 
@@ -2388,7 +2442,7 @@ request.
 **`reauth_at` is the session's own proof plus `step_up`.** Every session a
 sign-in opens — a password and its second factor, a redeemed invitation, a
 step-up — records the instant it was proved on its row, and the guard composes
-the deadline from that and this node's window at decision time — which
+the deadline from that and the step-up window in force at decision time — which
 gestures ask for it is [the authority table's](#some-gestures-ask-how-recently-you-proved-who-you-are). Proof is a
 fact about one sign-in rather than about the person, so a proof on a laptop
 says nothing about a phone signed in last week, and a step-up re-proves by
@@ -2675,7 +2729,7 @@ unlocks.
 | **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds (a token or a service account bound to none) is refused, because it runs on the bound seat's model | Any one of the apps the row names (here `worklet` or `doclet`, and no other): the answer searches the pages only for a `doclet` holder and the board only for a `worklet` holder |
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker, and an agent seat's own executor sessions (`list_sessions`, `read_session`) | The caller, and **nobody else** — not even admin |
-| **Own record** | Marking an inbox, pinned views; a person's chat read state (`mark_chat_read`) and the marks over their own code notices (`code_mark_inbox`) | The owner, or admin, with the row's app |
+| **Own record** | Marking an inbox, pinned views; a person's chat read state (`mark_chat_read`), the marks over their own code notices (`code_mark_inbox`) and over their own comment notices (`artifact_mark_inbox`, which names no app) | The owner, or admin, with the row's app |
 | **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); running a schedule now (`run_schedule`, decided on every seat the schedule wakes); answering the question an executor parked on (`answer_executor`); and reading one seat's own trail (`audit.seat.read`: its memory, its turns, its executor's live output and its executor sessions with their transcripts) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses no app still runs their team. For a seat's controls the owner is the person bound to the seat — for a note to a turn whose executor is in its box, the seat the executor's record names under its sealed anchor, which the asking node reads itself ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)); for an executor's question it is its **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the executor's seat, so nobody who merely leads the requester answers a question the executor put to them |
 | **Saved view** | Saving a view | With `worklet`: a **personal** view (one naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's (a project's, a unit's, or the person whose page it sits on and whoever leads them) or admin's, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy (its fields, default assignee, tag renames and archives, archiving the project) and re-routing a task to another team | The project's lead, or admin, with `worklet` |
@@ -2966,7 +3020,7 @@ verb asks for one:
 | Window | Sized by | Asked by |
 |---|---|---|
 | none | — | Every read; every work, knowledge, artifact and chat verb but the three purges and chat's three destructions, and every code tool but a repository's purge; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a backup, the object store's migration, the retention and capacity gestures, the fleet broker's removals, discarding a wake feed's dead letter, ending every session in the company — purging a work item, a page or an artifact, or a repository's unreachable objects (`code_purge_unreachable`), and erasing or pruning a chat room or setting its horizon, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
+| `step_up` | `sign_in.step_up_seconds` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a backup, the object store's migration, the retention and capacity gestures, the fleet broker's removals, discarding a wake feed's dead letter, ending every session in the company — purging a work item, a page or an artifact, or a repository's unreachable objects (`code_purge_unreachable`), and erasing or pruning a chat room or setting its horizon, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window
 over every sensitive gesture — at the stricter end of it (GitHub's is two
@@ -3702,14 +3756,18 @@ today is smaller, and lives in two places:
   the `grants` it may use (`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`,
   `gitlet` — a CI runner that fetches the company's code needs `gitlet`); `admin`, whether
   this node [serves admin](#access-admin-and-one-permission-per-app) at all
-  (`serve` or `refuse`); what a password
-  sign-in asks for — `totp` (unset is `required`), `accept_insecure` and
-  `min_password_length`; and the `session` and `audit` blocks under it.
+  (`serve` or `refuse`); `limits`, this node's bounds on the company's
+  sign-in policy, and `accept_insecure`, which an optional second factor off
+  loopback needs; and the `audit` block under it.
   Password sign-in is always served; there is no setting that turns it off. `allow_anonymous_read`,
   `disabled` and `oidc` are all retired, and a file still carrying one is
   refused (Tier A decodes with unknown keys refused) by a message that names
   the key as removed and says what replaced it — see
   [Configuration § Auth](configuration.md#auth) for each.
+- **Tier B, `sign_in`**: the company's sign-in policy, whether a second
+  factor is required, the shortest password, how long a session lives and
+  stays unused, and the step-up window, changed from Settings › Sign-in policy
+  (see [The company sets its sign-in policy](#the-company-sets-its-sign-in-policy-within-each-nodes-limits)).
 - **The identity directory** — who is a *person*, who is a machine, and which
   seat each is bound to: the human seat every person holds, and the one a
   service account or a token's row may be bound to. It is written from the seat

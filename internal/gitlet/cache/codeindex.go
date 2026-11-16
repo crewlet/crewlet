@@ -740,23 +740,18 @@ func (c *Cache) listTip(ctx context.Context, s Synced, tip string) ([]treeFile, 
 		if len(rec) == 0 {
 			continue
 		}
-		meta, path, ok := bytes.Cut(rec, []byte{'\t'})
-		fields := strings.Fields(string(meta))
-		if !ok || len(fields) != 4 {
-			return nil, fmt.Errorf("cache: ls-tree of %s answered %q", s.entry.id, rec)
+		e, err := gitproc.ParseTreeEntry(rec)
+		if err != nil {
+			return nil, fmt.Errorf("cache: ls-tree of %s: %w", s.entry.id, err)
 		}
-		if fields[1] != "blob" || (fields[0] != "100644" && fields[0] != "100755") {
+		if e.Type != "blob" || (e.Mode != "100644" && e.Mode != "100755") {
 			continue
 		}
-		oid, err := codeindex.ParseOID(fields[2])
+		oid, err := codeindex.ParseOID(e.ID)
 		if err != nil {
 			return nil, err
 		}
-		size, err := strconv.ParseInt(fields[3], 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, treeFile{path: string(path), blob: oid, size: size})
+		files = append(files, treeFile{path: string(e.Path), blob: oid, size: e.Size})
 	}
 	return files, nil
 }

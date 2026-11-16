@@ -46,6 +46,9 @@ func artifactsSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	}
 	opts := artifactsapi.Options{
 		Gate: gate, Reads: arts, Writes: arts, Objects: engineObjects{e: e}, Ready: ready,
+		// THE COMMENT THREADS, and who each comment wakes and tells, decided
+		// as the agent tools decide it.
+		Comments: arts, Routing: engine.ArtifactCommentRouter(e),
 		// THE PIPELINE IS ASKED FOR PER REQUEST: the engine builds it on
 		// first use, and a node that cannot (no object store, no
 		// coordination store) answers the upload routes with why.
@@ -77,7 +80,7 @@ func artifactsSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	if err != nil {
 		return nil, nil, err
 	}
-	return surface, &queries.ArtifactsSource{Gate: gate, Reads: arts}, nil
+	return surface, &queries.ArtifactsSource{Gate: gate, Reads: arts, Comments: surface}, nil
 }
 
 // artifactsGate is THE admission to one artifact on this node, for every

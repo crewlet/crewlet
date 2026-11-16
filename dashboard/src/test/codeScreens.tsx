@@ -87,3 +87,43 @@ export function onTheRight(grid: HTMLElement, head: string): boolean {
   if (!cell) throw new Error(`no column head reads “${head}”`);
   return cell.className.includes("crewlet-data-grid__th--right");
 }
+
+/** A blob a case serves by its whole id: its text, the size its first page says, a promise it waits on. */
+export interface StubBlob {
+  text: string;
+  size?: number;
+  held?: Promise<void>;
+}
+
+/**
+ * `code_blob` by whole id, as the engine answers one with no path: the whole
+ * text on one page, or past 256 KiB a first page with a cursor to the rest.
+ */
+export async function blobAnswer(
+  url: URL,
+  blobs: Readonly<Record<string, StubBlob>>,
+): Promise<Response> {
+  const oid = url.searchParams.get("ref") ?? "";
+  const blob = blobs[oid];
+  if (!blob || url.searchParams.has("path")) return jsonAnswer({}, 404);
+  await blob.held;
+  const size = blob.size ?? blob.text.length;
+  return jsonAnswer({
+    kind: "blob",
+    blob: { oid, size, lines: blob.text.split("\n").length - 1, text: blob.text },
+    ...(size >= 256 << 10 && !url.searchParams.has("cursor") ? { next: "b:1" } : {}),
+  });
+}
+
+/** A drawn diff line of `kind` whose text is `text`, as its pieces: `class:text`, `[run]` or plain. */
+export function inkedLine(kind: string, text: string): string[] {
+  const line = [...document.querySelectorAll<HTMLElement>(`.diff-view__line[data-kind="${kind}"]`)]
+    .map((l) => l.querySelector<HTMLElement>(".diff-view__text")!)
+    .find((t) => t.textContent === text);
+  if (!line) throw new Error(`no ${kind} line reads “${text}”`);
+  return [...line.childNodes].map((node) => {
+    if (!(node instanceof HTMLElement)) return node.textContent ?? "";
+    if (node.className === "diff-view__run") return `[${node.textContent}]`;
+    return `${node.className}:${node.textContent}`;
+  });
+}

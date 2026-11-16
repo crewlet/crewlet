@@ -19,6 +19,9 @@ export default defineConfig({
     // pass by its process's CPU (`src/test/growth.ts`), which in the `threads`
     // pool would count every test file sharing the process.
     pool: "forks",
+    // A bench reads a module's imports through getters the module runner adds
+    // and the bundle does not, so its times are an upper bound on what ships.
+    benchmark: { suppressExportGetterWarnings: true },
     // HANG DETECTORS, sized in `src/test/bounds.ts` from what a case and a
     // hook were measured to take beside `go build` and `go vet`, because a
     // duration is CPU work over the share of a CPU its worker gets on a

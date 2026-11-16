@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -798,6 +799,7 @@ func New(opts Options) (*App, error) {
 
 	a := &App{
 		guard: auth.New(opts.Bootstrap).BindSeats(opts.SeatBindings).
+			WithSignIn(signInPolicyOf(opts.Bootstrap, companyOf(opts.Sources.Company))).
 			WithDevPrincipal(opts.DevPrincipal).WithSessions(opts.Sessions).
 			WithTokens(opts.Tokens).
 			WithAudit(opts.AuthEvents),
@@ -963,6 +965,7 @@ func New(opts Options) (*App, error) {
 	// (ADR-0125).
 	if d, ok := opts.Runtime.(delegatedRuntime); ok {
 		sources.Delegated = d.DelegatedReads()
+		sources.DelegatedGitHub = d.DelegatedGitHub()
 	}
 	// And the company's atlas, where the runtime reads one (ADR-0126).
 	if a, ok := opts.Runtime.(atlasRuntime); ok {
@@ -1047,12 +1050,10 @@ func New(opts Options) (*App, error) {
 	if opts.Bootstrap != nil && opts.Bootstrap.API.Artifacts.ExternalBase() != "" {
 		sources.ArtifactPages = true
 	}
-	// HOW A PERSON SIGNS IN HERE, from this node's own Tier A, through the
-	// accessors the sign-in path enforces it by. A caller that supplied its
-	// own keeps it.
+	// HOW A PERSON SIGNS IN HERE: the company's policy within this node's
+	// limits. A caller that supplied its own keeps it.
 	if sources.SignIn == nil && opts.Bootstrap != nil {
-		policy := queries.SignInPolicyOf(opts.Bootstrap.API.Auth)
-		sources.SignIn = &policy
+		sources.SignIn = &opts.Bootstrap.API.Auth
 	}
 	// GITLET'S ROWS, AS QUESTIONS, read from the one code surface
 	// this app is handed and asked on every question, with why this node
@@ -1498,7 +1499,7 @@ func (o Options) missing() error {
 //
 // The two verbs ask the same permission and differ in the step-up alone: every
 // write here changes what the deployment does for everybody on it, so it asks
-// for a proof inside `api.auth.session.step_up`, while the three reads — the
+// for a proof inside the step-up window, while the three reads — the
 // maintenance window's status, the value a reanchor must echo and the dead
 // letters' listing — change nothing, and a status an operator cannot see
 // without re-proving who they are is one they stop checking. The METHOD picks
@@ -1666,9 +1667,10 @@ type InboxFeed interface {
 // ([App.pushInboxGap]).
 func (a *App) pushInboxMoved(moved []inbox.Movement) {
 	for _, m := range moved {
+		app, relational := inboxHalf(m.Source)
 		a.stream.InboxChanged(stream.InboxChange{
 			Source: m.Source, Handle: m.Handle, UnreadDelta: m.UnreadDelta,
-			Subject: m.Subject, Reason: m.Reason, Stored: m.At, App: inboxApp(m.Source),
+			Subject: m.Subject, Reason: m.Reason, Stored: m.At, App: app, Relational: relational,
 		})
 	}
 }
@@ -1676,21 +1678,24 @@ func (a *App) pushInboxMoved(moved []inbox.Movement) {
 // pushInboxGap tells every watched inbox to read itself again: the engine
 // switched where this node's movements of source come from, and what moved in
 // the gap is not replayed — see [stream.Service.InboxReread].
-func (a *App) pushInboxGap(source string) { a.stream.InboxReread(source, inboxApp(source)) }
+func (a *App) pushInboxGap(source string) {
+	app, relational := inboxHalf(source)
+	a.stream.InboxReread(source, app, relational)
+}
 
-// inboxApp is the app whose half of a person's inbox a domain's movements are
-// about — the tracker's is Worklet's, the code log's Gitlet's (ADR-0110) — or
-// "" for a domain that keeps none, whose movement then reaches nobody
-// ([stream.InboxChange.ForReader]). Named by each domain's own state log name,
-// which is what an [inbox.Movement] carries.
-func inboxApp(source string) iam.Grant {
+// inboxHalf is who hears a domain's half of a person's inbox: the tracker's or
+// the code log's app, or for the artifacts' comments no app and every watcher
+// ([stream.InboxChange.Relational]); "" and false for a domain keeping none.
+func inboxHalf(source string) (iam.Grant, bool) {
 	switch source {
 	case worklet.Domain{}.Name():
-		return iam.GrantWorklet
+		return iam.GrantWorklet, false
 	case gitlet.Domain{}.Name():
-		return iam.GrantGitlet
+		return iam.GrantGitlet, false
+	case artifactsdomain.Domain{}.Name():
+		return "", true
 	}
-	return ""
+	return "", false
 }
 
 // Stream exposes the live channel, for the engine to feed.

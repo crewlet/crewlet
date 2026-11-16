@@ -82,8 +82,8 @@ func statusTaking(d time.Duration) func(context.Context) (coord.NodeStatus, erro
 //     heartbeat: at 45 s a 2.5 s hook ran the renews 16 s apart, at 90 s a
 //     5 s one 34 s apart against a 30 s window.
 //
-// Two seats, so the probe also covers a seat renewed after another in the
-// same pass, whose send instant moves with the one before it.
+// Two seats, so the probe covers every renewal of a pass, which are sent
+// together at its start, and their answers applied one after the other.
 func TestAHealthyNodeAdmitsItsSeatThroughEveryRenew(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

@@ -74,6 +74,8 @@ func TestEveryWriteNamesTheObjectItWrites(t *testing.T) {
 			"its only object",
 		builtin.CodeMarkInboxTool: "moves the caller's own code inbox, naming notices " +
 			"by their record ids — the caller's marks are its only object",
+		builtin.ArtifactMarkInboxTool: "moves the caller's own comment inbox, naming notices " +
+			"by their record ids: the caller's marks are its only object",
 		builtin.CodeCreateRepoTool: "makes a new repository, named by the `name` it " +
 			"will be listed under — on the other domains' tools a name is text, not " +
 			"an object, so it is not declared",

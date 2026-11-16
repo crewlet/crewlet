@@ -309,16 +309,33 @@ store:
   few gibibytes, the bucket's gibibyte is on top of the state logs' floors;
   give such a host more disk, or set `stream.store_max_bytes` and
   `store.objects.nats_max_bytes` together.
-- **A bucket that exists keeps the reservation it was created with**, as a
-  state log keeps its ceiling: the setting sizes a bucket that does not exist
-  yet. A node configured with another figure says so as
-  `natsobj_bucket_ceiling_kept`. Change an existing bucket's reservation with
-  `nats stream update OBJ_crewlet_files --max-bytes=<bytes>`, within what the
-  broker can grant — on an embedded fleet through a member's loopback client
-  listener with the [operator key](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool).
-  A single embedded node has no listener, so its bucket keeps its reservation:
-  make room by moving the files with `crewlet objects migrate -to s3`, or by
-  letting the collector remove what nothing names.
+- **Raise an existing bucket's reservation by raising the setting** and
+  restarting a data node, on every broker, a single embedded node included.
+  At boot, once its state logs hold their reservations, a data node whose
+  `store.objects.nats_max_bytes` is larger than the bucket's reservation
+  raises the bucket to it, changing nothing else about the bucket, and logs
+  `objects_bucket_raised`. It does so only where the broker can grant the
+  difference and still keep 1 GiB unreserved for the coordination records,
+  read from the broker's room as the node sees it: the embedded broker's own
+  limit (`stream.store_max_bytes`, or its share of the volume), a clustered
+  member's own room, or an external broker's account limit. Otherwise it keeps
+  the reservation, logs `objects_bucket_raise_refused` with the most it can
+  raise it to, and raises the
+  [`objects_bucket_raise_refused`](#alarms) alarm until its next boot; give
+  the broker more room or lower the figure, and restart it.
+  - **Only a data node raises it**, one at a time: data nodes take a
+    coordination lease for the raise and read the bucket again under it, so
+    nodes configured with different figures end at the largest, whatever order
+    they boot in. A node without `data` never raises it.
+  - **A smaller figure never lowers it.** A reservation is never shrunk; a
+    data node configured below it logs `objects_bucket_not_lowered` and keeps
+    it.
+  - **An external broker whose account states no limit is not raised**, since
+    the node cannot hold the raise to what the coordination records need. Raise
+    it there with `nats stream update OBJ_crewlet_files --max-bytes=<bytes>`,
+    within what the broker can grant; on an embedded fleet the same command
+    reaches a member's loopback client listener with the
+    [operator key](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool).
 - **A bucket with no ceiling is bounded by the figure you write, or refused.**
   Every bucket an engine built before the reservation created holds none, as
   does one made by hand or by another tool. A node configured with
@@ -330,10 +347,9 @@ store:
   whose figure is derived does not start, and names both that setting and the
   `nats stream update` that bounds the bucket from outside.
 - **A full bucket refuses the upload**, and what made it says so as a refusal
-  of its own naming the room an operator makes — move the files to a bucket,
-  raise the reservation on an external broker (an embedded one keeps the
-  reservation it was created with), or let the collector remove what nothing
-  names — never as
+  of its own naming the room an operator makes (raise
+  `store.objects.nats_max_bytes` and restart a data node, move the files to a
+  bucket, or let the collector remove what nothing names), never as
   a failure to try again, since every upload is refused the same until room is
   made: a push is refused `store_full` ([what git
   prints](gitlet.md#what-git-prints-and-what-it-means)), and so is a
@@ -345,9 +361,8 @@ store:
   [`objects_bucket_near_ceiling`](#alarms) alarm fires once less than a fifth
   of the reservation is left, and the `crewlet.objects.bucket.bytes` and
   `crewlet.objects.bucket.max_bytes` gauges (from the node holding the
-  collector's duty) draw it over time. [Move the files to a
-  bucket](#moving-the-files-to-a-bucket), or, on an external broker, raise the
-  reservation.
+  collector's duty) draw it over time. Raise the reservation, or [move the
+  files to a bucket](#moving-the-files-to-a-bucket).
 - **Size the members' disks for the files as well as the logs.** Every member
   keeps a copy of the whole reservation's worth of objects. Past about 100 GiB
   of files at three copies, replacing a member re-replicates the whole bucket
@@ -1165,7 +1180,8 @@ asks the same question and refuses on the same answer.
 
 | Alarm | Fires when |
 |---|---|
-| `objects_bucket_near_ceiling` | the fleet's NATS bucket holds more than four fifths of its byte reservation, as the node holding the collector's duty last read it: once it is full every upload is refused. Raise the reservation, or move the files to a bucket |
+| `objects_bucket_near_ceiling` | the fleet's NATS bucket holds more than four fifths of its byte reservation, as the node holding the collector's duty last read it: once it is full every upload is refused. Raise `store.objects.nats_max_bytes` and restart a data node, or move the files to a bucket |
+| `objects_bucket_raise_refused` | a data node's boot found `store.objects.nats_max_bytes` above the bucket's reservation and did not raise the bucket to it, because the broker could not grant the difference and still keep 1 GiB for the coordination records, or states no limit the node can read. The detail says which, and the most it can raise it to |
 | `objects_missing` | the collector's last audit to run to its end found files whose object the store does not hold, holds at the wrong size, under the wrong digest or as nothing it can read, or would not answer for twice while it answered for the rest — on the node holding the collector's duty, since one node's audit of a shared store is the fleet's |
 | `clock_skew` | a clock stands more than an hour from the fleet's — the median of the data nodes' clocks, as each node's position heartbeat reads them off the position register: on the node whose own clock moved, naming it, and on every node when the clock of the broker member leading the register did. The collector's grace and a retired pack's both rest on every clock keeping within that hour ([Why a deletion needs no lock](#why-a-deletion-needs-no-lock)) |
 

@@ -194,7 +194,9 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 // from the record and same-log rows alone, with broker instants, so two nodes at
 // one checkpoint hold the same bytes. The ledger is Divergent: it travels so an
 // adopter can answer a retry of anything its donor applied, and its
-// `applied_at` is each data node's own.
+// `applied_at` is each data node's own. So are a comment record's notices
+// (apply_notices.go): whether one is written depends on the batch's instant and the
+// epoch's inbox horizon, which two nodes applying one record need not share.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))
@@ -205,6 +207,7 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		out[table] = statelog.Local
 	}
 	out[Domain{}.OpsTable()] = statelog.Divergent
+	out[NoticesTable] = statelog.Divergent
 	return out
 }
 
@@ -232,11 +235,10 @@ func (Domain) GatesSeatAdmission() bool { return false }
 // byte-identical: N copies of one SQL state from one ordered log.
 func (Domain) ClaimsIdentity() bool { return true }
 
-// FeedGroup is EMPTY: no record on this log wakes anybody in this release.
-// Comments and watches, which would, arrive with a later build, and empty is
-// the answer that makes the trim's feed term absent rather than a consumer
-// nobody opens.
-func (Domain) FeedGroup() string { return "" }
+// FeedGroup is the artifacts log's wake consumer ([FeedGroup]): a comment
+// record carries who it wakes ([CommentNotify]), and the feed derives each
+// wake from the committed record (ADR-0012). The trim waits on it.
+func (Domain) FeedGroup() string { return FeedGroup }
 
 // BarrierTables is the empty set, DECLARED: the barrier writes no row on any
 // node, and stating that is what keeps "this kind wrote nothing" apart from

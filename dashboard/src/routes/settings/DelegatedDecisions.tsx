@@ -35,13 +35,18 @@
  * else is told so by the engine's refusal.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Card,
+  EmptyState,
   EmptyValue,
   IconButton,
+  InlineCode,
+  InlineRef,
   Input,
+  List,
+  ListItem,
   PageNote,
   Select,
   SettingsTable,
@@ -50,45 +55,53 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
-  VisuallyHidden,
   type DataGridColumn,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import {
-  BadgeCheckGlyph,
+  ArrowRightGlyph,
   ChevronLeftGlyph,
   ChevronRightGlyph,
-  FlagGlyph,
-  GaugeGlyph,
-  ListChecksGlyph,
   PencilGlyph,
   PlusGlyph,
   SearchGlyph,
-  ShieldCheckGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
 import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
-import { enabledPlan, removeRulePlan } from "~/lib/delegatedRules.ts";
+import {
+  DELEGABLE_KINDS,
+  enabledPlan,
+  problemWords,
+  removeRulePlan,
+} from "~/lib/delegatedRules.ts";
 import { useSettingWrite, type SettingWrite } from "~/lib/useSettingWrite.ts";
-import { useConfigWriteAccess, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { DelegatedRuleDialog, RULES_REREAD, type RuleTarget } from "./DelegatedRuleDialog.tsx";
 import { useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
+import {
+  handleLabel,
+  indexOrg,
+  nameOfIn,
+  useOrgIndex,
+  useSeatBadgeOf,
+  type NameOf,
+} from "~/lib/seats.ts";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { companyDateLabel, fmtCount, tsKey } from "~/lib/format.ts";
-import { andList } from "~/lib/words.ts";
 import {
   confidenceWords,
   giverWords,
   isReleaseAct,
-  kindWords,
+  kindsPhrase,
   overruledWords,
   verdictWords,
 } from "~/lib/delegation.ts";
@@ -126,13 +139,17 @@ const GIVER_OPTIONS = [
 ];
 
 /** How many of a rule's own paths its row shows before it counts the rest. */
-const PATHS_SHOWN = 4;
+const PATHS_SHOWN = 3;
 
 /** How many of a rule's required-check entries its row shows before it counts the rest. */
 const CHECKS_SHOWN = 2;
 
 /** One required-check entry as a line: `acme/api main: test, lint`. */
 const checksLine = (c: DelegatedRequiredChecks) => `${c.repo} ${c.branch}: ${c.checks.join(", ")}`;
+
+/** How often a rule's decisions are reviewed, as its row says it. */
+export const reviewWords = (rate: number) =>
+  rate <= 1 ? "Reviews every decision" : `Reviews 1 in ${fmtCount(rate)}`;
 
 /** A company day label moved by `days`: `2026-11-09` back one is `2026-11-08`. */
 export function shiftDay(label: string, days: number): string {
@@ -186,14 +203,13 @@ export function DelegatedDecisions() {
   return (
     <>
       <PageNote>
-        What agent seats decide in a person&rsquo;s place, the rules they decide by and what they
-        decided. The rules are a setting of the company document: change them here, and the engine
-        checks each change against the whole company first.
+        Let agents decide some requests in a person&rsquo;s place; anything risky or unclear still
+        goes to people.
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
         {data && (
           <>
-            <RulesCard answer={data} nameOf={nameOf} onApplied={refetch} />
+            <RulesCard answer={data} onApplied={refetch} />
             <LimitsCard answer={data} onApplied={refetch} />
             <PageToolbar>
               <Input
@@ -254,46 +270,48 @@ export function DelegatedDecisions() {
             </PageToolbar>
             <VerdictsCard
               name="decided"
-              icon={<ListChecksGlyph size="sm" />}
               title={
                 data.complete ? `Decided on ${companyDateLabel(data.day)}` : "Decided today, so far"
               }
               subtitle={
                 data.complete
-                  ? "Every request a verdict decided on that company day"
-                  : "The company day is still running: requests decided later today join this list."
+                  ? "Every request decided that day."
+                  : "Requests decided later today appear here too."
               }
               all={data.decided}
               rows={shown(data.decided)}
               more={data.decided_more}
               filtered={filtered}
-              empty={
-                data.complete
-                  ? "No request was decided that day."
-                  : "No request has been decided yet today."
-              }
+              empty={{
+                title: data.complete ? "No decisions that day" : "No decisions yet today",
+                hint: "A request an agent decides shows here with its verdict.",
+              }}
             />
             <VerdictsCard
               name="sampled"
-              icon={<BadgeCheckGlyph size="sm" />}
               title="Spot-checks"
-              subtitle="Decisions picked for a look after the fact, over the last 7 days"
+              subtitle="Decisions picked for people to review, last 7 days"
               all={data.spot_checks}
               rows={shown(data.spot_checks)}
               more={data.spot_checks_more}
               filtered={filtered}
-              empty="No decision was picked for a spot-check this week."
+              empty={{
+                title: "No spot-checks this week",
+                hint: "Some decisions are picked for people to review after the fact.",
+              }}
             />
             <VerdictsCard
               name="flagged"
-              icon={<FlagGlyph size="sm" />}
               title="Flagged denials"
-              subtitle="Requests a delegate denied with high confidence, over the last 7 days"
+              subtitle="Requests an agent refused with high confidence, last 7 days"
               all={data.flagged}
               rows={shown(data.flagged)}
               more={data.flagged_more}
               filtered={filtered}
-              empty="No delegate flagged a request as harmful this week."
+              empty={{
+                title: "No flagged denials this week",
+                hint: "A request an agent refuses as harmful shows here.",
+              }}
             />
           </>
         )}
@@ -321,15 +339,17 @@ type RulesGesture =
  */
 function RulesCard({
   answer,
-  nameOf,
   onApplied,
 }: {
   answer: DelegatedDecisionsAnswer;
-  nameOf: NameOf;
   onApplied: () => void;
 }) {
   const access = useConfigWriteAccess();
-  const write = useSettingWrite({ reread: RULES_REREAD, onApplied });
+  const write = useSettingWrite({
+    reread: RULES_REREAD,
+    onApplied,
+    problemWords: (problems) => problems.map(problemWords).join(" "),
+  });
   const [gesture, setGesture] = useState<RulesGesture>({ kind: "none" });
   const saved = write.state.kind === "saved" ? write.state : null;
   // A SAVE CLOSES THE SHEET OR THE QUESTION: the mark beside the card's state
@@ -347,16 +367,19 @@ function RulesCard({
     saved && (saved.standing === "applying" || saved.standing === "refused")
       ? `Saved, ${standingWords(saved.standing)}`
       : "";
-  const columns = ruleColumns(nameOf, access, (next) => begin(next));
+  const held = access.can ? undefined : access.reason;
+  // A kind is in one rule only, so with every kind taken there is nothing to add.
+  const full = DELEGABLE_KINDS.every((k) => answer.rules.some((r) => r.kinds.includes(k)));
+  const addHeld =
+    held ?? (full ? "Every kind of request has a rule. Edit one instead." : undefined);
   return (
     <Card padding="none">
       <Card.Header
-        icon={<ShieldCheckGlyph size="sm" />}
         count={answer.rules.length}
         subtitle={
           answer.enabled
-            ? "Requests of these kinds go to their delegates first."
-            : "Off: every request goes to people at once. The rules are kept."
+            ? "Requests of these kinds go to an agent first."
+            : "Off. Every request goes to people, and the rules are kept."
         }
         actions={
           <span className="row gap-2">
@@ -376,42 +399,52 @@ function RulesCard({
                 write.submit(enabledPlan(on));
               }}
             />
-            <Button
-              size="small"
-              variant="secondary"
-              leadingIcon={<PlusGlyph size="sm" />}
-              disabledReason={access.can ? undefined : access.reason}
-              title={access.can ? undefined : access.reason}
-              onClick={() => begin({ kind: "sheet", target: { kind: "add" } })}
-            >
-              Add a rule
-            </Button>
           </span>
         }
       >
         <Card.Title id="delegated-rules">Rules</Card.Title>
       </Card.Header>
+      <PageActions>
+        <Button
+          size="small"
+          variant="primary"
+          leadingIcon={<PlusGlyph size="sm" />}
+          disabledReason={addHeld}
+          title={addHeld}
+          onClick={() => begin({ kind: "sheet", target: { kind: "add" } })}
+        >
+          Add rule
+        </Button>
+      </PageActions>
       {gesture.kind === "switch" && write.state.kind !== "idle" && !saved && (
         <div className="delegated-rules-status">
           <SettingWriteStatus write={write} unchanged="Already so." onReload={onApplied} />
         </div>
       )}
-      <DataGrid<DelegatedRule>
-        name="rules"
-        aria-labelledby="delegated-rules"
-        rows={answer.rules}
-        rowKey={(r) => String(r.rule)}
-        columns={columns}
-        empty={{
-          title: "No rules",
-          hint: "The company document names none, so every request goes to people. Add a rule to delegate one kind of request.",
-          icon: "shield-check",
-        }}
-      />
+      {answer.rules.length === 0 ? (
+        <EmptyState
+          size="inline"
+          title="No rules yet"
+          description="Until a rule names a kind of request, people decide every one."
+        />
+      ) : (
+        <List variant="numbered-divided" aria-labelledby="delegated-rules">
+          {answer.rules.map((rule) => (
+            <RuleRow
+              key={rule.rule}
+              rule={rule}
+              held={held}
+              onChange={() => begin({ kind: "sheet", target: { kind: "edit", number: rule.rule } })}
+              onRemove={() => begin({ kind: "remove", rule })}
+            />
+          ))}
+        </List>
+      )}
       {gesture.kind === "sheet" && (
         <DelegatedRuleDialog
           target={gesture.target}
           write={write}
+          sample={answer.sample}
           onReload={onApplied}
           onClose={() => setGesture({ kind: "none" })}
         />
@@ -451,7 +484,7 @@ function RemoveRuleDialog({
   onReload: () => void;
   onClose: () => void;
 }) {
-  const kinds = andList(rule.kinds.map(kindWords));
+  const kinds = kindsPhrase(rule.kinds);
   return (
     <Modal
       open
@@ -479,7 +512,7 @@ function RemoveRuleDialog({
       }
     >
       <p className="t-body" style={{ margin: 0 }}>
-        {`Requests for ${kinds.toLowerCase()} go to people at once.`}
+        {`People will decide ${kinds.toLowerCase()} again.`}
         {rule.rule < last
           ? ` Rules after it move up one: rule ${rule.rule + 1} becomes rule ${rule.rule}.`
           : ""}
@@ -489,151 +522,132 @@ function RemoveRuleDialog({
   );
 }
 
-/** The rule grid's columns, ending in each rule's change and removal. */
-function ruleColumns(
-  nameOf: NameOf,
-  access: ConfigWriteAccess,
-  begin: (gesture: RulesGesture) => void,
-): DataGridColumn<DelegatedRule>[] {
-  const names = (handles: readonly string[]) => andList(handles.map(nameOf));
-  const held = access.can ? undefined : access.reason;
-  return [
-    {
-      key: "rule",
-      header: "Rule",
-      shrink: true,
-      cell: (r) => <span className="t-num">{r.rule}</span>,
-    },
-    {
-      key: "kinds",
-      header: "Decides",
-      floor: "9rem",
-      cell: (r) => (
-        <span className="row gap-1 wrap">
-          {r.kinds.map((k) => (
-            <Tag key={k} appearance="outline" title={k}>
-              {kindWords(k)}
-            </Tag>
-          ))}
-        </span>
-      ),
-    },
-    {
-      key: "delegates",
-      header: "Delegates",
-      floor: "9rem",
-      // A PANEL READS WHOLE, its two names and that both must allow, beside
-      // the paths column that narrows it.
-      overflow: "wrap",
-      cell: (r) =>
-        `${names(r.delegates)}${r.delegates.length > 1 ? " (a panel: both must allow)" : ""}`,
-    },
-    {
-      key: "escalate",
-      header: "Escalates to",
-      floor: "8rem",
-      cell: (r) => <TableTextCell>{names(r.escalate_to)}</TableTextCell>,
-    },
-    {
-      key: "paths",
-      header: "Always escalates",
-      floor: "9rem",
-      drop: 2,
-      // A RULE'S OWN PATHS, beside the built-in list every merge and deploy
-      // rule carries; a command rule has none to name.
-      title: (r) =>
-        r.always_escalate_paths.length > 0 ? r.always_escalate_paths.join("\n") : undefined,
-      cell: (r) => {
-        const paths = r.always_escalate_paths;
-        if (paths.length === 0) {
-          return (
-            <EmptyValue
-              label={r.kinds.some(isReleaseAct) ? "The built-in paths only" : "Not for commands"}
-            />
-          );
-        }
-        const rest = paths.length - PATHS_SHOWN;
-        return (
-          <span className="row gap-1 wrap">
-            {paths.slice(0, PATHS_SHOWN).map((p) => (
-              <Tag key={p} appearance="outline" monospace>
-                {p}
-              </Tag>
-            ))}
-            {rest > 0 ? <Tag appearance="outline">{`${fmtCount(rest)} more`}</Tag> : null}
-          </span>
-        );
-      },
-    },
-    {
-      key: "checks",
-      header: "Requires checks",
-      floor: "10rem",
-      drop: 3,
-      // A RULE'S OWN CHECKS per repository and branch, beside whatever the
-      // branch's protection requires; a command rule has none to name.
-      title: (r) =>
-        r.required_checks.length > 0 ? r.required_checks.map(checksLine).join("\n") : undefined,
-      cell: (r) => {
-        const entries = r.required_checks;
-        if (entries.length === 0) {
-          return (
-            <EmptyValue
-              label={r.kinds.some(isReleaseAct) ? "What the branch requires" : "Not for commands"}
-            />
-          );
-        }
-        const rest = entries.length - CHECKS_SHOWN;
-        return (
-          <span className="col gap-1">
-            {entries.slice(0, CHECKS_SHOWN).map((c) => (
-              <span key={`${c.repo} ${c.branch}`} className="row gap-1 wrap">
-                <Tag appearance="outline" monospace>{`${c.repo} ${c.branch}`}</Tag>
-                <TableTextCell>{c.checks.join(", ")}</TableTextCell>
-              </span>
-            ))}
-            {rest > 0 ? <Tag appearance="outline">{`${fmtCount(rest)} more`}</Tag> : null}
-          </span>
-        );
-      },
-    },
-    {
-      key: "sample",
-      header: "Spot-checks",
-      shrink: true,
-      align: "right",
-      drop: 1,
-      cell: (r) => <span className="t-num">{`1 in ${fmtCount(r.sample_one_in)}`}</span>,
-    },
-    {
-      key: "actions",
-      header: <VisuallyHidden>Actions</VisuallyHidden>,
-      action: true,
-      shrink: true,
-      cell: (r) => (
+/**
+ * One rule as a sentence: what, who decides, who hears about it, then a merge
+ * or deploy rule's conditions. Numbered as the engine numbers it.
+ */
+function RuleRow({
+  rule,
+  held,
+  onChange,
+  onRemove,
+}: {
+  rule: DelegatedRule;
+  /** Why this reader cannot change the rules, or undefined. */
+  held: string | undefined;
+  onChange: () => void;
+  onRemove: () => void;
+}) {
+  const release = rule.kinds.some(isReleaseAct);
+  const paths = rule.always_escalate_paths;
+  const checks = rule.required_checks;
+  return (
+    <ListItem
+      action={
         <span className="row gap-1">
           <IconButton
             size="sm"
             variant="ghost"
             icon={<PencilGlyph size="sm" />}
-            label={`Change rule ${r.rule}`}
+            label={`Edit rule ${rule.rule}`}
             disabledReason={held}
             title={held}
-            onClick={() => begin({ kind: "sheet", target: { kind: "edit", number: r.rule } })}
+            onClick={onChange}
           />
           <IconButton
             size="sm"
             variant="ghost"
             icon={<TrashGlyph size="sm" />}
-            label={`Remove rule ${r.rule}`}
+            label={`Remove rule ${rule.rule}`}
             disabledReason={held}
             title={held}
-            onClick={() => begin({ kind: "remove", rule: r })}
+            onClick={onRemove}
           />
         </span>
-      ),
-    },
-  ];
+      }
+    >
+      <div className="delegated-rule">
+        <p className="delegated-rule-head">
+          <strong>{kindsPhrase(rule.kinds)}</strong>
+          <ArrowRightGlyph size="sm" className="delegated-rule-arrow" aria-hidden />
+          <span>
+            <SeatNames handles={rule.delegates} />{" "}
+            {rule.delegates.length > 1 ? "decide together" : "decides"}
+          </span>
+        </p>
+        <p className="delegated-rule-meta">
+          <span>
+            Escalates to <SeatNames handles={rule.escalate_to} />
+          </span>
+          <span className="t-num">{reviewWords(rule.sample_one_in)}</span>
+        </p>
+        {release && (
+          <p className="delegated-rule-meta">
+            <span title={checks.length > 0 ? checks.map(checksLine).join("\n") : undefined}>
+              {"Checks: "}
+              {checks.length === 0
+                ? "what each branch requires"
+                : checks.slice(0, CHECKS_SHOWN).map((c, i) => (
+                    <span key={`${c.repo} ${c.branch}`}>
+                      {i > 0 ? ", " : ""}
+                      <InlineCode>{`${c.repo} ${c.branch}`}</InlineCode>
+                      {` (${c.checks.join(", ")})`}
+                    </span>
+                  ))}
+              {checks.length > CHECKS_SHOWN
+                ? ` and ${fmtCount(checks.length - CHECKS_SHOWN)} more`
+                : ""}
+            </span>
+            {paths.length > 0 && (
+              <span title={paths.join("\n")}>
+                {"Always to people: "}
+                {paths.slice(0, PATHS_SHOWN).map((p, i) => (
+                  <span key={p}>
+                    {i > 0 ? ", " : ""}
+                    <InlineCode>{p}</InlineCode>
+                  </span>
+                ))}
+                {paths.length > PATHS_SHOWN
+                  ? ` and ${fmtCount(paths.length - PATHS_SHOWN)} more`
+                  : ""}
+              </span>
+            )}
+          </p>
+        )}
+      </div>
+    </ListItem>
+  );
+}
+
+/**
+ * Seats named in a sentence, each with its face before its name and its
+ * handle on hover; a handle the chart does not hold is said as written.
+ */
+export function SeatNames({ handles }: { handles: readonly string[] }) {
+  const index = useOrgIndex();
+  return (
+    <>
+      {handles.map((handle, i) => {
+        const seat = index.byHandle.get(handle);
+        const name = seat?.name || handle;
+        const kind = seat?.kind === "human" ? "human" : "agent";
+        return (
+          <span key={handle}>
+            {i === 0 ? "" : i === handles.length - 1 ? " and " : ", "}
+            <InlineRef
+              markShape="face"
+              mark={
+                <SeatAvatar name={name} kind={kind} avatar={seat?.avatar} size="text" decorative />
+              }
+              title={name === handle ? handleLabel(handle) : `${name} · ${handleLabel(handle)}`}
+            >
+              {name}
+            </InlineRef>
+          </span>
+        );
+      })}
+    </>
+  );
 }
 
 /**
@@ -641,9 +655,9 @@ function ruleColumns(
  * build has no words for is drawn by the key itself.
  */
 const DELEGATED_LIMIT_LABELS: Readonly<Record<string, string>> = {
-  "delegated_decisions.deadline_seconds": "A request no delegate answered goes to people after",
-  "delegated_decisions.allows_per_hour": "Allows per kind and delegate, each clock hour",
-  "delegated_decisions.server_allows_per_hour": "Commands allowed per server, each clock hour",
+  "delegated_decisions.deadline_seconds": "An agent must answer within",
+  "delegated_decisions.allows_per_hour": "Most allows per agent and kind, each hour",
+  "delegated_decisions.server_allows_per_hour": "Most commands allowed per server, each hour",
 };
 
 /**
@@ -660,10 +674,7 @@ function LimitsCard({
 }) {
   return (
     <Card padding="none">
-      <Card.Header
-        icon={<GaugeGlyph size="sm" />}
-        subtitle="Whatever a delegate answers, past these a request goes to people."
-      >
+      <Card.Header subtitle="Past any of these, a request goes to people, whatever the agent decides.">
         <Card.Title id="delegated-limits">What Crewlet enforces</Card.Title>
       </Card.Header>
       <SettingsTable aria-labelledby="delegated-limits">
@@ -685,7 +696,6 @@ function LimitsCard({
 /** One list of verdicts, its foot saying how much of it is shown. */
 function VerdictsCard({
   name,
-  icon,
   title,
   subtitle,
   all,
@@ -695,14 +705,13 @@ function VerdictsCard({
   empty,
 }: {
   name: string;
-  icon: ReactNode;
   title: string;
   subtitle: string;
   all: readonly DelegatedVerdictRow[];
   rows: DelegatedVerdictRow[];
   more: boolean;
   filtered: boolean;
-  empty: string;
+  empty: { title: string; hint: string };
 }) {
   const columns = useVerdictColumns();
   const titleID = `delegated-${name}`;
@@ -712,7 +721,7 @@ function VerdictsCard({
   ].filter(Boolean);
   return (
     <Card padding="none">
-      <Card.Header icon={icon} count={all.length} subtitle={subtitle}>
+      <Card.Header count={all.length} subtitle={subtitle}>
         <Card.Title id={titleID}>{title}</Card.Title>
       </Card.Header>
       <DataGrid<DelegatedVerdictRow>
@@ -722,11 +731,11 @@ function VerdictsCard({
         rowKey={(r) => `${r.request}:${r.by}:${r.at}`}
         columns={columns}
         defaultSort="-at"
-        empty={{
-          title: filtered && all.length > 0 ? "Nothing matches" : empty,
-          hint: filtered && all.length > 0 ? "Clear the search or the filters." : undefined,
-          icon: "list-checks",
-        }}
+        empty={
+          filtered && all.length > 0
+            ? { title: "Nothing matches", hint: "Clear the search or the filters.", size: "inline" }
+            : { ...empty, size: "inline" }
+        }
         footer={foot.length > 0 ? <span className="t-caption">{foot.join(". ")}.</span> : null}
       />
     </Card>

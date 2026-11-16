@@ -187,7 +187,7 @@ func (n *socketNode) tab(t *testing.T, login string, absolute time.Time) signedI
 	person := uuid.Must(uuid.NewV7()).String()
 	bearer, err := n.signer.Mint(session.Mint{
 		Lineage: lineage, Person: person, Epoch: 1, Generation: 1,
-		StartPosition: 1, AbsoluteExpiresAt: absolute,
+		StartPosition: 1, SignedInAt: at, AbsoluteExpiresAt: absolute,
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -345,7 +345,7 @@ func TestATabClosesAtItsSessionsAbsoluteDeadline(t *testing.T) {
 // A session's idle deadline is moved by a re-issue on a REST response, and a
 // socket can never receive one, so the bearer it holds carries the
 // handshake's deadline however busy the tab has been. Decided on that
-// deadline, every tab open past session.Idle would close on the first
+// deadline, every tab open past the idle limit would close on the first
 // identity move anywhere near it while its person was at the screen; so the
 // HANDLER decides an open socket through the guard's ResolveOpen, which sets
 // that deadline aside and asks the rows. A REST request presenting the same
@@ -363,12 +363,12 @@ func TestAnOpenTabOutlivesItsSessionsIdleDeadline(t *testing.T) {
 	var at atomic.Int64
 	at.Store(clock.UnixNano())
 	node := newSocketNode(t, func() time.Time { return time.Unix(0, at.Load()).UTC() })
-	jane := node.tab(t, "jane.doe", clock.Add(session.Idle+time.Hour))
+	jane := node.tab(t, "jane.doe", clock.Add(config.DefaultIdleTimeout+time.Hour))
 	if got := node.probe(t, jane.cookie); got != http.StatusUpgradeRequired {
 		t.Fatalf("the cookie at its handshake's instant answered %d, want 426", got)
 	}
 
-	at.Store(clock.Add(session.Idle + time.Minute).UnixNano())
+	at.Store(clock.Add(config.DefaultIdleTimeout + time.Minute).UnixNano())
 	before := node.rows.readsOf(jane.person)
 	node.feed.fire(t, iamdomain.Moved{People: []string{jane.person}})
 	node.rows.readAtLeast(t, jane.person, before+1)

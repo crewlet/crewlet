@@ -223,6 +223,8 @@ type Result struct {
 	Name   string
 	Output string
 	Failed bool
+	// Content is every block of the answer, in order, as the harness read it.
+	Content []mcp.Content
 	// Err is a call the session never answered — the run was ended under it.
 	Err error
 }
@@ -535,7 +537,7 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn,
 		}
 		got := Result{Name: name, Err: err}
 		if res != nil {
-			got.Output, got.Failed = text(res), res.IsError
+			got.Output, got.Failed, got.Content = text(res), res.IsError, res.Content
 		}
 		s.mu.Lock()
 		s.got = append(s.got, got)

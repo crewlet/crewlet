@@ -75,6 +75,7 @@
 package configplane
 
 import (
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
@@ -105,6 +106,20 @@ const (
 	// what rollback preserved and raise an alarm.
 	PostureIsolated Posture = "isolated"
 )
+
+// postures is every posture [DecidePosture] answers, in the order a surface
+// lists them.
+var postures = []Posture{PostureServe, PostureWait, PostureShed, PostureStuck, PostureIsolated}
+
+// Postures is every posture a node can report — a fresh slice per call, so a
+// reader that bounds or lists what a node says (the presence's bound, derived
+// in internal/engine from the longest of them) reads the one list.
+func Postures() []Posture { return slices.Clone(postures) }
+
+// Valid reports whether a posture off the wire is one a node can report: a
+// node's status carries its posture as text, and a newer build's is a value
+// this one does not know rather than one it can act on.
+func (p Posture) Valid() bool { return slices.Contains(postures, p) }
 
 // ApplyStatus is a node's own outcome for an epoch. Three-valued, and the
 // third value is the one that matters.

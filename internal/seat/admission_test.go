@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -426,46 +429,123 @@ func TestAnAdmissionHookFailureDoesNotAbortTheHeartbeat(t *testing.T) {
 	wantHeld(t, h, "ceo", "eng")
 }
 
+// panicky is a store that, once armed, panics renewing one seat, or claiming
+// the presence: a defect in a client the pass calls on a goroutine of its own.
+type panicky struct {
+	coord.Backend
+	armed    atomic.Bool
+	seat     string
+	presence bool
+}
+
+func (b *panicky) Renew(ctx context.Context, resource, owner string, epoch int64,
+	ttl time.Duration) (bool, error) {
+
+	if b.armed.Load() && resource == b.seat {
+		panic("the store's client dereferenced a nil reply")
+	}
+	return b.Backend.Renew(ctx, resource, owner, epoch, ttl)
+}
+
+func (b *panicky) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	if b.armed.Load() && b.presence && coord.IsNodeResource(resource) {
+		panic("the store's client dereferenced a nil reply")
+	}
+	return b.Backend.TryAcquire(ctx, resource, opts)
+}
+
+// A PANIC IN A PASS COSTS ONLY WHAT PANICKED: a renewal that panics costs its
+// own seat that renewal — kept, as one the store did not answer, with its
+// admission off — and a presence claim that panics costs the presence; every
+// other seat is renewed, and the process lives.
+//
+// The pass runs both on goroutines of its own, where a panic nobody recovers
+// ends the process; renewed in line, the loop's own recovery caught it and lost
+// the rest of the pass instead.
+//
+// Mutation: recover neither (the test binary dies).
+func TestAPanicInAPassCostsOnlyWhatPanicked(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		seat     string
+		presence bool
+		renewed  []string
+		unproven []string
+	}{
+		{name: "a seat's renewal", seat: "eng", renewed: []string{"ceo", "ops"},
+			unproven: []string{"eng:false"}},
+		{name: "the presence's claim", presence: true, renewed: []string{"ceo", "eng", "ops"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			store := &panicky{Backend: f.store, presence: tc.presence}
+			if tc.seat != "" {
+				store.seat = seatResource(tc.seat)
+			}
+			hooks := &hookLog{}
+			h := f.newHost("node-a", Config{Backend: store, Hooks: hooks, TTL: 30 * time.Second})
+			h.renewNodePresence(f.ctx)
+			h.Sweep(f.ctx)
+			before := map[string]time.Time{}
+			for _, handle := range h.Held() {
+				before[handle] = f.leaseOf(seatResource(handle)).ExpiresAt
+			}
+
+			f.clock.Advance(5 * time.Second)
+			store.armed.Store(true)
+			wantStrings(t, h.Heartbeat(f.ctx), nil, "lost")
+
+			wantHeld(t, h, "ceo", "eng", "ops")
+			for _, handle := range tc.renewed {
+				after := f.leaseOf(seatResource(handle)).ExpiresAt
+				//fixedwait:stated two lease deadlines the store counted on the fleet's fake clock
+				if !after.After(before[handle]) {
+					t.Errorf("%s was not renewed beside the panic", handle)
+				}
+			}
+			wantStrings(t, hooks.admissioned(), tc.unproven, "admission changes")
+		})
+	}
+}
+
 // --- the heartbeat's own bookkeeping ---------------------------------------
 
-// slowRenew makes every renew cost wall-clock time, the way a slow store
-// does.
-type slowRenew struct {
-	coord.Backend
-	cost  time.Duration
-	clock *fakeClock
-}
-
-func (b slowRenew) Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error) {
-	ok, err := b.Backend.Renew(ctx, resource, owner, epoch, ttl)
-	b.clock.Advance(b.cost)
-	return ok, err
-}
-
-// Invariant 11: the clock is read PER SEAT.
+// Invariant 11: the clock is read PER SEAT, as its renewal is sent.
+//
+// One timestamp read for the pass and assigned to every seat's last-renew
+// stamp credits a seat sent in a later batch with a renewal earlier than it
+// happened — narrowing its grace, and its admission window, as the seat count
+// grows. Here a pass of one batch of [renewConcurrency] seats and two more,
+// over a store that answers each renewal ten seconds after it is asked, on a
+// bubble's clock: the first batch is sent at the pass's start and the last two
+// seats ten seconds in, once a worker is free, so when the pass ends, twenty
+// seconds in, the first batch's renewals are older than the fifteen-second
+// heartbeat and the last two's are not. Only a clock read per send tells them
+// apart; a clock read at each answer would admit the first batch too.
+//
+// Mutation: stamp every seat once for the pass (the last two refused), or at
+// its answer (the first batch admitted).
 func TestTheHeartbeatReadsTheClockPerSeat(t *testing.T) {
 	t.Parallel()
-	// A single pre-loop timestamp is assigned to every seat's last-renew
-	// stamp, so with many seats and a slow store the LATER ones record a
-	// renew earlier than it happened — narrowing their grace, and their
-	// admission window, as the seat count grows. Here three seats and a
-	// ten-second store would leave the last seat looking thirty seconds
-	// stale the instant its renew succeeded.
-	f := newFleet(t)
-	h := f.newHost("node-a", Config{
-		Seats: seatsNamed("ceo", "eng", "ops"),
-		TTL:   60 * time.Second, HeartbeatInterval: 15 * time.Second,
+	synctest.Test(t, func(t *testing.T) {
+		const slow = 10 * time.Second
+		store := &roundTrips{Backend: memory.New(), roundTrip: func() { time.Sleep(slow) }}
+		h := holding(t, store, renewConcurrency+2)
+
+		store.armed.Store(true)
+		wantStrings(t, h.Heartbeat(t.Context()), nil, "lost")
+
+		// heartbeatTargets renews by handle, and so does Held list them.
+		for i, handle := range h.Held() {
+			// The first batch genuinely aged past a heartbeat while the
+			// pass ground on; the last did not.
+			wantAdmits(t, h, handle, i >= renewConcurrency)
+		}
 	})
-	h.renewNodePresence(f.ctx)
-	h.Sweep(f.ctx)
-
-	h.backend = slowRenew{Backend: f.store, cost: 10 * time.Second, clock: f.clock}
-	wantStrings(t, h.Heartbeat(f.ctx), nil, "lost")
-
-	// ceo genuinely aged past a heartbeat interval while the pass ground on.
-	wantAdmits(t, h, "ceo", false)
-	// ops did not, and only a per-seat clock read can tell.
-	wantAdmits(t, h, "ops", true)
 }
 
 // reclaimOnRenew re-claims a seat while the heartbeat is suspended inside its

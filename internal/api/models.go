@@ -43,6 +43,7 @@ func NewModelSurface(e *engine.Engine, config *configapi.Service, cipher secrets
 		Config:  config,
 		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
 		Leases:  e.Backends().Coord,
+		Records: e.Backends().Fleet,
 		Audit:   audit,
 		Node:    e.Node().ID(),
 	})

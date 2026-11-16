@@ -177,7 +177,8 @@ test("a switch writes On and Off, and removes the key for the default it derives
   await show({ ...VECTORS, value: false, set: true }, "Search by meaning");
   const drawn = screen.getByRole("row", { name: /Search by meaning/ });
   expect(within(drawn).getByText("Off")).toBeTruthy();
-  expect(within(drawn).getByText("Changed from On")).toBeTruthy();
+  // The source says provenance alone; the editor names the default.
+  expect(within(drawn).getByText("Changed")).toBeTruthy();
   await press("Change Search by meaning");
   const back = screen.getByRole("radio", { name: "Default (On)" });
   fireEvent.click(back);
@@ -238,11 +239,28 @@ test("Save is held on the value the document already writes", async () => {
   expect(calls).toEqual([]);
 });
 
-test("a reader without the grant sees the pencil disabled with the reason", async () => {
+// A tap on a held pencil opens its reason, which is how touch is told.
+test("a reader without the grant is told why on a tap of the held pencil", async () => {
+  await show(SKILLS, "Tool skills", {}, READER_VIEWER);
+  const pencil = screen.getByRole("button", { name: "Change Tool skills" });
+  fireEvent.pointerDown(pencil, { pointerType: "touch" });
+  fireEvent.pointerLeave(pencil, { pointerType: "touch" });
+  expect(screen.getByRole("tooltip").textContent).toBe(
+    `Change Tool skills. ${CONFIG_WRITE_REASONS.no_grant}`,
+  );
+});
+
+// The held reason is the kit tooltip's, so keyboard focus shows it, not hover alone.
+test("a reader without the grant sees the pencil held, and its reason on keyboard focus", async () => {
   await show(SKILLS, "Tool skills", {}, READER_VIEWER);
   const pencil = screen.getByRole("button", { name: "Change Tool skills" });
   expect(
     pencil.getAttribute("aria-disabled") ?? String((pencil as HTMLButtonElement).disabled),
   ).toBe("true");
-  expect(pencil.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.no_grant);
+  // Focus as Tab gives it: the key first, so the focus is the keyboard's.
+  fireEvent.keyDown(document.body, { key: "Tab" });
+  act(() => pencil.focus());
+  expect(screen.getByRole("tooltip").textContent).toBe(
+    `Change Tool skills. ${CONFIG_WRITE_REASONS.no_grant}`,
+  );
 });

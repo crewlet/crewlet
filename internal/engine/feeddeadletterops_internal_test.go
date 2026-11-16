@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -138,6 +139,7 @@ var (
 	pageFeed = changefeed.Source{Name: doclet.Source, Group: doclet.FeedGroup}
 	chatFeed = changefeed.Source{Name: chatlet.Source, Group: chatlet.FeedGroup}
 	codeFeed = changefeed.Source{Name: gitlet.Source, Group: gitlet.FeedGroup}
+	artsFeed = changefeed.Source{Name: artifactsdomain.Source, Group: artifactsdomain.FeedGroup}
 )
 
 // letterBytes is d as the header its entry is kept under.
@@ -227,7 +229,7 @@ func TestTheListingNamesEveryDeclaredFeedEveryEntryAndEveryFeedItCouldNotRead(t 
 				f.Source, f.Subject)
 		}
 	}
-	if want := []changefeed.Source{workFeed, pageFeed, chatFeed, codeFeed}; !slices.Equal(feeds, want) {
+	if want := []changefeed.Source{workFeed, pageFeed, artsFeed, chatFeed, codeFeed}; !slices.Equal(feeds, want) {
 		t.Fatalf("the listing names the feeds %v, want every feed the domains declare, %v", feeds, want)
 	}
 	var declared []string
@@ -236,7 +238,8 @@ func TestTheListingNamesEveryDeclaredFeedEveryEntryAndEveryFeedItCouldNotRead(t 
 			declared = append(declared, group)
 		}
 	}
-	if !slices.Equal(declared, []string{workFeed.Group, pageFeed.Group, chatFeed.Group, codeFeed.Group}) {
+	if !slices.Equal(declared, []string{workFeed.Group, pageFeed.Group, artsFeed.Group, chatFeed.Group,
+		codeFeed.Group}) {
 		t.Fatalf("the register declares the wake feeds %v, so this case names the wrong ones", declared)
 	}
 

@@ -1,12 +1,12 @@
 /**
- * Watching a page: the eye in the page bar, and who else is told.
+ * Watching a page: Watch in the page bar, and who else is told.
  *
  * # Two controls, because they are two questions
  *
- * The eye answers "am I told when this changes" and changes it in one press
+ * Watch answers "am I told when this changes" and changes it in one press
  * (`save_page` with `watch`, as the person signed in). The count
- * beside it answers "who is told" and opens the list. A hover panel over the
- * eye would carry a list no keyboard, touch or screen reader reaches, which is
+ * beside it answers "who is told" and opens the list. A hover panel over
+ * Watch would carry a list no keyboard, touch or screen reader reaches, which is
  * what `Tooltip` refuses to be; a `Popover` is a list a reader can keep open.
  *
  * # Who is told
@@ -21,13 +21,13 @@
  * A watch is filed under the SEAT the writer acts as (`ViewerState.handle`),
  * because a wake reaches a seat and nothing else. A credential the directory
  * binds to no seat subscribes nobody (`internal/doclet` `Actor.subscriber`):
- * its login is no seat a change could be told to, so the eye is drawn
+ * its login is no seat a change could be told to, so Watch is drawn
  * disabled for it with that reason rather than offering a press the engine
  * would answer by moving nothing.
  */
 
-import { Button, IconButton, Popover, useToast } from "@crewlethq/ui";
-import { EyeGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Popover, useToast } from "@crewlethq/ui";
+import { EyeGlyph, EyeOffGlyph } from "@crewlethq/icons/glyphs";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { Page } from "~/protocol/index.ts";
@@ -40,7 +40,7 @@ export function followersOf(page: Pick<Page, "watchers" | "muted">): string[] {
 }
 
 /**
- * The eye and who it tells. `hold` is the page's own reason no change can be
+ * Watch, and who it tells. `hold` is the page's own reason no change can be
  * made to it (a page in the trash), said before the reader's own.
  */
 export function WatchControl({ page, hold }: { page: Page; hold?: string | undefined }) {
@@ -65,7 +65,7 @@ export function WatchControl({ page, hold }: { page: Page; hold?: string | undef
   // Ada Okonkwo. Show who watches this page"). An aria-label over the number
   // was a name that did not contain what is on screen, so a person who says
   // what they see ("click 2") reached nothing.
-  const counted = `watching${names.length > 0 ? `: ${names.join(", ")}` : ""}. Show who watches this page`;
+  const counted = `${names.length > 0 ? `: ${names.join(", ")}` : ""}. Show who watches this page`;
 
   const press = async () => {
     const result = await save.run(
@@ -75,7 +75,7 @@ export function WatchControl({ page, hold }: { page: Page; hold?: string | undef
       },
     );
     // A REFUSAL IS SAID WHERE IT CAN BE SEEN: the bar has no room for a note
-    // under the eye, and the page answering a newer version than the one the
+    // under Watch, and the page answering a newer version than the one the
     // press was against is the usual cause.
     if (result?.kind === "refused") {
       toast.show({
@@ -88,22 +88,25 @@ export function WatchControl({ page, hold }: { page: Page; hold?: string | undef
 
   return (
     <span className="knowledge-watch">
-      <IconButton
-        icon={<EyeGlyph size="sm" />}
-        label={watching ? "Stop watching this page" : "Watch this page"}
+      {/* Words, as a task's Watch says them: an eye alone could mean preview. */}
+      <Button
+        size="small"
         variant="ghost"
-        pressed={watching}
+        leadingIcon={watching ? <EyeOffGlyph size="sm" /> : <EyeGlyph size="sm" />}
+        loading={save.busy}
         disabledReason={held}
-        onClick={() => {
-          if (!save.busy) void press();
-        }}
-      />
+        tooltip
+        onClick={() => void press()}
+      >
+        {watching ? "Unwatch" : "Watch"}
+      </Button>
       <Popover
         label="Who watches this page"
         align="end"
         trigger={(open, toggle) => (
           <Button size="small" variant="ghost" aria-expanded={open} onClick={toggle}>
-            {followers.length.toLocaleString()} <span className="sr-only">{counted}</span>
+            {followers.length.toLocaleString()} watching
+            <span className="sr-only">{counted}</span>
           </Button>
         )}
       >
@@ -128,8 +131,8 @@ export function WatchControl({ page, hold }: { page: Page; hold?: string | undef
             {held !== undefined
               ? held
               : watching
-                ? "Press the eye to stop watching."
-                : "Press the eye to watch."}
+                ? "Press Unwatch to stop watching."
+                : "Press Watch to watch."}
           </p>
         </div>
       </Popover>

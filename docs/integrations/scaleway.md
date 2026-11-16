@@ -142,7 +142,7 @@ Granting it needs a fresh sign-in. When you move an agent off `administer`, or t
 A level is the safe default. When an agent needs one permission set no level holds, give it that set alone, beside its level, instead of a higher level:
 
 - **On the Agents tab:** open the agent's row, choose **Add grant**, pick the set from the Organization's own list, choose its projects (none is the agent's own projects; an Organization-scoped set takes none), and how long: 4 hours, 24 hours, 7 days, or permanent.
-- **From the agent's request:** when Scaleway refuses a call with `permissions_denied`, the agent asks with `request_access`, naming the set and why. You answer in your Inbox: **Grant for this change** (it lapses after the hours shown), **Add to this agent permanently**, or **Not now**. Either grant opens the exact change for you to apply first.
+- **From the agent's request:** when Scaleway refuses a call with `permissions_denied`, the agent asks with `request_access`, naming the set and why. You answer in your Inbox: **Grant for this change** (it lapses after the hours shown), **Add to this agent permanently**, or **Not now**. Either grant shows the exact grant first, and **Grant** approves it: the engine saves it and only then tells the agent yes.
 
 What Crewlet does:
 

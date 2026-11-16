@@ -3,6 +3,8 @@ package cache_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -368,13 +370,13 @@ func (w *syncWorld) dir(t testing.TB, c *cache.Cache, repo string) string {
 }
 
 // image is what an incarnation IS, as text a case compares: HEAD, config and
-// packed-refs byte for byte, the names of its pack files, and every entry
-// outside the image grammar. The maintainer's outputs — the multi-pack-index
-// and the commit-graph — are left out: whether one is on disk is the
-// maintainer's schedule, not the rows'. So is crewlet/, the index of pushes:
-// what it holds is how much of the push history this copy has read, never
-// what a fresh copy at the same position would — it is held to the rows by
-// its own check (checkIndex).
+// packed-refs byte for byte, the names of its pack files, its tag index byte
+// for byte with its rows, and every entry outside the image grammar. The
+// maintainer's outputs — the multi-pack-index and the commit-graph — are left
+// out: whether one is on disk is the maintainer's schedule, not the rows'. So
+// is the rest of crewlet/, the index of pushes: what it holds is how much of
+// the push history this copy has read, never what a fresh copy at the same
+// position would — it is held to the rows by its own check (checkIndex).
 func (w *syncWorld) image(t testing.TB, c *cache.Cache, repo string) string {
 	t.Helper()
 	return imageOf(t, w.dir(t, c, repo))
@@ -495,7 +497,23 @@ func imageOf(t testing.TB, dir string) string {
 		fmt.Fprintf(&b, "== dropping\n%s\n", strings.Join(dropping, "\n"))
 	}
 	fmt.Fprintf(&b, "== outside the image\n%s\n", strings.Join(strays, "\n"))
+	fmt.Fprintf(&b, "== tags\n%s", tagsImage(dir))
 	return b.String()
+}
+
+// tagsImage is the tag index of the incarnation at dir as an image holds it:
+// its SHA-256 and its rows, one line a tag.
+func tagsImage(dir string) string {
+	path := filepath.Join(dir, filepath.FromSlash(cache.TagsRel))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("unread: %v\n", errors.Is(err, fs.ErrNotExist))
+	}
+	rows, err := cache.TagRows(path)
+	if err != nil {
+		return fmt.Sprintf("%x unreadable: %v\n", sha256.Sum256(raw), err)
+	}
+	return fmt.Sprintf("%x\n%s\n", sha256.Sum256(raw), strings.Join(rows, "\n"))
 }
 
 // countingObjects is the store's read, counted: the opens of each object, in

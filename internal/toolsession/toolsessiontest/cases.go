@@ -1,6 +1,7 @@
 package toolsessiontest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"slices"
@@ -374,5 +375,31 @@ func testEveryRefusalCarriesItsClass(t *testing.T, factory Factory) {
 					describe([]Recorded{r}), string(tc.want))
 			}
 		})
+	}
+}
+
+// AN ANSWER'S IMAGE REACHES THE CLIENT AFTER ITS TEXT, AND NO RECORD KEEPS ITS
+// BYTES: one text block, then one image block with the tool's bytes, wherever
+// its harness runs; the record keeps the text and the image's type and size.
+func testAnAnswersImageReachesTheClientAndNoRecordKeepsItsBytes(t *testing.T, factory Factory) {
+	f := newFixture(t, factory)
+	cs := f.dial(0)
+	res := f.call(cs, pictureTool, nil)
+	if res.IsError || len(res.Content) != 2 {
+		t.Fatalf("the picture was answered %d blocks, failed %v: %q, want its text and one image",
+			len(res.Content), res.IsError, text(res))
+	}
+	if got, ok := res.Content[0].(*mcp.TextContent); !ok || got.Text != pictureAnswer {
+		t.Errorf("the first block is %#v, want the tool's text", res.Content[0])
+	}
+	img, ok := res.Content[1].(*mcp.ImageContent)
+	if !ok || img.MIMEType != crewletmcp.ImagePNG || !bytes.Equal(img.Data, picture) {
+		t.Errorf("the second block is %#v, want the PNG the tool answered", res.Content[1])
+	}
+	r := f.recorded(1)[0]
+	want := []crewletmcp.ImageRecord{{MIMEType: crewletmcp.ImagePNG, Bytes: len(picture)}}
+	if r.Name != pictureTool || r.Failed || r.Output != pictureAnswer || !slices.Equal(r.Images, want) {
+		t.Errorf("the call is recorded %s with images %+v, want its text and %+v",
+			describe([]Recorded{r}), r.Images, want)
 	}
 }

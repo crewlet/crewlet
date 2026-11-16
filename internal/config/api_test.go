@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/words"
@@ -431,6 +430,12 @@ func TestEveryRetiredKeyIsRefused(t *testing.T) {
 			"password and two-step verification"},
 		{"api.auth.bootstrap", "api:\n  auth:\n    bootstrap: closed\n",
 			"crewlet iam invite"},
+		{"api.auth.totp", "api:\n  auth:\n    totp: optional\n",
+			"sign_in.require_second_factor"},
+		{"api.auth.min_password_length", "api:\n  auth:\n    min_password_length: 16\n",
+			"sign_in.min_password_length"},
+		{"api.auth.session", "api:\n  auth:\n    session:\n      absolute: 48h\n",
+			"api.auth.limits.max_session_lifetime"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -561,137 +566,41 @@ func TestTrustedProxiesRefusesWhatCannotMeanWhatItSays(t *testing.T) {
 
 // --- the second factor --------------------------------------------------- //
 
-// AN UNSET SECOND FACTOR IS REQUIRED, the secure value, so a deployment that
-// says nothing gets one and `optional` is always somebody's choice — judged on
-// where a browser reaches the deployment, never on the bind.
+// AN OPTIONAL SECOND FACTOR IS THE OPERATOR'S TO ALLOW, judged on where a
+// browser reaches the deployment, never on the bind: `limits.second_factor:
+// optional` off loopback needs `accept_insecure`.
 //
-// Mutation: read the zero as optional in [APIAuth.SecondFactor] and the first
-// case fails; drop the loopback rule and the second does.
-func TestTheSecondFactorIsRequiredUnlessOptionalIsStatedAndJudgedOnTheExternalURL(t *testing.T) {
+// Mutation: drop the loopback rule and the refusals validate; judge the bind
+// address and the hardened node's case passes.
+func TestAnOptionalSecondFactorIsAllowedOnLoopbackOrWithTheAcknowledgement(t *testing.T) {
 	t.Parallel()
 	auth := func(f iam.SecondFactor, insecure bool, url string) Bootstrap {
 		b := serving()
 		b.API.ExternalURL = url
-		b.API.Auth.TOTP = f
+		b.API.Auth.Limits.SecondFactor = f
 		b.API.Auth.AcceptInsecure = insecure
 		return b
 	}
-	t.Run("unset is required", func(t *testing.T) {
-		t.Parallel()
-		b := auth("", false, "https://crewlet.example.com")
-		if err := b.Validate(); err != nil {
-			t.Fatalf("an unset second factor was refused: %v", err)
-		}
-		if got := b.API.Auth.SecondFactor(); got != iam.SecondFactorRequired {
-			t.Errorf("an unset second factor reads as %q, want %q", got,
-				iam.SecondFactorRequired)
-		}
-		// AN UNKNOWN VALUE REQUIRES ONE TOO: a denylist would read a newer
-		// peer's value as optional and drop the requirement for the length
-		// of a rolling upgrade.
-		newer := APIAuth{TOTP: "somethingnewer"}
-		if got := newer.SecondFactor(); got != iam.SecondFactorRequired {
-			t.Errorf("a value this build does not know reads as %q, want %q",
-				got, iam.SecondFactorRequired)
-		}
-	})
-	t.Run("a value this build does not know is refused", func(t *testing.T) {
-		t.Parallel()
-		refuses(t, auth("sometimes", false, "https://crewlet.example.com"), "sometimes")
-	})
-	t.Run("optional off loopback is refused", func(t *testing.T) {
-		t.Parallel()
-		refuses(t, auth(iam.SecondFactorOptional, false, "https://crewlet.example.com"),
-			"allows password-only sign-in")
-	})
-	t.Run("optional on loopback is fine", func(t *testing.T) {
-		t.Parallel()
-		for _, url := range []string{"http://localhost:8000", "http://LocalHost:8000", "http://127.0.0.1:8000"} {
-			b := auth(iam.SecondFactorOptional, false, url)
-			if err := b.Validate(); err != nil {
-				t.Errorf("%s was refused: %v", url, err)
-			}
-			if got := b.API.Auth.SecondFactor(); got != iam.SecondFactorOptional {
-				t.Errorf("a stated optional reads as %q", got)
-			}
-		}
-	})
-	t.Run("and off loopback with the acknowledgement", func(t *testing.T) {
-		t.Parallel()
-		b := auth(iam.SecondFactorOptional, true, "https://crewlet.example.com")
-		if err := b.Validate(); err != nil {
-			t.Errorf("an acknowledged insecure posture was refused: %v", err)
-		}
-	})
-	// THE JUDGEMENT IS ON THE EXTERNAL URL AND NOT THE BIND ADDRESS, and
-	// this is the case that separates them: a hardened node binds loopback
-	// behind its proxy and is reached over the internet, so a bind check
-	// would permit the insecure posture in exactly the deployment that
-	// must refuse it.
-	t.Run("a loopback bind behind a public address is still refused", func(t *testing.T) {
-		t.Parallel()
-		b := auth(iam.SecondFactorOptional, false, "https://crewlet.example.com")
-		b.API.Host = "127.0.0.1"
-		refuses(t, b, "allows password-only sign-in")
-	})
-}
-
-func TestAPasswordFloorBelowTheEngineOwnIsRefusedRatherThanRaised(t *testing.T) {
-	t.Parallel()
-	b := serving()
-	b.API.Auth.MinPasswordLength = 8
-	refuses(t, b, "below the minimum of")
-
-	b.API.Auth.MinPasswordLength = MaxPasswordLength + 1
-	refuses(t, b, "over the maximum of")
-
-	b.API.Auth.MinPasswordLength = 0
-	if got := b.API.Auth.Passwords(); got != iam.MinPasswordChars {
-		t.Errorf("an unset floor = %d, want the engine's own %d", got, iam.MinPasswordChars)
+	unset := auth("", false, "https://crewlet.example.com")
+	if err := unset.Validate(); err != nil {
+		t.Fatalf("an unset limit was refused: %v", err)
 	}
-}
-
-// THE STEP-UP WINDOW IS BOUNDED BOTH WAYS, AND AN UNSET ONE IS AN HOUR.
-//
-// One window sizes every step-up gesture, so both bounds are load-bearing:
-// below five minutes an administrator re-proves between one screen and the
-// next, and past a day a proof that old is not a step-up at all. Each refusal
-// names the setting an operator has to change. The controls sit on and inside
-// both bounds, and the unset value reads as the hour the setting's doc
-// defends.
-//
-// Mutation: drop the range check on `step_up` and both refusals validate;
-// move either bound and the case beside it flips.
-func TestTheStepUpWindowIsBoundedAndDefaultsToAnHour(t *testing.T) {
-	t.Parallel()
-	control := serving()
-	if err := control.Validate(); err != nil {
-		t.Fatalf("the control does not validate: %v", err)
-	}
-	for _, raw := range []string{"4m59s", "24h1m"} {
-		b := serving()
-		b.API.Auth.Session.StepUpRaw = raw
-		refuses(t, b, "api.auth.session.step_up")
-	}
-	for _, raw := range []string{"5m", "1h", "24h"} {
-		b := serving()
-		b.API.Auth.Session.StepUpRaw = raw
-		if err := b.Validate(); err != nil {
-			t.Errorf("step_up %s was refused: %v", raw, err)
-			continue
-		}
-		want, err := time.ParseDuration(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := b.API.Auth.Session.StepUp(); got != want {
-			t.Errorf("step_up %s reads as %s", raw, got)
+	refuses(t, auth("sometimes", false, "https://crewlet.example.com"), "sometimes")
+	refuses(t, auth(iam.SecondFactorOptional, false, "https://crewlet.example.com"),
+		"password-only sign-in")
+	for _, url := range []string{"http://localhost:8000", "http://LocalHost:8000", "http://127.0.0.1:8000"} {
+		loopback := auth(iam.SecondFactorOptional, false, url)
+		if err := loopback.Validate(); err != nil {
+			t.Errorf("%s was refused: %v", url, err)
 		}
 	}
-	if got := (APISession{}).StepUp(); got != time.Hour {
-		t.Errorf("an unset step_up reads as %s, want the hour the setting "+
-			"defends", got)
+	acknowledged := auth(iam.SecondFactorOptional, true, "https://crewlet.example.com")
+	if err := acknowledged.Validate(); err != nil {
+		t.Errorf("an acknowledged insecure posture was refused: %v", err)
 	}
+	hardened := auth(iam.SecondFactorOptional, false, "https://crewlet.example.com")
+	hardened.API.Host = "127.0.0.1"
+	refuses(t, hardened, "password-only sign-in")
 }
 
 // --- the warnings -------------------------------------------------------- //
@@ -722,7 +631,7 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 	t.Run("an acknowledged insecure posture", func(t *testing.T) {
 		t.Parallel()
 		b := serving()
-		b.API.Auth.TOTP = iam.SecondFactorOptional
+		b.API.Auth.Limits.SecondFactor = iam.SecondFactorOptional
 		b.API.Auth.AcceptInsecure = true
 		named(t, b, "accept_insecure")
 	})
@@ -746,7 +655,7 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 func TestASoundApiPostureWarnsAboutNothing(t *testing.T) {
 	t.Parallel()
 	b := serving()
-	b.API.Auth.TOTP = iam.SecondFactorRequired
+	b.API.Auth.Limits.SecondFactor = iam.SecondFactorRequired
 	if err := b.Validate(); err != nil {
 		t.Fatalf("the fixture does not validate: %v", err)
 	}
@@ -769,7 +678,7 @@ func TestANodeServingNoApiWarnsAboutNoneOfIt(t *testing.T) {
 	} {
 		b := DefaultBootstrap()
 		b.API.ExternalURL = external
-		b.API.Auth.TOTP = iam.SecondFactorOptional
+		b.API.Auth.Limits.SecondFactor = iam.SecondFactorOptional
 		b.API.Auth.AcceptInsecure = true
 		for _, w := range b.Warnings() {
 			if strings.HasPrefix(w.Path, "api.") {

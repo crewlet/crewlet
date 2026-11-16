@@ -26,10 +26,10 @@
  * drawn locked by the navigation for the same reader.
  */
 
-import { SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
 import {
   Card,
   EmptyState,
+  PageNote,
   Skeleton,
   TableKeyCell,
   TableNumberCell,
@@ -45,7 +45,7 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtExact } from "~/lib/format.ts";
-import { isRange, useTimeRange } from "~/lib/range.ts";
+import { useTimeRange } from "~/lib/range.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -53,13 +53,7 @@ import { WORKLET, accessNames } from "~/lib/access.ts";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { WorkSummary } from "~/protocol/types.ts";
 import { useMemo } from "react";
-import {
-  expensiveTasksParams,
-  spendOffer,
-  spendWindowParams,
-  taskFacts,
-  windowWords,
-} from "./model.ts";
+import { expensiveTasksParams, spendOffer, spendWindowParams, taskFacts } from "./model.ts";
 import { itemAddress } from "~/lib/work.ts";
 
 /** How many the overview's card lists — the design's three. */
@@ -102,7 +96,7 @@ export function ExpensiveTasksCard({
     // same lock this card already says.
     return (
       <Card className="spend-card" padding="none">
-        <Card.Header icon={<SquareKanbanGlyph size="sm" />}>
+        <Card.Header>
           <Card.Title>Most expensive tasks</Card.Title>
         </Card.Header>
         <p className="spend-card-body spend-caption">{`Needs ${accessNames([WORKLET])} access`}</p>
@@ -113,7 +107,6 @@ export function ExpensiveTasksCard({
   return (
     <Card className="spend-card" padding="none">
       <Card.Header
-        icon={<SquareKanbanGlyph size="sm" />}
         actions={
           <a
             className="t-link spend-caption"
@@ -139,7 +132,7 @@ export function ExpensiveTasksCard({
           // THE SAME EMPTY STATE AS THE EXPENSIVE TASKS PAGE, in the card's
           // compact size: one message, one treatment.
           <EmptyState
-            size="compact"
+            size="inline"
             title="No task last changed in this window has spent tokens"
             description="Tasks appear once agents spend tokens on them."
           />
@@ -197,10 +190,6 @@ export function ExpensiveTasks() {
   // to be a share of, and a percentage would claim one.
   const top = rows.reduce((m, r) => Math.max(m, r.spend?.tokens ?? 0), 0);
   usePeekNeighbours(useMemo(() => rows.map(itemRef), [rows]));
-  // THE ANSWER'S OWN DAYS, as every other card on Spend names its window —
-  // never the control's, and never "since" a date with today as the tacit
-  // other end, which was wrong for a window that ended in the past.
-  const words = spend.data ? windowWords(spend.data, isRange(range.window)) : null;
 
   // A WINDOW THE ENGINE REFUSED HAS NO LIST, and says why. The list's
   // question starts where the window's answer does, so without that answer it
@@ -227,14 +216,8 @@ export function ExpensiveTasks() {
       <PageActions>
         <TimeRangePicker {...rangePickerProps(range, "Window")} />
       </PageActions>
+      <PageNote>The tasks changed in this window, by every token they have spent.</PageNote>
       <Card className="spend-card spend-tasks" padding="none">
-        <Card.Header
-          subtitlePlacement="below"
-          icon={<SquareKanbanGlyph size="sm" />}
-          subtitle={`${words ? `${words} · ` : ""}tasks changed in this window · lifetime tokens`}
-        >
-          <Card.Title>Most expensive tasks</Card.Title>
-        </Card.Header>
         <QueryState
           error={answer.error}
           refusal={answer.refusal}

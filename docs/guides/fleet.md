@@ -593,7 +593,8 @@ and left unserved:
 |---|---|
 | `node` | A node id, under `node.id`'s own rule: starts with a letter or digit, then letters, digits, `.`, `_` or `-`, at most 64 characters. A `${VAR}` is **not** resolved here — Tier B compares the pin as written — so write the node id itself. The published schema carries the same pattern, so an editor flags a malformed pin as you type |
 | label key | 1 to 63 bytes of UTF-8 with no whitespace and no unprintable character. Dots, slashes and non-ASCII letters are fine (`topology.example.com/zone`). The same grammar governs `node.labels` in Tier A, so a key one of them accepts the other accepts too |
-| label value | Any string, compared exactly: interior spaces and the empty string are both values a node can carry. What a selector's value may **not** have is whitespace around it — every node's label values are trimmed of theirs when its Tier A file loads, so `" eu"` could never match; it is refused rather than trimmed, because the difference is the one you cannot see in the file |
+| label value | At most 64 bytes of printable characters, compared exactly: interior spaces and the empty string are both values a node can carry, while a tab, a control character or a line separator is refused, under the same rule `node.labels` is held to. What a selector's value may **not** have is whitespace around it — every node's label values are trimmed of theirs when its Tier A file loads, so `" eu"` could never match; it is refused rather than trimmed, because the difference is the one you cannot see in the file |
+| labels | At most 16, as many as a node can carry under `node.labels`: a seat is placed only on a node carrying every one, so a selector naming more could never be placed |
 
 A document with several bad keys reports every one of them, in the same
 order on every run, on both sides of the match.
@@ -977,11 +978,12 @@ snapshot again before you start restoring, rebuilding or adding nodes.
   not run the activated revision: one on an older epoch, one that refused it
   or applied it only in part, one on another revision, and one that has
   reported nothing.
-- **Each node's heartbeat** also carries how each of its MCP servers
+- **Each node's status record** carries how each of its MCP servers
   started — one row per server, counting the
-  instances that started and failed, with one failure's reason. See
-  [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
-- **What is firing on each node** rides the same heartbeat: every
+  instances that started and failed, with one failure's reason — beside its
+  models, its runners and what it runs on. See
+  [Its status record](../concepts/coordination.md#its-status-record).
+- **What is firing on each node** rides its heartbeat: every
   [alarm](../reference/alarms.md) the node's own table has up, by its kind
   and with when the node raised it, the longest-standing first. `GET /fleet`
   lists them on each node's row (`alarms`), so one read says what is wrong

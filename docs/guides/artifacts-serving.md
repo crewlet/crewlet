@@ -279,6 +279,53 @@ The listener's traffic is in the `crewlet.artifacts.serve.*` and
 
 ---
 
+## The render browser
+
+An agent checks its own page before anybody reviews it with `render_artifact`
+([Authoring artifacts](artifact-authoring.md#render-it-before-review)), which
+the engine renders in a headless Chromium you run. Name it in the Tier A of
+every node that runs seats, beside the two origins its frame is served under,
+with the same values the ingress nodes have:
+
+```yaml
+api:
+  external_url: https://crewlet.example.com
+  artifacts:
+    external_url: https://{artifact}.example-usercontent.net
+artifacts:
+  render:
+    browser_url: http://chromium:9222   # or the ws:// address it prints
+```
+
+Any Chromium at or above the engine's floor (major 153) will do, started
+headless with its DevTools port open to the node, for example
+`chromium --headless=new --remote-debugging-address=0.0.0.0
+--remote-debugging-port=9222`. The engine reads `/json/version` for the
+browser's socket, sends the port its address rather than a name (Chromium
+refuses a DevTools request named by host), and refuses one below the floor.
+
+- **It needs no network.** Every request a render makes, from every frame and
+  worker, is paused in the browser and answered by the engine: the version's
+  files through the node's own artifact handler, in process, and anything on
+  another site refused and reported. Run it with no route out; the node only
+  has to reach its DevTools port.
+- **Keep the port private.** The DevTools port is full control of that
+  browser, so only the engine's nodes may reach it: a sidecar on loopback, or a
+  private network. The pages it renders run their authors' script, so run it
+  in a container of its own rather than as the engine's user.
+- **One context a render.** Each render opens a browser context of its own,
+  holds every new frame and worker until its requests are paused, and disposes
+  of the context at the end, so nothing one render loads is seen by the next.
+  A node drives at most two at once, each for at most ninety seconds.
+- **No credential leaves the engine.** The render's frame is minted through a
+  credential name only the render's own resolver knows, for the render's
+  length; the artifact listener answers it as an ended credential, so a render
+  URL opens nothing anywhere else.
+
+Unset, `render_artifact` answers which keys to set.
+
+---
+
 ## Sizing the object store
 
 Artifact files live in the company's [object store](../concepts/object-store.md),

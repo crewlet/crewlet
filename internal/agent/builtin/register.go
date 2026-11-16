@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -128,6 +129,10 @@ type Deps struct {
 	// artifactdata.go.
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
+
+	// Render is render_artifact's, a seat's alone. The zero value omits
+	// it. See artifacts_render.go.
+	Render RenderDeps
 
 	// Code is the code read tools' — the company's own repositories, read on
 	// the server. The zero value omits all of them, which is a company that
@@ -372,7 +377,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	delegatedDeps := deps.Delegated
 	delegatedDeps.Release = release
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
-		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH),
+		renderCandidates(deps), codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH),
 		atlasCandidates(atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
 		atlasAgentCandidates(deps.AtlasRecord,
 			atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
@@ -424,6 +429,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			// AND A CODE WRITE REACHES GITLET: a branch moved or a
 			// repository changed is the answer to work that came from it.
 			opts = append(opts, tools.DeliversTo(gitlet.Source))
+		case slices.Contains(ArtifactCommentWrites(), c.tool.Name()):
+			// AND A COMMENT OR A RESOLVE ANSWERS ON THE ARTIFACT, where the
+			// person whose comment woke the turn reads it.
+			opts = append(opts, tools.DeliversTo(artifactsdomain.Source))
 		}
 		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
 		// each tool: the authority table is keyed on the tool's own
@@ -559,7 +568,7 @@ func annotationsFor(name string) tools.Annotations {
 		// lookup was refused it as a write to a surface a human reads
 		// while list_work_items beside it was admitted.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
-	case worklet.MarkInboxTool, worklet.SetPinsTool, CodeMarkInboxTool:
+	case worklet.MarkInboxTool, worklet.SetPinsTool, CodeMarkInboxTool, ArtifactMarkInboxTool:
 		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE, and saying so
 		// takes an explicit `OpenWorld: No` — these two fell to the
 		// default arm, whose `ReadOnly: No` with OpenWorld UNSET is

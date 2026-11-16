@@ -1,7 +1,6 @@
 package kv
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -132,8 +131,12 @@ func (e entry) lease() *coord.Lease {
 	}
 }
 
+// encodeValue is a lease bucket's or the epochs bucket's record as the store
+// writes it: coord's one lease encoding ([coord.EncodeLeaseRecord]), which the
+// bound on a lease's Meta is measured by — so what [Store.TryAcquire] holds a
+// Meta to is the bytes that cross.
 func encodeValue(v any) ([]byte, error) {
-	data, err := json.Marshal(v)
+	data, err := coord.EncodeLeaseRecord(v)
 	if err != nil {
 		// Only reachable through Meta, which is caller-supplied and may
 		// hold something JSON cannot express. That is an argument the

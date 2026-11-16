@@ -115,7 +115,7 @@ func TestAnInboxMovementIsTimedFromItsRecordsWhenSomebodyWatches(t *testing.T) {
 		Reason: "assignee", Stored: stored.Add(time.Second), App: iam.GrantWorklet})
 	svc.InboxChanged(stream.InboxChange{Handle: "lead", UnreadDelta: 2, Subject: "t-2",
 		Reason: "assignee", Stored: stored.Add(2 * time.Second), App: iam.GrantWorklet})
-	svc.InboxReread(worklet.Domain{}.Name(), iam.GrantWorklet)
+	svc.InboxReread(worklet.Domain{}.Name(), iam.GrantWorklet, false)
 
 	if got, want := judge.seen(), []time.Time{stored.Add(2 * time.Second)}; !slices.Equal(got, want) {
 		t.Errorf("inbox pushes were timed from %v, want %v: the movement the lead's "+

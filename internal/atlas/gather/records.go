@@ -46,6 +46,12 @@ type Nodes interface {
 	ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
 }
 
+// NodeStatuses is the nodes' status records ([coord.NodeStatusRecords]): each
+// node's MCP and model rows and what it runs on, counted against its presence.
+type NodeStatuses interface {
+	NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error)
+}
+
 // ServerTests is the connection tests people ran against the servers.
 type ServerTests interface {
 	ListSSHTests(ctx context.Context) ([]coord.SSHTest, error)
@@ -179,9 +185,22 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 	if leaseErr != nil {
 		note(SourceNodes, leaseErr)
 	} else {
+		// WHAT EACH NODE SAYS OF ITSELF rides its status record, counted
+		// against its presence. A store that cannot answer leaves every node
+		// drawn from its presence alone — its id and its broker — and says
+		// the source was not read whole.
+		var statuses map[string]coord.NodeStatusRecord
+		statusErr := ErrNoSource
+		if src.NodeStatuses != nil {
+			var records []coord.NodeStatusRecord
+			if records, statusErr = src.NodeStatuses.NodeStatusRecords(ctx); statusErr == nil {
+				statuses = coord.LiveNodeStatuses(records, leases)
+			}
+		}
 		for _, lease := range leases {
-			r.Fleet = append(r.Fleet, fleetNode(lease))
-			status, ok := coord.StatusFromMeta(lease.Meta)
+			id, _ := coord.ClassNode.Name(lease.Resource)
+			status, ok := statuses[id]
+			r.Fleet = append(r.Fleet, fleetNode(lease, status.Infra))
 			if !ok {
 				continue
 			}
@@ -200,7 +219,10 @@ func readRecords(ctx context.Context, src Sources, s derive.Settings, req Reques
 				r.Models = append(r.Models, p)
 			}
 		}
-		note(SourceNodes, nil)
+		if statusErr != nil {
+			statusErr = fmt.Errorf("each node's status record, which says what it runs on: %w", statusErr)
+		}
+		note(SourceNodes, statusErr)
 	}
 	if src.ServerTests == nil {
 		note(SourceServerTests, ErrNoSource)
@@ -370,17 +392,14 @@ func toolCalls(ctx context.Context, u Usage, servers []string, w window) ([]deri
 }
 
 // fleetNode is one live node as the atlas draws it: its id and how its broker
-// takes part off its profile, and what it says of what it runs on. A node on
-// a build older than the summary is still drawn, with nothing beyond those.
-func fleetNode(lease coord.Lease) derive.FleetNode {
+// takes part off its profile, and what its status record says of what it runs
+// on. A node whose record says nothing, or is not counted yet, is still drawn,
+// with nothing beyond those.
+func fleetNode(lease coord.Lease, infra coord.NodeInfra) derive.FleetNode {
 	id, _ := coord.ClassNode.Name(lease.Resource)
 	profile := placement.FromMeta(id, lease.Meta)
 	n := derive.FleetNode{ID: id, BrokerMember: profile.Broker == placement.BrokerMember,
 		ExternalBroker: profile.Broker == placement.BrokerClient}
-	infra, ok := coord.InfraFromMeta(lease.Meta)
-	if !ok {
-		return n
-	}
 	n.Address = infra.Address
 	n.BrokerServers = infra.BrokerServers
 	n.ObjectsKnown = infra.ObjectsBackend != ""

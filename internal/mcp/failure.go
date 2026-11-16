@@ -27,8 +27,8 @@ import (
 // remedies it calls for, and a screen cannot word a remedy for text it can
 // only print. So every failure the engine records about a server carries a
 // CLASS beside its sentence: the engine decides it once, where the facts are
-// (the HTTP status, the process's exit, the dial error), and the heartbeat,
-// a server's page and the alarms all read the class rather than parse the
+// (the HTTP status, the process's exit, the dial error), and the node's status
+// record, a server's page and the alarms all read the class rather than parse the
 // sentence.
 //
 // THE CLASS IS DECIDED WHERE THE FACTS ARE, never read back out of a sentence:

@@ -60,7 +60,7 @@ import { QueryState } from "~/components/common.tsx";
 import { PAGE_TITLE_MAX_BYTES } from "~/contract/pages.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateCompact, fmtDateTime, plural, relTime, textBudget } from "~/lib/format.ts";
+import { fmtDateCompact, fmtDateTime, plural, textBudget } from "~/lib/format.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -88,6 +88,7 @@ import {
   type SpaceOwners,
 } from "./spaceOwners.ts";
 import { usePagedPages } from "./usePagedPages.ts";
+import { ago } from "~/lib/ago.ts";
 
 /**
  * What the outline lists: the pages a person reads. A draft is somebody's page
@@ -272,7 +273,7 @@ function SpaceHead({ space }: { space: PageContainer }) {
           Last written{" "}
           {last ? (
             <time dateTime={last} title={fmtDateTime(last)}>
-              <b>{relTime(last, now)}</b>
+              <b>{ago(last, now)}</b>
             </time>
           ) : (
             <b>{neverWritten(space, written.data !== undefined && written.data !== null)}</b>

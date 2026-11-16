@@ -175,6 +175,8 @@ export interface ViewerState {
    * where the company runs none, and the composer takes no image.
    */
   assistantReadsImages: boolean;
+  /** The company sets a stronger chain a question can ask for: the composer offers Think harder. */
+  assistantDeliberate: boolean;
   /**
    * On a company talking on a vendor's chat, which vendor surfaces it
    * declares, named to a reader holding Chatlet only: empty everywhere else.
@@ -272,6 +274,7 @@ function viewerState(
     assistant: assistantUnavailable(data?.assistant),
     assistantModel: assistantModelNotice(data?.assistant),
     assistantReadsImages: data?.assistant?.reads_images === true,
+    assistantDeliberate: data?.assistant?.deliberate === true,
     chatVendors: data?.chat_vendors ?? [],
     artifactPages: data?.artifact_pages,
   };

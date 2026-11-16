@@ -30,7 +30,7 @@ import {
   runs,
 } from "~/routes/settings/models/fixtures.ts";
 import { ByJob } from "./ByJob.tsx";
-import type { ModelsData } from "./data.ts";
+import { assistantOf, type ModelsData } from "./data.ts";
 import { WIZARD_STEPS } from "./parts.tsx";
 import { CATEGORY_WORDS, FAST_NOTE } from "./words.ts";
 
@@ -233,6 +233,24 @@ test("the assistant's picker offers only a model that denies web tools, and open
     step: "assign",
     add: [{ job: "assistant" }],
   });
+});
+
+test("the assistant's line names the fallbacks its picker keeps, to an admin and a member", () => {
+  // `haiku` sits second in the chain the engine reports, behind `guarded`.
+  const chained = (admin: boolean) => {
+    const data = company({ admin });
+    const haiku = data.models.find((m) => m.key === "haiku")!;
+    haiku.entry.used_by = [...haiku.entry.used_by, { assistant: "chat", position: 1 }];
+    return { ...data, assistant: assistantOf(null, data.models) };
+  };
+  mount(chained(true));
+  const trigger = screen.getByRole("combobox", { name: "Model Ask Crewlet runs on" });
+  expect(trigger.textContent).toContain("guarded");
+  expect(document.body.textContent).toContain("Falls back to haiku, which a change here keeps.");
+  cleanup();
+  mount(chained(false));
+  expect(document.body.textContent).toContain("Falls back to haiku.");
+  expect(document.body.textContent).not.toContain("which a change here keeps");
 });
 
 test("a member reads every value, in the picker's type, with no picker", () => {

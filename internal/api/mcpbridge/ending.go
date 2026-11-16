@@ -193,6 +193,10 @@ type bridgedCalls struct {
 	// closing is every close of an opening's sessions its end left running
 	// ([binding.endKeeping]).
 	closing sync.WaitGroup
+
+	// answering, nil in production, runs in each call's handler before it waits
+	// on the call, handed the call's recorded channel (export_test.go).
+	answering func(recorded <-chan struct{})
 }
 
 func newBridgedCalls() *bridgedCalls {

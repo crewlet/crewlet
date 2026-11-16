@@ -75,6 +75,7 @@ import {
   Tabs,
   Tag,
   Tooltip,
+  VisuallyHidden,
   useToast,
 } from "@crewlethq/ui";
 import { PersonRow } from "@crewlethq/ui";
@@ -444,6 +445,14 @@ export function followingWords(followsAll: boolean): string {
 }
 
 /**
+ * A member row's second line. An agent's leads with how it follows, which
+ * its switch sets, so a narrow row cuts the team rather than that.
+ */
+export function memberDetail(who: string, following: string | null): string {
+  return following === null ? who : `${following} · ${who}`;
+}
+
+/**
  * The membership a following switch states: the room's members as the pane
  * read them, every one's following said, with `handle`'s set to `on`. The
  * read itself is the expectation it is stated against.
@@ -560,7 +569,7 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
                       )}
                     </>
                   }
-                  detail={follows ? `${who} · ${followingWords(on)}` : who}
+                  detail={memberDetail(who, follows ? followingWords(on) : null)}
                   meta={person.status ? stateWord(person.state) : undefined}
                   tag={
                     channel.created_by === person.handle ? <Tag size="xs">Owner</Tag> : undefined
@@ -724,18 +733,23 @@ function FollowSwitch({
   busy: boolean;
   onChange: (on: boolean) => void;
 }) {
-  const label = `${name} gets every message`;
+  // Drawn in words, so the track is not read as the member's state beside it.
+  const label = (
+    <>
+      Every message <VisuallyHidden>to {name}</VisuallyHidden>
+    </>
+  );
   if (rule) {
     return (
       <Tooltip content={rule}>
-        <Switch label={label} labelHidden checked={on} disabledReason={rule} />
+        <Switch label={label} size="sm" checked={on} disabledReason={rule} />
       </Tooltip>
     );
   }
   return (
     <Switch
       label={label}
-      labelHidden
+      size="sm"
       checked={on}
       disabledReason={busy ? "Saving the last change." : undefined}
       onCheckedChange={onChange}

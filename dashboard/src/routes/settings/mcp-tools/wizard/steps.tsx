@@ -18,6 +18,7 @@ import {
   FormField,
   Input,
   KeyValueRows,
+  NoticeList,
   Select,
   TableTwoLineCell,
   Text,
@@ -69,13 +70,26 @@ type Set = (patch: Partial<Draft>) => void;
 
 /** A field the step needs before it can go on, said on the field once Continue is pressed. */
 export type Missing = Partial<
-  Record<"name" | "url" | "command" | "rows" | "clientId" | "clientSecret", string>
+  Record<
+    | "name"
+    | "url"
+    | "command"
+    | "rows"
+    | "clientId"
+    | "clientSecret"
+    | "startupTimeout"
+    | "requestTimeout",
+    string
+  >
 > & {
   /** Per row, by its id. */
   row?: Record<string, string>;
 };
 
-/** What each step needs before it goes on: present fields, never a judgement of them. */
+/**
+ * What each step needs before it goes on: present fields, and a typed timeout
+ * that is a number of seconds, 0 or more (empty is the engine's default).
+ */
 export function missingIn(d: Draft, step: string): Missing {
   const out: Missing = {};
   if (step === "name" && !d.name.trim()) out.name = "Give the server a name.";
@@ -83,6 +97,18 @@ export function missingIn(d: Draft, step: string): Missing {
     out.url = "Give the server's address.";
   if (step === "connection" && d.transport === "stdio" && !d.command.trim())
     out.command = "Give the command that starts the server.";
+  if (step === "connection") {
+    for (const [key, typed, named] of [
+      ["startupTimeout", d.startupTimeout, "start timeout"],
+      ["requestTimeout", d.requestTimeout, "call timeout"],
+    ] as const) {
+      const t = typed.trim();
+      if (t !== "" && !(Number.isFinite(Number(t)) && Number(t) >= 0)) {
+        out[key] =
+          `The ${named} is a number of seconds, 0 or more. Leave it empty for the default.`;
+      }
+    }
+  }
   const rowsStep = d.transport === "stdio" ? "connection" : "signin";
   if (step === rowsStep && (d.transport === "stdio" || d.signIn === "headers")) {
     const row: Record<string, string> = {};
@@ -107,7 +133,16 @@ export function missingIn(d: Draft, step: string): Missing {
 
 /** Whether a step's needs are met. */
 export function isComplete(m: Missing): boolean {
-  return !m.name && !m.url && !m.command && !m.row && !m.clientId && !m.clientSecret;
+  return (
+    !m.name &&
+    !m.url &&
+    !m.command &&
+    !m.row &&
+    !m.clientId &&
+    !m.clientSecret &&
+    !m.startupTimeout &&
+    !m.requestTimeout
+  );
 }
 
 // ---- name ----------------------------------------------------------------------
@@ -357,7 +392,7 @@ export function ConnectionStep({
         label="Start timeout, in seconds"
         optional
         helper={`How long starting it and its handshake may take, and again its first tool listing, before it is given up on. Empty means ${MCP_DEFAULT_STARTUP_TIMEOUT_SECONDS}.`}
-        error={problemAt(problems, "startup_timeout_seconds")}
+        error={missing.startupTimeout ?? problemAt(problems, "startup_timeout_seconds")}
       >
         {(field) => (
           <Input
@@ -379,7 +414,7 @@ export function ConnectionStep({
         label="Call timeout, in seconds"
         optional
         helper={`How long one tool call may take before it fails back to the agent. Empty means ${MCP_DEFAULT_REQUEST_TIMEOUT_SECONDS}.`}
-        error={problemAt(problems, "request_timeout_seconds")}
+        error={missing.requestTimeout ?? problemAt(problems, "request_timeout_seconds")}
       >
         {(field) => (
           <Input
@@ -434,17 +469,21 @@ function IntegrationNote({ draft }: { draft: Draft }) {
     .filter((i) => i.from_integration)
     .map((i) => i.name);
   return (
-    <Callout variant="info" title={`${entry.title} decides which agents get it`}>
+    <Callout
+      variant="info"
+      title={`${entry.title} decides which agents get it`}
+      action={
+        <a
+          className="t-link"
+          href={href(["company", "integrations", entry.integration], { open: "agents" })}
+        >
+          Open its Agents tab
+        </a>
+      }
+    >
       Each agent turned on at the {entry.title} integration gets its own instance, signed in as
       itself{keys.length > 0 ? ` with the ${listed(keys)} the integration keeps for it` : ""}.
-      Nothing is stored here. Change who has it on the{" "}
-      <a
-        className="t-link prose-link"
-        href={href(["company", "integrations", entry.integration], { open: "agents" })}
-      >
-        {entry.title} integration's Agents tab
-      </a>
-      .
+      Nothing is stored here.
     </Callout>
   );
 }
@@ -839,15 +878,19 @@ export function TestStep({
           as an agent it has turned on, so with none on there is nobody to
           test it as, and the fix is on the integration. */}
       {!draft.shared && bound && agents !== null && testers.length === 0 ? (
-        <Callout variant="warning" title={`No agent has ${title} on`}>
-          Turn {title} on for an agent first, on its{" "}
-          <a
-            className="t-link prose-link"
-            href={href(["company", "integrations", bound], { open: "agents" })}
-          >
-            Agents tab
-          </a>
-          , then test it as that agent.
+        <Callout
+          variant="warning"
+          title={`No agent has ${title} on`}
+          action={
+            <a
+              className="t-link"
+              href={href(["company", "integrations", bound], { open: "agents" })}
+            >
+              Open its Agents tab
+            </a>
+          }
+        >
+          Turn {title} on for an agent first, then test it as that agent.
         </Callout>
       ) : null}
       {!draft.shared && !bound && testers.length === 0 ? (
@@ -879,23 +922,22 @@ export function AccessStep({ draft, set }: { draft: Draft; set: Set }) {
   if (draft.signIn === "integration") {
     const title = entry?.title ?? "The integration";
     return (
-      <Callout variant="info" title={`${title} decides which agents get it`}>
-        Each agent turned on at the {title} integration, with the access it has there, gets its own
-        instance of this server.{" "}
-        {entry?.integration ? (
-          <>
-            Change who has it on the{" "}
+      <Callout
+        variant="info"
+        title={`${title} decides which agents get it`}
+        action={
+          entry?.integration && (
             <a
-              className="t-link prose-link"
+              className="t-link"
               href={href(["company", "integrations", entry.integration], { open: "agents" })}
             >
-              integration's Agents tab
+              Open its Agents tab
             </a>
-            .
-          </>
-        ) : (
-          "Change who has it on the integration's Agents tab."
-        )}
+          )
+        }
+      >
+        Each agent turned on at the {title} integration, with the access it has there, gets its own
+        instance of this server. Who has it is changed on the integration&apos;s Agents tab.
       </Callout>
     );
   }
@@ -1132,11 +1174,12 @@ export function ReviewStep({
       />
       {check.kind === "problems" && problems.length > 0 ? (
         <Callout variant="danger" title="The engine refused this">
-          <ul className="mcp-list">
-            {problems.map((p) => (
-              <li key={`${p.path}:${p.message}`}>{p.message}</li>
-            ))}
-          </ul>
+          <NoticeList
+            notices={problems.map((p) => ({
+              key: `${p.path}:${p.message}`,
+              title: p.said || p.message,
+            }))}
+          />
         </Callout>
       ) : null}
       {check.kind === "blocked" ? (

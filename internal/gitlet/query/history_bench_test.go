@@ -76,7 +76,7 @@ func BenchmarkBlame(b *testing.B) {
 func BenchmarkLogPath(b *testing.B) {
 	historyReads(b, func(path, tip string) []string {
 		return []string{"log", "-z", "--topo-order", "--no-mailmap", "--no-color", "--no-notes",
-			"--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00", "--max-count=" + strconv.Itoa(gitlet.MaxLogLimit),
+			"--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%ct%x00%s%x00", "--max-count=" + strconv.Itoa(gitlet.MaxLogLimit),
 			tip, "--", ":(literal)" + path}
 	})
 }

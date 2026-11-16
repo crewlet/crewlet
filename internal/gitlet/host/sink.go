@@ -1,6 +1,7 @@
 package host
 
 import (
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -26,6 +27,10 @@ import (
 // before its pack has shown the client nothing and is run again over the
 // repaired cache.
 //
+// A DOWNLOAD'S SINK (download.go) holds its opening (holdOpening) so its
+// headers can read it, writes them itself (headers), and refuses any byte past
+// its bound (bound).
+//
 // AND IT READS ON PAST THE HOLD (tap): whether the answer carried a pack is
 // what the fetch audit asks once the request has ended (fetch.go), and an
 // answer whose acknowledgments outgrew the hold has not said yet.
@@ -36,11 +41,21 @@ type sink struct {
 	now         func() time.Time
 	// onStart, when set, is called once, as the first byte is written.
 	onStart func()
+	// headers, when set, writes a download's headers from its opening in
+	// place of contentType and no-cache.
+	headers func(h http.Header, opening []byte)
+	// opening is how much a download's hold keeps before the answer starts.
+	opening int
+	// bounded has the sink refuse a write past limit bytes of body; taken is
+	// what git has written so far, held or sent.
+	bounded      bool
+	limit, taken int64
 
 	mu  sync.Mutex
 	out *paced.Writer // nil until the first byte
-	// hold, while a fetch's answer has not started, is what it holds of
-	// it (holdPack); nil for any other answer, and once it has started.
+	// hold, while a fetch's or a download's answer has not started, is what
+	// it holds of it (holdPack, holdOpening); nil for any other answer, and
+	// once it has started.
 	hold *preamble
 	// tap is a fetch's answer read for its pack's beginning (band.go) — the
 	// hold's release rule while the answer is held, and past the hold whether
@@ -88,14 +103,39 @@ func (s *sink) holdPack() {
 	s.hold, s.tap = &preamble{}, &answerScan{}
 }
 
+// holdOpening has a download's sink hold up to n bytes of its answer before it
+// starts, so its headers can read them. Called before the first run.
+func (s *sink) holdOpening(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hold, s.opening = &preamble{}, n
+}
+
+// bound has the sink refuse any write past limit bytes of body (errPastBound),
+// writing nothing of it. Called before the first run.
+func (s *sink) bound(limit int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bounded, s.limit = true, limit
+}
+
+// errPastBound is a git process writing past its download's bound.
+var errPastBound = errors.New("host: git wrote past the download's bound")
+
 // again readies a held answer for another run over the same request: what the
 // last run's answer held, and its reading, are dropped. Only a run whose
 // answer never started is run again, so nothing of it reached the client.
 func (s *sink) again() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.out == nil && s.hold != nil {
-		s.hold, s.tap = &preamble{}, &answerScan{}
+	if s.out == nil {
+		s.taken = 0
+		if s.hold != nil {
+			s.hold = &preamble{}
+		}
+		if s.tap != nil {
+			s.tap = &answerScan{}
+		}
 	}
 }
 
@@ -118,6 +158,12 @@ func (s *sink) Write(p []byte) (int, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.bounded {
+		if s.taken+int64(len(p)) > s.limit {
+			return 0, errPastBound
+		}
+		s.taken += int64(len(p))
+	}
 	// READ ON PAST THE HOLD until the pack begins, so a fetch whose
 	// acknowledgments outgrew the hold is still told apart from a
 	// negotiation round that sent no object. Once begun, nothing more is
@@ -127,8 +173,20 @@ func (s *sink) Write(p []byte) (int, error) {
 	}
 	if s.out == nil {
 		if h := s.hold; h != nil {
-			if !s.tap.begun && len(h.held)+len(p) <= preambleHoldBytes {
+			if s.tap != nil && !s.tap.begun && len(h.held)+len(p) <= preambleHoldBytes {
 				h.held = append(h.held, p...)
+				return len(p), nil
+			}
+			if s.tap == nil && len(h.held)+len(p) < s.opening {
+				h.held = append(h.held, p...)
+				return len(p), nil
+			}
+			if s.tap == nil {
+				// THE OPENING READ WHOLE: what is held and p start the answer together.
+				h.held = append(h.held, p...)
+				if err := s.startLocked(); err != nil {
+					return 0, err
+				}
 				return len(p), nil
 			}
 		}
@@ -149,13 +207,13 @@ func (s *sink) emit(p []byte) (int, error) {
 
 // release starts a held answer with what it holds: the run's answer stands —
 // it succeeded, or failed in git's own words, which the client must read as
-// git wrote them. Nothing held, nothing is started, so a run that wrote
-// nothing is still answered with a status. Called once the last run has
-// ended.
+// git wrote them. A fetch holding nothing starts nothing, so a run that wrote
+// nothing is still answered with a status; a download starts even empty.
+// Called once the last run has ended.
 func (s *sink) release() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.out != nil || s.hold == nil || len(s.hold.held) == 0 {
+	if s.out != nil || s.hold == nil || (s.tap != nil && len(s.hold.held) == 0) {
 		return nil
 	}
 	return s.startLocked()
@@ -166,8 +224,16 @@ func (s *sink) release() error {
 // it.
 func (s *sink) startLocked() error {
 	h := s.w.Header()
-	h.Set("Content-Type", s.contentType)
-	h.Set("Cache-Control", "no-cache")
+	if s.headers != nil {
+		var opening []byte
+		if s.hold != nil {
+			opening = s.hold.held
+		}
+		s.headers(h, opening)
+	} else {
+		h.Set("Content-Type", s.contentType)
+		h.Set("Cache-Control", "no-cache")
+	}
 	s.w.WriteHeader(http.StatusOK)
 	s.out = paced.NewWriter(s.w, s.now)
 	if s.onStart != nil {

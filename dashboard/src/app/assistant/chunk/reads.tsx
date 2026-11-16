@@ -13,12 +13,15 @@
  * Which mention is a chip is `mentions.ts`'s rule, on the rendered text.
  */
 
-import { useMemo, type MouseEvent, type ReactNode } from "react";
+import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import {
+  Button,
   ButtonLink,
   DataGrid,
   DownloadButton,
   EntityList,
+  externalUrl,
+  LinkInterstitial,
   PropertyList,
   RecordChip,
   RecordChipList,
@@ -34,6 +37,7 @@ import {
   FileTextGlyph,
   FolderGlyph,
   FolderKanbanGlyph,
+  GlobeGlyph,
   LayersGlyph,
   ListFilterGlyph,
   MapGlyph,
@@ -45,6 +49,7 @@ import {
 import type {
   AssistantCardEvent,
   AssistantEntityCard,
+  AssistantOutside,
   AssistantTableCard,
 } from "~/contract/assistant.ts";
 import { exportFile } from "~/protocol/assistant.ts";
@@ -55,6 +60,7 @@ import { href as hrefOf } from "../../router.tsx";
 import { recordWord } from "../brief.ts";
 import { cellText, factText, ProseBlock, ReplyProse, type CardHandlers } from "./blocks.tsx";
 import { mentionsOf, readsOf, type Mention, type Read } from "./mentions.ts";
+import { Sources, sourcesOf } from "./sources.tsx";
 import { openInApp } from "./openInApp.ts";
 
 type EntityKind = NonNullable<AssistantEntityCard["kind"]>;
@@ -74,6 +80,7 @@ const KIND_GLYPH: Record<EntityKind, () => ReactNode> = {
   view: () => <ListFilterGlyph size="xs" />,
   room: () => <MessageSquareGlyph size="xs" />,
   atlas_entry: () => <MapGlyph size="xs" />,
+  web_page: () => <GlobeGlyph size="xs" />,
 };
 
 /** What a record's kind is called, at the head of its peek: "Task", "Agent". */
@@ -138,6 +145,35 @@ function OpenLink({ read, on }: { read: Read; on: CardHandlers }) {
     >
       {words}
     </ButtonLink>
+  );
+}
+
+/** A step outside Crewlet at an engine-built address, opened only through the kit's interstitial. */
+export function OutsideLink({ outside, source }: { outside: AssistantOutside; source: string }) {
+  const [opening, setOpening] = useState(false);
+  // The kit's own check, as for an artifact's links: absolute, no user name.
+  const url = externalUrl(outside.url);
+  if (!url) return null;
+  return (
+    <>
+      <Button
+        size="small"
+        variant="ghost"
+        onClick={() => setOpening(true)}
+        trailingIcon={<ArrowUpRightGlyph size="sm" />}
+      >
+        {outside.label}
+      </Button>
+      <LinkInterstitial
+        url={opening ? url : null}
+        source={source}
+        labels={{
+          intro: () =>
+            `${outside.label}. This is the vendor's own page, outside Crewlet: a person makes the change there, and Crewlet reads it again within a minute.`,
+        }}
+        onClose={() => setOpening(false)}
+      />
+    </>
   );
 }
 
@@ -295,9 +331,11 @@ export function ReadChip({
   const card = read.event.card;
   const keyed = said ? said.by === "key" : read.key !== undefined;
   const text = said?.text ?? read.label;
+  const outside = card.type === "table" ? card.table?.outside : card.entity?.outside;
   const actions = (
     <>
       <OpenLink read={read} on={on} />
+      {outside ? <OutsideLink outside={outside} source={read.label} /> : null}
       {card.type === "table" && card.table ? (
         <Downloads table={card.table} fallback={read.event.card_id} />
       ) : null}
@@ -402,10 +440,15 @@ export function Answer({
       text.trim() === "" ? [] : renderMarkdown(text, { ...ASSISTANT_WORDS, prose: mentions.prose });
     return { nodes: rendered, named: mentions.named };
   }, [text, reads, handlers]);
-  const unnamed = reads.filter((read) => !named.has(read.id));
+  // A WEB PAGE IS CITED under Sources, never also on the Also looked up line.
+  const sources = useMemo(() => sourcesOf(cards), [cards]);
+  const unnamed = reads.filter(
+    (read) => !named.has(read.id) && read.event.card.entity?.kind !== "web_page",
+  );
   return (
     <Stack gap={3}>
       {nodes.length > 0 ? <ProseBlock dimmed={dimmed}>{nodes}</ProseBlock> : null}
+      <Sources sources={sources} />
       {unnamed.length > 0 ? (
         <RecordChipList label="Also looked up">
           {unnamed.map((read) => (
