@@ -956,31 +956,20 @@ units:
 			name: "node facts YAML reads as other types", tier: TierBootstrap,
 			yaml: "node:\n  id: 7\n  labels: {gpu: true, rack: 12}\n",
 		},
-		// A LABEL VALUE IS BOUNDED IN BYTES and the schema counts characters,
-		// so a multi-byte value inside the schema's count is the validator's
-		// alone to refuse; and a ${VAR} longer than the bound is let through,
-		// since it is its value, resolved, that is bounded.
+		// A LABEL MAP'S COUNT IS IN THE SCHEMA, a label value's bound is not:
+		// it is counted in bytes and a schema counts characters, so the
+		// validator alone refuses a value past it.
 		{
 			name: "as many node labels as a node carries, each at its widest", tier: TierBootstrap,
 			yaml: "node:\n  labels:\n" + labelLines("    ", 16, strings.Repeat("v", 64)),
-		},
-		{
-			name: "a node label value written as a long reference", tier: TierBootstrap,
-			yaml: "node:\n  labels: {zone: \"${" + strings.Repeat("Z", 80) + "}\"}\n",
-			env:  map[string]string{strings.Repeat("Z", 80): "eu"},
 		},
 		{
 			name: "one node label more than a node carries", tier: TierBootstrap, editorCatches: true,
 			yaml: "node:\n  labels:\n" + labelLines("    ", 17, "eu"),
 		},
 		{
-			name: "a node label value past its bound", tier: TierBootstrap, editorCatches: true,
+			name: "a node label value past its bound", tier: TierBootstrap, validatorOnly: true,
 			yaml: "node:\n  labels: {zone: " + strings.Repeat("v", 65) + "}\n",
-		},
-		{
-			name: "a node label value inside the schema's characters and past its bytes",
-			tier: TierBootstrap, validatorOnly: true,
-			yaml: "node:\n  labels: {zone: " + strings.Repeat("é", 64) + "}\n",
 		},
 		{
 			name: "a selector naming more labels than a node carries", tier: TierCompany, editorCatches: true,
@@ -988,7 +977,7 @@ units:
 				labelLines("        ", 17, "eu"),
 		},
 		{
-			name: "a selector value past its bound", tier: TierCompany, editorCatches: true,
+			name: "a selector value past its bound", tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nroles:\n  - {name: Builder, placement: {labels: {zone: " +
 				strings.Repeat("v", 65) + "}}}\n",
 		},
@@ -1483,15 +1472,16 @@ func TestTheSchemaBoundsATokenIDWhereTheValidatorDoes(t *testing.T) {
 	}
 }
 
-// LABELS ARE BOUNDED IN THE ARTIFACT WHERE THE VALIDATOR BOUNDS THEM, on the
-// node and on the selector: how many a map holds, and how long each value is.
-// A struct tag is a literal that cannot name placement's constants, so this
-// holds the literals to them. The value's bound sits on its own branch in
-// Tier A, never on the ${VAR} branch beside it, whose length says nothing
-// about the value it resolves to.
+// A LABEL MAP'S COUNT IS BOUNDED IN THE ARTIFACT WHERE THE VALIDATOR BOUNDS
+// IT, on the node and on the selector. A struct tag is a literal that cannot
+// name placement's constant, so this holds the literal to it. A value's bound
+// is NOT in the artifact, and must not be: the validator counts it in bytes
+// and a schema counts characters, so a maxLength of 64 would pass a value of
+// 64 two-byte letters the validator refuses and say the editor checked it.
 //
-// Mutation: drop either tag's maxkeys or maxlen, or set one to a figure the
-// constants do not carry, and the arm for that field fails.
+// Mutation: drop either tag's maxkeys, or set it to a figure the constant does
+// not carry, and the arm for that field fails; put a maxlen back beside it and
+// the value arm fails.
 func TestTheSchemaBoundsLabelsWhereTheValidatorDoes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1510,16 +1500,48 @@ func TestTheSchemaBoundsLabelsWhereTheValidatorDoes(t *testing.T) {
 				labels["maxProperties"], placement.MaxLabels)
 		}
 		value, _ := labels["additionalProperties"].(map[string]any)
-		bound := value["maxLength"]
-		for _, branch := range anyOf(value) {
-			own, _ := branch.(map[string]any)
-			if own["maxLength"] != nil {
-				bound = own["maxLength"]
-			}
+		if bound, err := json.Marshal(value); err != nil || strings.Contains(string(bound), "maxLength") {
+			t.Errorf("%s.%s: the schema bounds a value in characters (%s), where the validator "+
+				"counts %d bytes", tc.def, tc.field, bound, placement.MaxLabelValueBytes)
 		}
-		if got, _ := bound.(float64); int(got) != placement.MaxLabelValueBytes {
-			t.Errorf("%s.%s: the schema bounds a value at %v, the validator at %d bytes",
-				tc.def, tc.field, bound, placement.MaxLabelValueBytes)
+	}
+}
+
+// A LENGTH BOUND WITH NO PATTERN BOUNDS THE FIELD'S OWN SPELLING, never a
+// ${VAR} the tier admits beside it: a reference is as long as its name, which
+// says nothing about the value it resolves to, so a schema that bounded the
+// whole text would flag a file the engine runs. No field carries that shape
+// today, so this holds the generator to it directly, on both tiers' kinds of
+// reference.
+//
+// Mutation: drop textSchema's no-pattern branch, so the bound lands on the
+// whole text, and both arms fail.
+func TestALengthBoundLeavesAReferenceBesideItUnbounded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		resolves   bool
+		directives map[string]string
+		reference  string
+	}{
+		{"a Tier A field", true, map[string]string{"maxlen": "8"}, referencePattern},
+		{"a Tier B pointer", false, map[string]string{"maxlen": "8", "pointer": ""}, wholeReferencePattern},
+	} {
+		out := newSchemaGen(tc.resolves).textSchema(tc.directives)
+		if out["maxLength"] != nil {
+			t.Errorf("%s: the bound sits on the whole text, a long reference included: %v", tc.name, out)
+			continue
+		}
+		branches := anyOf(out)
+		if len(branches) != 2 {
+			t.Errorf("%s: %d branches, want the field's own and the reference: %v", tc.name, len(branches), out)
+			continue
+		}
+		own, _ := branches[0].(map[string]any)
+		reference, _ := branches[1].(map[string]any)
+		if own["maxLength"] != 8 || reference["pattern"] != tc.reference || reference["maxLength"] != nil {
+			t.Errorf("%s: want the bound on the field's own branch and the reference unbounded: %v",
+				tc.name, out)
 		}
 	}
 }

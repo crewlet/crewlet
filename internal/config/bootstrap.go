@@ -1221,9 +1221,11 @@ type Node struct {
 	// At most placement.MaxLabels of them, each value at most
 	// placement.MaxLabelValueBytes printable bytes ([placement.CheckLabelValue]):
 	// they ride the presence lease on every heartbeat, whose size the store
-	// bounds. The js tag states both literally; TestTheSchemaBoundsLabelsWhereTheValidatorDoes
-	// holds it to the constants.
-	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" js:"maxkeys=16;maxlen=64" desc:"Free-form node facts a seat's placement selector matches on: at most 16, each value at most 64 bytes of printable text."`
+	// bounds. The js tag states the count literally, and
+	// TestTheSchemaBoundsLabelsWhereTheValidatorDoes holds it to the constant;
+	// the value's bound is the validator's alone, since it counts bytes and a
+	// schema counts characters.
+	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" js:"maxkeys=16" desc:"Free-form node facts a seat's placement selector matches on: at most 16, each value at most 64 bytes of printable text."`
 
 	// MaxConcurrent bounds how many agent turns this PROCESS runs at
 	// once. Zero — the shape an absent key takes — means the engine's

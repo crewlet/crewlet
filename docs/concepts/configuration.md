@@ -412,8 +412,10 @@ every heartbeat and the coordination store bounds what it carries
 labels are bounded where you write them: a file with a 17th label, or a
 value past 64 bytes, is refused by `crewlet validate` and at startup,
 naming `node.labels` or the key, rather than accepted and then left out
-of every peer's count. The published schema states both bounds, so an
-editor flags them as you type.
+of every peer's count. The published schema states the count, so an
+editor flags a 17th label as you type; a value's bound is counted in
+bytes, which a schema cannot express, so `crewlet validate` is what
+checks it.
 
 Nothing here means anything to the engine on its own: the org decides
 what to select on.

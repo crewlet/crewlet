@@ -218,7 +218,7 @@ type RolePlacement struct {
 	// Labels are pairs a node must carry, ALL of them, matched exactly, and
 	// so held to node.labels' own bounds: no more than a node can carry, each
 	// value in [placement.CheckLabelValue]'s grammar.
-	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" js:"maxkeys=16;maxlen=64" desc:"Node labels that must all match: at most 16, each value at most 64 bytes of printable text."`
+	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" js:"maxkeys=16" desc:"Node labels that must all match: at most 16, each value at most 64 bytes of printable text."`
 }
 
 // Seat is the placement constraint in the form the seat host consumes.
