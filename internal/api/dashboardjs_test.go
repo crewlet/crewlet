@@ -1470,7 +1470,9 @@ const (
 	// So it moved to 418 KiB, 2.28 seconds.
 	// Delegated decisions made readable, on kit 0.134.0: 418.0 KiB, 508 bytes over main: 419 KiB, 2.29 seconds.
 	// Code host glyphs, colours and kit marks, on kit 0.137.0: 419.8 KiB, 1,511 bytes over main: 420 KiB, 2.29 seconds.
-	initialBudget = 420 << 10
+	// The model wizard as a chunk of its own, every harness and reasoning effort, on kit 0.137.0: 421.5 KiB,
+	// the kit's shared modules regrouped around the new chunk: 422 KiB, 2.30 seconds.
+	initialBudget = 422 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2648,7 +2650,8 @@ const (
 	// The Gitlet history, tips, branches, committers and file finder train, on
 	// kit 0.137.0, measures 6351.5 KiB (6,503,931 bytes), 9,452 bytes over main: 6352 KiB.
 	// The Ask Crewlet reads train, on kit 0.137.0: 6354.3 KiB (6,506,836 bytes): 6355 KiB.
-	treeBudget = 5<<20 + 1235<<10
+	// Every harness in the model wizard, its own chunk, and reasoning effort, on kit 0.137.0: 6370.6 KiB: 6371 KiB.
+	treeBudget = 5<<20 + 1251<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -140,6 +140,7 @@ const LOADERS = {
   brand: () => import("~/routes/brand/index.ts"),
   spend: () => import("~/routes/spend/index.ts"),
   settings: () => import("~/routes/settings/index.ts"),
+  "model-wizard": () => import("~/routes/settings/models/wizard/ModelWizard.tsx"),
   account: () => import("~/routes/account/index.ts"),
   signin: () => import("~/routes/signin/index.ts"),
   "new-doc": () => import("~/routes/artifacts/new/DocCreate.tsx"),
@@ -151,7 +152,7 @@ const LOADERS = {
   palette: () => import("./palette/Palette.tsx"),
   assistant: () => import("./assistant/chunk/index.ts"),
 } satisfies Record<
-  ScreenDir | "org" | "signin" | NewArtifactChunk | "palette" | "assistant",
+  ScreenDir | "org" | "signin" | NewArtifactChunk | "palette" | "assistant" | "model-wizard",
   () => Promise<unknown>
 >;
 
@@ -180,7 +181,7 @@ type ScreenDir =
  */
 type NewArtifactChunk = `new-${MakeKind}`;
 
-/** A chunk: a workspace, the org editor, the sign-in screens, a create page, the palette or the assistant. */
+/** A chunk: a workspace, the org editor, the sign-in screens, a create page, the palette, the assistant or the model wizard. */
 export type Chunk = keyof typeof LOADERS;
 
 /** What a chunk's `index.ts` exports. */
@@ -292,6 +293,7 @@ export const CHUNKS: readonly Chunk[] = [
   "inbox",
   "me",
   "settings",
+  "model-wizard",
   "brand",
   "agents",
   "atlas",
@@ -311,7 +313,7 @@ export const CHUNKS: readonly Chunk[] = [
  * since a directory's name is nobody's word for anything.
  */
 const CHUNK_LABELS: Readonly<
-  Record<ScreenDir | "org" | "signin" | "palette" | "assistant", string>
+  Record<ScreenDir | "org" | "signin" | "palette" | "assistant" | "model-wizard", string>
 > = {
   home: "Home",
   inbox: "Inbox",
@@ -332,6 +334,7 @@ const CHUNK_LABELS: Readonly<
   signin: "sign-in",
   palette: "Search",
   assistant: "Ask Crewlet",
+  "model-wizard": "The model wizard",
 };
 
 /** What a chunk is called in a sentence a reader sees. */
@@ -364,7 +367,7 @@ export class ChunkLoadError extends Error {
   readonly advice: string;
   constructor(chunk: Chunk, cause: unknown) {
     const title =
-      chunk === "palette" || chunk === "assistant"
+      chunk === "palette" || chunk === "assistant" || chunk === "model-wizard"
         ? `${chunkLabel(chunk)} could not be loaded`
         : chunk.startsWith("new-")
           ? `The ${chunkLabel(chunk)} page could not be loaded`

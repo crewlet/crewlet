@@ -18,11 +18,11 @@ import {
   DEFAULT_HARNESS,
   DEFAULT_HARNESS_AUTH_MODE,
   EXECUTOR_HARNESSES,
-  HARNESS_FACTS,
   MODEL_KEY_PATTERN,
   type HarnessAuthMode,
   type RunnerCellName,
 } from "~/contract/models.ts";
+import { HARNESS_FACTS } from "~/contract/harnesses.ts";
 import { isReferenceName } from "~/lib/references.ts";
 import {
   applyUses,

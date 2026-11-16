@@ -12,7 +12,7 @@ import { describe, expect, test } from "vitest";
 import { noUses, usesForIntent } from "~/lib/modelUses.ts";
 import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import type { ModelView } from "../data.ts";
-import { HARNESS_FACTS } from "~/contract/models.ts";
+import { HARNESS_FACTS } from "~/contract/harnesses.ts";
 import {
   HARNESSES,
   baseOf,

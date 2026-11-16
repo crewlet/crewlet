@@ -85,6 +85,7 @@ describe("which chunk draws a screen", () => {
         "doclet",
         "live",
         "me",
+        "model-wizard",
         "org",
         "palette",
         "settings",
