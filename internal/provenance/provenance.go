@@ -65,6 +65,11 @@ const (
 	SourceArtifactFile    Source = "artifact_file"
 	SourceArtifactRow     Source = "artifact_row"
 
+	// SourceArtifactComment is a remark in a comment thread on an artifact
+	// (ADR-0153), by the writer its row names. The text a thread quotes from
+	// the page is the page's own words, read as [SourceArtifactFile].
+	SourceArtifactComment Source = "artifact_comment"
+
 	// SourceBrandVoice is the adopted brand's voice: how the company
 	// writes, read by an agent before it writes an artifact.
 	SourceBrandVoice Source = "brand_voice"
@@ -202,7 +207,7 @@ const (
 var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
-	SourceArtifactRow, SourceChangeNote, SourceAlert, SourceNotification,
+	SourceArtifactRow, SourceArtifactComment, SourceChangeNote, SourceAlert, SourceNotification,
 	SourceA2AMessage, SourceExecutor, SourceExecutorSession, SourceBrandVoice, SourceAPIAnswer,
 	SourcePageContext, SourceDeepWork,
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
@@ -216,6 +221,7 @@ func (s Source) Valid() bool { return slices.Contains(Sources, s) }
 // saidSources are the surfaces whose words a writer addressed to a conversation.
 var saidSources = []Source{
 	SourceChatThread, SourceWorkComment, SourcePageComment, SourceChangeComment, SourceChangeReview,
+	SourceArtifactComment,
 }
 
 // Said reports words a writer addressed to a conversation: a chat message, a
