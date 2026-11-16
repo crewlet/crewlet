@@ -94,19 +94,17 @@ function PrimaryAction({
  */
 function HeldNotice({ tool }: { tool: Tool }) {
   return (
-    <Callout variant="neutral" title={`Crewlet runs in ${tool.entry.name}'s place here`}>
-      <span className="col gap-1">
-        {tool.held.map((h) => (
-          <span key={h.name}>{heldReason(h.name, h.heldBy)}</span>
-        ))}
-        <span>
-          To use {listed(tool.held.map((h) => h.name))} instead, change it in{" "}
-          <a className="prose-link" href={href(["settings", "config"])}>
-            Configuration
-          </a>
-          .
-        </span>
-      </span>
+    <Callout
+      variant="neutral"
+      title={`Crewlet runs in ${tool.entry.name}'s place here`}
+      action={
+        <a className="t-link" href={href(["settings", "config"])}>
+          Open Configuration
+        </a>
+      }
+    >
+      {tool.held.map((h) => heldReason(h.name, h.heldBy)).join(" ")} To use{" "}
+      {listed(tool.held.map((h) => h.name))} instead, change it in Configuration.
     </Callout>
   );
 }

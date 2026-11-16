@@ -95,7 +95,6 @@ import {
 import {
   ActivityGlyph,
   ChartNoAxesGanttGlyph,
-  CircleQuestionMarkGlyph,
   EllipsisGlyph,
   MessageSquareGlyph,
   CircleStopGlyph,
@@ -847,7 +846,7 @@ function Notices({
           the engine, with its reason) chose it, and in red it read as an
           error stacked over the seat's real failure. */}
       {state === "paused" && (
-        <Callout variant={toneOf(state)} icon={<PauseGlyph size="md" />}>
+        <Callout variant={toneOf(state)}>
           {paused ? (
             <>
               <strong>Paused by {pauserOf(paused, nameOf)}</strong>{" "}
@@ -862,7 +861,7 @@ function Notices({
       {note && (
         <Callout
           variant="neutral"
-          icon={<PauseGlyph size="md" />}
+
           title={PAUSE_NOTE_WORDS[note].tag}
         >
           {paused ? (
@@ -913,7 +912,7 @@ function Notices({
       {sandbox && asking && standing && (
         <Callout
           variant="warning"
-          icon={<CircleQuestionMarkGlyph size="md" />}
+
           action={standing.answers ? <AnswerRunButton run={sandbox} seat={seat.name} /> : undefined}
         >
           {/* WHOM IT WAITS ON, as the engine says it for this reader: the

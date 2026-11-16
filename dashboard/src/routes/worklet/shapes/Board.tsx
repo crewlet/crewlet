@@ -312,26 +312,12 @@ export function Board({
       )}
       <RefusalNote write={move} />
       {unplaced && (
-        <Callout
-          variant="warning"
-          action={
-            <Button size="small" variant="ghost" onClick={() => setUnplaced("")}>
-              Dismiss
-            </Button>
-          }
-        >
+        <Callout variant="warning" onDismiss={() => setUnplaced("")}>
           {unplaced}
         </Callout>
       )}
       {orderNote && (
-        <Callout
-          variant="info"
-          action={
-            <Button size="small" variant="ghost" onClick={() => setTried(false)}>
-              Dismiss
-            </Button>
-          }
-        >
+        <Callout variant="info" onDismiss={() => setTried(false)}>
           {orderNote}
         </Callout>
       )}

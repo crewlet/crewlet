@@ -75,13 +75,7 @@ import {
   TableEntityCell,
   peekClickHandler,
 } from "@crewlethq/ui";
-import {
-  BuildingComplexGlyph,
-  ClockGlyph,
-  DatabaseGlyph,
-  KeyGlyph,
-  UsersGlyph,
-} from "@crewlethq/icons/glyphs";
+import { BuildingComplexGlyph, ClockGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
@@ -456,9 +450,7 @@ export function Budgets() {
           loose caption under the page's own. Not while the viewer is still
           being asked. */}
       {!access.can && access.block !== "loading" && (
-        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          {access.reason}
-        </Callout>
+        <Callout variant="neutral">{access.reason}</Callout>
       )}
 
       {budgets.loading && !answer && (
@@ -469,9 +461,7 @@ export function Budgets() {
       )}
 
       {answer && answer.durable === false && (
-        <Callout variant="neutral" icon={<DatabaseGlyph size="md" />}>
-          Couldn’t read current spend. Try again shortly.
-        </Callout>
+        <Callout variant="neutral">Couldn’t read current spend. Try again shortly.</Callout>
       )}
 
       {answer && answer.durable && (

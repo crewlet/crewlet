@@ -36,7 +36,6 @@ import {
   Text,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import { KeyGlyph, LinkGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
 import type { McpMemberServerStatus, McpOAuthView, McpValueState } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href } from "~/app/router.tsx";
@@ -79,7 +78,6 @@ export function ConnectionTab({
     <div className="mcp-stack">
       <Card padding="none">
         <Card.Header
-          icon={<ServerGlyph size="sm" />}
           actions={
             admin && server.configured ? (
               <Button size="small" variant="secondary" onClick={() => edit("connection")}>
@@ -141,7 +139,6 @@ export function ConnectionTab({
       ) : resolved ? (
         <Card padding="none">
           <Card.Header
-            icon={<KeyGlyph size="sm" />}
             actions={
               binding && data.admin ? (
                 <ButtonLink
@@ -201,7 +198,6 @@ export function ConnectionTab({
       (values.length > 0 || (resolved?.auth !== "integration" && !oauth)) ? (
         <Card padding="none">
           <Card.Header
-            icon={<KeyGlyph size="sm" />}
             count={values.length || undefined}
             actions={
               // AN OAUTH SERVER'S HEADERS are no row of the wizard's, which
@@ -265,7 +261,6 @@ function OAuthCard({
   return (
     <Card padding="none">
       <Card.Header
-        icon={<LinkGlyph size="sm" />}
         actions={
           <>
             <Button size="small" variant="secondary" onClick={onEdit}>

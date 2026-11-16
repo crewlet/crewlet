@@ -533,7 +533,7 @@ function MirrorDialog({
             ? "A source it does not follow yet is imported first (its branches and tags, but a seat's own, become the source's, and one the source lacks is deleted), and then it moves only by Gitlet's syncs from it, every 15 minutes, and takes no push of its own."
             : "Gitlet pushes these refs there as the seat you name: that seat's own identity at the other host, never a bot."}
         </p>
-        <FormField label="URL" hideLabel error={fieldError(hold, "url")}>
+        <FormField label="URL" error={fieldError(hold, "url")}>
           {(field) => (
             <Input
               id={field.id}
@@ -544,7 +544,7 @@ function MirrorDialog({
             />
           )}
         </FormField>
-        <FormField label="Credential" hideLabel error={fieldError(hold, "credential")}>
+        <FormField label="Credential" error={fieldError(hold, "credential")}>
           {(field) => (
             <Input
               id={field.id}
@@ -561,18 +561,28 @@ function MirrorDialog({
         </FormField>
         {kind === "push" && (
           <>
-            <Input
-              aria-label="Push as"
-              placeholder="The seat's handle"
-              value={as}
-              onChange={(event) => setAs(event.target.value)}
-            />
-            <Input
-              aria-label="Refs"
-              placeholder="Its default branch and refs/tags/* when left empty"
-              value={refs}
-              onChange={(event) => setRefs(event.target.value)}
-            />
+            <FormField label="Push as">
+              {(field) => (
+                <Input
+                  id={field.id}
+                  aria-describedby={field.describedBy}
+                  placeholder="The seat's handle"
+                  value={as}
+                  onChange={(event) => setAs(event.target.value)}
+                />
+              )}
+            </FormField>
+            <FormField label="Refs">
+              {(field) => (
+                <Input
+                  id={field.id}
+                  aria-describedby={field.describedBy}
+                  placeholder="Its default branch and refs/tags/* when left empty"
+                  value={refs}
+                  onChange={(event) => setRefs(event.target.value)}
+                />
+              )}
+            </FormField>
           </>
         )}
       </Stack>

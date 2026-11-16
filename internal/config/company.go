@@ -269,11 +269,19 @@ func ClockMoves(next, prior *Company) []Warning {
 	if from == to {
 		return nil
 	}
-	return []Warning{advisory(field("timezone"), fmt.Sprintf("This moves the company's "+
+	w := clockMovesAdvice.raise(field("timezone"), fmt.Sprintf("This moves the company's "+
 		"clock from %s to %s. Every budget's day, week and month will start at midnight "+
 		"in %s, cutting the window running now, and every schedule without a time zone "+
-		"of its own will run on %s time.", from, to, to, to))}
+		"of its own will run on %s time.", from, to, to, to))
+	w.Item = from + " to " + to
+	return []Warning{w}
 }
+
+// clockMovesAdvice is [ClockMoves]' warning, its Item the zone it moves from
+// and the one it moves to.
+var clockMovesAdvice = says("The company's time zone changes",
+	"Budgets will start each day, week and month at the new zone's midnight, cutting the "+
+		"current one short, and schedules without their own zone move too.")
 
 // skillVariableKey is the substitution-identifier rule.
 //
@@ -1832,17 +1840,27 @@ func (c *Company) executorWarnings() []Warning {
 			}
 		}
 		handle := seat.role.Seat().Handle()
-		w := advisory(at(seat.path, "llm"), fmt.Sprintf("%s's executor never runs on "+
+		w := executorSkipsAdvice.raise(at(seat.path, "llm"), fmt.Sprintf("%s's executor never runs on "+
 			"%s: a seat's executor is its harness's own run, which only %s have, "+
 			"so a launch skips it and runs on %s alone. That is fine if it is there "+
 			"for the reviewer, workers and side passes, which fall back to `llm`; "+
 			"otherwise take it out",
 			handle, c.describeChain(skipped), words.And(ExecutorHarnesses), c.describeChain(runners)))
-		w.Seat = handle
+		models := make([]words.Said, len(skipped))
+		for i, key := range skipped {
+			models[i] = words.Said(c.ModelName(key))
+		}
+		w.Seat, w.Item = handle, words.And(models)
 		out = append(out, w)
 	}
 	return out
 }
+
+// executorSkipsAdvice is [Company.executorWarnings]' rule; the warning's Item
+// names the models the executor never runs on.
+var executorSkipsAdvice = says("Backup models that never run the work",
+	"A model in this agent's list cannot run its main work, so it never takes over. Remove "+
+		"it, unless it is there for side tasks.")
 
 // validateSandboxPlacement holds the rules that need BOTH the catalogue and
 // the seats: whether the catalogue is there, which cells a company actually

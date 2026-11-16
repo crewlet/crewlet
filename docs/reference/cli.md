@@ -1205,8 +1205,11 @@ hold more entries than the prose output has lines. The prose output prints
 that message once, led by every path it applies to.
 
 Each warning is `{"kind", "ref", "path", "segments", "seat", "unit", "from",
-"to", "message"}`, every field always present, and it is one of two kinds
-here:
+"to", "message"}`, every field always present, with `title`, `person` and
+`item` (what it is about in a few words, the same said for a person, and the
+one thing within its seat or unit) and an advisory's `class` where they are
+set, as a [write's answer](api-endpoints.md#what-a-write-answers) carries
+them. It is one of two kinds here:
 
 - **`dangling_reference`** — a reference that resolves to nothing: a unit
   `lead`, a root seat's `unit`, a `manages` entry.

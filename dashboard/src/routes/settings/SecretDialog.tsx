@@ -90,7 +90,7 @@ export function SecretDialog({
   return (
     <Modal
       open
-      title={editing ? `Edit ${editing}` : "Store a secret"}
+      title={editing ? `Edit ${editing}` : "Add secret"}
       icon={<KeyGlyph size="md" />}
       onClose={onClose}
       // WHILE THE WRITE IS IN FLIGHT the veil, Escape and the close control
@@ -123,7 +123,7 @@ export function SecretDialog({
               variant="primary"
               disabled={busy || !name.trim() || value === "" || nameWrong !== null}
             >
-              {busy ? "Saving" : editing ? "Save" : "Store"}
+              {busy ? "Saving" : editing ? "Save" : "Add"}
             </Button>
           </>
         )

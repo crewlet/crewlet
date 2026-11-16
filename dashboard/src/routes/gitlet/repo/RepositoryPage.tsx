@@ -209,15 +209,19 @@ export function RepositoryPage({ repo }: { repo: string }) {
       {detail.redirect && (
         // A RENAME LEAVES THE OLD NAME REDIRECTING for a while: the page reads
         // the repository it found, and says what it is called now.
-        <Callout variant="neutral">
+        <Callout
+          variant="neutral"
+          action={
+            <a className="t-link" href={repoHref(detail.name)}>
+              Open {detail.name}
+            </a>
+          }
+        >
           {`“${repo}” is now called “${detail.name}”`}
           {detail.redirect_until
             ? `; the old name is released ${fmtDateTime(detail.redirect_until)}`
             : ""}
-          .{" "}
-          <a className="prose-link" href={repoHref(detail.name)}>
-            Open {detail.name}
-          </a>
+          .
         </Callout>
       )}
       <div
@@ -453,20 +457,18 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
           While it is deleted nothing of it changes: restore it to change its settings.
         </Callout>
       ) : repo.managed_by === "config" ? (
-        <Callout variant="neutral">
-          <Stack gap={2}>
-            <span>
-              These settings are the company document’s, in <span className="mono">code.repos</span>
-              : every activation settles them, so they are changed in Settings › Configuration.
-            </span>
-            {canConfigure && (
-              <span>
-                <ButtonLink variant="secondary" size="small" href={href(CONFIG_PATH)}>
-                  Open the configuration
-                </ButtonLink>
-              </span>
-            )}
-          </Stack>
+        <Callout
+          variant="neutral"
+          action={
+            canConfigure && (
+              <ButtonLink variant="secondary" size="small" href={href(CONFIG_PATH)}>
+                Open the configuration
+              </ButtonLink>
+            )
+          }
+        >
+          These settings come from the company document, so they are changed in Settings ›
+          Configuration.
         </Callout>
       ) : (
         <Callout variant="neutral">

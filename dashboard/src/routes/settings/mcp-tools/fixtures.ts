@@ -225,6 +225,8 @@ export const ADMIN_STATUS: McpServersStatusAnswer = {
   alarms: [
     {
       kind: "mcp_server_partial",
+      title: "A tool server needs a look",
+      person: "",
       detail: "1 of 2 instances of linear is not serving",
       remedy: "",
       entries: [
@@ -239,6 +241,8 @@ export const ADMIN_STATUS: McpServersStatusAnswer = {
     },
     {
       kind: "mcp_tools_refused",
+      title: "A tool server needs a look",
+      person: "",
       detail: "search: 1 tool is not offered",
       remedy: "",
       entries: [

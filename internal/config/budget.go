@@ -228,12 +228,14 @@ var windowPairs = []struct {
 }
 
 // warnings is every ceiling in this one budget that another ceiling in it
-// makes unable to refuse a turn, located at the key that does nothing.
+// makes unable to refuse a turn, located at the key that does nothing; whose
+// is the budget's holder as its Item names it ("company", or empty on a
+// seat's, which the warning names apart).
 //
 // PAIRWISE, and each warning names the one pair it is about, because what an
 // author does next is decided by that pair: lower the idle ceiling, or remove
 // it. A ceiling made idle only by two others at once is not reported.
-func (b TokenBudget) warnings(path Path) []Warning {
+func (b TokenBudget) warnings(path Path, whose string) []Warning {
 	ceilings := b.Ceilings()
 	var out []Warning
 	for _, pair := range windowPairs {
@@ -243,37 +245,69 @@ func (b TokenBudget) warnings(path Path) []Warning {
 			// Refused, or not a pair: validate owns a ceiling below one.
 			continue
 		}
+		var w Warning
 		switch {
 		case short >= long && pair.inside:
-			out = append(out, advisory(at(path, string(pair.short)), fmt.Sprintf(
+			w = idleInsideAdvice.raise(at(path, string(pair.short)), fmt.Sprintf(
 				"token_budget.%s (%d) is at or above token_budget.%s (%d), so it "+
 					"can never refuse a turn: a %s lies inside one %s, whose "+
 					"ceiling is reached first. Remove it, or lower it below %d to "+
 					"hold one %s to a share of the %s",
 				pair.short, short, pair.long, long, pair.short, pair.long, long,
-				pair.short, pair.long)))
+				pair.short, pair.long))
+			w.Item = limitItem(whose, pair.short)
 		case short >= long:
-			out = append(out, advisory(at(path, string(pair.short)), fmt.Sprintf(
+			w = idleStraddleAdvice.raise(at(path, string(pair.short)), fmt.Sprintf(
 				"token_budget.%s (%d) is at or above token_budget.%s (%d), so it "+
 					"can refuse a turn only in a %s that straddles two %ss: "+
 					"inside one %s, the %s's ceiling is reached first. Lower it "+
 					"below %d, or check the two are not swapped",
 				pair.short, short, pair.long, long, pair.short, pair.long,
-				pair.long, pair.long, long)))
+				pair.long, pair.long, long))
+			w.Item = limitItem(whose, pair.short)
 		// Divided rather than multiplied, so a ceiling near the int
 		// range cannot overflow into a warning that is not true:
 		// most × short <= long exactly when short <= long / most.
 		case short <= long/pair.most:
 			full := pair.most * short
-			out = append(out, advisory(at(path, string(pair.long)), fmt.Sprintf(
+			w = idleLongAdvice.raise(at(path, string(pair.long)), fmt.Sprintf(
 				"token_budget.%s (%d) can never refuse a turn: %s, and %d at "+
 					"token_budget.%s (%d) is %d, which it does not exceed. Remove "+
 					"it, or lower it below %d to hold a %s to less than %d full %ss",
 				pair.long, long, pair.spans, pair.most, pair.short, short, full,
-				full, pair.long, pair.most, pair.short)))
+				full, pair.long, pair.most, pair.short))
+			w.Item = limitItem(whose, pair.long)
+		default:
+			continue
 		}
+		out = append(out, w)
 	}
 	return out
+}
+
+// The words of [TokenBudget.warnings], one per way a ceiling of one budget
+// leaves another idle.
+var (
+	idleInsideAdvice = says("Limits never reached before a longer one",
+		"This limit is at or above a longer period's limit, which is reached first, so it never "+
+			"stops spending. Lower it or remove it.")
+	idleStraddleAdvice = says("Weekly limits at or above the monthly one",
+		"This weekly limit is at or above the monthly one, so it applies only in weeks that span "+
+			"two months. Lower it or swap the two.")
+	idleLongAdvice = says("Longer limits that are never reached",
+		"This limit is at least what the shorter limit allows over its whole period, so it is "+
+			"never reached. Lower it or remove it.")
+)
+
+// limitItem is a ceiling as a warning's Item names it: whose it is, where the
+// warning does not name that apart, and its window ("company daily limit").
+func limitItem(whose string, window period.Period) string {
+	adjective := map[period.Period]string{period.Day: "daily", period.Week: "weekly",
+		period.Month: "monthly"}[window]
+	if whose == "" {
+		return adjective + " limit"
+	}
+	return whose + " " + adjective + " limit"
 }
 
 // holds reports whether every window of period inner lies wholly inside one
@@ -403,11 +437,13 @@ func (i IdleCeiling) sentence(key, refused, spender, held string) string {
 // and a warning beside that refusal would be advice about a key that has to
 // go anyway.
 func (c *Company) budgetWarnings() []Warning {
-	out := c.TokenBudget.warnings(field("token_budget"))
+	out := c.TokenBudget.warnings(field("token_budget"), "company")
 	assistant := at(field("assistant"), "token_budget")
-	out = append(out, c.Assistant.TokenBudget.warnings(assistant)...)
+	out = append(out, c.Assistant.TokenBudget.warnings(assistant, "Ask Crewlet")...)
 	for _, idle := range c.TokenBudget.IdleUnder(c.Assistant.TokenBudget.Ceilings()) {
-		out = append(out, advisory(at(assistant, string(idle.Window)), idle.AssistantSentence()))
+		w := assistantUnderCompanyAdvice.raise(at(assistant, string(idle.Window)), idle.AssistantSentence())
+		w.Item = limitItem("", idle.Window)
+		out = append(out, w)
 	}
 	for role, path := range c.EachRole() {
 		seat := role.Seat()
@@ -415,9 +451,11 @@ func (c *Company) budgetWarnings() []Warning {
 			continue
 		}
 		here := at(path, "token_budget")
-		own := role.TokenBudget.warnings(here)
+		own := role.TokenBudget.warnings(here, "")
 		for _, idle := range c.TokenBudget.IdleUnder(role.TokenBudget.Ceilings()) {
-			own = append(own, advisory(at(here, string(idle.Window)), idle.Sentence(seat.Handle())))
+			w := seatUnderCompanyAdvice.raise(at(here, string(idle.Window)), idle.Sentence(seat.Handle()))
+			w.Item = limitItem("", idle.Window)
+			own = append(own, w)
 		}
 		for i := range own {
 			own[i].Seat = seat.Handle()
@@ -426,6 +464,17 @@ func (c *Company) budgetWarnings() []Warning {
 	}
 	return out
 }
+
+// The words of a ceiling the company's own leaves idle ([TokenBudget.IdleUnder]):
+// an agent's, and the one every person's Ask Crewlet spend is held to.
+var (
+	seatUnderCompanyAdvice = says("Agent limits at or above the company's",
+		"The company's limit is always reached first, so this agent's limit never stops its "+
+			"spending. Lower it below the company's or remove it.")
+	assistantUnderCompanyAdvice = says("Ask Crewlet limits at or above the company's",
+		"The company's limit is always reached first, so this Ask Crewlet limit never stops a "+
+			"question. Lower it below the company's or remove it.")
+)
 
 // validateExecutorFloor refuses a token ceiling below the room an executor
 // launch needs (turn_engine.executor_min_budget_tokens), on every scope a seat

@@ -187,30 +187,28 @@ func TestEveryAdvisoryClassIsValidAndRaisedSomewhere(t *testing.T) {
 	}
 }
 
-// EVERY CLASSED ADVISORY SPEAKS TO THE PERSON WHO OWNS THE COMPANY, beside the
-// operator's sentence, and no other warning claims to.
+// EVERY ADVISORY SPEAKS TO THE PERSON WHO OWNS THE COMPANY, beside the
+// operator's sentence, classed or not; a class is only what the advisor
+// builds a fix for.
 //
 // The owner reads a warning on the org chart and in a save's review, where the
 // operator's sentence put `providers.llm.default`, `llm_auxiliary` and a Tier A
-// keyring in front of a founder. So a classed advisory carries Person, worded
-// as every sentence a person is shown is (caveattest.Problems: no field, no
-// tool, no backtick, no em dash, a full stop), and Message stays the
+// keyring in front of a founder. So every advisory carries a title and Person,
+// worded as every sentence a person is shown is (caveattest.Problems: no
+// field, no tool, no backtick, no em dash, a full stop), and Message stays the
 // operator's, naming the key `crewlet validate` sends them to.
 //
-// Mutation: drop the person words from [config.classed], or put one back in
-// operator vocabulary, and this goes red.
-func TestEveryClassedAdvisorySpeaksToThePersonWhoOwnsTheCompany(t *testing.T) {
+// Mutation: drop the words from [config.classed], or put one back in operator
+// vocabulary, and this goes red.
+func TestEveryAdvisorySpeaksToThePersonWhoOwnsTheCompany(t *testing.T) {
 	t.Parallel()
 	seen := map[config.AdvisoryClass]bool{}
 	for _, w := range everyClass(t).Warnings() {
-		if w.Class == "" {
-			if w.Person != "" {
-				t.Errorf("an unclassed warning claims a person's words: %+v", w)
-			}
+		if w.Kind != config.WarningAdvisory {
 			continue
 		}
 		seen[w.Class] = true
-		if w.Person == "" || w.Person == w.Message {
+		if w.Title == "" || w.Person == "" || w.Person == w.Message {
 			t.Errorf("%s: no words for a person beside the operator's: %+v", w.Class, w)
 			continue
 		}
@@ -222,25 +220,5 @@ func TestEveryClassedAdvisorySpeaksToThePersonWhoOwnsTheCompany(t *testing.T) {
 		if !seen[class] {
 			t.Errorf("%s is never raised here, so its words are not checked", class)
 		}
-	}
-}
-
-// SEVEN AGENTS LEARNING ON THEIR OWN MODEL ARE ONE THING TO KNOW. The person's
-// words of a class whose subject is a seat named apart (Warning.Seat) are the
-// same for every seat, so a screen groups them and says them once, with how
-// many agents; the operator's sentence still names each seat's entry.
-//
-// Mutation: name the seat in the person words, and the two differ.
-func TestOneClassSaysTheSameToAPersonAboutEverySeat(t *testing.T) {
-	t.Parallel()
-	got := classedWarnings(everyClass(t), config.ClassAuxiliaryModel)
-	if len(got) != 2 {
-		t.Fatalf("auxiliary advisories = %+v, want one for each of the two agents", got)
-	}
-	if got[0].Seat == got[1].Seat || got[0].Message == got[1].Message {
-		t.Errorf("the two advisories do not name their own seats apart: %+v", got)
-	}
-	if got[0].Person != got[1].Person {
-		t.Errorf("one class says two things to a person: %q and %q", got[0].Person, got[1].Person)
 	}
 }

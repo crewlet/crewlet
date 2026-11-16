@@ -294,11 +294,15 @@ export function SshServers({ managed }: { managed: string | null }) {
               ports, the container names and their images, and nothing else the commands print.
             </ListItem>
           </List>
-          <Callout variant="info">
-            The server accepts this only after its setup is run on it again.{" "}
-            <Link external href={integrationDocHref("ssh", "let-the-atlas-read-a-server")}>
-              How to run it
-            </Link>
+          <Callout
+            variant="info"
+            action={
+              <Link external href={integrationDocHref("ssh", "let-the-atlas-read-a-server")}>
+                How to run it
+              </Link>
+            }
+          >
+            The server accepts this only after its setup is run on it again.
           </Callout>
           {error && (
             <Callout variant="danger" live="assertive">

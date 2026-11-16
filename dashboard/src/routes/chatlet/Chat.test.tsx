@@ -279,14 +279,14 @@ describe("a reader view's head", () => {
   // a room's bar holds none.
   test("moving between views swaps the tools, and a room's bar holds none", async () => {
     mountScreen({ hash: "#/chatlet/activity", answer: chatAnswers([room(GENERAL, "general")]) });
-    expect(await within(await topBar()).findByRole("switch", { name: "Unread only" })).toBeTruthy();
+    expect(await within(await topBar()).findByRole("button", { name: "Unread" })).toBeTruthy();
 
     flush(() => {
       location.hash = "#/chatlet/threads";
     });
     await waitFor(() => expect(trailHeading().textContent).toBe("Threads"));
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    expect(screen.queryByRole("switch", { name: "Unread only" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unread" })).toBeNull();
 
     flush(() => {
       location.hash = `#/chatlet/${GENERAL}`;
@@ -301,7 +301,7 @@ describe("a reader view's head", () => {
   // heading, not the page body. Mutation: drop the hand-off on a move.
   test("a move that removes the focused control focuses the trail's heading", async () => {
     mountScreen({ hash: "#/chatlet/activity", answer: chatAnswers([room(GENERAL, "general")]) });
-    const unread = await within(await topBar()).findByRole("switch", { name: "Unread only" });
+    const unread = await within(await topBar()).findByRole("button", { name: "Unread" });
     flush(() => unread.focus());
     expect(document.activeElement).toBe(unread);
 
