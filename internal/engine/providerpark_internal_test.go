@@ -986,8 +986,9 @@ func TestAParkTakenAsItsSeatsReleaseLiftsKeepsTheSeatHeld(t *testing.T) {
 // ends it, once its resume has returned, and a turn that meets the limit again
 // in between parks the seat on the record first: the release's late mark or
 // end then landed on the wait that park stands on. Ended, the park's own
-// release later found no record to mark, and the seat's re-park within
-// [parkCarryWindow] of it began a new wait; marked, the standing seat's re-park
+// release later found no record to mark: the seat dropped out of the waits the
+// heartbeat reports until its re-park within [parkCarryWindow] of that
+// release, which began a new wait; marked, the standing seat's re-park
 // on another chain more than [parkCarryWindow] after the release began a new
 // wait. Either way a seat that had waited throughout read as newly waiting, and
 // `llm_limit_waiting`, judged at fifteen minutes, went out.
@@ -1058,6 +1059,12 @@ func TestAParkTakenInAReleasesWindowKeepsItsWait(t *testing.T) {
 					t.Fatal("the window park's release lifted nothing")
 				}
 				r.at(released.Add(time.Minute + parkCarryWindow/2))
+				// AND BETWEEN THE TWO, while a park would continue the
+				// wait, the heartbeat reports it.
+				if got := since("default"); !got.Equal(parkedAt) {
+					t.Errorf("between the window park's release and its re-park the seat "+
+						"waits from %v, want %v", got, parkedAt)
+				}
 				r.park(t, "lead", reset.Add(2*time.Hour))
 				if got := since("default"); !got.Equal(parkedAt) {
 					t.Errorf("the re-park within %v of the window park's release waits from "+

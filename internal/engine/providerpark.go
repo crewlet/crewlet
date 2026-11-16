@@ -677,10 +677,12 @@ func (e *Engine) endParkWait(seat uuid.UUID) {
 // parks the seat again and joins a probe, carrying the wait's start, and the
 // release's late mark or end then lands on the record that park stands on:
 // marked released, a re-park of the standing seat on another chain more than
-// [parkCarryWindow] later began a new wait; ended, the next release found no
-// record to mark and the re-park after it began a new wait too, though the
-// seat had waited throughout. The Models page and `llm_limit_waiting` read the
-// probe's own instant while the park stands, so only that carry read wrong.
+// [parkCarryWindow] later began a new wait; ended, the park's own release
+// found no record to mark, so the seat dropped out of the waits the heartbeat
+// reports between that release and its re-park ([Engine.parkedByEntry]), and
+// the re-park began a new wait, though the seat had waited throughout. While
+// the park stands, the Models page and `llm_limit_waiting` read the probe's own
+// instant, which its join carried: what read wrong came after it.
 //
 // UNDER THE PARKS' LOCK, which a park records itself under before it joins a
 // probe: a park recorded before this read keeps the record for its join, and
