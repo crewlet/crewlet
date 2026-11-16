@@ -9228,6 +9228,103 @@ export interface CodeChangeName {
   state: CodeChangeState;
 }
 
+/** A check rollup's one word (`gitlet.CheckRollupState`), the first that holds, in this order. */
+export type CodeCheckRollupState =
+  "failing" | "running" | "pending" | "cancelled" | "passed" | (string & {});
+
+/** How many checks' latest attempts are in each state (`gitlet.CheckCounts`); `other` a state a later build records. */
+export interface CodeCheckCounts {
+  queued?: number;
+  running?: number;
+  passed?: number;
+  failed?: number;
+  errored?: number;
+  cancelled?: number;
+  skipped?: number;
+  other?: number;
+}
+
+/** One check that did not pass (`gitlet.FailingCheck`). */
+export interface CodeFailingCheck {
+  name: string;
+  state: (typeof CHECK_STATES)[number] | (string & {});
+  required?: boolean;
+}
+
+/**
+ * Where a set of checks stands (`gitlet.CheckRollup`): each check's latest
+ * attempt of one commit for one branch, judged as the merge gate judges a
+ * check.
+ */
+export interface CodeCheckRollup {
+  state: CodeCheckRollupState;
+  counts: CodeCheckCounts;
+  /** How many of the checks are required, and how many of those passed or were skipped: "Passed 2 of 2". */
+  required: number;
+  required_passed: number;
+  last_ended?: string;
+  running_since?: string;
+  /** Required first, then by name; `failing_more` counts the rest. */
+  failing?: CodeFailingCheck[];
+  failing_more?: number;
+  /** The commit holds more checks for the branch than a rollup reads: the counts are of those it read. */
+  more?: boolean;
+}
+
+/** Where a commit's checks stand for one branch (`gitlet.TargetChecks`). */
+export interface CodeTargetChecks extends CodeCheckRollup {
+  /** The branch, in full: `refs/heads/main`. */
+  target: string;
+}
+
+/** One approval of the merged revision a merge's gate names (`gitlet.GateApproval`). */
+export interface CodeGateApproval {
+  handle: string;
+  kind: CodePartyKind;
+  revision: number;
+}
+
+/** A merge's gate as the rows keep it (`gitlet.LandingGate`), on a commit's page alone. */
+export interface CodeLandingGate {
+  approvals?: CodeGateApproval[];
+  approvals_more?: boolean;
+  /** The commit the gate's checks ran on, and where they stand; both absent where no attempt is kept. */
+  checks_on?: string;
+  checks?: CodeCheckRollup;
+  /** No attempt is kept and the merged revision was pushed over 30 days ago: its checks may have been swept. */
+  gone?: boolean;
+}
+
+/** A change as a commit names it, with how it landed once merged (`gitlet.ChangeLanding`). */
+export interface CodeChangeLanding extends CodeChangeName {
+  merge_oid?: string;
+  merged_at?: string;
+  merged_via?: "push" | "direct" | "queue" | (string & {});
+  merged_by?: string;
+  merged_by_kind?: CodePartyKind;
+  /** A person's reason for merging past the gate, on a commit's page alone. */
+  override_reason?: string;
+  /** The gate it merged through, on a commit's page alone. */
+  gate?: CodeLandingGate;
+}
+
+/** What a history page draws beside one commit (`gitlet.CommitMark`). */
+export interface CodeCommitMark {
+  commit: string;
+  checks?: CodeTargetChecks[];
+  checks_more?: boolean;
+  merged?: CodeChangeLanding[];
+  heads?: { change: CodeChangeLanding; n: number }[];
+  more?: boolean;
+}
+
+/** `code_commit_marks`: the marks of up to 100 commits, in the order they were named. */
+export interface CodeCommitMarksAnswer {
+  commit_marks?: CodeCommitMark[];
+  position: LogPosition;
+  level: ReadLevel;
+}
+
 /**
  * `code_commit`: one commit by its whole id (`queries.CodeCommit`) — as the
  * history lists it, the push that introduced it (by the Gitlet node's index, and
@@ -9240,8 +9337,8 @@ export interface CodeCommitAnswer {
   pushed_by?: CodePushedBy;
   push?: CodePushRow;
   coverage?: CodeCoverage;
-  merged?: CodeChangeName[];
-  revisions?: { change: CodeChangeName; n: number }[];
+  merged?: CodeChangeLanding[];
+  revisions?: { change: CodeChangeLanding; n: number }[];
   more?: boolean;
   position: LogPosition;
   level: ReadLevel;
@@ -9411,6 +9508,7 @@ export interface CodeQueryMap {
   code_checks: CodeChecksAnswer;
   code_check: CodeCheckAnswer;
   code_check_log: CodeCheckLogPage;
+  code_commit_marks: CodeCommitMarksAnswer;
   code_commit: CodeCommitAnswer;
   code_diff: CodeGitAnswer;
   code_compare: CodeComparisonAnswer;

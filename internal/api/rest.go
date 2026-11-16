@@ -343,15 +343,17 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/compare", what: "code_compare", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/commits/{sha}", what: "code_commit", path: map[string]string{"name": "name", "sha": "sha"}},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the live queues, the attempts of
-	// checks — a repository's, a change's, a commit's or every repository's
-	// in a window — one attempt whole on its repository's path, and a page of
-	// the log a failed run kept, each decided per repository as the rows are.
-	// The branch an attempt was checked for rides the query as `target`: a
-	// ref's slashes are no path segment's.
+	// checks (a repository's, a change's, a commit's or every repository's
+	// in a window), one attempt whole on its repository's path, a page of
+	// the log a failed run kept, and the marks a history page's commits
+	// carry: their checks and the changes they landed with, each decided per
+	// repository as the rows are. The branch an attempt was checked for rides
+	// the query as `target`: a ref's slashes are no path segment's.
 	{method: "GET", pattern: "/gitlet/queue", what: "code_queue"},
 	{method: "GET", pattern: "/gitlet/checks", what: "code_checks"},
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}", what: "code_check", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/checks/{oid}/{check}/{attempt}/log", what: "code_check_log", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
+	{method: "GET", pattern: "/gitlet/repos/{name}/commit-marks", what: "code_commit_marks", path: map[string]string{"name": "name"}},
 	// AND A SEARCH OF THEIR LINES, across every repository the caller may
 	// read or the ones its repo: filters name, each decided per repository
 	// by the Gitlet node that answers it.

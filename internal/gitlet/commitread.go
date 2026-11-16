@@ -3,23 +3,30 @@ package gitlet
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A COMMIT'S CHANGES — the `commit` read, what a commit's page names beside
-// the commit itself: the repository in detail, as a read of one repository
-// answers it, and in the same snapshot every change the commit belongs to —
+// A COMMIT'S CHANGES, the `commit` read: what a commit's page names beside
+// the commit itself. The repository in detail, as a read of one repository
+// answers it, and in the same snapshot every change the commit belongs to:
 // each whose merge it is (code_changes_merge_idx) and each revision it heads
-// (code_revisions_head_idx), "revision 2 of web!42" — held to the asker's
-// grant on the repository as that read is. The commit itself, and the push
-// that introduced it, are the repository's content and its Gitlet node's index,
-// never these rows: a question asks them by object id beside this read.
+// (code_revisions_head_idx), "revision 2 of web!42". Each change carries how
+// it landed once merged ([ChangeLanding]): the commit its target was merged
+// at, when, which way and by whom, a person's reason for merging past its
+// gate, and, merged through its gate, that gate as the rows keep it
+// ([LandingGate]). Held to the asker's grant on the repository as that read
+// is. The commit itself, and the push that introduced it, are the
+// repository's content and its Gitlet node's index, never these rows: a
+// question asks them by object id beside this read.
 //
-// A commit belongs to a handful of changes in practice — two branches at one
-// head, a change reopened from the same commit — and to any number in the
+// A commit belongs to a handful of changes in practice (two branches at one
+// head, a change reopened from the same commit) and to any number in the
 // worst case, every one a branch somebody opened a change from, so each list
 // is read to [MaxCommitChanges] and says when it holds more (More): a commit's
 // page names the changes it belongs to, never a listing of them, which
@@ -41,12 +48,14 @@ const MaxCommitChanges = 50
 type CommitChanges struct {
 	// Commit is the commit, its whole id.
 	Commit string `json:"commit"`
-	// Merged is every change whose merge is the commit — the merge record's
-	// commit, or the head a push into its target merged it at — by its
-	// number; at most MaxCommitChanges.
-	Merged []ChangeName `json:"merged,omitempty"`
+	// Merged is every change whose merge is the commit (the merge record's
+	// commit, the queue's landing, or the head a push into its target merged
+	// it at) by its number, each with how it landed and its gate; at most
+	// MaxCommitChanges.
+	Merged []ChangeLanding `json:"merged,omitempty"`
 	// Revisions is every revision the commit is the head of, at most
-	// MaxCommitChanges, in the order code_revisions_head_idx keeps them.
+	// MaxCommitChanges, in the order code_revisions_head_idx keeps them, each
+	// change with how it landed once merged and its gate.
 	Revisions []CommitRevision `json:"revisions,omitempty"`
 	// More is set where either list holds more than it names.
 	More bool `json:"more,omitempty"`
@@ -54,34 +63,186 @@ type CommitChanges struct {
 
 // CommitRevision is one revision a commit heads: the change and its number.
 type CommitRevision struct {
-	Change ChangeName `json:"change"`
-	N      int64      `json:"n"`
+	Change ChangeLanding `json:"change"`
+	N      int64         `json:"n"`
 }
 
-// commitKeys are the two indexes a `commit` read seeks — GUARDS as planner.go
-// says, each held by plan_test.go to its seek.
+// ChangeLanding is a change as a commit's page names it: its name and, once
+// merged, how it landed: the commit its target was merged at, when, by which
+// way and by whom (each as its row keeps it, ChangeRow's columns); and, on a
+// `commit` read alone, a person's reason for merging past its gate and the
+// gate as the rows keep it. A `commit_marks` read carries neither.
+type ChangeLanding struct {
+	ChangeName
+	MergeOID     string    `json:"merge_oid,omitempty"`
+	MergedAt     time.Time `json:"merged_at,omitzero"`
+	MergedVia    MergedVia `json:"merged_via,omitempty"`
+	MergedBy     string    `json:"merged_by,omitempty"`
+	MergedByKind PartyKind `json:"merged_by_kind,omitempty"`
+	// OverrideReason is a person's reason for merging past the gate: their
+	// words, declared so.
+	OverrideReason string       `json:"override_reason,omitempty" untrusted:"name"`
+	Gate           *LandingGate `json:"gate,omitempty"`
+}
+
+// LandingGate is a merge's gate as the rows keep it, since the merge record
+// keeps no snapshot of it: the approvals of the revision the change merged at,
+// and where the checks on the commit the gate judged stand.
+type LandingGate struct {
+	// Approvals is each standing approval of the merged revision, by handle,
+	// at most MaxGateApprovals; ApprovalsMore that there are more. One of an
+	// earlier revision is not named, though the gate counted it unchanged.
+	Approvals     []GateApproval `json:"approvals,omitempty"`
+	ApprovalsMore bool           `json:"approvals_more,omitempty"`
+	// ChecksOn is the commit the gate's checks ran on, and Checks where they
+	// stand for the change's target; both absent where no attempt is kept.
+	ChecksOn string       `json:"checks_on,omitempty"`
+	Checks   *CheckRollup `json:"checks,omitempty"`
+	// Gone is set where no attempt is kept and the merged revision was pushed
+	// more than CheckHistory ago, so its checks may have been swept.
+	Gone bool `json:"gone,omitempty"`
+}
+
+// GateApproval is one standing approval: who gave it and the revision it
+// judged, the merged one.
+type GateApproval struct {
+	Handle   string    `json:"handle"`
+	Kind     PartyKind `json:"kind"`
+	Revision int64     `json:"revision"`
+}
+
+// MaxGateApprovals is the most approvals a gate names: a caption names a few
+// approvers, and eight is past any gate's required approvals.
+const MaxGateApprovals = 8
+
+// The indexes a `commit` read and a `commit_marks` read seek, GUARDS as
+// planner.go says, each held by plan_test.go to its seek.
 const (
 	commitMergedKey = "code_changes_merge_idx"
 	commitHeadsKey  = "code_revisions_head_idx"
+	// participantsKey is code_participants' PRIMARY KEY, (change_id,
+	// handle): a change's standing verdicts in handle order.
+	participantsKey = "sqlite_autoindex_code_participants_1"
+	// changeLandingsKey is code_landings_change_idx, (change_id) where one
+	// is named: the landing a queue (or a merge record) made of a change.
+	changeLandingsKey = "code_landings_change_idx"
+	// changeRevisionsKey is code_revisions' PRIMARY KEY, (change_id, n).
+	changeRevisionsKey = "sqlite_autoindex_code_revisions_1"
 )
 
-// A commit's changes: those whose merge is the commit, one range of
-// commitMergedKey on the repository and the commit, its partial predicate
-// repeated; and the revisions it heads, one range of commitHeadsKey on the
-// commit — which every repository's revisions share, so each is kept to this
-// repository by its change, read by its key. Each read one row past
-// MaxCommitChanges. Registered in plan_test.go.
+// landingColumns is a change as [scanLanding] reads it.
+const landingColumns = `c.id, c.number, c.title, c.state, c.target_ref, c.head_oid, c.merge_oid, c.merged_at,
+		c.merged_via, c.merged_by, c.merged_by_kind, c.override_reason, c.revision`
+
+// The `commit` read's statements, registered in plan_test.go: the changes a
+// commit merged and the revisions it heads, each one row past its bound, and a
+// merged change's approvals, queue landing and merged revision's push instant.
 const (
-	commitMergedSQL = `SELECT number, title, state FROM code_changes INDEXED BY ` + commitMergedKey + `
-		WHERE repo_id = ? AND merge_oid = ? AND merge_oid != '' LIMIT ?`
-	commitHeadsSQL = `SELECT r.n, c.number, c.title, c.state
+	commitMergedSQL = `SELECT ` + landingColumns + ` FROM code_changes AS c INDEXED BY ` + commitMergedKey + `
+		WHERE c.repo_id = ? AND c.merge_oid = ? AND c.merge_oid != '' LIMIT ?`
+	commitHeadsSQL = `SELECT r.n, ` + landingColumns + `
 		FROM code_revisions AS r INDEXED BY ` + commitHeadsKey + ` CROSS JOIN code_changes AS c
 		WHERE r.head_oid = ? AND c.id = r.change_id AND c.repo_id = ? LIMIT ?`
+	changeApprovalsSQL = `SELECT handle, kind, verdict_revision FROM code_participants INDEXED BY ` +
+		participantsKey + `
+		WHERE change_id = ? AND verdict = 'approve' AND verdict_revision = ? ORDER BY handle LIMIT ?`
+	changeLandingSQL = `SELECT target_ref, position FROM code_landings INDEXED BY ` + changeLandingsKey + `
+		WHERE change_id = ? AND change_id != '' LIMIT 1`
+	revisionPushedSQL = `SELECT at FROM code_revisions INDEXED BY ` + changeRevisionsKey + `
+		WHERE change_id = ? AND n = ?`
 )
+
+// belonging is a change a commit belongs to as its reads scan it: how it landed,
+// and what its gate is read by.
+type belonging struct {
+	ChangeLanding
+	id, target, head string
+	revision         int64
+}
+
+// marked is the landing as a history page's mark carries it: no reason and
+// no gate, which a commit's page answers.
+func (l belonging) marked() ChangeLanding {
+	out := l.ChangeLanding
+	out.OverrideReason, out.Gate = "", nil
+	return out
+}
+
+// headed is a revision a commit heads, its change as it landed.
+type headed struct {
+	change belonging
+	n      int64
+}
+
+// scanLanding reads one row of [landingColumns] of a change of repo, after
+// lead where given.
+func scanLanding(s scanner, repo RepoRef, lead ...any) (belonging, error) {
+	var (
+		l                         belonging
+		number                    int64
+		title, state, via, byKind string
+		mergedAt                  sql.NullInt64
+	)
+	if err := s.Scan(append(lead, &l.id, &number, &title, &state, &l.target, &l.head, &l.MergeOID, &mergedAt,
+		&via, &l.MergedBy, &byKind, &l.OverrideReason, &l.revision)...); err != nil {
+		return belonging{}, err
+	}
+	l.ChangeName = ChangeName{Repo: repo.Name, Ref: ChangeRef(repo.Name, number), Title: title,
+		State: ChangeState(state)}
+	l.MergedVia, l.MergedByKind = MergedVia(via), PartyKind(byKind)
+	if mergedAt.Valid {
+		l.MergedAt = store.DecodeTime(mergedAt.Int64)
+	}
+	return l, nil
+}
+
+// commitMerged is the changes of repo whose merge is commit, at most limit.
+func commitMerged(ctx context.Context, tx *sql.Tx, repo RepoRef, commit string, limit int) ([]belonging, error) {
+	rows, err := tx.QueryContext(ctx, commitMergedSQL, repo.ID, commit, limit)
+	if err != nil {
+		return nil, fmt.Errorf("gitlet: read the changes %s merged in %s: %w", commit, repo.Name, err)
+	}
+	var out []belonging
+	err = eachRow(rows, func(s scanner) (err error) {
+		var l belonging
+		if l, err = scanLanding(s, repo); err == nil {
+			out = append(out, l)
+		}
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gitlet: read the changes %s merged in %s: %w", commit, repo.Name, err)
+	}
+	return out, nil
+}
+
+// commitHeads is the revisions of repo's changes commit heads, at most limit.
+func commitHeads(ctx context.Context, tx *sql.Tx, repo RepoRef, commit string, limit int) ([]headed, error) {
+	rows, err := tx.QueryContext(ctx, commitHeadsSQL, commit, repo.ID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("gitlet: read the revisions %s heads in %s: %w", commit, repo.Name, err)
+	}
+	var out []headed
+	err = eachRow(rows, func(s scanner) (err error) {
+		var (
+			h headed
+			l belonging
+		)
+		if l, err = scanLanding(s, repo, &h.n); err == nil {
+			h.change = l
+			out = append(out, h)
+		}
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gitlet: read the revisions %s heads in %s: %w", commit, repo.Name, err)
+	}
+	return out, nil
+}
 
 // commit serves a `commit` read: the repository in detail, judged as a read
 // of one repository is ([Reader.repo]), and the changes q.Commit belongs to,
-// in the same transaction.
+// each merged through its gate with that gate, in the same transaction.
 func (r *Reader) commit(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
 	out *ReadAnswer) error {
 
@@ -89,53 +250,137 @@ func (r *Reader) commit(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		return err
 	}
 	repo := out.Repo.RepoRef
-	c := &CommitChanges{Commit: q.Commit}
-	name := func(number int64, title, state string) ChangeName {
-		return ChangeName{Repo: repo.Name, Ref: ChangeRef(repo.Name, number), Title: title,
-			State: ChangeState(state)}
-	}
-	rows, err := tx.QueryContext(ctx, commitMergedSQL, repo.ID, q.Commit, MaxCommitChanges+1)
+	merged, err := commitMerged(ctx, tx, repo, q.Commit, MaxCommitChanges+1)
 	if err != nil {
-		return fmt.Errorf("gitlet: read the changes %s merged in %s: %w", q.Commit, repo.Name, err)
+		return err
 	}
-	err = eachRow(rows, func(s scanner) (err error) {
-		var (
-			number       int64
-			title, state string
-		)
-		if err = s.Scan(&number, &title, &state); err != nil {
+	heads, err := commitHeads(ctx, tx, repo, q.Commit, MaxCommitChanges+1)
+	if err != nil {
+		return err
+	}
+	c := &CommitChanges{Commit: q.Commit, More: len(merged) > MaxCommitChanges || len(heads) > MaxCommitChanges}
+	// ONE GATE A CHANGE, read once: the change a commit merged is often the
+	// one whose last revision it heads.
+	gates := map[string]*LandingGate{}
+	gated := func(l belonging) (ChangeLanding, error) {
+		if l.MergedVia != MergedViaDirect && l.MergedVia != MergedViaQueue {
+			// A PUSH'S MERGE HAS NO GATE: its pusher is its push row's.
+			return l.ChangeLanding, nil
+		}
+		g, read := gates[l.id]
+		if !read {
+			var err error
+			if g, err = r.gateOf(ctx, tx, repo.ID, l); err != nil {
+				return ChangeLanding{}, err
+			}
+			gates[l.id] = g
+		}
+		out := l.ChangeLanding
+		out.Gate = g
+		return out, nil
+	}
+	for _, l := range merged[:min(len(merged), MaxCommitChanges)] {
+		named, err := gated(l)
+		if err != nil {
 			return err
 		}
-		c.Merged = append(c.Merged, name(number, title, state))
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("gitlet: read the changes %s merged in %s: %w", q.Commit, repo.Name, err)
+		c.Merged = append(c.Merged, named)
 	}
-	if rows, err = tx.QueryContext(ctx, commitHeadsSQL, q.Commit, repo.ID, MaxCommitChanges+1); err != nil {
-		return fmt.Errorf("gitlet: read the revisions %s heads in %s: %w", q.Commit, repo.Name, err)
-	}
-	err = eachRow(rows, func(s scanner) (err error) {
-		var (
-			n, number    int64
-			title, state string
-		)
-		if err = s.Scan(&n, &number, &title, &state); err != nil {
+	for _, h := range heads[:min(len(heads), MaxCommitChanges)] {
+		named, err := gated(h.change)
+		if err != nil {
 			return err
 		}
-		c.Revisions = append(c.Revisions, CommitRevision{Change: name(number, title, state), N: n})
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("gitlet: read the revisions %s heads in %s: %w", q.Commit, repo.Name, err)
-	}
-	if len(c.Merged) > MaxCommitChanges || len(c.Revisions) > MaxCommitChanges {
-		c.More = true
-		c.Merged = c.Merged[:min(len(c.Merged), MaxCommitChanges)]
-		c.Revisions = c.Revisions[:min(len(c.Revisions), MaxCommitChanges)]
+		c.Revisions = append(c.Revisions, CommitRevision{Change: named, N: h.n})
 	}
 	out.Commit = c
 	return nil
+}
+
+// gateOf is the gate change l merged through, as the rows keep it: its merged
+// revision's approvals, and the checks on its head (a direct merge) or on the
+// tip its land record left the branch at (a queue landing, from code_landings).
+func (r *Reader) gateOf(ctx context.Context, tx *sql.Tx, repoID string, l belonging) (*LandingGate, error) {
+	g := &LandingGate{}
+	rows, err := tx.QueryContext(ctx, changeApprovalsSQL, l.id, l.revision, MaxGateApprovals+1)
+	if err != nil {
+		return nil, fmt.Errorf("gitlet: read the approvals of %s: %w", l.Ref, err)
+	}
+	err = eachRow(rows, func(s scanner) (err error) {
+		var (
+			a    GateApproval
+			kind string
+		)
+		if err = s.Scan(&a.Handle, &kind, &a.Revision); err != nil {
+			return err
+		}
+		a.Kind = PartyKind(kind)
+		g.Approvals = append(g.Approvals, a)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gitlet: read the approvals of %s: %w", l.Ref, err)
+	}
+	if len(g.Approvals) > MaxGateApprovals {
+		g.Approvals, g.ApprovalsMore = g.Approvals[:MaxGateApprovals], true
+	}
+	on := l.head
+	if l.MergedVia == MergedViaQueue {
+		if on, err = landedTip(ctx, tx, repoID, l.id); err != nil {
+			return nil, fmt.Errorf("gitlet: read the landing of %s: %w", l.Ref, err)
+		}
+	}
+	if on != "" {
+		if g.Checks, err = rollupOfTarget(ctx, tx, repoID, on, l.target); err != nil {
+			return nil, err
+		}
+	}
+	if g.Checks != nil {
+		g.ChecksOn = on
+	}
+	if g.Checks == nil {
+		// The gate's attempts ended after its revision was pushed, so none
+		// can have been swept before that is CheckHistory old.
+		pushed, err := revisionPushed(ctx, tx, l)
+		if err != nil {
+			return nil, fmt.Errorf("gitlet: read when %s's merged revision was pushed: %w", l.Ref, err)
+		}
+		g.Gone = pushed.Before(r.now().Add(-CheckHistory))
+	}
+	return g, nil
+}
+
+// revisionPushed is when l's merged revision was pushed, or its merge instant
+// where no row of the revision is kept.
+func revisionPushed(ctx context.Context, tx *sql.Tx, l belonging) (time.Time, error) {
+	var at int64
+	err := tx.QueryRowContext(ctx, revisionPushedSQL, l.id, l.revision).Scan(&at)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return l.MergedAt, nil
+	case err != nil:
+		return time.Time{}, err
+	}
+	return store.DecodeTime(at), nil
+}
+
+// landedTip is the commit the land record that landed change left its target
+// at, or "" where no landing row of it is kept: the change's landing, then
+// its record's last.
+func landedTip(ctx context.Context, tx *sql.Tx, repoID, change string) (string, error) {
+	var (
+		target   string
+		position int64
+		tip      string
+	)
+	err := tx.QueryRowContext(ctx, changeLandingSQL, change).Scan(&target, &position)
+	if err == nil {
+		err = tx.QueryRowContext(ctx, landingTipSQL, repoID, target, position).Scan(&tip)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return tip, err
 }
 
 // validateCommit is [ReadQuery.validate] for a `commit` read: the commit it

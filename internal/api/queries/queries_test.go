@@ -401,10 +401,11 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// a listing across repositories keeps the rows of those the caller
 		// reads, and one attempt — and its log — is refused on one it does
 		// not.
-		"code_queue":     string(iam.GrantGitlet),
-		"code_checks":    string(iam.GrantGitlet),
-		"code_check":     string(iam.GrantGitlet),
-		"code_check_log": string(iam.GrantGitlet),
+		"code_queue":        string(iam.GrantGitlet),
+		"code_checks":       string(iam.GrantGitlet),
+		"code_check":        string(iam.GrantGitlet),
+		"code_check_log":    string(iam.GrantGitlet),
+		"code_commit_marks": string(iam.GrantGitlet),
 		// AND A SEARCH OF THEIR LINES, decided per repository alike: an
 		// unfiltered search leaves out what the caller does not read, and a
 		// repo: naming one is refused — by every Gitlet node that answers it.

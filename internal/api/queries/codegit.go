@@ -131,8 +131,9 @@ type CodeCommit struct {
 	Push     *gitlet.PushRow  `json:"push,omitempty"`
 	Coverage *gitlet.Coverage `json:"coverage,omitempty"`
 	// Merged, Revisions and More are the changes it belongs to, as the
-	// reader's `commit` answers them (gitlet.CommitChanges).
-	Merged    []gitlet.ChangeName     `json:"merged,omitempty"`
+	// reader's `commit` answers them (gitlet.CommitChanges): each with how
+	// it landed once merged and the gate it merged through.
+	Merged    []gitlet.ChangeLanding  `json:"merged,omitempty"`
 	Revisions []gitlet.CommitRevision `json:"revisions,omitempty"`
 	More      bool                    `json:"more,omitempty"`
 	Position  statelog.Position       `json:"position"`

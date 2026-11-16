@@ -212,3 +212,48 @@ func TestAChecksListingNamesItsNarrowing(t *testing.T) {
 		}
 	}
 }
+
+// A HISTORY PAGE'S MARKS ARE THE READER'S ANSWER: `commits` (comma-separated
+// or a frame's list) reach one `commit_marks` read at the caller's freshness,
+// answered bare, and a session read with no floor is refused.
+//
+// Mutations: drop `commits` from codeReadQuery: the reader is asked no
+// commit, red; answer the read Immutable: red; split no comma: one id
+// "a,b", red.
+func TestCommitMarksAreTheReadersAnswer(t *testing.T) {
+	t.Parallel()
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	marks := []gitlet.CommitMark{{Commit: a}, {Commit: b, Checks: []gitlet.TargetChecks{{
+		Target: "refs/heads/main", CheckRollup: gitlet.CheckRollup{State: gitlet.RollupPassed}}}}}
+	stub := &stubCode{answer: func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
+		return gitlet.ReadAnswer{CommitMarks: marks, Level: q.Fresh.Level}, nil
+	}}
+	for _, commits := range []any{a + "," + b, []any{a, b}} {
+		answer, err := askNative(t, queries.Sources{Code: stub}, "code_commit_marks", map[string]any{
+			"name": "web", "commits": commits, "read_level": "linearizable"})
+		if err != nil {
+			t.Fatalf("the marks of %v: %v", commits, err)
+		}
+		got, ok := answer.(gitlet.ReadAnswer)
+		if !ok || len(got.CommitMarks) != 2 || got.CommitMarks[1].Checks[0].State != gitlet.RollupPassed {
+			t.Fatalf("the marks of %v answered %T %+v, want the reader's answer bare", commits, answer, answer)
+		}
+		asked := stub.last()
+		if asked.Kind != gitlet.ReadCommitMarks || asked.Repo != "web" || len(asked.CommitMarks) != 2 ||
+			asked.CommitMarks[0] != a || asked.CommitMarks[1] != b ||
+			asked.Fresh.Level != statelog.ReadLinearizable {
+			t.Errorf("the marks of %v asked %+v, want one commit_marks read of web's a and b, linearizable",
+				commits, asked)
+		}
+	}
+	none := &stubCode{}
+	if _, err := askNative(t, queries.Sources{Code: none}, "code_commit_marks", map[string]any{"name": "web",
+		"commits": a, "read_level": "session"}); !errors.Is(err, queries.ErrBadParams) || len(none.asked) != 0 {
+		t.Errorf("a session read with no floor answered %v having read %d, want bad_params", err,
+			len(none.asked))
+	}
+	if _, err := askNative(t, queries.Sources{Code: none}, "code_commit_marks", map[string]any{"name": "web",
+		"commits": 7}); !errors.Is(err, queries.ErrBadParams) || len(none.asked) != 0 {
+		t.Errorf("commits given as a number answered %v having read %d, want bad_params", err, len(none.asked))
+	}
+}

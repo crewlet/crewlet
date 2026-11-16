@@ -1494,7 +1494,8 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	case ReadCommit:
 		// A POINT READ, as a read of one repository is: its detail is the
 		// answer's first part, and a change a deferred record holds back
-		// would be a commit's page naming less than it belongs to.
+		// would be a commit's page naming less than it belongs to. Its gates'
+		// checks and approvals, on other paths, are read as their rows stand.
 		query = fresh.Resolved(resolver(q.Repo), false)
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.commit(ctx, tx, q, chart, cp, &out) }
 	case ReadIntroduced:
@@ -1610,6 +1611,13 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// names lie on any repository's subjects (inboxread.go).
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.noticeCards(ctx, tx, q, chart, &out) }
+	case ReadCommitMarks:
+		// A SET READ of the repository's rows and its checks, as a listing
+		// of its checks is: an attempt or a change a deferred record holds
+		// back is read as its row stands, and a history page polled each
+		// minute is not refused for it.
+		query = fresh.Resolved(checksResolver(q.Repo), true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.commitMarks(ctx, tx, q, chart, &out) }
 	case ReadExpungeTips:
 		// A POINT READ OF THE REPOSITORY, as an `introduced` read is: a
 		// record this node deferred on the repository may carry a drop the
@@ -1883,6 +1891,10 @@ func (q ReadQuery) validate() error {
 		if err := q.validateNoticeCards(); err != nil {
 			return err
 		}
+	case ReadCommitMarks:
+		if err := q.validateCommitMarks(); err != nil {
+			return err
+		}
 	case ReadChecks, ReadCheck:
 		if err := q.validateChecks(); err != nil {
 			return err
@@ -1910,9 +1922,10 @@ func (q ReadQuery) validate() error {
 }
 
 // kindOwnedField refuses a field that one kind a principal reads alone reads
-// — a commit, an inbox, an inbox page's cards, the narrowing of a listing of
-// repositories to the ones a rule protects — on a read of any other kind,
-// the engine's own reads included ([ReadQuery.validate]).
+// (a commit, an inbox, an inbox page's cards, a history page's commits, the
+// narrowing of a listing of repositories to the ones a rule protects) on a
+// read of any other kind, the engine's own reads included
+// ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
 	case q.Protected && q.Kind != ReadRepos:
@@ -1927,6 +1940,9 @@ func (q ReadQuery) kindOwnedField() error {
 			ErrInvalid)
 	case q.RefListing != nil && q.Kind != ReadRefs:
 		return fmt.Errorf("%w: ref_listing: only a refs listing is ordered, narrowed or read in detail",
+			ErrInvalid)
+	case len(q.CommitMarks) > 0 && q.Kind != ReadCommitMarks:
+		return fmt.Errorf("%w: commit_marks: only a commit_marks read names the commits whose marks it reads",
 			ErrInvalid)
 	}
 	return nil
