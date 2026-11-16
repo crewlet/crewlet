@@ -464,11 +464,13 @@ export type PreviewEntry =
   | { kind: "skipped"; count: number; of: "same" | "added" | "removed" };
 
 /**
- * A change cut to a preview: at most `max` changed blocks; a run of more than
- * `run` blocks added or removed together shows its first `run - 1` and counts
- * the rest; unchanged blocks are counted where they stand, except the heading
- * a change sits under, which says where on the page it is. Nothing after the
- * last change shown. `more` is how many changed blocks the preview left out.
+ * A change cut to a preview: at most `max` changed blocks. A run of more than
+ * `run` blocks added or removed together keeps its headings, each with the
+ * blocks under it counted, so a reader sees which sections went; a run with
+ * no heading shows its first `run - 1` and counts the rest. Unchanged blocks
+ * are counted where they stand, except the heading a change sits under, which
+ * says where on the page it is. Nothing after the last change shown. `more`
+ * is how many changed blocks the preview left out.
  */
 export function previewOf(
   blocks: readonly ProseBlock[],
@@ -513,8 +515,28 @@ export function previewOf(
       let end = i;
       while (end + 1 < blocks.length && blocks[end + 1]!.change === block.change) end++;
       const length = end - i + 1;
+      const stretch = blocks.slice(i, end + 1);
+      i = end;
+      if (length > run && stretch.some((b) => b.block.kind === "heading")) {
+        // EACH SECTION BY ITS HEADING, the blocks under it counted.
+        let under = 0;
+        const fold = () => {
+          if (under > 0) entries.push({ kind: "skipped", count: under, of: block.change });
+          under = 0;
+        };
+        for (const b of stretch) {
+          if (b.block.kind !== "heading") under++;
+          else if (shown < max) {
+            fold();
+            entries.push({ kind: "block", block: b });
+            shown++;
+          } else more++;
+        }
+        fold();
+        continue;
+      }
       const take = Math.min(length <= run ? length : run - 1, max - shown);
-      for (let k = 0; k < take; k++) entries.push({ kind: "block", block: blocks[i + k]! });
+      for (let k = 0; k < take; k++) entries.push({ kind: "block", block: stretch[k]! });
       shown += take;
       const left = length - take;
       if (left > 0 && length > run) {
@@ -522,7 +544,6 @@ export function previewOf(
       } else {
         more += left;
       }
-      i = end;
       continue;
     }
     entries.push({ kind: "block", block });

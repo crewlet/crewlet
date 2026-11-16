@@ -226,6 +226,29 @@ describe("the preview", () => {
     expect(more).toBe(0);
   });
 
+  test("a long removed run with sections keeps each section's heading and counts what was under it", () => {
+    const goneHeading = (text: string): ProseBlock => ({
+      change: "removed",
+      block: { kind: "heading", level: 2, text },
+      words: 1,
+    });
+    const run = [
+      goneHeading("Open questions"),
+      gone("1"),
+      gone("2"),
+      goneHeading("Legacy importer"),
+      gone("3"),
+      gone("4"),
+      gone("5"),
+    ];
+    expect(previewOf(run, 8).entries).toEqual([
+      { kind: "block", block: run[0] },
+      { kind: "skipped", count: 2, of: "removed" },
+      { kind: "block", block: run[3] },
+      { kind: "skipped", count: 3, of: "removed" },
+    ]);
+  });
+
   test("a long removed run shows its start and counts the rest; past the cap, changes are counted as more", () => {
     const run = [gone("1"), gone("2"), gone("3"), gone("4"), gone("5")];
     const { entries } = previewOf(run, 6);
