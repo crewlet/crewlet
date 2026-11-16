@@ -1469,7 +1469,8 @@ const (
 	// punctuation peel a marked chip now takes among it, in the shared chunk.
 	// So it moved to 418 KiB, 2.28 seconds.
 	// Delegated decisions made readable, on kit 0.134.0: 418.0 KiB, 508 bytes over main: 419 KiB, 2.29 seconds.
-	initialBudget = 419 << 10
+	// Code host glyphs, colours and kit marks, on kit 0.137.0: 419.8 KiB, 1,511 bytes over main: 420 KiB, 2.29 seconds.
+	initialBudget = 420 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2641,7 +2642,8 @@ const (
 	// The Ask Crewlet, sign-in policy, settings and Delegated decisions train,
 	// on kit 0.134.0, measures 6342.3 KiB (6,494,479 bytes), 29,554 bytes over
 	// main's 6313.4 KiB: 6343 KiB.
-	treeBudget = 5<<20 + 1223<<10
+	// Code host glyphs, colours and kit marks, on kit 0.137.0: 6350.7 KiB, 8,666 bytes over main: 6351 KiB.
+	treeBudget = 5<<20 + 1231<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
