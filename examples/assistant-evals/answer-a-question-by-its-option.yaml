@@ -1,0 +1,87 @@
+# A question with three options waits on the founder; the decisions read lists
+# it with its options by id, the recommendation and what it cites, and the
+# answer is proposed by the option chosen, sent only once approved.
+person:
+  apps: [worklet]
+  acts: [comment_on_work_item]
+page:
+  screen: inbox
+  title: Inbox
+  params: {}
+  query: {}
+  resources: [{kind: task, id: ENG-41}]
+  selection: {kind: task, id: ENG-41}
+  source_revision: url:5c1e0b7a
+  accepts: []
+question: >-
+  What is the Agent CTO asking me on ENG-41, and what does it recommend? Answer
+  it with the Worker route.
+answers:
+  - route: GET /worklet/decisions
+    body:
+      handle: jane-founder
+      more: false
+      total: 1
+      items:
+        - kind: ask
+          at: "2026-11-14T09:00:00Z"
+          put_to_you: true
+          may_answer: true
+          needs_you: true
+          ask:
+            key: ENG-41
+            title: Serve versioned docs pages from the docs site
+            comment: c-12
+            asked_by: agent-cto
+            asked_at: "2026-11-14T09:00:00Z"
+            body: Which way should we route /docs/{version} to the docs site?
+            open: true
+            decision:
+              question: Which way should the edge route versioned docs pages?
+              options:
+                - {id: origin-rule, label: "Origin rule with a Host override", detail: "Needs a plan upgrade"}
+                - {id: worker, label: "A Worker route on the free tier"}
+                - {id: defer, label: "Defer until the docs release"}
+              recommended: origin-rule
+              rationale: One rule to maintain, and the plan upgrade is small.
+              role: approver
+              evidence:
+                - {kind: url, ref: "https://docs.example.com/rules/origin", label: "Origin rules"}
+  - route: GET /worklet/comments
+    body:
+      item: 7d0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f
+      key: ENG-41
+      title: Serve versioned docs pages from the docs site
+      comments:
+        - id: c-12
+          author: agent-cto
+          ask: jane-founder
+          body: Which way should we route /docs/{version} to the docs site?
+          decision:
+            question: Which way should the edge route versioned docs pages?
+            options:
+              - {id: origin-rule, label: "Origin rule with a Host override", detail: "Needs a plan upgrade"}
+              - {id: worker, label: "A Worker route on the free tier"}
+              - {id: defer, label: "Defer until the docs release"}
+            recommended: origin-rule
+            role: approver
+script:
+  - call: list_decisions
+  - call: answer_decision
+    args:
+      item: ENG-41
+      answers: c-12
+      choice: worker
+      body: Use a Worker route on the free tier, matching the exact path only.
+expect:
+  calls: [list_decisions, answer_decision]
+  never: [comment_on_task]
+  shows:
+    - "origin-rule: Origin rule with a Host override (Needs a plan upgrade)"
+    - "worker: A Worker route on the free tier"
+    - "One rule to maintain"
+    - "url: https://docs.example.com/rules/origin (Origin rules)"
+    - "c-12"
+    - Answer question
+  proposals: 1
+  state: waiting_for_approval

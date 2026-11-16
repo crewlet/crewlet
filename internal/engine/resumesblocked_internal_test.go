@@ -19,47 +19,53 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RUN WAITING FOR AN OPERATOR IS RAISED FROM THE HEARTBEAT OF THE NODE HOLDING
-// ITS SEAT, by every data node, whichever node holds it: a satellite evaluates no
-// alarm table of its own, and read from each node's own memory alone, the alarm
-// was never raised for a seat a satellite held. The reading sums the fleet's runs
-// and names the one waiting longest, by its seat, the node holding it, its
-// condition and how long. A live node whose beat carried no status keeps its last
-// word, a listing that fails stands on the last that answered, and a node whose
-// lease is gone says nothing any more.
+// A RUN WAITING FOR AN OPERATOR IS RAISED FROM THE STATUS RECORD OF THE NODE
+// HOLDING ITS SEAT, by every data node, whichever node holds it: a satellite
+// evaluates no alarm table of its own, and read from each node's own memory
+// alone, the alarm was never raised for a seat a satellite held. The reading sums
+// the fleet's runs and names the one waiting longest, by its seat, the node
+// holding it, its condition and how long. A live node whose record is not counted
+// keeps its last word while its presence stands at the same epoch, a listing that
+// fails stands on the last that answered, and a node whose presence is gone, or
+// was claimed again at a new epoch, says nothing it said before.
 //
-// Mutation: read this node's own memory alone, read a node that said nothing this
-// beat as holding no such run, clear the reading on a failed listing, or keep a
-// gone node's word, and a step goes red.
-func TestARunWaitingForAnOperatorIsRaisedFromItsHoldersHeartbeat(t *testing.T) {
+// Mutation: read this node's own memory alone, read a node whose record is not
+// counted as holding no such run, clear the reading on a failed listing, or keep
+// a gone or restarted node's word, and a step goes red.
+func TestARunWaitingForAnOperatorIsRaisedFromItsHoldersStatusRecord(t *testing.T) {
 	t.Parallel()
 	live := t.Context()
 	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
 	backend := coordtest.NewFaulty(coordmem.New())
-	beat := func(node string, blocked *coord.ResumesBlocked, saying bool) *coord.Lease {
+	fleet := coordmem.NewFleet()
+	claim := func(node, owner string) *coord.Lease {
 		t.Helper()
-		// THE PLACEMENT HALF ALONE where the node does not say: a beat whose
-		// status hook overran its share carries no status at all.
-		meta := map[string]any{"roles": []string{"seats"}}
-		if saying {
-			meta[coord.StatusKey] = coord.NodeStatus{ResumesBlocked: blocked}.Meta()
-		}
 		lease, _, err := backend.TryAcquire(live, coord.NodeResource(node), coord.AcquireOptions{
-			Owner: node + ":1", TTL: time.Hour, Preferred: node, Ungated: true, Meta: meta,
+			Owner: owner, TTL: time.Hour, Preferred: node, Ungated: true,
+			Meta: map[string]any{"roles": []string{"seats"}},
 		})
 		if err != nil || lease == nil {
-			t.Fatalf("%s's beat: %v", node, err)
+			t.Fatalf("%s's presence: %v", node, err)
 		}
 		return lease
 	}
-	beat("core-1", nil, true)
-	sat1 := beat("sat-1", &coord.ResumesBlocked{Runs: 2, Seat: "swe", Kind: "disk_full",
-		Since: now.Add(-40 * time.Minute)}, true)
-	beat("sat-2", &coord.ResumesBlocked{Runs: 1, Seat: "ops", Kind: "fleet_keys_differ",
-		Since: now.Add(-10 * time.Minute)}, true)
+	say := func(lease *coord.Lease, blocked *coord.ResumesBlocked) {
+		t.Helper()
+		node, _ := coord.NodeID(lease.Resource)
+		if err := fleet.PutNodeStatus(live, coord.NodeStatusRecord{Node: node, Epoch: lease.Epoch, At: now,
+			ResumesBlocked: blocked}); err != nil {
+			t.Fatalf("%s's record: %v", node, err)
+		}
+	}
+	say(claim("core-1", "core-1:1"), nil)
+	sat1 := claim("sat-1", "sat-1:1")
+	say(sat1, &coord.ResumesBlocked{Runs: 2, Seat: "swe", Kind: "disk_full", Since: now.Add(-40 * time.Minute)})
+	sat2 := claim("sat-2", "sat-2:1")
+	say(sat2, &coord.ResumesBlocked{Runs: 1, Seat: "ops", Kind: "fleet_keys_differ",
+		Since: now.Add(-10 * time.Minute)})
 	// A DATA NODE HOLDING NO SUCH RUN ITSELF, as a core node of a fleet whose
 	// seats run on satellites does.
-	e := &Engine{backends: &Backends{Coord: backend}, testNode: "core-1"}
+	e := &Engine{backends: &Backends{Coord: backend, Fleet: fleet}, testNode: "core-1"}
 	read := func(step string, want statelog.Reading) {
 		t.Helper()
 		var got statelog.Reading
@@ -80,8 +86,10 @@ func TestARunWaitingForAnOperatorIsRaisedFromItsHoldersHeartbeat(t *testing.T) {
 		ExecutorResumeBlockedNode: "sat-1", ExecutorResumeBlockedKind: "disk_full",
 		ExecutorResumeBlockedFor: 40 * time.Minute}
 	read("two satellites' runs", both)
-	beat("sat-1", nil, false)
-	read("a satellite's beat that carried no status", both)
+	if err := fleet.DeleteNodeStatus(live, "sat-1", sat1.Epoch); err != nil {
+		t.Fatalf("remove sat-1's record: %v", err)
+	}
+	read("a satellite whose record is not counted", both)
 	backend.Break(nil)
 	read("a listing that failed", both)
 	backend.Heal()
@@ -92,18 +100,28 @@ func TestARunWaitingForAnOperatorIsRaisedFromItsHoldersHeartbeat(t *testing.T) {
 	read("a satellite gone", statelog.Reading{ExecutorResumesBlocked: 1, ExecutorResumeBlockedSeat: "ops",
 		ExecutorResumeBlockedNode: "sat-2", ExecutorResumeBlockedKind: "fleet_keys_differ",
 		ExecutorResumeBlockedFor: 10 * time.Minute})
+	// A NODE THAT CLAIMED ITS PRESENCE AGAIN is a new incarnation: what the old
+	// one said, in its record or this reader's memory, is not its word.
+	if released, err := backend.Release(live, coord.NodeResource("sat-2"), sat2.Owner, sat2.Epoch); err != nil ||
+		!released {
+		t.Fatalf("sat-2's release = (%v, %v)", released, err)
+	}
+	if again := claim("sat-2", "sat-2:2"); again.Epoch == sat2.Epoch {
+		t.Fatalf("the premise: sat-2 claimed again at its old epoch %d", again.Epoch)
+	}
+	read("a satellite restarted", statelog.Reading{})
 }
 
-// A NODE SAYS ON ITS HEARTBEAT WHICH RUNS OF ITS SEATS WAIT FOR AN OPERATOR, from
-// the executor coordinator its runtime publishes: a finished job whose resume
-// failed on a full disk counts its run, under the kind the engine's one
+// A NODE SAYS IN ITS STATUS RECORD WHICH RUNS OF ITS SEATS WAIT FOR AN OPERATOR,
+// from the executor coordinator its runtime publishes: a finished job whose
+// resume failed on a full disk counts its run, under the kind the engine's one
 // classification of conditions gives the failure, and a node whose runs wait on
-// nothing says none. That beat is all a data node raises executor_resume_blocked
-// from for a seat this node holds.
+// nothing says none. That record is all a data node raises
+// executor_resume_blocked from for a seat this node holds.
 //
-// Mutation: leave the runs off the heartbeat, or say a coordinator's empty answer
+// Mutation: leave the runs off the record, or say a coordinator's empty answer
 // as a row, and the case goes red.
-func TestANodeSaysOnItsHeartbeatWhichRunsWaitForAnOperator(t *testing.T) {
+func TestANodeSaysInItsStatusRecordWhichRunsWaitForAnOperator(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
@@ -128,7 +146,7 @@ func TestANodeSaysOnItsHeartbeatWhichRunsWaitForAnOperator(t *testing.T) {
 	t.Cleanup(coordinator.Stop)
 	e := &Engine{}
 	e.useSandbox(store, coordinator)
-	if said := beatOf(t, e).ResumesBlocked; said != nil {
+	if said := statusRecordOf(t, e).ResumesBlocked; said != nil {
 		t.Fatalf("a node whose runs wait on nothing said %+v", said)
 	}
 
@@ -154,11 +172,10 @@ func TestANodeSaysOnItsHeartbeatWhichRunsWaitForAnOperator(t *testing.T) {
 		t.Fatal("the premise: a resume on a full disk is handed back")
 	}
 
-	// AS A PEER READS IT, off the wire the beat publishes.
-	sent, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: beatOf(t, e).Meta()})
-	said := sent.ResumesBlocked
+	// AS A PEER READS IT, off the wire the record is written as.
+	said := recordedRows(t, statusRecordOf(t, e)).ResumesBlocked
 	if said == nil || said.Runs != 1 || said.Seat != "swe" || said.Kind != "disk_full" || said.Since.IsZero() {
-		t.Fatalf("the heartbeat says %+v of the run waiting on a full disk, want one run of swe's on "+
+		t.Fatalf("the record says %+v of the run waiting on a full disk, want one run of swe's on "+
 			"disk_full since its failure", said)
 	}
 }

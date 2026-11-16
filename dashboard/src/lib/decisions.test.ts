@@ -34,6 +34,7 @@ const answer: DecisionsAnswer = {
   ],
   total: 1,
   answerable: 1,
+  more: false,
   capped: false,
 };
 

@@ -349,6 +349,7 @@ func (s *Service) completeEnrolment(w http.ResponseWriter, r *http.Request,
 	}, signIn{
 		method: types.SignInPassword, factor: types.FactorTOTP,
 		stepUp: true, replaces: replaced.Bearer.Lineage.String(),
+		signedIn: replaced.Bearer.SignedInAt,
 		absolute: replaced.Bearer.AbsoluteExpiresAt,
 		provedAt: &proved,
 		because:  "replaced after setting up two-step verification",

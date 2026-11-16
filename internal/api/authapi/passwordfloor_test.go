@@ -18,21 +18,15 @@ import (
 // engine's floor of twelve, under a deployment's floor of twenty.
 const fifteen = "fifteen-letters"
 
-// withFloor is a Tier A stating the given
-// `min_password_length` — zero being the engine's own floor.
+// withFloor is a node whose operator holds the company's password floor to at
+// least floor, zero being the engine's own floor.
 func withFloor(o *authapi.Options, floor int) {
-	o.Bootstrap.API.Auth.MinPasswordLength = floor
+	o.Bootstrap.API.Auth.Limits.MinPasswordLength = floor
 }
 
-// THE DEPLOYMENT'S PASSWORD FLOOR IS THE ONE ENFORCED, AND THE ONE REPORTED.
-//
-// `api.auth.min_password_length` was validated, documented and enforced
-// by nothing: every route that sets a password checked the engine's twelve, and
-// both answers that tell a form what to refuse — `/auth/config` and the
-// invitation's view — said twelve whatever the file said. So a company that
-// asked for twenty accepted fifteen at every redemption, and a form built from
-// the reported floor agreed with the route while both disagreed with the
-// company.
+// THE PASSWORD FLOOR IN FORCE IS THE ONE ENFORCED, AND THE ONE REPORTED: every
+// route that sets a password and both answers that tell a form what to refuse
+// (`/auth/config` and the invitation's view) read the one sign-in policy.
 //
 // Mutation: pass the engine's floor at the redemption and it accepts
 // fifteen; report the engine's floor from either answer and it says 12. The control is the same requests under the engine's own floor, which
@@ -150,7 +144,7 @@ func reportedFloor(t *testing.T, mux *http.ServeMux, path string) int {
 // sign-in is about to ask for. And the posture read names no "backend": password
 // sign-in is always served.
 //
-// Mutation: report `api.auth.totp` as written rather than with its default and
+// Mutation: report the second factor as written rather than with its default and
 // the unset case reads "".
 func TestThePostureReadReportsTheSecondFactorWithItsDefault(t *testing.T) {
 	t.Parallel()

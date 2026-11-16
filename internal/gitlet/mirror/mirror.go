@@ -192,6 +192,10 @@ type Options struct {
 	Metrics *metrics.Recorder
 	Logger  *slog.Logger
 	Now     func() time.Time
+	// Ended, nil in production, is told each attempt's end once the worker
+	// has recorded it and let go of its lock: what a case waits on before it
+	// moves Now, since an attempt's end is stamped from Now after its dial.
+	Ended func(repoID string, out bool, err error)
 }
 
 // ErrOptions is an Options value New refuses, wrapped naming every field.
@@ -614,8 +618,9 @@ func (m *Mirrors) nextQueued() (mirrorKey, queuedAttempt, bool) {
 }
 
 // start runs key's attempt on a goroutine of the worker's own, and as it
-// ends starts the queued attempts its slot frees ([Mirrors.startQueued]).
-// Called with mu held.
+// ends records its end, starts the queued attempts its slot frees
+// ([Mirrors.startQueued]) and then tells [Options.Ended]. Called with mu
+// held.
 func (m *Mirrors) start(key mirrorKey, l listed, floor statelog.Position, now time.Time) {
 	m.running[key] = true
 	m.claim(key, l, now)
@@ -627,6 +632,10 @@ func (m *Mirrors) start(key mirrorKey, l listed, floor statelog.Position, now ti
 			err = m.push(m.life, key.repo, l, floor)
 		} else {
 			err = m.attempt(m.life, key.repo, l, floor)
+		}
+		if m.o.Ended != nil {
+			// Deferred ahead of the lock: told after the record and the unlock.
+			defer m.o.Ended(key.repo, key.out, err)
 		}
 		m.mu.Lock()
 		defer m.mu.Unlock()

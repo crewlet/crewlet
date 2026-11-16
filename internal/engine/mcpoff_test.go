@@ -45,11 +45,11 @@ func TestAServerTurnedOffIsNeverStartedOrGranted(t *testing.T) {
 			if names := e.Company().Tools.Names(); slices.Contains(names, "tracker_probe") {
 				t.Errorf("the epoch's catalogue lists a server turned off: %v", names)
 			}
-			// NOT ON THE HEARTBEAT: nothing was started, failed or held
+			// NOT ON THE STATUS RECORD: nothing was started, failed or held
 			// back for it, so the node has nothing to say, and the fleet's
 			// answer reads the configuration to call it disabled.
 			if row, reported := statusOf(e, "tracker"); reported {
-				t.Errorf("the heartbeat reports a server turned off: %+v", row)
+				t.Errorf("the status record reports a server turned off: %+v", row)
 			}
 			for _, handle := range []string{"ceo", "cto"} {
 				if names := surfaceOf(t, e, handle); slices.Contains(names, "tracker_probe") {

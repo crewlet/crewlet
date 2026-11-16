@@ -96,7 +96,7 @@ func (a *Applier) applyTaskRecord(ctx context.Context, tx *sql.Tx, c applyContex
 	if err != nil {
 		return 0, err
 	}
-	next.UpdatedAt = updated.UTC()
+	next.UpdatedAt = updated
 
 	// THE FINISH STAMPS ARE THE APPLIER'S, derived from the group the
 	// task has just entered rather than carried by the record.
@@ -320,7 +320,8 @@ func stampArchive(task *Task, current Task, held bool, c applyContext) error {
 //
 // THE BROKER'S, never a clock: the applier reads no clock at all, which is
 // what makes a derived instant byte-identical on every node that applies the
-// same record.
+// same record — taken as the state log hands it, in the store's encoding on
+// every path ([statelog.Record.StoredAt]), so it needs no normalizing here.
 func effectiveOf(c applyContext) (time.Time, error) {
 	if c.brokerAt.IsZero() {
 		return time.Time{}, fmt.Errorf("worklet: the record at %s carries no "+
@@ -328,7 +329,7 @@ func effectiveOf(c applyContext) (time.Time, error) {
 			"clock read here would put a different number on every node",
 			c.position)
 	}
-	return c.brokerAt.UTC(), nil
+	return c.brokerAt, nil
 }
 
 // readTaskStatement is [readTask]'s read, named for the plan test.

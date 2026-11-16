@@ -167,7 +167,7 @@ func WithMCPRelistBase(opts Options, base time.Duration) Options {
 	return opts
 }
 
-// MCPStatus is this node's MCP servers as its heartbeat would publish them
+// MCPStatus is this node's MCP servers as its status record would carry them
 // now, for a test outside the package that reads what an operator is told.
 func MCPStatus(e *Engine) []coord.MCPServerStatus { return e.mcpStatus(context.Background()) }
 

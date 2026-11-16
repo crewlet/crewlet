@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,16 @@ type Spec struct {
 	// holds nothing (a search that could not run, and why), which an empty
 	// answer hands the model in place of a card ([Built.Empty]).
 	Note string
+	// Outside, where named, is a step outside Crewlet the answer carries ([wire.Outside]).
+	Outside *Outside
+}
+
+// Outside is the paths, from the answer's root, to a step's address and words.
+// The address must be a field tagged `link:"engine"` (held by the catalogue's
+// suite); a value that is not an absolute https address draws no link.
+type Outside struct {
+	Path  string
+	Label string
 }
 
 // Table is a table card over a list in the answer.
@@ -77,6 +88,25 @@ type Column struct {
 	// an empty one: a room's "#", as every screen draws a room's name, so
 	// the card and the screen say "#launch" alike.
 	Prefix string
+	// Else is read where Path holds nothing, so one column says a value that rows of
+	// two kinds keep in two places (an ask's decision, a parked run's).
+	Else string
+	// Entries, where set, writes a value that is a list of records entry by
+	// entry ([Entries]) rather than by each record's name.
+	Entries *Entries
+}
+
+// Entries writes a list of records one line per entry, led by the id an answer
+// names it by: "worker: A Worker route on the free tier (detail)".
+type Entries struct {
+	// Lead is the path within an entry to what leads its line: the id an
+	// answer names it by (an option's), or what it is (a piece of evidence's
+	// kind). Empty leads with its first word.
+	Lead string
+	// Words are the paths within an entry to its words, in order: the first
+	// after the lead, every other in parentheses after that, an empty one
+	// left out.
+	Words []string
 }
 
 // Options are what a build is told beyond the spec and the answer.
@@ -193,6 +223,13 @@ type Fact struct {
 	// Detail marks a fact the card keeps for the model (a version an update
 	// is proposed against) that the drawer leaves out.
 	Detail bool
+	// Entries, where set, writes a value that is a list of records entry by
+	// entry ([Entries]), as a column's does.
+	Entries *Entries
+	// Flag, where set, makes the fact a FLAG, as [Items.Flag] makes an
+	// item's: a value that is true reads these words, and anything else is
+	// no fact at all.
+	Flag string
 }
 
 // Items is the list an entity card carries beneath its record.
@@ -209,6 +246,10 @@ type Items struct {
 	// ID, Label, Fact and Depth are paths within one item; Depth, when
 	// named, indents a tree.
 	ID, Label, Fact, Depth string
+	// Else, where named, is the path an item's label is read from where
+	// Label holds nothing: a task's link to a page has no title of its own
+	// to be listed by, and is listed by what it is instead.
+	Else string
 	// Flag, where set, makes Fact a FLAG: an item whose fact is true reads
 	// these words, and one whose fact is false or absent reads nothing. A
 	// bare "true" beside a name says nothing to the person reading the card
@@ -228,7 +269,10 @@ type Items struct {
 	// Noun is what one item and several are called ("policy", "policies"),
 	// which the drawer counts a folded card's list with.
 	Noun wire.Noun
-	Open *Open
+	// Facts are an item's further values, paths within it, kept as details the drawer
+	// leaves out and the model reads (a comment's question and options).
+	Facts []Fact
+	Open  *Open
 }
 
 // Open is the link a card, a row or an item opens: a screen of the link table
@@ -280,11 +324,27 @@ func (s Spec) Paths() []Path {
 		}
 	}
 	add("", s.Note)
+	if o := s.Outside; o != nil {
+		add("", o.Path)
+		add("", o.Label)
+	}
+	// A LIST WRITTEN ENTRY BY ENTRY reads each entry's fields below the
+	// list's own path, a step over a list being a step into its entries.
+	listed := func(from, p string, en *Entries) {
+		add(from, p)
+		if en != nil && p != "" {
+			add(from, entryPath(p, en.Lead))
+			for _, w := range en.Words {
+				add(from, entryPath(p, w))
+			}
+		}
+	}
 	if t := s.Table; t != nil {
 		add("", t.Rows)
 		add("row", t.Expand)
 		for _, c := range t.Columns {
-			add("row", c.Path)
+			listed("row", c.Path, c.Entries)
+			listed("row", c.Else, c.Entries)
 		}
 		opens("", t.Open)
 	}
@@ -294,14 +354,17 @@ func (s Spec) Paths() []Path {
 			add("record", p)
 		}
 		for _, f := range e.Facts {
-			add("record", f.Path)
+			listed("record", f.Path, f.Entries)
 		}
 		opens("record", e.Open)
 		if it := e.Items; it != nil {
 			add("", it.Path)
 			add("item", it.Expand)
-			for _, p := range []string{it.ID, it.Label, it.Fact, it.Depth} {
+			for _, p := range []string{it.ID, it.Label, it.Else, it.Fact, it.Depth} {
 				add("item", p)
+			}
+			for _, f := range it.Facts {
+				listed("item", f.Path, f.Entries)
 			}
 			opens("item", it.Open)
 		}
@@ -309,7 +372,18 @@ func (s Spec) Paths() []Path {
 	return out
 }
 
-// Path is one path a spec reads and the root it is read from.
+// entryPath is the path of field within each entry of the list at p, empty
+// where field names none.
+func entryPath(p, field string) string {
+	if field == "" {
+		return ""
+	}
+	return joinPath(p, field)
+}
+
+// Path is one path a spec reads and the root it is read from. A step of a
+// path that reaches a list steps into its entries: `decision.options.id` is
+// every option's id.
 type Path struct{ From, Path string }
 
 // Validate reports what is wrong with a spec as written: exactly one body,
@@ -317,6 +391,9 @@ type Path struct{ From, Path string }
 func (s Spec) Validate() error {
 	if (s.Table == nil) == (s.Entity == nil) {
 		return errors.New("cards: a spec is exactly one of a table and an entity")
+	}
+	if o := s.Outside; o != nil && (o.Path == "" || o.Label == "") {
+		return errors.New("cards: an outside step names the path to its address and to its words")
 	}
 	var links []*Open
 	if t := s.Table; t != nil {
@@ -329,9 +406,12 @@ func (s Spec) Validate() error {
 				return fmt.Errorf("cards: table column %q is not a unique key with a "+
 					"label, a path and a type", c.Key)
 			}
-			if (c.Seat || c.Prefix != "") && c.Type != wire.ColumnText {
-				return fmt.Errorf("cards: table column %q names a seat or a prefix and is "+
-					"not text", c.Key)
+			if (c.Seat || c.Prefix != "" || c.Entries != nil) && c.Type != wire.ColumnText {
+				return fmt.Errorf("cards: table column %q names a seat, a prefix or "+
+					"entries and is not text", c.Key)
+			}
+			if err := c.Entries.validate(c.Key); err != nil {
+				return err
 			}
 			keys[c.Key] = true
 		}
@@ -365,10 +445,8 @@ func (s Spec) Validate() error {
 			return fmt.Errorf("cards: an entity spec of kind %q cuts its title at %d bytes "+
 				"or heads it by a room, and only a room is headed by one", e.Kind, e.TitleCut)
 		}
-		for _, f := range e.Facts {
-			if f.Label == "" || f.Path == "" || !f.Type.Valid() {
-				return fmt.Errorf("cards: fact %q needs a label, a path and a type", f.Label)
-			}
+		if err := validFacts(e.Facts); err != nil {
+			return err
 		}
 		links = append(links, e.Open)
 		if it := e.Items; it != nil {
@@ -384,6 +462,13 @@ func (s Spec) Validate() error {
 				return fmt.Errorf("cards: the items at %q word a flag but name no fact "+
 					"path to read it from", it.Path)
 			}
+			if it.Else != "" && it.Label == "" {
+				return fmt.Errorf("cards: the items at %q name an Else for a label they "+
+					"never read", it.Path)
+			}
+			if err := validFacts(it.Facts); err != nil {
+				return err
+			}
 			links = append(links, it.Open)
 		}
 	}
@@ -394,6 +479,42 @@ func (s Spec) Validate() error {
 		if err := checkOpen(o); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validFacts reports the first of facts that names no label, path or type, or
+// lists entries in a value that is not text.
+func validFacts(facts []Fact) error {
+	for _, f := range facts {
+		if f.Label == "" || f.Path == "" || !f.Type.Valid() {
+			return fmt.Errorf("cards: fact %q needs a label, a path and a type", f.Label)
+		}
+		if (f.Entries != nil || f.Flag != "") && f.Type != wire.ColumnText {
+			return fmt.Errorf("cards: fact %q lists entries or words a flag and is not "+
+				"text", f.Label)
+		}
+		if f.Entries != nil && f.Flag != "" {
+			return fmt.Errorf("cards: fact %q both lists entries and words a flag", f.Label)
+		}
+		if err := f.Entries.validate(f.Label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate reports entries that name nothing to write, for the column or fact
+// named.
+func (en *Entries) validate(name string) error {
+	if en == nil {
+		return nil
+	}
+	if en.Lead == "" && len(en.Words) == 0 {
+		return fmt.Errorf("cards: %q lists entries and names no field of one to write", name)
+	}
+	if slices.Contains(en.Words, "") {
+		return fmt.Errorf("cards: %q lists entries with a word that names no field", name)
 	}
 	return nil
 }
@@ -454,8 +575,33 @@ func BuildWith(spec Spec, answer []byte, now time.Time, o Options) (Built, error
 	if spec.Note != "" {
 		built.Note = text(lookup(doc, spec.Note))
 	}
+	if out := outsideOf(spec.Outside, doc); out != nil {
+		switch {
+		case built.Card.Table != nil:
+			built.Card.Table.Outside = out
+		case built.Card.Entity != nil:
+			built.Card.Entity.Outside = out
+		}
+		if err = built.Card.Validate(); err != nil {
+			return Built{}, err
+		}
+	}
 	built.Zone = o.Zone
 	return built, nil
+}
+
+// outsideOf is the step spec reads from doc, or nil without an https address and words.
+func outsideOf(spec *Outside, doc any) *wire.Outside {
+	if spec == nil {
+		return nil
+	}
+	out := &wire.Outside{Label: text(lookup(doc, spec.Label)), URL: text(lookup(doc, spec.Path))}
+	u, err := url.Parse(out.URL)
+	if strings.TrimSpace(out.Label) == "" || err != nil || u.Scheme != "https" || u.Host == "" ||
+		u.User != nil {
+		return nil
+	}
+	return out
 }
 
 // decode reads one JSON value, numbers kept as written.
@@ -491,7 +637,7 @@ func buildTable(t *Table, doc any, now time.Time, o Options) (Built, error) {
 	for _, row := range rows[:min(len(rows), MaxRows)] {
 		cells := make([]any, len(columns))
 		for i, c := range columns {
-			cells[i] = cell(c.Type, lookup(row, c.Path))
+			cells[i] = c.cell(row)
 			if handle, ok := cells[i].(string); ok && c.Seat && handle != "" &&
 				o.SeatName != nil {
 				if name, known := o.SeatName(handle); known {
@@ -531,14 +677,16 @@ func buildTable(t *Table, doc any, now time.Time, o Options) (Built, error) {
 	return built, out.Validate()
 }
 
-// morePast reads an answer's word that rows lie past its page: a cursor that
-// is present and not empty, or a flag that is true.
+// morePast reads an answer's word that rows lie past its page: a non-empty
+// cursor (a position cursor is empty at zero) or a true flag.
 func morePast(v any) bool {
 	switch m := v.(type) {
 	case bool:
 		return m
 	case string:
 		return m != ""
+	case json.Number:
+		return m.String() != "0"
 	case nil:
 		return false
 	}
@@ -576,15 +724,7 @@ func buildEntity(e *Entity, doc any, o Options) (Built, error) {
 	if card.Title == "" {
 		card.Title = e.Name
 	}
-	for _, f := range e.Facts {
-		if v := factValue(f.Type, lookup(record, f.Path)); v != "" {
-			fact := wire.Fact{Label: f.Label, Value: v, Mono: f.Mono, Detail: f.Detail}
-			if f.Type != wire.ColumnText {
-				fact.Type = f.Type
-			}
-			card.Facts = append(card.Facts, fact)
-		}
-	}
+	card.Facts = factsOf(e.Facts, record, false)
 	if e.Text != "" {
 		card.Text = text(field(record, e.Text))
 	}
@@ -605,7 +745,11 @@ func buildEntity(e *Entity, doc any, o Options) (Built, error) {
 			// nothing: read with lookup, an empty path is the item itself, and
 			// a plain policy came out as its own label and again as its fact.
 			item := wire.EntityItem{Kind: it.Kind, ID: text(field(raw, it.ID)),
-				Label: text(field(raw, it.Label)), Fact: text(field(raw, it.Fact))}
+				Label: text(field(raw, it.Label)), Fact: text(field(raw, it.Fact)),
+				Facts: factsOf(it.Facts, raw, true)}
+			if item.Label == "" {
+				item.Label = text(field(raw, it.Else))
+			}
 			if it.Flag != "" {
 				item.Fact = flagged(item.Fact, it.Flag)
 			}
@@ -747,6 +891,84 @@ func field(v any, path string) any {
 		return nil
 	}
 	return lookup(v, path)
+}
+
+// factsOf are the facts of record that hold a value, each in the form its type
+// names; detail marks every one a detail, as an item's always are.
+func factsOf(facts []Fact, record any, detail bool) []wire.Fact {
+	var out []wire.Fact
+	for _, f := range facts {
+		v := lookup(record, f.Path)
+		value := factValue(f.Type, v)
+		switch {
+		case f.Entries != nil:
+			value = f.Entries.write(v)
+		case f.Flag != "":
+			value = flagged(value, f.Flag)
+		}
+		if value == "" {
+			continue
+		}
+		fact := wire.Fact{Label: f.Label, Value: value, Mono: f.Mono, Detail: f.Detail || detail}
+		if f.Type != wire.ColumnText {
+			fact.Type = f.Type
+		}
+		out = append(out, fact)
+	}
+	return out
+}
+
+// cell is the column's value in row: at its Path, else at its Else where Path
+// holds nothing, written entry by entry where it lists entries.
+func (c Column) cell(row any) any {
+	v := lookup(row, c.Path)
+	if v == nil && c.Else != "" {
+		v = lookup(row, c.Else)
+	}
+	if c.Entries != nil {
+		if s := c.Entries.write(v); s != "" {
+			return s
+		}
+		return nil
+	}
+	return cell(c.Type, v)
+}
+
+// write is v (a list of records, or one) one entry per line: the lead, then the
+// first word after a colon and the rest in parentheses.
+func (en *Entries) write(v any) string {
+	var list []any
+	switch t := v.(type) {
+	case []any:
+		list = t
+	case map[string]any:
+		list = []any{t}
+	}
+	lines := make([]string, 0, len(list))
+	for _, entry := range list {
+		oneLine := func(path string) string { return strings.Join(strings.Fields(text(field(entry, path))), " ") }
+		var words []string
+		for _, w := range en.Words {
+			if s := oneLine(w); s != "" {
+				words = append(words, s)
+			}
+		}
+		line := oneLine(en.Lead)
+		if len(words) > 0 {
+			rest := words[0]
+			if len(words) > 1 {
+				rest += " (" + strings.Join(words[1:], "; ") + ")"
+			}
+			if line != "" {
+				rest = line + ": " + rest
+			}
+			line = rest
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // cell is one value as a column of typ carries it: text for a text column,

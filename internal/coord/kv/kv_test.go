@@ -509,6 +509,61 @@ func TestFleetContract(t *testing.T) {
 	})
 }
 
+// TestNodeStatusRecordContract runs the node status records' suite over the
+// KV: a record store and the lease store whose presence it is joined to, each
+// on its own buckets on one embedded broker, as a node opens both.
+func TestNodeStatusRecordContract(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	coordtest.RunNodeStatusRecords(t, func(t *testing.T) (coord.Backend, coord.NodeStatusRecords) {
+		return openStore(t, nc, coordtest.LongTTL), openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
+	})
+}
+
+// A NODE'S STATUS RECORD AGES OUT WITH ITS BUCKET, at the apply status's
+// freshness: what removes a dead node's rows is the age, and nothing sweeps
+// them, so a bucket opened without one would keep every node that ever ran.
+//
+// Mutation: open the node status bucket with no age, or with the ledger's,
+// and the age in force reads otherwise.
+func TestANodesStatusRecordAgesOutAtTheStatusFreshness(t *testing.T) {
+	t.Parallel()
+	store := openFleet(t, embeddedNATS(t))
+	status, err := store.nodeStatus.Status(t.Context())
+	if err != nil {
+		t.Fatalf("read the node status bucket: %v", err)
+	}
+	if got := status.TTL(); got != time.Minute {
+		t.Errorf("the node status bucket ages at %v, want the StatusFreshness it was opened with (%v)",
+			got, time.Minute)
+	}
+}
+
+// ONE NODE'S UNREADABLE RECORD IS THAT NODE NOT SAYING, never every node's rows
+// failed: a record this build cannot decode — a body that is not an object —
+// is skipped, and the listing answers every other node's. (The memory twin
+// keeps only what Encode wrote, so it cannot hold one; it skips the same way.)
+//
+// Mutation: raise the decode error from the listing, and the fleet's rows go
+// with one node's.
+func TestAnUndecodableStatusRecordIsSkippedNotRaised(t *testing.T) {
+	t.Parallel()
+	store := openFleet(t, embeddedNATS(t))
+	if err := store.PutNodeStatus(t.Context(), coord.NodeStatusRecord{Node: "n2", Epoch: 3}); err != nil {
+		t.Fatalf("PutNodeStatus: %v", err)
+	}
+	if _, err := store.nodeStatus.Put(t.Context(), encodeKey("n1"), []byte("not an object")); err != nil {
+		t.Fatalf("write an undecodable record: %v", err)
+	}
+	got, err := store.NodeStatusRecords(t.Context())
+	if err != nil {
+		t.Fatalf("NodeStatusRecords over one undecodable record: %v", err)
+	}
+	if len(got) != 1 || got[0].Node != "n2" || got[0].Epoch != 3 {
+		t.Errorf("the listing answered %+v, want n2's record alone", got)
+	}
+}
+
 // THE BODY RIDES THE POINTER AS THE JSON IT IS.
 //
 // Carried as bytes, encoding/json spells it as a base64 string — over an

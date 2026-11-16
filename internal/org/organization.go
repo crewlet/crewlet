@@ -290,7 +290,7 @@ func (o *Organization) AgentSeatByID(id uuid.UUID) *Role {
 }
 
 // AgentHandleByID names the agent seat whose derived id is id by its handle,
-// for a reader naming a seat a peer reported by its id (a heartbeat row names
+// for a reader naming a seat a peer reported by its id (a status record's row names
 // the seat an instance was launched for that way, ADR-0013).
 //
 // THE ID ITSELF WHERE THIS ORG HOLDS NO SUCH SEAT, which is a seat retired since

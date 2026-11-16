@@ -2,9 +2,10 @@
  * Which screen changes a setting in place. COPIES of `queries.SettingGroups`,
  * held by `internal/api`'s `TestTheDashboardReadsExactlyTheSettingsTheEngineSends`:
  * `company` is the company's clock, `code` Gitlet's commit identity, and
- * `knowledge` the knowledge base's own settings.
+ * `knowledge` the knowledge base's own settings, and `sign_in` the company's
+ * sign-in policy.
  */
-type SettingGroup = "company" | "code" | "knowledge";
+type SettingGroup = "company" | "code" | "knowledge" | "sign_in";
 
 /**
  * What a setting's value is, and so how it is typed. COPIES of

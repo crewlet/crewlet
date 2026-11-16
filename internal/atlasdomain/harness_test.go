@@ -158,6 +158,8 @@ func (n *writeNode) drain() {
 		if verdict != recordseal.Verified {
 			n.t.Fatalf("record %d did not verify: %s", seq, verdict)
 		}
+		// AS THE FRAMEWORK'S LOOP HANDS IT ([statelog.AppliedInstant]).
+		storedAt = statelog.AppliedInstant(storedAt)
 		n.applyBody(seq, body, storedAt)
 	}
 }

@@ -46,11 +46,14 @@ func World() map[string]any {
 		"/worklet/ENG-42": map[string]any{"task": map[string]any{"id": RecordID, "key": "ENG-42",
 			"title": "Ship it", "status": "todo", "priority": "normal", "assignee": "pm",
 			"body": "The old description.", "version": 3, "tags": []any{"release"}}},
-		"/worklet/comments": map[string]any{"key": "ENG-42", "title": "Ship it",
+		"/worklet/comments": map[string]any{"item": RecordID, "key": "ENG-42", "title": "Ship it",
 			"comments": []any{map[string]any{"id": "c1", "ask": "pm", "body": "Which day?",
 				"decision": map[string]any{"question": "Which day?", "options": []any{
 					map[string]any{"id": "a", "label": "Monday"}}}}}},
 		"/worklet/my-work": map[string]any{"handle": "pm"},
+		// WHOSE QUESTIONS ARE WHOSE: the person's own record, which a
+		// question put to them is asked of.
+		"/worklet/decisions": map[string]any{"handle": "pm", "items": []any{}, "more": false},
 		// WHO IS ASKING, and where a create of theirs that names no project or
 		// container lands: what a create's preview resolves its default from.
 		"/viewer": map[string]any{"handle": "pm", "project": "ENG", "space": "ENG"},

@@ -4109,13 +4109,17 @@ covers:
 | Reviewing and delegations | `llm_review` and `llm_subagent` |
 | Routines and evaluations | `llm_auxiliary` and `llm_judge` |
 | Everything | the seat's `llm`, clearing the four satellites, so every job resolves to it |
-| Ask Crewlet | `assistant.llm`, company-wide, with no seats; the model must deny web tools |
+| Ask Crewlet | the head of `assistant.llm`, company-wide, with no seats, keeping its fallbacks; the model must deny web tools |
 
 The two pairs are paired by the model each wants: reviewing and the delegated
 work take a strong model, and the routines and the onboarding judge, each under
 a fixed deadline, a fast one, so one model chosen serves both jobs it writes.
-Each field is written as one model, never a chain: a fallback the field named
-before is dropped, and the review names every one it drops. Taking a model off
+A seat's field is written as one model, never a chain: a fallback the field
+named before is dropped, and the review names every one it drops. Ask Crewlet
+is the exception, because its chain is the only failover every person's
+questions have: choosing its model replaces the one it answers with first and
+keeps every fallback behind it, in order, and both *By job* and the review say
+which fallbacks stay. Taking a model off
 a job removes it from the field, and a field left empty is deleted, so the job
 resolves as an unset one does (the review shows where it lands). Routines
 and evaluations, whose jobs have a fixed deadline
@@ -4124,7 +4128,7 @@ model chosen is not a fast one, and never refuses it. A model
 Ask Crewlet already runs on keeps it until another model is chosen for
 Ask Crewlet.
 
-**Status comes from every node's heartbeat.** Each node publishes, per model,
+**Status comes from every node's status record.** Each node publishes, per model,
 how it signs in there, whether it sits out a vendor's limit and until when,
 when it last answered and last failed, the seats parked on it and, for a model
 signed in with a harness login, that login's state on its disk. The page joins them:
@@ -4132,7 +4136,8 @@ a model is `sitting_out` while any live node sits it out, `no_sign_in` when
 nothing signs it in on the node answering, `rejected` after a refusal newer than
 its last answer or past its credential's expiry, `expiring` within seven days of
 that expiry, `untested` before anything said whether it works, and `ready`
-otherwise. A node whose beat carried no report is shown as one that did not say,
+otherwise. A live node with no [status record](coordination.md#its-status-record)
+counted is shown as one that did not say,
 never as a node where nothing happened. Members read every model's condition;
 only an admin reads the credential's name, its hint, who stored it and when, the
 account a login names and the vendor's own sentence.

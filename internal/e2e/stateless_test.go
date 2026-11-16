@@ -187,6 +187,7 @@ func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap
 	boot := config.DefaultBootstrap()
 	ring.hold(&boot)
 	withCredential(t, &boot)
+	withPasswordAlone(&boot)
 	boot.Node.ID = "data-a"
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(brokertest.TempDir(t), "stream"))

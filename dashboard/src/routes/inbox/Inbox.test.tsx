@@ -583,6 +583,7 @@ describe("the list", () => {
           ],
           total: 0,
           answerable: 1,
+          more: false,
           capped: false,
         },
         executors: { runs: [theirs] },

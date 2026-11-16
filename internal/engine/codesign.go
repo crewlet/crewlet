@@ -34,18 +34,14 @@ import (
 //     it, and only the push row's `via engine` and its principal say who
 //     built a commit. A coding box's pack may hold no commit under it that
 //     the repository does not already hold (Committer, the same address,
-//     spelled once: engineCommitter).
+//     spelled once: engineCommitter). Its name and local part are
+//     gitlet.EngineCommitterName and EngineCommitterLocal, the spelling a
+//     history's read marks a commit engine_committed by.
 //
 // A node with no epoch, or whose chart holds no such seat, signs nothing:
 // gitlet.ErrNotServing, about this node, so the write runs nothing here and the
 // walk asks a Gitlet node serving a chart that holds it.
 type codeSigner struct{ e *Engine }
-
-// The engine's committer name and the local part of its address.
-const (
-	codeCommitterName  = "Crewlet"
-	codeCommitterLocal = "engine"
-)
 
 // maxIdentityEmailBytes is the most an address a commit names may be: RFC
 // 5321's 254 bytes, past which no mail system takes it.
@@ -54,7 +50,7 @@ const maxIdentityEmailBytes = 254
 // engineCommitter is the address the engine commits as on the identity
 // domain domain: the ONE spelling of it, which every commit Sign names and
 // every box push Committer holds carry alike.
-func engineCommitter(domain string) string { return codeCommitterLocal + "@" + domain }
+func engineCommitter(domain string) string { return gitlet.EngineCommitterLocal + "@" + domain }
 
 func (s codeSigner) Sign(p gitlet.Principal) (host.Signature, error) {
 	c := s.e.Company()
@@ -69,7 +65,7 @@ func (s codeSigner) Sign(p gitlet.Principal) (host.Signature, error) {
 			"commit as", gitlet.ErrNotServing, p.Seat)
 	}
 	name, email := authorOf(p.Seat, role.Name, role.Email, domain)
-	return host.Signature{AuthorName: name, AuthorEmail: email, CommitterName: codeCommitterName,
+	return host.Signature{AuthorName: name, AuthorEmail: email, CommitterName: gitlet.EngineCommitterName,
 		CommitterEmail: engineCommitter(domain)}, nil
 }
 

@@ -1085,8 +1085,8 @@ type Reading struct {
 	// condition only an operator clears: the disk of the node holding the
 	// seat full, read-only or failing, its limit of open files reached, or the
 	// fleet's nodes holding different keys or running different builds
-	// (internal/sandbox's Coordinator.ResumesBlocked, which each node says on
-	// its heartbeat). ExecutorResumeBlockedSeat is the seat of the run waiting
+	// (internal/sandbox's Coordinator.ResumesBlocked, which each node says in
+	// its status record). ExecutorResumeBlockedSeat is the seat of the run waiting
 	// longest, ExecutorResumeBlockedNode the node holding it,
 	// ExecutorResumeBlockedKind the condition its last resume failed on, and
 	// ExecutorResumeBlockedFor how long since the first such failure in a row.
@@ -1192,7 +1192,7 @@ type ModelCondition struct {
 }
 
 // MCPServerCondition is one MCP server's condition, joined from every live
-// node's heartbeat row for it ([coord.MCPServerStatus]).
+// node's status record row for it ([coord.MCPServerStatus]).
 //
 // ONE PER SERVER THE CONFIGURATION RUNS: a server turned off (`enabled:
 // false`) raises nothing, since nothing is started for it on purpose, and a

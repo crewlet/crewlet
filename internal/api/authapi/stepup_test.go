@@ -66,7 +66,7 @@ func newStepUpRigWith(t *testing.T, row session.Row,
 	}
 	cookie, err := fixtureSigner(t).Mint(session.Mint{
 		Lineage: lineage, Person: r.estate.person.ID, StartPosition: 1,
-		Epoch: 3, Generation: 2, AbsoluteExpiresAt: absolute,
+		Epoch: 3, Generation: 2, SignedInAt: clock, AbsoluteExpiresAt: absolute,
 		EnrolmentOnly: restricted,
 	})
 	if err != nil {

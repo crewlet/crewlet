@@ -83,15 +83,18 @@ func logRecordText(fields ...string) string {
 // and any record that is not that fails the page as output that does not
 // parse, never answered as a commit: a field too many, a field too few, an id
 // that is no id, a parent list that is no list, a date that is no number, and
-// a stream that ends inside a record.
+// a stream that ends inside a record. The committer is read apart from the
+// author.
 //
 // Mutation: the terminator's emptiness unchecked (a field too many read as the
-// next record's start) → red.
+// next record's start) → red; the committer read from the author's field →
+// red.
 func TestALogRecordIsReadExactly(t *testing.T) {
 	t.Parallel()
 	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	good := logRecordText(a, b+" "+a, "Ana", "ana@example.com", "1700000000", "1700000100", "fix it") +
-		logRecordText(b, "", "Bo", "bo@example.com", "1600000000", "1600000100", "")
+	good := logRecordText(a, b+" "+a, "Ana", "ana@example.com", "Crewlet", "engine@seats.example", "1700000000",
+		"1700000100", "fix it") +
+		logRecordText(b, "", "Bo", "bo@example.com", "Cy", "cy@example.com", "1600000000", "1600000100", "")
 	for _, size := range []int{len(good), 1} {
 		var got []gitlet.LogCommit
 		s := newLogStream(nil, func(rec *logRecord) error {
@@ -107,28 +110,36 @@ func TestALogRecordIsReadExactly(t *testing.T) {
 		if err := s.close(); err != nil {
 			t.Fatalf("in pieces of %d: close: %v", size, err)
 		}
+		engine, other := true, false
 		want := []gitlet.LogCommit{
-			{OID: a, Parents: []string{b, a}, Author: "Ana", AuthorEmail: "ana@example.com",
+			{OID: a, Parents: []string{b, a}, Author: "Ana", AuthorEmail: "ana@example.com", Committer: "Crewlet",
+				CommitterEmail: "engine@seats.example", EngineCommitted: &engine,
 				AuthoredAt: time.Unix(1700000000, 0).UTC(), CommittedAt: time.Unix(1700000100, 0).UTC(), Subject: "fix it"},
-			{OID: b, Author: "Bo", AuthorEmail: "bo@example.com", AuthoredAt: time.Unix(1600000000, 0).UTC(),
+			{OID: b, Author: "Bo", AuthorEmail: "bo@example.com", Committer: "Cy", CommitterEmail: "cy@example.com",
+				EngineCommitted: &other, AuthoredAt: time.Unix(1600000000, 0).UTC(),
 				CommittedAt: time.Unix(1600000100, 0).UTC()},
 		}
 		if !slices.EqualFunc(got, want, func(x, y gitlet.LogCommit) bool {
 			return x.OID == y.OID && slices.Equal(x.Parents, y.Parents) && x.Author == y.Author &&
-				x.AuthorEmail == y.AuthorEmail && x.AuthoredAt.Equal(y.AuthoredAt) &&
+				x.AuthorEmail == y.AuthorEmail && x.Committer == y.Committer &&
+				x.CommitterEmail == y.CommitterEmail && x.EngineCommitted != nil &&
+				*x.EngineCommitted == *y.EngineCommitted && x.AuthoredAt.Equal(y.AuthoredAt) &&
 				x.CommittedAt.Equal(y.CommittedAt) && x.Subject == y.Subject
 		}) {
 			t.Errorf("in pieces of %d the records read %+v, want %+v", size, got, want)
 		}
 	}
 	for name, text := range map[string]string{
-		"a field too many": strings.Join([]string{a, "", "Ana", "a@x", "1", "2", "s", "extra"}, "\x00") + "\x00\x00",
-		"a field too few":  strings.Join([]string{a, "", "Ana", "a@x", "1", "2"}, "\x00") + "\x00\x00",
-		"no id":            logRecordText("not an id", "", "Ana", "a@x", "1", "2", "s"),
-		"a short parent":   logRecordText(a, "abc", "Ana", "a@x", "1", "2", "s"),
-		"a doubled space":  logRecordText(a, b+"  "+a, "Ana", "a@x", "1", "2", "s"),
-		"no date":          logRecordText(a, "", "Ana", "a@x", "yesterday", "2", "s"),
-		"ended inside":     strings.Join([]string{a, "", "Ana"}, "\x00"),
+		"a field too many": strings.Join([]string{a, "", "Ana", "a@x", "Cy", "c@x", "1", "2", "s", "extra"}, "\x00") +
+			"\x00\x00",
+		"a field too few": strings.Join([]string{a, "", "Ana", "a@x", "Cy", "c@x", "1", "2"}, "\x00") + "\x00\x00",
+		// The format before the committer: a field short.
+		"the old format":  logRecordText(a, "", "Ana", "a@x", "1", "2", "s"),
+		"no id":           logRecordText("not an id", "", "Ana", "a@x", "Cy", "c@x", "1", "2", "s"),
+		"a short parent":  logRecordText(a, "abc", "Ana", "a@x", "Cy", "c@x", "1", "2", "s"),
+		"a doubled space": logRecordText(a, b+"  "+a, "Ana", "a@x", "Cy", "c@x", "1", "2", "s"),
+		"no date":         logRecordText(a, "", "Ana", "a@x", "Cy", "c@x", "yesterday", "2", "s"),
+		"ended inside":    strings.Join([]string{a, "", "Ana"}, "\x00"),
 	} {
 		s := newLogStream(nil, func(*logRecord) error { return nil })
 		_, err := s.Write([]byte(text))
@@ -157,7 +168,8 @@ func TestAMergeOfManyParentsIsDescribedByItsCount(t *testing.T) {
 			got, _ = rec.commit()
 			return nil
 		})
-		text := logRecordText(strings.Repeat("a", 40), strings.Join(parents, " "), "Ana", "a@x", "1", "2", "s")
+		text := logRecordText(strings.Repeat("a", 40), strings.Join(parents, " "), "Ana", "a@x", "Cy", "c@x", "1",
+			"2", "s")
 		if _, err := s.Write([]byte(text)); err != nil {
 			t.Fatal(err)
 		}
@@ -208,11 +220,12 @@ func TestAFieldIsDescribedPastItsEncodedBound(t *testing.T) {
 }
 
 // porcelain is a blame's output for two lines of a file named f, the first
-// changed by commit a under the path old\nname (quoted as git quotes it), the
-// second by commit b under f, a's details named once though it is named again.
+// changed by commit a under the path old\nname (quoted as git quotes it) and
+// committed as the engine's convention, the second by commit b under f, a's
+// details named once though it is named again.
 func porcelain(a, b string) string {
 	return a + " 1 1 1\nauthor Ana\nauthor-mail <ana@example.com>\nauthor-time 1700000000\nauthor-tz +0000\n" +
-		"committer Ana\ncommitter-mail <ana@example.com>\ncommitter-time 1700000000\ncommitter-tz +0000\n" +
+		"committer Crewlet\ncommitter-mail <engine@seats.example>\ncommitter-time 1700000000\ncommitter-tz +0000\n" +
 		"summary first\nboundary\nfilename \"old\\nname\\303\\251\"\n\tone\n" +
 		b + " 2 2 2\nauthor Bo\nauthor-mail <>\nauthor-time 1600000000\nauthor-tz +0000\n" +
 		"committer Bo\ncommitter-mail <>\ncommitter-time 1600000000\ncommitter-tz +0000\nsummary (" + b + ")\n" +
@@ -225,30 +238,39 @@ func porcelain(a, b string) string {
 // each line with its group's commit; a commit's details named once and every
 // later line of it carrying them; its path C-unquoted as git quotes it;
 // git's "(<id>)" stand-in for an empty message answered as no subject; an
-// address taken out of its brackets; a detail no answer carries read past.
-// And what is no porcelain fails as output that does not parse: a line with no
-// header, a detail before any header, an id of a header's alone, a stream
-// ending inside a line.
+// author's and a committer's address taken out of their brackets, and the
+// engine's convention marked; a detail no answer carries read past. And what
+// is no porcelain fails as output that does not parse: a line with no header,
+// a detail before any header, an id of a header's alone, a stream ending
+// inside a line, a committer's address out of brackets, a committer named
+// twice.
 //
 // Mutation: a commit's path taken from the line's group rather than kept for
-// the commit (the fourth line, a's again, with no filename) → red.
+// the commit (the fourth line, a's again, with no filename) → red; the
+// committer-mail kept with its brackets → red.
 func TestABlamesPorcelainIsReadAsGitWritesIt(t *testing.T) {
 	t.Parallel()
 	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	type seen struct {
-		final, orig   int
-		commit, path  string
-		text          string
-		author, email string
-		summary       string
-		authored      time.Time
+		final, orig               int
+		commit, path              string
+		text                      string
+		author, email             string
+		committer, committerEmail string
+		engine                    bool
+		summary                   string
+		authored                  time.Time
 	}
 	for _, size := range []int{len(porcelain(a, b)), 1} {
 		var got []seen
 		s := newBlameStream(func(l *blamedLine) error {
 			c, _ := l.detail.commit()
+			if c.EngineCommitted == nil {
+				t.Fatalf("commit %s carries no engine mark", l.commit)
+			}
 			got = append(got, seen{final: l.final, orig: l.orig, commit: l.commit, path: l.detail.path,
-				text: string(l.text.buf), author: c.Author, email: c.AuthorEmail, summary: c.Subject,
+				text: string(l.text.buf), author: c.Author, email: c.AuthorEmail, committer: c.Committer,
+				committerEmail: c.CommitterEmail, engine: *c.EngineCommitted, summary: c.Subject,
 				authored: c.AuthoredAt})
 			return nil
 		})
@@ -263,23 +285,27 @@ func TestABlamesPorcelainIsReadAsGitWritesIt(t *testing.T) {
 		}
 		old := "old\nnameé"
 		want := []seen{
-			{1, 1, a, old, "one", "Ana", "ana@example.com", "first", time.Unix(1700000000, 0).UTC()},
-			{2, 2, b, "f", "two\twith a tab", "Bo", "", "", time.Unix(1600000000, 0).UTC()},
-			{3, 3, b, "f", "three", "Bo", "", "", time.Unix(1600000000, 0).UTC()},
-			{4, 1, a, old, "four", "Ana", "ana@example.com", "first", time.Unix(1700000000, 0).UTC()},
+			{1, 1, a, old, "one", "Ana", "ana@example.com", "Crewlet", "engine@seats.example", true, "first",
+				time.Unix(1700000000, 0).UTC()},
+			{2, 2, b, "f", "two\twith a tab", "Bo", "", "Bo", "", false, "", time.Unix(1600000000, 0).UTC()},
+			{3, 3, b, "f", "three", "Bo", "", "Bo", "", false, "", time.Unix(1600000000, 0).UTC()},
+			{4, 1, a, old, "four", "Ana", "ana@example.com", "Crewlet", "engine@seats.example", true, "first",
+				time.Unix(1700000000, 0).UTC()},
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("in pieces of %d the porcelain read\n%+v\nwant\n%+v", size, got, want)
 		}
 	}
 	for name, text := range map[string]string{
-		"a line with no header":       "\tone\n",
-		"a detail before a header":    "author Ana\n",
-		"an id alone":                 a + "\n",
-		"a header with no numbers":    a + " x y\n",
-		"two headers, no line":        a + " 1 1 1\nfilename f\n" + a + " 2 2\n",
-		"ended inside a line":         a + " 1 1 1\nfilename f\n\tone",
-		"a filename git never quotes": a + " 1 1 1\nfilename \"f\n\tone\n",
+		"a line with no header":        "\tone\n",
+		"a detail before a header":     "author Ana\n",
+		"an id alone":                  a + "\n",
+		"a header with no numbers":     a + " x y\n",
+		"two headers, no line":         a + " 1 1 1\nfilename f\n" + a + " 2 2\n",
+		"ended inside a line":          a + " 1 1 1\nfilename f\n\tone",
+		"a filename git never quotes":  a + " 1 1 1\nfilename \"f\n\tone\n",
+		"a committer-mail unbracketed": a + " 1 1 1\ncommitter-mail c@x\nfilename f\n\tone\n",
+		"a committer named twice":      a + " 1 1 1\ncommitter Cy\ncommitter Cy\nfilename f\n\tone\n",
 	} {
 		s := newBlameStream(func(*blamedLine) error { return nil })
 		_, err := s.Write([]byte(text))

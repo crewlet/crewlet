@@ -7,7 +7,7 @@
 import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { vi } from "vitest";
-import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { Announcer, LayerHost, ToastProvider } from "@crewlethq/ui";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -61,6 +61,8 @@ export function mountSettings(
             <Router>{screen}</Router>
           </FrameReadings>
         </LayerHost>
+        {/* As the app's frame mounts it, so a field that announces is heard. */}
+        <Announcer label="Announcements" />
       </ToastProvider>
     </ClientContext.Provider>,
   );

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -42,7 +43,7 @@ import (
 //
 // It does what Claude Code does with that argv, and nothing a test could get
 // right while the engine was wrong: it answers `--version` with a release
-// ([codingVersion], or [codingVersionEnv]'s), reads its brief on stdin, as `-p`
+// ([codingRelease]), reads its brief on stdin, as `-p`
 // with no prompt does, its system prompt off `--append-system-prompt-file`, its
 // tool surface off `--mcp-config` and its hooks off `--settings`, dials the seat's
 // bridge over a REAL MCP session, and loops —
@@ -54,6 +55,11 @@ import (
 // box's does. It ends when the model submits its work or answers in prose, or
 // at `--max-turns`, and prints stream-json as Claude Code does: one object a
 // line, the result message last, its usage the sum of every round's.
+//
+// IT FILES ITS SESSION AS CLAUDE CODE FILES IT ([codingSessionThread]): a
+// rooted chain of records, each stamped with the release it answered at its
+// start, the brief its root — what a reading of a kept session reads, so a
+// relaunch that asks one reads what the stand-in wrote ([codingModeCutAsk]).
 //
 // ITS HOOKS ARE PLAYED AT ITS BOUNDARIES, as Claude Code plays them
 // ([codingHooks]): after each batch of calls has its results (PostToolBatch)
@@ -75,6 +81,17 @@ import (
 // It reaches the child through the shim's own `env`, which bakes it in: the
 // box hands its harness an environment of its own making, never the engine's.
 const harnessEnv = "CREWLET_E2E_CODING_CLI"
+
+// codingVersionFileEnv names a file, outside the box, whose content the
+// stand-in answers `claude --version` with where the file exists, ahead of
+// [codingVersionEnv]: read each time it is asked, so a case can move the
+// release between one box of a seat and the next, which role.sandbox.env, the
+// same in every box, cannot. The file is [codingVersionFile], beside the
+// shim, which bakes this variable in as it does [harnessEnv]: a launch asks a
+// box's harness its release outside the run too (its check that the box
+// continues a session it carries), in an environment role.sandbox.env never
+// reaches.
+const codingVersionFileEnv = "FAKE_AGENT_VERSION_FILE"
 
 // What a case may vary about a run, read off the run's own environment —
 // which is role.sandbox.env, the ONLY route an external value has into a box,
@@ -142,7 +159,32 @@ const (
 	// and ends without submitting, as a harness told to end its turn does.
 	// The run carrying it on, told the call's answer, does the work.
 	codingModeApproval = "approval"
+	// codingModeCutAsk is a run cut off after it asked
+	// ([codingCutAsk]): it makes [codingCutCalls] calls over the seat's
+	// bridge and files only the first [codingCutKept] of them, each its call
+	// and its result, in its session, as a harness killed before it wrote the
+	// rest never wrote them; asks a person as [codingModeAsk] does, without
+	// filing that call either; submits nothing, plays no hook, and exits with
+	// status 1. The collection parks the job on its question whatever its
+	// exit, and the exit marks the session it keeps cut off, so the answer's
+	// relaunch continues that session told only what it lacks, where a
+	// reading of it says what it holds. The run carrying it on does the work.
+	codingModeCutAsk = "cutask"
 )
+
+// codingCutCalls is how many calls a [codingModeCutAsk] run makes before it
+// asks, and codingCutKept how many of them, from the first, its session holds.
+const (
+	codingCutCalls = 4
+	codingCutKept  = 2
+)
+
+// codingCutQuery is what a [codingModeCutAsk] run's call i (from 1) asks
+// `list_sessions` for: its own words, so a brief that tells a call names it
+// and one that leaves it out does not, and no two calls read alike.
+func codingCutQuery(i int) string {
+	return fmt.Sprintf("the cut-off job's call %d of %d", i, codingCutCalls)
+}
 
 // codingQuestion is what a [codingModeAsk] run asks, and codingOptions the
 // options it gives, the first recommended: a person answers it with a press.
@@ -188,13 +230,14 @@ const codingMaxRounds = 16
 //
 // THE SAME FORK-BOMB GUARD as [scriptedEntry]'s: a child that somehow lost
 // [harnessEnv] falls through to the suite with a filter matching nothing.
-// And GORACE, for the reason that entry sets it.
-func codingShim(endpoint string) string {
+// And GORACE, for the reason that entry sets it; and the file a case moves the
+// release in ([codingVersionFileEnv]), versionFile.
+func codingShim(endpoint, versionFile string) string {
 	return fmt.Sprintf("#!/bin/sh\n"+
 		"# The executor's harness: the e2e test binary, standing in for Claude\n"+
 		"# Code. See internal/e2e/codingcli_test.go.\n"+
-		"exec env %s=%s %s=%s %s '-test.run=^$' \"$@\"\n",
-		harnessEnv, shellQuote(endpoint),
+		"exec env %s=%s %s=%s %s=%s %s '-test.run=^$' \"$@\"\n",
+		harnessEnv, shellQuote(endpoint), codingVersionFileEnv, shellQuote(versionFile),
 		procgrouptest.GORACE, shellQuote(procgrouptest.StandInRaceOptions()),
 		shellQuote(scriptedHarnessBinary))
 }
@@ -206,7 +249,14 @@ func writeCodingShim(dir, endpoint string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, "claude")
-	return path, os.WriteFile(path, []byte(codingShim(endpoint)), 0o755)
+	return path, os.WriteFile(path, []byte(codingShim(endpoint, codingVersionFile(path))), 0o755)
+}
+
+// codingVersionFile is the file the shim at shim answers `claude --version`
+// from where it exists ([codingVersionFileEnv]): beside the shim, outside
+// every box, and none until a case writes it.
+func codingVersionFile(shim string) string {
+	return filepath.Join(filepath.Dir(shim), "version")
 }
 
 // codingSandbox is the providers.sandbox block every company here runs its
@@ -235,8 +285,8 @@ func codingSandbox(boxes, shim string) string {
 }
 
 // codingEntry is the providers.llm entry, under key, every agent seat's
-// executor launches on: Claude Code, keeping its homes under stateDir —
-// indented to sit under `providers: llm:`.
+// executor launches on: Claude Code on [codingModel], keeping its homes under
+// stateDir — indented to sit under `providers: llm:`.
 //
 // A VENDOR'S ENTRY WITH NOTHING OVERRIDDEN, because nothing of it runs on this
 // host: a seat's chain names it after the scripted entry, so every phase on the host
@@ -244,11 +294,16 @@ func codingSandbox(boxes, shim string) string {
 // that member (its harness has no in-box runner) to take this one. What the entry
 // decides is what the runner is handed — its harness, its model, its cell.
 func codingEntry(key, stateDir string) string {
+	return codingEntryOn(key, stateDir, codingModel)
+}
+
+// codingEntryOn is [codingEntry] on model.
+func codingEntryOn(key, stateDir, model string) string {
 	return fmt.Sprintf(`    %s:
       harness: claude-code
       model: %s
       state_dir: %q
-`, key, codingModel, stateDir)
+`, key, model, stateDir)
 }
 
 // shellQuote quotes s for a POSIX shell.
@@ -267,7 +322,10 @@ type codingArgs struct {
 	// a run carrying it on with the answer continues; session the one
 	// `--session-id` names, which a run that starts one is started under.
 	resume, session string
-	maxTurns        int
+	// model is the model `--model` names, which the replies its session
+	// files name ([codingSessionThread.use]).
+	model    string
+	maxTurns int
 }
 
 // codingInvocation is what a run records of how it was started
@@ -339,6 +397,8 @@ func parseCodingArgs(args []string) (codingArgs, error) {
 			out.resume, err = value(i)
 		case "--session-id":
 			out.session, err = value(i)
+		case "--model":
+			out.model, err = value(i)
 		case "--max-turns":
 			var raw string
 			if raw, err = value(i); err == nil {
@@ -428,7 +488,7 @@ func runHarness(endpoint string) int {
 		// ahead of what the run's script passed.
 		return strings.HasPrefix(arg, "-test.")
 	}), []string{"--version"}) {
-		fmt.Println(cmp.Or(os.Getenv(codingVersionEnv), codingVersion))
+		fmt.Println(codingRelease())
 		return 0
 	}
 	// THE PROMPT IS STDIN'S, as `-p` with no prompt reads it: the runner
@@ -485,9 +545,9 @@ func runHarness(endpoint string) int {
 	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
 		return fail("filing the session's transcript: %v", err)
 	}
-	opened, _ := json.Marshal(map[string]any{"type": "user", "sessionId": session,
-		"message": map[string]any{"role": "user", "content": parsed.brief}})
-	if err := os.WriteFile(transcript, append(opened, '\n'), 0o600); err != nil {
+	thread := &codingSessionThread{path: transcript, session: session, release: codingRecordRelease(),
+		at: time.Now().UTC()}
+	if err := thread.brief(parsed.brief); err != nil {
 		return fail("filing the session's transcript: %v", err)
 	}
 	switch mode := cmp.Or(os.Getenv(codingModeEnv), codingModeWork); mode {
@@ -550,6 +610,27 @@ func runHarness(endpoint string) int {
 		}
 		stream.result("success", "blocked on a question", 1, replyUsage{})
 		return 0
+	case codingModeCutAsk:
+		// A FRESH RUN CARRYING ON ONE THAT ASKED does the work, as
+		// [codingModeAsk]'s does; a case expecting the cut-off session
+		// continued says so of the argv.
+		if strings.Contains(parsed.brief, codingQuestion) {
+			if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
+				return fail("%v", err)
+			}
+			return 0
+		}
+		if told, err := toldHowToAsk(parsed); err != nil || !told {
+			return fail("the run was to ask a person, and its standing instructions "+
+				"never say how (%s): %v", builtin.AskAndWaitTool, err)
+		}
+		if err := codingCutAsk(context.Background(), parsed, thread, stream); err != nil {
+			return fail("%v", err)
+		}
+		// NO RESULT LINE AND A FAILING EXIT, as a harness killed mid-stream
+		// leaves its run.
+		return fail("cut off after asking, its session holding %d of the %d calls it made before",
+			codingCutKept, codingCutCalls)
 	default:
 		// A MODE THIS STAND-IN DOES NOT KNOW SAYS SO. Falling through would
 		// run the default and pass a case for the wrong reason.
@@ -875,6 +956,164 @@ func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event
 	return strings.Join(notes, "\n\n"), nil
 }
 
+// codingRelease is what the stand-in answers `claude --version` with: the
+// content of the file [codingVersionFileEnv] names where that file exists, else
+// [codingVersionEnv]'s release, else [codingVersion].
+func codingRelease() string {
+	if path := os.Getenv(codingVersionFileEnv); path != "" {
+		if raw, err := os.ReadFile(path); err == nil {
+			return strings.TrimSpace(string(raw))
+		}
+	}
+	return cmp.Or(os.Getenv(codingVersionEnv), codingVersion)
+}
+
+// codingRecordRelease is the release a record of the stand-in's session says
+// wrote it, as Claude Code stamps its own on each: [codingRelease] without
+// the name after it, "2.1.310".
+func codingRecordRelease() string {
+	release, _, _ := strings.Cut(codingRelease(), " ")
+	return release
+}
+
+// codingSessionThread is a stand-in run's session as Claude Code files it, its
+// main thread at path: one JSON record a line, each chained to the one before it by
+// `parentUuid` (null on the root, the brief) and carrying its own `uuid`,
+// `timestamp`, `sessionId` and `version`, the release the run answered at its
+// start ([codingRecordRelease]) — the shape a reading of a kept session reads
+// (internal/sandbox/executor's claudeholdings.go), which holds every chained
+// record to the release that wrote it.
+type codingSessionThread struct {
+	path, session, release string
+	// at is the time the next record is stamped with, a millisecond past the
+	// one before, so the records' times order as their lines do.
+	at time.Time
+	// parent is the uuid of the newest record, "" before the root.
+	parent string
+}
+
+// brief files the session's root: the brief, as its first user message, over
+// whatever the path held.
+func (th *codingSessionThread) brief(brief string) error {
+	return th.append(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": brief}},
+		os.O_CREATE|os.O_TRUNC)
+}
+
+// use files a reply of model's making one call, under id, of the bridge's
+// tool, named as Claude Code names a tool of an MCP server
+// (`mcp__<server>__<tool>`): its message's id, its usage and its stop reason
+// as Claude Code records a reply's, so a reading pairs the call by the reply
+// and the resumed count is bounded by what it billed.
+func (th *codingSessionThread) use(model, id, tool string, input map[string]any) error {
+	return th.append(map[string]any{"type": "assistant", "message": map[string]any{
+		"id": claudeID("msg_"), "type": "message", "role": "assistant", "model": cmp.Or(model, unnamedModel),
+		"content": []map[string]any{{
+			"type": "tool_use", "id": id, "name": "mcp__" + config.ToolServerName + "__" + tool, "input": input,
+		}},
+		"stop_reason": "tool_use", "usage": toolUseUsage.claudeUsage(),
+	}}, os.O_APPEND)
+}
+
+// result files the result of the call under id: text, the bridge's answer, and
+// failed, whether it was an error.
+func (th *codingSessionThread) result(id, text string, failed bool) error {
+	return th.append(map[string]any{"type": "user", "message": map[string]any{"role": "user",
+		"content": []map[string]any{{
+			"type": "tool_result", "tool_use_id": id, "content": text, "is_error": failed,
+		}},
+	}}, os.O_APPEND)
+}
+
+// append files record as the thread's next, the file opened with flag.
+func (th *codingSessionThread) append(record map[string]any, flag int) error {
+	id := uuid.NewString()
+	var parent any
+	if th.parent != "" {
+		parent = th.parent
+	}
+	record["parentUuid"], record["isSidechain"], record["uuid"] = parent, false, id
+	record["timestamp"] = th.at.Format("2006-01-02T15:04:05.000Z")
+	record["sessionId"], record["version"] = th.session, th.release
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(th.path, flag|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = file.Write(append(raw, '\n'))
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	th.parent, th.at = id, th.at.Add(time.Millisecond)
+	return nil
+}
+
+// codingCutAsk is a [codingModeCutAsk] run's calls, over a session it opens on
+// the seat's bridge: [codingCutCalls] calls of `list_sessions`, each asking
+// for words of its own ([codingCutQuery]), of which only the first
+// [codingCutKept] are filed in thread, then its structured question
+// ([codingQuestionInput]), not filed either.
+func codingCutAsk(ctx context.Context, args codingArgs, thread *codingSessionThread, stream codingStream) error {
+	bridge, err := bridgeURL(args.mcpConfig)
+	if err != nil {
+		return err
+	}
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "claude", Version: "e2e"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: bridge, HTTPClient: httpx.Client(0)}, nil)
+	if err != nil {
+		return fmt.Errorf("connecting to the bridge at %s to work and ask: %w", bridge, err)
+	}
+	defer func() { _ = session.Close() }()
+	stream.init([]string{builtin.ListSessionsTool, builtin.AskAndWaitTool})
+	for i := 1; i <= codingCutCalls; i++ {
+		id := claudeID("toolu_")
+		input := map[string]any{"query": codingCutQuery(i)}
+		stream.toolUse(id, builtin.ListSessionsTool, input)
+		out, failed := callOverBridge(ctx, session, id, builtin.ListSessionsTool, input)
+		stream.toolResult(id, out, failed)
+		if i > codingCutKept {
+			continue
+		}
+		if err := thread.use(args.model, id, builtin.ListSessionsTool, input); err != nil {
+			return fmt.Errorf("filing call %d in the session: %w", i, err)
+		}
+		if err := thread.result(id, out, failed); err != nil {
+			return fmt.Errorf("filing call %d's result in the session: %w", i, err)
+		}
+	}
+	id := claudeID("toolu_")
+	input := codingQuestionInput()
+	stream.toolUse(id, builtin.AskAndWaitTool, input)
+	out, failed := callOverBridge(ctx, session, id, builtin.AskAndWaitTool, input)
+	stream.toolResult(id, out, failed)
+	if failed {
+		return fmt.Errorf("asking over the bridge: %s", out)
+	}
+	return nil
+}
+
+// codingQuestionInput is the structured question a [codingModeAsk] or
+// [codingModeCutAsk] run asks: [codingQuestion], with [codingOptions], the
+// first recommended.
+func codingQuestionInput() map[string]any {
+	options := make([]any, len(codingOptions))
+	for i, option := range codingOptions {
+		options[i] = option
+	}
+	return map[string]any{
+		"question": codingQuestion,
+		"context":  "The flaky **api** test passes on both branches; the fix is pushed to `wip/flake`.",
+		"to":       "requester", "branch": "wip/flake",
+		"options": options, "recommended": "main", "role": "approver",
+		"rationale": "main ships with the next tag.",
+	}
+}
+
 // codingAsk is a [codingModeAsk] run's calls: its structured question, over a
 // session it opens on the seat's bridge, the submission the bridge refuses it
 // once it has asked, then the Stop hook its harness runs as it ends its turn.
@@ -891,17 +1130,7 @@ func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, stream c
 	defer func() { _ = session.Close() }()
 	stream.init([]string{builtin.AskAndWaitTool, runner.SubmitWorkTool})
 	id := claudeID("toolu_")
-	options := make([]any, len(codingOptions))
-	for i, option := range codingOptions {
-		options[i] = option
-	}
-	input := map[string]any{
-		"question": codingQuestion,
-		"context":  "The flaky **api** test passes on both branches; the fix is pushed to `wip/flake`.",
-		"to":       "requester", "branch": "wip/flake",
-		"options": options, "recommended": "main", "role": "approver",
-		"rationale": "main ships with the next tag.",
-	}
+	input := codingQuestionInput()
 	stream.toolUse(id, builtin.AskAndWaitTool, input)
 	out, failed := callOverBridge(ctx, session, id, builtin.AskAndWaitTool, input)
 	stream.toolResult(id, out, failed)

@@ -151,6 +151,41 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	}
 }
 
+// A HISTORY PAGE'S STATEMENTS READ NO UNNESTED AGGREGATE, which would read every
+// attempt of every commit; a control the driver does unnest proves the check sees it.
+// Mutation: ignore Decorrelated's answer, or plan the control as a page statement.
+func TestTheCommitMarksStatementsReadNoUnnestedAggregate(t *testing.T) {
+	t.Parallel()
+	db := seededPlanEstate(t)
+	control := storetest.Plan(t, db, `SELECT k.name, (SELECT MAX(n.attempt) FROM code_checks AS n
+		WHERE n.repo_id = k.repo_id AND n.commit_oid = k.commit_oid AND n.target_ref = k.target_ref
+			AND n.name = k.name) FROM code_checks AS k`, nil)
+	if _, unnested := storetest.Decorrelated(control); !unnested {
+		t.Fatalf("the control, a per-row maximum of every attempt, is not seen unnested, so this check "+
+			"passes every statement blind:\n%s", strings.Join(control, "\n"))
+	}
+	for name, st := range map[string]statement{
+		"a commit's latest checks, every branch": {sql: latestChecksOfCommitSQL,
+			args: []any{"repo-1", oid("c"), MaxMarkTargets*maxRollupChecks + 1}},
+		"a commit's latest checks for a branch": {sql: latestChecksOfTargetSQL,
+			args: []any{"repo-1", oid("c"), "refs/heads/main", maxRollupChecks + 1}},
+		"a merged change's approvals": {sql: changeApprovalsSQL,
+			args: []any{"repo-1-change-000001", 1, MaxGateApprovals + 1}},
+		"when a merged revision was pushed": {sql: revisionPushedSQL, args: []any{"repo-1-change-000001", 1}},
+		"a change's landing":                {sql: changeLandingSQL, args: []any{"repo-1-change-000001"}},
+		"changes a commit merged": {sql: commitMergedSQL,
+			args: []any{"repo-1", oid("head-3-3"), MaxCommitChanges + 1}},
+		"revisions a commit heads": {sql: commitHeadsSQL,
+			args: []any{oid("head-1-1"), "repo-1", MaxCommitChanges + 1}},
+	} {
+		plan := storetest.Plan(t, db, st.sql, st.args)
+		if line, unnested := storetest.Decorrelated(plan); unnested {
+			t.Errorf("%s answers a per-row aggregate from its whole child table (%q):\n%s", name, line,
+				strings.Join(plan, "\n"))
+		}
+	}
+}
+
 // THE RANGES A ROUND ASKS ABOUT ARE READ OVER THE LIVE REFS ALONE.
 //
 // The push decide asks, under every create, whether a live ref lies in a
@@ -201,6 +236,25 @@ func TestTheRefConflictProbesStepOverNoTombstone(t *testing.T) {
 	if got := strings.Join(strings.Fields(declared), " "); got != want {
 		t.Fatalf("%s is declared\n\t%s\nwant\n\t%s\n— the live refs alone, keyed as the probes seek them",
 			liveRefsKey, got, want)
+	}
+}
+
+// THE MOVED INDEX HOLDS THE LIVE BRANCHES ALONE, its predicate [movedRefs]:
+// the planner prints the same seek without it, so only the declaration shows it.
+// Mutation: declare it without the namespace bounds.
+func TestTheMovedIndexHoldsTheLiveBranchesAlone(t *testing.T) {
+	t.Parallel()
+	db := seededPlanEstate(t)
+	var declared string
+	if err := db.Read(context.Background(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(context.Background(),
+			`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, movedRefsKey).Scan(&declared)
+	}); err != nil {
+		t.Fatalf("read %s's declaration: %v", movedRefsKey, err)
+	}
+	want := "CREATE INDEX " + movedRefsKey + " ON code_refs (repo_id, at, ref) WHERE " + movedRefs
+	if got := strings.Join(strings.Fields(declared), " "); got != want {
+		t.Fatalf("%s is declared\n\t%s\nwant\n\t%s", movedRefsKey, got, want)
 	}
 }
 
@@ -650,6 +704,20 @@ func registeredStatements() map[string]statement {
 		"review row": {reviewRowSQL, []any{"review-1"}, []string{"sqlite_autoindex_code_reviews_1 (id=?)"}},
 		"live change on": {liveChangeOnSQL, []any{"repo-1", "refs/heads/f000001"},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		// A REFS LISTING BY WHEN EACH BRANCH MOVED, its active count, and its
+		// detail's reads: a ref's movers at its position and a branch's change.
+		"refs moved": {refsMovedSQL, []any{"repo-1", 0, int64(math.MaxInt64), 200},
+			[]string{"INDEX " + movedRefsKey + " (repo_id=? AND at<=? AND at>=?)"}},
+		"refs moved after": {refsMovedAfterSQL, []any{"repo-1", 0, 9, 9, "refs/heads/b", 200},
+			[]string{"INDEX " + movedRefsKey + " (repo_id=? AND at<=? AND at>=?)"}},
+		"active branches": {activeBranchesSQL, []any{"repo-1", 0, "refs/heads/main", 1001},
+			[]string{"INDEX " + movedRefsKey + " (repo_id=? AND at>=?)"}},
+		"pushes at a position": {pushesAtSQL, []any{"repo-1", 7},
+			[]string{"code_pushes_repo_idx (repo_id=? AND position=?)"}},
+		"live change of a source": {liveChangeOfSourceSQL, []any{"repo-1", "refs/heads/topic"},
+			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		"newest change of a source": {newestChangeOfSourceSQL, []any{"repo-1", "refs/heads/topic"},
+			[]string{changesSourceKey + " (repo_id=? AND source_ref=?)"}},
 		// A FAILED CHECK A PERSON'S CI REPORTED finds the live change at
 		// its head on its target (checkswriter.go's headChangeIn).
 		"live change at head": {liveChangeAtHeadSQL, []any{"repo-1", "refs/heads/main", oid("head-1-3")},
@@ -1155,6 +1223,23 @@ func registeredStatements() map[string]statement {
 			[]string{commitMergedKey + " (repo_id=? AND merge_oid=?)"}},
 		"revisions a commit heads": {commitHeadsSQL, []any{oid("head-1-1"), "repo-1", MaxCommitChanges + 1},
 			[]string{commitHeadsKey + " (head_oid=?)", changeKey + " (id=?)"}},
+		// A HISTORY PAGE'S MARKS AND A MERGE'S GATE (commitmarks.go, commitread.go,
+		// checkrollup.go): each check's latest attempt, a merged change's approvals
+		// and the landing a queue made of it, each one walk or seek.
+		"a commit's latest checks, every branch": {latestChecksOfCommitSQL,
+			[]any{"repo-1", oid("c"), MaxMarkTargets*maxRollupChecks + 1},
+			[]string{checksKey + " (repo_id=? AND commit_oid=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
+		"a commit's latest checks for a branch": {latestChecksOfTargetSQL,
+			[]any{"repo-1", oid("c"), "refs/heads/main", maxRollupChecks + 1},
+			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
+		"a merged change's approvals": {changeApprovalsSQL, []any{"repo-1-change-000001", 1, MaxGateApprovals + 1},
+			[]string{participantKey + " (change_id=?)"}},
+		"when a merged revision was pushed": {revisionPushedSQL, []any{"repo-1-change-000001", 1},
+			[]string{revisionKey + " (change_id=? AND n=?)"}},
+		"a change's landing": {changeLandingSQL, []any{"repo-1-change-000001"},
+			[]string{changeLandingsKey + " (change_id=?)"}},
 		"reviews given": {reviewsGivenSQL, []any{"seat-0", 50},
 			[]string{reviewsGivenKey + " (reviewer=?)"}},
 		"reviews given after": {reviewsGivenAfterSQL, []any{"seat-0", 3000, 50},
@@ -1614,12 +1699,6 @@ func claimedReads() map[string]statement {
 		// the walk of a Gitlet node that keeps indexes, and of a search across
 		// the company's repositories — its partial predicate repeated
 		// verbatim. Nothing in this build reads a repository by its mode.
-		// THE MERGE QUEUE'S INDEX ITS LATER READERS SEEK (replicated 0110):
-		// a change's landings, a broken landing's authors' and the change
-		// page's. Nothing in this build reads a change's landings.
-		"code_landings_change_idx": {`SELECT repo_id, target_ref, position, ordinal FROM code_landings
-			INDEXED BY code_landings_change_idx WHERE change_id = ? AND change_id != ''`,
-			[]any{"repo-1-change-000001"}, []string{"code_landings_change_idx (change_id=?)"}},
 		// A PERSON'S CODE INBOX (replicated 0109), newest first: the
 		// composed inbox's code half reads it.
 		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications

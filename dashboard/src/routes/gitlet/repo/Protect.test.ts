@@ -149,8 +149,12 @@ test("a seat approving a change to the checks is sent where it moved", () => {
 // Mutation: admit 0, 9 or a fraction, or judge an ungated form, and this fails.
 test("a gate's queue is held to whole numbers inside the engine's bounds", () => {
   expect(landingHeld({ gated: true, depth: "8", batch: "1" })).toBeUndefined();
-  expect(landingHeld({ gated: true, depth: "9", batch: "1" })).toMatch(/1 to 8/);
-  expect(landingHeld({ gated: true, depth: "2", batch: "0" })).toMatch(/1 to 8/);
-  expect(landingHeld({ gated: true, depth: "1.5", batch: "1" })).toMatch(/whole number/);
+  expect(landingHeld({ gated: true, depth: "9", batch: "1" })).toEqual({
+    field: "depth",
+    reason: "Changes tested at once is a whole number from 1 to 8.",
+  });
+  expect(landingHeld({ gated: true, depth: "2", batch: "0" })?.field).toBe("batch");
+  expect(landingHeld({ gated: true, depth: "2", batch: "0" })?.reason).toMatch(/1 to 8/);
+  expect(landingHeld({ gated: true, depth: "1.5", batch: "1" })?.reason).toMatch(/whole number/);
   expect(landingHeld({ gated: false, depth: "", batch: "" })).toBeUndefined();
 });

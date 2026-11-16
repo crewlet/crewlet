@@ -167,7 +167,7 @@ func seatRefusal(binding session.Binding) *Refusal {
 //
 // # Why a session and not a sign-in refusal
 //
-// `api.auth.totp: required` says nobody signs in on a password alone,
+// A required second factor says nobody signs in on a password alone,
 // and a person who holds no second factor — freshly invited, or one
 // an administrator reset — has nothing else to present. Refusing the sign-in
 // would lock them out of the one gesture that satisfies the rule, so the
@@ -584,7 +584,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 			s.reissue(w, v)
 			return sessionAnswer{how: iam.Resolved, presented: true, tierA: &entry,
 				via:      iam.SessionName(v.Bearer.Lineage.String()),
-				lifetime: v.Bearer.AbsoluteExpiresAt, session: presentedOf(v)}
+				lifetime: v.Ends.Absolute, session: presentedOf(v)}
 		}
 	}
 
@@ -641,7 +641,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	}
 	return sessionAnswer{
 		principal: s.principal(v, binding, admin, proof), how: iam.Resolved,
-		refusal: refusal, presented: true, lifetime: v.Bearer.AbsoluteExpiresAt,
+		refusal: refusal, presented: true, lifetime: v.Ends.Absolute,
 		session: presentedOf(v),
 	}
 }
@@ -653,7 +653,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 // later, so a grant bounded by the presented one never outlives the cookie the
 // browser actually held.
 func presentedOf(v session.Validation) presentedSession {
-	return presentedSession{idle: v.Bearer.IdleExpiresAt, enrolmentOnly: v.EnrolmentOnly()}
+	return presentedSession{idle: v.Ends.Idle, enrolmentOnly: v.EnrolmentOnly()}
 }
 
 // awaitStart waits for this node to apply the start of the session a write
@@ -703,7 +703,7 @@ func (s *Sessions) awaitStart(ctx context.Context, directory session.Directory,
 // reissue sets the cookie a served validation re-issued, if it re-issued one.
 func (s *Sessions) reissue(w http.ResponseWriter, v session.Validation) {
 	if v.Reissue != "" {
-		session.Issue(w, s.external, v.Reissue, v.Bearer.AbsoluteExpiresAt)
+		session.Issue(w, s.external, v.Reissue, v.Ends.Absolute)
 	}
 }
 
@@ -835,8 +835,8 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 // row somebody has to rewrite. A mixed fleet mid-rollout is a LEGAL state,
 // which is why each node publishes its own posture.
 //
-// AND SO IS THE STEP-UP WINDOW, for the same reason: `api.auth.session.step_up`
-// is this node's own setting, and the session row states only WHEN its holder
+// AND SO IS THE STEP-UP WINDOW: the company's, held within this node's limit,
+// read per request, and the session row states only WHEN its holder
 // proved who they are. The principal's [iam.Principal.ReauthAt] is the instant
 // that proof stops counting — the proof plus this node's window — so a
 // shortened window takes effect on the next request, and a session that
@@ -883,16 +883,15 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 	return p
 }
 
-// proofWindow is this node's step-up window, `api.auth.session.step_up`.
-//
-// THE NODE'S OWN, applied when a principal is composed, for the admin
-// posture's reason: a session row states only WHEN its holder proved who they are, so a
-// shortened window takes effect on this node's next request with nothing
-// rewritten, and a fleet mid-rollout legally disagrees about it.
-type proofWindow time.Duration
+// proofWindow is the step-up window in force, read per request: the company's
+// `sign_in.step_up_seconds` held within this node's limit, so a change takes
+// effect on the next request with nothing rewritten (ADR-0152).
+type proofWindow func() time.Duration
 
-// windowOf reads the window off the session settings, its default applied.
-func windowOf(s config.APISession) proofWindow { return proofWindow(s.StepUp()) }
+// windowOf is the step-up window of a sign-in policy read per request.
+func windowOf(policy func() config.SignInPolicy) proofWindow {
+	return func() time.Duration { return policy().StepUp }
+}
 
 // stamp gives p the deadline a proof taken at provedAt earns: the proof plus
 // the window.
@@ -906,7 +905,7 @@ func (w proofWindow) stamp(p *iam.Principal, provedAt time.Time) {
 		p.ReauthAt = time.Time{}
 		return
 	}
-	p.ReauthAt = provedAt.Add(time.Duration(w))
+	p.ReauthAt = provedAt.Add(w())
 }
 
 // personID parses the id a bearer carries.

@@ -295,7 +295,7 @@ mcp_servers:
 		t.Fatal(err)
 	}
 	surface, _ := configSurface(t, doc)
-	s, _ := withHistory(t, queries.Sources{Coord: coordmemory.New(), Company: companySource(t, cfg),
+	s, _ := withHistory(t, queries.Sources{Coord: coordmemory.New(), NodeStatuses: coordmemory.NewFleet(), Company: companySource(t, cfg),
 		Config: surface, MCPListings: fakeListings{}})
 	got, err := s.MCPServer(t.Context(), "tracker")
 	if err != nil {

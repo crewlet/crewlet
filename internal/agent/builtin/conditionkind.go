@@ -105,7 +105,7 @@ func InfrastructureKind(kind string) bool {
 // give-up counts no failure of the node's (internal/sandbox's resumeGivenUp),
 // so the run and its seat wait for as long as the condition lasts, and
 // nothing ends it but a turn's deadline. So it is said: while one such run
-// waits, the node holding the seat says so on its heartbeat
+// waits, the node holding the seat says so in its status record
 // (internal/sandbox's Coordinator.ResumesBlocked), and every data node raises
 // executor_resume_blocked from there. False for every other kind,
 // one that clears when a store, a log or a broker answers again included,

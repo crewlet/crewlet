@@ -315,7 +315,7 @@ var alarmMeaning = map[Kind]string{
 		"is the node's, so the run and its seat wait for the operator, the " +
 		"job's completion coming round on each announcement. The node holding " +
 		"the seat counts the run from its own memory of its resumes and says " +
-		"so on its heartbeat, and every data node raises the alarm from there, " +
+		"so in its status record, and every data node raises the alarm from there, " +
 		"so a seat a satellite holds is raised too: it clears once a resume " +
 		"of the run gets past the condition or fails for anything else, once " +
 		"the run ends, and once the seat moves, whose next holder says it " +

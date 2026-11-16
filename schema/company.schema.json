@@ -126,6 +126,10 @@
           "$ref": "#/$defs/AssistantDeepWork",
           "description": "Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
         },
+        "deliberate": {
+          "$ref": "#/$defs/AssistantDeliberate",
+          "description": "A stronger model chain for hard questions: a person asks for it with Think harder, one question at a time, and briefs of a decision may use it. Held to assistant.llm's rules and charged to the same budgets. Absent: every question runs on assistant.llm."
+        },
         "enabled": {
           "description": "Run Ask Crewlet for this company. Absent or false: off.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -160,7 +164,7 @@
           "description": "providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."
         },
         "max_steps": {
-          "description": "Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30.",
+          "description": "Most model rounds one Ask Crewlet turn may take before its answer, each calling any number of tools, 1..40. Absent: 30.",
           "maximum": 40,
           "minimum": 0,
           "type": [
@@ -177,6 +181,10 @@
             "null"
           ]
         },
+        "research": {
+          "$ref": "#/$defs/AssistantResearch",
+          "description": "Web research: Ask Crewlet reads pages, through the engine, from the hosts listed here. Absent: it reads no web page."
+        },
         "retention_days": {
           "description": "How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30.",
           "maximum": 365,
@@ -189,6 +197,10 @@
         "token_budget": {
           "$ref": "#/$defs/TokenBudget",
           "description": "Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
+        },
+        "tools": {
+          "$ref": "#/$defs/AssistantTools",
+          "description": "Which of Ask Crewlet's tools the company turns off for everybody. It only narrows what a person's own permissions already offer."
         },
         "turn_timeout_seconds": {
           "description": "Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900.",
@@ -241,6 +253,106 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantDeliberate": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_briefs": {
+          "description": "Run a brief of a decision (Brief me on this decision) on this chain too. Absent or false: briefs run on assistant.llm.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": "array"
+            }
+          ],
+          "description": "providers.llm keys a question asked to think harder runs on, a fallback chain held to assistant.llm's rules: each an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Required."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantResearch": {
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "description": "The hosts Ask Crewlet may read pages from over https, each a host name alone (docs.example.com), at most 50. Required.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "search": {
+          "$ref": "#/$defs/ResearchSearch",
+          "description": "Web search over the listed hosts, through the company's own search tool server. Absent: Ask Crewlet reads pages it is given but searches none."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantTools": {
+      "additionalProperties": false,
+      "properties": {
+        "deny": {
+          "description": "Tool families Ask Crewlet never offers, each once: writes (every change it could propose, so it only reads), generic_changes (a change to any API route), generic_reads (a read of any API route), chat_writes, atlas_writes, agent_controls (pausing, resuming, steering and answering an agent's run), page_changes (a change to the screen the person has open), deep_work.",
+          "items": {
+            "enum": [
+              "writes",
+              "generic_changes",
+              "generic_reads",
+              "chat_writes",
+              "atlas_writes",
+              "agent_controls",
+              "page_changes",
+              "deep_work",
+              "",
+              null
+            ]
+          },
+          "type": [
+            "array",
             "null"
           ]
         }
@@ -3731,6 +3843,24 @@
         "null"
       ]
     },
+    "ResearchSearch": {
+      "additionalProperties": false,
+      "properties": {
+        "mcp_server": {
+          "description": "The mcp_servers entry Ask Crewlet searches through: a shared, enabled entry the curated catalogue recognises as Tavily, whose tavily_search is not blocked. Each node serving the API runs its own instance of it for research alone. Required.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Role": {
       "additionalProperties": false,
       "properties": {
@@ -4913,7 +5043,8 @@
               "null"
             ]
           },
-          "description": "Node labels that must all match.",
+          "description": "Node labels that must all match: at most 16, each value at most 64 bytes of printable text.",
+          "maxProperties": 16,
           "type": [
             "object",
             "null"
@@ -5978,6 +6109,52 @@
         "null"
       ]
     },
+    "SignIn": {
+      "additionalProperties": false,
+      "properties": {
+        "idle_timeout_seconds": {
+          "description": "How long a session lives unused before its person signs in again: 900 to 2592000 seconds (15 minutes to 30 days). Empty is 43200 (12 hours).",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min_password_length": {
+          "description": "Shortest password a person may set: 12 to 256 characters. Empty is 12.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "require_second_factor": {
+          "description": "Whether a person signing in with a password must also give a second factor. Empty is true. false needs api.auth.limits.second_factor: optional on the node.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "session_lifetime_seconds": {
+          "description": "Longest a session lives from sign-in, however it is used: 3600 to 2592000 seconds (1 hour to 30 days). Empty is 604800 (7 days).",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "step_up_seconds": {
+          "description": "How long a proof of identity authorises a sensitive change before it is asked again: 300 to 86400 seconds (5 minutes to 1 day). Empty is 3600 (1 hour).",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "SkillCurator": {
       "additionalProperties": false,
       "properties": {
@@ -6858,6 +7035,9 @@
         "array",
         "null"
       ]
+    },
+    "sign_in": {
+      "$ref": "#/$defs/SignIn"
     },
     "skill_variables": {
       "additionalProperties": {

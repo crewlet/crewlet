@@ -68,9 +68,8 @@ const (
 	// per-seat template no seat on a live node declares credentials for,
 	// or a server no node has applied yet.
 	MCPNotStarted MCPServerState = "not_started"
-	// MCPUnreported — no live node's latest heartbeat carried its MCP
-	// report (its status hook did not answer within its share of the beat,
-	// or no node is live), so
+	// MCPUnreported — no live node has a status record counted (none has
+	// written one at its presence epoch yet, or no node is live), so
 	// nothing can be said about any server. Not "not started", which would
 	// be a claim nobody made.
 	MCPUnreported MCPServerState = "unreported"
@@ -229,9 +228,10 @@ func (offer BuiltinOffer) withheldFrom(ctx context.Context, o *org.Organization,
 // MCPStatusNode is one live node.
 type MCPStatusNode struct {
 	ID string `json:"id"`
-	// Reported is whether the node's latest heartbeat carried its status.
-	// False when its status hook did not answer within its share of the
-	// beat, and its cells are UNKNOWN, never zero.
+	// Reported is whether a status record of the node's live presence is
+	// counted. False before the node writes one at its presence epoch (a
+	// node just started, or back at a new epoch), and its cells are then
+	// UNKNOWN, never zero.
 	Reported bool `json:"reported"`
 }
 
@@ -367,14 +367,39 @@ type MCPServerNode struct {
 	Restarts int `json:"restarts"`
 }
 
+// NodeStatusReader is the fleet's node status records
+// ([coord.NodeStatusRecords]) as the questions that draw each node's rows read
+// them.
+type NodeStatusReader interface {
+	NodeStatusRecords(ctx context.Context) ([]coord.NodeStatusRecord, error)
+}
+
+// liveStatuses is the live nodes' presence leases and the status records
+// counted against them, by node ([coord.LiveNodeStatuses]): the one read of
+// every node's rows. Either one unreadable is an error rather than a fleet with
+// no nodes, or one whose nodes all say nothing: "no node started github" drawn
+// over a store blip is the wrong thing to act on.
+func (s Sources) liveStatuses(ctx context.Context) ([]coord.Lease, map[string]coord.NodeStatusRecord, error) {
+	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
+	if err != nil {
+		return nil, nil, err
+	}
+	records, err := s.NodeStatuses.NodeStatusRecords(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return leases, coord.LiveNodeStatuses(records, leases), nil
+}
+
 // mcpServersStatus answers what each MCP server did on each node.
 //
-// FROM THE HEARTBEATS, NOT A FAN-OUT. Every node re-publishes its servers as
-// they are at each beat on its presence lease ([coord.NodeStatus.MCP]) — a
-// child that died since it started counts as failed until it is back — so one
-// listing of the lease table is every node's answer at once. There is no node
-// that did not answer in time, only one whose last heartbeat carried no
-// status, and that is a column of its own rather than a row of zeros.
+// FROM THE STATUS RECORDS, NOT A FAN-OUT. Every node re-publishes its servers
+// as they are on its status record ([coord.NodeStatusRecord.MCP]) within a
+// renew period of a change — a child that died since it started counts as
+// failed until it is back — so one listing of the records, counted against the
+// lease table's presence, is every node's answer at once. There is no node
+// that did not answer in time, only a live one with no record counted, and
+// that is a column of its own rather than a row of zeros.
 //
 // EVERYBODY'S, IN TWO READINGS ([MCPReading]), as each model's condition is: a
 // server's state and its tools are what tell a member why an agent lacks one.
@@ -384,11 +409,8 @@ type MCPServerNode struct {
 // the same reader the same commands); anybody else reads
 // [MemberMCPStatusAnswer], which names none of that.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
-	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
+	leases, records, err := s.liveStatuses(ctx)
 	if err != nil {
-		// THE LEASE TABLE IS THE ANSWER, so an unreadable one is an
-		// error rather than a fleet with no nodes: "no node started
-		// github" drawn over a store blip is the wrong thing to act on.
 		return nil, err
 	}
 	grants, err := s.mcpGrants(ctx)
@@ -397,7 +419,7 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		// drawn over a store blip would send somebody to sign in again.
 		return nil, err
 	}
-	status := s.mcpStatusOf(leases, grants)
+	status := s.mcpStatusOf(leases, records, grants)
 	// THE BUILT-INS READ ONCE, for the shelves and for every agent's count of
 	// them, so both are one registry's ([BuiltinOffer]).
 	builtins := s.builtinOffer()
@@ -466,12 +488,14 @@ func (s Sources) mcpApprovals(ctx context.Context) ([]MCPApproval, error) {
 	return out, nil
 }
 
-// mcpStatusOf is `mcp_servers_status` read off the presence leases given and
-// the servers' OAuth grants: the one reading of every server's row, which a
+// mcpStatusOf is `mcp_servers_status` read off the presence leases given, the
+// status records counted against them and the servers' OAuth grants: the one
+// reading of every server's row, which a
 // server's detail answers its own row from. Its built-in shelves are empty:
 // the status question fills them from the offer it reads once
 // ([Sources.mcpServersStatus]), and a server's detail reads no shelf.
-func (s Sources) mcpStatusOf(leases []coord.Lease, grants map[string]*coord.MCPGrant) MCPStatusAnswer {
+func (s Sources) mcpStatusOf(leases []coord.Lease, records map[string]coord.NodeStatusRecord,
+	grants map[string]*coord.MCPGrant) MCPStatusAnswer {
 
 	type report struct {
 		node     string
@@ -481,13 +505,13 @@ func (s Sources) mcpStatusOf(leases []coord.Lease, grants map[string]*coord.MCPG
 	reports := make([]report, 0, len(leases))
 	for _, lease := range leases {
 		r := report{node: nameIn(coord.ClassNode, lease.Resource)}
-		if status, ok := coord.StatusFromMeta(lease.Meta); ok {
+		if record, ok := records[r.node]; ok {
 			// PUBLISHED, so an empty list is "started none" — the
-			// node always reports what it started beside its status —
+			// node always writes what it started on its record —
 			// rather than "did not say".
 			r.reported = true
-			r.servers = make(map[string]coord.MCPServerStatus, len(status.MCP))
-			for _, m := range status.MCP {
+			r.servers = make(map[string]coord.MCPServerStatus, len(record.MCP))
+			for _, m := range record.MCP {
 				r.servers[m.Server] = m
 			}
 		}

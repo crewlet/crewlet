@@ -1130,16 +1130,18 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 // and its place in the order the round's log TOOK its calls, which a relaunch
 // that continues a kept session tells the calls after its save point by: the
 // log's number, never one the conversion makes up, so a call an older build
-// appended stays unnumbered.
+// appended stays unnumbered. And the id the call's harness gave it, which a
+// reading of what a cut-off kept session holds is asked by: the log's, and
+// none on a call the harness named none.
 //
-// Mutation: drop the place, either order's, the start, the duration or the
-// origin from the conversion, and this goes red.
+// Mutation: drop the place, either order's, the start, the duration, the
+// origin or the harness's id from the conversion, and this goes red.
 func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 6, 15, 12, 1, 2, 0, time.UTC)
 	got := bridgedCalls([]sandbox.BridgeCall{
 		{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted", Seq: 2, Appended: 5,
-			StartedAt: at, DurationMS: 1500, Origin: "mcp:slack", Server: "slack"},
+			StartedAt: at, DurationMS: 1500, Origin: "mcp:slack", Server: "slack", CallID: "toolu_01slackpost"},
 		{Name: "jira_create", Args: "not json", Failed: true, Seq: 1},
 	})
 	if len(got) != 2 {
@@ -1160,6 +1162,11 @@ func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	if got[0].Origin != "mcp:slack" || got[0].Server != "slack" {
 		t.Errorf("who answered was lost: origin %q, server %q", got[0].Origin, got[0].Server)
 	}
+	if got[0].CallID != "toolu_01slackpost" || got[1].CallID != "" {
+		t.Errorf("the calls reach the runner under the ids %q and %q, want the one their harness gave the first, "+
+			"toolu_01slackpost, and none for the second, which its harness named none", got[0].CallID,
+			got[1].CallID)
+	}
 	// AN UNMEASURED CALL STAYS UNMEASURED: a zero start is "not timed",
 	// never a call placed at the epoch.
 	if !got[1].StartedAt.IsZero() || got[1].Duration != 0 {
@@ -1175,6 +1182,49 @@ func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	}
 	if got[1].Args != nil {
 		t.Errorf("undecodable arguments became %v, want nil", got[1].Args)
+	}
+}
+
+// A CALL STILL IN FLIGHT CARRIES ITS HARNESS'S ID TO THE RUNNER, as a finished
+// one does. A reading of what a cut-off kept session holds is asked of the
+// round's finished calls by the ids their harness gave them, and the session
+// may show a call still in flight under the id a finished one carries: a
+// harness that makes a call again may send the id it sent the first time. So
+// the runner must see the in-flight call's id to ask of no finished call it
+// could be taken for, which it can only where the resume hands it over:
+// through the resume's own conversion of the log it read, beside its identity
+// and its unknown outcome, and none on an entry its harness named none.
+//
+// Mutation: drop the id from the conversion of a call in flight
+// (unfinishedCalls), and this goes red.
+func TestACallStillInFlightCarriesItsHarnessID(t *testing.T) {
+	t.Parallel()
+	const id = "toolu_01stillrunning"
+	digest := strings.Repeat("b", 64)
+	resumed := runnerResume(resumeInput{Bridged: sandbox.BridgeLog{
+		Calls: []sandbox.BridgeCall{{Name: "read_page", Output: "read", Seq: 1, CallID: id}},
+		InFlight: []sandbox.BridgeCall{
+			{Name: "post_message", Seq: 2, Digest: digest, CallID: id},
+			{Name: "vendor_post", Seq: 3},
+		},
+	}}, nil, nil, nil)
+	if len(resumed.Bridged) != 1 || resumed.Bridged[0].CallID != id {
+		t.Fatalf("the runner is handed %+v of the finished call, want it under the id its harness gave it, %q",
+			resumed.Bridged, id)
+	}
+	if len(resumed.Unfinished) != 2 {
+		t.Fatalf("the runner is handed %d calls in flight, want 2: %+v", len(resumed.Unfinished),
+			resumed.Unfinished)
+	}
+	first, second := resumed.Unfinished[0], resumed.Unfinished[1]
+	if first.Name != "post_message" || first.Seq != 2 || first.Digest != digest || !first.Unfinished ||
+		first.CallID != id {
+		t.Errorf("the runner is handed %+v of the call in flight, want it by its identity, its outcome "+
+			"unknown, under the id its harness gave it, %q", first, id)
+	}
+	if second.Name != "vendor_post" || !second.Unfinished || second.CallID != "" {
+		t.Errorf("the runner is handed %+v of the call in flight its harness named none, want it under no id",
+			second)
 	}
 }
 

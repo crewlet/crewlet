@@ -36,6 +36,10 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		fill(rng, reflect.ValueOf(&ref).Elem())
 		check("ref", ref, ref.encodedBytes())
 
+		var listing RefListing
+		fill(rng, reflect.ValueOf(&listing).Elem())
+		check("ref in detail", listing, listing.encodedBytes())
+
 		var pack PackRow
 		fill(rng, reflect.ValueOf(&pack).Elem())
 		check("pack", pack, pack.encodedBytes())
@@ -117,6 +121,10 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		var change ChangeSummary
 		fill(rng, reflect.ValueOf(&change).Elem())
 		check("change listing row", change, change.encodedBytes())
+
+		var rollup CheckRollup
+		fill(rng, reflect.ValueOf(&rollup).Elem())
+		check("rollup", rollup, rollup.encodedBytes())
 
 		var revision RevisionRow
 		fill(rng, reflect.ValueOf(&revision).Elem())

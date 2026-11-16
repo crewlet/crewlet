@@ -660,21 +660,18 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 	// thread, the edit's own answer, a page's detail) reported the two instants
 	// equal, and "(edited)" could never be drawn.
 	//
-	// FROM THE HELD DOCUMENT, which carries the insert's instant at full
-	// precision; the row's column holds the same instant in microseconds and
-	// answers only for a document this build cannot decode, which the readers
-	// skip as well.
+	// FROM THE ROW'S created_at COLUMN, which the insert wrote from the same
+	// broker instant as its document and no edit moves: the state log hands
+	// that instant in the store's encoding on every path
+	// ([statelog.Record.StoredAt]), so the column is exactly what the held
+	// document says, and it answers for a document this build cannot decode
+	// as well.
 	created := at.brokerAt
-	var heldDoc []byte
 	var heldAt int64
 	switch err := tx.QueryRowContext(ctx, heldCommentStatement, c.ID).
-		Scan(&heldDoc, &heldAt); {
+		Scan(&heldAt); {
 	case err == nil:
-		if held, derr := DecodeComment(heldDoc); derr == nil && !held.CreatedAt.IsZero() {
-			created = held.CreatedAt
-		} else {
-			created = store.DecodeTime(heldAt)
-		}
+		created = store.DecodeTime(heldAt)
 	case !errors.Is(err, sql.ErrNoRows):
 		return 0, "", fmt.Errorf("doclet: read comment %s at %s: %w",
 			c.ID, at.position, err)
@@ -1107,7 +1104,7 @@ func addressMatches(at applyContext, container, token, claimedContainer,
 // rewritten, one retired revision, and a title claim released by its own key.
 const (
 	headAtStatement         = `SELECT document, version FROM pages_heads WHERE id = ?`
-	heldCommentStatement    = `SELECT document, created_at FROM pages_comments WHERE id = ?`
+	heldCommentStatement    = `SELECT created_at FROM pages_comments WHERE id = ?`
 	removeCommentStatement  = `DELETE FROM pages_comments WHERE id = ? AND version < ?`
 	closeAskStatement       = `UPDATE pages_comments SET answered = 1 WHERE id = ? AND page_id = ? AND asks = 1`
 	clearWatchersStatement  = `DELETE FROM pages_watchers WHERE page_id = ?`

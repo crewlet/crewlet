@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Draft is everything a running turn knows when a write tool's call becomes a
@@ -44,7 +45,7 @@ type Draft struct {
 
 	// Taint names the outside source the turn read before it proposed
 	// (D25), shown on the card.
-	Taint string
+	Taint provenance.Source
 
 	// Now is the instant the proposal is made, and TTL how long it waits
 	// (zero is [DefaultTTL]).

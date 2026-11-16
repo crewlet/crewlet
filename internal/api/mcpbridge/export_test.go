@@ -45,6 +45,12 @@ func AwaitClosing(b *Bridge) { b.calls.closing.Wait() }
 // and the handler, a moment no relay can be made to wait in.
 func Relayed(b *Bridge) http.Handler { return b.relayed() }
 
+// HoldAnswersUntilRecorded holds each call's handler on b until the call is
+// recorded, so its start and its answer are both ready as it first looks.
+func HoldAnswersUntilRecorded(b *Bridge) {
+	b.calls.answering = func(recorded <-chan struct{}) { <-recorded }
+}
+
 // The answers a call is handed as its opening ends, or after it ended.
 const (
 	EndedNote        = endedNote

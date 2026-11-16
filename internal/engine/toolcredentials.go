@@ -32,7 +32,7 @@ import (
 //     seals its credential under the variable the seat points at — is claimed
 //     before that pass has run: on every first boot, and for every seat a
 //     revision adds. The child is NOT STARTED, and that is not a failure:
-//     the heartbeat counts it as waiting, with a sentence naming the variable
+//     its status record counts it as waiting, with a sentence naming the variable
 //     and the integration that mints it, and the log says so once per pass at
 //     info. It starts once the seal reaches this node (below). Only a seat's
 //     values can be this: a pass mints per seat, so a shared server has
@@ -62,8 +62,9 @@ import (
 // store and tells the operator to reload, which is an apply. A timer would
 // retry nothing that could start. What a person does at an integration is the
 // one thing no pass here can see, which is why a child held back on one is
-// judged again on every heartbeat against the integration's last report rather
-// than on its own pass alone ([Engine.mcpStatus]).
+// judged again on every pass of the status record's writer against the
+// integration's last report rather than on its own pass alone
+// ([Engine.mcpStatus]).
 //
 // # A key that may go without its value is declared, and left out
 //
@@ -635,14 +636,15 @@ func (m *credentialMissing) mintingKinds() []integration.Kind {
 // judged is m weighed against what each integration minting one of its
 // variables last recorded, keyed by integration, as the fleet holds it.
 //
-// A FRESH VALUE, never m changed in place: the heartbeat judges the outcome a
-// pass filed, on every beat, while the next pass may be filing another. Nil
+// A FRESH VALUE, never m changed in place: the status record's writer judges
+// the outcome a pass filed, on every reading, while the next pass may be
+// filing another. Nil
 // states is "this node could not read the record", and m is then returned
 // with the judgement its pass stored rather than cleared — the record not
 // answering for a moment is no evidence that a person has acted. That is the
-// pass's judgement and not the previous beat's, so for the one beat that
-// cannot read a wait the last beat judged stopped can read as waiting again,
-// and the reverse, until the next beat reads the record.
+// pass's judgement and not the previous reading's, so for the one reading that
+// cannot read a wait the last reading judged stopped can read as waiting again,
+// and the reverse, until the next reading reads the record.
 func (m *credentialMissing) judged(states map[integration.Kind]integration.State) *credentialMissing {
 	if m == nil || states == nil || len(m.minting) == 0 {
 		return m
@@ -733,8 +735,8 @@ func beforeIdentities(p integration.Phase) bool {
 }
 
 // reason says what is missing and how to supply it, or what is awaited — no
-// value, only variables and keys. Failures first, because the heartbeat bounds
-// the sentence ([coord.MaxMCPErrorBytes]) and what somebody has to act on is
+// value, only variables and keys. Failures first, because the status record
+// bounds the sentence ([coord.MaxMCPErrorBytes]) and what somebody has to act on is
 // the part that must survive the cut.
 func (m *credentialMissing) reason() string {
 	var parts []string
@@ -824,7 +826,7 @@ func (m *credentialMissing) optionalRemedy() string {
 		m.reader, plural(keys, "it", "them"), words.And(lists))
 }
 
-// Error is the sentence the heartbeat carries and the log writes: why the
+// Error is the sentence the status record carries and the log writes: why the
 // child is not started, and — for a child that is only waiting — when it
 // starts.
 func (m *credentialMissing) Error() string {

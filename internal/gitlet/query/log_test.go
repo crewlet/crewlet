@@ -257,17 +257,18 @@ func TestAGrepPageEndsAtItsLimitthMatch(t *testing.T) {
 
 // A LOG CANNOT BE FORGED BY A MESSAGE: a pushed commit whose subject and body
 // hold \x01 and a whole record's worth of a commit git never made — the id,
-// the parents, an author, the dates, a subject, each between the separator a
-// record framed by \x01 would have used — is listed as the one commit it is,
-// its subject its own, and the pages hold exactly git rev-list's ids for the
-// path.
+// the parents, an author, a committer spelling the engine's convention, the
+// dates, a subject, each between the separator a record framed by \x01 would
+// have used — is listed as the one commit it is, its subject its own, and the
+// pages hold exactly git rev-list's ids for the path.
 //
 // Mutation: the walk's records split on \x01 → the forged commit listed, red.
 func TestALogCannotBeForgedByAMessage(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	forged := strings.Repeat("f", 40)
-	record := "\x01" + forged + "\x01\x01Mallory\x01m@example.com\x011700000000\x011700000000\x01forged\x01"
+	record := "\x01" + forged + "\x01\x01Mallory\x01m@example.com\x01Crewlet\x01engine@forged.example" +
+		"\x011700000000\x011700000000\x01forged\x01"
 	x.p.Commit(x.work, map[string]string{"f": "1"}, "honest")
 	x.p.Commit(x.work, map[string]string{"f": "2"}, "evil"+record+"\n\nbody"+record)
 	x.p.Commit(x.work, map[string]string{"f": "3"}, "after")
@@ -287,7 +288,8 @@ func TestALogCannotBeForgedByAMessage(t *testing.T) {
 		}
 		for _, p := range got {
 			for _, c := range p.Log.Commits {
-				if c.Subject == "forged" || c.Author == "Mallory" {
+				if c.Subject == "forged" || c.Author == "Mallory" || c.CommitterEmail == "engine@forged.example" ||
+					c.EngineCommitted == nil || *c.EngineCommitted {
 					t.Errorf("a record carries the forged fields: %+v", c)
 				}
 			}
@@ -295,12 +297,12 @@ func TestALogCannotBeForgedByAMessage(t *testing.T) {
 	}
 }
 
-// A LOG'S AUTHORS ARE THE COMMITS' OWN, and so are a blame's: a `.mailmap` at
-// the default branch mapping the person to another name renames nobody in a
-// history read from any commit, nor in a blame — git blame would read it, in a
-// bare repository, without the configuration the read gives it (measured on
-// 2.56.0: "Mapped Name" without mailmap.blob emptied, the commit's own with
-// it).
+// A LOG'S AUTHORS AND COMMITTERS ARE THE COMMITS' OWN, and so are a blame's: a
+// `.mailmap` at the default branch mapping the person to another name renames
+// nobody in a history read from any commit, nor in a blame — git blame would
+// read it, in a bare repository, without the configuration the read gives it
+// (measured on 2.56.0: "Mapped Name" without mailmap.blob emptied, the
+// commit's own with it).
 //
 // Mutation: the blame without mailmap.blob emptied → the mapped name, red.
 func TestAHistorysAuthorsAreTheCommitsOwn(t *testing.T) {
@@ -324,10 +326,16 @@ func TestAHistorysAuthorsAreTheCommitsOwn(t *testing.T) {
 		if c.Author != "Crewlet Test" || c.AuthorEmail != "test@example.com" {
 			t.Errorf("the log names %s <%s>, want the commit's own author", c.Author, c.AuthorEmail)
 		}
+		if c.Committer != "Crewlet Test" || c.CommitterEmail != "test@example.com" {
+			t.Errorf("the log names %s <%s>, want the commit's own committer", c.Committer, c.CommitterEmail)
+		}
 	}
 	for _, c := range mustRead(t, s, blameQ(repo, gitlet.BlameQuery{Rev: head, Path: "a.txt"})).Blame.Commits {
 		if c.Author != "Crewlet Test" || c.AuthorEmail != "test@example.com" {
 			t.Errorf("the blame names %s <%s>, want the commit's own author", c.Author, c.AuthorEmail)
+		}
+		if c.Committer != "Crewlet Test" || c.CommitterEmail != "test@example.com" {
+			t.Errorf("the blame names %s <%s>, want the commit's own committer", c.Committer, c.CommitterEmail)
 		}
 	}
 }
@@ -471,4 +479,334 @@ func (b *budgetEnds) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, er
 		return res, fmt.Errorf("%w: the read's budget, as the test's pool tells it", gitproc.ErrDeadline)
 	}
 	return res, err
+}
+
+// dated is the person's git dating its commits at, to the second.
+func (x *fixture) dated(at time.Time) *gittest.Client {
+	d := at.UTC().Format(time.RFC3339)
+	return x.p.Git().Env("GIT_AUTHOR_DATE="+d, "GIT_COMMITTER_DATE="+d)
+}
+
+// A LOG'S UNTIL KEEPS THE COMMITS BEFORE IT, a filter and never a stop: over skewed
+// dates the pages equal `rev-list --min-age`, exclusive at the bound, two at a time.
+// Mutation: Until as --max-age, an inclusive bound, or skip records git did not output.
+func TestALogUntilKeepsTheCommitsBeforeIt(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
+	day := func(d int) time.Time { return historyDay.AddDate(0, 0, d-1) }
+	until := day(3)
+	c1 := x.dated(day(1).Add(time.Hour)).Commit(t, x.work, map[string]string{"f": "1"}, "c1")
+	c2 := x.dated(day(2)).Commit(t, x.work, map[string]string{"f": "2"}, "c2")
+	c3 := x.dated(until.Add(-time.Second)).Commit(t, x.work, map[string]string{"f": "3"}, "a second before")
+	c4 := x.dated(until).Commit(t, x.work, map[string]string{"f": "4"}, "at the bound")
+	x.dated(day(5)).Commit(t, x.work, map[string]string{"f": "5"}, "c5")
+	c6 := x.dated(day(1).Add(12*time.Hour)).Commit(t, x.work, map[string]string{"f": "6"}, "skewed: before its parent")
+	x.dated(day(9)).Commit(t, x.work, map[string]string{"f": "7"}, "c7")
+	x.push(gitlettest.RepoName, "main")
+	head := strings.TrimSpace(x.git("rev-parse", "HEAD"))
+	repo := x.repo(gitlettest.RepoName)
+	x.synced(0, repo)
+	s := x.server(0, query.Options{})
+	minAge := func(at time.Time) string { return "--min-age=" + strconv.FormatInt(at.Unix(), 10) }
+	for _, tc := range []struct {
+		name string
+		q    gitlet.LogQuery
+		git  []string
+		want []string
+	}{
+		{"until", gitlet.LogQuery{Rev: head, Until: until}, []string{minAge(until.Add(-time.Second)), head},
+			[]string{c6, c3, c2, c1}},
+		{"paged by twos", gitlet.LogQuery{Rev: head, Until: until, Limit: 2},
+			[]string{minAge(until.Add(-time.Second)), head}, []string{c6, c3, c2, c1}},
+		{"until inside a second", gitlet.LogQuery{Rev: head, Until: until.Add(500 * time.Millisecond)},
+			[]string{minAge(until), head}, []string{c6, c4, c3, c2, c1}},
+		{"a window", gitlet.LogQuery{Rev: head, Since: day(2), Until: until},
+			[]string{"--max-age=" + strconv.FormatInt(day(2).Unix(), 10), minAge(until.Add(-time.Second)), head},
+			nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := strings.Fields(x.git(append([]string{"rev-list", "--topo-order"}, tc.git...)...))
+			if tc.want != nil && !slices.Equal(want, tc.want) {
+				t.Fatalf("git's own rev-list keeps %v, want %v: the history is not the one this case built", want,
+					tc.want)
+			}
+			got := pages(t, s, logQ(repo, tc.q), gitlet.MaxGitAnswerBytes)
+			if !slices.Equal(commits(got), want) {
+				t.Fatalf("the pages list %v, want git's own %v", commits(got), want)
+			}
+			for i, p := range got {
+				if last := i == len(got)-1; p.Log.Complete != last {
+					t.Errorf("page %d of %d is complete %t", i, len(got), p.Log.Complete)
+				}
+				if p.Log.Unjudged != nil {
+					t.Errorf("page %d, asked with no pushed_by, counts %d unjudged", i, *p.Log.Unjudged)
+				}
+			}
+			if tc.q.Limit == 2 && len(got) != (len(want)+1)/2 {
+				t.Errorf("a history of %d read two a page took %d pages", len(want), len(got))
+			}
+		})
+	}
+}
+
+// A LOG NARROWED BY WHO PUSHED IT COUNTS WHAT IT CANNOT JUDGE: each seat's commits in
+// walk order, those pushed before the index began in Unjudged, Coverage set, no memo.
+// Mutation: judge by Principal.Actor, keep or drop an unjudged commit uncounted, or memoize.
+func TestALogNarrowedByWhoPushedCountsWhatItCannotJudge(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
+	dev := gitlettest.NewPerson(t, x.f, "dev")
+	pushAs := func(p *gitlettest.Person) {
+		t.Helper()
+		if res := p.PushArgs(t.Context(), x.work, []string{"--force"}, x.url(0, gitlettest.RepoName),
+			"main"); res.Err != nil {
+			t.Fatalf("git push: %s", res)
+		}
+	}
+	early1 := x.commit(map[string]string{"f": "e1"}, "before the index")
+	early2 := x.commit(map[string]string{"f": "e2"}, "also before")
+	g, dir := x.f.GitletNode(0), x.f.Nodes()[0].CacheDir()
+	g.Stop(t.Context())
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	g.Restart(t)
+	c1 := x.commit(map[string]string{"f": "c1"}, "ceo's first")
+	d1 := x.p.Commit(x.work, map[string]string{"f": "d1"}, "dev's first")
+	pushAs(dev)
+	c2 := x.commit(map[string]string{"f": "c2"}, "ceo's second")
+	d2 := x.p.Commit(x.work, map[string]string{"f": "d2"}, "dev's second")
+	d3 := x.p.Commit(x.work, map[string]string{"f": "d3"}, "dev's third, in the same push")
+	pushAs(dev)
+	c3 := x.commit(map[string]string{"f": "c3"}, "ceo's third")
+	repo := x.repo(gitlettest.RepoName)
+	head := strings.TrimSpace(x.git("rev-parse", "HEAD"))
+	if walk := strings.Fields(x.git("rev-list", "--topo-order", head)); !slices.Equal(walk,
+		[]string{c3, d3, d2, c2, d1, c1, early2, early1}) {
+		t.Fatalf("the walk is %v: the history is not the one this case built", walk)
+	}
+	x.synced(0, repo)
+	x.indexed(0, repo)
+	rec := &recording{}
+	s := x.server(0, query.Options{Git: rec.on(x, 0)})
+	narrowed := func(seat string, limit int) gitlet.GitQuery {
+		q := logQ(repo, gitlet.LogQuery{Rev: head, PushedBy: seat, Limit: limit})
+		q.Home = false
+		return q
+	}
+	for _, tc := range []struct {
+		seat  string
+		limit int
+		want  []string
+	}{
+		{"ceo", 0, []string{c3, c2, c1}},
+		{"dev", 0, []string{d3, d2, d1}},
+		{"ceo", 2, []string{c3, c2, c1}},
+		{"pat", 0, nil},
+	} {
+		got := pages(t, s, narrowed(tc.seat, tc.limit), gitlet.MaxGitAnswerBytes)
+		unjudged := 0
+		for i, p := range got {
+			switch {
+			case p.Log.Unjudged == nil:
+				t.Fatalf("%s, %d a page: page %d carries no unjudged count", tc.seat, tc.limit, i)
+			case p.Coverage == nil:
+				t.Errorf("%s, %d a page: page %d carries no coverage", tc.seat, tc.limit, i)
+			case p.Memo:
+				t.Errorf("%s, %d a page: page %d was answered from the memo", tc.seat, tc.limit, i)
+			}
+			unjudged += *p.Log.Unjudged
+		}
+		if !slices.Equal(commits(got), tc.want) || unjudged != 2 {
+			t.Errorf("narrowed to %s, %d a page, the pages list %v and count %d unjudged; want %v and the 2 "+
+				"pushed before the index", tc.seat, tc.limit, commits(got), unjudged, tc.want)
+		}
+		if tc.limit == 2 && (len(got) != 2 || *got[0].Log.Unjudged != 0 || *got[1].Log.Unjudged != 2) {
+			t.Errorf("narrowed two a page, %d pages count %v unjudged; want 2 pages, the second counting both",
+				len(got), unjudgedOf(got))
+		}
+	}
+	for _, id := range []string{early1, early2} {
+		for _, seat := range []string{"ceo", "dev"} {
+			if slices.Contains(commits(pages(t, s, narrowed(seat, 0), gitlet.MaxGitAnswerBytes)), id) {
+				t.Errorf("commit %s, pushed before the index began, is listed as %s's", id, seat)
+			}
+		}
+	}
+	plain := logQ(repo, gitlet.LogQuery{Rev: head})
+	plain.Home = false
+	if a := mustRead(t, s, plain); a.Log.Unjudged != nil {
+		t.Errorf("a history asked with no pushed_by counts %d unjudged", *a.Log.Unjudged)
+	}
+	before := len(walks(rec))
+	mustRead(t, s, narrowed("ceo", 0))
+	if again := walks(rec); len(again) != before+1 {
+		t.Errorf("the same narrowed read again ran %d walks of git, want 1: it was memoized", len(again)-before)
+	}
+}
+
+// unjudgedOf is each page's unjudged count, -1 for none.
+func unjudgedOf(pages []gitlet.GitAnswer) []int {
+	out := make([]int, len(pages))
+	for i, p := range pages {
+		out[i] = -1
+		if p.Log.Unjudged != nil {
+			out[i] = *p.Log.Unjudged
+		}
+	}
+	return out
+}
+
+// walks is every `git log` a recording ran.
+func walks(rec *recording) []gitproc.Cmd {
+	var out []gitproc.Cmd
+	for _, c := range rec.ran() {
+		if c.Args[0] == "log" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// A NARROWED PAGE THE BUDGET ENDS GOES ON FROM ITS CURSOR: cut after three records it
+// answers its kept commit with Next s:3, Unjudged set and no memo; later pages complete it.
+// Mutation: memoize the cut page, count kept commits in its cursor, or drop its Unjudged.
+func TestANarrowedPageTheBudgetEndsGoesOnFromItsCursor(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
+	dev := gitlettest.NewPerson(t, x.f, "dev")
+	var ceo []string
+	for i := range 4 {
+		ceo = append(ceo, x.commit(map[string]string{"f": "ceo " + strconv.Itoa(i)}, fmt.Sprintf("ceo %d", i)))
+		x.p.Commit(x.work, map[string]string{"f": "dev " + strconv.Itoa(i)}, fmt.Sprintf("dev %d", i))
+		if res := dev.PushArgs(t.Context(), x.work, []string{"--force"}, x.url(0, gitlettest.RepoName),
+			"main"); res.Err != nil {
+			t.Fatalf("git push: %s", res)
+		}
+	}
+	slices.Reverse(ceo)
+	repo := x.repo(gitlettest.RepoName)
+	head := strings.TrimSpace(x.git("rev-parse", "HEAD"))
+	x.synced(0, repo)
+	x.indexed(0, repo)
+	q := logQ(repo, gitlet.LogQuery{Rev: head, PushedBy: "ceo"})
+	whole := commits(pages(t, x.server(0, query.Options{}), q, gitlet.MaxGitAnswerBytes))
+	if !slices.Equal(whole, ceo) {
+		t.Fatalf("the unbroken narrowed history lists %v, want the ceo's %v", whole, ceo)
+	}
+	cut := &budgetEndsAfter{Pool: x.f.Nodes()[0].Pool(), records: 3}
+	s := x.server(0, query.Options{Git: cut})
+	a := mustRead(t, s, q)
+	switch {
+	case !slices.Equal(commits([]gitlet.GitAnswer{a}), ceo[:1]) || a.Log.Scanned != 3 || a.Next != "s:3" ||
+		a.Log.Complete:
+		t.Fatalf("a narrowed walk its budget ended after 3 records lists %v of %d scanned, next %q, complete %t; "+
+			"want the ceo's newest, 3 scanned, next s:3", commits([]gitlet.GitAnswer{a}), a.Log.Scanned, a.Next,
+			a.Log.Complete)
+	case a.Log.Unjudged == nil || *a.Log.Unjudged != 0:
+		t.Errorf("the cut page's unjudged count is %v, want 0, set", unjudgedOf([]gitlet.GitAnswer{a}))
+	case a.Memo:
+		t.Error("the cut page was answered from the memo")
+	}
+	before := cut.walks.Load()
+	if again := mustRead(t, s, q); again.Memo || cut.walks.Load() == before {
+		t.Error("a cut narrowed page was answered from the memo")
+	}
+	q.Cursor = a.Next
+	rest := pages(t, x.server(0, query.Options{}), q, gitlet.MaxGitAnswerBytes)
+	if got := append(commits([]gitlet.GitAnswer{a}), commits(rest)...); !slices.Equal(got, whole) {
+		t.Errorf("the cut page and the pages after it list %v, want the unbroken %v", got, whole)
+	}
+}
+
+// budgetEndsAfter is a query.Pool whose every log writes its first records
+// (git's --max-count, counted after --skip) and then answers that its budget
+// ended it.
+type budgetEndsAfter struct {
+	query.Pool
+	records int
+	walks   atomic.Int64
+}
+
+func (b *budgetEndsAfter) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	if c.Args[0] != "log" {
+		return b.Pool.Run(ctx, c)
+	}
+	c.Args = slices.Insert(slices.Clone(c.Args), 1, "--max-count="+strconv.Itoa(b.records))
+	res, err := b.Pool.Run(ctx, c)
+	if err == nil {
+		b.walks.Add(1)
+		return res, fmt.Errorf("%w: the read's budget, as the test's pool tells it", gitproc.ErrDeadline)
+	}
+	return res, err
+}
+
+// A COMMIT'S COMMITTER IS NAMED, AND THE ENGINE'S CONVENTION MARKED, in a history and a
+// blame: true exactly for `Crewlet` at `engine@` on any domain, false for every near miss.
+// Mutation: case-fold, tie to one domain, judge a cut address, leave nil, or read the author.
+func TestACommitsCommitterIsNamedAndTheEnginesConventionMarked(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
+	type committer struct {
+		name, email string
+		marked      bool
+	}
+	committers := []committer{
+		{"Crewlet", "engine@seats.example", true},
+		{"Crewlet", "engine@other.example", true},
+		{"crewlet", "engine@x.example", false},
+		{"Crewlet", "Engine@x.example", false},
+		{"Crewlet Bot", "engine@x.example", false},
+		{"Crewlet", "engine@", false},
+		{"Crewlet", "engine@" + strings.Repeat("e", gitlet.MaxLogPersonBytes) + ".example", false},
+		{"Crewlet Test", "test@example.com", false},
+	}
+	byCommit := map[string]committer{}
+	var text strings.Builder
+	for i, c := range committers {
+		fmt.Fprintf(&text, "line %d\n", i)
+		id := x.p.Git().Env("GIT_COMMITTER_NAME="+c.name, "GIT_COMMITTER_EMAIL="+c.email).Commit(t, x.work,
+			map[string]string{"f.txt": text.String()}, fmt.Sprintf("committed by %d", i))
+		byCommit[id] = c
+	}
+	x.push(gitlettest.RepoName, "main")
+	head := strings.TrimSpace(x.git("rev-parse", "HEAD"))
+	repo := x.repo(gitlettest.RepoName)
+	s := x.server(0, query.Options{})
+	check := func(how, id, name, email, author string, engine *bool) {
+		t.Helper()
+		want, ok := byCommit[id]
+		wantEmail := want.email
+		if len(wantEmail) > gitlet.MaxLogPersonBytes {
+			wantEmail = "" // described by its size alone
+		}
+		switch {
+		case !ok:
+			t.Errorf("the %s names commit %s, which this case did not make", how, id)
+		case name != want.name || email != wantEmail:
+			t.Errorf("the %s names commit %s's committer %q <%s>, want its own %q <%.40s>", how, id, name, email,
+				want.name, wantEmail)
+		case author != "Crewlet Test":
+			t.Errorf("the %s names commit %s's author %q, want the person", how, id, author)
+		case engine == nil:
+			t.Errorf("the %s leaves commit %s (%s <%.40s>) unmarked", how, id, want.name, want.email)
+		case *engine != want.marked:
+			t.Errorf("the %s marks commit %s (%s <%.40s>) engine-committed %t, want %t", how, id, want.name,
+				want.email, *engine, want.marked)
+		}
+	}
+	listed := mustRead(t, s, logQ(repo, gitlet.LogQuery{Rev: head})).Log.Commits
+	if len(listed) != len(committers) {
+		t.Fatalf("the history lists %d commits, want %d", len(listed), len(committers))
+	}
+	for _, c := range listed {
+		check("history", c.OID, c.Committer, c.CommitterEmail, c.Author, c.EngineCommitted)
+	}
+	blamed := mustRead(t, s, blameQ(repo, gitlet.BlameQuery{Rev: head, Path: "f.txt"})).Blame.Commits
+	if len(blamed) != len(committers) {
+		t.Fatalf("the blame names %d commits, want %d", len(blamed), len(committers))
+	}
+	for id, c := range blamed {
+		check("blame", id, c.Committer, c.CommitterEmail, c.Author, c.EngineCommitted)
+	}
 }

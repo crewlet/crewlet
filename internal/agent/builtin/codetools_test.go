@@ -1534,6 +1534,51 @@ func TestAGitAnswerFitsOneToolAnswer(t *testing.T) {
 	}
 }
 
+// CODE_LOG NARROWS BY TIME AND BY WHO PUSHED: `until` and `pushed_by` reach Gitlet
+// as given and `unjudged` comes back; a bad `until` or handle is refused unasked.
+// Mutation: the tool dropping `until` or `pushed_by`.
+func TestCodeLogNarrowsByTimeAndWhoPushed(t *testing.T) {
+	t.Parallel()
+	host := newGitletHost()
+	none := 3
+	host.git = func(q gitlet.GitQuery) gitlet.GitAnswer {
+		return gitlet.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Rev: mainOID, Position: host.at,
+			Log: &gitlet.LogAnswer{Commits: []gitlet.LogCommit{}, Complete: true, Unjudged: &none}}
+	}
+	reg := codeRegistry(t, codeDeps(host))
+	_, answer := callCode(t, reg, codeTurn(t), builtin.CodeLogTool, map[string]any{"repo": "site", "rev": mainOID,
+		"since": "2026-09-01T00:00:00Z", "until": "2026-10-01T00:00:00Z", "pushed_by": " agent-ceo "})
+	_, _, gits := host.asked()
+	until := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	if len(gits) != 1 || gits[0].Log == nil || !gits[0].Log.Until.Equal(until) ||
+		gits[0].Log.PushedBy != "agent-ceo" {
+		t.Fatalf("the tool asked %+v, want one history until %s pushed by agent-ceo", gits, until)
+	}
+	if log, _ := answer["log"].(map[string]any); log == nil || log["unjudged"] != float64(none) {
+		t.Errorf("the answer carries %v, want the page's %d unjudged", answer["log"], none)
+	}
+	for _, c := range []struct {
+		args map[string]any
+		says string
+	}{
+		{map[string]any{"until": "yesterday"}, "`until` is a time in RFC 3339"},
+		{map[string]any{"pushed_by": "Not A Seat"}, "pushed_by"},
+		{map[string]any{"since": "2026-10-01T00:00:00Z", "until": "2026-09-01T00:00:00Z"}, "until"},
+	} {
+		args := map[string]any{"repo": "site", "rev": mainOID}
+		for k, v := range c.args {
+			args[k] = v
+		}
+		got := refusedCode(t, reg, codeTurn(t), builtin.CodeLogTool, args)
+		if !strings.Contains(got.Output, c.says) {
+			t.Errorf("%v was refused with %q, want it to say %q", c.args, got.Output, c.says)
+		}
+	}
+	if _, _, after := host.asked(); len(after) != 1 {
+		t.Errorf("a refused call asked Gitlet %d more reads", len(after)-1)
+	}
+}
+
 // closerSpelled is a subject spelling the fence's closer as often as it can and
 // still be answered: past `bound` once neutralised, it would be described by
 // its size instead — so each spelling costs its escape too.
@@ -2004,7 +2049,9 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // 1 796 bytes (~449 tokens) — the one grammar's filters said once in
 // `query`'s description, the answer's shape (hits, tips, coverage, pages)
 // once in the tool's — the cost codeReadsCatalogueBudget pays too, since
-// every seat carries it; ~6% headroom again.
+// every seat carries it; ~6% headroom again. And code_log took `until` and
+// `pushed_by` within it, deliberately, with their measured cost: 41 167 →
+// 41 556, 389 bytes (~97 tokens).
 const codeCatalogueBudget = 57_500
 
 // codeReadsCatalogueBudget is the most bytes the thirteen code reads'
@@ -2027,7 +2074,9 @@ const codeCatalogueBudget = 57_500
 // headroom again. And 20 300 → 22 100 when code_search joined the reads,
 // deliberately, with its measured cost: 19 082 → 20 878 (~5 220 tokens),
 // 1 796 bytes (~449 tokens), its grammar said once in `query`'s description
-// and its answer's shape once in its own; ~6% headroom again.
+// and its answer's shape once in its own; ~6% headroom again. And code_log
+// took `until` and `pushed_by` within it, deliberately, with their measured
+// cost: 17 097 → 17 486 (~4 372 tokens), 389 bytes (~97 tokens).
 const codeReadsCatalogueBudget = 22_100
 
 // codeReviewCatalogueBudget is the most bytes a review seat's code tools may
@@ -2040,7 +2089,9 @@ const codeReadsCatalogueBudget = 22_100
 // 22 500: measured at 21 232 (~5 308 tokens) when the review tier was first
 // offered the conversation's writes — the four 4 278 bytes (~1 070 tokens)
 // above the thirteen reads' 16 954 as the session serves them now — so ~6%
-// headroom, the rule [codeCatalogueBudget] states.
+// headroom, the rule [codeCatalogueBudget] states. And code_log took `until`
+// and `pushed_by` within it, deliberately, with their measured cost: 21 375 →
+// 21 764 (~5 441 tokens), 389 bytes (~97 tokens), ~3% headroom left.
 const codeReviewCatalogueBudget = 22_500
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting

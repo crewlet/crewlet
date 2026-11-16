@@ -207,7 +207,7 @@ func TestAPassLeavesADeadSeatChildToItsBridgeAndAnApplyAsksItToTryNow(t *testing
 	}
 	if rows := e.mcpStatus(t.Context()); len(rows) != 1 || rows[0].Failed != 1 ||
 		!strings.Contains(rows[0].Error, "would not restart") {
-		t.Errorf("heartbeat = %+v, want the child reported down with why", rows)
+		t.Errorf("status record = %+v, want the child reported down with why", rows)
 	}
 
 	e.convergeSeat(t.Context(), s, true)

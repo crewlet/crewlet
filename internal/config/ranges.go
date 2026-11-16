@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -42,6 +43,10 @@ type Range struct {
 	// its own rather than the low end of its scale (a message horizon of 0
 	// keeps messages for ever, while 1 to 29 days is refused).
 	OrZero bool `json:"or_zero,omitempty"`
+	// OperatorMin and OperatorMax mark a bound this node's operator set in its
+	// own file ([SignInLimits.Range]), narrower than the engine's.
+	OperatorMin bool `json:"operator_min,omitempty"`
+	OperatorMax bool `json:"operator_max,omitempty"`
 }
 
 // Admits reports whether v is a value of the range.
@@ -142,9 +147,24 @@ var settingRanges = map[string]Range{
 	"code.scratch.max_per_seat":      {Min: 0, Max: atMost(CodeScratchMaxPerSeatCeiling)},
 	// 0 KEEPS MESSAGES FOR EVER, a choice of its own below the shortest
 	// horizon (ChatletConfig.MessageRetentionDays says why it is three-valued).
+	"assistant.max_steps":                 assistantSteps.rangeOf(),
+	"assistant.turn_timeout_seconds":      assistantTimeout.rangeOf(),
+	"assistant.proposal_ttl_seconds":      assistantProposal.rangeOf(),
+	"assistant.retention_days":            assistantRetention.rangeOf(),
+	"assistant.deep_work.timeout_seconds": deepTimeout.rangeOf(),
+	"assistant.deep_work.max_steps":       deepSteps.rangeOf(),
+	"assistant.deep_work.max_tokens":      deepTokens.rangeOf(),
+
 	"chat.chatlet.message_retention_days": {
 		Min: MinMessageRetentionDays, Max: atMost(MaxMessageRetentionDays), OrZero: true,
 	},
+
+	// THE SIGN-IN POLICY: each bound's reason is at its constant (signin.go),
+	// and each node narrows it to its operator's limits (SignInLimits.Range).
+	SignInPasswordKey:        {Min: iam.MinPasswordChars, Max: atMost(MaxPasswordLength)},
+	SignInSessionLifetimeKey: {Min: SessionLifetimeFloor.Seconds(), Max: atMost(SessionLifetimeCeiling.Seconds())},
+	SignInIdleTimeoutKey:     {Min: IdleTimeoutFloor.Seconds(), Max: atMost(IdleTimeoutCeiling.Seconds())},
+	SignInStepUpKey:          {Min: StepUpFloor.Seconds(), Max: atMost(StepUpCeiling.Seconds())},
 
 	"notification_rate_limit":         {Min: 0},
 	"notification_coalesce_max_batch": {Min: 1, Max: atMost(coalesceMaxBatchMax)},

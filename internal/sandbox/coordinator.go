@@ -494,8 +494,8 @@ type CoordinatorOptions struct {
 	// builds), and false for any other. The give-up counts no such failure,
 	// the node's, so a completion's run waits for the operator for as long as
 	// the condition lasts, and this is how that wait is said: the run is
-	// counted in [Coordinator.ResumesBlocked], which the node says on its
-	// heartbeat for every data node to raise the executor_resume_blocked
+	// counted in [Coordinator.ResumesBlocked], which the node says in its
+	// status record for every data node to raise the executor_resume_blocked
 	// alarm from. The classification sits above this package
 	// (internal/agent/builtin's OperatorKind); nil says none.
 	OperatorsCondition func(error) (string, bool)

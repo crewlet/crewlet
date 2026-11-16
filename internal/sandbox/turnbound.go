@@ -62,7 +62,7 @@ import (
 // gets past. What the operator sees, condition by condition:
 //
 //   - every one: the `executor_resume_blocked` alarm, raised by every data
-//     node from the heartbeat of the node holding the seat, a satellite's
+//     node from the status record of the node holding the seat, a satellite's
 //     included, while one of its runs waits so ([Coordinator.ResumesBlocked],
 //     [CoordinatorOptions.OperatorsCondition]), naming the seat waiting
 //     longest, the node holding it, the condition's kind and for how long,
@@ -311,7 +311,7 @@ type ResumesBlocked struct {
 // condition is cleared. Each attempt's `sandbox_resume_failed` line says why,
 // but a line repeated on every announcement is no signal anyone is paged by,
 // so the wait is raised as the executor_resume_blocked alarm while it lasts:
-// the node says this on its heartbeat, and every data node raises it from
+// the node says this in its status record, and every data node raises it from
 // there (internal/engine's executorReading), since the node holding the seat
 // may be a satellite, which evaluates no alarm table of its own. FROM THIS
 // NODE'S OWN MEMORY of its attempts, which is exact for the seats it holds: a

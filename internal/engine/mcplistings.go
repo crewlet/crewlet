@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // WHAT THIS NODE'S MCP SERVERS LIST, PUBLISHED; AND WHAT EVERY NODE'S LIST,
@@ -30,8 +31,8 @@ import (
 //
 // # Derived at each beat, written when it changes
 //
-// The listing is read off the bridges at every beat, as the heartbeat's MCP
-// rows are ([Engine.mcpStatus]): an apply, a claim, a release, a restart that
+// The listing is read off the bridges at every beat, as the status record's
+// MCP rows are ([Engine.mcpStatus]): an apply, a claim, a release, a restart that
 // lists differently and a seat's pass each move it, and a publisher hooked
 // into each of them would be one hook short the day a sixth appears. What
 // goes to the store is only a listing whose content moved since this node
@@ -212,23 +213,40 @@ func (e *Engine) startMCPListings(ctx context.Context) {
 	}()
 }
 
-// stopMCPListings ends the watch and the publisher, and removes this node's
-// own listings: a node that is going says so rather than leaving the sweep to
-// find out. Its readers stopped counting them when its presence went, so a
-// removal that fails costs nothing but the sweep's work.
-func (e *Engine) stopMCPListings(ctx context.Context) {
+// stopMCPListings ends the watch and the publisher. What they published stays
+// until [Engine.removeMCPListings], which the teardown makes once the seats
+// are given back.
+func (e *Engine) stopMCPListings() {
 	if e.listings.cancel == nil {
 		return
 	}
 	e.listings.cancel()
 	<-e.listings.done
+}
+
+// removeMCPListings removes this node's own listings, once its publisher has
+// stopped: a node that is going says so rather than leaving the sweep to find
+// out.
+//
+// ONE STEP OF THE STOP'S ALLOWANCE ([seat.StopStep]), never a bound of its
+// own: what falls back when it fails is the maintenance sweep, and every
+// reader stopped counting the listings when the presence they were filed
+// under went with the drain, so running out of the allowance costs no more
+// than not trying. A bound of its own was a reconcile interval on an
+// unreachable store beside the allowance, which the stop's grace does not
+// cover. AFTER THE SEATS' GIVE-BACKS, which the teardown makes first, so
+// what this spends is what they left.
+func (e *Engine) removeMCPListings(ctx context.Context) {
 	e.listings.mu.Lock()
-	published := maps.Clone(e.listings.published)
+	published := e.listings.published
 	e.listings.published = nil
 	e.listings.mu.Unlock()
+	if len(published) == 0 || e.backends == nil || e.backends.Fleet == nil {
+		return
+	}
+	removeCtx, done := seat.StopStep(context.WithoutCancel(ctx))
+	defer done()
 	node := e.nodeID()
-	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), coord.ReconcileInterval)
-	defer cancel()
 	for _, server := range slices.Sorted(maps.Keys(published)) {
 		if _, err := e.backends.Fleet.DeleteMCPListing(removeCtx, server, node,
 			published[server].version); err != nil {

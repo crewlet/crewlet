@@ -1455,8 +1455,10 @@ const (
 	// from the list ([changeRowsIn]).
 	changesNamedSQL = `SELECT ` + qualifiedChangeColumns + ` FROM json_each(?) AS j
 		CROSS JOIN code_changes AS c WHERE c.id = CAST(j.value AS TEXT)`
-	liveChangeOnSQL = `SELECT number FROM code_changes WHERE repo_id = ? AND source_ref = ? AND ` +
-		liveChanges + ` LIMIT 1`
+	// liveChangeOnSQL NAMES code_changes_open_idx: the planner otherwise takes
+	// code_changes_source_idx, which walks every change ever opened from the branch.
+	liveChangeOnSQL = `SELECT number FROM code_changes INDEXED BY code_changes_open_idx
+		WHERE repo_id = ? AND source_ref = ? AND ` + liveChanges + ` LIMIT 1`
 	// liveChangeAtHeadSQL is the live change into a target at a head — a
 	// failed check a person's CI reported, which names no change
 	// ([headChangeIn]) — one seek of code_changes_target_idx, its predicate

@@ -550,8 +550,10 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 			"are attributed to, and APIToken.Token is tagged",
 		"Stream.Credentials": "a PATH to a NATS credentials file, not the " +
 			"material at it",
-		"APIAuth.MinPasswordLength": "the floor a person's password is held " +
+		"SignIn.MinPasswordLength": "the floor a person's password is held " +
 			"to, a number of characters, never a password",
+		"SignInLimits.MinPasswordLength": "the lowest floor the company may " +
+			"set, a number of characters, never a password",
 		"MCPServer.SeatCredentials": "which seat credential a server reads and " +
 			"under which key: integration, field and key names, never a value; " +
 			"the engine binds the sealed value itself",

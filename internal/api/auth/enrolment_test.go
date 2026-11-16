@@ -14,7 +14,7 @@ import (
 // A SESSION THAT MAY ONLY ENROL A SECOND FACTOR REACHES THE ROUTES THAT LET ITS
 // PERSON IN OR OUT, AND NOTHING ELSE.
 //
-// `api.auth.totp: required` was validated, documented and enforced by
+// A required second factor was validated, documented and enforced by
 // nothing, so a password alone reached every surface on a deployment that
 // required a second factor. A sign-in that proves only a password there now
 // opens a session marked enrolment-only, and the guard answers every guarded
@@ -130,7 +130,7 @@ func TestAnEnrolmentOnlySessionIsRestrictedOnANodeThatHasNotAppliedIt(t *testing
 		s := newSignedIn(t)
 		cookie, err := s.signer.Mint(session.Mint{
 			Lineage: s.lineage, Person: sessionPerson, Epoch: 3, Generation: 1,
-			StartPosition: sessionStart, AbsoluteExpiresAt: s.at.Add(8 * time.Hour),
+			StartPosition: sessionStart, SignedInAt: s.at, AbsoluteExpiresAt: s.at.Add(8 * time.Hour),
 			EnrolmentOnly: restricted,
 		})
 		if err != nil {
