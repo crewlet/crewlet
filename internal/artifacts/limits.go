@@ -368,22 +368,18 @@ const (
 // Render bounds: what one render_artifact call may cost the browser it drives
 // and the box it writes its screenshots to (internal/artifactrender).
 const (
-	// TurnRenders bounds the renders one turn segment makes: a check after
-	// each of the ten publishes one artifact may take, less the first two,
-	// which an author renders once it has something to look at. A looping
-	// turn is held to eight renders of RenderTimeout each.
+	// TurnRenders bounds a turn segment's renders: about one per publish on
+	// an artifact, and a looping turn holds the browser for a bounded time.
 	TurnRenders = 8
 
-	// RenderTimeout bounds one render from its first command to its last
-	// shot: four page loads (two widths, two themes) and twelve shots take
-	// under thirty seconds on a pool beside the engine, and three times
-	// that covers a busy one. Well under the bridge's call floor.
+	// RenderTimeout bounds one render: four loads and twelve shots take under
+	// thirty seconds beside the engine, and three times that covers a busy
+	// pool, well under the bridge's call floor.
 	RenderTimeout = 90 * time.Second
 
-	// RenderConcurrency is how many renders one node drives at once, and
-	// RenderQueueWait how long a further one waits for a turn before it is
-	// refused as busy: each holds a page of the pool's for up to
-	// RenderTimeout, and a node's seats share one pool with every node's.
+	// RenderConcurrency is how many renders a node drives at once, and
+	// RenderQueueWait how long a further one waits before it is refused as
+	// busy: every node's seats share one browser pool.
 	RenderConcurrency = 2
 	RenderQueueWait   = 20 * time.Second
 
@@ -426,10 +422,9 @@ const (
 	// box: twelve shots at a busy page's size.
 	RenderBoxBytes = 48 * miB
 
-	// RenderServedBytes bounds what the engine serves one render's page
-	// across its loads: a whole version's bytes, since a page loads what it
-	// references and the runtime and kit are small. A page that asks for
-	// more is reading without end, and the render stops.
+	// RenderServedBytes bounds what one render is served across its loads: a
+	// whole version's bytes. A page that asks for more is reading without
+	// end, and the render stops.
 	RenderServedBytes = MaxVersionBytes
 
 	// RenderFindings bounds the lines of one kind a render reports (console

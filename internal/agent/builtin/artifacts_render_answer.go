@@ -106,9 +106,7 @@ func renderSpecOf(args map[string]any) (renderSpec, string) {
 // ---- the page's reads, as the seat ------------------------------------- //
 
 // renderReads answers the page's data and state reads as the datastore read
-// tools answer the seat: the rows the seat may read, and where the turn acts
-// for somebody, only those they may read too. Admitted once, at the page's
-// first read.
+// tools answer the seat, requester ceiling included; admitted at the first read.
 type renderReads struct {
 	d    dataTools
 	turn *turnctx.Turn

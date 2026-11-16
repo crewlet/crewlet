@@ -15,10 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/browser/cdp"
 )
 
-// THE BROWSER: an operator-run headless Chromium, reached over the DevTools
-// protocol, in which a render opens a browser context of its own and one tab,
-// and which it never lets reach any network: every request of every frame and
-// worker the tab starts is paused and answered by the engine (serve.go).
+// An operator-run headless Chromium: a render opens a context and a tab of its
+// own in it, and every request there is answered by the engine (serve.go).
 
 // discoverTimeout bounds the read of a browser's /json/version, and
 // discoverBytes its answer, a few hundred bytes of JSON.
@@ -31,13 +29,9 @@ const (
 // context of its own: the render's may be the one that ended.
 const closeTimeout = 5 * time.Second
 
-// dial connects to the configured browser: its socket as configured, or the
-// one its /json/version names, rebased onto the configured address.
-//
-// THE HOST IS SENT AS AN ADDRESS. Chromium refuses a DevTools request whose
-// Host is a DNS name other than localhost, so a browser configured by name
-// (a container's service name) is asked under the address the name resolves
-// to.
+// dial connects to the configured browser's socket, or the one its
+// /json/version names rebased onto the configured address. The Host is sent
+// as an address: Chromium refuses a DevTools request named by host.
 func (r *Renderer) dial(ctx context.Context) (*cdp.Conn, error) {
 	u, err := url.Parse(r.browser)
 	if err != nil {

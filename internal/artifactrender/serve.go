@@ -14,14 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/browser/cdp"
 )
 
-// THE REQUESTS: every request any frame or worker of a render's tab makes is
-// paused before it leaves and answered here. The artifact origin's are served
-// by the render's own artifactserve.Handler, in process, with the Fetch
-// Metadata a browser would have sent, so the document, its runtime, its nonce,
-// its policy, the kit and the brand are the bytes a viewer's browser gets. The
-// host page and the kit it paints with are the engine's. Anything else is
-// refused, and the page's own requests among it reported: the render browser
-// reaches no network, and the engine fetches nothing a page names.
+// Every request of a render's tab is paused and answered here: the artifact
+// origin's by the render's own handler with a browser's Fetch Metadata, the
+// host's by the engine, anything else refused, so the browser needs no network.
 
 // hostPath is the path the render's host page is served at on the dashboard's
 // origin, and the kit it links below it. Never requested of the dashboard

@@ -82,11 +82,9 @@ func newRenderRig(t *testing.T, req requesters, box *fakeShotBox) renderRig {
 	return renderRig{artifactRig: artifactRig{f: f, reg: reg}, renderer: r, box: box}
 }
 
-// A seat renders its own page: the renderer is handed the version, the seat
-// as the viewer at its role, the default widths and themes, and an admission
-// that decides the seat again; the shots land in the run's box and the
-// findings come back, the page's console text fenced as the version's
-// publisher's words.
+// A seat renders its own page: the renderer gets the version, the seat as
+// viewer and an admission deciding it again; the shots land in the box and
+// the page's console text is fenced as its publisher's words.
 func TestASeatRendersItsOwnPage(t *testing.T) {
 	t.Parallel()
 	box := &fakeShotBox{}

@@ -6,18 +6,9 @@ import (
 	"strings"
 )
 
-// THE CUSTOM PROPERTY SCAN: which `var(--name)` a page's stylesheets reference
-// that no stylesheet, style attribute or `@property` rule it loaded defines.
-// Such a reference makes its declaration invalid at computed-value time, so a
-// `background: var(--missing)` paints nothing, which the eye misses on a white
-// page and a reader sees as a see-through bar.
-//
-// A SCAN OF THE TEXT, NOT THE CSSOM: in the shared origin mode a page's own
-// stylesheets are cross-origin to its opaque document, so their rules cannot
-// be read from the page, while the engine served every byte of them. The scan
-// keeps strings and comments out, follows blocks to find each declaration's
-// selector, and is never a validator: what it cannot read as a declaration it
-// passes over.
+// The custom property scan: each `var(--name)` no loaded sheet defines. It reads
+// the served text, not the CSSOM, which an opaque document cannot read across
+// origins; it is no validator, and passes over what it cannot read.
 
 // sheet is one stylesheet's text and where it came from: a served file's
 // display path, `<style>` for an inline block, or `style=""` for an
@@ -320,10 +311,8 @@ type reader struct {
 	counted int
 }
 
-// until reads up to the first byte of stops outside a string or a bracket,
+// until reads to the first byte of stops outside a string or a bracket,
 // answering the text before it and the byte (0 at the end of the text).
-// Parentheses and brackets are followed so a `;` in `url(a;b)` or a
-// `{` in an attribute selector's string does not end anything.
 func (r *reader) until(stops string) (string, byte) {
 	start := r.pos
 	depth := 0

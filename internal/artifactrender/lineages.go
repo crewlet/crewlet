@@ -7,12 +7,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// lineages is the render handler's credential resolver: each live render's
-// lineage, standing for the principal it renders as for as long as the render
-// runs, and nothing else. A ticket minted through any other credential, or
-// through a render that has ended, stands for nobody here; and the public
-// origin's resolver (internal/api/auth's Lineages) knows no render lineage,
-// so a render's ticket opens nothing there.
+// lineages is the render handler's credential resolver: a live render's
+// lineage stands for its principal, anything else for nobody. The public
+// origin's resolver knows no render lineage, so a render ticket opens nothing.
 type lineages struct {
 	mu   sync.Mutex
 	live map[string]grant

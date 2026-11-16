@@ -16,16 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// RENDER_ARTIFACT: a seat looks at a version it may read exactly as a viewer
-// sees it, before it asks anybody to review it. The engine renders the page
-// in its own browser (internal/artifactrender), so no credential reaches the
-// box, and answers what it found: properties that resolve to nothing, bars
-// that hide or show through, console errors, failed requests, broken links,
-// and screenshots, written into the calling run's own box where its harness
-// shows them.
-//
-// A SEAT'S TOOL ALONE: a person opens the page in the dashboard, and the
-// screenshots have nowhere to go but a box.
+// render_artifact: a seat sees its own page as a viewer does before review,
+// rendered by the engine so no credential reaches the box. A seat's tool
+// alone: a person opens the page in the dashboard.
 
 // RenderArtifactTool is the render's tool name: its authority row's action.
 const RenderArtifactTool = string(authz.ActionArtifactRender)

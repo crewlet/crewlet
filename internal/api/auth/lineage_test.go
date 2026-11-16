@@ -295,11 +295,9 @@ func TestASessionsNameOnANodeBehindItNeverServesAWrite(t *testing.T) {
 	}
 }
 
-// TestARendersNameStandsForNobodyOnTheOrigin: a render's ticket is minted
-// through a credential name only the render's own in-process resolver knows,
-// so the public origin answers it as an ended credential, whatever the
-// identity rows would say of any name. Mutation: resolve any class with a
-// colon through the session arm and a leaked render URL opens a page.
+// TestARendersNameStandsForNobodyOnTheOrigin: only the render's own resolver
+// knows its credential name, so the public origin answers it as ended.
+// Mutation: resolve any unknown class and a leaked render URL opens a page.
 func TestARendersNameStandsForNobodyOnTheOrigin(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()

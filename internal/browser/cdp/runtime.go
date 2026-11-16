@@ -156,9 +156,8 @@ type CallFrame struct {
 }
 
 // RuntimeConsoleAPICalled is Runtime.consoleAPICalled: a page called the
-// console. Its arguments are the page's, so one past ReadLimit ends the
-// session whose listener asked for it, and no other. First consumer: the
-// artifact render's console report (internal/artifactrender).
+// console. Arguments past ReadLimit end only the listening session. First
+// consumer: the artifact render's console report (internal/artifactrender).
 var RuntimeConsoleAPICalled = Event[RuntimeConsoleAPICalledEvent]{name: "Runtime.consoleAPICalled"}
 
 // RuntimeConsoleAPICalledEvent is Runtime.consoleAPICalled's parameters.

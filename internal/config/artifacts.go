@@ -478,10 +478,9 @@ func (a *CompanyArtifacts) validate(path Path) error {
 	return p.err()
 }
 
-// checkRenderBrowser is why raw is no DevTools endpoint a render can dial, or
-// empty: an http(s) origin whose /json/version names the browser's socket, or
-// that socket's ws(s) address. Never user information, a query or a fragment,
-// which a dial would send or drop without saying.
+// checkRenderBrowser is why raw is no DevTools endpoint a render can dial (an
+// http(s) origin or a ws(s) socket, with no user information, query or
+// fragment), or empty.
 func checkRenderBrowser(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

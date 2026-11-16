@@ -17,10 +17,8 @@ import (
 	"github.com/crewlet/crewlet/static"
 )
 
-// THE RENDER'S ENGINE WIRING: render_artifact's renderer over this node's own
-// artifact origin (the same ticket codec, origin, estate router, object store,
-// chart and embedded tree the api.artifacts listener serves from), the browser
-// Tier A names, the box a run's screenshots go to, and the turn tally.
+// render_artifact's engine wiring: the renderer over this node's own artifact
+// origin and the browser Tier A names, the run's box and the turn tally.
 
 // RenderToolDeps are render_artifact's dependencies on this node, or the zero
 // value, which offers no render, where the node takes no artifact uploads.

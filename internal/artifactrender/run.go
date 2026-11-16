@@ -712,10 +712,9 @@ func (u *run) wholePage(ctx context.Context, rep *Report) []barUse {
 	return uses
 }
 
-// pageOwn is the unresolved names the page's own styles use. The kit's, the
-// runtime's and the brand's sheets define for the page and are read for that,
-// but what they reference is theirs: the kit names the brand's tokens, which
-// only an adopted brand defines, and the values its own scripts set.
+// pageOwn is the unresolved names the page's own styles use: the kit's and
+// the brand's sheets count as definitions, but what they reference (the
+// brand's tokens, values the kit's scripts set) is theirs.
 func pageOwn(all []unresolvedUse) []unresolvedUse {
 	out := all[:0]
 	for _, un := range all {
