@@ -87,6 +87,10 @@ var ReproducibleTables = []string{
 	// replay rebuilds it from those records alone.
 	"code_repo_kinds",
 
+	// The changes of the repositories in use by state, a row for each owner and visibility:
+	// kept with code_changes by the applies and re-derived by the applier (apply_counts.go).
+	"code_change_tallies",
+
 	// A person's marks over their code notices — how far they have read on
 	// this log, what they marked out of order or put off, which reasons are
 	// theirs — written by the records on the person's own subject alone,

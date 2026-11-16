@@ -289,6 +289,8 @@ func (n *node) seedChanges(repoID string, shapes []changeShape) []string {
 	}); err != nil {
 		n.t.Fatalf("seed %s's changes: %v", repoID, err)
 	}
+	// THE COUNTS THE SEEDED ROWS IMPLY, as an upgraded node re-derives them.
+	gitlet.RecountChanges(n.t, n.db)
 	return ids
 }
 
@@ -377,6 +379,7 @@ func TestAPurgeRemovesARepositorysChanges(t *testing.T) {
 				if err != nil {
 					t.Fatalf("PurgeStep: %v", err)
 				}
+				n.changeCountsHold()
 				steps = append(steps, before-left())
 				if len(steps) == 1 && tc.oldest > 0 {
 					last := ids[len(ids)-1]
@@ -465,6 +468,7 @@ func TestAPurgeIsBoundedByWhatItsChangesWeigh(t *testing.T) {
 				if err != nil {
 					t.Fatalf("PurgeStep: %v", err)
 				}
+				n.changeCountsHold()
 				steps = append(steps, before-changes())
 				if len(steps) == 1 {
 					if pushes := n.count(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = ?`, id); pushes != 0 {

@@ -1140,6 +1140,9 @@ const (
 	// (commitmarks.go): each commit's checks per branch and the changes it landed
 	// with, in one snapshot and held to the asker's grant on the repository.
 	ReadCommitMarks ReadKind = "commit_marks"
+	// ReadCounts is a scope's counts (counts.go): the parts [ReadQuery.Counts] asks, of one
+	// repository or of every one in use the asker reads, in one snapshot.
+	ReadCounts ReadKind = "counts"
 )
 
 // ReadKinds is the closed set.
@@ -1158,15 +1161,16 @@ const (
 // [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
 // that read [ReadQuery.Target], `commit` the only one that reads
 // [ReadQuery.Commit], `inbox` the only one that reads [ReadQuery.Inbox],
-// `notice_cards` the only one that reads [ReadQuery.NoticeCards], and
-// `commit_marks` the only one that reads [ReadQuery.CommitMarks].
+// `notice_cards` the only one that reads [ReadQuery.NoticeCards],
+// `commit_marks` the only one that reads [ReadQuery.CommitMarks], and
+// `counts` the only one that reads [ReadQuery.Counts].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
 		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed, ReadDefaultTips,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
-		ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards, ReadCommitMarks}
+		ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards, ReadCommitMarks, ReadCounts}
 }
 
 // Valid reports a kind this build knows.
@@ -1546,6 +1550,12 @@ type ReadQuery struct {
 	// ids, once each, required for that kind and refused on every other. A request
 	// field, no record's, so no versionedFields row: an older build refuses the kind.
 	CommitMarks []string `json:"commit_marks,omitempty"`
+	// Counts is a `counts` read's parts, each a key of its own so an older build refuses one
+	// it lacks unread; required there and refused on every other kind. A request field, no record's.
+	Counts *CountsQuery `json:"counts,omitempty"`
+	// RepoFacts asks a listing of repositories or a read of one for each one's facts
+	// ([RepoSummary.ChangeCounts]); refused on every other kind. A request field, no record's.
+	RepoFacts bool `json:"repo_facts,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -1578,7 +1588,8 @@ type ReadQuery struct {
 // first, on every page of them; Reviewers, Comments, Reviews and Findings a
 // page of the part of its conversation a `change` read names
 // ([ReadQuery.Part]) — Reviews a `reviews` listing's page too, each naming its
-// change; and Routed a `change_routing` read's page.
+// change; Routed a `change_routing` read's page; and Counts a `counts`
+// read's parts.
 type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
@@ -1712,7 +1723,9 @@ type ReadAnswer struct {
 	// CommitMarks is a `commit_marks` read's answer, one mark a commit in the
 	// query's order; an answer's field, no record's.
 	CommitMarks []CommitMark `json:"commit_marks,omitempty"`
-	Next        string       `json:"next,omitempty"`
+	// Counts is a `counts` read's answer, a part each it asked; an answer's field, no record's.
+	Counts *Counts `json:"counts,omitempty"`
+	Next   string  `json:"next,omitempty"`
 	// TipsNext is a `checks_due` page of one repository's tip work cut at its
 	// bound: the target it ended at, which the next page goes on after
 	// ([ChecksDueQuery.TipsAfter]) before any head — so a repository whose
@@ -2519,6 +2532,8 @@ type RepoSummary struct {
 	// Pushes is pushes EVER.
 	Pushes     int64     `json:"pushes"`
 	LastPushAt time.Time `json:"last_push_at,omitzero"`
+	// ChangeCounts is its changes by state, answered only where [ReadQuery.RepoFacts] asks.
+	ChangeCounts *ChangeCounts `json:"change_counts,omitempty"`
 }
 
 // RepoDetail is one repository in detail.

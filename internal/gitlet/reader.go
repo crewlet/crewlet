@@ -1616,6 +1616,14 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// read as its row stands, so a history page polled each minute is not refused.
 		query = fresh.Resolved(checksResolver(q.Repo), true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.commitMarks(ctx, tx, q, chart, &out) }
+	case ReadCounts:
+		// A SET READ, of the repository it names or of the domain, as a listing of changes is.
+		if q.Repo != "" {
+			query = fresh.Resolved(resolver(q.Repo), true)
+		} else {
+			query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		}
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.counts(ctx, tx, q, chart, &out) }
 	case ReadExpungeTips:
 		// A POINT READ OF THE REPOSITORY, as an `introduced` read is: a
 		// record this node deferred on the repository may carry a drop the
@@ -1842,7 +1850,7 @@ func (q ReadQuery) validate() error {
 			"read, and a change's own reviews are a change read's part", ErrInvalid)
 	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "", q.Kind == ReadChecks && q.Repo == "",
 		q.Kind == ReadQueue && q.Repo == "", q.Kind == ReadReviews, q.Kind == ReadInbox,
-		q.Kind == ReadNoticeCards:
+		q.Kind == ReadNoticeCards, q.Kind == ReadCounts && q.Repo == "":
 	case !ValidName(q.Repo):
 		return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
 	}
@@ -1893,6 +1901,10 @@ func (q ReadQuery) validate() error {
 		if err := q.validateCommitMarks(); err != nil {
 			return err
 		}
+	case ReadCounts:
+		if err := q.validateCounts(); err != nil {
+			return err
+		}
 	case ReadChecks, ReadCheck:
 		if err := q.validateChecks(); err != nil {
 			return err
@@ -1921,9 +1933,9 @@ func (q ReadQuery) validate() error {
 
 // kindOwnedField refuses a field that one kind a principal reads alone reads
 // (a commit, an inbox, an inbox page's cards, a history page's commits, the
-// narrowing of a listing of repositories to the ones a rule protects) on a
-// read of any other kind, the engine's own reads included
-// ([ReadQuery.validate]).
+// narrowing of a listing of repositories to the ones a rule protects, the
+// parts a counts read names, a repository's facts) on a read of any other
+// kind, the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
 	case q.Protected && q.Kind != ReadRepos:
@@ -1942,6 +1954,11 @@ func (q ReadQuery) kindOwnedField() error {
 	case len(q.CommitMarks) > 0 && q.Kind != ReadCommitMarks:
 		return fmt.Errorf("%w: commit_marks: only a commit_marks read names the commits whose marks it reads",
 			ErrInvalid)
+	case q.Counts != nil && q.Kind != ReadCounts:
+		return fmt.Errorf("%w: counts: only a counts read names the parts it counts", ErrInvalid)
+	case q.RepoFacts && q.Kind != ReadRepos && q.Kind != ReadRepo:
+		return fmt.Errorf("%w: repo_facts: only a listing of repositories and a read of one answer a "+
+			"repository's facts", ErrInvalid)
 	}
 	return nil
 }
@@ -2699,6 +2716,16 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	if err := protectionsOf(ctx, tx, ids, out.Repos); err != nil {
 		return err
 	}
+	// ITS FACTS WHERE ASKED, read before the page is cut so it is measured with them.
+	if q.RepoFacts {
+		listed := make([]*RepoSummary, len(out.Repos))
+		for i := range out.Repos {
+			listed[i] = &out.Repos[i]
+		}
+		if err := withFacts(ctx, tx, listed); err != nil {
+			return err
+		}
+	}
 	// MEASURED WITH THEIR RULES, which are read in one statement for the
 	// whole page and are most of a row's bytes when a repository has many:
 	// counted before them, a page of 500 repositories at 64 long rules each
@@ -2807,6 +2834,12 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	// seek of the rules ([ruleDetailsIn]).
 	if q.Gates {
 		if out.Repo.Gates, out.Repo.RuleSources, err = ruleDetailsIn(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	// AND ITS FACTS ONLY TO A READ THAT ASKS ([ReadQuery.RepoFacts]).
+	if q.RepoFacts {
+		if err = withFacts(ctx, tx, []*RepoSummary{&out.Repo.RepoSummary}); err != nil {
 			return err
 		}
 	}

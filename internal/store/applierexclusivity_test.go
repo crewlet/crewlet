@@ -602,8 +602,10 @@ var allowedReplicatedWriter = []allowance{
 			"subject — each attempt's queue, claim and ending joined into one " +
 			"row with its log and its horizon, the home's dispatch of a " +
 			"change head under its target's checks file (apply_dispatch.go), " +
-			"and a person's marks over their own code notices on their own " +
-			"subject (apply_marks.go).",
+			"a person's marks over their own code notices on their own " +
+			"subject (apply_marks.go), and the counts of a repository's " +
+			"changes and their tallies by owner, and their re-derivation " +
+			"(apply_counts.go).",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,

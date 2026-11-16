@@ -430,8 +430,9 @@ func (p MergeProposal) JudgesChart() bool { return true }
 // mergeDecidedRows is the most rows a merge's OWN writes make its apply touch,
 // beside the push it lands ([Applier.applyMerge]): the change's row, its live
 // queue entry, its stored readiness ([clearReadiness]), the target's landing
-// row and its green row.
-const mergeDecidedRows = 5 + routingNoticeRows
+// row, its green row and the tip work its green row pays ([advanceGreen]), and
+// the tally row its merge moves (apply_counts.go).
+const mergeDecidedRows = 6 + tallyRows + routingNoticeRows
 
 // mergeRecordRows is the most rows one merge record makes its apply write
 // before its horizons: its own ([mergeDecidedRows]); its push's row, its two
@@ -442,12 +443,12 @@ const mergeDecidedRows = 5 + routingNoticeRows
 // change the target heads as a source, revised with a revision and an author
 // and its queue entry ended, and up to [MaxPushMerges] live changes into the
 // target at the merge's commit, each merged with its queue entry ended and its
-// stored readiness cleared. Its
+// stored readiness cleared, and the tally row those merges move. Its
 // own change the record merges first, so the push finds it merged and moves
 // it no further. Far under MaxRecordRows with the horizons' room
 // ([recordRows]), which [TestAMergeRecordFitsItsRows] holds — so a merge's
 // decide counts no change of its push's, as a push batch's must.
-const mergeRecordRows = mergeDecidedRows + 1 + 1 + 3 + 1 + seatDayRows + 4 + 3*MaxPushMerges
+const mergeRecordRows = mergeDecidedRows + 1 + 1 + 3 + 1 + seatDayRows + 4 + 3*MaxPushMerges + tallyRows
 
 // ProposeMerge decides one merge as a batch of its own in the repository's
 // queue — the push's queue and bounds ([Committer.Propose]), as a queue's
