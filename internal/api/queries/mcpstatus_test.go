@@ -265,8 +265,8 @@ func TestEachServerIsJudgedAcrossEveryNodesReport(t *testing.T) {
 	}
 }
 
-// A SILENT NODE'S CELLS ARE UNKNOWN, NEVER ZERO. Its last heartbeat carried no
-// status (the status hook did not answer within the beat), and a row of zeros
+// A SILENT NODE'S CELLS ARE UNKNOWN, NEVER ZERO. No status record of its counts
+// (it has not written one at its presence's epoch yet), and a row of zeros
 // under its name would read as "started nothing here" — the confident zero the
 // fleet answer is written to avoid. A node that published a status naming no
 // server DID say: it started none.

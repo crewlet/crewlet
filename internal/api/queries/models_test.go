@@ -121,14 +121,14 @@ func entryOf(t *testing.T, answer queries.ModelEntriesAnswer, key string) querie
 	return queries.ModelEntry{}
 }
 
-// A MODEL'S STATE IS THE FLEET'S HEARTBEATS, JOINED.
+// A MODEL'S STATE IS THE FLEET'S STATUS RECORDS, JOINED.
 //
-// Each node publishes what it knows of each model on its presence lease; the
+// Each node publishes what it knows of each model on its status record; the
 // answer is the join: the latest sit-out window and every node sitting it out,
 // the latest answer and the latest failure (named by its node), and the seats
-// parked on it, by handle. A node whose beat carried no report is a column of
-// its own, never a row of zeros.
-func TestModelStateIsTheFleetsHeartbeats(t *testing.T) {
+// parked on it, by handle. A node with no record counted is a column of its
+// own, never a row of zeros.
+func TestModelStateIsTheFleetsStatusRecords(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
 	s := modelSources(t, backend)

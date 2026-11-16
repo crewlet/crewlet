@@ -808,10 +808,10 @@ func Register(r *Registry, s Sources) {
 		// WHAT EACH MCP SERVER DID ON EACH NODE, off the nodes' status
 		// records counted against the same lease table: every node
 		// re-publishes its starts on its record, so one listing of each
-		// answers for the fleet. Everybody's,
-		// in two readings, as `llm_entries` is: the configuration's
-		// reader reads every server's launch command and the first line
-		// of each failure, which `/config` shows the same reader, and
+		// answers for the fleet. Everybody's, in two readings, as
+		// `llm_entries` is: the configuration's reader reads every
+		// server's launch command and the first line of each failure,
+		// which `/config` shows the same reader, and
 		// anybody else each server's condition with none of that. The
 		// routes beside it (internal/api/mcpapi) are `tools.read`, which
 		// admits exactly whom this posture does. See
