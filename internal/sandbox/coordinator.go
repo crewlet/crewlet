@@ -6409,6 +6409,9 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 	// THE ATTACHMENT FIRST, before anything this recovery counts can ask
 	// for the seat's hold: every hold from here is taken for it.
 	c.attachInbox(handle, inbox)
+	// WHAT WAS SIGNALLED BEFORE THE SEAT'S RUNS ARE READ, for the keep of
+	// each resume a row holds ([Coordinator.keepHeldRows]).
+	seen := c.signalsSeen()
 	active, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
 		return fmt.Errorf("sandbox: recovering %s: %w", handle, err)
@@ -6425,7 +6428,7 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 			c.settleWrite(w)
 		}
 		c.rearmOwed(ctx, tally.owed)
-		c.keepHeldRows(ctx, tally.held)
+		c.keepHeldRows(ctx, tally.held, seen)
 	}()
 	if len(active) == 0 {
 		return nil
@@ -6533,8 +6536,18 @@ func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
 // as an owed refusal is ([Coordinator.rearmOwed]): the claim refuses a held
 // row, so a re-fire before the instant claims nothing.
 //
+// A SIGNAL THAT LANDS WHILE THE PASS RUNS IS NOT LOST: seen is what was
+// signalled before the pass read the seat's runs, and a condition or a stop
+// signalled for the seat since lifts the hold here and re-fires the job at
+// once, as for a hold a resume here wrote ([Coordinator.keepHeldOnRow]). The
+// signal lifts every hold on its condition itself and re-fires each job it
+// released ([Coordinator.liftHoldsLocked]), but from a listing of the runs,
+// which the store may leave unanswered where it answers one row, and it found
+// nothing kept here yet: kept for the instant regardless, the job waited for
+// the hold's instant after the signal that lifts it.
+//
 // A completion this node already keeps for the job is left as it is.
-func (c *Coordinator) keepHeldRows(ctx context.Context, runs []PendingRun) {
+func (c *Coordinator) keepHeldRows(ctx context.Context, runs []PendingRun, seen map[signal]uint64) {
 	var kept []PendingRun
 	for _, run := range runs {
 		c.mu.Lock()
@@ -6543,8 +6556,9 @@ func (c *Coordinator) keepHeldRows(ctx context.Context, runs []PendingRun) {
 		if already {
 			continue
 		}
-		c.keepHeldOnRow(run, nil, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, nil)
-		kept = append(kept, run)
+		if c.keepHeldOnRow(run, nil, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, seen) {
+			kept = append(kept, run)
+		}
 	}
 	for _, run := range kept {
 		log.InfoContext(ctx, "sandbox_completion_hold_kept",

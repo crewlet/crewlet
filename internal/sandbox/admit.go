@@ -565,7 +565,10 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 // the completion's event, or nil for one rebuilt from the row
 // ([announcementOf]); seen is what was signalled before the hold was written,
 // or before a claim the hold refused was asked ([Coordinator.keepHeldClaim]),
-// nil where nothing was asked ([Coordinator.keepHeldRows]).
+// or before a recovery read the held row ([Coordinator.keepHeldRows]). Reports
+// whether the completion was kept for the hold's instant: not where it was
+// re-fired at once, the coordinator is closed or this node no longer holds the
+// seat.
 //
 // # Why a hold on the row is kept in memory too
 //
@@ -593,13 +596,14 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 //
 // A SIGNAL THAT LANDED BEFORE THE KEEP IS NOT LOST, as for a refused completion
 // ([Coordinator.keepRefused]): one whose listing of the runs ran before the
-// hold was written lifted nothing, so a condition or a person's stop signalled
-// for the seat since seen lifts the hold here and re-fires at once.
+// hold was written, or was not answered, lifted nothing, so a condition or a
+// person's stop signalled for the seat since seen lifts the hold here and
+// re-fires at once.
 func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold Refusal,
 	seen map[signal]uint64,
-) {
+) bool {
 	if hold.Condition == "" {
-		return
+		return false
 	}
 	ev, announced := announcementOf(run)
 	if trigger == nil {
@@ -609,19 +613,21 @@ func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold 
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return
+		return false
 	}
-	if seen != nil && (c.signalledSinceLocked(hold.Condition, ev.AgentHandle, seen) ||
-		c.signalledSinceLocked(stopLanded, ev.AgentHandle, seen)) {
+	if c.signalledSinceLocked(hold.Condition, ev.AgentHandle, seen) ||
+		c.signalledSinceLocked(stopLanded, ev.AgentHandle, seen) {
 		c.liftAndRefireLocked(kept)
 		c.mu.Unlock()
-		return
+		return false
 	}
 	c.keepLocked(kept)
 	c.mu.Unlock()
 	if _, leased := c.leaseOf(ev.AgentHandle); !leased {
 		c.forgetRefused(ev.TurnID)
+		return false
 	}
+	return true
 }
 
 // oweRefused is answer, what a delivery of ev's completion leaves with the

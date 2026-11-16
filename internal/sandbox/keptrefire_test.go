@@ -548,7 +548,10 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 // a job another holder owns; lift a hold on its signal and leave the job to the
 // waiter, and a lift with nothing kept for the job, whether dropped or never
 // made by a recovery the signal raced, leaves it unannounced; leave a held row
-// out of a recovery, and nothing is kept.
+// out of a recovery, and nothing is kept; read what was signalled only once the
+// recovery has listed the seat's runs, and a signal during it whose listing of
+// the holds the store does not answer leaves the job kept for the hold's
+// instant.
 func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 	t.Parallel()
 
@@ -876,6 +879,30 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 			t.Fatalf("the turn resumed %d times (%+v) on a signal that landed while the seat's recovery ran; "+
 				"want it carried once, not kept for an instant its row no longer holds it to", len(resumed),
 				resumed)
+		}
+	})
+
+	t.Run("re-fired on a signal during the seat's recovery whose listing is not answered", func(t *testing.T) {
+		t.Parallel()
+		live := t.Context()
+		rig := newCoordRig(t)
+		budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
+		rig.restart(t, rig.queue, "", rigLease, nil)
+		// THE CONDITION IS SIGNALLED once the recovery has read the seat's
+		// runs, and the store does not answer its listing of every hold on
+		// the condition: nothing lifts the row's hold but the keep the
+		// recovery makes of it.
+		restarted := rig.coordinator
+		restarted.pending = &signalledOnRecovery{PendingStore: unlistedRuns{restarted.pending},
+			signal: func() { restarted.Readmit("budget", "swe") }}
+		if err := rig.recoverSeat(live, rigLease.Owner, rigLease.Epoch); err != nil {
+			t.Fatalf("recovering the seat: %v", err)
+		}
+		restarted.inflight.Wait()
+		if resumed := rig.resumer.calls(); len(resumed) != 1 || !resumed[0].Success {
+			t.Fatalf("the turn resumed %d times (%+v) on a signal that landed while the seat's recovery ran, "+
+				"its listing of the holds not answered; want it carried once by the recovery's keep, not kept "+
+				"for the hold's instant", len(resumed), resumed)
 		}
 	})
 
