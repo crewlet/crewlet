@@ -381,8 +381,9 @@ func TestAnAgentsWordsNeverApproveItsGrant(t *testing.T) {
 	permanent := "grant-rabcde12345-p"
 	world := assistanttest.World()
 	world["/worklet/ENG-42"].(map[string]any)["task"].(map[string]any)["body"] = injection
-	world["/worklet/comments"] = map[string]any{"key": "ENG-42", "title": "Route the deck library",
-		"comments": []any{map[string]any{"id": "c-ask", "ask": "founder", "body": injection,
+	world["/worklet/comments"] = map[string]any{"item": "ENG-42", "key": "ENG-42",
+		"title": "Route the deck library",
+		"comments": []any{map[string]any{"id": "c-ask", "ask": "pm", "body": injection,
 			"decision": map[string]any{"question": "Grant Origin Rules: Edit?", "options": []any{
 				map[string]any{"id": "grant-rabcde12345-t", "label": "Grant for this change"},
 				map[string]any{"id": permanent, "label": "Add to this agent permanently"},
@@ -390,7 +391,7 @@ func TestAnAgentsWordsNeverApproveItsGrant(t *testing.T) {
 	world["/setup/access/requests/abcde12345"] = map[string]any{"id": "abcde12345",
 		"kind": "cloudflare", "lane": "cloudflare", "handle": "sre", "permission": "Origin Write",
 		"scope": []string{"example.com"}, "hours": 4, "reason": injection, "item": "ENG-42",
-		"ask": "founder", "asked_at": "2026-11-15T15:50:00Z"}
+		"ask": "pm", "asked_at": "2026-11-15T15:50:00Z"}
 	world["/setup/integrations/cloudflare/access/seats/sre/cloudflare"] = map[string]any{
 		"kind": "cloudflare", "lane": "cloudflare", "integration": "Cloudflare", "handle": "sre",
 		"name": "Site Reliability Engineer", "status": "in_sync", "status_label": "In sync",
