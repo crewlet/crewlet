@@ -62,3 +62,42 @@ var ErrStopped = errStopped
 
 // LogFormat is the format every log a read runs names, its fields NUL-ended.
 const LogFormat = logFormat
+
+// TreeWalk scales a directory's last commits' bounds (treecommits.go); a
+// zero field keeps its default.
+type TreeWalk struct {
+	Span, Window, NarrowRecords, NarrowEntries, NarrowWalks, NarrowBytes, MemoRecords int
+}
+
+// SetTreeWalk scales s's directory walks' bounds to w.
+func SetTreeWalk(s *Server, w TreeWalk) {
+	b := &s.treeWalk
+	set := func(to *int, v int) {
+		if v != 0 {
+			*to = v
+		}
+	}
+	set(&b.span, w.Span)
+	set(&b.window, w.Window)
+	set(&b.narrowRecords, w.NarrowRecords)
+	set(&b.narrowEntries, w.NarrowEntries)
+	set(&b.narrowWalks, w.NarrowWalks)
+	set(&b.narrowBytes, w.NarrowBytes)
+	set(&b.memoRecords, w.MemoRecords)
+}
+
+// WindowStart is whether name begins a window of size by its hash alone.
+func WindowStart(name string, size int) bool { return windowStart(name, size) }
+
+// WindowStarts is the indices of names that begin windows, by the rule
+// dirWindows walks a listing with (natural and forced starts).
+func WindowStarts(names []string, size int) []int {
+	rule := windowRule{size: size}
+	var out []int
+	for i, name := range names {
+		if _, begins := rule.next(i, name, false); begins {
+			out = append(out, i)
+		}
+	}
+	return out
+}

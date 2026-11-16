@@ -18,13 +18,14 @@ import (
 // `code_tree` and `code_blob`, a directory and a file at a revision (…/tree,
 // …/blob); `code_find`, a file found by its name in a revision's tree
 // (…/find); `code_log` and `code_blame`, a path's history and who last changed
-// each line of a file (…/log, …/blame); `code_diff` and `code_compare`, what
-// changed between two revisions and how they relate, with what merging the
-// one into the other would do (…/diff, …/compare); `code_tips`, many branch
-// heads and tags at once with how far each is from a base (…/tips);
-// `code_tags`, its tags newest first by their own date (…/tags); and
-// `code_commit`, one commit with the push that introduced it and the changes
-// it belongs to (…/commits/{sha}). Each is decided per repository by the grant
+// each line of a file (…/log, …/blame); `code_tree_commits`, the commit that
+// last changed each entry of a directory (…/tree-commits); `code_diff` and
+// `code_compare`, what changed between two revisions and how they relate,
+// with what merging the one into the other would do (…/diff, …/compare);
+// `code_tips`, many branch heads and tags at once with how far each is from a
+// base (…/tips); `code_tags`, its tags newest first by their own date
+// (…/tags); and `code_commit`, one commit with the push that introduced it
+// and the changes it belongs to (…/commits/{sha}). Each is decided per repository by the grant
 // the serving node derives, as every code question is (code.go), and read at
 // the caller's freshness.
 //
@@ -92,6 +93,9 @@ type CodePage struct {
 	Tips *gitlet.TipsAnswer `json:"tips,omitempty"`
 	// Tags is a tags read's part (code_tags).
 	Tags *gitlet.TagsAnswer `json:"tags,omitempty"`
+
+	// TreeCommits is a directory's last commits' part (code_tree_commits).
+	TreeCommits *gitlet.TreeCommitsAnswer `json:"tree_commits,omitempty"`
 
 	Resolved map[string]CodeResolved    `json:"resolved,omitempty"`
 	Position statelog.Position          `json:"position,omitzero"`
@@ -347,7 +351,8 @@ func (g gitAsk) read(ctx context.Context, repo gitlet.RepoRef, q gitlet.GitQuery
 		return CodePage{}, false, codeRefusal(g.name, err)
 	}
 	page := CodePage{Repo: g.name, Kind: a.Kind, Rev: a.Rev, Next: a.Next, Tree: a.Tree, Blob: a.Blob, Diff: a.Diff,
-		Log: a.Log, Blame: a.Blame, Find: a.Find, Compare: a.Compare, Tips: a.Tips, Tags: a.Tags}
+		Log: a.Log, Blame: a.Blame, Find: a.Find, Compare: a.Compare, Tips: a.Tips, Tags: a.Tags,
+		TreeCommits: a.TreeCommits}
 	if immutable {
 		return page, true, nil
 	}
@@ -603,6 +608,35 @@ func (s Sources) codeBlame(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	return answered(page, immutable), nil
+}
+
+// codeTreeCommits answers `code_tree_commits`: the commit that last changed
+// each entry of a directory at `ref` (the default branch where it names
+// none), its root or `path`, a page at a time from `cursor`, code_tree's own.
+func (s Sources) codeTreeCommits(ctx context.Context, p Params) (any, error) {
+	g, err := s.gitAskOf(ctx, p, "code_tree_commits")
+	if err != nil {
+		return nil, err
+	}
+	rev, err := revParam(p, "ref", true)
+	if err != nil {
+		return nil, err
+	}
+	path, b64, err := pathParams(p)
+	if err != nil {
+		return nil, err
+	}
+	repo, err := g.resolve(ctx, rev)
+	if err != nil {
+		return nil, err
+	}
+	page, immutable, err := g.read(ctx, repo, gitlet.GitQuery{Kind: gitlet.GitTreeCommits,
+		TreeCommits: &gitlet.TreeCommitsQuery{Rev: rev.oid, Path: path, PathB64: b64}}, p.String("cursor"), rev)
+	if err != nil {
+		return nil, err
+	}
+	// A page its read's budget cut is the machine's and the moment's.
+	return answered(page, immutable && !page.TreeCommits.Cut()), nil
 }
 
 // codeDiff answers `code_diff`: what changed from `base` to `head` — the

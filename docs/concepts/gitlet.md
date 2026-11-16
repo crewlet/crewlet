@@ -4115,8 +4115,10 @@ and place — `crewlet.code.publish.refusals` by `reason` on a maintainer —
 `publish`) names, any other reason logged as `code_publication_refused` — and
 `crewlet.code.cache.memo.lookups` by `outcome` beside
 `crewlet.code.cache.memo.bytes`: misses climbing while the memo sits at its
-sixteenth of the budget is a memo too small for the pages seats ask for again,
-and `corrupt` at all a disk damaging what the cache holds
+sixteenth of the budget is a memo too small for the pages seats ask for again
+(`probe_hit` and `probe_miss` count the windows of a directory's last commits
+a walk probes for, which say how often a new commit's read is derived), and
+`corrupt` at all a disk damaging what the cache holds
 ([metrics reference](../reference/metrics.md)).
 
 ### Published layers
@@ -5299,7 +5301,9 @@ which, the commits each has that the other lacks, and what one changed since
 the merge base), a path's history ([A path's history](#a-paths-history)),
 a file found by its name in a commit's tree ([Finding a file](#finding-a-file)),
 which commit last changed each line of a file
-([Who changed a line](#who-changed-a-line)), whether a commit landed in a
+([Who changed a line](#who-changed-a-line)), the commit that last changed each
+entry of a directory ([A directory's last commits](#a-directorys-last-commits)),
+whether a commit landed in a
 branch and which push landed it (`landed_in`,
 [Which push landed a commit](#which-push-landed-a-commit)), many branch heads
 and tags at once, each with the commit it names and how far it is from a base
@@ -5349,10 +5353,12 @@ that two objects begin with is refused, asking for more of its digits.
 **A path is data.** A path a read names reaches git on a batch command's
 standard input, where it resolves to the id of the tree or file it names, and
 every git process the read runs is handed ids, fixed options and numbers the
-node formats alone — or, for a history and a blame, whose git reads no path on
-its standard input, the path as the ONE argument after `--`, which git reads as
-a path and never as an option, a history's as a literal pathspec: so no path
-can be read as an option, and a path named `--output=x` is the path
+node formats alone — or, for a history, a blame and a directory's last
+commits, whose git reads no path on its standard input, as arguments after
+`--`, which git reads as paths and never as options: a history's and a blame's
+path as the ONE argument there, a history's as a literal pathspec, and a
+directory walk's directory or entries as one or more literal pathspecs: so no
+path can be read as an option, and a path named `--output=x` is the path
 `--output=x`. A diff's stat is filtered by the paths a read names after git has
 answered, never by a pathspec, and so is an interdiff by the paths its
 revisions touch.
@@ -5617,6 +5623,64 @@ answered absent, beside their size (`subject_bytes`, `author_bytes`,
 past 64 (`parent_count`): so the widest commit, and the widest line with its
 commit, always fit a page, and no page carries half a field read as the whole.
 
+### A directory's last commits
+
+`code_tree_commits` asks which commit last changed each entry of a directory at
+a commit, as `git log -1 -- <entry>` names it: the column a file table shows
+beside the listing. A page begins where the listing's own page does (its
+cursor is `code_tree`'s, `e:<n>`) and holds up to a hundred entries, each with
+its commit, and each commit they name once, as a history lists it, so the
+column fills beside the listing a page at a time.
+
+**Git's rule, per entry.** An entry's history follows, at a merge, the side
+whose files it kept, the first such parent where several did, and is the
+merge itself where it kept neither side's: a conflict resolved by hand, or a
+merge's own edit. One walk of the directory as a whole would follow the
+directory's own history instead, and would name another commit for about a fifth
+of the entries of histories with merges. The rule reads files: a commit that
+only adds an empty directory changes nothing, so a directory that never held
+a file has no last commit, and one whose files a commit removed is answered
+that commit.
+
+**How it is read.** One walk goes down the directory's first-parent line,
+`git log --first-parent --name-status` with the directory as a literal
+pathspec, and each commit it reads answers the entries it changed. An entry a
+merge changed against its first parent is left there and walked alone by git
+from the merge (`log -1 <merge> -- <entry>`), which is git's own answer for
+it. Where a long history leaves a few entries untouched (at most 64 after the
+first 1 024 commits), the walk ends and they go on together in walks narrowed
+to their own paths, at most 32 entries and 64 KiB of pathspecs a walk (two
+walks for ordinary names), which the copy's changed-path filters serve for many
+paths at once.
+
+**Kept, and derived for a new commit.** The page is kept in the
+[memo](#the-memo), and beside it windows of answers, cut where an entry's name
+hashes to a boundary so an entry added or removed moves no other window, kept
+under the last commit that changed the directory (the walk's first record).
+Every commit after that one until the
+directory next changes has the same answers, so a read at a new commit probes
+for them as it walks and finds them at its second commit: a push is answered
+by a walk of two commits. A window is trusted only for the names it holds.
+
+**A page cut short.** The walks leave a tenth of the read's ten seconds of git
+for the log of the page's commits. A page the time ran out on holds the
+entries it answered and goes on from the first it did not; where that is its
+first entry, it answers it `out_of_time` alone and goes on past it. Such a page
+is marked `out_of_time`, never kept, and answered bare rather than immutable.
+Once the page's own entries are answered, the walks left only complete windows
+for the memo: the budget, a busy read lane or the answer falling due ends them
+without failing the page, which is answered and kept.
+
+**Measured** (`BenchmarkTreeCommits`, 100 000 commits on twelve vCPUs, a linear
+history): a cold first page of a root of 40 entries untouched since the first
+commit took 2.1 s with a commit-graph and 4.9 s without, in six processes; of
+`src/`, 400 busy files, 132 and 152 ms; of a directory four levels down, 151
+and 256 ms; and a page at a new commit derived from its parent's windows 21 to
+32 ms, in four processes. Where two thirds of the changes come in through
+merges, the root took 1.0 s with a commit-graph and 2.4 s without, `src/` and
+the deep directory 0.5 to 0.7 s in about a hundred processes, most of them
+entries a merge changed, each walked alone, and a derived page 22 to 31 ms.
+
 ### A search of one repository
 
 A code search of one repository asks its Gitlet nodes in their order, as every
@@ -5847,8 +5911,13 @@ blaming a range page by page blames it once. A comparison is kept whole; a
 history's page is its walk's own, kept where the walk ended it and never where
 the read's ten seconds of git did; a tips read is kept a tip at a time rather
 than as a page ([Many tips at once](#many-tips-at-once)); whether a commit
-landed in a branch never is, since its answer moves with the branch. A read that misses a page another read on the node is
-cutting waits for it and is answered from what that read kept, so the seats a
+landed in a branch never is, since its answer moves with the branch. A
+directory's last commits keep each page, and apart from it each window of
+answers under the last commit that changed the directory (its walk's first
+record): every commit after that one until
+the directory next changes has the same answers, so a page at a new commit
+probes for them at its walk's records and finds them at its second. A read
+that misses a page another read on the node is cutting waits for it and is answered from what that read kept, so the seats a
 push's review reaches, all asking for the same diff at once, cost the node one
 git process rather than one each.
 

@@ -101,6 +101,8 @@ func revsOf(q gitlet.GitQuery) []string {
 		revs = []string{q.Log.Rev}
 	case gitlet.GitBlame:
 		revs = []string{q.Blame.Rev}
+	case gitlet.GitTreeCommits:
+		revs = []string{q.TreeCommits.Rev}
 	case gitlet.GitChecksFile:
 		revs = []string{q.ChecksFile.Commit}
 	case gitlet.GitCodeFiles:
@@ -137,9 +139,9 @@ func placedAt(q *gitlet.ReanchorQuery, whole map[string]string) []string {
 	return lines
 }
 
-// pathOf is the path a tree, a file or a blame read names, decoded (validated
-// already, by gitlet.GitQuery.Validate) — the object the batch looks up at the
-// read's revision. A log's path is no such object: a history names the
+// pathOf is the path a tree, a file, a blame or a directory's last commits'
+// read names, decoded (validated already, by gitlet.GitQuery.Validate): the
+// object the batch looks up at the read's revision. A log's path is no such object: a history names the
 // commits that changed a path, which its revision need not hold.
 func pathOf(q gitlet.GitQuery) string {
 	var p string
@@ -150,6 +152,8 @@ func pathOf(q gitlet.GitQuery) string {
 		p, _ = gitlet.GitPath("blob.path", q.Blob.Path, q.Blob.PathB64, true)
 	case gitlet.GitBlame:
 		p, _ = gitlet.GitPath("blame.path", q.Blame.Path, q.Blame.PathB64, false)
+	case gitlet.GitTreeCommits:
+		p, _ = gitlet.GitPath("tree_commits.path", q.TreeCommits.Path, q.TreeCommits.PathB64, true)
 	case gitlet.GitChecksFile:
 		p = gitlet.ChecksFilePath
 	case gitlet.GitCodeFiles:
@@ -159,14 +163,15 @@ func pathOf(q gitlet.GitQuery) string {
 }
 
 // lookedUp reports whether a read of q's kind looks its path up in the batch:
-// a tree's, a file's, a blame's and a checks file's, the one deploy or
-// dependency file a code files read names (its listing names none), and a
-// find's root tree, which its path, none, names (`<id>^{tree}`): the tree
-// whose listing it reads by that tree's own id.
+// a tree's, a file's, a blame's, a directory's last commits' (the tree they
+// list) and a checks file's, the one deploy or dependency file a code files
+// read names (its listing names none), and a find's root tree, which its path,
+// none, names (`<id>^{tree}`): the tree whose listing it reads by that tree's
+// own id.
 func lookedUp(q gitlet.GitQuery) bool {
 	return q.Kind == gitlet.GitTree || q.Kind == gitlet.GitBlob || q.Kind == gitlet.GitBlame ||
-		q.Kind == gitlet.GitChecksFile || (q.Kind == gitlet.GitCodeFiles && q.CodeFiles.File != "") ||
-		q.Kind == gitlet.GitFind
+		q.Kind == gitlet.GitTreeCommits || q.Kind == gitlet.GitChecksFile ||
+		(q.Kind == gitlet.GitCodeFiles && q.CodeFiles.File != "") || q.Kind == gitlet.GitFind
 }
 
 // find is step 7: what every revision and the path name, or the first

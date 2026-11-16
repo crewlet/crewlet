@@ -3246,6 +3246,10 @@ const (
 	// and the line — and the path, where it was another — it had there: at
 	// most MaxBlameLines lines a read, a page at a time.
 	GitBlame GitReadKind = "blame"
+	// GitTreeCommits is the commit that last changed each entry of a directory
+	// at a commit, as `git log -1 -- <entry>` names it, a page of its listing
+	// at a time (treecommits.go).
+	GitTreeCommits GitReadKind = "tree_commits"
 	// GitChecksFile is the checks file a commit holds — [ChecksFilePath] in
 	// its tree — its object's id and type and, for a file within
 	// [MaxChecksFileBytes], its bytes WHOLE: what a repository's home reads a
@@ -3281,8 +3285,8 @@ const (
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitTags, GitLandedIn,
-		GitRevisionFacts, GitReanchor, GitInterdiff, GitLog, GitBlame, GitChecksFile, GitCodeFiles, GitSearch,
-		GitFind}
+		GitRevisionFacts, GitReanchor, GitInterdiff, GitLog, GitBlame, GitTreeCommits, GitChecksFile, GitCodeFiles,
+		GitSearch, GitFind}
 }
 
 // Valid reports a kind this build answers.
@@ -3303,17 +3307,18 @@ func (k GitReadKind) EnginesOwn() bool {
 }
 
 // Unstampable reports a kind whose answer is a PAGE of the repository's content
-// — a listing, a file's lines, a diff, a comparison, many tips, an interdiff, a
-// history, a blame or a find — which a read may ask cut and answered with no
-// stamp ([GitQuery.Unstamped]). A find's answer is a function of the tree, the
-// query, the limit and the build, so a browser may keep a find by whole ids
-// for a typing session. Never a landed-in read, whose answer IS what the
+// (a listing, a file's lines, a diff, a comparison, many tips, an interdiff, a
+// history, a blame, a directory's last commits or a find), which a read may ask
+// cut and answered with no stamp ([GitQuery.Unstamped]). A find's answer is a
+// function of the tree, the query, the limit and the build, so a browser may
+// keep a find by whole ids for a typing session. Never a landed-in read, whose answer IS what the
 // node's index says of a push; nor a revision's facts, a re-anchoring or a
 // checks file, which the engine and a change's own reads ask, never a question
 // that keeps a page.
 func (k GitReadKind) Unstampable() bool {
 	switch k {
-	case GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitInterdiff, GitLog, GitBlame, GitFind:
+	case GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitInterdiff, GitLog, GitBlame, GitTreeCommits,
+		GitFind:
 		return true
 	}
 	return false
@@ -3460,6 +3465,7 @@ type GitQuery struct {
 	Interdiff     *InterdiffQuery     `json:"interdiff,omitempty"`
 	Log           *LogQuery           `json:"log,omitempty"`
 	Blame         *BlameQuery         `json:"blame,omitempty"`
+	TreeCommits   *TreeCommitsQuery   `json:"tree_commits,omitempty"`
 	ChecksFile    *ChecksFileQuery    `json:"checks_file,omitempty"`
 	CodeFiles     *CodeFilesQuery     `json:"code_files,omitempty"`
 	Search        *SearchQuery        `json:"search,omitempty"`
@@ -3900,6 +3906,7 @@ func (q GitQuery) Validate() error {
 		{GitCompare, q.Compare != nil}, {GitTips, q.Tips != nil}, {GitTags, q.Tags != nil},
 		{GitLandedIn, q.LandedIn != nil}, {GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
+		{GitTreeCommits, q.TreeCommits != nil},
 		{GitChecksFile, q.ChecksFile != nil}, {GitCodeFiles, q.CodeFiles != nil},
 		{GitSearch, q.Search != nil}, {GitFind, q.Find != nil}} {
 		switch {
@@ -3944,6 +3951,8 @@ func (q GitQuery) Validate() error {
 		return q.Log.validate()
 	case GitBlame:
 		return q.Blame.validate()
+	case GitTreeCommits:
+		return q.TreeCommits.validate()
 	case GitChecksFile:
 		return wholeID("checks_file.commit", q.ChecksFile.Commit, false)
 	case GitCodeFiles:
@@ -4332,11 +4341,11 @@ type GitAnswer struct {
 	// Next is where the next page starts, handed back as the query's Cursor
 	// with the query otherwise unchanged; empty on the last page.
 	Next string `json:"next,omitempty"`
-	// PushedBy is the push that INTRODUCED each commit the answer names —
-	// its Rev, a diff's or a comparison's commits, every commit a log page
-	// lists or a blame page's lines name — by the commit's whole id,
-	// where the answering node's index of which push introduced each commit
-	// holds it. A commit it does not name was introduced outside Coverage, or
+	// PushedBy is the push that INTRODUCED each commit the answer names (its
+	// Rev, a diff's or a comparison's commits, every commit a log page lists,
+	// a blame page's lines or a directory's last commits name) by the commit's
+	// whole id, where the answering node's index of which push introduced each
+	// commit holds it. A commit it does not name was introduced outside Coverage, or
 	// by a push that listed more than MaxIntroduced commits.
 	PushedBy map[string]PushedBy `json:"pushed_by,omitempty"`
 	// Coverage is what that index holds, on every answer of a node that keeps
@@ -4358,6 +4367,7 @@ type GitAnswer struct {
 	Reanchor      *ReanchorAnswer      `json:"reanchor,omitempty"`
 	Log           *LogAnswer           `json:"log,omitempty"`
 	Blame         *BlameAnswer         `json:"blame,omitempty"`
+	TreeCommits   *TreeCommitsAnswer   `json:"tree_commits,omitempty"`
 	ChecksFile    *ChecksFileAnswer    `json:"checks_file,omitempty"`
 	CodeFiles     *CodeFilesAnswer     `json:"code_files,omitempty"`
 	Search        *SearchAnswer        `json:"search,omitempty"`

@@ -1962,7 +1962,11 @@ func Catalogue() []Instrument {
 			Shows: "Seats' reads by object id that this node's git cache looked " +
 				"up among the answers it keeps, by `outcome`: `hit`, answered " +
 				"from the answer kept, with no git run; `miss`, none kept, so " +
-				"the read ran its git and keeps what it cut; `corrupt`, a kept " +
+				"the read ran its git and keeps what it cut; `probe_hit` and " +
+				"`probe_miss`, a read's probe for a part of an answer it may " +
+				"find under any of several keys (a directory's window of last " +
+				"commits, under each commit its walk passes), where a miss " +
+				"computes nothing under that key; `corrupt`, a kept " +
 				"answer that did not read back whole — removed, and computed " +
 				"again, so rising is this node's disk damaging what it " +
 				"holds. Misses climbing while `crewlet.code.cache.memo.bytes` " +

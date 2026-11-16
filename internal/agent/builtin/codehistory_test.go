@@ -72,9 +72,12 @@ func (historyCopy) Provenance(cache.Synced) (cache.Provenance, error) {
 }
 func (historyCopy) WantHistory(string)                                 {}
 func (historyCopy) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
-func (historyCopy) Memo(cache.Synced) *cache.MemoBatch                 { return nil }
-func (historyCopy) Spool() (*os.File, error)                           { return nil, os.ErrInvalid }
-func (historyCopy) IndexTip(cache.Synced) (cache.IndexedTip, bool)     { return cache.IndexedTip{}, false }
+func (historyCopy) MemoProbe(cache.Synced, cache.MemoKey) ([]byte, bool) {
+	return nil, false
+}
+func (historyCopy) Memo(cache.Synced) *cache.MemoBatch             { return nil }
+func (historyCopy) Spool() (*os.File, error)                       { return nil, os.ErrInvalid }
+func (historyCopy) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.IndexedTip{}, false }
 func (historyCopy) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
 	return nil, false
 }

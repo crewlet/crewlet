@@ -907,13 +907,14 @@
 // asked of first is the estate router's: the repository's HOME, the first of
 // its rendezvous order over the live Gitlet nodes (ADR-0089).
 //
-// Two of those reads answer with text git leaves unbounded: a path's HISTORY
+// Three of those reads answer with text git leaves unbounded: a path's HISTORY
 // ([GitLog], its literal [LogQuery.Grep] matched by the Gitlet node, never by
-// git) and a file's BLAME ([GitBlame]). Each such field — a commit's subject,
-// its author's name and address, its parents, a blamed line — is DESCRIBED BY
-// ITS SIZE past its bound, never cut ([MaxLogSubjectBytes] and its kin, each of
-// the field's encoded size), so the widest commit, and the widest line with its
-// commit, always fit one page. A kind is an estate request's and no record's,
+// git), a file's BLAME ([GitBlame]) and a directory's LAST COMMITS
+// ([GitTreeCommits]), whose commits are a history's. Each such field (a
+// commit's subject, its author's name and address, its parents, a blamed line)
+// is DESCRIBED BY ITS SIZE past its bound, never cut ([MaxLogSubjectBytes] and
+// its kin, each of the field's encoded size), so the widest commit, and the
+// widest line with its commit, always fit one page. A kind is an estate request's and no record's,
 // so a kind added moves no [RecordVersion].
 //
 // # An engine write is built on a Gitlet node and lands as a push
