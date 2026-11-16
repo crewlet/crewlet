@@ -56,9 +56,13 @@ func TestTheDispatcherKeepsTheToolSessionContract(t *testing.T) {
 				once.Do(func() { close(cli.end) })
 				<-ended
 			},
-			Recorded: func(*testing.T) []toolsessiontest.Recorded {
+			Recorded: func(t *testing.T) []toolsessiontest.Recorded {
 				var out []toolsessiontest.Recorded
 				for _, c := range toolloop.Recorded(r.host) {
+					// THE RECORD KEEPS NO PICTURE once the answer is out.
+					if c.Result.Images != nil {
+						t.Errorf("the record of %s keeps its images' bytes", c.Name)
+					}
 					out = append(out, toolsessiontest.Recorded{Seq: c.Seq, Name: c.Name,
 						Output: c.Result.Output, Failed: c.Result.Failed, Images: c.Images,
 						Class: c.Result.Refusal()})

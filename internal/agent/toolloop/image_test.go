@@ -88,8 +88,8 @@ func imagePhase(t *testing.T, tool tools.Callable) (llmtest.Result, *toolloop.Re
 // holds the picture.
 //
 // Mutation: answer the harness from Output alone (toolloop's dispatcher or the
-// session's server), and the image block is missing; keep the bytes on the
-// call's settled result, or on the surface's record, and the records hold them.
+// session's server), and the image block is missing; write the picture into the
+// text a record keeps, and the records hold its bytes.
 func TestABuiltinsPictureReachesTheHarnessAndNoRecordKeepsIt(t *testing.T) {
 	t.Parallel()
 	data := cropPNG(t)
