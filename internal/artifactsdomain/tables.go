@@ -37,6 +37,10 @@ var ReproducibleTables = []string{
 	// internal/objstore/references), and every adoption and clear.
 	"artifact_brand", "artifact_brand_files", "artifact_brand_history",
 
+	// Comment threads (ADR-0153): each thread with its anchor and status,
+	// and every remark in it.
+	"artifact_comment_threads", "artifact_comments",
+
 	// The gate tables, which outlive the records that wrote them, and the
 	// reanchor's audit row.
 	"artifacts_deletions", "artifacts_evictions", "artifacts_log_generations",

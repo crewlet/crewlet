@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -42,6 +44,10 @@ import (
 //   - The company's adopted brand is ONE subject (`brand`, no id): two
 //     administrators adopting at once contend there, and the later one is
 //     decided against the earlier one's adoption.
+//   - A comment thread rides a subject of its own beneath its artifact
+//     (ADR-0153): its remarks, edits, resolve and reopen contend only with
+//     each other, never with a publish, and the artifact's deletion gate
+//     covers it as it covers an asset.
 
 // ObjectKind is what an object on the artifacts log is.
 //
@@ -100,15 +106,15 @@ const (
 	// KindBrand is the company's adopted brand, ONE subject with no id: an
 	// adoption and a clear.
 	KindBrand ObjectKind = "brand"
+
+	// KindComment is one comment thread on an artifact (ADR-0153): its
+	// opening remark, its replies, their edits and removals, its resolve and
+	// its reopen. Its id is the artifact's id, a dot and the thread's, so the
+	// deletion gate reads the artifact from the subject alone, as an asset's.
+	KindComment ObjectKind = "comment"
 )
 
-// KindComment is RESERVED for the anchored comments a later build adds: no
-// op, no payload and no table in this build, and NOT in [ObjectKinds], so a
-// record of it is refused where it is written and a newer peer's is filed
-// under the literal like any kind this build does not know.
-const KindComment ObjectKind = "comment"
-
-// ObjectKinds are the ten, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the eleven, and THE ORDER IS LOAD-BEARING.
 //
 // The framework's conformance suite publishes the FIRST THREE a domain
 // declares, twice each, in order, so the declaration decides what the suite
@@ -117,12 +123,13 @@ const KindComment ObjectKind = "comment"
 // create wrote is a record the applier refuses, so any other order would
 // certify a refusal.
 //
-// A KIND ADDED LATER IS APPENDED, never inserted: the folder tree and the
-// brand came after the base format, so a build that predates them retains
-// their records ([versionedFields] stamps each kind at its version).
+// A KIND ADDED LATER IS APPENDED, never inserted: the folder tree, the brand
+// and comment threads came after the base format, so a build that predates
+// them retains their records ([versionedFields] stamps each kind at its
+// version).
 var ObjectKinds = []ObjectKind{
 	KindArtifact, KindAsset, KindReader, KindSource, KindEviction, KindGeneration,
-	KindBarrier, KindTrimmed, KindFolder, KindBrand,
+	KindBarrier, KindTrimmed, KindFolder, KindBrand, KindComment,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -131,7 +138,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation, and so whether the framework keeps an anchor for it.
 //
-// EIGHT OF TEN DO. The barrier shares one subject across the whole domain, so
+// NINE OF ELEVEN DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one. A trimmed record REMOVES anchors, and identical ones are each
 // meant to land, so an expectation would refuse every one after the first and
@@ -219,6 +226,23 @@ func SplitAssetID(id string) (artifact, asset string, err error) {
 	return artifact, asset, nil
 }
 
+// CommentSubject names one comment thread of one artifact. The artifact leads,
+// for [AssetSubject]'s reason: the deletion gate reads it from the subject.
+func CommentSubject(artifact artifacts.ID, thread uuid.UUID) Subject {
+	return Subject{Kind: KindComment, ID: artifact.String() + "." + thread.String()}
+}
+
+// SplitCommentID takes a comment subject's id apart into the artifact and the
+// thread, cut at the first dot as an asset's is.
+func SplitCommentID(id string) (artifact, thread string, err error) {
+	artifact, thread, ok := strings.Cut(id, ".")
+	if !ok || artifact == "" || thread == "" {
+		return "", "", fmt.Errorf("artifactsdomain: %q is not a comment thread id: "+
+			"a thread's id is its artifact's id, a dot and its own", id)
+	}
+	return artifact, thread, nil
+}
+
 // EvictionSubject names one node's standing in this log, so an eviction and
 // the readmission that inverts it arbitrate against each other and nothing
 // else.
@@ -301,8 +325,8 @@ func (s Subject) Validate() error {
 	return nil
 }
 
-// writable refuses a subject this build may not WRITE: an unknown kind, and
-// the reserved comment kind among them.
+// writable refuses a subject this build may not WRITE: a kind it does not
+// know.
 func (s Subject) writable() error {
 	if err := s.Validate(); err != nil {
 		return err
@@ -327,7 +351,8 @@ func ParseSubject(wire string) (Subject, bool) {
 //
 // THE SUBJECT ALONE DECIDES, for the reason [Gates.GatedAt] gives: the
 // publisher's side is asked about another node's record with no body. An
-// artifact subject names its artifact and an asset subject leads with it; a
+// artifact subject names its artifact, and an asset's and a comment thread's
+// lead with it; a
 // source subject and a reader subject name one only in their payloads, so they
 // are gated on nothing and their applies refuse an artifact the marker holds
 // instead. ONE FUNCTION, asked by [Applier.Gated] and [Gates.GatedAt] alike,
@@ -338,6 +363,12 @@ func gatedArtifact(kind, id string) (string, bool) {
 		return id, id != ""
 	case KindAsset:
 		artifact, _, err := SplitAssetID(id)
+		if err != nil {
+			return "", false
+		}
+		return artifact, true
+	case KindComment:
+		artifact, _, err := SplitCommentID(id)
 		if err != nil {
 			return "", false
 		}

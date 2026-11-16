@@ -22,10 +22,10 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 // marker (permanent) and a guarding row (what still says an object exists once
 // the record that created it has been trimmed off the log).
 //
-// THREE KINDS HAVE THEM. An ARTIFACT has both. An ASSET has a guarding row and
-// its artifact's marker. A SOURCE address has a guarding row, the claim, and no
-// marker: releasing an address is a transfer or a purge, not a destruction of
-// the address. A reader's state and the framework's kinds are created by their
+// FOUR KINDS HAVE THEM. An ARTIFACT has both. An ASSET and a COMMENT thread
+// have a guarding row and their artifact's marker. A SOURCE address has a
+// guarding row, the claim, and no marker: releasing an address is a transfer
+// or a purge, not a destruction of the address. A reader's state and the framework's kinds are created by their
 // first record and removed by nothing, so false for both is the answer.
 func guards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, guard bool, err error) {
 	switch ObjectKind(subj.Kind) {
@@ -51,6 +51,20 @@ func guards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, gu
 			artifact, artifact, asset).Scan(&removed, &present); err != nil {
 			return false, false, fmt.Errorf("artifactsdomain: read the guards on "+
 				"asset %s: %w", subj.ID, err)
+		}
+		return removed > 0, present > 0, nil
+	case KindComment:
+		artifact, thread, splitErr := SplitCommentID(subj.ID)
+		if splitErr != nil {
+			return false, false, splitErr
+		}
+		var removed, present int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT (SELECT COUNT(*) FROM artifacts_deletions WHERE artifact_id = ?),
+			       (SELECT COUNT(*) FROM artifact_comment_threads WHERE artifact_id = ? AND id = ?)`,
+			artifact, artifact, thread).Scan(&removed, &present); err != nil {
+			return false, false, fmt.Errorf("artifactsdomain: read the guards on "+
+				"comment thread %s: %w", subj.ID, err)
 		}
 		return removed > 0, present > 0, nil
 	case KindSource:

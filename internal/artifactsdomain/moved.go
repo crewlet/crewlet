@@ -56,6 +56,11 @@ const (
 	// batch, for a label every page reads again on its own.
 	MoveFolder MoveKind = "folder"
 
+	// MoveComment is a comment thread opened, a remark added, edited or
+	// removed, or a thread resolved or reopened (ADR-0153). It narrows
+	// nothing: an open page re-reads its threads.
+	MoveComment MoveKind = "comment"
+
 	// MoveReset names NO artifact: every artifact on this node may have
 	// moved with no committed record to say which, because a batch retained
 	// a record this build cannot read, or an adoption replaced the whole
@@ -66,7 +71,7 @@ const (
 // MoveKinds are every kind of movement.
 var MoveKinds = []MoveKind{
 	MoveVersion, MoveMeta, MoveShare, MoveAsset, MoveTrash, MoveRestore, MovePurge,
-	MoveTransfer, MoveFolder, MoveReset,
+	MoveTransfer, MoveFolder, MoveReset, MoveComment,
 }
 
 // Moved is one artifact's movement in a committed batch.

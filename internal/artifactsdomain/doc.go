@@ -15,8 +15,20 @@
 // removal. A republish-in-place address is a SOURCE subject, create-only, so two
 // first publishes of one source contend there. An asset rides a subject of its
 // own beneath its artifact (never carried, so it needs no artifact ordering),
-// and a reader's pins and opened marks ride the reader's. The `comment` kind is
-// reserved for a later build and has no op here.
+// and a reader's pins and opened marks ride the reader's.
+//
+// # A comment is a thread of its own
+//
+// ADR-0153. A comment thread rides a subject of its own beneath its artifact
+// (`comment`, [CommentSubject]), so its remarks, edits, resolve and reopen
+// contend only with each other and never with a publish, and the artifact's
+// deletion gate covers it. A thread keeps the anchor it was made with and the
+// version it was made on, and nothing else about where it is: its place on
+// any version is found at read by internal/artifacts/commentanchor, so a
+// publish writes nothing to a thread. A comment record writes no history row;
+// each row carries the position of the record that last wrote it, and the
+// writer reads its verdict back from that. Each record also carries who it
+// wakes or tells ([CommentNotify]), computed by the writer's caller, as data.
 //
 // # The carry rule, and why the collector needs no lock
 //
@@ -72,8 +84,9 @@
 // version, a narrowing's access epoch, a trash, a purge), built from the rows it
 // wrote, and the engine fans it out to the serving origin's authorization cache
 // and the socket hub ([Moved]). A batch that retained a record this build cannot
-// read moves everything ([MoveReset]). No record wakes a seat in this release, so
-// the domain declares no feed.
+// read moves everything ([MoveReset]). The domain declares no feed: a comment
+// record carries who it wakes ([CommentNotify]), and the feed that delivers it
+// is declared with that delivery.
 //
 // # An artifact lives in one folder, and a folder grants nothing
 //

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/commentanchor"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -44,4 +45,32 @@ func RefusalError(ctx context.Context, w *Writer, id string, reason Refusal, s H
 	number int) error {
 
 	return w.refusal(ctx, id, reason, s, number)
+}
+
+// OpenThreadStamped opens a thread as a writer whose thread bound was
+// maxThreads, deciding nothing but the record: it stands in two opens that
+// raced past one snapshot, so a test can hold the apply to the stamped bound
+// and the writer to the verdict it reads back.
+func OpenThreadStamped(ctx context.Context, w *Writer, c Call, in ThreadInput, maxThreads int) (
+	Commented, error) {
+
+	opID, err := w.operation(c, string(OpCommentOpen), in.Artifact.String(), in)
+	if err != nil {
+		return Commented{}, err
+	}
+	at := w.now()
+	thread, remark := threadIDOf(opID), remarkIDOf(opID)
+	subject, scope := CommentSubject(in.Artifact, thread), ScopeSet{Subject: true}
+	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternCreate,
+		func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decision(stamp, c, subject, OpCommentOpen, scope, opID, CommentOpenPayload{
+				V: baseRecordVersion, Remark: remark.String(), Body: in.Body, Version: in.Version,
+				Anchor: commentanchor.Whole(), MaxThreads: maxThreads,
+			}, at)
+		}))
+	out := Commented{Thread: thread, Remark: remark, Result: res}
+	if err != nil {
+		return out, err
+	}
+	return out, w.commentVerdict(ctx, in.Artifact, thread, remark, OpCommentOpen, res, maxThreads)
 }
