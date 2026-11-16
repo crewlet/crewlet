@@ -83,10 +83,7 @@
 //
 // # An image a tool's answer carries
 //
-// A first-party tool may hand the model a picture to see beside its text
-// ([Result.Images], image.go): at most [MaxImages], each a PNG, JPEG or WebP
-// within [MaxImageBytes], its type read from its bytes, never taken on its
-// word. An image cannot be fenced (ADR-0040), so it rides only beside text,
-// and that text says whose picture it is. A third-party server's image stays
-// the one line [Block.Render] writes: nothing the engine wrote says whose it is.
+// A first-party tool may hand the model pictures beside its text ([Result.Images]),
+// held to [CheckImages]. An image cannot be fenced (ADR-0040), so its text says
+// whose it is; a third-party server's image stays the line [Block.Render] writes.
 package mcp

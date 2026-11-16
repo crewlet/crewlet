@@ -66,9 +66,8 @@
 //
 // # An answer's images
 //
-// A call's answer may carry images beside its text ([Result.Images]), written
-// as image content after the text, so a client that reads no image still reads
-// the text saying whose picture it is. They are held to internal/mcp's
+// A call's answer may carry images ([Result.Images]), written after its text so
+// a client that reads no image still reads it, and held to internal/mcp's
 // CheckImages as they are written, so an image it refuses never leaves.
 //
 // # No listener anywhere

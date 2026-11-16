@@ -264,6 +264,8 @@ A seat that edits what it read and sends the fence back with it does not store t
 
 A fence is a model's, never a person's. A write's answer that echoes words somebody else wrote (a room's topic and purpose on `update_channel`, a page's title on `save_page` and `comment_on_page`, a parked run's question on `answer_executor`) labels them for whichever model reads it, a seat's in a turn or an assistant's over `/operator/mcp`. The act route and the human write surface answer a person the same receipt with those words as they were stored, with no fence, no escape and no envelope: the labels tell a model how far to believe what it reads, and a person reads the words on their own screen ([ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-caveat-or-a-refusal-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md)).
 
+A picture cannot be fenced: there is no line around it the picture cannot also draw, and words drawn inside it read to a model as words. So a built-in tool hands its model an image only beside its text, which says whose picture it is under the same labels, and the engine refuses an answer carrying an image with no text ([an answer's image](../guides/tools-and-mcp.md#how-tool-calls-work)). An MCP server's image is never passed on: it stays the one line that describes it.
+
 Fencing reduces prompt injection; it does not remove it. The structural defences hold whatever a model does: every write a seat makes is still authorized as that seat, so a seat persuaded by a page can do no more than its grants allow.
 
 ### The thread a turn was woken in
