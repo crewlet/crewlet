@@ -644,7 +644,8 @@ func (e *Engine) endLimitProbe(ctx context.Context, key probeKey, probe *limitPr
 		}
 		// THE WAIT IS OVER: the chain answered, or stopped reporting a
 		// limit, unless the seat met it again in the release's window and
-		// stands parked on it ([Engine.unlessParked]).
+		// stands parked on it ([Engine.unlessParked]). After the release,
+		// whose park, standing, would keep it.
 		e.endParkWait(seat)
 	}
 }

@@ -1086,6 +1086,55 @@ func TestAParkTakenInAReleasesWindowKeepsItsWait(t *testing.T) {
 	}
 }
 
+// A PROBE'S ANSWER ENDS THE WAIT OF EVERY SEAT IT RELEASES.
+//
+// The answer releases each seat's park and then ends its wait, which a park of
+// the seat that stands keeps ([Engine.unlessParked]). Ended before the
+// release, the wait would meet the very park being released and be kept, and
+// the release would only mark it released, so a seat that met a new limit
+// within [parkCarryWindow] of the answer read as waiting since before its
+// models answered.
+//
+// Mutation: end the wait before the release, and this fails.
+func TestAProbesAnswerEndsTheWaitOfEverySeatItReleases(t *testing.T) {
+	t.Parallel()
+	reset := parkedAt.Add(time.Hour)
+	model := &limitedModel{reset: reset}
+	r := newProbeRig(t, model)
+	model.now = r.clock
+	lead, err := r.e.seatID("lead")
+	if err != nil {
+		t.Fatalf("seatID: %v", err)
+	}
+	r.park(t, "lead", reset)
+	answered := reset.Add(time.Second)
+	r.at(answered)
+	live := r.alarms.live()
+	if len(live) != 1 {
+		t.Fatalf("%d alarms armed for one seat's park, want its probe's one", len(live))
+	}
+	live[0].fire()
+	if r.e.providerParks.parking(lead) != nil {
+		t.Fatal("the probe's answer left the seat parked")
+	}
+
+	again := answered.Add(parkCarryWindow / 2)
+	r.at(again)
+	r.park(t, "lead", again.Add(time.Hour))
+	rows := 0
+	var since time.Time
+	for _, row := range r.e.parkedByEntry()["default"] {
+		if row.Seat == lead {
+			rows++
+			since = row.Since
+		}
+	}
+	if rows != 1 || !since.Equal(again) {
+		t.Errorf("the seat that met a new limit %v after its models answered waits from %v "+
+			"(%d rows), want one new wait from %v", parkCarryWindow/2, since, rows, again)
+	}
+}
+
 // A SEAT'S RELEASE FORGETS ITS WAIT, PARKED OR NOT.
 //
 // A release that finds a park standing leaves the seat's wait record to it
