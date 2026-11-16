@@ -128,6 +128,33 @@ const rollup = (target: string, state: string) => ({
   required_passed: state === "passed" ? 2 : 1,
 });
 
+/** The tags newest first, as `code_tags` answers them: one dated, one past 9999, one of a tree. */
+const TAG_ROWS = [
+  {
+    ref: "refs/tags/v3",
+    oid: HEAD,
+    type: "commit",
+    peeled: HEAD,
+    peeled_type: "commit",
+    date: "2026-10-28T07:00:00Z",
+  },
+  {
+    ref: "refs/tags/v2",
+    oid: OTHER,
+    type: "tag",
+    peeled: OTHER,
+    peeled_type: "commit",
+    date_unix: 253402300801,
+  },
+  {
+    ref: "refs/tags/v1",
+    oid: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+    type: "tree",
+    peeled: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+    peeled_type: "tree",
+  },
+];
+
 /** One head of a `code_tips` page, behind and ahead of its base. */
 const tipOf = (oid: string, behind?: number, ahead?: number) => ({
   oid,
@@ -549,6 +576,12 @@ function stubEngine(
               .map((commit) => ({ commit, checks: [rollup("refs/heads/main", "passed")] })),
             position: POSITION,
             level: "session",
+          });
+        case "/query/code_tags":
+          return json({
+            repo: "web",
+            kind: "tags",
+            tags: { tags: TAG_ROWS.slice(0, Number(p.get("limit") ?? 50)), total: TAG_ROWS.length },
           });
         case "/query/code_tips":
           return json({
@@ -1789,6 +1822,9 @@ test("the views are the address", async () => {
   expect(all.get("moved_before")).toBeNull();
   expect(all.get("moved_since")).toBeNull();
   expect(location.hash).toContain("view=all");
+  fireEvent.click(screen.getByRole("radio", { name: "Tags" }));
+  await waitFor(() => expect(location.hash).toContain("view=tags"));
+  await screen.findByRole("table", { name: /^Tags/ });
   // Mutation: list the default branch in Active, and its rows outnumber the engine's count.
   fireEvent.click(screen.getByRole("radio", { name: "Active" }));
   const active = await screen.findByRole("table", { name: /^Active branches/ });
@@ -1869,6 +1905,51 @@ test("the default branch is found on a later page of its find, else drawn unread
   mount("#/gitlet/repos/web?tab=branches");
   const unread = await screen.findByRole("table", { name: "Default branch" });
   expect(within(unread).getByText("Not read")).toBeTruthy();
+});
+
+// TAGS ARE BY DATE, the newest Latest, each at its commit; the Overview shows three
+// and leads to the Tags view, which pages them all. Mutation: mark Latest on every
+// page's first row, or link a tag of a tree to a commit's page.
+test("tags are by date, the newest Latest, each at its commit", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web?tab=branches");
+  const box = await screen.findByRole("table", { name: /^Tags/ });
+  expect(reads(asked, "code_tags")[0]!.searchParams.get("limit")).toBe("3");
+  expect(within(box).getByRole("link", { name: "View all" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/web?tab=branches&view=tags",
+  );
+  cleanup();
+
+  const again = stubEngine();
+  mount("#/gitlet/repos/web?tab=branches&view=tags");
+  const tags = await screen.findByRole("table", { name: /^Tags/ });
+  expect(reads(again, "code_tags")[0]!.searchParams.get("limit")).toBe("50");
+  expect(screen.queryByRole("searchbox", { name: "Find a branch" })).toBeNull();
+  const rows = [...tags.querySelectorAll<HTMLElement>("tbody tr")];
+  expect(rows.map((r) => r.querySelector(".code-tag__name")?.textContent)).toEqual([
+    "v3",
+    "v2",
+    "v1",
+  ]);
+  expect(within(tags).getAllByText("Latest")).toHaveLength(1);
+  expect(within(rows[0]!).getByText("Latest")).toBeTruthy();
+  expect(within(rows[0]!).getByRole("link", { name: "v3" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/web?ref=refs%2Ftags%2Fv3",
+  );
+  expect(
+    within(rows[0]!)
+      .getByRole("link", { name: HEAD.slice(0, 7) })
+      .getAttribute("href"),
+  ).toBe(`#/gitlet/repos/web/commits/${HEAD}`);
+  expect(rows[0]!.querySelector("time")?.textContent).toBe("5h ago");
+  expect(within(rows[1]!).getByText("after the year 9999")).toBeTruthy();
+  expect(within(rows[2]!).getByText("undated")).toBeTruthy();
+  expect(within(rows[2]!).queryByRole("link", { name: "0f1e2d3" })).toBeNull();
+  expect(
+    within(rows[0]!).getByRole("link", { name: "Compare v3 with main" }).getAttribute("href"),
+  ).toBe("#/gitlet/repos/web/compare?base=refs%2Ftags%2Fv3&head=main");
 });
 
 // J WALKS A BOX'S BRANCHES: j focuses the first row's name and Enter opens its

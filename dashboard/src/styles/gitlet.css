@@ -1287,23 +1287,6 @@
   gap: var(--spacing-2);
 }
 
-/* A REF OF THE BRANCHES AND TAGS: its glyph, its name, its marks. */
-.code-ref {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-  min-width: 0;
-}
-
-.code-ref__name {
-  min-width: 0;
-  font-family: var(--font-family-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* A SECTION OF A TAB BELOW ITS FIRST, with a heading of its own. */
 .code-section {
   display: flex;
@@ -1387,6 +1370,17 @@
   inline-size: 23%;
 }
 
+.code-refs__table--tags thead tr > :nth-child(1) {
+  inline-size: 70%;
+}
+.code-refs__table--tags thead tr > :nth-child(2) {
+  inline-size: 30%;
+}
+
+.code-refs__table .code-refs__end {
+  text-align: end;
+}
+
 .code-refs__table .code-refs__title {
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
@@ -1438,6 +1432,45 @@
 .code-refs__drift,
 .code-refs__change {
   white-space: nowrap;
+}
+
+/* A TAG: its glyph, then its name and marks over the commit it names and when. */
+.code-tag {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-tag__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.code-tag__name {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+}
+
+.code-tag__name:hover {
+  text-decoration: underline;
+}
+
+.code-tag__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.code-tag__fact {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
 }
 
 /* HOW FAR A BRANCH IS FROM THE DEFAULT: two counts either side of a hairline, each over a

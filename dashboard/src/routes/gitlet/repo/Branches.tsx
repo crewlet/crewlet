@@ -1,6 +1,6 @@
 /**
  * A repository's branches and tags as tables: each branch with who moved it and when, its checks,
- * its distance from the default branch and its change, in views by when each moved; tags under them.
+ * its distance from the default branch and its change, in views by when each moved; tags newest first.
  */
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
@@ -19,18 +19,19 @@ import {
   useClipboard,
 } from "@crewlethq/ui";
 import {
-  BookmarkGlyph,
   CheckGlyph,
   ClockGlyph,
+  CodeGlyph,
   CopyGlyph,
   GitBranchGlyph,
+  GitCommitVerticalGlyph,
   GitCompareGlyph,
   ListGlyph,
   RotateCcwClockGlyph,
   SearchGlyph,
   ShieldCheckGlyph,
+  TagGlyph,
 } from "@crewlethq/icons/glyphs";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { href, useDraft, useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
@@ -38,7 +39,7 @@ import { ago } from "~/lib/ago.ts";
 import { useClock, useNow } from "~/lib/clock.ts";
 import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
 import { PUSH_HISTORY_DAYS, changeRef, refName, repoPath, shortOID } from "~/lib/code.ts";
-import { civilAt, civilKey, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
+import { civilAt, civilKey, fmtDateTime, plural, readerDay, relTime } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
 import { dayStartIn } from "~/lib/range.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
@@ -48,24 +49,17 @@ import {
   type CodeCommitMark,
   type CodeRefListing,
   type CodeTip,
+  type CodeGitAnswer,
   type CodeRefMover,
   type CodeRefProtection,
-  type CodeRefRow,
   type CodeRefsAnswer,
   type CodeRepoDetail,
+  type CodeTagRow,
 } from "~/protocol/index.ts";
 import { ChangeRefPill } from "../Changes.tsx";
 import { useListKeys } from "../CodeList.tsx";
-import { compareHref, repoHref } from "../paths.ts";
-import {
-  BranchChip,
-  CheckRollupMark,
-  Face,
-  GITLET,
-  ShaChip,
-  useWhoName,
-  type Who,
-} from "../ui.tsx";
+import { commitHref, compareHref, repoHref } from "../paths.ts";
+import { BranchChip, CheckRollupMark, Face, GITLET, useWhoName, type Who } from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
 import { useCommitMarks } from "./marks.ts";
 import { ProtectButton } from "./Protect.tsx";
@@ -76,24 +70,25 @@ const ACTIVE_DAYS = 90;
 
 const DAY_MS = 86_400_000;
 const HEADS = "refs/heads/";
-/** Where a repository's tags are listed (`gitlet.ReadQuery.Prefix`). */
-const TAG_PREFIX = "refs/tags/";
 /** A page of a view: its heads stay under the 100 one marks or tips read takes. */
 const PAGE_LIMIT = 50;
 /** The Overview's active branches, the default branch left out. */
 const OVERVIEW_ACTIVE = 10;
 /** A page of the find that looks for the default branch by its name. */
 const DEFAULT_FIND_LIMIT = 20;
+/** The Overview's newest tags. */
+const OVERVIEW_TAGS = 3;
 /** How long typing rests before a find is written to the address. */
 const FIND_PAUSE_MS = 250;
 
-type View = "overview" | "active" | "stale" | "all";
+type View = "overview" | "active" | "stale" | "all" | "tags";
 
 const VIEWS: readonly { value: View; label: string; icon: ReactNode }[] = [
   { value: "overview", label: "Overview", icon: <GitBranchGlyph size="sm" /> },
   { value: "active", label: "Active", icon: <ClockGlyph size="sm" /> },
   { value: "stale", label: "Stale", icon: <RotateCcwClockGlyph size="sm" /> },
   { value: "all", label: "All", icon: <ListGlyph size="sm" /> },
+  { value: "tags", label: "Tags", icon: <TagGlyph size="sm" /> },
 ];
 
 const viewOf = (raw: string): View =>
@@ -130,11 +125,13 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
           options={VIEWS.map((v) => ({ value: v.value, label: v.label, icon: v.icon }))}
         />
         <span className="spacer" />
-        <FindBranch q={q} onQ={setQ} />
+        {view !== "tags" && <FindBranch q={q} onQ={setQ} />}
         <NewBranchButton repo={repo} />
       </PageToolbar>
       <div className="code-refs-boxes">
-        {view === "overview" && !q ? (
+        {view === "tags" ? (
+          <TagsView repo={repo} />
+        ) : view === "overview" && !q ? (
           <Overview repo={repo} since={since} />
         ) : (
           <BranchView repo={repo} view={view} q={q} since={since} />
@@ -211,7 +208,7 @@ function Overview({ repo, since }: { repo: CodeRepoDetail; since: string | undef
       <FactsNote facts={facts} repo={repo} />
       <DefaultBox repo={repo} found={found} facts={facts} />
       <ActiveBox repo={repo} active={active} facts={facts} />
-      <Tags repo={repo} />
+      <TagsBox repo={repo} />
     </>
   );
 }
@@ -407,7 +404,7 @@ function BranchView({
   q: string;
   since: string | undefined;
 }) {
-  const shown = view === "overview" ? "all" : view;
+  const shown = view === "overview" || view === "tags" ? "all" : view;
   const params = useMemo(
     () => listingParams(repo.name, shown, q, since, PAGE_LIMIT),
     [repo.name, shown, q, since],
@@ -498,7 +495,7 @@ function BranchView({
   );
 }
 
-type Columns = "branch" | "default";
+type Columns = "branch" | "default" | "tags";
 
 /** One box of branches: a table titled in its first head cell, its rows walked with `j`, `k` and Enter. */
 function RefsBox({
@@ -513,6 +510,7 @@ function RefsBox({
   empty,
   foot,
   columns = "branch",
+  headEnd,
   children,
 }: {
   title: string;
@@ -526,12 +524,15 @@ function RefsBox({
   empty?: { title: ReactNode; hint: ReactNode; action?: ReactNode } | undefined;
   foot?: ReactNode;
   columns?: Columns;
+  /** The last head cell's words, a box's way to more of it; else its controls, unnamed. */
+  headEnd?: ReactNode;
   children: ReactNode;
 }) {
   const id = useId();
   const box = useRef<HTMLElement>(null);
   useListKeys({ root: box, keys });
   const failed = error !== null;
+  const tags = columns === "tags";
   return (
     <section className="code-refs" aria-labelledby={id} ref={box}>
       {(loading || failed || empty) && (
@@ -543,7 +544,10 @@ function RefsBox({
         <Skeleton variant="table" rows={3} label={loadingLabel} />
       ) : (
         <QueryState error={error} refusal={refusal} detail={detail} loading={false} empty={empty}>
-          <table className="code-refs__table" aria-labelledby={id}>
+          <table
+            className={tags ? "code-refs__table code-refs__table--tags" : "code-refs__table"}
+            aria-labelledby={id}
+          >
             <thead>
               <tr>
                 <th scope="col" id={id} className="code-refs__title">
@@ -557,21 +561,25 @@ function RefsBox({
                     )}
                   </span>
                 </th>
-                <th scope="col">Updated</th>
-                <th scope="col">Checks</th>
-                {columns === "default" ? (
+                {!tags && (
                   <>
-                    <td />
-                    <td />
-                  </>
-                ) : (
-                  <>
-                    <th scope="col">Behind | Ahead</th>
-                    <th scope="col">Change</th>
+                    <th scope="col">Updated</th>
+                    <th scope="col">Checks</th>
+                    {columns === "default" ? (
+                      <>
+                        <td />
+                        <td />
+                      </>
+                    ) : (
+                      <>
+                        <th scope="col">Behind | Ahead</th>
+                        <th scope="col">Change</th>
+                      </>
+                    )}
                   </>
                 )}
-                <th scope="col">
-                  <VisuallyHidden>Actions</VisuallyHidden>
+                <th scope="col" className="code-refs__end">
+                  {headEnd ?? <VisuallyHidden>Actions</VisuallyHidden>}
                 </th>
               </tr>
             </thead>
@@ -974,75 +982,182 @@ function MovedBy({ row, now }: { row: CodeRefListing; now: number }) {
   );
 }
 
-/**
- * The repository's tags, under its branches: the engine's listing under
- * `refs/tags/`, by name a page at a time, each opening its files at the tag —
- * named by its whole ref, which no branch of the same name can shadow.
- */
-function Tags({ repo }: { repo: CodeRepoDetail }) {
-  const params = useMemo(() => ({ name: repo.name, prefix: TAG_PREFIX }), [repo.name]);
-  const first = useCodeQuery("code_refs", params);
+/** The Overview's Tags box: the newest three, and the way to all of them. */
+function TagsBox({ repo }: { repo: CodeRepoDetail }) {
+  const read = useCodeQuery(
+    "code_tags",
+    useMemo(() => ({ name: repo.name, limit: OVERVIEW_TAGS }), [repo.name]),
+  );
+  const now = useNow();
+  const rows = read.data?.tags?.tags ?? [];
+  return (
+    <RefsBox
+      title="Tags"
+      count={read.data?.tags ? { count: read.data.tags.total } : undefined}
+      keys={rows.map((t) => t.ref)}
+      loading={read.loading}
+      loadingLabel={`Loading the tags of ${repo.name}`}
+      error={read.error}
+      refusal={read.refusal}
+      detail={read.detail}
+      empty={rows.length === 0 ? NO_TAG : undefined}
+      columns="tags"
+      headEnd={
+        <a className="t-link" href={viewHref(repo.name, "tags")}>
+          View all
+        </a>
+      }
+    >
+      {rows.map((t, i) => (
+        <TagRow key={t.ref} repo={repo} tag={t} latest={i === 0} now={now} />
+      ))}
+    </RefsBox>
+  );
+}
+
+const NO_TAG = {
+  title: "No tag yet",
+  hint: "A tag is listed once a push that creates it applies.",
+};
+
+/** Every tag, newest first by its own date, a page at a time. */
+function TagsView({ repo }: { repo: CodeRepoDetail }) {
+  const params = useMemo(() => ({ name: repo.name, limit: PAGE_LIMIT }), [repo.name]);
+  const first = useCodeQuery("code_tags", params);
   const paged = usePaged(
     first,
     params,
-    (cursor) => codeRest.query("code_refs", { ...params, cursor }),
-    (a: CodeRefsAnswer) => a.refs ?? [],
-    (r: CodeRefRow) => r.ref,
-    (a: CodeRefsAnswer) => a.next ?? "",
+    (cursor) => codeRest.query("code_tags", { ...params, cursor }),
+    (a: CodeGitAnswer) => a.tags?.tags ?? [],
+    (t: CodeTagRow) => t.ref,
+    (a: CodeGitAnswer) => a.next ?? "",
   );
+  const now = useNow();
   const rows = paged.items;
+  const total = first.data?.tags?.total;
   return (
-    <section className="code-section" aria-labelledby="code-tags-title">
-      <h2 id="code-tags-title" className="code-section__title">
-        Tags
-      </h2>
-      {paged.loading && rows.length === 0 && (
-        <Skeleton variant="text" rows={3} label={`Loading the tags of ${repo.name}`} />
-      )}
-      <QueryState
-        error={paged.error}
-        refusal={paged.refusal}
-        detail={first.detail}
-        loading={paged.loading}
-        empty={
-          rows.length > 0 || paged.more
-            ? undefined
-            : { title: "No tag yet", hint: "A tag is listed once a push that creates it applies." }
-        }
-      >
-        <DataGrid<CodeRefRow>
-          name="tags"
-          rows={rows}
-          rowKey={(r) => r.ref}
-          serverSorted
-          rowHref={(r) => repoHref(repo.name, { ref: r.ref })}
-          onLoadMore={paged.more ? paged.next : undefined}
-          loadedNote={paged.more ? `${plural(rows.length, "tag")} loaded` : undefined}
-          aria-label={`Tags of ${repo.name}`}
-          columns={[
-            {
-              key: "name",
-              header: "Tag",
-              floor: "12rem",
-              phoneLead: true,
-              cell: (r) => (
-                <span className="code-ref">
-                  <BookmarkGlyph size="sm" className="code-glyph" />
-                  <span className="code-ref__name">{refName(r.ref).name}</span>
-                </span>
-              ),
-            },
-            {
-              key: "commit",
-              header: "Commit",
-              shrink: true,
-              action: true,
-              cell: (r) => (r.oid ? <ShaChip oid={r.oid} /> : null),
-            },
-          ]}
-        />
-      </QueryState>
-      {paged.pageError && <PageFailed error={paged.pageError} />}
-    </section>
+    <RefsBox
+      title="Tags"
+      count={total === undefined ? undefined : { count: total }}
+      keys={rows.map((t) => t.ref)}
+      loading={paged.loading && rows.length === 0}
+      loadingLabel={`Loading the tags of ${repo.name}`}
+      error={paged.error}
+      refusal={paged.refusal}
+      detail={first.detail}
+      empty={rows.length === 0 && !paged.more ? NO_TAG : undefined}
+      columns="tags"
+      foot={
+        paged.more || paged.pageError ? (
+          <>
+            {paged.more && (
+              <Button size="small" variant="secondary" loading={paged.paging} onClick={paged.next}>
+                Load more tags
+              </Button>
+            )}
+            {paged.more && <span className="t-caption">{plural(rows.length, "tag")} loaded</span>}
+            {paged.pageError && <PageFailed error={paged.pageError} />}
+          </>
+        ) : undefined
+      }
+    >
+      {rows.map((t, i) => (
+        <TagRow key={t.ref} repo={repo} tag={t} latest={i === 0} now={now} />
+      ))}
+    </RefsBox>
+  );
+}
+
+/** When a tag was made: its own date, past the year 9999, or none of its own. */
+function TagDate({ tag, now }: { tag: CodeTagRow; now: number }) {
+  if (tag.date) {
+    return (
+      <time dateTime={tag.date} title={fmtDateTime(tag.date)}>
+        {relTime(tag.date, now)}
+      </time>
+    );
+  }
+  if (tag.date_unix !== undefined) return <span>after the year 9999</span>;
+  return (
+    <span title="A lightweight tag of a tree or a blob, or an annotated tag naming no tagger, has no date of its own.">
+      undated
+    </span>
+  );
+}
+
+/** One tag: its name opening its files at its whole ref, the commit it names and when, and its controls. */
+function TagRow({
+  repo,
+  tag,
+  latest,
+  now,
+}: {
+  repo: CodeRepoDetail;
+  tag: CodeTagRow;
+  latest: boolean;
+  now: number;
+}) {
+  const name = refName(tag.ref).name;
+  const id = shortOID(tag.peeled);
+  return (
+    <tr data-key={tag.ref}>
+      <td className="code-refs__name">
+        <span className="code-tag">
+          <TagGlyph size="sm" className="code-glyph" />
+          <span className="code-tag__body">
+            <span className="code-refs__marks">
+              <a
+                className="code-tag__name"
+                href={repoHref(repo.name, { ref: tag.ref })}
+                data-list-link
+              >
+                {name}
+              </a>
+              {latest && (
+                <Tag appearance="outline" size="xs">
+                  Latest
+                </Tag>
+              )}
+            </span>
+            <span className="code-tag__meta">
+              <span className="code-tag__fact">
+                <GitCommitVerticalGlyph size="xs" className="code-glyph" />
+                {tag.peeled_type === "commit" ? (
+                  <a className="t-link mono" href={commitHref(repo.name, tag.peeled)}>
+                    {id}
+                  </a>
+                ) : (
+                  <span className="mono">{id}</span>
+                )}
+              </span>
+              <span className="code-tag__fact">
+                <ClockGlyph size="xs" className="code-glyph" />
+                <TagDate tag={tag} now={now} />
+              </span>
+            </span>
+          </span>
+        </span>
+      </td>
+      <td className="code-refs__actions">
+        <span className="code-refs__controls">
+          <IconButtonLink
+            href={repoHref(repo.name, { ref: tag.ref })}
+            icon={<CodeGlyph />}
+            label={`Browse the files at ${name}`}
+            size="sm"
+            variant="ghost"
+          />
+          <ButtonLink
+            href={compareHref(repo.name, { base: tag.ref, head: repo.default_branch })}
+            size="small"
+            variant="ghost"
+            leadingIcon={<GitCompareGlyph size="sm" />}
+            aria-label={`Compare ${name} with ${repo.default_branch}`}
+          >
+            Compare
+          </ButtonLink>
+        </span>
+      </td>
+    </tr>
   );
 }
