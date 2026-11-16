@@ -2190,6 +2190,15 @@ what readers see in the generated release notes. See below.
    group it: Dependabot's `dependencies` label sorts bumps to the bottom (see
    `.github/release.yml`).
 
+**A pull request's CI run stops at its first failed job.** Every job of
+`ci.yml` has to pass before a merge, so one red job already means another push,
+and that push cancels the run. So
+[`ci-cancel.yml`](.github/workflows/ci-cancel.yml) cancels the rest as soon as
+a job fails, rather than let it hold runners other pull requests are waiting
+for, and the run shows the first failure rather than every one. **Re-run
+failed jobs** re-runs the cancelled jobs too, so a flaky failure costs the
+whole run again. A run on `main` is never cancelled.
+
 Small, focused PRs are much easier to review than large ones. If you are
 planning a substantial change — a new subsystem, or a reshaping of the config
 format — please open an issue first to discuss the approach.
