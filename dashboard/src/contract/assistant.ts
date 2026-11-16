@@ -193,7 +193,8 @@ export type AssistantTaintSource =
   | "turn_ending"
   | "server_output"
   | "delegated_request"
-  | "atlas";
+  | "atlas"
+  | "web_page";
 
 /** One row of a proposal's change list, in the before and after grammar. */
 type AssistantChangeKind = "fact" | "changed" | "added" | "removed" | "text";
@@ -243,7 +244,8 @@ type AssistantResourceKind =
   | "schedule"
   | "view"
   | "room"
-  | "atlas_entry";
+  | "atlas_entry"
+  | "web_page";
 
 /**
  * What the person calls the record a screen has open, as the drawer names it
@@ -555,6 +557,12 @@ interface AssistantEntityItem {
   label: string;
   fact?: string;
   depth?: number;
+  /**
+   * What the item carries beyond its label and fact, each a detail the
+   * drawer leaves out and the model reads (a comment's question, whom it
+   * asks, its options and the recommendation). Absent on an item with none.
+   */
+  facts?: AssistantFact[];
   open?: AssistantLink;
 }
 

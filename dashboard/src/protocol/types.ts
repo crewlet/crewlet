@@ -6526,6 +6526,9 @@ export interface DecisionItem {
 export interface DecisionsAnswer {
   handle: string;
   items: DecisionItem[];
+  /** Something lies past this page: an item `limit` left out, or an open ask
+   *  past the 50 the tracker reads. */
+  more: boolean;
   /** Everything that waits on the person, not the page: what is put to
    *  them, and on their own record what they may answer that its delegates
    *  escalated or left past their deadline. What the badge says. */
