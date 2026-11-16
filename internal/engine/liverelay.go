@@ -320,10 +320,17 @@ func (b liveBatch) domain() string {
 // liveDomains is every domain whose applier announces to this node's sockets,
 // in a fixed order: the inbox sources the register marks ([inboxSources]),
 // chat, the artifacts and the datastore — the domains whose copies the relay
-// judges, each on its own verdict.
+// judges, each on its own verdict. EACH ONCE: the artifacts announce both
+// what their commits moved and the inbox their comments moved, on one copy.
 func liveDomains() []string {
-	return append(inboxSources(), chatlet.Domain{}.Name(),
-		artifactsdomain.Domain{}.Name(), artifactdata.Domain{}.Name())
+	out := inboxSources()
+	for _, d := range []string{chatlet.Domain{}.Name(), artifactsdomain.Domain{}.Name(),
+		artifactdata.Domain{}.Name()} {
+		if !slices.Contains(out, d) {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // relayedBatch is one batch a server's appliers announced, numbered by the
@@ -983,7 +990,10 @@ func (e *Engine) liveGap(domains []string) {
 		case chatlet.Domain{}.Name():
 			e.chatGap()
 		case artifactsdomain.Domain{}.Name():
+			// BOTH OF ITS ANNOUNCEMENTS: what its commits moved, and the
+			// inbox its comments moved.
 			e.artifactsListeners.tell([]artifactsdomain.Moved{artifactsdomain.Reset()})
+			e.inboxGap(domain)
 		case artifactdata.Domain{}.Name():
 			e.artifactDataListeners.tell([]artifactdata.Moved{artifactdata.ResetMove()})
 		default:

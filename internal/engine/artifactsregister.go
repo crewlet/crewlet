@@ -23,9 +23,11 @@ import (
 // not write would keep an evicted node counted here for ever. And its wake
 // feed: a comment record carries whom it wakes, and the feed derives each wake
 // from the committed record (ADR-0012, ADR-0153).
+// It keeps an inbox too: a comment record tells the people it concerns.
 func artifactsRegistrations() []registration {
 	return []registration{{
 		Domain: artifactsdomain.Domain{},
+		Inbox:  true,
 		NewApplier: func(s *stateLog) (statelog.Applier, error) {
 			// WHAT EACH COMMITTED BATCH MOVED, told to every listener on this
 			// node: the serving origin's authorization cache and the socket
