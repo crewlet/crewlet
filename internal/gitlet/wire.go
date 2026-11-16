@@ -1565,8 +1565,15 @@ type ReadQuery struct {
 	// it lacks unread; required there and refused on every other kind. A request field, no record's.
 	Counts *CountsQuery `json:"counts,omitempty"`
 	// RepoFacts asks a listing of repositories or a read of one for each one's facts
-	// ([RepoSummary.ChangeCounts]); refused on every other kind. A request field, no record's.
+	// ([RepoSummary.ChangeCounts], [RepoSummary.Card]) and a first page for its total
+	// ([ReadAnswer.ReposTotal]); refused on every other kind. A request field, no record's.
 	RepoFacts bool `json:"repo_facts,omitempty"`
+	// RepoKind narrows a `repos` listing to one kind ([RepoKind]); "" is every kind. Refused on
+	// every other kind of read. A request field, so an older build refuses it unread.
+	RepoKind RepoKind `json:"repo_kind,omitempty"`
+	// RepoSort orders a `repos` listing ([RepoSort]); "" is by name. Refused on every other kind
+	// of read. A request field, so an older build refuses it unread.
+	RepoSort RepoSort `json:"repo_sort,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -1599,8 +1606,8 @@ type ReadQuery struct {
 // first, on every page of them; Reviewers, Comments, Reviews and Findings a
 // page of the part of its conversation a `change` read names
 // ([ReadQuery.Part]) — Reviews a `reviews` listing's page too, each naming its
-// change; Routed a `change_routing` read's page; and Counts a `counts`
-// read's parts.
+// change; Routed a `change_routing` read's page; Counts a `counts`
+// read's parts; and ReposTotal a first page of repositories' total.
 type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
@@ -1738,7 +1745,9 @@ type ReadAnswer struct {
 	CommitMarks []CommitMark `json:"commit_marks,omitempty"`
 	// Counts is a `counts` read's answer, a part each it asked; an answer's field, no record's.
 	Counts *Counts `json:"counts,omitempty"`
-	Next   string  `json:"next,omitempty"`
+	// ReposTotal is a first page of repositories' whole listing, where [ReadQuery.RepoFacts] asks.
+	ReposTotal *ReposTotal `json:"repos_total,omitempty"`
+	Next       string      `json:"next,omitempty"`
 	// TipsNext is a `checks_due` page of one repository's tip work cut at its
 	// bound: the target it ended at, which the next page goes on after
 	// ([ChecksDueQuery.TipsAfter]) before any head — so a repository whose
@@ -2547,6 +2556,9 @@ type RepoSummary struct {
 	LastPushAt time.Time `json:"last_push_at,omitzero"`
 	// ChangeCounts is its changes by state, answered only where [ReadQuery.RepoFacts] asks.
 	ChangeCounts *ChangeCounts `json:"change_counts,omitempty"`
+	// Card is what a listing's row draws of it, where [ReadQuery.RepoFacts] asks: absent from a
+	// build that does not answer it, and each part inside absent where unknown or none.
+	Card *RepoCard `json:"card,omitempty"`
 }
 
 // RepoDetail is one repository in detail.

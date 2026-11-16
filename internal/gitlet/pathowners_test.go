@@ -434,6 +434,10 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 			q.CommitMarks = []string{strings.Repeat("6", 40)}
 		}},
 		{"protected", []gitlet.ReadKind{gitlet.ReadRepos}, func(q *gitlet.ReadQuery) { q.Protected = true }},
+		{"repo_kind", []gitlet.ReadKind{gitlet.ReadRepos}, func(q *gitlet.ReadQuery) { q.RepoKind = gitlet.RepoScratch }},
+		{"repo_sort", []gitlet.ReadKind{gitlet.ReadRepos}, func(q *gitlet.ReadQuery) {
+			q.RepoSort = gitlet.RepoSortPushed
+		}},
 		{"counts", []gitlet.ReadKind{gitlet.ReadCounts}, func(q *gitlet.ReadQuery) {
 			q.Counts = &gitlet.CountsQuery{Changes: true}
 		}},

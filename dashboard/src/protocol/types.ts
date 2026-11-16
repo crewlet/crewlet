@@ -8504,6 +8504,8 @@ export interface CodeRepoSummary {
   last_push_at?: string;
   /** Its changes by state, where `repo_facts=true` asks (`gitlet.RepoSummary.ChangeCounts`). */
   change_counts?: CodeChangeCounts;
+  /** Its card, where `repo_facts=true` asks (`gitlet.RepoSummary.Card`); absent is not answered. */
+  card?: CodeRepoCard;
 }
 
 /** Changes by state (`gitlet.ChangeCounts`); `live` is the draft and the open together. */
@@ -8513,6 +8515,44 @@ export interface CodeChangeCounts {
   open: number;
   closed: number;
   merged: number;
+}
+
+/** What a listing's row draws of a repository (`gitlet.RepoCard`); each part absent where unknown or none. */
+export interface CodeRepoCard {
+  push_mirrored?: boolean;
+  last_push?: CodeLastPush;
+  tip_checks?: CodeCheckRollup;
+}
+
+/** Its newest push that was no expiry (`gitlet.LastPush`), with what became of its commands. */
+export interface CodeLastPush extends CodeRefMover {
+  at: string;
+  outcome: CodePushCounts;
+}
+
+/** Repositories by status (`gitlet.RepoCounts`); `live` is the importing, active and archived together. */
+export interface CodeRepoCounts {
+  live: number;
+  importing: number;
+  active: number;
+  archived: number;
+  deleted: number;
+  purging: number;
+}
+
+/** Repositories by kind, each by status (`gitlet.RepoKindCounts`). */
+export interface CodeRepoKindCounts {
+  project: CodeRepoCounts;
+  scratch: CodeRepoCounts;
+}
+
+/**
+ * A listing's whole, all its pages (`gitlet.ReposTotal`); `live_bytes` absent where the company
+ * holds more than 10 000 repositories of its kinds and statuses, whatever the caller reads.
+ */
+export interface CodeReposTotal {
+  repos: number;
+  live_bytes?: number;
 }
 
 /** One ref update a push asked for, and what became of it (`gitlet.Command`). */
@@ -8606,10 +8646,12 @@ interface CodePage {
   level: ReadLevel;
 }
 
-/** `code_repos`: the repositories the asker may read, by name. */
+/** `code_repos`: the repositories the asker may read, by name or by last push. */
 export interface CodeReposAnswer extends CodePage {
   /** Absent on a page that holds none, which may still carry a `next`. */
   repos?: CodeRepoSummary[];
+  /** The whole listing, on a first page `repo_facts=true` asks. */
+  repos_total?: CodeReposTotal;
 }
 
 /** `code_pushes`: one repository's pushes, newest first in log order. */
@@ -9219,6 +9261,8 @@ export interface CodeRemoteState {
 /** `code_repo`: one repository, by its name — or by an old one a rename left redirecting. */
 export interface CodeRepoAnswer extends CodePage {
   repo?: CodeRepoDetail;
+  /** The address a person's git clones it from, on this deployment's own address. */
+  clone_url?: string;
 }
 
 /** One live ref (`gitlet.RefRow`): its whole name, the object it points at, and where its last move landed. */
@@ -9704,6 +9748,7 @@ export interface CodeCommitMarksAnswer {
 /** A counts read's parts, each absent where not asked (`gitlet.Counts`). */
 export interface CodeCounts {
   changes?: CodeChangeCounts;
+  repos?: CodeRepoKindCounts;
 }
 
 /** `code_counts`: a scope's counts, the parts it was asked. */

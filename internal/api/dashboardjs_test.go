@@ -2673,7 +2673,8 @@ const (
 	// 6410.9 KiB (6,564,755 bytes), 36,917 bytes over main: 6411 KiB.
 	// The artifact comments, their inbox, Gitlet syntax and harness marks train, on kit 0.144.0:
 	// 6595.4 KiB (6,753,705 bytes), 76,032 over main: 6596 KiB.
-	treeBudget = 5<<20 + 1476<<10
+	// Gitlet's diffs and search hits coloured by kind: 6598.0 KiB (6,756,345 bytes), 2,640 over main: 6598 KiB.
+	treeBudget = 5<<20 + 1478<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
