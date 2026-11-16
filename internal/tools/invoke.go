@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
@@ -68,7 +69,8 @@ func ArgsOf(tool Callable, thirdParty bool, raw map[string]any) toolargs.Args {
 // Invoke calls a tool, holding a first-party call to the schema the tool
 // advertises ([CheckArgs]): a value the tool would misread is refused before
 // it runs (refused is true, and the tool was never called), and every other
-// finding rides on the tool's own answer ([withFaults]). An error is the
+// finding rides on the tool's own answer ([withFaults]). The answer's images
+// are held to [mcp.CheckImages] as it returns ([withImages]). An error is the
 // caller's context ending, as a tool's own call reports it.
 func Invoke(ctx context.Context, in Invocation) (res Result, refused bool, err error) {
 	var faults []ArgFault
@@ -86,7 +88,20 @@ func Invoke(ctx context.Context, in Invocation) (res Result, refused bool, err e
 	if err != nil {
 		return res, false, err
 	}
-	return withFaults(in, res, faults), false, nil
+	return withFaults(in, withImages(in, res), faults), false, nil
+}
+
+// withImages is a tool's answer as it may be sent: the answer itself, or, where
+// its images break [mcp.CheckImages], a failure saying why in their place, so
+// the record and the model both read the same refusal and no image is sent.
+func withImages(in Invocation, res Result) Result {
+	err := mcp.CheckImages(res.Output, res.Images)
+	if err == nil {
+		return res
+	}
+	contractLog.Error("tool_image_refused", "tool", in.Name, "where", in.Where, "error", err)
+	return Result{Output: fmt.Sprintf("%s could not answer: %v. This is a fault in the tool, "+
+		"not in your call; carry on without it.", in.Name, err), Failed: true, Cause: RefusalInternalError}
 }
 
 // call is THE ONE PLACE a tool's own call is made, telling the tool who is

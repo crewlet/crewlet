@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -19,17 +20,21 @@ import (
 // identity estate's, so it states a barrier (a `linearizable` read of an
 // artifact is a quorum-committed position), its own generation record, and the
 // node gate's writer: the trim counts nodes on this log, so one the gate could
-// not write would keep an evicted node counted here for ever. It declares no
-// wake feed: no record on it wakes a seat in this release.
+// not write would keep an evicted node counted here for ever. And its wake
+// feed: a comment record carries whom it wakes, and the feed derives each wake
+// from the committed record (ADR-0012, ADR-0154).
+// It keeps an inbox too: a comment record tells the people it concerns.
 func artifactsRegistrations() []registration {
 	return []registration{{
 		Domain: artifactsdomain.Domain{},
+		Inbox:  true,
 		NewApplier: func(s *stateLog) (statelog.Applier, error) {
 			// WHAT EACH COMMITTED BATCH MOVED, told to every listener on this
 			// node: the serving origin's authorization cache and the socket
 			// hub, each of which serves only this node's own requests, so
 			// the apply on every data node is what reaches each of them.
-			return artifactsdomain.NewApplier(s.nodeID, s.artifactsMoved), nil
+			return artifactsdomain.NewApplier(s.nodeID, s.artifactsMoved,
+				s.inboxFor(artifactsdomain.Domain{})), nil
 		},
 		NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 			runner *statelog.Runner) (writeSeams, error) {
@@ -82,6 +87,12 @@ func artifactsRegistrations() []registration {
 			}, nil
 		},
 		OpsRetention: statelog.OpsRetention,
+		// THE WAKE FEED, over the log's own fleet-wide group: a comment's
+		// wake is derived from the committed record, never published by the
+		// writer's goroutine. See domainfeed.go.
+		Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
+			return artifactsdomain.NewTranslator(), artifactsdomain.FeedSource{Log: records}
+		},
 		Ceiling: func(stream config.Stream, free int64) domainCeiling {
 			bytes, derived := stream.ArtifactsMaxBytes(free)
 			return domainCeiling{Bytes: bytes,

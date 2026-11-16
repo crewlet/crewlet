@@ -25,13 +25,6 @@ import {
   RelativeTime,
   Text,
 } from "@crewlethq/ui";
-import {
-  ChartColumnGlyph,
-  GaugeGlyph,
-  KeyGlyph,
-  ShieldCheckGlyph,
-  UsersGlyph,
-} from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href, useParam } from "~/app/router.tsx";
@@ -197,7 +190,7 @@ function WhoRunsCard({ model, data }: { model: ModelView; data: ModelsData }) {
   const assistant = assistantLine(who.assistant, who.deepWork);
   return (
     <Card padding="none">
-      <Card.Header icon={<UsersGlyph size="sm" />} count={who.seats}>
+      <Card.Header count={who.seats}>
         <Card.Title>Who runs on it</Card.Title>
       </Card.Header>
       <Card.Body>
@@ -497,7 +490,6 @@ function SignInCard({
     >
       <Card padding="none">
         <Card.Header
-          icon={<KeyGlyph size="sm" />}
           actions={
             host ? undefined : <CredentialButton model={model} open={open} variant="secondary" />
           }
@@ -529,7 +521,6 @@ function TestCard({ model, open }: { model: ModelView; open: Open }) {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<ShieldCheckGlyph size="sm" />}
         actions={
           <Button size="small" variant="secondary" onClick={() => open("test")}>
             Test now
@@ -576,7 +567,7 @@ function UsageCard({ model }: { model: ModelView }) {
   const usage = model.admin!.usage;
   return (
     <Card padding="none">
-      <Card.Header icon={<ChartColumnGlyph size="sm" />}>
+      <Card.Header>
         <Card.Title>Usage, last {plural(usage.days, "day")}</Card.Title>
       </Card.Header>
       <Card.Body>
@@ -612,7 +603,6 @@ function LimitsCard({ model, open }: { model: ModelView; open: Open }) {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<GaugeGlyph size="sm" />}
         actions={
           <Button size="small" variant="secondary" onClick={() => open("edit", { step: "limits" })}>
             Change
@@ -637,6 +627,7 @@ function LimitsCard({ model, open }: { model: ModelView; open: Open }) {
                 ? `${DEFAULT_HARNESS_MAX_CONCURRENT} (the default)`
                 : String(model.maxConcurrent),
             ],
+            ["Reasoning effort", model.effort ?? "The harness default"],
           ]}
         />
       </Card.Body>

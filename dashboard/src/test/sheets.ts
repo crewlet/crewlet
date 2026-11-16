@@ -62,3 +62,32 @@ export function sheetRules(): SheetRule[] {
   }
   return out;
 }
+
+/** A selector list's selectors: split at the commas outside every parenthesis. */
+export function splitSelectors(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] === "(") depth++;
+    else if (list[i] === ")") depth--;
+    else if (list[i] === "," && depth === 0) {
+      out.push(list.slice(from, i).trim());
+      from = i + 1;
+    }
+  }
+  out.push(list.slice(from).trim());
+  return out;
+}
+
+/**
+ * The `--color-` token the one rule for exactly `selector` reads in its
+ * `property` declaration; throws unless exactly one rule has that selector.
+ */
+export function declared(selector: string, property: string, rules = sheetRules()): string | null {
+  const found = rules.filter((r) => r.selector === selector);
+  if (found.length !== 1)
+    throw new Error(`${selector} is declared ${found.length} times, not once`);
+  const at = new RegExp(`(?:^|[;{\\s])${property}\\s*:([^;]*)`).exec(found[0]!.body);
+  return at ? (/var\((--color-[\w-]+)\)/.exec(at[1]!)?.[1] ?? null) : null;
+}

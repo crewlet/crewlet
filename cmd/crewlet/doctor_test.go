@@ -38,7 +38,7 @@ var doctorAnswer = advisor.Answer{Revision: "rev-7", Findings: []advisor.Finding
 		Evidence: []advisor.Fact{{Key: "named", Value: 6}}, Records: []string{"c-1"}},
 	{Class: advisor.ClassAuxiliaryModel, Severity: advisor.SeverityNote, Actor: advisor.ActorOwner,
 		Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "jordan", Name: "Jordan"},
-		Title:   "It learns on its own model.", Why: "Learning costs its spend."},
+		Title:   "It learns on its own model.", Why: "Learning costs its spend.", Item: "sonnet-large"},
 }}
 
 // THE DOCTOR NAMES NOTHING THE COMPANY CHOSE BY DEFAULT: subjects are a kind
@@ -57,14 +57,15 @@ func TestTheDoctorPrintsKindsOrdinalsAndCountsUnlessAskedForWords(t *testing.T) 
 	if strings.Count(out, "seat#1") != 2 || strings.Contains(out, "seat#2") {
 		t.Errorf("one subject named twice is not one ordinal:\n%s", out)
 	}
-	for _, chosen := range []string{"sre", "invoice-sync", "jordan", "Jordan", "No verified backup", "Named 6 times"} {
+	for _, chosen := range []string{"sre", "invoice-sync", "jordan", "Jordan", "No verified backup", "Named 6 times", "sonnet-large"} {
 		if strings.Contains(out, chosen) {
 			t.Errorf("the doctor printed %q without -words:\n%s", chosen, out)
 		}
 	}
 	out, _, _ = cli(t, "doctor", "-words", config)
 	for _, want := range []string{"schedule:sre:invoice-sync", "seat:jordan",
-		"1. No verified backup. One server, and nothing copied off it."} {
+		"1. No verified backup. One server, and nothing copied off it.",
+		"Learning costs its spend. (sonnet-large)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("-words does not print %q:\n%s", want, out)
 		}

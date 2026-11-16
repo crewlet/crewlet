@@ -1962,7 +1962,11 @@ func Catalogue() []Instrument {
 			Shows: "Seats' reads by object id that this node's git cache looked " +
 				"up among the answers it keeps, by `outcome`: `hit`, answered " +
 				"from the answer kept, with no git run; `miss`, none kept, so " +
-				"the read ran its git and keeps what it cut; `corrupt`, a kept " +
+				"the read ran its git and keeps what it cut; `probe_hit` and " +
+				"`probe_miss`, a read's probe for a part of an answer it may " +
+				"find under any of several keys (a directory's window of last " +
+				"commits, under each commit its walk passes), where a miss " +
+				"computes nothing under that key; `corrupt`, a kept " +
 				"answer that did not read back whole — removed, and computed " +
 				"again, so rising is this node's disk damaging what it " +
 				"holds. Misses climbing while `crewlet.code.cache.memo.bytes` " +
@@ -2231,7 +2235,7 @@ func Catalogue() []Instrument {
 				"`class` (`read`, `transfer`, `maintenance`). A p95 " +
 				"approaching ten seconds is a node about to answer clones and pushes " +
 				"with 503 — every slot of one lane busy for a whole read attempt. " +
-				"`transfer` waiting is a node serving as many clones and pushes as " +
+				"`transfer` waiting is a node serving as many clones, pushes and downloads as " +
 				"`gitlet.max_transfers` admits (more Gitlet nodes, or more memory and a " +
 				"wider `gitlet.max_transfers`); `read` waiting is a node out of " +
 				"`gitlet.max_processes`, one core a slot.",
@@ -2239,8 +2243,8 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeGitCPU, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"class"},
-			Shows: "CPU a git process tree spent, by lane: `transfer` is clones " +
-				"and pushes, `read` the cache's reads and a push's scans and " +
+			Shows: "CPU a git process tree spent, by lane: `transfer` is clones, " +
+				"pushes and downloads, `read` the cache's reads and a push's scans and " +
 				"fetch checks, `maintenance` the bitmaps, indexes and checks. " +
 				"One observation per process, its whole cost, recorded when it " +
 				"ends: its user and system time and that of every process it " +
@@ -2280,7 +2284,7 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeGitShareWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"share"},
-			Shows: "How long a clone, fetch or push waited for its transfer " +
+			Shows: "How long a clone, fetch, push or download waited for its transfer " +
 				"slot on this node, by the `share` it waited in (`person`: the " +
 				"holder of a human seat — a person through any credential of " +
 				"theirs, or a Tier A token or service account the identity " +

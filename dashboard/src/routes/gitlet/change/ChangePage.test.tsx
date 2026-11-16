@@ -23,6 +23,7 @@ import { draftsKey } from "~/lib/reviewDrafts.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
+import { blobAnswer, inkedLine } from "~/test/codeScreens.tsx";
 import { engineJson } from "~/test/engineAnswer.ts";
 import { withDerived } from "~/test/org.ts";
 import { settled } from "~/test/settle.ts";
@@ -752,6 +753,37 @@ test("the header says when the change was opened in words", async () => {
   });
 });
 
+// THE HEADER WEARS THE STATE PILL; the byline's branches are linked chips, the
+// rail's plain ones. Mutation: draw the branches as plain names, or drop the
+// spaces around "into", and this fails.
+test("the header's state is its pill, and its branches are chips in the byline and the rail", async () => {
+  stubEngine(detail(), () => json({}));
+  mount();
+  const byline = await waitFor(() => {
+    const chips = [
+      ...document.querySelectorAll<HTMLElement>(".code-change-byline .code-branch-chip"),
+    ];
+    expect(chips).toHaveLength(2);
+    return chips;
+  });
+  const pill = document.querySelector<HTMLElement>('.code-state[data-state="open"]');
+  expect(pill?.textContent).toBe("Open");
+  expect(pill?.querySelector("svg")).not.toBeNull();
+  expect(byline.map((a) => [a.tagName, a.textContent, a.getAttribute("href")])).toEqual([
+    ["A", "retry", "#/gitlet/repos/web?ref=retry"],
+    ["A", "main", "#/gitlet/repos/web"],
+  ]);
+  for (const a of byline) expect(a.classList.contains("prose-link")).toBe(true);
+  const rail = await waitFor(() => {
+    const branches = document.querySelector<HTMLElement>(".code-rail__branches");
+    expect(branches).not.toBeNull();
+    return branches!;
+  });
+  const chips = [...rail.querySelectorAll<HTMLElement>(".code-branch-chip")];
+  expect(chips.map((c) => c.tagName)).toEqual(["SPAN", "SPAN"]);
+  expect(rail.textContent).toBe("retry into main");
+});
+
 // A FINISHED CHANGE OFFERS ONLY WHAT STILL APPLIES: a merged change takes no
 // review, no ask and no close from anybody, so its bar draws none of them and
 // its Revert stands where the merge controls were; a closed one offers its
@@ -1303,4 +1335,100 @@ test("a finding is answered under itself, with the answer chosen and a note", as
     note: "Out of scope here",
   });
   expect(acted[0]!.args.findings).toHaveLength(1);
+});
+
+// A CHANGE'S DIFF IS COLOURED FROM ITS BLOBS, each side read by the whole id
+// its listing names, so a hunk opening inside a comment reads as one.
+// Mutation: pass no tokens to the change's DiffView.
+test("a change's diff colours each side from its blob, a hunk inside a comment as comment", async () => {
+  const OLD = "1".repeat(40);
+  const NEW = "2".repeat(40);
+  const go = (edit: string) =>
+    ["package app", "", "/*", "notes", edit, "*/", "func Later() {}"].join("\n") + "\n";
+  stubEngine(
+    detail(),
+    () => json({ outcome: "applied" }),
+    {},
+    [
+      [
+        "--- a/app.go",
+        "+++ b/app.go",
+        "@@ -5,3 +5,3 @@",
+        "-old note",
+        "+new note",
+        " */",
+        " func Later() {}",
+      ].join("\n"),
+    ],
+    [[{ path: "app.go", status: "M", added: 1, deleted: 1, old_oid: OLD, new_oid: NEW }]],
+  );
+  const engine = vi.mocked(fetch);
+  const asked: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_blob") return engine(input, init);
+      asked.push(url);
+      return blobAnswer(url, { [OLD]: { text: go("old note") }, [NEW]: { text: go("new note") } });
+    }),
+  );
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go");
+
+  await waitFor(() =>
+    expect(inkedLine("add", "new note")).toEqual(["[new]", "code-syn-comment: note"]),
+  );
+  expect(inkedLine("remove", "old note")).toEqual(["[old]", "code-syn-comment: note"]);
+  expect(inkedLine("same", "func Later() {}")).toContain("code-syn-keyword:func");
+  expect(asked.map((u) => u.searchParams.get("ref")).sort()).toEqual([OLD, NEW]);
+});
+
+// A FILE PAST THE LISTING'S FIRST PAGE, named by the address, is coloured from
+// the oids its patch's answer carries.
+// Mutation: drop the fallback to the patch's file.
+test("a file the listing has not reached is coloured from its patch's own entry", async () => {
+  const OLD = "1".repeat(40);
+  const NEW = "2".repeat(40);
+  const go = (edit: string) => ["package app", "", "func A() {", edit, "}"].join("\n") + "\n";
+  const patch = [
+    "--- a/app.go",
+    "+++ b/app.go",
+    "@@ -3,3 +3,3 @@",
+    " func A() {",
+    "-\treturn 1",
+    "+\treturn 2",
+    " }",
+  ].join("\n");
+  const app = { path: "app.go", status: "M", added: 1, deleted: 1, old_oid: OLD, new_oid: NEW };
+  stubEngine(
+    detail(),
+    () => json({ outcome: "applied" }),
+    {
+      diff: () =>
+        json({
+          position: POSITION,
+          level: "session",
+          revision: 2,
+          diff: { base: HEAD, head: HEAD, files: [app], total: 2, added: 1, deleted: 1, patch },
+        }),
+    },
+    [patch],
+    [[{ path: "other.go", status: "M", added: 1, deleted: 1 }], [app]],
+  );
+  const engine = vi.mocked(fetch);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/query/code_blob") return engine(input, init);
+      return blobAnswer(url, {
+        [OLD]: { text: go("\treturn 1") },
+        [NEW]: { text: go("\treturn 2") },
+      });
+    }),
+  );
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go");
+
+  await waitFor(() => expect(inkedLine("same", "func A() {")).toContain("code-syn-keyword:func"));
+  expect(inkedLine("add", "\treturn 2")).toContain("code-syn-keyword:return");
 });

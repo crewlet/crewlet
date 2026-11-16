@@ -62,7 +62,7 @@
  */
 
 import { Button, Callout, Card, CodeBlock, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
-import { CircleAlertGlyph, FileTextGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
+import { FileTextGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
 import { useLayoutEffect, useRef, useState } from "react";
 import { href, useParam, useRoute } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -459,7 +459,7 @@ function Transcript({
               </div>
             )}
             {first.state !== "read" ? (
-              <Callout variant="warning" icon={<CircleAlertGlyph size="md" />}>
+              <Callout variant="warning">
                 <strong>{STATE_TITLES[first.state]}.</strong> {first.why}
               </Callout>
             ) : pages.items.length ? (
@@ -484,7 +484,7 @@ function Transcript({
               // the entries above, its object gone or released since — ends
               // the transcript here and says why, rather than as if the run
               // had ended where the entries do.
-              <Callout variant="warning" icon={<CircleAlertGlyph size="md" />}>
+              <Callout variant="warning">
                 <strong>The rest of this transcript could not be read.</strong>{" "}
                 {STATE_TITLES[last.state]}: {last.why}
               </Callout>
@@ -842,9 +842,7 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
   if (entry.kind === "unread") {
     return (
       <div className="thread-entry">
-        <Callout variant="warning" icon={<CircleAlertGlyph size="md" />}>
-          {entry.text}
-        </Callout>
+        <Callout variant="warning">{entry.text}</Callout>
       </div>
     );
   }

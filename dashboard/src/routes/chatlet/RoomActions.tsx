@@ -318,15 +318,14 @@ export function RoomActions({ tight }: { tight: boolean }) {
         </Tooltip>
       )}
       {!tight && (
-        <Tooltip content="Search this room">
-          <IconButton
-            label="Search this room"
-            size="header"
-            variant="ghost"
-            icon={<SearchGlyph />}
-            onClick={search}
-          />
-        </Tooltip>
+        <IconButton
+          label="Search this room"
+          size="header"
+          variant="ghost"
+          icon={<SearchGlyph />}
+          tooltip
+          onClick={search}
+        />
       )}
       {!tight && (
         <Menu

@@ -334,8 +334,10 @@ var subjectOf = map[string]subject{
 	worklet.MyWorkTool:    {kind: authz.KindPerson},
 	worklet.MarkInboxTool: {kind: authz.KindPerson},
 	worklet.SetPinsTool:   {kind: authz.KindPerson},
-	// AND THE CODE LOG'S HALF OF AN INBOX'S MARKS, a person's own alike.
-	CodeMarkInboxTool: {kind: authz.KindPerson},
+	// AND THE CODE LOG'S AND THE ARTIFACTS LOG'S HALVES OF AN INBOX'S MARKS,
+	// a person's own alike.
+	CodeMarkInboxTool:     {kind: authz.KindPerson},
+	ArtifactMarkInboxTool: {kind: authz.KindPerson},
 
 	// AND THE ONES THAT DO ARE DECIDED ON WHOSE RECORD THE NAME IS, NOT ON
 	// WHAT WAS TYPED. Each tool resolves its `handle` first
@@ -430,6 +432,7 @@ var subjectOf = map[string]subject{
 	// on the app alone and the tool again with its caller as the owner,
 	// beside the parent folder's role. Nor is the brand, everybody's read.
 	GetArtifactTool:         {kind: authz.KindArtifact, inTool: true},
+	RenderArtifactTool:      {kind: authz.KindArtifact, inTool: true},
 	PublishArtifactTool:     {kind: authz.KindArtifact, inTool: true},
 	UpdateArtifactTool:      {kind: authz.KindArtifact, inTool: true},
 	ShareArtifactTool:       {kind: authz.KindArtifact, inTool: true},
@@ -439,6 +442,13 @@ var subjectOf = map[string]subject{
 	// destination by the folder's top-level owner and shares, neither of
 	// which any argument states (see artifacts_folders.go).
 	MoveArtifactTool: {kind: authz.KindArtifact, inTool: true},
+	// A COMMENT IS DECIDED BY THE SAME STORED ROW, and the writer keeps an
+	// edit to the remark's author (see artifacts_comments.go).
+	ListArtifactCommentsTool:   {kind: authz.KindArtifact, inTool: true},
+	CommentOnArtifactTool:      {kind: authz.KindArtifact, inTool: true},
+	ResolveArtifactCommentTool: {kind: authz.KindArtifact, inTool: true},
+	EditArtifactCommentTool:    {kind: authz.KindArtifact, inTool: true},
+	RemoveArtifactCommentTool:  {kind: authz.KindArtifact, inTool: true},
 
 	// AND ITS DATASTORE, decided by the same stored row and then by each
 	// collection's own rules, which the tool settles once it has read the
@@ -477,6 +487,7 @@ var ownBookkeeping = map[string]bool{
 	worklet.MarkInboxTool:    true,
 	worklet.SetPinsTool:      true,
 	CodeMarkInboxTool:        true,
+	ArtifactMarkInboxTool:    true,
 	chatlet.MarkChatReadTool: true,
 }
 

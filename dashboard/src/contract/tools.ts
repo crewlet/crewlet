@@ -57,9 +57,9 @@ type BuiltinGroupKey =
  * repository is then its grant there, and it reads a private address in
  * the atlas only within its own reach). `worklet_asked`: one that uses
  * Worklet, or one an open ask on the item names. `project_lead`: the lead
- * of the project the work or file is in. `artifact_viewer`, `artifact_editor`, `artifact_owner`:
- * the least role on the one artifact the call names (an editor also authors
- * artifacts). `health_tools`: an agent whose role carries the `health_tools`
+ * of the project the work or file is in. `artifact_viewer`, `artifact_commenter`,
+ * `artifact_editor`, `artifact_owner`: the least role on the one artifact the
+ * call names (an editor also authors artifacts). `health_tools`: an agent whose role carries the `health_tools`
  * grant, the deployment's health being an admin's read. `ssh_read`,
  * `ssh_operate`: an agent whose SSH access is on with a server, and one at
  * operate. `delegated_decisions`: an agent a delegated-decisions rule names a
@@ -79,6 +79,7 @@ export type BuiltinGate =
   | "artifact_viewer"
   | "artifact_editor"
   | "artifact_owner"
+  | "artifact_commenter"
   | "health_tools"
   | "ssh_read"
   | "ssh_operate"

@@ -35,9 +35,10 @@ import (
 // with a newline — by abbreviated ids, and every argument list a read ran is
 // held to its template: the kind's fixed options, whole ids at their places,
 // `--disambiguate=` validated hex, a history's window as numbers the server
-// formats and a blame's range as two, and — for a history and a blame alone,
-// which read no path on a standard input — the path as the ONE argument after
-// `--`, where git reads it as a path whatever it spells: a history's as a
+// formats and a blame's range as two, and — for a history, a blame and a
+// directory's walks, which read no path on a standard input — the path as the
+// ONE argument after `--` (a directory walk's as one or more literal
+// pathspecs), where git reads it as a path whatever it spells: a history's as a
 // literal pathspec, a blame's as itself. Every other path was fed to
 // cat-file's batch, `<id>:<path>`, where it is a name like any other, and a
 // filtered stat's and a patch's files to diff-pairs as the raw records
@@ -160,6 +161,32 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 		}
 	}
 
+	// A DIRECTORY'S LAST COMMITS: the listing names the tree, and every walk
+	// names the directory, or its entries once the walk narrows, as literal
+	// pathspecs after `--`, whatever they spell; `-r`, last changed on a merged
+	// side branch, is walked alone from the merge.
+	x.branch("odd", head)
+	side := x.p.Commit(x.work, map[string]string{"-r": "side\n"}, "side")
+	x.git("checkout", "-q", "main")
+	x.git("merge", "-q", "--no-ff", "-m", "take the side", "odd")
+	later := x.commit(map[string]string{"zz": "z\n"}, "later")
+	ts := x.server(0, query.Options{Git: rec})
+	query.SetTreeWalk(ts, query.TreeWalk{NarrowRecords: 1, NarrowEntries: 2, NarrowWalks: 3})
+	for _, dir := range []string{"", "--output=x"} {
+		for _, e := range mustRead(t, ts, treeCommitsQ(repo, later[:7], dir)).TreeCommits.Entries {
+			if e.Commit == "" || e.Path == "-r" && e.Commit != side {
+				t.Errorf("the last commit of %q was answered %q", e.Path, e.Commit)
+			}
+		}
+	}
+	for _, walk := range []string{"--first-parent", "-1"} {
+		if !slices.ContainsFunc(rec.ran(), func(c gitproc.Cmd) bool {
+			return c.Args[0] == "log" && c.Args[1] == walk && slices.Contains(c.Args, logLiteralTemplate+"-r")
+		}) {
+			t.Errorf("no walk `log %s` named the entry -r", walk)
+		}
+	}
+
 	ran := rec.ran()
 	if len(ran) < 20 {
 		t.Fatalf("the reads ran %d processes; the case reads nothing", len(ran))
@@ -212,13 +239,15 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 
 // templates are the argument lists a read runs: "<oid>" a whole id, "<range>"
 // two joined by "...", "<abbrevs>" one or more `--disambiguate=` of
-// validated hex, ending the list, and "<oids>" one or more whole ids, ending it.
+// validated hex, ending the list, "<oids>" one or more whole ids, ending it,
+// and "<literals>" one or more literal pathspecs, ending it.
 var templates = [][]string{
 	{"cat-file", "--batch-check", "-Z"},
 	{"cat-file", "--batch-check=%(objectmode) %(objectname) %(objecttype)", "-Z"},
 	{"cat-file", "blob", "<oid>"},
 	{"rev-parse", "<abbrevs>"},
 	{"ls-tree", "-z", "-l", "<oid>"},
+	{"ls-tree", "-z", "<oid>"},
 	{"ls-tree", "-z", "-l", "-r", "<oid>"},
 	{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff", "--no-textconv", "<oid>", "<oid>"},
 	{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff", "--no-textconv", "-M", "<oid>", "<oid>"},
@@ -267,7 +296,13 @@ func historyTemplates() [][]string {
 			}
 		}
 	}
-	return append(out, []string{"blame", "--porcelain", "-L", "<lines>", "<oid>", "--", "<path>"})
+	// A directory's last commits: the group walk (the root's names no path),
+	// the same over the directory or its entries, and an entry walked alone.
+	walk := []string{"log", "--first-parent", "-z", "--no-color", "--no-notes", "--root", "--name-status",
+		"--no-renames", "--diff-merges=first-parent", "--format=%H%x00%P", "<oid>"}
+	return append(out, []string{"blame", "--porcelain", "-L", "<lines>", "<oid>", "--", "<path>"}, walk,
+		append(slices.Clone(walk), "--", "<literals>"),
+		[]string{"log", "-1", "-z", "--no-color", "--no-notes", "--format=%H", "<oid>", "--", "<literal>"})
 }
 
 // fitsTemplate reports whether args is one of templates, or a history's or a
@@ -296,6 +331,18 @@ func fits(args, tmpl []string) bool {
 		for _, a := range args[len(head):] {
 			hex, ok := strings.CutPrefix(a, "--disambiguate=")
 			if !ok || !gitlet.ValidRev(hex) || gitref.ValidOID(hex) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(tmpl) > 0 && tmpl[len(tmpl)-1] == "<literals>" {
+		head := tmpl[:len(tmpl)-1]
+		if len(args) <= len(head) || !fits(args[:len(head)], head) {
+			return false
+		}
+		for _, a := range args[len(head):] {
+			if !strings.HasPrefix(a, logLiteralTemplate) {
 				return false
 			}
 		}

@@ -69,7 +69,7 @@ afterEach(() => {
 describe("which chunk draws a screen", () => {
   // A CHUNK IS A SCREEN DIRECTORY, not a sidebar row: Company's rows draw
   // screens from five of them, and a row that moves moves no code.
-  test("every screen directory is a chunk, and the org editor is one of its own", () => {
+  test("every screen directory is a chunk; the org editor and Gitlet's repository and change pages are their own", () => {
     expect([...CHUNKS].sort()).toEqual(
       [
         "account",
@@ -80,11 +80,14 @@ describe("which chunk draws a screen", () => {
         "brand",
         "chatlet",
         "gitlet",
+        "gitlet-change",
+        "gitlet-repo",
         "home",
         "inbox",
         "doclet",
         "live",
         "me",
+        "model-wizard",
         "org",
         "palette",
         "settings",
@@ -161,6 +164,37 @@ describe("which chunk draws a screen", () => {
     expect(at("gitlet")).toBe("gitlet");
     expect(at("gitlet", "repos")).toBe("gitlet");
     expect(at("gitlet", "pushes")).toBe("gitlet");
+  });
+
+  // GITLET IS THREE CHUNKS, BY ADDRESS, so a first click into one fetches neither other.
+  // Mutation: fold a repository's or a change's pages back into the section pages' index.
+  test("Gitlet is three chunks, by address", async () => {
+    const at = (...path: string[]) => {
+      const where = resolve(path);
+      return where.resolved ? chunkOf(where) : null;
+    };
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    expect(at("gitlet")).toBe("gitlet");
+    expect(at("gitlet", "repos")).toBe("gitlet");
+    expect(at("gitlet", "pushes")).toBe("gitlet");
+    expect(at("gitlet", "repos", "web")).toBe("gitlet-repo");
+    expect(at("gitlet", "repos", "web", "commits", commit)).toBe("gitlet-repo");
+    expect(at("gitlet", "repos", "web", "compare")).toBe("gitlet-repo");
+    expect(at("gitlet", "repos", "web", "changes", "4")).toBe("gitlet-change");
+    const repo = await loadChunk("gitlet-repo");
+    expect(Object.keys(repo).sort()).toEqual(["CommitPage", "ComparePage", "RepositoryPage"]);
+    const change = await loadChunk("gitlet-change");
+    expect(Object.keys(change).sort()).toEqual(["ChangePage", "ChangePeek"]);
+    const sections = await loadChunk("gitlet");
+    for (const page of [
+      "RepositoryPage",
+      "CommitPage",
+      "ComparePage",
+      "ChangePage",
+      "ChangePeek",
+    ]) {
+      expect(page in sections, page).toBe(false);
+    }
   });
 
   test("each kind's create page is a chunk of its own, and none is prefetched", () => {

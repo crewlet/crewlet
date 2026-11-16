@@ -107,7 +107,8 @@ type Use struct {
 	// advertisement of upload-pack; each advertisement served is one fetch,
 	// however many negotiation rounds follow it, and whether or not a pack
 	// does: a fetch that finds its client up to date costs this node its
-	// advertisement and its ls-refs, and is counted.
+	// advertisement and its ls-refs, and is counted. So is every download of
+	// a file or a ZIP (host/download.go), one git process that read it.
 	Fetches int64 `json:"fetches"`
 	// Clones is the fetches whose transfer named wants and no `have`, served
 	// to their end: a client offering nothing to subtract is sent each

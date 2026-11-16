@@ -104,6 +104,21 @@ describe("the dashboard under Trusted Types", () => {
     }
   });
 
+  // A REPOSITORY'S CODE is drawn as text in spans, never markup, whatever it holds.
+  test("the code colouring's registry, scanner and spans are among the modules read", () => {
+    const paths = new Set(modules().map((m) => m.path));
+    for (const path of [
+      "lib/syntax/index.ts",
+      "lib/syntax/scan.ts",
+      "lib/syntax/lang-markup.ts",
+      "routes/gitlet/syntax.tsx",
+    ]) {
+      expect(paths.has(path), path).toBe(true);
+      const mod = modules().find((m) => m.path === path)!;
+      expect(sinksIn(mod.text, mod.lang), path).toEqual([]);
+    }
+  });
+
   test("the rule finds every kind of sink it names", () => {
     const sample = [
       "el.innerHTML = s;",

@@ -23,7 +23,6 @@ import {
   type DescriptionListEntry,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
-import { FileTextGlyph, ListChecksGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtDateTime } from "~/lib/format.ts";
@@ -186,7 +185,7 @@ function Consent({
   const stale = shareOf(answer.share) !== "off" && answer.accepted !== answer.schema;
   return (
     <Card padding="none">
-      <Card.Header icon={<ListChecksGlyph size="sm" />}>
+      <Card.Header>
         <Card.Title>Usage insights to Crewlet</Card.Title>
       </Card.Header>
       <Card.Body padding="md" className="col gap-2">
@@ -211,20 +210,24 @@ function Consent({
           </Text>
         )}
         {stale && (
-          <Callout variant="warning" title="Nothing is shared until you accept this list">
-            This engine&rsquo;s list of patterns differs from the one you accepted, so it shares
-            nothing until you accept it.{" "}
-            <Button
-              size="small"
-              disabled={!access.can}
-              onClick={() =>
-                write.submit(
-                  insightsPlan({ accepted: answer.schema }, "Accepted the usage insights list"),
-                )
-              }
-            >
-              Accept this list
-            </Button>
+          <Callout
+            variant="warning"
+            title="Nothing is shared until you accept this list"
+            action={
+              <Button
+                size="small"
+                disabled={!access.can}
+                onClick={() =>
+                  write.submit(
+                    insightsPlan({ accepted: answer.schema }, "Accepted the usage insights list"),
+                  )
+                }
+              >
+                Accept this list
+              </Button>
+            }
+          >
+            This engine&rsquo;s list of patterns differs from the one you accepted.
           </Callout>
         )}
         {mark && (
@@ -334,7 +337,7 @@ function ReviewQueue({ answer, onDecided }: { answer: InsightsAnswer; onDecided:
 
   return (
     <Card padding="none">
-      <Card.Header icon={<ListChecksGlyph size="sm" />} count={queued.length}>
+      <Card.Header count={queued.length}>
         <Card.Title>Waiting for your review</Card.Title>
       </Card.Header>
       {refused && (
@@ -360,9 +363,9 @@ function ReviewQueue({ answer, onDecided }: { answer: InsightsAnswer; onDecided:
         rows={queued}
         rowKey={(r) => `${r.class}/${r.week}`}
         empty={{
+          size: "inline",
           title: "Nothing to review",
           hint: "A record waits here once a pattern holds two days in a row of one week.",
-          icon: "list-checks",
         }}
         columns={[
           {
@@ -430,7 +433,7 @@ function Records({ answer }: { answer: InsightsAnswer }) {
   const titleOf = useTitles(answer);
   return (
     <Card padding="none">
-      <Card.Header icon={<FileTextGlyph size="sm" />} count={answer.records.length}>
+      <Card.Header count={answer.records.length}>
         <Card.Title>Usage insights kept</Card.Title>
       </Card.Header>
       <DataGrid<InsightRow>
@@ -441,9 +444,9 @@ function Records({ answer }: { answer: InsightsAnswer }) {
         defaultSort="-week"
         isFailed={(r) => r.status === "failed"}
         empty={{
+          size: "inline",
           title: "No records yet",
           hint: "With sharing on, a record shows up here once the advisor finds a pattern.",
-          icon: "list-checks",
         }}
         columns={[
           {

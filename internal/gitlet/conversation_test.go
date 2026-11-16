@@ -1346,6 +1346,7 @@ func TestAPurgeIsBoundedByWhatAConversationWeighs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PurgeStep: %v", err)
 		}
+		n.changeCountsHold()
 		after := n.count(`SELECT COUNT(*) FROM code_comments WHERE change_id = ?`, ids[0])
 		steps = append(steps, before-after)
 		if after > 0 {
@@ -1403,6 +1404,7 @@ func TestAPurgeCutsAConversationByItsFindingsAndReviewsToo(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PurgeStep: %v", err)
 		}
+		n.changeCountsHold()
 		after := wide()
 		steps = append(steps, before-after)
 		if after > 0 {

@@ -352,6 +352,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_assets":       "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_seen_by":      "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_access":       "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_comments":     "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_usage":        "decided_by:" + string(authz.ActionArtifactUsage),
 		"artifact_trail":        "decided_by:" + string(authz.ActionAuditRead),
 		"brand":                 "decided_by:" + string(authz.ActionBrandRead),
@@ -403,6 +404,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_tags":    string(iam.GrantGitlet),
 		"code_compare": string(iam.GrantGitlet),
 		"code_commit":  string(iam.GrantGitlet),
+		// AND EACH ENTRY'S LAST COMMIT, decided per repository alike.
+		"code_tree_commits": string(iam.GrantGitlet),
 		// AND ITS MERGE QUEUES AND ITS CHECKS, decided per repository alike:
 		// a listing across repositories keeps the rows of those the caller
 		// reads, and one attempt — and its log — is refused on one it does
@@ -412,6 +415,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_check":        string(iam.GrantGitlet),
 		"code_check_log":    string(iam.GrantGitlet),
 		"code_commit_marks": string(iam.GrantGitlet),
+		// AND GITLET'S SECTION COUNTS, decided per repository alike: the company's leave out what the caller
+		// does not read.
+		"code_counts": string(iam.GrantGitlet),
 		// AND A SEARCH OF THEIR LINES, decided per repository alike: an
 		// unfiltered search leaves out what the caller does not read, and a
 		// repo: naming one is refused — by every Gitlet node that answers it.

@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/version"
@@ -274,6 +275,11 @@ type HealthAlarms struct {
 	// are is the admin-only `work_retention` answer this public body
 	// points at rather than restates.
 	Worst string `json:"worst,omitempty"`
+
+	// WorstTitle is that alarm's title, the table's words for a company
+	// owner ([statelog.Alarm.Title]), so a screen names it without the
+	// admin-only report. Absent beside an absent Worst.
+	WorstTitle string `json:"worst_title,omitempty"`
 }
 
 // Readiness is what /ready answers.
@@ -486,6 +492,7 @@ func fleetCounts(fleet FleetState) (*int, *HealthAlarms) {
 			// The first is the one standing longest
 			// ([statelog.Tracker.Standing]).
 			alarms.Worst = string(fleet.Alarms[0])
+			alarms.WorstTitle, _, _ = statelog.PersonWords(fleet.Alarms[0])
 		}
 	}
 	return nodes, alarms

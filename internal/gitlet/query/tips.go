@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/cache"
@@ -149,7 +150,7 @@ func (r *read) tipsRead(ctx context.Context, objs found, at cursor) (gitlet.GitA
 	if err != nil {
 		return gitlet.GitAnswer{}, err
 	}
-	listed, err := r.readCommits(ctx, commits)
+	listed, err := r.readCommits(ctx, "log of the tips' commits", commits)
 	if err != nil {
 		return gitlet.GitAnswer{}, err
 	}
@@ -319,8 +320,9 @@ func tipTag(t gitref.Tag) *gitlet.TipTag {
 }
 
 // readCommits is each commit of ids as a history lists it, from ONE log that
-// walks none of their parents.
-func (r *read) readCommits(ctx context.Context, ids []string) (map[string]gitlet.LogCommit, error) {
+// walks none of their parents; what names the log in an error. A commit dated
+// past the year 9999 fails it, unparsed: no answer can carry such a date.
+func (r *read) readCommits(ctx context.Context, what string, ids []string) (map[string]gitlet.LogCommit, error) {
 	out := make(map[string]gitlet.LogCommit, len(ids))
 	if len(ids) == 0 {
 		return out, nil
@@ -333,6 +335,10 @@ func (r *read) readCommits(ctx context.Context, ids []string) (map[string]gitlet
 		if !slices.Contains(ids, rec.oid) {
 			return fmt.Errorf("%w: git log listed commit %s, which the read did not ask", errUnparsed, rec.oid)
 		}
+		if rec.authored.After(lastJSONTime) || rec.committed.After(lastJSONTime) {
+			return fmt.Errorf("%w: commit %s is dated past the year 9999, which an answer cannot carry",
+				errUnparsed, rec.oid)
+		}
 		out[rec.oid], _ = rec.commit()
 		return nil
 	})
@@ -343,22 +349,24 @@ func (r *read) readCommits(ctx context.Context, ids []string) (map[string]gitlet
 	})
 	if res.Damage == nil && errors.Is(err, errUnparsed) {
 		r.charge(res)
-		return nil, r.unparsed(ctx, "log of the tips' commits", err)
+		return nil, r.unparsed(ctx, what, err)
 	}
-	if err = r.failed(ctx, "log of the tips' commits", res, err, nil); err != nil {
+	if err = r.failed(ctx, what, res, err, nil); err != nil {
 		return nil, err
 	}
 	if err = stream.close(); err != nil {
-		return nil, r.unparsed(ctx, "log of the tips' commits", err)
+		return nil, r.unparsed(ctx, what, err)
 	}
 	for _, id := range ids {
 		if _, ok := out[id]; !ok {
-			return nil, r.unparsed(ctx, "log of the tips' commits", fmt.Errorf("%w: git log did not list commit %s",
-				errUnparsed, id))
+			return nil, r.unparsed(ctx, what, fmt.Errorf("%w: git log did not list commit %s", errUnparsed, id))
 		}
 	}
 	return out, nil
 }
+
+// lastJSONTime is the last instant encoding/json writes a time.Time at.
+var lastJSONTime = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 
 // encodeTipFact is a tip's facts as a memo entry holds them, its counts no
 // part of them; decodeTipFact reads them back.

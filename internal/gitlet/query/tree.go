@@ -1,16 +1,12 @@
 package query
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
-	"github.com/crewlet/crewlet/internal/gitref"
 )
 
 // A LISTING is `git ls-tree -z -l [-r] <tree id>` — the tree by its id, never
@@ -200,27 +196,16 @@ func (r *read) endPage(m *memoRun, p *gitlet.GitAnswer, at cursor, next, left in
 // a scan wants, never git's own failure.
 var errStop = errors.New("query: read enough")
 
-// parseEntry reads one `ls-tree -z -l` record — "<mode> <type> <id> <size>\t<path>",
-// the size right-aligned and "-" for anything but a blob — its path relative
-// to the tree listed, made one from the repository's root.
+// parseEntry reads one `ls-tree -z -l` record (gitproc.ParseTreeEntry), its
+// path relative to the tree listed, made one from the repository's root. A
+// size of "-" is 0 here; a blob git could not read (BAD) is ErrMissingObject.
 func parseEntry(rec []byte, dir string) (gitlet.TreeEntry, error) {
-	tab := bytes.IndexByte(rec, '\t')
-	if tab < 0 {
-		return gitlet.TreeEntry{}, fmt.Errorf("query: ls-tree answered %q, which is no entry", truncated(rec))
+	g, err := gitproc.ParseTreeEntry(rec)
+	if err != nil {
+		return gitlet.TreeEntry{}, err
 	}
-	fields := strings.Fields(string(rec[:tab]))
-	if len(fields) != 4 || !gitref.ValidOID(fields[2]) {
-		return gitlet.TreeEntry{}, fmt.Errorf("query: ls-tree answered %q, which is no entry", truncated(rec))
-	}
-	e := gitlet.TreeEntry{Mode: fields[0], Type: fields[1], OID: fields[2]}
-	if fields[3] != "-" {
-		size, err := strconv.ParseInt(fields[3], 10, 64)
-		if err != nil || size < 0 {
-			return gitlet.TreeEntry{}, fmt.Errorf("query: ls-tree answered %q, whose size is none", truncated(rec))
-		}
-		e.Size = size
-	}
-	p := string(rec[tab+1:])
+	e := gitlet.TreeEntry{Mode: g.Mode, Type: g.Type, OID: g.ID, Size: max(g.Size, 0)}
+	p := string(g.Path)
 	if dir != "" {
 		p = dir + "/" + p
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/commentanchor"
 	"github.com/crewlet/crewlet/internal/artifacts/foldername"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -28,7 +29,7 @@ func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
 			Domain:  artifactsdomain.Domain{},
-			Applier: artifactsdomain.NewApplier("suite-node", nil),
+			Applier: artifactsdomain.NewApplier("suite-node", nil, nil),
 			// Migrate is nil: these tables ship in the replicated estate's
 			// own migration (0043), so a fresh store already has them.
 			Encode: encodeSuiteRecord,
@@ -61,7 +62,7 @@ func TestTheArtifactsGateReaderKeepsTheSharedRule(t *testing.T) {
 		return statelogtest.GateCandidate{
 			Candidate: statelogtest.Candidate{
 				Domain:  artifactsdomain.Domain{},
-				Applier: artifactsdomain.NewApplier("suite-node", nil),
+				Applier: artifactsdomain.NewApplier("suite-node", nil, nil),
 				// RAW IDS: the family asks the reader about the very ids it
 				// handed out, so a record about one must name it on its
 				// subject as given.
@@ -204,6 +205,12 @@ func suitePayload(kind artifactsdomain.ObjectKind, artifact, id string) (
 		return artifactsdomain.FolderSubject(), artifactsdomain.OpCreate, folderCreatePayload(id)
 	case artifactsdomain.KindBrand:
 		return artifactsdomain.BrandSubject(), artifactsdomain.OpAdopt, brandAdoptPayload(artifact)
+	case artifactsdomain.KindComment:
+		// THE SUBJECT IS SPELLED, NOT PARSED: a gate case names its
+		// artifact by a string no id parses.
+		thread := uuid.NewSHA1(suiteNamespace, []byte("thread-"+id))
+		return artifactsdomain.Subject{Kind: kind, ID: artifact + "." + thread.String()},
+			artifactsdomain.OpCommentOpen, commentOpenPayload(id)
 	}
 	return artifactsdomain.Subject{Kind: kind, ID: id}, artifactsdomain.OpPatch, nil
 }
@@ -221,6 +228,19 @@ func folderCreatePayload(id string) artifactsdomain.FolderCreatePayload {
 			ID: artifactsdomain.FolderIDOf("suite-folder-"+id, 0).String(), Name: name, NameKey: key,
 		}},
 		Authority: suiteAuthority(),
+	}
+}
+
+// commentOpenPayload is a thread opened on version 1, on a name its page
+// declares, with one remark named for id.
+func commentOpenPayload(id string) artifactsdomain.CommentOpenPayload {
+	return artifactsdomain.CommentOpenPayload{
+		V: 1, Remark: uuid.NewSHA1(suiteNamespace, []byte("remark-"+id)).String(),
+		Body: "Is this the right total for " + id + "?", Version: 1,
+		Anchor: commentanchor.Anchor{Kind: commentanchor.KindHTML, Page: "index.html", Name: "summary"},
+		Quote:  "the total", Mentions: []string{"suite"}, MaxThreads: artifacts.MaxThreadsPerArtifact,
+		Notify: &artifactsdomain.CommentNotify{Agents: []artifactsdomain.Recipient{{
+			Seat: "suite", Reason: artifactsdomain.NotifyOwner, Addressed: true}}},
 	}
 }
 
@@ -269,6 +289,14 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		op, payload = artifactsdomain.OpCreate, p
 	case "CreatePayload.Kind brand":
 		op, payload = artifactsdomain.OpCreate, createPayloadOfKind(artifact, artifacts.KindBrand)
+	case "Subject.Kind comment":
+		subject = artifactsdomain.CommentSubject(mustID(artifact),
+			uuid.NewSHA1(suiteNamespace, []byte("thread-carrying")))
+		op, payload = artifactsdomain.OpCommentOpen, commentOpenPayload("carrying")
+	case "RecordEnvelope.Op inbox_marks":
+		subject, op = artifactsdomain.ReaderSubject("suite"), artifactsdomain.OpInboxMarks
+		payload = artifactsdomain.PersonMarks{V: 1, Handle: "suite", Gesture: artifactsdomain.MarkGesture{
+			Read: []string{"suite-notice"}}, Positions: map[string]uint64{"suite-notice": 1}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

@@ -173,7 +173,7 @@ test("a warning the change introduces stops the save until Save anyway", async (
     await settled();
   });
   expect(save).not.toHaveBeenCalled();
-  expect(screen.getByText("The engine accepts this, with a warning")).toBeTruthy();
+  expect(screen.getByText("This change brings 1 warning")).toBeTruthy();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
     await settled();

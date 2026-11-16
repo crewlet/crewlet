@@ -104,6 +104,10 @@ export interface AdvisorFinding {
   why: string;
   path: string;
   evidence: { key: string; value: number }[];
+  /** The one thing within the subject it is about, as a list reads it: `health-check (24 a day)`. */
+  item?: string;
+  /** The seats it is about, by name, where one finding speaks for several. */
+  names?: string[];
   /** At most five atlas entries the finding is about; absent for a reader without the atlas app. */
   entries?: AdvisorAtlasEntry[];
   fix: AdvisorFix;
@@ -127,6 +131,9 @@ export interface AdvisorNotice {
   cause?: string;
   /** The alarm kind that raised a finding's notice, for a reader without the finding. */
   alarm?: string;
+  /** The raising alarm's words for a company owner; absent where no alarm raised it. */
+  title?: string;
+  person?: string;
 }
 
 /** Every finding at one revision, the most costly first. */

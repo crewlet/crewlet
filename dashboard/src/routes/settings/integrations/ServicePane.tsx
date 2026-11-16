@@ -54,7 +54,6 @@ import {
   type DataGridColumn,
 } from "@crewlethq/ui";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { VendorMark } from "@crewlethq/icons";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PROJECT_PAGE } from "~/contract/work.ts";
@@ -153,7 +152,6 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
   const by = service.replacedBy;
   const what = HOLDS[service.key];
   const apps = by?.keys ?? [];
-  const only = apps.length === 1 ? apps[0] : undefined;
   // THE SENTENCE NAMES THE CONNECTION THE APP RIDES: Jira and Confluence
   // through the one Atlassian integration, a chat vendor as itself. A vendor
   // nobody named (the `viewer` answer tells the names to a holder of Chatlet) is
@@ -168,7 +166,7 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
     <div className="int-service-off">
       <Callout
         variant="neutral"
-        icon={only ? <VendorMark vendor={connectionOf(only)} size="md" /> : undefined}
+
         title={
           by
             ? `${capitalised(by.name)} ${apps.length > 1 ? "do" : "does"} this for your company`

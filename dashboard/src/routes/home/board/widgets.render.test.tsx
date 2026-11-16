@@ -632,6 +632,62 @@ describe("the Inbox widget", () => {
     expect(screen.getByText(`Inbox · ${shown}+ unread`)).toBeTruthy();
     expect(screen.getByText(`All ${shown}+ unread`)).toBeTruthy();
   });
+
+  // A COMMENT ON AN ARTIFACT IS A ROW TOO, saying who did what to which
+  // artifact with the remark as words, and opening it in the Inbox. Mutation:
+  // draw only Worklet's and Gitlet's rows, and the card lists nothing.
+  test("lists a comment on an artifact as who did what, opening it in the Inbox", async () => {
+    const own = {
+      record_id: "a-4",
+      log_seq: 4,
+      log_stream: "CREWLET_ARTIFACTS_LOG",
+      log_generation: 1,
+      at: "2026-10-20T09:00:00Z",
+      reason: "mention",
+      primary: true,
+      addressed: false,
+      op: "comment_reply",
+      artifact: "art-1",
+      thread: "th-1",
+      excerpt: "Can you check the **totals**?",
+      actor: "cto",
+      actor_kind: "agent",
+      title: "Q3 plan",
+      artifact_kind: "doc",
+      read: false,
+    };
+    const inbox = {
+      handle: "jane",
+      notices: [
+        {
+          source: "artifacts",
+          record_id: own.record_id,
+          position: { stream: own.log_stream, generation: own.log_generation, seq: own.log_seq },
+          at: own.at,
+          reason: own.reason,
+          primary: own.primary,
+          addressed: own.addressed,
+          kind: "comment",
+          subject: { id: own.artifact, title: own.title },
+          excerpt: own.excerpt,
+          actor: own.actor,
+          actor_kind: own.actor_kind,
+          read: own.read,
+          extra: own,
+        },
+      ],
+      sources: [{ name: "artifacts", primary_reasons: ["owner", "mention", "assignee"] }],
+      unread: 1,
+      primary: 1,
+      complete: true,
+    };
+    mount(<LeafView widget={leaf(WIDGETS.get("inbox.updates")!, {})} />, ADMIN, { inbox });
+    await settle();
+    const row = screen.getByRole("link", { name: /commented on Q3 plan/ });
+    expect(row.textContent).toContain("CTO commented on Q3 plan");
+    expect(row.textContent).toContain("Can you check the totals?");
+    expect(row.getAttribute("href")).toBe("#/inbox?row=artifact%3Aa-4");
+  });
 });
 
 describe("the Agent skills widget", () => {

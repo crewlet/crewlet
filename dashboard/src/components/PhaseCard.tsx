@@ -701,9 +701,8 @@ function WithheldNote({ agentId }: { agentId: string }) {
   }, [agentId, agents, org]);
   if (!lead) return <Callout variant="neutral">{`${WITHHELD_WORDS}. ${WITHHELD_WHY}`}</Callout>;
   return (
-    <Callout variant="neutral">
-      Only <Link href={href(seatPath(lead))}>{lead.name}</Link> (this seat’s lead) and admins can
-      see what it says.
+    <Callout variant="neutral" action={<Link href={href(seatPath(lead))}>Open {lead.name}</Link>}>
+      Only {lead.name} (this seat’s lead) and admins can see what it says.
     </Callout>
   );
 }

@@ -1140,6 +1140,9 @@ const (
 	// (commitmarks.go): each commit's checks per branch and the changes it landed
 	// with, in one snapshot and held to the asker's grant on the repository.
 	ReadCommitMarks ReadKind = "commit_marks"
+	// ReadCounts is a scope's counts (counts.go): the parts [ReadQuery.Counts] asks, of one
+	// repository or of every one in use the asker reads, in one snapshot.
+	ReadCounts ReadKind = "counts"
 )
 
 // ReadKinds is the closed set.
@@ -1158,15 +1161,16 @@ const (
 // [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
 // that read [ReadQuery.Target], `commit` the only one that reads
 // [ReadQuery.Commit], `inbox` the only one that reads [ReadQuery.Inbox],
-// `notice_cards` the only one that reads [ReadQuery.NoticeCards], and
-// `commit_marks` the only one that reads [ReadQuery.CommitMarks].
+// `notice_cards` the only one that reads [ReadQuery.NoticeCards],
+// `commit_marks` the only one that reads [ReadQuery.CommitMarks], and
+// `counts` the only one that reads [ReadQuery.Counts].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
 		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed, ReadDefaultTips,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
-		ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards, ReadCommitMarks}
+		ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards, ReadCommitMarks, ReadCounts}
 }
 
 // Valid reports a kind this build knows.
@@ -1324,6 +1328,9 @@ type ReadQuery struct {
 	// versionedFields row. The domain landed on main with it
 	// ([RecordVersion]).
 	Gates bool `json:"gates,omitempty"`
+	// Cards asks a `changes` listing for each listed change's card ([ChangeSummary.Card]);
+	// refused on every other kind. A request field, so an older build refuses it unread.
+	Cards bool `json:"cards,omitempty"`
 	// Change is a `change` read's number, and a `change_routing` read's: the
 	// change's on the repository Repo names, web!42's 42 — REQUIRED there,
 	// at least 1, and refused on every other kind.
@@ -1377,8 +1384,12 @@ type ReadQuery struct {
 	// move first, and tests a terminal state and an owner on the rows it
 	// read; one that names any of those walks that one's index, in its order
 	// (a live state's newest opening first), and tests the window on each
-	// row.
+	// row. A live state asked by when its changes moved ([ChangeSortUpdated])
+	// walks by move and reads no change that moved before the window.
 	Window ChangeWindow `json:"window,omitempty"`
+	// ChangeSort orders a `changes` listing ([ChangeSort]); "" is its walk's own order. A request
+	// field, so an older build refuses it unread and the router asks the next node.
+	ChangeSort ChangeSort `json:"change_sort,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
 	// reviews, its findings or the asker's own standing findings
@@ -1546,6 +1557,19 @@ type ReadQuery struct {
 	// ids, once each, required for that kind and refused on every other. A request
 	// field, no record's, so no versionedFields row: an older build refuses the kind.
 	CommitMarks []string `json:"commit_marks,omitempty"`
+	// Counts is a `counts` read's parts, each a key of its own so an older build refuses one
+	// it lacks unread; required there and refused on every other kind. A request field, no record's.
+	Counts *CountsQuery `json:"counts,omitempty"`
+	// RepoFacts asks a listing of repositories or a read of one for each one's facts
+	// ([RepoSummary.ChangeCounts], [RepoSummary.Card]) and a first page for its total
+	// ([ReadAnswer.ReposTotal]); refused on every other kind. A request field, no record's.
+	RepoFacts bool `json:"repo_facts,omitempty"`
+	// RepoKind narrows a `repos` listing to one kind ([RepoKind]); "" is every kind. Refused on
+	// every other kind of read. A request field, so an older build refuses it unread.
+	RepoKind RepoKind `json:"repo_kind,omitempty"`
+	// RepoSort orders a `repos` listing ([RepoSort]); "" is by name. Refused on every other kind
+	// of read. A request field, so an older build refuses it unread.
+	RepoSort RepoSort `json:"repo_sort,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -1578,7 +1602,8 @@ type ReadQuery struct {
 // first, on every page of them; Reviewers, Comments, Reviews and Findings a
 // page of the part of its conversation a `change` read names
 // ([ReadQuery.Part]) — Reviews a `reviews` listing's page too, each naming its
-// change; and Routed a `change_routing` read's page.
+// change; Routed a `change_routing` read's page; Counts a `counts`
+// read's parts; and ReposTotal a first page of repositories' total.
 type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
@@ -1712,7 +1737,11 @@ type ReadAnswer struct {
 	// CommitMarks is a `commit_marks` read's answer, one mark a commit in the
 	// query's order; an answer's field, no record's.
 	CommitMarks []CommitMark `json:"commit_marks,omitempty"`
-	Next        string       `json:"next,omitempty"`
+	// Counts is a `counts` read's answer, a part each it asked; an answer's field, no record's.
+	Counts *Counts `json:"counts,omitempty"`
+	// ReposTotal is a first page of repositories' whole listing, where [ReadQuery.RepoFacts] asks.
+	ReposTotal *ReposTotal `json:"repos_total,omitempty"`
+	Next       string      `json:"next,omitempty"`
 	// TipsNext is a `checks_due` page of one repository's tip work cut at its
 	// bound: the target it ended at, which the next page goes on after
 	// ([ChecksDueQuery.TipsAfter]) before any head — so a repository whose
@@ -2519,6 +2548,11 @@ type RepoSummary struct {
 	// Pushes is pushes EVER.
 	Pushes     int64     `json:"pushes"`
 	LastPushAt time.Time `json:"last_push_at,omitzero"`
+	// ChangeCounts is its changes by state, answered only where [ReadQuery.RepoFacts] asks.
+	ChangeCounts *ChangeCounts `json:"change_counts,omitempty"`
+	// Card is what a listing's row draws of it, where [ReadQuery.RepoFacts] asks: absent from a
+	// build that does not answer it, and each part inside absent where unknown or none.
+	Card *RepoCard `json:"card,omitempty"`
 }
 
 // RepoDetail is one repository in detail.
@@ -2762,6 +2796,9 @@ type ChangeSummary struct {
 	// ([RecordVersion]), so every build serving the dashboard answers a
 	// listing with them.
 	UpdatedAt time.Time `json:"updated_at"`
+	// Card is what a listing's row draws beside its readiness, where [ReadQuery.Cards]
+	// asks; nil is not answered, never "nothing to say".
+	Card *ChangeCard `json:"card,omitempty"`
 }
 
 // ChangeDetail is one change in detail: its summary, its description and its
@@ -3246,6 +3283,10 @@ const (
 	// and the line — and the path, where it was another — it had there: at
 	// most MaxBlameLines lines a read, a page at a time.
 	GitBlame GitReadKind = "blame"
+	// GitTreeCommits is the commit that last changed each entry of a directory
+	// at a commit, as `git log -1 -- <entry>` names it, a page of its listing
+	// at a time (treecommits.go).
+	GitTreeCommits GitReadKind = "tree_commits"
 	// GitChecksFile is the checks file a commit holds — [ChecksFilePath] in
 	// its tree — its object's id and type and, for a file within
 	// [MaxChecksFileBytes], its bytes WHOLE: what a repository's home reads a
@@ -3281,8 +3322,8 @@ const (
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitTags, GitLandedIn,
-		GitRevisionFacts, GitReanchor, GitInterdiff, GitLog, GitBlame, GitChecksFile, GitCodeFiles, GitSearch,
-		GitFind}
+		GitRevisionFacts, GitReanchor, GitInterdiff, GitLog, GitBlame, GitTreeCommits, GitChecksFile, GitCodeFiles,
+		GitSearch, GitFind}
 }
 
 // Valid reports a kind this build answers.
@@ -3303,17 +3344,18 @@ func (k GitReadKind) EnginesOwn() bool {
 }
 
 // Unstampable reports a kind whose answer is a PAGE of the repository's content
-// — a listing, a file's lines, a diff, a comparison, many tips, an interdiff, a
-// history, a blame or a find — which a read may ask cut and answered with no
-// stamp ([GitQuery.Unstamped]). A find's answer is a function of the tree, the
-// query, the limit and the build, so a browser may keep a find by whole ids
-// for a typing session. Never a landed-in read, whose answer IS what the
+// (a listing, a file's lines, a diff, a comparison, many tips, an interdiff, a
+// history, a blame, a directory's last commits or a find), which a read may ask
+// cut and answered with no stamp ([GitQuery.Unstamped]). A find's answer is a
+// function of the tree, the query, the limit and the build, so a browser may
+// keep a find by whole ids for a typing session. Never a landed-in read, whose answer IS what the
 // node's index says of a push; nor a revision's facts, a re-anchoring or a
 // checks file, which the engine and a change's own reads ask, never a question
 // that keeps a page.
 func (k GitReadKind) Unstampable() bool {
 	switch k {
-	case GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitInterdiff, GitLog, GitBlame, GitFind:
+	case GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitInterdiff, GitLog, GitBlame, GitTreeCommits,
+		GitFind:
 		return true
 	}
 	return false
@@ -3460,6 +3502,7 @@ type GitQuery struct {
 	Interdiff     *InterdiffQuery     `json:"interdiff,omitempty"`
 	Log           *LogQuery           `json:"log,omitempty"`
 	Blame         *BlameQuery         `json:"blame,omitempty"`
+	TreeCommits   *TreeCommitsQuery   `json:"tree_commits,omitempty"`
 	ChecksFile    *ChecksFileQuery    `json:"checks_file,omitempty"`
 	CodeFiles     *CodeFilesQuery     `json:"code_files,omitempty"`
 	Search        *SearchQuery        `json:"search,omitempty"`
@@ -3900,6 +3943,7 @@ func (q GitQuery) Validate() error {
 		{GitCompare, q.Compare != nil}, {GitTips, q.Tips != nil}, {GitTags, q.Tags != nil},
 		{GitLandedIn, q.LandedIn != nil}, {GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
+		{GitTreeCommits, q.TreeCommits != nil},
 		{GitChecksFile, q.ChecksFile != nil}, {GitCodeFiles, q.CodeFiles != nil},
 		{GitSearch, q.Search != nil}, {GitFind, q.Find != nil}} {
 		switch {
@@ -3944,6 +3988,8 @@ func (q GitQuery) Validate() error {
 		return q.Log.validate()
 	case GitBlame:
 		return q.Blame.validate()
+	case GitTreeCommits:
+		return q.TreeCommits.validate()
 	case GitChecksFile:
 		return wholeID("checks_file.commit", q.ChecksFile.Commit, false)
 	case GitCodeFiles:
@@ -4332,11 +4378,11 @@ type GitAnswer struct {
 	// Next is where the next page starts, handed back as the query's Cursor
 	// with the query otherwise unchanged; empty on the last page.
 	Next string `json:"next,omitempty"`
-	// PushedBy is the push that INTRODUCED each commit the answer names —
-	// its Rev, a diff's or a comparison's commits, every commit a log page
-	// lists or a blame page's lines name — by the commit's whole id,
-	// where the answering node's index of which push introduced each commit
-	// holds it. A commit it does not name was introduced outside Coverage, or
+	// PushedBy is the push that INTRODUCED each commit the answer names (its
+	// Rev, a diff's or a comparison's commits, every commit a log page lists,
+	// a blame page's lines or a directory's last commits name) by the commit's
+	// whole id, where the answering node's index of which push introduced each
+	// commit holds it. A commit it does not name was introduced outside Coverage, or
 	// by a push that listed more than MaxIntroduced commits.
 	PushedBy map[string]PushedBy `json:"pushed_by,omitempty"`
 	// Coverage is what that index holds, on every answer of a node that keeps
@@ -4358,6 +4404,7 @@ type GitAnswer struct {
 	Reanchor      *ReanchorAnswer      `json:"reanchor,omitempty"`
 	Log           *LogAnswer           `json:"log,omitempty"`
 	Blame         *BlameAnswer         `json:"blame,omitempty"`
+	TreeCommits   *TreeCommitsAnswer   `json:"tree_commits,omitempty"`
 	ChecksFile    *ChecksFileAnswer    `json:"checks_file,omitempty"`
 	CodeFiles     *CodeFilesAnswer     `json:"code_files,omitempty"`
 	Search        *SearchAnswer        `json:"search,omitempty"`

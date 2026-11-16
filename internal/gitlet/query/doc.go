@@ -1,5 +1,6 @@
 // Package query is THE SERVER-SIDE READS OF A REPOSITORY BY OBJECT ID: a
-// tree's listing, a file's lines, a diff's stat or one file's patch, how two
+// tree's listing, the commit that last changed each of its entries
+// (treecommits.go), a file's lines, a diff's stat or one file's patch, how two
 // commits compare, whether a commit landed in a branch and which push landed
 // it, a path's history (log.go) and which commit last changed each line of a
 // file (blame.go), a file found by its name in a commit's tree (find.go) — and
@@ -115,11 +116,12 @@
 // resolves `<id>:<path>` to the id of the tree or file it names, so every
 // later process is handed that id, and `git diff-pairs -z`'s, which reads back
 // the raw records diff-tree wrote, paths and all, to count or patch the files
-// a diff read asks for (diff.go) — or, for the two reads whose git reads no
-// path there, as the ONE argument after `--`, where git reads an argument as
-// a path and never as an option: a history's as a literal pathspec
-// (`:(literal)<path>`, log.go) and a blame's as itself, blame taking a path
-// rather than a pathspec (blame.go). Never `log --stdin`, which reads a path
+// a diff read asks for (diff.go) — or, for the three reads whose git reads no
+// path there, after `--`, where git reads an argument as a path and never as
+// an option: a history's path as the ONE argument there, a literal pathspec
+// (`:(literal)<path>`, log.go), a blame's as itself, blame taking a path
+// rather than a pathspec (blame.go), and a directory walk's directory or
+// entries as one or more literal pathspecs (treecommits.go). Never `log --stdin`, which reads a path
 // a line at a time and takes a carriage return off its end. A diff's paths are
 // filtered here, over git's whole raw answer, and an interdiff's touched
 // paths are each a file's whole name, looked up at both heads as
@@ -127,7 +129,8 @@
 // option can hide in one: `--output=x` is a file's name there like any other. A re-anchoring's
 // diff-pairs is handed no path at all, its pairs numbered (anchor.go).
 // TestAPathReachesGitOnlyAsData holds every argument list a read runs to its
-// template, a history's and a blame's path the one argument after `--`.
+// template, a history's and a blame's path the one argument after `--`, and
+// a directory walk's every argument after it a literal pathspec.
 // diff-tree, diff-pairs, rev-list, log and blame each take `--output`, which
 // creates the file it names in the repository they run in: the writers gate
 // (cache.TestNothingButSyncWritesACache) argues each of this package's
@@ -220,6 +223,42 @@
 // the request, as Gitlet's is, would hold the read for a round, a
 // scrub or a rebuild no read's budget holds.
 //
+// # A directory's last commits
+//
+// Each entry's commit is the one `git log -1 -- <entry>` names (treecommits.go):
+// git simplifies history per path, following at a merge the first parent the
+// entry's files are unchanged against and naming the merge where they differ
+// from every parent, and it reads files, so a directory that never held one
+// has no last commit. One walk of the directory as a whole would follow the
+// directory's own history and name another commit for an entry a merge took
+// from the side the directory did not.
+//
+// So ONE first-parent walk reads the directory's line: `log --first-parent -z
+// --root --name-status --no-renames --diff-merges=first-parent
+// --format=%H%x00%P`, the directory a literal pathspec after `--` (none at the
+// root). `--name-status` frames the stream, every path after a one-letter
+// status, so no name reads as an id; `%P` is read at any width. A commit of one
+// parent answers the entries it changed; an entry a merge changed is left there
+// and walked alone by git (`log -1 <merge> -- <entry>`). Once the walk has read
+// 1 024 records with at most 64 entries left, it ends and they go on in walks
+// narrowed to their own literal pathspecs, at most 32 entries and 64 KiB of
+// them a walk (two walks for ordinary names), which the changed-path filters
+// serve for many paths at once.
+//
+// WINDOWS of answers are kept under the walk's first record, the commit every
+// later commit shares answers with until the directory next changes, and the
+// group walk probes for them at its first 64 records (cache.MemoProbe), so a
+// push is answered by a walk of two records. A window begins at a name whose
+// FNV-1a hash is 0 modulo its size, or 256 entries into one, and is trusted
+// only for the names it holds, so an entry added or removed misreads nothing.
+//
+// The walks leave a tenth of the read's budget for the log of the page's
+// commits; a page the budget cut holds what was answered, is marked
+// out_of_time, and is never kept nor answered immutable. Once the page's own
+// entries are answered (and the page's log read), the walks left only complete
+// windows for the memo, and the budget, a busy lane or the answer falling due
+// ends them without failing the page.
+//
 // # Who may read
 //
 // The grant is judged on the ANSWERING node, from its own epoch's chart and
@@ -272,7 +311,7 @@
 // function of object ids alone, so a cursor one node issued is sound on any
 // other; the tags listing's is the last tag's key, `d:<seconds>:<name>`, which
 // any node's listing resumes past. The positions: a listing's n-th
-// entry, a stat's n-th file, a file's line or the byte inside an overlong one,
+// entry (a directory's last commits' too), a stat's n-th file, a file's line or the byte inside an overlong one,
 // a patch's byte, a history's n-th commit, a blame's line. A listing's Total,
 // a file's Lines and a diff's totals are the whole answer's on every page. A
 // history's and a blame's pages carry text the code tools fence — every
@@ -381,4 +420,16 @@
 // BenchmarkFind over 100 000 files (twelve vCPUs, git 2.56.0): a tree's first
 // find 407 ms (479 at p95), each later one 77 ms (115 at p95), far inside
 // gitproc.ReadDeadline, so no index of names is kept beside the memo.
+//
+// BenchmarkTreeCommits over 100 000 commits (twelve vCPUs, git 2.56.0,
+// -benchtime 5x, p50): a linear history's cold first page of a root of 40
+// entries untouched since the first commit 2.1 s with a commit-graph and 4.9 s
+// without (six processes: the group walk's 1 024 records and two narrowed
+// walks); of src/, 400 busy files, 132 and 152 ms; of internal/a/b/c/, 151
+// and 256 ms; a page at a new commit derived from its parent's windows 21 to
+// 32 ms in four processes. A history merging its changes from side branches
+// (two thirds of them), 100 000 commits in all: the root 1.0 s and 2.4 s in
+// eleven processes; src/ 593 and 501 ms and internal/a/b/c/ 717 and 694 ms,
+// in 95 and 129 processes, most of them the entries a merge changed, each
+// walked alone; derived pages 22 to 31 ms in four.
 package query

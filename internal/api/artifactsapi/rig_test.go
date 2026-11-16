@@ -257,6 +257,9 @@ type writes struct {
 	mu    sync.Mutex
 	calls []call
 	err   error
+
+	// threads are the comment threads the comment reads answer, by artifact.
+	threads map[artifacts.ID][]artifactsdomain.CommentThread
 }
 
 type call struct {
@@ -708,7 +711,7 @@ func newRig(t *testing.T, framed bool) *rig {
 	opts := artifactsapi.Options{
 		Gate: artifactsapi.Gate{Heads: g.estate, Chart: chart{}, Limits: limits, Marks: g.marks,
 			Roster: roster{}, Company: func() config.CompanyArtifacts { return g.company }},
-		Reads: g.estate, Writes: g.writes, Objects: g.objects,
+		Reads: g.estate, Writes: g.writes, Objects: g.objects, Comments: g.writes,
 		Uploads:   func() (artifactsapi.Pipeline, error) { return g.pipeline, nil },
 		WorkItems: g.work.tracker,
 		Ready:     g.ready,

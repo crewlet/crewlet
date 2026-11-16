@@ -120,3 +120,25 @@ func ServeAPI(b *Bootstrap) {
 		ID: "founder", Token: testTokenValue, Grants: []iam.Grant{iam.GrantAdmin},
 	}}
 }
+
+// Advice is one rule's words for a person, as a test reads them.
+type Advice struct{ Title, Person string }
+
+// RaisedElsewhere reports whether another package raises the rule with a's words.
+func RaisedElsewhere(a Advice) bool {
+	for r := range raisedElsewhere {
+		if r.title == a.Title && r.person == a.Person {
+			return true
+		}
+	}
+	return false
+}
+
+// Advices is every rule's words, in the order they were declared ([says]).
+func Advices() []Advice {
+	out := make([]Advice, len(advices))
+	for i, a := range advices {
+		out[i] = Advice{Title: a.title, Person: a.person}
+	}
+	return out
+}

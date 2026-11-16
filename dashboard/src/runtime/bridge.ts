@@ -23,6 +23,11 @@
 // RELATIVE, like every contract import outside the app: this module is also
 // built into the runtime alone, where the `~` alias does not exist.
 import { ARTIFACT_CAPABILITIES, ARTIFACT_ROLES } from "../contract/artifacts.ts";
+import {
+  ARTIFACT_COMMENT_ANCHOR_NAME,
+  ARTIFACT_COMMENT_CROP_MAX_BYTES,
+  ARTIFACT_COMMENT_QUOTE_MAX_BYTES,
+} from "../contract/artifactsworkspace.ts";
 import { PRESENCE_ACTIVITIES } from "../contract/presence.ts";
 
 /** The bridge's message names on the port, beside the handshake's. */
@@ -40,7 +45,8 @@ export const BRIDGE_MESSAGE = {
 /** The capabilities a version declares, as the runtime names them (`artifacts.Capability`). */
 export type RuntimeCapability = (typeof ARTIFACT_CAPABILITIES)[number];
 
-/** Every method a page may call, and the capability each needs (none for `openLink` and `print`). */
+/** Every method a page may call, and the capability each needs (none for `openLink`, `print` and
+ *  the comment layer's four, which only report what the page already draws). */
 export const BRIDGE_METHODS = {
   "identity.me": "identity",
   "identity.people": "identity",
@@ -61,6 +67,10 @@ export const BRIDGE_METHODS = {
   "assets.list": "assets",
   openLink: null,
   print: null,
+  "comments.layout": null,
+  "comments.pick": null,
+  "comments.crop": null,
+  "comments.escape": null,
 } as const satisfies Record<string, RuntimeCapability | null>;
 
 export type BridgeMethod = keyof typeof BRIDGE_METHODS;
@@ -156,7 +166,73 @@ export type BridgeEvent =
       roster: BridgeRoster;
     }
   | { type: typeof BRIDGE_MESSAGE.event; topic: "connection"; state: BridgeConnection }
-  | { type: typeof BRIDGE_MESSAGE.event; topic: "identity"; viewer: BridgeViewer | null };
+  | { type: typeof BRIDGE_MESSAGE.event; topic: "identity"; viewer: BridgeViewer | null }
+  | ({ type: typeof BRIDGE_MESSAGE.event; topic: "comments" } & CommentRequest);
+
+// ---- the comment layer -------------------------------------------------------
+
+/** How the host draws comments over the page: not at all, its pins, or a reader placing one. */
+export type CommentMode = "off" | "show" | "place";
+
+const COMMENT_MODES: readonly CommentMode[] = ["off", "show", "place"];
+
+/** A name a page declares a comment anchor by (`commentanchor.NamePattern`). */
+export const COMMENT_ANCHOR_NAME = new RegExp(ARTIFACT_COMMENT_ANCHOR_NAME);
+
+/** The most of an anchor's words a pick carries (`artifacts.MaxCommentQuoteBytes`). */
+
+/** The largest picture of a part a page answers (`artifacts.MaxCommentCropBytes`). */
+
+/** The longest side of that picture, in pixels (`artifacts.MaxCommentCropSide`). */
+
+/** The most anchors one layout reports: far past any page a reader comments on part by part. */
+export const COMMENT_LAYOUT_MAX_ANCHORS = 2000;
+
+/** A point on the page, as fractions (0..1) of its document's width and height. */
+export interface CommentPoint {
+  x: number;
+  y: number;
+}
+
+/** What the host asks about: a declared anchor, or a point. */
+export type CommentTarget = { name: string } | { point: CommentPoint };
+
+/** Host to page, on the `comments` topic: the mode, a part to bring into view, or a part to draw. */
+export type CommentRequest =
+  { mode: CommentMode } | { reveal: CommentTarget } | { capture: { id: number } & CommentTarget };
+
+/** One declared anchor as the page draws it, in CSS pixels of its document. */
+export interface CommentAnchorBox {
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Page to host (`comments.layout`): where its anchors are, and how much of the document is in view. */
+export interface CommentLayout {
+  anchors: CommentAnchorBox[];
+  doc: { w: number; h: number };
+  scroll: { x: number; y: number };
+  viewport: { w: number; h: number };
+  /** While placing: the innermost anchor under the reader's pointer, which the host outlines. */
+  hover?: string;
+}
+
+/** Page to host (`comments.pick`): a click while placing, on an anchor or a point. */
+export interface CommentPick {
+  name: string | null;
+  /** The anchor's words, at most [ARTIFACT_COMMENT_QUOTE_MAX_BYTES]; empty on a point. */
+  quote: string;
+  point: CommentPoint;
+}
+
+/** Page to host (`comments.crop`): the picture asked for by `capture`, or null where none was drawn. */
+export interface CommentCrop {
+  id: number;
+  image: string | null;
+}
 
 /** One member of the room, as a page reads it: the session, and the person the chart says holds it. */
 export interface BridgeMember extends BridgePerson {
@@ -374,8 +450,135 @@ export function readEvent(data: unknown): BridgeEvent | null {
       if (m["viewer"] !== null && viewer === null) return null;
       return { type: BRIDGE_MESSAGE.event, topic: "identity", viewer };
     }
+    case "comments": {
+      const request = readCommentRequest(m);
+      return request ? { type: BRIDGE_MESSAGE.event, topic: "comments", ...request } : null;
+    }
   }
   return null;
+}
+
+// ---- the comment layer's readers -------------------------------------------
+
+/** Whether a value is a name a page may declare. */
+export function isAnchorName(v: unknown): v is string {
+  return typeof v === "string" && COMMENT_ANCHOR_NAME.test(v);
+}
+
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+/** A fraction of the document, held to 0..1 rather than refused: a click on the edge is still on the page. */
+const fraction = (v: number) => Math.min(1, Math.max(0, v));
+
+/** Reads a point as fractions of the document, clamped to it, or null. */
+export function readCommentPoint(data: unknown): CommentPoint | null {
+  const p = record(data);
+  if (!p || !finite(p["x"]) || !finite(p["y"])) return null;
+  return { x: fraction(p["x"]), y: fraction(p["y"]) };
+}
+
+/** Reads what a request names: a declared name, or a point. */
+function readTarget(data: Record<string, unknown>): CommentTarget | null {
+  if (data["name"] !== undefined) return isAnchorName(data["name"]) ? { name: data["name"] } : null;
+  const point = readCommentPoint(data["point"]);
+  return point ? { point } : null;
+}
+
+/** Reads the host's request on the `comments` topic, or null. */
+export function readCommentRequest(data: Record<string, unknown>): CommentRequest | null {
+  if (data["mode"] !== undefined) {
+    const mode = data["mode"];
+    return typeof mode === "string" && (COMMENT_MODES as readonly string[]).includes(mode)
+      ? { mode: mode as CommentMode }
+      : null;
+  }
+  const reveal = record(data["reveal"]);
+  if (reveal) {
+    const target = readTarget(reveal);
+    return target ? { reveal: target } : null;
+  }
+  const capture = record(data["capture"]);
+  if (capture) {
+    const id = capture["id"];
+    const target = readTarget(capture);
+    if (typeof id !== "number" || !Number.isInteger(id) || id < 1 || !target) return null;
+    return { capture: { id, ...target } };
+  }
+  return null;
+}
+
+/** The UTF-8 length of a string, as the engine counts a quote. */
+export function utf8Length(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
+/** A page's layout, or null for anything that is not exactly one. */
+export function readCommentLayout(data: unknown): CommentLayout | null {
+  const m = record(data);
+  if (!m || !Array.isArray(m["anchors"])) return null;
+  const doc = record(m["doc"]);
+  const scroll = record(m["scroll"]);
+  const viewport = record(m["viewport"]);
+  if (!doc || !scroll || !viewport) return null;
+  if (!finite(doc["w"]) || !finite(doc["h"]) || doc["w"] <= 0 || doc["h"] <= 0) return null;
+  if (!finite(scroll["x"]) || !finite(scroll["y"])) return null;
+  if (!finite(viewport["w"]) || !finite(viewport["h"]) || viewport["w"] < 0 || viewport["h"] < 0)
+    return null;
+  if (m["anchors"].length > COMMENT_LAYOUT_MAX_ANCHORS) return null;
+  const anchors: CommentAnchorBox[] = [];
+  for (const raw of m["anchors"]) {
+    const a = record(raw);
+    if (!a || !isAnchorName(a["name"])) return null;
+    const { x, y, w, h } = a;
+    if (!finite(x) || !finite(y) || !finite(w) || !finite(h) || w < 0 || h < 0) return null;
+    anchors.push({ name: a["name"], x, y, w, h });
+  }
+  const out: CommentLayout = {
+    anchors,
+    doc: { w: doc["w"], h: doc["h"] },
+    scroll: { x: scroll["x"], y: scroll["y"] },
+    viewport: { w: viewport["w"], h: viewport["h"] },
+  };
+  if (m["hover"] !== undefined && m["hover"] !== null) {
+    if (!isAnchorName(m["hover"])) return null;
+    out.hover = m["hover"];
+  }
+  return out;
+}
+
+/** A pick, or null. A quote past the bound is refused, never cut here: the page cuts its own. */
+export function readCommentPick(data: unknown): CommentPick | null {
+  const m = record(data);
+  if (!m) return null;
+  const name = m["name"] ?? null;
+  if (name !== null && !isAnchorName(name)) return null;
+  const quote = m["quote"] ?? "";
+  if (typeof quote !== "string" || utf8Length(quote) > ARTIFACT_COMMENT_QUOTE_MAX_BYTES)
+    return null;
+  const point = readCommentPoint(m["point"]);
+  if (!point) return null;
+  return { name, quote, point };
+}
+
+/** The picture types a crop may be, as the engine reads them by their bytes. */
+const CROP_IMAGE = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/;
+
+/** Whether a data URL is a picture the engine would keep: its type, and its bytes within the bound. */
+export function isCropImage(v: unknown): v is string {
+  if (typeof v !== "string") return false;
+  const m = CROP_IMAGE.exec(v);
+  if (!m) return false;
+  const b64 = m[1]!;
+  const bytes = (b64.length * 3) / 4 - (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0);
+  return bytes <= ARTIFACT_COMMENT_CROP_MAX_BYTES;
+}
+
+/** A crop's answer, or null; a picture the engine would not keep reads as none, so nobody waits. */
+export function readCommentCrop(data: unknown): CommentCrop | null {
+  const m = record(data);
+  const id = m?.["id"];
+  if (!m || typeof id !== "number" || !Number.isInteger(id) || id < 1) return null;
+  return { id, image: isCropImage(m["image"]) ? m["image"] : null };
 }
 
 /** The capability a method needs, or null for one every page may call. */

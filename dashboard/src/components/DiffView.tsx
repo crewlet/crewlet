@@ -1,17 +1,12 @@
 /**
- * Every diff the dashboard draws: one component, and no hue.
+ * Every diff of lines the dashboard draws: one component, coloured only in Gitlet.
+ * A change read as prose is the design system's `DocumentDiff` (`components/ProseDiff.tsx`).
  *
  * # Why it is local
  *
- * The design system has a `DiffView`, a `DiffSummary` and a `DiffList`, and
- * all three paint an added line in the success state's tint and a removed one
- * in the danger state's. Here colour carries STATE ("The one rule" in
- * docs/reference/dashboard-design.md), and a diff is not one: a removed line is
- * not a failure and an added one is not done, and on a page that also draws a
- * failed check, a red removed line beside a red failed-check chip makes one red
- * mean two things. So every diff is drawn by this one component, from the
- * package's tokens, and none of the three is imported anywhere
- * (`styles/diffs.test.ts`).
+ * The design system's diffs paint the code host's tints, and outside Gitlet
+ * colour carries STATE ("The one rule"), so every diff is this one component,
+ * coloured only through [DiffViewProps.hue] (`styles/diffs.test.ts`).
  *
  * # Two texts are compared by the dashboard's one line diff
  *
@@ -23,7 +18,7 @@
  * the lines it marks), a sentence says so and why, in place of every row: a
  * comparison not made is never drawn as though it had been.
  *
- * # What tells a line's kind, with no hue
+ * # What tells a line's kind
  *
  * Three things, each enough alone:
  *
@@ -42,6 +37,9 @@
  *   Which two lines those are is read off the change's shape, a setting's
  *   path or a text's place ([pairsOf]), and where the shape cannot say, no
  *   line is underlined: an underline is a claim that two lines are one.
+ *
+ * In Gitlet ([DiffViewProps.hue]) the kit's tints stand in for the two steps,
+ * and its code is coloured by kind ([DiffViewProps.tokens]) outside the changed run.
  *
  * # The shapes it takes
  *
@@ -122,7 +120,13 @@ import { plural } from "~/lib/format.ts";
 import { compareLines, notComparedReason } from "~/lib/lineDiff.ts";
 import { scrollerOf } from "~/lib/scroller.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
-import { changedRuns, type ChangedRuns, type Run } from "~/lib/wordDiff.ts";
+import {
+  changedRuns,
+  segments,
+  type ChangedRuns,
+  type DiffSpan,
+  type Run,
+} from "~/lib/wordDiff.ts";
 // THE DIFF'S OWN SHEET: every screen that draws a diff is a lazy chunk, so the
 // rules arrive with the first of them rather than in the first paint.
 import "~/styles/diff.css";
@@ -218,6 +222,16 @@ export type DiffViewProps = DiffSource & {
    * new reveal.
    */
   reveal?: ((line: DiffLine) => boolean) | undefined;
+  /**
+   * "code" draws the lines in the kit's code host colours: every diff Gitlet
+   * draws passes it and no other does (`styles/diffs.test.ts`).
+   */
+  hue?: "code" | undefined;
+  /**
+   * A line's coloured spans, by its side and number there: Gitlet's syntax, drawn
+   * only with `hue="code"` and never inside a changed run (`styles/diffs.test.ts`).
+   */
+  tokens?: ((side: "before" | "after", n: number) => readonly DiffSpan[] | null) | undefined;
 };
 
 /**
@@ -240,6 +254,7 @@ export type DiffViewProps = DiffSource & {
  * holds a line — up to fifteen, about 13. Every line and every pair is a grid
  * of its own. So a diff at the threshold mounts about 7,000 elements unified
  * and about 13,000 split, every one of them laid out before the first paint.
+ * Coloured in Gitlet, a line holds its tokens' spans as well, about ten more.
  *
  * WHAT IT WEIGHS: a mounted diff keeps find-in-page and a screen reader's
  * reading of the whole of it, which windowing takes away; windowing keeps the
@@ -702,19 +717,39 @@ function useReveal(
   }, [body, at, held, reveal]);
 }
 
-/** A line's text, its changed run underlined. An empty line keeps its height. */
-function Text({ text, run }: { text: string; run: Run | null }) {
+/**
+ * A line's text, its changed run underlined and its host's spans around it. An
+ * empty line keeps its height.
+ */
+function Text({
+  text,
+  run,
+  spans,
+}: {
+  text: string;
+  run: Run | null;
+  spans: readonly DiffSpan[] | null;
+}) {
+  if (!text) return <span className="diff-view__text"> </span>;
   return (
     <span className="diff-view__text">
-      {run ? (
-        <>
-          {text.slice(0, run.start)}
-          <span className="diff-view__run">{text.slice(run.start, run.end)}</span>
-          {text.slice(run.end)}
-        </>
-      ) : (
-        text || " "
-      )}
+      {segments(text, spans, run).map((s, i) => {
+        const piece = text.slice(s.start, s.end);
+        if (s.run) {
+          return (
+            <span key={i} className="diff-view__run">
+              {piece}
+            </span>
+          );
+        }
+        return s.className ? (
+          <span key={i} className={s.className}>
+            {piece}
+          </span>
+        ) : (
+          piece
+        );
+      })}
     </span>
   );
 }
@@ -746,6 +781,25 @@ interface Tracks {
   onPick?: ((line: DiffLine, extend: boolean) => void) | undefined;
   picked?: ((line: DiffLine) => boolean) | undefined;
   reveal?: ((line: DiffLine) => boolean) | undefined;
+  /** A line's coloured spans on the side it is drawn, set only in the code hue. */
+  spans?:
+    | ((line: DiffLine, side: "left" | "right" | undefined) => readonly DiffSpan[] | null)
+    | undefined;
+}
+
+/**
+ * A host's spans for a line, asked by the blob side it is read from: an
+ * unchanged line on a split's left is the older blob's.
+ */
+function spansReader(
+  tokens: (side: "before" | "after", n: number) => readonly DiffSpan[] | null,
+): NonNullable<Tracks["spans"]> {
+  return (line, side) => {
+    if (line.path !== undefined) return null;
+    const older = line.kind === "remove" || (line.kind === "same" && side === "left");
+    const n = older ? line.before : line.after;
+    return n === null ? null : tokens(older ? "before" : "after", n);
+  };
 }
 
 /**
@@ -823,6 +877,9 @@ function Line({
   /** The line goes on the setting the line above began, whose path is not written again. */
   continues?: boolean | undefined;
 }) {
+  // ASKED ONCE A MOUNTED LINE: a window's scroll redraws the rows it holds.
+  const reader = tracks.spans;
+  const spans = useMemo(() => reader?.(line, side) ?? null, [reader, line, side]);
   return (
     <div
       className="diff-view__line"
@@ -841,7 +898,7 @@ function Line({
       {/* A CONTINUING LINE DRAWS NO PATH CELL: its value keeps the value's
           own track (`diff.css`), so it lines up under the line it goes on. */}
       {tracks.keyed && !continues && <span className="diff-view__path">{line.path ?? ""}</span>}
-      <Text text={line.text} run={run} />
+      <Text text={line.text} run={run} spans={spans} />
     </div>
   );
 }
@@ -901,7 +958,7 @@ function RowView({ row, tracks, pairs }: { row: Row; tracks: Tracks; pairs: Pair
 
 export function DiffView(props: DiffViewProps) {
   const { layout = "unified", against, empty, "aria-label": label } = props;
-  const { notes, onPick, picked, reveal } = props;
+  const { notes, onPick, picked, reveal, hue, tokens } = props;
   const { hunks: given, before, after, context } = props;
   // TWO TEXTS ARE COMPARED ONCE, for as long as they are the two texts.
   const compared = useMemo(
@@ -924,6 +981,11 @@ export function DiffView(props: DiffViewProps) {
   const blocks = useMemo(() => blocksOf(rows), [rows]);
   const shown = useWindow(body, blocks, rows.length > WINDOW_FROM_ROWS);
   useReveal(body, blocks, reveal, shown.holds);
+  // SPANS ONLY IN THE CODE HUE: every other diff draws what it drew.
+  const spans = useMemo(
+    () => (hue === "code" && tokens ? spansReader(tokens) : undefined),
+    [hue, tokens],
+  );
 
   if (compared && compared.kind !== "compared") {
     return (
@@ -942,6 +1004,7 @@ export function DiffView(props: DiffViewProps) {
     onPick,
     picked,
     reveal,
+    spans,
   };
   return (
     <div
@@ -950,6 +1013,7 @@ export function DiffView(props: DiffViewProps) {
       aria-label={label ?? "Line changes"}
       className={cx(
         "diff-view",
+        hue === "code" && "diff-view--code",
         shape.numbered && "diff-view--numbered",
         shape.keyed && "diff-view--keyed",
         split && "diff-view--split",

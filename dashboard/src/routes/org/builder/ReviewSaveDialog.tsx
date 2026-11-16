@@ -21,20 +21,20 @@
  * own mark on the record, so the form asks for the sentence and shows no id.
  */
 
-import { engineSentence } from "./EngineSentence.tsx";
+import { engineWords } from "~/components/ConfigWarnings.tsx";
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
-import { ACKNOWLEDGEMENT_TEXT, WarningLines } from "./dialogParts.tsx";
+import { ACKNOWLEDGEMENT_TEXT, BuilderWarnings } from "./dialogParts.tsx";
 import type { Acknowledgement, ChangeSet, EntityRef, OnboardingCause } from "./model/changes.ts";
 import type { PlacedProblem } from "./model/problems.ts";
-import type { WarningLine } from "./model/warnings.ts";
+import type { DraftWarnings } from "./model/warnings.ts";
 import type { CheckStatus, SaveRules } from "./model/scheduler.ts";
 import type { BuilderMode } from "./model/transport.ts";
 import type { SavePhase } from "./useSave.ts";
-import { PlugGlyph, RotateCwGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Checkbox, Spinner } from "@crewlethq/ui";
+import { SaveGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, Checkbox, NoticeList, Spinner } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
@@ -160,8 +160,8 @@ export function ReviewSaveDialog({
   changes: ChangeSet;
   rules: SaveRules;
   status: CheckStatus;
-  /** The current check's warnings, one line for each thing to know: a dry run of exactly this save. */
-  warnings: readonly WarningLine[];
+  /** The current check's warnings: a dry run of exactly this save. */
+  warnings: DraftWarnings;
   problemCount: number;
   documentProblems: readonly PlacedProblem[];
   phase: SavePhase;
@@ -235,9 +235,7 @@ export function ReviewSaveDialog({
       )}
       {phase.kind === "retry" && <Callout variant="warning">{phase.message}</Callout>}
       {phase.kind === "settling" && (
-        <Callout variant="warning" icon={<RotateCwGlyph />}>
-          Checking whether the save was stored.
-        </Callout>
+        <Callout variant="warning">Checking whether the save was stored.</Callout>
       )}
       {unknown && (
         <Callout variant="warning">
@@ -245,25 +243,29 @@ export function ReviewSaveDialog({
         </Callout>
       )}
 
-      {rules.reason && !busy && (
-        <Callout variant={status === "problems" ? "danger" : "warning"}>
-          {rules.reason}
-          {status === "problems" &&
-            problemCount > 0 &&
-            ` The engine reported ${plural(problemCount, "problem")}.`}
+      {((rules.reason && !busy) || (status === "problems" && documentProblems.length > 0)) && (
+        <Callout
+          variant={status === "problems" ? "danger" : "warning"}
+          title={
+            status === "problems" && problemCount > 0
+              ? `The engine reported ${plural(problemCount, "problem")}`
+              : undefined
+          }
+        >
+          {!busy && rules.reason}
+          {status === "problems" && documentProblems.length > 0 && (
+            <NoticeList
+              label="Problems with the whole configuration"
+              notices={documentProblems.map((p, i) => ({
+                key: String(i),
+                title: engineWords(p.message),
+              }))}
+            />
+          )}
         </Callout>
-      )}
-      {status === "problems" && documentProblems.length > 0 && (
-        <ul className="org-builder-list" aria-label="Problems with the whole configuration">
-          {documentProblems.map((p, i) => (
-            <li key={i}>{engineSentence(p.message)}</li>
-          ))}
-        </ul>
       )}
       {status === "unchecked" && (
-        <Callout variant="warning" icon={<PlugGlyph />}>
-          Couldn’t check this draft. Saving still validates it.
-        </Callout>
+        <Callout variant="warning">Couldn’t check this draft. Saving still validates it.</Callout>
       )}
 
       <section className="col gap-1" aria-label="Changes">
@@ -303,12 +305,10 @@ export function ReviewSaveDialog({
         </section>
       )}
 
-      {warnings.length > 0 && (
-        <section className="col gap-1" aria-label="Warnings">
-          <strong>The engine will run this, with {plural(warnings.length, "warning")}</strong>
-          <WarningLines lines={warnings} />
-        </section>
-      )}
+      <BuilderWarnings
+        draft={warnings}
+        title={(n) => `The engine will run this, with ${plural(n, "warning")}`}
+      />
 
       {changes.acknowledgements.map((a) => (
         <Checkbox

@@ -19,8 +19,11 @@ import (
 // them about whether a server is down.
 type MCPAlarm struct {
 	Kind statelog.Kind `json:"kind"`
-	// Detail is the longest-standing server's measurement, and Remedy what
-	// to do about the kind, both in the table's words.
+	// Title and Person are the kind's words for a company owner, Detail the
+	// longest-standing server's measurement, and Remedy what an operator does
+	// about the kind, all in the table's words.
+	Title  string `json:"title"`
+	Person string `json:"person"`
 	Detail string `json:"detail"`
 	Remedy string `json:"remedy"`
 	// Entries are the servers it stands on, in name order. ALWAYS A LIST.
@@ -140,7 +143,7 @@ func (s Sources) mcpAlarms() []MCPAlarm {
 		if !ok {
 			continue
 		}
-		alarm := MCPAlarm{Kind: a.Kind, Detail: a.Detail, Remedy: a.Remedy,
+		alarm := MCPAlarm{Kind: a.Kind, Title: a.Title, Person: a.Person, Detail: a.Detail, Remedy: a.Remedy,
 			Entries: make([]MCPAlarmEntry, 0, len(a.Entries))}
 		for _, e := range a.Entries {
 			entry := MCPAlarmEntry{Key: e.Key, Detail: e.Detail, Since: instantOrNull(e.Since), Seat: e.Seat,

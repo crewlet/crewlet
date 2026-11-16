@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"net"
 	"net/url"
 	"slices"
@@ -331,7 +332,8 @@ func (a APIArtifacts) warnings(api API, serving bool) []Warning {
 
 // ---- artifacts (Tier A) ------------------------------------------------------ //
 
-// Artifacts is the Tier A artifacts block: the plan quotas this node enforces.
+// Artifacts is the Tier A artifacts block: the plan quotas this node enforces,
+// and the browser it renders pages in.
 //
 // TIER A, because a quota is a promise made to whoever runs the deployment: a
 // tenant administrator must not be able to raise their own, and a managed
@@ -339,10 +341,23 @@ func (a APIArtifacts) warnings(api API, serving bool) []Warning {
 // deployment renders these from the plan.
 type Artifacts struct {
 	Limits ArtifactLimits `yaml:"limits,omitempty" json:"limits,omitzero"`
+	Render ArtifactRender `yaml:"render,omitempty" json:"render,omitzero"`
 }
 
 // IsZero lets an unset block drop out of a JSON round trip.
-func (a Artifacts) IsZero() bool { return a.Limits == ArtifactLimits{} }
+func (a Artifacts) IsZero() bool { return a.Limits == ArtifactLimits{} && a.Render == ArtifactRender{} }
+
+// ArtifactRender is the browser this node renders artifact pages in for a
+// seat's render_artifact. TIER A, because it is an address on this node's
+// network, which the operator runs and a company document cannot name.
+type ArtifactRender struct {
+	// BrowserURL is a headless Chromium's DevTools endpoint. Unset, this
+	// node renders nothing and the tool says which key to set.
+	BrowserURL string `yaml:"browser_url,omitempty" json:"browser_url,omitempty" desc:"A headless Chromium's DevTools endpoint this node renders artifact pages in, for a seat checking its own page before review: http://host:port (its /json/version is read) or the ws:// address it prints. It needs no network of its own: the engine answers every request a render makes. Unset renders nothing."`
+}
+
+// IsZero lets an unset block drop out of a JSON round trip.
+func (r ArtifactRender) IsZero() bool { return r.BrowserURL == "" }
 
 // ArtifactLimits are the plan quotas. Zero is unset and takes the documented
 // default; a value outside its bounds is refused naming them.
@@ -377,6 +392,9 @@ func orInt64(v, fallback int64) int64 {
 
 func (a *Artifacts) validate(path Path) error {
 	var p problems
+	if err := checkRenderBrowser(a.Render.BrowserURL); err != "" {
+		p.add(at(at(path, "render"), "browser_url"), ErrShape, "%s", err)
+	}
 	limits := at(path, "limits")
 	l := a.Limits
 	bytesInRange(&p, limits, "company_bytes", l.CompanyBytes,
@@ -458,4 +476,35 @@ func (a *CompanyArtifacts) validate(path Path) error {
 			"%q is not a seen_by policy: write editors or nobody", a.SeenBy)
 	}
 	return p.err()
+}
+
+// checkRenderBrowser is why raw is no DevTools endpoint a render can dial (an
+// http(s) origin or a ws(s) socket, with no user information, query or
+// fragment), or empty.
+func checkRenderBrowser(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("%q is not a URL: %v", raw, err)
+	case u.Hostname() == "":
+		return fmt.Sprintf("%q names no host", raw)
+	case u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "":
+		return fmt.Sprintf("%q carries user information, a query or a fragment; "+
+			"name the endpoint alone", raw)
+	}
+	switch u.Scheme {
+	case "http", "https":
+		if u.Path != "" && u.Path != "/" {
+			return fmt.Sprintf("%q has a path; an http endpoint is the browser's "+
+				"origin, such as http://chromium:9222", raw)
+		}
+	case "ws", "wss":
+	default:
+		return fmt.Sprintf("%q must start with http://, https://, ws:// or wss://", raw)
+	}
+	return ""
 }

@@ -21,12 +21,6 @@
 
 import type { ReactNode } from "react";
 import { Button, Callout, Spinner } from "@crewlethq/ui";
-import {
-  KeyGlyph,
-  RotateCwGlyph,
-  SettingsGlyph,
-  TriangleAlertGlyph,
-} from "@crewlethq/icons/glyphs";
 import { CoverageTags, INCOMPLETE_NOTE, oddLevel, type CoverageFacts } from "~/components/work.tsx";
 
 export interface Degradation {
@@ -35,16 +29,6 @@ export interface Degradation {
    * first dial still out, which is no fault yet.
    */
   variant: "neutral" | "warning" | "danger";
-  /**
-   * The mark, as a GLYPH rather than a name.
-   *
-   * It was a name out of our own icon set, chosen from a three-value union, and
-   * the union was the whole type system this had: a fourth degradation would
-   * have added a name here and a drawing of our own. A component is the
-   * value uilet's `Callout` takes, and `degradationOf` below is the only thing
-   * that ever builds one.
-   */
-  icon: ReactNode;
   message: string;
   action?: { label: string; onClick: () => void };
   /**
@@ -96,7 +80,6 @@ export function degradationOf({
   if (authRejected) {
     return {
       variant: "danger",
-      icon: <KeyGlyph size="md" />,
       message: "You’re signed out.",
       action: { label: "Sign in", onClick: onSignIn },
     };
@@ -109,21 +92,18 @@ export function degradationOf({
     if (!everConnected) {
       return {
         variant: "neutral",
-        icon: <RotateCwGlyph size="md" />,
         message: "Connecting to the engine.",
         firstDial: true,
       };
     }
     return {
       variant: "warning",
-      icon: <RotateCwGlyph size="md" />,
       message: "Reconnecting. Showing the last state received.",
     };
   }
   if (configured === false) {
     return {
       variant: "warning",
-      icon: <SettingsGlyph size="md" />,
       message: "No company is active, so no seats are running.",
       action: { label: "Configuration", onClick: onConfig },
     };
@@ -167,7 +147,7 @@ export function StateBar({
           may be missing, rows that should have gone may still be here, and
           every total on this screen was computed over the incomplete set. */}
       {incomplete && (
-        <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />} layout="banner">
+        <Callout variant="warning" layout="banner">
           {INCOMPLETE_NOTE}
         </Callout>
       )}
@@ -201,7 +181,7 @@ function DegradedNotice({ degraded }: { degraded: Degradation }) {
   return (
     <Callout
       variant={degraded.variant}
-      icon={degraded.icon}
+
       layout="banner"
       action={
         degraded.action && (

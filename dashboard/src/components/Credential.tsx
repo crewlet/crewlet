@@ -28,6 +28,7 @@ export function Credential({ through }: { through: string }) {
     <Copyable
       value={credential.id}
       display={words}
+      displayWords
       variant="inline"
       ariaLabel={`Copy the ${credential.kind}'s id, ${credential.id}`}
       title={`Copy ${credential.id}`}

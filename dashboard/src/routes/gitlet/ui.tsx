@@ -1,7 +1,7 @@
 /**
- * The marks every Gitlet screen draws the same way: a commit's id, who did
- * something and when, what a directory entry is, and how a repository is
- * cloned.
+ * The marks every Gitlet screen draws the same way: a commit's id, a branch,
+ * who did something and when, what a directory entry is, and how a repository
+ * is cloned.
  *
  * # Why they are one module
  *
@@ -11,11 +11,9 @@
  * the blame another, and a seat was a face on one screen and a bare name on
  * the next. So each mark is written here, once, and every screen draws it.
  *
- * NONE OF THEM IS COLOURED. A seat's face is its own profile icon (the one
- * rule's third exception), a person's their initials on the neutral badge;
- * a directory and a file are glyphs, told apart by their drawing and their
- * name, never by a hue (`docs/reference/dashboard-design.md`, "The one
- * rule").
+ * ONLY A BRANCH IS COLOURED, in the kit's code-ref chip (the seventh
+ * exception); faces, directories and files are told apart by drawing and name,
+ * never by hue (`docs/reference/dashboard-design.md`, "The one rule").
  */
 
 import "~/styles/gitlet.css";
@@ -27,12 +25,13 @@ import {
   FileCodeGlyph,
   FileTextGlyph,
   FolderGlyph,
+  GitBranchGlyph,
   LinkGlyph,
   PackageGlyph,
   SquareTerminalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { shortOID } from "~/lib/code.ts";
+import { refName, shortOID } from "~/lib/code.ts";
 import { ago } from "~/lib/ago.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
@@ -217,5 +216,38 @@ export function CloneButton({ repo }: { repo: string }) {
         </p>
       </div>
     </Popover>
+  );
+}
+
+/**
+ * A branch as Gitlet names it: the kit's code-ref chip with its glyph (the
+ * seventh exception), a link where the host gives one, which keeps `.prose-link`.
+ */
+export function BranchChip({ name, href }: { name: string; href?: string | undefined }) {
+  const inner = (
+    <>
+      <GitBranchGlyph size="xs" />
+      {name}
+    </>
+  );
+  return href ? (
+    <a className="code-branch-chip prose-link" href={href}>
+      {inner}
+    </a>
+  ) : (
+    <span className="code-branch-chip">{inner}</span>
+  );
+}
+
+/**
+ * A ref by its short name: a branch as its chip, a tag or any other ref in
+ * the code face.
+ */
+export function RefName({ gitRef }: { gitRef: string }) {
+  const ref = refName(gitRef);
+  return ref.kind === "branch" ? (
+    <BranchChip name={ref.name} />
+  ) : (
+    <span className="mono">{ref.name}</span>
   );
 }

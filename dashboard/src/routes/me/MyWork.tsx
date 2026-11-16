@@ -814,14 +814,18 @@ function OrderStamp({
 }) {
   if (!setByName) return null;
   return (
-    <Callout variant="info">
+    <Callout
+      variant="info"
+      action={
+        onPriorities && (
+          <button type="button" className="t-link" onClick={onPriorities}>
+            Priorities
+          </button>
+        )
+      }
+    >
       Order set by {setByName}
-      {stamp?.priorities_set_at ? ` ${ago(stamp.priorities_set_at, now)}` : ""}.{" "}
-      {onPriorities && (
-        <button type="button" className="t-link" onClick={onPriorities}>
-          Priorities →
-        </button>
-      )}
+      {stamp?.priorities_set_at ? ` ${ago(stamp.priorities_set_at, now)}` : ""}.
     </Callout>
   );
 }

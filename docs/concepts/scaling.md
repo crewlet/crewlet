@@ -221,6 +221,15 @@ network work, not CPU: each push's object carries the index its receiving
 node's git wrote, so the node downloads, verifies and renames, and runs no
 `index-pack`.
 
+**A download is served where it lands**, like a fetch: a file's bytes or a
+commit's ZIP, from the node's own copy, in a transfer slot. A large ZIP is the
+one transfer that takes a core for its whole run, so a node makes at most one
+for every four cores (two at least) at once, one for each principal, and a ZIP
+whose output is at most 64 MiB takes no place; a commit past 4 GiB of files, a
+million entries or 64 MiB of paths is refused before a byte is sent. Route
+`/git/` by repository and a ZIP's sync is warm
+([Downloading a file or a commit](gitlet.md#downloading-a-file-or-a-commit)).
+
 **A node coming up with many repositories** asked of it — joining, or
 restarted — reads at most eight of them whole at once from the data nodes
 ([many repositories at once](gitlet.md#the-cache-on-a-gitlet-node)). Every

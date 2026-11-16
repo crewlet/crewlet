@@ -43,7 +43,7 @@ import {
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { refName, shortOID } from "~/lib/code.ts";
+import { shortOID } from "~/lib/code.ts";
 import { checkPurposeWord, checkStateTone, checkStateWord } from "~/lib/checks.ts";
 import { fmtBytes, fmtDuration, plural } from "~/lib/format.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
@@ -55,6 +55,7 @@ import type {
   CodeChecksAnswer,
 } from "~/protocol/index.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
+import { RefName } from "../ui.tsx";
 import "~/styles/gitlet.css";
 
 /**
@@ -152,7 +153,7 @@ export function CheckGrid({
               ) : (
                 <span className="mono">{shortOID(r.oid)}</span>
               )}
-              <span className="muted">{`for ${refName(r.target).name}`}</span>
+              <span className="muted">for</span> <RefName gitRef={r.target} />
             </span>
           ),
         },
@@ -343,7 +344,7 @@ function CheckWhole({ repo, d }: { repo: string; d: CodeCheckDetail }) {
         </a>
       ),
     },
-    { label: "For", value: <span className="mono">{refName(d.target).name}</span> },
+    { label: "For", value: <RefName gitRef={d.target} /> },
     { label: "Ran", value: fmtDuration(d.duration_ms ?? null) },
   ];
   if (d.exit_code !== undefined) facts.push({ label: "Exit code", value: String(d.exit_code) });

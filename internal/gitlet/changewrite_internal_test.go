@@ -44,7 +44,8 @@ import (
 // Mutation: set the state beside the head in changeHeadMoved, and the head
 // move rewrites the state, owner, open and repository-state listings; name the
 // work item in changeEdited, and an edit of the title rewrites
-// code_changes_work_idx; drop a case, and its kind is declared and never
+// code_changes_work_idx; key the live indexes without updated_at, and an edit of
+// the title rewrites none of them; drop a case, and its kind is declared and never
 // planned; read IdxInsert rather than IdxDelete, and the opens rewrite every
 // index.
 func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
@@ -65,10 +66,13 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 		// moved, which every write that moves its version rewrites.
 		moved = "code_changes_updated_idx"
 	)
+	// movedLive is every index keyed by when the change last moved: the
+	// company's and, for the live states, by state alone and by repository.
+	movedLive := []string{moved, changesLiveMovedKey, changesRepoLiveMovedKey}
 	// EVERY INDEX THE STATE IS IN, by its key or by its predicate — the open
-	// and target indexes partial on the live states, and the three listings
-	// keyed by it.
-	stated := []string{open, target, changesStateKey, changesOwnerKey, changesRepoStateKey, moved}
+	// and target indexes partial on the live states, the three listings
+	// keyed by it, and the two live ones by last move.
+	stated := append([]string{open, target, changesStateKey, changesOwnerKey, changesRepoStateKey}, movedLive...)
 	merged := append(slices.Clone(stated), merge)
 
 	// push plans what a push record of entries writes about the changes its
@@ -158,7 +162,7 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 			// each moving the state; and the change it opens, an insert.
 			{"a push moving changes' heads", push(pushEntry("heads",
 				move(liveSource(0), liveHead(0), oid("next-0")),
-				move(liveSource(1), liveHead(1), oid("next-1")))), []string{target, moved}},
+				move(liveSource(1), liveHead(1), oid("next-1")))), append([]string{target}, movedLive...)},
 			{"a push merging a change", push(pushEntry("merging",
 				move("refs/heads/main", ZeroOID, liveHead(2)))), merged},
 			{"a push closing a change", push(pushEntry("closing",
@@ -166,16 +170,16 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 			{"a push opening a change", push(opening), nil},
 			// A CHANGE'S LIFECYCLE.
 			{"an edit of the title", lifecycle(ChangeEdit{RepoID: repo, ChangeID: change(0), Title: &title}),
-				[]string{moved}},
+				movedLive},
 			{"an edit of the description", lifecycle(ChangeEdit{RepoID: repo, ChangeID: change(0), Body: &body}),
-				[]string{moved}},
+				movedLive},
 			{"an edit setting the work item", lifecycle(ChangeEdit{RepoID: repo, ChangeID: change(0),
-				WorkItem: &item}), []string{changesWorkKey, moved}},
+				WorkItem: &item}), append([]string{changesWorkKey}, movedLive...)},
 			{"an edit clearing the work item", lifecycle(ChangeEdit{RepoID: repo, ChangeID: change(0),
-				ClearWorkItem: true}), []string{changesWorkKey, moved}},
+				ClearWorkItem: true}), append([]string{changesWorkKey}, movedLive...)},
 			{"a draft's state", lifecycle(ChangeDraft{RepoID: repo, ChangeID: change(0), Draft: true}), stated},
 			{"a retarget", lifecycle(ChangeRetarget{RepoID: repo, ChangeID: change(0),
-				TargetRef: "refs/heads/release"}), []string{target, moved}},
+				TargetRef: "refs/heads/release"}), append([]string{target}, movedLive...)},
 			{"a close", lifecycle(ChangeClose{RepoID: repo, ChangeID: change(0), Reason: "not needed"}), stated},
 			{"a reopen", lifecycle(ChangeReopen{RepoID: repo, ChangeID: change(0), Head: oid("back")}), stated},
 			{"a landing", lifecycle(ChangeLanded{RepoID: repo, ChangeID: change(0), Revision: 1,

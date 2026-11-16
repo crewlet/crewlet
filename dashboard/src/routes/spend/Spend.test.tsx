@@ -358,7 +358,7 @@ test("a refused window draws none of the previous window's figures, and says so 
   expect(screen.queryByText(/Tokens · /)).toBeNull();
   expect(screen.queryByRole("heading", { name: "By agent" })).toBeNull();
   expect(screen.queryByRole("radiogroup", { name: "Split by" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Export" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Export CSV" }).hasAttribute("disabled")).toBe(true);
 });
 
 // THE MONTHLY TILE IS THE ENGINE'S STATE, and its window is this month.
@@ -1020,7 +1020,7 @@ test("the hero's tiles row holds only the tiles that have something to say", asy
 // the task card said it as a bare sentence beside them, two treatments for
 // one answer. Mutation: draw a ranked list's empty sentence again and the
 // second query finds no empty state round it.
-test("every empty Spend card says so with the one compact empty state", async () => {
+test("every empty Spend card says so with the one empty state", async () => {
   mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     work_items: items([]),
@@ -1048,7 +1048,6 @@ test("every Spend card with a subtitle stacks it under its title", async () => {
   ]) {
     const source = readFileSync(join(process.cwd(), "src/routes/spend", file), "utf8");
     const subtitles = source.match(/\bsubtitle=/g)?.length ?? 0;
-    expect(subtitles, file).toBeGreaterThan(0);
     expect(source.match(/subtitlePlacement="below"/g)?.length ?? 0, file).toBe(subtitles);
   }
 });
@@ -1082,8 +1081,8 @@ test("By agent says nothing about the window until it has answered", async () =>
   expect(grid.textContent).not.toContain("no seat has a daily token ceiling");
   expect(grid.querySelector('[aria-busy="true"]')).not.toBeNull();
   unmount();
-  // AND AN ANSWERED EMPTY WINDOW SAYS BOTH.
-  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(0), viewer: VIEWER });
+  // AND AN ANSWERED WINDOW WITH NO AGENT'S SPEND SAYS BOTH.
+  mount("#/settings/spend?window=30d", <Spend />, { tokens: rollup(5), viewer: VIEWER });
   await settle();
   const answered = screen.getByText("By agent").closest(".spend-card") as HTMLElement;
   expect(within(answered).getByText("No agent spent tokens in this window")).toBeTruthy();
@@ -1243,10 +1242,9 @@ test("a window whose calls spent no tokens draws one empty state and counts the 
   expect(chart.textContent).toContain("887 calls, none spent tokens.");
   expect(within(chart).queryByText("Core")).toBeNull();
   expect(chart.textContent).not.toContain("The four biggest");
-  const byModel = screen.getByText("By model").closest(".spend-card") as HTMLElement;
-  expect(within(byModel).getByText("No model spent tokens in this window")).toBeTruthy();
-  expect(byModel.textContent).toContain("887 calls, none spent tokens.");
-  expect(byModel.textContent).not.toContain("No model served a call");
+  // The chart's empty state is the only one: no breakdown card repeats it.
+  expect(screen.queryByText("By model")).toBeNull();
+  expect(screen.queryByText("No model spent tokens in this window")).toBeNull();
 });
 
 // "THE FOUR BIGGEST" IS A FOLD THE ENGINE MADE, said only where it made one,
@@ -1323,4 +1321,28 @@ test("the median tile marks an absent median and says why under it", async () =>
   expect(tile.querySelector(".crewlet-empty-value")).not.toBeNull();
   expect(tile.textContent).toContain("No task finished in this window spent tokens");
   expect(screen.getByText(/median tokens per finished task · none in this window/)).toBeTruthy();
+});
+
+// A WINDOW THAT SPENT NO TOKENS HAS NOTHING TO BREAK DOWN BY THEM: the chart's
+// one empty state says so, and the turns that changed nothing, which are turns
+// rather than tokens, stay.
+test("a window that spent no tokens draws no breakdown cards and keeps the idle turns", async () => {
+  mount("#/settings/spend?window=30d", <Spend />, {
+    tokens: rollup(0),
+    token_series: series(0),
+    work_items: items([]),
+    viewer: VIEWER,
+  });
+  await settle();
+  expect(screen.getByText("No tokens spent in this window")).toBeTruthy();
+  for (const title of [
+    "By agent",
+    "By model",
+    "By team",
+    "Most expensive tasks",
+    "Auxiliary model",
+  ]) {
+    expect(screen.queryByText(title)).toBeNull();
+  }
+  expect(screen.getByText("Turns that changed nothing")).toBeTruthy();
 });

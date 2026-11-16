@@ -95,7 +95,13 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 	if _, err := tx.ExecContext(ctx, openedSQL, at.packed, o.RepoID); err != nil {
 		return 0, fmt.Errorf("gitlet: advance %s's next change at %s: %w", o.RepoID, at.position, err)
 	}
-	return rows + 3, nil
+	var opened ChangeCounts
+	opened.add(state, 1)
+	tallied, countErr := countChanges(ctx, tx, o.RepoID, opened)
+	if countErr != nil {
+		return 0, fmt.Errorf("%w (the open at %s)", countErr, at.position)
+	}
+	return rows + 3 + tallied, nil
 }
 
 // applyChangeWrite writes one write of a change beyond its open — an edit, a
@@ -246,7 +252,13 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, repoID); err != nil {
 		return 0, fmt.Errorf("gitlet: move %s's version at %s: %w", repoID, at.position, err)
 	}
-	return rows + 1, nil
+	var moved ChangeCounts
+	moved.move(row.state, next.state)
+	tallied, countErr := countChanges(ctx, tx, repoID, moved)
+	if countErr != nil {
+		return 0, fmt.Errorf("%w (the record at %s)", countErr, at.position)
+	}
+	return rows + 1 + tallied, nil
 }
 
 // leavesQueue is how a write of a change's lifecycle ends its live queue
@@ -519,8 +531,11 @@ func changeNotApplied(ctx context.Context, at applyContext, repoID, changeID, wh
 // narrowed to a window walks. So each kind rewrites that index beside the
 // ones named above — a head move two entries where it rewrote one — the cost
 // of saying when a change last moved, which no column already said.
+// A move of a live change also rewrites its two entries in the live indexes by
+// last move (replicated "A live change is listed by when it last moved"), so a
+// live change's head move rewrites four entries where it rewrote one.
 // TestAChangeWriteRewritesOnlyTheIndexesItMoves holds each kind to the
-// indexes its plan rewrites, and the push apply's head moves to those two: an
+// indexes its plan rewrites, and the push apply's head moves to those four: an
 // index added on a column a write sets — the head's above all — is a decision
 // that test makes somebody take, never a cost nobody saw.
 type changeWrite string

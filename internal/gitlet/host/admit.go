@@ -129,7 +129,12 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	switch how {
 	case iam.Resolved:
 	case iam.Anonymous:
-		auth.GitChallenge(w)
+		if op == auth.GitDownload {
+			// A download is never challenged: a browser would prompt.
+			auth.DownloadUnauthorized(w)
+		} else {
+			auth.GitChallenge(w)
+		}
 		return admission{}, false
 	default:
 		s.identityUnknown(w, r, name, iam.Reason(ctx))
@@ -187,6 +192,7 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 //     (measured, TestARenamedRepositorysOldNameRedirectsAClone). Refusing
 //     that POST, as a redirect-only old name would, fails every such clone
 //     with git's bare `RPC failed; HTTP 404`.
+//   - A DOWNLOAD GOES ON, to the repository under its current name.
 //   - A PUSH IS REFUSED, at either step, naming the new name: at the
 //     advertisement in the 404 git prints (`remote: <sentence>`), never a
 //     redirect, which a credential-helper client follows to POST its push to
@@ -196,6 +202,10 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 //     holds, so no push is recorded for it.
 func renamed(w http.ResponseWriter, r *http.Request, raw string, op auth.GitOp, ref gitlet.RepoRef) bool {
 	switch {
+	case op == auth.GitDownload:
+		// Served as the repository, never redirected: a Location built from
+		// the request's path misses a path-routing proxy's prefix.
+		return true
 	case op == auth.GitFetch && r.Method == http.MethodPost:
 		return true
 	case op == auth.GitFetch:

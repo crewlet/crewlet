@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/artifactrender"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -289,5 +292,19 @@ func TestASessionsNameOnANodeBehindItNeverServesAWrite(t *testing.T) {
 	if _, how := lineages(t, s.guard(), st).PrincipalFor(t.Context(),
 		iam.SessionName(s.lineage.String()), session.NeedWrite); how != iam.Resolved {
 		t.Errorf("a live session's name resolved %v for a write, want it served", how)
+	}
+}
+
+// TestARendersNameStandsForNobodyOnTheOrigin: only the render's own resolver
+// knows its credential name, so the public origin answers it as ended.
+// Mutation: resolve any unknown class and a leaked render URL opens a page.
+func TestARendersNameStandsForNobodyOnTheOrigin(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	g := auth.New(&b)
+	l := lineages(t, g, &standings{owner: "agent-cto", live: true})
+	name := artifactrender.LineagePrefix + uuid.NewString()
+	if got, how := l.Principal(t.Context(), name); how != iam.Anonymous {
+		t.Fatalf("%q resolved %v to %+v, want anonymous", name, how, got)
 	}
 }

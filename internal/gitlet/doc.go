@@ -25,6 +25,11 @@
 // subject and by nothing else, receive-pack never runs in a cache, and git is
 // told `ok` only from a push's applied row (ADR-0084).
 //
+// A LISTING OF REPOSITORIES (repolisting.go, apply_repotallies.go) is read by name or by last
+// push over an index of each kind, with each row's card read where asked; code_repo_tallies
+// counts the repositories by owner, visibility, kind and status, kept by the lifecycle applies
+// and re-derived by the applier.
+//
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
 // One object a push — one PUT, and one GET on every Gitlet node that installs it,
@@ -162,7 +167,9 @@
 // state (replicated 0097), a repository's, the company's in a state —
 // newest first, testing every filter that index does not seek on the rows the
 // page read, so a page is the rows it read and never scans past its limit
-// for the few it keeps. One change ([ReadChange]) is read by its number on
+// for the few it keeps. A live state asked by when its changes moved
+// ([ChangeSortUpdated]) walks its lifecycle's and its conversations' indexes
+// in step (changesort.go). One change ([ReadChange]) is read by its number on
 // its repository, its revisions paged newest first beside it. Both are held to
 // the asker's grant on the change's repository ([JudgeRead]): a listing that
 // names a repository, and a read of one change, are refused whole where the
@@ -176,6 +183,10 @@
 // where each finding is in the revision asked about, and the floor those
 // reads by object id are asked at — is decided once, over those rows
 // (revisionread.go), for every surface that shows it.
+//
+// ITS COUNTS (apply_counts.go, counts.go): code_repos counts each repository's changes by
+// state and code_change_tallies those in use by owner and visibility, kept by every apply and
+// re-derived when their rules change; a counts read sums the tallies the asker's grant reads.
 //
 // # A change's conversation is rows on its own subject
 //
@@ -298,6 +309,10 @@
 // so moves only by a merge whose preconditions one snapshot proved, or by a
 // person's own push under direct_push persons, which is that person's recorded
 // override; never by a seat's push, which every protection refuses.
+//
+// A LISTING'S CARDS (changecards.go): asked with [ReadQuery.Cards], each listed change's
+// conversation counts, its reviewers' faces, its head's [CheckRollup] and a recent
+// ejection, a statement a part over the page's ids and one rollup a head.
 //
 // # A change wakes the seats its records concern
 //
@@ -907,13 +922,14 @@
 // asked of first is the estate router's: the repository's HOME, the first of
 // its rendezvous order over the live Gitlet nodes (ADR-0089).
 //
-// Two of those reads answer with text git leaves unbounded: a path's HISTORY
+// Three of those reads answer with text git leaves unbounded: a path's HISTORY
 // ([GitLog], its literal [LogQuery.Grep] matched by the Gitlet node, never by
-// git) and a file's BLAME ([GitBlame]). Each such field — a commit's subject,
-// its author's name and address, its parents, a blamed line — is DESCRIBED BY
-// ITS SIZE past its bound, never cut ([MaxLogSubjectBytes] and its kin, each of
-// the field's encoded size), so the widest commit, and the widest line with its
-// commit, always fit one page. A kind is an estate request's and no record's,
+// git), a file's BLAME ([GitBlame]) and a directory's LAST COMMITS
+// ([GitTreeCommits]), whose commits are a history's. Each such field (a
+// commit's subject, its author's name and address, its parents, a blamed line)
+// is DESCRIBED BY ITS SIZE past its bound, never cut ([MaxLogSubjectBytes] and
+// its kin, each of the field's encoded size), so the widest commit, and the
+// widest line with its commit, always fit one page. A kind is an estate request's and no record's,
 // so a kind added moves no [RecordVersion].
 //
 // # An engine write is built on a Gitlet node and lands as a push

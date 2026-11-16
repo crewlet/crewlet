@@ -90,7 +90,8 @@ func TestTheArtifactSkillsNameOnlyRegisteredTools(t *testing.T) {
 	for _, rel := range []string{artifactToolSkill, artifactFounderSkill} {
 		for _, m := range named.FindAllStringSubmatch(readRepoFile(t, rel), -1) {
 			if !slices.Contains(builtin.ArtifactTools(), m[1]) &&
-				!slices.Contains(builtin.ArtifactDataTools(), m[1]) {
+				!slices.Contains(builtin.ArtifactDataTools(), m[1]) &&
+				!slices.Contains(builtin.RenderTools(), m[1]) {
 				t.Errorf("%s names `%s`, which is no artifacts tool", rel, m[1])
 			}
 		}
