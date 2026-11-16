@@ -95,4 +95,7 @@ export const SESSION_QUERIES = {
     "code_commit_marks",
     "inbox",
   ],
+  // THE ARTIFACTS LOG'S HALF OF THE INBOX: a mark of an artifact notice lands
+  // there, and the composed inbox reads it back at that floor.
+  artifacts: ["inbox"],
 } as const;

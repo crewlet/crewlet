@@ -1,9 +1,10 @@
 /**
  * What a reader does with an update: mark it read (or unread again), put it
  * off, or bring it back. Each is ONE gesture on this person's own inbox,
- * naming exactly the one notice that is open, through ITS SOURCE'S tool —
- * `mark_inbox` for a tracker notice, `code_mark_inbox` for Gitlet's —
- * since each domain keeps the marks over its own notices on its own log.
+ * naming exactly the one notice that is open, through ITS SOURCE'S tool:
+ * `mark_inbox` for a tracker notice, `code_mark_inbox` for Gitlet's and
+ * `artifact_mark_inbox` for a comment on an artifact, since each domain keeps
+ * the marks over its own notices on its own log.
  *
  * A GESTURE, NEVER THE DOCUMENT. Marking read marks this record and nothing
  * else: every other mark, every snooze and the read position stay where they
@@ -23,6 +24,7 @@ import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { fmtAt, fromWall, toWall } from "~/lib/format.ts";
 import { snoozePresets } from "./model.ts";
+import type { InboxNotice } from "~/protocol/index.ts";
 /** What a mark needs of a notice, whichever source it came from. */
 export interface Markable {
   record_id: string;
@@ -41,11 +43,11 @@ export function NoticeActions({
 }: {
   notice: Markable;
   /** The domain the notice is kept by, whose tool marks it. */
-  source: "tracker" | "code";
+  source: InboxNotice["source"];
   /**
    * The notice's own position on its domain's log,
    * `<stream>@<generation>:<sequence>`: the floor its mark waits for (the
-   * `seen` of `mark_inbox` or `code_mark_inbox`).
+   * `seen` of its source's mark).
    */
   seen?: string;
   now: number;
@@ -56,11 +58,12 @@ export function NoticeActions({
   /** The notice was read or put off here, so it leaves the group it was in. */
   onSettled: () => void;
 }) {
-  // BOTH TOOLS, NAMED AS LITERALS, and the notice's source's used: each is a
-  // write on its own log, read back at that log's floor.
+  // EVERY SOURCE'S TOOL, NAMED AS LITERALS, and the notice's source's used:
+  // each is a write on its own log, read back at that log's floor.
   const tracker = useAct("mark_inbox");
   const code = useAct("code_mark_inbox");
-  const write = source === "code" ? code : tracker;
+  const artifacts = useAct("artifact_mark_inbox");
+  const write = source === "code" ? code : source === "artifacts" ? artifacts : tracker;
   const [picking, setPicking] = useState(false);
   // WHAT THIS PANE DID, until the next read says it too: the button turns into
   // its opposite the moment the write lands, rather than a poll later.

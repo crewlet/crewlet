@@ -5871,10 +5871,69 @@ export interface CodeInboxNotice {
   snoozed_until?: string;
 }
 
+/** Why a comment on an artifact reached a person: they own the artifact, they
+ *  are assigned the work item it is for, it mentions them, or they are already
+ *  in the thread. The first three are primary by default; `participant` is
+ *  context. */
+export type ArtifactInboxReason = "owner" | "assignee" | "mention" | "participant";
+
+/** What the record behind an artifact notice did to its comment thread. */
+export type ArtifactCommentOp =
+  "comment_open" | "comment_reply" | "comment_resolve" | "comment_reopen";
+
+/** A comment thread as it stands, read with the page where the read asked for
+ *  `cards` (`artifactsdomain.NoticeThread`): a card's alone. */
+export interface ArtifactNoticeThread {
+  status: "open" | "resolved";
+  /** The version the thread was made on. */
+  version: number;
+  /** The text the commenter selected, where they selected any. */
+  quote?: string;
+  /** The remarks the thread still holds. */
+  remarks: number;
+  resolved_by?: string;
+  resolved_version?: number;
+}
+
+/** One notice about a comment on an artifact (`artifactsdomain.InboxNotice`).
+ *  Commenting is a relation to the artifact, so no app holds it. */
+export interface ArtifactInboxNotice {
+  /** The record on the artifacts log, and what a mark names. */
+  record_id: string;
+  log_seq: number;
+  log_stream: string;
+  log_generation: number;
+  at: string;
+  reason: ArtifactInboxReason;
+  primary: boolean;
+  addressed: boolean;
+  op: ArtifactCommentOp;
+  /** The artifact's id. */
+  artifact: string;
+  /** The thread's id. */
+  thread: string;
+  /** The remark the record made, for an open or a reply. */
+  remark?: string;
+  /** Its first 600 bytes; absent for a resolve or a reopen, and once removed. */
+  excerpt?: string;
+  actor: string;
+  actor_kind: string;
+  /** The artifact's title and kind as they stand, read with the page; absent
+   *  where the page's heads hold none. */
+  title?: string;
+  artifact_kind?: string;
+  thread_state?: ArtifactNoticeThread;
+  read: boolean;
+  snoozed?: boolean;
+  snoozed_until?: string;
+}
+
 /** One notice of a person's COMPOSED inbox (`inbox.Notice`): what every source
  *  says alike, and the source's own notice whole in `extra`. */
 export type InboxNotice =
-  InboxNoticeOf<"tracker", WorkInboxNotice> | InboxNoticeOf<"code", CodeInboxNotice>;
+  | InboxNoticeOf<"tracker", WorkInboxNotice>
+  | InboxNoticeOf<"code", CodeInboxNotice>
+  | InboxNoticeOf<"artifacts", ArtifactInboxNotice>;
 
 export interface InboxNoticeOf<S extends string, E> {
   source: S;
@@ -5899,7 +5958,8 @@ export interface InboxNoticeOf<S extends string, E> {
 
 /** One source a composed inbox read, and what it said of the person's marks. */
 export interface InboxSourceState {
-  name: "tracker" | "code";
+  /** Worklet's, Gitlet's, or the artifacts', each counted on its own log. */
+  name: "tracker" | "code" | "artifacts";
   seen_through?: InboxPosition;
   primary_reasons: string[];
   /** The newest notice of this source the page carries. */
