@@ -426,6 +426,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 	case k == KindReader && (op == OpPin || op == OpUnpin || op == OpOpened ||
 		op == OpReadElevated):
 		return decodePayload[ReaderPayload](rec)
+	case k == KindReader && op == OpInboxMarks:
+		return decodePayload[PersonMarks](rec)
 	case k == KindEviction && op == OpEviction:
 		return decodePayload[Eviction](rec)
 	case k == KindGeneration && op == OpGeneration:

@@ -293,6 +293,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		subject = artifactsdomain.CommentSubject(mustID(artifact),
 			uuid.NewSHA1(suiteNamespace, []byte("thread-carrying")))
 		op, payload = artifactsdomain.OpCommentOpen, commentOpenPayload("carrying")
+	case "RecordEnvelope.Op inbox_marks":
+		subject, op = artifactsdomain.ReaderSubject("suite"), artifactsdomain.OpInboxMarks
+		payload = artifactsdomain.PersonMarks{V: 1, Handle: "suite", Gesture: artifactsdomain.MarkGesture{
+			Read: []string{"suite-notice"}}, Positions: map[string]uint64{"suite-notice": 1}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}
