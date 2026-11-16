@@ -6827,11 +6827,12 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`,
 `search_knowledge`; wherever the node takes artifact uploads,
 `list_artifacts`, `get_artifact`, `list_dashboard_sources`,
-`get_artifact_format`, `get_company_brand`, `create_artifact`,
-`publish_artifact`, `update_artifact`,
+`get_artifact_format`, `get_company_brand`, `list_artifact_comments`,
+`create_artifact`, `publish_artifact`, `update_artifact`,
 `share_artifact`, `unshare_artifact`, `upload_artifact_asset`,
-`create_artifact_folder`, `move_artifact`, `read_artifact_data`,
-`query_artifact_data`,
+`create_artifact_folder`, `move_artifact`, `comment_on_artifact`,
+`resolve_artifact_comment`, `edit_artifact_comment`,
+`remove_artifact_comment`, `read_artifact_data`, `query_artifact_data`,
 `write_artifact_data` and `set_artifact_schema` (see
 [Artifacts](../guides/tools-and-mcp.md#artifacts)), each artifact and datastore
 write answering its `op_id` here, and taking it back, by Worklet's own rule
@@ -9131,6 +9132,12 @@ for. The domain's applier decides from the record alone.
 | `POST /artifacts/{id}/assets` | `upload_artifact_asset` | `{"upload": "<upload>", "name": "<name>"}`: finalize an asset |
 | `DELETE /artifacts/{id}/assets/{asset}` | `upload_artifact_asset` | Remove one |
 | `PUT`, `DELETE /artifacts/{id}/pin` | `artifacts.pin` | The caller's own pin |
+| `POST /artifacts/{id}/comments` | `comment_on_artifact` | Open a comment thread with its first remark: `{"body": "<markdown>", "version"?, "anchor"?, "quote"?, "crop"?, "crop_type"?}`. `version` is the version it is about (absent, the head), `anchor` where on it as [Artifacts](../concepts/artifacts.md#comments) says each kind takes (absent, the whole version), `quote` the page's words (at most 1 KiB), and `crop` a picture of the part as its bytes in standard base64, `crop_type` `image/png`, `image/jpeg` or `image/webp` (at most 64 KiB, 800 pixels on its longer side). Answers the `thread` and `remark` ids. A remark is at most 16 KiB; one carrying a credential is `422 credential_refused`; an artifact in the trash is `409 artifact_trashed`; one at 2000 threads is `409 conflict` |
+| `POST /artifacts/{id}/comments/{thread}/replies` | `comment_on_artifact` | `{"body", "reply_to"?}`: a remark in the thread, answering the thread or one remark. A thread at 500 remarks is `409 conflict` |
+| `PATCH /artifacts/{id}/comments/{thread}/remarks/{remark}` | `edit_artifact_comment` | `{"body"}`: what one of the caller's own remarks says now; somebody else's is `403 forbidden` |
+| `DELETE /artifacts/{id}/comments/{thread}/remarks/{remark}` | `remove_artifact_comment` | Take one remark's words down; it keeps its place, marked removed. The author's, or an administrator's moderating |
+| `POST /artifacts/{id}/comments/{thread}/resolve` | `resolve_artifact_comment` | `{"version"?}`: resolve the thread citing the version that addressed it, from the version it was made on to the head (absent, the head) |
+| `POST /artifacts/{id}/comments/{thread}/reopen` | `resolve_artifact_comment` | Reopen a resolved thread |
 | `PUT /artifacts/{id}/folder` | `move_artifact` on the artifact and `artifacts.folder.file` on the folder | `{"folder": "<id>"}` files it in a folder, `{"folder": ""}` at the top level. See [Folders](#folders) |
 | `POST /artifacts/folder-moves` | as `PUT /artifacts/{id}/folder`, for each item alone | `{"items": [{"artifact", "folder"}]}`, at most 25, answered `200` with `{"results": [{"artifact", "outcome", "message"?}]}`. See [Folders](#folders) |
 
@@ -9273,6 +9280,7 @@ a person present, and the version is marked forced.
 | `GET /artifacts/{id}/assets` | `artifact_assets` | The asset store |
 | `GET /artifacts/{id}/seen-by` | `artifact_seen_by` | Who has opened it, to the owner and editors while the company's `artifacts.seen_by` is `editors` (`shown: false` otherwise) |
 | `GET /artifacts/{id}/access` | `artifact_access` | The share dialog's list: the owner, each share with the seats a unit share reaches today (and `invalid: true` on a share that reaches nobody, see above), and an agent owner's leads; to a viewer, the owner and a count |
+| `GET /artifacts/{id}/comments` | `artifact_comments` | Every comment thread placed on `version` (absent, the head): `{artifact, version, head, counts: {open, resolved, outdated}, can_comment, role, threads}`, each thread `{id, version, anchor, label, placement, place?, quote?, crop?, status, resolved_by?, resolved_by_kind?, resolved_at?, resolved_version?, created_by, created_by_kind, created_at, updated_at, remarks}` and each remark `{id, author, author_kind, body, mentions?, reply_to?, created_at, edited_at?, removed?}`. `placement` is `here`, `moved` (found again by its content, `place` where), `outdated` (gone from that version, `place` absent) or `later` (made on a later version); `crop` is a data URL. `open` counts the open threads still placed, `outdated` the open ones whose part is gone. Read as the artifact's content: an artifact in the trash is `409 artifact_trashed` |
 | `GET /artifacts/usage` | `artifact_usage` | The company's counters against the Tier A quotas; `artifacts.usage`, an administrator's |
 | `GET /artifacts/trail` | `artifact_trail` | **The company trail of every artifact**: every artifact's history rows across the company, private ones included, newest first in the log's order, each naming its `artifact`, its current `title` and `owner`, the op, the actor and whether only the admin path admitted them. `op=` narrows it to one op (`read_elevated` lists every administrator's override, so one nobody would find in an artifact's own history is found here), with `cursor` and `limit`; an op no history row is filed under (a pin, an opened mark, a purge, which takes the history with it) is `400 bad_params`. `audit.read`, an administrator's, decided by no relation to any artifact |
 

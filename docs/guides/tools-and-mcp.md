@@ -285,7 +285,9 @@ the agent's own artifact asked by somebody it is not shared with answers the
 conflict with no rows at all. Every row a data tool answers is fenced as text
 its writers wrote (`artifact_row`, naming the row's creator and last writer), a
 conflict's current rows included. A turn writes at most **1,000** datastore
-ops; a retry of a call it lost the answer to is not counted again.
+ops; a retry of a call it lost the answer to is not counted again. A comment
+thread's remarks are fenced as their authors' words (`artifact_comment`), and
+the text it quotes as the page's (`artifact_file`).
 
 **An artifact in the trash serves no content.** `get_artifact`,
 `read_artifact_data` and `query_artifact_data` refuse it, naming the trash and
