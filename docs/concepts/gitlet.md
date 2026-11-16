@@ -1819,9 +1819,10 @@ answer that holds every record the code log had committed when it was asked.
   changes are kept by state, so an owner's are listed in a state, or in a
   repository, or on a work item. A repository's changes are listed by
   number; a reviewer's by the change's id, which is minted as the change is
-  opened; a window's, where nothing else leads it, by when each change last
-  moved; every other listing — a live state's in a window among them — in
-  the order the records that opened its changes landed on the code log. Every change it lists says how many of its
+  opened; a window's, where nothing else leads it, and a live state's asked
+  for by when its changes moved (`sort=updated`), by when each change last
+  moved; every other listing, a live state's in a window among them, in the
+  order the records that opened its changes landed on the code log. Every change it lists says how many of its
   findings stand open — none of its authors has answered them — and **when it
   last moved**.
 - **When a change last moved** is the later of two instants, one a subject it
@@ -1844,7 +1845,10 @@ answer that holds every record the code log had committed when it was asked.
   live changes, where the window's hold every change that moved, the merged
   among them: in a company that merges far more changes than it keeps open,
   the open changes of a month's window walked by the window would cost a page
-  for every few that are kept.
+  for every few that are kept. Asked for by when its changes last moved
+  (`sort=updated`), a live state walks its own changes by their lifecycle's
+  last move and the conversations by when somebody last spoke, together,
+  newest first, each change once.
 - **The changes waiting on a reviewer** are a listing that names a
   `reviewer` — the changes whose ask of that reviewer still **waits** — or
   `needs=review`, the **live** ones alone, the asker's own where it names no
@@ -1926,6 +1930,24 @@ read, never by reading further: a page is the changes it
 and a reader pages until no cursor comes back. A page reads 50 changes unless
 asked for fewer or more, 200 at most; a change's revisions come 200 a page,
 1 000 at most.
+
+**A live state by when its changes last moved** (`sort=updated` beside
+`state=draft` or `state=open`, and optionally a repository, an owner, a work
+item or a window) reads two indexes in step: its own changes by their
+lifecycle's last move, which hold the live changes alone, and the
+conversations by when somebody last spoke in them, which hold every change
+anybody ever discussed, the merged and closed among them, which the walk steps
+over. It reads no conversation spoken before the oldest live change a full
+page read, or before the window's start where one is named and the page read
+fewer, none once a page has read every live change left (unless a window is
+named), and at most 1 000 a page, so where many ended changes were discussed
+after the live ones last moved a page can be short, or empty with a cursor. An
+owner and a work item are tested on the changes the page read. `sort=opened`
+is the order every listing but a window's own reads in, and a window nothing
+else leads, already by last move, refuses it; `sort=updated` is refused beside
+a reviewer or what the changes wait on, whose walks keep their own order, and
+where neither a live state nor such a window is named. The instant is the one
+a row says it last moved.
 
 **Every read of changes is held to the reader's grant** on the change's
 repository, as the repository's own reads are ([Who may read and
