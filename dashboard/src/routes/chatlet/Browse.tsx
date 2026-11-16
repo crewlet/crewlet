@@ -60,7 +60,7 @@ import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtCount, plural, relTime } from "~/lib/format.ts";
+import { fmtCount, plural } from "~/lib/format.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -73,6 +73,7 @@ import { roomMark } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { ViewHead, useViewBarTight } from "./ViewHead.tsx";
+import { ago } from "~/lib/ago.ts";
 
 type Kind = "all" | "public" | "unit" | "archived";
 
@@ -422,7 +423,7 @@ export function BrowseRow({ room }: { room: ChatDirectoryRoom }) {
       topic={channel.topic}
       facts={[
         plural(room.members, "member"),
-        room.last_at ? `last message ${relTime(room.last_at, now)}` : "",
+        room.last_at ? `last message ${ago(room.last_at, now)}` : "",
         note,
       ]}
       action={

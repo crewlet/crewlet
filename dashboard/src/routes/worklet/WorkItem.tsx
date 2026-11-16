@@ -94,7 +94,6 @@ import {
 } from "~/lib/seats.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { AdvisorNotice } from "~/protocol/advisor.ts";
-import { relTime } from "~/lib/format.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
@@ -129,6 +128,7 @@ import type {
   WorkSummary,
   WorkTombstone,
 } from "~/protocol/index.ts";
+import { ago } from "~/lib/ago.ts";
 
 /** How often a task and its sub-tasks are asked again: nothing pushes either. */
 const ITEM_POLL_MS = 15_000;
@@ -215,7 +215,7 @@ export function RemovedNote({
     <Callout variant="warning" icon={<TrashGlyph size="md" />}>
       <span>
         <strong>In the trash.</strong>
-        {` Moved to the trash${by ? ` by ${by}` : ""} ${relTime(tomb.at, now)}`}
+        {` Moved to the trash${by ? ` by ${by}` : ""} ${ago(tomb.at, now, { clock: true })}`}
         {tomb.removed_with ? (
           <>
             {" "}

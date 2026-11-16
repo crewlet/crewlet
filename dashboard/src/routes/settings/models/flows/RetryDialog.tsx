@@ -20,6 +20,7 @@ import type { CredentialLimited } from "~/protocol/models.ts";
 import { retryModel } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
 import { WINDOW } from "../words.ts";
+import { AgoTime } from "~/components/AgoTime.tsx";
 
 /** Why nothing was cleared: the limit holds, the probe failed, or the engine refused. */
 type Outcome =
@@ -135,7 +136,7 @@ export function RetryDialog({
       <div className="models-stack">
         {bench ? (
           <Text as="p" variant="body">
-            {sentenceCase(WINDOW[bench.window])}, since <RelativeTime value={bench.since} />. The
+            {sentenceCase(WINDOW[bench.window])}, since <AgoTime since value={bench.since} />. The
             engine tries again at {fmtClock(bench.until, Date.now())} (
             <RelativeTime value={bench.until} />
             ).
