@@ -267,17 +267,24 @@ func TestTheTailIsChargedAtTheHarnessesLowestRate(t *testing.T) {
 
 // EVERY CHAINED LINE AFTER THE ANCHOR IS CHARGED, an attachment, a system record
 // and a prompt snapshot among them, though the harness counts the last as
-// nothing; a record outside the chain, the harness's bookkeeping, is not.
+// nothing; a record outside the chain, the harness's bookkeeping, is not. A
+// user record that carries no `parentUuid` is in a chain as Claude Code's
+// resume reads one, rooting it, and is charged too.
 //
-// Mutation: pass attachments over, or charge bookkeeping, and this goes red.
+// Mutation: pass attachments over, charge bookkeeping, or charge only a record
+// that carries a `parentUuid`, and this goes red.
 func TestEveryChainedLineAfterTheAnchorIsCharged(t *testing.T) {
 	t.Parallel()
 	note := cntAttachment("u2", "u3", `{"type":"total_tokens_reminder","text":"tokens left"}`)
 	system := `{"parentUuid":"u3","isSidechain":false,"type":"system","subtype":"turn_duration","uuid":"u4"}`
 	snapshot := cntAttachment("u4", "u5", `{"type":"prompt_snapshot","text":"the system prompt"}`)
+	unparented := strings.Replace(cntUser("", "u6", `"a later root"`), `"parentUuid":null,`, "", 1)
+	if strings.Contains(unparented, "parentUuid") {
+		t.Fatalf("the unparented user record carries a parentUuid: %s", unparented)
+	}
 	got := cntCount(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), note,
-		cntBookkeeping, system, snapshot)
-	wantBound(t, got, 1050+cntCharge(note)+cntCharge(system)+cntCharge(snapshot))
+		cntBookkeeping, system, snapshot, unparented)
+	wantBound(t, got, 1050+cntCharge(note)+cntCharge(system)+cntCharge(snapshot)+cntCharge(unparented))
 }
 
 // AN IMAGE OR A DOCUMENT AFTER THE ANCHOR MARKS THE COUNT: the harness counts each

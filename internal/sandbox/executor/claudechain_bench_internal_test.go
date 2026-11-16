@@ -407,7 +407,7 @@ const benchRoot = "null"
 // in a comma, then its uuid and its time, ms after rcBase.
 func benchRecord(parent, side, kind, keys string, n, ms int) string {
 	return `{"parentUuid":` + parent + `,` + side + `"type":"` + kind + `",` + keys + `"uuid":"` + rcUUID(n) +
-		`","timestamp":"` + rcAt(ms) + `"}`
+		`","timestamp":"` + rcAt(ms) + `","version":"2.1.310"}`
 }
 
 // benchOf is the parent naming record n.
@@ -805,7 +805,7 @@ func benchReadingLineLast(t *benchThread) {
 	n := t.records + 1
 	head := `{"parentUuid":"` + rcUUID(threadChainMaxRecords) + `","isSidechain":false,"type":"user",` +
 		`"message":{"role":"user","content":[`
-	tail := `]},"uuid":"` + rcUUID(n) + `","timestamp":"` + rcAt(n) + `"}`
+	tail := `]},"uuid":"` + rcUUID(n) + `","timestamp":"` + rcAt(n) + `","version":"2.1.310"}`
 	const block = `{"type":"tool_result","tool_use_id":"a"}`
 	t.blocks = (threadLineMax - 1 - len(head) - len(tail) + 1) / (len(block) + 1)
 	t.record(head + strings.Repeat(block+",", t.blocks-1) + block + tail)

@@ -39,6 +39,16 @@ import (
 // picked once, as it launches, and the context the session sends first is known
 // here, the brief beside it only once the runner has written it.
 //
+// WHAT A CUT-OFF KEPT SESSION HOLDS is read for the relaunch that continues
+// it, once its runner has the round's calls in hand and before it writes the
+// briefs ([agentLauncher.SessionHoldings]): through the runner of the member
+// driving the harness that wrote the session, for the release that wrote it
+// ([runner.SessionBasis.Release]), and logged whatever it answers. The briefs
+// told by it ride beside the others to the sandbox layer ([sandboxSession]),
+// which hands them only to a box of that release, and the launch's floor
+// counts them and drops them alone where the seat's budget cannot carry them
+// ([agentLauncher.continuedFloor]).
+//
 // WHAT A READER OF A SESSION IS TOLD A RELAUNCH WOULD DO is asked of the node
 // holding the seat ([Engine.RelaunchTargets]): the member that node would launch
 // a relaunch on now, as its own bench of spent plans has it.
@@ -193,7 +203,12 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 	through, _ := captured.SavePoint()
 	return runner.SessionBasis{
 		LaunchSeq: captured.LaunchSeq, CaptureSeq: captured.CaptureSeq, SessionID: continued.Row.SessionID,
-		Harness: continued.Row.Harness, Through: through, NoteCursor: captured.NoteCursor,
+		Harness: continued.Row.Harness,
+		// AND THE RELEASE THAT WROTE IT, which a reading of what the session
+		// holds is read for: the relaunch's best word for the release that
+		// resumes it, its own box not yet acquired.
+		Release: continued.Row.HarnessVersion,
+		Through: through, NoteCursor: captured.NoteCursor,
 		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
 		KeptTurn: continued.KeptTurn,
 		// AND WHAT CLAUDE CODE COUNTS THE CAPTURE'S SESSION AT, as its take
@@ -204,6 +219,117 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// BRIEF'S COUNT, which the brief continuing it tells.
 		Owed: slices.Clone(captured.Omitted),
 	}
+}
+
+var _ runner.HoldingsAsker = (*agentLauncher)(nil)
+
+// SessionHoldings answers which of the round's calls ask marks asked the
+// cut-off kept session basis names holds ([runner.HoldingsAsker]), as
+// [sandbox.Coordinator.HoldingsOf] reads it off the capture the turn's run
+// record keeps, through the runner of the seat's chain that drives the
+// harness that wrote the session ([chainRestorers.reader]); and logs what it
+// answers: `executor_session_holdings_read` with how many asked calls the
+// reading held and told, how many distinct subagents a told call is under,
+// and the release it was read for, beside one
+// `executor_session_subagent_unreported` per such subagent; or
+// `executor_session_holdings_unread`, saying why, where it read none, and
+// then answers the zero value.
+//
+// THAT HARNESS'S RUNNER AND NO OTHER: what a session holds is read by the
+// runner of the harness that wrote it, which is also the one
+// [sandbox.ContinuityOf] still continues the turn's row with, and one runner
+// drives each harness. The first member's runner, of another harness,
+// refuses the session.
+//
+// NEVER AN ERROR TO THE RUNNER: every failure is no reading, and the relaunch
+// is told every call after the session's save point, which is never wrong.
+func (l *agentLauncher) SessionHoldings(ctx context.Context, basis runner.SessionBasis,
+	ask sandbox.HoldingsAsk) sandbox.SessionHoldings {
+
+	holdings, err := l.sessionHoldings(ctx, basis, ask)
+	if err != nil {
+		log.InfoContext(ctx, "executor_session_holdings_unread", "seat", l.seat.Handle(),
+			"turn_id", l.turn.RunID, "detail", err.Error(),
+			"outcome", "the relaunch is told every call after its save point")
+		return sandbox.SessionHoldings{}
+	}
+	asked, held := 0, 0
+	var unreported []string
+	for _, c := range ask.Calls {
+		if !c.Asked {
+			continue
+		}
+		asked++
+		in, under := holdings.Holds(c)
+		switch {
+		case in:
+			held++
+		case under != "" && !slices.Contains(unreported, under):
+			unreported = append(unreported, under)
+		}
+	}
+	log.InfoContext(ctx, "executor_session_holdings_read", "seat", l.seat.Handle(), "turn_id", l.turn.RunID,
+		"asked", asked, "held", held, "told", asked-held, "unreported", len(unreported), "writer", ask.Resumer,
+		"outcome", readOutcome(held, len(unreported)))
+	// ONE LINE PER SUBAGENT, never per call: its calls are told under one
+	// heading, and the line says why the session does not hold its report.
+	for _, agent := range unreported {
+		log.InfoContext(ctx, "executor_session_subagent_unreported", "seat", l.seat.Handle(),
+			"turn_id", l.turn.RunID, "agent", agent, "detail", holdings.Subagents[agent].Why)
+	}
+	return holdings
+}
+
+// readOutcome is what follows a reading that held held of the asked calls and
+// told some under unreported subagents, as `executor_session_holdings_read`
+// says it.
+//
+// BY WHAT FOLLOWS, NEVER ONE PROMISE FOR EVERY READING: one that holds no
+// asked call and moves none under a subagent tells what the telling with no
+// reading tells, so the runner builds no brief told by it (its heldReading),
+// and no line says it was not handed. Every other reading is followed by the
+// brief told by it, by `executor_session_holdings_unused` saying why that brief
+// was not handed, or by `executor_session_not_continued` where the launch does
+// not continue the session at all, the brief told by the reading with it.
+func readOutcome(held, unreported int) string {
+	if held == 0 && unreported == 0 {
+		return "the reading holds no asked call and moves none, so the relaunch is told every call after its " +
+			"save point"
+	}
+	return "the launch hands the brief told by it where its box's harness answers writer and its first request " +
+		"sends the session whole; otherwise executor_session_holdings_unused says why not, or " +
+		"executor_session_not_continued where the session itself is not continued"
+}
+
+// sessionHoldings is [agentLauncher.SessionHoldings] before it logs: the
+// reading, or why there is none. A reading the reader answered without
+// having read the archive whole, or of a kind this build does not read, is
+// none: it holds no call ([sandbox.SessionHoldings.Holds]), and the line saying
+// it was read would claim what it did not.
+func (l *agentLauncher) sessionHoldings(ctx context.Context, basis runner.SessionBasis,
+	ask sandbox.HoldingsAsk) (sandbox.SessionHoldings, error) {
+
+	rt := l.engine.sandbox.Load()
+	manager := l.company.catalogue
+	if rt == nil || rt.coordinator == nil || manager == nil {
+		return sandbox.SessionHoldings{}, errors.New("this node has no sandbox runtime for this company")
+	}
+	restores, err := l.company.chainRestores(l.seat, manager)
+	if err != nil {
+		return sandbox.SessionHoldings{}, err
+	}
+	holdings, err := rt.coordinator.HoldingsOf(ctx, l.turn.RunID, basis.LaunchSeq, basis.CaptureSeq, ask,
+		restores.reader(basis.Harness))
+	switch {
+	case err != nil:
+		return sandbox.SessionHoldings{}, err
+	case !holdings.Read:
+		return sandbox.SessionHoldings{}, errors.New("the reading did not read the session's archive whole")
+	case !holdings.Kind.Valid():
+		return sandbox.SessionHoldings{}, fmt.Errorf("the reading is of a kind this build does not read (%q)",
+			holdings.Kind)
+	}
+	return holdings, nil
 }
 
 // continuationWindow is what the seat's executor chain may hold a continued
@@ -329,6 +455,23 @@ func (c chainRestorers) Restores(archive sandbox.SessionArchive) (bool, string) 
 	return false, why
 }
 
+// reader is the runner of the chain's member driving harness as it reads
+// what a session holds ([sandbox.HoldingsReader]), nil where no member drives
+// harness or that member's runner reads none: a session's holdings are read
+// only by its own harness's runner, which is the one that restores it
+// ([chainRestorers.Restores]), and one runner drives each harness, so the
+// first member driving it names it.
+func (c chainRestorers) reader(harness string) sandbox.HoldingsReader {
+	for _, r := range c {
+		if r.harness != harness {
+			continue
+		}
+		reader, _ := r.restorer.(sandbox.HoldingsReader)
+		return reader
+	}
+	return nil
+}
+
 // relaunchTarget is what a launch of seat's turn — a relaunch, or a
 // conversation's next turn — would be launched on now, as this node picks it
 // ([sandbox.RelaunchTarget]): the first member of the seat's executor chain
@@ -423,6 +566,11 @@ func (e *Engine) relaunchCompany(turn string) *Company {
 // first launch froze it and continues only in a box of its own, with the one
 // brief for that. Either with what its briefs left out of the round the launch
 // carries on, which the launch records where it hands one ([sandbox.BriefTold]).
+// Beside a kept capture's two briefs, the two told by a reading of what it
+// holds where the runner wrote them ([runner.SessionContinuation.Exact]), with
+// the release they were read for and what they left out, which the sandbox
+// layer hands only to a box of that release; never beside a base, which no
+// reading is read of.
 func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation {
 	switch {
 	case s == nil:
@@ -432,14 +580,21 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 	case !s.Basis.Continues():
 		return nil
 	}
-	return &sandbox.SessionContinuation{LaunchSeq: s.Basis.LaunchSeq, CaptureSeq: s.Basis.CaptureSeq,
+	out := &sandbox.SessionContinuation{LaunchSeq: s.Basis.LaunchSeq, CaptureSeq: s.Basis.CaptureSeq,
 		Brief: s.Brief, Replaced: s.Replaced, Told: s.Told}
+	if x := s.Exact; x != nil {
+		out.Exact = &sandbox.ExactTelling{Resumer: x.Resumer, Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
+	}
+	return out
 }
 
 // sessionDecision is how the launch decided its run takes up a session, in the
 // runner's terms ([runner.SessionDecision]): a session its conversation's last
-// turn left is always continued in a new box.
+// turn left is always continued in a new box; and whether the brief handed is
+// the one told by a reading of what the session holds, whose own telling the
+// run's guard and its published prompt then follow.
 func sessionDecision(d sandbox.LaunchDecision) runner.SessionDecision {
 	return runner.SessionDecision{Continues: d.Brief.Continues(), Kept: d.Kept, Base: d.Base,
-		NewBox: d.Brief == sandbox.BriefContinuedNewBox || d.Brief == sandbox.BriefContinuedConversation}
+		NewBox: d.Brief == sandbox.BriefContinuedNewBox || d.Brief == sandbox.BriefContinuedConversation,
+		Exact:  d.Exact}
 }

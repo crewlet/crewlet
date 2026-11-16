@@ -26,11 +26,11 @@ import (
 //
 // THE BOUND. This reading takes the anchor's four counts as written, through
 // the line layer's one rule for a reply's usage ([threadLine.Usage]), and
-// charges every chained line after the anchor's place at [sandbox.ClaudeCharge],
-// two bytes a token of the line and its break, at most every rate the harness
-// counts a block at (text at three or four a UTF-16 unit, a JSON-titled
-// document at two, a call at its JSON over three or four), each block's syntax
-// bytes covering its rounding. So the bound is never below the harness's count,
+// charges every chained line ([threadHead.Chained]) after the anchor's place at
+// [sandbox.ClaudeCharge], two bytes a token of the line and its break, at most
+// every rate the harness counts a block at (text at three or four a UTF-16
+// unit, a JSON-titled document at two, a call at its JSON over three or four),
+// each block's syntax bytes covering its rounding. So the bound is never below the harness's count,
 // measured so at every one of 186 real compactions and 376,937 cut points of
 // real sessions, and in every probe job.
 //

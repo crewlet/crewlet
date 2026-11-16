@@ -300,7 +300,7 @@ func benchSessionLines(plain int64, n int, ratio float64) func(*testing.B, *tar.
 			if i == 0 {
 				parent = "null"
 			}
-			own := `"uuid":"` + ctUUID(int(i)+2) + `","timestamp":"` + rcAt(int(i)) + `"}`
+			own := `"uuid":"` + ctUUID(int(i)+2) + `","timestamp":"` + rcAt(int(i)) + `","version":"2.1.310"}`
 			var record string
 			switch {
 			case n == threadLineMax:
@@ -464,7 +464,7 @@ func benchBlocks(block string) func(*testing.B, *tar.Writer) sandbox.HoldingsAsk
 	return func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 		head := `{"parentUuid":"` + ctUUID(1) + `","isSidechain":false,"type":"user","message":{"role":"user",` +
 			`"content":[`
-		tail := `]},"uuid":"` + ctUUID(2) + `"}`
+		tail := `]},"uuid":"` + ctUUID(2) + `","version":"2.1.310"}`
 		blocks := (threadLineMax - 1 - len(head) - len(tail) + 1) / (len(block) + 1)
 		record := head + strings.Repeat(block+",", blocks-1) + block + tail
 		benchMember(b, tw, hsMain, ctBrief(ctUUID(1))+"\n"+record+"\n")
