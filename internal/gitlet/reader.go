@@ -2962,7 +2962,7 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	}
 	var id string
 	if q.Cursor == "" {
-		if err := r.repo(ctx, tx, q, chart, cp, out); err != nil {
+		if err = r.repo(ctx, tx, q, chart, cp, out); err != nil {
 			return err
 		}
 		id = out.Repo.ID
