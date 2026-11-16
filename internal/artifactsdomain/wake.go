@@ -44,12 +44,9 @@ const (
 	MetaRecordID = "record_id"
 )
 
-// Parser turns a comment record the feed relayed into the wakes it implies.
-//
-// It implements [notify.Parser]. EVERYTHING IT NEEDS IS IN THE RECORD: the
-// routing snapshot its writer decided ([CommentNotify]), read through the one
-// rule every native domain routes by (internal/routing), so the node that wins
-// a delivery routes without reading a row it may be behind on.
+// Parser turns a comment record the feed relayed into its wakes, from the
+// routing snapshot the record carries alone, so any node routes it without
+// reading a row.
 type Parser struct {
 	logger *slog.Logger
 }
@@ -73,12 +70,9 @@ func NewParser(opts ParserOptions) *Parser {
 // Source is the integration name, matching the delivery's own: [Source].
 func (p *Parser) Source() string { return Source }
 
-// Parse reports which seats a comment record wakes: each agent its snapshot
-// names that the company still employs, never its author, under the reason and
-// the addressing the snapshot records.
-//
-// THE WAKE ID IS DERIVED from the record and the recipient
-// ([changefeed.WakeID]), so a redelivery collapses into the wake it made.
+// Parse wakes each agent the snapshot names that the company still employs,
+// never its author; the wake id is derived from the record and the recipient,
+// so a redelivery collapses into the wake it made.
 func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) ([]notify.Routed, error) {
 	record, err := recordFromBody(w.Body)
 	if err != nil {

@@ -9,34 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 )
 
-// THE ARTIFACTS FEED: a seat hears about a comment on an artifact by a WAKE
-// DERIVED FROM THE LOG (ADR-0012), never published by the writer that decided
-// the record. The log's own fleet-wide consumer ([FeedGroup]) reads every
-// committed record on whichever data node wins it; the translator decides
-// whether a record can wake a seat at all, the parser ([Parser]) which seats,
-// from the routing snapshot the record carries ([CommentNotify]), and the
-// notification spine publishes each wake to its seat's inbox.
-//
-// # Only seats are woken
-//
-// A person is never queue-woken: what they read of a comment is the thread
-// itself and their inbox, never a turn. So a record whose snapshot tells only
-// people is no delivery at all, and the feed acknowledges it.
+// The artifacts feed derives a comment's wake from the committed record (ADR-0012):
+// the translator relays a record whose routing snapshot wakes an agent, and the
+// parser wakes those agents. People are told, never queue-woken.
 
 // Source is the notification source the artifacts log's wakes are delivered
 // under, and the surface a tool that answers one on the artifact delivers to.
 // Bare, as the tracker's `work` is.
 const Source = "artifact"
 
-// FeedGroup is the artifacts log's wake consumer: the fleet-wide group the
-// feed runs as ([Domain.FeedGroup]) and the one the log's trim waits on.
-//
-// STABLE FOR THE DEPLOYMENT'S LIFE. The fleet's position on the log IS this
-// consumer, and a renamed group is a fresh consumer that starts from the log's
-// first retained record: every comment the log still holds would come back as
-// a wake, which only the feed's claim and the derived wake id collapse. The
-// group, not the broker's consumer name, which is derived from the group and
-// the stream together.
+// FeedGroup is the artifacts log's wake consumer, which the trim waits on.
+// Stable for the deployment's life: a renamed group replays every retained
+// record as a wake.
 const FeedGroup = "crewlet-artifacts-feed"
 
 // Translator decides whether a committed artifacts record can wake a seat, and
@@ -52,14 +36,9 @@ func (t *Translator) Source() changefeed.Source {
 	return changefeed.Source{Name: Source, Group: FeedGroup}
 }
 
-// Translate decides whether rec wakes anybody.
-//
-// Every record but a comment's open, reply, resolve and reopen is acknowledged
-// off its envelope: no other record carries a routing. A comment record whose
-// snapshot wakes no agent is acknowledged too, a decision rather than a
-// failure. A record this build cannot decode past its envelope is a newer
-// build's, DEFERRED to a peer on that build ([changefeed.Defer]) and never
-// acknowledged: the feed's consumer is the fleet's (#838).
+// Translate decides whether rec wakes anybody: only a comment record whose
+// snapshot names an agent does. A newer build's record is deferred to a peer
+// ([changefeed.Defer]), never acknowledged unread (#838).
 func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
 	envelope, err := DecodeEnvelope(rec.Payload)
 	if err != nil {
@@ -94,9 +73,7 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 }
 
 // wakesAnybody reports a record, by its envelope, whose payload can carry a
-// routing: a comment's open, reply, resolve or reopen. An edit and a removal
-// say nothing new to anybody, and every other kind is machinery or a write no
-// seat is woken for.
+// routing: a comment's open, reply, resolve or reopen.
 func wakesAnybody(kind ObjectKind, op OpKind) bool {
 	switch op {
 	case OpCommentOpen, OpCommentReply, OpCommentResolve, OpCommentReopen:

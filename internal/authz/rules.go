@@ -724,10 +724,8 @@ const (
 	ActionArtifactDataRead  Action = "read_artifact_data"
 	ActionArtifactDataQuery Action = "query_artifact_data"
 	ActionArtifactDataWrite Action = "write_artifact_data"
-	// COMMENTS (ADR-0153). Reading an artifact's threads is reading it: a
-	// viewer's. Opening, replying, resolving and reopening are a
-	// commenter's. Editing and removing a remark admit a commenter at the
-	// table, and the domain's writer keeps an edit to the remark's author
+	// COMMENTS (ADR-0153): reading threads is a viewer's, every write a
+	// commenter's; the domain's writer keeps an edit to the remark's author
 	// and a removal to its author or an administrator moderating.
 	ActionArtifactCommentList    Action = "list_artifact_comments"
 	ActionArtifactComment        Action = "comment_on_artifact"

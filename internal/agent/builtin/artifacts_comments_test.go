@@ -16,13 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A THREAD'S WORDS REACH A MODEL FENCED (ADR-0040): every remark as its
-// author's, under `artifact_comment`, and the quote as the page's own words,
-// under `artifact_file` naming nobody; the label and the anchor, which name
-// what the page declares, carry no fence of their own and open none.
-//
-// Mutation: answer a remark's body without its fence, or fence the quote as
-// the commenter's, and this goes red.
+// A thread's words reach a model fenced (ADR-0040): a remark as its author's,
+// the quote as the page's naming nobody. Mutation: answer a remark unfenced,
+// or fence the quote as the commenter's, and this goes red.
 func TestAThreadsWordsReachAModelFenced(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{"founder": founderPrincipal(iam.Apps...)}, nil)
@@ -152,14 +148,9 @@ type fakeAssignees []string
 
 func (f fakeAssignees) Assignees(context.Context, artifacts.ID) ([]string, error) { return f, nil }
 
-// WHO A COMMENT WAKES AND TELLS IS DECIDED ONCE, AT WRITE (ADR-0113). A
-// person's remark naming nobody wakes the agents with a stake (the owner,
-// addressed, and a linked item's assignee), one naming somebody wakes only whom
-// it names; an agent's wakes nobody unless it asks; a person's resolve or
-// reopen wakes the owner; people are told, never woken; the author never hears.
-//
-// Mutation: wake the owner beside a person's mention, or wake an agent's
-// mention without `asks`, and its case goes red.
+// Who a comment wakes and tells is decided at write (ADR-0113): stakes for a
+// person naming nobody, only the named otherwise, no agent for an agent's
+// remark that asks nothing. Mutation: wake the owner beside a mention.
 func TestACommentWakesTheSeatsItConcernsAndTellsThePeople(t *testing.T) {
 	t.Parallel()
 	o := organization(t)

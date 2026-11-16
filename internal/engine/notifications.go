@@ -434,8 +434,8 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 	e.rebuildPartiesLocked(c, e.readStandingLocked(ctx))
 }
 
-// firstPartySources are the notification sources this engine hosts itself —
-// its tracker, its knowledge base, its chat, Gitlet and its artifacts — whose senders
+// firstPartySources are the notification sources this engine hosts itself:
+// its tracker, its knowledge base, its chat, Gitlet and its artifacts, whose senders
 // ARE seat handles, declared to every party registry the engine builds
 // ([partyRegistry]) as the namespaces whose ids are handles.
 //

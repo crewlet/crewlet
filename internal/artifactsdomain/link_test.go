@@ -179,12 +179,9 @@ func TestALinkTheRowsRefusedListsTheArtifactUnderNothing(t *testing.T) {
 	}
 }
 
-// AN ARTIFACT'S WORK ITEMS ARE EVERY ITEM ITS APPLIED HISTORY NAMES, once each
-// and sorted: the item it was made for and every item it was linked to, which
-// is whom a comment on it reads the assignees of.
-//
-// Mutation: drop DISTINCT and ENG-13 is answered twice; drop the outcome and a
-// refused link's item is answered.
+// An artifact's work items are every item its applied history names, once each
+// and sorted. Mutation: drop DISTINCT and ENG-13 is answered twice; drop the
+// outcome and a refused link's item is answered.
 func TestAnArtifactsWorkItemsAreTheItemsItsHistoryNames(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)

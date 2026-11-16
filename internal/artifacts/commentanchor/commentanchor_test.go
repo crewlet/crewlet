@@ -444,11 +444,9 @@ func (f files) Read(p string) ([]byte, error) {
 	return []byte(data), nil
 }
 
-// A VERSION'S INDEX IS READ BY WHAT ITS KIND'S COMMENTS POINT AT: an html
-// version's pages and scripts, and nothing at all for a kind whose comments
-// take the whole version, which reads no file.
-//
-// Mutation: read every file, or skip the scripts, and this goes red.
+// A version's index is read by what its kind's comments point at: an html
+// version's pages and scripts, and nothing for a whole-version kind.
+// Mutation: skip the scripts, and this goes red.
 func TestAVersionsIndexIsReadByWhatItsKindPointsAt(t *testing.T) {
 	t.Parallel()
 	site := files{"index.html": `<section data-crewlet-anchor="comparison"></section>`,

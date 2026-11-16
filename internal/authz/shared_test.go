@@ -850,15 +850,9 @@ func TestOnlyAnAgentsEditsAreSteerable(t *testing.T) {
 	}
 }
 
-// A COMMENT IS A COMMENTER'S, AND READING THREADS IS A VIEWER'S (ADR-0153).
-//
-// Opening, replying, resolving, reopening, editing and removing are admitted
-// from the commenter share up, with no app, since a commenter authors nothing;
-// reading the threads is a viewer's, as reading the artifact is. A viewer is
-// refused every write naming the commenter role, and an administrator with no
-// relation is admitted on the admin path, marked, which is what a moderated
-// removal is stamped from. Mutation: name the artifacts app on a comment row,
-// or raise one to contributor, and its case goes red.
+// A comment is a commenter's with no app, reading threads a viewer's, and an
+// administrator is admitted on the admin path, marked (ADR-0153). Mutation:
+// name the artifacts app on a comment row, or raise one to contributor.
 func TestACommentIsACommentersAndReadingThreadsAViewers(t *testing.T) {
 	t.Parallel()
 	writes := []authz.Action{authz.ActionArtifactComment, authz.ActionArtifactCommentResolve,

@@ -70,20 +70,16 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 	return deps
 }
 
-// ArtifactCommentRouter is who a comment on an artifact wakes and tells, as
-// this node decides it when the record is formed: the chart now, the seats a
-// remark names on it, and the assignees of the artifact's work items read
-// through the router. EXPORTED for the artifacts API, which forms the same
-// records from a person's gestures.
+// ArtifactCommentRouter decides who a comment on an artifact wakes and tells:
+// the chart now, the seats a remark names and the linked items' assignees.
+// Exported for the artifacts API, which forms the same records.
 func ArtifactCommentRouter(e *Engine) builtin.ArtifactCommentRouter {
 	return builtin.ArtifactCommentRouter{Org: e.currentOrg, Mentions: LiveMentions(e),
 		Assignees: artifactAssignees{engine: e}}
 }
 
 // artifactAssignees reads the assignee of every work item an artifact was made
-// for or linked to, through the router: the items from the artifacts log, each
-// assignee from Worklet's. A company that keeps its work items elsewhere, and a
-// node not yet handed one, has no Worklet item to read, so nobody is added.
+// for or linked to, through the router; a company without Worklet adds nobody.
 type artifactAssignees struct{ engine *Engine }
 
 func (a artifactAssignees) Assignees(ctx context.Context, id artifacts.ID) ([]string, error) {

@@ -68,10 +68,8 @@ import (
 // A person who asked in a chat thread for a review sheet is waiting in that
 // thread: the seat publishes, then posts the `url` every answer carries with
 // its chat tools, and the delivery check sends the turn back if it only
-// published. So no publishing tool declares a delivery surface. A comment's
-// wake arrives as a changefeed-derived wake on the artifacts log (ADR-0012),
-// and the two tools that answer one on the artifact itself, a comment and a
-// resolve ([ArtifactCommentWrites]), deliver to the artifacts surface.
+// published. So no publishing tool declares a delivery surface; a comment
+// and a resolve ([ArtifactCommentWrites]) answer a comment's wake on the artifact.
 
 // The artifacts tools' names: each is its authority row's action.
 const (

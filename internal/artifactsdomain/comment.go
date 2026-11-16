@@ -100,10 +100,9 @@ type CommentNotify struct {
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 }
 
-// CommentAbout is what a comment's wake says of where it was made, read when
-// the record was formed, as a code change's routing carries its title: the
-// artifact's title and kind, its head then, and the thread's version, anchor
-// label and quote.
+// CommentAbout is what a comment's wake says of where it was made, read when the
+// record was formed: the artifact's title, kind and head, and the thread's
+// version, label and quote.
 type CommentAbout struct {
 	Title string         `json:"title,omitempty"`
 	Kind  artifacts.Kind `json:"kind,omitempty"`

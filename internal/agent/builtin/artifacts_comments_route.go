@@ -14,23 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// WHO A COMMENT ON AN ARTIFACT WAKES AND TELLS (ADR-0153, ADR-0012). The
-// routing snapshot a comment record carries ([artifactsdomain.CommentNotify])
-// is decided here, ONCE, for every surface that writes one: the tools below
-// and the artifacts API's routes. It is decided at write time from the
-// artifact's owner, the assignees of the work items it was made for or linked
-// to, the seats the remark @-mentions and the seats already in the thread,
-// and the record carries it, so the wake derived later reads the record and no
-// state that moved since.
-//
-// ONE RULE FOR A STAKE (ADR-0113). A person's remark naming nobody wakes the
-// agents with a standing stake (the owner, a linked item's assignee, an agent
-// already in the thread); one naming somebody wakes the agents it names and no
-// stake. An agent's remark wakes another agent only when it states that it
-// asks (`asks: true`), and then by the same two rules; with `asks: false` it
-// wakes no agent. People are never woken: they are told, the person owner of
-// a new thread, the people in a thread of every reply, resolve and reopen, and
-// the people a remark names.
+// Who a comment on an artifact wakes and tells, decided once at write for the
+// tools and the API alike (ADR-0113): a person's remark naming nobody wakes the
+// agents with a stake, naming somebody wakes whom it names; people are told.
 
 // ArtifactAssignees reads, when a comment is written, the assignee of every
 // work item an artifact was made for or linked to: a removed item, one the

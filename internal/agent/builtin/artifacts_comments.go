@@ -27,22 +27,9 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE COMMENT TOOLS (ADR-0153): an artifact's threads read, a thread opened or
-// answered, resolved citing the version that addressed it or reopened, and one
-// remark edited or removed. Each is decided on the artifact's stored row, for
-// the caller and for whoever the turn is acting for, as every artifact tool is
-// ([ArtifactDeps.decide]); the domain's writer then keeps an edit to the
-// remark's author and a removal to its author or an administrator.
-//
-// A REMARK IS ITS WRITER'S WORDS AND A QUOTE IS THE PAGE'S. Every read answers
-// a remark fenced as `artifact_comment` under its author, and a quote and an
-// element's source fenced as `artifact_file`, page content nobody named
-// (ADR-0040). A crop is a picture, and a tool answers text alone, so a reader
-// is told one exists and nothing of it.
-//
-// AN ADDRESSED WAKE IS ANSWERED ON THE ARTIFACT: a comment and a resolve
-// deliver to the artifacts surface ([artifactsdomain.Source]), so a turn woken
-// by a person's comment discharges its obligation by answering it there.
+// The comment tools (ADR-0153), each decided on the artifact's stored row for
+// the caller and the turn's requester. A remark is fenced as its author's words,
+// a quote and an element's source as the page's (ADR-0040).
 
 // The comment tools' names: each is its authority row's action.
 const (

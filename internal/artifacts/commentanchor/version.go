@@ -13,10 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 )
 
-// Read is the index of one stored version of an artifact of kind, read through
-// src by what the kind's comments may point at: its pages and scripts, its
-// deck or its canvas. Nil, with no read, for a kind whose comments take the
-// whole version alone.
+// Read is the index of a stored version of an artifact of kind, read through src
+// by what its comments may point at: pages and scripts, a deck or a canvas. Nil,
+// with no read, for a kind whose comments take the whole version alone.
 func Read(kind artifacts.Kind, src artifacts.FileSource, m artifacts.Manifest) (*Index, error) {
 	accepted, ok := accepts[kind]
 	if !ok {

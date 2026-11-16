@@ -20,13 +20,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// COMMENT THREADS ON AN ARTIFACT (ADR-0153): the six writes a person makes on
-// the artifact's threads, each keyed and decided on the artifact, and the read
-// the `artifact_comments` question answers, every thread placed on the version
-// asked through that version's anchor index, which is cached per version on
-// this node as a deck's read is. Who each write wakes and tells is decided
-// here, once, by the router the agent tools decide it by
-// ([builtin.ArtifactCommentRouter]).
+// Comment threads on an artifact (ADR-0153): six keyed writes routed by the
+// agent tools' router, and the read placing each thread on a version through
+// that version's anchor index, cached per version as a deck's read is.
 
 // Comments are the artifacts' comment threads: the estate router's.
 type Comments interface {
@@ -139,9 +135,7 @@ type CommentRemark struct {
 }
 
 // Comments answers every thread on artifact id placed on version (zero for the
-// head), as p reads it: decided as a read of the artifact's content, so an
-// artifact in the trash serves none, and the admin path's override recorded
-// first.
+// head), decided as a read of its content: a trashed artifact serves none.
 func (s *Service) Comments(ctx context.Context, p iam.Principal, id artifacts.ID, version int) (
 	CommentsAnswer, error) {
 

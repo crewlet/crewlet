@@ -83,14 +83,9 @@ func (w *writes) hold(id artifacts.ID, anchor commentanchor.Anchor, author strin
 	return th
 }
 
-// A COMMENT IS A COMMENTER'S, KEYED, AND ITS ROUTING IS STAMPED AT WRITE: a
-// share at commenter or above opens a thread and the record carries whom it
-// tells (the person who owns the page); a viewer is refused naming the role;
-// an artifact in the trash takes no comment; a write sent without its key is
-// refused before anything is written.
-//
-// Mutation: mount the open on the read verb, or drop the routing from the
-// input, and this goes red.
+// A comment is a commenter's, keyed, refused on a trashed artifact, and its
+// routing is stamped at write. Mutation: mount the open on the read verb, or
+// drop the routing from the input, and this goes red.
 func TestACommentIsACommentersKeyedAndRoutedAtWrite(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
@@ -158,10 +153,9 @@ func TestCommentsOnOneArtifactAreHeldToABudget(t *testing.T) {
 	}
 }
 
-// THE THREADS ARE PLACED ON THE VERSION ASKED. A deck's element is found on
-// its slide and labelled by its number, a page's section the page does not
-// declare is outdated and still listed, the counts say so, a crop is a data
-// URL, and whether the reader may comment is answered with their role.
+// The threads are placed on the version asked: a deck's element labelled by its
+// slide's number, an undeclared section outdated and counted, a crop a data URL,
+// and whether the reader may comment answered with their role.
 func TestTheThreadsArePlacedOnTheVersionAsked(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
