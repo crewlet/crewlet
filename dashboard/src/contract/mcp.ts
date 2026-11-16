@@ -330,6 +330,9 @@ export interface McpAlarmEntry {
  */
 export interface McpAlarm {
   kind: McpAlarmKind;
+  /** The kind's words for a company owner, as on every alarm. */
+  title: string;
+  person: string;
   /** The longest-standing server's measurement. */
   detail: string;
   /** What to do about the kind, in the engine's words. */

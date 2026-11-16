@@ -518,6 +518,8 @@ test("an answer served at stale renders no banner at all", () => {
  * rendering (`~/test/retentionAlarms.ts`).
  */
 const alarm = (over: Partial<RetentionAlarm> & Pick<RetentionAlarm, "kind">): RetentionAlarm => ({
+  title: "A data log is held",
+  person: "",
   detail: "",
   remedy: "The term holding each log names what to fix.",
   ...over,
@@ -541,7 +543,7 @@ test("an alarm is drawn once, with the logs it holds as one line and each log's 
   const domains = backup.domains ?? [];
   const { container } = render(<AlarmItem alarm={backup} now={NOW} />);
   const text = container.textContent ?? "";
-  expect(screen.getByText("Backup age")).toBeTruthy();
+  expect(screen.getByText("No recent backup")).toBeTruthy();
   // THE HEADLINE IS THE MOST PRESSING LOG'S OWN MEASUREMENT, as a sentence.
   expect(text).toContain(
     "No verified backup has been recorded, and the policy asks for one every 24h; " +
@@ -677,7 +679,7 @@ test("an alarm is a row of the alarms card, with no button the page bar already 
   expect(container.querySelector(".crewlet-callout")).toBeNull();
   const rows = container.querySelectorAll(".alarm-rows > .alarm-row");
   expect(rows).toHaveLength(2);
-  expect(screen.getByText("Backup age").closest(".alarm-row")).toBe(rows[0]);
+  expect(screen.getByText("No recent backup").closest(".alarm-row")).toBe(rows[0]);
   expect(screen.queryByRole("button", { name: "Take a backup" })).toBeNull();
 });
 
@@ -688,8 +690,14 @@ test("a model alarm is named with a link to Models, and not drawn as a backup al
     <AlarmList
       alarms={[
         engineAlarm("young"),
-        { kind: "llm_limit", detail: "limit sits out its session limit", remedy: "" },
-        { kind: "code_commit_busy", detail: "busy", remedy: "" },
+        {
+          kind: "llm_limit",
+          title: "",
+          person: "",
+          detail: "limit sits out its session limit",
+          remedy: "",
+        },
+        { kind: "code_commit_busy", title: "", person: "", detail: "busy", remedy: "" },
       ]}
       now={NOW}
     />,

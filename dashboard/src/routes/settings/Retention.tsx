@@ -81,7 +81,7 @@ import { href, useRoute } from "~/app/router.tsx";
 import {
   ALARMS_AT,
   alarmHome,
-  alarmKindTitle,
+  alarmTitle,
   alarmLogLines,
   drawnOnBackups,
   type AlarmLogLine,
@@ -210,7 +210,7 @@ export function AlarmList({ alarms, now }: { alarms: RetentionAlarm[]; now: numb
                 return (
                   <Fragment key={alarm.kind}>
                     {i === 0 ? null : i === elsewhere.length - 1 ? " and " : ", "}
-                    {alarmKindTitle(alarm.kind)} on{" "}
+                    {alarmTitle(alarm)} on{" "}
                     <a className="t-link prose-link" href={href(home.path)}>
                       {home.label}
                     </a>
@@ -255,7 +255,8 @@ export function AlarmItem({ alarm, now }: { alarm: RetentionAlarm; now: number }
         <TriangleAlertGlyph size="sm" />
       </span>
       <div className="alarm-body">
-        <p className="alarm-title">{alarmKindTitle(alarm.kind)}</p>
+        <p className="alarm-title">{alarmTitle(alarm)}</p>
+        <p>{alarm.person}</p>
         <p>
           {folded && (
             <>

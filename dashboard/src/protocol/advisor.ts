@@ -131,6 +131,9 @@ export interface AdvisorNotice {
   cause?: string;
   /** The alarm kind that raised a finding's notice, for a reader without the finding. */
   alarm?: string;
+  /** The raising alarm's words for a company owner; absent where no alarm raised it. */
+  title?: string;
+  person?: string;
 }
 
 /** Every finding at one revision, the most costly first. */

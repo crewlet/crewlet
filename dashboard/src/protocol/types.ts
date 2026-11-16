@@ -2245,6 +2245,9 @@ export interface FleetNode {
 /** One alarm firing on a node, as the fleet's node row carries it. */
 export interface FleetNodeAlarm {
   kind: string;
+  /** The kind's words for a company owner; absent for a kind this build does not raise. */
+  title?: string;
+  person?: string;
   /** When it was raised, empty where the node did not say. */
   since: string;
 }
@@ -2622,6 +2625,10 @@ export interface RetentionReplica {
  */
 export interface RetentionAlarm {
   kind: string;
+  /** What is wrong, for a company owner: the same for every alarm of the kind. */
+  title: string;
+  /** What it affects and what to do, in a sentence or two; `detail` and `remedy` are the operator's. */
+  person: string;
   /** The measurement, or the most pressing log's where it stands on several. */
   detail: string;
   remedy: string;

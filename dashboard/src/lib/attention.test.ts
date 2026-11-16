@@ -50,12 +50,18 @@ const SETUP_BLOCKER = {
 const SETUP_NOTICE = { class: SETUP_BLOCKER.class, subject: SETUP_BLOCKER.subject };
 
 /** An alarm's notice, as the engine sends one that has stood past its threshold. */
+/** The engine's words for the kinds these cases raise, as a notice carries them. */
+const ALARM_WORDS: Record<string, { title: string; person: string }> = {
+  backup_age: { title: "No recent backup", person: "Take a backup, then schedule them." },
+};
+
 function alarmNotice(kind: string, nodes = ["node-a"]): AdvisorNotice {
   return {
     class: "alarm",
     subject: { kind: "alarm", name: kind },
     since: "2026-01-01T10:00:00Z",
     nodes,
+    ...ALARM_WORDS[kind],
   };
 }
 
@@ -121,7 +127,14 @@ function mcpAlarm(
     fix: { kind: "restart" as const, server: key, seat: "" },
     ...over,
   };
-  return { kind, detail: entry.detail, remedy: "What to do.", entries: [entry] };
+  return {
+    kind,
+    title: "A tool server is not running",
+    person: "Agents cannot use it. Restart it.",
+    detail: entry.detail,
+    remedy: "What to do.",
+    entries: [entry],
+  };
 }
 
 /** One capped window of a live meter, on 1 January's day. */
@@ -904,7 +917,7 @@ describe("an MCP server's alarms", () => {
 
   test("a partial shared server names the nodes, not an agent", () => {
     const [row] = attentionQueue(input({ mcpAlarms: [mcpAlarm("mcp_server_partial", "docs")] }));
-    expect(row?.title).toBe("docs is not running on every node");
+    expect(row?.title).toBe("docs is not running everywhere");
     expect(row?.who).toBeUndefined();
   });
 });
@@ -937,7 +950,8 @@ test("a notice an alarm raised is drawn as that alarm when its finding is missin
     }),
   );
   const row = queue.find((a) => a.id === "alarm-backup_age");
-  expect(row?.title).toBe("Backup age has not cleared");
+  // A NOTICE WITHOUT THE ENGINE'S WORDS (a kind this build does not raise) reads its kind.
+  expect(row?.title).toBe("Backup age");
   expect(row?.technical).toBe("Standing on node-a.");
   expect(row?.at).toBe("2026-01-01T10:00:00Z");
   expect(conditionsToDecide(queue)).toContainEqual(row);
@@ -968,7 +982,8 @@ test("an alarm that has stood is a condition a person decides", () => {
     }),
   );
   const backup = queue.find((a) => a.id === "alarm-backup_age");
-  expect(backup?.title).toBe("Backup age has not cleared");
+  expect(backup?.title).toBe("No recent backup");
+  expect(backup?.detail).toBe("Take a backup, then schedule them.");
   // WHERE IT IS FIXED, NOT WHERE IT IS LISTED: the backup it asks for, taken
   // from Backups & retention's own dialog.
   expect(backup?.path).toEqual(["settings", "backups"]);

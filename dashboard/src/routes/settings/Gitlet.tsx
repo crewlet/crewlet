@@ -37,7 +37,7 @@ import { useState } from "react";
 import { Button, Card, Disclosure, EmptyState, InlineCode, SettingsTable } from "@crewlethq/ui";
 import { BellGlyph, CodeGlyph, SettingsGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { alarmKindTitle } from "~/lib/alarms.ts";
+import { alarmTitle } from "~/lib/alarms.ts";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CODE_ALARM_KINDS } from "~/contract/code.ts";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
@@ -359,7 +359,7 @@ function CodeAlarms({ fleet }: { fleet: FleetAnswer }) {
           <ul className="col gap-1" aria-label="Code alarms firing">
             {firing.map((a) => (
               <li key={`${a.node}\u0000${a.kind}`}>
-                {alarmKindTitle(a.kind)} on{" "}
+                {alarmTitle(a)} on{" "}
                 <a className="t-link prose-link mono" href={href(["settings", "nodes", a.node])}>
                   {a.node}
                 </a>

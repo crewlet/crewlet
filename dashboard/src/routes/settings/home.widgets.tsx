@@ -26,7 +26,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { DIRECTORY_READ, useHumanSeats } from "~/components/people.tsx";
-import { alarmKindTitle, alarmsLink } from "~/lib/alarms.ts";
+import { alarmTitle, alarmsLink } from "~/lib/alarms.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { configStanding, offRevision } from "~/lib/configStanding.ts";
@@ -118,7 +118,7 @@ function Backups() {
                 href={href(link.path, link.query)}
                 leading={<Tag variant="warning">Alarm</Tag>}
               >
-                {alarmKindTitle(a.kind)}
+                {alarmTitle(a)}
               </ListItem>
             ))}
           </List>

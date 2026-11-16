@@ -18,7 +18,8 @@ import { href } from "~/app/router.tsx";
 import { listed } from "~/lib/format.ts";
 import type { McpData } from "../data.ts";
 import { ServerMark, type OnFlow } from "../parts.tsx";
-import { ALARM, failureWords, FIX } from "../words.ts";
+import { failureWords, FIX } from "../words.ts";
+import { ALARM } from "~/lib/mcpAlarmWords.ts";
 import { AgoTime } from "~/components/AgoTime.tsx";
 
 /**
