@@ -909,6 +909,11 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 	if refused, err := fenced(ctx, tx, s.ManagedBy, s.ConfigEpoch); err != nil || refused {
 		return 0, err
 	}
+	// WHAT IT PUTS IN THE CHANGE TALLIES before, which its owner and visibility move.
+	before, err := tallyStandingIn(ctx, tx, p.RepoID)
+	if err != nil {
+		return 0, err
+	}
 	// THE IMPORT A PULL MIRROR STARTS, read off the mirrors the row holds
 	// BEFORE the record: a source the repository does not follow yet is
 	// imported first (M6-D16, [repoRemotes.startsImport]).
@@ -944,7 +949,11 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 	if err != nil {
 		return 0, err
 	}
-	return int(n) + replaced + owners, nil
+	moved, err := retally(ctx, tx, p.RepoID, before)
+	if err != nil {
+		return 0, err
+	}
+	return int(n) + replaced + owners + moved, nil
 }
 
 // replacePathOwners deletes a repository's path owners and writes the new set:
@@ -996,13 +1005,22 @@ func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext, 
 	if refused, err := fenced(ctx, tx, row.managedBy, p.ConfigEpoch); err != nil || refused {
 		return 0, err
 	}
+	// ITS CHANGES LEAVE THE TALLIES with it: a deleted repository is in no use.
+	before, err := tallyStandingIn(ctx, tx, p.RepoID)
+	if err != nil {
+		return 0, err
+	}
 	res, err := tx.ExecContext(ctx, deleteRepoSQL,
 		at.at(), p.ConfigEpoch, at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("gitlet: delete %s at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
-	return int(n), nil
+	moved, err := retally(ctx, tx, p.RepoID, before)
+	if err != nil {
+		return 0, err
+	}
+	return int(n) + moved, nil
 }
 
 // applyRestore brings a deleted repository back with the settings the restore
@@ -1021,6 +1039,11 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, nil
 	}
 	if refused, err := fenced(ctx, tx, s.ManagedBy, p.ConfigEpoch); err != nil || refused {
+		return 0, err
+	}
+	// ITS CHANGES RETURN TO THE TALLIES with it, under the owner it returns with.
+	before, err := tallyStandingIn(ctx, tx, p.RepoID)
+	if err != nil {
 		return 0, err
 	}
 	from, to, _, err := remoteColumns(s, nil)
@@ -1047,7 +1070,11 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err != nil {
 		return 0, err
 	}
-	return int(n) + replaced + owners, nil
+	moved, err := retally(ctx, tx, p.RepoID, before)
+	if err != nil {
+		return 0, err
+	}
+	return int(n) + replaced + owners + moved, nil
 }
 
 // managerRefuses reports a settings or restore record whose manager is not the

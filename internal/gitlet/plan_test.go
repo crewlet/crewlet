@@ -173,6 +173,8 @@ func TestTheCommitMarksStatementsReadNoUnnestedAggregate(t *testing.T) {
 			args: []any{"repo-1-change-000001", 1, MaxGateApprovals + 1}},
 		"when a merged revision was pushed": {sql: revisionPushedSQL, args: []any{"repo-1-change-000001", 1}},
 		"a change's landing":                {sql: changeLandingSQL, args: []any{"repo-1-change-000001"}},
+		"a card's newest queue entry": {sql: cardEjectionsSQL,
+			args: []any{`[["repo-1","repo-1-change-000001"]]`}},
 		"changes a commit merged": {sql: commitMergedSQL,
 			args: []any{"repo-1", oid("head-3-3"), MaxCommitChanges + 1}},
 		"revisions a commit heads": {sql: commitHeadsSQL,
@@ -361,6 +363,7 @@ const (
 	authorKey     = "sqlite_autoindex_code_change_authors_1"
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
 	bodyKey       = "sqlite_autoindex_code_change_bodies_1"
+	talliesKey    = "sqlite_autoindex_code_change_tallies_1"
 	// untestedKey and dequeuedKey are replicated 0140's indexes as a
 	// given-up attempt's tests seek them: its commit among the ones its
 	// target's trains test or landed, and its candidate among the dequeued.
@@ -1119,6 +1122,15 @@ func registeredStatements() map[string]statement {
 		"next change":        {nextChangeSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"opened":             {openedSQL, []any{3000, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"touched":            {touchedSQL, []any{3000, "repo-1"}, []string{repoKey + " (id=?)"}},
+		// A REPOSITORY'S CHANGES COUNTED BY STATE (apply_counts.go): its row by its key, a tally
+		// row by its key, the re-derivation's page of repositories and one repository's changes
+		// counted over one range of its index.
+		"count changes":  {changeCountsSQL, []any{1, -1, 0, 0, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"tally standing": {tallyStandingSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"untally": {untallySQL, []any{"company", "unit", "ENG"},
+			[]string{talliesKey + " (visibility=? AND owner_kind=? AND owner=?)"}},
+		"rederive repos":   {rederiveReposSQL, []any{"", 1000}, []string{repoKey + " (id>?)"}},
+		"changes by state": {changesByStateSQL, []any{"repo-1"}, []string{changesRepoStateKey + " (repo_id=?)"}},
 		// A CHANGE A PUSH OPENS: the repository's next number moved past
 		// the opens of a push record, by its key; and the numbers of the
 		// changes a batch's answers name, or a queue page's entries,
@@ -1180,6 +1192,9 @@ func registeredStatements() map[string]statement {
 		"conversations of changes": {conversationsOfSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
 		"listed repos": {listedReposSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
+		// THE COUNTS' READS (counts.go): every tally row, and the facts of a page of repositories.
+		"change tallies": {changeTalliesSQL, nil, []string{"SCAN code_change_tallies"}},
+		"repo facts":     {repoFactsOfSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		// THE READS OF A CHANGE'S CONVERSATION (conversationread.go): a
 		// reviewer's standing asks newest first, a first page and a page
 		// after a cursor, and the changes they name driven from their list;
@@ -1240,6 +1255,17 @@ func registeredStatements() map[string]statement {
 			[]string{revisionKey + " (change_id=? AND n=?)"}},
 		"a change's landing": {changeLandingSQL, []any{"repo-1-change-000001"},
 			[]string{changeLandingsKey + " (change_id=?)"}},
+		// A LISTING'S CARDS (changecards.go): its conversations' counters, standing verdicts and
+		// waiting asks, and each live change's newest queue entry, driven from the page's ids.
+		"card counts": {cardCountsSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
+		"card verdicts": {cardVerdictsSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", participantKey + " (change_id=?)"}},
+		"card asks": {cardAsksSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", reviewerKey + " (change_id=?)"}},
+		"card ejections": {cardEjectionsSQL, []any{`[["repo-1","repo-1-change-000001"]]`},
+			[]string{"SCAN json_each AS j", queueKey + " (repo_id=? AND entry_id=?)",
+				"code_queue_change_idx (change_id=?)"}},
 		"reviews given": {reviewsGivenSQL, []any{"seat-0", 50},
 			[]string{reviewsGivenKey + " (reviewer=?)"}},
 		"reviews given after": {reviewsGivenAfterSQL, []any{"seat-0", 3000, 50},

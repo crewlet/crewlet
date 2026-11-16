@@ -515,14 +515,23 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	if err != nil {
 		return err
 	}
-	pg := page{maxRows: limit, maxB: r.pageBytes}
+	var listed []changeRow
 	for _, row := range kept {
-		judged := readiness[row.id]
-		if walk.person && (judged == nil || !judged.WaitsPerson()) {
-			continue
+		if judged := readiness[row.id]; !walk.person || (judged != nil && judged.WaitsPerson()) {
+			listed = append(listed, row)
 		}
+	}
+	// THE CARDS ([ReadQuery.Cards]) are read for the rows the page lists, and weigh in its cut.
+	var cards map[string]*ChangeCard
+	if q.Cards {
+		if cards, err = r.changeCardsIn(ctx, tx, listed); err != nil {
+			return err
+		}
+	}
+	pg := page{maxRows: limit, maxB: r.pageBytes}
+	for _, row := range listed {
 		s := repos[row.repoID].summary(row)
-		s.Readiness = judged
+		s.Readiness, s.Card = readiness[row.id], cards[row.id]
 		out.Changes = append(out.Changes, s)
 		if pg.add(s.encodedBytes()) {
 			out.Next = walk.cursor(row)
@@ -566,9 +575,10 @@ func readinessIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[st
 }
 
 // listedReposIn is every repository a page of changes across repositories
-// names whose changes the listing serves, by id: active or archived, and read
-// by both asker and the seat it reads for ([JudgeRead]) — each read in ONE
-// statement over the page's repositories, and judged once a page.
+// names whose changes the listing serves, by id: in use (importing, active or
+// archived), and read by both asker and the seat it reads for ([JudgeRead]),
+// each read in ONE statement over the page's repositories, and judged once a
+// page.
 func listedReposIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asker Principal, ceilingSeat string,
 	chart Roster) (map[string]listedRepo, error) {
 
@@ -581,9 +591,10 @@ func listedReposIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asker P
 
 // listedReposAmong is every repository of ids — each named once however often
 // it is named, in any order — whose rows a listing across repositories serves,
-// by id: active or archived, and read by both asker and the seat it reads for
-// ([JudgeRead]) — each read in ONE statement over the page's repositories, and
-// judged once a page. what names the page in a failure's sentence.
+// by id: in use (importing, active or archived), and read by both asker and
+// the seat it reads for ([JudgeRead]), each read in ONE statement over the
+// page's repositories, and judged once a page. what names the page in a
+// failure's sentence.
 func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Principal, ceilingSeat string,
 	chart Roster, what string) (map[string]listedRepo, error) {
 

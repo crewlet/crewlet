@@ -1898,6 +1898,17 @@ answer that holds every record the code log had committed when it was asked.
   changes is judged by the chart whoever asks — a person's too — and a data
   node that holds none yet refuses it as a node that is not serving, which
   the next data node answers.
+- **A listing's rows carry their cards where asked** (`cards=true`): each
+  change's comments (comments alone, never its reviews), its reviews, how many
+  reviewers' standing verdict asks for changes, up to eight reviewers' faces
+  (each reviewer's standing verdict and the revision it judged, and whether an
+  ask of them waits and why; asks for changes first, then waiting asks, then
+  approvals; a reviewer who has only commented draws none) with how many
+  more, where its head's checks stand for its target (each check's latest
+  attempt, counted by state, the required ones passed of all required, and the
+  failing ones named, required or not), and, for a live change its merge queue
+  put out within the last day, why and when. A card is read only when asked,
+  so a seat's listing and a change's readiness do not grow.
 
 **A listing reads the one index its filters lead with** — the changes whose
 stored readiness waits on a person; a reviewer's
@@ -1921,8 +1932,9 @@ repository, as the repository's own reads are ([Who may read and
 push](#who-may-read-and-push)):
 
 - A listing that names no repository lists the changes of every repository
-  the reader may read — and of an active or archived one only: a deleted
-  repository's changes are no work anybody can do until it is restored.
+  the reader may read, and of one in use only (importing, active or
+  archived): a deleted repository's changes are no work anybody can do until
+  it is restored.
 - A listing that names a repository, and a read of one change, are refused
   `not_permitted` where the reader may not read the repository, naming the
   visibility and who does read it — a number in it too, which is never
@@ -1956,6 +1968,30 @@ the revision asked about ([Where lines are in another
 revision](#where-lines-are-in-another-revision)), its reviews and its
 comments — each page cut whole-row at one tool answer and resumed after the
 last row it kept.
+
+### Counting changes
+
+Gitlet answers how many changes a scope holds in each state: draft, open,
+closed and merged, and `live`, the draft and the open together. The scope is
+the company's, every repository in use the reader may read, or one
+repository named, whatever its state, as a listing naming it lists it. A
+count is never narrowed by a listing's other filters: it is the section's
+total, not a page's.
+
+The counts are kept, never walked. Each repository's row counts its changes
+by state, moved by every record that opens a change, moves its state or
+purges it. The company's are tallied by owner and visibility, which are what
+decides who may read a repository, so a count sums the tallies the reader's
+grant reads and costs the same however many changes the company holds. A
+build that changes how they are counted recounts them from the changes at
+its first boot, on every data node.
+
+A deleted repository's changes leave the company's count, and a restore
+brings them back under the owner it returns with. A count is exact at the
+position it is read at, so a `session` read after a write includes it. A
+listing of repositories and one repository's detail answer each one's counts
+where `repo_facts=true` asks
+([`GET /gitlet/counts`](../reference/api-endpoints.md#the-code-reads)).
 
 ---
 

@@ -177,6 +177,10 @@
 // reads by object id are asked at — is decided once, over those rows
 // (revisionread.go), for every surface that shows it.
 //
+// ITS COUNTS (apply_counts.go, counts.go): code_repos counts each repository's changes by
+// state and code_change_tallies those in use by owner and visibility, kept by every apply and
+// re-derived when their rules change; a counts read sums the tallies the asker's grant reads.
+//
 // # A change's conversation is rows on its own subject
 //
 // What is said ABOUT a change — who is asked to review it, its comments and
@@ -298,6 +302,10 @@
 // so moves only by a merge whose preconditions one snapshot proved, or by a
 // person's own push under direct_push persons, which is that person's recorded
 // override; never by a seat's push, which every protection refuses.
+//
+// A LISTING'S CARDS (changecards.go): asked with [ReadQuery.Cards], each listed change's
+// conversation counts, its reviewers' faces, its head's [CheckRollup] and a recent
+// ejection, a statement a part over the page's ids and one rollup a head.
 //
 // # A change wakes the seats its records concern
 //

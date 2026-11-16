@@ -742,7 +742,17 @@ func (s RepoSummary) encodedBytes() int {
 	if !s.LastPushAt.IsZero() {
 		n += field("last_push_at", timeBytes(s.LastPushAt), false)
 	}
+	if s.ChangeCounts != nil {
+		n += field("change_counts", s.ChangeCounts.encodedBytes(), false)
+	}
 	return n
+}
+
+// encodedBytes is the length of the counts' JSON encoding, every field written.
+func (c ChangeCounts) encodedBytes() int {
+	return 2 + field("live", intBytes(c.Live), true) + field("draft", intBytes(c.Draft), false) +
+		field("open", intBytes(c.Open), false) + field("closed", intBytes(c.Closed), false) +
+		field("merged", intBytes(c.Merged), false)
 }
 
 // members is the length of the change's own members, without the braces that
@@ -826,8 +836,65 @@ func (s ChangeSummary) encodedBytes() int {
 	if s.Readiness != nil {
 		n += field("readiness", s.Readiness.encodedBytes(), false)
 	}
-	return n + field("open_findings", intBytes(s.OpenFindings), false) +
+	n += field("open_findings", intBytes(s.OpenFindings), false) +
 		field("updated_at", timeBytes(s.UpdatedAt), false)
+	if s.Card != nil {
+		n += field("card", s.Card.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the card's JSON encoding.
+func (c ChangeCard) encodedBytes() int {
+	n := 2 + field("comments", intBytes(c.Comments), true) + field("reviews", intBytes(c.Reviews), false) +
+		field("changes_requested", intBytes(c.ChangesRequested), false)
+	if len(c.Reviewers) > 0 {
+		list := 2 + len(c.Reviewers) - 1
+		for _, f := range c.Reviewers {
+			list += f.encodedBytes()
+		}
+		n += field("reviewers", list, false)
+	}
+	if c.ReviewersOmitted != 0 {
+		n += field("reviewers_omitted", intBytes(int64(c.ReviewersOmitted)), false)
+	}
+	if c.Checks != nil {
+		n += field("checks", c.Checks.encodedBytes(), false)
+	}
+	if c.Ejected != nil {
+		n += field("ejected", c.Ejected.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the face's JSON encoding.
+func (f ReviewerFace) encodedBytes() int {
+	n := 2 + field("handle", stringBytes(f.Handle), true) + field("kind", stringBytes(string(f.Kind)), false)
+	if f.Verdict != "" {
+		n += field("verdict", stringBytes(string(f.Verdict)), false)
+	}
+	if f.VerdictRevision != 0 {
+		n += field("verdict_revision", intBytes(f.VerdictRevision), false)
+	}
+	if f.Asked {
+		n += field("asked", trueBytes, false)
+	}
+	if f.Reason != "" {
+		n += field("reason", stringBytes(string(f.Reason)), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the ejection's JSON encoding.
+func (e CardEjection) encodedBytes() int {
+	n := 2 + field("reason", stringBytes(string(e.Reason)), true) + field("at", timeBytes(e.At), false)
+	if len(e.Checks) > 0 {
+		n += field("checks", stringsBytes(e.Checks), false)
+	}
+	if e.ChecksMore != 0 {
+		n += field("checks_more", intBytes(int64(e.ChecksMore)), false)
+	}
+	return n
 }
 
 // encodedBytes is the length of the readiness's JSON encoding: its list null
