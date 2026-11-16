@@ -34,7 +34,11 @@ import (
 //     fires queued behind it. Past the
 //     deadline a completion's resume gets the attempt it can have at once,
 //     and anything that would make it wait or retry ends it instead
-//     ([Coordinator.completeAtDeadline], [Coordinator.endAtDeadline]).
+//     ([Coordinator.completeAtDeadline], [Coordinator.endAtDeadline]). A
+//     resume its seat's budget held on the run's row, which the waiter passes
+//     over and the claim refuses until the hold lifts, is held no later than
+//     the deadline ([Coordinator.unclaimHeld]): held until the budget's window
+//     turned, a day, a week or a month on, nothing reached it to end it.
 //   - THE RESUME GIVE-UP ([ResumeGiveUp], [MinResumeFailures]), for every
 //     turn, capped or not. A resume that FAILS for a reason of the run's own
 //     (not one that waits, not one the node or its infrastructure failed, and

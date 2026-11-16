@@ -5006,11 +5006,27 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, detail string
 // sooner ([Coordinator.Readmit]), and a signal never wired to say so costs the
 // turn that much and no more.
 //
+// A TURN WITH A DEADLINE IS HELD NO LATER THAN IT ([PendingRun.Deadline]): past
+// the deadline nothing waits, and the resume that meets anything then ends
+// the run ([Coordinator.endAtDeadline]). But nothing reaches a held row to end
+// it: the waiter passes it over, the claim refuses it, so an ending at the
+// deadline's claim is refused too ([Coordinator.completeAtDeadline]), and the
+// backstop that ends a completion held past its deadline is a hold this node
+// keeps in memory ([Coordinator.recheckHeld]), never one on the row. Held until
+// the budget's window turned, a day, an ISO week or a calendar month on, a
+// capped turn whose review met the budget minutes before its cap held its seat
+// that long. Held until the deadline, the hold lapses there, and the keep made
+// for it ([Coordinator.keepHeldOnRow]) or the waiter's next announcement
+// re-fires the job then, its resume past the deadline ending the run.
+//
 // It returns the hold it asked the release to write, its instant set, which
 // the completion is kept here for ([Coordinator.keepHeldOnRow]).
 func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal Refusal) (Refusal, error) {
 	if refusal.Until.IsZero() {
 		refusal.Until = c.now().Add(answerWaitBackstop)
+	}
+	if !run.Deadline.IsZero() && run.Deadline.Before(refusal.Until) {
+		refusal.Until = run.Deadline
 	}
 	log.InfoContext(ctx, "sandbox_resume_held",
 		"turn_id", run.TurnID, "agent", run.AgentHandle, "condition", string(refusal.Condition),

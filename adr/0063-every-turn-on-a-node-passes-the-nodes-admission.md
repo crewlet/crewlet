@@ -77,10 +77,14 @@ still fires every five minutes before its instant, and there does only what an
 announcement of the job does (`sandbox.Coordinator.recheckHeld`): past the
 turn's deadline the run is ended, and before it the hold is kept and the next
 backstop armed, so a turn whose deadline passes while no waiter announces the
-job ends within five minutes of it, rather than at the hold's instant. The
-claim is at-most-once, so any of them arriving together resume the run once. A
-seat this node lets go of drops its kept completions, for the waiter that
-drives each run's box to announce to the seat's next holder.
+job ends within five minutes of it, rather than at the hold's instant; and a
+hold on the run's row is written no later than the turn's deadline
+(`sandbox.Coordinator.unclaimHeld`), since nothing reaches a held row to end
+it, so the hold lapses there and its keep re-fires the job, whose resume past
+the deadline ends the run. The claim is at-most-once, so any of them arriving
+together resume the run once. A seat this node lets go of drops its kept
+completions, for the waiter that drives each run's box to announce to the
+seat's next holder.
 
 **An acknowledged refusal is an obligation the seat's holder owes, recorded on
 the run's row.** The acknowledgement stays: it spends none of the completion's

@@ -1084,6 +1084,50 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 	})
 }
 
+// A RESUME ITS SEAT'S BUDGET HELD ON ITS ROW IS HELD NO LATER THAN ITS TURN'S
+// DEADLINE. Past the deadline nothing waits, and a resume that meets anything
+// then ends the run. But nothing reached a held row to end it: the waiter
+// passes it over and the claim refuses it, an ending at the deadline's claim
+// among them, and the backstop that ends a completion held past its deadline
+// is for one this node holds in memory. So a capped turn whose review met the
+// budget minutes before its cap held its seat until the budget's window
+// turned, a day, a week or a month on. The hold is written until the
+// deadline, where it is sooner than the window's turn, and the keep made for
+// it re-fires the job at the deadline, whose resume past it ends the run.
+//
+// Mutation: hold the row until the refusal's instant alone, and the job is
+// re-fired, and the run ended, only once the window turns.
+func TestABudgetHoldOnTheRowLapsesAtItsTurnsDeadline(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	deadline := rig.now.Add(10 * time.Minute)
+	rig.launchUntil("t1", deadline)
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "checked the monitors"})
+	rig.resumer.failWith(budgetHeld(rig.now.Add(24 * time.Hour)))
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the premise: the held resume = %v; want its completion spent", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning || got.HeldFor != "budget" ||
+		!got.HeldUntil.Equal(deadline) {
+		t.Fatalf("the row is %s held for %q until %v; want running, held for the budget until the turn's "+
+			"deadline %v, before the window turns", got.Status, got.HeldFor, got.HeldUntil, deadline)
+	}
+	if delays := rig.retries.delays(); len(delays) != 1 || delays[0] != 10*time.Minute {
+		t.Fatalf("the held completion's re-fires armed = %v; want one, at the turn's deadline", delays)
+	}
+	// THE DEADLINE, the budget still refusing: the job is re-fired, and its
+	// resume past the deadline ends the run.
+	rig.now = deadline
+	rig.fireRetries()
+	rig.coordinator.inflight.Wait()
+	if !rig.gone("t1") || !rig.endedWith("t1", types.ExecutorFailureDeadline) {
+		t.Fatalf("at its turn's deadline the held run is not ended at its deadline: failures %+v",
+			rig.failures())
+	}
+}
+
 // bubbleRig is a rig whose coordinator reads the clock of the synctest bubble
 // it is made in, and arms its timers on it, its run store reading the instant
 // the bubble began: a case whose subject is what the coordinator does as that
