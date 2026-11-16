@@ -8938,7 +8938,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   Pushes draws it. **Branches** is its branches as tables in views (Overview:
   the default branch and the active ones; Active, Stale and All by when each
   moved), each branch with who moved it and when (Gitlet for a merge or a
-  queue landing) and its change, with Find a branch, and writes them:
+  queue landing), its checks, how far it is behind and ahead of the default
+  branch and its change, with Find a branch, and writes them:
   **New branch** (`code_create_branch`, a name and where it starts, the
   default branch when left empty), and on each row **Protect**, which opens
   the protection form on that branch's ref (a branch a rule names already is

@@ -1,6 +1,6 @@
 /**
- * A repository's branches and tags as tables: each branch with who moved it and when,
- * its protection and its change, in views by when each moved; tags under them.
+ * A repository's branches and tags as tables: each branch with who moved it and when, its checks,
+ * its distance from the default branch and its change, in views by when each moved; tags under them.
  */
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
@@ -36,25 +36,38 @@ import { href, useDraft, useParam } from "~/app/router.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { ago } from "~/lib/ago.ts";
 import { useClock, useNow } from "~/lib/clock.ts";
+import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
 import { PUSH_HISTORY_DAYS, changeRef, refName, repoPath, shortOID } from "~/lib/code.ts";
 import { civilAt, civilKey, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
 import { dayStartIn } from "~/lib/range.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import type {
-  CodeRefListing,
-  CodeRefMover,
-  CodeRefProtection,
-  CodeRefRow,
-  CodeRefsAnswer,
-  CodeRepoDetail,
+import {
+  QueryError,
+  type CodeCommitMark,
+  type CodeRefListing,
+  type CodeTip,
+  type CodeRefMover,
+  type CodeRefProtection,
+  type CodeRefRow,
+  type CodeRefsAnswer,
+  type CodeRepoDetail,
 } from "~/protocol/index.ts";
 import { ChangeRefPill } from "../Changes.tsx";
 import { useListKeys } from "../CodeList.tsx";
 import { compareHref, repoHref } from "../paths.ts";
-import { BranchChip, Face, GITLET, ShaChip, useWhoName, type Who } from "../ui.tsx";
+import {
+  BranchChip,
+  CheckRollupMark,
+  Face,
+  GITLET,
+  ShaChip,
+  useWhoName,
+  type Who,
+} from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
+import { useCommitMarks } from "./marks.ts";
 import { ProtectButton } from "./Protect.tsx";
 import "~/styles/gitlet.css";
 
@@ -122,11 +135,7 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
       </PageToolbar>
       <div className="code-refs-boxes">
         {view === "overview" && !q ? (
-          <>
-            <DefaultBox repo={repo} />
-            <ActiveBox repo={repo} since={since} />
-            <Tags repo={repo} />
-          </>
+          <Overview repo={repo} since={since} />
         ) : (
           <BranchView repo={repo} view={view} q={q} since={since} />
         )}
@@ -187,9 +196,36 @@ function listingParams(
   };
 }
 
-/** The Default branch box: the default branch found by its name. */
-function DefaultBox({ repo }: { repo: CodeRepoDetail }) {
+/** The Overview: the default branch, the active branches, and the newest tags. */
+function Overview({ repo, since }: { repo: CodeRepoDetail; since: string | undefined }) {
   const found = useDefaultBranch(repo);
+  const active = useActiveBranches(repo, since);
+  // ONE MARKS READ for the heads of both boxes, asked once both are here.
+  const heads =
+    found.loading || active.read.loading
+      ? ""
+      : [found.row?.oid, ...active.rows.map((r) => r.oid)].filter(Boolean).join(",");
+  const facts = useBranchFacts(repo, useHeadPages(heads === "" ? [] : [heads]));
+  return (
+    <>
+      <FactsNote facts={facts} repo={repo} />
+      <DefaultBox repo={repo} found={found} facts={facts} />
+      <ActiveBox repo={repo} active={active} facts={facts} />
+      <Tags repo={repo} />
+    </>
+  );
+}
+
+/** The Default branch box: the default branch found by its name. */
+function DefaultBox({
+  repo,
+  found,
+  facts,
+}: {
+  repo: CodeRepoDetail;
+  found: ReturnType<typeof useDefaultBranch>;
+  facts: Facts;
+}) {
   const now = useNow();
   return (
     <RefsBox
@@ -203,7 +239,7 @@ function DefaultBox({ repo }: { repo: CodeRepoDetail }) {
       columns="default"
     >
       {found.row ? (
-        <BranchRow repo={repo} row={found.row} now={now} />
+        <BranchRow repo={repo} row={found.row} now={now} facts={facts} />
       ) : (
         <UnreadDefault repo={repo} />
       )}
@@ -282,8 +318,8 @@ function UnreadDefault({ repo }: { repo: CodeRepoDetail }) {
   );
 }
 
-/** The Overview's active branches: up to ten, the default branch left out, and the way to all of them. */
-function ActiveBox({ repo, since }: { repo: CodeRepoDetail; since: string | undefined }) {
+/** The Overview's active branches: up to ten, the default branch left out, and their count. */
+function useActiveBranches(repo: CodeRepoDetail, since: string | undefined) {
   const params = useMemo(
     () => ({
       ...listingParams(repo.name, "active", "", since, OVERVIEW_ACTIVE + 1),
@@ -292,10 +328,24 @@ function ActiveBox({ repo, since }: { repo: CodeRepoDetail; since: string | unde
     [repo.name, since],
   );
   const read = useCodeQuery("code_refs", params);
-  const now = useNow();
   const rows = (read.data?.refs_detail ?? [])
     .filter((r) => r.ref !== HEADS + repo.default_branch)
     .slice(0, OVERVIEW_ACTIVE);
+  return { read, rows };
+}
+
+/** The Overview's Active branches box, and the way to all of them. */
+function ActiveBox({
+  repo,
+  active,
+  facts,
+}: {
+  repo: CodeRepoDetail;
+  active: ReturnType<typeof useActiveBranches>;
+  facts: Facts;
+}) {
+  const { read, rows } = active;
+  const now = useNow();
   const count = read.data?.active_branches;
   const more = count ? count.more === true || count.count > rows.length : Boolean(read.data?.next);
   return (
@@ -318,7 +368,7 @@ function ActiveBox({ repo, since }: { repo: CodeRepoDetail; since: string | unde
       }
     >
       {rows.map((r) => (
-        <BranchRow key={r.ref} repo={repo} row={r} now={now} />
+        <BranchRow key={r.ref} repo={repo} row={r} now={now} facts={facts} />
       ))}
     </RefsBox>
   );
@@ -382,6 +432,10 @@ function BranchView({
     shown === "active"
       ? paged.items.filter((r) => r.ref !== HEADS + repo.default_branch)
       : paged.items;
+  const facts = useBranchFacts(
+    repo,
+    useHeadPages(paged.answers.map((a) => (a.refs_detail ?? []).map((r) => r.oid).join(","))),
+  );
   const title = q ? `Branches matching “${q}”` : TITLES[shown];
   const empty = q
     ? {
@@ -394,43 +448,53 @@ function BranchView({
   // A FIND'S PAGE CAN HOLD NOTHING YET HAVE MORE: the engine reads at most 10,000 refs a page.
   const nothingYet = rows.length === 0 && paged.more;
   return (
-    <RefsBox
-      title={title}
-      count={
-        q
-          ? undefined
-          : shown === "all"
-            ? { count: repo.branches }
-            : (first.data?.active_branches ?? undefined)
-      }
-      keys={rows.map((r) => r.ref)}
-      loading={paged.loading && rows.length === 0}
-      loadingLabel={`Loading the ${title.toLowerCase()} of ${repo.name}`}
-      error={paged.error}
-      refusal={paged.refusal}
-      detail={first.detail}
-      empty={rows.length === 0 && !paged.more ? empty : undefined}
-      foot={
-        paged.more || paged.pageError ? (
-          <>
-            {nothingYet && <span className="t-caption">None among the branches read so far</span>}
-            {paged.more && (
-              <Button size="small" variant="secondary" loading={paged.paging} onClick={paged.next}>
-                {nothingYet ? "Keep looking" : "Load more branches"}
-              </Button>
-            )}
-            {paged.more && rows.length > 0 && (
-              <span className="t-caption">{plural(rows.length, "branch", "branches")} loaded</span>
-            )}
-            {paged.pageError && <PageFailed error={paged.pageError} />}
-          </>
-        ) : undefined
-      }
-    >
-      {rows.map((r) => (
-        <BranchRow key={r.ref} repo={repo} row={r} now={now} />
-      ))}
-    </RefsBox>
+    <>
+      <FactsNote facts={facts} repo={repo} />
+      <RefsBox
+        title={title}
+        count={
+          q
+            ? undefined
+            : shown === "all"
+              ? { count: repo.branches }
+              : (first.data?.active_branches ?? undefined)
+        }
+        keys={rows.map((r) => r.ref)}
+        loading={paged.loading && rows.length === 0}
+        loadingLabel={`Loading the ${title.toLowerCase()} of ${repo.name}`}
+        error={paged.error}
+        refusal={paged.refusal}
+        detail={first.detail}
+        empty={rows.length === 0 && !paged.more ? empty : undefined}
+        foot={
+          paged.more || paged.pageError ? (
+            <>
+              {nothingYet && <span className="t-caption">None among the branches read so far</span>}
+              {paged.more && (
+                <Button
+                  size="small"
+                  variant="secondary"
+                  loading={paged.paging}
+                  onClick={paged.next}
+                >
+                  {nothingYet ? "Keep looking" : "Load more branches"}
+                </Button>
+              )}
+              {paged.more && rows.length > 0 && (
+                <span className="t-caption">
+                  {plural(rows.length, "branch", "branches")} loaded
+                </span>
+              )}
+              {paged.pageError && <PageFailed error={paged.pageError} />}
+            </>
+          ) : undefined
+        }
+      >
+        {rows.map((r) => (
+          <BranchRow key={r.ref} repo={repo} row={r} now={now} facts={facts} />
+        ))}
+      </RefsBox>
+    </>
   );
 }
 
@@ -494,9 +558,18 @@ function RefsBox({
                   </span>
                 </th>
                 <th scope="col">Updated</th>
-                <td />
-                <td />
-                {columns === "default" ? <td /> : <th scope="col">Change</th>}
+                <th scope="col">Checks</th>
+                {columns === "default" ? (
+                  <>
+                    <td />
+                    <td />
+                  </>
+                ) : (
+                  <>
+                    <th scope="col">Behind | Ahead</th>
+                    <th scope="col">Change</th>
+                  </>
+                )}
                 <th scope="col">
                   <VisuallyHidden>Actions</VisuallyHidden>
                 </th>
@@ -555,7 +628,17 @@ function protectionTitle(p: CodeRefProtection): string {
 }
 
 /** One branch: its name and marks, who moved it and when, its change, and its controls. */
-function BranchRow({ repo, row, now }: { repo: CodeRepoDetail; row: CodeRefListing; now: number }) {
+function BranchRow({
+  repo,
+  row,
+  now,
+  facts,
+}: {
+  repo: CodeRepoDetail;
+  row: CodeRefListing;
+  now: number;
+  facts: Facts;
+}) {
   const name = refName(row.ref).name;
   const rev = branchRev(repo, row.ref);
   const isDefault = rev === "";
@@ -588,8 +671,14 @@ function BranchRow({ repo, row, now }: { repo: CodeRepoDetail; row: CodeRefListi
       <td className="code-refs__updated">
         <MovedBy row={row} now={now} />
       </td>
-      <td className="code-refs__checks" />
-      <td className="code-refs__drift" />
+      <td className="code-refs__checks">
+        <BranchChecks repo={repo} row={row} mark={facts.mark(row.oid)} now={now} />
+      </td>
+      <td className="code-refs__drift">
+        {!isDefault && row.oid !== repo.head && (
+          <Drift tip={facts.tip(row.oid)} most={facts.most} base={repo.default_branch} />
+        )}
+      </td>
       <td className="code-refs__change">
         {!isDefault && row.change && (
           <ChangeRefPill
@@ -637,6 +726,190 @@ function BranchRow({ repo, row, now }: { repo: CodeRepoDetail; row: CodeRefListi
         </span>
       </td>
     </tr>
+  );
+}
+
+/** Each loaded page's heads, once each: a list of whole ids per page, kept while the pages say the same. */
+function useHeadPages(pages: readonly string[]): readonly (readonly string[])[] {
+  const key = pages.join("\n");
+  return useMemo(
+    () =>
+      key === "" ? [] : key.split("\n").map((p) => [...new Set(p.split(",").filter(Boolean))]),
+    [key],
+  );
+}
+
+/** What each head carries beside its row: its checks, how far it is from the default branch, and why either is missing. */
+interface Facts {
+  mark: (oid: string) => CodeCommitMark | null | undefined;
+  tip: (oid: string) => CodeTip | undefined;
+  /** The most commits any loaded head is behind or ahead, which the bars are drawn against. */
+  most: number;
+  marksFailed: string | null;
+  tipsFailed: string | null;
+}
+
+/** The engine's sentence for a refused read, else its code. */
+function sentenceOf(err: unknown): string {
+  if (!(err instanceof QueryError)) return "the read failed";
+  const refusal = err.refusal as { detail?: string | null } | null;
+  return err.detail ?? refusal?.detail ?? err.message;
+}
+
+/** How far each page's heads are from the default branch's head: whole ids both sides, so kept by the tab. */
+function useTips(
+  repo: string,
+  base: string | undefined,
+  pages: readonly (readonly string[])[],
+): { of: (oid: string) => CodeTip | undefined; failed: string | null } {
+  const [held, setHeld] = useState<Readonly<Record<string, CodeTip[] | { failed: string }>>>({});
+  const asks = useMemo(
+    () =>
+      base
+        ? pages
+            .map((oids) => oids.filter((o) => o !== base))
+            .filter((oids) => oids.length > 0)
+            .map((oids) => ({ key: `${repo}\n${base}\n${oids.join(",")}`, oids: oids.join(",") }))
+        : [],
+    [repo, base, pages],
+  );
+  const asking = useRef(new Map<string, AbortController>());
+  useEffect(() => {
+    for (const { key, oids } of asks) {
+      if (key in held || asking.current.has(key)) continue;
+      const abort = new AbortController();
+      asking.current.set(key, abort);
+      codeRest
+        .query("code_tips", { name: repo, oids, base: base ?? "" }, abort.signal)
+        .then(
+          (a): CodeTip[] | { failed: string } => a.tips?.tips ?? [],
+          (err: unknown) => ({ failed: sentenceOf(err) }),
+        )
+        .then((page) => {
+          if (abort.signal.aborted) return;
+          asking.current.delete(key);
+          setHeld((h) => ({ ...h, [key]: page }));
+        });
+    }
+  }, [asks, held, repo, base]);
+  useEffect(() => {
+    const running = asking.current;
+    return () => {
+      for (const abort of running.values()) abort.abort();
+      running.clear();
+    };
+  }, []);
+  const byOid = useMemo(() => {
+    const out = new Map<string, CodeTip>();
+    for (const { key } of asks) {
+      const page = held[key];
+      if (Array.isArray(page)) for (const t of page) out.set(t.oid, t);
+    }
+    return out;
+  }, [asks, held]);
+  const failed =
+    asks
+      .map(({ key }) => held[key])
+      .map((page) => (page && !Array.isArray(page) ? page.failed : null))
+      .find((f) => f !== null) ?? null;
+  return { of: (oid) => byOid.get(oid), failed };
+}
+
+/** The checks and the drift of every head the pages name. */
+function useBranchFacts(repo: CodeRepoDetail, pages: readonly (readonly string[])[]): Facts {
+  const marks = useCommitMarks(repo.name, pages);
+  const tips = useTips(repo.name, repo.head, pages);
+  let most = 0;
+  for (const oids of pages) {
+    for (const oid of oids) {
+      const t = tips.of(oid);
+      most = Math.max(most, t?.behind ?? 0, t?.ahead ?? 0);
+    }
+  }
+  return {
+    mark: marks.of,
+    tip: tips.of,
+    most,
+    marksFailed: marks.failed ? (marks.failed.sentence ?? marks.failed.code) : null,
+    tipsFailed: tips.failed,
+  };
+}
+
+/** Why the checks or the drift are missing, said once above the boxes. */
+function FactsNote({ facts, repo }: { facts: Facts; repo: CodeRepoDetail }) {
+  const { marksFailed, tipsFailed } = facts;
+  if (!marksFailed && !tipsFailed) return null;
+  const drift = `how far each branch is from ${repo.default_branch}`;
+  const what =
+    marksFailed && tipsFailed
+      ? `Checks and ${drift} are`
+      : marksFailed
+        ? "Checks are"
+        : `${drift[0]!.toUpperCase()}${drift.slice(1)} is`;
+  return (
+    <p className="code-refs-note" role="status">
+      {what} unavailable: {marksFailed ?? tipsFailed}.
+    </p>
+  );
+}
+
+/** A branch's checks: its head's, for itself or else for the default branch; never a cross for none. */
+function BranchChecks({
+  repo,
+  row,
+  mark,
+  now,
+}: {
+  repo: CodeRepoDetail;
+  row: CodeRefListing;
+  mark: CodeCommitMark | null | undefined;
+  now: number;
+}) {
+  if (mark === undefined) return null;
+  const rollup = rollupFor(mark, row.ref, HEADS + repo.default_branch);
+  if (rollup) {
+    return (
+      <CheckRollupMark
+        rollup={rollup}
+        title={rollupTitle(rollup, row.ref, now)}
+        of={rollup.target === row.ref}
+      />
+    );
+  }
+  const gone = now - Date.parse(row.moved_at) > CHECK_HISTORY_DAYS * DAY_MS;
+  return <EmptyValue label={gone ? "Checks no longer kept" : "No check ran"} />;
+}
+
+/**
+ * How far a branch is behind and ahead of the default branch: the two counts either side of
+ * a hairline, each over a bar on a log scale of the loaded rows' most; words on a phone.
+ */
+function Drift({ tip, most, base }: { tip: CodeTip | undefined; most: number; base: string }) {
+  if (!tip) return null;
+  if (tip.counts_out_of_time || tip.behind === undefined || tip.ahead === undefined) {
+    return <EmptyValue label="Not counted in the read's time" />;
+  }
+  const share = (n: number) => (most > 0 ? (Math.log1p(n) / Math.log1p(most)) * 100 : 0);
+  const side = (n: number, which: "behind" | "ahead") => (
+    <span className="code-drift__side" data-side={which}>
+      <span className="code-drift__count">{n}</span>
+      <span className="code-drift__bar" style={{ inlineSize: `${share(n)}%` }} />
+    </span>
+  );
+  return (
+    <span
+      className="code-drift"
+      role="img"
+      aria-label={`${plural(tip.behind, "commit")} behind ${base}, ${tip.ahead} ahead`}
+    >
+      <span className="code-drift__bars">
+        {side(tip.behind, "behind")}
+        {side(tip.ahead, "ahead")}
+      </span>
+      <span className="code-drift__words">
+        {tip.behind} behind, {tip.ahead} ahead
+      </span>
+    </span>
   );
 }
 

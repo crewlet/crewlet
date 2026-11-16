@@ -490,6 +490,24 @@ function withBranches() {
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), location.origin);
+      if (url.pathname === "/query/code_tips") {
+        const oids = (url.searchParams.get("oids") ?? "").split(",");
+        return json({
+          repo: "web",
+          kind: "tips",
+          tips: {
+            base: BASE,
+            tips: oids.map((oid) => ({
+              oid,
+              type: "commit",
+              peeled: oid,
+              peeled_type: "commit",
+              behind: 12,
+              ahead: 3,
+            })),
+          },
+        });
+      }
       if (url.pathname !== "/query/code_refs" || url.searchParams.get("detail") !== "true") {
         return answer(url);
       }
@@ -565,6 +583,15 @@ for (const [viewport, column] of [
         expect(cell("actions").top).toBeGreaterThanOrEqual(cell("updated").bottom - 0.5);
       }
     }
+    // HOW FAR A BRANCH IS FROM main: bars beside the columns, words where the row stacks.
+    const drift = await eventually(() => {
+      const found = document.querySelector<HTMLElement>(".code-drift");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    const shown = (el: Element) => getComputedStyle(el).display !== "none";
+    expect(shown(drift.querySelector(".code-drift__words")!)).toBe(column < 640);
+    expect(shown(drift.querySelector(".code-drift__bars")!)).toBe(column >= 640);
     if (column < 640) return;
     // THE TABLE FILLS ITS BOX: the name on the title's inset, the controls ending on the box's.
     const title = box.querySelector(".code-refs__heading")!.getBoundingClientRect();

@@ -1440,6 +1440,59 @@
   white-space: nowrap;
 }
 
+/* HOW FAR A BRANCH IS FROM THE DEFAULT: two counts either side of a hairline, each over a
+   neutral bar (a count is not a state), its length set inline on a log scale. */
+.code-drift {
+  display: inline-flex;
+}
+
+.code-drift__bars {
+  display: inline-flex;
+}
+
+.code-drift__side {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-1);
+  inline-size: var(--spacing-8);
+  padding-inline: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.code-drift__side[data-side="behind"] {
+  border-inline-end: 1px solid var(--color-border-strong);
+}
+
+.code-drift__side[data-side="ahead"] {
+  align-items: flex-start;
+}
+
+.code-drift__count {
+  line-height: 1;
+}
+
+.code-drift__bar {
+  block-size: calc(var(--spacing-1) / 2);
+  border-radius: var(--radius-pill);
+  background: var(--color-text-tertiary);
+}
+
+.code-drift__words {
+  display: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* WHY THE CHECKS OR THE DRIFT ARE MISSING, said once above the boxes. */
+.code-refs-note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .code-refs__unknown {
   color: var(--color-text-tertiary);
 }
@@ -1505,6 +1558,14 @@
 
   .code-refs-find {
     inline-size: 100%;
+  }
+
+  .code-drift__bars {
+    display: none;
+  }
+
+  .code-drift__words {
+    display: inline;
   }
 }
 

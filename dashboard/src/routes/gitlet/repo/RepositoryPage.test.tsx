@@ -119,6 +119,24 @@ const json = (payload: unknown, status = 200) =>
 /** A revision as the engine resolves it: a whole ref as it is, a bare name as a branch. */
 const wholeRef = (rev: string) => (rev.startsWith("refs/") ? rev : `refs/heads/${rev}`);
 
+/** Where a commit's checks stand for `target`, as `code_commit_marks` answers it. */
+const rollup = (target: string, state: string) => ({
+  target,
+  state,
+  counts: state === "passed" ? { passed: 2 } : { passed: 1, running: 1 },
+  required: 2,
+  required_passed: state === "passed" ? 2 : 1,
+});
+
+/** One head of a `code_tips` page, behind and ahead of its base. */
+const tipOf = (oid: string, behind?: number, ahead?: number) => ({
+  oid,
+  type: "commit",
+  peeled: oid,
+  peeled_type: "commit",
+  ...(behind === undefined ? { counts_out_of_time: true } : { behind, ahead }),
+});
+
 /** Who moved a branch, as the push history names the push. */
 const mover = (seat: string, via: string) => ({
   push_id: `p-${seat}-${via}`,
@@ -523,6 +541,24 @@ function stubEngine(
           );
         case "/query/code_pushes":
           return json({ position: POSITION, level: "session" });
+        case "/query/code_commit_marks":
+          return json({
+            commit_marks: (p.get("commits") ?? "")
+              .split(",")
+              .filter((c) => c === HEAD)
+              .map((commit) => ({ commit, checks: [rollup("refs/heads/main", "passed")] })),
+            position: POSITION,
+            level: "session",
+          });
+        case "/query/code_tips":
+          return json({
+            repo: "web",
+            kind: "tips",
+            tips: {
+              base: p.get("base"),
+              tips: (p.get("oids") ?? "").split(",").map((oid) => tipOf(oid, 0, 3)),
+            },
+          });
       }
       return json({}, 404);
     }),
@@ -857,6 +893,20 @@ test("a link past a file's end opens the file from its first line, saying so", a
   expect(screen.getByText(/it has no line 3100/)).toBeTruthy();
   expect(bigStarts(asked, "code_blob")).toEqual(["3050", null]);
 });
+
+/** The engine answering `what` from `answer`, everything else as it answered before. */
+function stubQuery(asked: URL[], what: string, answer: (p: URLSearchParams) => Response) {
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== `/query/${what}`) return engine(input, init);
+      asked.push(url);
+      return answer(url.searchParams);
+    }),
+  );
+}
 
 /** The engine answering `code_refs` in detail from `answer`, everything else as stubEngine does. */
 function stubListing(
@@ -1480,6 +1530,93 @@ test("the default branch offers no delete, and every other branch does", async (
   expect(screen.queryByRole("button", { name: "Delete main" })).toBeNull();
 });
 
+// EACH BRANCH'S CHECKS ARE ITS HEAD'S, asked once a page, for itself else for the
+// default; no rollup is never a cross, and past 30 days is said no longer kept.
+// Mutation: ask per row, read only the branch's own target, or drop the retention word.
+test("each branch's checks are its head's, for itself or for the default branch", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  const old = {
+    ref: "refs/heads/old",
+    oid: "4444444444444444444444444444444444444444",
+    position: POSITION,
+    moved_at: "2026-08-01T10:00:00Z",
+  };
+  const bare = {
+    ref: "refs/heads/bare",
+    oid: THIRD,
+    position: POSITION,
+    moved_at: "2026-10-26T10:00:00Z",
+  };
+  const asked = stubListing((p) => json(refsListing(p, [...REF_ROWS, bare, old])));
+  stubQuery(asked, "code_commit_marks", () =>
+    json({
+      commit_marks: [
+        { commit: HEAD, checks: [rollup("refs/heads/main", "passed")] },
+        { commit: OTHER, checks: [rollup("refs/heads/main", "running")] },
+      ],
+      position: POSITION,
+      level: "session",
+    }),
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=all");
+  const all = await screen.findByRole("table", { name: /^All branches/ });
+  const checks = (name: string) =>
+    within(all)
+      .getByRole("link", { name })
+      .closest("tr")!
+      .querySelector<HTMLElement>(".code-refs__checks")!;
+  await waitFor(() => expect(checks("main").textContent).toBe("Passed 2 of 2"));
+  expect(checks("feature").textContent).toBe("Running");
+  expect(within(checks("bare")).getByText("No check ran")).toBeTruthy();
+  expect(checks("bare").querySelector(".code-check-mark")).toBeNull();
+  expect(within(checks("old")).getByText("Checks no longer kept")).toBeTruthy();
+  const marks = reads(asked, "code_commit_marks");
+  expect(marks).toHaveLength(1);
+  expect(marks[0]!.searchParams.get("commits")).toBe([OTHER, HEAD, THIRD, old.oid].join(","));
+});
+
+// HOW FAR EACH BRANCH IS FROM THE DEFAULT is read once, by whole ids: the heads
+// against the default branch's own head. Mutation: name the base by its branch,
+// or draw a count the read ran out of time on.
+test("how far each branch is from the default is read once, by whole ids", async () => {
+  const slow = {
+    ref: "refs/heads/slow",
+    oid: THIRD,
+    position: POSITION,
+    moved_at: "2026-10-26T10:00:00Z",
+  };
+  const asked = stubListing((p) => json(refsListing(p, [...REF_ROWS, slow])));
+  stubQuery(asked, "code_tips", (p) =>
+    json({
+      repo: "web",
+      kind: "tips",
+      tips: {
+        base: HEAD,
+        tips: [tipOf(OTHER, 0, 3), tipOf(THIRD)].filter((t) =>
+          p.get("oids")!.split(",").includes(t.oid),
+        ),
+      },
+    }),
+  );
+  mount("#/gitlet/repos/web?tab=branches&view=all");
+  const all = await screen.findByRole("table", { name: /^All branches/ });
+  const drift = (name: string) =>
+    within(all)
+      .getByRole("link", { name })
+      .closest("tr")!
+      .querySelector<HTMLElement>(".code-refs__drift")!;
+  expect(
+    await within(all).findByRole("img", { name: "0 commits behind main, 3 ahead" }),
+  ).toBeTruthy();
+  expect(within(drift("slow")).getByText("Not counted in the read's time")).toBeTruthy();
+  expect(drift("main").textContent).toBe("");
+  const tips = reads(asked, "code_tips");
+  expect(tips).toHaveLength(1);
+  expect(tips[0]!.searchParams.get("base")).toBe(HEAD);
+  expect(tips[0]!.searchParams.get("oids")).toBe([OTHER, THIRD].join(","));
+});
+
 // DELETE IS HELD WITH THE ENGINE'S OWN SENTENCE where its rules refuse it, and
 // the client's own hold, which knows the reader's seat, wins over it.
 // Mutation: drop the listing's sentence, or let it win over the client's.
@@ -1762,6 +1899,24 @@ test("a refused listing is said in its box", async () => {
   expect(reads(asked, "code_refs").every((u) => u.searchParams.get("detail") === "true")).toBe(
     true,
   );
+});
+
+// REFUSED CHECKS AND DRIFT ARE SAID ONCE, above the boxes, and the rows draw
+// without them. Mutation: say it in every row, or drop the rows with it.
+test("refused checks and drift are said once, the rows drawn without them", async () => {
+  const asked = stubEngine();
+  const refuse = () =>
+    engineJson({ error: "unavailable", detail: "this node answers no marks yet" }, 503);
+  stubQuery(asked, "code_commit_marks", refuse);
+  stubQuery(asked, "code_tips", refuse);
+  mount("#/gitlet/repos/web?tab=branches");
+  expect(
+    await screen.findAllByText(
+      "Checks and how far each branch is from main are unavailable: this node answers no marks yet.",
+    ),
+  ).toHaveLength(1);
+  const active = await screen.findByRole("table", { name: /^Active branches/ });
+  expect(within(active).getByRole("link", { name: "feature" })).toBeTruthy();
 });
 
 // A FILE EDITED IN THE BROWSER IS ONE COMMIT ON THE BRANCH ON SCREEN, at the
