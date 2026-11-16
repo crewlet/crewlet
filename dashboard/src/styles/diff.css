@@ -107,9 +107,12 @@
   text-decoration-line: underline;
 }
 /* A PICKED LINE IS RULED, not tinted: a hue here would be a state, and a pick
-   is the reader's place, not the line's. */
+   is the reader's place, not the line's. Forced colours drop the rule and
+   paint the transparent outline. */
 .diff-view__line[data-picked] {
   box-shadow: inset 2px 0 0 var(--color-border-strong);
+  outline: 2px solid transparent;
+  outline-offset: -2px;
 }
 /* WHAT A HOST DRAWS UNDER A LINE — a finding, a thread — on the diff's own
    ground, ruled off the lines, in the body's face rather than the code's. */

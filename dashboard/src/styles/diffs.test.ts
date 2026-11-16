@@ -93,6 +93,46 @@ describe("in the sheets", () => {
   });
 });
 
+/**
+ * Every rule ruling a picked line by a shadow alone, as `file selector`: forced
+ * colours drop every shadow and paint an outline, so a pick needs one.
+ */
+export function unoutlinedPicks(rules: readonly SheetRule[]): string[] {
+  return rules
+    .filter(
+      (rule) =>
+        rule.selector.includes("[data-picked]") &&
+        /(?:^|[;\s])box-shadow\s*:/.test(rule.body) &&
+        !/(?:^|[;\s])outline\s*:(?!\s*(?:none\b|0(?:px)?\s*(?:;|$)))/.test(rule.body),
+    )
+    .map((rule) => `${rule.file} ${rule.selector}`);
+}
+
+describe("a picked line", () => {
+  test("a pick ruled by a shadow carries an outline, which forced colours paint", () => {
+    const ruled = sheetRules().filter(
+      (rule) => rule.selector.includes("[data-picked]") && /box-shadow\s*:/.test(rule.body),
+    );
+    // A VACUITY FLOOR: the diff's pick and the file view's.
+    expect(ruled.length).toBeGreaterThanOrEqual(2);
+    expect(unoutlinedPicks(sheetRules())).toEqual([]);
+  });
+
+  test("it can tell: a pick ruled by a shadow alone is reported", () => {
+    const shadow = "box-shadow: inset 2px 0 0 var(--color-border-strong);";
+    const pick = (body: string): SheetRule => ({
+      file: "diff.css",
+      selector: ".diff-view__line[data-picked]",
+      body,
+    });
+    expect(unoutlinedPicks([pick(shadow)])).toEqual(["diff.css .diff-view__line[data-picked]"]);
+    expect(unoutlinedPicks([pick(`${shadow} outline: 2px solid transparent;`)])).toEqual([]);
+    expect(unoutlinedPicks([pick(`${shadow} outline: none;`)])).toEqual([
+      "diff.css .diff-view__line[data-picked]",
+    ]);
+  });
+});
+
 /** The token the sheets' one rule for exactly `selector` paints its background with. */
 function paint(selector: string): string {
   const rules = sheetRules().filter((r) => r.selector === selector);

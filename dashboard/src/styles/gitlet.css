@@ -1047,10 +1047,13 @@
 }
 
 /* A PICKED LINE IS RULED, not tinted, as a picked line of a diff is: a pick
-   is the reader's place, not the line's state. */
+   is the reader's place, not the line's state. Forced colours drop the rule
+   and paint its outline. */
 .code-source__line[data-picked],
 .code-blame tr[data-picked] {
   box-shadow: inset 2px 0 0 var(--color-border-strong);
+  outline: 2px solid transparent;
+  outline-offset: -2px;
 }
 
 .code-source__number {
