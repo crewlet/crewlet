@@ -1433,67 +1433,73 @@ func ctAllButUUID(l threadLine) string {
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
 	fmt.Fprintf(&b, "toolUseResult: %s\n", ctRaw(l.ToolUseResult()))
+	ctFacts(&b, l, m)
+	return b.String()
+}
+
+// ctFacts writes to b everything [ctAllButUUID] prints after a line's own
+// toolUseResult, its message m among it.
+func ctFacts(b *strings.Builder, l threadLine, m threadMessage) {
 	cleared, err := l.ToolResultsCleared()
-	fmt.Fprintf(&b, "tool results cleared: %t; %v\n", cleared, err)
+	fmt.Fprintf(b, "tool results cleared: %t; %v\n", cleared, err)
 	reason, err := l.StopReason()
-	fmt.Fprintf(&b, "stop reason: %q; %v\n", reason, err)
+	fmt.Fprintf(b, "stop reason: %q; %v\n", reason, err)
 	failed, err := l.APIError()
-	fmt.Fprintf(&b, "a failed request's reply: %t; %v\n", failed, err)
+	fmt.Fprintf(b, "a failed request's reply: %t; %v\n", failed, err)
 	model, err := l.Model()
-	fmt.Fprintf(&b, "model: %q; %v\n", model, err)
+	fmt.Fprintf(b, "model: %q; %v\n", model, err)
 	reply, err := l.MessageID()
-	fmt.Fprintf(&b, "reply: %q; %v\n", reply, err)
+	fmt.Fprintf(b, "reply: %q; %v\n", reply, err)
 	usage, used, err := l.Usage()
-	fmt.Fprintf(&b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
+	fmt.Fprintf(b, "usage %t: id %q, model %q, input %d, cache writes %d, cache reads %d, output %d; %v\n", used,
 		usage.ID, usage.Model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, err)
 	var listed []string
 	preserved, err := l.Preserved(func(uuid string) error {
 		listed = append(listed, uuid)
 		return nil
 	})
-	fmt.Fprintf(&b, "preserved: %+v, listing %q; %v\n", preserved, strings.Join(listed, " "), err)
+	fmt.Fprintf(b, "preserved: %+v, listing %q; %v\n", preserved, strings.Join(listed, " "), err)
 	leaf, marked, err := l.Checkpoint()
-	fmt.Fprintf(&b, "checkpoint: leaf %q, marked %t; %v\n", leaf, marked, err)
+	fmt.Fprintf(b, "checkpoint: leaf %q, marked %t; %v\n", leaf, marked, err)
 	keyed, err := l.LeafKeyed()
-	fmt.Fprintf(&b, "leaf keyed: %t; %v\n", keyed, err)
+	fmt.Fprintf(b, "leaf keyed: %t; %v\n", keyed, err)
 	attached, err := l.AttachmentType()
-	fmt.Fprintf(&b, "attachment type: %q; %v\n", attached, err)
+	fmt.Fprintf(b, "attachment type: %q; %v\n", attached, err)
 	var retracted []string
 	err = l.Retracted(func(uuid string) error {
 		retracted = append(retracted, uuid)
 		return nil
 	})
-	fmt.Fprintf(&b, "retracted: %q; %v\n", strings.Join(retracted, " "), err)
+	fmt.Fprintf(b, "retracted: %q; %v\n", strings.Join(retracted, " "), err)
 	var replaced []string
 	err = l.ReplacedResults(func(id string) { replaced = append(replaced, id) })
-	fmt.Fprintf(&b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
+	fmt.Fprintf(b, "replaced results: %q; %v\n", strings.Join(replaced, " "), err)
 	replacements, err := l.ReplacementCount()
-	fmt.Fprintf(&b, "replacements listed: %d; %v\n", replacements, err)
+	fmt.Fprintf(b, "replacements listed: %d; %v\n", replacements, err)
 	virtual, err := l.IsVirtual()
-	fmt.Fprintf(&b, "virtual: %t; %v\n", virtual, err)
+	fmt.Fprintf(b, "virtual: %t; %v\n", virtual, err)
 	shutdown, err := l.InterruptedByShutdown()
-	fmt.Fprintf(&b, "interrupted by a shutdown: %t; %v\n", shutdown, err)
+	fmt.Fprintf(b, "interrupted by a shutdown: %t; %v\n", shutdown, err)
 	summary, err := l.IsCompactSummary()
-	fmt.Fprintf(&b, "a compaction's summary: %t; %v\n", summary, err)
-	fmt.Fprintf(&b, "a task's delivery: %t\n", l.TaskDelivery())
+	fmt.Fprintf(b, "a compaction's summary: %t; %v\n", summary, err)
+	fmt.Fprintf(b, "a task's delivery: %t\n", l.TaskDelivery())
 	var batch []string
 	batched, err := l.BatchToolUses(func(id string) { batch = append(batch, id) })
-	fmt.Fprintf(&b, "a batch's reply: %t, splitting %q; %v\n", batched, strings.Join(batch, " "), err)
+	fmt.Fprintf(b, "a batch's reply: %t, splitting %q; %v\n", batched, strings.Join(batch, " "), err)
 	ms, stamped, err := l.Timestamp()
-	fmt.Fprintf(&b, "written %t at %d; %v\n", stamped, ms, err)
+	fmt.Fprintf(b, "written %t at %d; %v\n", stamped, ms, err)
 	meta, err := l.IsMeta()
-	fmt.Fprintf(&b, "meta: %t; %v\n", meta, err)
+	fmt.Fprintf(b, "meta: %t; %v\n", meta, err)
 	source, sourced := l.SourceToolAssistantUUID()
-	fmt.Fprintf(&b, "source %t: %x\n", sourced, source)
+	fmt.Fprintf(b, "source %t: %x\n", sourced, source)
 	call, isCall := l.AttachmentToolUseID()
-	fmt.Fprintf(&b, "followed %t: %x\n", isCall, call)
+	fmt.Fprintf(b, "followed %t: %x\n", isCall, call)
 	saysText, saysAny := m.Says()
-	fmt.Fprintf(&b, "says text %t, anything %t\n", saysText, saysAny)
+	fmt.Fprintf(b, "says text %t, anything %t\n", saysText, saysAny)
 	formed, err := l.AttachmentWellFormed()
-	fmt.Fprintf(&b, "kept as well formed: %t; %v\n", formed, err)
+	fmt.Fprintf(b, "kept as well formed: %t; %v\n", formed, err)
 	release, err := l.Version()
-	fmt.Fprintf(&b, "written by %q; %v\n", release, err)
-	return b.String()
+	fmt.Fprintf(b, "written by %q; %v\n", release, err)
 }
 
 // ctRaw is a raw value a line hands out, as text: "absent" where it is nil,
@@ -1790,6 +1796,280 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 		variant := ctReplace(t, tc.record, tc.from, tc.to)
 		if got, want := ctAll(ctLine(t, variant)), ctAll(ctLine(t, tc.record)); got != want {
 			t.Errorf("%s reads as\n%swant\n%s", name, got, want)
+		}
+	}
+}
+
+// ctOutcome is how a reader reads record, the one line of a thread: where it
+// is a record, what every accessor reads of it ([ctAll]) but the values it
+// hands out raw, a call's input and a result's content and a record's own
+// toolUseResult, of which it prints what their readers read instead (the
+// target a call sends to, a result's text, what an answer says); where it is
+// none, its fault, the type it names and its error. A line's place and size
+// are left out, so two lines that differ in nothing a reader reads print
+// alike, and so is a hook's record, which no case here reads.
+func ctOutcome(t *testing.T, record string) string {
+	t.Helper()
+	got := ctRead(ctThread(record), threadPlainMax)
+	switch {
+	case len(got.broken) == 1 && len(got.lines) == 0 && errors.Is(got.end, io.EOF):
+		b := got.broken[0]
+		return fmt.Sprintf("no record: fault %q, type %q; %v\n", b.Fault, b.Type, b.Err)
+	case len(got.lines) != 1 || len(got.broken) != 0 || !errors.Is(got.end, io.EOF):
+		t.Fatalf("%.120s reads as %d lines and %d broken, ended by %v; want one line", record, len(got.lines),
+			len(got.broken), got.end)
+	}
+	l := got.lines[0]
+	var b strings.Builder
+	h := l.Head
+	side := "absent"
+	if h.Sidechain != nil {
+		side = strconv.FormatBool(*h.Sidechain)
+	}
+	fmt.Fprintf(&b, "head: type %q, subtype %q, parent %s, sidechain %s, agent %q, replaces a span %t\n",
+		h.Type, h.Subtype, ctRaw(h.Parent), side, h.AgentID, h.ReplacesSpan)
+	uuid, err := l.UUID()
+	fmt.Fprintf(&b, "uuid: %q; %v\n", uuid, err)
+	m, err := l.Message()
+	text, isText := m.Text()
+	fmt.Fprintf(&b, "message: text %q (%t), kinds %q; %v\n", text, isText, strings.Join(m.Kinds(), " "), err)
+	for _, c := range m.Calls() {
+		failed := "absent"
+		if c.IsError != nil {
+			failed = strconv.FormatBool(*c.IsError)
+		}
+		said, isSaid := resultText(c.Content)
+		fmt.Fprintf(&b, "call %q: id %q, name %q, is_error %s, sends to %q, its result's text %q (%t)\n", c.Kind,
+			c.ID, c.Name, failed, sendTarget(c.Input), said, isSaid)
+	}
+	kind, err := l.OriginKind()
+	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
+	own := l.ToolUseResult()
+	completed, agent, refused := agentAnswer(own)
+	fmt.Fprintf(&b, "its answer: completed %t, agent %q, refused %t, a handback %t\n", completed, agent, refused,
+		carriesHandback(own))
+	ctFacts(&b, l, m)
+	return b.String()
+}
+
+// ctTwice is a key written twice into a line: in writes the keys it is given
+// into the line, first is the first occurrence, between what lies between the
+// two ("" where nothing does), and last the last.
+type ctTwice struct {
+	in                   func(keys string) string
+	first, between, last string
+}
+
+// ctAt writes keys into record in place of from, which it holds exactly once.
+func ctAt(t *testing.T, record, from string) func(keys string) string {
+	return func(keys string) string { return ctReplace(t, record, from, keys) }
+}
+
+// ctKeys is the keys given, those that are not "", as an object writes them.
+func ctKeys(keys ...string) string {
+	return strings.Join(slices.DeleteFunc(keys, func(k string) bool { return k == "" }), ",")
+}
+
+// A KEY WRITTEN TWICE IS READ WHOLLY BY ITS LAST, as Claude Code's JSON.parse
+// reads it, at every level of a line: the line reads exactly as the line
+// holding only the last occurrence (and what lies between) reads, through
+// every accessor and every reader of a call, a result and an answer, whether
+// that is a record or no record, and whatever the first occurrence held. Each
+// case's first occurrence reads otherwise on its own (a key the last lacks, or
+// another value), so a reader that keeps any of it fails the case:
+//
+//   - a record's message (a call, a reply's id, its model and its usage, then
+//     one text block), its own toolUseResult (a completed answer naming its
+//     agent and carrying a handback, then none), its attachment (a fork's
+//     briefing following a call, then a payload of no type), a boundary's
+//     compactMetadata (the list it kept, then a segment alone), its
+//     replacements and a reply's batch (an entry, then none), and its origin
+//     (a task's notification, then none);
+//   - the head: a key of the wrong type, then one of the right type, is a
+//     record, and the reverse no record, for isSidechain, type, subtype,
+//     agentId and parentUuid; a replacesSpan of the wrong type between an
+//     assistant's type and a user's is no record of the user's type, and
+//     between a user's and an assistant's a record; and a head fault between a
+//     user's type and a type no record carries names no type;
+//   - a message's content (a call, then a text), its usage (an output count,
+//     then none), its report of the context edits applied (a clearing, then
+//     none), its id, its model and its stop reason;
+//   - a block's id, its type (a call's, then a text's), a result's call id
+//     and its failure, a call's input (a target, then none), a result's
+//     content (a text, then none) and a block's text (blank, then said, and
+//     the reverse);
+//   - a result's text block's type and text; an answer's status and a send's
+//     success; an iteration's type and a count of it; an edit's type and its
+//     count; a replacement's kind; a batch entry's id; an attachment's type,
+//     a skill listing's names, a withheld memory's entries and an entry's why;
+//     and a compaction's list (its uuids, then an anchor alone).
+//
+// Mutation: merge a repeated object's members into the earlier occurrence's,
+// or a repeated list's entries into the earlier one's, as a reader that keeps
+// what it read of the first does, and every record-level case reads the first
+// occurrence's fact; read a key written twice by its first value, and every
+// case reads as its first; refuse a key written twice, and every case is no
+// record.
+func TestAKeyWrittenTwiceIsReadWhollyByItsLast(t *testing.T) {
+	t.Parallel()
+	const other = "toolu_test_other"
+	brief, prompt := ctBrief(ctUUID(1)), ctSubagentPrompt(ctUUID(3))
+	call := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	result := ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn)
+	summary := ctSummary(ctUUID(15), ctUUID(16))
+	compacting := ctBoundary(ctUUID(10), ctUUID(11), ctUUID(3), ctUUID(4))
+	cleared := ctReported(t, ctEdits(ctClearing))
+	said := ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"text","text":"hi"}]`)
+	sent := ctAssistant(ctUUID(3), ctUUID(4), `[{"type":"tool_use","id":"`+ctCall+`","name":"`+
+		claudeToolSendMessage+`","input":{"to":"`+ctAgent+`","message":"continue"}}]`)
+	blocked := ctResult(ctUUID(4), ctUUID(5), `[{"tool_use_id":"`+ctCall+`","type":"tool_result","content":`+
+		`[{"type":"text","text":"x"}]}]`, ctResultOwn)
+	// owned is a result whose own toolUseResult is own.
+	owned := func(own string) string { return ctResult(ctUUID(4), ctUUID(5), ctResultBody, own) }
+	// iteration is the model's call whose usage lists one iteration, of keys.
+	iteration := func(keys string) string {
+		return ctReplace(t, call, `"output_tokens":20}`, `"output_tokens":20,"iterations":[{`+keys+`}]}`)
+	}
+	// batchOf is the model's call whose batch lists one entry, of keys.
+	batchOf := func(keys string) string {
+		return ctReplace(t, call, `"apiBlockIndex"`, `"batchToolUses":[{`+keys+`}],"apiBlockIndex"`)
+	}
+	// attached is an attachment record whose payload is attachment.
+	attached := func(attachment string) string { return ctAttachment(ctUUID(1), ctUUID(2), attachment, "") }
+	member := func(record, key string) string {
+		t.Helper()
+		var found string
+		if err := eachKey(json.RawMessage(record), func(name []byte, value json.RawMessage, _ int) error {
+			if string(name) == key {
+				found = `"` + key + `":` + string(value)
+			}
+			return nil
+		}); err != nil || found == "" {
+			t.Fatalf("%.80s holds no %s: %v", record, key, err)
+		}
+		return found
+	}
+	segment := `"preservedSegment":{"headUuid":"` + ctUUID(20) + `","anchorUuid":"` + ctUUID(21) + `","tailUuid":"` +
+		ctUUID(22) + `"}`
+	withheld := `{"path":"a","why":"denied","displayPath":"a"}`
+	listed := ctListed(ctUUID(11), ctUUID(3), ctUUID(4))[1:]
+	batching := ctReplace(t, call, `"apiBlockIndex"`, `"batchToolUses":[{"id":"`+ctCall+`","name":"Bash"}],"apiBlockIndex"`)
+	for name, tc := range map[string]ctTwice{
+		// A record.
+		"a message": {in: ctAt(t, call, member(call, "message")), first: member(call, "message"),
+			last: `"message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}`},
+		"a toolUseResult": {in: ctAt(t, owned(`{}`), `"toolUseResult":{}`),
+			first: `"toolUseResult":{"status":"completed","agentId":"` + ctAgent + `","handback":{"report":"x"}}`,
+			last:  `"toolUseResult":{}`},
+		"an attachment": {in: ctAt(t, attached(`{}`), `"attachment":{}`),
+			first: `"attachment":{"type":"` + attachmentForkBriefing + `","toolUseID":"` + ctCall + `"}`,
+			last:  `"attachment":{"content":"x"}`},
+		"a compactMetadata": {in: ctAt(t, compacting, member(compacting, "compactMetadata")),
+			first: member(compacting, "compactMetadata"), last: `"compactMetadata":{` + segment + `}`},
+		"a replacements": {in: ctAt(t, ctReplacement("", ctReplaced(ctCall)), `"replacements":[`+ctReplaced(ctCall)+`]`),
+			first: `"replacements":[` + ctReplaced(ctCall) + `]`, last: `"replacements":[]`},
+		"a batchToolUses": {in: ctAt(t, batching, `"batchToolUses":[{"id":"`+ctCall+`","name":"Bash"}]`),
+			first: `"batchToolUses":[{"id":"` + ctCall + `","name":"Bash"}]`, last: `"batchToolUses":[]`},
+		"an origin": {in: ctAt(t, ctNotification(ctUUID(1), ctUUID(3)), ctNotificationOrigin),
+			first: ctNotificationOrigin, last: `"origin":{}`},
+		// The head.
+		"an isSidechain of no boolean, then false": {in: ctAt(t, brief, `"isSidechain":false`),
+			first: `"isSidechain":"x"`, last: `"isSidechain":false`},
+		"an isSidechain false, then of no boolean": {in: ctAt(t, brief, `"isSidechain":false`),
+			first: `"isSidechain":false`, last: `"isSidechain":"x"`},
+		"a type of no string, then user": {in: ctAt(t, brief, `"type":"user"`),
+			first: `"type":7`, last: `"type":"user"`},
+		"a type user, then of no string": {in: ctAt(t, brief, `"type":"user"`),
+			first: `"type":"user"`, last: `"type":7`},
+		"a subtype of no string, then one": {in: ctAt(t, summary, `"subtype":"stop_hook_summary"`),
+			first: `"subtype":7`, last: `"subtype":"stop_hook_summary"`},
+		"a subtype, then of no string": {in: ctAt(t, summary, `"subtype":"stop_hook_summary"`),
+			first: `"subtype":"stop_hook_summary"`, last: `"subtype":7`},
+		"an agentId of no string, then one": {in: ctAt(t, prompt, `"agentId":"`+ctAgent+`"`),
+			first: `"agentId":7`, last: `"agentId":"` + ctAgent + `"`},
+		"an agentId, then of no string": {in: ctAt(t, prompt, `"agentId":"`+ctAgent+`"`),
+			first: `"agentId":"` + ctAgent + `"`, last: `"agentId":7`},
+		"a parentUuid of neither null nor a string, then one": {in: ctAt(t, result, `"parentUuid":"`+ctUUID(4)+`"`),
+			first: `"parentUuid":7`, last: `"parentUuid":"` + ctUUID(4) + `"`},
+		"a parentUuid, then of neither null nor a string": {in: ctAt(t, result, `"parentUuid":"`+ctUUID(4)+`"`),
+			first: `"parentUuid":"` + ctUUID(4) + `"`, last: `"parentUuid":7`},
+		"a replacesSpan of no boolean between an assistant's type and a user's": {in: ctAt(t, brief, `"type":"user"`),
+			first: `"type":"assistant"`, between: `"replacesSpan":"x"`, last: `"type":"user"`},
+		"a replacesSpan of no boolean between a user's type and an assistant's": {in: ctAt(t, brief, `"type":"user"`),
+			first: `"type":"user"`, between: `"replacesSpan":"x"`, last: `"type":"assistant"`},
+		"a head fault between a user's type and one no record carries": {
+			in:    ctAt(t, brief, `"isSidechain":false,"promptId":"`+ctPrompt+`","type":"user"`),
+			first: `"type":"user"`, between: `"isSidechain":1`, last: `"type":"bogus"`},
+		// A message.
+		"a message's content": {in: ctAt(t, call, `"content":`+ctUseContent),
+			first: `"content":` + ctUseContent, last: `"content":"hi"`},
+		"a message's usage": {in: ctAt(t, call, ctUsage), first: ctUsage,
+			last: `"usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`},
+		"a message's context_management": {in: ctAt(t, cleared, `"context_management":`+ctEdits(ctClearing)),
+			first: `"context_management":` + ctEdits(ctClearing), last: `"context_management":{}`},
+		"a message's id": {in: ctAt(t, call, `"id":"msg_test"`), first: `"id":"msg_other"`, last: `"id":"msg_test"`},
+		"a message's model": {in: ctAt(t, call, `"model":"claude-sonnet-4-5"`), first: `"model":"<synthetic>"`,
+			last: `"model":"claude-sonnet-4-5"`},
+		"a message's stop_reason": {in: ctAt(t, call, `"stop_reason":"tool_use"`), first: `"stop_reason":"refusal"`,
+			last: `"stop_reason":"tool_use"`},
+		// A message's blocks.
+		"a block's id": {in: ctAt(t, call, `"id":"`+ctCall+`"`), first: `"id":"` + other + `"`,
+			last: `"id":"` + ctCall + `"`},
+		"a block's type": {in: ctAt(t, call, `"type":"tool_use"`), first: `"type":"tool_use"`, last: `"type":"text"`},
+		"a block's tool_use_id": {in: ctAt(t, result, `"tool_use_id":"`+ctCall+`"`),
+			first: `"tool_use_id":"` + other + `"`, last: `"tool_use_id":"` + ctCall + `"`},
+		"a block's is_error": {in: ctAt(t, result, `"is_error":false`), first: `"is_error":true`,
+			last: `"is_error":false`},
+		"a block's input": {in: ctAt(t, sent, `"input":{"to":"`+ctAgent+`","message":"continue"}`),
+			first: `"input":{"to":"` + ctAgent + `","message":"continue"}`, last: `"input":{}`},
+		"a block's content": {in: ctAt(t, result, `"content":"b1"`), first: `"content":"b1"`,
+			last: `"content":[]`},
+		"a block's text, blank first": {in: ctAt(t, said, `"text":"hi"`), first: `"text":" "`, last: `"text":"hi"`},
+		"a block's text, blank last":  {in: ctAt(t, said, `"text":"hi"`), first: `"text":"hi"`, last: `"text":" "`},
+		// A result's text block.
+		"a result's block's type": {in: ctAt(t, blocked, `"type":"text"`), first: `"type":"text"`,
+			last: `"type":"image"`},
+		"a result's block's text": {in: ctAt(t, blocked, `"text":"x"`), first: `"text":"y"`, last: `"text":"x"`},
+		// A record's own toolUseResult.
+		"an answer's status": {in: ctAt(t, owned(`{"status":"completed","agentId":"`+ctAgent+`"}`),
+			`"status":"completed"`), first: `"status":"completed"`, last: `"status":"async_launched"`},
+		"a send's success": {in: ctAt(t, owned(`{"success":false}`), `"success":false`), first: `"success":false`,
+			last: `"success":true`},
+		// A usage's iterations.
+		"an iteration's type": {in: iteration, first: `"type":"` + iterationFallback + `"`,
+			between: `"input_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":20`,
+			last:    `"type":"` + iterationAdvisor + `"`},
+		"an iteration's count": {in: iteration, first: `"cache_read_input_tokens":5`,
+			between: `"type":"message","input_tokens":100,"cache_creation_input_tokens":0,"output_tokens":20`,
+			last:    `"cache_read_input_tokens":0`},
+		// An edit the server applied.
+		"an edit's type": {in: ctAt(t, cleared, `"type":"clear_tool_uses_20250919"`),
+			first: `"type":"clear_tool_uses_20250919"`, last: `"type":"clear_thinking_20251015"`},
+		"an edit's count": {in: ctAt(t, cleared, `"cleared_tool_uses":18`), first: `"cleared_tool_uses":18`,
+			last: `"cleared_tool_uses":0`},
+		// A replacement, a batch's entry and an attachment's payload.
+		"a replacement's kind": {in: ctAt(t, ctReplacement("", ctReplaced(ctCall)), `"kind":"tool-result"`),
+			first: `"kind":"tool-result"`, last: `"kind":"image"`},
+		"a batch entry's id": {in: batchOf, first: `"id":"` + other + `"`, last: `"id":"` + ctCall + `","name":"Bash"`},
+		"an attachment's type": {in: ctAt(t, attached(`{"type":"`+attachmentForkBriefing+`"}`),
+			`"type":"`+attachmentForkBriefing+`"`), first: `"type":"` + attachmentForkBriefing + `"`,
+			last: `"type":"hook_success"`},
+		"a skill listing's names": {in: ctAt(t, attached(`{"type":"`+attachmentSkillListing+`","names":["a"]}`),
+			`"names":["a"]`), first: `"names":["a"]`, last: `"names":7`},
+		"a withheld memory's entries": {in: ctAt(t, attached(ctWithheld(withheld)), `"entries":[`+withheld+`]`),
+			first: `"entries":[` + withheld + `]`, last: `"entries":[{"path":1}]`},
+		"a withheld entry's why": {in: ctAt(t, attached(ctWithheld(withheld)), `"why":"denied"`),
+			first: `"why":"denied"`, last: `"why":"bogus"`},
+		// What a compaction says it kept.
+		"a compaction's list": {in: ctAt(t, compacting, listed), first: listed,
+			last: `"preservedMessages":{"anchorUuid":"` + ctUUID(11) + `"}`},
+	} {
+		got := ctOutcome(t, tc.in(ctKeys(tc.first, tc.between, tc.last)))
+		if want := ctOutcome(t, tc.in(ctKeys(tc.between, tc.last))); got != want {
+			t.Errorf("%s reads as\n%swant it read as its last alone\n%s", name, got, want)
+		}
+		if first := ctOutcome(t, tc.in(ctKeys(tc.first, tc.between))); first == got {
+			t.Errorf("%s reads as its first alone reads, so no reader that keeps the first fails it:\n%s", name, got)
 		}
 	}
 }

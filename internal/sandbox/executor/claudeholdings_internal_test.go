@@ -3135,6 +3135,61 @@ func TestARetractionListInASubagentsThreadLeavesItNotWhole(t *testing.T) {
 	}
 }
 
+// A CALL A SUBAGENT'S LIST NAMES BEFORE ITS FAULT IS TOLD: where a subagent's
+// content-replacement record lists an asked call's result and then an entry
+// that is no object, or its reply's batch lists that call and then such an
+// entry, the subagent is not whole, and the call, whose use and result lie
+// whole in the main thread, is told all the same. Every entry a list hands
+// before its fault is read, as the entries of a whole list are: the harness
+// reads the entries it can of a list (it replaces a result an entry names; a
+// batch an entry names folds its calls), so an entry dropped with the one that
+// broke the list would leave a call held whose result its model was not
+// handed whole. A batch's entry reaches a call of the main thread where the
+// reading meets it before the main thread is decided, so that case's archive
+// holds the subagent's members first, an order a box may write them in. The
+// session whose subagent's lists name no such entry holds the call and
+// reports its subagent, in either order.
+//
+// Mutation: walk a list whole before it hands an entry, answering its fault
+// before any entry it read (in the replacements' accessor, or in the
+// batch's), and the call that list names is held.
+func TestACallASubagentsListNamesBeforeItsFaultIsTold(t *testing.T) {
+	t.Parallel()
+	const id, out = "toolu_test_listed", "listed done"
+	call := hsLogged(id, out)
+	for name, tc := range map[string]struct {
+		edit func(*testing.T, *hsSession)
+		held bool
+	}{
+		"no list names it": {func(*testing.T, *hsSession) {}, true},
+		"no list names it, its subagent's members first": {func(_ *testing.T, s *hsSession) { s.reversed = true },
+			true},
+		"a replacement names it, then an entry that is no object": {func(_ *testing.T, s *hsSession) {
+			s.thread = append(s.thread, ctReplacement(ctAgent, `{"kind":"tool-result","toolUseId":"`+id+`"}`, `7`))
+		}, false},
+		"a batch names it, then an entry that is no object": {func(t *testing.T, s *hsSession) {
+			s.thread[1] = ctReplace(t, s.thread[1], `"apiBlockIndex"`, `"batchToolUses":[{"id":"`+id+`"},7],`+
+				`"apiBlockIndex"`)
+			s.reversed = true
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := hsForeground(t)
+			s.main = append(s.main, hsCall(ctUUID(3), 5, id, hsBlock(t, out))...)
+			tc.edit(t, &s)
+			got, err := hsRead(t, tarOfMembers(t, s.members()), ctSession, hsAsk(call, hsLogged(hsSubCall, hsSubOut)))
+			hsReadWhole(t, got, err)
+			held, under := got.Holds(call)
+			report := got.Subagents[ctAgent]
+			if held != tc.held || under != "" || report.Reported != tc.held {
+				t.Errorf("Holds = %t under %q, the subagent %+v, its records %+v; want it held %t in the main list, "+
+					"the subagent reported %t", held, under, report, got.Calls[id], tc.held, tc.held)
+			}
+		})
+	}
+}
+
 // A LEG FINISHED WITHOUT TEXT IS UNFINISHED (rule 2, condition 5): a subagent
 // answers its caller with the text of its last reply whose text says
 // something, as JavaScript's trim() reads it (2.1.322's pkn through t5t,
