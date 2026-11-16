@@ -217,6 +217,7 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 	if main := n.target(repo, mainRef); main != oidOf("M") {
 		t.Fatalf("main is at %q after its landing, want the train's tip", main)
 	}
+	n.activityHolds()
 	if m := n.mergedChange(change); m.state != string(gitlet.ChangeStateMerged) || m.via != string(gitlet.MergedViaQueue) ||
 		m.mergeOID != oidOf("M") || m.by != "founder" || m.byKind != string(gitlet.PartyPerson) ||
 		m.operator != "pat:ada" {

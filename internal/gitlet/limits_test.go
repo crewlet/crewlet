@@ -462,9 +462,9 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	// THE BYTE-MAXIMAL PUSH IS ONE OF FORCED UPDATES, counted two rows a
 	// command — its ref, and the object it left — so ONE shares a record's
 	// rows with nothing of its size.
-	if rows := gitlet.RowBound(maximal); rows != 2*gitlet.MaxCommandsPerPush+2 {
+	if rows := gitlet.RowBound(maximal); rows != 2*gitlet.MaxCommandsPerPush+3 {
 		t.Errorf("a maximal push of forced updates bounds %d rows, want two a command (%d) + its row "+
-			"+ its pack", rows, 2*gitlet.MaxCommandsPerPush)
+			"+ its pack + its pusher's day", rows, 2*gitlet.MaxCommandsPerPush)
 	}
 	if got := gitlet.RecordRows(gitlet.RowBound(maximal)); got > gitlet.MaxRecordRows {
 		t.Errorf("a maximal push of forced updates bounds %d rows with the record's own (RecordRows), "+
@@ -483,9 +483,9 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 		c.Forced = false
 		forward.Commands = append(forward.Commands, c)
 	}
-	if rows := gitlet.RowBound(forward); rows != gitlet.MaxCommandsPerPush+2 {
+	if rows := gitlet.RowBound(forward); rows != gitlet.MaxCommandsPerPush+3 {
 		t.Errorf("a maximal push of fast-forward updates bounds %d rows, want MaxCommandsPerPush (%d) "+
-			"+ its row + its pack", rows, gitlet.MaxCommandsPerPush)
+			"+ its row + its pack + its pusher's day", rows, gitlet.MaxCommandsPerPush)
 	}
 	if got := gitlet.RecordRows(3 * gitlet.RowBound(forward)); got > gitlet.MaxRecordRows {
 		t.Errorf("three maximal pushes of fast-forward updates bound %d rows with the record's own "+
@@ -504,9 +504,9 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	for _, c := range maximal.Commands {
 		deleting.Commands = append(deleting.Commands, gitlet.Command{Ref: c.Ref, Old: c.Old, New: gitlet.ZeroOID})
 	}
-	if rows := gitlet.RowBound(deleting); rows != 3*gitlet.MaxCommandsPerPush+2 {
+	if rows := gitlet.RowBound(deleting); rows != 3*gitlet.MaxCommandsPerPush+3 {
 		t.Errorf("a maximal push of deletions bounds %d rows, want three a deletion (%d) + its row + "+
-			"its pack", rows, 3*gitlet.MaxCommandsPerPush)
+			"its pack + its pusher's day", rows, 3*gitlet.MaxCommandsPerPush)
 	}
 	if got := gitlet.RecordRows(gitlet.RowBound(deleting)); got > gitlet.MaxRecordRows {
 		t.Errorf("a maximal push of deletions bounds %d rows with the record's own, past "+

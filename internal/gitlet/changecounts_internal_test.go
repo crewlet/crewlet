@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -489,9 +490,10 @@ func TestARecordWritesNoMoreRowsThanItsDecideCounts(t *testing.T) {
 		})
 	}
 
-	// A green merge or landing pays main's owed tip work. Each one's pushes write 4 rows beside its own:
-	// a merge's ref, pack, push row and counters; a landing's two push rows, main's ref and the counters.
-	const pushRows = 4
+	// A green merge or landing pays main's owed tip work. Each one's pushes write 6 rows beside its own:
+	// a merge's ref, pack, push row and counters; a landing's two push rows, main's ref and the counters;
+	// and either one's day row and Gitlet's pusher day (apply_activity.go).
+	const pushRows = 6
 	t.Run("a green merge of a queued change", func(t *testing.T) {
 		t.Parallel()
 		e := given(t, false)
@@ -558,9 +560,9 @@ func TestARecordWritesNoMoreRowsThanItsDecideCounts(t *testing.T) {
 	})
 }
 
-// THE TALLY ROWS TAKE NOTHING FROM THE HORIZONS: under a full backlog a push and a merge sweep or
-// forget what a build without counts does, touching MaxRecordRows and their tally row on top.
-// Mutation: charge the tally rows to landPushes or a merge's spent, and each sweeps one fewer.
+// THE TALLY ROWS AND THE PUSH ACTIVITY TAKE NOTHING FROM THE HORIZONS: under a full backlog a push and
+// a merge sweep, expire or forget what a build without them does, touching MaxRecordRows and theirs on top.
+// Mutation: charge the tally or activity rows to landPushes' rows or expired, and each sweeps fewer.
 func TestTheTallyRowsTakeNothingFromTheHorizons(t *testing.T) {
 	t.Parallel()
 	const repo, waiting = "repo-c", MaxRecordRows + 500
@@ -578,15 +580,18 @@ func TestTheTallyRowsTakeNothingFromTheHorizons(t *testing.T) {
 	// own is the rows the merging push writes as a build without the counts counts them: the ref,
 	// the pack, the push row, the counters, the change's row and its readiness row.
 	const own = 6
+	// activity is a record's push day row and its pusher's day.
+	const activity = pushDayRows + pusherDayRows
 	t.Run("a push merging a change", func(t *testing.T) {
 		t.Parallel()
 		e := given(t)
 		tombstones(e)
 		got := e.applyCounting(pushOf(t, repo, pushEntry("p1", move(ccMain, oid("base"), ccHead(1)))))
 		left := e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND target = ''`, repo)
-		if want := int64(waiting - (MaxRecordRows - own - 1)); left != want || got != MaxRecordRows+tallyRows {
+		if want := int64(waiting - (MaxRecordRows - own - 1)); left != want ||
+			got != MaxRecordRows+tallyRows+activity {
 			t.Errorf("the push touched %d rows and left %d tombstones, want %d and %d", got, left,
-				MaxRecordRows+tallyRows, want)
+				MaxRecordRows+tallyRows+activity, want)
 		}
 		e.changeCountsMatchRows()
 	})
@@ -601,9 +606,10 @@ func TestTheTallyRowsTakeNothingFromTheHorizons(t *testing.T) {
 		left := e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND target = ''`, repo)
 		// THE MERGE'S OWN ROW is its change, its spent (it holds no readiness or queue entry); its
 		// push's are the ref, the pack, the push row and the counters; the sweep's mark one more.
-		if want := int64(waiting - (MaxRecordRows - 1 - 4 - 1)); left != want || got != MaxRecordRows+tallyRows {
+		if want := int64(waiting - (MaxRecordRows - 1 - 4 - 1)); left != want ||
+			got != MaxRecordRows+tallyRows+activity {
 			t.Errorf("the merge touched %d rows and left %d tombstones, want %d and %d", got, left,
-				MaxRecordRows+tallyRows, want)
+				MaxRecordRows+tallyRows+activity, want)
 		}
 		e.changeCountsMatchRows()
 	})
@@ -616,11 +622,36 @@ func TestTheTallyRowsTakeNothingFromTheHorizons(t *testing.T) {
 			waiting, repo)
 		got := e.applyCounting(pushOf(t, repo, pushEntry("p1", move(ccMain, oid("base"), ccHead(1)))))
 		left := e.num(`SELECT COUNT(*) FROM code_ref_drops WHERE repo_id = ?`, repo)
-		if want := int64(waiting - (MaxRecordRows - own)); left != want || got != MaxRecordRows+tallyRows {
+		if want := int64(waiting - (MaxRecordRows - own)); left != want || got != MaxRecordRows+tallyRows+activity {
 			t.Errorf("the push touched %d rows and left %d drops, want %d and %d", got, left,
-				MaxRecordRows+tallyRows, want)
+				MaxRecordRows+tallyRows+activity, want)
 		}
 		e.changeCountsMatchRows()
+	})
+	// A PUSH EXPIRING ITS HISTORY moves each expired row's day and pusher day down in its one move, and
+	// still expires and sweeps what an older build does: its own rows are its ref, pack, push row and counters.
+	t.Run("a push expiring its history", func(t *testing.T) {
+		t.Parallel()
+		e := openApplyEstate(t)
+		e.apply(create(t, repo, "c"))
+		old := applyClock.Add(-PushHistory - 100*24*time.Hour)
+		for i := range HorizonDeletesPerRecord {
+			entry := pushEntry(fmt.Sprint("old-", i), move(fmt.Sprintf("refs/heads/old-%02d", i), ZeroOID, oid("old")))
+			entry.Principal = Principal{Kind: PrincipalOperator, OperatorID: fmt.Sprint("op-", i), Seat: fmt.Sprint("person-", i)}
+			e.apply(pushOf(t, repo, entry).at(old.Add(time.Duration(i) * 24 * time.Hour)))
+		}
+		tombstones(e)
+		got := e.applyCounting(pushOf(t, repo, pushEntry("p1", move("refs/heads/new", ZeroOID, oid("new")))))
+		left := e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND target = ''`, repo)
+		pushes := e.num(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = ?`, repo)
+		const pushOwn = 4
+		moved := activity + 2*HorizonDeletesPerRecord
+		if want := int64(waiting - (MaxRecordRows - pushOwn - HorizonDeletesPerRecord - 1)); left != want ||
+			pushes != 1 || got != MaxRecordRows+moved {
+			t.Errorf("the push touched %d rows, left %d tombstones and %d pushes, want %d, %d and 1", got, left,
+				pushes, MaxRecordRows+moved, want)
+		}
+		e.activityMatchesRows()
 	})
 }
 

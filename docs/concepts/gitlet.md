@@ -3148,8 +3148,9 @@ repository, never by a node's own sweep:
   handle, or the engine on its own account (`system`, for [the ref
   lifecycle](#the-ref-lifecycle)'s deletions) — how the push's pack was built
   (`git`, sent by a client's git, `engine`, built by the engine itself,
-  `merge`, landed by a merge, or `expiry`, the ref lifecycle's deletion of
-  idle seat branches), and for a seat's push the turn that
+  `merge`, landed by a merge, `expiry`, the ref lifecycle's deletion of
+  idle seat branches, or `queue`, a merge queue's landing, `import` and
+  `mirror`, Gitlet's own), and for a seat's push the turn that
   made it, the work item that turn was charged to and the model it ran on —
   and for a push the seat's coding box made, the executor that pushed and the
   harness it ran, which is how the engine reads back what a run
@@ -3219,6 +3220,37 @@ retirement; a node last brought up to date before its removal reads the
 repository whole at its next sync, as after a forgotten deletion, and
 downloads nothing again.
 
+### Counting pushes
+
+A repository's pushes are counted by day and by who pushed, so a screen draws
+a repository's recent activity and who pushes to it without walking its push
+history:
+
+- every push row is counted on its UTC day, by the quarter-hour its record
+  landed in, the ref lifecycle's expiries too, as the push history lists them;
+- who pushed is counted per UTC day: a seat by its handle, a person by the
+  human seat they hold whichever credential they pushed with, and Gitlet for a
+  merge, a merge queue's landing, an import and a pull mirror's sync, never the
+  person or seat who merged or queued. The ref lifecycle's expiry is counted in
+  the day series and as nobody's push;
+- a reader's days are the boundaries its client sends, its own midnights:
+  every UTC offset in use is a whole quarter-hour, so each of its days is
+  counted exactly in any zone, across a clock change too;
+- who pushed is counted on the whole UTC days that begin within those days, so
+  its window can sit up to a day off the reader's own;
+- both are kept as the history is (181 days), and a first boundary older than
+  the history keeps whole, 181 days less two hours for the clocks it is kept
+  by, is refused rather than counted short;
+- they are kept, never walked: each push, each expiry of the history and each
+  purge step moves them, and a build that changes how they are counted
+  recounts them from the push history at its first boot, on every data node;
+- a deleted repository keeps them until its purge takes its pushes.
+
+They are asked with `day_bounds` beside `repo_facts=true` on a listing of
+repositories or one repository's detail, or on a push history
+(`GET /gitlet/repos/{name}/pushes`); see [the code
+reads](../reference/api-endpoints.md#the-code-reads).
+
 ### Deletion and purge
 
 A repository removed from `code.repos` is **deleted**, softly: its rows and
@@ -3245,7 +3277,7 @@ asks of a live repository's unreachable objects
   ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry));
 - each purge is a sequence of bounded **steps**, each one record removing a
   bounded part of the repository's rows — its push history, its refs, its
-  packs and the ones a compaction retired, its
+  packs and the ones a compaction retired, what its pushes are counted by, its
   [ref drops](#retention-and-history), then its [changes](#changes), each
   whole: a change's revisions, authors, [conversation](#reviews-and-findings)
   and description, then its row — then its [checks](#checks), each with its

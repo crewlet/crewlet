@@ -364,8 +364,8 @@ const ReconcileInFlight = reconcileInFlight
 // ReconcileRecordRows is the most rows one record a reconcile writes touches.
 const ReconcileRecordRows = reconcileRecordRows
 
-// RecountChanges re-derives db's change counts, as an upgraded node's first boot does, for a
-// case that seeds changes by hand.
+// RecountChanges re-derives db's derived rows, the change counts and the push activity among them,
+// as an upgraded node's first boot does, for a case that seeds rows by hand.
 func RecountChanges(t testing.TB, db store.ReplicatedHandle) {
 	t.Helper()
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
@@ -388,6 +388,19 @@ func ChangeCountsDrift(t testing.TB, db store.ReplicatedHandle) string {
 		return err
 	}); err != nil {
 		t.Fatalf("read the change counts: %v", err)
+	}
+	return drift
+}
+
+// ActivityDrift names the first difference between db's push activity and its push rows, "" for none.
+func ActivityDrift(t testing.TB, db store.ReplicatedHandle) string {
+	t.Helper()
+	var drift string
+	if err := db.Reader().Read(t.Context(), func(tx *sql.Tx) (err error) {
+		drift, err = activityDrift(t.Context(), tx)
+		return err
+	}); err != nil {
+		t.Fatalf("read the push activity: %v", err)
 	}
 	return drift
 }

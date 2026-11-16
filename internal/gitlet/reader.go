@@ -1404,6 +1404,9 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	if err := q.validate(); err != nil {
 		return ReadAnswer{}, err
 	}
+	if err := q.daysKept(r.now()); err != nil {
+		return ReadAnswer{}, err
+	}
 	fresh, levelErr := q.freshness()
 	if levelErr != nil {
 		return ReadAnswer{}, levelErr
@@ -1914,6 +1917,11 @@ func (q ReadQuery) validate() error {
 			return err
 		}
 	}
+	if q.DayBounds != nil {
+		if err := q.validateDayBounds(); err != nil {
+			return err
+		}
+	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
 		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage(),
 		ReadChangeRouting: MaxRoutedRecordsPerPage, ReadReviews: MaxReviewsPerPage,
@@ -1958,6 +1966,9 @@ func (q ReadQuery) kindOwnedField() error {
 			ErrInvalid)
 	case q.Counts != nil && q.Kind != ReadCounts:
 		return fmt.Errorf("%w: counts: only a counts read names the parts it counts", ErrInvalid)
+	case len(q.DayBounds) > 0 && q.Kind != ReadRepos && q.Kind != ReadRepo && q.Kind != ReadPushes:
+		return fmt.Errorf("%w: day_bounds: only a listing of repositories, a read of one and a push history "+
+			"count pushes by the asker's days", ErrInvalid)
 	case q.RepoFacts && q.Kind != ReadRepos && q.Kind != ReadRepo:
 		return fmt.Errorf("%w: repo_facts: only a listing of repositories and a read of one answer a "+
 			"repository's facts", ErrInvalid)
@@ -2639,6 +2650,10 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		return err
 	}
 	limit := min(limitOr(q.Limit, defaultRepoLimit), r.pageRows)
+	if len(q.DayBounds) > 0 {
+		// The sparks' read is measured at this page at most, whatever the default.
+		limit = min(limit, MaxSparkReposPerPage)
+	}
 	// THE PROTECTED ONES BY THEIR OWN INDEX ([ReadQuery.Protected]): the
 	// same rows in the same order, walked by an index that holds no
 	// repository a rule does not protect. AND THE NAMES A PREFIX BEGINS
@@ -2726,6 +2741,16 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		}
 		if err := withFacts(ctx, tx, listed); err != nil {
 			return err
+		}
+	}
+	// ITS PUSHES ON THE ASKER'S DAYS where DayBounds asks, before the cut so the page is measured with them.
+	if len(q.DayBounds) > 0 {
+		days, sparkErr := pushesOnDays(ctx, tx, ids, q.DayBounds)
+		if sparkErr != nil {
+			return sparkErr
+		}
+		for i := range out.Repos {
+			out.Repos[i].Spark = days[out.Repos[i].ID]
 		}
 	}
 	// MEASURED WITH THEIR RULES, which are read in one statement for the
@@ -2839,6 +2864,17 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 			return err
 		}
 	}
+	// ITS PUSHES ON THE ASKER'S DAYS AND WHO PUSHED, where DayBounds asks beside RepoFacts.
+	if len(q.DayBounds) > 0 {
+		var days map[string][]int64
+		if days, err = pushesOnDays(ctx, tx, []string{id}, q.DayBounds); err != nil {
+			return err
+		}
+		out.Repo.Spark = days[id]
+		if out.Repo.Pushers, err = pushersIn(ctx, tx, id, q.DayBounds, MaxPushersAnswered); err != nil {
+			return err
+		}
+	}
 	// AND ITS FACTS ONLY TO A READ THAT ASKS ([ReadQuery.RepoFacts]).
 	if q.RepoFacts {
 		if err = withFacts(ctx, tx, []*RepoSummary{&out.Repo.RepoSummary}); err != nil {
@@ -2946,6 +2982,14 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			out.Pushes = []PushRow{row}
 		}
 		return nil
+	}
+	// THE REPOSITORY'S PUSHES ON THE ASKER'S DAYS where DayBounds asks, whatever the page holds.
+	if len(q.DayBounds) > 0 {
+		var days map[string][]int64
+		if days, err = pushesOnDays(ctx, tx, []string{id}, q.DayBounds); err != nil {
+			return err
+		}
+		out.PushDays = days[id]
 	}
 	limit := limitOr(q.Limit, defaultPushLimit)
 	var rows *sql.Rows

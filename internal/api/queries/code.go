@@ -342,6 +342,10 @@ func codeReadQuery(kind gitlet.ReadKind, asker gitlet.Principal, p Params) (gitl
 		}
 		q.Status = append(q.Status, status)
 	}
+	// THE ASKER'S DAYS, which the reader refuses on any read that counts no pushes by day.
+	if q.DayBounds, err = dayBoundsParams(p); err != nil {
+		return gitlet.ReadQuery{}, err
+	}
 	if p.Has("limit") {
 		n, whole := p.WholeInt("limit")
 		// int is int64 on every platform the store builds for
