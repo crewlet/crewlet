@@ -140,5 +140,9 @@ test("a harness with no effort setting says why", () => {
     />,
   );
   expect(screen.queryByRole("combobox", { name: /Reasoning effort/ })).toBeNull();
-  expect(screen.getByText(/Cursor has no reasoning effort setting the engine passes/)).toBeTruthy();
+  expect(
+    screen.getByText(
+      /No reasoning effort setting here. Cursor Agent takes effort as part of the model id/,
+    ),
+  ).toBeTruthy();
 });

@@ -64,8 +64,7 @@ export function EffortField({
   if (facts.efforts.length === 0) {
     return (
       <Text as="p" variant="caption" tone="secondary">
-        {name} has no reasoning effort setting the engine passes.{" "}
-        {facts.effortNote?.replaceAll("`", "") ?? ""}.
+        No reasoning effort setting here. {facts.effortNote ?? ""}.
       </Text>
     );
   }
@@ -74,7 +73,7 @@ export function EffortField({
   const helper =
     levels.length === 0
       ? `${name} runs ${modelId(draft)} with no reasoning effort setting.`
-      : `How hard the model reasons, in ${name}'s own levels for this model. The harness default passes none.`;
+      : `How hard the model reasons, in ${name}'s own levels for this model. Harness default sends none, so ${name} uses its own.`;
   return (
     <FormField label="Reasoning effort" optional helper={helper} error={error}>
       {(field) => (
@@ -148,7 +147,7 @@ export function ModelStep({
     : answer?.source === "models.dev"
       ? "Suggestions from models.dev."
       : answer?.reason
-        ? `No suggestions: ${answer.reason}`
+        ? `No suggestions: ${answer.reason.replace(/\.?$/, ".")}`
         : listing.error
           ? "No suggestions: the catalogue could not be read."
           : "";

@@ -85,7 +85,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
     login: "adopt",
     efforts: [],
     effortNote:
-      "Gemini CLI 0.65 reads a thinking level only from its settings.json, per model family (thinkingLevel or thinkingBudget), and the engine writes that file for each call",
+      "Gemini CLI reads a thinking level only from its own settings file, per model family, which the engine writes for each call",
   },
   "qwen-code": {
     binary: "qwen",
@@ -94,7 +94,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
     keyShared: true,
     efforts: [],
     effortNote:
-      "Qwen Code 0.26 reads model.reasoningEffort only from its settings.json, which the engine writes for each call",
+      "Qwen Code reads its reasoning effort only from its own settings file, which the engine writes for each call",
   },
   "cursor-agent": {
     binary: "cursor-agent",
@@ -103,7 +103,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
     login: "command",
     efforts: [],
     effortNote:
-      "Cursor Agent takes effort only as part of the model id: name a variant `cursor-agent --list-models` prints, such as gpt-5.5-high",
+      "Cursor Agent takes effort as part of the model id, such as gpt-5.5-high; cursor-agent --list-models lists them",
   },
   copilot: {
     binary: "copilot",

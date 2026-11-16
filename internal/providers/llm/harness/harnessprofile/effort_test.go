@@ -55,7 +55,7 @@ func TestAnEffortProblemSaysWhatTheHarnessTakes(t *testing.T) {
 		{claude, "sonnet", "ultra", `takes "low", "medium", "high", "xhigh" or "max", not "ultra"`},
 		{claude, "claude-haiku-4-5", "low", "runs claude-haiku-4-5 with no reasoning effort setting"},
 		{claude, "claude-opus-4-6", "xhigh", `on claude-opus-4-6, not "xhigh"`},
-		{cursor, "gpt-5.5", "high", "only as part of the model id"},
+		{cursor, "gpt-5.5", "high", "as part of the model id"},
 	} {
 		got := tc.p.EffortProblem("the harness", tc.model, tc.level)
 		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {

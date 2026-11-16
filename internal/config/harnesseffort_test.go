@@ -48,8 +48,8 @@ func TestAnEffortThatWouldReachNothingIsRefused(t *testing.T) {
 		kind                   error
 		says                   string
 	}{
-		{"gemini-cli", "gemini-3-pro", "high", ErrConflict, "only from its settings.json"},
-		{"cursor-agent", "gpt-5.5", "high", ErrConflict, "only as part of the model id"},
+		{"gemini-cli", "gemini-3-pro", "high", ErrConflict, "only from its own settings file"},
+		{"cursor-agent", "gpt-5.5", "high", ErrConflict, "as part of the model id"},
 		{"claude-code", "sonnet", "minimal", ErrUnknownValue, `"low", "medium", "high", "xhigh" or "max", not "minimal"`},
 		{"pi", "anthropic/claude-sonnet-5", "none", ErrUnknownValue, `not "none"`},
 		{"claude-code", "claude-haiku-4-5", "low", ErrUnknownValue, "runs claude-haiku-4-5 with no reasoning effort"},

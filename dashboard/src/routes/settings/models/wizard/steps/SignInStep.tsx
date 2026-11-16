@@ -19,6 +19,7 @@ import {
   Text,
   ValueField,
 } from "@crewlethq/ui";
+import type { ReactNode } from "react";
 import { listed } from "~/lib/format.ts";
 import { HostLogin } from "../../HostLogin.tsx";
 import type { ModelView } from "../../data.ts";
@@ -68,7 +69,7 @@ export const METHOD_WORDS: Record<Method, { label: string; detail: string }> = {
 };
 
 /** A method in the words of the draft's harness, where they differ from the general ones. */
-export function methodWords(harness: string, method: Method): { label: string; detail: string } {
+export function methodWords(harness: string, method: Method): { label: string; detail: ReactNode } {
   const facts = factsOf(harness);
   if (method === "api-key" && facts.providerKeys)
     return {
@@ -89,7 +90,12 @@ export function methodWords(harness: string, method: Method): { label: string; d
   if (method === "host-login" && facts.login === "adopt")
     return {
       label: METHOD_WORDS["host-login"].label,
-      detail: `You sign in with ${facts.binary} yourself on the engine host, and the model uses that login. This page shows whether it is signed in.`,
+      detail: (
+        <>
+          You sign in with <span className="mono">{facts.binary}</span> yourself on the engine host,
+          and the model uses that login. This page shows whether it is signed in.
+        </>
+      ),
     };
   return METHOD_WORDS[method];
 }
@@ -183,17 +189,6 @@ export function SignInStep({
         </FormField>
       ) : null}
 
-      {draft.harness === "qwen-code" && draft.method === "api-key" ? (
-        <ValueField
-          kind="text"
-          label="Endpoint"
-          value={draft.endpoint}
-          placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-          help="The OpenAI-compatible address Qwen Code calls. Empty uses the harness's own."
-          onChange={(v) => onChange({ endpoint: v })}
-        />
-      ) : null}
-
       {draft.method === "token" ? (
         <>
           <Text as="p" variant="body">
@@ -278,6 +273,17 @@ export function SignInStep({
             )}
           </div>
         )
+      ) : null}
+
+      {draft.harness === "qwen-code" && draft.method === "api-key" ? (
+        <ValueField
+          kind="text"
+          label="Endpoint"
+          value={draft.endpoint}
+          placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+          help="The OpenAI-compatible address Qwen Code calls. Empty uses the harness's own."
+          onChange={(v) => onChange({ endpoint: v })}
+        />
       ) : null}
 
       {draft.method === "cloud" ? (

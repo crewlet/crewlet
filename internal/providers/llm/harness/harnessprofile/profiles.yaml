@@ -1182,7 +1182,7 @@ gemini-cli:
     - path: .gemini/settings.json
       content: '{"privacy":{"usageStatisticsEnabled":false},"security":{"auth":{"selectedType":"gemini-api-key"}}}'
   model_args: ["--model", "{model}"]
-  effort_note: "Gemini CLI 0.65 reads a thinking level only from its settings.json, per model family (thinkingLevel or thinkingBudget), and the engine writes that file for each call"
+  effort_note: "Gemini CLI reads a thinking level only from its own settings file, per model family, which the engine writes for each call"
   # ONE CHANNEL, AND IT REPLACES: GEMINI_SYSTEM_MD names a file whose text is
   # the request's whole systemInstruction — no identity line of the vendor's
   # and nothing per call — so a seat and a side pass both take it. NO CHANNEL
@@ -1444,7 +1444,7 @@ qwen-code:
       in: work
       content: "# This call's environment is the engine's; nothing above this directory is read.\n"
   model_args: ["--model", "{model}"]
-  effort_note: "Qwen Code 0.26 reads model.reasoningEffort only from its settings.json, which the engine writes for each call"
+  effort_note: "Qwen Code reads its reasoning effort only from its own settings file, which the engine writes for each call"
   # BOTH SYSTEM-PROMPT CHANNELS, each a FILE a variable names, so the text
   # never reaches argv, where /proc/<pid>/cmdline makes it readable by every
   # account on the machine. The flags (--system-prompt,
@@ -2137,7 +2137,7 @@ cursor-agent:
     - path: .cursor/mcp.json
       content: '{"mcpServers":{}}'
   model_args: ["--model", "{model}"]
-  effort_note: "Cursor Agent takes effort only as part of the model id: name a variant `cursor-agent --list-models` prints, such as gpt-5.5-high"
+  effort_note: "Cursor Agent takes effort as part of the model id, such as gpt-5.5-high; cursor-agent --list-models lists them"
   # NO SYSTEM-PROMPT CHANNEL. The system prompt is assembled by Cursor's
   # service: the run request carries the user message and no system prompt
   # (its one field for one, set by the hidden --system-prompt, is documented
