@@ -31,6 +31,12 @@ import (
 // each a few bytes and each bounded by something the engine declares (the
 // alarm table bounds the marks).
 //
+// BOUNDED AS A WHOLE: the presence's Meta is held to [MaxLeaseMetaBytes],
+// derived from every field's own bound — the alarm table for the marks,
+// [MaxBuildBytes] for the build, Tier A for the labels beside it — so a field
+// added here is a field that bound has to be derived again for
+// (internal/engine, TestThePresenceLeaseAtItsWorstFitsItsBound).
+//
 // Freshness is the heartbeat interval, which is exactly the freshness every
 // other column of the fleet view already has, and the view prints how long
 // each lease has left — so a stale row reads as stale rather than as
@@ -153,7 +159,8 @@ type NodeStatus struct {
 	StartedAt time.Time
 
 	// Build is the engine build the node runs, as internal/version names it,
-	// and "" where a node said none. Whether every live node runs one build
+	// and "" where a node said none. [NodeStatus.Meta] carries at most
+	// [MaxBuildBytes] of it. Whether every live node runs one build
 	// is read off it: a fleet mid-upgrade hands work between builds by design.
 	Build string
 
@@ -290,7 +297,9 @@ func (s NodeStatus) Meta() map[string]any {
 		out["started_at"] = s.StartedAt.UTC().Format(time.RFC3339)
 	}
 	if s.Build != "" {
-		out["build"] = s.Build
+		// CUT to [MaxBuildBytes]: the one field of the core no table
+		// bounds, and the presence's bound is a sum over every field.
+		out["build"] = cutBuild(s.Build)
 	}
 	if s.ParkedStateVersion > 0 {
 		out["parked_state_version"] = s.ParkedStateVersion
