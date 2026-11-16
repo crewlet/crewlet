@@ -265,7 +265,7 @@ function groupItem(
   )[0]!;
   // THE META NAMES THE SUBJECT on a lone finding; with the subject before the title it would say it twice.
   const said =
-    group.length > 1 || (notice.subject !== undefined && item.meta === first.subject.name);
+    group.length > 1 || (notice.subject !== undefined && findingMeta(first) === first.subject.name);
   return {
     ...item,
     key: `${item.key}\u0000${group.length}`,

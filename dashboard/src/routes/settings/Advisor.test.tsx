@@ -579,3 +579,20 @@ test("the advisor in flight is a skeleton, and no claim that nothing needs chang
   expect(document.querySelector(".crewlet-skeleton")).not.toBeNull();
   expect(screen.queryByText("Nothing to change")).toBeNull();
 });
+
+test("a lone finding about one agent names it once, before its title", async () => {
+  const one = {
+    ...HEALTH,
+    names: ["Engineer"],
+    subject: { kind: "seat", seat: "pm", name: "Engineer" },
+  };
+  await mount({ revision: "r1", findings: [one], unread: [] });
+  const row = screen
+    .getByText(
+      (_, el) =>
+        el?.className === "crewlet-attention-list__line" && el.textContent!.endsWith(HEALTH.title),
+    )
+    .closest("li")!;
+  expect(row.querySelector(".crewlet-attention-list__subject")?.textContent).toBe("Engineer");
+  expect(row.querySelector(".crewlet-attention-list__meta")).toBeNull();
+});
