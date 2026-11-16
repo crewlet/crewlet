@@ -2,7 +2,14 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { CHANGE_DRAFT_CHIP, CHANGE_STATES, CODE_REF } from "@crewlethq/tokens/test/palette";
+import {
+  CHANGE_DRAFT_CHIP,
+  CHANGE_STATES,
+  CODE_GROUNDS,
+  CODE_PICK,
+  CODE_REF,
+  SYNTAX_INKS,
+} from "@crewlethq/tokens/test/palette";
 
 import { declared, sheetRules, type SheetRule } from "../test/sheets.ts";
 import {
@@ -13,6 +20,7 @@ import {
   modules,
   parse,
   resolveSource,
+  shippedText,
   stringValue,
   walk,
   type Lang,
@@ -23,8 +31,8 @@ import { spelled } from "../test/kit.ts";
 
 /**
  * THE CODE HOST'S COLOURS ARE GITLET'S (the one rule's seventh exception): its
- * change, syntax, ref and file colours are read by Gitlet's sheet alone, and
- * its marks drawn by Gitlet's modules and the screens that list its changes.
+ * change, ref and file colours are read by Gitlet's sheet alone, its syntax inks
+ * by its token sheet alone, and its marks drawn by Gitlet's modules and hosts.
  */
 
 /** The change, syntax, ref and file families; the diff family is `diffs.test.ts`'s. */
@@ -33,11 +41,17 @@ const FAMILY = /--color-(?:syntax|change-(?:open|merged|closed|draft)|code|file)
 /** Every code host token, the diff family's included. */
 const ALL = /--color-(?:diff|syntax|change-(?:open|merged|closed|draft)|code|file)-[\w-]+/g;
 
-/** The sheets that may read `FAMILY`. */
-const READERS: { file: string; why: string }[] = [
+/** The sheets that may read `FAMILY`, each only its own part of it. */
+const READERS: { file: string; family: RegExp; why: string }[] = [
   {
     file: "gitlet.css",
+    family: /^--color-(?:change-(?:open|merged|closed|draft)|code|file)-/,
     why: "Gitlet's own sheet, which arrives with its modules and the marks they lend.",
+  },
+  {
+    file: "gitlet-code.css",
+    family: /^--color-syntax-/,
+    why: "Code coloured by kind in Gitlet, each token in its kit syntax ink.",
   },
 ];
 
@@ -74,21 +88,25 @@ const HOSTS: { file: string; names: string[]; why: string }[] = [
 const ADDRESSES = "routes/gitlet/paths";
 const ANYWHERE = new Set(["CODE_LIST_POLL_MS"]);
 
-/** The one module that writes each mark's class. */
+/** The one module that writes each mark's class, and each token's. */
 const WRITERS: Record<string, string> = {
   "code-state": "routes/gitlet/Changes.tsx",
   "code-branch-chip": "routes/gitlet/ui.tsx",
+  ...Object.fromEntries(
+    SYNTAX_INKS.map((ink) => [`code-syn-${kindOf(ink)}`, "routes/gitlet/syntax.tsx"]),
+  ),
 };
 
 const inGitlet = (path: string) => path.startsWith("routes/gitlet/");
 
-/** Rules outside `READERS` reading the family, as `file selector -> token`. */
+/** Rules reading a part of the family no `READERS` entry gives their sheet, as `file selector -> token`. */
 export function familyRules(rules: readonly SheetRule[]): string[] {
-  return rules
-    .filter((rule) => !READERS.some((r) => r.file === rule.file))
-    .flatMap((rule) =>
-      [...rule.body.matchAll(FAMILY)].map((m) => `${rule.file} ${rule.selector} -> ${m[0]}`),
-    );
+  return rules.flatMap((rule) => {
+    const reader = READERS.find((r) => r.file === rule.file);
+    return [...rule.body.matchAll(FAMILY)]
+      .filter((m) => !reader?.family.test(m[0]))
+      .map((m) => `${rule.file} ${rule.selector} -> ${m[0]}`);
+  });
 }
 
 /** A code host token or the start of one a module builds; `--color-change-mark` is not one. */
@@ -268,6 +286,109 @@ export function miscastSteps(rules: readonly SheetRule[]): string[] {
   return out;
 }
 
+/** The kind a syntax ink is named for: `keyword` for `--color-syntax-keyword`. */
+function kindOf(ink: string): string {
+  return ink.slice("--color-syntax-".length);
+}
+
+/** The module that writes the token classes, the only one to spell their prefix. */
+const SYNTAX_WRITER = "routes/gitlet/syntax.tsx";
+
+/** Where a module other than [SYNTAX_WRITER] spells `code-syn-` in its shipped text, as `path:line`. */
+export function spelledPrefix(module: Module): string[] {
+  if (module.path === SYNTAX_WRITER) return [];
+  return shippedText(module)
+    .filter((piece) => piece.text.includes("code-syn-"))
+    .map((piece) => `${module.path}:${piece.line}`);
+}
+
+/** The token rules: one a syntax ink, each in `gitlet-code.css`. */
+const SYNTAX_RULES = new Set(SYNTAX_INKS.map((ink) => `.code-syn-${kindOf(ink)}`));
+
+/**
+ * Each token rule against its kit ink, the comment's also italic, and any
+ * other rule naming a token class or reading a syntax ink, over every sheet.
+ */
+export function unmeasuredSyntax(rules: readonly SheetRule[]): string[] {
+  const out: string[] = [];
+  const own = rules.filter((r) => r.file === "gitlet-code.css");
+  for (const ink of SYNTAX_INKS) {
+    const selector = `.code-syn-${kindOf(ink)}`;
+    let got: string | null;
+    try {
+      got = declared(selector, "color", own);
+    } catch (e) {
+      out.push(`gitlet-code.css ${(e as Error).message}`);
+      continue;
+    }
+    if (got !== ink) out.push(`gitlet-code.css ${selector} color: ${got}, not ${ink}`);
+    const body = own.find((r) => r.selector === selector)!.body;
+    for (const decl of body.split(";")) {
+      const at = /^\s*([\w-]+)\s*:\s*([\s\S]*?)\s*$/.exec(decl);
+      if (!at || at[1] === "color") continue;
+      if (selector === ".code-syn-comment" && at[1] === "font-style" && at[2] === "italic")
+        continue;
+      out.push(`gitlet-code.css ${selector} sets ${at[1]}`);
+    }
+    if (selector === ".code-syn-comment" && !/font-style\s*:\s*italic/.test(body)) {
+      out.push("gitlet-code.css .code-syn-comment is not italic");
+    }
+  }
+  for (const r of rules) {
+    if (!/\.code-syn-/.test(r.selector) && !r.body.includes("--color-syntax-")) continue;
+    if (r.file === "gitlet-code.css" && SYNTAX_RULES.has(r.selector)) continue;
+    out.push(`${r.file} ${r.selector} is not a token rule`);
+  }
+  return out;
+}
+
+/** The ink stylesheet, which only Gitlet imports. */
+const SYNTAX_SHEET = "styles/gitlet-code.css";
+
+/**
+ * Where a module outside Gitlet and `lib/syntax` reaches `lib/syntax` (a type
+ * draws nothing), or imports the token sheet. Test helpers never ship.
+ */
+export function syntaxSites(path: string, text: string, lang: Lang): string[] {
+  if (inGitlet(path) || path.startsWith("lib/syntax/") || path.startsWith("test/")) return [];
+  const line = lineOf(text);
+  const out: string[] = [];
+  walk(parse(text, lang), (node: Node) => {
+    const source = (node.source as Node | null | undefined)?.value;
+    if (typeof source !== "string") return;
+    const to = resolveSource(path, source) ?? "";
+    const typed = node.importKind === "type" || node.exportKind === "type";
+    if (to.startsWith("lib/syntax/") && !typed)
+      out.push(`${path}:${line(node.start)} reaches ${source}`);
+    if (to === SYNTAX_SHEET) out.push(`${path}:${line(node.start)} imports ${source}`);
+  });
+  return out;
+}
+
+/** A class whose element holds coloured code: its grounds are the ones the inks are measured on. */
+const CODE_HOLDERS = /\.code-(?:source|blame)(?:__(?:line|text))?(?![\w-])/;
+
+/**
+ * A rule painting a ground under coloured code with anything but the kit's
+ * code grounds, their hover or the pick, as `file selector property: value`.
+ */
+export function unmeasuredCodeGrounds(rules: readonly SheetRule[]): string[] {
+  const allowed = new Set([...CODE_GROUNDS, "--color-surface-hover", CODE_PICK]);
+  const out: string[] = [];
+  for (const rule of rules) {
+    if (!CODE_HOLDERS.test(rule.selector)) continue;
+    for (const decl of rule.body.split(";")) {
+      const at = /^\s*(background(?:-color)?)\s*:\s*([\s\S]*?)\s*$/.exec(decl);
+      if (!at) continue;
+      const value = at[2]!;
+      const token = /^var\((--color-[\w-]+)\)$/.exec(value)?.[1];
+      const ok = value === "none" || value === "transparent" || (token && allowed.has(token));
+      if (!ok) out.push(`${rule.file} ${rule.selector} ${at[1]}: ${value}`);
+    }
+  }
+  return out;
+}
+
 /** A grammar module: each is its own chunk, fetched by the registry. */
 const GRAMMAR = /^lib\/syntax\/lang-[\w-]+\.ts$/;
 const REGISTRY = "lib/syntax/index.ts";
@@ -304,15 +425,20 @@ function fetched(registry: Module): string[] {
 }
 
 describe("in the sheets", () => {
-  test("only Gitlet's sheet reads the change, syntax, ref and file colours", () => {
+  test("only Gitlet's sheets read the change, syntax, ref and file colours, each its own", () => {
     expect(familyRules(sheetRules())).toEqual([]);
-    for (const { file, why } of READERS) {
+    for (const { file, family, why } of READERS) {
       const reads = sheetRules()
         .filter((r) => r.file === file)
-        .flatMap((r) => [...r.body.matchAll(FAMILY)]);
-      expect(reads.length, `${file} no longer reads the family`).toBeGreaterThanOrEqual(2);
+        .flatMap((r) => [...r.body.matchAll(FAMILY)].map((m) => m[0]))
+        .filter((token) => family.test(token));
+      expect(reads.length, `${file} no longer reads its family`).toBeGreaterThanOrEqual(2);
       expect(why.length, file).toBeGreaterThan(40);
     }
+    const inks = sheetRules()
+      .filter((r) => r.file === "gitlet-code.css")
+      .flatMap((r) => [...r.body.matchAll(FAMILY)].map((m) => m[0]));
+    expect(new Set(inks)).toEqual(new Set(SYNTAX_INKS));
   });
 });
 
@@ -352,6 +478,14 @@ describe("in the tree", () => {
       }
     }
   });
+  test("no module but the token writer spells a token class's prefix", () => {
+    expect(modules().flatMap(spelledPrefix)).toEqual([]);
+  });
+
+  test("lib/syntax and the token sheet are reached only from Gitlet", () => {
+    expect(modules().flatMap((m) => syntaxSites(m.path, m.text, m.lang))).toEqual([]);
+  });
+
   test("each grammar is its own chunk, fetched only by the registry", () => {
     expect(modules().flatMap((m) => grammarImports(m.path, m.text, m.lang))).toEqual([]);
     const grammars = modules()
@@ -373,6 +507,14 @@ describe("in the palette", () => {
 
   test("a state pill and a branch chip paint the pairs the kit measures", () => {
     expect(unmeasuredPaints(sheetRules())).toEqual([]);
+  });
+
+  test("each token rule paints its kit ink, and no other rule names one", () => {
+    expect(unmeasuredSyntax(sheetRules())).toEqual([]);
+  });
+
+  test("the code the inks colour stands on the grounds they are measured on", () => {
+    expect(unmeasuredCodeGrounds(sheetRules())).toEqual([]);
   });
 
   test("no step of the code host's families is cast in another's role", () => {
@@ -598,6 +740,114 @@ describe("it can tell", () => {
     const elsewhere = 'const g = () => import("~/lib/syntax/lang-go.ts");';
     expect(grammarImports("routes/gitlet/syntax.tsx", elsewhere, "tsx")).toEqual([
       "routes/gitlet/syntax.tsx:1 fetches ~/lib/syntax/lang-go.ts",
+    ]);
+  });
+  test("a syntax ink read outside the token sheet, or the token sheet reading anything else", () => {
+    expect(
+      familyRules([
+        rule("gitlet.css", ".code-syn-x", "color: var(--color-syntax-string);"),
+        rule("gitlet-code.css", ".code-syn-x", "color: var(--color-syntax-string);"),
+        rule("gitlet-code.css", ".x", "background: var(--color-code-ref-fill);"),
+      ]),
+    ).toEqual([
+      "gitlet.css .code-syn-x -> --color-syntax-string",
+      "gitlet-code.css .x -> --color-code-ref-fill",
+    ]);
+  });
+
+  test("a token rule off its ink, missing, not italic, or a stray one", () => {
+    const sheet = SYNTAX_INKS.map((ink) =>
+      rule(
+        "gitlet-code.css",
+        `.code-syn-${ink.slice("--color-syntax-".length)}`,
+        ink.endsWith("-comment")
+          ? `color: var(${ink}); font-style: italic;`
+          : `color: var(${ink});`,
+      ),
+    );
+    expect(unmeasuredSyntax(sheet)).toEqual([]);
+    const swap = (selector: string, body: string) =>
+      sheet.map((r) => (r.selector === selector ? { ...r, body } : r));
+    expect(unmeasuredSyntax(swap(".code-syn-keyword", "color: var(--color-syntax-type);"))).toEqual(
+      ["gitlet-code.css .code-syn-keyword color: --color-syntax-type, not --color-syntax-keyword"],
+    );
+    expect(unmeasuredSyntax(sheet.filter((r) => r.selector !== ".code-syn-number"))).toEqual([
+      "gitlet-code.css .code-syn-number is declared 0 times, not once",
+    ]);
+    expect(
+      unmeasuredSyntax(swap(".code-syn-comment", "color: var(--color-syntax-comment);")),
+    ).toEqual(["gitlet-code.css .code-syn-comment is not italic"]);
+    expect(
+      unmeasuredSyntax(
+        swap(".code-syn-keyword", "color: var(--color-syntax-keyword); font-weight: 600;"),
+      ),
+    ).toEqual(["gitlet-code.css .code-syn-keyword sets font-weight"]);
+    expect(
+      unmeasuredSyntax([
+        ...sheet,
+        rule(
+          "gitlet-code.css",
+          ".code-source .code-syn-string",
+          "color: var(--color-syntax-type);",
+        ),
+      ]),
+    ).toEqual(["gitlet-code.css .code-source .code-syn-string is not a token rule"]);
+  });
+
+  test("a token class written, or its prefix spelled, by another module", () => {
+    const at = (path: string, text: string): Module => ({ path, text, lang: "tsx" });
+    expect(
+      classWrites(
+        at("routes/gitlet/repo/Files.tsx", 'const c = "code-syn-keyword";'),
+        "code-syn-keyword",
+      ),
+    ).toEqual([1]);
+    expect(
+      spelledPrefix(at("routes/gitlet/Search.tsx", "const c = (k: string) => `code-syn-${k}`;")),
+    ).toEqual(["routes/gitlet/Search.tsx:1"]);
+    expect(
+      spelledPrefix(at("routes/gitlet/syntax.tsx", "const c = (k: string) => `code-syn-${k}`;")),
+    ).toEqual([]);
+  });
+
+  test("lib/syntax or the token sheet reached outside Gitlet", () => {
+    const config = "routes/settings/Config.tsx";
+    expect(syntaxSites(config, 'import { language } from "~/lib/syntax/index.ts";', "tsx")).toEqual(
+      [`${config}:1 reaches ~/lib/syntax/index.ts`],
+    );
+    expect(
+      syntaxSites(config, 'import type { Token } from "~/lib/syntax/types.ts";', "tsx"),
+    ).toEqual([]);
+    expect(
+      syntaxSites(config, 'const g = await import("~/lib/syntax/lang-go.ts");', "tsx"),
+    ).toEqual([`${config}:1 reaches ~/lib/syntax/lang-go.ts`]);
+    expect(
+      syntaxSites(
+        "routes/gitlet/repo/Files.tsx",
+        'import { language } from "~/lib/syntax/index.ts";',
+        "tsx",
+      ),
+    ).toEqual([]);
+    expect(syntaxSites("routes/home/X.tsx", 'import "~/styles/gitlet-code.css";', "tsx")).toEqual([
+      "routes/home/X.tsx:1 imports ~/styles/gitlet-code.css",
+    ]);
+  });
+
+  test("a ground under coloured code the inks are not measured on", () => {
+    expect(
+      unmeasuredCodeGrounds([
+        rule(
+          "gitlet.css",
+          ".code-source__line[data-picked]",
+          "background: var(--color-brand-accent-soft);",
+        ),
+        rule("gitlet.css", ".code-source__line:hover", "background: var(--color-surface-hover);"),
+        rule("gitlet.css", ".code-blame__commit", "background: var(--color-brand-accent-soft);"),
+        rule("gitlet.css", ".code-blame tr[data-picked]", `background: var(${CODE_PICK});`),
+        rule("gitlet.css", ".code-source__number", "background: none;"),
+      ]),
+    ).toEqual([
+      "gitlet.css .code-source__line[data-picked] background: var(--color-brand-accent-soft)",
     ]);
   });
 });

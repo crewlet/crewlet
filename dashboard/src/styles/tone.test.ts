@@ -188,6 +188,11 @@ const ACCENT_RULES: SheetSite[] = [
     selector: ".code-branch-chip",
     why: "A branch on the kit's code-ref chip, the accent's soft step and ink, beside its glyph: a kind in Gitlet's code, never an action.",
   },
+  {
+    file: "gitlet-code.css",
+    selector: ".code-syn-keyword",
+    why: "A keyword in code read in Gitlet, in the accent's ink beside its own word: a kind of word, never an action.",
+  },
 ];
 
 /** The code host family's names, which alias other steps. */

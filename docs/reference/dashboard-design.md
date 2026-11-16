@@ -131,9 +131,10 @@ filled only from a value that passed the design system's `#rrggbb` gate, never
 from raw CSS; and drawn with an edge of its own, so a colour that matches the
 ground is still a swatch.
 
-The seventh is **code read in Gitlet**: its diffs (`hue="code"`), a change's
-state pill and a branch chip wear the kit's code host colours, each hue a kind
-beside its sign, word or glyph: never done, a fault or an action.
+The seventh is **code read in Gitlet**: its diffs (`hue="code"`), its files'
+code coloured by kind, a change's state pill and a branch chip wear the kit's
+code host colours, each hue a kind beside its sign, word or glyph: never done,
+a fault or an action.
 
 Outside Gitlet no diff wears them; the pill and chip appear only in its
 Changes grid (a task, a seat, My work), its peek, Home's code card and the
@@ -329,6 +330,16 @@ as installed — and no `VersionCompare` is handed the two texts that would make
 it draw one);
 `lib/lineDiff.test.ts` holds the same of the package's `diffLines`, which
 nothing compares with; `components/DiffView.test.tsx` holds what it draws.
+
+### Code is coloured by kind in Gitlet
+
+A file Gitlet draws under 256 KiB, and its blame, colour each token in the
+kit's syntax ink for its kind (`lib/syntax/`, one fetched grammar a language),
+its state walked from line 1; a larger file, or a plain-text one, is plain.
+
+The lines paint plain and their colours follow, and a file opened past line 1
+waits for the lines above it, read by its blob's id, so no line changes
+colour. `styles/codehost.test.ts` keeps the inks to `gitlet-code.css`.
 
 ---
 
@@ -8763,6 +8774,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   name can shadow), `path=` the directory or the file, `lens=blame`, and
   `lines=` the lines picked — pressing a line's number picks it, Shift
   extends the run — drawn RULED, never tinted.
+  Its code is coloured by kind
+  ([Code is coloured by kind in Gitlet](#code-is-coloured-by-kind-in-gitlet)).
   An address that picks `lines=` — a hit on Gitlet › Search, a ⌘K hit or a
   Permalink — OPENS AT THE LINE: the path's one read asks from fifty lines
   before it (`code_blob`'s `start_line`), decided before anything is read,
