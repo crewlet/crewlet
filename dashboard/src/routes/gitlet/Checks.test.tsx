@@ -188,6 +188,12 @@ test("an attempt opens whole, its failures linked into its diff and its log read
   expect(target.hash).toContain("line=12");
   expect(within(pane).getByText("--- FAIL: TestRetry")).toBeTruthy();
   expect(asked.some((u) => u.pathname === "/query/code_check_log")).toBe(false);
+  // THE BRANCH CHECKED IS ITS CHIP, in the row ("for main", a space kept) and
+  // in the pane's For. Mutation: drop the space after "for", and this fails.
+  const chip = row.querySelector(".code-branch-chip");
+  expect(chip?.textContent).toBe("main");
+  expect(chip?.parentElement?.textContent).toContain("for main");
+  expect(within(pane).getByText("main").closest(".code-branch-chip")).not.toBeNull();
 
   fireEvent.click(within(pane).getByRole("button", { name: /Read its log/ }));
   expect(await within(pane).findByText(/=== RUN TestRetry/)).toBeTruthy();

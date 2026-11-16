@@ -1,17 +1,11 @@
 /**
- * Every diff the dashboard draws: one component, and no hue.
+ * Every diff the dashboard draws: one component, coloured only in Gitlet.
  *
  * # Why it is local
  *
- * The design system has a `DiffView`, a `DiffSummary` and a `DiffList`, and
- * all three paint an added line in the success state's tint and a removed one
- * in the danger state's. Here colour carries STATE ("The one rule" in
- * docs/reference/dashboard-design.md), and a diff is not one: a removed line is
- * not a failure and an added one is not done, and on a page that also draws a
- * failed check, a red removed line beside a red failed-check chip makes one red
- * mean two things. So every diff is drawn by this one component, from the
- * package's tokens, and none of the three is imported anywhere
- * (`styles/diffs.test.ts`).
+ * The design system's diffs paint the code host's tints, and outside Gitlet
+ * colour carries STATE ("The one rule"), so every diff is this one component,
+ * coloured only through [DiffViewProps.hue] (`styles/diffs.test.ts`).
  *
  * # Two texts are compared by the dashboard's one line diff
  *
@@ -23,7 +17,7 @@
  * the lines it marks), a sentence says so and why, in place of every row: a
  * comparison not made is never drawn as though it had been.
  *
- * # What tells a line's kind, with no hue
+ * # What tells a line's kind
  *
  * Three things, each enough alone:
  *
@@ -42,6 +36,8 @@
  *   Which two lines those are is read off the change's shape, a setting's
  *   path or a text's place ([pairsOf]), and where the shape cannot say, no
  *   line is underlined: an underline is a claim that two lines are one.
+ *
+ * In Gitlet ([DiffViewProps.hue]) the kit's tints stand in for the two steps.
  *
  * # The shapes it takes
  *
@@ -218,6 +214,11 @@ export type DiffViewProps = DiffSource & {
    * new reveal.
    */
   reveal?: ((line: DiffLine) => boolean) | undefined;
+  /**
+   * "code" draws the lines in the kit's code host colours: every diff Gitlet
+   * draws passes it and no other does (`styles/diffs.test.ts`).
+   */
+  hue?: "code" | undefined;
 };
 
 /**
@@ -901,7 +902,7 @@ function RowView({ row, tracks, pairs }: { row: Row; tracks: Tracks; pairs: Pair
 
 export function DiffView(props: DiffViewProps) {
   const { layout = "unified", against, empty, "aria-label": label } = props;
-  const { notes, onPick, picked, reveal } = props;
+  const { notes, onPick, picked, reveal, hue } = props;
   const { hunks: given, before, after, context } = props;
   // TWO TEXTS ARE COMPARED ONCE, for as long as they are the two texts.
   const compared = useMemo(
@@ -950,6 +951,7 @@ export function DiffView(props: DiffViewProps) {
       aria-label={label ?? "Line changes"}
       className={cx(
         "diff-view",
+        hue === "code" && "diff-view--code",
         shape.numbered && "diff-view--numbered",
         shape.keyed && "diff-view--keyed",
         split && "diff-view--split",

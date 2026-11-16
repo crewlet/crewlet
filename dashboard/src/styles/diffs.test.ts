@@ -4,6 +4,10 @@ import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_THEME_ID, themeRegistry } from "@crewlethq/tokens";
 import {
+  CODE_GROUNDS,
+  CODE_PICK,
+  DIFF_HUNK,
+  DIFF_ROWS,
   OPAQUE_SURFACES,
   RUNG_STEPS,
   deltaE,
@@ -13,12 +17,14 @@ import {
 } from "@crewlethq/tokens/test/palette";
 
 import { KIT, kitModule, kitReaches, spelled } from "../test/kit.ts";
-import { sheetRules, type SheetRule } from "../test/sheets.ts";
+import { declared, sheetRules, splitSelectors, type SheetRule } from "../test/sheets.ts";
 import {
+  classWrites,
   isLocalSource,
   lineOf,
   modules,
   parse,
+  resolveSource,
   stringValue,
   walk,
   type Lang,
@@ -26,15 +32,17 @@ import {
 } from "../test/source.ts";
 
 /**
- * DIFFS CARRY NO HUE ("Diffs carry no hue" in docs/reference/dashboard-design.md).
+ * A DIFF CARRIES NO HUE OUTSIDE GITLET
+ * (`dashboard-design.md#a-diff-carries-no-hue-outside-gitlet`).
  *
  * Colour carries STATE here, and a diff is not one: a removed line is not a
  * failure and an added one is not done. The design system's three diffs —
  * `DiffView`, `DiffSummary`, `DiffList` — tint an added line with the success
- * state and a removed one with the danger state, and so did this tree's own
- * configuration diff. On the page that draws a change, a red failed-check chip
- * beside red removed lines makes one red mean two things. So every diff is
- * `components/DiffView.tsx`, and this file holds the rule three ways:
+ * state and a removed one with the danger state wherever they are drawn, and
+ * so did this tree's own configuration diff. On the page that draws a change,
+ * a red failed-check chip beside red removed lines makes one red mean two
+ * things. So every diff is `components/DiffView.tsx`, and this file holds the
+ * rule four ways:
  *
  * - IN THE SHEETS: no rule that names a diff spends a state's hue, a chart
  *   series' or an identity's.
@@ -45,6 +53,9 @@ import {
  *   that draws them, through a namespace, a dynamic import or a re-export of a
  *   module the package says exports them — and nothing hands its
  *   `VersionCompare` the two texts that would make it draw one.
+ * - IN GITLET: only `.diff-view--code` reads the diff colours, every Gitlet
+ *   diff passes `hue="code"` and no other does, and the steps it paints are
+ *   the kit's measured ones.
  *
  * The accent is not among the hues forbidden: it says where the reader is (a
  * focus ring, a range they picked), which is never a line's kind.
@@ -93,6 +104,131 @@ describe("in the sheets", () => {
   });
 });
 
+/** The diff family's tokens. */
+const DIFF_FAMILY = /--color-diff-[\w-]+/g;
+
+/**
+ * Every rule reading the diff family that is not wholly a coloured diff's in
+ * `diff.css`, as `file selector -> token`.
+ */
+export function uncodedDiffRules(rules: readonly SheetRule[]): string[] {
+  return rules.flatMap((rule) => {
+    const coded =
+      rule.file === "diff.css" &&
+      splitSelectors(rule.selector).every((s) => /^\.diff-view--code(?![\w-])/.test(s));
+    return coded
+      ? []
+      : [...rule.body.matchAll(DIFF_FAMILY)].map((m) => `${rule.file} ${rule.selector} -> ${m[0]}`);
+  });
+}
+
+/** Every rule that takes a changed run's underline away, as `file selector`. */
+export function runUnderlineRemovals(rules: readonly SheetRule[]): string[] {
+  return rules
+    .filter(
+      (rule) =>
+        /\.diff-view__run(?![\w-])/.test(rule.selector) &&
+        /(?:^|[;\s])text-decoration(?:-line)?\s*:\s*(?:none|initial|unset)\b/.test(rule.body),
+    )
+    .map((rule) => `${rule.file} ${rule.selector}`);
+}
+
+describe("in Gitlet's sheets", () => {
+  test("only a coloured diff's rules read the diff colours", () => {
+    const reading = sheetRules().filter((rule) => /--color-diff-/.test(rule.body));
+    // A VACUITY FLOOR: the two kinds' rows, signs, numbers and runs, and the hunk.
+    expect(reading.length).toBeGreaterThanOrEqual(8);
+    expect(uncodedDiffRules(sheetRules())).toEqual([]);
+  });
+
+  test("it can tell: the diff colours read outside a coloured diff are reported", () => {
+    const rule = (file: string, selector: string, body: string): SheetRule => ({
+      file,
+      selector,
+      body,
+    });
+    expect(
+      uncodedDiffRules([
+        rule(
+          "diff.css",
+          '.diff-view__line[data-kind="add"]',
+          "background: var(--color-diff-added-row);",
+        ),
+        rule("gitlet.css", ".code-ftree__status", "color: var(--color-diff-added-sign);"),
+        rule("diff.css", ".diff-view--code .x, .y", "color: var(--color-diff-removed-sign);"),
+        rule(
+          "diff.css",
+          '.diff-view--code .diff-view__line[data-kind="add"]',
+          "background: var(--color-diff-added-row);",
+        ),
+      ]),
+    ).toEqual([
+      'diff.css .diff-view__line[data-kind="add"] -> --color-diff-added-row',
+      "gitlet.css .code-ftree__status -> --color-diff-added-sign",
+      "diff.css .diff-view--code .x, .y -> --color-diff-removed-sign",
+    ]);
+  });
+
+  test("nothing takes a changed run's underline away", () => {
+    const runs = sheetRules().filter((rule) => /\.diff-view__run(?![\w-])/.test(rule.selector));
+    // A VACUITY FLOOR: the base run and the two coloured kinds'.
+    expect(runs.length).toBeGreaterThanOrEqual(3);
+    expect(runUnderlineRemovals(sheetRules())).toEqual([]);
+  });
+
+  test("it can tell: a run's underline taken away is reported", () => {
+    const run = '.diff-view--code .diff-view__line[data-kind="add"] .diff-view__run';
+    const tint = "background: var(--color-diff-added-word);";
+    expect(
+      runUnderlineRemovals([
+        { file: "diff.css", selector: run, body: `${tint} text-decoration-line: none;` },
+        { file: "diff.css", selector: run, body: `${tint} text-decoration: none;` },
+        { file: "diff.css", selector: ".diff-view__run", body: "text-decoration-line: underline;" },
+      ]),
+    ).toEqual([`diff.css ${run}`, `diff.css ${run}`]);
+  });
+});
+
+/**
+ * Every rule ruling a picked line by a shadow alone, as `file selector`: forced
+ * colours drop every shadow and paint an outline, so a pick needs one.
+ */
+export function unoutlinedPicks(rules: readonly SheetRule[]): string[] {
+  return rules
+    .filter(
+      (rule) =>
+        rule.selector.includes("[data-picked]") &&
+        /(?:^|[;\s])box-shadow\s*:/.test(rule.body) &&
+        !/(?:^|[;\s])outline\s*:(?!\s*(?:none\b|0(?:px)?\s*(?:;|$)))/.test(rule.body),
+    )
+    .map((rule) => `${rule.file} ${rule.selector}`);
+}
+
+describe("a picked line", () => {
+  test("a pick ruled by a shadow carries an outline, which forced colours paint", () => {
+    const ruled = sheetRules().filter(
+      (rule) => rule.selector.includes("[data-picked]") && /box-shadow\s*:/.test(rule.body),
+    );
+    // A VACUITY FLOOR: the diff's pick and the file view's.
+    expect(ruled.length).toBeGreaterThanOrEqual(2);
+    expect(unoutlinedPicks(sheetRules())).toEqual([]);
+  });
+
+  test("it can tell: a pick ruled by a shadow alone is reported", () => {
+    const shadow = "box-shadow: inset 2px 0 0 var(--color-border-strong);";
+    const pick = (body: string): SheetRule => ({
+      file: "diff.css",
+      selector: ".diff-view__line[data-picked]",
+      body,
+    });
+    expect(unoutlinedPicks([pick(shadow)])).toEqual(["diff.css .diff-view__line[data-picked]"]);
+    expect(unoutlinedPicks([pick(`${shadow} outline: 2px solid transparent;`)])).toEqual([]);
+    expect(unoutlinedPicks([pick(`${shadow} outline: none;`)])).toEqual([
+      "diff.css .diff-view__line[data-picked]",
+    ]);
+  });
+});
+
 /** The token the sheets' one rule for exactly `selector` paints its background with. */
 function paint(selector: string): string {
   const rules = sheetRules().filter((r) => r.selector === selector);
@@ -136,6 +272,29 @@ function floor(upper: string, lower: string): number {
   return step![3];
 }
 
+/** A coloured diff's line of one kind, as its rules select it. */
+const codedLine = (kind: string) =>
+  `.diff-view--code .diff-view__line[data-kind="${kind === "added" ? "add" : "remove"}"]`;
+
+/** The coloured diff's rules that read the diff colours: each kind's row, sign, number and run, and the skip. */
+const CODED_STEPS = [
+  ...DIFF_ROWS.flatMap(({ kind }) => [
+    codedLine(kind),
+    `${codedLine(kind)} .diff-view__mark`,
+    `${codedLine(kind)}:not([data-picked]) .diff-view__number`,
+    `${codedLine(kind)} .diff-view__run`,
+  ]),
+  ".diff-view--code .diff-view__skip",
+];
+
+/** Every `diff.css` rule reading the diff colours that is not one of `CODED_STEPS`, as `file selector`. */
+export function unlistedDiffPaints(rules: readonly SheetRule[]): string[] {
+  return rules
+    .filter((r) => r.file === "diff.css" && /--color-diff-/.test(r.body))
+    .filter((r) => !CODED_STEPS.includes(r.selector))
+    .map((r) => `${r.file} ${r.selector}`);
+}
+
 describe("in the palette", () => {
   // TWO SURFACE STEPS, ONE EITHER SIDE OF THE GROUND: the rungs are the
   // package's ladder (`OPAQUE_SURFACES`, frame to raised), so an added line
@@ -175,6 +334,41 @@ describe("in the palette", () => {
       );
       expect(deltaE(u, d), `${state}: an added line off a removed one`).toBeGreaterThan(0);
     }
+  });
+
+  // THE COLOURED DIFF PAINTS WHAT THE PALETTE MEASURES: the family's steps,
+  // over a ground the kit measures them on. A step drawn elsewhere is unmeasured.
+  test("a coloured diff paints the kit's measured steps, on a ground they are measured on", () => {
+    expect(CODE_GROUNDS).toContain(paint(".diff-view__body"));
+    for (const { kind, row, gutter, word, sign } of DIFF_ROWS) {
+      const line = codedLine(kind);
+      expect(declared(line, "background")).toBe(row);
+      expect(declared(line, "box-shadow")).toBe(gutter);
+      expect(declared(`${line} .diff-view__mark`, "color")).toBe(sign);
+      expect(declared(`${line}:not([data-picked]) .diff-view__number`, "color")).toBe(sign);
+      expect(declared(`${line} .diff-view__run`, "background")).toBe(word);
+    }
+    expect(declared(".diff-view--code .diff-view__skip", "background")).toBe(DIFF_HUNK.row);
+    expect(
+      declared(".diff-view--code .diff-view__line[data-kind][data-picked]", "background"),
+    ).toBe(CODE_PICK);
+    expect(CODED_STEPS).toHaveLength(9);
+    expect(unlistedDiffPaints(sheetRules())).toEqual([]);
+  });
+
+  test("it can tell: a coloured diff painting a step outside those it declares", () => {
+    const rule = (selector: string, body: string): SheetRule => ({
+      file: "diff.css",
+      selector,
+      body,
+    });
+    expect(
+      unlistedDiffPaints([
+        rule(".diff-view--code .diff-view__text", "background: var(--color-diff-added-mark);"),
+        rule(`${codedLine("added")} .diff-view__run`, "background: var(--color-diff-added-word);"),
+        rule(".diff-view--code .diff-view__skip", "background: var(--color-diff-hunk-row);"),
+      ]),
+    ).toEqual(["diff.css .diff-view--code .diff-view__text"]);
   });
 });
 
@@ -411,5 +605,163 @@ describe("in the tree", () => {
       "ways.tsx:15 hands VersionCompare `after`",
       "ways.tsx:16 spreads into VersionCompare",
     ]);
+  });
+});
+
+/** Every Gitlet module drawing a DiffView, each with `hue="code"`: two-sided. */
+const CODE_DIFFS: { file: string; why: string }[] = [
+  {
+    file: "routes/gitlet/change/Files.tsx",
+    why: "A change's files, each read in its revision's diff, with its findings.",
+  },
+  {
+    file: "routes/gitlet/commit/DiffFiles.tsx",
+    why: "A commit's files and a comparison's, each read in its diff.",
+  },
+];
+
+const DIFF_MODULE = "components/DiffView";
+
+/** Whether a module sits in the Gitlet workspace. */
+const inGitlet = (path: string) => path.startsWith("routes/gitlet/");
+
+/** Each JSX element of a module that draws the tree's DiffView, by any local name. */
+function diffElements(path: string, text: string, lang: Lang): Node[] {
+  const program = parse(text, lang);
+  const names = new Set<string>();
+  const spaces = new Set<string>();
+  for (const node of program.body as Node[]) {
+    if (node.type !== "ImportDeclaration") continue;
+    const to = resolveSource(path, String((node.source as Node).value));
+    if (to?.replace(/\.tsx?$/, "") !== DIFF_MODULE) continue;
+    for (const spec of node.specifiers as Node[]) {
+      const local = String((spec.local as Node).name);
+      if (spec.type === "ImportNamespaceSpecifier") spaces.add(local);
+      else if (spec.type === "ImportSpecifier" && spelled(spec.imported as Node) === "DiffView") {
+        names.add(local);
+      }
+    }
+  }
+  const out: Node[] = [];
+  walk(program, (node: Node) => {
+    if (node.type !== "JSXOpeningElement") return;
+    const name = node.name as Node;
+    const drawn =
+      name.type === "JSXIdentifier"
+        ? names.has(String(name.name))
+        : name.type === "JSXMemberExpression" &&
+          (name.object as Node).type === "JSXIdentifier" &&
+          spaces.has(String((name.object as Node).name)) &&
+          (name.property as Node).name === "DiffView";
+    if (drawn) out.push(node);
+  });
+  return out;
+}
+
+/** Whether a module draws the tree's DiffView. */
+export function drawsDiffView(path: string, text: string, lang: Lang): boolean {
+  return diffElements(path, text, lang).length > 0;
+}
+
+/**
+ * Where a module draws the tree's DiffView against the rule: in Gitlet without
+ * `hue="code"`, outside it with a hue, or anywhere through a spread.
+ */
+export function hueSites(path: string, text: string, lang: Lang): string[] {
+  const line = lineOf(text);
+  const out: string[] = [];
+  for (const element of diffElements(path, text, lang)) {
+    const at = `${path}:${line(element.start)}`;
+    let hue: Node | null = null;
+    for (const attribute of element.attributes as Node[]) {
+      if (attribute.type === "JSXSpreadAttribute") out.push(`${at} spreads into DiffView`);
+      else if ((attribute.name as Node).name === "hue") hue = attribute;
+    }
+    if (!inGitlet(path)) {
+      if (hue) out.push(`${at} passes hue to DiffView`);
+      continue;
+    }
+    if (!hue) {
+      out.push(`${at} draws DiffView without hue="code"`);
+      continue;
+    }
+    const value = hue.value as Node | null;
+    const given =
+      value?.type === "JSXExpressionContainer"
+        ? stringValue(value.expression as Node)
+        : stringValue(value ?? undefined);
+    if (given !== "code") out.push(`${at} passes a hue other than "code"`);
+  }
+  return out;
+}
+
+describe("in Gitlet's tree", () => {
+  test('every Gitlet diff passes hue="code", and no other diff passes a hue', () => {
+    expect(modules().flatMap((m) => hueSites(m.path, m.text, m.lang))).toEqual([]);
+  });
+
+  test("every Gitlet module that draws a DiffView is listed, and every listed one still draws one", () => {
+    const drawing = modules()
+      .filter((m) => inGitlet(m.path) && drawsDiffView(m.path, m.text, m.lang))
+      .map((m) => m.path);
+    expect(drawing).toEqual(CODE_DIFFS.map((d) => d.file).sort());
+    for (const { file, why } of CODE_DIFFS) expect(why.length, file).toBeGreaterThan(40);
+  });
+
+  test("only DiffView writes its code hue's class", () => {
+    for (const m of modules()) {
+      const writes = classWrites(m, "diff-view--code");
+      if (m.path === "components/DiffView.tsx") expect(writes, m.path).not.toEqual([]);
+      else expect(writes, m.path).toEqual([]);
+    }
+  });
+
+  test("it can tell: a hue outside Gitlet, a spread, a Gitlet diff without it and a hand-written class are reported", () => {
+    const named = 'import { DiffView } from "~/components/DiffView.tsx";';
+    expect(
+      hueSites(
+        "routes/settings/Config.tsx",
+        `${named}\nconst A = () => <DiffView hunks={h} hue="code" />;`,
+        "tsx",
+      ),
+    ).toEqual(["routes/settings/Config.tsx:2 passes hue to DiffView"]);
+    expect(
+      hueSites(
+        "routes/doclet/X.tsx",
+        'import * as d from "../../components/DiffView.tsx";\nconst A = () => <d.DiffView hue="code" />;',
+        "tsx",
+      ),
+    ).toEqual(["routes/doclet/X.tsx:2 passes hue to DiffView"]);
+    expect(
+      hueSites(
+        "routes/doclet/X.tsx",
+        'import { DiffView as Diff } from "~/components/DiffView.tsx";\nconst A = () => <Diff {...p} />;',
+        "tsx",
+      ),
+    ).toEqual(["routes/doclet/X.tsx:2 spreads into DiffView"]);
+    const files = "routes/gitlet/change/Files.tsx";
+    expect(hueSites(files, `${named}\nconst A = () => <DiffView hunks={h} />;`, "tsx")).toEqual([
+      `${files}:2 draws DiffView without hue="code"`,
+    ]);
+    expect(hueSites(files, `${named}\nconst A = () => <DiffView hue={pick} />;`, "tsx")).toEqual([
+      `${files}:2 passes a hue other than "code"`,
+    ]);
+    const talk = "routes/gitlet/change/Conversation.tsx";
+    expect(hueSites(talk, `${named}\nconst A = () => <DiffView hunks={h} />;`, "tsx")).toEqual([
+      `${talk}:2 draws DiffView without hue="code"`,
+    ]);
+    expect(
+      hueSites(
+        "routes/gitlet/commit/DiffFiles.tsx",
+        `${named}\nconst A = () => <DiffView hunks={h} hue="code" />;`,
+        "tsx",
+      ),
+    ).toEqual([]);
+    const written = {
+      path: files,
+      text: 'const c = cx("diff-view--code", x);',
+      lang: "tsx" as const,
+    };
+    expect(classWrites(written, "diff-view--code")).toEqual([1]);
   });
 });

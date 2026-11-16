@@ -2653,6 +2653,8 @@ const (
 	// The Gitlet tags and times in words train, on kit 0.137.0: 6355.5 KiB (6,508,053 bytes), 1,217 over main: 6356 KiB.
 	// Every harness in the model wizard, its own chunk, and reasoning effort, on kit 0.137.0: 6370.6 KiB: 6371 KiB.
 	// The model effort and every harness train, on kit 0.137.0: 6371.8 KiB (6,524,759 bytes), 16,686 over main: 6372 KiB.
+	// Gitlet's code host colours (diffs, change states, branches), on kit 0.137.0:
+	// 6358.5 KiB (6,511,153 bytes), 3,100 bytes over main: 6359 KiB.
 	treeBudget = 5<<20 + 1252<<10
 )
 

@@ -12,7 +12,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { MAX_COMPARE_LINES, MAX_EDITS } from "~/lib/lineDiff.ts";
 import { changedRuns } from "~/lib/wordDiff.ts";
-import { sheetRules } from "~/test/sheets.ts";
+import { sheetRules, splitSelectors } from "~/test/sheets.ts";
 import { DiffView, WINDOW_BLOCK_ROWS, WINDOW_FROM_ROWS, type DiffHunk } from "./DiffView.tsx";
 
 // THE UNDERLINE'S READING, WATCHED: a pass-through, so every case below draws
@@ -578,28 +578,86 @@ describe("a diff a host writes on", () => {
   });
 });
 
-// NO HUE. The design system's diffs paint an added line in the success
-// state's tint and a removed one in the danger state's; here colour carries
-// state, and a diff is not one. Every rule that can reach what the diff draws
-// is read, so a rule added later for any class it carries is held too. The
-// accent is not in the list: it says where the reader is (a focus ring, a
-// range they picked), which is never a line's kind.
+// THE CODE HUE IS A CLASS ON THE ROOT AND NOTHING ELSE: the same rows, marks,
+// words and runs either way. Mutation: draw the run or the mark differently
+// under the hue, or drop the class, and this fails.
+describe("in Gitlet", () => {
+  test("a diff Gitlet reads as code takes the code hue on its root, and draws the same lines", () => {
+    const hunks: DiffHunk[] = [
+      {
+        skipped: 4,
+        lines: [
+          same(5, 5, "keep"),
+          removed(6, "paid in any order"),
+          added(6, "paid in join order"),
+        ],
+      },
+    ];
+    const read = (root: HTMLElement) => ({
+      lines: lines(root),
+      runs: runs(root),
+      marks: [...root.querySelectorAll(".diff-view__mark")].map((m) => m.textContent),
+      skips: [...root.querySelectorAll(".diff-view__skip")].map((m) => m.textContent),
+    });
+    const plain = render(<DiffView hunks={hunks} />);
+    const before = read(plain.container);
+    expect(plain.container.querySelector(".diff-view")?.classList.contains("diff-view--code")).toBe(
+      false,
+    );
+    plain.unmount();
+    const coded = render(<DiffView hunks={hunks} hue="code" />);
+    expect(coded.container.querySelector(".diff-view")?.classList.contains("diff-view--code")).toBe(
+      true,
+    );
+    expect(read(coded.container)).toEqual(before);
+    expect(before.skips).toHaveLength(1);
+    expect(before.runs.length).toBeGreaterThan(0);
+  });
+});
+
+// NO HUE OUTSIDE GITLET: no rule that reaches what a diff draws spends a state's
+// hue, and in Gitlet only the code hue's own rules do. The accent is not listed:
+// it marks where the reader is, never a line's kind.
 describe("what a diff draws", () => {
-  test("is reached by no rule that spends a state's, a series' or an identity's hue", () => {
-    const { container } = render(<DiffView {...EDIT} layout="split" against="rev 4" />);
+  /** The sheet rules one of whose selectors names only classes `root` draws. */
+  const reaching = (root: ParentNode) => {
     const classes = new Set(
-      [...container.querySelectorAll("[class]")].flatMap((el) => [...el.classList]),
+      [...root.querySelectorAll("[class]")].flatMap((el) => [...el.classList]),
     );
     expect(classes.has("diff-view__line")).toBe(true);
-    const reaching = sheetRules().filter((rule) =>
-      [...classes].some((name) => new RegExp(`\\.${name}(?![\\w-])`).test(rule.selector)),
+    const rules = sheetRules().filter((rule) =>
+      splitSelectors(rule.selector).some((selector) => {
+        const named = [...selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1]!);
+        return named.some((n) => n.startsWith("diff-view")) && named.every((n) => classes.has(n));
+      }),
     );
-    // A VACUITY FLOOR: a walk that found no rule for the diff checked nothing.
-    expect(reaching.length).toBeGreaterThan(10);
-    const hued = reaching.filter((rule) => /--color-(?:feedback|data|node)-/.test(rule.body));
-    expect(hued.map((rule) => `${rule.selector} { ${rule.body.trim()} }`)).toEqual([]);
     // AND NONE OF THE PACKAGE'S DIFFS IS IN IT.
     expect([...classes].filter((name) => name.startsWith("crewlet-diff"))).toEqual([]);
+    return rules;
+  };
+  const shown = (rules: { selector: string; body: string }[]) =>
+    rules.map((rule) => `${rule.selector} { ${rule.body.trim()} }`);
+
+  test("is reached by no rule that spends a state's, a series' or an identity's hue", () => {
+    const { container, unmount } = render(<DiffView {...EDIT} layout="split" against="rev 4" />);
+    const plain = reaching(container);
+    // A VACUITY FLOOR: a walk that found no rule for the diff checked nothing.
+    expect(plain.length).toBeGreaterThan(10);
+    const hued = plain.filter((rule) =>
+      /--color-(?:feedback|data|node|diff|syntax|change-(?:open|merged|closed|draft)|code|file)-/.test(
+        rule.body,
+      ),
+    );
+    expect(shown(hued)).toEqual([]);
+    unmount();
+    // IN GITLET the diff colours reach it, and still no state, series or identity.
+    const coded = reaching(
+      render(<DiffView {...EDIT} hue="code" layout="split" against="rev 4" />).container,
+    );
+    expect(coded.some((rule) => /--color-diff-/.test(rule.body))).toBe(true);
+    expect(
+      shown(coded.filter((rule) => /--color-(?:feedback|data|node)-/.test(rule.body))),
+    ).toEqual([]);
   });
 
   // THE TWO STEPS AND THEIR GROUND are read from the sheet and matched to what

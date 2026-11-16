@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
-import { sheetRules } from "../test/sheets.ts";
+import { sheetRules, splitSelectors } from "../test/sheets.ts";
 import { modules } from "../test/source.ts";
 
 /**
@@ -1073,23 +1073,6 @@ test("every stylesheet is imported by the entry point, or by the screen it belon
       "a screen's own sheet, by its screen's module and not by main.tsx",
   ).toEqual([]);
 });
-
-/** A selector list's selectors: split at the commas outside every parenthesis. */
-function splitSelectors(list: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let from = 0;
-  for (let i = 0; i < list.length; i++) {
-    if (list[i] === "(") depth++;
-    else if (list[i] === ")") depth--;
-    else if (list[i] === "," && depth === 0) {
-      out.push(list.slice(from, i).trim());
-      from = i + 1;
-    }
-  }
-  out.push(list.slice(from).trim());
-  return out;
-}
 
 test("a screen's own sheet selects only that screen's classes", () => {
   for (const [file, { owns }] of Object.entries(LAZY_SHEETS)) {
