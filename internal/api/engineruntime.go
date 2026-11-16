@@ -192,6 +192,7 @@ func (r engineRuntime) SeatPauses() queries.SeatPauseLister {
 // answers from: the engine's, and no test runtime that keeps none.
 type delegatedRuntime interface {
 	DelegatedReads() queries.DelegatedReads
+	DelegatedGitHub() queries.DelegatedGitHub
 }
 
 // atlasRuntime is a runtime that reads the company's atlas: the settings it
@@ -206,6 +207,10 @@ func (r engineRuntime) AtlasReads() builtin.AtlasDeps { return engine.AtlasToolD
 // DelegatedReads is the engine's access log, as the delegated-decisions read
 // takes it.
 func (r engineRuntime) DelegatedReads() queries.DelegatedReads { return r.engine.SSHAccess() }
+
+// DelegatedGitHub is the company's GitHub as a rule's form reads it, through
+// the agents' apps of the wiring the engine holds now.
+func (r engineRuntime) DelegatedGitHub() queries.DelegatedGitHub { return r.engine }
 
 func (r engineRuntime) AgentAccess() queries.AgentAccess {
 	return func(ctx context.Context) ([]queries.AgentAccessRow, error) {

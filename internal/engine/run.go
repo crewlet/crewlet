@@ -208,6 +208,10 @@ type Engine struct {
 	// reads it from its own goroutine while the API installs it.
 	configWriter atomic.Pointer[ConfigWriter]
 
+	// grantSaver saves a chosen request's grant ([Engine.UseGrantSaver]); atomic, as
+	// the API installs it while requests read it.
+	grantSaver atomic.Pointer[GrantSaver]
+
 	// seatAccessPending is why the migration onto per-seat access left each
 	// integration unmigrated on its last attempt here, by integration.Kind,
 	// for the access pass's finding ([Engine.MigrateSeatAccess]).

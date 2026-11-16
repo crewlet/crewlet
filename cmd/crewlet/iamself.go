@@ -84,10 +84,10 @@ func (m selfMint) mint(ctx context.Context, warn io.Writer) (map[string]any, err
 			// move the owner's revocation epoch, which withdraws the
 			// token this command just minted along with the session.
 			fmt.Fprintf(warn, "couldn't sign out the session this command "+
-				"opened (%v). It ends on its own after %s unused, or now "+
-				"with POST /auth/logout/<lineage>. Don't use `crewlet iam "+
-				"revoke` for it: that revokes the new token too.\n",
-				endErr, session.Idle)
+				"opened (%v). It ends on its own once unused for the "+
+				"company's idle limit, or now with POST /auth/logout/<lineage>. "+
+				"Don't use `crewlet iam revoke` for it: that revokes the new "+
+				"token too.\n", endErr)
 		}
 	}()
 	if restricted {

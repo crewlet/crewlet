@@ -59,6 +59,7 @@ import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PROJECT_PAGE } from "~/contract/work.ts";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
+import { UnreadSetting } from "~/components/SettingEditor.tsx";
 import { TextSetting } from "~/components/TextSetting.tsx";
 import type { SettingRow } from "~/contract/settings.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -580,12 +581,9 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
                   onApplied={limits.refetch}
                 />
               ) : (
-                <SettingsTable.Row
-                  label="Inbox keeps a notice for"
-                  settingKey="inbox.retention_days"
-                >
+                <UnreadSetting label="Inbox keeps a notice for" settingKey="inbox.retention_days">
                   {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
-                </SettingsTable.Row>
+                </UnreadSetting>
               )}
               <SettingsTable.Row label="Projects the chart declares">
                 {viewer.admin ? (
@@ -807,9 +805,9 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
                     {...(d.key === "knowledge.scope" ? { choices: spaces.map((c) => c.key) } : {})}
                   />
                 ) : (
-                  <SettingsTable.Row key={d.key} label={d.label} settingKey={d.key}>
+                  <UnreadSetting key={d.key} label={d.label} settingKey={d.key}>
                     {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
-                  </SettingsTable.Row>
+                  </UnreadSetting>
                 );
               })}
             </SettingsTable>
@@ -862,12 +860,12 @@ function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
               zero="0 to keep them for ever"
             />
           ) : (
-            <SettingsTable.Row
+            <UnreadSetting
               label="Messages are kept for"
               settingKey="chat.chatlet.message_retention_days"
             >
               {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
-            </SettingsTable.Row>
+            </UnreadSetting>
           )}
         </SettingsTable>
         <p className="t-caption">

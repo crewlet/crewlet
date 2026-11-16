@@ -30,9 +30,8 @@ const (
 	// as, a person present rather than a token — which [DetailReason] names.
 	DetailGrants = httpjson.KeyGrants
 	// DetailWindow is [Decision.Recency] on a step-up refusal: the window
-	// the verb asks a proof inside, spelled as the `api.auth.session` key
-	// that sets it (`step_up`), so the word a client reads and the setting
-	// an operator tunes are one string.
+	// the verb asks a proof inside (`step_up`, which `sign_in.step_up_seconds`
+	// sizes).
 	DetailWindow = "window"
 	// DetailRole is [Decision.Role] on a [ReasonRole] refusal: the least
 	// role on the artifact the verb needs, so a client can say whom to ask

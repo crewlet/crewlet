@@ -598,7 +598,7 @@ func (a *assistApp) tokenSession(t *testing.T) *http.Cookie {
 	login := iam.TokenLogin("fixture")
 	bearer, err := signer.Mint(session.Mint{Lineage: uuid.Must(uuid.NewV7()),
 		Person: login, Epoch: 1, Generation: 1, StartPosition: 1,
-		AbsoluteExpiresAt: clock.Add(time.Hour)})
+		SignedInAt: clock, AbsoluteExpiresAt: clock.Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}

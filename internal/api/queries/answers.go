@@ -114,6 +114,10 @@ type Sources struct {
 	// reads (ADR-0125); nil serves no such question.
 	Delegated DelegatedReads
 
+	// DelegatedGitHub is the company's GitHub a rule's form offers
+	// (delegatedgithub.go); nil serves none of its three questions.
+	DelegatedGitHub DelegatedGitHub
+
 	// Atlas is the atlas's reads on this node (atlas.go); nil serves no
 	// atlas question.
 	Atlas AtlasReads
@@ -214,10 +218,10 @@ type Sources struct {
 	// from the Bootstrap it is handed.
 	ArtifactPages bool
 
-	// SignIn is this node's sign-in posture, read from its Tier A
-	// `api.auth` ([SignInPolicyOf]). Nil leaves `sign_in_policy`
+	// SignIn is this node's `api.auth`, whose limits the company's sign-in
+	// policy is held within ([SignInPolicyOf]). Nil leaves `sign_in_policy`
 	// unregistered; internal/api fills it from the Bootstrap it is handed.
-	SignIn *SignInPolicy
+	SignIn *config.APIAuth
 
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.
@@ -953,8 +957,8 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.SignIn != nil {
 		// HOW A PERSON SIGNS IN HERE, for the administrators who answer
-		// for it: posture rather than a secret, but the deployment's, read
-		// beside the people and tokens it governs. See [SignInPolicy].
+		// for it: posture rather than a secret, but the company's own
+		// machinery (ADR-0033). See [SignInPolicyAnswer].
 		r.Register("sign_in_policy", Requires(iam.GrantAdmin), s.signInPolicy)
 	}
 	// The NATIVE backends, each gated on its own reader: a company can run
@@ -1183,6 +1187,13 @@ func Register(r *Registry, s Sources) {
 		// WHAT DELEGATES DECIDED, for the people they answer to: decided
 		// per caller against the rules' escalate_to (ADR-0125).
 		r.Register("delegated_decisions", DecidedBy(authz.ActionDelegatedRead), s.delegatedDecisions)
+	}
+	if s.DelegatedGitHub != nil {
+		// WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB, for the
+		// administrator who writes the rule into the document.
+		r.Register("delegated_repositories", Requires(iam.GrantAdmin), s.delegatedRepositories)
+		r.Register("delegated_branches", Requires(iam.GrantAdmin), s.delegatedBranches)
+		r.Register("delegated_checks", Requires(iam.GrantAdmin), s.delegatedChecks)
 	}
 	if s.Artifacts != nil {
 		// THE ARTIFACTS, each decided per artifact by the artifacts' one

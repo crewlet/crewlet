@@ -932,6 +932,7 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
                     unavailable={assistantUnavailable}
                     model={assistantModel}
                     attach={assistantAttach}
+                    deliberate={viewer.assistantDeliberate}
                     admin={viewer.admin}
                     onClose={() => showAssistant(false)}
                     initialFocus={assistantFocus}

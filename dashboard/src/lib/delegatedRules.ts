@@ -26,7 +26,7 @@
  */
 
 import type { DelegatedAct } from "~/contract/delegated.ts";
-import type { CompanyDocument } from "~/protocol/types.ts";
+import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import { isReleaseAct, kindWords } from "./delegation.ts";
 import type { SettingChange, SettingPlan } from "./useSettingWrite.ts";
 import { andList } from "./words.ts";
@@ -62,8 +62,28 @@ export interface RuleDraft {
   checks: DocumentChecks[];
 }
 
-/** The fields of a form a shape error can sit on. */
-export type RuleField = "sample" | "checks";
+/** The fields of a form an error can sit on. */
+export type RuleField = "kinds" | "delegates" | "escalateTo" | "sample" | "paths" | "checks";
+
+/** A panel is two agents; the engine refuses a third. */
+export const MAX_DELEGATES = 2;
+
+/** The spot-check rate's default and the range the engine holds it to (the read's `sample`). */
+export interface SampleRange {
+  default: number;
+  min: number;
+  max: number;
+}
+
+/** The spot-check rates a form offers by name; any other is typed. */
+export const SAMPLE_PRESETS: readonly number[] = [1, 5, 10, 50];
+
+/** What a spot-check rate means for the people a rule escalates to. */
+export function sampleWords(rate: number): string {
+  return rate <= 1
+    ? "These people review every decision afterwards."
+    : `These people review about 1 in ${rate} of the agent's decisions afterwards.`;
+}
 
 /** A form read as a rule, or what is wrong with its shape. */
 export type ReadRule =
@@ -136,13 +156,21 @@ export function releasesIn(kinds: readonly string[]): boolean {
  * Reads a form as the rule it writes. Shape only (see the file's head): the
  * paths and checks of a rule with no merge or deploy are left out, since the
  * engine takes them only for one, and a checks entry left wholly empty is a
- * row nobody filled in.
+ * row nobody filled in. `range` is the engine's, where the read carried it.
  */
-export function readDraft(draft: RuleDraft): ReadRule {
+export function readDraft(draft: RuleDraft, range?: SampleRange): ReadRule {
   const errors: Partial<Record<RuleField, string>> = {};
+  if (draft.kinds.length === 0) errors.kinds = "Pick at least one kind of request.";
+  if (draft.delegates.length === 0) errors.delegates = "Pick the agent that decides.";
+  else if (draft.delegates.length > MAX_DELEGATES) {
+    errors.delegates = "Pick one agent, or two for a panel.";
+  }
+  if (draft.escalateTo.length === 0) errors.escalateTo = "Pick at least one person.";
   const sample = draft.sample.trim();
   if (sample !== "" && !/^\d+$/.test(sample)) {
-    errors.sample = "A whole number: one decision in this many is spot-checked.";
+    errors.sample = "Enter a whole number.";
+  } else if (sample !== "" && range && (Number(sample) < range.min || Number(sample) > range.max)) {
+    errors.sample = `From ${range.min} to ${range.max}.`;
   }
   const releases = releasesIn(draft.kinds);
   const checks = releases
@@ -151,7 +179,9 @@ export function readDraft(draft: RuleDraft): ReadRule {
         .filter((c) => c.repo !== "" || c.branch !== "" || c.checks.length > 0)
     : [];
   if (checks.some((c) => c.repo === "" || c.branch === "")) {
-    errors.checks = "Each entry names its repository (owner/name) and its branch.";
+    errors.checks = "Pick a repository and a branch for each entry.";
+  } else if (checks.some((c) => c.checks.length === 0)) {
+    errors.checks = "Add at least one check to each entry.";
   }
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   const rule: DocumentRule = {
@@ -255,4 +285,46 @@ export function removeRulePlan(number: number, kinds: readonly string[]): Settin
       summary: `${SUMMARY}: remove rule ${number} (${kindsWords(held)})`,
     };
   };
+}
+
+/** Which form field each key of a rule is. */
+const FIELD_OF_KEY: Readonly<Record<string, RuleField>> = {
+  kinds: "kinds",
+  delegates: "delegates",
+  escalate_to: "escalateTo",
+  sample_one_in: "sample",
+  always_escalate_paths: "paths",
+  required_checks: "checks",
+};
+
+/** `delegated_decisions.rules[2].escalate_to[0]`: the rule's index and its key. */
+const RULE_PATH = /^delegated_decisions\.rules\[(\d+)\](?:\.([a-z_]+))?/;
+
+/** A problem in a person's words: the engine's own, else its line without the path. */
+export function problemWords(problem: Pick<ConfigProblem, "path" | "message" | "said">): string {
+  if (problem.said) return problem.said;
+  const prefix = `${problem.path}: `;
+  return problem.message.startsWith(prefix)
+    ? problem.message.slice(prefix.length)
+    : problem.message;
+}
+
+/**
+ * The engine's problems with rule `index` (0-based), each under the field it
+ * names, and every other problem left over to be said whole.
+ */
+export function placeProblems(
+  problems: readonly Pick<ConfigProblem, "path" | "message" | "said">[],
+  index: number,
+): { fields: Partial<Record<RuleField, string>>; rest: string[] } {
+  const fields: Partial<Record<RuleField, string>> = {};
+  const rest: string[] = [];
+  for (const problem of problems) {
+    const at = RULE_PATH.exec(problem.path);
+    const field = at && Number(at[1]) === index && at[2] ? FIELD_OF_KEY[at[2]] : undefined;
+    const words = problemWords(problem);
+    if (field) fields[field] = fields[field] ? `${fields[field]} ${words}` : words;
+    else rest.push(words);
+  }
+  return { fields, rest };
 }

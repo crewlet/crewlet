@@ -92,8 +92,9 @@ var ActTransportCodes = []httpjson.Code{
 	httpjson.CodeReaderChanged,
 	// The cross-site write gate's.
 	httpjson.CodeCSRFOrigin,
-	// The authority table's, through the one refusal mapping.
-	httpjson.CodeUnauthorized, httpjson.CodeStepUpRequired,
+	// The authority table's, through the one refusal mapping; token_refused for
+	// a verb a tool asks that needs a person present (a grant that raises).
+	httpjson.CodeUnauthorized, httpjson.CodeStepUpRequired, httpjson.CodeTokenRefused,
 	// This route's own.
 	httpjson.CodeUnknownTool, httpjson.CodeReadOnlyTool,
 	httpjson.CodeUnsupportedMediaType,

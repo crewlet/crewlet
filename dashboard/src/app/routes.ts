@@ -370,6 +370,7 @@ export type FramedScreen =
   | { screen: "mcp-tools"; server?: string; tool?: string }
   | { screen: "secrets"; name?: string }
   | { screen: "limits" }
+  | { screen: "ask-crewlet" }
   | { screen: "spend" }
   | { screen: "spend-tasks" }
   | { screen: "people" }
@@ -855,6 +856,7 @@ function settings(rest: string[], screen: Make, under: Under): Route {
   // own somewhere else, or none.
   const bare: Partial<Record<string, FramedScreen>> = {
     limits: { screen: "limits" },
+    "ask-crewlet": { screen: "ask-crewlet" },
     people: { screen: "people" },
     "service-accounts": { screen: "service-accounts" },
     tokens: { screen: "tokens" },

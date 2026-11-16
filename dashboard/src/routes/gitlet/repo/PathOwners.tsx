@@ -15,6 +15,7 @@
 
 import { useMemo, useState } from "react";
 import { Button, FormField, ListInput, Select, Stack, withDraft } from "@crewlethq/ui";
+import { fieldError, holdReason } from "~/lib/formHold.ts";
 import { ConfirmModal, Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import {
@@ -174,9 +175,9 @@ function PathOwnerDialog({
   const wanted = withDraft(paths, draft);
   const [kind, ref] = owner.split(/:(.*)/s) as [string, string];
   const change = owner === "" ? null : pathOwnersArgs({ kind, ref }, wanted, had);
+  const hold = pathOwnerFormHeld(owner, wanted, had);
   const blocked =
-    pathOwnerFormHeld(owner, wanted, had) ??
-    (change?.remove ? pathOwnerTakeHeld(repo, viewer, gating) : undefined);
+    holdReason(hold) ?? (change?.remove ? pathOwnerTakeHeld(repo, viewer, gating) : undefined);
   const submit = async () => {
     if (!pressable(write, blocked) || change === null) return;
     const result = await write.run(
@@ -230,6 +231,7 @@ function PathOwnerDialog({
           label="Paths"
           itemName="path"
           helper="Globs over its tree from the root, such as src/** or docs/*.md."
+          error={fieldError(hold, "paths")}
           placeholder="src/**"
           value={paths}
           draft={draft}

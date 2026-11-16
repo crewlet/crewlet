@@ -1,0 +1,102 @@
+# An agent's request for one permission is approved from its question in one
+# step. The assistant reads the agent's access, which names the open request
+# and the option that grants it for its hours, and proposes the answer choosing
+# that option. The card draws the grant in the engine's words (the permission
+# by the catalogue's name, where it applies, how long it lasts, that it changes
+# things) rather than the option's label, and approving it asks the person to
+# confirm it is them: the answer's route saves the grant before it tells the
+# agent yes. Nothing is granted until the person approves.
+person:
+  apps: [admin]
+  acts: [comment_on_work_item]
+page:
+  screen: inbox
+  title: Inbox
+  params: {}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: url:7d1e3c55
+  accepts: []
+question: >-
+  The Site Reliability Engineer asked on ENG-58 for Origin Rules: Edit on
+  example.com. Grant it, just for this change.
+answers:
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: sre, name: Site Reliability Engineer, kind: agent}
+  - route: GET /setup/integrations/{kind}/access/seats/{handle}/{lane}
+    body:
+      kind: cloudflare
+      lane: cloudflare
+      integration: Cloudflare
+      handle: sre
+      name: Site Reliability Engineer
+      status: in_sync
+      status_label: In sync
+      grant: Read
+      holds: Read
+      scope: Default reach
+      account: crewlet-nimbus-sre
+      tool: live
+      requests: >-
+        request abcde12345 asks for Origin Rules: Edit on example.com for 4
+        hours, on ENG-58 on 2026-11-15; its question grants it with
+        grant-rabcde12345-t (for 4 hours) or grant-rabcde12345-p (for good)
+      grantable: >-
+        Cloudflare offers 212 permissions beside this agent's level; the
+        company's connection lacks 170 of them
+      permissions: >-
+        Origin Rules: Edit (Zone, changes things, in no level): the company's
+        connection can grant it
+      lookup:
+        - {id: Origin Write, name: "Origin Rules: Edit", group: Zone, write: true, level: No level, grantable: "Yes"}
+      checked_at: "2026-11-15T15:58:00Z"
+      plan: []
+  - route: GET /setup/access/requests/{id}
+    body:
+      id: abcde12345
+      kind: cloudflare
+      lane: cloudflare
+      handle: sre
+      permission: Origin Write
+      scope: [example.com]
+      hours: 4
+      reason: The origin rule for the deck library needs Origin Rules Edit on the zone.
+      item: ENG-58
+      ask: jane-founder
+      asked_at: "2026-11-15T15:50:00Z"
+  - route: GET /worklet/comments
+    body:
+      key: ENG-58
+      title: Route the deck library
+      comments:
+        - id: c-ask
+          author: sre
+          ask: jane-founder
+          body: Grant Site Reliability Engineer Origin Rules Edit on example.com?
+          decision:
+            question: Grant Site Reliability Engineer Origin Rules Edit on example.com?
+            options:
+              - {id: grant-rabcde12345-t, label: Grant for this change (expires in 4 hours)}
+              - {id: grant-rabcde12345-p, label: Add to this agent permanently}
+              - {id: decline, label: Not now}
+            recommended: grant-rabcde12345-t
+script:
+  - call: get_seat_access
+    args: {handle: Site Reliability Engineer, integration: cloudflare}
+  - call: answer_decision
+    args: {item: ENG-58, answers: c-ask, choice: grant-rabcde12345-t}
+expect:
+  calls: [get_seat_access, answer_decision]
+  never: [set_seat_access]
+  proposals: 1
+  step_up: true
+  state: waiting_for_approval
+  shows:
+    - Grant an agent's request
+    - "Origin Rules: Edit on example.com"
+    - 4 hours from when you approve
+    - may change things at Cloudflare

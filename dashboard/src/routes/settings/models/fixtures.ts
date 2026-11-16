@@ -21,7 +21,7 @@ import type {
   ModelUse,
 } from "~/protocol/models.ts";
 import type { CompanyDocument, OrgProjection } from "~/protocol/types.ts";
-import { modelViews, type ModelsData } from "~/routes/settings/models/data.ts";
+import { assistantOf, modelViews, type ModelsData } from "~/routes/settings/models/data.ts";
 import { withDerived } from "~/test/org.ts";
 
 /** The instant every model reading here is taken at. */
@@ -162,7 +162,7 @@ export function modelsData({
   alarms?: ModelAlarm[];
   admin?: boolean;
   doc?: CompanyDocument | null;
-  assistant?: { enabled: boolean; key: string | null };
+  assistant?: ModelsData["assistant"];
   seats?: Seat[];
   reload?: () => void;
 }): ModelsData {
@@ -182,7 +182,6 @@ export function modelsData({
         alarms: null,
       };
   const models = modelViews(answer, admin ? doc : null);
-  const runsAssistant = models.find((m) => m.uses.assistant)?.key ?? null;
   return {
     admin,
     doc: admin ? doc : null,
@@ -191,7 +190,7 @@ export function modelsData({
     alarms: admin ? alarms : [],
     nodes: answer.nodes,
     node: answer.node,
-    assistant: assistant ?? { enabled: runsAssistant !== null, key: runsAssistant },
+    assistant: assistant ?? assistantOf(admin ? doc : null, models),
     loading: false,
     error: null,
     failed: null,

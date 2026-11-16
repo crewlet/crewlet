@@ -45,6 +45,10 @@ const (
 // code, which only the handler shows.
 type ValueTypes map[string]reflect.Type
 
+// AnswerScope is the [ValueTypes] key of the answer's own type, which a member
+// the answer leaves out (omitted where empty) is held to.
+const AnswerScope = "answer"
+
 // HoldCard holds every path spec reads to answer, the decoded body a route's
 // handler gave the request a tool named name sent, and fails each one the
 // answer does not hold:
@@ -93,7 +97,11 @@ func HoldCard(t testing.TB, name string, spec cards.Spec, answer any, types Valu
 		}
 		held++
 		if p.From == scopeAnswer {
+			// A member the answer leaves out is held to its declared type ([AnswerScope]).
 			if !Present(answer, p.Path) {
+				if typ := consult(AnswerScope); typ != nil && TypeHolds(typ, p.Path) {
+					continue
+				}
 				t.Errorf("%s reads %q from its answer, which has no such key: %.300s", name,
 					p.Path, encoded(answer))
 			}
@@ -251,6 +259,59 @@ func TypeHolds(t reflect.Type, path string) bool {
 		t = next
 	}
 	return true
+}
+
+// EngineLink reports whether path from type t names a string field tagged
+// `link:"engine"`: the only field a card may draw as a step outside Crewlet.
+func EngineLink(t reflect.Type, path string) bool {
+	keys := strings.Split(path, ".")
+	for i, key := range keys {
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct {
+			return false
+		}
+		f, ok := jsonField(t, key)
+		if !ok {
+			return false
+		}
+		if i == len(keys)-1 {
+			return f.Type.Kind() == reflect.String && f.Tag.Get("link") == "engine"
+		}
+		t = f.Type
+	}
+	return false
+}
+
+// jsonField is the field of struct t encoding/json writes as name.
+func jsonField(t reflect.Type, name string) (reflect.StructField, bool) {
+	for i := range t.NumField() {
+		f := t.Field(i)
+		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if tag == "-" || (!f.IsExported() && !f.Anonymous) {
+			continue
+		}
+		if f.Anonymous && tag == "" {
+			inner := f.Type
+			for inner.Kind() == reflect.Pointer {
+				inner = inner.Elem()
+			}
+			if inner.Kind() == reflect.Struct {
+				if found, ok := jsonField(inner, name); ok {
+					return found, true
+				}
+			}
+			continue
+		}
+		if tag == "" {
+			tag = f.Name
+		}
+		if tag == name {
+			return f, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 // memberMissing is a key of v (a decoded object) that type t has no member

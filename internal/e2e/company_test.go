@@ -93,6 +93,9 @@ units:
     purpose: keeps the lights on
     project: OPS
     lead: ceo
+# PASSWORD ALONE, which every node this suite serves allows ([withPasswordAlone]).
+sign_in:
+  require_second_factor: false
 turn_engine:
   max_iterations: 1
 `

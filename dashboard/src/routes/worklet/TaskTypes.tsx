@@ -32,6 +32,7 @@ import { WRITE_REASONS, linkOf } from "~/lib/useWriteAccess.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import type { WorkTypeDef } from "~/protocol/index.ts";
 import { identifierOf } from "./ProjectSettings.tsx";
+import { fieldError, fieldHeld, formHeld, holdReason } from "~/lib/formHold.ts";
 
 /** One change to the company's types. */
 export type TypeChange =
@@ -137,11 +138,12 @@ export function TaskTypesDialog({ onClose }: { onClose: () => void }) {
 
   const slug = identifierOf(name);
   const taken = effective.some((t) => t.slug === slug);
-  const addHeld = !name.trim()
-    ? "Name the type first."
+  const addHold = !name.trim()
+    ? formHeld("Name the type first.")
     : taken
-      ? `A type already files tasks as ${slug}.`
+      ? fieldHeld("name", `A type already files tasks as ${slug}.`)
       : undefined;
+  const addHeld = holdReason(addHold);
   const renameHeld =
     editing?.kind === "rename" && name.trim() === editing.type.name
       ? "Type a different name."
@@ -176,32 +178,12 @@ export function TaskTypesDialog({ onClose }: { onClose: () => void }) {
           <ul className="col gap-2 task-types" aria-label="Task types">
             {live.map((type) => (
               <li key={type.slug} className="col gap-2">
-                <div className="row gap-2">
-                  <Tag appearance="outline" title={type.description || undefined}>
-                    {type.name}
-                  </Tag>
-                  <span className="mono t-caption truncate">{type.slug}</span>
-                  {type.builtin && <span className="t-caption muted">built in</span>}
-                  <span className="spacer" />
-                  <Button
-                    size="small"
-                    variant="ghost"
-                    aria-label={`Rename the type ${type.name}`}
-                    disabledReason={blocked}
-                    onClick={() => open({ kind: "rename", type })}
-                  >
-                    Rename
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="ghost"
-                    aria-label={`Archive the type ${type.name}`}
-                    disabledReason={blocked}
-                    onClick={() => open({ kind: "archive", type })}
-                  >
-                    Archive
-                  </Button>
-                </div>
+                <TypeRow
+                  type={type}
+                  blocked={blocked}
+                  onRename={() => open({ kind: "rename", type })}
+                  onArchive={() => open({ kind: "archive", type })}
+                />
                 {editing?.kind === "rename" && editing.type.slug === type.slug && (
                   <form
                     className="row gap-2 wrap"
@@ -288,6 +270,7 @@ export function TaskTypesDialog({ onClose }: { onClose: () => void }) {
               <FormField
                 label="Name"
                 htmlFor="type-add-name"
+                error={fieldError(addHold, "name")}
                 helper={
                   name.trim()
                     ? `Tasks hold it as ${slug}, for good.`
@@ -374,5 +357,53 @@ export function TaskTypesDialog({ onClose }: { onClose: () => void }) {
         </QueryState>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * One type as the dialog lists it: its name, slug and "built in" wrap as one
+ * block beside the two actions, so a narrow dialog cuts neither.
+ */
+export function TypeRow({
+  type,
+  blocked,
+  onRename,
+  onArchive,
+}: {
+  type: WorkTypeDef;
+  blocked: string | undefined;
+  onRename: () => void;
+  onArchive: () => void;
+}) {
+  return (
+    <div className="task-type-row">
+      <span className="task-type-words">
+        <Tag appearance="outline" title={type.description || undefined}>
+          {type.name}
+        </Tag>
+        <span className="mono t-caption task-type-slug">{type.slug}</span>
+        {type.builtin && <span className="t-caption muted nowrap">built in</span>}
+      </span>
+      <span className="row gap-2 task-type-actions">
+        <Button
+          size="small"
+          variant="ghost"
+          aria-label={`Rename the type ${type.name}`}
+          disabledReason={blocked}
+          onClick={onRename}
+        >
+          Rename
+        </Button>
+        <Button
+          size="small"
+          variant="ghost"
+          aria-label={`Archive the type ${type.name}`}
+          disabledReason={blocked}
+          onClick={onArchive}
+        >
+          Archive
+        </Button>
+      </span>
+    </div>
   );
 }

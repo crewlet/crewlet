@@ -811,12 +811,12 @@
   color: var(--color-text-secondary);
 }
 
-/* CLONE: the address in a block of its own, and what git asks for under it. */
+/* CLONE: the address in a block of its own, and what git asks for under it.
+   No width of its own: wider than the kit's panel, it scrolls sideways. */
 .code-clone {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  width: min(30rem, 80vw);
   padding: var(--spacing-3);
 }
 

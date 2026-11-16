@@ -3,12 +3,14 @@ package wire
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -56,6 +58,29 @@ type TableCard struct {
 	// person's ownership and apps on every download.
 	Exports *Exports `json:"exports,omitempty"`
 	Open    *Link    `json:"open,omitempty"`
+	// Outside is a step outside Crewlet the read names ([Outside]).
+	Outside *Outside `json:"outside,omitempty"`
+}
+
+// Outside is a step a person takes at a vendor's own page, at an address the
+// engine built (never a model): the drawer opens it through the link
+// interstitial, and a model is told only the step and the host.
+type Outside struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// validate holds an outside step to a label and an absolute https address.
+func (o *Outside) validate() error {
+	if o == nil {
+		return nil
+	}
+	u, err := url.Parse(o.URL)
+	if strings.TrimSpace(o.Label) == "" || err != nil || u.Scheme != "https" || u.Host == "" ||
+		u.User != nil {
+		return fmt.Errorf("%w: an outside step names what it is and an https address", ErrInvalid)
+	}
+	return nil
 }
 
 // Column is a table card's column.
@@ -115,6 +140,8 @@ type EntityCard struct {
 	// Markdown subset: no images, no raw HTML, no autolinks.
 	Text  string       `json:"text,omitempty"`
 	Items []EntityItem `json:"items,omitempty"`
+	// Outside is a step outside Crewlet the record names ([Outside]).
+	Outside *Outside `json:"outside,omitempty"`
 	// ItemsTotal is how many items the record holds where Items is only the
 	// first of them; absent where Items is the whole list.
 	ItemsTotal int `json:"items_total,omitempty"`
@@ -193,10 +220,9 @@ type ProposalCard struct {
 	// Audience is who will see the result where visibility changes (a
 	// share, a comment others are notified of).
 	Audience []string `json:"audience,omitempty"`
-	// Taint names the outside source the turn read before proposing, so
-	// the person weighs a change that text somebody else wrote may have
-	// asked for (D25).
-	Taint string `json:"taint,omitempty"`
+	// Taint is the surface (one of provenance.Sources) whose outside text the
+	// turn read before proposing (D25); absent for none.
+	Taint provenance.Source `json:"taint,omitempty"`
 	// StepUp is a change whose verb asks the person to confirm it is them
 	// before it executes.
 	StepUp bool `json:"step_up,omitempty"`
@@ -375,6 +401,7 @@ func (c Card) Validate() error {
 					item.Kind, words.Or(ResourceKinds))
 			}
 		}
+		return c.Entity.Outside.validate()
 	case CardProposal:
 		return c.Proposal.validate()
 	case CardOpenInApp:
@@ -424,7 +451,7 @@ func (t *TableCard) validate() error {
 		return fmt.Errorf("%w: table row_count %d is under the %d rows it carries", ErrInvalid,
 			t.RowCount, len(t.Rows))
 	}
-	return nil
+	return t.Outside.validate()
 }
 
 func (p *ProposalCard) validate() error {
