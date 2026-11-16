@@ -379,6 +379,9 @@ type paritySources struct {
 	queries.Sources
 	state  *livestate.LiveState
 	config *configapi.Service
+	// plane is the fleet store the sources read the node status records
+	// from, which a fixture reporting a node writes its record to.
+	plane *coordmemory.Fleet
 }
 
 // parityWorld builds the sources over one estate on a temporary path.
@@ -442,9 +445,9 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 	}
 	state := livestate.New(livestate.WithClock(func() time.Time { return clock }))
 	estate := apiArtifacts{}
-	return paritySources{state: state, config: configs, Sources: queries.Sources{
+	return paritySources{state: state, config: configs, plane: plane, Sources: queries.Sources{
 		State: state, Events: eventfan.Solo("node-a", db.Events()), Usage: usage.Reader{Estate: db.Replicated()},
-		Company: companySource(t, company), Coord: coordmemory.New(), Atlas: atlasDepsOf(company, nil),
+		Company: companySource(t, company), Coord: coordmemory.New(), NodeStatuses: plane, Atlas: atlasDepsOf(company, nil),
 		Work: stubWorkReader{}, Pages: posturePages{}, WorkSearch: noWorkHits{},
 		Sandbox: noExecutors{}, Config: configs,
 		Artifacts: &queries.ArtifactsSource{Gate: artifactsGate(estate), Reads: estate},
