@@ -29,13 +29,11 @@
  * keyboard. A task named on a row or in a byline opens beside the inbox, in
  * the frame's side panel.
  *
- * # Where the company runs no Worklet and hosts no code
+ * # Whatever runs the tracker
  *
- * Updates, Snoozed and Earlier are the native domains' notices — Worklet's
- * and Gitlet's, composed by the engine (`inbox`) — and Mark all read
- * marks them, so where the company runs another tracker or none and hosts no
- * code (`lib/services.ts`) none of them is asked for or drawn: one line says
- * where asks and mentions go instead ([elsewhereLine]). Needs you stays, because
+ * Updates, Snoozed and Earlier are the native domains' notices, composed by the engine (`inbox`):
+ * Worklet's, Gitlet's and the comments on artifacts every company keeps, so every reader with a
+ * record is asked whatever runs the tracker; Mark all read marks them. Needs you stays, because
  * what fills it without Worklet still arrives: the seats stopped on a
  * spent budget and the engine's conditions (the agents and budget pushes) and
  * the executors parked on a question (`decisions`, which answers them
@@ -94,7 +92,7 @@ import { UnboundRemedy } from "~/components/people.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { useBackends, useServicesRun, type OrgServices } from "~/lib/services.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -213,14 +211,10 @@ export function Inbox() {
   // reconnect is never sent again.
   const owner = viewer.owner;
   const bound = owner !== "";
-  // THE NOTICES ARE EVERY NATIVE DOMAIN'S, composed by the engine (`inbox`):
-  // Worklet's where the company runs it and the reader holds Worklet,
-  // Gitlet's where it hosts code — each under its own
-  // permission, which the engine decides — so they are asked for every reader
-  // with a record, and a company running neither answers an empty list.
+  // THE NOTICES ARE EVERY NATIVE DOMAIN'S, composed by the engine (`inbox`), each under its own
+  // permission: Worklet's, Gitlet's and the comments on artifacts every company keeps, so they are
+  // asked for every reader with a record, whatever the company runs.
   const runs = useServicesRun();
-  const backends = useBackends();
-  const notices = bound && (runs.tracker || runs.code);
   // EVERY LIST A ROW OPENS FROM ASKS FOR `cards`: what an opened code notice
   // draws beyond the notice — the change's description, its open findings and
   // where its merge stands — which the engine judges after it composes the
@@ -229,10 +223,10 @@ export function Inbox() {
   // none, so it judges nothing.
   const updatesRead = useQuery(
     "inbox",
-    notices
+    bound
       ? { handle: owner, limit: INBOX_PAGE, unread: true, snoozed: "exclude", cards: true }
       : undefined,
-    { enabled: notices, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
+    { enabled: bound, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
   );
   usePageCoverage(updatesRead.data);
   // THE SNOOZED COUNT IS READ WHETHER OR NOT THE LIST IS OPEN, because the link
@@ -240,13 +234,13 @@ export function Inbox() {
   // it is read bare.
   const snoozedCount = useQuery(
     "inbox",
-    notices ? { handle: owner, limit: INBOX_PAGE, snoozed: "only" } : undefined,
-    { enabled: notices, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
+    bound ? { handle: owner, limit: INBOX_PAGE, snoozed: "only" } : undefined,
+    { enabled: bound, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
   );
   // THE SNOOZED LIST IS READ ONLY ONCE IT IS OPENED, with the cards its rows
   // open onto.
   const snoozed = usePagedInbox(
-    notices && snoozedOpen
+    bound && snoozedOpen
       ? { handle: owner, limit: INBOX_PAGE, snoozed: "only", cards: true }
       : undefined,
     INBOX_POLL_MS,
@@ -255,7 +249,7 @@ export function Inbox() {
   // EARLIER IS READ ONLY ONCE IT IS OPENED: every notice not snoozed, of which
   // the read ones are listed (`earlierOf`).
   const earlier = usePagedInbox(
-    notices && earlierOpen
+    bound && earlierOpen
       ? { handle: owner, limit: INBOX_PAGE, unread: false, snoozed: "exclude", cards: true }
       : undefined,
     INBOX_POLL_MS,
@@ -284,8 +278,8 @@ export function Inbox() {
     setArrived(undefined);
   }, []);
   // THE SNOOZE BOUND, so a preset the engine would refuse is never offered:
-  // Worklet's person record states it, and Gitlet keeps the same
-  // rule (internal/inbox's MaxSnoozeAhead).
+  // Worklet's person record states it, and Gitlet and the artifacts keep the
+  // same rule (internal/inbox's MaxSnoozeAhead).
   const person = useQuery("work_person", bound && runs.tracker ? { handle: owner } : undefined, {
     enabled: bound && runs.tracker,
   });
@@ -312,9 +306,9 @@ export function Inbox() {
         // say why a reader who cannot act cannot.
         subjects: bound ? decisionSubjects(decisions.data, seatConditionsOf(agents)) : [],
         conditions: conditionsToDecide(attention),
-        notices: notices ? (updatesRead.data?.notices ?? []) : [],
+        notices: bound ? (updatesRead.data?.notices ?? []) : [],
       }),
-    [bound, notices, decisions.data, agents, attention, updatesRead.data],
+    [bound, decisions.data, agents, attention, updatesRead.data],
   );
 
   // THE ROWS DRAWN LAST, WHERE NOTHING IN THEM CHANGED. They are derived
@@ -563,12 +557,11 @@ export function Inbox() {
   // EVERY READ THE LIST STANDS ON HAS ANSWERED: the live state the conditions
   // are measured over (the org's snapshot), and the reader's own decisions
   // and updates. Until then the list is loading, never quiet.
-  const allAnswered =
-    org !== null && !(bound && decisions.loading) && !(notices && updatesRead.loading);
+  const allAnswered = org !== null && !(bound && (decisions.loading || updatesRead.loading));
   const quiet = inboxQuiet({
     answered: allAnswered,
     answer: updatesRead.data,
-    bound: notices,
+    bound,
     // A FAILED VIEWER READ ASKED NOTHING, so nothing was checked and clear.
     error: Boolean(updatesRead.error || decisions.error || viewer.failed),
     shown: needs.length + others.length + updates.length,
@@ -597,14 +590,12 @@ export function Inbox() {
 
   return (
     <div className="inbox-frame" data-phone-pane={single && named ? "true" : undefined}>
-      {/* MARK ALL READ IS EVERY SOURCE'S: hidden where the company runs no
-          source of notices, and otherwise drawn for every reader, held with
-          its reason where there is nothing of theirs to mark. */}
-      {(runs.tracker || runs.code) && (
-        <PageActions>
-          <MarkAllRead through={notices ? readThrough(loaded) : NOTHING_TO_READ} />
-        </PageActions>
-      )}
+      {/* MARK ALL READ IS EVERY SOURCE'S, drawn for every reader since every
+          company keeps artifacts, and held with its reason where there is
+          nothing of theirs to mark. */}
+      <PageActions>
+        <MarkAllRead through={bound ? readThrough(loaded) : NOTHING_TO_READ} />
+      </PageActions>
 
       {/* THREE VIEWER STATES, three sentences, and an unbound reader's says
           what binding would add (`UnboundRemedy`): it is a service account or
@@ -627,11 +618,12 @@ export function Inbox() {
         </Callout>
       ) : null}
       {holding && (
-        <Callout variant="info" className="inbox-callout">
-          {holding}{" "}
-          <Link href={href(["me", "holding-up"])} size="inherit">
-            See what they wait on
-          </Link>
+        <Callout
+          variant="info"
+          className="inbox-callout"
+          action={<Link href={href(["me", "holding-up"])}>See what they wait on</Link>}
+        >
+          {holding}
         </Callout>
       )}
 
@@ -677,10 +669,9 @@ export function Inbox() {
             index={index}
             now={now}
             loading={!allAnswered}
-            quiet={runs.tracker || runs.code ? quiet : null}
+            quiet={quiet}
             more={Boolean(updatesRead.data?.next_cursor)}
-            bound={notices}
-            elsewhere={runs.tracker || runs.code ? null : elsewhereLine(backends?.tracker ?? null)}
+            bound={bound}
             refusal={
               // A READ THAT FAILED IS SAID, never drawn as a quiet list: each
               // read's own refusal, where the rows it would have given go.
@@ -738,8 +729,7 @@ export function Inbox() {
         {showPane && (
           <InboxPane
             row={selected}
-            empty={runs.tracker || runs.code ? undefined : paneElsewhere(backends?.tracker ?? null)}
-            listEmpty={Boolean(quiet) && (runs.tracker || runs.code)}
+            listEmpty={Boolean(quiet)}
             loading={!allAnswered}
             index={index}
             now={now}
@@ -758,51 +748,31 @@ export function Inbox() {
   );
 }
 
-/**
- * Where asks and mentions go where the company runs no Worklet, as far
- * as the engine has said which tracker it runs.
- */
-export function elsewhereLine(tracker: OrgServices["tracker"] | null): string {
-  if (tracker === "jira") return "Jira handles work items, so asks and mentions arrive there.";
-  if (tracker === "none") {
-    return "The company runs no work tracker, so no asks or mentions arrive here.";
-  }
-  return "Work items live outside Crewlet, so asks and mentions don't arrive here.";
-}
-
-/**
- * What the reading pane says with nothing open where the company runs no
- * Worklet: "All clear. New updates open here." promised updates that
- * cannot arrive. It says where asks and mentions go instead, and what still
- * comes here.
- */
-export function paneElsewhere(tracker: OrgServices["tracker"] | null): {
-  title: string;
-  description: string;
-} {
-  const description = "Seats stopped on a budget and the engine's conditions still arrive here.";
-  if (tracker === "jira") return { title: "Asks and mentions arrive in Jira", description };
-  return { title: "No asks or mentions arrive here", description };
-}
-
-/** A page with nothing unread on it, from either source. */
-const NOTHING_TO_READ: ReadThrough = { tracker: null, code: null };
+/** A page with nothing unread on it, from any source. */
+const NOTHING_TO_READ: ReadThrough = { tracker: null, code: null, artifacts: null };
 
 /**
  * "Mark all read", which reads EACH SOURCE through the NEWEST UPDATE LOADED of
  * its and nothing past it: an update that arrived after this page was drawn
  * is one the person has not seen. Each domain keeps its own marks on its own
- * log, so the gesture is one write to each source with anything unread here —
- * `mark_inbox` for Worklet's notices, `code_mark_inbox` for Gitlet's — and
- * the list is re-read past both.
+ * log, so the gesture is one write to each source with anything unread here: `mark_inbox` for
+ * Worklet's notices, `code_mark_inbox` for Gitlet's and `artifact_mark_inbox` for the artifacts'
+ * comments. The list is re-read past every one.
  */
 function MarkAllRead({ through }: { through: ReadThrough }) {
   const tracker = useAct("mark_inbox");
   const code = useAct("code_mark_inbox");
-  const nothing = !through.tracker && !through.code;
+  const artifacts = useAct("artifact_mark_inbox");
+  // EACH SOURCE WITH ANYTHING UNREAD, in one order, with where it reads through.
+  const sent = [
+    { write: tracker, at: through.tracker },
+    { write: code, at: through.code },
+    { write: artifacts, at: through.artifacts },
+  ].flatMap(({ write, at }) => (at ? [{ write, at }] : []));
+  const nothing = sent.length === 0;
   // THE BUTTON STANDS FOR WHICHEVER WRITE IT SENDS FIRST, so its access and
-  // its busy state are that write's; the other's refusal is shown beside it.
-  const lead = through.tracker || !through.code ? tracker : code;
+  // its busy state are that write's; the others' refusals are shown beside it.
+  const lead = sent[0]?.write ?? tracker;
   return (
     <>
       <WriteButton
@@ -827,19 +797,13 @@ function MarkAllRead({ through }: { through: ReadThrough }) {
           // applied it.
           //
           // ONE GESTURE, ONE TOAST: the write the button stands for says
-          // "Marked all read", and the other source's runs quiet, its
-          // refusal still drawn beside the button. Each raised its own, two
+          // "Marked all read", and every other source's runs quiet, its
+          // refusal still drawn beside the button. Each raised its own,
           // identical toasts for one press.
-          if (through.tracker) {
-            void tracker.run(
-              { read_through: through.tracker, seen: through.tracker },
-              { done: "Marked all read", quiet: lead !== tracker },
-            );
-          }
-          if (through.code) {
-            void code.run(
-              { read_through: through.code, seen: through.code },
-              { done: "Marked all read", quiet: lead !== code },
+          for (const { write, at } of sent) {
+            void write.run(
+              { read_through: at, seen: at },
+              { done: "Marked all read", quiet: write !== lead },
             );
           }
         }}
@@ -848,6 +812,7 @@ function MarkAllRead({ through }: { through: ReadThrough }) {
       </WriteButton>
       <RefusalNote write={tracker} />
       <RefusalNote write={code} />
+      <RefusalNote write={artifacts} />
     </>
   );
 }

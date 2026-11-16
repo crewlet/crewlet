@@ -271,9 +271,9 @@ holding a record for every resource the deployment has ever leased, which used
 to be read whole every five seconds to find one node's seats.
 
 **Every read of one key is the leader's too**, not only a certification's. A
-claim reads its own write back to learn the store's deadline, a renew and a
-release read the lease before they write, and the fleet's records are read by
-key — and each of those, answered by a replica that had not applied the write
+claim reads its own write back to learn the store's deadline, a release —
+and a renewal whose record moved since this node wrote it — reads the lease
+before it writes, and the fleet's records are read by key — and each of those, answered by a replica that had not applied the write
 yet, told its caller the write was never made. On a three-member cluster with
 a hundred nodes claiming at once, 743 of 10,000 claims on fresh seats answered
 "not held" for a lease that was then theirs until its TTL — a singleton duty
@@ -283,8 +283,12 @@ node acts on by shedding the seat. So every single-key read goes to the stream
 leader, and one the leader cannot answer — none elected, none reachable — is
 **unavailable**, never "absent". It costs the hop to the leader: measured
 in-process, 40–220 µs at the median where a replica's read took 25–135 µs, and
-about half the read throughput through one node's connection — a few percent
-of it spent by ten thousand seats renewing on the fifteen-second heartbeat.
+about half the read throughput through one node's connection. Ten thousand
+seats renewing on the fifteen-second heartbeat used to spend a few percent of
+it, a read a renewal; a renewal of a lease the node wrote last now reads
+nothing ([below](#a-renewal-of-its-own-write-is-one-round-trip)), so what is
+left is each presence's read-back and the reads of a renewal whose record
+moved.
 
 There is deliberately **no all-classes listing**. A class is one segment of a
 name, so the empty one addresses nothing, and a read of it would answer with
@@ -352,6 +356,32 @@ without anybody rewriting it. An operator's own tooling (`nats kv get`, through 
 member's loopback client listener on an embedded fleet —
 [Reaching an embedded fleet's broker with the nats tool](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)) still
 reads through any replica.
+
+### A renewal of its own write is one round trip
+
+A lease renewal is the one write a node makes of every lease it holds on every
+heartbeat, and it used to read its record from the leader first — to learn that
+the record was still there, still named this owner at this epoch, and the
+revision to write at — and then write it: two round trips a seat. The store
+already knows all three for a lease it holds. It wrote the record itself, and
+the broker gave that write a revision it never hands out again. So the store
+keeps, per resource, the record it last wrote and that revision, and a renewal
+is **one write at that revision**: it lands only while the record is still
+exactly that write, with no peer's claim, release or reap since, which is
+everything the read established. A write refused on that comparison says only
+that the record moved, so the renewal then reads it and decides as it always
+did; one nobody answered is *unknown*, as before. A node's presence, which is
+renewed by a claim, starts from the same knowledge: its write and the read that
+returns the store's deadline, two round trips rather than three.
+
+**Only a record that cannot lapse while it can be read is renewed this way**: a
+seat or presence lease taken for the whole age of `leases`, which the bucket
+removes at its deadline, so a record still there is a live one. A record judged
+by its own deadline against the store's clock — every lease in `duties`, and a
+seat lease asked for less than the bucket's age — can lapse while it is still
+there, and a lapsed lease is never renewed, only re-acquired at a new epoch. A
+write at its revision would land on a lapsed lease, so its renewal still reads
+the record and the store's clock first.
 
 ### What a leader read does not promise
 
@@ -502,6 +532,7 @@ flowchart LR
         E[("epochs<br/>the fencing counter")]
         C[("config<br/>activation pointer")]
         S[("status<br/>one key per node")]
+        NS[("node status<br/>each node's MCP, model,<br/>runner and infra rows")]
         LG[("ledger<br/>turn completions")]
         CL[("claims<br/>delivery dedupe · spent setup states")]
         R[("rate<br/>notification valve")]
@@ -534,6 +565,7 @@ flowchart LR
 | `epochs` | The monotonic fencing counter each seat's, duty's and node's tokens are minted from, and the one counter every taker lease's are: a taker names one process, so a counter of its own would leave a record per process start, and nothing removes a counter. Its own bucket because it is the one thing here that must never expire (see the retention table below) | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config` | Which revision **is** the company: every config read, on every node, answers it, and every config write is built on it. The key's own revision is the fencing epoch | [Control Plane](control-plane.md) |
 | `status` | What each node last tried to apply and how that went (`error` or `degraded` is a refusal), the epoch it last applied, the revision it serves, the revision it would come back on if it restarted now, and when it last said so. A refused re-activation of the revision a node already runs names one revision in both of the first two, so a refusal is read from the status, never from the two differing; the epoch it applied trails the one it tried exactly while the status is a refusal; what a node boots on is a third revision, which parts from what it serves while a write to its boot row is being retried, and is absent on a node whose own database is discarded at every start | [Control Plane](control-plane.md) |
+| `node status` | What each node says of its MCP servers, its models, its runners and what it runs on: one record per node, beside its presence rather than on it, counted only while the node holds its presence at the epoch the record names | [Its status record](#its-status-record) |
 | `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
 | `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, so a third-party app's retry to a *different* ingress node woke the same seat twice — and has this setup callback's state already been spent. Each claim carries its own deadline, so a setup state's fifteen minutes share the bucket with a delivery's five; see the retention table below | [Event System](event-system.md), [GitHub](../integrations/github.md#one-github-app-per-agent) |
 | `rate` | The notification valve. Four nodes ran four of them, so a seat capped at five a second emitted twenty | [Event System](event-system.md) |
@@ -586,6 +618,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `claims` | 30 minutes, the longest claim's TTL | Like `duties`, each record carries the TTL its claim asked for and lapses at that deadline: a webhook delivery is claimed for **5 minutes** — a third-party app's redelivery and an operator's replay, not its full retry schedule — and a Mattermost post for **30**, because a seat that reconnects replays the last 15 minutes and every node holds every seat's socket (see [Running on a fleet](../integrations/mattermost.md#running-on-a-fleet)). A setup flow's state is claimed for **15 minutes** (`coord.SetupOnceRetention`) the moment it is presented, so a second presentation is refused: the span of a browser round trip to the vendor and two clicks, and under the hour a GitHub manifest's one-time code lives, so a link that has expired says so rather than failing later on a dead code. The age only has to outlive the longest claim; a claim asking for more than the age in force is refused rather than clamped |
 | `ledger` | 7 days | Must outlast the queue's redelivery horizon **and** the scheduler's catchup ceiling — expiring a completion a tick could still evaluate lets that fire run twice |
 | `status` | 4 reconcile intervals (~60 s) | A node that stops reporting must **vanish** from the fleet view rather than linger as a healthy row nobody is writing |
+| `node status` | 4 reconcile intervals (~60 s), the same | A node's [status record](#its-status-record) is rewritten at least every reconcile interval, four times inside the age, so a live node's never ages out and a dead node's goes with no sweep; readers stopped counting it before then, when its presence lapsed |
 | `config` | none | The pointer is the fencing sequence, and a fence that restarts is not a fence |
 | `budgets` | 32 days | The longest calendar window a counter has a slot for is a month — 31 days, and at most an hour of clock change — and every charge rewrites the record, so a record older than that counts nothing a current window can be refused against. The age is **not** the reset: a window's allowance comes back when the window turns over, rolled inside the charge that crosses the boundary (see [Token budgets are windows](#token-budgets-are-windows)) |
 | `fires` | 7 days | Must outlast the scheduler's catchup ceiling, for a sharper reason than the ledger's: a completion that expired early makes a turn re-run, while a claim that expired early makes the catchup pass dispatch a fire the fleet already ran |
@@ -649,18 +682,36 @@ A token budget is a set of ceilings per **calendar window** — the day, the ISO
 
 ## What a node says about itself
 
-Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture (absent for a beat on which it could not read the control plane, rather than the `serve` its own readiness probe assumes then), when it started, how far its replicated state has come up, whether it serves admin, how its MCP servers started — and which alarms are firing on it:
+Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture (absent for a beat on which it could not read the control plane, rather than the `serve` its own readiness probe assumes then), when it started, the build it runs, how far its replicated state has come up, whether it serves admin — and which alarms are firing on it. Each is a few bytes, and the alarm marks are bounded by the alarm table, because the presence is rewritten on every beat and is what placement and liveness read. What grows with a company's configuration — its MCP servers, its models, its runners and what the node runs on — is on its [status record](#its-status-record) instead:
 
 - **`admin`** — the node's own [`api.auth.admin`](identity-and-access.md#access-admin-and-one-permission-per-app): `serve` or `refuse`. The posture is applied at decision time, per node and per request, and nothing is written when it changes, so a fleet mid-rollout legally disagrees about it — and without a row saying so, whether somebody can administer the company would depend on which node a load balancer sent them to, with nothing anywhere saying why. `GET /query/fleet` shows it per node. Absent on a node that serves no API, which is a node not saying rather than one that refuses.
 
-- **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances are serving and how many are not, how many tools one serves, and one failure's reason (clipped to 512 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds and the status is re-sent on every beat. A status with no rows is a node that started none. The counts are the servers' state **as of the beat**, not what their starts concluded: a child that died after starting counts as failed, with what took it down, until the engine has [brought it back](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start), and a shared server whose start failed counts as started once a retry brings it up. What each server's instances *list* is not here: a listing is tens of kilobytes where a row is a few hundred bytes, and re-sent every beat it would be most of the heartbeat. It is a record of its own, written when it changes ([What every server lists](../guides/tools-and-mcp.md#what-every-server-lists)).
-
 - **`alarms`**: every [alarm](../reference/alarms.md) the node's own table has firing as of the beat: one mark per kind, however many logs a kind stands on, carrying the kind and when the node raised it (by its own clock, to the second; for a kind on several logs, the oldest of them; for an alarm raised again within 30 minutes of clearing, its first raise), the longest-standing first, which is the order its health envelope takes `worst` from. Only the kind and its start ride the heartbeat, never the measurement, which moves on every evaluation and is the node's own `alarm_raised` line. An alarm is evaluated by the node it describes, and its gauge, its log line and the health envelope each tell only somebody already looking at that node; this is where every node's set is read at once, and it is the set as it stands now, so a clear nobody heard about is read off it rather than lost. `GET /query/fleet` shows it per node. A node that evaluated its table and found nothing publishes an empty list; a node with no table it has evaluated (one running no state log, which is any node without `data`, or one whose first evaluation has not run) publishes no `alarms`, which is a node not saying, never a node with nothing firing.
 
-Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook overruns its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero. A key in the status this build does not know is ignored rather than refused, so a successor sharing the fleet can publish what it adds and this build still reads the rest of that node's status.
 Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook does not answer within its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero. The hook itself reports whether it answered — the beat does not infer it from the clock after the hook returns, which used to discard a complete answer whenever the process was descheduled past the deadline. A key in the status this build does not know is ignored rather than refused, so a successor sharing the fleet can publish what it adds and this build still reads the rest of that node's status.
 
 **Beside the status, never in it**, a node with the `gitlet` role carries `git_background_bytes` on every renewal: the memory its [git cache](gitlet.md#the-cache-on-a-gitlet-node) gives its background work — its maintenance budget, the node's memory less what its serving keeps, which every whole-repository step of the cache's is admitted against, read again at every maintenance pass, so a container resized in place says its new figure within a pass and a beat. The Gitlet nodes weigh each other by it to choose a repository's **maintainer**, the one Gitlet node that does a repository's background work for the whole fleet rather than for its own cache: the first node of the repository's git order — the order its [home](gitlet.md#the-home-gitlet-node) heads — whose budget holds the work, and the home where none does. So on a fleet of alike nodes the maintainer is the home, on a fleet with one large Gitlet node the repositories only it can hold are maintained there, and no node is asked in turn. Each such question reads one listing of the presence leases — the Gitlet nodes and every node's figure together — so no node is ordered by one listing and weighed by the next, and a node that listing does not carry is no candidate, the asking node included: one that has given its presence back to drain is nobody's maintainer from the first listing that leaves it out, its own included. The figure rides outside the status because a status whose hook overran is dropped for that beat, and a placement input dropped with it would leave the node saying nothing of what it can hold until the next beat. Read from memory, the figure has nothing to overrun, so it is written on every beat — zero included, which is a Gitlet node saying it has nothing to give: Gitlet not built on it yet, or transfers that keep all of its memory. A Gitlet node whose row carries no figure at all (a build that writes none) is not saying, never one with nothing to give, and nothing moves past a repository's home on it: where it ranks behind the home it is passed over — a runner-up holds no copy of the repository in the ordinary case, so work placed there on no information would begin with a cold sync of the whole history only to be refused at that node's own admission — and it keeps the repositories it is home to, whose copies it holds. A node without the `gitlet` role writes no figure. Not on `GET /query/fleet`.
+
+### The presence's bound
+
+A node re-sends its whole presence on every heartbeat, and a renewal waits on it crossing the node's link, so what a presence carries is bounded: the coordination store refuses a claim whose meta is past **8 KiB**, on every backend and before anything is sent. The figure is derived rather than chosen. It is the presence at its worst under the limits the engine already declares — every role, [16 labels](configuration.md#nodelabels) of a 63-byte key and a 64-byte value, the counts at the largest integer, the build cut to 64 bytes, and one mark for every kind of the [alarm table](../reference/alarms.md) — each spelled at its most expensive, which is just under 8,000 bytes, rounded up to the next kibibyte. A record adds its envelope (the resource, the owner, the epoch, the TTL and the hint, about 420 bytes), so a presence record is at most about 8.6 KB, a quarter of a second at the slowest pace the engine allows a link. A test builds that worst case through the node's own assembler and holds the bound to it, so a new alarm kind or a new status field moves the bound on purpose rather than failing a node at run time.
+
+No legal configuration reaches it; `node.labels` is held to its limits when the file is read. If a node's status ever would carry its presence past the bound, the node publishes its presence **without the status** for that beat, as it does when its status hook does not answer — so it stays counted and keeps its seats — and logs `node_presence_status_dropped` at `ERROR` with the size and the bound. A presence past the bound without its status, which only labels outside the Tier A limits could make, is refused by the store, and the node logs `node_presence_refused_too_large` at `ERROR` on every renewal until it is fixed.
+
+### Its status record
+
+What a node says of its MCP servers, its models, its runners and what it runs on is a record of its own in the `node status` bucket, one per node, filed under the node's id so a node can describe only itself:
+
+- **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances are serving and how many are not, how many tools one serves, and one failure's reason (clipped to 512 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds. A record with no rows is a node that started none. The counts are the servers' state **as of the record**, not what their starts concluded: a child that died after starting counts as failed, with what took it down, until the engine has [brought it back](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start), and a shared server whose start failed counts as started once a retry brings it up. What each server's instances *list* is not here: a listing is tens of kilobytes where a row is a few hundred bytes. It is a record of its own, written when it changes ([What every server lists](../guides/tools-and-mcp.md#what-every-server-lists)).
+- **`models`** — one row per model entry of the node's active revision: how it signs in and whether that resolves here, the window it [sits out](llm-backends.md) on this node, its last answer and its last failure, the seats this node holds parked on it (the eight longest-waiting, and how many), and its harness login on this node's disk. Each node's own: a node's process meets a vendor's limit, and its memory keeps the window, so a peer about to retry the model reads it here.
+- **`runners`** — whether each [executor cell](code-sandbox.md#whether-a-cell-is-ready) can start a box on this node, as its probe last found it.
+- **`infra`** — what the node runs on, read once from its own file: the host its peers reach it at, an external broker's servers, the embedded cluster's name and where the company's files are kept. Hosts and names only; the [atlas](atlas.md) draws the fleet from it.
+
+**Why it is not on the presence.** The presence is rewritten on every beat and is what placement and liveness read, so what it costs should not grow with what a company declares. These rows grow with the company — a row per server and per model, a probe's finding, an infra summary of up to twenty-two texts — and nothing that keeps a node counted or its seats held reads them. So the record is written on a loop of its own, never on the beat: a node whose data path is slow writes its record late, and renews its presence on time.
+
+**Written when it moves.** As its presence is claimed at a new epoch, and every renew period after, the node builds the record from memory and writes it when it differs from the one it last wrote, leaving out each model's last answer, which moves on every call; so a sit-out, a failure or a server going down reaches every reader within a renew period. Whatever moved, it is rewritten at least every reconcile interval (15 s), which carries the last answer at that freshness and keeps the record four writes inside its bucket's age.
+
+**Joined to the presence by its epoch.** A record carries the presence epoch the node held when it wrote it, and a reader counts it only while that node holds its presence **at that epoch** — the rule [MCP listings](../guides/tools-and-mcp.md#what-every-server-lists) follow too. A node that died stops counting the moment its presence lapses, before its record ages out; a node that restarted, or lapsed and claimed its presence again, is read as not saying until it writes, which it does as the presence is claimed. A node that stops cleanly removes its record once it has given its seats back, on what is left of the stop's [one allowance](agent-runtime.md#graceful-shutdown) — and only up to the epoch it wrote at, so the record of a later process under the same node id, started before this one finished stopping, stands. A live node with no record counted is "did not say", never zero: the Models page and the Servers tab draw it as a column of its own. A key this build does not know is ignored, as in the status.
 
 ## Who is in the fleet, asked per request
 
@@ -685,7 +736,7 @@ The node's own database holds everything a *single* node is the only reader of. 
 And two things stay **per-process** deliberately:
 
 - **`max_concurrent`.** Tier A's `node.max_concurrent` (default 32) is the gate every agent turn passes through, and it is per node — so an org's ceiling is N × the configured value. Size it per node, not per company. This is the one knob a fleet genuinely changes the meaning of.
-- **A seat's MCP subprocesses.** They are children of the node that claimed the seat, and they die with the release. Only their *status* is shared, on the heartbeat ([above](#what-a-node-says-about-itself)).
+- **A seat's MCP subprocesses.** They are children of the node that claimed the seat, and they die with the release. Only their *status* is shared, on the node's status record ([above](#its-status-record)).
 
 ---
 

@@ -202,6 +202,9 @@ type captureHooks struct {
 	// watched is told, after each of the watcher's measures, a stream's
 	// size and its allocated bytes.
 	watched func(stream string, size, allocated int64)
+	// delivered is told, after each of the reader's reads, how far it has
+	// read a stream and handed it on.
+	delivered func(stream string, at int64)
 	// current answers, for the group a child leads, whether it is still the
 	// one recorded: [procgroup.Leader.Current].
 	current func(leader procgroup.Leader) (bool, error)
@@ -765,6 +768,9 @@ func (c *childRun) readSome(cp *capture, buf []byte, upTo int64) bool {
 	}
 	cp.hand(buf[:got])
 	cp.delivered.Store(off + int64(got))
+	if c.hooks != nil && c.hooks.delivered != nil {
+		c.hooks.delivered(cp.stream, off+int64(got))
+	}
 	return true
 }
 

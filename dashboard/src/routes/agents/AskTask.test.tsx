@@ -59,6 +59,7 @@ const ADA: ViewerState = {
   assistant: "disabled",
   assistantModel: null,
   assistantReadsImages: false,
+  assistantDeliberate: false,
 };
 
 /** What the engine says the company runs: Crewlet's own, all four. */

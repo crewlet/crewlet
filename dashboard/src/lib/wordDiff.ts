@@ -28,6 +28,9 @@
  *
  * PURE, and in `lib/` for the reason the rest of this directory gives: what is
  * underlined is held by these tests rather than by a screen.
+ *
+ * A host's coloured spans are cut at the run's edges, and the run keeps the
+ * code's own text ([segments]).
  */
 
 /** A stretch of a line's text, as offsets into it: `start` inclusive, `end` exclusive. */
@@ -106,4 +109,69 @@ export function changedRuns(before: string, after: string): ChangedRuns {
   const shared = a.slice(0, head).concat(a.slice(a.length - tail));
   if (!shared.some((t) => t.word)) return NONE;
   return { before: span(a, head, a.length - tail), after: span(b, head, b.length - tail) };
+}
+
+/** A host's run of a line's text, up to `end` (exclusive), drawn with `className`, or plain. */
+export interface DiffSpan {
+  end: number;
+  className: string | null;
+}
+
+/** One piece of a drawn line: the changed run, or a stretch with its class or none. */
+export interface Segment {
+  start: number;
+  end: number;
+  className: string | null;
+  run: boolean;
+}
+
+/**
+ * A line cut at its spans' ends and its run's edges, covering it in order. The
+ * run is one segment with no class: its text stays the code's own on its tint.
+ */
+export function segments(
+  text: string,
+  spans: readonly DiffSpan[] | null,
+  run: Run | null,
+): Segment[] {
+  const length = text.length;
+  const from = run ? Math.min(Math.max(run.start, 0), length) : 0;
+  const to = run ? Math.min(Math.max(run.end, from), length) : 0;
+  const out: Segment[] = [];
+  let ran = false;
+  const push = (start: number, end: number, className: string | null) => {
+    if (end <= start) return;
+    const last = out[out.length - 1];
+    if (className === null && last && !last.run && last.className === null && last.end === start) {
+      last.end = end;
+    } else {
+      out.push({ start, end, className, run: false });
+    }
+  };
+  const piece = (start: number, end: number, className: string | null) => {
+    if (!run || end <= from || start >= to) {
+      // A run of no length sits between the pieces it divides.
+      if (run && !ran && start >= to) {
+        out.push({ start: from, end: to, className: null, run: true });
+        ran = true;
+      }
+      push(start, end, className);
+      return;
+    }
+    push(start, from, className);
+    if (!ran) out.push({ start: from, end: to, className: null, run: true });
+    ran = true;
+    push(to, end, className);
+  };
+  let at = 0;
+  for (const span of spans ?? []) {
+    const end = Math.min(span.end, length);
+    if (end <= at) continue;
+    piece(at, end, span.className);
+    at = end;
+  }
+  piece(at, length, null);
+  if (run && !ran) out.push({ start: from, end: to, className: null, run: true });
+  if (out.length === 0) out.push({ start: 0, end: 0, className: null, run: false });
+  return out;
 }

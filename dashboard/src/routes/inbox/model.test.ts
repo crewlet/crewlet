@@ -10,6 +10,9 @@ import {
   answerWords,
   answeredQuestion,
   answeredRows,
+  artifactCard,
+  artifactRowKey,
+  artifactWords,
   ASK_HEADING,
   askContext,
   askHeadline,
@@ -47,6 +50,7 @@ import type {
   AgentRow,
   AnsweredRun,
   AnsweredWorkAsk,
+  ArtifactInboxNotice,
   CodeInboxNotice,
   ExecutorRow,
   InboxAnswer,
@@ -125,6 +129,53 @@ function codeNotice(id: string, extra: Partial<CodeInboxNotice> = {}): InboxNoti
   };
 }
 
+/** A comment on an artifact as the artifacts' own notice carries it. */
+function artifactExtra(id: string, extra: Partial<ArtifactInboxNotice> = {}): ArtifactInboxNotice {
+  return {
+    record_id: id,
+    log_seq: 9,
+    log_stream: "CREWLET_ARTIFACTS_LOG",
+    log_generation: 1,
+    at: "2026-09-27T12:00:00Z",
+    reason: "owner",
+    primary: true,
+    addressed: false,
+    op: "comment_open",
+    artifact: "art-1",
+    thread: "th-1",
+    remark: "The **Q3** numbers look off",
+    excerpt: "The **Q3** numbers look off",
+    actor: "maya",
+    actor_kind: "human",
+    title: "Q3 plan",
+    artifact_kind: "doc",
+    read: false,
+    ...extra,
+  };
+}
+
+/** A comment on an artifact as the composed inbox carries it. */
+function artifactNotice(id: string, extra: Partial<ArtifactInboxNotice> = {}): InboxNotice {
+  const n = artifactExtra(id, extra);
+  const notice: InboxNotice = {
+    source: "artifacts",
+    record_id: n.record_id,
+    position: { stream: n.log_stream, generation: n.log_generation, seq: n.log_seq },
+    at: n.at,
+    reason: n.reason,
+    primary: n.primary,
+    addressed: n.addressed,
+    kind: "comment",
+    subject: { id: n.artifact, title: n.title },
+    actor: n.actor,
+    actor_kind: n.actor_kind,
+    read: n.read,
+    extra: n,
+  };
+  if (n.excerpt !== undefined) notice.excerpt = n.excerpt;
+  return notice;
+}
+
 const ASK_ROW = {
   id: "t",
   key: "LEAD-12",
@@ -181,6 +232,126 @@ describe("the rows", () => {
       ["change", "change:r-1"],
     ]);
     expect(rowName(rows[1]!, null)).toBe("web!42");
+  });
+
+  // A COMMENT ON AN ARTIFACT IS A ROW OF ITS OWN, keyed behind its own prefix.
+  // Mutation: key it by its bare record id, and it names the Worklet row too.
+  test("an artifact notice is an artifact row, keyed apart from every other source's", () => {
+    const rows = noticeRows([composed(notice("r-1")), codeNotice("r-1"), artifactNotice("r-1")]);
+    expect(rows.map((r) => [r.kind, r.key])).toEqual([
+      ["notice", "r-1"],
+      ["change", "change:r-1"],
+      ["artifact", "artifact:r-1"],
+    ]);
+    expect(artifactRowKey("r-1")).toBe("artifact:r-1");
+  });
+});
+
+// A COMMENT ON AN ARTIFACT, as its row and its card say it: who did what to
+// which artifact, the remark as words, why it reached the reader, and where
+// the thread stands, with the address that opens the artifact on it.
+describe("a comment on an artifact", () => {
+  const index = indexOrg(
+    withDerived({
+      name: "Acme",
+      roles: [
+        { handle: "maya", name: "Maya Ops", kind: "human" },
+        { handle: "cto", name: "CTO", kind: "agent" },
+      ],
+    }) as never,
+  );
+  const row = (extra: Partial<ArtifactInboxNotice> = {}): InboxRow => ({
+    kind: "artifact",
+    key: "artifact:a-1",
+    at: "2026-09-27T12:00:00Z",
+    notice: artifactExtra("a-1", extra),
+  });
+
+  // Mutation: word a resolve as a comment, or draw the remark as markup.
+  test("says what its author did to the artifact, and the remark as plain words", () => {
+    expect(artifactWords(artifactExtra("a-1"))).toEqual({
+      did: "commented on Q3 plan",
+      heading: "Commented",
+      excerpt: "The Q3 numbers look off",
+    });
+    const did = (op: ArtifactInboxNotice["op"]) =>
+      artifactWords(artifactExtra("a-1", { op, excerpt: undefined }));
+    expect(did("comment_reply").did).toBe("commented on Q3 plan");
+    expect(did("comment_resolve")).toEqual({
+      did: "resolved a comment on Q3 plan",
+      heading: "Resolved a comment",
+    });
+    expect(did("comment_reopen")).toEqual({
+      did: "reopened a comment on Q3 plan",
+      heading: "Reopened a comment",
+    });
+  });
+
+  test("is from whoever wrote it, drawn as the seat they write as", () => {
+    expect(rowWho(row(), index)?.name).toBe("Maya Ops");
+    expect(rowWho(row({ actor: "cto", actor_kind: "agent" }), index)?.kind).toBe("agent");
+    expect(rowWho(row({ actor: "crewlet", actor_kind: "system" }), index)).toBeNull();
+  });
+
+  test("is about no task, and names no record the page context reads", () => {
+    expect(rowItem(row())).toBeNull();
+    expect(rowKey(row())).toBe("");
+    expect(inboxSelection(row())).toBeNull();
+  });
+
+  // Mutation: say why in Worklet's phrases, and "owner" reads as raw words.
+  test("says why it reached the reader in its own words", () => {
+    const why = (reason: string) =>
+      artifactCard(artifactExtra("a-1", { reason: reason as ArtifactInboxNotice["reason"] }), index)
+        .why;
+    expect(why("owner")).toBe("On your artifact");
+    expect(why("mention")).toBe("Mentioned you");
+    expect(why("participant")).toBe("In a thread you're in");
+    expect(why("assignee")).toBe("For your work item");
+    // A REASON A NEWER ENGINE RECORDS is said in its own words.
+    expect(why("follower_added")).toBe("follower added");
+  });
+
+  // Mutation: open the artifact without its panel or its thread.
+  test("opens the artifact on its comments, at its thread", () => {
+    expect(artifactCard(artifactExtra("a-1"), index).href).toBe(
+      "#/artifacts/art-1?panel=comments&thread=th-1",
+    );
+  });
+
+  // Mutation: say "Open" for a resolved thread, or drop who resolved it.
+  test("says where the thread stands, where the read carried it", () => {
+    expect(artifactCard(artifactExtra("a-1"), index).thread).toBeNull();
+    const open = artifactCard(
+      artifactExtra("a-1", {
+        thread_state: { status: "open", version: 2, quote: "Revenue grew 12%", remarks: 3 },
+      }),
+      index,
+    ).thread;
+    expect(open).toEqual({
+      quote: "Revenue grew 12%",
+      resolved: false,
+      status: "Open",
+      facts: "3 remarks · started on version 2",
+    });
+    const resolved = artifactCard(
+      artifactExtra("a-1", {
+        thread_state: {
+          status: "resolved",
+          version: 1,
+          remarks: 1,
+          resolved_by: "maya",
+          resolved_version: 4,
+        },
+      }),
+      index,
+    ).thread;
+    expect(resolved).toEqual({
+      quote: "",
+      resolved: true,
+      status: "Resolved by Maya Ops",
+      facts: "1 remark · started on version 1",
+    });
   });
 });
 
@@ -467,21 +638,31 @@ describe("mark all read", () => {
           notice("c", { log_generation: 2, log_seq: 40, read: true }),
         ].map(composed),
       ),
-    ).toEqual({ tracker: "CREWLET_TRACKER_LOG@2:3", code: null });
+    ).toEqual({ tracker: "CREWLET_TRACKER_LOG@2:3", code: null, artifacts: null });
     expect(readThrough([composed(notice("a", { read: true }))])).toEqual({
       tracker: null,
       code: null,
+      artifacts: null,
     });
   });
 
-  test("reads each source through its own newest notice, never one through the other's", () => {
+  // Mutation: read the artifacts through the newest notice of any source, and
+  // their log is sent the tracker's position.
+  test("reads each source through its own newest notice, never one through another's", () => {
     expect(
       readThrough([
         composed(notice("a", { log_generation: 1, log_seq: 90 })),
         codeNotice("x", { log_generation: 1, log_seq: 4 }),
         codeNotice("y", { log_generation: 1, log_seq: 2 }),
+        artifactNotice("p", { log_generation: 2, log_seq: 1 }),
+        artifactNotice("q", { log_generation: 1, log_seq: 50 }),
+        artifactNotice("s", { log_generation: 2, log_seq: 6, read: true }),
       ]),
-    ).toEqual({ tracker: "CREWLET_TRACKER_LOG@1:90", code: "CREWLET_CODE_LOG@1:4" });
+    ).toEqual({
+      tracker: "CREWLET_TRACKER_LOG@1:90",
+      code: "CREWLET_CODE_LOG@1:4",
+      artifacts: "CREWLET_ARTIFACTS_LOG@2:1",
+    });
   });
 });
 
@@ -573,6 +754,7 @@ describe("the quiet sentences", () => {
     sources: [
       { name: "tracker", primary_reasons: [] },
       { name: "code", primary_reasons: [] },
+      { name: "artifacts", primary_reasons: ["owner", "mention", "assignee"] },
     ],
     unread: 0,
     primary: 0,
@@ -587,8 +769,8 @@ describe("the quiet sentences", () => {
 
   test("claim no read history for a person who never marked one", () => {
     expect(inboxQuiet({ ...base, answer })?.title).toBe("Nothing has reached you yet");
-    // EITHER SOURCE'S READ POSITION is evidence of having read something.
-    const read = (name: "tracker" | "code"): InboxAnswer => ({
+    // ANY SOURCE'S READ POSITION is evidence of having read something.
+    const read = (name: "tracker" | "code" | "artifacts"): InboxAnswer => ({
       ...answer,
       sources: answer.sources.map((s) =>
         s.name === name ? { ...s, seen_through: { stream: "S", seq: 4 } } : s,
@@ -596,6 +778,7 @@ describe("the quiet sentences", () => {
     });
     expect(inboxQuiet({ ...base, answer: read("tracker") })?.title).toBe("You are caught up");
     expect(inboxQuiet({ ...base, answer: read("code") })?.title).toBe("You are caught up");
+    expect(inboxQuiet({ ...base, answer: read("artifacts") })?.title).toBe("You are caught up");
   });
 
   test("name what the conditions were measured over for a reader who is nobody", () => {

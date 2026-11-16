@@ -1,5 +1,5 @@
 /**
- * TOKEN SPEND, LAID OUT, over a window that spent nothing. A row is one height,
+ * TOKEN SPEND, LAID OUT, over a window no agent spent in. A row is one height,
  * so an empty card is stretched to its neighbour's; its empty state then
  * stands in the middle of that height rather than at the top over a band of
  * nothing, which read as a card that failed to fill.
@@ -31,6 +31,8 @@ const ORG = {
 };
 
 const NOTHING = { input_tokens: 0, output_tokens: 0, total_tokens: 0, calls: 0 };
+// A window that spent tokens draws its breakdown cards; one that spent none draws only the chart's empty state.
+const SPENT = { input_tokens: 3, output_tokens: 2, total_tokens: 5, calls: 1 };
 const WINDOW = {
   since: "2026-08-31T00:00:00Z",
   until: "2026-09-30T00:00:00Z",
@@ -47,7 +49,7 @@ const ANSWERS: Record<string, unknown> = {
   answered_decisions: { handle: "jane", items: [] },
   tokens: {
     ...WINDOW,
-    totals: NOTHING,
+    totals: SPENT,
     by_phase: [],
     by_model: [],
     by_provider: [],

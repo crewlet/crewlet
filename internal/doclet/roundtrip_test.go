@@ -271,6 +271,8 @@ func (r *roundTrip) drain() {
 		if err != nil {
 			r.t.Fatalf("decode record %d: %v", seq, err)
 		}
+		// AS THE FRAMEWORK'S LOOP HANDS IT ([statelog.AppliedInstant]).
+		storedAt = statelog.AppliedInstant(storedAt)
 		record := statelog.Record{
 			Envelope: statelog.Envelope{
 				V: env.V, Kind: string(env.Subject.Kind),

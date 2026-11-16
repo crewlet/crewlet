@@ -23,7 +23,7 @@ import { indexOrg, type Seat } from "~/lib/seats.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { usesOf, type Uses } from "~/lib/modelUses.ts";
+import { keysOf, usesOf, type Uses } from "~/lib/modelUses.ts";
 import type { AgentRow, CompanyDocument, LogRefusal, QueryRefusal } from "~/protocol/types.ts";
 import type {
   MemberModelEntry,
@@ -61,6 +61,8 @@ export interface ModelView {
   runIn: string | null;
   timeoutSeconds: number | null;
   maxConcurrent: number | null;
+  /** The reasoning effort the entry sets, or null for the harness's default. */
+  effort: string | null;
   webDenied: boolean;
   /** The document entry as written, for an edit. Null for a member, who reads no document. */
   raw: Record<string, unknown> | null;
@@ -81,8 +83,12 @@ export interface ModelsData {
   nodes: ModelNode[];
   /** The node that answered. */
   node: string;
-  /** Whether the Dashboard Assistant is on, and the model it runs on. */
-  assistant: { enabled: boolean; key: string | null };
+  /**
+   * Whether the Dashboard Assistant is on, the model it answers with first,
+   * and the fallbacks behind it in their order: its whole chain, which a
+   * change of its model keeps.
+   */
+  assistant: { enabled: boolean; key: string | null; fallbacks: string[] };
   loading: boolean;
   error: string | null;
   /**
@@ -99,22 +105,33 @@ export interface ModelsData {
   reload: () => void;
 }
 
-/** The model the assistant runs on, from the document an admin reads or the uses the engine reports. */
-function assistantOf(doc: CompanyDocument | null, models: readonly ModelView[]) {
+/**
+ * The assistant's chain, from the document an admin reads or, for a member who
+ * reads none, the places the engine reports its chat at (`used_by`), in order.
+ */
+export function assistantOf(
+  doc: CompanyDocument | null,
+  models: readonly Pick<ModelView, "key" | "entry">[],
+): ModelsData["assistant"] {
   const assistant =
     doc && isRecord((doc as Record<string, unknown>).assistant)
       ? ((doc as Record<string, unknown>).assistant as Record<string, unknown>)
       : null;
-  const fromUses = models.find((m) => m.uses.assistant)?.key ?? null;
-  if (!assistant) return { enabled: fromUses !== null, key: fromUses };
-  const llm = assistant.llm;
-  const key =
-    typeof llm === "string"
-      ? llm
-      : Array.isArray(llm) && typeof llm[0] === "string"
-        ? llm[0]
-        : fromUses;
-  return { enabled: assistant.enabled === true, key: key || null };
+  const fromUses = models
+    .flatMap((m) =>
+      m.entry.used_by
+        .filter((u) => u.assistant === "chat")
+        .map((u) => ({ key: m.key, position: u.position })),
+    )
+    .sort((a, b) => a.position - b.position)
+    .map((u) => u.key);
+  const written = assistant ? keysOf(assistant.llm) : [];
+  const chain = written.length > 0 ? written : fromUses;
+  return {
+    enabled: assistant ? assistant.enabled === true : fromUses.length > 0,
+    key: chain[0] ?? null,
+    fallbacks: chain.slice(1),
+  };
 }
 
 /** The models, joined: the engine's reading in its order, each with its document entry. */
@@ -141,6 +158,7 @@ export function modelViews(
       runIn: typeof raw?.run_in === "string" ? raw.run_in : null,
       timeoutSeconds: typeof raw?.timeout_seconds === "number" ? raw.timeout_seconds : null,
       maxConcurrent: typeof raw?.max_concurrent === "number" ? raw.max_concurrent : null,
+      effort: typeof raw?.effort === "string" ? raw.effort : null,
       webDenied: overrides.web_tools === "denied",
       raw,
     };

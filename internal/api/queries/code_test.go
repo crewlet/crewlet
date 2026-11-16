@@ -280,6 +280,8 @@ var codeQuestions = []struct {
 		"attempt": "1", "target": "refs/heads/main"}},
 	{"code_check_log", gitlet.ReadCheck, map[string]any{"name": "web", "oid": stubOID, "check": "unit",
 		"attempt": "1", "target": "refs/heads/main"}},
+	{"code_commit_marks", gitlet.ReadCommitMarks, map[string]any{"name": "web", "commits": stubOID}},
+	{"code_counts", gitlet.ReadCounts, map[string]any{"parts": "changes"}},
 }
 
 // A CODE QUESTION HANDS THE READER THE CALLER'S WHOLE FRESHNESS: the level,

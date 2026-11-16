@@ -23,7 +23,7 @@ import (
 // The scrub finds it: the one a report makes due, a scrub step's, or the one
 // every check runs first (check).
 func (in *interleaving) damageInPlace(string) string {
-	repo, dir, rel := in.heldFile(true)
+	repo, dir, rel := in.heldFile(true, true)
 	if rel == "" {
 		return "nothing held"
 	}
@@ -50,7 +50,7 @@ func (in *interleaving) requestMeetsDamage(string) string {
 	}
 	s := in.syncAt(repo, linearizable)
 	defer s.Release()
-	rel := in.fileOf(s.Dir, true)
+	rel := in.fileOf(s.Dir, true, false)
 	if rel == "" {
 		return "nothing held"
 	}

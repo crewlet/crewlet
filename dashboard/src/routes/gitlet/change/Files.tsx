@@ -1,7 +1,7 @@
 /**
  * A change's diff: the files a revision changes, one file's patch drawn by the
- * dashboard's one hueless `DiffView`, and every finding and thread on the line
- * it is about.
+ * dashboard's one `DiffView`, in the code hue, its code coloured by kind, and
+ * every finding and thread on the line it is about.
  *
  * # Read by object id, placed by the engine
  *
@@ -58,6 +58,7 @@ import { useNow } from "~/lib/clock.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
+import { useDiffTokens } from "../syntax.tsx";
 import type {
   CodeChangeAnswer,
   CodeChangeDetail,
@@ -371,11 +372,13 @@ function FileDiff({
   const patch = useCodeQuery("code_change", params, { enabled: !entry?.binary });
   // EVERY PAGE OF THE PATCH the reader asks for, each its part's own question
   // from the cursor the page before it ended at (`lib/patchPages.ts`).
-  const { paged, hunks } = usePatchPages(patch, params, (cursor) =>
+  const { paged, hunks, file } = usePatchPages(patch, params, (cursor) =>
     codeRest.query("code_change", { ...params, cursor }),
   );
   // Every page held is asked again when what the patch is read from moves.
   useAskAgainWhenMoved(moved, !entry?.binary, paged.refresh);
+  // A FILE PAST THE LISTING'S PAGES READ is coloured from its patch's own entry.
+  const tokens = useDiffTokens({ repo: change.repo, file: entry ?? file, hunks });
   const [pick, setPick] = useState<Pick | null>(null);
   const ofFile: Placed[] = findings
     .filter((f) => f.path === path)
@@ -485,6 +488,8 @@ function FileDiff({
       ) : (
         <>
           <DiffView
+            hue="code"
+            tokens={tokens}
             hunks={hunks}
             layout={layout}
             aria-label={`Changes to ${path}`}

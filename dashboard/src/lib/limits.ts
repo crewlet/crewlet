@@ -42,7 +42,7 @@ export type TypedLimit =
 export function limitTyping(row: LimitRow): string {
   switch (row.unit) {
     case "seconds":
-      return "A number of seconds.";
+      return "A duration: seconds, or with m, h or d (30m, 12h, 7d).";
     case "fraction":
       return "A percentage, from 1 to 100.";
     case "per_second":
@@ -59,7 +59,20 @@ export function limitText(row: LimitRow, value: number): string {
   // A SHARE IS TYPED AS A PERCENTAGE, rounded to what a float keeps of it:
   // 0.35 times 100 is 35.00000000000001.
   if (row.unit === "fraction") return String(Math.round(value * 10_000) / 100);
+  if (row.unit === "seconds") return durationText(value);
   return String(value);
+}
+
+/** The units a duration is typed in, by their letter, in seconds. */
+const DURATION_UNITS: Readonly<Record<string, number>> = { s: 1, m: 60, h: 3_600, d: 86_400 };
+
+/** A duration as typed: whole days, hours or minutes by their letter, else seconds. */
+function durationText(seconds: number): string {
+  for (const unit of ["d", "h", "m"] as const) {
+    const size = DURATION_UNITS[unit]!;
+    if (seconds > 0 && seconds % size === 0) return `${seconds / size}${unit}`;
+  }
+  return String(seconds);
 }
 
 /**
@@ -70,7 +83,7 @@ export function limitText(row: LimitRow, value: number): string {
 function notOfUnit(row: LimitRow, typed: string): string {
   switch (row.unit) {
     case "seconds":
-      return `“${typed}” is not a number of seconds.`;
+      return `“${typed}” is not a duration.`;
     case "fraction":
       return `“${typed}” is not a percentage.`;
     case "per_second":
@@ -118,13 +131,23 @@ export function rangeWords(row: LimitRow, range: SettingRange, zeroWords?: strin
     return `${scale}, or ${zeroWords ?? "0"}.`;
   }
   const least = boundWords(row, range.min);
+  // A BOUND THIS NODE'S OPERATOR SET is named as theirs, so a person refused
+  // past it knows a company setting cannot move it.
+  const operator =
+    range.operator_max === true
+      ? " This node’s operator allows no more."
+      : range.operator_min === true
+        ? " This node’s operator allows no less."
+        : "";
   if (range.max === undefined) {
-    return range.min_exclusive ? `More than ${least}.` : `At least ${least}.`;
+    return (range.min_exclusive ? `More than ${least}.` : `At least ${least}.`) + operator;
   }
   const most = boundWords(row, range.max);
-  return range.min_exclusive
-    ? `More than ${least}, and at most ${most}.`
-    : `From ${least} to ${most}.`;
+  return (
+    (range.min_exclusive
+      ? `More than ${least}, and at most ${most}.`
+      : `From ${least} to ${most}.`) + operator
+  );
 }
 
 /**
@@ -135,6 +158,7 @@ export function rangeWords(row: LimitRow, range: SettingRange, zeroWords?: strin
 export function readLimit(row: LimitRow, text: string, zeroWords?: string): TypedLimit {
   const typed = text.trim().replace(/%$/, "").trim();
   if (typed === "") return { ok: true, value: null };
+  if (row.unit === "seconds") return readDuration(row, typed, zeroWords);
   // A SIGN IS READ, so -2 is told the cap's range rather than that it is not
   // a number.
   if (!/^-?\d+(\.\d+)?$/.test(typed)) return { ok: false, error: notOfUnit(row, typed) };
@@ -145,9 +169,6 @@ export function readLimit(row: LimitRow, text: string, zeroWords?: string): Type
     case "fraction":
       value = Math.round(n * 100) / 10_000;
       break;
-    case "seconds":
-      value = n;
-      break;
     case "count":
     case "per_second":
     case "days":
@@ -155,6 +176,18 @@ export function readLimit(row: LimitRow, text: string, zeroWords?: string): Type
       value = n;
       break;
   }
+  if (row.range && !rangeAdmits(row.range, value)) {
+    return { ok: false, error: rangeWords(row, row.range, zeroWords) };
+  }
+  return { ok: true, value };
+}
+
+/** A duration as typed: a number of seconds, or of minutes, hours or days by their letter. */
+function readDuration(row: LimitRow, typed: string, zeroWords?: string): TypedLimit {
+  const match = /^(-?\d+(?:\.\d+)?)\s*([smhd])?$/i.exec(typed);
+  if (!match) return { ok: false, error: notOfUnit(row, typed) };
+  const value = Number(match[1]) * DURATION_UNITS[(match[2] ?? "s").toLowerCase()]!;
+  if (!Number.isFinite(value)) return { ok: false, error: notOfUnit(row, typed) };
   if (row.range && !rangeAdmits(row.range, value)) {
     return { ok: false, error: rangeWords(row, row.range, zeroWords) };
   }
@@ -240,7 +273,7 @@ export function limitPlan(
       summary:
         value === null
           ? `${area}: ${label} back to the default (${row.key})`
-          : `${area}: ${label} set to ${limitText(row, value)}${row.unit === "fraction" ? "%" : ""} (${row.key})`,
+          : `${area}: ${label} set to ${row.unit === "seconds" ? fmtSetting(value) : limitText(row, value)}${row.unit === "fraction" ? "%" : ""} (${row.key})`,
     };
   };
 }

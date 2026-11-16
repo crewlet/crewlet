@@ -34,6 +34,10 @@ type Result struct {
 	// Trust is the label the model's text was fenced under: the tool's,
 	// or what its TrustOf made of this answer. A refusal carries none.
 	Trust provenance.Trust
+	// Source is the surface the answer's text came from: what its TrustOf
+	// found, else the tool's own Source. A turn tainted by this answer names
+	// it on the proposals it makes after (D25).
+	Source provenance.Source
 	// Empty is an answer that held nothing: no card is drawn, and the
 	// model is told what was asked and that nothing matched.
 	Empty bool
@@ -41,6 +45,16 @@ type Result struct {
 
 // Failed reports a read the route refused or could not answer.
 func (r Result) Failed() bool { return r.Refusal != nil }
+
+// trusted is what t's TrustOf makes of a call and its answer: the trust, and
+// the surface its outside text came from, the tool's own where it names none.
+func (t Tool) trusted(args Args, answer any) (provenance.Trust, provenance.Source) {
+	got := t.TrustOf(args, answer)
+	if got.Source == "" {
+		return got.Trust, t.Source
+	}
+	return got.Trust, got.Source
+}
 
 // Shape is a read's answer as the person and the model receive it, in this
 // order, each step before the next:
@@ -111,26 +125,26 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 	if err != nil {
 		return Result{}, fmt.Errorf("catalog: card %s's answer: %w", t.Name, err)
 	}
-	trust := t.Trust
+	trust, source := t.Trust, t.Source
 	if t.TrustOf != nil {
 		answer, decodeErr := cards.Decode(body)
 		if decodeErr != nil {
 			return Result{}, fmt.Errorf("catalog: read %s's answer: %w", t.Name, decodeErr)
 		}
-		trust = t.TrustOf(args, answer)
+		trust, source = t.trusted(args, answer)
 	}
 	if built.Empty {
 		model, emptyErr := emptyModel(t, trust, args, built.Note, b)
 		if emptyErr != nil {
 			return Result{}, emptyErr
 		}
-		return Result{Model: model, Trust: trust, Empty: true}, nil
+		return Result{Model: model, Trust: trust, Source: source, Empty: true}, nil
 	}
 	model, err := fitModel(t, trust, built, b)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Cards: []wire.Card{built.Card}, Model: model, Trust: trust}, nil
+	return Result{Cards: []wire.Card{built.Card}, Model: model, Trust: trust, Source: source}, nil
 }
 
 // scoped is spec with its table's title carrying scope, the one spelling a
@@ -199,28 +213,32 @@ func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 		if err != nil {
 			return Result{}, err
 		}
-		return Result{Model: model, Trust: t.Trust, Empty: true}, nil
+		return Result{Model: model, Trust: t.Trust, Source: t.Source, Empty: true}, nil
 	}
 	body, err := redacted(resp.Body)
 	if err != nil {
 		text := redact.Secrets(string(bytes.ToValidUTF8(resp.Body, nil)))
 		model, fitErr := fitAnswer(t, t.Trust, b, text)
-		return Result{Model: model, Trust: t.Trust}, fitErr
+		return Result{Model: model, Trust: t.Trust, Source: t.Source}, fitErr
 	}
 	doc, err := cards.Decode(body)
 	if err != nil {
 		return Result{}, fmt.Errorf("catalog: read %s's answer: %w", t.Name, err)
 	}
-	trust := t.Trust
+	trust, source := t.Trust, t.Source
 	if t.TrustOf != nil {
-		trust = t.TrustOf(args, doc)
+		trust, source = t.trusted(args, doc)
 	}
 	model, err := fitAnswer(t, trust, b, string(body))
 	if err != nil {
 		return Result{}, err
 	}
-	out := Result{Model: model, Trust: trust}
-	if spec, rows, ok := cards.Infer(doc, callTitle(args)); ok {
+	out := Result{Model: model, Trust: trust, Source: source}
+	title := callTitle(args)
+	if t.Title != nil {
+		title = t.Title(args)
+	}
+	if spec, rows, ok := cards.Infer(doc, title); ok {
 		encoded, err := json.Marshal(rows)
 		if err != nil {
 			return Result{}, fmt.Errorf("catalog: encode %s's rows: %w", t.Name, err)
@@ -289,6 +307,8 @@ var narrowingQuery = map[string]bool{
 	"label": true, "title": true, "asked_of": true, "asked_by": true, "has_open_asks": true,
 	"collection": true, "field": true, "due": true, "author": true,
 	"lane": true, "vendor": true, "confidence": true, "health": true,
+	// THE IDENTITY TRAIL's: whom its entries are about, and one kind of entry.
+	"person": true, "event": true,
 }
 
 // narrowWords are the arguments a person reads by other words than their
@@ -364,16 +384,16 @@ func oversize(t Tool, args Args, b provenance.Boundary, o cards.Options) (Result
 	// what its TrustOf makes of the call with no answer to read, so a
 	// generic read of a route outside the company still marks the turn
 	// (a cut read of the event log is still a read of it).
-	trust := t.Trust
+	trust, source := t.Trust, t.Source
 	if t.TrustOf != nil {
-		trust = t.TrustOf(args, nil)
+		trust, source = t.trusted(args, nil)
 	}
 	model, err := modelFact(t, trust, b, map[string]any{"cut": cut})
 	if err != nil {
 		return Result{}, err
 	}
 	return Result{Cards: []wire.Card{cards.Oversize(title, open, narrow)}, Model: model,
-		Trust: trust}, nil
+		Trust: trust, Source: source}, nil
 }
 
 // readRoute is the route pattern a read's call was sent to, as the engine

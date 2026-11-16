@@ -281,7 +281,7 @@ type OrgSeat struct {
 	// registry's own origin grammar — `builtin` first, then `mcp:<server>`
 	// for each server it is granted, in the order the company declares them.
 	// What the seat is GRANTED, not what is running: a server that failed to
-	// start is still listed, and the node heartbeat's MCP report is what says
+	// start is still listed, and the node status record's MCP report is what says
 	// it failed. Absent on a human seat and for every reader who is not an
 	// admin.
 	ToolSources []string `json:"tool_sources,omitempty"`

@@ -16,7 +16,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { BrokerCell, Fleet, HeldSince, NodePeek, nodeFacts } from "./Fleet.tsx";
+import { BrokerCell, Fleet, HeldSince, NodePeek, homelessWords, nodeFacts } from "./Fleet.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
@@ -268,23 +268,26 @@ describe("whether a node runs the fleet's revision", () => {
     const card = (await screen.findByText("Not running anywhere")).closest<HTMLElement>(
       ".crewlet-card",
     )!;
+    const item = (handle: string) =>
+      [...card.querySelectorAll<HTMLElement>(".crewlet-notice-list__item")].find(
+        (c) => c.querySelector(".crewlet-notice-list__subject")?.textContent === handle,
+      )!;
     const said = (handle: string) =>
-      [...card.querySelectorAll<HTMLElement>(".crewlet-callout")]
-        .find((c) => c.textContent?.startsWith(handle))
-        ?.textContent?.replace(/\s+/g, " ");
+      item(handle).querySelector(".crewlet-notice-list__detail")?.textContent?.replace(/\s+/g, " ");
     expect(view.container.textContent).not.toContain("[object Object]");
-    expect(said("pinned")).toBe(
-      "pinned can’t be placed: no live node that runs seats is named nowhere-1.",
+    expect(item("pinned").querySelector(".crewlet-notice-list__title")?.textContent).toBe(
+      "pinned: Can’t be placed",
     );
+    expect(said("pinned")).toBe("Because no live node that runs seats is named nowhere-1.");
     expect(said("labelled")).toBe(
-      "labelled can’t be placed: no live node that runs seats carries the labels gpu=true and zone=us.",
+      "Because no live node that runs seats carries the labels gpu=true and zone=us.",
     );
     expect(said("both")).toBe(
-      "both can’t be placed: no live node that runs seats is named n9 and carries the label zone=eu.",
+      "Because no live node that runs seats is named n9 and carries the label zone=eu.",
     );
-    expect(within(card).getByRole("link", { name: "pinned" }).getAttribute("href")).toBe(
-      "#/company/org/seats/pinned",
-    );
+    expect(
+      within(item("pinned")).getByRole("link", { name: "Open the seat" }).getAttribute("href"),
+    ).toBe("#/company/org/seats/pinned");
   });
 
   // THE WAY TO BACKUPS WAITS FOR THE PAGE: painted under the loading
@@ -458,12 +461,19 @@ describe("a node's posture", () => {
     expect(within(postureFact(silent)).getByTitle(SILENT).textContent).toContain(SILENT);
   });
 
-  test("a posture the node read is its own word, the same tag in its row and its facts", async () => {
+  test("a serving posture is a plain word, the same in its row and its facts", async () => {
     const row = await rowsOf([serving]);
-    const tone = (el: HTMLElement) => el.closest(".crewlet-tag")?.className ?? "";
-    expect(tone(within(row("serving-0")).getByText("serve"))).toContain("crewlet-tag--success");
+    expect(within(row("serving-0")).getByText("Serving").closest(".crewlet-tag")).toBeNull();
     cleanup();
-    expect(tone(within(postureFact(serving)).getByText("serve"))).toContain("crewlet-tag--success");
+    expect(within(postureFact(serving)).getByText("Serving").closest(".crewlet-tag")).toBeNull();
+  });
+
+  test("any other posture is a warning tag in words", async () => {
+    const row = await rowsOf([
+      node({ id: "shedding-0", in_flight: 0, draining: false, posture: "shed" }),
+    ]);
+    const tag = within(row("shedding-0")).getByText("Shedding").closest(".crewlet-tag");
+    expect(tag?.className).toContain("crewlet-tag--warning");
   });
 });
 
@@ -989,4 +999,19 @@ describe("the Nodes table", () => {
       expect(screen.getByText("workers")).toBeDefined();
     });
   });
+});
+
+// A ROLE NO NODE CAN PLACE HAS NO HOME: the caption counts it with the roles
+// no seat runs, and never says every role has one beside an Unplaceable of 1.
+test("the seats-placed caption counts unplaced roles with the unmanned ones", () => {
+  expect(homelessWords({ unmanned_roles: [], unplaceable: [] })).toBe("every role has a home");
+  expect(homelessWords({ unmanned_roles: [], unplaceable: [{ handle: "agent-swe" }] })).toBe(
+    "1 role with no seat running",
+  );
+  expect(
+    homelessWords({
+      unmanned_roles: ["agent-swe", "agent-pm"],
+      unplaceable: [{ handle: "agent-swe" }],
+    }),
+  ).toBe("2 roles with no seat running");
 });

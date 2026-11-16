@@ -219,3 +219,47 @@ func TestStrictTransportSecurityFollowsTheDeployment(t *testing.T) {
 		}
 	}
 }
+
+// A REPOSITORY'S BYTES RUN NOTHING (ADR-0153): the inert policy sandboxes
+// with no allowance, loads nothing and is framed nowhere, the artifact
+// origin's inert policy is the same value, and a download carries exactly the
+// inert headers and a same-origin resource policy.
+//
+// Mutation: drop sandbox from Inert, or CORP from Download.
+func TestTheInertPolicyRunsNothing(t *testing.T) {
+	t.Parallel()
+	directives := map[string]string{}
+	for d := range strings.SplitSeq(pagepolicy.Inert, ";") {
+		name, value, _ := strings.Cut(strings.TrimSpace(d), " ")
+		directives[name] = value
+	}
+	for name, want := range map[string]string{"default-src": "'none'", "frame-ancestors": "'none'",
+		"base-uri": "'none'", "form-action": "'none'", "sandbox": ""} {
+		if got, ok := directives[name]; !ok || got != want {
+			t.Errorf("Inert's %s is %q (present %v), want %q", name, got, ok, want)
+		}
+	}
+	if strings.Contains(pagepolicy.Inert, "allow-") {
+		t.Errorf("Inert %q allows something in its sandbox", pagepolicy.Inert)
+	}
+	if pagepolicy.ArtifactInert != pagepolicy.Inert {
+		t.Errorf("ArtifactInert %q is not Inert %q: two spellings of one policy", pagepolicy.ArtifactInert,
+			pagepolicy.Inert)
+	}
+	h := http.Header{}
+	pagepolicy.Download(h)
+	want := http.Header{}
+	for name, value := range map[string]string{"Content-Security-Policy": pagepolicy.Inert,
+		"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+		"Cross-Origin-Resource-Policy": "same-origin"} {
+		want.Set(name, value)
+	}
+	if len(h) != len(want) {
+		t.Errorf("Download set %v, want exactly %v", h, want)
+	}
+	for name := range want {
+		if h.Get(name) != want.Get(name) {
+			t.Errorf("Download's %s is %q, want %q", name, h.Get(name), want.Get(name))
+		}
+	}
+}

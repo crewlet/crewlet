@@ -296,19 +296,7 @@ export function BrandPage() {
         <BarActions adoption={adoption} onClear={() => setConfirming("clear")} />
       ) : null}
       {notice ? (
-        <Callout
-          variant="warning"
-          action={
-            <Button
-              size="small"
-              variant="ghost"
-              leadingIcon={<XGlyph size="sm" />}
-              onClick={() => setNotice(null)}
-            >
-              Dismiss
-            </Button>
-          }
-        >
+        <Callout variant="warning" onDismiss={() => setNotice(null)}>
           {notice}
         </Callout>
       ) : null}
@@ -596,7 +584,7 @@ function DraftNotice({
   return (
     <Callout
       variant="info"
-      icon={<WandSparklesGlyph size="sm" />}
+
       action={mayPublish || mayContinue || canDiscard ? actions : undefined}
     >
       {what}

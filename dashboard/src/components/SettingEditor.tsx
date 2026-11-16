@@ -15,11 +15,30 @@
  * after the save, which reads as a save that did not take. A node that
  * refused the revision goes on running the value before, so that is what is
  * drawn, marked as refused here.
+ *
+ * The pencil is always drawn, held with its reason for a reader who may not
+ * change it ([SettingPencil]), also where the engine's row is not served ([UnreadSetting]).
  */
 
-import { Button, FormField, IconButton, Popover, returnFocus, SettingsTable } from "@crewlethq/ui";
+import {
+  Button,
+  FormField,
+  IconButton,
+  Popover,
+  returnFocus,
+  SettingsTable,
+  type IconButtonProps,
+} from "@crewlethq/ui";
 import { PencilGlyph } from "@crewlethq/icons/glyphs";
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { SettingWriteStatus, standingWords } from "~/components/SettingWriteStatus.tsx";
 import type { ConfigProblem } from "~/protocol/types.ts";
 import { useSettingWrite, type SettingPlan } from "~/lib/useSettingWrite.ts";
@@ -218,15 +237,11 @@ export function SettingEditor<S, V>({
             open={editing}
             onOpenChange={(next) => (next ? open() : close())}
             trigger={(isOpen, toggle) => (
-              <IconButton
+              <SettingPencil
                 ref={pencil}
-                size="sm"
-                variant="ghost"
-                icon={<PencilGlyph />}
-                label={`Change ${label}`}
+                label={label}
+                held={access.can ? undefined : access.reason}
                 aria-expanded={isOpen}
-                disabledReason={access.can ? undefined : access.reason}
-                title={access.can ? undefined : access.reason}
                 onClick={toggle}
               />
             )}
@@ -278,6 +293,61 @@ export function SettingEditor<S, V>({
             </form>
           </Popover>
         )}
+      </span>
+    </SettingsTable.Row>
+  );
+}
+
+/**
+ * The pencil that opens a setting's editor, held with the reason where this
+ * reader may not change it. The kit tooltip, not a native title, so hover,
+ * keyboard focus and a press all show the reason.
+ */
+export const SettingPencil = forwardRef<
+  HTMLButtonElement,
+  Omit<IconButtonProps, "label" | "icon" | "tooltip" | "disabledReason"> & {
+    /** What the setting is called; the pencil is "Change" it. */
+    label: string;
+    /** Why this reader may not change it, or undefined where they may. */
+    held: string | undefined;
+  }
+  // The rest is the button's: a popover hands its trigger aria state.
+>(function SettingPencil({ label, held, ...rest }, ref) {
+  return (
+    <IconButton
+      {...rest}
+      ref={ref}
+      size="sm"
+      variant="ghost"
+      icon={<PencilGlyph />}
+      label={`Change ${label}`}
+      tooltip
+      disabledReason={held}
+    />
+  );
+});
+
+/**
+ * A setting whose engine row this reader is not served: its value where the
+ * page has it, and the pencil held with the reason (a write control is never
+ * hidden). A reader who may change it sees no pencil until the row arrives.
+ */
+export function UnreadSetting({
+  label,
+  settingKey,
+  children,
+}: {
+  label: string;
+  settingKey: string;
+  /** The value, where the page has it; what it says where it does not. */
+  children: ReactNode;
+}) {
+  const access = useConfigWriteAccess();
+  return (
+    <SettingsTable.Row label={label} settingKey={settingKey}>
+      <span className="ceiling">
+        <span>{children}</span>
+        {!access.can && <SettingPencil label={label} held={access.reason} />}
       </span>
     </SettingsTable.Row>
   );

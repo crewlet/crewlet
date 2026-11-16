@@ -510,7 +510,7 @@ func TestOnlyASessionPersonDerivesAGrant(t *testing.T) {
 		rig := newAssistRig(t)
 		cookie, err := rig.signer.Mint(session.Mint{
 			Lineage: rig.lineage, Person: iam.TokenLogin("ci"), Epoch: 3, Generation: 1,
-			StartPosition: sessionStart, AbsoluteExpiresAt: rig.at.Add(time.Hour),
+			StartPosition: sessionStart, SignedInAt: rig.at, AbsoluteExpiresAt: rig.at.Add(time.Hour),
 		})
 		if err != nil {
 			t.Fatal(err)

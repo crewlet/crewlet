@@ -93,6 +93,9 @@ units:
     purpose: keeps the lights on
     project: OPS
     lead: ceo
+# PASSWORD ALONE, which every node this suite serves allows ([withPasswordAlone]).
+sign_in:
+  require_second_factor: false
 turn_engine:
   max_iterations: 1
 `
@@ -583,10 +586,20 @@ type scriptedModel struct {
 	chat *chatScript
 }
 
-// scriptedCall is one tool call the executor makes.
+// scriptedCall is one tool call the executor makes: its input, or later, which
+// builds the input when the call is made, for one naming what the turn's wake made.
 type scriptedCall struct {
 	tool  string
 	input map[string]any
+	later func() map[string]any
+}
+
+// args is the call's input, built now where it is built late.
+func (c scriptedCall) args() map[string]any {
+	if c.later != nil {
+		return c.later()
+	}
+	return c.input
 }
 
 // callOnExecute makes the next executor requests call a tool, once each, in
@@ -595,6 +608,14 @@ func (m *scriptedModel) callOnExecute(tool string, input map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.scripted = append(m.scripted, scriptedCall{tool: tool, input: input})
+}
+
+// callOnExecuteLater is [scriptedModel.callOnExecute] for a call whose input is
+// built when the executor makes it.
+func (m *scriptedModel) callOnExecuteLater(tool string, input func() map[string]any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.scripted = append(m.scripted, scriptedCall{tool: tool, later: input})
 }
 
 // nextCall is the executor's next scripted call, if one is left.
@@ -745,7 +766,7 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	case offered["submit_work"]:
 		if call, ok := m.nextCall(); ok {
 			saw("execute")
-			reply = toolUse(call.tool, call.input)
+			reply = toolUse(call.tool, call.args())
 			break
 		}
 		if answer, hold, ok := m.chatAnswer(req); ok {

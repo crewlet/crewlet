@@ -279,6 +279,7 @@ func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
 	return harness.New(harness.Config{
 		Key:                        key,
 		Model:                      model,
+		Effort:                     spec.Effort,
 		Harness:                    spec.HarnessName(),
 		StateDir:                   stateDir,
 		Overrides:                  spec.Overrides,

@@ -18,8 +18,9 @@
 // panics; a call that runs under the run's context and not the MCP request's;
 // arguments that did not parse; a call after the run ended; each call's place
 // in the run's call log, fixed when it arrives; an activation answered once the
-// client has re-listed; a suspend the run cannot resume, refused; and the class
-// every refusal carries on the record.
+// client has re-listed; a suspend the run cannot resume, refused; the class
+// every refusal carries on the record; and an answer's image, which reaches the
+// client after its text while the record keeps its type and size alone.
 //
 // A gate only one of them has BY DESIGN stays in that package's own tests: the
 // tool loop's round cap, its terminator barrier, its pause for a person's note
@@ -95,6 +96,10 @@ type Tool struct {
 	// Run is what the tool does, and its output.
 	Run func(ctx context.Context, call ToolCall) string
 
+	// Images ride every answer of the tool beside its output, as a
+	// first-party tool's picture does ([crewletmcp.Result.Images]).
+	Images []crewletmcp.Image
+
 	// Suspends marks a tool whose work outlives its call, as a Dashboard
 	// Assistant proposal's does: its result asks the run to park with the
 	// call unanswered. The run a factory serves is one that cannot be
@@ -158,6 +163,10 @@ type Recorded struct {
 	Output string
 	Failed bool
 
+	// Images is what the record keeps of the answer's images: their type and
+	// size, never their bytes.
+	Images []crewletmcp.ImageRecord
+
 	// Class is the refusal's class, read out of the recorded cause: "" for
 	// a call that succeeded.
 	Class crewletmcp.Refusal
@@ -181,6 +190,7 @@ func Run(t *testing.T, factory Factory) {
 		{"AnActivationIsAnsweredOnceTheClientHasRelisted", testAnActivationIsAnsweredOnceTheClientHasRelisted},
 		{"ASuspendTheRunCannotResumeIsRefused", testASuspendTheRunCannotResumeIsRefused},
 		{"EveryRefusalCarriesItsClass", testEveryRefusalCarriesItsClass},
+		{"AnAnswersImageReachesTheClientAndNoRecordKeepsItsBytes", testAnAnswersImageReachesTheClientAndNoRecordKeepsItsBytes},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

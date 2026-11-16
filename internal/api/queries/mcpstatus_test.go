@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,20 +51,57 @@ mcp_servers:
       Authorization: Bearer literal-linear-secret
 `
 
-// presentNode puts one node on the lease table with the heartbeat it
-// publishes, or — with no status — the placement half alone, which is what a
-// beat whose status hook did not answer within its share of the beat carries.
-func presentNode(t *testing.T, backend coord.Backend, id string, status *coord.NodeStatus) {
+// presentNode puts one node on the lease table and, where record is given,
+// writes its status record at the epoch of the presence it claimed; with no
+// record the node is live and says nothing, as one is before its writer's first
+// write at its epoch.
+func presentNode(t *testing.T, backend coord.Backend, id string, record *coord.NodeStatusRecord) {
 	t.Helper()
-	meta := map[string]any{"roles": []string{"seats"}}
-	if status != nil {
-		meta[coord.StatusKey] = status.Meta()
+	presence, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+		Owner: id + ":1", TTL: time.Minute, Meta: map[string]any{"roles": []string{"seats"}},
+	})
+	if err != nil || presence == nil {
+		t.Fatalf("claim %s's presence: %v, %v", id, presence, err)
 	}
-	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
-		Owner: id + ":1", TTL: time.Minute, Meta: meta,
-	}); err != nil {
+	if record == nil {
+		return
+	}
+	r := *record
+	r.Node, r.Epoch = id, presence.Epoch
+	if err := recordsOf(backend).PutNodeStatus(t.Context(), r); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// reclaimPresence gives node id's presence up and claims it again, at a new
+// epoch, as a node that restarted does: what its record says was said at the
+// epoch before.
+func reclaimPresence(t *testing.T, backend coord.Backend, id string) {
+	t.Helper()
+	held, err := backend.Get(t.Context(), coord.NodeResource(id))
+	if err != nil || held == nil {
+		t.Fatalf("read %s's presence: %v, %v", id, held, err)
+	}
+	if ok, err := backend.Release(t.Context(), held.Resource, held.Owner, held.Epoch); err != nil || !ok {
+		t.Fatalf("give %s's presence up: %v, %v", id, ok, err)
+	}
+	again, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+		Owner: id + ":2", TTL: time.Minute, Meta: map[string]any{"roles": []string{"seats"}},
+	})
+	if err != nil || again == nil || again.Epoch == held.Epoch {
+		t.Fatalf("claim %s's presence again: %v, %v (was epoch %d)", id, again, err, held.Epoch)
+	}
+}
+
+// recordsBeside is the status records beside each lease table a case builds,
+// by the table: what a node writes on its record is read against the presence
+// it claimed in that table, as a fleet's two stores are.
+var recordsBeside sync.Map
+
+// recordsOf is the status record store beside backend, made on first use.
+func recordsOf(backend coord.Backend) *coordmemory.Fleet {
+	records, _ := recordsBeside.LoadOrStore(backend, coordmemory.NewFleet())
+	return records.(*coordmemory.Fleet)
 }
 
 func mcpSources(t *testing.T, backend coord.Backend) queries.Sources {
@@ -73,14 +111,14 @@ func mcpSources(t *testing.T, backend coord.Backend) queries.Sources {
 		t.Fatal(err)
 	}
 	return queries.Sources{
-		Coord: backend, Company: companySource(t, cfg),
+		Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg),
 		Builtins: catalogueOffer,
 	}
 }
 
-// mcpFleet is two reporting nodes and one whose last heartbeat carried no
-// status: github started on both reporting nodes and failed for one seat on
-// node-b; docs started on node-a alone; linear started nowhere.
+// mcpFleet is two reporting nodes and one with no status record counted:
+// github started on both reporting nodes and failed for one seat on node-b;
+// docs started on node-a alone; linear started nowhere.
 //
 // A NODE REPORTS THE FAILING SEAT BY ITS ID, and the answer names it by its
 // handle.
@@ -99,7 +137,7 @@ func mcpFleet(t *testing.T) coord.Backend {
 		t.Fatal("the fixture has no backend-dev seat")
 	}
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{
 		MCP: []coord.MCPServerStatus{
 			{Server: "docs", Shared: true, Started: 1, Tools: 4,
 				Shadowed: []coord.MCPToolShadow{{Tool: "search", By: "linear"}}, ShadowedCount: 1},
@@ -110,7 +148,7 @@ func mcpFleet(t *testing.T) coord.Backend {
 				}, RefusedCount: 12},
 		},
 	})
-	presentNode(t, backend, "node-b", &coord.NodeStatus{
+	presentNode(t, backend, "node-b", &coord.NodeStatusRecord{
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Started: 1, Failed: 1, Tools: 25, Error: "401 Bad credentials", ErrorSeat: backendDev,
 				Refused: []coord.MCPToolRefusal{
@@ -227,8 +265,8 @@ func TestEachServerIsJudgedAcrossEveryNodesReport(t *testing.T) {
 	}
 }
 
-// A SILENT NODE'S CELLS ARE UNKNOWN, NEVER ZERO. Its last heartbeat carried no
-// status (the status hook did not answer within the beat), and a row of zeros
+// A SILENT NODE'S CELLS ARE UNKNOWN, NEVER ZERO. No status record of its counts
+// (it has not written one at its presence's epoch yet), and a row of zeros
 // under its name would read as "started nothing here" — the confident zero the
 // fleet answer is written to avoid. A node that published a status naming no
 // server DID say: it started none.
@@ -252,9 +290,23 @@ func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 		}
 	}
 
+	// AN EARLIER INCARNATION'S RECORD IS NOT THIS ONE'S: node-c's record
+	// says docs started, then its presence was given up and claimed again
+	// at a new epoch, and the live node has not written yet — it did not
+	// say, whatever the store still holds.
+	backend = coordmemory.New()
+	presentNode(t, backend, "node-c", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
+		{Server: "docs", Shared: true, Started: 1, Tools: 4}}})
+	reclaimPresence(t, backend, "node-c")
+	for _, row := range askMCPStatus(t, mcpSources(t, backend)).Servers {
+		if row.State != queries.MCPUnreported {
+			t.Errorf("%s = %s off a record node-c's earlier epoch wrote, want unreported", row.Name, row.State)
+		}
+	}
+
 	// THE CONTROL: a status naming no server is a node that started none.
 	backend = coordmemory.New()
-	presentNode(t, backend, "node-c", &coord.NodeStatus{InFlight: 1})
+	presentNode(t, backend, "node-c", &coord.NodeStatusRecord{})
 	for _, row := range askMCPStatus(t, mcpSources(t, backend)).Servers {
 		if row.State != queries.MCPNotStarted {
 			t.Errorf("%s = %s beside a node that reported starting nothing, want not_started",
@@ -270,7 +322,7 @@ func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 func TestAStatusWithNoServersStartedNone(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{InFlight: 1})
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{})
 	got := askMCPStatus(t, mcpSources(t, backend))
 	if want := []queries.MCPStatusNode{{ID: "node-a", Reported: true}}; !slices.Equal(got.Nodes, want) {
 		t.Fatalf("nodes = %+v, want %+v", got.Nodes, want)
@@ -287,7 +339,7 @@ func TestAStatusWithNoServersStartedNone(t *testing.T) {
 func TestAServerThatStartedNowhereIsFailing(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{
 		MCP: []coord.MCPServerStatus{{Server: "docs", Shared: true, Failed: 1, Error: "exec: docs-mcp: not found"}},
 	})
 	if docs := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "docs"); docs.State != queries.MCPFailing {
@@ -320,7 +372,7 @@ func TestAServerWaitingForAProvisionedCredentialIsNotFailing(t *testing.T) {
 		"it starts once the seal reaches this node"
 
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{
 		MCP: []coord.MCPServerStatus{{Server: "github", Waiting: 1, Wait: wait, WaitSeat: backendDev}},
 	})
 	github := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "github")
@@ -341,7 +393,7 @@ func TestAServerWaitingForAProvisionedCredentialIsNotFailing(t *testing.T) {
 		{"one seat failed, another waiting", coord.MCPServerStatus{Server: "github", Failed: 1, Waiting: 1}, queries.MCPFailing},
 	} {
 		backend := coordmemory.New()
-		presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{tc.status}})
+		presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{tc.status}})
 		if got := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "github").State; got != tc.want {
 			t.Errorf("%s: state = %s, want %s", tc.name, got, tc.want)
 		}
@@ -359,19 +411,19 @@ func TestAServerWaitingForAProvisionedCredentialIsNotFailing(t *testing.T) {
 func TestAnAnnotationKeyIsUnlistedOnlyWhereNoStartedInstanceListsIt(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Started: 2, Tools: 26, Unlisted: []string{"create_pull_reqest", "merge_pull_request"}},
 			{Server: "docs", Shared: true, Started: 1, Tools: 4, Unlisted: []string{"docs_search"}},
 		},
 	})
-	presentNode(t, backend, "node-b", &coord.NodeStatus{
+	presentNode(t, backend, "node-b", &coord.NodeStatusRecord{
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Started: 1, Tools: 30, Unlisted: []string{"create_pull_reqest"}},
 			{Server: "linear", Failed: 1, Error: "401", Unlisted: []string{"linear_typo"}},
 		},
 	})
-	presentNode(t, backend, "node-c", &coord.NodeStatus{
+	presentNode(t, backend, "node-c", &coord.NodeStatusRecord{
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Failed: 2, Error: "401 Bad credentials"},
 		},
@@ -395,7 +447,7 @@ func TestAnAnnotationKeyIsUnlistedOnlyWhereNoStartedInstanceListsIt(t *testing.T
 func TestAServerOnlyANodeReportsIsListedAsUnconfigured(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{
 		MCP: []coord.MCPServerStatus{{Server: "retired", Shared: true, Started: 1, Tools: 3}},
 	})
 	row := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "retired")
@@ -425,13 +477,13 @@ mcp_servers:
 		t.Fatal(err)
 	}
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{
 		MCP: []coord.MCPServerStatus{
 			{Server: "docs", Shared: true, Started: 1, Tools: 4},
 			{Server: "search", Shared: true, Started: 1, Tools: 2},
 		},
 	})
-	got := askMCPStatus(t, queries.Sources{Coord: backend, Company: companySource(t, cfg)})
+	got := askMCPStatus(t, queries.Sources{Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg)})
 
 	docs := serverRow(t, got, "docs")
 	if docs.State != queries.MCPDisabled || docs.Enabled {
@@ -449,7 +501,7 @@ mcp_servers:
 
 	// ON A FLEET THAT HAS NOT SAID, the configuration still has: a server
 	// turned off is disabled rather than unreported.
-	silent := askMCPStatus(t, queries.Sources{Coord: coordmemory.New(), Company: companySource(t, cfg)})
+	silent := askMCPStatus(t, queries.Sources{Coord: coordmemory.New(), NodeStatuses: coordmemory.NewFleet(), Company: companySource(t, cfg)})
 	if docs := serverRow(t, silent, "docs"); docs.State != queries.MCPDisabled {
 		t.Errorf("with no node reporting, docs = %s, want disabled", docs.State)
 	}
@@ -477,7 +529,8 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 // commands and each failure's first line are the configuration and what
 // became of it, which `/config` shows the same reader, so a caller holding
 // every app but admin is answered, in a member's reading. And an unreadable
-// lease table is an error, not a fleet with no nodes.
+// lease table, or unreadable status records, is an error, not a fleet with no
+// nodes or with nodes that say nothing.
 //
 // Mutation: register the question at admin, or answer every caller the
 // admin's reading, and this is red.
@@ -501,9 +554,19 @@ func TestTheServerStatusIsEverybodysAndNeverGuesses(t *testing.T) {
 	}
 
 	broken := queries.NewRegistry()
-	queries.Register(broken, queries.Sources{Coord: unreadableLeases{coordmemory.New()}})
+	queries.Register(broken, queries.Sources{Coord: unreadableLeases{coordmemory.New()},
+		NodeStatuses: coordmemory.NewFleet()})
 	if _, err := broken.Answer(everyGrant(t), "mcp_servers_status", nil); err == nil {
 		t.Error("an unreadable lease table was answered as a fleet")
+	}
+	// AND SO ARE UNREADABLE STATUS RECORDS: every live node read as not
+	// saying over a store blip is the wrong thing to show.
+	unread := queries.NewRegistry()
+	readable := coordmemory.New()
+	presentNode(t, readable, "node-a", nil)
+	queries.Register(unread, queries.Sources{Coord: readable, NodeStatuses: unreadableRecords{}})
+	if _, err := unread.Answer(everyGrant(t), "mcp_servers_status", nil); err == nil {
+		t.Error("unreadable status records were answered as a fleet that says nothing")
 	}
 }
 
@@ -643,6 +706,14 @@ func (unreadableLeases) ListLive(context.Context, coord.Class) ([]coord.Lease, e
 	return nil, errors.New("the coordination store did not answer")
 }
 
+// unreadableRecords is a status record store whose listing fails, as a store
+// blip makes it.
+type unreadableRecords struct{}
+
+func (unreadableRecords) NodeStatusRecords(context.Context) ([]coord.NodeStatusRecord, error) {
+	return nil, errors.New("the coordination store did not answer")
+}
+
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(v)
@@ -675,7 +746,7 @@ mcp_servers:
 	}
 	backend := coordmemory.New()
 	presentNode(t, backend, "node-a", nil)
-	answer := askMCPStatus(t, queries.Sources{Coord: backend, Company: companySource(t, cfg)})
+	answer := askMCPStatus(t, queries.Sources{Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg)})
 	for _, want := range []queries.MCPServerRow{
 		{Name: "code", Title: "GitHub", Catalogue: "github", Vendor: "github"},
 		{Name: "db", Title: "PostgreSQL", Catalogue: "postgres", Vendor: "postgresql"},

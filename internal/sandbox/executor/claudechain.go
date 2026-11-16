@@ -23,7 +23,9 @@ import (
 //
 // ITS READERS ask it of the release that resumes: the reading that tells a
 // relaunch which of its calls a kept session holds (exact telling), of the
-// relaunch box's, and the one that confirms a hook's note reached the model,
+// release that wrote the session, the relaunch's best word for it, since a
+// brief told by that reading is handed only to a box whose harness answers
+// that release before its brief is chosen; and the one that confirms a hook's note reached the model,
 // of the job's own and of the relaunch box's. Where it answers false, what
 // [threadChain] answers is no answer for that resume.
 //

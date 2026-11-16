@@ -75,13 +75,7 @@ import {
   TableEntityCell,
   peekClickHandler,
 } from "@crewlethq/ui";
-import {
-  BuildingComplexGlyph,
-  ClockGlyph,
-  DatabaseGlyph,
-  KeyGlyph,
-  UsersGlyph,
-} from "@crewlethq/icons/glyphs";
+import { BuildingComplexGlyph, ClockGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
@@ -100,6 +94,7 @@ import {
   type CeilingProposal,
 } from "./assistantActions.ts";
 import { QueryState } from "~/components/common.tsx";
+import { UnreadSetting } from "~/components/SettingEditor.tsx";
 import { TextSetting } from "~/components/TextSetting.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
@@ -319,7 +314,8 @@ function upperFirst(text: string): string {
  * default and changed in place. A change moves every budget window and every
  * schedule without a zone of its own, which the engine's check says before
  * the save asks to go ahead. A reader who may not read the document sees the
- * zone the windows answer was cut on.
+ * zone the windows answer was cut on, with the pencil held and its reason, as
+ * every ceiling's pencil on this page is for them.
  */
 function CompanyClock({ zone }: { zone: string }) {
   const viewer = useViewer();
@@ -341,9 +337,9 @@ function CompanyClock({ zone }: { zone: string }) {
             helper="Where every budget's day, week and month begins, and the clock a schedule without a zone of its own runs on."
           />
         ) : (
-          <SettingsTable.Row label="Time zone" settingKey="timezone">
+          <UnreadSetting label="Time zone" settingKey="timezone">
             {zone || "UTC"}
-          </SettingsTable.Row>
+          </UnreadSetting>
         )}
       </SettingsTable>
     </Card>
@@ -454,9 +450,7 @@ export function Budgets() {
           loose caption under the page's own. Not while the viewer is still
           being asked. */}
       {!access.can && access.block !== "loading" && (
-        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          {access.reason}
-        </Callout>
+        <Callout variant="neutral">{access.reason}</Callout>
       )}
 
       {budgets.loading && !answer && (
@@ -467,9 +461,7 @@ export function Budgets() {
       )}
 
       {answer && answer.durable === false && (
-        <Callout variant="neutral" icon={<DatabaseGlyph size="md" />}>
-          Couldn’t read current spend. Try again shortly.
-        </Callout>
+        <Callout variant="neutral">Couldn’t read current spend. Try again shortly.</Callout>
       )}
 
       {answer && answer.durable && (

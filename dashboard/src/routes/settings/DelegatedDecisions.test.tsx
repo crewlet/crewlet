@@ -122,6 +122,7 @@ const ANSWER: DelegatedDecisionsAnswer = {
       range: { min: 1, max: 60 },
     },
   ],
+  sample: { default: 10, min: 1, max: 1000 },
   // TODAY, SO FAR: what the page opens on.
   day: "2026-11-10",
   since: "2026-11-10T00:00:00Z",
@@ -194,14 +195,19 @@ function mount(hash = "#/settings/delegated-decisions") {
   );
 }
 
+/** The rules as the card lists them, one row each, numbered as the engine numbers them. */
+const ruleRows = () => within(screen.getByRole("list", { name: "Rules" })).getAllByRole("listitem");
+
 test("draws whether delegation is on, each rule and the limits the engine enforces", () => {
   answer.data = ANSWER;
   mount();
-  const rules = screen.getByRole("table", { name: "Rules" });
-  expect(within(rules).getByText("Commands on servers")).toBeTruthy();
-  expect(within(rules).getByText("Security Engineer")).toBeTruthy();
-  expect(within(rules).getAllByText("Ops Lead")).toHaveLength(2);
-  expect(within(rules).getByText("1 in 10")).toBeTruthy();
+  const [ssh, release] = ruleRows();
+  expect(ssh!.textContent).toContain("Server commands");
+  expect(ssh!.textContent).toContain("Security Engineer decides");
+  expect(within(ssh!).getByText(/Escalates to/).textContent).toContain("Ops Lead");
+  expect(within(ssh!).getByText("Reviews 1 in 10")).toBeTruthy();
+  expect(release!.textContent).toContain("Merges and deploys");
+  expect(within(release!).getByText("Reviews 1 in 5")).toBeTruthy();
   expect(screen.getByText("On")).toBeTruthy();
   const limits = screen.getByRole("table", { name: "What Crewlet enforces" });
   expect(within(limits).getByText("15 minutes")).toBeTruthy();
@@ -209,19 +215,37 @@ test("draws whether delegation is on, each rule and the limits the engine enforc
   expect(within(limits).getByText("10")).toBeTruthy();
 });
 
-// A MERGE AND DEPLOY RULE NAMES ITS KINDS AND ITS OWN PATHS, each path as
-// written; a command rule has none to name, and says so rather than a blank.
-test("a rule's own always-escalate paths are listed beside its kinds", () => {
+// EVERY SEAT WITH ITS FACE, and its handle on hover: a name alone could be two seats.
+test("each seat a rule names is drawn with its face, its name and its handle", () => {
   answer.data = ANSWER;
   mount();
-  const rules = screen.getByRole("table", { name: "Rules" });
-  const [ssh, release] = dataRows(rules);
-  expect(within(release!).getByText("Merges")).toBeTruthy();
-  expect(within(release!).getByText("Deploys")).toBeTruthy();
+  const [ssh] = ruleRows();
+  const delegate = within(ssh!).getByText("Security Engineer").closest("[title]")!;
+  expect(delegate.getAttribute("title")).toBe("Security Engineer · @security-engineer");
+  expect(ssh!.querySelectorAll(".crewlet-avatar").length).toBeGreaterThanOrEqual(2);
+});
+
+// A PANEL READS AS ONE: both names, deciding together.
+test("a panel of two delegates reads as deciding together", () => {
+  answer.data = {
+    ...ANSWER,
+    rules: [{ ...ANSWER.rules[1]!, delegates: ["release-reviewer", "security-engineer"] }],
+  };
+  mount();
+  const [panel] = ruleRows();
+  expect(panel!.textContent).toContain("Release Reviewer and Security Engineer decide together");
+});
+
+// A MERGE AND DEPLOY RULE NAMES ITS OWN PATHS, each as written; a command rule
+// has neither paths nor checks, and its row says nothing of them.
+test("a rule's own always-escalate paths are listed after who decides", () => {
+  answer.data = ANSWER;
+  mount();
+  const [ssh, release] = ruleRows();
   expect(within(release!).getByText("billing/**")).toBeTruthy();
   expect(within(release!).getByText("services/*/payments/**")).toBeTruthy();
-  // NEITHER PATHS NOR CHECKS on a command rule.
-  expect(within(ssh!).getAllByText("Not for commands")).toHaveLength(2);
+  expect(ssh!.textContent).not.toContain("Checks");
+  expect(ssh!.textContent).not.toContain("Always to people");
 });
 
 test("a rule with more paths than its row shows counts the rest", () => {
@@ -231,10 +255,10 @@ test("a rule with more paths than its row shows counts the rest", () => {
     rules: [{ ...ANSWER.rules[1]!, always_escalate_paths: paths }],
   };
   mount();
-  const rules = screen.getByRole("table", { name: "Rules" });
-  expect(within(rules).getByText("d/**")).toBeTruthy();
-  expect(within(rules).queryByText("e/**")).toBeNull();
-  expect(within(rules).getByText("2 more")).toBeTruthy();
+  const [row] = ruleRows();
+  expect(within(row!).getByText("c/**")).toBeTruthy();
+  expect(within(row!).queryByText("d/**")).toBeNull();
+  expect(row!.textContent).toContain("and 3 more");
 });
 
 // A RULE'S REQUIRED CHECKS read per repository and branch, the whole list on
@@ -242,10 +266,9 @@ test("a rule with more paths than its row shows counts the rest", () => {
 test("a rule lists the checks it requires on each repository's branch", () => {
   answer.data = ANSWER;
   mount();
-  const rules = screen.getByRole("table", { name: "Rules" });
-  const release = dataRows(rules)[1];
-  expect(within(release!).getByText("acme/api main")).toBeTruthy();
-  expect(within(release!).getByText("test, lint")).toBeTruthy();
+  const release = ruleRows()[1]!;
+  expect(within(release).getByText("acme/api main")).toBeTruthy();
+  expect(release.textContent).toContain("Checks: acme/api main (test, lint)");
 });
 
 test("a rule with more required-check entries than its row shows counts the rest", () => {
@@ -259,24 +282,31 @@ test("a rule with more required-check entries than its row shows counts the rest
     rules: [{ ...ANSWER.rules[1]!, always_escalate_paths: [], required_checks }],
   };
   mount();
-  const rules = screen.getByRole("table", { name: "Rules" });
-  expect(within(rules).getByText("acme/web main")).toBeTruthy();
-  expect(within(rules).queryByText("acme/jobs main")).toBeNull();
-  expect(within(rules).getByText("1 more")).toBeTruthy();
+  const [row] = ruleRows();
+  expect(within(row!).getByText("acme/web main")).toBeTruthy();
+  expect(within(row!).queryByText("acme/jobs main")).toBeNull();
+  expect(row!.textContent).toContain("and 1 more");
 });
 
 test("a merge or deploy rule with no checks of its own says the branch decides", () => {
   answer.data = { ...ANSWER, rules: [{ ...ANSWER.rules[1]!, required_checks: [] }] };
   mount();
-  const rules = screen.getByRole("table", { name: "Rules" });
-  expect(within(rules).getByText("What the branch requires")).toBeTruthy();
+  expect(ruleRows()[0]!.textContent).toContain("Checks: what each branch requires");
 });
 
-test("a merge or deploy rule with no paths of its own says it keeps the built-in ones", () => {
-  answer.data = { ...ANSWER, rules: [{ ...ANSWER.rules[1]!, always_escalate_paths: [] }] };
+test("a rule reviewing every decision says so", () => {
+  answer.data = { ...ANSWER, rules: [{ ...ANSWER.rules[0]!, sample_one_in: 1 }] };
   mount();
-  const rules = screen.getByRole("table", { name: "Rules" });
-  expect(within(rules).getByText("The built-in paths only")).toBeTruthy();
+  expect(within(ruleRows()[0]!).getByText("Reviews every decision")).toBeTruthy();
+});
+
+test("with no rules, the card says people decide every request", () => {
+  answer.data = { ...ANSWER, rules: [] };
+  mount();
+  expect(screen.getByText("No rules yet")).toBeTruthy();
+  expect(
+    screen.getByText("Until a rule names a kind of request, people decide every one."),
+  ).toBeTruthy();
 });
 
 // A MERGE'S VERDICT names no server, and says the absence as its own.
@@ -319,7 +349,7 @@ test("the digest lists each decision: the seat, what and where, the verdict, who
   // THE FOOT SAYS HOW MUCH IS SHOWN, and that the log held more.
   expect(screen.getByText("Showing 3 of 3. The log holds more than this page.")).toBeTruthy();
   expect(screen.getByRole("table", { name: "Spot-checks" })).toBeTruthy();
-  expect(screen.getByText("No delegate flagged a request as harmful this week.")).toBeTruthy();
+  expect(screen.getByText("No flagged denials this week")).toBeTruthy();
 });
 
 test("the toolbar narrows every list, and the foot counts what it shows", () => {
@@ -354,7 +384,7 @@ test("the page opens on today so far, and pages back but not past today", () => 
   mount();
   expect(answer.asked).toContainEqual({ day: "today" });
   expect(screen.getByRole("table", { name: "Decided today, so far" })).toBeTruthy();
-  expect(screen.getByText(/The company day is still running/)).toBeTruthy();
+  expect(screen.getByText("Requests decided later today appear here too.")).toBeTruthy();
   const after = screen.getByRole("button", { name: "The day after" });
   expect(after.hasAttribute("disabled") || after.getAttribute("aria-disabled") === "true").toBe(
     true,
@@ -366,14 +396,16 @@ test("the page opens on today so far, and pages back but not past today", () => 
 test("a running day nothing was decided on yet says so", () => {
   answer.data = { ...ANSWER, decided: [], decided_more: false };
   mount();
-  expect(screen.getByText("No request has been decided yet today.")).toBeTruthy();
+  expect(screen.getByText("No decisions yet today")).toBeTruthy();
 });
 
 test("off, it says every request goes to people and keeps the rules", () => {
   answer.data = { ...ANSWER, enabled: false };
   mount();
   expect(screen.getByText("Off")).toBeTruthy();
-  expect(screen.getByText(/every request goes to people at once/)).toBeTruthy();
+  expect(
+    screen.getByText("Off. Every request goes to people, and the rules are kept."),
+  ).toBeTruthy();
 });
 
 test("a search reads the seat, the command, the server and the reason", () => {

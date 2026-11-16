@@ -27,6 +27,7 @@ import { Changes, changesParams } from "./Changes.tsx";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -179,6 +180,21 @@ test("the changes are the engine's listing over REST, open by default, each row 
   expect(onSocket).not.toContain("code_changes");
 });
 
+// A row's meta is a sentence, so its time is said in words, on the reader's calendar.
+test("a row says when its change was opened in words", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  stubFetch((url) =>
+    url.pathname === "/query/code_changes"
+      ? json({ changes: [change("web", 42)], position: POSITION, level: "session" })
+      : null,
+  );
+  mount(<Changes />);
+  const grid = await screen.findByRole("table", { name: "Changes" });
+  const meta = grid.querySelector(".code-change-cell__meta");
+  expect(meta?.textContent).toContain("opened yesterday by");
+});
+
 // A ROW'S READINESS AND BLOCKERS ARE THE ENGINE'S JUDGEMENT: the Meter counts
 // the preconditions met of the readiness it was sent, and the blockers are
 // the blocker precondition's named and counted beyond — and a change that is
@@ -217,6 +233,45 @@ test("a row's readiness, open findings and last move are the engine's, and a clo
   expect(within(grid).getByText("3")).toBeTruthy();
   expect(within(grid).queryByRole("columnheader", { name: "Blockers" })).toBeNull();
   expect(within(grid).getAllByText("Not live")).toHaveLength(1);
+});
+
+// A ROW'S STATE IS THE KIT'S CHANGE PILL with its glyph (an unknown state is its
+// word, outlined), its branches chips with theirs. Mutation: the old soft Tag
+// for merged, the branches as plain text, or a chip without its glyph.
+test("a row's state is the kit's pill with its glyph, and its branches are chips", async () => {
+  const states = ["open", "draft", "merged", "closed"];
+  stubFetch((url) =>
+    url.pathname === "/query/code_changes" && !url.searchParams.has("limit")
+      ? json({
+          changes: [
+            ...states.map((state, i) => change("web", i + 1, { state })),
+            change("web", 9, { state: "archived" }),
+          ],
+          position: POSITION,
+          level: "session",
+        })
+      : url.pathname === "/query/code_changes"
+        ? json({ position: POSITION, level: "session" })
+        : null,
+  );
+  mount(<Changes />);
+  const grid = await screen.findByRole("table", { name: "Changes" });
+  for (const state of states) {
+    const word = state[0]!.toUpperCase() + state.slice(1);
+    const pill = within(grid).getByText(word).closest<HTMLElement>(".code-state");
+    expect(pill?.dataset.state, state).toBe(state);
+    expect(pill?.querySelector("svg"), state).not.toBeNull();
+  }
+  expect(within(grid).getByText("archived").closest(".code-state")).toBeNull();
+  for (const meta of grid.querySelectorAll(".code-change-cell__meta")) {
+    const chips = [...meta.querySelectorAll(".code-branch-chip")];
+    expect(chips.map((c) => c.textContent)).toEqual(["feature", "main"]);
+    for (const chip of chips) {
+      expect(chip.tagName).toBe("SPAN");
+      expect(chip.querySelector("svg"), chip.textContent ?? "").not.toBeNull();
+    }
+    expect(meta.querySelector(".code-change-cell__branches")?.textContent).toBe("feature → main");
+  }
 });
 
 // THE WINDOW IS THE ENGINE'S `window=`, sent as it reads it — and narrows the

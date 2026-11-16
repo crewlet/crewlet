@@ -122,7 +122,7 @@ import {
   useToast,
   downloadText,
 } from "@crewlethq/ui";
-import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { SearchGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { useParam } from "~/app/router.tsx";
@@ -1280,7 +1280,6 @@ export function Audit() {
       >
         <Card padding="none">
           <Card.Header
-            icon={<FileTextGlyph size="sm" />}
             count={shown.length}
             subtitle="Writes, runtime calls, access changes, artifact overrides and configuration revisions"
           >

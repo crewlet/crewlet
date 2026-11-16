@@ -91,6 +91,7 @@ const EVERY_TOOL = [
   "update_work_item",
   "mark_inbox",
   "code_mark_inbox",
+  "artifact_mark_inbox",
   "write_page",
 ];
 
@@ -169,11 +170,12 @@ function notice(id: string, extra: Record<string, unknown> = {}) {
 }
 
 /**
- * A notice as the composed inbox carries it: a code notice (`codeNotice`) as
- * it is, and any other as Worklet's, its own shape whole in `extra`.
+ * A notice as the composed inbox carries it: a code notice (`codeNotice`) or
+ * an artifact's (`artifactNotice`) as it is, and any other as Worklet's, its
+ * own shape whole in `extra`.
  */
 function composedOf(n: Record<string, unknown>): Record<string, unknown> {
-  if (n.source === "code") return n;
+  if (n.source === "code" || n.source === "artifacts") return n;
   return {
     source: "tracker",
     record_id: n.record_id,
@@ -314,6 +316,48 @@ function codeNotice(id: string, extra: Record<string, unknown> = {}) {
   };
 }
 
+/** A comment on one of Jane's artifacts, as the composed inbox carries it. */
+function artifactNotice(id: string, extra: Record<string, unknown> = {}) {
+  const n = {
+    record_id: id,
+    log_seq: Number(id.replace(/\D/g, "")) || 1,
+    log_stream: "CREWLET_ARTIFACTS_LOG",
+    log_generation: 1,
+    at: new Date(Date.now() - 20_000).toISOString(),
+    reason: "owner",
+    primary: true,
+    addressed: false,
+    op: "comment_open",
+    artifact: "art-1",
+    thread: "th-1",
+    remark: "The **Q3** numbers look off",
+    excerpt: "The **Q3** numbers look off",
+    actor: "maya",
+    actor_kind: "human",
+    title: "Q3 plan",
+    artifact_kind: "doc",
+    read: false,
+    ...extra,
+  };
+  return {
+    source: "artifacts",
+    record_id: id,
+    position: { stream: n.log_stream, generation: n.log_generation, seq: n.log_seq },
+    at: n.at,
+    reason: n.reason,
+    primary: n.primary,
+    addressed: n.addressed,
+    kind: "comment",
+    subject: { id: n.artifact, title: n.title },
+    excerpt: n.excerpt,
+    actor: n.actor,
+    actor_kind: n.actor_kind,
+    read: n.read,
+    snoozed: (n as { snoozed?: boolean }).snoozed,
+    extra: n,
+  };
+}
+
 /** A composed `inbox` page of notices, every source read. */
 function inboxOf(notices: unknown[], extra: Record<string, unknown> = {}) {
   return {
@@ -322,6 +366,7 @@ function inboxOf(notices: unknown[], extra: Record<string, unknown> = {}) {
     sources: [
       { name: "tracker", primary_reasons: [] },
       { name: "code", primary_reasons: [] },
+      { name: "artifacts", primary_reasons: [] },
     ],
     unread: 0,
     primary: 0,
@@ -419,7 +464,9 @@ beforeEach(() => {
               ? null
               : tool === "code_mark_inbox"
                 ? "CREWLET_CODE_LOG@1:99"
-                : "CREWLET_TRACKER_LOG@1:99",
+                : tool === "artifact_mark_inbox"
+                  ? "CREWLET_ARTIFACTS_LOG@1:99"
+                  : "CREWLET_TRACKER_LOG@1:99",
           receipt: answer.receipt,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -583,6 +630,7 @@ describe("the list", () => {
           ],
           total: 0,
           answerable: 1,
+          more: false,
           capped: false,
         },
         executors: { runs: [theirs] },
@@ -1924,6 +1972,76 @@ describe("the pane", () => {
     ]);
   });
 
+  // A COMMENT ON AN ARTIFACT IS ONE ROW SAYING WHO DID WHAT TO WHICH ARTIFACT, the remark as plain
+  // words under it, marked through the artifacts' own tool at its own position.
+  test("a comment on an artifact is listed beside the others and marked through its own tool", async () => {
+    location.hash = "#/inbox?row=artifact%3Aa-5";
+    mount({
+      answers: { inbox: inboxes({ unread: [artifactNotice("a-5"), notice("r-1")] }) },
+    });
+    await settle();
+    const updates = within(screen.getByRole("region", { name: "Updates, 2" }));
+    expect(updates.getAllByRole("listitem")).toHaveLength(2);
+    const row = updates.getByRole("button", { name: /commented on Q3 plan/ });
+    expect(row.textContent).toContain("Maya Ops");
+    expect(row.textContent).toContain("commented on Q3 plan");
+    expect(row.textContent).toContain("The Q3 numbers look off");
+    expect(row.textContent).not.toContain("**");
+    fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Mark as unread" }));
+    await settle();
+    expect(posted).toEqual([
+      {
+        tool: "artifact_mark_inbox",
+        args: { read: ["a-5"], seen: "CREWLET_ARTIFACTS_LOG@1:5" },
+      },
+      {
+        tool: "artifact_mark_inbox",
+        args: { unread: ["a-5"], seen: "CREWLET_ARTIFACTS_LOG@1:5" },
+      },
+    ]);
+  });
+
+  // ITS CARD: who, which artifact and why, the remark quoted, the thread's text and status, and the
+  // way to the thread on the artifact's page; every word is the notice's, so opening asks nothing.
+  test("a comment on an artifact opens as its card, with the thread one press away", async () => {
+    location.hash = "#/inbox?row=artifact%3Aa-5";
+    mount({
+      answers: {
+        inbox: inboxes({
+          unread: [
+            artifactNotice("a-5", {
+              thread_state: {
+                status: "resolved",
+                version: 2,
+                quote: "Revenue grew 12%",
+                remarks: 3,
+                resolved_by: "cto",
+                resolved_version: 3,
+              },
+            }),
+          ],
+        }),
+      },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    expect(byline()).toContain("Maya Ops on Q3 plan");
+    expect(byline()).toContain("On your artifact");
+    expect(pane.getByRole("heading", { name: "Commented" })).toBeTruthy();
+    expect(pane.getByText("The Q3 numbers look off")).toBeTruthy();
+    expect(pane.getByText("Revenue grew 12%")).toBeTruthy();
+    expect(pane.getByText("Resolved by CTO")).toBeTruthy();
+    expect(pane.getByText("3 remarks · started on version 2")).toBeTruthy();
+    expect(pane.getByRole("link", { name: "Open the thread" }).getAttribute("href")).toBe(
+      "#/artifacts/art-1?panel=comments&thread=th-1",
+    );
+    expect(asked.filter((a) => a.kind.startsWith("artifact"))).toEqual([]);
+    expect(fetched.filter((url) => url.includes("artifact"))).toEqual([]);
+    expect(posted).toEqual([]);
+  });
+
   // THE INTENT-FIRST CARD: the work item the change implements and its
   // description lead, then its open agent findings by weight and the one
   // sentence of where its merge stands, and the diff is one press away —
@@ -2110,20 +2228,29 @@ describe("the pane", () => {
     await settle();
     const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
     expect(pane.getByText("Merged")).toBeTruthy();
+    expect(pane.getByText("Merged").closest(".code-state")?.getAttribute("data-state")).toBe(
+      "merged",
+    );
     expect(pane.getByText("No agent finding stands open")).toBeTruthy();
     // A MERGED CHANGE HAS NO GATE LEFT TO MEET, so its card asks for none.
     expect(fetched.filter((url) => url.includes("/query/code_"))).toEqual([]);
   });
 
-  // MARK ALL READ SENDS BOTH: one read-through a source, each at its own
-  // newest notice. Mutation: read every source through the newest notice of
-  // any — Gitlet is sent a Worklet position, red.
+  // MARK ALL READ SENDS ONE MARK A SOURCE, each at its own newest notice. Mutations: read every
+  // source through the newest notice of any, and Gitlet is sent a Worklet position; leave the
+  // artifacts out, and their comments stay unread, red.
   test("Mark all read reads each source through its own newest update", async () => {
     mount({
       services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
         inbox: inboxes({
-          unread: [codeNotice("c-5"), notice("r-12", { log_seq: 12 }), codeNotice("c-2")],
+          unread: [
+            codeNotice("c-5"),
+            artifactNotice("a-3"),
+            notice("r-12", { log_seq: 12 }),
+            artifactNotice("a-8"),
+            codeNotice("c-2"),
+          ],
         }),
       },
     });
@@ -2139,9 +2266,16 @@ describe("the pane", () => {
         tool: "code_mark_inbox",
         args: { read_through: "CREWLET_CODE_LOG@1:5", seen: "CREWLET_CODE_LOG@1:5" },
       },
+      {
+        tool: "artifact_mark_inbox",
+        args: {
+          read_through: "CREWLET_ARTIFACTS_LOG@1:8",
+          seen: "CREWLET_ARTIFACTS_LOG@1:8",
+        },
+      },
     ]);
     // ONE PRESS, ONE TOAST: each source's write raised its own "Marked all
-    // read", two identical toasts for one gesture.
+    // read", identical toasts for one gesture.
     const toasts = [...document.querySelectorAll(".crewlet-toast")].filter((t) =>
       t.textContent?.includes("Marked all read"),
     );
@@ -3489,20 +3623,26 @@ describe("who is looking", () => {
   });
 });
 
-// WHERE THE COMPANY RUNS JIRA THE INBOX SAYS WHERE ASKS GO, in the list and in
-// the reading pane: the pane said "All clear. New updates open here.",
-// promising updates that cannot arrive. Mutation: keep the pane's default
-// copy and the Jira title is gone.
-test("on a Jira company the list and the empty pane say asks and mentions arrive in Jira", async () => {
-  mount({ services: { tracker: "jira", knowledge: "doclet", chat: "chatlet" } });
+// EVERY COMPANY KEEPS ARTIFACTS, so a company running neither Worklet nor Gitlet still lists and
+// marks the comments on the reader's artifacts.
+test("on a company running neither Worklet nor Gitlet the comments on artifacts still arrive", async () => {
+  mount({
+    services: { tracker: "jira", knowledge: "doclet", chat: "chatlet", code: "none" },
+    answers: { inbox: inboxes({ unread: [artifactNotice("a-5")] }) },
+  });
   await settle();
-  expect(
-    screen.getByText("Jira handles work items, so asks and mentions arrive there."),
-  ).toBeTruthy();
-  expect(screen.getByText("Asks and mentions arrive in Jira")).toBeTruthy();
-  expect(screen.queryByText("New updates open here.")).toBeNull();
-  // AND THE TRACKER'S NOTICES ARE NEVER ASKED FOR.
-  expect(asked.some((a) => a.kind === "inbox")).toBe(false);
+  expect(asked.some((a) => a.kind === "inbox")).toBe(true);
+  await openUpdates();
+  const updates = within(screen.getByRole("region", { name: "Updates, 1" }));
+  expect(updates.getByRole("button", { name: /commented on Q3 plan/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "artifact_mark_inbox",
+      args: { read_through: "CREWLET_ARTIFACTS_LOG@1:5", seen: "CREWLET_ARTIFACTS_LOG@1:5" },
+    },
+  ]);
 });
 
 // ONE EMPTY STATE FOR AN EMPTY INBOX: the list says it, and the reading pane

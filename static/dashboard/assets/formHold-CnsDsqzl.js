@@ -1,0 +1,1 @@
+function e(e){return{reason:e}}function t(e,t){return{reason:t,field:e}}function n(e){return e?.reason}function r(e,t){return e?.field===t?e.reason:void 0}export{n as i,t as n,e as r,r as t};

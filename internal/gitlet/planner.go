@@ -66,6 +66,16 @@ const (
 	// liveRefsKey is code_refs_live_idx, (repo_id, ref) WHERE target != ''
 	// (replicated migration 0082): the live refs alone, in key order.
 	liveRefsKey = "code_refs_live_idx"
+	// movedRefsKey is code_refs_moved_idx, (repo_id, at, ref) WHERE
+	// [movedRefs] (replicated migration 0170): the live branches by when each
+	// last moved.
+	movedRefsKey = "code_refs_moved_idx"
+	// movedRefs is the predicate code_refs_moved_idx is partial on, which every
+	// statement over it repeats verbatim.
+	movedRefs = `target != '' AND ref >= 'refs/heads/' AND ref < 'refs/heads0'`
+	// changesSourceKey is code_changes_source_idx, (repo_id, source_ref,
+	// number) (replicated migration 0170): the changes from one branch.
+	changesSourceKey = "code_changes_source_idx"
 	// protectedReposKey is code_repos_protected_idx, (name) WHERE
 	// [protectedRepos] (replicated migration 0145): the repositories a rule
 	// protects, in name order.
@@ -73,6 +83,14 @@ const (
 	// protectedRepos is the predicate code_repos_protected_idx is partial
 	// on, which a statement over it repeats verbatim.
 	protectedRepos = `protected = 1`
+	// kindReposKey is code_repos_kind_idx, (kind, name): one kind's repositories in name order.
+	kindReposKey = "code_repos_kind_idx"
+	// pushedReposKey is code_repos_pushed_idx, (kind, last_push_at, name) WHERE [reposInUse]:
+	// one kind's repositories in use by last push.
+	pushedReposKey = "code_repos_pushed_idx"
+	// reposInUse is the predicate code_repos_pushed_idx is partial on, every [RepoStatus.live]
+	// status in [RepoStatuses]' order, which a statement over it repeats verbatim.
+	reposInUse = `status IN ('importing', 'active', 'archived')`
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"
 	// changesNumberKey is code_changes_number_idx, (repo_id, number)

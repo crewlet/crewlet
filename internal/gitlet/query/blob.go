@@ -56,7 +56,7 @@ func (r *read) blobRead(ctx context.Context, objs found, at cursor, m *memoRun) 
 		if at.letter != 0 && at.letter != 'e' {
 			return gitlet.GitAnswer{}, errBadCursor(r.q.Cursor, gitlet.GitTree, widestCursor('e', 1))
 		}
-		return r.list(ctx, rev.peeled, objs.path, objs.target.id, false, at, m)
+		return r.list(ctx, rev.peeled, objs.path, objs.target.id, false, at, m, nil)
 	}
 	return gitlet.GitAnswer{}, fmt.Errorf("%w: %q names nothing in %s that holds lines (a submodule's commit is "+
 		"another repository's)", gitlet.ErrNotABlob, objs.path, rev.peeled)

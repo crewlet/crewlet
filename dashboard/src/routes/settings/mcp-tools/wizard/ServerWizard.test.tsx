@@ -343,6 +343,70 @@ test("an engine problem lands on its field and holds the save", async () => {
   expect(createEntity).not.toHaveBeenCalled();
 });
 
+// A negative timeout is said under its field at Continue, before the engine sees it.
+test("a negative call timeout stops Connection with the reason under its field", async () => {
+  mount();
+  await settle();
+  fireEvent.click(screen.getByRole("radio", { name: /Sentry/ }));
+  await press("Continue"); // Name
+  await press("Continue"); // Connection
+  fireEvent.change(screen.getByLabelText(/Call timeout, in seconds/), { target: { value: "-5" } });
+  await press("Continue"); // held on Connection
+  const field = screen.getByLabelText(/Call timeout, in seconds/);
+  expect(field.getAttribute("aria-invalid")).toBe("true");
+  expect(
+    screen.getByText(
+      "The call timeout is a number of seconds, 0 or more. Leave it empty for the default.",
+    ),
+  ).toBeDefined();
+  expect(dryRunCreate).not.toHaveBeenCalled();
+});
+
+// Review changes, on an edit, stops at a step left short rather than asking the engine.
+test("Review changes on an edit stops at a negative timeout under its field", async () => {
+  const entity = { name: "linear", transport: "http", url: "https://mcp.linear.app/mcp" };
+  mount(
+    {
+      server: mcpData("admin").server("linear")!,
+      entity,
+      values: [],
+      entry: LINEAR,
+      signIn: "none",
+    },
+    "connection",
+  );
+  await settle();
+  fireEvent.change(screen.getByLabelText(/Call timeout, in seconds/), { target: { value: "-5" } });
+  await press("Review changes");
+  expect(screen.getByLabelText(/Call timeout, in seconds/).getAttribute("aria-invalid")).toBe(
+    "true",
+  );
+  expect(dryRunEntity).not.toHaveBeenCalled();
+});
+
+// The engine's words for a person are said in place of its line for an operator.
+test("an engine problem with a person's words says those, not the document path", async () => {
+  vi.mocked(dryRunCreate).mockResolvedValue({
+    kind: "problems",
+    problems: [
+      {
+        path: "mcp_servers[0].request_timeout_seconds",
+        segments: ["mcp_servers", 0, "request_timeout_seconds"],
+        kind: "out_of_range",
+        message:
+          "mcp_servers[0].request_timeout_seconds: value out of range: must be 0 (the default) or positive, got -5",
+        said: "The call timeout can't be negative. Give a number of seconds, or leave it empty for the default.",
+      },
+    ],
+    derived: null,
+    code: "",
+    hint: "",
+  });
+  await walkSentry();
+  expect(screen.queryByText(/mcp_servers\[0\]/)).toBeNull();
+  expect(screen.getByText(/The call timeout can't be negative/)).toBeDefined();
+});
+
 // AN EDIT KEEPS ITS NAME and writes the entry back against the revision it
 // lands on, with nothing it does not draw dropped. Mutation: create on an
 // edit, or rebuild the entry from the draft alone, and this is red.
@@ -721,7 +785,7 @@ test("with no agent on at the integration, the test says to turn one on and runs
   await walkCloudflare();
   expect(testDraft).not.toHaveBeenCalled();
   expect(screen.getByText("No agent has Cloudflare on")).toBeDefined();
-  expect(screen.getByRole("link", { name: "Agents tab" }).getAttribute("href")).toBe(
+  expect(screen.getByRole("link", { name: "Open its Agents tab" }).getAttribute("href")).toBe(
     "#/company/integrations/cloudflare?open=agents",
   );
   expect(screen.queryByRole("combobox", { name: "Test as" })).toBeNull();

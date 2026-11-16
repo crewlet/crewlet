@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -58,6 +59,10 @@ import (
 type objectStore struct {
 	store *objstore.Store
 
+	// raise is the bucket raise this node's boot did not make, nil where
+	// there was none; the alarm tick reads it ([raiseObjects]).
+	raise atomic.Pointer[objectsRaise]
+
 	// collector is the duty's loop, nil until the native runtime starts it
 	// on a data node; collectorMu serialises starting it against stopping
 	// it, and collectorStopped is set, under it, once
@@ -91,6 +96,18 @@ func (e *Engine) startObjects() error {
 	}
 	e.objects = &objectStore{store: store}
 	return nil
+}
+
+// raiseObjectsAtBoot raises the nats bucket to this data node's explicit
+// store.objects.nats_max_bytes, keeping what it did not raise for the alarm.
+// owner is this process's incarnation, which holds the raise's lease.
+func (e *Engine) raiseObjectsAtBoot(ctx context.Context, boot *config.Bootstrap, owner string) {
+	if e.objects == nil || e.backends == nil {
+		return
+	}
+	if r := raiseObjects(ctx, boot, e.backends, owner); r != nil {
+		e.objects.raise.Store(r)
+	}
 }
 
 // objectCollectorDuty is the fleet singleton that collects and audits.
@@ -538,6 +555,10 @@ func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 	o := e.objects
 	if o == nil {
 		return
+	}
+	// THIS NODE'S OWN BOOT, so read on every node rather than the holder's.
+	if r := o.raise.Load(); r != nil {
+		out.ObjectsBucketWanted, out.ObjectsBucketKept, out.ObjectsBucketWhy = r.Wanted, r.Kept, r.Why
 	}
 	duty := o.duty.Load()
 	if duty == nil {

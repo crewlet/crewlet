@@ -18,7 +18,8 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
-import { SshServers } from "./SshServers.tsx";
+import { SshServers, said } from "./SshServers.tsx";
+import { RestError } from "~/protocol/rest.ts";
 import type { SetupSSHServer } from "~/contract/setup.ts";
 
 type Sent = { method: string; path: string; body: unknown };
@@ -326,4 +327,14 @@ test("a reader who may not change the configuration is held from every server wr
   fireEvent.click(add);
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(sent).toEqual([]);
+});
+
+// The engine's detail says which way a read failed; the code's generic sentence is the fallback.
+test("a refusal says the engine's detail alone, and its code's sentence only without one", () => {
+  const detail = "web-1.example.com does not resolve to an address. Check the host name.";
+  const generic = "The server could not be reached, or it presented no key Crewlet can pin.";
+  expect(said(new RestError(502, { error: "server_unreachable", message: generic, detail }))).toBe(
+    detail,
+  );
+  expect(said(new RestError(502, { error: "server_unreachable", message: generic }))).toBe(generic);
 });

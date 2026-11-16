@@ -34,13 +34,15 @@ func bootstrapFor(t *testing.T) config.Bootstrap {
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: "a-token-long-enough-for-the-floor", Grants: iam.AllGrants},
 	}
-	// A SECOND FACTOR OFFERED, NOT REQUIRED: unset is required, which
-	// would make every password sign-in here an enrolment-only session.
-	// The cases about a required factor state it (`requiring`); every
-	// other case signs in on a password and is about something else.
-	b.API.Auth.TOTP = iam.SecondFactorOptional
+	// A SECOND FACTOR OFFERED, NOT REQUIRED (allowed here, chosen by
+	// [passwordCompany]); the cases about a required one say so (`requiring`).
+	b.API.Auth.Limits.SecondFactor = iam.SecondFactorOptional
 	return b
 }
+
+// passwordCompany is the company every case's sign-in policy is read from: one
+// letting people sign in with a password alone where the node allows it.
+var passwordCompany = config.Company{SignIn: config.SignIn{RequireSecondFactor: new(false)}}
 
 // surface builds the sign-in surface over fakes.
 //
@@ -88,6 +90,12 @@ func buildWith(t *testing.T, b config.Bootstrap,
 	}
 	if replace != nil {
 		replace(&opts)
+	}
+	if opts.SignIn == nil {
+		// READ PER SIGN-IN, so a case changing the Tier A it was handed
+		// changes what the surface enforces.
+		boot := opts.Bootstrap
+		opts.SignIn = func() config.SignInPolicy { return boot.API.Auth.SignInPolicy(&passwordCompany) }
 	}
 	if opts.Behalf == nil {
 		// THE CASE'S OWN WRITER, whoever a gesture is made by: a case about

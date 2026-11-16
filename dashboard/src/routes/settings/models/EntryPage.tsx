@@ -25,13 +25,6 @@ import {
   RelativeTime,
   Text,
 } from "@crewlethq/ui";
-import {
-  ChartColumnGlyph,
-  GaugeGlyph,
-  KeyGlyph,
-  ShieldCheckGlyph,
-  UsersGlyph,
-} from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href, useParam } from "~/app/router.tsx";
@@ -66,6 +59,7 @@ import {
 } from "./parts.tsx";
 import { JOB_WORDS, seatName } from "./places.ts";
 import { ROUTE, RUN_IN, WINDOW, product } from "./words.ts";
+import { AgoTime } from "~/components/AgoTime.tsx";
 
 type Open = (flow: Flow, at?: WizardAt) => void;
 
@@ -196,7 +190,7 @@ function WhoRunsCard({ model, data }: { model: ModelView; data: ModelsData }) {
   const assistant = assistantLine(who.assistant, who.deepWork);
   return (
     <Card padding="none">
-      <Card.Header icon={<UsersGlyph size="sm" />} count={who.seats}>
+      <Card.Header count={who.seats}>
         <Card.Title>Who runs on it</Card.Title>
       </Card.Header>
       <Card.Body>
@@ -393,7 +387,7 @@ function ConditionCallout({
         {failure ? (
           <span className="models-stack">
             <span>
-              Refused <RelativeTime value={failure.at} /> on {failure.node}. Seats move to their
+              Refused <AgoTime clock value={failure.at} /> on {failure.node}. Seats move to their
               backups until it signs in again.
             </span>
             <VendorSaid said={failure.said} harness={model.harness} />
@@ -429,7 +423,7 @@ function ConditionCallout({
           </Button>
         }
       >
-        It expires <RelativeTime value={device.expires_at} />.
+        It expires <AgoTime value={device.expires_at} />.
       </Callout>
     );
   }
@@ -480,7 +474,7 @@ function SignInCard({
       "Expires",
       Date.parse(signIn.expires_at) <= Date.now() ? (
         <>
-          Expired <RelativeTime value={signIn.expires_at} />
+          Expired <AgoTime value={signIn.expires_at} />
         </>
       ) : (
         dated(signIn.expires_at)
@@ -496,7 +490,6 @@ function SignInCard({
     >
       <Card padding="none">
         <Card.Header
-          icon={<KeyGlyph size="sm" />}
           actions={
             host ? undefined : <CredentialButton model={model} open={open} variant="secondary" />
           }
@@ -528,7 +521,6 @@ function TestCard({ model, open }: { model: ModelView; open: Open }) {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<ShieldCheckGlyph size="sm" />}
         actions={
           <Button size="small" variant="secondary" onClick={() => open("test")}>
             Test now
@@ -553,7 +545,7 @@ function TestCard({ model, open }: { model: ModelView; open: Open }) {
                       <span className="col">
                         <span>
                           {failureWords(failure.kind, signInOf(model))},{" "}
-                          <RelativeTime value={failure.at} /> on {failure.node}
+                          <AgoTime clock value={failure.at} /> on {failure.node}
                         </span>
                         <VendorSaid said={failure.said} harness={model.harness} />
                       </span>,
@@ -575,7 +567,7 @@ function UsageCard({ model }: { model: ModelView }) {
   const usage = model.admin!.usage;
   return (
     <Card padding="none">
-      <Card.Header icon={<ChartColumnGlyph size="sm" />}>
+      <Card.Header>
         <Card.Title>Usage, last {plural(usage.days, "day")}</Card.Title>
       </Card.Header>
       <Card.Body>
@@ -611,7 +603,6 @@ function LimitsCard({ model, open }: { model: ModelView; open: Open }) {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<GaugeGlyph size="sm" />}
         actions={
           <Button size="small" variant="secondary" onClick={() => open("edit", { step: "limits" })}>
             Change
@@ -636,6 +627,7 @@ function LimitsCard({ model, open }: { model: ModelView; open: Open }) {
                 ? `${DEFAULT_HARNESS_MAX_CONCURRENT} (the default)`
                 : String(model.maxConcurrent),
             ],
+            ["Reasoning effort", model.effort ?? "The harness default"],
           ]}
         />
       </Card.Body>

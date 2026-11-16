@@ -7,7 +7,7 @@
  * The engine asks for a fresh proof of identity before the gestures that
  * change what a company is — its configuration, its credentials, how somebody
  * signs in, who is in its directory — and refuses them `403
- * step_up_required`, naming its one window (`api.auth.session.step_up`).
+ * step_up_required`, naming its one window (`sign_in.step_up_seconds`).
  * Every screen's writes go through `protocol/rest.ts`, which asks here and
  * REPLAYS the refused request once the person has confirmed, so a form being
  * saved is saved rather than lost to a refusal. Mounted once, beside the

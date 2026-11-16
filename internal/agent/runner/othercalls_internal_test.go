@@ -29,7 +29,7 @@ func TestAFreshRunIsToldNoOtherCalls(t *testing.T) {
 		"a run of its own":            {as: toldAs{fresh: true}},
 		"a session that continued it": {as: toldAs{}, want: prompts.OtherCalls{EarlierTurns: true}},
 	} {
-		out, _ := r.calledAfter(t.Context(), round, new(0), nil, nil, tc.as, nil, "")
+		out, _, _ := r.calledAfter(t.Context(), round, new(0), nil, nil, tc.as, nil, "")
 		if out.LateDropped != 1 {
 			t.Fatalf("%s: the dropped late call is not counted, so the case tests nothing: %+v", name, out)
 		}

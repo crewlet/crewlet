@@ -66,7 +66,7 @@ import {
   workspaceOf,
   workspaceRow,
 } from "./nav.ts";
-import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { href, samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
@@ -636,12 +636,11 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
   // not — because that is the record the engine pushes about. The socket
   // re-sends it on every reconnect. NO APP: the engine decides a watch as the
   // composed inbox's own read (`inbox`, own or lead), since its frames announce
-  // every native domain's notices — Gitlet's beside Worklet's.
-  // AND ONLY OF A COMPANY RUNNING A SOURCE OF NOTICES, Worklet or Gitlet,
-  // whose pushes these are.
+  // every native domain's notices: Worklet's, Gitlet's and the artifacts'.
+  // WHATEVER THE COMPANY RUNS: every company keeps artifacts, whose comments
+  // reach a person's inbox, so no service has to be known before it is taken.
   const runs = useServicesRun();
-  const ask = useServicesAsk();
-  const watchesInbox = viewer.owner !== "" && (ask.tracker || ask.code);
+  const watchesInbox = viewer.owner !== "";
   useEffect(() => {
     if (!watchesInbox) return;
     socket.watch(viewer.owner);
@@ -932,6 +931,7 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
                     unavailable={assistantUnavailable}
                     model={assistantModel}
                     attach={assistantAttach}
+                    deliberate={viewer.assistantDeliberate}
                     admin={viewer.admin}
                     onClose={() => showAssistant(false)}
                     initialFocus={assistantFocus}

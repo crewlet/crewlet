@@ -3,6 +3,7 @@ package cards
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -53,6 +54,8 @@ type tableDigest struct {
 	// Access is the sentence every list carries: what the person may not
 	// see is left out, so the model never reads an absence as proof.
 	Access string `json:"access"`
+	// Outside is the card's step outside Crewlet, without its address.
+	Outside string `json:"outside,omitempty"`
 }
 
 // MoreNote is what a table summary tells the model of a page with rows past
@@ -68,7 +71,7 @@ const AccessNote = "Rows the person may not see are left out, so a row missing h
 
 func tableSummary(t *wire.TableCard, more bool, zone *time.Location, budget int) ([]byte, error) {
 	d := tableDigest{Title: t.Title, RowCount: t.RowCount, Rows: onClock(t, zone),
-		Access: AccessNote, More: more}
+		Access: AccessNote, More: more, Outside: outsideSaid(t.Outside)}
 	for _, c := range t.Columns {
 		d.Columns = append(d.Columns, c.Label)
 	}
@@ -100,6 +103,7 @@ type entityDigest struct {
 	ItemsTotal   int               `json:"items_total,omitempty"`
 	MoreExist    bool              `json:"more_exist,omitempty"`
 	ItemsPartial string            `json:"note,omitempty"`
+	Outside      string            `json:"outside,omitempty"`
 }
 
 type itemDigest struct {
@@ -107,24 +111,19 @@ type itemDigest struct {
 	Label string `json:"label"`
 	Fact  string `json:"fact,omitempty"`
 	Depth int    `json:"depth,omitempty"`
+	// Facts are the item's details by label, each in the words the card
+	// holds, an instant on the company's clock.
+	Facts map[string]string `json:"facts,omitempty"`
 }
 
 func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte, error) {
 	d := entityDigest{Kind: e.Kind, ID: e.ID, Key: e.Key, Title: e.Title,
-		Subtitle: e.Subtitle, Text: e.Text}
-	if len(e.Facts) > 0 {
-		d.Facts = map[string]string{}
-		for _, f := range e.Facts {
-			d.Facts[f.Label] = f.Value
-			if f.Type == wire.ColumnDatetime {
-				d.Facts[f.Label] = Clock(f.Value, zone)
-			}
-		}
-	}
+		Subtitle: e.Subtitle, Text: e.Text, Outside: outsideSaid(e.Outside)}
+	d.Facts = factDigest(e.Facts, zone)
 	items := make([]itemDigest, 0, len(e.Items))
 	for _, it := range e.Items {
 		items = append(items, itemDigest{ID: it.ID, Label: it.Label, Fact: it.Fact,
-			Depth: it.Depth})
+			Depth: it.Depth, Facts: factDigest(it.Facts, zone)})
 	}
 	d.ItemsTotal = len(items)
 	d.MoreExist = e.ItemsMore
@@ -148,6 +147,22 @@ func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte,
 		d.TextOmitted, d.Text = len(d.Text), ""
 	}
 	return fit(func() (any, int) { return &d, len(items) }, set, budget)
+}
+
+// factDigest is facts by label as the model reads them, every instant on the
+// company's clock; nil for none.
+func factDigest(facts []wire.Fact, zone *time.Location) map[string]string {
+	if len(facts) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(facts))
+	for _, f := range facts {
+		out[f.Label] = f.Value
+		if f.Type == wire.ColumnDatetime {
+			out[f.Label] = Clock(f.Value, zone)
+		}
+	}
+	return out
 }
 
 // onClock is a table's rows with every instant in its datetime columns said on
@@ -267,4 +282,17 @@ func EmptySummary(read string, asked map[string]any, note string, budget int) ([
 			"a model is handed", len(out), budget)
 	}
 	return out, nil
+}
+
+// outsideSaid is a card's step outside Crewlet as the model reads it: the
+// step and its host, never the address, which no model is handed.
+func outsideSaid(o *wire.Outside) string {
+	if o == nil {
+		return ""
+	}
+	host := ""
+	if u, err := url.Parse(o.URL); err == nil {
+		host = u.Host
+	}
+	return o.Label + " (at " + host + ": the person opens it from the card)"
 }

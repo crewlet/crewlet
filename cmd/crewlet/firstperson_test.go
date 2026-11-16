@@ -51,7 +51,6 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	// and only there, which is the rule it is exercising.
 	port := reservePort(t)
 	boot := bootstrapFor(t, port)
-	boot.API.Auth.TOTP = iam.SecondFactorOptional
 	e := startFreshNode(t, boot)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	client := httpxtest.Pool(t)
@@ -148,7 +147,6 @@ func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T)
 	// NOT PARALLEL, for the first person's case's reason.
 	port := reservePort(t)
 	boot := bootstrapFor(t, port)
-	boot.API.Auth.TOTP = iam.SecondFactorOptional
 	e := startFreshNode(t, boot)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	client := httpxtest.Pool(t)
@@ -295,13 +293,15 @@ func signedIn(t *testing.T, client *http.Client, base, login, password string) s
 
 // startFreshNode boots one node serving its API on an estate nobody is
 // enrolled in — on a company declaring the human seat `founder`, the seat its
-// first person is invited or created onto — and stops it with the case.
+// first person is invited or created onto, signing in with a password alone —
+// and stops it with the case.
 func startFreshNode(t *testing.T, boot *config.Bootstrap) *engine.Engine {
 	t.Helper()
 	company, err := config.ParseCompany([]byte(peopleCompanyYAML))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
+	passwordOnly(boot, company)
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot, Company: company})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)

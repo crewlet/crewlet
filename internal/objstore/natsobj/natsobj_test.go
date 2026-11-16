@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -2464,9 +2465,8 @@ func TestABucketThatHoldsNoCeilingTakesAnExplicitReservation(t *testing.T) {
 	}
 }
 
-// A BUCKET THAT EXISTS KEEPS THE CEILING IT HOLDS, whatever this node was
-// configured with: the broker granted it once, and only the capacity gesture
-// changes it.
+// OPENING A BUCKET THAT EXISTS KEEPS THE CEILING IT HOLDS, whatever this node
+// was configured with: raising it is [natsobj.Backend.Raise]'s.
 func TestABucketThatExistsKeepsItsCeiling(t *testing.T) {
 	t.Parallel()
 	c := memberClient(t)
@@ -2484,6 +2484,114 @@ func TestABucketThatExistsKeepsItsCeiling(t *testing.T) {
 	if usage.MaxBytes != 2*testCeiling {
 		t.Fatalf("the bucket reports a ceiling of %d, want the %d it was created with", usage.MaxBytes, 2*testCeiling)
 	}
+}
+
+// A RAISE LIFTS THE RESERVATION AND NOTHING ELSE: one stream update, every
+// other field of the stream as it was, and what the bucket held reads back.
+func TestARaiseLiftsTheReservationAndNothingElse(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	w := &bucketJS{JetStream: c}
+	b := openWith(t, w, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
+	store, err := objstore.NewStore(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("kept through the raise")
+	o, err := store.Put(t.Context(), bytes.NewReader(body), int64(len(body)), objstore.PutMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, opened := bucketConfig(t, c), len(w.sent())
+	raised, err := b.Raise(t.Context(), 3*testCeiling)
+	if err != nil || raised != 3*testCeiling {
+		t.Fatalf("Raise answered %d, %v; want the %d asked for", raised, err, 3*testCeiling)
+	}
+	if sent := w.sent()[opened:]; !slices.Equal(sent, []string{"update stream"}) {
+		t.Errorf("the raise sent %v; want the one stream update", sent)
+	}
+	after := bucketConfig(t, c)
+	before.MaxBytes = 3 * testCeiling
+	if !reflect.DeepEqual(after, before) {
+		t.Errorf("the raise changed more than the reservation:\nbefore %+v\nafter  %+v", before, after)
+	}
+	usage, err := b.Usage(t.Context())
+	if err != nil || usage.MaxBytes != 3*testCeiling {
+		t.Fatalf("Usage answered %+v, %v; want the raised %d", usage, err, 3*testCeiling)
+	}
+	rc, err := store.Open(deadline(t), o)
+	if err != nil {
+		t.Fatalf("an object stored before the raise does not open: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("read back %q, %v; want what was stored before the raise", got, err)
+	}
+}
+
+// A RAISE NEVER LOWERS: a figure at or under the reservation sends nothing and
+// answers the reservation the bucket keeps.
+func TestARaiseNeverLowersTheReservation(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	w := &bucketJS{JetStream: c}
+	b := openWith(t, w, natsobj.Config{MaxBytes: 2 * testCeiling, Replicas: 1})
+	opened := len(w.sent())
+	for _, target := range []int64{2 * testCeiling, testCeiling} {
+		held, err := b.Raise(t.Context(), target)
+		if err != nil || held != 2*testCeiling {
+			t.Errorf("Raise to %d answered %d, %v; want the %d kept", target, held, err, 2*testCeiling)
+		}
+	}
+	if sent := w.sent()[opened:]; len(sent) != 0 {
+		t.Errorf("a raise to no more than the reservation sent %v", sent)
+	}
+	if got := bucketConfig(t, c).MaxBytes; got != 2*testCeiling {
+		t.Fatalf("the bucket holds %d, want the %d it was created with", got, 2*testCeiling)
+	}
+}
+
+// A RAISE THE BROKER CANNOT RESERVE IS ErrNoRoom, and the bucket keeps the
+// reservation it held.
+func TestARaiseTheBrokerCannotReserveIsNoRoom(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	b := openWith(t, c, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
+	held, err := b.Raise(t.Context(), 2*brokertest.StoreMaxBytes)
+	if !errors.Is(err, natsobj.ErrNoRoom) {
+		t.Fatalf("a raise past the broker's limit answered %v, want ErrNoRoom", err)
+	}
+	if held != testCeiling || bucketConfig(t, c).MaxBytes != testCeiling {
+		t.Fatalf("a refused raise left %d (the stream holds %d), want the %d kept",
+			held, bucketConfig(t, c).MaxBytes, testCeiling)
+	}
+}
+
+// A SEALED BUCKET IS NEVER RAISED: its files moved to another store.
+func TestASealedBucketIsNeverRaised(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	b := openWith(t, c, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
+	if err := b.Seal(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Raise(t.Context(), 2*testCeiling); err == nil {
+		t.Fatal("a sealed bucket's reservation was raised")
+	}
+	if got := bucketConfig(t, c).MaxBytes; got != testCeiling {
+		t.Fatalf("the sealed bucket holds %d, want the %d it was sealed at", got, testCeiling)
+	}
+}
+
+// bucketConfig is the bucket's stream configuration as the broker holds it.
+func bucketConfig(t *testing.T, c jetstream.JetStream) jetstream.StreamConfig {
+	t.Helper()
+	stream, err := c.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stream.CachedInfo().Config
 }
 
 // A FULL BUCKET LEAVES THE COORDINATION REMAINDER: a put past its reservation
@@ -2516,6 +2624,9 @@ func TestAFullBucketLeavesTheCoordinationRemainder(t *testing.T) {
 	}
 	if full.Remedy != natsobj.FullRemedy {
 		t.Errorf("a full bucket named the room %q, want the bucket's own, %q", full.Remedy, natsobj.FullRemedy)
+	}
+	if !strings.HasPrefix(full.Remedy, "an operator makes room: raises store.objects.nats_max_bytes") {
+		t.Errorf("a full bucket's room does not lead with the setting every node can raise: %q", full.Remedy)
 	}
 	usage, err := b.Usage(t.Context())
 	if err != nil {

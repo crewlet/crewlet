@@ -1,22 +1,18 @@
 /**
- * An agent's request for one permission at an integration, answered from its
- * question (ADR-0118): choosing "Grant for this change" or "Add to this agent
- * permanently" opens what the grant will be, built from the request as the
- * engine stored it, never from the question's words. Grant saves it on the
- * integration's Agents tab, which asks for a fresh sign-in where the
- * permission can change things, and only then is the question answered, so
- * the agent is told yes only once it holds the permission.
+ * An agent's grant request answered from its question (ADR-0118): shows the grant
+ * from the stored request, and Grant sends one write, the answer, which the engine
+ * saves the grant for first. The transport confirms a stale sign-in and resends.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button, Callout, DescriptionList, Link, Stack, Text } from "@crewlethq/ui";
-import type { AccessAnswer, AccessDraftRequest, AccessGrantRequest } from "~/contract/access.ts";
+import type { AccessAnswer, AccessGrantRequest } from "~/contract/access.ts";
 import { Modal } from "./Modal.tsx";
 import { pathSegment, rest } from "~/protocol/rest.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { grantEntry, grantReach, hoursWords, newGrant, type RequestOption } from "~/lib/grants.ts";
 
-/** What the dialog has read: the request, and the integration's Agents tab it saves on. */
+/** What the dialog has read: the request, and the integration's Agents tab that draws it. */
 type Read =
   | { state: "reading" }
   | { state: "gone"; words: string }
@@ -26,19 +22,23 @@ export function RequestGrantDialog({
   option,
   question,
   onClose,
-  onApplied,
+  onGrant,
+  granting,
+  refusal,
 }: {
   /** The option chosen: the request's id, and whether for good. */
   option: RequestOption;
   /** The decision's question, the dialog's title. */
   question: string;
   onClose: () => void;
-  /** Called once the grant is saved, for the question to be answered. */
-  onApplied: () => void;
+  /** Answers the question with the option chosen, which saves the grant first. */
+  onGrant: () => void;
+  /** Whether that answer is on its way. */
+  granting: boolean;
+  /** Why the answer was refused, drawn under the grant; nothing while it was not. */
+  refusal?: ReactNode;
 }) {
   const [read, setRead] = useState<Read>({ state: "reading" });
-  const [saving, setSaving] = useState(false);
-  const [refused, setRefused] = useState("");
   useEffect(() => {
     const ctl = new AbortController();
     void (async () => {
@@ -47,9 +47,8 @@ export function RequestGrantDialog({
           `/setup/access/requests/${pathSegment(option.id)}`,
           ctl.signal,
         )) as AccessGrantRequest;
-        // THE AGENTS TAB'S OWN ROUTE, read and saved as the tab does
-        // (`accessApi`), each path written out so the dev server's proxy gate
-        // reads it.
+        // The Agents tab's route, read only to draw the grant; paths written out
+        // for the dev server's proxy gate.
         const answer = (await rest.get(
           `/setup/integrations/${pathSegment(request.kind)}/access`,
           ctl.signal,
@@ -90,36 +89,6 @@ export function RequestGrantDialog({
   const entry = lane ? grantEntry(lane, request.permission) : undefined;
   const missing = !lane || !seat || !saved;
 
-  const save = async () => {
-    if (missing) return;
-    setSaving(true);
-    setRefused("");
-    try {
-      // ONE SEAT'S LANE, AS THE TAB SAVES IT: held to the revision read, so
-      // a save in between is refused rather than overwritten, and a fresh
-      // sign-in asked by the transport where the permission is a write.
-      await rest.put(
-        `/setup/integrations/${pathSegment(answer.kind)}/access`,
-        {
-          seats: {
-            [seat.handle]: {
-              [lane.lane]: {
-                ...saved.desired,
-                grants: [...(saved.desired.grants ?? []), { ...grant, request: request.id }],
-              },
-            },
-          },
-        } satisfies AccessDraftRequest,
-        { "If-Match": `"${answer.revision}"` },
-      );
-      onApplied();
-    } catch (err) {
-      setRefused(refusalText(err));
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <Modal
       open
@@ -127,16 +96,16 @@ export function RequestGrantDialog({
       title={question}
       footer={
         <>
-          <Button size="small" variant="ghost" onClick={onClose} disabled={saving}>
+          <Button size="small" variant="ghost" onClick={onClose} disabled={granting}>
             Cancel
           </Button>
           <Button
             size="small"
             variant="primary"
-            onClick={() => void save()}
-            disabled={missing || saving}
+            onClick={onGrant}
+            disabled={missing || granting || Boolean(entry?.unavailable)}
           >
-            {saving ? "Granting…" : "Grant"}
+            {granting ? "Granting…" : "Grant"}
           </Button>
         </>
       }
@@ -164,20 +133,21 @@ export function RequestGrantDialog({
           </Callout>
         )}
         {entry?.unavailable && (
-          <Callout variant="warning" title="The company's own credential has to hold it first">
-            {`${entry.unavailable}. Add ${(entry.missing ?? [entry.name]).join(", ")} to it, then grant.`}{" "}
-            {entry.action_url && (
-              <Link href={entry.action_url} external>
-                Open the API tokens page
-              </Link>
-            )}
+          <Callout
+            variant="warning"
+            title="The company's own credential has to hold it first"
+            action={
+              entry.action_url && (
+                <Link href={entry.action_url} external>
+                  Open the API tokens page
+                </Link>
+              )
+            }
+          >
+            {`${entry.unavailable}. Add ${(entry.missing ?? [entry.name]).join(", ")} to it, then grant.`}
           </Callout>
         )}
-        {refused && (
-          <Callout variant="danger" title="The grant was not saved">
-            {refused}
-          </Callout>
-        )}
+        {refusal}
       </Stack>
     </Modal>
   );

@@ -18,6 +18,16 @@ func applyConversation(ctx context.Context, tx *sql.Tx, c applyContext, payload 
 	switch p := payload.(type) {
 	case ConversationCreated:
 		return applyCreated(ctx, tx, c, id, p)
+	case ConversationSummarized:
+		res, err := tx.ExecContext(ctx, `
+			UPDATE assistant_conversations SET summary_sealed = ?, summary_through = ?,
+				version = ?
+			WHERE id = ? AND version < ?`, p.SummarySealed, p.Through, c.packed, id, c.packed)
+		if err != nil {
+			return 0, fmt.Errorf("assistantdomain: summarize conversation %s at %s: %w",
+				id, c.position, err)
+		}
+		return affected(res), nil
 	case ConversationTitled:
 		res, err := tx.ExecContext(ctx, `
 			UPDATE assistant_conversations SET title_sealed = ?,

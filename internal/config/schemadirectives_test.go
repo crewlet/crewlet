@@ -41,6 +41,12 @@ func TestEveryDirectiveMeansWhatItSays(t *testing.T) {
 	if problems := directiveProblems("maxlen=fifty"); len(problems) == 0 {
 		t.Fatal("control: a length bound that is not a number was accepted")
 	}
+	if problems := directiveProblems("maxkeys=16;maxlen=64"); len(problems) != 0 {
+		t.Fatalf("control: a map's key count beside its values' length was refused: %v", problems)
+	}
+	if problems := directiveProblems("maxkeys=0"); len(problems) == 0 {
+		t.Fatal("control: a key count that is not positive was accepted")
+	}
 
 	seen := map[reflect.Type]bool{}
 	var walk func(reflect.Type, string)
@@ -58,6 +64,10 @@ func TestEveryDirectiveMeansWhatItSays(t *testing.T) {
 			if tag := f.Tag.Get("js"); tag != "" {
 				for _, problem := range directiveProblems(tag) {
 					t.Errorf("%s.%s: %s", path, f.Name, problem)
+				}
+				if _, keys := parseDirectives(tag)["maxkeys"]; keys && f.Type.Kind() != reflect.Map {
+					t.Errorf("%s.%s: maxkeys bounds a map's keys, and this is a %s",
+						path, f.Name, f.Type.Kind())
 				}
 				if _, pointer := parseDirectives(tag)["pointer"]; pointer && elem(f.Type).Kind() != reflect.String {
 					t.Errorf("%s.%s: pointer is a text field's directive — a %s is "+
@@ -148,11 +158,12 @@ func directiveProblems(tag string) []string {
 			if _, err := strconv.ParseFloat(value, 64); err != nil {
 				out = append(out, key+" is not a number: "+strconv.Quote(value))
 			}
-		case "maxlen":
-			// A LENGTH, so a whole number and a positive one: a bound the
-			// generator cannot read as one is dropped from the artifact.
+		case "maxlen", "maxkeys":
+			// A LENGTH or a COUNT, so a whole number and a positive one: a
+			// bound the generator cannot read as one is dropped from the
+			// artifact.
 			if n, err := strconv.Atoi(value); err != nil || n < 1 {
-				out = append(out, "maxlen is not a positive whole number: "+strconv.Quote(value))
+				out = append(out, key+" is not a positive whole number: "+strconv.Quote(value))
 			}
 		case "enum":
 			if value == "" || strings.Contains(value, ",") {

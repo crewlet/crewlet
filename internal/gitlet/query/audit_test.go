@@ -3,6 +3,7 @@ package query_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -49,6 +50,16 @@ func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
 		t.Fatalf("the premise: the second seat's read of the same page ran git %v, want the memo's answer", more)
 	}
 	theirs := read(person)
+	// A FIND, recorded as its kind: what it answers is the repository's
+	// files, whichever pages of the memo it read them from.
+	found := mustRead(t, s, findQ(repo, head, "f", 0))
+	// A DIRECTORY'S LAST COMMITS, recorded as their kind.
+	lastCommits := mustRead(t, s, treeCommitsQ(repo, head, ""))
+	// A FINDING'S EXCERPT, recorded as its kind.
+	blob := strings.TrimSpace(x.git("rev-parse", head+":f"))
+	excerpt := mustRead(t, s, excerptsQ(repo, gitlet.ExcerptsQuery{Anchors: []gitlet.ExcerptAnchor{{
+		LineAnchor: gitlet.LineAnchor{ID: "f", Path: "f", Side: gitlet.SideNew, BlobOID: blob, Start: 1, End: 1},
+		Head:       head}}}))
 	outside := treeQ(repo, gitlet.TreeQuery{Rev: head})
 	outside.Asker = seat("sales-rep")
 	if _, err := s.Read(t.Context(), outside); err == nil {
@@ -65,9 +76,18 @@ func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
 		{RepoID: repo, RepoName: gitlettest.RepoName, PrincipalKind: types.CodeReaderOperator,
 			Principal: person.OperatorID, Seat: person.Seat, Via: types.FetchedViaTool, Kind: string(gitlet.GitTree),
 			Reads: 1, Bytes: int64(encoded(t, theirs))},
+		{RepoID: repo, RepoName: gitlettest.RepoName, PrincipalKind: types.CodeReaderOperator,
+			Principal: person.OperatorID, Seat: person.Seat, Via: types.FetchedViaTool, Kind: string(gitlet.GitFind),
+			Reads: 1, Bytes: int64(encoded(t, found))},
+		{RepoID: repo, RepoName: gitlettest.RepoName, PrincipalKind: types.CodeReaderOperator,
+			Principal: person.OperatorID, Seat: person.Seat, Via: types.FetchedViaTool,
+			Kind: string(gitlet.GitTreeCommits), Reads: 1, Bytes: int64(encoded(t, lastCommits))},
+		{RepoID: repo, RepoName: gitlettest.RepoName, PrincipalKind: types.CodeReaderOperator,
+			Principal: person.OperatorID, Seat: person.Seat, Via: types.FetchedViaTool,
+			Kind: string(gitlet.GitExcerpts), Reads: 1, Bytes: int64(encoded(t, excerpt))},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("the reads recorded are %+v, want the two seats' and the person's", got)
+		t.Fatalf("the reads recorded are %+v, want the two seats' and the person's four", got)
 	}
 	for i := range want {
 		if got[i] != want[i] {

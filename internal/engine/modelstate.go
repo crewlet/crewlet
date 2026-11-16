@@ -9,18 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
-// WHAT THIS NODE KNOWS ABOUT ITS MODELS, as its heartbeat publishes it (M9 of
+// WHAT THIS NODE KNOWS ABOUT ITS MODELS, as its status record publishes it (M9 of
 // the Models design): one row per entry of the active revision, built from the
 // entry's sign-in [harness.Plan] (its sit-out, last answer and last failure),
 // the provider park (the seats waiting on it), and the login watcher.
 //
-// ON THE HEARTBEAT, for the reason [coord.NodeStatus.MCP] is: each of these is
-// this node's own memory, every node re-sends its status anyway, and one lease
-// listing answers the Models page for the whole fleet, where asking each node
-// in turn would be a fan-out whose partial answers the status design refused.
+// ON THE STATUS RECORD, for the reason [coord.NodeStatusRecord.MCP] is: each of
+// these is this node's own memory, and one listing of the records answers the
+// Models page for the whole fleet, where asking each node in turn would be a
+// fan-out whose partial answers the status design refused.
 //
-// Read under the beat's own budget: every input is in memory, the sign-in
-// route reads the login's files, and nothing here runs a process.
+// Read within a pass of the record's writer: every input is in memory, the
+// sign-in route reads the login's files, and nothing here runs a process.
 
 // modelStatus is this node's model rows, nil for a node that runs no model.
 func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {

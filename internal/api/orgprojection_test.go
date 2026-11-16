@@ -74,6 +74,7 @@ var companyFields = map[string]classified{
 	"Code":           {exposure: exposureGuarded, why: "the company's repositories, their owners and rules, and what a push may hold: an operational setting. Only whether the engine hosts its code reaches a reader, as `services`"},
 	"Artifacts":      {exposure: exposureGuarded, why: "the company's artifact policy: what agents may manage and who sees who opened one"},
 	"Diagnostics":    {exposure: exposureGuarded, why: "whether the engine reports its own defects: an operational setting and an administrator's, read through the config query and `issue_reports`"},
+	"SignIn":         {exposure: exposureGuarded, why: "the company's sign-in policy: the company's own machinery, read by an administrator through sign_in_policy (ADR-0033)"},
 	"Inbox":          {exposure: exposureGuarded, why: "how long a person's inbox keeps a notice: an operational setting, read through the config question as Worklet's settings read it"},
 	"AccessHistory":  {exposure: exposureGuarded, why: "how long the record of what seats were told about their access and of their SSH use is kept: an operational setting, read through the config query"},
 	"Atlas":          {exposure: exposureGuarded, why: "how long the atlas keeps its history: an operational setting, read through the config query"},

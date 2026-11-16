@@ -55,10 +55,11 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			gitlet.MaxPackBytes, bound, objstore.RecordWithin)
 	}
 
-	// A PURGE PART AND ITS BOOKKEEPING FIT ONE RECORD'S ROW BUDGET.
-	if gitlet.PurgePartRows+2 > gitlet.MaxRecordRows {
-		t.Errorf("a purge part deletes %d rows (PurgePartRows) and writes its counters, past "+
-			"the %d one record's apply may touch (MaxRecordRows)", gitlet.PurgePartRows,
+	// A PURGE PART AND ITS BOOKKEEPING FIT ONE RECORD'S ROW BUDGET: its
+	// counters' row and its repository tally row beside what it deletes.
+	if gitlet.PurgePartRows+3 > gitlet.MaxRecordRows {
+		t.Errorf("a purge part deletes %d rows (PurgePartRows) and writes its counters and its repository "+
+			"tally row, past the %d one record's apply may touch (MaxRecordRows)", gitlet.PurgePartRows,
 			gitlet.MaxRecordRows)
 	}
 	// AND SO DOES THE FINAL PURGE, whose statements are unbounded because the
@@ -68,22 +69,25 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	// (MaxProtectionsPerRepo) and every path owner (MaxPathOwners, one row an
 	// owner), the published chain — which no part removes: MaxPublishedLayers
 	// layers of MaxLayerParts parts each — the name claim, the repository's
-	// row, its kind's count and the deletion marker.
+	// row, its kind's count, its repository tally row and the deletion marker.
 	chain := gitlet.MaxPublishedLayers * (1 + gitlet.MaxLayerParts)
-	if final := gitlet.PurgePartRows + gitlet.MaxProtectionsPerRepo + gitlet.MaxPathOwners + chain + 4; final >
+	if final := gitlet.PurgePartRows + gitlet.MaxProtectionsPerRepo + gitlet.MaxPathOwners + chain + 5; final >
 		gitlet.MaxRecordRows {
 		t.Errorf("the final purge removes up to %d rows (PurgePartRows %d + MaxProtectionsPerRepo %d + "+
-			"MaxPathOwners %d + a chain's %d + 4), past the %d one record's apply may touch (MaxRecordRows)",
+			"MaxPathOwners %d + a chain's %d + 5 with its repository tally row), past the %d one record's "+
+			"apply may touch (MaxRecordRows)",
 			final, gitlet.PurgePartRows, gitlet.MaxProtectionsPerRepo, gitlet.MaxPathOwners, chain,
 			gitlet.MaxRecordRows)
 	}
 	// AND A RECORD CARRYING A REPOSITORY'S SETTINGS WHOLE: a settings change
 	// or a restore deletes its rules and path owners and writes the new ones,
-	// and moves the repository's row — a create writes them with its claim.
-	if settings := 2*(gitlet.MaxProtectionsPerRepo+gitlet.MaxPathOwners) + 1; settings > gitlet.MaxRecordRows {
+	// and moves the repository's row, its two change tally rows and its two
+	// repository tally rows; a create writes them with its claim.
+	if settings := gitlet.ReconcileRecordRows; settings > gitlet.MaxRecordRows {
 		t.Errorf("a settings record touches up to %d rows (twice MaxProtectionsPerRepo %d and MaxPathOwners "+
-			"%d, and the row), past the %d one record's apply may touch (MaxRecordRows)", settings,
-			gitlet.MaxProtectionsPerRepo, gitlet.MaxPathOwners, gitlet.MaxRecordRows)
+			"%d, the row, two change tally rows and two repository tally rows), past the %d one record's "+
+			"apply may touch (MaxRecordRows)",
+			settings, gitlet.MaxProtectionsPerRepo, gitlet.MaxPathOwners, gitlet.MaxRecordRows)
 	}
 	// A MAXIMAL PUSH OF DELETIONS FITS ONE RECORD'S ROWS with its sweep's
 	// room: a push row, its pack and its refs, the object each deletion left,

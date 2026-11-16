@@ -968,9 +968,13 @@ func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
 		t.Fatalf("the reanchored checkpoint names %s, want the log's record at "+
 			"%d, stored at %s", cp.StoredAt, want.Seq, named)
 	}
-	if len(f.runner.names) != 1 || !f.runner.names[0].Equal(named) {
+	// AND THE RUNNER IS TOLD IT IN THE STORE'S ENCODING, as a commit and a
+	// restart hand it over, so its stance says the instant in one shape
+	// whichever set it last.
+	if applied := statelog.AppliedInstant(named); len(f.runner.names) != 1 ||
+		!f.runner.names[0].Equal(applied) || f.runner.names[0].Location() != time.UTC {
 		t.Fatalf("the runner was told its checkpoint names %v, want %s",
-			f.runner.names, named)
+			f.runner.names, applied)
 	}
 	if at, created := cursorOf(t, f.estate, probeStream); at != want ||
 		statelog.IdentityOf(created, reanchorCreated, true) != statelog.StreamSame {

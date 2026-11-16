@@ -33,8 +33,8 @@ import (
 // This node alone, in memory: the login is on this node's disk.
 
 // hostLoginBeat is how often the watcher stats each login's files: the
-// coordination heartbeat, which is the cadence the answer is published at, so
-// a login made on the node is on the page by the next beat.
+// reconcile interval, the longest the node's status record goes unwritten, so
+// a login made on the node is on the page by the next record.
 const hostLoginBeat = coord.ReconcileInterval
 
 // hostLoginRecheck is how long an answer stands with nothing changed on disk:
@@ -211,7 +211,7 @@ func (e *Engine) hostLoginOf(key string) *coord.HostLogin {
 }
 
 // CheckHostLogin runs an entry's status command on this node now and answers
-// what it said, which the heartbeat publishes from then on. [ErrNoModel] for an
+// what it said, which the node's status record publishes from then on. [ErrNoModel] for an
 // entry the active revision does not have, and [ErrNoHostLogin] for one that
 // does not sign in with a harness login here.
 func (e *Engine) CheckHostLogin(ctx context.Context, key string) (coord.HostLogin, error) {

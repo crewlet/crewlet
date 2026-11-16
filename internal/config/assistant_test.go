@@ -322,3 +322,143 @@ func TestACandidateAssistantModelIsJudgedAsAChainMember(t *testing.T) {
 		t.Errorf("an absent entry answered %v", err)
 	}
 }
+
+// A stronger chain is held to the quick chain's rules, at admission and where
+// it is handed out; with none set, or the assistant off, the error says which.
+func TestAStrongerChainIsHeldToTheAssistantsRules(t *testing.T) {
+	t.Parallel()
+	strong := "    strong:\n      harness: claude-code\n      model: opus\n" +
+		"      overrides: {web_tools: denied}\n"
+	open := "    open:\n      harness: claude-code\n      model: opus\n"
+
+	cfg := mustCompany(t, assistantCompany(assistantEntry+strong,
+		"  enabled: true\n  llm: [assistant]\n  deliberate:\n    llm: [strong, assistant]\n"+
+			"    decision_briefs: true\n"))
+	chain, err := cfg.DeliberateChain()
+	if err != nil {
+		t.Fatalf("DeliberateChain: %v", err)
+	}
+	if !slices.Equal(chain, ProviderKeys{"strong", "assistant"}) || !cfg.Assistant.Deliberate.DecisionBriefs {
+		t.Errorf("chain = %v, decision briefs %v", chain, cfg.Assistant.Deliberate.DecisionBriefs)
+	}
+
+	for name, tc := range map[string]struct{ entries, block, want string }{
+		"web allowed": {assistantEntry + open, "  deliberate:\n    llm: [open]\n",
+			"providers.llm.open.overrides: {web_tools: denied}"},
+		"not configured": {assistantEntry, "  deliberate:\n    llm: [missing]\n",
+			`"missing" is not a configured provider`},
+		"empty": {assistantEntry, "  deliberate:\n    llm: []\n", "names no model"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			doc := assistantCompany(tc.entries, "  enabled: true\n  llm: [assistant]\n"+tc.block)
+			err := rejects(t, doc, "assistant.deliberate.llm")
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal does not name %q:\n%v", tc.want, err)
+			}
+			stored, decodeErr := ParseCompanyDocument([]byte(doc))
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			if _, chainErr := stored.DeliberateChain(); chainErr == nil ||
+				!strings.Contains(chainErr.Error(), tc.want) {
+				t.Errorf("DeliberateChain handed out a chain admission refuses: %v", chainErr)
+			}
+		})
+	}
+
+	none := mustCompany(t, assistantCompany(assistantEntry, "  enabled: true\n  llm: [assistant]\n"))
+	if _, err := none.DeliberateChain(); !errors.Is(err, ErrNoDeliberate) {
+		t.Errorf("no block: err = %v, want ErrNoDeliberate", err)
+	}
+	off := mustCompany(t, assistantCompany(assistantEntry+strong,
+		"  enabled: false\n  llm: [assistant]\n  deliberate:\n    llm: [strong]\n"))
+	if _, err := off.DeliberateChain(); !errors.Is(err, ErrAssistantOff) {
+		t.Errorf("assistant off: err = %v, want ErrAssistantOff", err)
+	}
+}
+
+// tools.deny takes each known family once; an unknown or repeated one is
+// refused at its own index.
+func TestToolsDenyTakesEachKnownFamilyOnce(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t, assistantCompany(assistantEntry,
+		"  enabled: true\n  llm: [assistant]\n  tools:\n    deny: [writes, deep_work]\n"))
+	if !cfg.Assistant.Tools.Denies(FamilyWrites) || cfg.Assistant.Tools.Denies(FamilyChatWrites) {
+		t.Errorf("deny = %v", cfg.Assistant.Tools.Deny)
+	}
+	for name, tc := range map[string]struct{ deny, at, want string }{
+		"unknown":  {"[writes, everything]", "assistant.tools.deny[1]", `"everything"`},
+		"repeated": {"[chat_writes, chat_writes]", "assistant.tools.deny[1]", "listed twice"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := rejects(t, assistantCompany(assistantEntry,
+				"  enabled: true\n  llm: [assistant]\n  tools:\n    deny: "+tc.deny+"\n"), tc.at)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal does not name %q:\n%v", tc.want, err)
+			}
+		})
+	}
+}
+
+// Research lists bare host names: none, a scheme, a port, a path, a wildcard, an
+// upper-case name or a repeat is refused naming the entry; absent, it is off.
+func TestResearchListsBareHostNames(t *testing.T) {
+	t.Parallel()
+	ok, err := ParseCompany([]byte(assistantCompany("",
+		"  research:\n    hosts: [developers.cloudflare.com, docs.github.com]\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ok.Assistant.ResearchHosts(); len(got) != 2 {
+		t.Errorf("research hosts read as %v", got)
+	}
+	off, err := ParseCompany([]byte("name: Acme\n"))
+	if err != nil || off.Assistant.ResearchHosts() != nil {
+		t.Errorf("a company with no research block reads hosts %v (%v)",
+			off.Assistant.ResearchHosts(), err)
+	}
+	for name, tc := range map[string]struct{ hosts, path string }{
+		"none":       {"[]", "assistant.research.hosts"},
+		"a scheme":   {"[https://docs.github.com]", "assistant.research.hosts[0]"},
+		"a port":     {"[docs.github.com:443]", "assistant.research.hosts[0]"},
+		"a path":     {"[docs.github.com/en]", "assistant.research.hosts[0]"},
+		"a wildcard": {"['*.github.com']", "assistant.research.hosts[0]"},
+		"upper case": {"[Docs.GitHub.com]", "assistant.research.hosts[0]"},
+		"a repeat":   {"[docs.github.com, docs.github.com]", "assistant.research.hosts[1]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rejects(t, assistantCompany("", "  research:\n    hosts: "+tc.hosts+"\n"), tc.path)
+		})
+	}
+}
+
+// Research search names a shared, enabled Tavily entry whose search is not
+// blocked; any other entry, or none the document holds, is refused naming it.
+func TestResearchSearchNamesTheCompanysTavilyServer(t *testing.T) {
+	t.Parallel()
+	doc := func(servers, name string) string {
+		return "name: Acme\nmcp_servers:\n" + servers + "assistant:\n  research:\n" +
+			"    hosts: [docs.example.com]\n    search: {mcp_server: " + name + "}\n"
+	}
+	const tavily = "  - name: search\n    command: npm\n    args: [exec, --yes, --, tavily-mcp@0.2.22]\n" +
+		"    env: {TAVILY_API_KEY: '${TAVILY_API_KEY}'}\n"
+	if _, err := ParseCompany([]byte(doc(tavily, "search"))); err != nil {
+		t.Fatalf("a shared Tavily entry was refused: %v", err)
+	}
+	for name, tc := range map[string]struct{ servers, server string }{
+		"unknown entry": {tavily, "nothing"},
+		"not Tavily": {"  - name: search\n    command: npx\n    args: [-y, some-other-server]\n",
+			"search"},
+		"per role":       {tavily + "    shared: false\n", "search"},
+		"search blocked": {tavily + "    tools: {levels: {tavily_search: blocked}}\n", "search"},
+		"turned off":     {tavily + "    enabled: false\n", "search"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rejects(t, doc(tc.servers, tc.server), "assistant.research.search.mcp_server")
+		})
+	}
+}

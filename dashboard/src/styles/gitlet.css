@@ -1,13 +1,15 @@
 /* THE GITLET WORKSPACE (`routes/gitlet/`), and every screen that draws one of
    its marks elsewhere (Home's changes waiting on a person, Settings › Gitlet,
-   a task's and a seat's changes): a sheet of its own, which arrives with the
-   first module that draws a `code-` class rather than in the first paint.
+   a task's and a seat's changes, My work's reviews, the Inbox's code notice):
+   a sheet of its own, which arrives with the first module that draws a
+   `code-` class rather than in the first paint.
 
    Laid out as a code host is laid out, and coloured by the one rule: nothing
-   here spends a hue but a state — a change merged, a meter met — and a diff
-   spends none at all (`diff.css`). A directory and a file are told apart by
-   their glyphs and their names, a seat by its own face, a picked line by a
-   rule at its edge. */
+   here spends a hue but a state (a meter met) and the kit's code host colours
+   (a change's state, a branch, and its code's syntax in `gitlet-code.css`),
+   the seventh exception. A directory and a file are told apart by their
+   glyphs and their names, a seat by its own face, a picked line by a rule at
+   its edge. */
 
 /* GITLET › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
    move on its own, above the grid. A ruled box rather than a callout, since
@@ -56,14 +58,54 @@
   margin-block-start: var(--spacing-1);
 }
 
+/* A BRANCH: the kit's code-ref chip beside its glyph; its transparent edge is
+   what forced colours paint. */
 .code-branch-chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  max-width: 100%;
   padding: 0 var(--spacing-1);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--color-surface-inset);
+  background: var(--color-code-ref-fill);
+  color: var(--color-code-ref-ink);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+/* On a selected row the chip draws no ground: its ink is on the row's tint. */
+[role="row"]:is([aria-current="true"], :has([aria-current="true"])) .code-branch-chip {
+  background: none;
+}
+
+/* A CHANGE'S STATE: the kit's change colours on the kit's pill, beside the
+   state's glyph and word (the seventh exception). */
+.code-state[data-state="open"] {
+  border-color: transparent;
+  background: var(--color-change-open-fill);
+  color: var(--color-change-open-label);
+}
+.code-state[data-state="merged"] {
+  border-color: transparent;
+  background: var(--color-change-merged-fill);
+  color: var(--color-change-merged-label);
+}
+.code-state[data-state="closed"] {
+  border-color: transparent;
+  background: var(--color-change-closed-fill);
+  color: var(--color-change-closed-label);
+}
+.code-state[data-state="draft"] {
+  border-color: var(--color-change-draft-edge);
+  background: var(--color-change-draft-fill);
+  color: var(--color-change-draft-label);
+}
+/* The word stays centred on its glyph where the kit's stacked grid sets a
+   pictured value's words on their baseline. */
+.code-state[data-state] > :last-child {
+  align-self: center;
 }
 
 /* THE DESCRIPTION: a card its owner opened, the first thing on the page. */
@@ -479,7 +521,7 @@
 .code-rail__branches {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: var(--spacing-1);
   margin: 0;
   font-size: var(--font-size-sm);
@@ -704,7 +746,11 @@
 }
 
 .code-change-cell__branches {
-  overflow-wrap: anywhere;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
 }
 
 /* PROVENANCE: a label and its value a row, the labels one column. */
@@ -811,12 +857,12 @@
   color: var(--color-text-secondary);
 }
 
-/* CLONE: the address in a block of its own, and what git asks for under it. */
+/* CLONE: the address in a block of its own, and what git asks for under it.
+   No width of its own: wider than the kit's panel, it scrolls sideways. */
 .code-clone {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  width: min(30rem, 80vw);
   padding: var(--spacing-3);
 }
 
@@ -1046,11 +1092,13 @@
   background: var(--color-surface-hover);
 }
 
-/* A PICKED LINE IS RULED, not tinted, as a picked line of a diff is: a pick
-   is the reader's place, not the line's state. */
+/* A PICKED LINE IS RULED, not tinted: a pick is the reader's place, not the
+   line's state. Forced colours drop the rule and paint its outline. */
 .code-source__line[data-picked],
 .code-blame tr[data-picked] {
   box-shadow: inset 2px 0 0 var(--color-border-strong);
+  outline: 2px solid transparent;
+  outline-offset: -2px;
 }
 
 .code-source__number {
@@ -1204,8 +1252,9 @@
 /* A REF OF THE BRANCHES AND TAGS: its glyph, its name, its marks. */
 .code-ref {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-2);
+  gap: var(--spacing-1) var(--spacing-2);
   min-width: 0;
 }
 
@@ -1231,23 +1280,117 @@
   font-weight: var(--font-weight-semibold);
 }
 
-/* ONE COMMIT OF THE HISTORY: its subject, then who wrote it, when, who
-   pushed it and its work item, on a second line that wraps. */
-.code-log-row {
+/* ---- A list of rows of sentences (`routes/gitlet/CodeList.tsx`) ---------- */
+
+.code-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.code-list__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* THE CARD: one surface of rows, clipped to its rounding. */
+.code-list__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  overflow: clip;
+}
+
+.code-list__row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "body facts" "below below";
+  align-items: center;
+  gap: 0 var(--spacing-4);
+  padding: var(--spacing-3) var(--row-inline);
+}
+
+.code-list--lead .code-list__row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "lead body facts" "lead below below";
+  gap: 0 var(--spacing-4);
+}
+
+.code-list--compact .code-list__row {
+  padding-block: var(--spacing-2);
+}
+
+.code-list__row + .code-list__row {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-list__row:hover {
+  background: var(--color-surface-hover);
+}
+
+.code-list__row[data-current] {
+  background: var(--color-brand-accent-soft);
+}
+
+.code-list__row[data-cursor] {
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
+}
+
+.code-list__lead {
+  grid-area: lead;
+  align-self: start;
+}
+
+.code-list__body {
+  grid-area: body;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
   min-width: 0;
-  padding-block: var(--spacing-1);
 }
 
-.code-log-row__subject {
+.code-list__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  margin: 0;
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
+}
+
+.code-list__link,
+.code-list__words {
+  min-width: 0;
+  color: var(--color-text-primary);
+  text-decoration: none;
   overflow-wrap: anywhere;
 }
 
-.code-log-row__by {
+/* THE ROW IS THE LINK: its title stretched over it, the row's own controls lifted above. */
+.code-list__link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.code-list__title > :not(.code-list__link),
+.code-list__meta a,
+.code-list__meta button,
+.code-list__facts > *,
+.code-list__below {
+  position: relative;
+  z-index: 1;
+}
+
+.code-list__meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1256,13 +1399,142 @@
   color: var(--color-text-secondary);
 }
 
-.code-log-row__author {
+.code-list__facts {
+  grid-area: facts;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  white-space: nowrap;
+}
+
+/* SPACED BY ITS OWN MARGIN, so a row with nothing below keeps no gap for it. */
+.code-list__below {
+  grid-area: below;
+  min-width: 0;
+  margin-block-start: var(--spacing-2);
+}
+
+/* THE TIMELINE: a heading per group on a spine, its rows a card beside it. */
+.code-list--timeline .code-list__group {
+  position: relative;
+  padding-inline-start: var(--spacing-8);
+}
+
+.code-list--timeline .code-list__group::before {
+  content: "";
+  position: absolute;
+  inset-block: 0 calc(-1 * var(--spacing-4));
+  inset-inline-start: calc(var(--spacing-7) / 2 - 1px);
+  border-inline-start: 2px solid var(--color-border-default);
+}
+
+.code-list--timeline .code-list__group:not(:has(~ .code-list__group))::before {
+  inset-block-end: 0;
+}
+
+.code-list__heading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: var(--spacing-7);
+  margin: 0 0 var(--spacing-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+}
+
+.code-list--timeline .code-list__heading {
+  margin-inline-start: calc(-1 * var(--spacing-8));
+}
+
+.code-list__node {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--spacing-7);
+  block-size: var(--spacing-7);
+  background: var(--color-surface-background);
+  color: var(--color-text-tertiary);
+}
+
+.code-list__aside {
+  margin-inline-start: auto;
+  font-weight: var(--font-weight-regular);
+}
+
+.code-list__foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-list--timeline .code-list__foot {
+  padding-inline-start: var(--spacing-8);
+}
+
+.code-list__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* THE PHONE: the facts under the words, and the timeline's track given back to them. */
+@container page (width < 640px) {
+  .code-list__row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "body" "facts" "below";
+  }
+
+  .code-list--lead .code-list__row {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "lead body" "lead facts" "lead below";
+  }
+
+  .code-list__facts {
+    flex-wrap: wrap;
+    margin-block-start: var(--spacing-2);
+    white-space: normal;
+  }
+
+  .code-list--timeline .code-list__group,
+  .code-list--timeline .code-list__foot {
+    padding-inline-start: 0;
+  }
+
+  .code-list--timeline .code-list__group::before {
+    content: none;
+  }
+
+  .code-list--timeline .code-list__heading {
+    margin-inline-start: 0;
+  }
+}
+
+/* A HISTORY ROW'S META: who wrote the commit and when, then how it reached its branch. */
+.code-commit-meta__who {
   color: var(--color-text-primary);
   font-weight: var(--font-weight-medium);
 }
 
-.code-log-row__work {
+.code-commit-prov {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: calc(var(--spacing-1) / 2) var(--spacing-2) calc(var(--spacing-1) / 2) var(--spacing-1);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+  font-weight: var(--font-weight-medium);
+}
+
+.code-commit-prov > svg {
+  flex: none;
   color: var(--color-text-tertiary);
+}
+
+.code-commit-prov__key {
+  color: var(--color-text-primary);
 }
 
 /* ---- A commit's page (`routes/gitlet/commit/`) --------------------------- */
@@ -1379,11 +1651,6 @@
   flex: 1 1 12rem;
   max-width: 20rem;
   min-width: 0;
-}
-
-.code-search-coverage {
-  margin: 0;
-  padding-inline-start: var(--spacing-4);
 }
 
 .code-search-results {

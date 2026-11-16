@@ -584,9 +584,9 @@ func TestASwapCostsLinksNotDownloads(t *testing.T) {
 		t.Errorf("the output was opened %d times, want once", opens[out.Object])
 	}
 	const live = 15 - 2 + 1
-	if got, want := links.Load(), int64(3*live+3+len(idx.Runs)); got != want {
+	if got, want := links.Load(), int64(3*live+3+len(idx.Runs)+1); got != want {
 		t.Errorf("the swap made %d links, want %d: three for each of %d live packs, HEAD, config, the "+
-			"packed-refs and %d runs", got, want, live, len(idx.Runs))
+			"packed-refs, %d runs and the tag index", got, want, live, len(idx.Runs))
 	}
 	for _, name := range []string{"HEAD", "config", "packed-refs"} {
 		if !sameInode(t, filepath.Join(held.Dir, name), filepath.Join(s.Dir, name)) {

@@ -95,7 +95,6 @@ import {
 import {
   ActivityGlyph,
   ChartNoAxesGanttGlyph,
-  CircleQuestionMarkGlyph,
   EllipsisGlyph,
   MessageSquareGlyph,
   CircleStopGlyph,
@@ -191,6 +190,7 @@ import { SeatCode } from "./seat/Code.tsx";
 import { Settings } from "./seat/Settings.tsx";
 import { Turns } from "./seat/Turns.tsx";
 import { Work } from "./seat/Work.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** How many open tasks the Work tab's list, and the Overview's card, are read from. */
 const WORK_PAGE = 50;
@@ -846,10 +846,11 @@ function Notices({
           the engine, with its reason) chose it, and in red it read as an
           error stacked over the seat's real failure. */}
       {state === "paused" && (
-        <Callout variant={toneOf(state)} icon={<PauseGlyph size="md" />}>
+        <Callout variant={toneOf(state)}>
           {paused ? (
             <>
-              <strong>Paused by {pauserOf(paused, nameOf)}</strong> {relTime(paused.at, now)}
+              <strong>Paused by {pauserOf(paused, nameOf)}</strong>{" "}
+              {ago(paused.at, now, { clock: true })}
               {paused.reason ? `: “${sentence(paused.reason)}”` : "."}
             </>
           ) : (
@@ -860,12 +861,12 @@ function Notices({
       {note && (
         <Callout
           variant="neutral"
-          icon={<PauseGlyph size="md" />}
+
           title={PAUSE_NOTE_WORDS[note].tag}
         >
           {paused ? (
             <>
-              Paused by {pauserOf(paused, nameOf)} {relTime(paused.at, now)}
+              Paused by {pauserOf(paused, nameOf)} {ago(paused.at, now, { clock: true })}
               {/* THE QUOTE ENDS THE SENTENCE: `sentence` has already stopped it. */}
               {paused.reason ? `: “${sentence(paused.reason)}” ` : ". "}
             </>
@@ -911,7 +912,7 @@ function Notices({
       {sandbox && asking && standing && (
         <Callout
           variant="warning"
-          icon={<CircleQuestionMarkGlyph size="md" />}
+
           action={standing.answers ? <AnswerRunButton run={sandbox} seat={seat.name} /> : undefined}
         >
           {/* WHOM IT WAITS ON, as the engine says it for this reader: the

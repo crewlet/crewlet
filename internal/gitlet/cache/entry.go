@@ -377,6 +377,12 @@ type incarnation struct {
 	// rather than asked again every pass. Cleared by a graph written; never
 	// persisted, so a boot asks again at once.
 	graphFailed bool
+	// tagsFailed is when its tag step last failed: an index set aside or
+	// missing waits TagsRetry after it (tags.go). Never persisted: a boot's
+	// full round builds it.
+	tagsFailed time.Time
+	// tagsBad is the tag index last logged unreadable, so a file is logged once.
+	tagsBad fileID
 	// vouched is every checkable file of it this process wrote or checked
 	// (check.go), with the identity it had then: a pack's .idx and .rev by
 	// the pack's checksum, the derived files by their path relative to the

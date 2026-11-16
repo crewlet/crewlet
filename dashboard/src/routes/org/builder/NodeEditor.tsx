@@ -2140,9 +2140,15 @@ function IntegrationsSection({
             error={withProblems(errorFor(GITHUB_REPOS))}
           />
           {enrolling && (
-            <Callout variant="info">
-              Create its GitHub app in Integrations.{" "}
-              <ScreenLink to="integrations">Open Integrations</ScreenLink>
+            <Callout
+              variant="info"
+              action={
+                <ScreenLink to="integrations" standalone>
+                  Open Integrations
+                </ScreenLink>
+              }
+            >
+              Create its GitHub app in Integrations.
             </Callout>
           )}
         </ToolCard>

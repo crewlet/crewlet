@@ -96,8 +96,9 @@ const (
 	RecordSSHTests     Record = "ssh_tests"
 	RecordAccessLog    Record = "access_log"
 	RecordUsage        Record = "usage"
-	// RecordFleet is the live nodes' presence rows: each node, and what it
-	// says of the broker and the object store it runs on (ADR-0142).
+	// RecordFleet is the live nodes' presence rows and their status records:
+	// each node, and what it says of the broker and the object store it runs
+	// on (ADR-0142).
 	RecordFleet Record = "fleet"
 )
 

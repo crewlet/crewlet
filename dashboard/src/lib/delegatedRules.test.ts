@@ -13,8 +13,10 @@ import {
   draftOf,
   editRulePlan,
   enabledPlan,
+  placeProblems,
   readDraft,
   removeRulePlan,
+  sampleWords,
   type DocumentRule,
 } from "./delegatedRules.ts";
 
@@ -55,7 +57,34 @@ describe("a form read as a rule", () => {
     expect(readDraft({ ...draftOf(SSH), sample: " " })).toEqual({ ok: true, rule: SSH });
     expect(readDraft({ ...draftOf(SSH), sample: "2.5" })).toEqual({
       ok: false,
-      errors: { sample: "A whole number: one decision in this many is spot-checked." },
+      errors: { sample: "Enter a whole number." },
+    });
+  });
+
+  // THE ENGINE'S RANGE, where the read carried it, said before anything is sent.
+  test("a rate outside the engine's range is refused in its words", () => {
+    const range = { default: 10, min: 1, max: 1000 };
+    expect(readDraft({ ...draftOf(SSH), sample: "1001" }, range)).toEqual({
+      ok: false,
+      errors: { sample: "From 1 to 1000." },
+    });
+    expect(readDraft({ ...draftOf(SSH), sample: "1000" }, range).ok).toBe(true);
+  });
+
+  // WHAT EVERY RULE NEEDS is asked for before the engine is: a kind, the agent
+  // that decides (a panel at most two) and somebody to escalate to.
+  test("a rule without a kind, an agent or a person is refused field by field", () => {
+    expect(readDraft(draftOf())).toEqual({
+      ok: false,
+      errors: {
+        kinds: "Pick at least one kind of request.",
+        delegates: "Pick the agent that decides.",
+        escalateTo: "Pick at least one person.",
+      },
+    });
+    expect(readDraft({ ...draftOf(SSH), delegates: ["a", "b", "c"] })).toEqual({
+      ok: false,
+      errors: { delegates: "Pick one agent, or two for a panel." },
     });
   });
 
@@ -79,8 +108,47 @@ describe("a form read as a rule", () => {
     const half = { repo: "acme/web", branch: "", checks: ["test"] };
     expect(readDraft({ ...draftOf(RELEASE), checks: [half] })).toEqual({
       ok: false,
-      errors: { checks: "Each entry names its repository (owner/name) and its branch." },
+      errors: { checks: "Pick a repository and a branch for each entry." },
     });
+    const none = { repo: "acme/web", branch: "main", checks: [] };
+    expect(readDraft({ ...draftOf(RELEASE), checks: [none] })).toEqual({
+      ok: false,
+      errors: { checks: "Add at least one check to each entry." },
+    });
+  });
+});
+
+describe("the engine's refusal of a rule", () => {
+  const problem = (path: string, message: string, said?: string) => ({
+    path,
+    message: `${path}: ${message}`,
+    ...(said ? { said } : {}),
+  });
+
+  // EACH UNDER ITS FIELD, in the engine's person-facing words where it wrote
+  // them, else its line without the document path.
+  test("is placed under the fields of the rule it names, the rest said whole", () => {
+    const placed = placeProblems(
+      [
+        problem("delegated_decisions.rules[1].escalate_to", "missing", "Pick at least one person."),
+        problem("delegated_decisions.rules[1].delegates[0]", "ops-lead is a person's seat"),
+        problem("delegated_decisions.rules[0].kinds[0]", "taken"),
+        problem("roles[2].llm", "unknown entry"),
+      ],
+      1,
+    );
+    expect(placed.fields).toEqual({
+      escalateTo: "Pick at least one person.",
+      delegates: "ops-lead is a person's seat",
+    });
+    expect(placed.rest).toEqual(["taken", "unknown entry"]);
+  });
+
+  test("a spot-check rate's words say how often the people review", () => {
+    expect(sampleWords(1)).toBe("These people review every decision afterwards.");
+    expect(sampleWords(10)).toBe(
+      "These people review about 1 in 10 of the agent's decisions afterwards.",
+    );
   });
 });
 
@@ -110,7 +178,7 @@ describe("each change", () => {
     const changed = { ...SSH, escalate_to: ["ops-lead", "cto"] };
     expect(editRulePlan(1, SSH, changed)(doc({ rules: [SSH, RELEASE] }))).toEqual({
       patch: { delegated_decisions: { rules: [changed, RELEASE] } },
-      summary: "Delegated decisions: change rule 1 (Commands on servers)",
+      summary: "Delegated decisions: change rule 1 (Server commands)",
     });
     expect(editRulePlan(1, SSH, SSH)(doc({ rules: [SSH, RELEASE] }))).toBeNull();
   });
@@ -127,11 +195,11 @@ describe("each change", () => {
   test("a removed rule moves every later one up, and the last removes the key", () => {
     expect(removeRulePlan(1, SSH.kinds)(doc({ rules: [SSH, RELEASE] }))).toEqual({
       patch: { delegated_decisions: { rules: [RELEASE] } },
-      summary: "Delegated decisions: remove rule 1 (Commands on servers)",
+      summary: "Delegated decisions: remove rule 1 (Server commands)",
     });
     expect(removeRulePlan(1, SSH.kinds)(doc({ rules: [SSH] }))).toEqual({
       patch: { delegated_decisions: { rules: null } },
-      summary: "Delegated decisions: remove rule 1 (Commands on servers)",
+      summary: "Delegated decisions: remove rule 1 (Server commands)",
     });
     // The rule at that place delegates other kinds now: not the one drawn.
     expect(removeRulePlan(1, SSH.kinds)(doc({ rules: [RELEASE] }))).toBe("conflict");

@@ -152,6 +152,18 @@ claude-code:
     refuses: ["--mcp-config", "--allowedTools", "--allowed-tools", "--plugin-dir"]
     note: "--tools \"\" left the init event's built-in tool list empty and --strict-mcp-config loaded no server but the engine's crewlet server; measured on Claude Code 2.1.310"
   model_args: ["--model", "{model}"]
+  # Read from the 2.1.312 binary: an unknown level is dropped with a warning,
+  # the models below run without effort, and max or xhigh where a model lacks
+  # it runs at high. Aliases follow the harness's latest models, which take all.
+  effort:
+    args: ["--effort", "{effort}"]
+    levels: [low, medium, high, xhigh, max]
+    models:
+      - match: '(.*[./])?(claude-3-.*|claude-(opus|sonnet)-4(-0)?|claude-opus-4-1|claude-sonnet-4-5|claude-haiku-4-5)(-20[0-9]{6})?(-v[0-9].*|@.*|\[.*)?'
+      - match: '(.*[./])?claude-opus-4-5(-20[0-9]{6})?(-v[0-9].*|@.*|\[.*)?'
+        levels: [low, medium, high]
+      - match: '(.*[./])?claude-(opus|sonnet)-4-6(-20[0-9]{6})?(-v[0-9].*|@.*|\[.*)?'
+        levels: [low, medium, high, max]
   # BOTH SYSTEM-PROMPT CHANNELS, each a FILE: a seat's system prompt carries
   # the org chart, its policies, its roster and its own memory, and argv is
   # readable by every account on the machine. `claude --help` names the two
@@ -758,6 +770,11 @@ codex:
         - "tools.experimental_request_user_input.enabled=false"
         - "-"
   model_args: ["--model", "{model}"]
+  # `-c model_reasoning_effort`, read at rust-v0.164.0 (config_toml.rs): the
+  # value is sent as written, and a model's API refuses a level it lacks.
+  effort:
+    args: ["-c", 'model_reasoning_effort="{effort}"']
+    levels: [none, minimal, low, medium, high, xhigh, max]
   # A SIDE PASS REPLACES CODEX'S PROMPT: model_instructions_file takes the
   # place of the base instructions outright — the Responses `instructions`
   # field on 0.153.4, the first developer message on 0.164.0 — and the two
@@ -1165,6 +1182,7 @@ gemini-cli:
     - path: .gemini/settings.json
       content: '{"privacy":{"usageStatisticsEnabled":false},"security":{"auth":{"selectedType":"gemini-api-key"}}}'
   model_args: ["--model", "{model}"]
+  effort_note: "Gemini CLI reads a thinking level only from its own settings file, per model family, which the engine writes for each call"
   # ONE CHANNEL, AND IT REPLACES: GEMINI_SYSTEM_MD names a file whose text is
   # the request's whole systemInstruction — no identity line of the vendor's
   # and nothing per call — so a seat and a side pass both take it. NO CHANNEL
@@ -1426,6 +1444,7 @@ qwen-code:
       in: work
       content: "# This call's environment is the engine's; nothing above this directory is read.\n"
   model_args: ["--model", "{model}"]
+  effort_note: "Qwen Code reads its reasoning effort only from its own settings file, which the engine writes for each call"
   # BOTH SYSTEM-PROMPT CHANNELS, each a FILE a variable names, so the text
   # never reaches argv, where /proc/<pid>/cmdline makes it readable by every
   # account on the machine. The flags (--system-prompt,
@@ -1747,6 +1766,12 @@ opencode:
           in: work
           content: '{"mcp":{"servers":{"crewlet":{"type":"local","command":{relay_argv_json},"codemode":false,"timeout":{"execution":{tool_timeout_ms}}}}},"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"crewlet_*","resource":"*","effect":"allow"}]}'
   model_args: ["--model", "{model}"]
+  # The variant rides the model, `provider/model#variant` (2.1.4 has no
+  # --variant). Variants are per model from models.dev, and one the model lacks
+  # fails the run ("Variant unavailable"), so these are the protocols' defaults.
+  effort:
+    model_suffix: "#{effort}"
+    levels: [none, minimal, low, medium, high, xhigh, max]
   # `--model` takes `provider/model` (2.0 adds an optional `#variant`) and
   # splits it at the FIRST slash, so `openrouter/anthropic/claude-sonnet-5`
   # is the openrouter provider's `anthropic/claude-sonnet-5`, and a bare
@@ -2112,6 +2137,7 @@ cursor-agent:
     - path: .cursor/mcp.json
       content: '{"mcpServers":{}}'
   model_args: ["--model", "{model}"]
+  effort_note: "Cursor Agent takes effort as part of the model id, such as gpt-5.5-high; cursor-agent --list-models lists them"
   # NO SYSTEM-PROMPT CHANNEL. The system prompt is assembled by Cursor's
   # service: the run request carries the user message and no system prompt
   # (its one field for one, set by the hidden --system-prompt, is documented
@@ -2339,6 +2365,11 @@ copilot:
   local_tools: denied
   web_tools_note: "no web denial: --deny-tool web_fetch and web_search would be one, but it has not been measured against a copilot harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
+  # Read from 1.0.103: clap refuses any other value; a level the model lacks is
+  # logged and the run continues on the model's default.
+  effort:
+    args: ["--reasoning-effort", "{effort}"]
+    levels: [none, minimal, low, medium, high, xhigh, max]
   # NO REPLACE CHANNEL: the harness has no flag, variable or file that replaces
   # its system prompt in prompt mode (its SDK's replace mode is not reachable
   # from the command line), so every call takes the APPEND channel and keeps
@@ -2588,6 +2619,10 @@ grok:
   local_tools: denied
   web_tools_note: "no web denial: --disallowed-tools for its web tools would be one, but it has not been measured against a grok harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
+  # Read from 1.0.70: a level the model's menu lacks is refused by name.
+  effort:
+    args: ["--reasoning-effort", "{effort}"]
+    levels: [none, minimal, low, medium, high, xhigh, max]
   # BOTH CHANNELS, and both on argv: each flag takes the text itself, and a
   # path in its place is sent as the text (measured), so a seat's prompt is
   # readable in /proc/<pid>/cmdline and bounded by ARG_MAX.
@@ -2961,6 +2996,11 @@ muse-code:
     - path: .config/muse/settings.json
       content: '{"schema_version":1,"run":{"toolset":["web_search","web_fetch"]},"provider_retry":{"max_retries":3}}'
   model_args: ["--model", "{model}"]
+  # Read from 1.4.13: `none` is refused on Meta's provider and `ultra` is
+  # gated, so neither is offered.
+  effort:
+    args: ["--reasoning-effort", "{effort}"]
+    levels: [minimal, low, medium, high, xhigh, max]
   # THE APPEND CHANNEL IS AN UNDOCUMENTED VARIABLE:
   # TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE names a file whose text the harness
   # appends, after a blank line, at the very end of its own instructions —
@@ -3275,6 +3315,11 @@ kimi-code:
   local_tools: denied
   web_tools_note: "no web denial: dropping FetchURL from the agent file's allowlist would be one, but it has not been measured against a kimi harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
+  # Read from 2.3.2: no flag; the variable forces the level on Kimi's own
+  # provider, which refuses one the model lacks (effort-not-supported).
+  effort:
+    env: {KIMI_MODEL_THINKING_EFFORT: "{effort}"}
+    levels: [low, medium, high, xhigh, max]
   # BOTH CHANNELS ARE `--agent-file`, and the file is the tool allowlist AND
   # the system prompt at once.
   #
@@ -3723,6 +3768,11 @@ hermes:
   local_tools: denied
   web_tools_note: "no web denial: an empty --toolsets would be one, but it has not been measured against a hermes harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
+  # `--reasoning`, read at v2026.9.24 (hermes_constants.py): an unknown level
+  # is warned of and dropped, and a level the route lacks is lowered.
+  effort:
+    args: ["--reasoning", "{effort}"]
+    levels: [none, minimal, low, medium, high, xhigh, max]
   # THE SETTINGS THAT KEEP A CALL TO ITSELF, in the harness's own config file under
   # HERMES_HOME, written at every generation's open and merged by the harness over
   # its defaults:
@@ -4120,6 +4170,11 @@ pi:
   # drift, and an entry may say `web_tools: denied` truthfully.
   web_tools_note: "no web tool in this harness's built-in set; --no-tools sends the tool array empty (measured on 0.85.1)"
   model_args: ["--model", "{model}"]
+  # `--thinking`, read from 1.4.0 (dist/cli/args.js): an unknown level is
+  # warned of and dropped, and a level the model lacks is clamped.
+  effort:
+    args: ["--thinking", "{effort}"]
+    levels: [off, minimal, low, medium, high, xhigh, max]
   # BOTH CHANNELS ARE FILES: each flag reads its value as a path when a file
   # exists there. A seat's system prompt carries the org chart, its policies,
   # its roster and its memory, and argv is readable by every account on the

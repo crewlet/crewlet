@@ -15,7 +15,6 @@
  * names, so cutting the names to the column never cuts the count.
  */
 
-import { CpuGlyph } from "@crewlethq/icons/glyphs";
 import { BarList, Card, DATA_COLORS, EmptyState, Skeleton } from "@crewlethq/ui";
 import { usedByParts, usedByWords } from "./model.ts";
 import { fmtCount } from "~/lib/format.ts";
@@ -30,7 +29,8 @@ export function ByModel({
 }: {
   rollup: Rollup | null;
   loading: boolean;
-  words: string | null;
+  /** The window, where nothing else on the screen names it (a Home widget). */
+  words?: string | null;
 }) {
   const badgeOf = useSeatBadgeOf();
   // WHERE TOKENS WENT, so an entry whose calls spent nothing is no row of it
@@ -39,11 +39,7 @@ export function ByModel({
   const calls = rollup?.totals.calls ?? 0;
   return (
     <Card className="spend-card spend-list" padding="none">
-      <Card.Header
-        icon={<CpuGlyph size="sm" />}
-        subtitle={words ?? undefined}
-        subtitlePlacement="below"
-      >
+      <Card.Header subtitlePlacement="below" subtitle={words ?? undefined}>
         <Card.Title>By model</Card.Title>
       </Card.Header>
       <Card.Body padding="md">
@@ -51,7 +47,7 @@ export function ByModel({
           <Skeleton height="4.5rem" />
         ) : rollup?.entries_withheld ? (
           <EmptyState
-            size="compact"
+            size="inline"
             title="Shown to admins"
             description="Which of the company's model entries served the calls is its configuration, which an admin reads."
           />
@@ -63,13 +59,13 @@ export function ByModel({
           // refused calls contradicted Settings › Models, which counts them.
           calls > 0 ? (
             <EmptyState
-              size="compact"
+              size="inline"
               title="No model spent tokens in this window"
               description={`${callsWords(calls, 0)}. ${UNSPENT_CALLS}`}
             />
           ) : (
             <EmptyState
-              size="compact"
+              size="inline"
               title="No model was called in this window"
               description="A model entry appears once a call is made to it."
             />

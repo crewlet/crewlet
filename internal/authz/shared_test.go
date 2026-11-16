@@ -849,3 +849,41 @@ func TestOnlyAnAgentsEditsAreSteerable(t *testing.T) {
 		t.Error("SteerableOf knows a verb the table has no row for")
 	}
 }
+
+// A comment is a commenter's with no app, reading threads a viewer's, and an
+// administrator is admitted on the admin path, marked (ADR-0154). Mutation:
+// name the artifacts app on a comment row, or raise one to contributor.
+func TestACommentIsACommentersAndReadingThreadsAViewers(t *testing.T) {
+	t.Parallel()
+	writes := []authz.Action{authz.ActionArtifactComment, authz.ActionArtifactCommentResolve,
+		authz.ActionArtifactCommentEdit, authz.ActionArtifactCommentRemove}
+	viewer := artifact("jane", seatShare("sre", artifacts.RoleViewer))
+	commenter := artifact("jane", seatShare("sre", artifacts.RoleCommenter))
+	for _, a := range writes {
+		if need, _ := authz.MinRoleOf(a); need != artifacts.RoleCommenter {
+			t.Errorf("%s needs %s, want commenter", a, need)
+		}
+		if app, _ := authz.AppOf(a); app != "" {
+			t.Errorf("%s asks the app %q; commenting authors nothing", a, app)
+		}
+		if d := authz.Decide(t.Context(), personLeading("sre"), a, commenter, nimbus(),
+			decidedAt); !d.Allowed || d.Standing.Role != artifacts.RoleCommenter {
+			t.Errorf("%s: a commenter holding no app decided %+v, want admitted", a, d)
+		}
+		if d := authz.Decide(t.Context(), personLeading("sre"), a, viewer, nimbus(),
+			decidedAt); d.Allowed || d.Reason != authz.ReasonRole || d.Role != artifacts.RoleCommenter {
+			t.Errorf("%s: a viewer decided %+v, want refused naming commenter", a, d)
+		}
+		if d := authz.Decide(t.Context(), personLeading("ops", iam.GrantAdmin), a, artifact("jane"),
+			nimbus(), decidedAt); !d.Allowed || !d.Elevated {
+			t.Errorf("%s: an administrator with no relation decided %+v, want admitted, marked", a, d)
+		}
+	}
+	if need, _ := authz.MinRoleOf(authz.ActionArtifactCommentList); need != artifacts.RoleViewer {
+		t.Errorf("reading the threads needs %s, want viewer as reading the artifact does", need)
+	}
+	if d := authz.Decide(t.Context(), personLeading("sre"), authz.ActionArtifactCommentList, viewer,
+		nimbus(), decidedAt); !d.Allowed {
+		t.Errorf("a viewer reading the threads decided %+v, want admitted", d)
+	}
+}

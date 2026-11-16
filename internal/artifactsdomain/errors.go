@@ -127,6 +127,26 @@ var (
 	// draft may.
 	ErrBrandIncomplete = errors.New("artifactsdomain: the brand leaves out a field an " +
 		"adopted brand holds")
+
+	// ErrCommentNotFound reports a comment thread or a remark the artifact
+	// does not hold, or a remark already removed.
+	ErrCommentNotFound = errors.New("artifactsdomain: no such comment")
+
+	// ErrCommentLimit reports a thread past the threads one artifact keeps
+	// (artifacts.MaxThreadsPerArtifact) or a remark past the remarks one
+	// thread keeps (artifacts.MaxRemarksPerThread).
+	ErrCommentLimit = errors.New("artifactsdomain: there are already as many " +
+		"comments there as there may be")
+
+	// ErrNotTheAuthor reports an edit of a remark by anybody but its author,
+	// or a removal by anybody but its author that no administrator made.
+	ErrNotTheAuthor = errors.New("artifactsdomain: only a remark's author may " +
+		"change it")
+
+	// ErrCommentCredential reports a remark or a quote carrying a credential
+	// shape: refused, never redacted, because everybody who reads the
+	// artifact reads its comments.
+	ErrCommentCredential = errors.New("artifactsdomain: the comment carries a credential")
 )
 
 // FolderAmbiguous is a folder path that names more than one folder the caller

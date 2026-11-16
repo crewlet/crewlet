@@ -71,6 +71,20 @@ func (f *fakeAccess) GrantRequest(_ context.Context, id string) (seataccess.Gran
 	return seataccess.GrantRequest{}, seataccess.ErrNoRequest
 }
 
+func (f *fakeAccess) GrantRequests(_ context.Context, kind integration.Kind) (
+	[]seataccess.GrantRequest, error) {
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []seataccess.GrantRequest
+	for _, r := range f.requests {
+		if r.Kind == kind {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeAccess) RecordGrants(_ context.Context, _ integration.Kind, _ iam.Actor,
 	changes []seataccess.GrantChange) {
 	f.mu.Lock()

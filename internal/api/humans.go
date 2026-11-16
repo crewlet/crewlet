@@ -191,8 +191,17 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	if reader == nil || writer == nil {
 		return nil, nil, errNoIdentityEstate
 	}
+	// THE COMPANY'S SIGN-IN POLICY within this node's limits, read per
+	// request by the signer and the sign-in alike.
+	policy := signInPolicyOf(boot, func() *config.Company {
+		if c := e.Company(); c != nil {
+			return c.Config
+		}
+		return nil
+	})
 	signer, err := session.New(session.Options{
 		Material: boot.Secrets.TokenMaterial(),
+		Limits:   sessionLimits(policy),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("api: the session signer: %w", err)
@@ -210,6 +219,7 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	}
 	surface, err := authapi.New(authapi.Options{
 		Bootstrap: boot,
+		SignIn:    policy,
 		// THE READER, with a named session's standing asked of the ENGINE,
 		// which reads the identity log's end first so a lineage this
 		// node's rows do not hold is answered as nobody's only where they

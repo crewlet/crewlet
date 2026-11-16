@@ -221,10 +221,10 @@ test("a stored value goes as the request body rather than wrapped in JSON", asyn
   );
   render(<Secrets />);
 
-  fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "NEW_TOKEN" } });
   fireEvent.change(screen.getByLabelText("Value"), { target: { value: 'glpat-"quoted"' } });
-  fireEvent.click(screen.getByRole("button", { name: "Store" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
   await eventually(() => {
     const write = spy.mock.calls.find(([, init]) => init?.method === "PUT");
@@ -243,7 +243,7 @@ test("the value is a password field that refuses every saved login", async () =>
   stubLoaded();
   render(<Secrets />);
 
-  fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
   const value = screen.getByLabelText("Value");
   expect(value.getAttribute("type")).toBe("password");
   expect(value.getAttribute("autocomplete")).toBe("new-password");
@@ -268,10 +268,10 @@ test("a name the engine refuses is reported in the engine's own words", async ()
   );
   render(<Secrets />);
 
-  fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "CREWLET_RESERVED" } });
   fireEvent.change(screen.getByLabelText("Value"), { target: { value: "glpat-x" } });
-  fireEvent.click(screen.getByRole("button", { name: "Store" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
   expect(await screen.findByText(/a name the engine keeps for itself/)).toBeDefined();
 });
@@ -282,9 +282,9 @@ test("a name the engine refuses is reported in the engine's own words", async ()
 test("a name a reference cannot name is refused under the field before anything is sent", async () => {
   const spy = stubLoaded(() => null);
   render(<Secrets />);
-  fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
   fireEvent.change(screen.getByLabelText("Value"), { target: { value: "x" } });
-  const store = () => screen.getByRole("button", { name: "Store" }) as HTMLButtonElement;
+  const store = () => screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
   for (const [typed, said] of [
     ["1bad", "A name can’t start with a digit."],
     ["bad name", "A name has no spaces: use underscores."],
@@ -488,13 +488,13 @@ test("a read that answers after a newer one began does not overwrite it", async 
 test("an empty store names the command that fills it as code", async () => {
   stubFetch((path) => (path === "/secrets" ? ok({ secrets: [] }) : ok({})));
   render(<Secrets />);
-  expect(await screen.findByText("No secrets are stored")).toBeDefined();
+  expect(await screen.findByText("No secrets yet")).toBeDefined();
   const command = screen.getByText("crewlet secrets set");
   expect(command.tagName).toBe("CODE");
   // IN ITS CARD, as MCP & tools and Service accounts draw theirs: drawn by
   // the page's query it floated on the page's ground. Mutation: hand the
   // empty state back to the query and it has no card around it.
-  expect(screen.getByText("No secrets are stored").closest(".crewlet-card")).not.toBeNull();
+  expect(screen.getByText("No secrets yet").closest(".crewlet-card")).not.toBeNull();
 });
 
 // AN EMPTY STORE LEADS WITH ITS EMPTY STATE, not three zero tiles whose
@@ -502,7 +502,7 @@ test("an empty store names the command that fills it as code", async () => {
 test("an empty store draws no strip of zeros above its empty state", async () => {
   stubFetch((path) => (path === "/secrets" ? ok({ secrets: [] }) : ok({})));
   const { container } = render(<Secrets />);
-  expect(await screen.findByText("No secrets are stored")).toBeDefined();
+  expect(await screen.findByText("No secrets yet")).toBeDefined();
   expect(container.querySelector(".crewlet-statcard")).toBeNull();
   expect(screen.queryByText("names the fleet holds")).toBeNull();
   cleanup();

@@ -143,7 +143,7 @@ func (s *Surface) ask(w http.ResponseWriter, r *http.Request) {
 	}
 	accepted, err := s.svc.Start(r.Context(), assistant.TurnStart{Person: p,
 		Conversation: conversation, Key: key, Input: body.Input.Text, Page: body.PageContext,
-		Read: grant, Attachments: body.Attachments, Mode: body.Mode})
+		Read: grant, Attachments: body.Attachments, Mode: body.Mode, Deliberate: body.Deliberate})
 	if err != nil {
 		s.failWrite(w, r, key, err)
 		return

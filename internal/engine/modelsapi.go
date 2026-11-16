@@ -12,14 +12,14 @@ import (
 )
 
 // LocalModel is what THIS node resolved for one entry of its active revision,
-// as Settings › Models reads it beside the fleet's heartbeats: how the entry
+// as Settings › Models reads it beside the fleet's status records: how the entry
 // signs in here, the variable its credential is read from, whether it
 // resolved, and the hint and lifetime of the value it resolved.
 //
-// NOTHING HERE IS PUBLISHED OR STORED. The heartbeat carries the route and
-// whether it resolves; the variable's name, the hint and the lifetime are
-// answered only to the person asking this node, which is why they are read
-// here rather than off a lease.
+// NOTHING HERE IS PUBLISHED OR STORED. The node's status record carries the
+// route and whether it resolves; the variable's name, the hint and the lifetime
+// are answered only to the person asking this node, which is why they are read
+// here rather than off a record.
 type LocalModel struct {
 	Key string
 	// Route is harness's sign-in route on this node: token, credentials,

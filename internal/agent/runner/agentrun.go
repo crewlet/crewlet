@@ -305,6 +305,14 @@ type SessionDecision struct {
 	// ([SessionBasis.Base]) — always in a new box, and never one whose
 	// skills this turn's guard holds, so the guard is armed empty.
 	Base bool
+
+	// Exact says the brief the launch handed is the one told by a reading
+	// of what the kept session holds ([SessionContinuation.Exact]): its
+	// box's harness answered the release the reading was read for, so the
+	// run reads that telling's brief and holds what that telling held.
+	// False where the launch handed the brief told by the save point, or
+	// continues no kept session.
+	Exact bool
 }
 
 // SessionContinuation is how a launch continues a session in whatever box it
@@ -326,6 +334,50 @@ type SessionContinuation struct {
 	// them ([Continuation.Told]). Of the session its conversation's last turn
 	// left, the fresh brief's, which Replaced holds whole.
 	Told sandbox.BriefTold
+
+	// Exact is the briefs told by a reading of what the kept capture holds
+	// ([HoldingsAsker]), beside Brief and Replaced, which tell every call
+	// after the session's save point; nil where no reading was read, or its
+	// telling is not to be handed. Only for a kept capture of the turn's
+	// own, never for a Base: a reading is read only of a capture whose
+	// harness was cut off ([SessionBasis.MayLackBrief]). The launch hands
+	// one of them only to a box whose harness answers the release the
+	// reading was read for ([ExactTelling.Resumer]), and Brief or Replaced
+	// to every other box, and drops it alone where the seat's budget cannot
+	// carry it but carries the rest (internal/engine's continuedFloor).
+	Exact *ExactTelling
+}
+
+// ExactTelling is a relaunch's briefs told by a reading of what the kept
+// session it continues holds ([HoldingsAsker]): told only the calls of the
+// round the reading does not find the session holding, where the briefs
+// beside them ([SessionContinuation.Brief], [SessionContinuation.Replaced])
+// tell every call after the session's save point.
+//
+// READ FOR THE RELEASE THAT WROTE THE SESSION ([SessionBasis.Release]), the
+// relaunch's best word for the release that resumes it, since the relaunch's
+// box is acquired inside the launch, after its briefs are written: so the
+// launch hands these briefs only where the box's harness, asked before its
+// brief is chosen, answers exactly Resumer (internal/sandbox's continueKept),
+// and every other box the briefs told by the save point, which tell more and
+// never less.
+type ExactTelling struct {
+	// Resumer is the release the reading was read for
+	// (sandbox.HoldingsAsk.Resumer), "2.1.310": the one a box's harness must
+	// answer for Brief or Replaced to be handed to it. "" matches no box.
+	Resumer string
+
+	// Brief is the run's prompt in the box the session was last worked in,
+	// and Replaced in any other, as [SessionContinuation]'s are; "" where
+	// the telling wrote none for that box, which hands the brief told by the
+	// save point there.
+	Brief, Replaced string
+
+	// Told is what Brief and Replaced told of the round, the reads they
+	// counted without listing them ([Continuation.Told]): recorded on the
+	// job the launch opens in place of [SessionContinuation.Told] where it
+	// hands either.
+	Told sandbox.BriefTold
 }
 
 // SessionBasis is the kept session a relaunch of the turn continues, or why it
@@ -343,6 +395,15 @@ type SessionBasis struct {
 	// that member runs another.
 	Harness string
 
+	// Release is the release of Harness that wrote the session, as the
+	// turn's row on the executor log records it (the `--version` its job's
+	// box answered before its harness started): what a reading of what a
+	// cut-off session holds is read for ([HoldingsAsker],
+	// [ExactTelling.Resumer]), the relaunch's best word for the release
+	// that resumes it. "" for a base and where the row recorded none, which
+	// no reading is read for.
+	Release string
+
 	// Through and NoteCursor are what the session accounts for, so the brief
 	// that continues it carries what came after: its save point — how many of
 	// the round's calls the run's log had taken at the read the capture was
@@ -356,6 +417,10 @@ type SessionBasis struct {
 	// read the record marks unanswered, and is stopped there again by the
 	// turn's carried reads where that mark landed after the capture was
 	// stamped ([Runner.notesHeldBy]). Zero holds none of the round's calls.
+	// Through is what the record says the session holds, the one test by the
+	// save point ([heldAt]); of a session cut off, a reading of its archive
+	// may find it holding more, by each call's own key ([HoldingsAsker]), and
+	// the brief told by that reading tells none of those either.
 	Through    int
 	NoteCursor int
 
@@ -479,6 +544,21 @@ type SessionProber interface {
 	ProbeSession(ctx context.Context) SessionBasis
 }
 
+// HoldingsAsker is an [AgentLauncher] that reads which of a round's calls the
+// cut-off kept session a relaunch continues holds (internal/sandbox's
+// HoldingsOf), off the capture basis names, through the runner of the member
+// that drives basis.Harness, for ask's resumer: a relaunch that continues such
+// a session is then told only the calls the session lacks ([ExactTelling]).
+//
+// A VALUE ONLY, NEVER AN ERROR: the zero value is no reading
+// (sandbox.SessionHoldings), which the launcher logs with its reason, and the
+// relaunch is then told every call after the session's save point, which is
+// never wrong. OPTIONAL: a launcher without it is asked nothing, and its
+// relaunches are told every call after the save point.
+type HoldingsAsker interface {
+	SessionHoldings(ctx context.Context, basis SessionBasis, ask sandbox.HoldingsAsk) sandbox.SessionHoldings
+}
+
 // executeAsAgentRun launches the executor as a detached agentic run.
 //
 // It builds the surface and the prompt, hands them to the launcher, and
@@ -570,8 +650,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// AND JUDGED ON THAT LEAD, known before the budget is asked: where
 		// its harness may hand the session to its model as a summary, the
 		// telling of a session that may be one is handed ([firstRequest]).
-		briefs.kept, briefs.keptHolds = r.keptTellings(ctx, basis, collected, round, nil, history, built, fresh,
-			"").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
+		briefs.kept, briefs.keptHolds, briefs.exact = r.keptTellings(ctx, basis, collected, round, nil, history,
+			built, fresh, "").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -832,7 +912,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// after this, below, nor one an earlier answer it tells approved. And
 	// nothing of the closed rounds listed again: the run holds no session that
 	// shows them, and its brief renders every one of them as work already done.
-	freshTold, freshOmitted := r.calledAfter(ctx, round, new(0), nil, history, toldAs{fresh: true,
+	freshTold, freshOmitted, _ := r.calledAfter(ctx, round, new(0), nil, history, toldAs{fresh: true,
 		leads: slices.Concat(leadsHeld(carry, state.Round), answers.held), rendered: history}, built, fence)
 	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
 	// ([Runner.executeAsAgentRun]): the prior rounds' payloads and the calls
@@ -909,7 +989,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if carry.keeps() {
 		switch {
 		case basis.Continues():
-			briefs.kept, briefs.keptHolds = kept.led(ctx, r, lead, own)
+			briefs.kept, briefs.keptHolds, briefs.exact = kept.led(ctx, r, lead, own)
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its

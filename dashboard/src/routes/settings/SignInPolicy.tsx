@@ -1,109 +1,170 @@
 /**
- * Settings › Sign-in policy: how a person signs in, as this node enforces it.
- *
- * # What the engine enforces, on the node that answered
- *
- * The answer (`sign_in_policy`, an administrator's) is the posture the sign-in
- * code itself reads: whether a second factor is required, the shortest
- * password, how long a session lives from sign-in and unused, and how long a
- * proof of identity authorises a sensitive gesture, each with its default
- * applied where the node's file writes none. It is TIER A, written in each
- * node's own `crewlet.yaml` (`api.auth`), so it is THIS node's and nodes of
- * one fleet may differ: the page names the node rather than presenting the
- * reading as the company's. Read only: it changes with an edit to that file
- * and a restart.
- *
- * # Drawn as every read-only settings page is
- *
- * Each group is a card holding a [SettingsTable], the shape Settings › Limits
- * takes: the setting by its name (its key under `api.auth` behind the table's
- * copy control), the value enforced, and where the value comes from. The session's idle limit is the
- * one value no file sets (an engine constant, see `queries.SignInPolicy`), and
- * its source says so rather than pointing at a key that does not exist.
+ * Settings › Sign-in policy: the company's `sign_in` block, changed in place
+ * through the shared setting editor, beside this node's limits (ADR-0152).
  */
 
-import { Card, InlineCode, SettingsTable, PageNote } from "@crewlethq/ui";
-import { ClockGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
+import { Callout, Card, InlineCode, PageNote, SettingsTable } from "@crewlethq/ui";
+import { LimitSetting } from "~/components/LimitSetting.tsx";
+import { TextSetting } from "~/components/TextSetting.tsx";
 import { QueryState } from "~/components/common.tsx";
+import type { SignInPolicyAnswer } from "~/contract/signin.ts";
 import { fmtSetting, plural } from "~/lib/format.ts";
-import { FROM_NODE_FILE, NODE_FILE_CHANGE } from "~/lib/nodeFile.ts";
+import type { LimitRow } from "~/lib/limits.ts";
+import { FROM_NODE_FILE } from "~/lib/nodeFile.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 
-/** Where a value set in the node's file comes from. */
-const FROM_FILE = FROM_NODE_FILE;
+const AREA = "Sign-in policy";
+const REREAD = "Reload to see the sign-in policy as it is now.";
+
+/** The company document's keys, as the engine's rows name them. */
+const KEYS = {
+  password: "sign_in.min_password_length",
+  lifetime: "sign_in.session_lifetime_seconds",
+  idle: "sign_in.idle_timeout_seconds",
+  stepUp: "sign_in.step_up_seconds",
+} as const;
+
+const characters = (n: number) => plural(n, "character");
+const factorWords = (required: boolean) =>
+  required ? "Required at every sign-in" : "Optional, each person chooses";
 
 export function SignInPolicy() {
-  const { data, loading, error, refusal, detail } = useQuery("sign_in_policy", undefined, {
+  const { data, loading, error, refusal, detail, refetch } = useQuery("sign_in_policy", undefined, {
     pollMs: 300_000,
   });
   return (
     <>
       <PageNote>
-        {/* THE NODE BY NAME AND THE FILE IN WORDS: the keys are on each row's
-            copy control, for the operator who edits the file. */}
-        {data ? (
-          <>
-            How node <InlineCode>{data.node}</InlineCode> signs people in. Each value is set in its
-            configuration file and {NODE_FILE_CHANGE}.
-          </>
-        ) : (
-          <>Each value is set in the node&rsquo;s configuration file and {NODE_FILE_CHANGE}.</>
-        )}
+        How people sign in and how long a session lasts, within this node&rsquo;s limits.
       </PageNote>
       <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
-        {/* In the section body's own rhythm, as every Settings page stacks. */}
-        {data && (
-          <>
-            <Card padding="none">
-              <Card.Header icon={<ShieldUserGlyph size="sm" />}>
-                <Card.Title id="sign-in-signing">Signing in</Card.Title>
-              </Card.Header>
-              <SettingsTable aria-labelledby="sign-in-signing">
-                <SettingsTable.Row
-                  label="Two-step verification"
-                  settingKey="api.auth.totp"
-                  source={FROM_FILE}
-                >
-                  {data.policy.second_factor === "required"
-                    ? "Required for every password sign-in"
-                    : "Optional, each person chooses"}
-                </SettingsTable.Row>
-                <SettingsTable.Row
-                  label="Shortest password"
-                  settingKey="api.auth.min_password_length"
-                  source={FROM_FILE}
-                >
-                  {plural(data.policy.min_password_length, "character")}
-                </SettingsTable.Row>
-              </SettingsTable>
-            </Card>
-            <Card padding="none">
-              <Card.Header icon={<ClockGlyph size="sm" />}>
-                <Card.Title id="sign-in-sessions">Sessions</Card.Title>
-              </Card.Header>
-              <SettingsTable aria-labelledby="sign-in-sessions">
-                <SettingsTable.Row
-                  label="Longest a session lives"
-                  settingKey="api.auth.session.absolute"
-                  source={FROM_FILE}
-                >
-                  {fmtSetting(data.policy.session_absolute_seconds)}
-                </SettingsTable.Row>
-                <SettingsTable.Row label="Signed out when unused for" source="Fixed by the engine">
-                  {fmtSetting(data.policy.session_idle_seconds)}
-                </SettingsTable.Row>
-                <SettingsTable.Row
-                  label="A sensitive change asks again after"
-                  settingKey="api.auth.session.step_up"
-                  source={FROM_FILE}
-                >
-                  {fmtSetting(data.policy.step_up_seconds)}
-                </SettingsTable.Row>
-              </SettingsTable>
-            </Card>
-          </>
-        )}
+        {data && <Policy answer={data} onApplied={refetch} />}
       </QueryState>
     </>
   );
+}
+
+function Policy({ answer, onApplied }: { answer: SignInPolicyAnswer; onApplied: () => void }) {
+  const row = (key: string): LimitRow | undefined => answer.settings.find((r) => r.key === key);
+  const password = row(KEYS.password);
+  const lifetime = row(KEYS.lifetime);
+  const idle = row(KEYS.idle);
+  const stepUp = row(KEYS.stepUp);
+  const held = heldWords(answer);
+  const limit = (cap: LimitRow | undefined, label: string, words?: (n: number) => string) =>
+    cap && (
+      <LimitSetting
+        cap={cap}
+        label={label}
+        area={AREA}
+        reread={REREAD}
+        onApplied={onApplied}
+        {...(words ? { words } : {})}
+      />
+    );
+  return (
+    <>
+      <Card padding="none">
+        <Card.Header>
+          <Card.Title id="sign-in-signing">Signing in</Card.Title>
+        </Card.Header>
+        <SettingsTable aria-labelledby="sign-in-signing">
+          <TextSetting
+            row={answer.second_factor_setting}
+            label="Two-step verification"
+            area={AREA}
+            reread={REREAD}
+            onApplied={onApplied}
+            words={(v) => factorWords(v === true)}
+            switchWords={{ on: "Required", off: "Optional" }}
+            helper="Required asks every password sign-in for a code from an authenticator app. Optional lets a password alone sign people in."
+          />
+          {limit(password, "Shortest password", characters)}
+        </SettingsTable>
+      </Card>
+      <Card padding="none">
+        <Card.Header subtitle="A shorter limit ends sessions past it at their next request. A longer one applies to people who sign in after it.">
+          <Card.Title id="sign-in-sessions">Sessions</Card.Title>
+        </Card.Header>
+        <SettingsTable aria-labelledby="sign-in-sessions">
+          {limit(lifetime, "Longest a session lives")}
+          {limit(idle, "Signed out when unused for")}
+          {limit(stepUp, "A sensitive change asks again after")}
+        </SettingsTable>
+      </Card>
+      {held.length > 0 && (
+        <Callout variant="info" role="status">
+          <span>
+            Node <InlineCode>{answer.node}</InlineCode> holds {held.join(", ")}, the limit its
+            operator set.
+          </span>
+        </Callout>
+      )}
+      <Card padding="none">
+        <Card.Header subtitle="Set in the node’s configuration file. The company’s choices stay within them.">
+          <Card.Title id="sign-in-limits">This node&rsquo;s limits</Card.Title>
+        </Card.Header>
+        <SettingsTable aria-labelledby="sign-in-limits">
+          <SettingsTable.Row
+            label="Two-step verification"
+            settingKey="api.auth.limits.second_factor"
+            source={FROM_NODE_FILE}
+          >
+            {answer.limits.second_factor === "required"
+              ? "Always required"
+              : "The company may make it optional"}
+          </SettingsTable.Row>
+          <SettingsTable.Row
+            label="Shortest password the company may allow"
+            settingKey="api.auth.limits.min_password_length"
+            source={FROM_NODE_FILE}
+          >
+            {characters(answer.limits.min_password_length)}
+          </SettingsTable.Row>
+          <SettingsTable.Row
+            label="Longest session"
+            settingKey="api.auth.limits.max_session_lifetime"
+            source={FROM_NODE_FILE}
+          >
+            {fmtSetting(answer.limits.max_session_lifetime_seconds)}
+          </SettingsTable.Row>
+          <SettingsTable.Row
+            label="Longest unused session"
+            settingKey="api.auth.limits.max_idle_timeout"
+            source={FROM_NODE_FILE}
+          >
+            {fmtSetting(answer.limits.max_idle_timeout_seconds)}
+          </SettingsTable.Row>
+          <SettingsTable.Row
+            label="Longest step-up window"
+            settingKey="api.auth.limits.max_step_up"
+            source={FROM_NODE_FILE}
+          >
+            {fmtSetting(answer.limits.max_step_up_seconds)}
+          </SettingsTable.Row>
+        </SettingsTable>
+      </Card>
+    </>
+  );
+}
+
+/** Each company value this node enforces lower than the document says, in words. */
+export function heldWords(answer: SignInPolicyAnswer): string[] {
+  const out: string[] = [];
+  const value = (key: string) => answer.settings.find((r) => r.key === key)?.value;
+  if (answer.second_factor_setting.value === false && answer.policy.second_factor === "required") {
+    out.push("two-step verification to required");
+  }
+  const password = value(KEYS.password);
+  if (password !== undefined && answer.policy.min_password_length > password) {
+    out.push(`the shortest password to ${characters(answer.policy.min_password_length)}`);
+  }
+  const lower = (key: string, enforced: number, what: string) => {
+    const v = value(key);
+    if (v !== undefined && enforced < v) out.push(`${what} to ${fmtSetting(enforced)}`);
+  };
+  lower(KEYS.lifetime, answer.policy.session_absolute_seconds, "sessions");
+  lower(KEYS.idle, answer.policy.session_idle_seconds, "an unused session");
+  lower(KEYS.stepUp, answer.policy.step_up_seconds, "the step-up window");
+  return out;
 }

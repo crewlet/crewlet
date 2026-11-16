@@ -475,6 +475,8 @@ func TestGitRoutesAreNotPublished(t *testing.T) {
 		{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack"},
 		{http.MethodPost, "/git/r.git/git-upload-pack"},
 		{http.MethodPost, "/git/r.git/git-receive-pack"},
+		{http.MethodGet, "/git/r/-/raw?rev=" + strings.Repeat("a", 40) + "&path=a"},
+		{http.MethodGet, "/git/r/-/archive.zip?rev=" + strings.Repeat("a", 40)},
 		{http.MethodGet, "/gitlet/repos"},
 		{http.MethodGet, "/gitlet/repos/r"},
 		{http.MethodPost, "/gitlet/repos/r/verify"},

@@ -64,7 +64,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
-import { warningWords } from "~/protocol/configAnswer.ts";
+import { brings, ConfigWarnings } from "~/components/ConfigWarnings.tsx";
 import { refuse, useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { remedyOffer, scopeRemedy } from "~/lib/remedy.ts";
 
@@ -130,25 +130,19 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
       {state.kind === "checking" && <span className="t-caption">Checking with the engine…</span>}
       {state.kind === "saving" && <span className="t-caption">Saving…</span>}
       {state.kind === "unchanged" && <span className="t-caption">Already the limit.</span>}
-      {state.kind === "warned" && (
-        <Callout variant="warning">
-          <ul className="ceiling-warnings">
-            {state.warnings.map((w) => (
-              <li key={`${w.path}:${w.message}`}>{warningWords(w)}</li>
-            ))}
-          </ul>
-        </Callout>
-      )}
+      {state.kind === "warned" && <ConfigWarnings warnings={state.warnings} title={brings} />}
       {state.kind === "refused" && (
-        <Callout variant="danger">
-          <span>{state.message}</span>
-          {state.reload && (
-            <div className="row gap-2">
+        <Callout
+          variant="danger"
+          action={
+            state.reload && (
               <Button size="small" variant="secondary" onClick={onReload}>
                 Reload
               </Button>
-            </div>
-          )}
+            )
+          }
+        >
+          {state.message}
         </Callout>
       )}
     </div>

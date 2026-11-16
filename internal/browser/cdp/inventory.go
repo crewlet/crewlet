@@ -61,6 +61,8 @@ var inventory = []declared{
 	RuntimeReleaseObject,
 	runtimeRunIfWaitingForDebugger,
 	RuntimeBindingCalled,
+	RuntimeConsoleAPICalled,
+	RuntimeExceptionThrown,
 	RuntimeExecutionContextCreated,
 	RuntimeExecutionContextDestroyed,
 	RuntimeExecutionContextsCleared,
@@ -140,7 +142,11 @@ var inventory = []declared{
 	IORead,
 	// Emulation
 	EmulationSetDeviceMetricsOverride,
+	EmulationSetEmulatedMedia,
 	EmulationSetFocusEmulationEnabled,
+	// Log
+	LogEnable,
+	LogEntryAdded,
 }
 
 // testOnly is the commands and events this package's own tests send and

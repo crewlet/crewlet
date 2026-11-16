@@ -1185,11 +1185,11 @@ describe("a phase whose body was withheld", () => {
         store.applySeats([{ agent_id: "a-dev", role: "Dev", handle: "dev" }] as never);
       },
     );
-    const lead = screen.getByRole("link", { name: "Jane Founder" });
+    const lead = screen.getByRole("link", { name: "Open Jane Founder" });
     expect(lead.getAttribute("href")).toContain("jane");
-    expect(lead.closest(".crewlet-callout")?.textContent).toBe(
-      "Only Jane Founder (this seat’s lead) and admins can see what it says.",
-    );
+    expect(
+      lead.closest(".crewlet-callout")?.querySelector(".crewlet-callout__content")?.textContent,
+    ).toBe("Only Jane Founder (this seat’s lead) and admins can see what it says.");
   });
 });
 

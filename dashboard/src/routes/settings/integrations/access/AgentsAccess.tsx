@@ -59,7 +59,7 @@ import type {
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { useAssistantDraft, useDraftState, writeTo } from "~/app/assistant/draft.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { asSentence, fmtDate, relTime } from "~/lib/format.ts";
+import { asSentence, fmtDate } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Clocked } from "../Clocked.tsx";
@@ -135,6 +135,7 @@ import {
 } from "./logic.ts";
 import { laneWords, RETIRED_GENERIC } from "./words.ts";
 import { AddGrantDialog, GrantsCell } from "./Grants.tsx";
+import { ago } from "~/lib/ago.ts";
 
 export interface AgentsAccessProps {
   /** The integration's key, which the access routes are keyed on. */
@@ -490,7 +491,6 @@ export const AgentsAccess = memo(function AgentsAccess({
               <Select
                 size="sm"
                 width="full"
-                menuClassName="agent-access-menu"
                 multiple
                 ariaLabel={`${seat.name}'s ${lane.name} permissions`}
                 {...refusedProps(seat, lane, "level")}
@@ -510,7 +510,6 @@ export const AgentsAccess = memo(function AgentsAccess({
               <Select
                 size="sm"
                 width="full"
-                menuClassName="agent-access-menu"
                 ariaLabel={`${seat.name}'s ${lane.name} access`}
                 {...refusedProps(seat, lane, "level")}
                 value={want.level ?? ""}
@@ -1083,7 +1082,7 @@ function laneMessage({
             {at && (
               <>
                 {" "}
-                <Clocked text={(now) => relTime(at, now)} />
+                <Clocked text={(now) => ago(at, now, { clock: true })} />
               </>
             )}{" "}
             by somebody else
@@ -1104,14 +1103,13 @@ function laneMessage({
     );
   } else if (o.changed_by_hand_at && saved.plan.length > 0) {
     const at = o.changed_by_hand_at;
-    const when = <Clocked text={(now) => relTime(at, now)} />;
     const levelMoved = saved.desired.level !== o.level;
     body = (
       <Callout
         variant="warning"
         title={
           <>
-            Changed at {lane.name} {when}
+            Changed at {lane.name} <Clocked text={(now) => ago(at, now, { clock: true })} />
           </>
         }
         action={

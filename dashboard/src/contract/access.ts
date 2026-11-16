@@ -252,6 +252,8 @@ export interface AccessOptions {
   grant_whole?: string;
   /** Where a grant on the whole connection applies ("the account", "the Organization"). */
   grant_account?: string;
+  /** When this offer was read from the vendor; absent where it was not read. */
+  read_at?: string;
 }
 
 /** What the company document asks for one seat on one lane. */

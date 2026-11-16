@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
+	"github.com/crewlet/crewlet/internal/artifacts/commentanchor"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -274,6 +275,99 @@ func (v *vault) ClearBrand(_ context.Context, c artifactsdomain.Call) (artifacts
 	return v.wrote("clear_brand", c), nil
 }
 
+// theThread is the thread every comment read answers, and a write naming it the
+// refusal a comment write has.
+var theThread = uuid.NewSHA1(uuid.NameSpaceOID, []byte("the thread"))
+
+func (v *vault) Threads(_ context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error) {
+	if id == refused {
+		return nil, fmt.Errorf("%w: %s", artifactsdomain.ErrPurged, id)
+	}
+	return []artifactsdomain.CommentThread{{Artifact: id, ID: theThread, Version: 2,
+		Anchor:  commentanchor.Anchor{Kind: commentanchor.KindHTML, Page: "index.html", Name: "summary"},
+		Remarks: []artifactsdomain.Remark{{Body: "Looks good", Mentions: []string{"pm"}}}}}, nil
+}
+
+func (v *vault) Thread(_ context.Context, id artifacts.ID, thread uuid.UUID) (artifactsdomain.CommentThread, error) {
+	if thread != theThread {
+		return artifactsdomain.CommentThread{}, fmt.Errorf("%w: %s", artifactsdomain.ErrCommentNotFound, thread)
+	}
+	return artifactsdomain.CommentThread{Artifact: id, ID: thread, Status: artifactsdomain.ThreadResolved,
+		ResolvedVersion: 3}, nil
+}
+
+func (v *vault) WorkItems(_ context.Context, id artifacts.ID) ([]string, error) {
+	if id == refused {
+		return nil, fmt.Errorf("%w: %s", artifactsdomain.ErrPurged, id)
+	}
+	return []string{"ENG-7", "ENG-9"}, nil
+}
+
+func (v *vault) Inbox(_ context.Context, q artifactsdomain.InboxQuery) (artifactsdomain.InboxPage, error) {
+	if q.Cursor == "bad" {
+		return artifactsdomain.InboxPage{}, fmt.Errorf("%w: %q", artifactsdomain.ErrBadCursor, q.Cursor)
+	}
+	return artifactsdomain.InboxPage{Handle: q.Handle, Notices: []artifactsdomain.InboxNotice{{
+		RecordID: "r-1", Op: artifactsdomain.OpCommentReply, Thread: theThread.String(), Excerpt: string(q.Snoozed),
+		Reason: artifactsdomain.NotifyMention}}, Heads: map[string]artifactsdomain.Head{"a": {Title: "Kept"}},
+		Next: q.Cursor + "+", Level: q.Fresh.Level}, nil
+}
+
+func (v *vault) NoticeThreads(_ context.Context, refs []artifactsdomain.ThreadRef, _ statelog.Freshness) (
+	[]*artifactsdomain.NoticeThread, error) {
+	out := make([]*artifactsdomain.NoticeThread, len(refs))
+	for i, ref := range refs {
+		if ref.Thread == theThread.String() {
+			out[i] = &artifactsdomain.NoticeThread{Status: artifactsdomain.ThreadResolved, Remarks: 2}
+		}
+	}
+	return out, nil
+}
+
+func (v *vault) MarkInbox(_ context.Context, c artifactsdomain.Call, in artifactsdomain.MarkInput) (
+	artifactsdomain.Written, error) {
+	return v.wrote(fmt.Sprintf("mark_inbox:%s:%s", strings.Join(in.Gesture.Read, ","), in.Seen), c), nil
+}
+
+func (v *vault) OpenThread(_ context.Context, c artifactsdomain.Call, in artifactsdomain.ThreadInput) (
+	artifactsdomain.Commented, error) {
+	w := v.wrote(fmt.Sprintf("open_thread:%d:%s:%s:%s:%d:%s", in.Version, in.Anchor.Name, in.Quote,
+		in.CropType, len(in.Crop), in.Notify.Agents[0].Seat), c)
+	return artifactsdomain.Commented{Thread: theThread, Remark: theThread, Result: w.Result}, nil
+}
+
+func (v *vault) Reply(_ context.Context, c artifactsdomain.Call, in artifactsdomain.ReplyInput) (
+	artifactsdomain.Commented, error) {
+	if in.Thread != theThread {
+		return artifactsdomain.Commented{}, fmt.Errorf("%w: %s", artifactsdomain.ErrCommentLimit, in.Thread)
+	}
+	w := v.wrote("reply:"+in.Body+":"+in.ReplyTo.String(), c)
+	return artifactsdomain.Commented{Thread: in.Thread, Result: w.Result}, nil
+}
+
+func (v *vault) EditRemark(_ context.Context, c artifactsdomain.Call, in artifactsdomain.RemarkEdit) (
+	artifactsdomain.Written, error) {
+	if in.Remark != theThread {
+		return artifactsdomain.Written{}, artifactsdomain.ErrNotTheAuthor
+	}
+	return v.wrote("edit_remark:"+in.Body, c), nil
+}
+
+func (v *vault) RemoveRemark(_ context.Context, c artifactsdomain.Call, in artifactsdomain.RemarkRemoval) (
+	artifactsdomain.Written, error) {
+	return v.wrote(fmt.Sprintf("remove_remark:%t", in.Moderated), c), nil
+}
+
+func (v *vault) Resolve(_ context.Context, c artifactsdomain.Call, in artifactsdomain.ResolveInput) (
+	artifactsdomain.Written, error) {
+	return v.wrote(fmt.Sprintf("resolve:%d", in.Version), c), nil
+}
+
+func (v *vault) Reopen(_ context.Context, c artifactsdomain.Call, in artifactsdomain.ReopenInput) (
+	artifactsdomain.Written, error) {
+	return v.wrote("reopen:"+in.Thread.String(), c), nil
+}
+
 func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -392,6 +486,58 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 		contrast.Pair.Ratio != 2.66 || contrast.Pair.ForegroundColor != "#999999" {
 		t.Errorf("a contrast refusal crossed as %v, without the pair that refused it", err)
 	}
+	if threads, err := a.Threads(ctx, id); err != nil || len(threads) != 1 || threads[0].ID != theThread ||
+		threads[0].Anchor.Name != "summary" || threads[0].Remarks[0].Mentions[0] != "pm" {
+		t.Errorf("threads = (%+v, %v)", threads, err)
+	}
+	if _, err := a.Threads(ctx, refused); !errors.Is(err, artifactsdomain.ErrPurged) {
+		t.Errorf("a purged artifact's threads crossed as %v", err)
+	}
+	if th, err := a.Thread(ctx, id, theThread); err != nil || th.Status != artifactsdomain.ThreadResolved ||
+		th.ResolvedVersion != 3 {
+		t.Errorf("thread = (%+v, %v)", th, err)
+	}
+	if _, err := a.Thread(ctx, id, uuid.New()); !errors.Is(err, artifactsdomain.ErrCommentNotFound) {
+		t.Errorf("a missing thread's refusal crossed as %v", err)
+	}
+	if items, err := a.WorkItems(ctx, id); err != nil || len(items) != 2 || items[1] != "ENG-9" {
+		t.Errorf("work items = (%v, %v)", items, err)
+	}
+	if _, err := a.WorkItems(ctx, refused); !errors.Is(err, artifactsdomain.ErrPurged) {
+		t.Errorf("a purged artifact's work items crossed as %v", err)
+	}
+	if p, err := a.Inbox(ctx, artifactsdomain.InboxQuery{Handle: "jane", Snoozed: "only", Cursor: "c",
+		Fresh: stale}); err != nil || p.Handle != "jane" || len(p.Notices) != 1 || p.Notices[0].Excerpt != "only" ||
+		p.Notices[0].Op != artifactsdomain.OpCommentReply || p.Heads["a"].Title != "Kept" || p.Next != "c+" ||
+		p.Level != stale.Level {
+		t.Errorf("inbox = (%+v, %v)", p, err)
+	}
+	if _, err := a.Inbox(ctx, artifactsdomain.InboxQuery{Handle: "jane", Cursor: "bad"}); !errors.Is(err,
+		artifactsdomain.ErrBadCursor) {
+		t.Errorf("a bad inbox cursor crossed as %v", err)
+	}
+	if cards, err := a.NoticeThreads(ctx, []artifactsdomain.ThreadRef{{Artifact: "a", Thread: "gone"},
+		{Artifact: "a", Thread: theThread.String()}}, stale); err != nil || len(cards) != 2 || cards[0] != nil ||
+		cards[1] == nil || cards[1].Remarks != 2 {
+		t.Errorf("notice threads = (%+v, %v)", cards, err)
+	}
+	if got, err := a.OpenThread(ctx, jane, artifactsdomain.ThreadInput{Artifact: id, Body: "Total?",
+		Version: 2, Anchor: commentanchor.Anchor{Kind: commentanchor.KindHTML, Page: "index.html",
+			Name: "summary"}, Quote: "Is this the right total?", Crop: []byte("\x89PNG"),
+		CropType: "image/png", Notify: artifactsdomain.CommentNotify{Agents: []artifactsdomain.Recipient{{
+			Seat: "pm", Reason: artifactsdomain.NotifyOwner, Addressed: true}}},
+	}); err != nil || got.Thread != theThread {
+		t.Errorf("open thread = (%+v, %v)", got, err)
+	}
+	if _, err := a.Reply(ctx, jane, artifactsdomain.ReplyInput{Artifact: id, Thread: uuid.New(),
+		Body: "Again"}); !errors.Is(err, artifactsdomain.ErrCommentLimit) {
+		t.Errorf("a full thread's refusal crossed as %v", err)
+	}
+	if _, err := a.EditRemark(ctx, jane, artifactsdomain.RemarkEdit{Body: "Mine",
+		RemarkRef: artifactsdomain.RemarkRef{Artifact: id, Thread: theThread, Remark: uuid.New()},
+	}); !errors.Is(err, artifactsdomain.ErrNotTheAuthor) {
+		t.Errorf("an edit of somebody else's remark crossed as %v", err)
+	}
 	_, err = a.AdoptBrand(ctx, jane, artifactsdomain.BrandAdoptInput{Version: 98})
 	var incomplete *artifactsdomain.BrandIncomplete
 	if !errors.Is(err, artifactsdomain.ErrBrandIncomplete) || !errors.As(err, &incomplete) ||
@@ -434,6 +580,35 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 			return err
 		},
 		"clear_brand": func() error { _, err := a.ClearBrand(ctx, jane); return err },
+		"reply": func() error {
+			_, err := a.Reply(ctx, jane, artifactsdomain.ReplyInput{Artifact: id, Thread: theThread,
+				Body: "Agreed", ReplyTo: theThread})
+			return err
+		},
+		"edit_remark": func() error {
+			_, err := a.EditRemark(ctx, jane, artifactsdomain.RemarkEdit{Body: "Agreed, mostly",
+				RemarkRef: artifactsdomain.RemarkRef{Artifact: id, Thread: theThread, Remark: theThread}})
+			return err
+		},
+		"remove_remark": func() error {
+			_, err := a.RemoveRemark(ctx, jane, artifactsdomain.RemarkRemoval{Moderated: true,
+				RemarkRef: artifactsdomain.RemarkRef{Artifact: id, Thread: theThread, Remark: theThread}})
+			return err
+		},
+		"resolve": func() error {
+			_, err := a.Resolve(ctx, jane, artifactsdomain.ResolveInput{Artifact: id, Thread: theThread, Version: 3})
+			return err
+		},
+		"reopen": func() error {
+			_, err := a.Reopen(ctx, jane, artifactsdomain.ReopenInput{Artifact: id, Thread: theThread})
+			return err
+		},
+		"mark_inbox": func() error {
+			_, err := a.MarkInbox(ctx, jane, artifactsdomain.MarkInput{Gesture: artifactsdomain.MarkGesture{
+				Read: []string{"r-1"}}, Seen: statelog.Position{Stream: "CREWLET_ARTIFACTS_LOG", Generation: 1,
+				Seq: 9}})
+			return err
+		},
 	} {
 		if err := write(); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -446,7 +621,11 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 		"restore:jane", "purge:jane", "add_asset:jane", "remove_asset:jane", "pin:true:jane", "opened:jane", "read_elevated:4:jane",
 		"create_folders:Reports/Weekly:jane", "rename_folder:f-1:Q3:jane", "move_folder:f-1:f-2:jane",
 		"remove_folder:f-1:jane", "move:f-2:jane",
-		"adopt_brand:7:jane", "clear_brand:jane"} {
+		"adopt_brand:7:jane", "clear_brand:jane",
+		"open_thread:2:summary:Is this the right total?:image/png:4:pm:jane",
+		"reply:Agreed:" + theThread.String() + ":jane", "edit_remark:Agreed, mostly:jane",
+		"remove_remark:true:jane", "resolve:3:jane", "reopen:" + theThread.String() + ":jane",
+		"mark_inbox:r-1:CREWLET_ARTIFACTS_LOG@1:9:jane"} {
 		found := false
 		for _, got := range v.calls {
 			found = found || got == want

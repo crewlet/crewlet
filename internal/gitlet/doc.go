@@ -25,6 +25,11 @@
 // subject and by nothing else, receive-pack never runs in a cache, and git is
 // told `ok` only from a push's applied row (ADR-0084).
 //
+// A LISTING OF REPOSITORIES (repolisting.go, apply_repotallies.go) is read by name or by last
+// push over an index of each kind, with each row's card read where asked; code_repo_tallies
+// counts the repositories by owner, visibility, kind and status, kept by the lifecycle applies
+// and re-derived by the applier.
+//
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
 // One object a push — one PUT, and one GET on every Gitlet node that installs it,
@@ -162,7 +167,9 @@
 // state (replicated 0097), a repository's, the company's in a state —
 // newest first, testing every filter that index does not seek on the rows the
 // page read, so a page is the rows it read and never scans past its limit
-// for the few it keeps. One change ([ReadChange]) is read by its number on
+// for the few it keeps. A live state asked by when its changes moved
+// ([ChangeSortUpdated]) walks its lifecycle's and its conversations' indexes
+// in step (changesort.go). One change ([ReadChange]) is read by its number on
 // its repository, its revisions paged newest first beside it. Both are held to
 // the asker's grant on the change's repository ([JudgeRead]): a listing that
 // names a repository, and a read of one change, are refused whole where the
@@ -176,6 +183,10 @@
 // where each finding is in the revision asked about, and the floor those
 // reads by object id are asked at — is decided once, over those rows
 // (revisionread.go), for every surface that shows it.
+//
+// ITS COUNTS (apply_counts.go, counts.go): code_repos counts each repository's changes by
+// state and code_change_tallies those in use by owner and visibility, kept by every apply and
+// re-derived when their rules change; a counts read sums the tallies the asker's grant reads.
 //
 // # A change's conversation is rows on its own subject
 //
@@ -298,6 +309,14 @@
 // so moves only by a merge whose preconditions one snapshot proved, or by a
 // person's own push under direct_push persons, which is that person's recorded
 // override; never by a seat's push, which every protection refuses.
+//
+// A LISTING'S CARDS (changecards.go): asked with [ReadQuery.Cards], each listed change's
+// conversation counts, its reviewers' faces, its head's [CheckRollup] and a recent
+// ejection, a statement a part over the page's ids and one rollup a head.
+//
+// A CHANGE'S PAGE (changepage.go): its detail names its participants, a reviewer row when the
+// record behind it landed (one notice of that record, none past the notices' horizon), a finding
+// when its review landed, and [ReadQuery.FindingPaths] counts its findings by path.
 //
 // # A change wakes the seats its records concern
 //
@@ -852,6 +871,10 @@
 // level its caller states: a comparison's two sides cost one barrier, and are
 // read at one moment.
 //
+// A refs listing is also read by when each branch moved (code_refs_moved_idx,
+// replicated 0170), narrowed by a bounded find ([MaxRefsScanned]), and in detail
+// ([RefListing]): its mover, protection, change and the asker's deletion verdict.
+//
 // A repository's PUSHES are read in LOG ORDER: code_pushes_repo_idx is keyed
 // (repo_id, position, push_id) (replicated 0084), because a record's
 // instant is the broker's and steps back across a stream leader's change, so
@@ -903,13 +926,14 @@
 // asked of first is the estate router's: the repository's HOME, the first of
 // its rendezvous order over the live Gitlet nodes (ADR-0089).
 //
-// Two of those reads answer with text git leaves unbounded: a path's HISTORY
+// Three of those reads answer with text git leaves unbounded: a path's HISTORY
 // ([GitLog], its literal [LogQuery.Grep] matched by the Gitlet node, never by
-// git) and a file's BLAME ([GitBlame]). Each such field — a commit's subject,
-// its author's name and address, its parents, a blamed line — is DESCRIBED BY
-// ITS SIZE past its bound, never cut ([MaxLogSubjectBytes] and its kin, each of
-// the field's encoded size), so the widest commit, and the widest line with its
-// commit, always fit one page. A kind is an estate request's and no record's,
+// git), a file's BLAME ([GitBlame]) and a directory's LAST COMMITS
+// ([GitTreeCommits]), whose commits are a history's. Each such field (a
+// commit's subject, its author's name and address, its parents, a blamed line)
+// is DESCRIBED BY ITS SIZE past its bound, never cut ([MaxLogSubjectBytes] and
+// its kin, each of the field's encoded size), so the widest commit, and the
+// widest line with its commit, always fit one page. A kind is an estate request's and no record's,
 // so a kind added moves no [RecordVersion].
 //
 // # An engine write is built on a Gitlet node and lands as a push
@@ -933,15 +957,17 @@
 //
 // # A change's revisions are read by the ids their rows record
 //
-// Three of those reads are of a change's revisions: a revision's FACTS against
+// Four of those reads are of a change's revisions: a revision's FACTS against
 // its target ([GitRevisionFacts]) — its merge base, the trees of its base and
 // its head, the files it touches and their classes, and the patch-id of its
 // diff, the engine's own read, which its repository's home asks naming no
 // asker ([GitReadKind.EnginesOwn]) — where lines anchored in
-// one revision are in another ([GitReanchor]), and what the change changed
-// between two ([GitInterdiff]). Each names its commits by the whole ids the
-// rows record, never an abbreviation: an interdiff compares two revisions'
-// bases as ids, which an abbreviation would make two spellings of one commit.
+// one revision are in another ([GitReanchor]), what the change changed
+// between two ([GitInterdiff]), and the lines around a finding's range with
+// that revision's diff marks ([GitExcerpts]). Each names its commits by the
+// whole ids the rows record, never an abbreviation: an interdiff compares two
+// revisions' bases as ids, which an abbreviation would make two spellings of
+// one commit.
 // A revision's touched list is bounded by [MaxTouchedPaths] and by
 // [MaxTouchedBytes] of JSON, so the facts that carry it are one page; past
 // either the revision touches all. And [Reanchor] is the one rule that places

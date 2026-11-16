@@ -2,7 +2,9 @@ package seat
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"time"
@@ -1094,69 +1096,104 @@ func (h *Host) fleetRoleEdges(live []placement.NodeProfile) roleEdges {
 	return out
 }
 
-// presenceMeta is what this node advertises to its peers.
+// PresenceMeta is what a node's presence lease carries: the placement half —
+// its profile's roles, labels and broker, how many seats it holds
+// (placement.HeldKey) and, only while it is, its withdrawal
+// (placement.WithdrawnKey) — then, on a Gitlet node, what its git cache gives
+// its background work ([coord.GitBackgroundKey]; nil on a node without the
+// gitlet role, which writes no key), and its status core under its own key
+// ([coord.StatusKey]; nil where the node did not say, which writes none).
 //
-// The placement half — roles and labels — and the live half beside it under
-// its own key, both re-sent on every heartbeat. A node with no status hook
-// publishes only the placement half, which is what makes "did not say"
-// distinguishable from "said zero" on the reading side. And, on a Gitlet node,
-// what its git cache gives its background work, under a key of its own and
-// outside the status ([Config.GitBackground]).
+// PURE, AND THE ONE ASSEMBLER: the beat builds its presence through it, and so
+// does internal/engine's TestThePresenceLeaseAtItsWorstFitsItsBound, which
+// derives [coord.MaxLeaseMetaBytes] from every input at its limit — so the
+// bound and the beat cannot assemble a presence two ways.
+func PresenceMeta(profile placement.NodeProfile, held int, withdrawn bool, gitBackground *int64,
+	status *coord.NodeStatus) map[string]any {
+	// [placement.NodeProfile.Meta] returns a fresh map per call, so the
+	// payload is built for this beat and belongs to no one else.
+	meta := profile.Meta()
+	meta[placement.HeldKey] = held
+	if withdrawn {
+		meta[placement.WithdrawnKey] = true
+	}
+	if gitBackground != nil {
+		meta[coord.GitBackgroundKey] = *gitBackground
+	}
+	if status != nil {
+		meta[coord.StatusKey] = status.Meta()
+	}
+	return meta
+}
+
+// presenceMeta is what this node advertises to its peers ([PresenceMeta]),
+// both halves re-sent on every heartbeat. A node with no status hook publishes
+// only the placement half, which is what makes "did not say" distinguishable
+// from "said zero" on the reading side.
 //
-// It writes into the profile's own map because [placement.NodeProfile.Meta]
-// returns a fresh literal per call — the lease payload is built for this
-// beat and belongs to no one else.
+// HOW MANY SEATS THIS NODE HOLDS, which its peers sum to learn whether
+// anything is free ([Host.fleetHoldsEverySeat]), is written unconditionally:
+// it is the host's own fact, with no hook to overrun. So is the withdrawal
+// (see [Host.setWithdrawn]), and so is a Gitlet node's budget, zero included:
+// a placement input every Gitlet node weighs this one by, which a slow control
+// plane must never drop for a beat ([coord.GitBackgroundKey]).
 //
 // The hook is BOUNDED. Answering may mean reading the control plane, and
 // this is the path that renews presence: an unbounded read on a wedged store
 // would hold the beat until the watchdog shot the process, to publish a
 // display column. A hook that does not answer — it says so with its error,
 // see [Config].Status — publishes the placement half alone, which the
-// reading side already renders as "did not say" — and what the beat writes
-// before the hook, the held count, the withdrawal and the git budget, none of
-// which can fail to answer.
-func (h *Host) presenceMeta(ctx context.Context) map[string]any {
-	meta := h.profile.Meta()
-	// HOW MANY SEATS THIS NODE HOLDS, which its peers sum to learn whether
-	// anything is free ([Host.fleetHoldsEverySeat]). Placement's own key,
-	// written unconditionally: it is the host's own fact, with no hook to
-	// overrun.
-	meta[placement.HeldKey] = h.placedCount()
-	// WITHDRAWN, only while it is: see [Host.setWithdrawn]. Absent is the
-	// reading every peer gives a node that is placing seats.
+// reading side already renders as "did not say".
+//
+// AND THE WHOLE IS MEASURED. The store refuses a presence whose Meta is past
+// [coord.MaxLeaseMetaBytes]; refused, the beat would renew nothing and this
+// node would leave its peers' count. No legal configuration reaches it — the
+// bound is derived from Tier A's label limits and the status core's own — so
+// a status that would carry it past is published as a hook that did not
+// answer is, the placement half alone, which those limits guarantee fits, and
+// said at ERROR with the size, the bound and the remedy: the node's place in
+// the fleet is kept, and the column is what is lost.
+func (h *Host) presenceMeta(ctx context.Context, logger *slog.Logger) map[string]any {
 	h.mu.Lock()
 	withdrawn := h.withdrawn
 	h.mu.Unlock()
-	if withdrawn {
-		meta[placement.WithdrawnKey] = true
-	}
-	// WHAT THIS GITLET NODE CAN GIVE ITS BACKGROUND WORK, on every beat and
-	// before the bounded hook, zero included: a placement input every Gitlet
-	// node weighs this one by, which a slow control plane must never drop
-	// for a beat ([coord.GitBackgroundKey]).
+	var git *int64
 	if h.gitBackground != nil {
-		meta[coord.GitBackgroundKey] = h.gitBackground()
+		budget := h.gitBackground()
+		git = &budget
 	}
-	// WHAT THIS NODE RUNS ON, the same on every beat: a copy per beat, since
-	// the payload belongs to this beat alone ([coord.InfraKey]).
-	if h.infra != nil {
-		meta[coord.InfraKey] = maps.Clone(h.infra)
-	}
+	held := h.placedCount()
+	placed := PresenceMeta(h.profile, held, withdrawn, git, nil)
 	if h.status == nil {
-		return meta
+		return placed
 	}
-	ctx, cancel := context.WithTimeout(ctx, h.statusBudget())
+	hookCtx, cancel := context.WithTimeout(ctx, h.statusBudget())
 	defer cancel()
 	// NOT ctx.Err() after the call. Whether the hook answered is the
 	// hook's fact: the clock read here cannot tell a hook the deadline
 	// cut short from one that had already returned its whole answer when
 	// the goroutine was descheduled past the deadline.
-	status, err := h.status(ctx)
+	status, err := h.status(hookCtx)
 	if err != nil {
-		return meta
+		return placed
 	}
-	meta[coord.StatusKey] = status.Meta()
-	return meta
+	whole := PresenceMeta(h.profile, held, withdrawn, git, &status)
+	size, err := coord.LeaseMetaBytes(whole)
+	if err == nil && size <= coord.MaxLeaseMetaBytes {
+		return whole
+	}
+	// Each attribute only where it says something: a size for a presence
+	// that measured, an error for one that did not.
+	why := slog.Int("bytes", size)
+	if err != nil {
+		why = slog.Any("error", err)
+	}
+	logger.ErrorContext(ctx, "node_presence_status_dropped", "node", h.nodeID,
+		why, "bound", coord.MaxLeaseMetaBytes,
+		"hint", "this node's presence was published without its status, which would carry it "+
+			"past what a lease holds; shrinking node.labels makes room, and a status this "+
+			"large beside labels Tier A allows is an engine defect worth reporting")
+	return placed
 }
 
 // statusBudget is how long one beat lets the status hook run.
@@ -1206,8 +1243,19 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 		// different roles or labels has to be able to correct what its
 		// peers believe about it without waiting for its presence lease to
 		// lapse first.
-		Meta: h.presenceMeta(ctx),
+		Meta: h.presenceMeta(ctx, log),
 	})
+	if errors.Is(err, coord.ErrValueTooLarge) {
+		// A DEFINITE REFUSAL, unlike the outage every other error is, which
+		// the next beat retries: this one the next beat repeats, and this
+		// node is gone from its peers' count until somebody reads why.
+		// presenceMeta keeps the status from reaching it, so only a
+		// placement half past what Tier A allows does.
+		log.ErrorContext(ctx, "node_presence_refused_too_large", "node", h.nodeID, "error", err,
+			"hint", "this node's presence is past what a lease holds and was not renewed; "+
+				"shrink node.labels to what Tier A allows")
+		return
+	}
 	if err != nil {
 		return
 	}
@@ -1220,7 +1268,12 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 
 	h.mu.Lock()
 	draining := h.draining
+	claimed := false
 	if !draining {
+		// A NEW EPOCH, not merely a lease in hand where none was: a
+		// lapsed lease stays in hand until the claim that replaces it,
+		// at the epoch the store mints for a lease that lapsed.
+		claimed = h.nodeLease == nil || h.nodeLease.Epoch != lease.Epoch
 		h.nodeLease = lease
 		h.presenceRenewedAt = asked
 	}
@@ -1233,6 +1286,10 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 		// dropped it leaves
 		// peers reserving capacity for a node that will never claim again.
 		h.giveUpLease(ctx, *lease)
+		return
+	}
+	if claimed && h.presenceClaimed != nil {
+		h.presenceClaimed(lease.Epoch)
 	}
 }
 

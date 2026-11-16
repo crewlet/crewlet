@@ -235,7 +235,7 @@ test("the head names the space, what it is for, and when somebody last wrote in 
   expect(screen.getByText("How the platform runs")).toBeTruthy();
   const facts = screen.getByRole("list", { name: "About Engineering" });
   expect(facts.textContent).toContain("3 pages");
-  expect(facts.textContent).toContain("Last written 2h ago");
+  expect(facts.textContent).toContain("Last written 2 hours ago");
   // FROM THE SPACE'S OWN CHANGE LOG, asked for the newest change to what a
   // page says.
   expect(asked.find((a) => a.kind === "page_activity")?.params).toEqual({

@@ -206,6 +206,13 @@ var domainErrors = map[string]map[string]classRow{
 		"ErrFolderDepth":     {err: artifactsdomain.ErrFolderDepth, means: malformed},
 		"FolderAmbiguous":    {err: &artifactsdomain.FolderAmbiguous{}, means: malformed},
 
+		// A COMMENT that is not there, a thread or an artifact at its comment
+		// bound, somebody else's remark, and words carrying a credential.
+		"ErrCommentNotFound":   {err: artifactsdomain.ErrCommentNotFound, means: absent},
+		"ErrCommentLimit":      {err: artifactsdomain.ErrCommentLimit, means: objectState},
+		"ErrNotTheAuthor":      {err: artifactsdomain.ErrNotTheAuthor, means: notPermitted},
+		"ErrCommentCredential": {err: artifactsdomain.ErrCommentCredential, means: malformed},
+
 		// THE BRAND'S, which an administrator meets adopting one on the brand
 		// routes and which no tool and no write surface makes.
 		"ErrBrandContrast":   {err: artifactsdomain.ErrBrandContrast, why: brandAdoption},

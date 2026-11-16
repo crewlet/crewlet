@@ -23,7 +23,7 @@ func conditionOf(t *testing.T, conditions []statelog.ModelCondition, key string)
 	return statelog.ModelCondition{}
 }
 
-// A MODEL'S CONDITION IS THE FLEET'S, JOINED FROM EVERY NODE'S HEARTBEAT: a
+// A MODEL'S CONDITION IS THE FLEET'S, JOINED FROM EVERY NODE'S STATUS RECORD: a
 // refusal on one node stands until an answer on ANY node is newer; the latest
 // window and the earliest wait across nodes are the entry's; a token's expiry
 // is computed from when the store wrote it; and "nothing signs it in" is this
@@ -31,7 +31,7 @@ func conditionOf(t *testing.T, conditions []statelog.ModelCondition, key string)
 //
 // Mutation: read the refusal off one node, take any node's window rather than
 // the latest, or raise "no sign-in" for an entry nothing runs, and this fails.
-func TestAModelsConditionIsTheFleetsHeartbeats(t *testing.T) {
+func TestAModelsConditionIsTheFleetsStatusRecords(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	c := &Company{Config: &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{

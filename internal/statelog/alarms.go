@@ -179,8 +179,8 @@ const (
 	// bucket's byte reservation may remain before an operator is told:
 	// TWICE A LOG'S, a fifth, borrowed from [HeadroomAlarmFraction] so a
 	// retune of the one moves the other. Twice, because both remedies for
-	// a full bucket take longer than a log's: raising its reservation is a
-	// capacity change on a stream every member holds, and moving the files
+	// a full bucket take longer than a log's: raising its reservation waits
+	// for a data node to restart on the new figure, and moving the files
 	// to a bucket (`crewlet objects migrate --to s3`) copies every one of
 	// them and ends inside a maintenance window. A full bucket refuses
 	// uploads, and only uploads.
@@ -501,9 +501,10 @@ const (
 	KindCensusDrift         Kind = "census_drift"
 	KindObjectsMissing      Kind = "objects_missing"
 
-	KindObjectsBucketNearCeiling Kind = "objects_bucket_near_ceiling"
-	KindObjectiveBurn            Kind = "objective_burn"
-	KindClockSkew                Kind = "clock_skew"
+	KindObjectsBucketNearCeiling  Kind = "objects_bucket_near_ceiling"
+	KindObjectsBucketRaiseRefused Kind = "objects_bucket_raise_refused"
+	KindObjectiveBurn             Kind = "objective_burn"
+	KindClockSkew                 Kind = "clock_skew"
 
 	// Gitlet's: a Gitlet node's own work, beside the logs', and the
 	// committer's on the data node that decides a repository's pushes.
@@ -872,6 +873,12 @@ type Reading struct {
 	// nothing. A zero MaxBytes is "not measured", never "full".
 	ObjectsBucketBytes, ObjectsBucketMaxBytes int64
 
+	// ObjectsBucketWanted is the store.objects.nats_max_bytes this node's boot
+	// did not raise the nats bucket to, ObjectsBucketKept what it kept, and
+	// ObjectsBucketWhy why; zero where no raise was refused.
+	ObjectsBucketWanted, ObjectsBucketKept int64
+	ObjectsBucketWhy                       string
+
 	// ObjectiveBurns is every service objective this node is spending the
 	// error budget of too fast, each over the fastest pair of windows that
 	// fires ([objectives.Meter.Burning]): empty on a node whose objectives
@@ -1165,7 +1172,7 @@ type ModelCondition struct {
 }
 
 // MCPServerCondition is one MCP server's condition, joined from every live
-// node's heartbeat row for it ([coord.MCPServerStatus]).
+// node's status record row for it ([coord.MCPServerStatus]).
 //
 // ONE PER SERVER THE CONFIGURATION RUNS: a server turned off (`enabled:
 // false`) raises nothing, since nothing is started for it on purpose, and a
@@ -1308,6 +1315,11 @@ type Alarm struct {
 	// Kind is which alarm.
 	Kind Kind `json:"kind"`
 
+	// Title and Person are the kind's static words for a company owner: what is
+	// wrong, then what it affects and what to do. Detail and Remedy stay the operator's.
+	Title  string `json:"title"`
+	Person string `json:"person"`
+
 	// Detail says what was measured, in the operator's units. It is the
 	// half of an alarm that makes it actionable: "apply_lag" is a name,
 	// and "this node is 4m12s behind" is a fact. For a per-log condition
@@ -1431,6 +1443,9 @@ type rule struct {
 	stays func(Reading) (string, bool)
 	// remedy is what an operator does about it.
 	remedy string
+	// title and person are what a company owner reads ([Alarm.Title],
+	// [Alarm.Person]), declared on the row so no kind ships without them.
+	title, person string
 	// perLog marks a condition that is a property of ONE LOG rather than
 	// of the node, which the report evaluates once per log from that log's
 	// own inputs and lists under the kind's one alarm ([Alarm.Domains]), and
@@ -1470,7 +1485,10 @@ func (rule rule) perEntry() bool { return rule.model != nil || rule.server != ni
 // visible on one verb and no screen at all.
 var table = []rule{
 	{
-		kind: KindApplyLag,
+		kind:  KindApplyLag,
+		title: "A server is falling behind",
+		person: "A server is behind on the company's recent changes, so it takes on no new agents. " +
+			"Check it if it does not catch up.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("this node is %s behind the log", spoken(r.ApplyLag)),
 				r.ApplyLag > StallGrace
@@ -1484,7 +1502,10 @@ var table = []rule{
 			"nodes until the copy recovers; the node's seats stay.",
 	},
 	{
-		kind: KindReadRefusals,
+		kind:  KindReadRefusals,
+		title: "A server is refusing reads",
+		person: "A server refuses reads for a reason other than catching up, so some pages fail to load. " +
+			"Check its log for the refusal reason.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("reads have been refused for %s for a reason other "+
 					"than ordinary lag", spoken(r.RefusalsSince)),
@@ -1495,7 +1516,10 @@ var table = []rule{
 			"` is a fault rather than a wait.",
 	},
 	{
-		kind: KindBarrierSlow,
+		kind:  KindBarrierSlow,
+		title: "Reads are slow on a server",
+		person: "Reads that need the latest changes wait too long on a server, so pages load slowly. " +
+			"Check the message broker and the server's storage.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the read barrier's p95 is past %s, a quarter of the "+
 					"read budget: up to %s", spoken(ReadBudget/4), spoken(r.BarrierP95)),
@@ -1505,7 +1529,10 @@ var table = []rule{
 			"latency and this node's apply drain before looking anywhere else.",
 	},
 	{
-		kind:   KindLogHeadroom,
+		kind:  KindLogHeadroom,
+		title: "A data log is almost full",
+		person: "A data log is close to its size limit, and once full it refuses new changes. " +
+			"Raise its limit or unblock its cleanup.",
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			if r.HeadroomFraction == nil {
@@ -1537,7 +1564,11 @@ var table = []rule{
 		// are the ceiling the operator set and the window they set, and
 		// the alarm fires at the point where the second no longer fits
 		// in the first.
-		kind:   KindLogCeilingShort,
+		kind:  KindLogCeilingShort,
+		title: "A data log will fill up",
+		person: "At its current rate a data log fills before its cleanup may remove anything, " +
+			"and then refuses new changes. " +
+			"Raise its size limit.",
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			if r.LogBytesPerDay == nil || r.LogMaxBytes == 0 || r.ReplayWindow <= 0 {
@@ -1576,7 +1607,11 @@ var table = []rule{
 		// old" in the log of a company four seconds after its first
 		// boot, one line above the trim term saying no backup had been
 		// recorded at all.
-		kind: KindBackupAge,
+		kind:  KindBackupAge,
+		title: "No recent backup",
+		person: "Without a recent verified backup, " +
+			"data logs are not cleaned up and grow until they refuse changes. " +
+			"Take a backup now.",
 		fires: func(r Reading) (string, bool) {
 			if r.BackupMaxAge <= 0 {
 				return "", false
@@ -1631,7 +1666,10 @@ var table = []rule{
 		// THE TERM IS NOT IN THE SENTENCE. It is a field of the log the
 		// alarm stands on ([AlarmDomain.Term]), because one alarm carries
 		// every held log and two of them can be held by different terms.
-		kind:   KindTrimBlocked,
+		kind:  KindTrimBlocked,
+		title: "Log cleanup is stuck",
+		person: "A data log's cleanup has stalled, so the log keeps growing toward its size limit. " +
+			"Fix what is holding it.",
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			if r.TrimBlockedBy == "" || r.ReplayWindow <= 0 || r.TrimPastWindow == 0 {
@@ -1652,7 +1690,11 @@ var table = []rule{
 		// report evaluates it once for each log this node holds a record on,
 		// because what the grace does is the log's: every log's copy is
 		// judged on its own (ADR-0079), see [Reading.DeferredAge].
-		kind:   KindDeferredOld,
+		kind:  KindDeferredOld,
+		title: "A server cannot read new changes",
+		person: "A server runs an older version that cannot read changes other servers write, " +
+			"so it stopped serving the affected logs. " +
+			"Upgrade that server.",
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			what := "the oldest record on this log that this node cannot apply"
@@ -1677,7 +1719,10 @@ var table = []rule{
 		// PER LOG, for the same reason: a read of one log refuses on that
 		// log's floor, and a floor published ahead of this node is one
 		// log's re-anchor.
-		kind:   KindFloorUnknown,
+		kind:  KindFloorUnknown,
+		title: "A server cannot serve a data log",
+		person: "A server cannot read a data log's cleanup point, so it refuses reads of that log. " +
+			"If it lasts, check the message broker.",
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			detail := fmt.Sprintf("this log's trim floor has been unreadable here "+
@@ -1702,7 +1747,10 @@ var table = []rule{
 			"docs/guides/retention.md, \"An unreadable trim floor\".",
 	},
 	{
-		kind: KindPrefetchSlow,
+		kind:  KindPrefetchSlow,
+		title: "Knowledge lookups are slow",
+		person: "Agents wait longer than planned for knowledge lookups before each turn. " +
+			"Add a data server, or check the server's storage.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the knowledge scans this node ran for turns' prefetches "+
 					"are past their %s budget at p95: up to %s", spoken(PrefetchScanBudget),
@@ -1717,7 +1765,11 @@ var table = []rule{
 			"rebuild. See docs/guides/search.md.",
 	},
 	{
-		kind: KindSearchSlow,
+		kind:  KindSearchSlow,
+		title: "Search is slow",
+		person: "Search is slower than its target because the " +
+			"content has outgrown what one server can scan. " +
+			"Add a data server to share the work.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("interactive search is past its %s target at p95: up to %s",
 					spoken(InteractiveSearchTarget), spoken(r.SearchP95)),
@@ -1729,7 +1781,10 @@ var table = []rule{
 			"no range. See docs/guides/search.md.",
 	},
 	{
-		kind: KindSearchDegraded,
+		kind:  KindSearchDegraded,
+		title: "Search is missing meaning-based results",
+		person: "Some searches ran without meaning-based matching, so their results are less relevant. " +
+			"Check the embeddings provider.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%.0f%% of searches were answered without their "+
 					"semantic half", r.SearchDegradedFraction*100),
@@ -1743,7 +1798,11 @@ var table = []rule{
 			"less well, and silently.",
 	},
 	{
-		kind: KindSearchScoped,
+		kind:  KindSearchScoped,
+		title: "Search covered only part of the content",
+		person: "Some searches skipped part of the content because a server did not answer, " +
+			"so results may be incomplete. " +
+			"Check that server if it lasts.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%.0f%% of searches were answered over part of the "+
 				"corpus", r.SearchScopedFraction*100), r.SearchScopedFraction > 0
@@ -1770,7 +1829,10 @@ var table = []rule{
 		// scatter waits on ([Reading.HistoryReadBudget]), never restated.
 		// PROCESS-WIDE rather than per log: the reads are of each data
 		// node's own event log, which is no state log at all.
-		kind: KindHistoryPartial,
+		kind:  KindHistoryPartial,
+		title: "History is missing some entries",
+		person: "Some history views missed a server's entries because it answered too slowly. " +
+			"Check that server's storage and network.",
 		fires: func(r Reading) (string, bool) {
 			budget := "the fleet read budget"
 			if r.HistoryReadBudget > 0 {
@@ -1790,7 +1852,10 @@ var table = []rule{
 			"`apply_lag` alarms say which.",
 	},
 	{
-		kind: KindRecallBelowFloor,
+		kind:  KindRecallBelowFloor,
+		title: "Search indexing is behind",
+		person: "Some content is not yet indexed for meaning-based search, so results can miss it. " +
+			"Check the embeddings provider if it does not catch up.",
 		fires: func(r Reading) (string, bool) {
 			if r.SemanticCoverage == nil {
 				return "", false
@@ -1812,7 +1877,10 @@ var table = []rule{
 		// it was measured probing EVERY list, the full scan's own pool, and
 		// says the codes fail this corpus, not that the index was trained
 		// badly.
-		kind: KindIVFRecallBelowFloor,
+		kind:  KindIVFRecallBelowFloor,
+		title: "Search accuracy is below target",
+		person: "Meaning-based search misses more good matches than it should on this content. " +
+			"Report it, since only a product update can fix it.",
 		fires: func(r Reading) (string, bool) {
 			if r.IVFRecall == nil {
 				return "", false
@@ -1833,7 +1901,10 @@ var table = []rule{
 			"reports.",
 	},
 	{
-		kind: KindRecordsGated,
+		kind:  KindRecordsGated,
+		title: "Some changes were dropped",
+		person: "Some changes were dropped and cannot be recovered. " +
+			"Check today's server logs to see which server wrote them.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d record(s) were dropped by an apply gate in the "+
 				"last day", r.RecordsGated), r.RecordsGated > 0
@@ -1860,7 +1931,11 @@ var table = []rule{
 		// DeadLetterAge), so it never holds a slot of the consumer's
 		// pending set for ever. This names the build that cannot read it,
 		// while a peer that can is still being given the chance.
-		kind: KindFeedUnreadable,
+		kind:  KindFeedUnreadable,
+		title: "A server cannot read some changes",
+		person: "A server cannot read some change records, " +
+			"so the agents they should wake are woken late or not at all. " +
+			"Upgrade that server.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d change record(s) could not be translated in the "+
 				"last day", r.FeedUnreadable), r.FeedUnreadable > 0
@@ -1884,7 +1959,10 @@ var table = []rule{
 		// had. Its count of what expires within a day is the reading's,
 		// taken on every beat, so it moves as the entries age rather than
 		// only when a feed starts and replays them.
-		kind:   KindFeedDeadLettered,
+		kind:  KindFeedDeadLettered,
+		title: "Some agents were never woken",
+		person: "Some changes no server could read have not woken their agents, and will expire unread. " +
+			"Upgrade a server or restore the missing encryption key.",
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			if len(r.FeedDeadLetters) == 0 {
@@ -1921,7 +1999,11 @@ var table = []rule{
 		// beat or two, and that otherwise waits for such a node to START,
 		// which a roll paused for good never brings. Its count of what
 		// expires within a day is the reading's, taken on every beat.
-		kind: KindInboundDeadLettered,
+		kind:  KindInboundDeadLettered,
+		title: "Messages to agents wait for an upgrade",
+		person: "Some messages from connected apps wait for a server on the newer version, " +
+			"and are lost if none delivers them. " +
+			"Finish the upgrade.",
 		fires: func(r Reading) (string, bool) {
 			if len(r.InboundDeadLetters) == 0 {
 				return "", false
@@ -1953,7 +2035,10 @@ var table = []rule{
 		// has stopped is named, and the feed's own schedule is held to it
 		// ([FeedReopenCeiling]), so a feed still down past it is one whose
 		// broker or consumer is still refusing.
-		kind: KindFeedStopped,
+		kind:  KindFeedStopped,
+		title: "A server stopped following changes",
+		person: "A server's change feed stopped, so agents may be woken late, though nothing is lost. " +
+			"Check the message broker.",
 		fires: func(r Reading) (string, bool) {
 			var parts []string
 			for _, f := range r.FeedsDown {
@@ -1975,7 +2060,10 @@ var table = []rule{
 			"`changefeed_open_failed` line carries it.",
 	},
 	{
-		kind: KindMaintenanceOpen,
+		kind:  KindMaintenanceOpen,
+		title: "A maintenance window is still open",
+		person: "While a capacity maintenance window is open, restarted servers do no work. " +
+			"Finish or cancel the window.",
 		fires: func(r Reading) (string, bool) {
 			fires := r.MaintenanceOpenFor > MaintenanceAlarmAfter
 			if !r.MaintenanceUnreadable {
@@ -2007,6 +2095,10 @@ var table = []rule{
 	},
 	{
 		kind:  KindVolumeLow,
+		title: "A disk is low on space",
+		person: "A disk holding company data may be too full for backups and restores, " +
+			"which then fail partway. " +
+			"Add space to that disk.",
 		fires: volumeLow(VolumeHeadroomFactor),
 		stays: volumeLow(VolumeClearFactor),
 		remedy: "Add space to the volume the alarm names. Where it could not be " +
@@ -2018,7 +2110,11 @@ var table = []rule{
 			"store besides, which its detail states in bytes.",
 	},
 	{
-		kind: KindWALLarge,
+		kind:  KindWALLarge,
+		title: "A database file has grown large",
+		person: "A database file has grown large because a backup or reader holds it open, " +
+			"and could fill the disk. " +
+			"Make room on the disk.",
 		fires: func(r Reading) (string, bool) {
 			detail := fmt.Sprintf("the write-ahead log is %s", bytesHuman(r.WALBytes))
 			if r.WALFile != "" {
@@ -2040,7 +2136,10 @@ var table = []rule{
 			"no other symptom until the volume fills.",
 	},
 	{
-		kind: KindPoolStarved,
+		kind:  KindPoolStarved,
+		title: "A server's database is overloaded",
+		person: "Requests on a server wait for a database connection, so everything there is slower. " +
+			"Allow more connections, or find what holds them.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("a database connection takes past %s at p95 to acquire: up to %s",
 				spoken(PoolWaitAlarm), spoken(r.PoolWaitP95)), r.PoolWaitP95 > PoolWaitAlarm
@@ -2059,7 +2158,11 @@ var table = []rule{
 		// per log and lists every log past its census under the one alarm
 		// ([Alarm.Domains]). A reading naming only the log furthest past its
 		// census hid every other log past its own.
-		kind:   KindCensusDrift,
+		kind:  KindCensusDrift,
+		title: "A data log is busier than planned",
+		person: "A data log handles more than twice the reads it was sized for, " +
+			"so its size limit may be too small. " +
+			"Resize that log.",
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			// THE LOG'S OWN CEILING FIELD, where the caller named it: the
@@ -2089,7 +2192,10 @@ var table = []rule{
 			"log not yet created.",
 	},
 	{
-		kind: KindObjectsMissing,
+		kind:  KindObjectsMissing,
+		title: "Some files cannot be read",
+		person: "Some company files are missing or damaged in file storage, so they cannot be opened. " +
+			"Restore them from a backup or upload them again.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d file(s) are missing from the object store, damaged "+
 				"in it, or not answered for by it", r.ObjectsMissing), r.ObjectsMissing > 0
@@ -2101,35 +2207,55 @@ var table = []rule{
 			"status` names them, and what was found of each.",
 	},
 	{
-		kind: KindObjectsBucketNearCeiling,
+		kind:  KindObjectsBucketNearCeiling,
+		title: "File storage is almost full",
+		person: "Uploads will be refused once file storage is full. " +
+			"Raise its size, or move the files to a larger store.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the nats object bucket holds %s of its %s reservation",
 					bytesHuman(r.ObjectsBucketBytes), bytesHuman(r.ObjectsBucketMaxBytes)),
 				r.ObjectsBucketMaxBytes > 0 && float64(r.ObjectsBucketMaxBytes-r.ObjectsBucketBytes) <
 					ObjectsHeadroomAlarmFraction*float64(r.ObjectsBucketMaxBytes)
 		},
-		// THE GESTURES EVERY DEPLOYMENT HAS COME FIRST, as the full bucket's own
-		// refusal says them (natsobj.FullRemedy): a bucket that exists keeps
-		// the reservation it was created with, `store.objects.nats_max_bytes`
-		// sizes only a bucket a node creates, and `nats stream update` reaches
-		// no single embedded node, which has no client listener. Offered first,
-		// it was the one step this alarm's most common reader could not take.
-		remedy: "Once the bucket is full every upload is refused. Move the files to an " +
-			"S3-compatible bucket with `crewlet objects migrate -to s3` (see " +
-			"docs/concepts/object-store.md), or let the collector remove the files " +
-			"nothing names any more (Settings, File storage, shows what it holds). Where " +
-			"the nats tool reaches the broker (an external one, or an embedded fleet's " +
-			"member through its loopback listener with the operator key) the reservation " +
-			"can be raised instead: `nats stream update OBJ_crewlet_files " +
-			"--max-bytes=<bytes>`, within what the broker can grant. A single embedded " +
-			"node has no listener, and keeps the reservation its bucket was created with.",
+		// THE SETTING COMES FIRST: a data node raises the bucket to a larger
+		// store.objects.nats_max_bytes at boot on every broker, as the full
+		// bucket's own refusal says (natsobj.FullRemedy).
+		remedy: "Once the bucket is full every upload is refused. Raise " +
+			"`store.objects.nats_max_bytes` and restart a data node: its boot raises the " +
+			"bucket's reservation where the broker can grant the difference and still keep " +
+			"1 GiB for the coordination records, and `objects_bucket_raise_refused` says why " +
+			"where it cannot. Or move the files to an S3-compatible bucket with `crewlet " +
+			"objects migrate -to s3` (see docs/concepts/object-store.md), or let the collector " +
+			"remove the files nothing names any more (Settings, File storage, shows what it holds).",
+	},
+	{
+		kind:  KindObjectsBucketRaiseRefused,
+		title: "File storage could not grow",
+		person: "File storage could not grow to its configured size, so uploads are held to its old limit. " +
+			"Give the message broker more room.",
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("store.objects.nats_max_bytes asks for %s and the nats object "+
+					"bucket keeps its %s reservation: %s", bytesHuman(r.ObjectsBucketWanted),
+					bytesHuman(r.ObjectsBucketKept), r.ObjectsBucketWhy),
+				r.ObjectsBucketWanted > 0
+		},
+		remedy: "A data node raises the bucket at boot once the broker can grant the difference " +
+			"and still keep 1 GiB for the coordination records. Give the broker more room " +
+			"(raise `stream.store_max_bytes`, or free the volume holding `stream.store_dir`), " +
+			"or lower `store.objects.nats_max_bytes` to what the detail says fits, and restart " +
+			"this node. Where the broker states no limit this node can read (an external one " +
+			"whose account sets none), raise it there with `nats stream update " +
+			"OBJ_crewlet_files --max-bytes=<bytes>`. See docs/concepts/object-store.md.",
 	},
 	{
 		// ONE ALARM FOR EVERY BURNING OBJECTIVE, the detail naming each:
 		// the kind is the alarm's identity on the gauge and the screen, and
 		// a burn is one cause (this node failing what it promised) whichever
 		// objective shows it first.
-		kind: KindObjectiveBurn,
+		kind:  KindObjectiveBurn,
+		title: "Service quality is slipping",
+		person: "A service target is failing fast enough to use up its monthly error allowance early. " +
+			"Find what is failing now.",
 		fires: func(r Reading) (string, bool) {
 			if len(r.ObjectiveBurns) == 0 {
 				return "", false
@@ -2166,7 +2292,10 @@ var table = []rule{
 		// because that is the machine whose clock an operator has to fix. A
 		// node measured against the member alone read the member's drift as
 		// its own and sent the operator to the wrong machine.
-		kind: KindClockSkew,
+		kind:  KindClockSkew,
+		title: "A server clock is wrong",
+		person: "A server's clock is far off the others', so cleanup may delete files still in use. " +
+			"Turn on time sync on that machine.",
 		fires: func(r Reading) (string, bool) {
 			if r.ClockSkewBound <= 0 {
 				return "", false
@@ -2231,7 +2360,11 @@ var table = []rule{
 		// one the kernel kills at every duty cycle — so the number that
 		// already decides whether a bitmap is written is the number the
 		// alarm fires at. Silent at the budget, as a bitmap at it is written.
-		kind: KindCodeMaintenanceRefused,
+		kind:  KindCodeMaintenanceRefused,
+		title: "Repositories are served more slowly",
+		person: "A server lacks the memory to index some repositories, " +
+			"so clones are slower but still correct. " +
+			"Give that server more memory.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d repository(ies) on this node are served without a bitmap: "+
 					"the largest's needs about %s, and the node can give its background "+
@@ -2288,7 +2421,11 @@ var table = []rule{
 		// held from the listing of every pass, whatever that pass's compaction
 		// of the repository decided, so it stands for as long as pushes are
 		// refused.
-		kind: KindCodeCompactionBehind,
+		kind:  KindCodeCompactionBehind,
+		title: "Pushes to a repository are refused",
+		person: "A repository's storage upkeep has fallen behind, " +
+			"so pushes to it are refused until it catches up. " +
+			"Check the server's log for the cause.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d repository(ies) this node maintains hold the most live packs a "+
 					"repository may — the most, %s, holds %d — so every push carrying a pack "+
@@ -2331,7 +2468,10 @@ var table = []rule{
 		// and logged, never alarmed. Raised by the node that decides the
 		// repository's pushes, whatever node received them, since it is the
 		// one whose queue is full or slow.
-		kind: KindCodeCommitBusy,
+		kind:  KindCodeCommitBusy,
+		title: "Pushes are being turned away",
+		person: "A server cannot keep up with pushes, so some were turned away and retried. " +
+			"Spread pushes over more repositories, or add data servers.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d proposal(s) were refused busy in the last %s because this node's "+
 					"committer could not hold them or reach them in time — %d for %s alone, %d at the "+
@@ -2383,7 +2523,10 @@ var table = []rule{
 		// timeout and the rule fires at any count. Raised by every data node
 		// from its rows, never by a runner: a fleet with no live Gitlet node
 		// runs no check, and still raises it.
-		kind: KindCodeChecksBacklog,
+		kind:  KindCodeChecksBacklog,
+		title: "Checks are waiting to run",
+		person: "Checks have waited past their time limit for a runner, so changes wait to merge. " +
+			"Add Gitlet servers or allow more checks at once.",
 		fires: func(r Reading) (string, bool) {
 			count := fmt.Sprintf("%d", r.CodeChecksBacklog)
 			if r.CodeChecksBacklogMore {
@@ -2423,7 +2566,10 @@ var table = []rule{
 		// on every deep queue's ordinary day and never on a depth-one queue
 		// with hour-long checks. Raised by each queue's home Gitlet node, the
 		// one node that builds its trains and so the one that times them.
-		kind: KindCodeMergeRateOver,
+		kind:  KindCodeMergeRateOver,
+		title: "A merge queue is falling behind",
+		person: "A merge queue is asked to land more changes than it can, so waits keep growing. " +
+			"Speed up its checks or batch more changes.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d merge queue(s) this node is home to were asked to land more changes in "+
 					"the last %s than they can land in it — the furthest, %s, %d enqueue(s) against %d at "+
@@ -2461,7 +2607,11 @@ var table = []rule{
 		// rule fires at any count — never at a number of its own. A node's
 		// condition, raised by every data node from its own rows, before the
 		// first create is refused rather than after.
-		kind: KindCodeRefsNearLimit,
+		kind:  KindCodeRefsNearLimit,
+		title: "A repository is near its branch limit",
+		person: "A repository creates branches and tags so fast it will reach its limit, " +
+			"and then new ones are refused. " +
+			"Delete branches it no longer needs.",
 		fires: func(r Reading) (string, bool) {
 			window := spokenDays(r.CodeRefsWindow)
 			return fmt.Sprintf("%d repository(ies) set refs so fast that they reach the %d-ref bound within "+
@@ -2486,7 +2636,10 @@ var table = []rule{
 			"\"The ref lifecycle\".",
 	},
 	{
-		kind: KindLLMCredentialExpiring,
+		kind:  KindLLMCredentialExpiring,
+		title: "A model sign-in expires soon",
+		person: "A model's sign-in expires within a month, and agents using it then stop. " +
+			"Renew it before it expires.",
 		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			left := m.ExpiresAt.Sub(now)
 			return AlarmEntry{Detail: expiryDetail(m, left), Since: m.ExpiresAt.Add(-CredentialNoticeDays * day)},
@@ -2497,7 +2650,10 @@ var table = []rule{
 			"models that read it switch to it at once."),
 	},
 	{
-		kind: KindLLMCredentialExpiresSoon,
+		kind:  KindLLMCredentialExpiresSoon,
+		title: "A model sign-in expires this week",
+		person: "A model's sign-in expires within days, and agents using it then stop. " +
+			"Renew it now.",
 		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			left := m.ExpiresAt.Sub(now)
 			return AlarmEntry{Detail: expiryDetail(m, left), Since: m.ExpiresAt.Add(-CredentialWarningDays * day)},
@@ -2507,7 +2663,11 @@ var table = []rule{
 			"Rotate. Once it expires every seat on the model is refused."),
 	},
 	{
-		kind: KindLLMSignInRefused,
+		kind:  KindLLMSignInRefused,
+		title: "A model cannot sign in",
+		person: "A model's sign-in is refused, expired or missing, " +
+			"so agents using it stop unless they have a fallback model. " +
+			"Give it a working sign-in.",
 		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			switch {
 			case !m.RefusedAt.IsZero():
@@ -2533,7 +2693,10 @@ var table = []rule{
 			"they have one."),
 	},
 	{
-		kind: KindLLMLimit,
+		kind:  KindLLMLimit,
+		title: "A model reached its usage limit",
+		person: "A model hit its plan's usage limit, so its agents use their fallback until it resets. " +
+			"No action is needed unless this is unexpected.",
 		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			out := m.SittingOut
 			if out == nil || !now.Before(out.Until) {
@@ -2548,7 +2711,10 @@ var table = []rule{
 			"stops every node sitting it out."),
 	},
 	{
-		kind: KindLLMLimitWaiting,
+		kind:  KindLLMLimitWaiting,
+		title: "Agents are waiting on a usage limit",
+		person: "Agents with no fallback model are stopped until a model's usage limit resets. " +
+			"Add a fallback model or raise the plan.",
 		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			if m.WaitingSince.IsZero() {
 				return AlarmEntry{}, false
@@ -2574,7 +2740,10 @@ var table = []rule{
 		// the home judges each mirror at the promise and the rule fires at
 		// any count (ADR-0015). A node's condition, raised by the home that
 		// runs the mirror and by no other node.
-		kind: KindCodeMirrorFailing,
+		kind:  KindCodeMirrorFailing,
+		title: "A repository mirror is out of date",
+		person: "A repository mirror has not synced within its refresh time, so the copy is out of date. " +
+			"Check the mirror's address and credential.",
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d mirror(s) of repositories this node is home to have not been brought "+
 					"level for longer than their refresh (the longest: %s, %s)",
@@ -2620,7 +2789,10 @@ var table = []rule{
 		// A SERVER NOBODY IS SIGNED IN TO is `mcp_oauth_needs_sign_in`'s:
 		// its instances are held back for a person's sign-in, which no
 		// restart and no fix to its address ends.
-		kind: KindMCPServerFailing,
+		kind:  KindMCPServerFailing,
+		title: "A tool server is down",
+		person: "A tool server is not running, so no agent can use its tools. " +
+			"Fix the error it reports, then restart it.",
 		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
 			if s.needsSignIn() || s.Started > 0 || s.Failed == 0 || !heldPast(s.DownSince, now, MCPOutageGrace) {
 				return AlarmEntry{}, false
@@ -2638,7 +2810,10 @@ var table = []rule{
 		// SOME INSTANCES SERVING AND SOME NOT, past the same ceiling: a
 		// node's environment, one agent's credentials or one child that
 		// keeps dying, rather than the server.
-		kind: KindMCPServerPartial,
+		kind:  KindMCPServerPartial,
+		title: "A tool server is down for some agents",
+		person: "A tool server is not running everywhere, so some agents cannot use its tools. " +
+			"Fix the error it reports, then restart it.",
 		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
 			if s.needsSignIn() || s.Started == 0 || s.Failed == 0 || !heldPast(s.DownSince, now, MCPOutageGrace) {
 				return AlarmEntry{}, false
@@ -2663,7 +2838,10 @@ var table = []rule{
 		// folded into them: a wait is no failure, and the server's state
 		// does not count it as one, but a wait that has outlived a whole
 		// pass is an integration that is not delivering.
-		kind: KindMCPServerWaitingLong,
+		kind:  KindMCPServerWaitingLong,
+		title: "A tool server waits for a credential",
+		person: "An agent cannot use a tool server because its integration has not delivered a credential. " +
+			"Open that integration to see why.",
 		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
 			if s.Waiting == 0 || !heldPast(s.WaitingSince, now, MCPWaitingGrace) {
 				return AlarmEntry{}, false
@@ -2681,7 +2859,10 @@ var table = []rule{
 		// A TOOL NO AGENT CAN BE HANDED, raised as soon as a node lists
 		// it: a name is refused by a rule, never by a moment, so no wait
 		// would change it.
-		kind: KindMCPToolsRefused,
+		kind:  KindMCPToolsRefused,
+		title: "Some tools cannot be offered",
+		person: "Some of a tool server's tools have names agents cannot use, so no agent sees them. " +
+			"Shorten or change the server's tool prefix.",
 		server: func(s MCPServerCondition, _ time.Time) (AlarmEntry, bool) {
 			if s.RefusedCount == 0 {
 				return AlarmEntry{}, false
@@ -2699,7 +2880,11 @@ var table = []rule{
 		// words). Raised at once: it is a person's step, and no wait ends
 		// it. No agent is offered the server's tools until somebody signs
 		// in.
-		kind: KindMCPOAuthNeedsSignIn,
+		kind:  KindMCPOAuthNeedsSignIn,
+		title: "A tool server needs a sign-in",
+		person: "A tool server's sign-in is missing or can no longer be renewed, " +
+			"so no agent can use its tools. " +
+			"Have an administrator sign in.",
 		server: func(s MCPServerCondition, _ time.Time) (AlarmEntry, bool) {
 			if !s.needsSignIn() {
 				return AlarmEntry{}, false
@@ -2723,7 +2908,10 @@ var table = []rule{
 		// A GRANT THAT RUNS OUT within [MCPSignInNotice], where its vendor
 		// said when: the sign-in renews the access, and nothing renews the
 		// grant itself but a person signing in again.
-		kind: KindMCPOAuthExpiring,
+		kind:  KindMCPOAuthExpiring,
+		title: "A tool server sign-in runs out soon",
+		person: "A tool server's sign-in is running out, and agents lose its tools when it does. " +
+			"Sign in to it again.",
 		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
 			if s.SignIn == nil || !s.SignIn.Held || s.SignIn.Failure != "" || s.SignIn.Expiry.IsZero() ||
 				s.SignIn.Expiry.Sub(now) > MCPSignInNotice {
@@ -2746,7 +2934,10 @@ var table = []rule{
 		// A CALL WAITING ON A PERSON past the grace, at its server: its
 		// run is parked and its seat free, so nothing is failing, but the
 		// work it was doing waits on somebody who has not answered.
-		kind: KindMCPApprovalWaiting,
+		kind:  KindMCPApprovalWaiting,
+		title: "A tool call waits for approval",
+		person: "An agent's work is paused until someone answers a tool call it asked to make. " +
+			"Allow or deny it.",
 		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
 			if s.Approvals == 0 || !heldPast(s.ApprovalSince, now, MCPApprovalGrace) {
 				return AlarmEntry{}, false
@@ -2770,7 +2961,10 @@ var table = []rule{
 		// until a call is held. No span, as a refused name has none: a
 		// definition is changed or it is not, and a node restarting does
 		// not make it so.
-		kind:   KindMCPToolsChanged,
+		kind:  KindMCPToolsChanged,
+		title: "A tool changed and needs review",
+		person: "A tool server changed or added tools, which now ask a person before every call. " +
+			"Review the change, then accept or block it.",
 		unread: func(s MCPServerCondition) bool { return s.ChangesUnread },
 		server: func(s MCPServerCondition, _ time.Time) (AlarmEntry, bool) {
 			if s.ChangesUnread || s.Changes == 0 {
@@ -3039,7 +3233,7 @@ func Evaluate(r Reading) []Alarm {
 			judge = rule.stays
 		}
 		if detail, firing := judge(r); firing {
-			out = append(out, Alarm{Kind: rule.kind, Detail: detail, Remedy: rule.remedy})
+			out = append(out, rule.alarm(detail))
 		}
 	}
 	return out
@@ -3080,7 +3274,14 @@ func (rule rule) evaluateEntries(r Reading) (Alarm, bool) {
 			lead = e
 		}
 	}
-	return Alarm{Kind: rule.kind, Detail: lead.Detail, Remedy: rule.remedy, Entries: entries}, true
+	alarm := rule.alarm(lead.Detail)
+	alarm.Entries = entries
+	return alarm, true
+}
+
+// alarm is the rule's alarm with its detail, in the table's words.
+func (rule rule) alarm(detail string) Alarm {
+	return Alarm{Kind: rule.kind, Title: rule.title, Person: rule.person, Detail: detail, Remedy: rule.remedy}
 }
 
 // AlarmRef names the instances of a per-entry kind an evaluation could not
@@ -3181,6 +3382,18 @@ func Kinds() []Kind {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// PersonWords is kind's [Alarm.Title] and [Alarm.Person], and false for a kind
+// this build does not raise: for a surface that names an alarm by its kind
+// alone, such as a node's heartbeat marks.
+func PersonWords(kind Kind) (title, person string, ok bool) {
+	for _, rule := range table {
+		if rule.kind == kind {
+			return rule.title, rule.person, true
+		}
+	}
+	return "", "", false
 }
 
 // Spoken is a duration as a person reads it ("45s", "2m 5s", "22h 33m"),

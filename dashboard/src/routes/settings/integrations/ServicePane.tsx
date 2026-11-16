@@ -54,11 +54,11 @@ import {
   type DataGridColumn,
 } from "@crewlethq/ui";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { VendorMark } from "@crewlethq/icons";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PROJECT_PAGE } from "~/contract/work.ts";
 import { LimitSetting } from "~/components/LimitSetting.tsx";
+import { UnreadSetting } from "~/components/SettingEditor.tsx";
 import { TextSetting } from "~/components/TextSetting.tsx";
 import type { SettingRow } from "~/contract/settings.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -152,7 +152,6 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
   const by = service.replacedBy;
   const what = HOLDS[service.key];
   const apps = by?.keys ?? [];
-  const only = apps.length === 1 ? apps[0] : undefined;
   // THE SENTENCE NAMES THE CONNECTION THE APP RIDES: Jira and Confluence
   // through the one Atlassian integration, a chat vendor as itself. A vendor
   // nobody named (the `viewer` answer tells the names to a holder of Chatlet) is
@@ -167,7 +166,7 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
     <div className="int-service-off">
       <Callout
         variant="neutral"
-        icon={only ? <VendorMark vendor={connectionOf(only)} size="md" /> : undefined}
+
         title={
           by
             ? `${capitalised(by.name)} ${apps.length > 1 ? "do" : "does"} this for your company`
@@ -580,12 +579,9 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
                   onApplied={limits.refetch}
                 />
               ) : (
-                <SettingsTable.Row
-                  label="Inbox keeps a notice for"
-                  settingKey="inbox.retention_days"
-                >
+                <UnreadSetting label="Inbox keeps a notice for" settingKey="inbox.retention_days">
                   {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
-                </SettingsTable.Row>
+                </UnreadSetting>
               )}
               <SettingsTable.Row label="Projects the chart declares">
                 {viewer.admin ? (
@@ -807,9 +803,9 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
                     {...(d.key === "knowledge.scope" ? { choices: spaces.map((c) => c.key) } : {})}
                   />
                 ) : (
-                  <SettingsTable.Row key={d.key} label={d.label} settingKey={d.key}>
+                  <UnreadSetting key={d.key} label={d.label} settingKey={d.key}>
                     {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
-                  </SettingsTable.Row>
+                  </UnreadSetting>
                 );
               })}
             </SettingsTable>
@@ -862,12 +858,12 @@ function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
               zero="0 to keep them for ever"
             />
           ) : (
-            <SettingsTable.Row
+            <UnreadSetting
               label="Messages are kept for"
               settingKey="chat.chatlet.message_retention_days"
             >
               {viewer.admin ? <EmptyValue /> : <EmptyValue label="Admins see this" />}
-            </SettingsTable.Row>
+            </UnreadSetting>
           )}
         </SettingsTable>
         <p className="t-caption">

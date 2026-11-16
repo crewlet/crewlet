@@ -49,6 +49,7 @@ import {
   type WizardAt,
 } from "./parts.tsx";
 import { ALARM_TONE, CATEGORY_WORDS, WINDOW, product } from "./words.ts";
+import { AgoTime } from "~/components/AgoTime.tsx";
 
 /** The gesture that fixes an alarm: a flow, opened on one model. */
 export interface AlarmFix {
@@ -350,7 +351,7 @@ function words(
       ) : expired ? (
         <>
           The {noun} for {theModels(keys, false)} expired{" "}
-          <RelativeTime value={expiresAt} now={now} />
+          <AgoTime clock value={expiresAt} now={now} />
         </>
       ) : (
         <>
@@ -416,7 +417,7 @@ function words(
     waiting.names.length > 0 ? (
       <>
         {whoLine(waiting.names)} {waiting.names.length === 1 ? "is" : "are"} waiting, with no
-        fallback model, since <RelativeTime value={waiting.since} now={now} />.{" "}
+        fallback model, since <AgoTime since value={waiting.since} now={now} />.{" "}
       </>
     ) : null;
   if (kind === "llm_limit_waiting") {

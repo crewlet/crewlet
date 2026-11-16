@@ -15,29 +15,16 @@
  * docs/guides/budgets-and-spend.md.
  */
 
-import { WrenchGlyph } from "@crewlethq/icons/glyphs";
 import { BarList, Card, DATA_COLORS, EmptyState, Skeleton } from "@crewlethq/ui";
 import { purposeLabel } from "~/lib/auxiliary.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
 import type { Rollup } from "~/protocol/types.ts";
 
-export function Workers({
-  rollup,
-  loading,
-  words,
-}: {
-  rollup: Rollup | null;
-  loading: boolean;
-  words: string | null;
-}) {
+export function Workers({ rollup, loading }: { rollup: Rollup | null; loading: boolean }) {
   const rows = (rollup?.by_worker ?? []).filter((w) => w.total_tokens > 0);
   return (
     <Card className="spend-card spend-list" padding="none">
-      <Card.Header
-        icon={<WrenchGlyph size="sm" />}
-        subtitle={words ?? undefined}
-        subtitlePlacement="below"
-      >
+      <Card.Header>
         <Card.Title>Auxiliary model</Card.Title>
       </Card.Header>
       <Card.Body padding="md">
@@ -48,7 +35,7 @@ export function Workers({
           // bare sentence beside the tables' and the chart's empty states read
           // as two kinds of answer to one question.
           <EmptyState
-            size="compact"
+            size="inline"
             title="The auxiliary model spent no tokens in this window"
             description="Its calls appear here once it makes them."
           />

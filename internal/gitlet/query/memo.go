@@ -61,7 +61,9 @@ import (
 // range, as a file's does; a history's page is its walk's own — the walk ends
 // where the page does, since its cost is the walk — memoized where the walk
 // ended it, and never where the read's budget or its due instant did, which
-// is the machine's and the moment's; and a landed-in read, a revision's facts
+// is the machine's and the moment's; a directory's last commits' page is kept
+// as its read cut it, and its windows of answers apart, under the last commit
+// that changed the directory, its walk's first record (treecommits.go); and a landed-in read, a revision's facts
 // and a re-anchoring never (memoizable says why). A history's and a blame's
 // key carries the measure their pages were cut with (costModel), since a
 // fence they are measured with is a build's.
@@ -88,7 +90,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/4"
+const memoFormat = "page/8"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -168,18 +170,25 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 			strconv.FormatBool(f.filters()), strconv.Itoa(len(f.paths)))
 		parts = append(parts, f.paths...)
 	case gitlet.GitLog:
-		// Since as the second its walk stops before, the limit as the page
-		// applies it, and the cost the page's fields were measured at.
+		// Since as the second its walk stops before, Until as the last
+		// second it keeps, the limit as the page applies it, and the cost the
+		// page's fields were measured at. A PushedBy read is never memoized.
 		path, _ := gitlet.GitPath("log.path", q.Log.Path, q.Log.PathB64, true)
-		since := ""
+		since, until := "", ""
 		if !q.Log.Since.IsZero() {
 			since = strconv.FormatInt(sinceSecond(q.Log.Since), 10)
 		}
-		parts = append(parts, whole[q.Log.Rev], path, q.Log.Grep, since, strconv.Itoa(logLimitOf(q.Log)),
+		if !q.Log.Until.IsZero() {
+			until = strconv.FormatInt(untilSecond(q.Log.Until), 10)
+		}
+		parts = append(parts, whole[q.Log.Rev], path, q.Log.Grep, since, until, strconv.Itoa(logLimitOf(q.Log)),
 			costModel)
 	case gitlet.GitBlame:
 		start, end := q.Blame.Range()
 		parts = append(parts, whole[q.Blame.Rev], pathOf(q), strconv.Itoa(start), strconv.Itoa(end), costModel)
+	case gitlet.GitTreeCommits:
+		// The span bounds the page's entries.
+		parts = append(parts, whole[q.TreeCommits.Rev], pathOf(q), strconv.Itoa(r.s.treeWalk.span))
 	case gitlet.GitSearch:
 		// The commit read and the ref that named it, then the query's every
 		// part: whichever path cut the page, its hits are the same lines.
@@ -197,6 +206,16 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 			strconv.FormatBool(s.IgnoreCase), s.Text, strconv.Itoa(s.Hits()), after, strconv.Itoa(afterLine),
 			strconv.Itoa(len(paths)))
 		parts = append(parts, paths...)
+	case gitlet.GitExcerpts:
+		// The context as applied, then every anchor whole: its revision, its blob, its path's
+		// bytes, its side and its range.
+		e := q.Excerpts
+		parts = append(parts, strconv.Itoa(e.ContextOf()), strconv.Itoa(len(e.Anchors)))
+		for _, a := range e.Anchors {
+			p, _ := gitlet.GitPath("path", a.Path, a.PathB64, false)
+			parts = append(parts, a.ID, whole[a.Base], whole[a.Head], a.BlobOID, p, string(a.Side),
+				strconv.Itoa(a.Start), strconv.Itoa(a.End))
+		}
 	}
 	return cache.NewMemoKey(append(parts, formatCursor(at))...)
 }
@@ -208,12 +227,24 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 // should keep; a re-anchoring, a check and one diff of a few blobs, keyed
 // by a list of anchors each caller makes anew; and a checks file, asked once
 // a target's tip by the home that keeps what it parsed of it — a whole file
-// the memo would hold for nobody else; and a commit's deploy and dependency
-// files, asked once a tip by the scan that records what they declare.
+// the memo would hold for nobody else; a commit's deploy and dependency
+// files, asked once a tip by the scan that records what they declare; and a
+// find, which reads the tree's memoized listing and would add a page a keystroke.
 func memoizable(q gitlet.GitQuery) bool {
+	// A HISTORY NARROWED BY WHO PUSHED IT is a function of the node's index
+	// of pushes, which moves, never of the ids alone (gitlet.GitQuery.ReadsIndex).
+	if q.ReadsIndex() {
+		return false
+	}
 	switch q.Kind {
 	case gitlet.GitLandedIn, gitlet.GitRevisionFacts, gitlet.GitReanchor, gitlet.GitChecksFile,
-		gitlet.GitCodeFiles:
+		gitlet.GitCodeFiles, gitlet.GitFind:
+		return false
+	case gitlet.GitTips:
+		// Kept a tip at a time under tipsMemoFormat (tips.go), never as a page.
+		return false
+	case gitlet.GitTags:
+		// Read from the copy's tag index, never a page of the memo (tags.go).
 		return false
 	}
 	return true
@@ -421,6 +452,23 @@ func (w *pageWriter) flag(v bool) {
 	}
 }
 
+// optBool and optInt write a field an answer may leave out: whether it is
+// set, and its value where it is, so an absent one reads back absent and
+// never as false or zero.
+func (w *pageWriter) optBool(v *bool) {
+	w.flag(v != nil)
+	if v != nil {
+		w.flag(*v)
+	}
+}
+
+func (w *pageWriter) optInt(v *int) {
+	w.flag(v != nil)
+	if v != nil {
+		w.int(*v)
+	}
+}
+
 // encodePage is p's encoding: a memo body's first part, which its tail and
 // counts are appended to (appendTail, appendCounts).
 func encodePage(p memoPage) []byte {
@@ -492,23 +540,13 @@ func encodePage(p memoPage) []byte {
 		w.str(l.PathB64)
 		w.int(len(l.Commits))
 		for _, c := range l.Commits {
-			w.str(c.OID)
-			w.int(len(c.Parents))
-			for _, p := range c.Parents {
-				w.str(p)
-			}
-			w.int(c.ParentCount)
-			w.str(c.Author)
-			w.int(c.AuthorBytes)
-			w.str(c.AuthorEmail)
-			w.int(c.AuthorEmailBytes)
-			w.time(c.AuthoredAt)
-			w.time(c.CommittedAt)
-			w.str(c.Subject)
-			w.int(c.SubjectBytes)
+			appendLogCommit(&w, c)
 		}
 		w.int(l.Scanned)
 		w.flag(l.Complete)
+		// Never set on a page the memo keeps (memoizable), and written all
+		// the same: an entry holds every field of its answer.
+		w.optInt(l.Unjudged)
 	case gitlet.GitBlame:
 		b := a.Blame
 		w.str(b.Path)
@@ -534,10 +572,32 @@ func encodePage(p memoPage) []byte {
 			w.int(c.AuthorBytes)
 			w.str(c.AuthorEmail)
 			w.int(c.AuthorEmailBytes)
+			appendCommitter(&w, c.Committer, c.CommitterBytes, c.CommitterEmail, c.CommitterEmailBytes,
+				c.EngineCommitted)
 			w.time(c.AuthoredAt)
 			w.str(c.Subject)
 			w.int(c.SubjectBytes)
 		}
+	case gitlet.GitTreeCommits:
+		t := a.TreeCommits
+		w.str(t.Tree)
+		w.str(t.Path)
+		w.str(t.PathB64)
+		w.int(len(t.Entries))
+		for _, e := range t.Entries {
+			w.str(e.Path)
+			w.str(e.PathB64)
+			w.str(e.Commit)
+			w.flag(e.OutOfTime)
+		}
+		w.int(len(t.Commits))
+		for _, c := range t.Commits {
+			appendLogCommit(&w, c)
+		}
+		w.int(t.Total)
+		// Never set on a page the memo keeps (Cut), and written all the same:
+		// an entry holds every field of its answer.
+		w.flag(t.OutOfTime)
 	case gitlet.GitSearch:
 		s := a.Search
 		w.str(s.Tip)
@@ -553,8 +613,34 @@ func encodePage(p memoPage) []byte {
 			w.str(h.Text)
 			w.str(h.Blob)
 		}
+	case gitlet.GitExcerpts:
+		w.int(len(a.Excerpts.Excerpts))
+		for _, e := range a.Excerpts.Excerpts {
+			w.str(e.ID)
+			w.str(e.Status)
+			w.flag(e.Binary)
+			w.flag(e.More)
+			w.int(len(e.Lines))
+			for _, l := range e.Lines {
+				w.str(l.Mark)
+				w.int(l.Old)
+				w.int(l.New)
+				w.str(l.Text)
+				w.int(l.TextBytes)
+			}
+		}
 	}
 	return w
+}
+
+// appendCommitter writes a history's or a blame's commit's committer: the name
+// and the address, each with its size, and the engine's mark.
+func appendCommitter(w *pageWriter, name string, nameBytes int, email string, emailBytes int, engine *bool) {
+	w.str(name)
+	w.int(nameBytes)
+	w.str(email)
+	w.int(emailBytes)
+	w.optBool(engine)
 }
 
 // appendFile writes one diff file: its counts too where with is set (a
@@ -703,6 +789,24 @@ func (r *pageReader) flag() bool {
 	return v
 }
 
+// optBool and optInt read a field as pageWriter's optBool and optInt wrote
+// it: nil where it was left out.
+func (r *pageReader) optBool() *bool {
+	if !r.flag() {
+		return nil
+	}
+	v := r.flag()
+	return &v
+}
+
+func (r *pageReader) optInt() *int {
+	if !r.flag() {
+		return nil
+	}
+	v := r.int()
+	return &v
+}
+
 // maxInt is the largest int, which a count read back may not pass.
 const maxInt = int(^uint(0) >> 1)
 
@@ -773,7 +877,7 @@ func decodePage(body []byte) (memoPage, error) {
 				l.Commits[i] = readLogCommit(r)
 			}
 		}
-		l.Scanned, l.Complete = r.int(), r.flag()
+		l.Scanned, l.Complete, l.Unjudged = r.int(), r.flag(), r.optInt()
 		a.Log = l
 	case gitlet.GitBlame:
 		b := &gitlet.BlameAnswer{Path: r.str(), PathB64: r.str(), StartLine: r.int(), EndLine: r.int(),
@@ -789,13 +893,37 @@ func decodePage(body []byte) (memoPage, error) {
 			for range n {
 				id := r.str()
 				b.Commits[id] = gitlet.BlameCommit{Author: r.str(), AuthorBytes: r.int(), AuthorEmail: r.str(),
-					AuthorEmailBytes: r.int(), AuthoredAt: r.time(), Subject: r.str(), SubjectBytes: r.int()}
+					AuthorEmailBytes: r.int(), Committer: r.str(), CommitterBytes: r.int(), CommitterEmail: r.str(),
+					CommitterEmailBytes: r.int(), EngineCommitted: r.optBool(), AuthoredAt: r.time(),
+					Subject: r.str(), SubjectBytes: r.int()}
 			}
 			if len(b.Commits) != n {
 				r.err = errMemoPage // an id twice: no page this build writes
 			}
 		}
 		a.Blame = b
+	case gitlet.GitTreeCommits:
+		t := &gitlet.TreeCommitsAnswer{Tree: r.str(), Path: r.str(), PathB64: r.str(), Entries: []gitlet.TreeCommit{},
+			Commits: []gitlet.LogCommit{}}
+		if n := r.count(); r.err == nil {
+			t.Entries = make([]gitlet.TreeCommit, n)
+			for i := range t.Entries {
+				t.Entries[i] = gitlet.TreeCommit{Path: r.str(), PathB64: r.str(), Commit: r.str(), OutOfTime: r.flag()}
+			}
+		}
+		if n := r.count(); r.err == nil {
+			seen := map[string]bool{}
+			t.Commits = make([]gitlet.LogCommit, n)
+			for i := range t.Commits {
+				t.Commits[i] = readLogCommit(r)
+				if seen[t.Commits[i].OID] {
+					r.err = errMemoPage // a commit twice: no page this build writes
+				}
+				seen[t.Commits[i].OID] = true
+			}
+		}
+		t.Total, t.OutOfTime = r.int(), r.flag()
+		a.TreeCommits = t
 	case gitlet.GitSearch:
 		s := &gitlet.SearchAnswer{Tip: r.str(), Ref: r.str(), Via: gitlet.SearchVia(r.str()), SkippedFiles: r.int(),
 			Truncated: r.flag(), Hits: []gitlet.SearchHit{}}
@@ -807,6 +935,24 @@ func decodePage(body []byte) (memoPage, error) {
 			}
 		}
 		a.Search = s
+	case gitlet.GitExcerpts:
+		x := &gitlet.ExcerptsAnswer{Excerpts: []gitlet.Excerpt{}}
+		if n := r.count(); r.err == nil {
+			x.Excerpts = make([]gitlet.Excerpt, n)
+			for i := range x.Excerpts {
+				e := gitlet.Excerpt{ID: r.str(), Status: r.str(), Binary: r.flag(), More: r.flag(),
+					Lines: []gitlet.ExcerptLine{}}
+				if m := r.count(); r.err == nil {
+					e.Lines = make([]gitlet.ExcerptLine, m)
+					for j := range e.Lines {
+						e.Lines[j] = gitlet.ExcerptLine{Mark: r.str(), Old: r.int(), New: r.int(), Text: r.str(),
+							TextBytes: r.int()}
+					}
+				}
+				x.Excerpts[i] = e
+			}
+		}
+		a.Excerpts = x
 	default:
 		return memoPage{}, errMemoPage
 	}
@@ -828,9 +974,32 @@ func readLogCommit(r *pageReader) gitlet.LogCommit {
 	c.ParentCount = r.int()
 	c.Author, c.AuthorBytes = r.str(), r.int()
 	c.AuthorEmail, c.AuthorEmailBytes = r.str(), r.int()
+	c.Committer, c.CommitterBytes = r.str(), r.int()
+	c.CommitterEmail, c.CommitterEmailBytes = r.str(), r.int()
+	c.EngineCommitted = r.optBool()
 	c.AuthoredAt, c.CommittedAt = r.time(), r.time()
 	c.Subject, c.SubjectBytes = r.str(), r.int()
 	return c
+}
+
+// appendLogCommit writes one commit as readLogCommit reads it: a history
+// page's, a tip's and a directory's last commits' alike.
+func appendLogCommit(w *pageWriter, c gitlet.LogCommit) {
+	w.str(c.OID)
+	w.int(len(c.Parents))
+	for _, p := range c.Parents {
+		w.str(p)
+	}
+	w.int(c.ParentCount)
+	w.str(c.Author)
+	w.int(c.AuthorBytes)
+	w.str(c.AuthorEmail)
+	w.int(c.AuthorEmailBytes)
+	appendCommitter(w, c.Committer, c.CommitterBytes, c.CommitterEmail, c.CommitterEmailBytes, c.EngineCommitted)
+	w.time(c.AuthoredAt)
+	w.time(c.CommittedAt)
+	w.str(c.Subject)
+	w.int(c.SubjectBytes)
 }
 
 // readFile reads one diff file as appendFile wrote it.

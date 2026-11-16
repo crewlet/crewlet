@@ -68,6 +68,13 @@ const peopleCompanyYAML = companyYAML + `  - name: Founder
     kind: human
 `
 
+// passwordOnly lets people of company sign in on boot's node with a password
+// alone: the operator's limit allows it and the company chooses it.
+func passwordOnly(boot *config.Bootstrap, company *config.Company) {
+	boot.API.Auth.Limits.SecondFactor = iam.SecondFactorOptional
+	company.SignIn.RequireSecondFactor = new(false)
+}
+
 // configPair writes both tiers into a temp directory and returns the flags
 // that point at them.
 func configPair(t *testing.T, bootstrapYAML, company string) []string {
@@ -1768,7 +1775,7 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	want := []config.Warning{{
 		Kind: config.WarningDanglingReference, Ref: "lead",
 		Path: "units[0].lead", Segments: config.Path{"units", 0, "lead"},
-		Unit: "Platform", From: "Platform", To: "ghost",
+		Unit: "Platform", From: "Platform", To: "ghost", Item: "ghost",
 	}, {
 		Kind: config.WarningAdvisory, Path: "roles",
 		Segments: config.Path{"roles"},
@@ -1796,13 +1803,12 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 			t.Errorf("warnings[%d] carries no message: %+v", i, g)
 		}
 		g.Message = ""
-		// THE PERSON'S WORDS ARE PROSE TOO, so likewise only present: a classed
-		// advisory carries them (config.Warning.Person), an unclassed one none.
-		if (g.Person != "") != (w.Class != "") {
-			t.Errorf("warnings[%d] person words = %q, want them exactly when it has a class: %+v",
-				i, g.Person, g)
+		// ITS RULE'S TITLE AND PERSON WORDS ARE PROSE TOO, so likewise only
+		// present: every advisory and dangling reference carries both.
+		if g.Title == "" || g.Person == "" {
+			t.Errorf("warnings[%d] title %q, person words %q, want both: %+v", i, g.Title, g.Person, g)
 		}
-		g.Person = ""
+		g.Title, g.Person = "", ""
 		if !reflect.DeepEqual(g, w) {
 			t.Errorf("warnings[%d] = %+v, want %+v", i, g, w)
 		}

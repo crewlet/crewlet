@@ -15,9 +15,9 @@ import (
 
 // THE BEARER'S WIRE FORMAT, and what each field is doing there.
 //
-//	v3.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<absolute expiry>.<idle expiry>[.<scope>].<mac>
+//	v4.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<signed in>.<absolute expiry>.<issued>.<idle expiry>[.<scope>].<mac>
 //
-// NINE FIELDS, dot-separated, with the session's own pair joined by `~` so
+// ELEVEN FIELDS, dot-separated, with the session's own pair joined by `~` so
 // that the two values a node needs before it reads anything travel as one
 // token — and one more, present only where it says something: the scope, on a
 // session that may do less than everything. Every one of them is here because
@@ -36,8 +36,10 @@ import (
 //     signature and the epoch together are proof the sign-in happened;
 //   - the START POSITION, which is what turns "no row" into the two answers it
 //     actually is — a session that ended, or one this node has not seen;
-//   - the ABSOLUTE expiry, which no re-issue ever moves;
-//   - the IDLE expiry, which every re-issue does, with no store write at all;
+//   - the SIGN-IN instant, carried by every replacement of the session, and
+//     the ABSOLUTE expiry, which no re-issue ever moves;
+//   - the ISSUE instant and the IDLE expiry, which every re-issue moves, with
+//     no store write at all;
 //   - the SCOPE, present only on a session that may do less than everything:
 //     `enrol`, one its sign-in opened on a password alone where a second
 //     factor is required ([Bearer.EnrolmentOnly]).
@@ -53,6 +55,11 @@ import (
 // token a new id. A MAC over the value once rode here for that, and went: a
 // second credential check on every request, a key derivation and an ending of
 // its own, to shorten an hour an id change already shortens to nothing.
+//
+// # Why the instants ride beside the deadlines (v4)
+//
+// So a node can hold a session to SHORTER limits set since it was signed
+// ([Bearer.EndsUnder], ADR-0152); a raised limit never stretches it.
 //
 // # There is no rotation index, and v2 had one
 //
@@ -75,11 +82,11 @@ import (
 // re-issue at every window boundary, which [ReissueAfter] already does five
 // minutes into any window. So it is gone, and with it `session.rotate_after`
 // and the reuse revocation. What bounds a captured cookie is what always did:
-// the idle deadline (twelve hours from the last use), the absolute deadline
-// (configured), the person's revocation epoch and the fleet's generation (one
-// write each, immediate). The version moved because the session pair is a
-// field v2 read as a triple — a v2 bearer is malformed here, and a v3 one is
-// malformed to a v2 build, rather than either being misread.
+// the idle deadline (from the last use), the absolute deadline, the person's
+// revocation epoch and the fleet's generation (one write each, immediate). The
+// version moved because the session pair is a field v2 read as a triple — a v2
+// bearer is malformed here, and a v3 one is malformed to a v2 build, rather
+// than either being misread; v4 moved it again for the two instants.
 //
 // # Why the scope is in the bearer, and why it is optional
 //
@@ -93,9 +100,9 @@ import (
 // socket's snapshot among it, on a deployment that requires a second factor.
 //
 // ABSENT WHEN THE SESSION IS WHOLE, and that is the rolling-upgrade decision
-// rather than tidiness. A whole session's bearer is byte for byte the nine
-// fields every build reads, so a fleet part-way through an upgrade keeps every
-// ordinary session on every node. A scoped one is ten, which a build that
+// rather than tidiness. A whole session's bearer is byte for byte the eleven
+// fields every v4 build reads, so a fleet part-way through an upgrade keeps
+// every ordinary session on every node. A scoped one is twelve, which a build that
 // knows no scope refuses as MALFORMED — the direction that fails safe, because
 // such a build would otherwise serve it whole. What that costs is a person
 // part-way through enrolling asked to sign in again on that node, for a
@@ -130,9 +137,14 @@ type Bearer struct {
 	// record landed at.
 	StartPosition uint64
 
-	// AbsoluteExpiresAt is never moved by a re-issue; IdleExpiresAt is
-	// moved by every one.
+	// SignedInAt is when the sign-in this session continues proved who it
+	// was; a replacement (a step-up, a password change) carries it.
+	SignedInAt time.Time
+
+	// AbsoluteExpiresAt is never moved by a re-issue; IssuedAt and
+	// IdleExpiresAt are moved by every one.
 	AbsoluteExpiresAt time.Time
+	IssuedAt          time.Time
 	IdleExpiresAt     time.Time
 
 	// EnrolmentOnly marks a session that may do nothing but enrol a second
@@ -158,12 +170,9 @@ var ErrMalformed = errors.New("session: not a bearer of this format")
 
 // Mint is what issuing a bearer needs.
 //
-// THE CALLER STATES THE DEADLINES rather than this package deriving them: the
-// absolute lifetime is configured and belongs to whoever read the config, and
-// a signer that reached for it would be a second reader of a field that is
-// allowed to change under it. The IDLE deadline is the exception and is
-// derived here, because [Idle] is a constant precisely so that every node
-// agrees on it.
+// THE CALLER STATES THE SIGN-IN AND ITS DEADLINE, which a replacement carries
+// from the session it replaces; the idle deadline is stamped here, from the
+// signer's [Limits].
 type Mint struct {
 	// Lineage is the session's id: the subject its records arbitrate on.
 	Lineage uuid.UUID
@@ -172,6 +181,9 @@ type Mint struct {
 	Epoch         uint64
 	Generation    uint64
 	StartPosition uint64
+
+	// SignedInAt is when the sign-in this session continues happened.
+	SignedInAt time.Time
 
 	// AbsoluteExpiresAt is the deadline no re-issue moves.
 	AbsoluteExpiresAt time.Time
@@ -195,6 +207,9 @@ func (s *Signer) Mint(m Mint) (string, error) {
 	case m.AbsoluteExpiresAt.IsZero():
 		return "", errors.New("session: a bearer needs an absolute deadline; " +
 			"a zero one read as 'never' is a session nobody bounded")
+	case m.SignedInAt.IsZero():
+		return "", errors.New("session: a bearer needs its sign-in instant, " +
+			"which a lowered lifetime is measured from")
 	}
 	now := s.now()
 	return s.issue(Bearer{
@@ -203,26 +218,27 @@ func (s *Signer) Mint(m Mint) (string, error) {
 		Person:            m.Person,
 		Epoch:             m.Epoch,
 		StartPosition:     m.StartPosition,
+		SignedInAt:        m.SignedInAt,
 		AbsoluteExpiresAt: m.AbsoluteExpiresAt,
 		EnrolmentOnly:     m.EnrolmentOnly,
-	}, now)
+	}, now, s.limits().Idle)
 }
 
-// issue signs one bearer, stamping the idle deadline.
+// issue signs one bearer issued at now, its idle deadline idle later.
 //
 // IT ALWAYS SIGNS UNDER THE ACTIVE KEY, including when it is re-issuing a
 // cookie that arrived under an older one. That is what makes a keyring
 // rotation drain: every live session moves to the new key the first time it is
 // used, so by the time the old key is dropped the sessions still on it are the
 // ones that have been idle longer than the re-issue window.
-func (s *Signer) issue(b Bearer, now time.Time) (string, error) {
+func (s *Signer) issue(b Bearer, now time.Time, idle time.Duration) (string, error) {
 	key, held := s.keys[s.activeTag]
 	if !held {
 		return "", fmt.Errorf("%w: the active key is not in this signer's "+
 			"keyring", ErrNoKeyring)
 	}
 	b.KeyTag = s.activeTag
-	b.IdleExpiresAt = now.Add(Idle)
+	b.IssuedAt, b.IdleExpiresAt = now, now.Add(idle)
 	payload := b.payload()
 	return payload + "." + sign(key, payload), nil
 }
@@ -238,7 +254,9 @@ func (b Bearer) payload() string {
 		b.Lineage.String() + "~" + b.Person,
 		strconv.FormatUint(b.Epoch, 10),
 		strconv.FormatUint(b.StartPosition, 10),
+		strconv.FormatInt(b.SignedInAt.Unix(), 10),
 		strconv.FormatInt(b.AbsoluteExpiresAt.Unix(), 10),
+		strconv.FormatInt(b.IssuedAt.Unix(), 10),
 		strconv.FormatInt(b.IdleExpiresAt.Unix(), 10),
 	}
 	if b.EnrolmentOnly {
@@ -249,7 +267,7 @@ func (b Bearer) payload() string {
 
 // fields is how many dot-separated parts a WHOLE session's bearer has,
 // signature included; each attribute adds one — see the format's doc.
-const fields = 9
+const fields = 11
 
 // attributes is how many a bearer may carry: a scope.
 const attributes = 1
@@ -325,8 +343,10 @@ func (s *Signer) parse(cookie string) (Bearer, error) {
 		raw  string
 		into *time.Time
 	}{
-		{parts[6], &b.AbsoluteExpiresAt},
-		{parts[7], &b.IdleExpiresAt},
+		{parts[6], &b.SignedInAt},
+		{parts[7], &b.AbsoluteExpiresAt},
+		{parts[8], &b.IssuedAt},
+		{parts[9], &b.IdleExpiresAt},
 	} {
 		seconds, err := strconv.ParseInt(field.raw, 10, 64)
 		if err != nil {

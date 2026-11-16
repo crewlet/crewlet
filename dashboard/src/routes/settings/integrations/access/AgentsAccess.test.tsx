@@ -11,8 +11,6 @@
  * only, with one line saying why.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { Profiler, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -499,34 +497,6 @@ test("a Cloudflare level the provisioner cannot grant is offered disabled, sayin
   expect(configure.getAttribute("aria-disabled")).not.toBe("true");
 });
 
-// EVERY LEVEL BEFORE IT SCROLLS. A level is a name over a note of up to four
-// lines, where the kit sizes its panel for six one-line rows, so Cloudflare's
-// picker showed two levels of four. jsdom lays nothing out, so the cascade over
-// the panel the picker opens is what is read.
-test("the level picker's panel is tall enough for every level and its note", () => {
-  const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
-  const sheets = [
-    read("node_modules/@crewlethq/ui/dist/styles.css"),
-    read("src/styles/access.css"),
-  ].map((text) => {
-    const style = document.createElement("style");
-    style.textContent = text;
-    document.head.append(style);
-    return style;
-  });
-  try {
-    draw(cloudflareAnswer());
-    fireEvent.click(screen.getByRole("combobox", { name: "SRE's Cloudflare access" }));
-    const panel = screen.getAllByRole("option")[0]!.closest<HTMLElement>(".agent-access-menu");
-    expect(panel).not.toBeNull();
-    expect(
-      getComputedStyle(panel!).getPropertyValue("--crewlet-select-menu-max-height").trim(),
-    ).toBe("24rem");
-  } finally {
-    for (const s of sheets) s.remove();
-  }
-});
-
 test("an off Cloudflare seat says turning it on mints a token limited to the company's zones", () => {
   draw(cloudflareAnswer());
   expect(
@@ -772,7 +742,10 @@ test("an agent's permissions are a count beside a pencil that edits them, and re
   expect(screen.getByText("6 permissions")).toBeTruthy();
   const edit = screen.getByRole("button", { name: "Edit QA's GitHub permissions" });
   expect(glyphIn(edit)).toBe(PENCIL);
-  expect(edit.getAttribute("title")).toContain("Issues: Read and write");
+  fireEvent.keyDown(document.body, { key: "Tab" });
+  act(() => edit.focus());
+  expect(screen.getByRole("tooltip").textContent).toContain("Issues: Read and write");
+  act(() => edit.blur());
   expect((edit as HTMLButtonElement).disabled).toBe(false);
   cleanup();
   draw(githubAnswer(), { readOnly: OPERATOR_MANAGED });
@@ -862,7 +835,7 @@ test("an agent's details say when it was checked and when its access was last ap
     details("SRE");
     const list = document.querySelector<HTMLElement>('dl[aria-label="SRE on Datadog"]')!;
     expect(within(list).getByText("Sync")).toBeTruthy();
-    expect(list.textContent).toContain("Checked 1m ago, last applied 10m ago");
+    expect(list.textContent).toContain("Checked 1 minute ago, last applied 10 minutes ago");
   } finally {
     vi.useRealTimers();
   }

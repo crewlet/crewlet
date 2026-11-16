@@ -164,6 +164,9 @@ func settleTipWork(ctx context.Context, tx store.Execer, repoID, target string, 
 //     naming the merger, whom the merge was made for ([keptCarrier]) and what it
 //     introduced, the repository's counters, and the horizons with what the
 //     record's rows leave them.
+//  5. Its merge counted in the repository's changes by state and their tally
+//     ([countChanges]), after the push, so the horizons are given what an older
+//     build's rows leave them.
 func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m Merge) (int, error) {
 	m.WorkingFor = keptCarrier(at, m.WorkingFor)
 	row, found, err := changeRowIn(ctx, tx, m.ChangeID)
@@ -265,7 +268,15 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	if err != nil {
 		return 0, err
 	}
-	return rows + pushed, nil
+
+	// 5 ITS MERGE COUNTED.
+	var merged ChangeCounts
+	merged.move(row.state, ChangeStateMerged)
+	tallied, err := countChanges(ctx, tx, m.RepoID, merged)
+	if err != nil {
+		return 0, fmt.Errorf("%w (the merge at %s)", err, at.position)
+	}
+	return rows + pushed + tallied, nil
 }
 
 // push is the push m lands, as its push row records it: its push id the

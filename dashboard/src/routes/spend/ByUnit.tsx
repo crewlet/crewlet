@@ -9,7 +9,6 @@
  * bands and wrong for a list whose fifth row is somebody's whole team.
  */
 
-import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import { useMemo } from "react";
 import { BarList, Card, DATA_COLORS, EmptyState, Skeleton } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
@@ -24,13 +23,7 @@ import { SERIES_MAX_GROUPS } from "~/contract/spend.ts";
 /** The most bands the engine names in one answer: By unit asks for every one. */
 export const UNIT_GROUPS = SERIES_MAX_GROUPS;
 
-export function ByUnit({
-  params,
-  words,
-}: {
-  params: Record<string, unknown>;
-  words: string | null;
-}) {
+export function ByUnit({ params }: { params: Record<string, unknown> }) {
   const units = useQuery("token_series", {
     ...params,
     group: "unit",
@@ -46,11 +39,7 @@ export function ByUnit({
   const index = useMemo(() => indexOrg(org), [org]);
   return (
     <Card className="spend-card spend-list" padding="none">
-      <Card.Header
-        icon={<UsersGlyph size="sm" />}
-        subtitle={words ?? undefined}
-        subtitlePlacement="below"
-      >
+      <Card.Header>
         <Card.Title>By team</Card.Title>
       </Card.Header>
       <Card.Body padding="md">
@@ -67,7 +56,7 @@ export function ByUnit({
             // bare sentence beside the tables' and the chart's empty states read
             // as two kinds of answer to one question.
             <EmptyState
-              size="compact"
+              size="inline"
               title="No team's seats spent tokens in this window"
               description="A team appears once its seats spend tokens."
             />

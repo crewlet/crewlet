@@ -123,6 +123,8 @@ func (e *estate) seedChangeRows(id string, changes, revisions, authors, body int
 			SELECT printf('%s-change-%06d', ?, i / ?), printf('seat-%05d', i % ?), 'agent', 1, 1 FROM k`,
 			changes*authors, id, authors, authors)
 	}
+	// THE COUNTS THE SEEDED ROWS IMPLY, as an upgraded node re-derives them.
+	e.rederive()
 }
 
 // seedNotices writes perChange notices of each of a repository's first

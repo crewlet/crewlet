@@ -15,7 +15,8 @@ import "strings"
 // spelling of them works. Each entry here names the key, says it was
 // removed, and says what replaces it.
 //
-// ONLY THE KEYS THE IDENTITY AND ACCESS REWRITE AND PER-SEAT ACCESS REMOVED.
+// ONLY THE KEYS THE IDENTITY AND ACCESS REWRITE, PER-SEAT ACCESS AND THE
+// COMPANY'S SIGN-IN POLICY (ADR-0152) REMOVED.
 // Every one of them changes who can reach the deployment, or what an agent may
 // do at a vendor, so the file that still carries one is the file whose author
 // most needs to read what changed.
@@ -32,6 +33,18 @@ var removedKeys = map[string]string{
 	"APIAuth.bootstrap": "`api.auth.bootstrap` was removed. Remove it, and " +
 		"invite the first person with an `api.auth.tokens` token " +
 		"(`crewlet iam invite <address> -seat <handle>`)",
+	// THE SIGN-IN POLICY moved into the company document, within limits each
+	// node's operator sets (ADR-0152).
+	"APIAuth.totp": "`api.auth.totp` was removed. The company sets two-step " +
+		"verification now (`sign_in.require_second_factor`); to let it drop the " +
+		"second factor, set `api.auth.limits.second_factor: optional`",
+	"APIAuth.min_password_length": "`api.auth.min_password_length` was removed. " +
+		"The company sets the password floor now (`sign_in.min_password_length`); " +
+		"to hold it higher, set `api.auth.limits.min_password_length`",
+	"APIAuth.session": "`api.auth.session` was removed. The company sets the " +
+		"session lifetime and step-up window now (`sign_in.session_lifetime_seconds`, " +
+		"`sign_in.step_up_seconds`); to bound them, set " +
+		"`api.auth.limits.max_session_lifetime` and `api.auth.limits.max_step_up`",
 	// PER-SEAT ACCESS moved what an agent may do at a vendor onto the seat
 	// (`roles[].integrations.<lane>`), in the vendor's own terms.
 	"GitLabProvisioning.access_level": "`integrations.gitlab.provisioning.access_level` " +

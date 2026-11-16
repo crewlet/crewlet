@@ -28,9 +28,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// GITLET ON THE API: smart HTTP under /git/ for a person's
-// git client, the cache's verify under /gitlet/, and what every node answers
-// when it serves none of Gitlet now.
+// GITLET ON THE API: smart HTTP under /git/ for a person's git client and two
+// downloads beside it, a file's bytes and a commit's ZIP, the cache's verify
+// under /gitlet/, and what every node answers when it serves none of Gitlet
+// now.
 //
 // Both prefixes are GUARDED, as every route the exemption list
 // ([auth.Unguarded]) does not name is, and neither is ever on api.public
@@ -86,7 +87,8 @@ import (
 // ([App.boxGitRoute]): its prefix is public, and the reason is the
 // deployment's state.
 
-// GitRoutes is Gitlet as the API mounts it; *host.Server satisfies it.
+// GitRoutes is Gitlet as the API mounts it; *host.Server satisfies it. Raw
+// and Archive are a person's two downloads beside git (host/download.go).
 // The Box handlers are the same three entry points behind a box's admission
 // rather than a person's; AdmitCheck is that admission for a check's box's
 // reads under /box/gitlet/ (boxcode.go), which answers a request it refuses
@@ -95,6 +97,8 @@ type GitRoutes interface {
 	InfoRefs() http.Handler
 	UploadPack() http.Handler
 	ReceivePack() http.Handler
+	Raw() http.Handler
+	Archive() http.Handler
 	BoxInfoRefs() http.Handler
 	BoxUploadPack() http.Handler
 	BoxReceivePack() http.Handler
@@ -339,7 +343,8 @@ func servesGit(b *config.Bootstrap) bool {
 // nothing but the overview, or a machine token carrying one app, could start a
 // verify, and its repair, of every repository a Gitlet node keeps. Now:
 //
-//   - THE GIT ROUTES admit every holder of the gitlet app the guard resolved
+//   - THE GIT ROUTES, and the two downloads beside them, decided as a
+//     fetch is, admit every holder of the gitlet app the guard resolved
 //     ([authz.ActionCodeGit]), as the code questions do, and refuse
 //     everybody else before any repository is read (ADR-0110):
 //     what a holder may fetch or push is the per-repository grant the serving
@@ -390,6 +395,8 @@ func (a *App) mountCode(mux authz.Mux) error {
 	mount(git, host.PatternInfoRefs, transport, a.gitRoute(GitRoutes.InfoRefs))
 	mount(git, host.PatternUploadPack, transport, a.gitRoute(GitRoutes.UploadPack))
 	mount(git, host.PatternReceivePack, transport, a.gitRoute(GitRoutes.ReceivePack))
+	mount(git, host.PatternRaw, transport, a.gitRoute(GitRoutes.Raw))
+	mount(git, host.PatternArchive, transport, a.gitRoute(GitRoutes.Archive))
 	mux.Handle(host.PatternBoxInfoRefs, a.boxGitRoute(GitRoutes.BoxInfoRefs))
 	mux.Handle(host.PatternBoxUploadPack, a.boxGitRoute(GitRoutes.BoxUploadPack))
 	mux.Handle(host.PatternBoxReceivePack, a.boxGitRoute(GitRoutes.BoxReceivePack))

@@ -139,7 +139,59 @@ const (
 	// maxSentence bounds one refusal sentence on the wire: a diagnostic, and
 	// git prints it on one line beside the ref.
 	maxSentence = 512
+
+	// ArchiveShare is how many read-lane slots (cores) each archive place
+	// stands for (Archives): a large ZIP inflates and deflates every file, a
+	// core for as long as its client reads fast.
+	ArchiveShare = 4
+
+	// ArchivesPerPrincipal is how many ZIPs one principal of the transfer
+	// share makes at once on a node, from its measure to its last byte.
+	ArchivesPerPrincipal = 1
+
+	// ArchiveFreeBytes is the largest output bound (archiveBound) a ZIP may
+	// have and take no archive place: about 4 s of one core at the measured
+	// 0.06 s a MiB (BenchmarkDownload).
+	ArchiveFreeBytes = 64 << 20
+
+	// MaxArchiveTreeBytes is the most bytes of files a ZIP is made of; past
+	// it `git clone --depth 1` serves the same files from compressed packs.
+	MaxArchiveTreeBytes = 4 << 30
+
+	// MaxArchiveEntries is the most entries (files, directories, submodules
+	// and the prefix's own) a ZIP is made of: a repeated subtree names a
+	// million from a few KiB of objects, at about 5 µs and 55 bytes of git's each.
+	MaxArchiveEntries = 1_000_000
+
+	// MaxArchiveNameBytes is the most bytes of entry names a ZIP is made of:
+	// git holds every name in the ZIP's central directory until its end.
+	MaxArchiveNameBytes = 64 << 20
+
+	// ArchiveDeadline is the longest one archive runs: a large one holds a
+	// scarce place, so a client slower than its ZIP's size an hour is cut.
+	ArchiveDeadline = time.Hour
+
+	// ArchiveEntryBytes is archiveBound's term for each entry beside its name
+	// twice: local and central headers, timestamps, zip64 fields and a data
+	// descriptor (measured 94 bytes for an ordinary entry, at most about 170).
+	ArchiveEntryBytes = 256
+
+	// ArchiveSlackBytes is archiveBound's constant: the end records and the
+	// commit-id comment (138 bytes), with room.
+	ArchiveSlackBytes = 64 << 10
 )
+
+// Archives is how many large ZIPs a node with readSlots read-lane slots makes
+// at once: one for every ArchiveShare, and never fewer than two, so one slow
+// client never holds a node's only place.
+func Archives(readSlots int) int { return max(2, readSlots/ArchiveShare) }
+
+// archiveBound is the most bytes a ZIP of a commit measured m can be: every
+// file's bytes with deflate's worst-case growth, each entry's headers, each
+// name twice (local and central header) and the end records.
+func archiveBound(m treeMeasure) int64 {
+	return m.bytes + m.bytes>>10 + m.entries*ArchiveEntryBytes + 2*m.nameBytes + ArchiveSlackBytes
+}
 
 // RequestBound is the most decoded bytes a fetch request to repo may carry:
 // fifty bytes for every object its live packs hold and every live ref — the

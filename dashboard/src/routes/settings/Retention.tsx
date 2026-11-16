@@ -68,20 +68,14 @@ import {
   type DataGridColumn,
   type Tone,
 } from "@crewlethq/ui";
-import {
-  DatabaseGlyph,
-  CopyGlyph,
-  PackageGlyph,
-  ClockGlyph,
-  TriangleAlertGlyph,
-} from "@crewlethq/icons/glyphs";
+import { TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { href, useRoute } from "~/app/router.tsx";
 import {
   ALARMS_AT,
   alarmHome,
-  alarmKindTitle,
+  alarmTitle,
   alarmLogLines,
   drawnOnBackups,
   type AlarmLogLine,
@@ -93,7 +87,7 @@ import { SNAPSHOT_DONORS_REQUIRED } from "~/contract/retention.ts";
 import { andList } from "~/lib/words.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
-import { asSentence, fmtBytes, fmtDateTime, fmtDuration, fmtExact, relTime } from "~/lib/format.ts";
+import { asSentence, fmtBytes, fmtDateTime, fmtDuration, fmtExact, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { marked } from "~/ui/Problems.tsx";
 import type {
@@ -110,6 +104,7 @@ import type {
 } from "~/protocol/index.ts";
 import { finishable, GateDialog } from "./GateDialog.tsx";
 import type { GateGesture } from "./GateDialog.tsx";
+import { ago } from "~/lib/ago.ts";
 
 /** Sixty seconds: this document is assembled from coordination and three
  *  loops, and none of them moves faster than a tick. */
@@ -209,7 +204,7 @@ export function AlarmList({ alarms, now }: { alarms: RetentionAlarm[]; now: numb
                 return (
                   <Fragment key={alarm.kind}>
                     {i === 0 ? null : i === elsewhere.length - 1 ? " and " : ", "}
-                    {alarmKindTitle(alarm.kind)} on{" "}
+                    {alarmTitle(alarm)} on{" "}
                     <a className="t-link prose-link" href={href(home.path)}>
                       {home.label}
                     </a>
@@ -254,7 +249,8 @@ export function AlarmItem({ alarm, now }: { alarm: RetentionAlarm; now: number }
         <TriangleAlertGlyph size="sm" />
       </span>
       <div className="alarm-body">
-        <p className="alarm-title">{alarmKindTitle(alarm.kind)}</p>
+        <p className="alarm-title">{alarmTitle(alarm)}</p>
+        <p>{alarm.person}</p>
         <p>
           {folded && (
             <>
@@ -453,6 +449,14 @@ export function RetentionPanels({
   // already includes it disagrees because something later moved the node
   // ([heldGestures]).
   const [gestures, setGestures] = useState<Record<string, GateGesture>>({});
+  const [openNodes, setOpenNodes] = useState<ReadonlySet<string>>(new Set());
+  const toggleNode = (n: RetentionNode) =>
+    setOpenNodes((was) => {
+      const next = new Set(was);
+      if (next.has(n.node_id)) next.delete(n.node_id);
+      else next.add(n.node_id);
+      return next;
+    });
   const holdGesture = (node: string, evict: boolean, g: GateGesture | null) => {
     setGestures((all) => {
       const next = { ...all };
@@ -501,13 +505,20 @@ export function RetentionPanels({
         ))}
 
       <Card padding="none">
-        <Card.Header icon={<CopyGlyph size="sm" />} count={nodes.length}>
+        <Card.Header count={nodes.length}>
           <Card.Title>Replication</Card.Title>
         </Card.Header>
         <DataGrid<RetentionNode>
           rows={nodes}
           rowKey={(n) => n.node_id}
           defaultSort="node"
+          expansion={{
+            isExpanded: (n) => openNodes.has(n.node_id),
+            onToggle: toggleNode,
+            label: (n, isOpen) => `${isOpen ? "Hide" : "Show"} ${n.node_id}'s position in each log`,
+            render: (n) => <NodePositions node={n} />,
+            canExpand: (n) => Object.keys(n.domains ?? {}).length > 0,
+          }}
           columns={[
             {
               key: "node",
@@ -545,7 +556,7 @@ export function RetentionPanels({
               // line, and the counted and reported facts give way first.
               floor: "15rem",
               sortValue: (n) => firstDomain(n)?.seq ?? -1,
-              cell: (n) => <NodePositions node={n} />,
+              cell: (n) => <PositionSummary node={n} />,
             },
             {
               key: "counted",
@@ -661,7 +672,6 @@ export function SnapshotsCard({
   return (
     <Card padding="none">
       <Card.Header
-        icon={<PackageGlyph size="sm" />}
         count={solo ? undefined : snapshots.length}
         subtitle={
           solo ? undefined : `${donorsCounted(snapshots)} of ${SNAPSHOT_DONORS_REQUIRED} donors`
@@ -747,13 +757,11 @@ export function SnapshotsCard({
         <Card.Body padding="md">
           <StatGroup>
             <StatCard
-              icon={<DatabaseGlyph size="xs" />}
               label="Replicated store"
               value={fmtBytes(replica.store_bytes)}
               sub="what a joining peer has to receive"
             />
             <StatCard
-              icon={<ClockGlyph size="xs" />}
               label="Projected join"
               value={fmtDuration(replica.projected_join_seconds * 1000)}
               sub={
@@ -892,7 +900,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
         <span>
           <strong>Maintenance on {op.stream}</strong>: no node starts in service until it closes.
           Phase <InlineCode close=",">{op.phase}</InlineCode> attempt {op.attempt}, since{" "}
-          {relTime(op.since, now)}
+          {ago(op.since, now, { since: true, clock: true })}
           {/* NOT IN PARENTHESES: the author's credential is in its own. */}
           {op.by && <>, run by {authorLabel(op.by, op.operator_id)}</>}. Resizing{" "}
           {fmtBytes(op.original_max_bytes)} to {fmtBytes(op.target_max_bytes)}.
@@ -1116,6 +1124,40 @@ export function donorsCounted(snapshots: RetentionSnapshot[]): number {
  * while nothing is applied is exactly what a retained record produces, and
  * from the position alone it is indistinguishable from being caught up.
  */
+/** A node's position over every log on one line: how many logs, and how many need a look. */
+export function PositionSummary({ node }: { node: RetentionNode }) {
+  const domains = Object.values(node.domains ?? {});
+  if (domains.length === 0) {
+    return <EmptyValue label="This node has published no position for any domain" />;
+  }
+  const flagged = domains.filter(
+    (d) =>
+      d.log_diverged ||
+      (d.deferred ?? 0) > 0 ||
+      d.generation_state === "left" ||
+      d.generation_state === "ahead",
+  ).length;
+  const behind = domains.filter((d) => (d.lag ?? 0) > 0).length;
+  const unknown = domains.filter((d) => d.lag == null).length;
+  const logs = plural(domains.length, "log");
+  return (
+    <span className="row gap-1 t-caption">
+      <span>
+        {behind > 0
+          ? `${logs}, ${behind} behind`
+          : unknown > 0
+            ? `${logs}, lag unknown on ${unknown}`
+            : `${logs}, caught up`}
+      </span>
+      {flagged > 0 && (
+        <Tag variant="danger">
+          {plural(flagged, "log")} {flagged === 1 ? "needs" : "need"} a look
+        </Tag>
+      )}
+    </span>
+  );
+}
+
 export function NodePositions({ node }: { node: RetentionNode }) {
   const domains = Object.entries(node.domains ?? {});
   if (domains.length === 0) {
@@ -1222,7 +1264,6 @@ export function LogRetention({ domains }: { domains: RetentionDomain[] }) {
   return (
     <Card padding="none">
       <Card.Header
-        icon={<ClockGlyph size="sm" />}
         count={domains.length}
         subtitle={
           shared

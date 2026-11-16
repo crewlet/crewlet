@@ -20,7 +20,7 @@ import type {
   RunnerCellName,
 } from "../contract/models.ts";
 
-/** One live node, and whether its heartbeat carried its models' state. */
+/** One live node, and whether its status record carried its models' state. */
 export interface ModelNode {
   id: string;
   reported: boolean;

@@ -12,10 +12,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
+	"github.com/crewlet/crewlet/internal/artifacts/commentanchor"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -121,6 +123,13 @@ type Options struct {
 	// routes. REQUIRED.
 	Objects Objects
 
+	// Comments are the artifacts' comment threads. REQUIRED.
+	Comments Comments
+
+	// Routing decides who each comment record wakes and tells, as the agent
+	// tools decide it ([builtin.ArtifactCommentRouter]).
+	Routing builtin.ArtifactCommentRouter
+
 	// WorkItems is Worklet, asked for per request: Worklet comes up with the
 	// node's first company, which a node that booted with none meets after
 	// this surface is serving. It answers [ErrWorkletNotUp] before then and
@@ -161,6 +170,12 @@ type Service struct {
 	// checks is the node's budget for page checks ([Service.check]).
 	checks *costlimit.Limiter
 
+	// comments are the threads, routing who each write wakes, and
+	// commentBudget the node's budget for comment writes per artifact.
+	comments      Comments
+	routing       builtin.ArtifactCommentRouter
+	commentBudget *costlimit.Limiter
+
 	// decks, docs, boards and canvases are what this node read of each
 	// version for the dashboard, through the kind's format.
 	decks    *formatCache[slideformat.Deck]
@@ -168,6 +183,9 @@ type Service struct {
 	boards   *formatCache[*dashspec.Board]
 	canvases *formatCache[canvasformat.Canvas]
 	brands   *formatCache[brandformat.Brand]
+
+	// indexes are each version's comment anchor index ([commentanchor.Read]).
+	indexes *formatCache[*commentanchor.Index]
 }
 
 // New builds the surface.
@@ -192,6 +210,8 @@ func New(opts Options) (*Service, error) {
 	case opts.WorkItems == nil:
 		return nil, errors.New("artifactsapi: no Worklet: a link to a work item is " +
 			"checked against the item Worklet holds")
+	case opts.Comments == nil:
+		return nil, errNoComments
 	}
 	pace := opts.PaceClock
 	if pace == nil {
@@ -199,10 +219,11 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{gate: opts.Gate, reads: opts.Reads, writes: opts.Writes, uploads: opts.Uploads,
 		objects: opts.Objects, workItems: opts.WorkItems, frames: opts.Frames, ready: opts.Ready, pace: pace,
-		checks: newCheckLimiter(pace),
-		decks:  newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
+		checks: newCheckLimiter(pace), comments: opts.Comments, routing: opts.Routing,
+		commentBudget: newCommentLimiter(pace),
+		decks:         newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
 		boards: newBoardCache(opts.Objects), canvases: newCanvasCache(opts.Objects),
-		brands: newBrandCache(opts.Objects)}, nil
+		brands: newBrandCache(opts.Objects), indexes: newIndexCache(opts.Objects)}, nil
 }
 
 // Gate is the surface's admission, which the read questions take too.
@@ -282,6 +303,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"DELETE /artifacts/{id}/assets/{asset}", pre, s.removeAsset},
 		{"PUT /artifacts/{id}/pin", pre, s.pin},
 		{"DELETE /artifacts/{id}/pin", pre, s.unpin},
+		{"POST /artifacts/{id}/comments", pre.Creating(), s.openComment},
+		{"POST /artifacts/{id}/comments/{thread}/replies", pre.Creating(), s.replyComment},
+		{"PATCH /artifacts/{id}/comments/{thread}/remarks/{remark}", pre, s.editComment},
+		{"DELETE /artifacts/{id}/comments/{thread}/remarks/{remark}", pre, s.removeComment},
+		{"POST /artifacts/{id}/comments/{thread}/resolve", pre.Rewriting(), s.resolveComment},
+		{"POST /artifacts/{id}/comments/{thread}/reopen", pre.Rewriting(), s.reopenComment},
 		{"POST /artifacts/{id}/tickets", ticket.Creating(), s.ticket},
 		{patternFiles, pre, s.file},
 		{"GET /artifacts/{id}/versions/{n}/source", pre, s.source},

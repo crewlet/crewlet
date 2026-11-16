@@ -34,6 +34,7 @@ func (c SealedCount) Outside(active string) int { return c.Values.Outside(active
 // a sealed column added there is counted here too.
 var sealedColumns = []struct{ table, column string }{
 	{"assistant_conversations", "title_sealed"},
+	{"assistant_conversations", "summary_sealed"},
 	{"assistant_turns", "page_title_sealed"},
 	{"assistant_messages", "text_sealed"},
 	{"assistant_messages", "page_title_sealed"},

@@ -801,7 +801,9 @@ how much of a project's open work has been started (`task_counts.active`), the
 hand-off count on each history row, and when a task last changed
 (`updated_at`); in the identity estate, the seat an invitation holds
 (`iam_invites.seat_id`, read out of the invitation's own document so a seat
-hold is one indexed lookup). The apply maintains each one as it goes. When the rules that
+hold is one indexed lookup); in Gitlet, each repository's changes by state
+and their tallies by owner and visibility, and the repositories tallied by
+owner, visibility, kind and status. The apply maintains each one as it goes. When the rules that
 compute them differ from the ones a node's rows were derived under — a build
 that adds such a column or changes how one is computed, a node that just
 adopted a snapshot from a peer on a different build, or a checkpoint a reanchor
@@ -809,8 +811,8 @@ created — the node's next boot recomputes them from the rows it holds, in the
 same transaction that records which rules the rows now follow, before it
 applies anything new. It happens once per change, on every data node; the
 `statelog_rederived` log line names the domain, the rule versions it moved
-between and how many rows it wrote. Both domains are at rule set 1, the one
-this build applies as it goes.
+between and how many rows it wrote. Each is at the rule set this build
+applies as it goes.
 
 ## Two compacted domains: the embeddings and each data node's day
 

@@ -75,7 +75,9 @@ async function card(name: string): Promise<HTMLElement> {
 
 describe("a source's standing", () => {
   test("says when it is read next, and for a failed read when it was last read whole", () => {
-    expect(readLine(sourceStanding("cloudflare"), NOW)).toBe("Read 10m ago, next read in 50m.");
+    expect(readLine(sourceStanding("cloudflare"), NOW)).toBe(
+      "Read 10 minutes ago, next read in 50 minutes.",
+    );
     expect(
       readLine(
         sourceStanding("github", {
@@ -85,7 +87,7 @@ describe("a source's standing", () => {
         }),
         NOW,
       ),
-    ).toBe("Tried 2m ago, last read whole 10m ago, due now.");
+    ).toBe("Tried 2 minutes ago, last read whole 10 minutes ago, due now.");
     expect(
       readLine(
         sourceStanding("ssh", {
@@ -109,7 +111,7 @@ describe("a source's standing", () => {
     expect(refreshBlocked(sourceStanding("cloudflare"), NOW)).toBeUndefined();
     expect(
       refreshBlocked(sourceStanding("github", { refreshable_at: "2026-11-11T09:03:00Z" }), NOW),
-    ).toBe("Read moments ago. It can be read again in 3m");
+    ).toBe("Read moments ago. It can be read again in 3 minutes");
     // THE FLOOR HAS PASSED: an instant behind the clock holds nothing.
     expect(
       refreshBlocked(sourceStanding("github", { refreshable_at: "2026-11-11T08:59:00Z" }), NOW),
@@ -273,7 +275,7 @@ describe("the band", () => {
 
 // THE READ INTERVAL IS THE COMPANY'S, changed where it is read: for an
 // administrator, the engine's own row with the field that changes it; for
-// anyone else, the sentence alone, and the limits are never asked.
+// anyone else, the same row with its pencil held, and the limits never asked.
 describe("the read interval", () => {
   const ROW = {
     key: "atlas.refresh_interval_seconds",
@@ -291,7 +293,9 @@ describe("the read interval", () => {
     mountAtlas("#/company/atlas/sources", <SourcesPage />, grownCompany(), {
       answers: { viewer: ADMIN_VIEWER, atlas_sources: sourcesAnswer(), limits: { limits: [ROW] } },
     });
-    const row = await screen.findByRole("row", { name: /Each source is read every/ });
+    // The engine's row once `limits` answers.
+    await screen.findByText("Changed from 1 hour");
+    const row = screen.getByRole("row", { name: /Each source is read every/ });
     expect(within(row).getByText("30 minutes")).toBeTruthy();
     expect(within(row).getByText("Changed from 1 hour")).toBeTruthy();
     expect(
@@ -300,10 +304,14 @@ describe("the read interval", () => {
     expect(screen.getByText(/Refresh now reads one sooner/)).toBeTruthy();
   });
 
-  test("is a sentence for a reader the limits are not an answer for", async () => {
+  test("is the same row, its pencil held with the reason, for a reader the limits are not an answer for", async () => {
     const { asked } = mountSources();
-    expect(await screen.findByText(/Each source is read every hour\./)).toBeTruthy();
-    expect(screen.queryByRole("row", { name: /Each source is read every/ })).toBeNull();
+    const row = await screen.findByRole("row", { name: /Each source is read every/ });
+    expect(within(row).getByText("1 hour")).toBeTruthy();
+    const pencil = within(row).getByRole("button", { name: "Change Each source is read every" });
+    expect(pencil.getAttribute("aria-disabled")).toBe("true");
+    expect(pencil.getAttribute("aria-describedby")).toBeTruthy();
+    expect(screen.getByText(/Refresh now reads one sooner/)).toBeTruthy();
     expect(asked.map((a) => a.what)).not.toContain("limits");
   });
 });

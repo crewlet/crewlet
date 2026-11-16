@@ -35,6 +35,8 @@ const versions = [3, 2, 1].map(
 const refetch = vi.fn();
 /** The reader's folder tree, as `artifact_folders` answers it. */
 let folders: unknown[] = [];
+/** The threads on the version on show, as `artifact_comments` answers them. */
+let threads: unknown = null;
 
 vi.mock("~/lib/useQuery.ts", () => ({ useQuery: vi.fn() }));
 vi.mock("~/lib/artifacts/useDataStore.ts", () => ({ useDataStore: vi.fn(() => null) }));
@@ -79,11 +81,19 @@ vi.mock("~/lib/store-hooks.ts", async () => {
     useOrg: () => null,
   };
 });
+/** The roles a change needs that this reader is refused. */
+const denied = vi.hoisted(() => new Set<string>());
 vi.mock("~/lib/artifacts/access.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/artifacts/access.ts")>(
     "~/lib/artifacts/access.ts",
   );
-  return { ...actual, useArtifactAccess: () => ({ can: true, as: "ada", acts: [] }) };
+  return {
+    ...actual,
+    useArtifactAccess: (need: { role?: string }) =>
+      need.role && denied.has(need.role)
+        ? { can: false, block: "not_served", reason: "Held for this reader." }
+        : { can: true, as: "ada", acts: [] },
+  };
 });
 vi.mock("~/lib/artifacts/pins.ts", () => ({
   usePins: () => ({ data: { items: [] } }),
@@ -194,7 +204,9 @@ beforeEach(() => {
           ? { versions }
           : what === "artifact_folders"
             ? { folders }
-            : null;
+            : what === "artifact_comments"
+              ? threads
+              : null;
     return { data, loading: false, error: null, refusal: null, refetch };
   }) as never);
   vi.mocked(useDataStore).mockReturnValue(null);
@@ -204,6 +216,8 @@ beforeEach(() => {
   reader.owner = "";
   roomOthers.length = 0;
   folders = [];
+  threads = null;
+  denied.clear();
 });
 
 afterEach(() => {
@@ -443,4 +457,72 @@ test("the standalone page leads back to the gallery and offers no second new tab
   expect(location.hash).toBe(`#/artifacts/${ID}/standalone?panel=details`);
   expect(screen.getByRole("complementary", { name: "Details" })).toBeTruthy();
   expect(screen.getByText("The artifact itself")).toBeTruthy();
+});
+
+// COMMENTS: a panel and its key like every other, and Comment mode a tool of
+// the bar on the kinds whose parts take a comment.
+test("Comments is a panel with its key, and the bar's control says how many threads are open", () => {
+  threads = {
+    artifact: ID,
+    version: 3,
+    head: 3,
+    counts: { open: 2, resolved: 1, outdated: 0 },
+    can_comment: true,
+    role: "owner",
+    threads: [],
+  };
+  mount(`#/artifacts/${ID}`);
+  expect(tool("Comments, 2 open").getAttribute("aria-keyshortcuts")).toBe("C");
+  press("c");
+  expect(screen.getByRole("complementary", { name: "Comments" })).toBeTruthy();
+  expect(location.hash).toBe(`#/artifacts/${ID}?panel=comments`);
+  press("c");
+  expect(screen.queryByRole("complementary")).toBeNull();
+});
+
+test("Comment mode starts from Shift+C on a page, says so above it, and Escape or Done ends it", () => {
+  detail = { ...detail, kind: "html" } as ArtifactDetail;
+  mount(`#/artifacts/${ID}`);
+  expect(tool("Comment").getAttribute("aria-pressed")).toBe("false");
+  act(() => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "C", shiftKey: true, bubbles: true, cancelable: true }),
+    );
+  });
+  expect(screen.getByText(/Click a section or a point of the page/)).toBeTruthy();
+  expect(tool("Stop commenting").getAttribute("aria-pressed")).toBe("true");
+  act(() => {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+  });
+  expect(screen.queryByText(/Click a section or a point of the page/)).toBeNull();
+  fireEvent.click(tool("Comment"));
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(screen.queryByText(/Click a section or a point of the page/)).toBeNull();
+});
+
+test("a kind with no parts to place on has no Comment tool, and its comments are the panel's", () => {
+  mount(`#/artifacts/${ID}`);
+  detail = { ...detail, kind: "doc" } as ArtifactDetail;
+  cleanup();
+  mount(`#/artifacts/${ID}`);
+  const bar = screen.getByRole("banner");
+  expect(within(bar).queryByRole("button", { name: "Comment" })).toBeNull();
+  expect(tool("Comments")).toBeTruthy();
+});
+
+test("a reader below commenter has the Comment tool held, saying why, and its key does nothing", () => {
+  detail = { ...detail, kind: "design", role: "viewer" } as ArtifactDetail;
+  denied.add("commenter");
+  mount(`#/artifacts/${ID}`);
+  const comment = tool("Comment");
+  expect(comment.getAttribute("aria-disabled")).toBe("true");
+  expect(document.body.textContent).toContain("Commenting needs the “Can comment” role");
+  act(() => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "C", shiftKey: true, bubbles: true, cancelable: true }),
+    );
+  });
+  expect(screen.queryByText(/Click a point on a board/)).toBeNull();
 });

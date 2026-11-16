@@ -459,7 +459,8 @@ func (b *changeBook) takeBack() {
 }
 
 // alone is the rows e — and the change it opens, where it carries one — would
-// make its record write about changes, and how many it moves, as the first
+// make its record write about changes, as the decide holds a record to them
+// ([changeBook.decidedRows]), and how many it moves, as the first
 // entry of a record of its own once the book's record has landed: the
 // changes as that record leaves them, the ones it opened among them as rows
 // the next record finds, and none of its writes. What the decide weighs a
@@ -473,7 +474,7 @@ func (b *changeBook) alone(e PushEntry) (rows, moved int) {
 	if e.Change != nil {
 		b.open(e)
 	}
-	rows, moved = b.rowCount(), b.moved()
+	rows, moved = b.decidedRows(), b.moved()
 	b.takeBack()
 	b.writes = record
 	return rows, moved
@@ -488,9 +489,47 @@ func (b *changeBook) alone(e PushEntry) (rows, moved int) {
 // book counts whether or not, since its rows hold no mergeability. The
 // repository's own row, whose next number an open moves, is the record's
 // already ([recordRows]).
-func (b *changeBook) rowCount() int {
+func (b *changeBook) rowCount() int { return b.rowsEnding(len(b.ended())) }
+
+// rowsEnding is [changeBook.rowCount] with the ended changes counted once by its caller.
+func (b *changeBook) rowsEnding(ended int) int {
 	w := &b.writes
-	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + b.queuedMoved() + len(b.ended())
+	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + b.queuedMoved() + ended
+}
+
+// decidedRows is [changeBook.rowCount] and, where the moves open or end a change (a push's
+// only state moves), the tally row the apply writes beside it, which no horizon is given.
+func (b *changeBook) decidedRows() int {
+	ended := len(b.ended())
+	if len(b.writes.opened) > 0 || ended > 0 {
+		return b.rowsEnding(ended) + tallyRows
+	}
+	return b.rowsEnding(ended)
+}
+
+// statesRead is every change the book holds, by id, in its state now: taken before the
+// record's first move, the states the apply read them in.
+func (b *changeBook) statesRead() map[string]ChangeState {
+	read := make(map[string]ChangeState, len(b.rows))
+	for id, row := range b.rows {
+		read[id] = row.state
+	}
+	return read
+}
+
+// counted is what the book's moves do to the repository's counts, from the states read
+// ([changeBook.statesRead]): each change opened counted in its final state, and each
+// other moved from the state it was read in to its final one.
+func (b *changeBook) counted(read map[string]ChangeState) ChangeCounts {
+	var c ChangeCounts
+	for _, id := range b.writes.touched {
+		if b.writes.opened[id] {
+			c.add(b.rows[id].state, 1)
+			continue
+		}
+		c.move(read[id], b.rows[id].state)
+	}
+	return c
 }
 
 // ended is the changes the book's moves merged or closed — none of those it
