@@ -3478,6 +3478,18 @@ reader, and its revisions' facts) and `code_checks` of the change at each
 check's latest attempt (`latest`, every page of it, drawn only once whole) —
 so the card needs nothing of the engine besides, and never rebuilds what a
 check stands at from a page of its history.
+
+**A comment on an artifact is a row and a card of the same parts.** Its row
+reads "Maya Ops commented on Q3 plan" (or resolved, or reopened, a comment
+on it), the remark beneath as plain words, never markup. Its card names the
+artifact and why it reached the reader ("On your artifact", "Mentioned you",
+"In a thread you're in", "For your work item"), quotes the remark, and, from
+the card the list asked for, the text the commenter selected, whether the
+thread is open or resolved and by whom, and how many remarks it holds; **Open
+the thread** goes to `#/artifacts/<id>?panel=comments&thread=<thread>`. Its
+marks go through `artifact_mark_inbox`, every reader's, since commenting is a
+relation and no app; **Mark all read** sends one mark per domain the page
+read, each through the newest of that domain's notices on it.
 It says what the head revision's REQUIRED checks measured, each one's state
 and duration — never tokens — and only where the readiness judges a `check`
 precondition; the head revision's change classes (how many touched paths
@@ -3615,13 +3627,11 @@ would add (`crewlet iam bind`, or a row created with `-seat`). The conditions a 
 updates and decisions need a credential bound to their seat, and every write
 control is drawn for all three, disabled with the reason.
 
-**Without Worklet the Inbox stays, and says where the rest went.** The
-asks and the updates are Worklet's notices, but the seats stopped on a
-spent budget and the conditions a person decides arrive under every backend,
-so the Inbox is never hidden with Worklet (see [the sidebar](#the-sidebar)).
-It draws those, and one line in place of its updates naming where asks and
-mentions go instead: "Jira handles work items, so asks and mentions arrive
-there.", or that the company runs no work tracker.
+**Without Worklet the Inbox stays.** The asks are Worklet's notices, but the
+seats stopped on a spent budget, the conditions a person decides and the
+comments on artifacts arrive under every backend, so the Inbox is never hidden
+with Worklet (see [the sidebar](#the-sidebar)): it draws those, and its
+updates are the comments and, where the company hosts code, Gitlet's.
 
 ### My work is one person's day
 
