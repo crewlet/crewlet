@@ -18,6 +18,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/net/html"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The bounds of a read (ADR-0151).
@@ -109,8 +111,8 @@ func Allowed(hosts []string, raw string) (*url.URL, error) {
 	}
 	u.Fragment = ""
 	if !listed(hosts, u.Hostname()) || u.Port() != "" && u.Port() != "443" {
-		return nil, fmt.Errorf("%w: %s is not one of %s", ErrNotListed, u.Hostname(),
-			strings.Join(hosts, ", "))
+		return nil, fmt.Errorf("%w: %q is not one of %s", ErrNotListed, u.Hostname(),
+			words.Or(hosts))
 	}
 	return u, nil
 }
