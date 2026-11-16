@@ -954,6 +954,12 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	if p.Part != parts+1 {
 		return 0, nil
 	}
+	// ITS REPOSITORY TALLY ROW moves on the first part, deleted to purging, beside the
+	// part's own rows and never charged to its budget.
+	before, err := tallyStandingIn(ctx, tx, p.RepoID)
+	if err != nil {
+		return 0, err
+	}
 	budget := PurgePartRows
 	deleted := 0
 
@@ -1119,7 +1125,11 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		gone.tombstones, livePacksGone, liveBytesGone, liveObjectsGone, at.packed, p.RepoID); err != nil {
 		return 0, fmt.Errorf("gitlet: count %s's purge at %s: %w", p.RepoID, at.position, err)
 	}
-	return deleted + 1, nil
+	moved, err := retally(ctx, tx, p.RepoID, before)
+	if err != nil {
+		return 0, err
+	}
+	return deleted + 1 + moved, nil
 }
 
 // applyPurge removes what remains of a repository and writes its deletion
@@ -1140,9 +1150,9 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
 // globs packed into it) and a published chain of at most MaxPublishedLayers
 // layers of MaxLayerParts parts each: with the name claim, the row, its kind's
-// count and the marker that is PurgePartRows + MaxProtectionsPerRepo +
-// MaxPathOwners + MaxPublishedLayers × (1 + MaxLayerParts) + 4 rows, which the
-// limits test holds within MaxRecordRows. A change's revisions, authors, body
+// count, its repository tally row and the marker that is PurgePartRows +
+// MaxProtectionsPerRepo + MaxPathOwners + MaxPublishedLayers × (1 +
+// MaxLayerParts) + 5 rows, which the limits test holds within MaxRecordRows. A change's revisions, authors, body
 // and conversation go before the changes, through which alone they are found.
 //
 // AN OLD NAME a rename left redirecting to the repository is NOT released
@@ -1206,11 +1216,21 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	case err != nil:
 		return 0, fmt.Errorf("gitlet: read %s's kind at %s: %w", p.RepoID, at.position, err)
 	}
+	before, err := tallyStandingIn(ctx, tx, p.RepoID)
+	if err != nil {
+		return 0, err
+	}
 	if res, err = tx.ExecContext(ctx, removeRepoSQL, p.RepoID); err != nil {
 		return 0, fmt.Errorf("gitlet: remove %s at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ = res.RowsAffected()
 	deleted += int(n)
+	// AND COUNTED OUT OF ITS REPOSITORY TALLY ROW, pruned where it was the key's last.
+	moved, err := retally(ctx, tx, p.RepoID, before)
+	if err != nil {
+		return 0, err
+	}
+	deleted += moved
 	if n > 0 {
 		if res, err = tx.ExecContext(ctx, uncountKindSQL, kind); err != nil {
 			return 0, fmt.Errorf("gitlet: count %s out at %s: %w", p.RepoID, at.position, err)

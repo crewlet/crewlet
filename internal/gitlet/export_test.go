@@ -47,6 +47,16 @@ func SetRefScanBounds(r *Reader, scanned, active int) {
 	r.refsScanned, r.activeCounted = scanned, active
 }
 
+// CountedCommands is n with c counted in by what became of it, as a push row's are.
+func CountedCommands(n CommandCounts, c Command) CommandCounts {
+	n.add(c)
+	return n
+}
+
+// SetRepoListingBounds has r sum at most sized repositories' size into a listing's total and walk
+// at most walk push rows for a card's last push: MaxReposSized and MaxLastPushWalk as shipped.
+func SetRepoListingBounds(r *Reader, sized, walk int) { r.reposSized, r.lastPushWalk = sized, walk }
+
 // SetTipWindow has r read at most landings landings above a target's green
 // for its tip work — the cases that reach a window's bound without landing
 // MaxTipLandings pushes.

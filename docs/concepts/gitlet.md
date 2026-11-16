@@ -1144,6 +1144,41 @@ A first page can also count the branches other than the default branch that
 moved since an instant (`active_since`), the Overview's "Active branches"; it
 counts up to 1 000 and says when there were more.
 
+### Listing repositories
+
+The repositories are listed a page at a time by name, or by last push
+(`sort=pushed`): newest first, the repositories pushed at one instant by name,
+highest first, then those never pushed, by name. Only the repositories in use
+(importing, active and archived) are listed by last push. `kind=project` or
+`kind=scratch` lists one kind, each read as one range of an index of its own
+kind, so a company's scratch repositories cost its Projects tab nothing.
+Neither a kind nor the order by last push combines with a prefix or with the
+protected repositories.
+
+Asked for its facts (`repo_facts=true`), each row also says:
+
+- **Whether it is a push mirror**: its home pushes it to another host.
+- **Who pushed last**: the newest push of its history that was no expiry, with
+  what became of its commands; a command refused beside those that landed
+  counts as refused. It is known while the push history keeps that push (181
+  days) and while no more than about a hundred expiries followed it, and its
+  instant is always the repository's last push.
+- **Where its default branch's checks stand**: each check's latest attempt at
+  the branch's head for that branch, judged as the merge gate judges.
+
+A first page asked for its facts also carries the whole listing's count and
+live size, all its pages together, where it is narrowed by nothing but its
+kind and statuses. The size is summed for a listing of up to 10 000
+repositories and left out above it; the count is always exact.
+
+Gitlet also counts the repositories: `code_counts` part `repos` answers every
+repository the reader may read, by kind and by status (importing, active,
+archived, deleted, purging, and `live`, the first three together). The counts
+are kept as repositories are created, change owner, visibility or state, and
+are purged, tallied by owner and visibility as the change counts are
+([Counting changes](#counting-changes)), and recounted at the first boot of a
+build that changes how.
+
 ---
 
 ## Compaction
@@ -1990,7 +2025,8 @@ A deleted repository's changes leave the company's count, and a restore
 brings them back under the owner it returns with. A count is exact at the
 position it is read at, so a `session` read after a write includes it. A
 listing of repositories and one repository's detail answer each one's counts
-where `repo_facts=true` asks
+and their card ([Listing repositories](#listing-repositories)) where
+`repo_facts=true` asks
 ([`GET /gitlet/counts`](../reference/api-endpoints.md#the-code-reads)).
 
 ---

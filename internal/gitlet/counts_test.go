@@ -244,7 +244,7 @@ func TestARepositoryListingAnswersItsChangeCountsWhenAsked(t *testing.T) {
 	if len(bare.Repos) != 2 || len(asked.Repos) != 2 {
 		t.Fatalf("the listings answered %d and %d repositories, want both", len(bare.Repos), len(asked.Repos))
 	}
-	factFields := []string{"ChangeCounts"}
+	factFields := []string{"ChangeCounts", "Card"}
 	summary := reflect.TypeFor[gitlet.RepoSummary]()
 	for _, f := range factFields {
 		field, ok := summary.FieldByName(f)

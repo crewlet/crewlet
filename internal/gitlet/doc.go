@@ -25,6 +25,11 @@
 // subject and by nothing else, receive-pack never runs in a cache, and git is
 // told `ok` only from a push's applied row (ADR-0084).
 //
+// A LISTING OF REPOSITORIES (repolisting.go, apply_repotallies.go) is read by name or by last
+// push over an index of each kind, with each row's card read where asked; code_repo_tallies
+// counts the repositories by owner, visibility, kind and status, kept by the lifecycle applies
+// and re-derived by the applier.
+//
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
 // One object a push — one PUT, and one GET on every Gitlet node that installs it,

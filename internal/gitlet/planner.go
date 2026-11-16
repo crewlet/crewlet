@@ -83,6 +83,14 @@ const (
 	// protectedRepos is the predicate code_repos_protected_idx is partial
 	// on, which a statement over it repeats verbatim.
 	protectedRepos = `protected = 1`
+	// kindReposKey is code_repos_kind_idx, (kind, name): one kind's repositories in name order.
+	kindReposKey = "code_repos_kind_idx"
+	// pushedReposKey is code_repos_pushed_idx, (kind, last_push_at, name) WHERE [reposInUse]:
+	// one kind's repositories in use by last push.
+	pushedReposKey = "code_repos_pushed_idx"
+	// reposInUse is the predicate code_repos_pushed_idx is partial on, every [RepoStatus.live]
+	// status in [RepoStatuses]' order, which a statement over it repeats verbatim.
+	reposInUse = `status IN ('importing', 'active', 'archived')`
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"
 	// changesNumberKey is code_changes_number_idx, (repo_id, number)

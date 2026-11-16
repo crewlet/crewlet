@@ -299,6 +299,39 @@ func TestTheLiveIndexesHoldTheLiveStates(t *testing.T) {
 	}
 }
 
+// THE PUSHED INDEX HOLDS THE REPOSITORIES IN USE, SPELLED AS ITS READERS SPELL THEM:
+// [reposInUse] lists every [RepoStatus.live] status in [RepoStatuses]' order, and
+// code_repos_pushed_idx is declared partial on it exactly, so a listing by last push lists
+// what a listing by name of the same statuses lists.
+//
+// Mutation: declare the index on `status IN ('active', 'archived')`, or make a deleted
+// repository live, and this fails.
+func TestThePushedIndexHoldsTheRepositoriesInUse(t *testing.T) {
+	t.Parallel()
+	var live []string
+	for _, s := range RepoStatuses() {
+		if s.live() {
+			live = append(live, "'"+string(s)+"'")
+		}
+	}
+	if want := "status IN (" + strings.Join(live, ", ") + ")"; reposInUse != want {
+		t.Fatalf("reposInUse is %q, and the statuses in use in RepoStatuses' order spell %q", reposInUse, want)
+	}
+	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = node.Close() })
+	var declared string
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`,
+			pushedReposKey).Scan(&declared)
+	}); err != nil {
+		t.Fatalf("read %s's declaration: %v", pushedReposKey, err)
+	}
+	want := "CREATE INDEX " + pushedReposKey + " ON code_repos (kind, last_push_at, name) WHERE " + reposInUse
+	if got := strings.Join(strings.Fields(declared), " "); got != want {
+		t.Errorf("%s is declared\n\t%s\nwant\n\t%s", pushedReposKey, got, want)
+	}
+}
+
 // statement is one registered statement, arguments that make it plannable,
 // and the seeks its plan must contain — each an index and the columns of it the
 // statement bounds, as the plan prints them, or for a table [scanOK] lets a
@@ -364,6 +397,8 @@ const (
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
 	bodyKey       = "sqlite_autoindex_code_change_bodies_1"
 	talliesKey    = "sqlite_autoindex_code_change_tallies_1"
+	// repoTalliesKey is code_repo_tallies' PRIMARY KEY index, (visibility, owner_kind, owner, kind).
+	repoTalliesKey = "sqlite_autoindex_code_repo_tallies_1"
 	// untestedKey and dequeuedKey are replicated 0140's indexes as a
 	// given-up attempt's tests seek them: its commit among the ones its
 	// target's trains test or landed, and its candidate among the dequeued.
@@ -473,6 +508,7 @@ func registeredStatements() map[string]statement {
 		"retired after":       {retiredAfterSQL, []any{"repo-1", 1005, 1015, 1005, "retired-000050", "retired-000050", "pack", 100}, []string{retiredRepoIdx + " (repo_id=? AND retired_position>=? AND retired_position<=?)"}},
 		"push":                {pushSQL, []any{"repo-1-push-000001"}, []string{pushKey + " (push_id=?)"}},
 		"pushes first":        {pushesFirstSQL, []any{"repo-1", 50}, []string{"code_pushes_repo_idx (repo_id=?)"}},
+		"latest pushes":       {latestPushesSQL, []any{"repo-1", MaxLastPushWalk}, []string{"code_pushes_repo_idx (repo_id=?)"}},
 		"pushes after":        {pushesAfterSQL, []any{"repo-1", 100, 100, "p", 50}, []string{"code_pushes_repo_idx (repo_id=? AND position<=?)"}},
 		"pushes above":        {pushesAboveSQL, []any{"repo-1", 10, 100, 100}, []string{"code_pushes_repo_idx (repo_id=? AND position>? AND position<=?)"}},
 		"pushes above after":  {pushesAboveAfterSQL, []any{"repo-1", 10, 100, 10, "p", 100}, []string{"code_pushes_repo_idx (repo_id=? AND position>=? AND position<=?)"}},
@@ -497,6 +533,18 @@ func registeredStatements() map[string]statement {
 			[]string{"code_repos_name_idx (name>=? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
 		"repos under after": {reposUnderAfterSQL, []any{`["active","archived"]`, "r0150", "r02", 100},
 			[]string{"code_repos_name_idx (name>? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
+		// A LISTING OF ONE KIND, AND BY LAST PUSH: one range of a kind's index, the dated walked
+		// backwards and the never-pushed after it by name; and a total's size over one kind's range.
+		"repos of a kind": {kindReposSQL, []any{`["active","archived"]`, "project", "", 100},
+			[]string{kindReposKey + " (kind=? AND name>?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"repos pushed": {pushedReposSQL, []any{`["active","archived"]`, "project", int64(math.MinInt64), 100},
+			[]string{pushedReposKey + " (kind=? AND last_push_at>?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"repos pushed after": {pushedReposAfterSQL, []any{`["active","archived"]`, "project", 9, 9, "r05", 100},
+			[]string{pushedReposKey + " (kind=? AND last_push_at<=?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"repos never pushed": {neverPushedReposSQL, []any{`["active","archived"]`, "project", "", 100},
+			[]string{pushedReposKey + " (kind=? AND last_push_at=? AND name>?)", refsKey + " (repo_id=? AND ref=?)"}},
+		"repos sized": {reposSizedSQL, []any{"project", `["active","archived"]`, MaxReposSized + 1},
+			[]string{kindReposKey + " (kind=?)"}},
 		"protected repos under first": {protectedReposUnderFirstSQL,
 			[]any{`["active","archived"]`, "r01", "r02", 100},
 			[]string{protectedReposKey + " (name>=? AND name<?)", refsKey + " (repo_id=? AND ref=?)"}},
@@ -1129,7 +1177,9 @@ func registeredStatements() map[string]statement {
 		"tally standing": {tallyStandingSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"untally": {untallySQL, []any{"company", "unit", "ENG"},
 			[]string{talliesKey + " (visibility=? AND owner_kind=? AND owner=?)"}},
-		"rederive repos":   {rederiveReposSQL, []any{"", 1000}, []string{repoKey + " (id>?)"}},
+		"rederive repos": {rederiveReposSQL, []any{"", 1000}, []string{repoKey + " (id>?)"}},
+		"unrepo tally": {unrepoTallySQL, []any{"company", "unit", "ENG", "project"},
+			[]string{repoTalliesKey + " (visibility=? AND owner_kind=? AND owner=? AND kind=?)"}},
 		"changes by state": {changesByStateSQL, []any{"repo-1"}, []string{changesRepoStateKey + " (repo_id=?)"}},
 		// A CHANGE A PUSH OPENS: the repository's next number moved past
 		// the opens of a push record, by its key; and the numbers of the
@@ -1194,6 +1244,7 @@ func registeredStatements() map[string]statement {
 		"listed repos": {listedReposSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		// THE COUNTS' READS (counts.go): every tally row, and the facts of a page of repositories.
 		"change tallies": {changeTalliesSQL, nil, []string{"SCAN code_change_tallies"}},
+		"repo tallies":   {repoTalliesSQL, nil, []string{"SCAN code_repo_tallies"}},
 		"repo facts":     {repoFactsOfSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		// THE READS OF A CHANGE'S CONVERSATION (conversationread.go): a
 		// reviewer's standing asks newest first, a first page and a page
