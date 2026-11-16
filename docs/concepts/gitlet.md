@@ -1902,6 +1902,17 @@ answer that holds every record the code log had committed when it was asked.
   changes is judged by the chart whoever asks — a person's too — and a data
   node that holds none yet refuses it as a node that is not serving, which
   the next data node answers.
+- **A listing's rows carry their cards where asked** (`cards=true`): each
+  change's comments (comments alone, never its reviews), its reviews, how many
+  reviewers' standing verdict asks for changes, up to eight reviewers' faces
+  (each reviewer's standing verdict and the revision it judged, and whether an
+  ask of them waits and why; asks for changes first, then waiting asks, then
+  approvals; a reviewer who has only commented draws none) with how many
+  more, where its head's checks stand for its target (each check's latest
+  attempt, counted by state, the required ones passed of all required, and the
+  failing ones named, required or not), and, for a live change its merge queue
+  put out within the last day, why and when. A card is read only when asked,
+  so a seat's listing and a change's readiness do not grow.
 
 **A listing reads the one index its filters lead with** — the changes whose
 stored readiness waits on a person; a reviewer's

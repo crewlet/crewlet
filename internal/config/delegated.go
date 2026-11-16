@@ -510,6 +510,17 @@ func checkCheckNames(p *problems, path Path, checks []string) {
 	}
 }
 
+// The words of [Company.delegatedAdvisories], each warning's Item the
+// repository: no GitHub at all, and a repository outside the GitHub it runs.
+var (
+	checksWithoutGitHubAdvice = says("Required checks with GitHub not connected",
+		"A decision rule requires checks on this repository, but GitHub is not connected, so "+
+			"they are never read. Connect GitHub or remove the checks.")
+	checksOutsideGitHubAdvice = says("Required checks outside your GitHub",
+		"This repository is outside the GitHub accounts the company connects, so its required "+
+			"checks are never read. Connect its owner or remove the checks.")
+)
+
 // delegatedAdvisories says where a rule requires checks of a repository the
 // company's GitHub does not cover: no merge or deploy is asked there, so the
 // entry is never read.
@@ -521,16 +532,21 @@ func (c *Company) delegatedAdvisories() []Warning {
 		for j, rc := range r.RequiredChecks {
 			here := idx(at(idx(at(field("delegated_decisions"), "rules"), i), "required_checks"), j)
 			owner, _, _ := strings.Cut(rc.Repo, "/")
+			var w Warning
 			switch {
 			case gh == nil || !gh.Enabled:
-				out = append(out, advisory(at(here, "repo"), fmt.Sprintf("the company runs no GitHub "+
-					"(integrations.github), so the checks required of %s are never read", rc.Repo)))
+				w = checksWithoutGitHubAdvice.raise(at(here, "repo"), fmt.Sprintf("the company runs no GitHub "+
+					"(integrations.github), so the checks required of %s are never read", rc.Repo))
 			case known && !slices.Contains(owners, strings.ToLower(owner)):
-				out = append(out, advisory(at(here, "repo"), fmt.Sprintf("%s is not under an owner the "+
+				w = checksOutsideGitHubAdvice.raise(at(here, "repo"), fmt.Sprintf("%s is not under an owner the "+
 					"company's GitHub covers (%s), so no merge or deploy there is asked and its checks are "+
 					"never read; name its owner in integrations.github.provisioning.org or a seat's "+
-					"integrations.github.repos", rc.Repo, words.And(owners))))
+					"integrations.github.repos", rc.Repo, words.And(owners)))
+			default:
+				continue
 			}
+			w.Item = rc.Repo
+			out = append(out, w)
 		}
 	}
 	return out

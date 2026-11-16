@@ -173,8 +173,8 @@ test("a named repository's queue shows its train base, its required checks and i
   expect(await within(web).findAllByRole("img", { name: / of 2$/ })).toHaveLength(2);
   expect(within(web).getAllByText(/of 30m/)).toHaveLength(2);
   const out = screen.getByLabelText("Put out lately");
-  expect(within(out).getByText("ejected")).toBeTruthy();
-  expect(within(out).getByText("a required check failed")).toBeTruthy();
+  expect(within(out).getByText(/put out of the queue in the last day$/)).toBeTruthy();
+  expect(within(out).getByText(/a required check failed$/)).toBeTruthy();
   expect(within(out).getByText("unit")).toBeTruthy();
   expect(asked.find((u) => u.pathname === "/query/code_queue")?.searchParams.get("repo")).toBe(
     "web",

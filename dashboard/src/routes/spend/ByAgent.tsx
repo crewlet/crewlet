@@ -24,7 +24,6 @@
  * thousand pixels of scrolling before the next card.
  */
 
-import { BotGlyph } from "@crewlethq/icons/glyphs";
 import {
   Card,
   EmptyValue,
@@ -81,13 +80,11 @@ export function ByAgent({
   lines,
   loading,
   error,
-  words,
   range,
 }: {
   lines: readonly AgentLine[];
   loading: boolean;
   error: QueryErrorCode | null;
-  words: string | null;
   range: Window;
 }) {
   const badgeOf = useSeatBadgeOf();
@@ -114,17 +111,14 @@ export function ByAgent({
     <Card className="spend-card spend-agents" padding="none">
       <Card.Header
         subtitlePlacement="below"
-        icon={<BotGlyph size="sm" />}
         // NOTHING IS CLAIMED BEFORE THE ANSWER: with no lines yet, "no seat has a
         // daily token ceiling" was a statement about seats nobody had read.
         subtitle={
           loading && lines.length === 0
             ? undefined
-            : `${words ? `${words} · ` : ""}${
-                capped
-                  ? "budget is today\u2019s per-seat allowance"
-                  : "no seat has a daily token ceiling"
-              }`
+            : capped
+              ? "budget is today\u2019s per-seat allowance"
+              : "no seat has a daily token ceiling"
         }
       >
         <Card.Title>By agent</Card.Title>

@@ -7,7 +7,8 @@
  */
 
 import { expect, test } from "vitest";
-import { ALARM, FAILURE, failureWords, writeRefusalWords } from "./words.ts";
+import { FAILURE, failureWords, writeRefusalWords } from "./words.ts";
+import { ALARM } from "~/lib/mcpAlarmWords.ts";
 
 // A FAILURE WITH NO CLASS is not given one: its words say the engine could not
 // tell, and the server's own sentence is what is known.

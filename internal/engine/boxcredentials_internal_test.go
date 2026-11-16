@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
@@ -60,6 +61,10 @@ func TestALineAnIntegrationsCredentialReplacesIsSaid(t *testing.T) {
 	got := map[string]string{}
 	for _, w := range BoxCredentialWarnings(c.Config) {
 		got[w.Path] = w.Seat + ": " + w.Message
+		// A PERSON IS TOLD IN THE RULE'S OWN WORDS, the line's subject as the item.
+		if w.Title == "" || w.Person == "" || w.Item == "" {
+			t.Errorf("%s carries no words for a person: %+v", w.Path, w)
+		}
 	}
 	own, ok := got["roles[0].sandbox.env.EXPO_TOKEN"]
 	if !ok || !strings.HasPrefix(own, "qa: ") || !strings.Contains(own, "ignored") {
@@ -124,6 +129,9 @@ func TestAToolTokenUnderASignInNameIsWithheldAndSaid(t *testing.T) {
 	if len(warnings) != 1 || warnings[0].Path != "roles[0].integrations" ||
 		!strings.Contains(warnings[0].Message, "does not put the agent's own DigitalOcean credential there") {
 		t.Fatalf("warnings = %+v, want the withheld token said at the seat", warnings)
+	}
+	if w := warnings[0]; w.Title != config.BoxSignInAdvice.On(config.Warning{}).Title || w.Item == "" {
+		t.Errorf("the withheld token carries %q / %q, want its rule's words and the variable", w.Title, w.Item)
 	}
 	e := &Engine{}
 	e.secretsMu.Lock()

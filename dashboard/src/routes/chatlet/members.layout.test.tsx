@@ -1,6 +1,7 @@
 /**
  * An agent's member row with its follow switch and Remove, at the members
- * pane's width: the follow rule its switch sets is drawn whole; the team gives way.
+ * pane's width: the switch's words and the follow rule it sets are drawn
+ * whole; the team gives way.
  */
 import "~/test/layout.tsx";
 import "~/styles/chatlet-frame.css";
@@ -10,7 +11,7 @@ import { afterEach, expect, test } from "vitest";
 import { page } from "vitest/browser";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
-import { IconButton, PersonRow, Switch } from "@crewlethq/ui";
+import { IconButton, PersonRow, Switch, VisuallyHidden } from "@crewlethq/ui";
 import { XGlyph } from "@crewlethq/icons/glyphs";
 import { followingWords, memberDetail } from "./Details.tsx";
 
@@ -42,7 +43,15 @@ test("an agent's follow rule is whole beside its switch and Remove", async () =>
             onSelect={() => {}}
             action={
               <span className="row gap-1">
-                <Switch label="Agent PM gets every message" labelHidden checked={false} />
+                <Switch
+                  size="sm"
+                  label={
+                    <>
+                      Every message <VisuallyHidden>to Agent PM</VisuallyHidden>
+                    </>
+                  }
+                  checked={false}
+                />
                 <IconButton
                   variant="ghost-danger"
                   size="sm"
@@ -67,5 +76,10 @@ test("an agent's follow rule is whole beside its switch and Remove", async () =>
   range.setEnd(text, start + rule.length);
   expect(range.getBoundingClientRect().right).toBeLessThanOrEqual(
     detail.getBoundingClientRect().right,
+  );
+  const words = host.querySelector<HTMLElement>(".crewlet-switch__label")!;
+  expect(words.scrollWidth).toBeLessThanOrEqual(words.clientWidth);
+  expect(words.getBoundingClientRect().right).toBeLessThanOrEqual(
+    host.getBoundingClientRect().right,
   );
 });

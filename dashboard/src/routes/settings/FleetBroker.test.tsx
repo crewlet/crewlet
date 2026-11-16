@@ -137,9 +137,7 @@ describe("broker membership", () => {
     a.nodes = a.nodes!.slice(0, 1);
     a.findings = [];
     const { container } = panel(a);
-    expect(
-      screen.getByText("This engine runs one embedded broker, so there is no cluster to show."),
-    ).toBeTruthy();
+    expect(screen.getByText("One embedded broker, with no cluster")).toBeTruthy();
     expect(container.querySelector(".crewlet-callout")).toBeNull();
     expect(screen.queryByText(/Couldn’t read the metadata group/)).toBeNull();
     expect(screen.queryByText("not a voter")).toBeNull();

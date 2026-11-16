@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The classes of an agent the engine paused for a failure a retry cannot cure
@@ -25,7 +23,7 @@ type PausedSeat struct {
 }
 
 // pausedFailure is one failure kind's finding: what paused the agents, and
-// the fix. because finishes "<agents> are paused because ...".
+// the fix. because finishes "Paused because ...", after the agents' names.
 type pausedFailure struct {
 	class   Class
 	because string
@@ -54,7 +52,7 @@ var pausedFailures = map[string]pausedFailure{
 				"paused agent from its page."},
 	},
 	"models_refused": {
-		class: ClassModelsCredential, because: "no model would accept its credential",
+		class: ClassModelsCredential, because: "no model accepted the credential",
 		fix: Fix{Kind: FixExternalStep, Setting: "providers.llm",
 			Sentence: "Replace the models' credentials under Settings, Models, then resume each " +
 				"paused agent from its page. Changing the models they run on resumes them as well."},
@@ -81,7 +79,8 @@ func PausedClasses() []Class {
 }
 
 // pausedSeats is one blocking finding per failure kind that holds an agent,
-// naming every agent it holds. A kind this build does not know raises nothing.
+// in that kind's words whoever it holds, naming every agent it holds in Names.
+// A kind this build does not know raises nothing.
 func pausedSeats(ev Evidence) []Finding {
 	byKind := map[string][]PausedSeat{}
 	for _, p := range ev.Paused {
@@ -93,23 +92,23 @@ func pausedSeats(ev Evidence) []Finding {
 	for _, kind := range slices.Sorted(maps.Keys(byKind)) {
 		seats, f := byKind[kind], pausedFailures[kind]
 		slices.SortFunc(seats, func(a, b PausedSeat) int { return cmp.Compare(a.Handle, b.Handle) })
-		names := make([]words.Said, len(seats))
+		names := make([]string, len(seats))
 		for i, s := range seats {
-			names[i] = words.Said(s.Name)
+			names[i] = s.Name
 		}
-		subject, verb, them := Subject{Kind: SubjectCompany}, "are", "them"
+		subject := Subject{Kind: SubjectCompany}
 		if len(seats) == 1 {
-			subject, verb, them = Subject{Kind: SubjectSeat, Seat: seats[0].Handle}, "is", "it"
+			subject = Subject{Kind: SubjectSeat, Seat: seats[0].Handle}
 		}
 		fix := f.fix
 		fix.Options = []Option{}
 		out = append(out, Finding{
 			Class: f.class, Severity: SeverityBlocks, Actor: ActorOwner, Source: SourceEvidence,
 			Area: AreaSetup, Subject: subject,
-			Title: fmt.Sprintf("%s %s paused because %s.", words.And(names), verb, f.because),
-			Why: fmt.Sprintf("The engine paused %s after the same failure twice in a row, since "+
-				"another try would fail the same way. Work sent to %s waits and nothing is dropped.",
-				them, them),
+			Title: fmt.Sprintf("Paused because %s.", f.because),
+			Why: "The engine pauses an agent after the same failure twice in a row, since another " +
+				"try would fail the same way. Work sent to it waits and nothing is dropped.",
+			Names:    names,
 			Evidence: []Fact{{Key: "agents", Value: int64(len(seats))}},
 			Fix:      fix,
 		})

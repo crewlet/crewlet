@@ -863,11 +863,7 @@ function MergeNote({
         className="slides-merged"
         variant="info"
         title={`Moved onto version ${merge.live.base}`}
-        action={
-          <Button size="small" variant="ghost" onClick={onDismiss}>
-            Dismiss
-          </Button>
-        }
+        onDismiss={onDismiss}
       >
         Somebody published while you were editing. Their changes (
         {merge.theirs.length === 0 ? "none to slides" : merge.theirs.join(", ")}) are kept beside

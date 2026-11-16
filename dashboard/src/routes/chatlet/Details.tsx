@@ -75,6 +75,7 @@ import {
   Tabs,
   Tag,
   Tooltip,
+  VisuallyHidden,
   useToast,
 } from "@crewlethq/ui";
 import { PersonRow } from "@crewlethq/ui";
@@ -732,18 +733,23 @@ function FollowSwitch({
   busy: boolean;
   onChange: (on: boolean) => void;
 }) {
-  const label = `${name} gets every message`;
+  // Drawn in words, so the track is not read as the member's state beside it.
+  const label = (
+    <>
+      Every message <VisuallyHidden>to {name}</VisuallyHidden>
+    </>
+  );
   if (rule) {
     return (
       <Tooltip content={rule}>
-        <Switch label={label} labelHidden checked={on} disabledReason={rule} />
+        <Switch label={label} size="sm" checked={on} disabledReason={rule} />
       </Tooltip>
     );
   }
   return (
     <Switch
       label={label}
-      labelHidden
+      size="sm"
       checked={on}
       disabledReason={busy ? "Saving the last change." : undefined}
       onCheckedChange={onChange}

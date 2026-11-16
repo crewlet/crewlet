@@ -1328,6 +1328,9 @@ type ReadQuery struct {
 	// versionedFields row. The domain landed on main with it
 	// ([RecordVersion]).
 	Gates bool `json:"gates,omitempty"`
+	// Cards asks a `changes` listing for each listed change's card ([ChangeSummary.Card]);
+	// refused on every other kind. A request field, so an older build refuses it unread.
+	Cards bool `json:"cards,omitempty"`
 	// Change is a `change` read's number, and a `change_routing` read's: the
 	// change's on the repository Repo names, web!42's 42 — REQUIRED there,
 	// at least 1, and refused on every other kind.
@@ -2781,6 +2784,9 @@ type ChangeSummary struct {
 	// ([RecordVersion]), so every build serving the dashboard answers a
 	// listing with them.
 	UpdatedAt time.Time `json:"updated_at"`
+	// Card is what a listing's row draws beside its readiness, where [ReadQuery.Cards]
+	// asks; nil is not answered, never "nothing to say".
+	Card *ChangeCard `json:"card,omitempty"`
 }
 
 // ChangeDetail is one change in detail: its summary, its description and its

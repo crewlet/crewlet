@@ -26,7 +26,7 @@ import type { AgentRow, BudgetWindow, OrgBudget, ExecutorRow } from "~/protocol/
 import { entryLimits, limitDetail, limitTitle, type EntryLimit } from "./providerLimit.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
-import type { McpAlarm, McpAlarmEntry, McpAlarmKind } from "~/contract/mcp.ts";
+import type { McpAlarm } from "~/contract/mcp.ts";
 import type { AtlasReviewItem } from "~/contract/atlas.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import {
@@ -43,10 +43,14 @@ import { fmtAt, possessive } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
 import type { AdvisorFinding, AdvisorNotice, AdvisorSubject } from "~/protocol/advisor.ts";
-import { alarmHome, alarmKindTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
+import { alarmHome, alarmTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
+import { ALARM } from "./mcpAlarmWords.ts";
 import { HELD_CLASS, heldItem, heldReason, heldSetting } from "./heldConversation.ts";
 import { PAUSED_SEAT_CLASSES } from "~/contract/advisor.ts";
 import { unreadSentences, unreadTitle } from "./advisorUnread.ts";
+
+/** A tool server alarm's tone as the queue's severity. */
+const SEVERITY_OF_TONE = { danger: "critical", warning: "caution", info: "info" } as const;
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -335,8 +339,8 @@ function alarmRow(kind: string, n: AdvisorNotice): Attention {
     severity: "critical",
     subject: "alarms",
     icon: "triangle-alert",
-    title: `${alarmKindTitle(kind)} has not cleared`,
-    detail: "The engine raised this alarm and it has not cleared on its own.",
+    title: alarmTitle({ kind, title: n.title }),
+    detail: n.person || "The engine raised this alarm and it has not cleared on its own.",
     ...(n.nodes?.length ? { technical: `Standing on ${n.nodes.join(", ")}.` } : {}),
     ...(fix
       ? { path: fix.path, ...(fix.query ? { query: fix.query } : {}), action: fix.action }
@@ -572,15 +576,15 @@ export function attentionQueue(input: AttentionInput): Attention[] {
   // agent, and these are only its words. The row opens the server's page,
   // where its instances say the rest.
   for (const alarm of mcpAlarms) {
-    const words = MCP_ALARM_WORDS[alarm.kind];
+    const words = ALARM[alarm.kind];
     for (const entry of alarm.entries) {
       out.push({
         id: `mcp-${alarm.kind}-${entry.key}`,
-        severity: words.severity,
+        severity: SEVERITY_OF_TONE[words.tone],
         subject: "tools",
-        icon: words.icon,
-        title: words.title(entry),
-        detail: words.detail(entry),
+        icon: words.tone === "info" ? "clock" : "triangle-alert",
+        title: words.title({ server: entry.key, who: entry.seat, node: "", count: 0 }),
+        detail: alarm.person,
         // THE ENGINE'S MEASUREMENT, what each instance said included, behind
         // the disclosure for whoever is fixing it.
         technical: entry.detail,
@@ -827,85 +831,6 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 }
-
-/**
- * Each MCP alarm in words: its row's severity, glyph, title and what leaving it
- * costs. TOTAL OVER THE CONTRACT'S UNION, so a kind the engine adds is a type
- * error here until it has words, rather than a row with none.
- *
- * A SERVER THAT IS NOT RUNNING IS CRITICAL, for the agent or node it stops,
- * however many others it serves; a wait and a refused name cost the tools they
- * hold back and nothing more.
- */
-const MCP_ALARM_WORDS: Record<
-  McpAlarmKind,
-  {
-    severity: Severity;
-    icon: GlyphName;
-    title: (entry: McpAlarmEntry) => string;
-    detail: (entry: McpAlarmEntry) => string;
-  }
-> = {
-  mcp_server_failing: {
-    severity: "critical",
-    icon: "triangle-alert",
-    title: (e) => `${e.key} is not running`,
-    detail: () => "No agent can call its tools until an instance serves again.",
-  },
-  mcp_server_partial: {
-    severity: "critical",
-    icon: "triangle-alert",
-    title: (e) =>
-      e.seat ? `${e.key} is not running for ${e.seat}` : `${e.key} is not running on every node`,
-    detail: (e) =>
-      e.seat
-        ? `${e.seat} cannot call its tools. The other agents are not affected.`
-        : "The nodes it is down on cannot call its tools. The other nodes still serve it.",
-  },
-  mcp_server_waiting_long: {
-    severity: "caution",
-    icon: "clock",
-    title: (e) =>
-      e.seat
-        ? `${e.key} is still waiting for ${possessive(e.seat)} credential`
-        : `${e.key} is still waiting for a credential`,
-    detail: () =>
-      "The integration that mints it has not delivered it, so the agent cannot call the server's tools yet.",
-  },
-  mcp_tools_refused: {
-    severity: "caution",
-    icon: "wrench",
-    title: (e) => `Some of ${possessive(e.key)} tools are not offered`,
-    detail: () => "Their names do not fit, so no agent is offered them until they are renamed.",
-  },
-  mcp_oauth_needs_sign_in: {
-    severity: "critical",
-    icon: "triangle-alert",
-    title: (e) => `${e.key} needs somebody to sign in`,
-    detail: () => "No agent can call its tools until an administrator signs the company in to it.",
-  },
-  mcp_oauth_expiring: {
-    severity: "caution",
-    icon: "clock",
-    title: (e) => `${possessive(e.key)} sign-in runs out soon`,
-    detail: () => "Sign in again before it runs out, or the agents lose its tools.",
-  },
-  mcp_approval_waiting: {
-    severity: "caution",
-    icon: "clock",
-    title: (e) =>
-      e.seat
-        ? `${e.seat} is waiting for approval to use ${e.key}`
-        : `A call to ${e.key} is waiting for approval`,
-    detail: () => "Its run is parked until somebody allows or denies the call.",
-  },
-  mcp_tools_changed: {
-    severity: "caution",
-    icon: "settings",
-    title: (e) => `${e.key} changed a tool since it was allowed`,
-    detail: () => "Each changed tool asks before every call until somebody reviews the change.",
-  },
-};
 
 /**
  * What a parked run's row says, with its deadline where there is one.

@@ -602,21 +602,20 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
                         ? "The deck was made, and the task was not filed"
                         : "The task was not filed"
                     }
-                  >
-                    {files.refusal.sentence}
-                    {files.refusal.hint ? ` ${files.refusal.hint}` : ""}
-                    {made && (
-                      <>
-                        {" "}
+                    action={
+                      made && (
                         <Button
                           size="small"
-                          variant="ghost"
+                          variant="secondary"
                           onClick={() => nav.to(artifactPath(made.id))}
                         >
                           Open the deck
                         </Button>
-                      </>
-                    )}
+                      )
+                    }
+                  >
+                    {files.refusal.sentence}
+                    {files.refusal.hint ? ` ${files.refusal.hint}` : ""}
                   </Callout>
                 ) : null}
               </>

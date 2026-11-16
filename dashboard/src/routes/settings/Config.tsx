@@ -45,8 +45,6 @@ import {
   peekClickHandler,
 } from "@crewlethq/ui";
 import {
-  FileTextGlyph,
-  ServerGlyph,
   SplitGlyph,
   LayersGlyph,
   ClockGlyph,
@@ -356,7 +354,7 @@ function AppliedAcross({
   }
   return (
     <Card>
-      <Card.Header icon={<ServerGlyph size="sm" />}>
+      <Card.Header>
         <Card.Title>Across the fleet</Card.Title>
       </Card.Header>
       {body}
@@ -459,6 +457,7 @@ function Through({ credential }: { credential: string }) {
     <Copyable
       value={named.id}
       display={openSentence(named.kind)}
+      displayWords
       variant="inline"
       ariaLabel={`Copy the ${named.kind}'s id, ${named.id}`}
       title={`Copy ${named.id}`}
@@ -532,7 +531,7 @@ function RevisionBody({
         </section>
       ) : (
         <Card>
-          <Card.Header icon={<FileTextGlyph size="sm" />}>
+          <Card.Header>
             <Card.Title>Where it came from</Card.Title>
           </Card.Header>
           {provenance}
@@ -840,9 +839,7 @@ export function ConfigScreen({
           History lens lists revisions of that Integrations and Structure
           wrote. This page shows it; those pages change parts; import replaces it. */}
       <PageNote>
-        This page shows the company document and changes it whole: edit it, import a file over it as{" "}
-        <InlineCode>crewlet config import</InlineCode> does, reload it, or revert to an earlier
-        revision. Integrations, Structure and Principles change parts of it.
+        The whole company document: edit it, import over it, reload it or revert to a revision.
       </PageNote>
 
       {/* THE REVISION THIS PATH NAMES, above the lens rather than below it:
@@ -945,7 +942,6 @@ export function ConfigScreen({
               // card's surface rather than drawing a second frame inside it.
               <Card padding="none">
                 <Card.Header
-                  icon={<FileTextGlyph size="sm" />}
                   subtitle="as the engine resolved it"
                   actions={
                     <span className="row gap-2">
@@ -1055,7 +1051,7 @@ export function ConfigScreen({
                 state's sentence did. */}
             <div className="entity-pick">
               <Card padding="none">
-                <Card.Header icon={<LayersGlyph size="sm" />} count={(ids.data?.ids ?? []).length}>
+                <Card.Header count={(ids.data?.ids ?? []).length}>
                   {ENTITY_KINDS.find((k) => k.kind === kind)?.label ?? kind}
                 </Card.Header>
                 <div className="col entity-pick-list">
@@ -1085,7 +1081,6 @@ export function ConfigScreen({
               </Card>
               <Card>
                 <Card.Header
-                  icon={<FileTextGlyph size="sm" />}
                   subtitle="as the active revision declares it"
                   actions={
                     one.data?.entity ? (
@@ -1143,11 +1138,7 @@ export function ConfigScreen({
           revision's page landed on a list and showed no change at all. */}
       {!onRevision && lens === "diff" && (
         <Card>
-          <Card.Header
-            id={CHANGES_HEAD_ID}
-            icon={<SplitGlyph size="sm" />}
-            subtitle={sides.subtitle}
-          >
+          <Card.Header id={CHANGES_HEAD_ID} subtitle={sides.subtitle}>
             {revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
           </Card.Header>
           {!revision ? (
@@ -1211,7 +1202,7 @@ export function ConfigScreen({
             }
           >
             <Card padding="none">
-              <Card.Header icon={<ClockGlyph size="sm" />} count={rows.length}>
+              <Card.Header count={rows.length}>
                 <Card.Title>Revisions</Card.Title>
               </Card.Header>
               <DataGrid<RevisionMeta>

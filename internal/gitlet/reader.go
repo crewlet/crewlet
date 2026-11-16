@@ -1946,6 +1946,8 @@ func (q ReadQuery) kindOwnedField() error {
 			"protects", ErrInvalid)
 	case q.Commit != "" && q.Kind != ReadCommit:
 		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
+	case q.Cards && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: cards: only a listing of changes carries each change's card", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
 		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:

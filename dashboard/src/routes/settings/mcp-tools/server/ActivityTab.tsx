@@ -14,7 +14,6 @@ import {
   Text,
   type DataGridColumn,
 } from "@crewlethq/ui";
-import { ChartColumnGlyph, HandGlyph, ScrollTextGlyph } from "@crewlethq/icons/glyphs";
 import type { McpApproval, McpCallRow, McpMemberToolUsage } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { listed, plural } from "~/lib/format.ts";
@@ -153,7 +152,7 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
   return (
     <div className="mcp-stack">
       <Card padding="none">
-        <Card.Header icon={<ChartColumnGlyph size="sm" />}>
+        <Card.Header>
           <Card.Title>Calls by tool, last {usage.days} days</Card.Title>
         </Card.Header>
         <DataGrid<McpMemberToolUsage>
@@ -174,7 +173,7 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
       </Card>
       {detail.reading === "admin" ? (
         <Card padding="none">
-          <Card.Header icon={<ScrollTextGlyph size="sm" />}>
+          <Card.Header>
             <Card.Title>Recent calls</Card.Title>
           </Card.Header>
           <DataGrid<McpCallRow>
@@ -194,7 +193,7 @@ export function ActivityTab({ detail, data }: { detail: ServerDetail; data: McpD
       ) : null}
       {detail.reading === "admin" ? (
         <Card padding="none">
-          <Card.Header icon={<HandGlyph size="sm" />} count={approvals.length || undefined}>
+          <Card.Header count={approvals.length || undefined}>
             <Card.Title>Calls held for approval</Card.Title>
           </Card.Header>
           <DataGrid<McpApproval>

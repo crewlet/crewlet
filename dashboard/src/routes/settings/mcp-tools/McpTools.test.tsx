@@ -234,6 +234,8 @@ test("an alarm a sign-in fixes opens the Sign in dialog", () => {
     alarms: [
       {
         kind: "mcp_oauth_needs_sign_in",
+        title: "A tool server needs a look",
+        person: "",
         detail: "linear needs a sign-in",
         remedy: "",
         entries: [
@@ -349,6 +351,8 @@ test("a waiting call's alarm opens the calls held on its server", async () => {
     alarms: [
       {
         kind: "mcp_approval_waiting",
+        title: "A tool server needs a look",
+        person: "",
         detail: "a call to linear_delete_issue has waited 12 minutes",
         remedy: "",
         entries: [
@@ -382,6 +386,8 @@ test("a changed-tools alarm opens their review, and counts as waiting", async ()
     alarms: [
       {
         kind: "mcp_tools_changed",
+        title: "A tool server needs a look",
+        person: "",
         detail: "linear changed delete_issue",
         remedy: "",
         entries: [

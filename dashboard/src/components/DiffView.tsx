@@ -1,5 +1,6 @@
 /**
- * Every diff the dashboard draws: one component, coloured only in Gitlet.
+ * Every diff of lines the dashboard draws: one component, coloured only in Gitlet.
+ * A change read as prose is the design system's `DocumentDiff` (`components/ProseDiff.tsx`).
  *
  * # Why it is local
  *

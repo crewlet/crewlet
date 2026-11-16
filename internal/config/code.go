@@ -2329,11 +2329,13 @@ func (c *Company) codeWarnings() []Warning {
 		}
 		if r.MirrorFrom != nil {
 			if len(r.Protect) > 0 {
-				out = append(out, advisory(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
+				w := mirrorProtectAdvice.raise(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
 					"%s is a pull mirror (mirror_from): every ref moves by Gitlet's syncs from its "+
 						"source, and it takes no push and no change of its own, so no rule of its protect "+
 						"list holds anything (remove protect, or remove mirror_from to push to it here)",
-					r.Name)))
+					r.Name))
+				w.Item = r.Name
+				out = append(out, w)
 			}
 			continue
 		}
@@ -2354,12 +2356,30 @@ func (c *Company) codeWarnings() []Warning {
 		}) {
 			continue
 		}
-		out = append(out, advisory(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
+		w := unprotectedBranchAdvice.raise(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
 			"%s's default branch %s is unprotected: a person can force-push it, and no merge "+
 				"gate holds what merges into it (add {branch: %s} to its protect list, with merge_by, "+
-				"approvals, human_paths or checks to gate its merges)", r.Name, branch, branch)))
+				"approvals, human_paths or checks to gate its merges)", r.Name, branch, branch))
+		w.Item = branchItem(r.Name, branch)
+		out = append(out, w)
 	}
 	return out
+}
+
+// The words of [Company.codeWarnings]' own two: a mirror's protect list, and
+// a default branch no rule protects.
+var (
+	mirrorProtectAdvice = says("Branch rules on a mirrored repository",
+		"This repository copies another and takes no pushes, so its branch rules do nothing. "+
+			"Remove them, or stop mirroring to push here.")
+	unprotectedBranchAdvice = says("Main branches anyone can overwrite",
+		"Anyone can overwrite this repository's main branch, and nothing checks what merges "+
+			"into it. Add a protection rule for the branch.")
+)
+
+// branchItem is a branch of a repository as a warning's Item names it.
+func branchItem(repo, branch string) string {
+	return repo + " (" + branch + ")"
 }
 
 // directBoxWarnings is one warning for every place a company hosting code puts
@@ -2395,12 +2415,8 @@ func (c *Company) directBoxWarnings() []Warning {
 		"ANY live executor run and push as that run's seat, and a repository's `visibility: unit` and a " +
 		"run's grants do not bind "
 	const remedy = "; run it in `container` or `e2b` to hold it to them"
-	// ONE SENTENCE FOR BOTH PLACES, the entry's own cell and the default: a
-	// person is told what the cell lets an agent do and what to choose, and
-	// the setting the warning is at is where they choose it.
-	const person = "Agents run their work directly on the engine's own server, where an agent can " +
-		"read every code repository and act as any other agent, whatever a repository's " +
-		"visibility. Run them in a container or a cloud sandbox to hold each agent to its own access."
+	// ONE WORDING FOR BOTH PLACES, the entry's own cell and the default
+	// ([directBoxAdvice]), each named apart as the warning's Item.
 	var out []Warning
 	inherited := false
 	entries := map[string]bool{}
@@ -2419,12 +2435,16 @@ func (c *Company) directBoxWarnings() []Warning {
 			continue
 		}
 		entries[box.Executor] = true
-		out = append(out, classed(ClassDirectBox, at(entryPath(box.Executor), "run_in"),
-			reads+"the executors of the seats this entry launches on"+remedy, person))
+		w := classed(ClassDirectBox, directBoxAdvice, at(entryPath(box.Executor), "run_in"),
+			reads+"the executors of the seats this entry launches on"+remedy)
+		w.Item = c.ModelName(box.Executor)
+		out = append(out, w)
 	}
 	if inherited {
-		out = append(out, classed(ClassDirectBox, field("providers.sandbox.default_run_in"),
-			reads+"the executors of the seats that take this default"+remedy, person))
+		w := classed(ClassDirectBox, directBoxAdvice, field("providers.sandbox.default_run_in"),
+			reads+"the executors of the seats that take this default"+remedy)
+		w.Item = "the sandbox default"
+		out = append(out, w)
 	}
 	return out
 }
@@ -2451,25 +2471,42 @@ func idleGateFields(i int, r CodeRepo) []Warning {
 			continue
 		}
 		rulePath := idx(at(idx(field("code.repos"), i), "protect"), k)
-		idle := func(name, why string) {
-			out = append(out, advisory(at(rulePath, name), fmt.Sprintf("%s's rule on %s sets %s, %s",
-				r.Name, rule.Branch, name, why)))
+		idle := func(a advice, name, why string) {
+			w := a.raise(at(rulePath, name), fmt.Sprintf("%s's rule on %s sets %s, %s",
+				r.Name, rule.Branch, name, why))
+			w.Item = branchItem(r.Name, rule.Branch)
+			out = append(out, w)
 		}
 		if rule.OwnersApprove && len(r.PathOwners) == 0 {
-			idle("owners_approve", "and the repository names no path owners: no change touches an owned "+
-				"path, so it waits for nobody's approval (name path_owners, or remove owners_approve)")
+			idle(idleOwnersApproveAdvice, "owners_approve", "and the repository names no path owners: "+
+				"no change touches an owned path, so it waits for nobody's approval (name path_owners, "+
+				"or remove owners_approve)")
 		}
 		if len(rule.Checks) == 0 && rule.Landing != (CodeLanding{}) {
-			idle("landing", "and requires no checks: only a branch whose merges wait for checks has a queue "+
-				"to land them, so every merge into this one lands directly (require checks, or remove landing)")
+			idle(idleLandingAdvice, "landing", "and requires no checks: only a branch whose merges wait "+
+				"for checks has a queue to land them, so every merge into this one lands directly "+
+				"(require checks, or remove landing)")
 		}
 		if len(rule.ApprovalsUnless) > 0 && rule.Approvals.Resolved() == CodeApprovalsNone {
-			idle("approvals_unless", "beside approvals: none, so it exempts changes from approvals the rule "+
-				"never asks (set approvals: one, or remove approvals_unless)")
+			idle(idleApprovalsUnlessAdvice, "approvals_unless", "beside approvals: none, so it exempts "+
+				"changes from approvals the rule never asks (set approvals: one, or remove approvals_unless)")
 		}
 	}
 	return out
 }
+
+// The words of [idleGateFields], one per merge gate field that does nothing.
+var (
+	idleOwnersApproveAdvice = says("Owner approval with no owners named",
+		"This branch rule asks file owners to approve, but the repository names no owners, so "+
+			"it waits for nobody. Name owners or drop the setting.")
+	idleLandingAdvice = says("Merge queues with no checks to wait for",
+		"This branch rule sets up a merge queue but requires no checks, so every merge skips "+
+			"the queue. Require checks or remove the queue.")
+	idleApprovalsUnlessAdvice = says("Approval exemptions with no approvals asked",
+		"This branch rule exempts changes from approvals it never asks for, so the exemption "+
+			"does nothing. Require an approval or remove it.")
+)
 
 // codeMergeRateDay is the span `crewlet validate` prices a queue's capacity
 // over: a DAY, at one landing a seat — a seat that may merge and lands one
@@ -2513,17 +2550,24 @@ func (c *Company) mergeRateWarnings(units *org.Index, persons, i int, r CodeRepo
 		if capacity >= seats {
 			continue
 		}
-		out = append(out, advisory(at(idx(at(idx(field("code.repos"), i), "protect"), k), "landing"),
+		w := mergeRateAdvice.raise(at(idx(at(idx(field("code.repos"), i), "protect"), k), "landing"),
 			fmt.Sprintf("%s's queue on %s lands at most %d change(s) a day (%d candidate(s) of up to %d "+
 				"change(s) a round, a round as long as the longest check may run (%s, "+
 				"code.checks.max_timeout_seconds)), fewer than the %d seat(s) that may merge into it "+
 				"(merge_by %s), at one change a day each, so its queue falls behind once they merge "+
 				"(raise landing.depth or landing.batch, or lower code.checks.max_timeout_seconds to what "+
 				"its checks take)", r.Name, rule.Branch, capacity, g.Landing.Depth, g.Landing.Batch, round,
-				seats, by)))
+				seats, by))
+		w.Item = branchItem(r.Name, rule.Branch)
+		out = append(out, w)
 	}
 	return out
 }
+
+// mergeRateAdvice is [Company.mergeRateWarnings]' rule.
+var mergeRateAdvice = says("Merge queues too slow for their team",
+	"This merge queue lands fewer changes a day than the people and agents allowed to merge, "+
+		"so it falls behind. Let it land more each round.")
 
 // seatsThatMayMerge is how many seats may merge into a branch of a repository
 // owned by owner under merge authority by (M5-D2), counted through the chart's
@@ -2596,12 +2640,17 @@ func unitWithNoLead(units *org.Index, i int, r CodeRepo) (Warning, bool) {
 	if u == nil || units.EffectiveLead(u) != nil {
 		return Warning{}, false
 	}
-	w := advisory(at(idx(field("code.repos"), i), "visibility"), fmt.Sprintf(
+	w := unitRepoNoLeadAdvice.raise(at(idx(field("code.repos"), i), "visibility"), fmt.Sprintf(
 		"%s is visibility: unit and owned by %s, which has no lead: only persons and "+
 			"%s's members read it (set a lead on %s, or the owner)", r.Name, ref, ref, ref))
-	w.Unit = u.Name
+	w.Unit, w.Item = u.Name, r.Name
 	return w, true
 }
+
+// unitRepoNoLeadAdvice is [unitWithNoLead]'s rule.
+var unitRepoNoLeadAdvice = says("Team repositories whose team has no lead",
+	"Only people and the team's members can read this repository, because its team has no "+
+		"lead. Give the team a lead, or the repository another owner.")
 
 // roleCodeWarnings is every agent seat whose `code.access` nothing reads: the
 // company hosts no code of its own (`code.backend` is not gitlet), and Gitlet
@@ -2629,14 +2678,20 @@ func (c *Company) roleCodeWarnings() []Warning {
 			!slices.Contains(CodeAccessTiers, role.Code.Access) {
 			continue
 		}
-		w := advisory(at(path, "code.access"), fmt.Sprintf(
+		w := accessWithoutHostingAdvice.raise(at(path, "code.access"), fmt.Sprintf(
 			"code.access %s grants nothing: this company hosts no code (code.backend is %s), "+
 				"and Gitlet is the only place a tier caps what a seat may do. "+
 				"A GitHub App's access is its integrations.github.permissions. Set code.backend: gitlet, "+
 				"or remove code",
 			role.Code.Access, backend))
-		w.Seat = role.Seat().Handle()
+		w.Seat, w.Item = role.Seat().Handle(), strings.ReplaceAll(role.Code.Access, "_", " ")
 		out = append(out, w)
 	}
 	return out
 }
+
+// accessWithoutHostingAdvice is [Company.roleCodeWarnings]' rule; the
+// warning's Item names the seat's tier.
+var accessWithoutHostingAdvice = says("Code access with no code hosting",
+	"This agent has a code access level, but the company hosts no code, so it grants nothing. "+
+		"Turn on code hosting or remove the level.")

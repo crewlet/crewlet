@@ -61,11 +61,6 @@ const ACCENT: Site[] = [
   },
   {
     file: "routes/settings/Fleet.tsx",
-    line: `{data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}`,
-    why: "Which node is answering this reader. Literally where the reader is.",
-  },
-  {
-    file: "routes/settings/Fleet.tsx",
     line: `{n.id === data?.this_node && <Tag variant="brand">this one</Tag>}`,
     why: "The same fact, as a row of the fleet table.",
   },

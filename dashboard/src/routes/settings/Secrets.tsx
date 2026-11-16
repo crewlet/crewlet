@@ -45,14 +45,7 @@ import {
   type DataGridActivationEvent,
   peekClickHandler,
 } from "@crewlethq/ui";
-import {
-  PlusGlyph,
-  XGlyph,
-  LinkGlyph,
-  PencilGlyph,
-  KeyGlyph,
-  ShieldGlyph,
-} from "@crewlethq/icons/glyphs";
+import { PlusGlyph, XGlyph, PencilGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
@@ -511,7 +504,7 @@ export function Secrets({ name }: { name?: string }) {
           size="small"
           onClick={() => setWriting({ editing: "" })}
         >
-          Store a secret
+          Add secret
         </Button>
       </PageActions>
 
@@ -521,12 +514,7 @@ export function Secrets({ name }: { name?: string }) {
       {list.length > 0 && (
         <Card padding="none">
           <StatGroup columns={3}>
-            <StatCard
-              icon={<KeyGlyph size="xs" />}
-              label="Credentials"
-              value={list.length}
-              sub="names the fleet holds"
-            />
+            <StatCard label="Credentials" value={list.length} sub="names the fleet holds" />
             {/* NOT WHERE THE VALUES LIVE. This tile once counted rows whose
                 source read "store" — a word no writer stamps, since `source`
                 is which path wrote a row and every row listed here is sealed
@@ -537,7 +525,6 @@ export function Secrets({ name }: { name?: string }) {
                 reads: each one is either a forgotten `${VAR}` or a
                 credential nothing needs any more. */}
             <StatCard
-              icon={<LinkGlyph size="xs" />}
               label="Read by nothing"
               value={unread ?? <EmptyValue label="Not known" />}
               sub={
@@ -547,7 +534,6 @@ export function Secrets({ name }: { name?: string }) {
               }
             />
             <StatCard
-              icon={<ShieldGlyph size="xs" />}
               label="Distinct key ids"
               value={new Set(list.map((r) => r.key_id)).size}
               sub="a rekey moves every value onto a new one"
@@ -575,10 +561,10 @@ export function Secrets({ name }: { name?: string }) {
             // own gesture first, and the command, as code, after it.
             empty={{
               icon: "key",
-              title: "No secrets are stored",
+              title: "No secrets yet",
               hint: (
                 <>
-                  Store one with Store a secret, or from the command line with{" "}
+                  Add one with Add secret, or from the command line with{" "}
                   <InlineCode close=".">crewlet secrets set</InlineCode>
                 </>
               ),

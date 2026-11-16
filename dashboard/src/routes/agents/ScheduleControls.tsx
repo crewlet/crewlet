@@ -59,7 +59,7 @@ import {
 } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { getEntity } from "~/protocol/configWrite.ts";
-import { warningWords } from "~/protocol/configAnswer.ts";
+import { brings, ConfigWarnings } from "~/components/ConfigWarnings.tsx";
 import { isAbort } from "~/protocol/rest.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import {
@@ -355,17 +355,15 @@ function WriteOutcome({ write }: { write: ScheduleWrite }) {
   }
   if (state.kind === "warned") {
     return (
-      <Callout
-        variant="warning"
-        title="The engine would also say"
+      <ConfigWarnings
+        warnings={state.warnings}
+        title={brings}
         action={
           <Button size="small" variant="secondary" onClick={write.confirm}>
             Save anyway
           </Button>
         }
-      >
-        {state.warnings.map(warningWords).join(" ")}
-      </Callout>
+      />
     );
   }
   return null;
@@ -818,11 +816,7 @@ function DialogOutcome({ write }: { write: ScheduleWrite }): ReactNode {
     );
   }
   if (state.kind === "warned") {
-    return (
-      <Callout variant="warning" title="The engine would also say">
-        {state.warnings.map(warningWords).join(" ")}
-      </Callout>
-    );
+    return <ConfigWarnings warnings={state.warnings} title={brings} />;
   }
   if (state.kind === "refused") {
     return (

@@ -148,6 +148,7 @@ func withCanaries(f advisor.Finding, i int) advisor.Finding {
 	f.Title, f.Why, f.Path, f.Area = c(0), c(1), c(2), advisor.Area(c(3))
 	f.Subject = advisor.Subject{Kind: advisor.SubjectSeat, Seat: c(4), Unit: c(5), Schedule: c(6), Name: c(7)}
 	f.Records = []string{c(1), c(2)}
+	f.Item, f.Names = c(5), []string{c(6), c(7)}
 	f.Fix.Sentence, f.Fix.Unchanged = c(3), c(4)
 	return f
 }

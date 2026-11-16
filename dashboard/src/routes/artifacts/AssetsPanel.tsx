@@ -32,6 +32,7 @@ import {
   Callout,
   FileList,
   FilePickButton,
+  NoticeList,
   useToast,
   type FileListItem,
   type PickedFile,
@@ -209,11 +210,9 @@ export function AssetsPanel({ detail }: { detail: ArtifactDetail }) {
             title={refused.length === 1 ? "A file was not added" : "Some files were not added"}
             live="polite"
           >
-            <ul className="artifact-list" role="list">
-              {refused.map((r) => (
-                <li key={r.name}>{`${r.name}: ${r.refused}`}</li>
-              ))}
-            </ul>
+            <NoticeList
+              notices={refused.map((r) => ({ key: r.name, subject: r.name, title: r.refused }))}
+            />
           </Callout>
         ) : null}
       </Section>

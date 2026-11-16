@@ -220,7 +220,9 @@ describe("saying it", () => {
     const field = await box();
     fireEvent.keyDown(field, { key: "Enter" });
     expect(posts()).toHaveLength(0);
-    expect(screen.getByRole("button", { name: /^send$/i }).getAttribute("title") ?? "").toContain(
+    const send = screen.getByRole("button", { name: /^send$/i });
+    const described = send.getAttribute("aria-describedby")?.split(" ").pop() ?? "";
+    expect(document.getElementById(described)?.textContent ?? "").toContain(
       WRITE_FIRST.slice(0, 5),
     );
   });
