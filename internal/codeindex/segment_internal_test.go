@@ -8,7 +8,6 @@ import (
 	"math"
 	"math/bits"
 	"math/rand/v2"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -333,8 +332,7 @@ func TestEveryReadOfAPostingListRefusesWhatIsNotTheFormat(t *testing.T) {
 // the bytes a build of every blob writes, the 32-way merge allocates what
 // the 2-way one does, and each less than it writes.
 func TestAMergeAllocatesForWhatItWritesHoweverManyItMerges(t *testing.T) {
-	// Not parallel: runtime.MemStats counts every goroutine's allocations,
-	// and a parallel case's would be counted as the merge's.
+	// Not parallel: a parallel case's measured call would be counted as this one's.
 	rng := rand.New(rand.NewPCG(20261027, 3))
 	words := make([]string, 300)
 	for i := range words {
@@ -382,17 +380,15 @@ func TestAMergeAllocatesForWhatItWritesHoweverManyItMerges(t *testing.T) {
 			segs[j] = opened(t, write(k, j))
 		}
 		out := bytes.NewBuffer(make([]byte, 0, len(whole)))
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		err := MergeSegments(out, segs, nil)
-		runtime.ReadMemStats(&after)
+		var err error
+		spent, _ := allocations(t, func() { err = MergeSegments(out, segs, nil) })
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(out.Bytes(), whole) {
 			t.Fatalf("merging the blobs from %d segments writes other bytes than building them whole", k)
 		}
-		return after.TotalAlloc - before.TotalAlloc
+		return spent
 	}
 	// Five leaves a list unpaired in two of its rounds.
 	two, five, many := merge(2), merge(5), merge(32)
@@ -416,26 +412,23 @@ func TestAMergeAllocatesForWhatItWritesHoweverManyItMerges(t *testing.T) {
 // by two ordinals at a time to 4 096 make their buffers a few tens of times,
 // never once a union.
 func TestAUnionKeptFromMergeToMergeMakesItsBuffersFewTimes(t *testing.T) {
-	// Not parallel: runtime.MemStats counts every goroutine's allocations,
-	// and a parallel case's would be counted as the union's.
+	// Not parallel: a parallel case's measured call would be counted as this one's.
 	const most = 2048
 	evens, odds := make([]uint32, most), make([]uint32, most)
 	for i := range evens {
 		evens[i], odds[i] = uint32(2*i), uint32(2*i+1)
 	}
 	var u union
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for n := 1; n <= most; n++ {
-		u.reset()
-		u.add(evens[:n])
-		u.add(odds[:n])
-		if got := u.merged(); len(got) != 2*n || got[2*n-1] != uint32(2*n-1) {
-			t.Fatalf("the union of %d evens and %d odds holds %d ordinals", n, n, len(got))
+	_, made := allocations(t, func() {
+		for n := 1; n <= most; n++ {
+			u.reset()
+			u.add(evens[:n])
+			u.add(odds[:n])
+			if got := u.merged(); len(got) != 2*n || got[2*n-1] != uint32(2*n-1) {
+				t.Fatalf("the union of %d evens and %d odds holds %d ordinals", n, n, len(got))
+			}
 		}
-	}
-	runtime.ReadMemStats(&after)
-	made := after.Mallocs - before.Mallocs
+	})
 	bound := uint64(8 * bits.Len(2*most))
 	t.Logf("%d unions growing to %d ordinals made %d allocations, against a bound of %d", most, 2*most, made,
 		bound)
