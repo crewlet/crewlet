@@ -529,13 +529,9 @@ func TestAHistoryNarrowedByWhoPushedIsNeverImmutable(t *testing.T) {
 	}
 }
 
-// A FIND NAMES ITS QUERY. `q` and `limit` reach the read by object id as the
-// find's query and its limit, the revision its `ref`; a request naming no
-// `q`, or a limit that is no whole number of zero or more, is bad_params
-// before anything is read, the rows or a Gitlet node.
-//
-// Mutation: drop codeFind's check of q, or of its limit being whole: the
-// request with none, or with 2.5, reaches the reader, red.
+// A FIND NAMES ITS QUERY: `q` and `limit` reach the read as the find's query and
+// limit; no `q`, or a limit that is no whole number, is bad_params before any read.
+// Mutation: drop codeFind's check of q, or of its limit being whole.
 func TestAFindNamesItsQuery(t *testing.T) {
 	t.Parallel()
 	stub := &stubCode{}

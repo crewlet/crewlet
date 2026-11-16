@@ -16,10 +16,9 @@ const (
 	// types into a finder, past any file's path a person would type, and the
 	// bound of the matcher's work on each path, which is linear in it.
 	MaxFindQueryBytes = 256
-	// MaxFindLimit is the most files one find answers, and DefaultFindLimit
-	// how many one naming none answers: a finder's list a person scrolls, and
-	// the rest is narrowed by typing on, which Total tells them to. Fewer
-	// where their paths fill the answer's bytes.
+	// MaxFindLimit is the most files one find answers, and DefaultFindLimit how many
+	// one naming none answers: a list a person scrolls, narrowed by typing on.
+	// Fewer where their paths fill the answer's bytes.
 	MaxFindLimit     = 100
 	DefaultFindLimit = 50
 )
@@ -30,11 +29,9 @@ type FindQuery struct {
 	// Rev is a commit's id (or a tag's naming one), or a tree's, whole or
 	// abbreviated: the files of its root tree are searched.
 	Rev string `json:"rev"`
-	// Query is the characters a file's path holds in order, case-folded
-	// (unicode.SimpleFold's orbits, so `K` finds the Kelvin sign), each
-	// matching one character of the path: 1 to MaxFindQueryBytes bytes of
-	// UTF-8 with no NUL. A space is a character like any other. Never handed
-	// to git.
+	// Query is the characters a path holds in order, case-folded as unicode.SimpleFold
+	// does (`K` finds the Kelvin sign): 1 to MaxFindQueryBytes bytes of UTF-8, no NUL,
+	// a space a character like any other. Never handed to git.
 	Query string `json:"query"`
 	// Limit is the most files answered, 1 to MaxFindLimit; zero is
 	// DefaultFindLimit.
@@ -98,9 +95,8 @@ type FindMatch struct {
 	// OID is its blob, Mode its git mode (100644, 100755, 120000).
 	OID  string `json:"oid"`
 	Mode string `json:"mode"`
-	// Spans are the runs of Path's characters the query matched, each
-	// [start, end) in code points of Path as carried (a run of bytes that
-	// are not UTF-8 is one U+FFFD there and one position here, matched by
-	// nothing), in order: what a finder draws in bold.
+	// Spans are the runs of Path the query matched, each [start, end) in code points
+	// of Path as carried (a run that is not UTF-8 is one position, matched by
+	// nothing): what a finder draws in bold.
 	Spans [][2]int `json:"spans"`
 }

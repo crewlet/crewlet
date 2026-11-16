@@ -425,11 +425,9 @@ func (s Sources) codeTree(ctx context.Context, p Params) (any, error) {
 	return answered(page, immutable), nil
 }
 
-// codeFind answers `code_find`: the files of `ref`'s tree (the default
-// branch where it names none) whose path holds `q`'s characters in order,
-// case-folded, best first: `limit` of them (1 to gitlet.MaxFindLimit,
-// gitlet.DefaultFindLimit where it names none), and how many match. One
-// answer, no cursor: a person narrows it by typing on.
+// codeFind answers `code_find`: the files of `ref`'s tree (the default branch where
+// none) whose path holds `q`'s characters in order, case-folded, best first, up to
+// `limit`, with how many match. No cursor: a person narrows it by typing on.
 func (s Sources) codeFind(ctx context.Context, p Params) (any, error) {
 	g, err := s.gitAskOf(ctx, p, "code_find")
 	if err != nil {

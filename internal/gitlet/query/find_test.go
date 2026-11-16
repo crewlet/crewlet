@@ -44,13 +44,9 @@ func foundPaths(f *gitlet.FindAnswer) []string {
 	return out
 }
 
-// A FIND RANKS THE BASENAME FIRST AND BY CONTIGUITY, each query answering in
-// the rank's order with its spans; of three files tied but for their bytes and
-// a better one after them, the two best are the better one and the first.
-//
-// Mutations: drop the tier, the gaps, the start, the excess or the length
-// from the rank, or put the bytes before the length → red; drop the bytes
-// from the rank → the tie evicted is the first, red.
+// A FIND RANKS THE BASENAME FIRST AND BY CONTIGUITY, each query in rank order with its
+// spans; of three files tied but for their bytes, the best two keep the first.
+// Mutation: drop a term of the rank (tier, gaps, start, excess, length, bytes) or reorder them.
 func TestAFindRanksTheBasenameFirstAndByContiguity(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -104,12 +100,9 @@ func TestAFindRanksTheBasenameFirstAndByContiguity(t *testing.T) {
 	}
 }
 
-// A FIND FOLDS CASE AS strings.EqualFold DOES: README finds readme.md, `k`
-// finds U+212A KELVIN SIGN, and `ß` neither finds `ss` nor is found by it.
-//
-// Mutations: fold the query alone (lower-case it, the paths as they are) →
-// license finds nothing, red; fold ß to ss, as full case mapping does →
-// STRASS finds straße.md, red.
+// A FIND FOLDS CASE AS strings.EqualFold DOES: README finds readme.md, `k` finds
+// U+212A KELVIN SIGN, and `ß` neither finds `ss` nor is found by it.
+// Mutation: fold the query alone, or fold ß to ss as full case mapping does.
 func TestAFindFoldsCaseAsEqualFoldDoes(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -134,12 +127,9 @@ func TestAFindFoldsCaseAsEqualFoldDoes(t *testing.T) {
 	}
 }
 
-// A FIND MATCHES NO BYTE THAT IS NOT TEXT: such a run is one position, found
-// by the characters around it and by neither its Latin-1 reading nor U+FFFD.
-//
-// Mutations: decode an invalid byte as U+FFFD and match it → the U+FFFD
-// query finds both, red; count each invalid byte as a position → the second
-// file's spans are [[0,1],[3,4]], red.
+// A FIND MATCHES NO BYTE THAT IS NOT TEXT: such a run is one position, found by the
+// characters around it and by neither its Latin-1 reading nor U+FFFD.
+// Mutation: match an invalid byte as U+FFFD, or count each invalid byte as a position.
 func TestAFindMatchesNoByteThatIsNotText(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -170,13 +160,9 @@ func TestAFindMatchesNoByteThatIsNotText(t *testing.T) {
 	}
 }
 
-// A FIND KEEPS ITS LIMIT AND COUNTS EVERY MATCH: 120 of 300 files match, the
-// best 50 (or 100) are answered in rank order, a link is a file and a
-// submodule is not, and an invalid find is refused as it is validated.
-//
-// Mutations: count a submodule as a file → files is 301, red; keep the first
-// matches the listing passes rather than the best → the link is missing, red;
-// answer every match → 120, red.
+// A FIND KEEPS ITS LIMIT AND COUNTS EVERY MATCH: of 300 files 120 match, the best 50 (or
+// 100) answer in rank order, a link is a file and a submodule is not, an invalid find refused.
+// Mutation: count a submodule, keep the first matches rather than the best, or answer all.
 func TestAFindKeepsItsLimitAndCountsEveryMatch(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -294,13 +280,9 @@ func lsTrees(runs []run) int {
 	return n
 }
 
-// A FIND KEEPS NOTHING OF ITS OWN AND RUNS NO GIT ONCE ITS TREE IS LISTED: one
-// listing by the tree's id serves every later query and every commit holding
-// the tree, and the memo holds the listing's pages and no answer.
-//
-// Mutations: memoize a find's answer → the memo grows with each query, red;
-// key the pages by the commit → the other commit's find lists the tree again,
-// red; take the warm path through git → a later query lists it, red.
+// A FIND KEEPS NOTHING OF ITS OWN AND RUNS NO GIT ONCE ITS TREE IS LISTED: one listing by
+// the tree's id serves every later query and commit, and the memo holds no answer.
+// Mutation: memoize a find's answer, key the pages by the commit, or go warm through git.
 func TestAFindKeepsNothingOfItsOwnAndRunsNoGitOnceItsTreeIsListed(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -402,12 +384,9 @@ func (c *missOnce) MemoGet(s cache.Synced, k cache.MemoKey) ([]byte, bool) {
 	return c.Cache.MemoGet(s, k)
 }
 
-// A FIND GOES ON FROM THE PAGE ITS MEMO LACKS: with the second page gone it
-// lists once from there, answers as before and puts the pages back.
-//
-// Mutations: refuse the find, or rank the pages the walk read alone, at a
-// page the memo lacks → red; list the tree from its first entry and hand the
-// pages read again → the counts double, red.
+// A FIND GOES ON FROM THE PAGE ITS MEMO LACKS: with the second page gone it lists once
+// from there, answers as before and puts the pages back.
+// Mutation: refuse there, rank only the pages read, or list from the first entry again.
 func TestAFindGoesOnFromThePageItsMemoLacks(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -476,11 +455,9 @@ func TestAFindIsOneAnswerCutByItsBytes(t *testing.T) {
 	}
 }
 
-// A PATH NO READ NAMES IS NO FILE A FIND HOLDS. Beside b/a.txt, a blob at a
-// path of about 10 KiB, past gitlet.MaxGitPathBytes, that matches best: the
-// find answers b/a.txt and counts one file.
-//
-// Mutation: rank the long path → it fills the answer alone, nothing fits, red.
+// A PATH NO READ NAMES IS NO FILE A FIND HOLDS: beside b/a.txt, a best-matching blob at
+// a path past gitlet.MaxGitPathBytes; the find answers b/a.txt and counts one file.
+// Mutation: rank the long path, which fills the answer alone.
 func TestAFindPassesAPathNoReadNames(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())

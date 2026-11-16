@@ -31,10 +31,8 @@ func (r *read) findRead(ctx context.Context, objs found) (gitlet.GitAnswer, erro
 	tree := objs.target.id
 	f := newFinder(fq.Query, fq.Files())
 
-	// THE LISTING'S OWN READ, as an unstamped tree read of the tree's id
-	// asks it: the same keys, the same room, so the same pages. It shares the
-	// read's pinned copy, which the read alone releases, and reads no index,
-	// which an unstamped read never does.
+	// THE LISTING'S OWN READ, as an unstamped tree read of the tree's id asks it, so
+	// the same pages; it shares the read's pinned copy and reads no index.
 	sub := &read{s: r.s, synced: r.synced, linear: r.linear, indexRead: true, q: gitlet.GitQuery{
 		Kind: gitlet.GitTree, RepoID: r.q.RepoID, Asker: r.q.Asker, Unstamped: true,
 		Tree: &gitlet.TreeQuery{Rev: tree, Recursive: true}}}
@@ -105,11 +103,9 @@ func (r *read) findRead(ctx context.Context, objs found) (gitlet.GitAnswer, erro
 	return r.found(rev, tree, f), nil
 }
 
-// found is the find's answer: the finder's best, best first, as many as fit
-// the room an answer naming rev and tree leaves, with how many match and how
-// many files the tree holds. One match always fits: the finder ranks no path
-// past gitlet.MaxGitPathBytes, 24 KiB escaped, and its spans are at most one
-// pair a query's character.
+// found is the find's answer: the finder's best first, as many as fit the room an
+// answer naming rev and tree leaves, with how many match and how many files the
+// tree holds. One match always fits: a ranked path is at most gitlet.MaxGitPathBytes.
 func (r *read) found(rev object, tree string, f *finder) gitlet.GitAnswer {
 	envelope := gitlet.GitAnswer{Kind: gitlet.GitFind, Rev: rev.peeled, Find: &gitlet.FindAnswer{Tree: tree,
 		Matches: []gitlet.FindMatch{}, Total: widest, Files: widest}}

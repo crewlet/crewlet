@@ -214,9 +214,7 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 // a target's tip by the home that keeps what it parsed of it — a whole file
 // the memo would hold for nobody else; a commit's deploy and dependency
 // files, asked once a tip by the scan that records what they declare; and a
-// find, which keeps nothing of its own: it reads the tree's listing pages,
-// which a tree read keys by the tree alone, and a query's answer would be a
-// page per keystroke in a memo shared by the whole node.
+// find, which reads the tree's memoized listing and would add a page a keystroke.
 func memoizable(q gitlet.GitQuery) bool {
 	// A HISTORY NARROWED BY WHO PUSHED IT is a function of the node's index
 	// of pushes, which moves, never of the ids alone (gitlet.GitQuery.ReadsIndex).

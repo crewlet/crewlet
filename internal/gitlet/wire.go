@@ -3260,11 +3260,9 @@ const (
 	// node keeps one, and otherwise git grep — at most MaxSearchHits of
 	// them, in one answer with no next page (search.go).
 	GitSearch GitReadKind = "search"
-	// GitFind is the files of a commit's tree whose path holds a query's
-	// characters in order, case-folded: a finder's "go to file", answered with
-	// the best of them, best first, and how many match (find.go). Read over the
-	// tree's recursive listing as its memo keeps it, by the tree's own id, so
-	// a person typing runs no git after the first query of a tree.
+	// GitFind is the files of a commit's tree whose path holds a query's characters in
+	// order, case-folded, best first, with how many match (find.go): read over the
+	// tree's memoized listing, so a person typing runs no git after the first query.
 	GitFind GitReadKind = "find"
 )
 
