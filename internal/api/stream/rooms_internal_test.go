@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -168,5 +169,33 @@ func TestAPresenceMemberIsNamedAsItsRecordIs(t *testing.T) {
 				t.Fatalf("the room names %q, the history %q", got, want)
 			}
 		})
+	}
+}
+
+// EVERY MOVEMENT SAYS WHETHER IT NARROWS THE ROOM: one that may change who
+// reads the artifact suspends its datastore pushes until the room is decided
+// again, and one that cannot (a version, a comment) leaves them flowing; a
+// reset names no artifact and suspends every room before this is asked. A
+// movement kind added without a row here fails, so none is classified by the
+// switch's default.
+func TestEveryMovementSaysWhetherItNarrowsTheRoom(t *testing.T) {
+	t.Parallel()
+	want := map[artifactsdomain.MoveKind]bool{
+		artifactsdomain.MoveVersion: false, artifactsdomain.MoveMeta: false,
+		artifactsdomain.MoveShare: true, artifactsdomain.MoveAsset: false,
+		artifactsdomain.MoveTrash: true, artifactsdomain.MoveRestore: false,
+		artifactsdomain.MovePurge: true, artifactsdomain.MoveTransfer: true,
+		artifactsdomain.MoveFolder: false, artifactsdomain.MoveReset: false,
+		artifactsdomain.MoveComment: false,
+	}
+	for _, kind := range artifactsdomain.MoveKinds {
+		narrowing, ok := want[kind]
+		if !ok {
+			t.Errorf("movement %q has no row: say whether it narrows the room", kind)
+			continue
+		}
+		if got := narrows(kind); got != narrowing {
+			t.Errorf("narrows(%q) = %v, want %v", kind, got, narrowing)
+		}
 	}
 }
