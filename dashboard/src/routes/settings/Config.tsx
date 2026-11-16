@@ -457,6 +457,7 @@ function Through({ credential }: { credential: string }) {
     <Copyable
       value={named.id}
       display={openSentence(named.kind)}
+      displayWords
       variant="inline"
       ariaLabel={`Copy the ${named.kind}'s id, ${named.id}`}
       title={`Copy ${named.id}`}

@@ -1473,7 +1473,7 @@ const (
 	// The model wizard as a chunk of its own, every harness and reasoning effort, on kit 0.137.0: 421.5 KiB,
 	// the kit's shared modules regrouped around the new chunk: 422 KiB, 2.30 seconds.
 	// Doclet's newest change read as the page reads, on kit 0.141.1, whose one sheet adds its new parts: 420.3 KiB: 421 KiB, 2.30 seconds.
-	// The Settings polish, on kit 0.141.1: 420.2 KiB, the kit's shared chunk most of it: 421 KiB, 2.30 seconds.
+	// The Settings polish, on kit 0.143.0: 420.2 KiB, the kit's shared chunk most of it: 421 KiB, 2.30 seconds.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0: 422.2 KiB: 423 KiB, 2.31 seconds.
 	initialBudget = 423 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
@@ -2661,8 +2661,8 @@ const (
 	// The Gitlet code host colours train, on kit 0.137.0: 6374.8 KiB (6,527,838 bytes), 3,079 over main: 6375 KiB.
 	// Doclet's newest change read as the page reads, on kit 0.141.1: 6505.7 KiB (6,661,846 bytes), 153,793 over main,
 	// 133,990 of them the kit's coding-harness vendor marks in the icons chunk: 6506 KiB.
-	// The Settings polish, on kit 0.141.1: 6488.7 KiB (6,644,388 bytes), 116,550 over main, the
-	// kit's newer components most of it: 6489 KiB.
+	// The Settings polish, on kit 0.143.0: 6491.8 KiB (6,647,648 bytes), 119,810 over main, the
+	// kit's newer components most of it: 6492 KiB.
 	// One notice system, on kit 0.142.0: 6511.6 KiB (6,667,924 bytes), 140,086 over main, about
 	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0:
