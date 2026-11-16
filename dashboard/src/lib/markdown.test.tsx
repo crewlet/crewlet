@@ -6,6 +6,7 @@ import {
   type RenderOptions,
   nestSections,
   outline,
+  renderBlocks,
   renderInline,
   renderMarkdown,
   splitSections,
@@ -14,7 +15,7 @@ import {
   linkTargets,
   shownImage,
 } from "./markdown.ts";
-import { plainText } from "./markdownText.ts";
+import { inlineRuns, plainText } from "./markdownText.ts";
 // THE FIXTURES ARE REAL FILES, imported verbatim rather than inlined as
 // template literals: a document written in a `.md` file is a document
 // somebody can read and edit as markdown, and a fixture that only exists
@@ -1007,5 +1008,59 @@ describe("prose", () => {
       },
     ).forEach((node) => render(<div>{node}</div>));
     expect(opened).toEqual(["Head", "one ", "four", "five", "a", "b", "c", "d"]);
+  });
+});
+
+describe("the inline hook", () => {
+  const DOC = [
+    "## A heading",
+    "",
+    "A paragraph with a [link](https://example.com).",
+    "",
+    "> A quote",
+    "",
+    "- one",
+    "  - nested",
+    "- [x] two",
+    "",
+    "| A | B |",
+    "| --- | --- |",
+    "| c | d |",
+    "",
+    "```sh",
+    "make dashboard",
+    "```",
+  ].join("\n");
+
+  it("is called in inlineRuns' order, once per run, and what it draws is what renders", () => {
+    const blocks = parseMarkdown(DOC);
+    const seen: string[] = [];
+    const { container } = render(
+      <div>
+        {renderBlocks(blocks, {
+          inline: (text, key) => {
+            seen.push(text);
+            return <mark key={key}>{seen.length}</mark>;
+          },
+        })}
+      </div>,
+    );
+    expect(seen).toEqual(blocks.flatMap(inlineRuns));
+    expect(seen).toEqual([
+      "A heading",
+      "A paragraph with a [link](https://example.com).",
+      "A quote",
+      "one",
+      "nested",
+      "two",
+      "A",
+      "B",
+      "c",
+      "d",
+    ]);
+    expect([...container.querySelectorAll("mark")].map((m) => m.textContent)).toEqual(
+      seen.map((_, i) => String(i + 1)),
+    );
+    expect(container.querySelector("pre code")?.textContent).toBe("make dashboard");
   });
 });

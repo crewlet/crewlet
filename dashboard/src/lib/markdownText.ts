@@ -154,3 +154,25 @@ export function firstBlockText(source: string): string {
   }
   return "";
 }
+
+/**
+ * A block's runs of inline text in the order `lib/markdown.ts` draws them, which
+ * is the order its `inline` option is called in.
+ */
+export function inlineRuns(block: MarkdownBlock): string[] {
+  switch (block.kind) {
+    case "heading":
+    case "paragraph":
+      return [block.text];
+    case "quote":
+    case "callout":
+      return block.blocks.flatMap(inlineRuns);
+    case "list":
+      return block.items.flatMap((item) => item.blocks.flatMap(inlineRuns));
+    case "table":
+      return [...block.head, ...block.rows.flat()];
+    case "code":
+    case "rule":
+      return [];
+  }
+}
