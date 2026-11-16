@@ -179,8 +179,8 @@ const (
 	// bucket's byte reservation may remain before an operator is told:
 	// TWICE A LOG'S, a fifth, borrowed from [HeadroomAlarmFraction] so a
 	// retune of the one moves the other. Twice, because both remedies for
-	// a full bucket take longer than a log's: raising its reservation is a
-	// capacity change on a stream every member holds, and moving the files
+	// a full bucket take longer than a log's: raising its reservation waits
+	// for a data node to restart on the new figure, and moving the files
 	// to a bucket (`crewlet objects migrate --to s3`) copies every one of
 	// them and ends inside a maintenance window. A full bucket refuses
 	// uploads, and only uploads.
@@ -501,9 +501,10 @@ const (
 	KindCensusDrift         Kind = "census_drift"
 	KindObjectsMissing      Kind = "objects_missing"
 
-	KindObjectsBucketNearCeiling Kind = "objects_bucket_near_ceiling"
-	KindObjectiveBurn            Kind = "objective_burn"
-	KindClockSkew                Kind = "clock_skew"
+	KindObjectsBucketNearCeiling  Kind = "objects_bucket_near_ceiling"
+	KindObjectsBucketRaiseRefused Kind = "objects_bucket_raise_refused"
+	KindObjectiveBurn             Kind = "objective_burn"
+	KindClockSkew                 Kind = "clock_skew"
 
 	// Gitlet's: a Gitlet node's own work, beside the logs', and the
 	// committer's on the data node that decides a repository's pushes.
@@ -871,6 +872,12 @@ type Reading struct {
 	// node, and on a fleet whose files are in an S3 bucket, which reserves
 	// nothing. A zero MaxBytes is "not measured", never "full".
 	ObjectsBucketBytes, ObjectsBucketMaxBytes int64
+
+	// ObjectsBucketWanted is the store.objects.nats_max_bytes this node's boot
+	// did not raise the nats bucket to, ObjectsBucketKept what it kept, and
+	// ObjectsBucketWhy why; zero where no raise was refused.
+	ObjectsBucketWanted, ObjectsBucketKept int64
+	ObjectsBucketWhy                       string
 
 	// ObjectiveBurns is every service objective this node is spending the
 	// error budget of too fast, each over the fastest pair of windows that
@@ -2108,21 +2115,32 @@ var table = []rule{
 				r.ObjectsBucketMaxBytes > 0 && float64(r.ObjectsBucketMaxBytes-r.ObjectsBucketBytes) <
 					ObjectsHeadroomAlarmFraction*float64(r.ObjectsBucketMaxBytes)
 		},
-		// THE GESTURES EVERY DEPLOYMENT HAS COME FIRST, as the full bucket's own
-		// refusal says them (natsobj.FullRemedy): a bucket that exists keeps
-		// the reservation it was created with, `store.objects.nats_max_bytes`
-		// sizes only a bucket a node creates, and `nats stream update` reaches
-		// no single embedded node, which has no client listener. Offered first,
-		// it was the one step this alarm's most common reader could not take.
-		remedy: "Once the bucket is full every upload is refused. Move the files to an " +
-			"S3-compatible bucket with `crewlet objects migrate -to s3` (see " +
-			"docs/concepts/object-store.md), or let the collector remove the files " +
-			"nothing names any more (Settings, File storage, shows what it holds). Where " +
-			"the nats tool reaches the broker (an external one, or an embedded fleet's " +
-			"member through its loopback listener with the operator key) the reservation " +
-			"can be raised instead: `nats stream update OBJ_crewlet_files " +
-			"--max-bytes=<bytes>`, within what the broker can grant. A single embedded " +
-			"node has no listener, and keeps the reservation its bucket was created with.",
+		// THE SETTING COMES FIRST: a data node raises the bucket to a larger
+		// store.objects.nats_max_bytes at boot on every broker, as the full
+		// bucket's own refusal says (natsobj.FullRemedy).
+		remedy: "Once the bucket is full every upload is refused. Raise " +
+			"`store.objects.nats_max_bytes` and restart a data node: its boot raises the " +
+			"bucket's reservation where the broker can grant the difference and still keep " +
+			"1 GiB for the coordination records, and `objects_bucket_raise_refused` says why " +
+			"where it cannot. Or move the files to an S3-compatible bucket with `crewlet " +
+			"objects migrate -to s3` (see docs/concepts/object-store.md), or let the collector " +
+			"remove the files nothing names any more (Settings, File storage, shows what it holds).",
+	},
+	{
+		kind: KindObjectsBucketRaiseRefused,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("store.objects.nats_max_bytes asks for %s and the nats object "+
+					"bucket keeps its %s reservation: %s", bytesHuman(r.ObjectsBucketWanted),
+					bytesHuman(r.ObjectsBucketKept), r.ObjectsBucketWhy),
+				r.ObjectsBucketWanted > 0
+		},
+		remedy: "A data node raises the bucket at boot once the broker can grant the difference " +
+			"and still keep 1 GiB for the coordination records. Give the broker more room " +
+			"(raise `stream.store_max_bytes`, or free the volume holding `stream.store_dir`), " +
+			"or lower `store.objects.nats_max_bytes` to what the detail says fits, and restart " +
+			"this node. Where the broker states no limit this node can read (an external one " +
+			"whose account sets none), raise it there with `nats stream update " +
+			"OBJ_crewlet_files --max-bytes=<bytes>`. See docs/concepts/object-store.md.",
 	},
 	{
 		// ONE ALARM FOR EVERY BURNING OBJECTIVE, the detail naming each:
