@@ -4187,12 +4187,16 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// UNDER THE ADMISSION, which is the only way here: the turn this
 	// re-enters is one the node admitted ([admitted]).
 	ctx := adm.ctx
-	// WHAT THIS ATTEMPT SAYS OF A WAIT FOR THE OPERATOR, whichever way it
-	// returns: a failure only an operator clears keeps the run counted in
-	// [Coordinator.ResumesBlocked], and every other answer, a resume that got
-	// past it included, takes it out.
+	// WHAT THIS ATTEMPT SAYS OF A WAIT FOR THE OPERATOR: a failure only an
+	// operator clears counts the run in [Coordinator.ResumesBlocked] as it is
+	// met (below), and every other answer, a resume that got past it
+	// included, takes it out as the attempt returns.
 	blockedOn := ""
-	defer func() { c.noteBlocked(run, blockedOn) }()
+	defer func() {
+		if blockedOn == "" {
+			c.noteBlocked(run, "")
+		}
+	}()
 	if len(run.ExecuteState) == 0 {
 		// No parked turn to resume, and the run cannot be judged without
 		// one.
@@ -4493,7 +4497,14 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			log.ErrorContext(ctx, "sandbox_resume_failed",
 				"turn_id", run.TurnID, "revert_to", claimedFrom(run),
 				"attempt", run.Launch.ResumeFailures+1, "error", err.Error())
-			blockedOn = c.blockedBy(run, err)
+			// COUNTED AS IT IS MET, before the claim is handed back, never
+			// as the attempt returns: an ending of the run from here on (a
+			// hand-back that fails, which ends it, or a stop) takes it out
+			// ([Coordinator.runSettled]), and counted after that ending, a
+			// run that was over held the alarm up until its seat moved.
+			if blockedOn = c.blockedBy(run, err); blockedOn != "" {
+				c.noteBlocked(run, blockedOn)
+			}
 		}
 		// A FAILURE IS COUNTED AND BOUNDED, a wait is not, and nor is a
 		// failure of the node's own, or one another node can get past while

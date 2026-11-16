@@ -369,11 +369,15 @@ func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) 
 // kind and how long since the first such failure in a row, an attempt that
 // meets the condition again keeping that instant; and takes it out once a
 // resume gets past the condition, once one fails for anything else, once the
-// run settles, and once the seat is let go of. A failure of the node's that a
-// wait clears (a coordination store that did not answer) is never counted.
+// run settles, and once the seat is let go of. AN ATTEMPT WHOSE OWN HAND-BACK
+// FAILED ENDS THE RUN, so it is out too: counted as that attempt returned,
+// after its ending had taken it out, a run that was over held the alarm up
+// until its seat moved. A failure of the node's that a wait clears (a
+// coordination store that did not answer) is never counted.
 //
 // Mutation: record no failure, keep the latest instant rather than the first,
-// or drop the record on any one of the four ways out, and a row goes red.
+// drop the record on any one of the five ways out, or count the failure as
+// the attempt returns rather than as it is met, and a row goes red.
 func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 	t.Parallel()
 	full := errors.New("write: no space left on device")
@@ -449,6 +453,19 @@ func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 		rig := rigFor(t)
 		waiting(t, rig)
 		rig.coordinator.runSettled("t1")
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("a hand-back that failed, which ends the run", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"ReleaseClaim"}}
+		if err := attempt(t, rig); err != nil {
+			t.Fatalf("the premise: an attempt whose claim cannot be handed back ends the run: %v", err)
+		}
+		if !rig.gone("t1") {
+			t.Fatal("the premise: the run whose claim could not be handed back is ended")
+		}
 		blockedFor(t, rig, ResumesBlocked{})
 	})
 	t.Run("a failure of the node's a wait clears", func(t *testing.T) {
