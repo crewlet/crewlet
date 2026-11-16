@@ -35,11 +35,15 @@ func TestEveryAssistantToolResultIsFenced(t *testing.T) {
 		checked++
 		t.Run(tool.Name, func(t *testing.T) {
 			t.Parallel()
-			spec, ok := tool.CardFor(catalog.Args(requiredArgs(tool)))
-			if !ok {
-				t.Fatalf("%s cards no answer for its required arguments", tool.Name)
+			// An inferred read has no spec; any record of words stands for its answer.
+			var answer any = map[string]any{"words": "Somebody's words."}
+			if !tool.Infer {
+				spec, ok := tool.CardFor(catalog.Args(requiredArgs(tool)))
+				if !ok {
+					t.Fatalf("%s cards no answer for its required arguments", tool.Name)
+				}
+				answer = answerFor(spec)
 			}
-			answer := answerFor(spec)
 			f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{tool},
 				Handler: func(exec.Request) exec.Response { return evals.JSON(answer) },
 				Rounds: []evals.Round{

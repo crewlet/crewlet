@@ -1,6 +1,7 @@
 package configapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2121,5 +2122,38 @@ func TestEveryConfigRouteTakesTheGrantItsVerbNames(t *testing.T) {
 				t.Errorf("a refusal answered Cache-Control %q, want no-store", got)
 			}
 		})
+	}
+}
+
+// One section of the document reads as its own redacted value; an unknown one
+// is refused naming the sections, and one the document leaves unset is absent.
+func TestOneSectionOfTheConfigReadsAlone(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, companyDoc)
+	res := s.do(t, http.MethodGet, "/config?section=name", "", nil)
+	if res.Code != http.StatusOK || strings.TrimSpace(res.Body.String()) != `"Acme"` {
+		t.Errorf("the name section answered %d %s", res.Code, res.Body)
+	}
+	whole := s.do(t, http.MethodGet, "/config", "", nil)
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(whole.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range document {
+		got := s.do(t, http.MethodGet, "/config?section="+key, "", nil)
+		if got.Code != http.StatusOK || !bytes.Equal(bytes.TrimSpace(got.Body.Bytes()), want) {
+			t.Errorf("section %s answered %d %.200s, want the document's own %.200s", key,
+				got.Code, got.Body, want)
+		}
+	}
+	if res := s.do(t, http.MethodGet, "/config?section=secrets", "", nil); res.Code !=
+		http.StatusBadRequest || !strings.Contains(res.Body.String(), "integrations") {
+		t.Errorf("an unknown section answered %d %s, want a refusal naming the sections",
+			res.Code, res.Body)
+	}
+	if res := s.do(t, http.MethodGet, "/config?section=skill_variables", "", nil); res.Code !=
+		http.StatusNotFound {
+		t.Errorf("a section the document leaves unset answered %d %s", res.Code, res.Body)
 	}
 }
