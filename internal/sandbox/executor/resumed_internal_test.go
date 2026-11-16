@@ -740,8 +740,8 @@ func (c cancelling) end(bool, error)          {}
 // two lines its body handed at once ends there, and the thread is not read whole,
 // so its count names no restart, not even the one its first line is.
 //
-// Mutation: leave the context unchecked between lines, or name the restart read
-// before the cut, and this goes red.
+// Mutation: leave the context unchecked between lines (the line reader's Next
+// asking none), or name the restart read before the cut, and this goes red.
 func TestAReadCutShortBetweenLinesLeavesNoCount(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())

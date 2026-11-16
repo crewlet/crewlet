@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"encoding/json/jsontext"
@@ -300,7 +301,9 @@ func validClaudeAgent(agent string) bool {
 // time, each line's head decoded ([threadReader.Next]). One goroutine reads
 // it. A THREAD'S MEMBER: a subagent's metadata is one JSON document with no
 // line break ([claudeSubagentMeta]), which it reads as nothing but a torn
-// piece.
+// piece. ONE READER READS A SESSION'S MEMBERS, one after another
+// ([threadReader.Reset]): a reading of a session's threads keeps one reader's
+// buffers whatever members it reads, never one a member.
 type threadReader struct {
 	r *bufio.Reader
 	// maxBytes is the member's bound, and left what of it the lines read so
@@ -321,6 +324,17 @@ type threadReader struct {
 func newThreadReader(r io.Reader, maxBytes int64) *threadReader {
 	maxBytes = max(maxBytes, 0)
 	return &threadReader{r: bufio.NewReaderSize(threadSource{r}, lineChunkBytes), maxBytes: maxBytes, left: maxBytes}
+}
+
+// Reset makes t read r, one member, within maxBytes, as [newThreadReader]
+// does: whatever t read before, how it ended among it (a torn piece, a bound,
+// an error, a context that ended), is gone, and t reads r exactly as a fresh
+// reader would, keeping only its buffer.
+func (t *threadReader) Reset(r io.Reader, maxBytes int64) {
+	maxBytes = max(maxBytes, 0)
+	t.r.Reset(threadSource{r})
+	t.maxBytes, t.left = maxBytes, maxBytes
+	t.n, t.torn, t.end = 0, false, nil
 }
 
 // threadSource is a member's reader whose every error but its end reaches
@@ -379,9 +393,19 @@ func (e *threadSourceError) Unwrap() error { return e.err }
 //     that wraps the take's scrub's bound, as a reader metering a kept
 //     archive with the scrub's own meter returns, is that reader's, never
 //     errThreadBound ([threadSource]).
-func (t *threadReader) Next() (threadLine, error) {
+//   - ctx's error once ctx has ended, asked before each line is read: the
+//     reading is over, and stays over, whatever context a later Next is
+//     handed. A line's read itself asks no context, so a reading overruns its
+//     caller's wait by one line's read and decode at most. ctx is the one
+//     place a reading's caller is heard: its callers ask none of their own
+//     between lines.
+func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 	if t.end != nil {
 		return threadLine{}, t.end
+	}
+	if err := ctx.Err(); err != nil {
+		t.end = err
+		return threadLine{}, err
 	}
 	bound, member := threadLineMax, t.left < threadLineMax
 	if member {

@@ -596,6 +596,23 @@ type holdingsWalk struct {
 	notices map[legNotice]noticeFact
 	unnamed map[string]bool
 	kept    int
+	// lines is the one line reader every thread member the walk reads is
+	// read through ([holdingsWalk.reader]).
+	lines *threadReader
+}
+
+// reader is the walk's one line reader, made to read member within what the
+// members read so far left of the reading's budget ([threadPlainMax]): one
+// reader for every member, so a session of many subagents costs the walk one
+// reader's buffers ([threadReader.Reset]), never one a member.
+func (w *holdingsWalk) reader(member io.Reader) *threadReader {
+	handed := &handedReader{r: member, handed: &w.handed}
+	if w.lines == nil {
+		w.lines = newThreadReader(handed, w.bounds.plain-w.handed)
+	} else {
+		w.lines.Reset(handed, w.bounds.plain-w.handed)
+	}
+	return w.lines
 }
 
 // callFacts is what the counted records of the threads read say of one asked
@@ -816,15 +833,12 @@ func outsideArchive(name string) bool {
 // cannot place the thread ([threadChain.Unknown]): read on, the reading
 // would vouch for a thread no model says the resume hands its model.
 func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
-	lines := newThreadReader(&handedReader{r: member, handed: &w.handed}, w.bounds.plain-w.handed)
+	lines := w.reader(member)
 	chain, pairing := newThreadChain(""), &holdingsPairing{}
 	for {
-		// BETWEEN LINES, since a line's read takes no context: a reading
-		// overruns its caller's wait by one line's read and decode at most.
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		line, err := lines.Next()
+		// ctx is asked before each line ([threadReader.Next]), and an error
+		// of its is the walk's to answer ([holdingsWalk.failed]).
+		line, err := lines.Next(ctx)
 		switch {
 		case errors.Is(err, io.EOF):
 			return w.mainEnd(ctx, chain, pairing)
@@ -1290,13 +1304,10 @@ func originOf(line threadLine) string {
 func (w *holdingsWalk) subagentThread(ctx context.Context, agent string, a *subagentFacts,
 	member io.Reader) error {
 
-	lines := newThreadReader(&handedReader{r: member, handed: &w.handed}, w.bounds.plain-w.handed)
+	lines := w.reader(member)
 	chain, pairing := newThreadChain(agent), &holdingsPairing{}
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		line, err := lines.Next()
+		line, err := lines.Next(ctx)
 		var broken *threadLineError
 		switch {
 		case errors.Is(err, io.EOF):

@@ -2102,15 +2102,16 @@ func (c *hsCancelling) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// A READING STOPS BETWEEN LINES WHEN ITS CONTEXT ENDS, since a line's read
-// takes none: a caller that left while a thread was read, many mebibytes that
+// A READING STOPS BETWEEN LINES WHEN ITS CONTEXT ENDS, which the line reader
+// asks before each line ([threadReader.Next]), since a line's read takes
+// none: a caller that left while a thread was read, many mebibytes that
 // gzip barely shrinks, the main thread's or a subagent's, ends the reading
 // within a line, with the caller's own error and the rest of the stream never
 // read. A walk that asked only between members would read the thread whole
 // and drain the stream.
 //
-// Mutation: ask the context between members alone, in either thread's walk,
-// and the reading reads that whole thread and stands.
+// Mutation: ask the context between members alone, never in the line
+// reader's Next, and the reading reads that whole thread and stands.
 func TestAReadingStopsBetweenLinesWhenItsContextEnds(t *testing.T) {
 	t.Parallel()
 	random := rand.NewChaCha8([32]byte{'h', 'o', 'l', 'd'})

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -437,7 +438,7 @@ func ctReadFrom(member io.Reader, maxBytes int64) ctReading {
 	r := newThreadReader(member, maxBytes)
 	var got ctReading
 	for {
-		line, err := r.Next()
+		line, err := r.Next(context.Background())
 		var broken *threadLineError
 		switch {
 		case err == nil:
@@ -446,7 +447,7 @@ func ctReadFrom(member io.Reader, maxBytes int64) ctReading {
 			got.broken = append(got.broken, broken)
 		default:
 			got.end, got.torn = err, r.Torn()
-			_, got.again = r.Next()
+			_, got.again = r.Next(context.Background())
 			return got
 		}
 	}
@@ -648,6 +649,105 @@ func TestAMembersReaderThatFailsEndsTheReadingWithItsError(t *testing.T) {
 		if errors.Is(got.end, errThreadBound) || got.end == nil || got.end.Error() != tc.err.Error() {
 			t.Errorf("%s: the reading ended with %v; want the reader's own error in its own words, never the "+
 				"layer's bound", name, got.end)
+		}
+	}
+}
+
+// ctTrace is what r hands out reading one member to its end with ctx, as
+// text: each line as Next hands it (its place and bytes, or, where it is no
+// record, its place, fault and size), then what ended the reading, what one
+// more Next answered, and whether the member ended torn.
+func ctTrace(ctx context.Context, r *threadReader) string {
+	var b strings.Builder
+	for {
+		line, err := r.Next(ctx)
+		var broken *threadLineError
+		switch {
+		case err == nil:
+			fmt.Fprintf(&b, "line %d: %s\n", line.N, line.Raw)
+		case errors.As(err, &broken):
+			fmt.Fprintf(&b, "line %d is no record: fault %q, size %d\n", broken.N, broken.Fault, broken.Size)
+		default:
+			_, again := r.Next(ctx)
+			fmt.Fprintf(&b, "ended by %v, then %v, torn %t\n", err, again, r.Torn())
+			return b.String()
+		}
+	}
+}
+
+// A READING ENDS AT THE LINE ITS CONTEXT ENDED: Next asks its context before
+// each line, so once a caller's context has ended the next Next answers its
+// error and hands no more lines, and the reading stays over, whatever context
+// a later Next is handed. The lines before it were each read whole.
+//
+// Mutation: ask no context in Next, and the line after the end is read; or
+// answer a context's end for its own Next alone, and a later one reads on.
+func TestAReadingEndsAtTheLineItsContextEnded(t *testing.T) {
+	t.Parallel()
+	r := newThreadReader(strings.NewReader(ctThread(ctBrief(ctUUID(1)), ctBrief(ctUUID(2)), ctBrief(ctUUID(3)))),
+		threadPlainMax)
+	ctx, cancel := context.WithCancel(t.Context())
+	if line, err := r.Next(ctx); err != nil || line.N != 1 {
+		t.Fatalf("the first line read as %d, %v; want line 1", line.N, err)
+	}
+	cancel()
+	for _, next := range []context.Context{ctx, t.Context()} {
+		if line, err := r.Next(next); !errors.Is(err, context.Canceled) {
+			t.Errorf("a Next after the reading's context ended handed line %d, %v; want %v", line.N, err,
+				context.Canceled)
+		}
+	}
+	if r.Torn() {
+		t.Errorf("a reading its context ended reads as torn")
+	}
+}
+
+// A RESET READER READS AS A FRESH ONE: one reader reads a session's members one
+// after another ([threadReader.Reset]), so a member read after another reads
+// exactly as a fresh reader reads it, its lines numbered from 1, its bound its
+// own, ended only by what ends it, and torn only where it is, whatever the
+// member before it left: a torn piece, the member's bound, a line that is no
+// record, an error of its reader, or a context that ended. The next member is
+// read to its end, and again within a bound it passes, which ends its reading
+// before its end could say whether it is torn.
+//
+// Mutation: keep any of what a reading leaves across Reset (how it ended, how
+// many lines it read, its torn piece, what of its bound it took), and the
+// member after it reads otherwise.
+func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
+	t.Parallel()
+	brief := ctBrief(ctUUID(1))
+	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)))
+	within := int64(len(next)) + 1
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	// text is a member that hands out body.
+	text := func(body string) func() io.Reader {
+		return func() io.Reader { return strings.NewReader(body) }
+	}
+	for name, tc := range map[string]struct {
+		before   func() io.Reader
+		maxBytes int64
+		ctx      context.Context
+	}{
+		"a torn member":           {text(ctThread(brief, brief) + `{"type":"user"`), threadPlainMax, t.Context()},
+		"a member past its bound": {text(ctThread(brief, brief)), int64(len(brief)) + 3, t.Context()},
+		"a member holding a line that is no record": {text(ctThread(brief, "[1]", brief, brief)), within,
+			t.Context()},
+		"a member whose reader failed": {func() io.Reader {
+			return io.MultiReader(strings.NewReader(ctThread(brief, brief)), iotest.ErrReader(io.ErrUnexpectedEOF))
+		}, within, t.Context()},
+		"a reading whose context ended": {text(ctThread(brief, brief)), within, ended},
+	} {
+		for _, bound := range []int64{within, within - 2} {
+			r := newThreadReader(tc.before(), tc.maxBytes)
+			ctTrace(tc.ctx, r)
+			r.Reset(strings.NewReader(next), bound)
+			got := ctTrace(t.Context(), r)
+			if want := ctTrace(t.Context(), newThreadReader(strings.NewReader(next), bound)); got != want {
+				t.Errorf("after %s, the next member read within %d bytes reads as\n%swant it read as a fresh "+
+					"reader reads it\n%s", name, bound, got, want)
+			}
 		}
 	}
 }

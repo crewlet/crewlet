@@ -332,7 +332,7 @@ func rcChainEnding(ctx context.Context, t *testing.T, agent string, lines ...str
 	got := rcRead{c: newThreadChain(agent), handles: map[int]chainHandle{}}
 	r := newThreadReader(strings.NewReader(text), threadPlainMax)
 	for {
-		line, err := r.Next()
+		line, err := r.Next(t.Context())
 		var broken *threadLineError
 		switch {
 		case err == nil:
@@ -2029,7 +2029,7 @@ func TestAThreadPastTheChainsBoundIsCannotTell(t *testing.T) {
 	r := newThreadReader(strings.NewReader(ctThread(prompt, retracting(threadChainMaxRecords-2),
 		rcReply(2, 3, "msg_b", 2000, rcCalls("x1")), rcReply(3, 4, "msg_c", 3000, rcCalls("x2")))), threadPlainMax)
 	for {
-		line, err := r.Next()
+		line, err := r.Next(t.Context())
 		if err != nil {
 			break
 		}
@@ -3094,7 +3094,7 @@ func TestAnEndItsCallerAbandonedLeavesNoModel(t *testing.T) {
 		r := newThreadReader(strings.NewReader(ctThread(tc.lines...)), threadPlainMax)
 		h := noChainRecord
 		for {
-			line, err := r.Next()
+			line, err := r.Next(t.Context())
 			if err != nil {
 				break
 			}
