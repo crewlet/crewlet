@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant`
-- **Enforced-by:** `internal/config.TestTheAssistantRefusesAnEntryThatReachesTheWeb`, `internal/config.TestResearchListsBareHostNames`, `internal/research.TestOnlyAListedHostsPagesAreRead`, `internal/research.TestAPageIsReadAsItsText`, `internal/api/queries.TestAPageIsReadOnlyFromTheHostsTheCompanyLists`, `internal/assistant.TestTheWebIsOfferedOnlyWhereTheCompanyListsHosts`, `internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites`, `internal/assistant.TestAProposalAfterOutsideTextIsTainted`
+- **Enforced-by:** `internal/config.TestTheAssistantRefusesAnEntryThatReachesTheWeb`, `internal/config.TestResearchListsBareHostNames`, `internal/research.TestOnlyAListedHostsPagesAreRead`, `internal/research.TestAPageIsReadAsItsText`, `internal/api/queries.TestAPageIsReadOnlyFromTheHostsTheCompanyLists`, `internal/assistant.TestTheWebIsOfferedOnlyWhereTheCompanyListsHosts`, `internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites`, `internal/assistant.TestAProposalAfterOutsideTextIsTainted`, `internal/assistant.TestAWebTaintedTurnProposesOnlyOnItsSubject`
 - **Tag-status:** unreleased
 
 ## The decision

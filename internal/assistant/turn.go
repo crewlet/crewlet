@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/live"
+	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/events"
@@ -96,7 +98,10 @@ type turn struct {
 	// after (D25).
 	outside provenance.Source
 	// calls counts this segment's calls of each tool a turn bounds (Tool.PerTurn).
-	calls    map[string]int
+	calls map[string]int
+	// subjects are the records the person asked about: the page's selection and
+	// resources, and the task keys their question names (ADR-0151).
+	subjects []string
 	model    string
 	provider string
 	// deep is the turn's deep work (ADR-0054): what this segment hands a
@@ -133,6 +138,57 @@ func (t *turn) firstOutput() {
 	if !shown {
 		t.svc.metrics.Observe(metrics.AssistantFirstOutputLatency, t.svc.now().Sub(t.started), nil)
 	}
+}
+
+// taskKey is a task's key as a person writes it in a question (ENG-41).
+var taskKey = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`\b[A-Z][A-Z0-9]{1,9}-[0-9]+\b`)
+})
+
+// subjectsOf are the records a question and its page name.
+func subjectsOf(question string, page *wire.PageContext) []string {
+	out := taskKey().FindAllString(question, -1)
+	if page != nil {
+		if page.Selection != nil {
+			out = append(out, page.Selection.ID)
+		}
+		for _, r := range page.Resources {
+			out = append(out, r.ID)
+		}
+	}
+	return out
+}
+
+// onSubject reports whether a proposal stays on what the person asked about,
+// as a turn that read a web page must: a change to the page itself, or one whose
+// target is a record they named.
+func (t *turn) onSubject(scope wire.ProposalScope, p proposal.Preview) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.outside != provenance.SourceWebPage || scope == wire.ScopePage {
+		return true
+	}
+	return p.Target != "" && slices.ContainsFunc(t.subjects, func(s string) bool {
+		return strings.EqualFold(s, p.Target)
+	})
+}
+
+// subjectWords are the turn's subjects as a refusal names them.
+func (t *turn) subjectWords() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.subjects) == 0 {
+		return "no record"
+	}
+	return strings.Join(t.subjects, ", ")
+}
+
+// orNothing is s, or words for none.
+func orNothing(s string) string {
+	if s == "" {
+		return "a new record"
+	}
+	return s
 }
 
 // spend counts one call of tool, and reports whether the turn may still make it.
@@ -786,6 +842,9 @@ type parked struct {
 	// Deep is the deep-work run the turn parked on, continued by the
 	// approval that resumes it; absent for a quick-mode proposal.
 	Deep *parkedDeep `json:"deep,omitempty"`
+	// Subjects are the turn's records asked about, which a web-tainted segment
+	// proposes on alone.
+	Subjects []string `json:"subjects,omitempty"`
 	// Page is the page context the segment ran on: what a resumed segment
 	// runs on when its decision carried none. A decision that carries one
 	// replaces it ([Service.Resume]).
@@ -813,7 +872,7 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
 		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail, Deep: t.deep.parked,
-		Page: t.page, Outside: string(t.outside), Strength: t.strength}
+		Page: t.page, Outside: string(t.outside), Strength: t.strength, Subjects: t.subjects}
 	if t.anchor != uuid.Nil {
 		keep.Anchor = t.anchor.String()
 	}
