@@ -139,6 +139,32 @@ func TestAnInboxFrameNeedsNoApp(t *testing.T) {
 	}
 }
 
+// A RELATIONAL HALF OF AN INBOX REACHES EVERY WATCHER AND NAMES NO OBJECT: the
+// artifacts' comments are gated by no app, each notice held by the read to its
+// artifact's relation, which a frame cannot decide, so every watcher is told
+// the half moved and none which artifact. An app's half still reaches its
+// holders alone.
+//
+// Mutation: keep the subject, or gate the relational half on an app, and a
+// line goes red.
+func TestARelationalInboxHalfReachesEveryWatcherNamingNoObject(t *testing.T) {
+	t.Parallel()
+	moved := InboxChange{Source: "artifacts", Handle: "ana", UnreadDelta: 1, Subject: "artifact-1",
+		Reason: "mention", Relational: true}
+	for name, a := range map[string]Audience{"Worklet": NewAudience(workletPrincipal, nil),
+		"no app at all": NewAudience(overviewPrincipal, nil)} {
+		_, data, ok := moved.ForReader(Reader{Audience: a})
+		got, _ := data.(InboxChange)
+		if !ok || got.Subject != "" || got.UnreadDelta != 1 || got.Source != "artifacts" {
+			t.Errorf("%s was handed %+v (%v), want the movement with no subject", name, data, ok)
+		}
+	}
+	code := InboxChange{Source: "code", Handle: "ana", Subject: "change-1", App: iam.GrantGitlet}
+	if _, _, ok := code.ForReader(Reader{Audience: NewAudience(overviewPrincipal, nil)}); ok {
+		t.Error("a watcher without Gitlet was handed the code half's movement")
+	}
+}
+
 // THE SNAPSHOT IS WHAT THE PUSHES WOULD BE, key by key.
 //
 // Every key the service builds names the push it stands in for, and a reader

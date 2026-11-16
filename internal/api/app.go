@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -1666,9 +1667,10 @@ type InboxFeed interface {
 // ([App.pushInboxGap]).
 func (a *App) pushInboxMoved(moved []inbox.Movement) {
 	for _, m := range moved {
+		app, relational := inboxHalf(m.Source)
 		a.stream.InboxChanged(stream.InboxChange{
 			Source: m.Source, Handle: m.Handle, UnreadDelta: m.UnreadDelta,
-			Subject: m.Subject, Reason: m.Reason, Stored: m.At, App: inboxApp(m.Source),
+			Subject: m.Subject, Reason: m.Reason, Stored: m.At, App: app, Relational: relational,
 		})
 	}
 }
@@ -1676,21 +1678,27 @@ func (a *App) pushInboxMoved(moved []inbox.Movement) {
 // pushInboxGap tells every watched inbox to read itself again: the engine
 // switched where this node's movements of source come from, and what moved in
 // the gap is not replayed — see [stream.Service.InboxReread].
-func (a *App) pushInboxGap(source string) { a.stream.InboxReread(source, inboxApp(source)) }
+func (a *App) pushInboxGap(source string) {
+	app, relational := inboxHalf(source)
+	a.stream.InboxReread(source, app, relational)
+}
 
-// inboxApp is the app whose half of a person's inbox a domain's movements are
-// about — the tracker's is Worklet's, the code log's Gitlet's (ADR-0110) — or
-// "" for a domain that keeps none, whose movement then reaches nobody
-// ([stream.InboxChange.ForReader]). Named by each domain's own state log name,
-// which is what an [inbox.Movement] carries.
-func inboxApp(source string) iam.Grant {
+// inboxHalf is who hears a domain's half of a person's inbox: the app the
+// tracker's (Worklet) and the code log's (Gitlet, ADR-0110) are about, or,
+// for the artifacts' comments, no app and every watcher, told no subject
+// ([stream.InboxChange.Relational]); "" and false for a domain that keeps
+// none, whose movement then reaches nobody. Named by the state log's name an
+// [inbox.Movement] carries.
+func inboxHalf(source string) (iam.Grant, bool) {
 	switch source {
 	case worklet.Domain{}.Name():
-		return iam.GrantWorklet
+		return iam.GrantWorklet, false
 	case gitlet.Domain{}.Name():
-		return iam.GrantGitlet
+		return iam.GrantGitlet, false
+	case artifactsdomain.Domain{}.Name():
+		return "", true
 	}
-	return ""
+	return "", false
 }
 
 // Stream exposes the live channel, for the engine to feed.

@@ -1586,11 +1586,12 @@ type stubs struct {
 	work  *stubWork
 	pages *stubPages
 	code  *stubCode
+	arts  *artifactsEstate
 }
 
 // newStubs are stubs nothing has asked yet, readied for q.
 func newStubs(q sessionQuestion) stubs {
-	s := stubs{work: &stubWork{}, pages: &stubPages{}, code: &stubCode{}}
+	s := stubs{work: &stubWork{}, pages: &stubPages{}, code: &stubCode{}, arts: &artifactsEstate{}}
 	if q.ready != nil {
 		q.ready(s)
 	}
@@ -1599,7 +1600,7 @@ func newStubs(q sessionQuestion) stubs {
 
 // sources are s as a registry is wired with them.
 func (s stubs) sources() queries.Sources {
-	return queries.Sources{Work: s.work, Pages: s.pages, Code: s.code}
+	return queries.Sources{Work: s.work, Pages: s.pages, Code: s.code, Artifacts: artifactsSeam(s.arts)}
 }
 
 // sessionQuestions are EVERY question on this surface that reads a
@@ -1793,14 +1794,14 @@ var sessionQuestions = []sessionQuestion{
 	{"code_commit_marks", []string{"code"}, map[string]any{"name": "web", "commits": stubOID},
 		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
 		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
-	// THE COMPOSED INBOX: the tracker's notices and Gitlet's, each
-	// half at the floor of its own log, so a "mark all read" that wrote a
-	// record on each is read back past both (inbox.go).
-	{"inbox", []string{"tracker", "code"}, map[string]any{"handle": "ana"},
+	// THE COMPOSED INBOX: the tracker's notices, Gitlet's and the
+	// artifacts', each half at the floor of its own log, so a "mark all
+	// read" that wrote a record on each is read back past every one.
+	{"inbox", []string{"tracker", "code", "artifacts"}, map[string]any{"handle": "ana"},
 		func(s stubs) statelog.ReadLevel { return s.work.inboxQuery.Level },
 		func(s stubs) []bound {
-			return append(handed(s.work.inboxQuery.MaxLag, s.work.inboxQuery.MaxLagSeq),
-				handedWhole(s.code.last().Fresh)...)
+			return slices.Concat(handed(s.work.inboxQuery.MaxLag, s.work.inboxQuery.MaxLagSeq),
+				handedWhole(s.code.last().Fresh), handedWhole(s.arts.lastInbox().Fresh))
 		}, nil},
 }
 
