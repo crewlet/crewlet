@@ -198,7 +198,7 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	outcomes = append(outcomes, startAll(ctx, c.Tools, specs, e.mcp, e.mcp.Reconcile)...)
 	// REPLACED WHOLE, per apply: the outcomes describe the servers THIS
 	// revision declares, and a server a revision dropped must leave the
-	// heartbeat with it rather than be reported as still started.
+	// status record with it rather than be reported as still started.
 	e.mcpMu.Lock()
 	stampSince(e.mcpShared, outcomes, e.now())
 	e.mcpShared = outcomes
@@ -278,7 +278,7 @@ func (e *Engine) stopSharedServers(ctx context.Context) {
 }
 
 // mcpOutcome is what one start of one MCP instance concluded, kept for the
-// heartbeat's [coord.NodeStatus.MCP].
+// node's status record ([coord.NodeStatusRecord.MCP]).
 //
 // Recorded at the start, and not only asked of the bridge on each beat,
 // because a FAILED start can leave nothing in the bridge to ask: a seat's
@@ -339,7 +339,7 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 	o.unlisted = bridge.UnlistedOverrides(instance)
 }
 
-// mcpStatus is this node's MCP servers as the heartbeat publishes them: one
+// mcpStatus is this node's MCP servers as its status record publishes them: one
 // row per configured server, its instances counted, read off the same
 // [mcpReading] of each instance a server's page is answered from
 // ([Engine.MCPInstances]).
@@ -353,19 +353,20 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 // outcome is the only record of it, and counted as failed it would read as a
 // fault on the one screen an operator connecting an integration is watching.
 //
-// AND JUDGED AGAIN ON EVERY BEAT, against what the integration minting it last
+// AND JUDGED AGAIN ON EVERY READING — each pass of the node's status record —
+// against what the integration minting it last
 // recorded ([credentialMissing.judged]). The pass that held it back ran at
 // the claim, which on a first boot comes before that integration's first pass,
 // and nothing about a person acting on an integration — or failing to —
 // reaches a seat's pass: so a child the pass could only call waiting becomes a
 // failure here the moment the integration reports that its own credential is
 // missing, or that this seat's account is switched off, and stops being one
-// when that clears. A beat that cannot read the record keeps the judgement
-// the seat's pass stored with the outcome, not the previous beat's; one with
+// when that clears. A reading that cannot read the record keeps the judgement
+// the seat's pass stored with the outcome, not the previous reading's; one with
 // nothing waiting reads nothing ([Engine.mintingStates]).
 //
 // AND WHAT EACH INSTANCE'S TOOLS LOST TO THEIR NAMES ([unfiled]), read off
-// its bridge and the surface it is filed into at the beat, as its tools are:
+// its bridge and the surface it is filed into at the reading, as its tools are:
 // a restart that lists differently, or a refile, moves both.
 //
 // AND HOW LONG THE SERVER HAS BEEN DOWN HERE AND HOW OFTEN IT CAME BACK: the
@@ -679,7 +680,7 @@ func limitSurface(reg *tools.Registry, seat *org.Role) {
 // on which vendor happened to answer first (a company whose behaviour changes
 // between restarts for no reason anybody can see).
 //
-// What each start concluded is returned, in spec order, for the heartbeat.
+// What each start concluded is returned, in spec order, for the status record.
 // The tool count is the BRIDGE's for that instance rather than the change's:
 // a change also names tools of other servers that a start un-shadowed, and
 // the question the count answers is what this server serves.
@@ -776,7 +777,7 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 // — gets no spec: it comes back as an outcome carrying a [credentialMissing],
 // which the pass judges and logs ([Engine.withheldForCredentials]) — see
 // toolcredentials.go. So does a template that does not resolve into a
-// launchable spec. Either way the heartbeat reports the server rather than
+// launchable spec. Either way the status record reports the server rather than
 // leaving it out as though the seat never declared it.
 func seatSpecs(
 	c *Company, seat *org.Role, env *config.Resolver, mint *seatMint,

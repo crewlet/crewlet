@@ -427,7 +427,7 @@ every other route.
 | `POST` | `/diagnostics/insights/decisions` | An administrator's answer to a queued insight record, `{"class", "week", "choice": "send" or "decline"}`: send schedules it at its own random time within a day. **Takes `admin` and a step-up**. Refused `409` when the record is not waiting for a decision (sharing is not in review mode, or it was decided) |
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
 | `GET` | `/mcp-catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `tools.read`**, everybody's: a member reads the curated half alone (see [below](#get-mcp-catalogue)) |
-| `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node (serving, failed, tools served and the first failure), read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Everybody's**, in two readings: a member's names no launch line, failure sentence or wait (see [below](#get-mcp-servers)) |
+| `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node (serving, failed, tools served and the first failure), read off every node's status record, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Everybody's**, in two readings: a member's names no launch line, failure sentence or wait (see [below](#get-mcp-servers)) |
 | `GET` | `/mcp-servers/{name}` | One MCP server whole: its row as `/mcp-servers` answers it, every tool the fleet's live nodes list for it (per-agent servers included) with its hints, risk and arguments, what the server said of itself in its handshake, and what removing it would take with it. **Takes `tools.read`**, everybody's, in two readings (see [below](#get-mcp-serversname)) |
 | `POST` | `/mcp-servers/{name}/retry` | Restart one MCP server now: every instance on every node, or with `seat` one agent's instance on the node holding the seat. **Takes `tools.retry`**, an administrator's at any recency (see [below](#post-mcp-serversnameretry)) |
 | `POST` | `/mcp-servers/{name}/check` | Test one MCP server where it runs, calling no tool: on every node, or with `seat` one agent's instance on the node holding the seat; recorded as the server's latest test. **Takes `tools.check`**, an administrator's at any recency (see [below](#post-mcp-serversnamecheck)) |
@@ -2956,11 +2956,13 @@ stored or carried to the fleet is `outcome: "failed"`.
 
 #### `GET /llm/entries`
 
-Built from every live node's heartbeat, which carries each model's sign-in
-route, sit-out, last answer and last failure, parked seats and host login, plus
-what this node resolved for each entry. An unreadable lease table is
-`503 unavailable`: the table is the answer, so a blip is never drawn as "no
-node knows".
+Built from every live node's
+[status record](../concepts/coordination.md#its-status-record), counted at its
+presence's epoch, which carries each model's sign-in route, sit-out, last
+answer and last failure, parked seats and host login, plus what this node
+resolved for each entry. An unreadable lease table or record store is
+`503 unavailable`: they are the answer, so a blip is never drawn as "no node
+knows".
 
 ```json
 {
@@ -6759,7 +6761,7 @@ a label derived from it follows the same rule.
   the rule the engine builds the seat's surface and starts its own server
   instances by, and never a seat's `mcp_env` block, which holds values. It is
   the GRANT, not what is running: a server that failed to start is still
-  listed, and the node heartbeat's MCP report is what says it failed.
+  listed, and the node status record's MCP report is what says it failed.
 
 **What it never carries.** A seat's `contact` identities, `email`, `unit`
 reference, `workers`, `learning_enabled`, `mcp_env`, `sandbox`, `placement`,
@@ -11158,14 +11160,17 @@ commands it reports on; anybody else reads
 [a member's reading](#a-members-reading-of-mcp--tools), `reading: "member"`,
 which names no launch line, failure sentence or wait.
 
-**Off the heartbeats, not a fan-out.** Each node re-publishes its MCP servers
-as they are at each beat on its presence lease — a child that died after it
+**Off the status records, not a fan-out.** Each node re-publishes its MCP
+servers on its
+[status record](../concepts/coordination.md#its-status-record), within a renew
+period of a change — a child that died after it
 started counts as failed until the engine has
 [brought it back](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start),
 and a shared server whose start failed counts as started once a retry brings it
 up — one row per server with its instances counted (a per-seat template has one instance per seat that node holds), so
-one read of the lease table is every node's answer at once. A node whose last
-heartbeat carried no status (its status hook did not answer within the beat) is
+one read of the records, counted against the lease table's presence, is every
+node's answer at once. A live node with no record counted at its presence's
+epoch (one just started, or back at a new epoch and not yet written) is
 `reported: false` and its cells are UNKNOWN — never a row of zeros, which would
 read as "started nothing". A node that reports and started nothing is
 `reported: true` with no rows.
@@ -11195,21 +11200,21 @@ token again on the restart schedule (15 seconds, doubling to 5 minutes) and
 starts the instance once it is issued. One whose pass reports that a person
 must act first (its own credential missing or refused, an approval outstanding, the seat's
 account failed or switched off, or the integration being disconnected) counts
-as `failed`, judged again at every heartbeat, since a wait with no end is a
+as `failed`, judged again at every pass of the node's status record, since a wait with no end is a
 failure somebody has to act on:
 
 | `state` | Means |
 |---|---|
 | `disabled` | The configuration turns the server off (`enabled: false`): nothing is started for it and no seat is granted it. Decided before anything a node reports, so a node still on an earlier revision that runs it shows only in its own cell until it applies this one |
 | `needs_sign_in` | The server is [signed in to with OAuth](../guides/tools-and-mcp.md#signing-in-with-oauth) and nobody holds a grant for it, its vendor refused to renew the grant or let it run out, or nothing serves it and the nodes hold it back for a sign-in (its grant was made for an address the server is no longer configured at): nothing is started for it until somebody signs in. Decided next, before the other counts |
-| `running` | Every instance any node launched is serving: it started, listed its tools and was up at its node's last beat |
+| `running` | Every instance any node launched is serving: it started, listed its tools and was up when its node last wrote its record |
 | `partial` | Some are serving and some are not — a node's environment, one seat's credentials, or one child that died and is being restarted, rather than the server |
 | `failing` | Something failed and nothing is serving — instances were launched and none serves (the server, its command or address, or credentials every seat shares), every instance went down and is being restarted, or the server was held back, unlaunched, for a value that resolves to nothing: a shared server's own, or one every seat's instance lacks |
 | `waiting` | Nothing was launched and nothing failed, and some seat's instance is waiting for its provisioned credential. Only where nothing else decides: a server serving one seat while another waits is `running`, and one with a failure beside a wait is `partial` or `failing` |
 | `not_started` | Every reporting node started nothing for it — a per-seat template granted to no seat a live node holds |
-| `unreported` | No live node's latest heartbeat carried the report |
+| `unreported` | No live node has a status record counted |
 
-`error` is one failed instance's reason, cut to 512 bytes on the heartbeat,
+`error` is one failed instance's reason, cut to 512 bytes on the status record,
 and `error_seat` the seat it was launched for (none for a shared server): the
 instance down longest on that node, so `error`, `error_seat`, `error_class` and
 `down_since` are one instance's facts (ties go to the lower seat id); the
@@ -11217,7 +11222,7 @@ whole text is the node's `mcp_server_failed` log line for a start that failed,
 its `mcp_server_credential_missing` line for a server or a seat's instance held
 back, unlaunched, because a value it is started with resolves to nothing and
 nothing mints it, or the integration minting it cannot mint until a person
-acts (that one from the node's last pass over the seat; the heartbeat re-judges
+acts (that one from the node's last pass over the seat; the status record re-judges
 it against the integration's latest report), and its `server_exited` or
 `server_restart_failed` line for an instance that went down after it started.
 `wait` is one waiting instance's sentence (the variables it waits for and the
@@ -11264,7 +11269,7 @@ of the server whose tool is offered instead, and `message` is the engine's
 sentence saying why and what would offer it (a shorter `tool_prefix`, one
 where two servers share a name), which a screen shows as written. Each tool is
 listed once across the fleet, sorted, every one any node named; a node names
-at most 8 of each on its heartbeat, so `refused_count` and `shadowed_count`
+at most 8 of each on its status record, so `refused_count` and `shadowed_count`
 say how many there are, as the node counting the most counts them, and never
 fewer than are listed. Both lists are always present, empty where every tool
 is offered. The node's own log names each one too (`mcp_tool_refused`,
@@ -11629,8 +11634,8 @@ it under, so a node that drained, died or restarted stops counting at once.
   configuration does not declare.
 - `instances` is every instance of the server, **read from the nodes holding
   them when you ask** ([Tools and MCP › A server's health](../guides/tools-and-mcp.md#a-servers-health)):
-  each node whose last heartbeat reports an instance of it, and each node whose
-  heartbeat carried no report, is asked over the broker within two seconds. Each
+  each node whose status record reports an instance of it, and each live node
+  with no record counted, is asked over the broker within two seconds. Each
   instance names its `seat` (`""` for a shared server's one instance), `node`,
   `state` (`running`, `failed` or `waiting`), `since` (when that state began:
   its session's start, when it stopped serving or first failed, or when it was

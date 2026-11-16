@@ -120,6 +120,8 @@ func everySeam(t *testing.T) queries.Sources {
 		Sandbox:  memorySandbox{},
 		Research: noResearch{},
 		Searcher: noResearch{},
+		// EACH NODE'S STATUS RECORD, counted against Coord's presence.
+		NodeStatuses: coordmemory.NewFleet(),
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
 		// fleet record, which answers every run `not_running`.
 		ExecutorTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),

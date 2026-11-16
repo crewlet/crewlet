@@ -1827,7 +1827,7 @@ export interface OrgSeat {
   /**
    * Where this seat's tools come from, in the registry's origin grammar:
    * `builtin`, then `mcp:<server>` per server it is GRANTED, in declaration
-   * order. The grant, not what is running — the node heartbeat's MCP report
+   * order. The grant, not what is running — the node status record's MCP report
    * says whether a server started. Absent on a human seat and for every
    * reader but an admin.
    */

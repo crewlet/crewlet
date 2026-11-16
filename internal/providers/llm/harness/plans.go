@@ -138,8 +138,8 @@ func newPlan() *Plan { return &Plan{scoped: map[string]*bench{}} }
 // MaxSaid bounds the vendor's sentence a [Failure] or a [SitOut] carries. The
 // useful part is its head ("You've hit your session limit · resets 4:30pm
 // (America/Vancouver)" is 66 bytes), and what a node publishes about its
-// models is re-sent on every heartbeat; the whole sentence is in the node's
-// own log line.
+// models is rewritten on its status record at least every reconcile interval;
+// the whole sentence is in the node's own log line.
 const MaxSaid = 240
 
 // Failure is a call on a sign-in that set its readiness verdict: a refused

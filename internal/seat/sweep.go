@@ -1137,11 +1137,6 @@ func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	if h.gitBackground != nil {
 		meta[coord.GitBackgroundKey] = h.gitBackground()
 	}
-	// WHAT THIS NODE RUNS ON, the same on every beat: a copy per beat, since
-	// the payload belongs to this beat alone ([coord.InfraKey]).
-	if h.infra != nil {
-		meta[coord.InfraKey] = maps.Clone(h.infra)
-	}
 	if h.status == nil {
 		return meta
 	}
@@ -1220,7 +1215,12 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 
 	h.mu.Lock()
 	draining := h.draining
+	claimed := false
 	if !draining {
+		// A NEW EPOCH, not merely a lease in hand where none was: a
+		// lapsed lease stays in hand until the claim that replaces it,
+		// at the epoch the store mints for a lease that lapsed.
+		claimed = h.nodeLease == nil || h.nodeLease.Epoch != lease.Epoch
 		h.nodeLease = lease
 		h.presenceRenewedAt = asked
 	}
@@ -1233,6 +1233,10 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 		// dropped it leaves
 		// peers reserving capacity for a node that will never claim again.
 		h.giveUpLease(ctx, *lease)
+		return
+	}
+	if claimed && h.presenceClaimed != nil {
+		h.presenceClaimed(lease.Epoch)
 	}
 }
 

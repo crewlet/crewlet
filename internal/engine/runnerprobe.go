@@ -15,7 +15,7 @@ import (
 // this node, now?" (M13 of the Models design): what the Models page's "where
 // it runs" step disables a cell by, and what a person reads when a run did not
 // start. Each node probes its own cells and publishes the answer on its
-// heartbeat ([coord.NodeStatus.Runners]), because a cell's readiness is a fact
+// status record ([coord.NodeStatusRecord.Runners]), because a cell's readiness is a fact
 // of the node: Docker installed on one host and not another, an e2b key set in
 // one node's environment.
 //
