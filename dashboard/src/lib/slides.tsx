@@ -23,6 +23,10 @@
  * presenter's next slide), so every drawing's ids and references are prefixed
  * with the instance's own prefix.
  *
+ * EVERY ELEMENT DRAWN CARRIES ITS PATH (`data-node`), never a Fragment, which
+ * draws nothing: a comment is anchored to the element under the reader's
+ * pointer by that path, and its pin is placed on the element found by it.
+ *
  * WRITTEN BACK CANONICALLY. A person's edit changes the tree; `slideSource`
  * writes it as slide HTML the engine's parser reads back to the same tree,
  * every value in the canonical form the engine wrote, so a slide saved by the
@@ -215,10 +219,10 @@ function svgValue(name: string, value: string, prefix: string): string | null {
   return value;
 }
 
-function renderSVG(node: SlideNode, ctx: SlideRenderContext, key: string): ReactNode {
+function renderSVG(node: SlideNode, ctx: SlideRenderContext, path: NodePath): ReactNode {
   if (node.tag === undefined) return node.text ?? "";
   if (!SVG_ELEMENTS.has(node.tag)) return null;
-  const props: Record<string, string> = { key };
+  const props: Record<string, string> = { key: path, "data-node": path };
   for (const [name, value] of Object.entries(node.attrs ?? {})) {
     if (!SVG_ATTRIBUTES.has(name)) continue;
     const v = svgValue(name, value, ctx.prefix);
@@ -227,7 +231,7 @@ function renderSVG(node: SlideNode, ctx: SlideRenderContext, key: string): React
   return createElement(
     node.tag,
     props,
-    ...(node.children ?? []).map((c, i) => renderSVG(c, ctx, `${key}.${i}`)),
+    ...(node.children ?? []).map((c, i) => renderSVG(c, ctx, `${path}/${i}`)),
   );
 }
 
@@ -278,17 +282,25 @@ function renderNode(node: SlideNode, ctx: SlideRenderContext, path: NodePath): R
       }
       return createElement(
         "svg",
-        { key: path, ...props, role: "img", style, className: "slide-svg" },
+        { key: path, "data-node": path, ...props, role: "img", style, className: "slide-svg" },
         ...(node.children ?? []).map((c, i) => renderSVG(c, ctx, `${path}/${i}`)),
       );
     }
     case "img": {
       const src = attrs.src ? ctx.image(attrs.src) : null;
       return src ? (
-        <img key={path} className="slide-img" src={src} alt={attrs.alt ?? ""} style={style} />
+        <img
+          key={path}
+          data-node={path}
+          className="slide-img"
+          src={src}
+          alt={attrs.alt ?? ""}
+          style={style}
+        />
       ) : (
         <span
           key={path}
+          data-node={path}
           className="slide-img slide-img-pending"
           role="img"
           aria-label={attrs.alt ?? ""}
@@ -300,13 +312,20 @@ function renderNode(node: SlideNode, ctx: SlideRenderContext, path: NodePath): R
       const href = attrs.href ?? "";
       if (ctx.links === "text") {
         return (
-          <span key={path} className="slide-a">
+          <span key={path} data-node={path} className="slide-a">
             {children}
           </span>
         );
       }
       return /^https:\/\/[^\s<>"'`]+$/.test(href) ? (
-        <a key={path} className="slide-a" href={href} target="_blank" rel="noopener noreferrer">
+        <a
+          key={path}
+          data-node={path}
+          className="slide-a"
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
           {children}
         </a>
       ) : (
@@ -319,6 +338,7 @@ function renderNode(node: SlideNode, ctx: SlideRenderContext, path: NodePath): R
       return (
         <span
           key={path}
+          data-node={path}
           className={`slide-shape slide-shape-${kind}`}
           aria-hidden="true"
           style={clip ? { ...style, clipPath: clip } : style}
@@ -328,14 +348,14 @@ function renderNode(node: SlideNode, ctx: SlideRenderContext, path: NodePath): R
     case "x-icon": {
       const Glyph = ICONS[attrs.name as SlideIcon];
       return (
-        <span key={path} className="slide-icon" aria-hidden="true" style={style}>
+        <span key={path} data-node={path} className="slide-icon" aria-hidden="true" style={style}>
           {Glyph ? <Glyph size={`${SLIDE_ICON_GLYPH_PERCENT}%`} /> : null}
         </span>
       );
     }
     case "table":
       return (
-        <table key={path} className="slide-table" style={style}>
+        <table key={path} data-node={path} className="slide-table" style={style}>
           <tbody>{children}</tbody>
         </table>
       );
@@ -345,6 +365,7 @@ function renderNode(node: SlideNode, ctx: SlideRenderContext, path: NodePath): R
       return (
         <div
           key={path}
+          data-node={path}
           className={box ? "slide-div slide-text-box" : "slide-div"}
           data-display={declared(node.style, "display") ? "set" : undefined}
           style={
@@ -362,11 +383,15 @@ function renderNode(node: SlideNode, ctx: SlideRenderContext, path: NodePath): R
       );
     }
     case "br":
-      return <br key={path} />;
+      return <br key={path} data-node={path} />;
     case "hr":
-      return <hr key={path} className="slide-hr" style={style} />;
+      return <hr key={path} data-node={path} className="slide-hr" style={style} />;
     default:
-      return createElement(tag, { key: path, className: `slide-${tag}`, style }, ...children);
+      return createElement(
+        tag,
+        { key: path, "data-node": path, className: `slide-${tag}`, style },
+        ...children,
+      );
   }
 }
 
