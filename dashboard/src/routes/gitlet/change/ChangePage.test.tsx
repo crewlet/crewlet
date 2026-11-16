@@ -752,6 +752,37 @@ test("the header says when the change was opened in words", async () => {
   });
 });
 
+// THE HEADER WEARS THE STATE PILL; the byline's branches are linked chips, the
+// rail's plain ones. Mutation: draw the branches as plain names, or drop the
+// spaces around "into", and this fails.
+test("the header's state is its pill, and its branches are chips in the byline and the rail", async () => {
+  stubEngine(detail(), () => json({}));
+  mount();
+  const byline = await waitFor(() => {
+    const chips = [
+      ...document.querySelectorAll<HTMLElement>(".code-change-byline .code-branch-chip"),
+    ];
+    expect(chips).toHaveLength(2);
+    return chips;
+  });
+  const pill = document.querySelector<HTMLElement>('.code-state[data-state="open"]');
+  expect(pill?.textContent).toBe("Open");
+  expect(pill?.querySelector("svg")).not.toBeNull();
+  expect(byline.map((a) => [a.tagName, a.textContent, a.getAttribute("href")])).toEqual([
+    ["A", "retry", "#/gitlet/repos/web?ref=retry"],
+    ["A", "main", "#/gitlet/repos/web"],
+  ]);
+  for (const a of byline) expect(a.classList.contains("prose-link")).toBe(true);
+  const rail = await waitFor(() => {
+    const branches = document.querySelector<HTMLElement>(".code-rail__branches");
+    expect(branches).not.toBeNull();
+    return branches!;
+  });
+  const chips = [...rail.querySelectorAll<HTMLElement>(".code-branch-chip")];
+  expect(chips.map((c) => c.tagName)).toEqual(["SPAN", "SPAN"]);
+  expect(rail.textContent).toBe("retry into main");
+});
+
 // A FINISHED CHANGE OFFERS ONLY WHAT STILL APPLIES: a merged change takes no
 // review, no ask and no close from anybody, so its bar draws none of them and
 // its Revert stands where the merge controls were; a closed one offers its

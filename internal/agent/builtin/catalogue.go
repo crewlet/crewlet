@@ -282,6 +282,7 @@ var filed = []struct {
 
 	{ListArtifactsTool, GroupArtifacts, GateEverybody, reachesNoVendor},
 	{GetArtifactTool, GroupArtifacts, GateArtifactViewer, reachesNoVendor},
+	{RenderArtifactTool, GroupArtifacts, GateArtifactViewer, reachesNoVendor},
 	{ArtifactFormatTool, GroupArtifacts, GateEverybody, reachesNoVendor},
 	{CompanyBrandTool, GroupArtifacts, GateEverybody, reachesNoVendor},
 	{DashboardSourcesTool, GroupArtifacts, GateEverybody, reachesNoVendor},

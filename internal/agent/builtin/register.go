@@ -129,6 +129,10 @@ type Deps struct {
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
 
+	// Render is render_artifact's, a seat's alone. The zero value omits
+	// it. See artifacts_render.go.
+	Render RenderDeps
+
 	// Code is the code read tools' — the company's own repositories, read on
 	// the server. The zero value omits all of them, which is a company that
 	// hosts no code. See codetools.go.
@@ -372,7 +376,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	delegatedDeps := deps.Delegated
 	delegatedDeps.Release = release
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
-		codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH),
+		renderCandidates(deps), codeCandidates(deps.Code), healthCandidates(deps.Health), sshCandidates(deps.SSH),
 		atlasCandidates(atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),
 		atlasAgentCandidates(deps.AtlasRecord,
 			atlasReader{deps: deps.Atlas, code: deps.Code, authorize: deps.Authorize}),

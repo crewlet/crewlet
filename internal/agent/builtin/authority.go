@@ -430,6 +430,7 @@ var subjectOf = map[string]subject{
 	// on the app alone and the tool again with its caller as the owner,
 	// beside the parent folder's role. Nor is the brand, everybody's read.
 	GetArtifactTool:         {kind: authz.KindArtifact, inTool: true},
+	RenderArtifactTool:      {kind: authz.KindArtifact, inTool: true},
 	PublishArtifactTool:     {kind: authz.KindArtifact, inTool: true},
 	UpdateArtifactTool:      {kind: authz.KindArtifact, inTool: true},
 	ShareArtifactTool:       {kind: authz.KindArtifact, inTool: true},

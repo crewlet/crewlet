@@ -24,7 +24,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 import { parseAst } from "vite";
 
 /**
@@ -318,4 +318,25 @@ function isWhole(node: Node, parent: Node | null): boolean {
     default:
       return true;
   }
+}
+
+/**
+ * The lines where a module's shipped text holds `name` as a whole class token,
+ * however it is composed (a literal, a template part, JSX text).
+ */
+export function classWrites(module: Module, name: string): number[] {
+  const token = new RegExp(`(?<![\\w-])${name.replace(/[-]/g, "\\-")}(?![\\w-])`);
+  return shippedText(module)
+    .filter((piece) => token.test(piece.text))
+    .map((piece) => piece.line);
+}
+
+/**
+ * Where a local import from the module at `from` points, as a path under
+ * `src/` (`routes/gitlet/ui.tsx`); null for a package.
+ */
+export function resolveSource(from: string, source: string): string | null {
+  if (source.startsWith("~/")) return posix.normalize(source.slice(2));
+  if (!isLocalSource(source)) return null;
+  return posix.normalize(posix.join(posix.dirname(from), source));
 }

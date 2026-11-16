@@ -390,3 +390,48 @@ test("a person's Code tab lists their changes and reviews and draws no counters"
   expect(screen.queryByText("Findings received")).toBeNull();
   expect(onSocket.some((q) => q.what === "seat_activity")).toBe(false);
 });
+
+// A CHANGE'S STATE READS AS GITLET'S PILL WHEREVER ITS ROW IS LISTED, with its
+// glyph, and the listings' rows carry branch chips. Mutation: keep Home's
+// outlined Draft, and this fails.
+test("a change's state reads as Gitlet's pill wherever its row is listed", async () => {
+  const rows = (states: string[]) => states.map((state, i) => ({ ...change("web", i + 1), state }));
+  const pills = async (states: string[]) => {
+    for (const state of states) {
+      const pill = await waitFor(() => {
+        const found = document.querySelector<HTMLElement>(`.code-state[data-state="${state}"]`);
+        expect(found, state).not.toBeNull();
+        return found!;
+      });
+      expect(pill.querySelector("svg"), state).not.toBeNull();
+    }
+  };
+  const listed = ["open", "draft", "merged"];
+  const answer = (states: string[]) => (url: URL) =>
+    url.pathname === "/query/code_changes"
+      ? { changes: rows(states), position: POSITION, level: "session" }
+      : url.pathname === "/query/code_reviews"
+        ? { position: POSITION, level: "session" }
+        : undefined;
+
+  stubFetch(answer(listed));
+  mount(<ChangeList params={{ work: "native:item-1" }} empty={{ title: "None", hint: "" }} />);
+  await pills(listed);
+  expect(document.querySelectorAll(".code-change-cell__branches .code-branch-chip")).toHaveLength(
+    listed.length * 2,
+  );
+  cleanup();
+
+  stubFetch(answer(listed));
+  mount(<SeatCode seat={seat("dev")} human={false} />, ADMIN_VIEWER, { seat_activity: ACTIVITY });
+  await pills(listed);
+  expect(document.querySelectorAll(".code-change-cell__branches .code-branch-chip")).toHaveLength(
+    listed.length * 2,
+  );
+  cleanup();
+
+  stubFetch(answer(["open", "draft"]));
+  mount(<CodeWaiting />);
+  await pills(["open", "draft"]);
+  expect(document.querySelector(".crewlet-tag--outline")).toBeNull();
+});

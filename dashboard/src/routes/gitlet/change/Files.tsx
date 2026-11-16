@@ -1,7 +1,7 @@
 /**
  * A change's diff: the files a revision changes, one file's patch drawn by the
- * dashboard's one hueless `DiffView`, and every finding and thread on the line
- * it is about.
+ * dashboard's one `DiffView`, in the code hue, and every finding and thread on
+ * the line it is about.
  *
  * # Read by object id, placed by the engine
  *
@@ -485,6 +485,7 @@ function FileDiff({
       ) : (
         <>
           <DiffView
+            hue="code"
             hunks={hunks}
             layout={layout}
             aria-label={`Changes to ${path}`}

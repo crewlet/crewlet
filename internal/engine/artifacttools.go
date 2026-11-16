@@ -110,6 +110,17 @@ func (e *Engine) currentOrg() *org.Organization {
 type artifactBoxes struct{ engine *Engine }
 
 func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.ArtifactBox, error) {
+	box, err := b.attach(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	return &runBox{box: box, root: path.Join(box.Home(), sandbox.WorkspaceSubdir),
+		listed: map[string]bool{}}, nil
+}
+
+// attach is the box of the executor working in turn t, attached: the one box
+// a turn reads its build from and a render writes its screenshots to.
+func (b artifactBoxes) attach(ctx context.Context, t *turnctx.Turn) (sandbox.Sandbox, error) {
 	rt := b.engine.sandbox.Load()
 	if rt == nil || t == nil || t.RunID == "" {
 		return nil, builtin.ErrNoBox
@@ -150,8 +161,7 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 	case err != nil:
 		return nil, err
 	}
-	return &runBox{box: box, root: path.Join(box.Home(), sandbox.WorkspaceSubdir),
-		listed: map[string]bool{}}, nil
+	return box, nil
 }
 
 // runBox is one reattached box, read under its workspace.

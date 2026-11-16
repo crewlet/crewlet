@@ -560,17 +560,23 @@ func (s *Service) sittingOutHere(ctx context.Context, keys []string) ([]string, 
 	return out, nil
 }
 
+// harnessProducts is each built-in harness as a person reads it, as the
+// dashboard's HARNESS_PRODUCTS names it.
+var harnessProducts = map[config.Harness]string{
+	config.HarnessClaudeCode: "Claude Code", config.HarnessCodex: "Codex",
+	config.HarnessGeminiCLI: "Gemini CLI", config.HarnessQwenCode: "Qwen Code",
+	config.HarnessOpenCode: "OpenCode", config.HarnessCursorAgent: "Cursor",
+	config.HarnessCopilot: "GitHub Copilot", config.HarnessGrok: "Grok",
+	config.HarnessMuseCode: "Muse Code", config.HarnessKimiCode: "Kimi Code",
+	config.HarnessHermes: "Hermes", config.HarnessPi: "Pi",
+}
+
 // agentName is an entry's harness in a sentence.
 func agentName(entry *config.LLMProvider) string {
-	switch entry.Harness {
-	case "", "claude-code":
-		return "Claude Code"
-	case "codex":
-		return "Codex"
-	case "opencode":
-		return "OpenCode"
+	if name, ok := harnessProducts[config.Harness(entry.HarnessName())]; ok {
+		return name
 	}
-	return string(entry.Harness)
+	return entry.HarnessName()
 }
 
 func plural(n int, one, many string) string {

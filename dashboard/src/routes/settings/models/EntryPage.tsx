@@ -637,6 +637,7 @@ function LimitsCard({ model, open }: { model: ModelView; open: Open }) {
                 ? `${DEFAULT_HARNESS_MAX_CONCURRENT} (the default)`
                 : String(model.maxConcurrent),
             ],
+            ["Reasoning effort", model.effort ?? "The harness default"],
           ]}
         />
       </Card.Body>

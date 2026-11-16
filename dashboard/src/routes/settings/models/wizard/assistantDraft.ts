@@ -18,7 +18,7 @@ import { listed } from "~/lib/format.ts";
 import { CATEGORY_ORDER, categoryState } from "~/lib/modelUses.ts";
 import { CATEGORY_WORDS, RUN_IN, product } from "../words.ts";
 import type { Draft } from "./draft.ts";
-import { METHOD_WORDS } from "./steps/SignInStep.tsx";
+import { methodWords } from "./steps/SignInStep.tsx";
 
 /** What the wizard tells the assistant it can do with the draft. */
 export const MODEL_DRAFT_HELP =
@@ -39,8 +39,9 @@ export function modelDraftFields(seats: readonly string[]): readonly DraftFieldS
   return [
     { path: "name", label: "Name", read: (d) => d.key },
     { path: "harness", label: "Harness", read: (d) => product(d.harness) },
-    { path: "method", label: "Method", read: (d) => METHOD_WORDS[d.method].label },
+    { path: "method", label: "Method", read: (d) => methodWords(d.harness, d.method).label },
     { path: "model", label: "Model", read: (d) => d.model },
+    { path: "effort", label: "Reasoning effort", read: (d) => d.effort || "Harness default" },
     {
       path: "where_it_runs",
       label: "Where it runs",

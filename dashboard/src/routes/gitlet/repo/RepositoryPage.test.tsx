@@ -717,12 +717,19 @@ test("the branches are the engine's refs, each opening its files", async () => {
     .map((a) => a.getAttribute("href"));
   expect(links).toContain("#/gitlet/repos/web?ref=feature");
   expect(links).toContain("#/gitlet/repos/web");
+  // EACH BRANCH IS ITS CHIP beside its marks; a tag is its name, never a chip.
+  const chips = [...grid.querySelectorAll(".code-branch-chip")].map((c) => c.textContent);
+  expect(chips).toContain("feature");
+  expect(
+    within(grid).getByText("default").closest(".code-ref")?.querySelector(".code-branch-chip"),
+  ).not.toBeNull();
   const tags = await screen.findByRole("table", { name: "Tags of web" });
   expect(
     within(tags)
       .getAllByRole("link")
       .map((a) => a.getAttribute("href")),
   ).toContain("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1");
+  expect(tags.querySelector(".code-branch-chip")).toBeNull();
 });
 
 // THE HISTORY IS READ AT THE REVISION AND THE PATH, with who pushed each
@@ -1169,6 +1176,9 @@ test("a protected branch leads to its rule, and another opens a new one", async 
   expect(within(grid).getAllByRole("link", { name: "Protection →" })).toHaveLength(1);
   expect(within(grid).getAllByRole("button", { name: "Protect" })).toHaveLength(1);
   expect(within(grid).getByText("protected")).toBeTruthy();
+  expect(
+    within(grid).getByText("protected").closest(".code-ref")?.querySelector(".code-branch-chip"),
+  ).not.toBeNull();
 });
 
 // A FILE EDITED IN THE BROWSER IS ONE COMMIT ON THE BRANCH ON SCREEN, at the

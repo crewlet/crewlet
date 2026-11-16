@@ -2918,7 +2918,7 @@ each. Every answer that depends on the node names it (`node`).
 |--------|------|-------|-------------|
 | `GET` | `/llm/entries` | anybody | Every model's condition across the fleet (query `llm_entries`): an administrator's reading, or a member's with nothing that names a credential |
 | `GET` | `/llm/runners` | `admin` | Whether each executor cell (`direct`, `container`, `e2b`) can start a box on each node (query `llm_runners`) |
-| `GET` | `/llm/models?harness=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
+| `GET` | `/llm/models?harness=<built-in harness>[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
 | `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
 | `GET` | `/llm/providers/{key}/check` | `admin` | One model's latest check, running or ended, from any node, while its record answers (query `llm_check`) |
 | `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` with a draft `entity` or when it re-activates | Test candidate credential values with the model's own harness, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
@@ -3042,13 +3042,15 @@ carries its `fix`.
 
 Read from the public [models.dev](https://models.dev) catalogue, which needs no
 key: no credential leaves the engine to name models, and whether a plan reaches
-one is what the test call says. Claude Code reads provider `anthropic` and Codex
-`openai`; OpenCode names its `provider` and is offered `<provider>/<id>`. A copy
+one is what the test call says. Claude Code reads provider `anthropic`, Codex
+`openai`, Gemini CLI `google` and Grok `xai`; OpenCode and Pi name their
+`provider` and are offered `<provider>/<id>`. Every other built-in harness names
+its own models, and is answered its aliases and page with `"source": "none"`. A copy
 is kept for a day and revalidated; a catalogue that cannot be read keeps the
 last copy and says how old it is in `reason`, and with no copy the answer is
 `"source": "none"` with `models: []` and the `reason`. `400 bad_params` for an
-unknown `harness` or OpenCode without `provider`; `422 unknown_provider` for a
-provider the catalogue does not list.
+unknown `harness`, `custom`, or OpenCode or Pi without `provider`; `422
+unknown_provider` for a provider they name that the catalogue does not list.
 
 #### `PUT /llm/providers/{key}/credential`
 

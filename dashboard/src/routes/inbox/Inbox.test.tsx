@@ -2111,6 +2111,9 @@ describe("the pane", () => {
     await settle();
     const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
     expect(pane.getByText("Merged")).toBeTruthy();
+    expect(pane.getByText("Merged").closest(".code-state")?.getAttribute("data-state")).toBe(
+      "merged",
+    );
     expect(pane.getByText("No agent finding stands open")).toBeTruthy();
     // A MERGED CHANGE HAS NO GATE LEFT TO MEET, so its card asks for none.
     expect(fetched.filter((url) => url.includes("/query/code_"))).toEqual([]);

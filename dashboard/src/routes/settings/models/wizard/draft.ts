@@ -22,6 +22,7 @@ import {
   type HarnessAuthMode,
   type RunnerCellName,
 } from "~/contract/models.ts";
+import { HARNESS_FACTS } from "~/contract/harnesses.ts";
 import { isReferenceName } from "~/lib/references.ts";
 import {
   applyUses,
@@ -35,7 +36,8 @@ import {
 import { WIZARD_STEPS, type WizardStep } from "../parts.tsx";
 import type { ModelView } from "../data.ts";
 
-export type Harness = "claude-code" | "codex" | "opencode";
+/** A built-in harness a model can be added on (`HARNESS_FACTS`, held to the engine's profiles). */
+export type Harness = string;
 /**
  * How a model signs in, as the wizard offers it. `unchanged` is a model on a
  * sign-in the wizard does not write (another harness, or the engine's own
@@ -56,9 +58,13 @@ export interface Draft {
   cloud: Cloud;
   /** The cloud fields as typed; a secret one left empty on an edit keeps what is stored. */
   cloudFields: Record<string, string>;
-  /** OpenCode's provider, the first half of its model name. */
+  /** The provider a harness that fronts many reads its key for (`providersFor`); OpenCode's and Pi's model names it first. */
   provider: string;
   model: string;
+  /** The reasoning effort, in the harness's own levels; empty for its default. */
+  effort: string;
+  /** Qwen Code's OpenAI-compatible endpoint; empty for the harness's own. */
+  endpoint: string;
   runIn: RunIn;
   timeout: string;
   concurrent: string;
@@ -69,35 +75,97 @@ export interface Draft {
   intent: Intent;
 }
 
-/** The harnesses a model can be added on, in the order offered. */
-export const HARNESSES: readonly Harness[] = ["claude-code", "codex", "opencode"];
+/** The harnesses a model can be added on, in the order offered: the three that run coding or most work, then by name. */
+export const HARNESSES: readonly Harness[] = [
+  "claude-code",
+  "codex",
+  "opencode",
+  "copilot",
+  "cursor-agent",
+  "gemini-cli",
+  "grok",
+  "hermes",
+  "kimi-code",
+  "muse-code",
+  "pi",
+  "qwen-code",
+];
 
-const isHarness = (harness: string): harness is Harness =>
-  (HARNESSES as readonly string[]).includes(harness);
+const isHarness = (harness: string): boolean => Object.hasOwn(HARNESS_FACTS, harness);
+
+/** What the engine's profile says about adding a model on one harness. */
+export type HarnessFacts = (typeof HARNESS_FACTS)[string];
+
+const NO_FACTS: HarnessFacts = { binary: "", signIns: [], efforts: [] };
+
+/** What the engine's profile says about adding a model on the harness; empty for one it does not ship. */
+export const factsOf = (harness: string): HarnessFacts => HARNESS_FACTS[harness] ?? NO_FACTS;
 
 /** Whether the draft's harness can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
 export const canExecute = (d: Pick<Draft, "harness">) =>
   (EXECUTOR_HARNESSES as readonly string[]).includes(d.harness);
 
-/** The sign-in methods each harness offers, the one allowed on any engine first. */
-export const METHODS: Readonly<Record<Harness, readonly Method[]>> = {
-  "claude-code": ["api-key", "host-login", "token", "cloud"],
-  codex: ["api-key", "device"],
-  opencode: ["api-key"],
-};
+/** The sign-in methods a harness offers, in its facts' order: the one allowed on any engine first. */
+export const methodsOf = (harness: string): readonly Method[] => factsOf(harness).signIns;
 
 /** The methods the draft's harness offers; a harness the wizard does not add keeps its sign-in. */
 export function methodsFor(d: Pick<Draft, "harness" | "method">): readonly Method[] {
-  return isHarness(d.harness) && d.method !== "unchanged" ? METHODS[d.harness] : ["unchanged"];
+  return isHarness(d.harness) && d.method !== "unchanged" ? methodsOf(d.harness) : ["unchanged"];
+}
+
+/** A model provider a harness that fronts many reads a key for, and the variable it reads. */
+export interface ProviderKey {
+  value: string;
+  label: string;
+  variable: string;
 }
 
 /** The providers OpenCode is offered with, and the variable each one's key is read from. */
-export const OPENCODE_PROVIDERS: readonly { value: string; label: string; variable: string }[] = [
+export const OPENCODE_PROVIDERS: readonly ProviderKey[] = [
   { value: "anthropic", label: "Anthropic", variable: "ANTHROPIC_API_KEY" },
   { value: "openai", label: "OpenAI", variable: "OPENAI_API_KEY" },
   { value: "openrouter", label: "OpenRouter", variable: "OPENROUTER_API_KEY" },
   { value: "groq", label: "Groq", variable: "GROQ_API_KEY" },
 ];
+
+/** Hermes's providers by the variables its registry reads (hermes_cli/auth.py); it picks the one keyed. */
+const HERMES_PROVIDERS: readonly ProviderKey[] = [
+  { value: "openrouter", label: "OpenRouter", variable: "OPENROUTER_API_KEY" },
+  { value: "anthropic", label: "Anthropic", variable: "ANTHROPIC_API_KEY" },
+  { value: "openai", label: "OpenAI", variable: "OPENAI_API_KEY" },
+  { value: "gemini", label: "Google AI Studio", variable: "GEMINI_API_KEY" },
+  { value: "xai", label: "xAI", variable: "XAI_API_KEY" },
+  { value: "deepseek", label: "DeepSeek", variable: "DEEPSEEK_API_KEY" },
+];
+
+/** Pi's providers by the variables its docs name (docs/providers.md). */
+const PI_PROVIDERS: readonly ProviderKey[] = [
+  { value: "anthropic", label: "Anthropic", variable: "ANTHROPIC_API_KEY" },
+  { value: "openai", label: "OpenAI", variable: "OPENAI_API_KEY" },
+  { value: "openrouter", label: "OpenRouter", variable: "OPENROUTER_API_KEY" },
+  { value: "google", label: "Google Gemini", variable: "GEMINI_API_KEY" },
+  { value: "groq", label: "Groq", variable: "GROQ_API_KEY" },
+  { value: "xai", label: "xAI", variable: "XAI_API_KEY" },
+];
+
+const PROVIDER_KEYS: Readonly<Record<string, readonly ProviderKey[]>> = {
+  opencode: OPENCODE_PROVIDERS,
+  hermes: HERMES_PROVIDERS,
+  pi: PI_PROVIDERS,
+};
+
+/** The providers a harness reads a key from `env` for; empty for one with a key of its own. */
+export const providersFor = (harness: string): readonly ProviderKey[] =>
+  factsOf(harness).providerKeys ? (PROVIDER_KEYS[harness] ?? []) : [];
+
+/** The harnesses whose model names its provider first, `<provider>/<model>`. */
+const PROVIDER_IN_MODEL: readonly string[] = ["opencode", "pi"];
+
+/** Whether the harness's model names its provider first. */
+export const namesProvider = (harness: string) => PROVIDER_IN_MODEL.includes(harness);
+
+/** Qwen Code's endpoint variable, which the wizard writes from the endpoint field. */
+export const QWEN_ENDPOINT = "OPENAI_BASE_URL";
 
 export interface CloudField {
   name: string;
@@ -164,17 +232,25 @@ const CLOUD_FLAG: Readonly<Partial<Record<Cloud, string>>> = {
   foundry: "CLAUDE_CODE_USE_FOUNDRY",
 };
 
-/** Every env variable the wizard writes, which an edit replaces rather than keeps. */
-const MANAGED_ENV = new Set<string>([
-  ...Object.values(CLOUD_FLAG),
-  ...Object.values(CLOUD_FIELDS).flatMap((c) => c.fields.map((f) => f.name)),
-  ...OPENCODE_PROVIDERS.map((p) => p.variable),
-]);
+/** Every env variable the wizard writes on the harness, which an edit replaces rather than keeps. */
+function managedEnv(harness: string): Set<string> {
+  return new Set<string>([
+    ...(methodsOf(harness).includes("cloud")
+      ? [
+          ...Object.values(CLOUD_FLAG),
+          ...Object.values(CLOUD_FIELDS).flatMap((c) => c.fields.map((f) => f.name)),
+        ]
+      : []),
+    ...providersFor(harness).map((p) => p.variable),
+    ...(harness === "qwen-code" ? [QWEN_ENDPOINT] : []),
+  ]);
+}
 
 /** The fields of an entry the wizard writes; every other field an edit keeps as written. */
 const MANAGED_FIELDS = new Set([
   "harness",
   "model",
+  "effort",
   "run_in",
   "timeout_seconds",
   "max_concurrent",
@@ -231,6 +307,8 @@ export function emptyDraft(): Draft {
     cloudFields: {},
     provider: "anthropic",
     model: "",
+    effort: "",
+    endpoint: "",
     runIn: "",
     timeout: "",
     concurrent: "",
@@ -251,10 +329,12 @@ export const credentialWord = (d: Pick<Draft, "method">) =>
 /** The convention a credential's secret starts from: the variable the harness itself reads. */
 function baseVariable(d: Pick<Draft, "harness" | "method" | "provider">): string {
   if (d.method === "token") return "CLAUDE_CODE_OAUTH_TOKEN";
-  if (d.harness === "codex") return "CODEX_API_KEY";
-  if (d.harness === "opencode")
-    return OPENCODE_PROVIDERS.find((p) => p.value === d.provider)?.variable ?? "API_KEY";
-  return "ANTHROPIC_API_KEY";
+  const facts = factsOf(d.harness);
+  if (facts.providerKeys)
+    return providersFor(d.harness).find((p) => p.value === d.provider)?.variable ?? "API_KEY";
+  // A KEY OTHER VENDORS SHARE (Qwen Code's OPENAI_API_KEY) is stored under a name of its own.
+  if (facts.keyShared) return "QWEN_API_KEY";
+  return facts.keyEnv ?? "API_KEY";
 }
 
 /** A model's name as a secret's suffix: SONNET_KEY for sonnet-key. */
@@ -317,12 +397,23 @@ export function credentialValues(d: Draft): Record<string, string> {
   return out;
 }
 
-/** The model's id as its harness takes it: OpenCode's names its provider first. */
+/** The model's id as its harness takes it: OpenCode's and Pi's name their provider first. */
 export function modelId(d: Pick<Draft, "harness" | "provider" | "model">): string {
   const model = d.model.trim();
-  return d.harness === "opencode" && model && !model.includes("/")
+  return namesProvider(d.harness) && model && !model.includes("/")
     ? `${d.provider}/${model}`
     : model;
+}
+
+/** The effort levels the draft's harness takes on its model, lowest first (its profile may narrow
+ * them per model); empty where it has no setting the engine passes. */
+export function effortLevels(d: Pick<Draft, "harness" | "provider" | "model">): readonly string[] {
+  const facts = factsOf(d.harness);
+  const model = modelId(d);
+  for (const rule of facts.effortModels ?? []) {
+    if (model && new RegExp(`^(?:${rule.match})$`).test(model)) return rule.levels;
+  }
+  return facts.efforts;
 }
 
 /** A whole number field as the entry writes it: a number, or the text the engine will refuse. */
@@ -342,12 +433,13 @@ function signInOf(
   const env: Record<string, string> = {};
   switch (d.method) {
     case "api-key":
-      if (d.harness === "opencode") {
-        // OPENCODE READS ITS PROVIDER'S OWN VARIABLE from env: its profile has no key slot.
+      if (factsOf(d.harness).providerKeys) {
+        // A HARNESS THAT FRONTS MANY READS ITS PROVIDER'S OWN VARIABLE from env: its profile has no key slot.
         const variable = baseVariable({ ...d, method: "api-key" });
         if (d.variable) env[variable] = ref(d.variable);
         return { auth: null, env };
       }
+      if (d.harness === "qwen-code" && d.endpoint.trim()) env[QWEN_ENDPOINT] = d.endpoint.trim();
       return { auth: { mode: "api-key", api_key: d.variable ? ref(d.variable) : "" }, env };
     case "token":
       return { auth: { mode: "subscription", token: d.variable ? ref(d.variable) : "" }, env };
@@ -392,6 +484,7 @@ export function entityOf(d: Draft, base?: Base): Record<string, unknown> {
   );
   entity.harness = d.harness;
   entity.model = modelId(d);
+  if (d.effort) entity.effort = d.effort;
   // WHERE AN EXECUTOR RUNS is a choice only a harness with a runner has; any other leaves it unset.
   if (d.runIn && canExecute(d)) entity.run_in = d.runIn;
   if (d.timeout.trim()) entity.timeout_seconds = wholeOrText(d.timeout);
@@ -405,6 +498,7 @@ export function entityOf(d: Draft, base?: Base): Record<string, unknown> {
   } else {
     const stored = storedCloud(rawEnv);
     const { auth, env } = signInOf(d, stored);
+    const managed = managedEnv(d.harness);
     // AN UNCHANGED METHOD KEEPS ITS OTHER AUTH FIELDS (a credential bundle); a new one starts clean.
     const kept =
       rawAuth && base?.method === d.method
@@ -415,7 +509,7 @@ export function entityOf(d: Draft, base?: Base): Record<string, unknown> {
     if (auth) entity.auth = { ...kept, ...auth };
     else if (Object.keys(kept).length > 0) entity.auth = kept;
     const merged = {
-      ...Object.fromEntries(Object.entries(rawEnv).filter(([k]) => !MANAGED_ENV.has(k))),
+      ...Object.fromEntries(Object.entries(rawEnv).filter(([k]) => !managed.has(k))),
       ...env,
     };
     if (Object.keys(merged).length > 0) entity.env = merged;
@@ -449,15 +543,23 @@ function cloudOf(env: Record<string, unknown>): Cloud {
 export function methodOf(model: ModelView): Method {
   const raw = model.raw ?? {};
   const auth = isRecord(raw.auth) ? raw.auth : {};
+  const env = isRecord(raw.env) ? raw.env : {};
   // AN ENTRY THAT NAMES NO MODE RUNS AS THE ENGINE'S DEFAULT, held to the engine by a Go gate.
   const mode: string = typeof auth.mode === "string" ? auth.mode : DEFAULT_HARNESS_AUTH_MODE;
   if (!isHarness(model.harness)) return "unchanged";
-  if (mode === "api-key") return model.harness === "opencode" ? "unchanged" : "api-key";
-  if (mode === "env") return model.harness === "claude-code" ? "cloud" : "unchanged";
+  const facts = factsOf(model.harness);
+  const offers = (m: Method): Method =>
+    (facts.signIns as readonly Method[]).includes(m) ? m : "unchanged";
+  if (mode === "api-key") return facts.providerKeys ? "unchanged" : offers("api-key");
+  if (mode === "env") return offers("cloud");
   if (mode !== "subscription") return "unchanged";
-  if (model.harness === "opencode") return "api-key";
+  if (facts.providerKeys)
+    return providersFor(model.harness).some((p) => referenced(env[p.variable]))
+      ? "api-key"
+      : offers("host-login");
   if (model.harness === "codex") return "device";
-  return auth.token || model.entry.sign_in.route === "token" ? "token" : "host-login";
+  if (auth.token || model.entry.sign_in.route === "token") return offers("token");
+  return offers("host-login");
 }
 
 /** The secret a model's credential is read from now, or "" where none is. */
@@ -468,8 +570,10 @@ function variableOf(model: ModelView, method: Method): string {
   const written =
     method === "token"
       ? referenced(auth.token)
-      : model.harness === "opencode"
-        ? (OPENCODE_PROVIDERS.map((p) => referenced(env[p.variable])).find(Boolean) ?? null)
+      : factsOf(model.harness).providerKeys
+        ? (providersFor(model.harness)
+            .map((p) => referenced(env[p.variable]))
+            .find(Boolean) ?? null)
         : referenced(auth.api_key);
   return written ?? model.admin?.sign_in.variable ?? "";
 }
@@ -485,10 +589,12 @@ export function draftOf(model: ModelView): Draft {
   const env = isRecord(raw.env) ? raw.env : {};
   const method = methodOf(model);
   const cloud = method === "cloud" ? cloudOf(env) : d.cloud;
+  // THE PROVIDER a provider-key entry is keyed for, else the one its model names first.
+  const keyed = providersFor(model.harness).find((p) => typeof env[p.variable] === "string");
   const [provider, rest] =
-    model.harness === "opencode" && model.model.includes("/")
+    namesProvider(model.harness) && model.model.includes("/")
       ? (model.model.split(/\/(.*)/s, 2) as [string, string])
-      : [d.provider, model.model];
+      : [keyed?.value ?? d.provider, model.model];
   return {
     ...d,
     key: model.key,
@@ -506,6 +612,11 @@ export function draftOf(model: ModelView): Draft {
         : {},
     provider,
     model: rest,
+    effort: typeof raw.effort === "string" ? raw.effort : "",
+    endpoint:
+      model.harness === "qwen-code" && typeof env[QWEN_ENDPOINT] === "string"
+        ? (env[QWEN_ENDPOINT] as string)
+        : "",
     runIn: (model.runIn ?? "") as RunIn,
     timeout: model.timeoutSeconds === null ? "" : String(model.timeoutSeconds),
     concurrent: model.maxConcurrent === null ? "" : String(model.maxConcurrent),
@@ -586,6 +697,7 @@ export function stepOf(p: Pick<ConfigProblem, "segments">, key: string): WizardS
   if (s[0] === "providers" && s[1] === "llm" && s[2] === key) {
     switch (s[3]) {
       case "model":
+      case "effort":
         return "model";
       case "run_in":
         return "runs";
@@ -614,6 +726,7 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
     const words: Record<string, string> = {
       harness: "Harness",
       model: "Model",
+      effort: "Reasoning effort",
       run_in: "Where it runs",
       timeout_seconds: "Timeout",
       max_concurrent: "Processes at once",
@@ -730,6 +843,17 @@ export function draftProblems(
     }
   }
   if (!d.model.trim()) out.push(at("model", "Choose the model the harness runs.", "missing"));
+  else if (d.effort && !effortLevels(d).includes(d.effort)) {
+    const levels = effortLevels(d);
+    out.push(
+      at(
+        "effort",
+        levels.length === 0
+          ? `${modelId(d)} runs with no reasoning effort setting. Choose the harness default.`
+          : `${modelId(d)} takes ${levels.join(", ")}. Choose one of those or the harness default.`,
+      ),
+    );
+  }
   const whole = (v: string) => v.trim() === "" || /^[1-9]\d*$/.test(v.trim());
   if (!whole(d.concurrent))
     out.push(at("max_concurrent", "Use a whole number of 1 or more, or leave it empty for 4."));

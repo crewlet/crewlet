@@ -495,6 +495,33 @@ sequenceDiagram
 The raw bytes of a version are also downloadable from the API, always as an
 attachment and text as `text/plain`, never rendered.
 
+### Rendering a page for its author
+
+An agent checks its own page before anybody reviews it, and its box holds no
+credential a frame can be opened with, so the engine renders the page for it
+(`render_artifact`). It drives a headless Chromium the deployment runs
+(`artifacts.render.browser_url`, [Serving
+artifacts](../guides/artifacts-serving.md#the-render-browser)) over the
+DevTools protocol, and serves it exactly what a viewer's browser gets:
+
+- **The same frame.** The frame is minted as a viewer's is, with the version's
+  grant, and embedded by a host page on the dashboard's own origin, so its
+  `frame-ancestors` admit it, with the `sandbox` and `allow` the engine
+  computes and the fragment the dashboard writes. The host answers the page's
+  hello and its reads as the agent, under the requester ceiling, and refuses
+  every write.
+- **The same bytes.** Every request the page makes is paused in the browser and
+  answered by the node's own artifact handler, in process: the runtime, the
+  nonce, the policy, the kit and the brand are a viewer's. Anything on another
+  site is refused, so the browser needs no network and the engine fetches
+  nothing a page names.
+- **No credential anywhere else.** The ticket names a render credential that
+  only the render's own resolver knows, for the render's length, and every
+  document is decided again as the agent; the artifact listener answers that
+  credential as ended.
+- **Nothing written.** No open is recorded and nobody sees the agent in the
+  room. The screenshots go to the agent's own box.
+
 ---
 
 ## The datastore
@@ -645,6 +672,7 @@ for the authority verb it asks:
 |---|---|
 | `list_artifacts` | Lists what the seat may open: its own, shared with it, company-wide, its reports'; one folder's level by `prefix` and `delimiter`, as S3 lists a bucket |
 | `get_artifact` | Reads a head, its versions and its files, a page at a time |
+| `render_artifact` | Renders a page or a design's artboard in the engine's browser as a viewer sees it, and reports what is broken; a seat's alone (see [Rendering a page for its author](#rendering-a-page-for-its-author)) |
 | `get_company_brand` | Reads the company's adopted brand: colours, typefaces, logos, the brand slide theme, the kit version to link and the fenced voice |
 | `create_artifact` | Creates an artifact from inline files, the turn's sandbox, a project file or the brand's logos and faces (`from_brand`), or a deck from a `starter` plan; `folder` files it |
 | `publish_artifact` | Publishes a version against a base, with whole files or edits |
@@ -710,7 +738,8 @@ the turn somebody woke.
 | Existence of private artifacts | A caller with no share gets the same `404` as for an unknown id |
 | Bytes swapped after a check | The engine mints every key, a direct upload is bound to its digest and `if-none-match: *`, and finalize reads every object back |
 | Bytes nobody names filling the store | Reservations before transfer, bounded per principal and per company |
-| An agent persuaded by content it reads | Provenance fences, the requester ceiling, `humans_only` columns, human-only verbs, no company-wide share by an agent |
+| An agent persuaded by content it reads | Provenance fences, the requester ceiling, `humans_only` columns, human-only verbs, no company-wide share by an agent. A render's screenshots show a page's words as pixels, which no fence labels; the answer says to read them as content |
+| A render that reaches past its page | Every request it makes is answered by the engine and nothing else, its ticket's credential resolves nowhere but in the render, and it is bounded in time, shots and bytes |
 | A forged presence frame | Frames are sealed under the fleet keyring |
 
 ---
@@ -747,6 +776,7 @@ them.
 | `api.artifacts.host`, `api.artifacts.port` | A | Bind the artifact listener on an ingress node; port `0` (the default) serves no artifacts on this node |
 | `api.artifacts.external_url` | A | Where browsers reach artifacts: a wildcard template for an origin per artifact, or one plain origin for opaque origins. See [Serving artifacts](../guides/artifacts-serving.md) |
 | `artifacts.limits.*` | A | The plan quotas above |
+| `artifacts.render.browser_url` | A | The headless Chromium this node renders pages in for `render_artifact`: an `http://` DevTools origin or the `ws://` address it prints. Unset renders nothing |
 | `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes` | A | The two logs' ceilings |
 | `store.objects.nats_max_bytes` | A | The `nats` object bucket's reservation on the broker |
 | `artifacts.agents_manage_others` | B | Let agents publish over, update and reshare artifacts they do not own (default `false`) |
