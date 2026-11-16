@@ -488,9 +488,44 @@ body background.
 
 ---
 
+## Render it before review
+
+An agent cannot open its own page the way a person does: its box holds no
+sign-in, and a frame opens only inside the dashboard. So the engine renders it
+for the agent. `render_artifact` opens a version of an `html` page, or one
+artboard of a `design`, in a headless Chromium the engine drives, in the very
+frame a viewer gets: the same ticket rules, the same runtime and kit, the same
+script policy and brand, the page's data read as the agent, at the widths,
+themes and scroll positions asked (by default 1440 and 390 pixels wide, light
+and dark, from the top). It can click, hover or press keys on named elements
+first, to open a menu or a tab. It answers:
+
+| Finding | What it means |
+|---|---|
+| Unresolved properties | A `var(--name)` your own CSS uses that no stylesheet the page loads defines, with the rule, the file and line, how many elements it styles and the defined tokens nearest it. Without a fallback, every declaration using it is dropped: a `background: var(--color-surface-base)` paints nothing, since the kit names that surface `--color-surface-background` |
+| See-through bars | A sticky or fixed element at least half the frame wide whose background is transparent, and the unresolved property its background asked for, if one did |
+| Hidden under bars | A heading, link or control a sticky or fixed element covers at the top of the page, or where an in-page link lands |
+| Console | Errors, warnings, uncaught exceptions and the script policy's refusals, by file and line |
+| Failed requests | A file the version does not hold, a refusal, or a request to another site, which a render never makes for a page |
+| Links | An in-page link to no id, a link to a page the version lacks, an external link the frame cannot open (use `crewlet.openLink`), a `javascript:` link |
+| Writes | Each write the page tried: a render writes nothing, so they are refused and listed |
+
+The screenshots are PNG files written to the agent's own box, under
+`~/.crewlet/renders/<artifact>/`, replacing that artifact's earlier ones, where
+its harness opens them like any image. A render writes nothing to the
+artifact: no open is recorded, nobody sees the agent in the room, and the
+page's data is read, never written.
+
+A render is bounded: at most twelve shots, 320 to 1920 pixels wide, ten
+actions, ninety seconds and eight renders a turn. It needs a browser the
+deployment runs ([Serving artifacts](artifacts-serving.md#the-render-browser)).
+
+---
+
 ## Before you share it
 
-- Open it in both light and dark mode, and at phone width.
+- Render it (above), or open it in both light and dark mode, and at phone
+  width.
 - Try it with storage unavailable, if your deployment serves artifacts from
   one shared host.
 - Check the Data tab: every collection should have a schema, and approval
