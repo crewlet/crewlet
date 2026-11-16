@@ -228,6 +228,9 @@ func (c *Coordinator) unclaimOwing(ctx context.Context, cr *claimRelease) error 
 			// lets go whatever was recorded behind it on the run.
 			moved = c.wroteCountLocked(cr.write, err == nil && released)
 		}
+		// AND THE RUN WAITS FOR THE OPERATOR once it is back where the
+		// claim found it, in the same step ([blockedResume]).
+		c.blockedAnsweredLocked(cr, err == nil && released)
 		if r := c.retries[turnID]; r != nil && r.release == cr {
 			r.release, owed = nil, true
 		}
@@ -261,6 +264,7 @@ func (c *Coordinator) dropRelease(cr *claimRelease) {
 		delete(c.releases, cr.run.TurnID)
 		moved = c.wroteCountLocked(cr.write, false)
 	}
+	c.blockedAnsweredLocked(cr, false)
 	c.mu.Unlock()
 	moved()
 }
@@ -427,6 +431,7 @@ func (c *Coordinator) claimCompletion(ctx context.Context, ev types.ExecutorFini
 		// landed, back to running, which the claim that won took it out of
 		// again (countwrite.go).
 		moved = c.wroteCountLocked(cr.write, true)
+		c.blockedAnsweredLocked(cr, true)
 		if r := c.retries[turnID]; r != nil && r.release == cr {
 			r.release, owed = nil, true
 		}

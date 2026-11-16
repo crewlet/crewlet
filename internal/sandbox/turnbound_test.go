@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -369,15 +370,24 @@ func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) 
 // kind and when the first such failure in a row was met, an attempt that
 // meets the condition again keeping that instant; and takes it out once a
 // resume gets past the condition, once one fails for anything else, once the
-// run settles, and once the seat is let go of. AN ATTEMPT WHOSE OWN HAND-BACK
-// FAILED ENDS THE RUN, so it is out too: counted as that attempt returned,
-// after its ending had taken it out, a run that was over held the alarm up
-// until its seat moved. A failure of the node's that a wait clears (a
-// coordination store that did not answer) is never counted.
+// run settles, and once the seat is let go of. COUNTED ONCE THE ATTEMPT'S
+// HAND-BACK LANDS: an attempt whose own hand-back failed ends the run, and one
+// whose run had its ending decided by another path while the resume ran (a
+// person's stop of the run the turn relaunched) finds it moved on, and counted
+// as the failure was met, or as the attempt returned, after that ending had
+// taken it out, a run that was over held the alarm up until its seat moved. A
+// resume whose turn relaunched before it failed is out, its hand-back finding
+// the turn's next job on the row. A hand-back the store answers late counts the
+// run once it lands, and an ending
+// that lands beside it, before its answer is taken, leaves it uncounted. A
+// failure of the node's that a wait clears (a coordination store that did not
+// answer) is never counted.
 //
 // Mutation: record no failure, keep the latest instant rather than the first,
-// drop the record on any one of the five ways out, or count the failure as
-// the attempt returns rather than as it is met, and a row goes red.
+// drop the record on any one of the ways out, count the failure as it is met
+// or as the attempt returns rather than once its hand-back lands, count it in
+// the step that takes the landing's answer whatever settled before it, or
+// keep it where the hand-back did not land, and a row goes red.
 func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 	t.Parallel()
 	full := errors.New("write: no space left on device")
@@ -470,6 +480,78 @@ func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 		}
 		blockedFor(t, rig, ResumesBlocked{})
 	})
+	t.Run("an ending decided while its resume runs", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		// THE TURN RELAUNCHES ITS EXECUTOR, and a person stops the seat's
+		// running work before the turn meets the full disk: the stop ends
+		// the relaunched run while the resume's frame still runs.
+		rig.resumer.failsInTurn = true
+		rig.resumer.during = func(ctx context.Context, r PendingRun) {
+			if _, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID)); err != nil {
+				t.Errorf("the turn's relaunch: %v", err)
+			}
+			if err := rig.coordinator.StopSeat(ctx, "swe", stopper); err != nil {
+				t.Errorf("the person's stop: %v", err)
+			}
+		}
+		_ = attempt(t, rig)
+		if run, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || (found && run.Ending == nil) {
+			t.Fatalf("the premise: the stop decided the run's ending (%+v, %v, %v)", run.Ending, found, err)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("a resume whose turn relaunched before it failed", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		// THE TURN'S NEXT JOB RUNS, so its run waits on nothing: the claim's
+		// hand-back finds the row holding that job and does not land.
+		rig.resumer.failsInTurn = true
+		rig.resumer.during = func(ctx context.Context, r PendingRun) {
+			if _, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID)); err != nil {
+				t.Errorf("the turn's relaunch: %v", err)
+			}
+		}
+		_ = attempt(t, rig)
+		if got := rig.get("t1"); got.Ending != nil || !slices.Contains(Active, got.Status) {
+			t.Fatalf("the premise: the relaunched run is live (%s, ending %+v)", got.Status, got.Ending)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("a hand-back the store answers late", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		store := &unansweredRelease{silentStore: &silentStore{PendingStore: rig.coordinator.pending,
+			silent: []string{"ReleaseClaim"}}}
+		rig.coordinator.pending = store
+		rig.resumer.failWith(fmt.Errorf("resuming t1: %w", full))
+		met := rig.now
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is not settled")
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+		store.answer()
+		if fired := rig.fireRetries(); fired == 0 {
+			t.Fatal("the premise: the release the store did not answer is owed and made again")
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning {
+			t.Fatalf("the premise: the owed hand-back landed, but the run is %s", got.Status)
+		}
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: met})
+	})
+	t.Run("an ending that lands beside the hand-back", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.coordinator.pending = &settledAsReleased{PendingStore: rig.coordinator.pending,
+			settle: func() { rig.coordinator.runSettled("t1") }}
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is handed back")
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
 	t.Run("a failure of the node's a wait clears", func(t *testing.T) {
 		t.Parallel()
 		rig := rigFor(t)
@@ -479,6 +561,21 @@ func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
 		}
 		blockedFor(t, rig, ResumesBlocked{})
 	})
+}
+
+// settledAsReleased is a run store whose claim's release lands and then, before
+// its answer is taken, has the run settled on this node by settle: an ending
+// decided on another path between the release's landing on the store and the
+// step that takes its answer.
+type settledAsReleased struct {
+	PendingStore
+	settle func()
+}
+
+func (s *settledAsReleased) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	released, err := s.PendingStore.ReleaseClaim(ctx, turnID, release)
+	s.settle()
+	return released, err
 }
 
 // WHAT THE GIVE-UP COUNTS OF A RESUME THIS NODE CANNOT MAKE, by the fleet's

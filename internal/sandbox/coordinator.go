@@ -4208,13 +4208,13 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// re-enters is one the node admitted ([admitted]).
 	ctx := adm.ctx
 	// WHAT THIS ATTEMPT SAYS OF A WAIT FOR THE OPERATOR: a failure only an
-	// operator clears counts the run in [Coordinator.ResumesBlocked] as it is
-	// met (below), and every other answer, a resume that got past it
-	// included, takes it out as the attempt returns.
+	// operator clears counts the run in [Coordinator.ResumesBlocked] once its
+	// hand-back lands (below), and every other answer, a resume that got
+	// past it included, takes it out as the attempt returns.
 	blockedOn := ""
 	defer func() {
 		if blockedOn == "" {
-			c.noteBlocked(run, "")
+			c.unblock(run.TurnID)
 		}
 	}()
 	if len(run.ExecuteState) == 0 {
@@ -4513,6 +4513,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// to the hour a vendor's window is benched for. An answer's is its
 		// own series, which waits in this node's memory already.
 		refusal, refused := waitingRefusal(err)
+		var failed failure
 		if refused {
 			log.InfoContext(ctx, "sandbox_resume_refused",
 				"turn_id", run.TurnID, "revert_to", claimedFrom(run),
@@ -4523,20 +4524,19 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			log.ErrorContext(ctx, "sandbox_resume_failed",
 				"turn_id", run.TurnID, "revert_to", claimedFrom(run),
 				"attempt", run.Launch.ResumeFailures+1, "error", err.Error())
-			// COUNTED AS IT IS MET, before the claim is handed back, never
-			// as the attempt returns: an ending of the run from here on (a
-			// hand-back that fails, which ends it, or a stop) takes it out
-			// ([Coordinator.runSettled]), and counted after that ending, a
-			// run that was over held the alarm up until its seat moved.
-			if blockedOn = c.blockedBy(run, err); blockedOn != "" {
-				c.noteBlocked(run, blockedOn)
-			}
+			// COUNTED ONCE THE HAND-BACK BELOW LANDS, never as the failure
+			// is met nor as the attempt returns: a hand-back that does not
+			// land was ended in its place, or found the run moved on, its
+			// ending decided by another path while this resume ran, and
+			// counted on either side of that ending, a run that was over
+			// held the alarm up until its seat moved ([blockedResume]).
+			blockedOn = c.blockedBy(run, err)
+			failed.blocked = blockedOn
 		}
 		// A FAILURE IS COUNTED AND BOUNDED, a wait is not, and nor is a
 		// failure of the node's own, or one another node can get past while
 		// one may: see [Coordinator.resumeGivenUp]. A completion's only, for
 		// the reason the deadline above gives.
-		var failed failure
 		if !refused && !claimedAnswer(run) && c.runsOwnFailure(ctx, run, err) {
 			now := c.now()
 			if c.resumeGivenUp(ctx, run, now, err) {
@@ -5104,9 +5104,16 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, detail stri
 func (c *Coordinator) handingBackLocked(run PendingRun, detail string, failed failure, hold *Refusal,
 ) (*claimRelease, func()) {
 	cr := &claimRelease{run: run, release: releaseFor(run, failed, hold), detail: detail}
+	// THE RELEASE WHOSE LANDING COUNTS THE RUN AS WAITING FOR THE OPERATOR
+	// ([blockedResume]), recorded before the one it takes the place of is
+	// answered, so a run an earlier attempt counted keeps its instant.
+	if failed.blocked != "" {
+		c.blockedHandBackLocked(cr, failed.blocked)
+	}
 	moved := func() {}
 	if earlier := c.releases[run.TurnID]; earlier != nil {
 		moved = c.wroteCountLocked(earlier.write, false)
+		c.blockedAnsweredLocked(earlier, false)
 	}
 	cr.write = c.writingCountLocked(run, StatusResumed, cr.release.To)
 	c.releases[run.TurnID] = cr

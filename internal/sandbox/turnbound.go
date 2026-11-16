@@ -101,10 +101,14 @@ const MinResumeFailures = 3
 
 // failure is what a hand-back counts onto the job's record: the instant a
 // collection could not read its box ([Release.CollectFailedAt]) or a resume
-// failed ([Release.ResumeFailedAt]). The zero value counts nothing.
+// failed ([Release.ResumeFailedAt]); and, in this node's memory rather than on
+// the record, the kind of a condition only an operator clears that the resume
+// failed on, which counts the run in [Coordinator.ResumesBlocked] once the
+// hand-back lands ([blockedResume]). The zero value counts nothing.
 type failure struct {
 	collectFailed time.Time
 	resumeFailed  time.Time
+	blocked       string
 }
 
 // pastDeadline reports whether the job ev announces belongs to a turn whose
@@ -284,10 +288,28 @@ func (c *Coordinator) runsOwnFailure(ctx context.Context, run PendingRun, err er
 // condition only an operator clears ([CoordinatorOptions.OperatorsCondition]):
 // the seat it holds, the condition's kind, and when the first such failure in
 // a row was met.
+//
+// COUNTED ONCE THE ATTEMPT'S HAND-BACK LANDS, never as the failure is met:
+// handBack is the release that gives the claim back while it is out (or owed,
+// which this node makes again until it lands), and counted whether a release
+// of it landed. A run waits for the operator only once it is back where its
+// claim found it, the completion coming round again on it; one whose
+// hand-back did not land was ended in its place, or had moved on, its ending
+// decided by another path while the resume ran (a person's stop of the run
+// the resumed turn relaunched, say), and counted as the failure was met, after
+// that ending had taken it out ([Coordinator.runSettled]), it held the alarm
+// up until its seat moved. Recorded with the release, in the step that records
+// it ([Coordinator.handingBackLocked]), and decided in the step that takes its
+// answer ([Coordinator.blockedAnsweredLocked]), so an ending that lands
+// between the release's landing on the store and that step takes the entry
+// out before it is counted. An entry counted by an earlier attempt stays
+// counted while the next one's release is out.
 type blockedResume struct {
-	agent string
-	kind  string
-	since time.Time
+	agent    string
+	kind     string
+	since    time.Time
+	handBack *claimRelease
+	counted  bool
 }
 
 // ResumesBlocked is what this node says of the runs of seats it holds that
@@ -318,17 +340,22 @@ type ResumesBlocked struct {
 // the node says this in its status record, and every data node raises it from
 // there (internal/engine's executorReading), since the node holding the seat
 // may be a satellite, which evaluates no alarm table of its own. FROM THIS
-// NODE'S OWN MEMORY of its attempts, which is exact for the seats it holds: a
+// NODE'S OWN MEMORY of its attempts, which is exact for the seats it holds:
+// counted once the failed attempt's hand-back lands ([blockedResume]); a
 // resume of the run that gets past the condition, or fails for anything else,
-// takes it out; so does the run's settling ([Coordinator.runSettled]) and the
-// seat's release, whose next holder says it again from its own attempts. A
-// restart forgets it until the run's next attempt fails again.
+// takes it out, and so does a hand-back that does not land, the run's settling
+// ([Coordinator.runSettled]) and the seat's release, whose next holder says it
+// again from its own attempts. A restart forgets it until the run's next
+// attempt fails again.
 func (c *Coordinator) ResumesBlocked() ResumesBlocked {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var out ResumesBlocked
 	var oldest blockedResume
 	for _, b := range c.blocked {
+		if !b.counted {
+			continue
+		}
 		out.Runs++
 		if out.Runs == 1 || b.since.Before(oldest.since) ||
 			(b.since.Equal(oldest.since) && b.agent < oldest.agent) {
@@ -355,24 +382,46 @@ func (c *Coordinator) blockedBy(run PendingRun, err error) string {
 	return ""
 }
 
-// noteBlocked records what run's latest resume says of a wait for the
-// operator: kind, the condition only an operator clears that it failed on, or
-// "" for any other answer, which takes the run out of
-// [Coordinator.ResumesBlocked]. A run already counted keeps the instant of its
-// first such failure in a row.
-func (c *Coordinator) noteBlocked(run PendingRun, kind string) {
+// unblock takes turnID's run out of [Coordinator.ResumesBlocked]: its latest
+// resume did not fail on a condition only an operator clears.
+func (c *Coordinator) unblock(turnID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if kind == "" {
-		delete(c.blocked, run.TurnID)
-		return
+	delete(c.blocked, turnID)
+}
+
+// blockedHandBackLocked records cr, the hand-back of a claim whose resume
+// failed on kind, a condition only an operator clears, as the release whose
+// landing counts its run in [Coordinator.ResumesBlocked] ([blockedResume]). A
+// run an earlier attempt counted keeps the instant of its first such failure in
+// a row, and stays counted while cr is out. Under mu.
+func (c *Coordinator) blockedHandBackLocked(cr *claimRelease, kind string) {
+	run := cr.run
+	b, ok := c.blocked[run.TurnID]
+	if !ok {
+		b = blockedResume{agent: run.AgentHandle, since: c.now()}
 	}
-	since := c.now()
-	if was, ok := c.blocked[run.TurnID]; ok {
-		since = was.since
-	}
+	b.kind, b.handBack = kind, cr
 	if c.blocked == nil {
 		c.blocked = map[string]blockedResume{}
 	}
-	c.blocked[run.TurnID] = blockedResume{agent: run.AgentHandle, kind: kind, since: since}
+	c.blocked[run.TurnID] = b
+}
+
+// blockedAnsweredLocked acts on cr's answer, landed or not, for the run it
+// would count in [Coordinator.ResumesBlocked], where cr is still the hand-back
+// that counts it: a release that landed counts it, and one that did not takes it
+// out. Under mu, in the step that takes the release's answer.
+func (c *Coordinator) blockedAnsweredLocked(cr *claimRelease, landed bool) {
+	turnID := cr.run.TurnID
+	b, ok := c.blocked[turnID]
+	if !ok || b.handBack != cr {
+		return
+	}
+	if !landed {
+		delete(c.blocked, turnID)
+		return
+	}
+	b.handBack, b.counted = nil, true
+	c.blocked[turnID] = b
 }
