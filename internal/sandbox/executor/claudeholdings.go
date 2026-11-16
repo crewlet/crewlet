@@ -1138,17 +1138,8 @@ func (w *holdingsWalk) count(thread string, call threadCall, n int, record int32
 			return
 		}
 		facts.resultThread, facts.line, facts.resultRec = thread, n, record
-		facts.failed, facts.textBytes = call.IsError != nil && *call.IsError, -1
-		if text, ok := resultText(call.Content); ok {
-			// READ AS IT WILL STREAM ([textResult]), a piece at a time.
-			var read textResult
-			cut := textCut{text: text}
-			for p := cut.next(); p != nil; p = cut.next() {
-				read.write(p)
-			}
-			sum := read.sum()
-			facts.textBytes, facts.opening, facts.whole = int(sum.Bytes), sum.Opening, sum.Whole
-		}
+		facts.failed = call.Failed
+		facts.textBytes, facts.opening, facts.whole = int(call.Text.Bytes), call.Text.Opening, call.Text.Whole
 	}
 }
 
@@ -1175,7 +1166,7 @@ func (w *holdingsWalk) leg(call threadCall, record int32) error {
 		if call.Name != claudeToolSendMessage {
 			return nil
 		}
-		return w.sentUnnamed(sendTarget(call.Input))
+		return w.sentUnnamed(call.To)
 	}
 	leg := w.legs[call.ID]
 	if leg == nil {
@@ -1191,7 +1182,7 @@ func (w *holdingsWalk) leg(call threadCall, record int32) error {
 	}
 	leg.sends++
 	if leg.sends == 1 {
-		leg.to = sendTarget(call.Input)
+		leg.to = call.To
 	}
 	return nil
 }
@@ -1238,7 +1229,7 @@ func (w *holdingsWalk) legResult(line threadLine, call threadCall, alone bool, r
 	if leg.results > 1 {
 		return
 	}
-	leg.resultRec, leg.resultLine, leg.failed = record, line.N, call.IsError != nil && *call.IsError
+	leg.resultRec, leg.resultLine, leg.failed = record, line.N, call.Failed
 	if alone {
 		leg.completed, leg.agent, leg.refused = agentAnswer(line.ToolUseResult())
 	}
@@ -1695,27 +1686,6 @@ func cutDescription(description string) string {
 	return strings.Clone(description[:cut])
 }
 
-// sendTarget is the subagent a SendMessage call's input, raw, sends to: its
-// `to`, matched exactly and a key written twice by its last value, where it
-// is a string naming an agent ([validClaudeAgent]); "" else, a send to no
-// subagent a reading reads.
-func sendTarget(input json.RawMessage) string {
-	if !wireObject(input) {
-		return ""
-	}
-	var wire struct {
-		To json.RawMessage `json:"to"`
-	}
-	if wireDecode(input, &wire) != nil {
-		return ""
-	}
-	to, err := wireRequiredString("to", wire.To)
-	if err != nil || !validClaudeAgent(to) {
-		return ""
-	}
-	return to
-}
-
 // agentAnswer is what a leg's result record's own toolUseResult, raw, says,
 // read by its exact keys and a key written twice by its last value: whether
 // an Agent or Task call's subagent completed (`status` "completed"), the
@@ -1925,47 +1895,4 @@ func (h *handedReader) Read(p []byte) (int, error) {
 	n, err := h.r.Read(p)
 	*h.handed += int64(n)
 	return n, err
-}
-
-// errNotOneText is a result's content that is neither a string nor one text
-// block ([resultText]).
-var errNotOneText = errors.New("not one text block")
-
-// resultText is the text a tool_result's content, raw, holds: a JSON string, or
-// a list of exactly one element, an object whose `type` is "text" and whose
-// `text` is a string, other keys passed over, each key matched exactly and a
-// key written twice read by its last value ([wireDecode]); false for every
-// other content, absent and null among it.
-//
-// THE LIST IS READ NO FURTHER THAN ITS SECOND ELEMENT ([eachElement]), so a
-// list a line long costs what its first two elements do.
-func resultText(content json.RawMessage) (string, bool) {
-	if len(content) > 0 && content[0] == '"' {
-		var text string
-		if err := wireDecode(content, &text); err != nil {
-			return "", false
-		}
-		return text, true
-	}
-	text, blocks := "", 0
-	err := eachElement(content, func(raw json.RawMessage, _ int) error {
-		blocks++
-		if blocks > 1 || !wireObject(raw) {
-			return errNotOneText
-		}
-		var block struct {
-			Type json.RawMessage `json:"type"`
-			Text json.RawMessage `json:"text"`
-		}
-		if err := wireDecode(raw, &block); err != nil {
-			return err
-		}
-		kind, err := wireRequiredString("type", block.Type)
-		if err != nil || kind != blockText {
-			return errNotOneText
-		}
-		text, err = wireRequiredString("text", block.Text)
-		return err
-	})
-	return text, err == nil && blocks == 1
 }

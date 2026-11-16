@@ -281,10 +281,12 @@ func (h *textHandback) write(p []byte) {
 var _ [sandbox.MaxBridgeOutputBytes - sandbox.HoldingsOpeningBytes]struct{}
 
 // threadResultText is a tool_result's text as the reading compares it with a
-// log's output: Bytes its decoded length; Opening the SHA-256 of its first
-// [sandbox.HoldingsOpeningBytes]; Whole the SHA-256 of all of it, where Bytes
-// is at most [sandbox.MaxBridgeOutputBytes], else zero, as a log keeps no
-// longer output whole to compare.
+// log's output ([threadCall.Text]): Bytes its decoded length, -1 where the
+// result's content holds no text ([resultText]); Opening the SHA-256 of its
+// first [sandbox.HoldingsOpeningBytes]; Whole the SHA-256 of all of it, where
+// Bytes is at most [sandbox.MaxBridgeOutputBytes], else zero, as a log keeps
+// no longer output whole to compare. A call holds it by value: a text of any
+// length costs a call these 72 bytes.
 type threadResultText struct {
 	Bytes          int64
 	Opening, Whole [sha256.Size]byte

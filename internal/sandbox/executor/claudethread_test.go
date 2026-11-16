@@ -1476,18 +1476,21 @@ func ctAllButUUID(l threadLine) string {
 	text, isText := m.Text()
 	fmt.Fprintf(&b, "message: text %q (%t), kinds %q; %v\n", text, isText, strings.Join(m.Kinds(), " "), err)
 	for _, c := range m.Calls() {
-		failed := "absent"
-		if c.IsError != nil {
-			failed = strconv.FormatBool(*c.IsError)
-		}
-		fmt.Fprintf(&b, "call %q: id %q, name %q, input %s, is_error %s, content %s\n", c.Kind, c.ID, c.Name,
-			ctRaw(c.Input), failed, ctRaw(c.Content))
+		ctCallFacts(&b, c)
 	}
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
 	fmt.Fprintf(&b, "toolUseResult: %s\n", ctRaw(l.ToolUseResult()))
 	ctFacts(&b, l, m)
 	return b.String()
+}
+
+// ctCallFacts writes to b everything a call hands out: its kind, its id, its
+// tool's name, the subagent it sends to, whether its result failed, and its
+// result's text as its length and digests.
+func ctCallFacts(b *strings.Builder, c threadCall) {
+	fmt.Fprintf(b, "call %q: id %q, name %q, sends to %q, failed %t, its result's text %d bytes, opening %x, "+
+		"whole %x\n", c.Kind, c.ID, c.Name, c.To, c.Failed, c.Text.Bytes, c.Text.Opening, c.Text.Whole)
 }
 
 // ctFacts writes to b everything [ctAllButUUID] prints after a line's own
@@ -1845,10 +1848,9 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 }
 
 // ctOutcome is how a reader reads record, the one line of a thread: where it
-// is a record, what every accessor reads of it ([ctAll]) but the values it
-// hands out raw, a call's input and a result's content and a record's own
-// toolUseResult, of which it prints what their readers read instead (the
-// target a call sends to, a result's text, what an answer says); where it is
+// is a record, what every accessor reads of it ([ctAll]) but the value it
+// hands out raw, a record's own toolUseResult, of which it prints what its
+// readers read instead (what an answer says); where it is
 // none, its fault, the type it names and its error. A line's place and size
 // are left out, so two lines that differ in nothing a reader reads print
 // alike.
@@ -1878,13 +1880,7 @@ func ctOutcome(t *testing.T, record string) string {
 	text, isText := m.Text()
 	fmt.Fprintf(&b, "message: text %q (%t), kinds %q; %v\n", text, isText, strings.Join(m.Kinds(), " "), err)
 	for _, c := range m.Calls() {
-		failed := "absent"
-		if c.IsError != nil {
-			failed = strconv.FormatBool(*c.IsError)
-		}
-		said, isSaid := resultText(c.Content)
-		fmt.Fprintf(&b, "call %q: id %q, name %q, is_error %s, sends to %q, its result's text %q (%t)\n", c.Kind,
-			c.ID, c.Name, failed, sendTarget(c.Input), said, isSaid)
+		ctCallFacts(&b, c)
 	}
 	kind, err := l.OriginKind()
 	fmt.Fprintf(&b, "origin: kind %q; %v\n", kind, err)
@@ -2123,10 +2119,10 @@ func TestAKeyWrittenTwiceIsReadWhollyByItsLast(t *testing.T) {
 // `\udXXX` escape where a text was cut inside a pair (an emoji at a truncation
 // point), and a byte that is no UTF-8 each read as U+FFFD, as encoding/json's
 // own decode reads them, wherever a line holds one: in a text the layer reads
-// (a brief's), in a value it hands out raw (a result's content, as written,
-// which its own decode then reads the same way), in a hook's record, and in a
-// key no reader reads. Each line reads whole. Refused, one such line would
-// cost a reader its whole reading of a thread its harness reads whole.
+// (a brief's, and a result's, whose length and digests are its reading's), in
+// a hook's record, in a value it hands out raw (a result's own output), and
+// in a key no reader reads. Each line reads whole. Refused, one such line
+// would cost a reader its whole reading of a thread its harness reads whole.
 //
 // Mutation: drop the option that reads them, and every line here is no
 // record.
@@ -2170,15 +2166,12 @@ func TestAStringClaudeCodeWroteBrokenReadsAsTheReplacementCharacter(t *testing.T
 		if result, ok := read(ctResult(ctUUID(4), ctUUID(5), ctReplace(t, ctResultBody, `"content":"b1"`,
 			`"content":`+tc.written), ctResultOwn)); ok {
 			m, err := result.Message()
-			var text string
 			switch {
 			case err != nil || len(m.Calls()) != 1:
 				t.Errorf("%s: a result holding it hands out the calls %+v, %v", name, m.Calls(), err)
-			case string(m.Calls()[0].Content) != tc.written:
-				t.Errorf("%s: a result holding it hands its content out as %q, want it as written", name,
-					m.Calls()[0].Content)
-			case wireDecode(m.Calls()[0].Content, &text) != nil || text != tc.text:
-				t.Errorf("%s: a result's content holding it reads as %q, want %q", name, text, tc.text)
+			case m.Calls()[0].Text != ltWhole(tc.text).Result:
+				t.Errorf("%s: a result's content holding it reads as the text %+v, want %q's %+v", name,
+					m.Calls()[0].Text, tc.text, ltWhole(tc.text).Result)
 			}
 		}
 		if note, ok := read(ctAttachment(ctUUID(6), ctUUID(7), ctReplace(t, ctBatchSystem,
@@ -2587,9 +2580,10 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 }
 
 // CALLS COME ONLY FROM A USER OR ASSISTANT MESSAGE: an assistant's tool_use
-// blocks and a user's tool_result blocks, each with its id and what it
-// carries raw (a call's input as written, a result's content, its is_error
-// where present), and nothing from any other record, an api-request-blob
+// blocks and a user's tool_result blocks, each with its id and what its
+// readers read of it (the subagent a call's input sends to, whether a result
+// failed, and a result's text as its length and digests, a result of no text
+// saying so), and nothing from any other record, an api-request-blob
 // repeating a result included. A failed call's result says so, as the resume's
 // result for a call it found unanswered and a killed command's do. A call
 // block in the other record, which the Messages API never writes, is a kind
@@ -2609,28 +2603,44 @@ func TestAHooksFiringIsNeverACallsID(t *testing.T) {
 // a call with no id; take either kind of call block in either record, and a
 // result in a model's message, or a call in a user's, is a call; read is_error
 // as false wherever it is present, and a failed call's result reads as a
-// success; hold only a message's first block to its type, and a bad block
-// after an accepted one reads as a block of no kind; name every record with
-// its type after an "a", and a model's reply is "a assistant record".
+// success; read a call's target off its input without the agent rule, and a
+// send to no agent sends to one; read a result of no text as an empty text,
+// and an image reads as a text of no bytes; hold only a message's first block
+// to its type, and a bad block after an accepted one reads as a block of no
+// kind; name every record with its type after an "a", and a model's reply is
+// "a assistant record".
 func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 	t.Parallel()
-	isFalse, isTrue := false, true
-	interrupted := "\"[Tool call interrupted: the session ended before this call's result was recorded, so its " +
-		"outcome is unknown. Check whether it took effect before relying on it or running it again.]\""
+	interrupted := "[Tool call interrupted: the session ended before this call's result was recorded, so its " +
+		"outcome is unknown. Check whether it took effect before relying on it or running it again.]"
+	text := func(s string) threadResultText { return ltWhole(s).Result }
+	none := threadResultText{Bytes: -1}
+	send := func(input string) string {
+		return `[{"type":"tool_use","id":"` + ctCall + `","name":"SendMessage","input":` + input + `}]`
+	}
 	for name, tc := range map[string]struct {
 		record string
 		calls  []threadCall
 	}{
 		"a model's call": {record: ctAssistant(ctUUID(3), ctUUID(4), ctUseContent), calls: []threadCall{
-			{Kind: blockToolUse, ID: ctCall, Name: "Bash", Input: []byte(ctUseInput)}}},
+			{Kind: blockToolUse, ID: ctCall, Name: "Bash"}}},
+		"a message sent to a subagent": {record: ctAssistant(ctUUID(3), ctUUID(4),
+			send(`{"to":"`+ctAgent+`","message":"continue"}`)), calls: []threadCall{
+			{Kind: blockToolUse, ID: ctCall, Name: "SendMessage", To: ctAgent}}},
+		"a message sent to no agent": {record: ctAssistant(ctUUID(3), ctUUID(4),
+			send(`{"to":"no agent","message":"continue"}`)), calls: []threadCall{
+			{Kind: blockToolUse, ID: ctCall, Name: "SendMessage"}}},
 		"its result": {record: ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), calls: []threadCall{
-			{Kind: blockToolResult, ID: ctCall, IsError: &isFalse, Content: []byte(`"b1"`)}}},
+			{Kind: blockToolResult, ID: ctCall, Text: text("b1")}}},
 		"an MCP tool's result, in blocks": {record: ctResult(ctUUID(9), ctUUID(10), ctMCPResult, ctMCPBlocks),
-			calls: []threadCall{{Kind: blockToolResult, ID: ctMCPCall, Content: []byte(ctMCPBlocks)}}},
+			calls: []threadCall{{Kind: blockToolResult, ID: ctMCPCall, Text: text("crewlet m1 done")}}},
+		"a result of no text": {record: ctResult(ctUUID(4), ctUUID(5), ctReplace(t, ctResultBody, `"content":"b1"`,
+			`"content":[{"type":"image","source":{"type":"base64","data":"AA=="}}]`), ctResultOwn),
+			calls: []threadCall{{Kind: blockToolResult, ID: ctCall, Text: none}}},
 		"the result a resume writes for a call it found unanswered": {record: ctInterrupted(ctUUID(4), ctUUID(5)),
-			calls: []threadCall{{Kind: blockToolResult, ID: ctCall, IsError: &isTrue, Content: []byte(interrupted)}}},
+			calls: []threadCall{{Kind: blockToolResult, ID: ctCall, Failed: true, Text: text(interrupted)}}},
 		"a killed command's result": {record: ctKilled(ctUUID(4), ctUUID(5)), calls: []threadCall{
-			{Kind: blockToolResult, ID: ctCall, IsError: &isTrue, Content: []byte(`"Exit code 137"`)}}},
+			{Kind: blockToolResult, ID: ctCall, Failed: true, Text: text("Exit code 137")}}},
 		"a model's text":                    {record: ctAssistant(ctUUID(2), ctUUID(3), `[{"type":"text","text":"batch 1."}]`)},
 		"a brief":                           {record: ctBrief(ctUUID(1))},
 		"a request blob repeating a result": {record: ctRequestBlob},
@@ -2648,10 +2658,7 @@ func TestCallsComeOnlyFromAUserOrAssistantMessage(t *testing.T) {
 			continue
 		}
 		for i, c := range calls {
-			want := tc.calls[i]
-			if c.Kind != want.Kind || c.ID != want.ID || c.Name != want.Name || !bytes.Equal(c.Input, want.Input) ||
-				!bytes.Equal(c.Content, want.Content) || (c.IsError == nil) != (want.IsError == nil) ||
-				(c.IsError != nil && *c.IsError != *want.IsError) {
+			if want := tc.calls[i]; c != want {
 				t.Errorf("%s hands out the call %+v, want %+v", name, c, want)
 			}
 		}

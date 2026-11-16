@@ -3756,12 +3756,11 @@ func TestNoIDTheCallIDRuleRefusesIsKept(t *testing.T) {
 	t.Parallel()
 	w := newHoldingsWalk(ctSession, hsAsk(hsLogged(hsSubCall, hsSubOut)), hsBounds())
 	for _, call := range []threadCall{
-		{Kind: blockToolUse, ID: "toolu_" + strings.Repeat("l", 1<<20), Name: claudeToolAgent,
-			Input: json.RawMessage(hsAgentInput)},
-		{Kind: blockToolUse, ID: "toolu test task", Name: claudeToolTask, Input: json.RawMessage(hsAgentInput)},
+		{Kind: blockToolUse, ID: "toolu_" + strings.Repeat("l", 1<<20), Name: claudeToolAgent},
+		{Kind: blockToolUse, ID: "toolu test task", Name: claudeToolTask},
 		{Kind: blockToolUse, ID: strings.Repeat("s", sandbox.MaxBridgeCallIDBytes+1), Name: claudeToolSendMessage,
-			Input: json.RawMessage(hsSendInput)},
-		{Kind: blockToolUse, ID: hsStarted, Name: claudeToolAgent, Input: json.RawMessage(hsAgentInput)},
+			To: sendTarget(json.RawMessage(hsSendInput))},
+		{Kind: blockToolUse, ID: hsStarted, Name: claudeToolAgent},
 	} {
 		if err := w.leg(call, 0); err != nil {
 			t.Fatalf("filing a call of %s: %v", call.Name, err)

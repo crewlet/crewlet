@@ -78,11 +78,12 @@ import (
 //     but a call's, through [threadMessage.Calls], and an attachment's
 //     `toolUseID` leaves it only as a key ([threadLine.AttachmentToolUseID]),
 //     since a PostToolUse hook's firing carries the id of the call it
-//     followed. An id written inside a
-//     record's text (a task notification's `<tool-use-id>`, a tool's output,
-//     a call's input) is bytes the layer hands out raw, in a line's Raw, a
-//     message's Text, a call's Input and Content and a record's
-//     ToolUseResult: its reader's to parse, and to hold to a rule of its own.
+//     followed. An id written inside a record's text (a task notification's
+//     `<tool-use-id>`, a tool's output, a call's input) leaves it as bytes
+//     in a line's Raw, a message's Text and a record's ToolUseResult, its
+//     reader's to parse and to hold to a rule of its own, or not at all: of a
+//     call's input and a result's text the layer hands out only the facts it
+//     reads of them ([threadCall]).
 //
 // What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
 // as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
@@ -551,15 +552,18 @@ func (e *threadLineError) Unwrap() error { return e.Err }
 // line's one decode.
 //
 // WHAT IT HANDS OUT RAW IS VALID UNTIL THE READER'S NEXT [threadReader.Next]:
-// the line's Raw, a call's Input and Content, and ToolUseResult, as a refused line's Raw is ([threadLineError]). A reader that
-// keeps any of them past that copies it, since the layer may hand out a
-// line's own bytes rather than a copy of them.
+// the line's Raw and ToolUseResult, as a refused line's Raw is
+// ([threadLineError]). A reader that keeps either past that copies it, since
+// the layer may hand out a line's own bytes rather than a copy of them.
 //
-// AND IT HANDS THEM OUT RAW ON PURPOSE: each has one reader, which holds it to
-// the shape that reader reads (a SendMessage's `input.to`, a result's text, an
-// agent's answer) under the layer's own options ([threadDecoding]) and walk
-// ([eachElement]), so a release that reshapes one costs that reader alone, as
-// a key one reader reads does.
+// AND IT HANDS ToolUseResult OUT RAW ON PURPOSE: its one reader holds it to
+// the shape that reader reads (an agent's answer) under the layer's own
+// options ([threadDecoding]), so a release that reshapes it costs that reader
+// alone, as a key one reader reads does. What a call's input and a result's
+// text are read for (the subagent a SendMessage sends to, a result's length
+// and digests) the layer reads itself, by its readers' own rules, each shape
+// it does not read the answer "none" rather than an error, so a call hands
+// out facts of a fixed size, never bytes as long as a line ([threadCall]).
 //
 // A KEY ONLY ONE READER READS IS HELD TO ITS TYPE IN THAT READER'S ACCESSOR,
 // never in the head: a release that reshapes it is that accessor's error and
@@ -1308,6 +1312,12 @@ type threadMessage struct {
 
 // threadCall is one call block of a message: a model's call, or the result it
 // was answered with.
+//
+// IT HOLDS FACTS, NEVER A CALL'S BYTES: a call's input and a result's content
+// are each as long as whatever wrote them made them, and what a reader asks of
+// them is the subagent a SendMessage sends to and the text a result holds as a
+// log's output is compared with, each read here, by value, so a call costs the
+// same whatever its input or its result held.
 type threadCall struct {
 	// Kind is "tool_use" or "tool_result".
 	Kind string
@@ -1315,14 +1325,17 @@ type threadCall struct {
 	ID string
 	// Name is the tool a tool_use called.
 	Name string
-	// Input is a tool_use's `input`, raw, valid until the reader's next Next
-	// ([threadLine]).
-	Input json.RawMessage
-	// IsError is a tool_result's `is_error`; nil where absent.
-	IsError *bool
-	// Content is a tool_result's `content`, raw: a string or a list of blocks.
-	// Valid until the reader's next Next ([threadLine]).
-	Content json.RawMessage
+	// To is the subagent a tool_use's `input` sends to ([sendTarget]): its
+	// `to`, where that is a string naming an agent; "" else, and on a
+	// tool_result.
+	To string
+	// Failed is whether a tool_result's `is_error` is true; false where it is
+	// absent, and on a tool_use.
+	Failed bool
+	// Text is a tool_result's text ([resultText]), as the reading compares it
+	// with a log's output ([threadResultText]); its Bytes -1 where its content
+	// holds no text. The zero value on a tool_use.
+	Text threadResultText
 }
 
 // The content blocks this layer names: the blocks that are calls, and those
@@ -1501,21 +1514,100 @@ func contentBlock(raw json.RawMessage) (threadCall, json.RawMessage, error) {
 		if c.Name, err = wireRequiredString("name", b.Name); err != nil {
 			return threadCall{}, nil, err
 		}
-		c.Input = b.Input
+		c.To = sendTarget(b.Input)
 	case blockToolResult:
 		if c.ID, err = callID("tool_use_id", b.ToolUseID); err != nil {
 			return threadCall{}, nil, err
 		}
 		if b.IsError != nil {
-			var failed bool
-			if failed, err = wireBool("is_error", b.IsError); err != nil {
+			if c.Failed, err = wireBool("is_error", b.IsError); err != nil {
 				return threadCall{}, nil, err
 			}
-			c.IsError = &failed
 		}
-		c.Content = b.Content
+		c.Text = resultTextOf(b.Content)
 	}
 	return c, b.Text, nil
+}
+
+// sendTarget is the subagent a SendMessage call's input, raw, sends to: its
+// `to`, matched exactly and a key written twice by its last value, where it
+// is a string naming an agent ([validClaudeAgent]); "" else, a send to no
+// subagent a reading reads.
+func sendTarget(input json.RawMessage) string {
+	if !wireObject(input) {
+		return ""
+	}
+	var wire struct {
+		To json.RawMessage `json:"to"`
+	}
+	if wireDecode(input, &wire) != nil {
+		return ""
+	}
+	to, err := wireRequiredString("to", wire.To)
+	if err != nil || !validClaudeAgent(to) {
+		return ""
+	}
+	return to
+}
+
+// resultTextOf is a tool_result's content, raw, as the reading compares it
+// with a log's output: its text ([resultText]) read as it will stream
+// ([textResult]), a piece at a time, into its length and its digests; Bytes
+// -1 where the content holds no text.
+func resultTextOf(content json.RawMessage) threadResultText {
+	text, ok := resultText(content)
+	if !ok {
+		return threadResultText{Bytes: -1}
+	}
+	var read textResult
+	cut := textCut{text: text}
+	for p := cut.next(); p != nil; p = cut.next() {
+		read.write(p)
+	}
+	return read.sum()
+}
+
+// errNotOneText is a result's content that is neither a string nor one text
+// block ([resultText]).
+var errNotOneText = errors.New("not one text block")
+
+// resultText is the text a tool_result's content, raw, holds: a JSON string, or
+// a list of exactly one element, an object whose `type` is "text" and whose
+// `text` is a string, other keys passed over, each key matched exactly and a
+// key written twice read by its last value ([wireDecode]); false for every
+// other content, absent and null among it.
+//
+// THE LIST IS READ NO FURTHER THAN ITS SECOND ELEMENT ([eachElement]), so a
+// list a line long costs what its first two elements do.
+func resultText(content json.RawMessage) (string, bool) {
+	if len(content) > 0 && content[0] == '"' {
+		var text string
+		if err := wireDecode(content, &text); err != nil {
+			return "", false
+		}
+		return text, true
+	}
+	text, blocks := "", 0
+	err := eachElement(content, func(raw json.RawMessage, _ int) error {
+		blocks++
+		if blocks > 1 || !wireObject(raw) {
+			return errNotOneText
+		}
+		var block struct {
+			Type json.RawMessage `json:"type"`
+			Text json.RawMessage `json:"text"`
+		}
+		if err := wireDecode(raw, &block); err != nil {
+			return err
+		}
+		kind, err := wireRequiredString("type", block.Type)
+		if err != nil || kind != blockText {
+			return errNotOneText
+		}
+		text, err = wireRequiredString("text", block.Text)
+		return err
+	})
+	return text, err == nil && blocks == 1
 }
 
 // callID is raw, a call block's key named key, held to a string that names a
