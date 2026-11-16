@@ -198,6 +198,7 @@ func TestATagFileReadsBackWhatItHolds(t *testing.T) {
 
 	t.Run("twelve tags of one commit", func(t *testing.T) {
 		t.Parallel()
+		r := rand.New(rand.NewPCG(7, 12))
 		commit := randomOID(r)
 		var tags []tagInsert
 		for i := range 12 {
@@ -218,6 +219,7 @@ func TestATagFileReadsBackWhatItHolds(t *testing.T) {
 
 	t.Run("not ours", func(t *testing.T) {
 		t.Parallel()
+		r := rand.New(rand.NewPCG(7, 13))
 		commit := randomOID(r)
 		tags := []tagInsert{
 			testTag("a", commit, commit, typeCommit, typeCommit, 5),
