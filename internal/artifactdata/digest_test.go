@@ -152,6 +152,8 @@ func TestEveryHistoryRowCarriesTheDigestAfterIt(t *testing.T) {
 		if verdict != recordseal.Verified {
 			t.Fatalf("record %d: %s", seq, verdict)
 		}
+		// AS THE FRAMEWORK'S LOOP HANDS IT ([statelog.AppliedInstant]).
+		storedAt = statelog.AppliedInstant(storedAt)
 		replay.applyBody(spec, seq, body, storedAt)
 		computed, _ := replay.digestFromRows(sheet)
 		var recorded []byte

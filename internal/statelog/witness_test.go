@@ -60,11 +60,16 @@ func (h *applyHarness) witnessedRunner(w statelog.Witness) {
 // offerFramed queues bytes exactly as given, which is what a writer that is not
 // this fleet puts on the broker.
 func (f *probeFetch) offerFramed(seq uint64, framed []byte) {
+	f.offerFramedStored(seq, probeStoredAt(seq), framed)
+}
+
+// offerFramedStored is [probeFetch.offerFramed] with the broker instant named.
+func (f *probeFetch) offerFramedStored(seq uint64, storedAt time.Time, framed []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queue = append(f.queue, statelog.Message{
 		Seq:      seq,
-		StoredAt: time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(seq) * time.Second),
+		StoredAt: storedAt,
 		Payload:  framed,
 		Ack: func() error {
 			f.mu.Lock()

@@ -761,17 +761,14 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 	}
 }
 
-// fewestAllocations is how many heap objects read allocates, the fewest of
-// many calls after one that warms it up, GOMAXPROCS one while it measures, as
-// [allocationsOf]'s is: many, since a decode takes its decoder from a pool,
-// which under the race detector drops a quarter of what is put back, so a
-// call can pay for a decoder afresh; the fewest of twenty does not.
+// fewestAllocations is the fewest heap objects of fewestCalls calls of read,
+// after a warm-up, at GOMAXPROCS one.
 func fewestAllocations(read func()) uint64 {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	read()
 	fewest := uint64(math.MaxUint64)
 	var before, after runtime.MemStats
-	for range 20 {
+	for range fewestCalls {
 		runtime.ReadMemStats(&before)
 		read()
 		runtime.ReadMemStats(&after)
@@ -779,6 +776,11 @@ func fewestAllocations(read func()) uint64 {
 	}
 	return fewest
 }
+
+// fewestCalls: under -race sync.Pool drops a quarter of puts and a decode makes
+// about five pool round trips, so one call in four costs only its own objects;
+// the fewest of 200 misses that one run in 10^23 (of 20, one in 250).
+const fewestCalls = 200
 
 // A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: a line whose JSON fails
 // before any whole value (a record a later write tore into, a line of white
@@ -1377,8 +1379,8 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // batch's reply, the calls that batch was split into among it, when it was
 // written, whether it is meta, the reply it names as its results' source, the
 // key of the call its attachment followed, whether its message says
-// anything, and whether a resume keeps it as an attachment of its shape, each
-// beside the error it answered. A
+// anything, whether a resume keeps it as an attachment of its shape, and the
+// release that wrote it, each beside the error it answered. A
 // raw value it hands out is printed by [ctRaw], so an absent one and a null
 // one never read alike.
 func ctAll(l threadLine) string {
@@ -1471,6 +1473,8 @@ func ctAllButUUID(l threadLine) string {
 	fmt.Fprintf(&b, "says text %t, anything %t\n", saysText, saysAny)
 	formed, err := l.AttachmentWellFormed()
 	fmt.Fprintf(&b, "kept as well formed: %t; %v\n", formed, err)
+	release, err := l.Version()
+	fmt.Fprintf(&b, "written by %q; %v\n", release, err)
 	return b.String()
 }
 
@@ -1567,6 +1571,12 @@ func TestAKeyIsReadExactlyAsWritten(t *testing.T) {
 			to: `"Uuid":"` + ctUUID(9) + `","uuid":"` + ctUUID(1) + `"`},
 		"Uuid alone": {record: ctDequeue, from: `"type":"queue-operation"`,
 			to: `"type":"queue-operation","Uuid":"` + ctUUID(9) + `"`},
+		"a version, then Version": {record: brief, from: `"version":"2.1.310"`,
+			to: `"version":"2.1.310","Version":"2.1.118"`},
+		"Version alone": {record: ctDequeue, from: `"type":"queue-operation"`,
+			to: `"type":"queue-operation","Version":"2.1.310"`},
+		"a version written twice": {record: brief, from: `"version":"2.1.310"`,
+			to: `"version":"2.1.118","version":"2.1.310"`},
 		// The keys only one reader reads.
 		"a message, then Message": {record: result, from: `"uuid":"` + ctUUID(5) + `"`,
 			to: `"Message":{"role":"user","content":[{"tool_use_id":"` + other + `","type":"tool_result",` +
@@ -1929,6 +1939,58 @@ func TestARecordsOwnUUIDIsHandedOverAsWritten(t *testing.T) {
 	for _, line := range got.lines {
 		if uuid, err := line.UUID(); uuid != "" || err != nil {
 			t.Errorf("line %d, a %s, carries no uuid and reads one as %q, %v", line.N, line.Head.Type, uuid, err)
+		}
+	}
+}
+
+// A RECORD NAMES THE RELEASE THAT WROTE IT, by its accessor: a chained record's
+// `version` as written, whatever its kind, a release the reading's floor holds
+// or not and a string that is no release alike, since the layer holds it to a
+// string alone and its reader holds it to a rule of its own; "" where the key
+// is absent, as on most of the harness's bookkeeping. A `version` that is no
+// string (a number, null, an object) is refused by Version alone: the line
+// still reads, with its head, its uuid and its message's calls as written, so
+// a release that reshaped it would cost the one reader that reads it.
+//
+// Mutation: hand out no release, and every record's reads as ""; read it off
+// the head, and a record whose `version` is no string is no record at all;
+// take a non-string for none, and a reshaped writer reads as one that named
+// none, which its reader cannot tell from a record that carries no key.
+func TestALineHandsTheReleaseThatWroteIt(t *testing.T) {
+	t.Parallel()
+	release := `"version":"2.1.310"`
+	reply := ctAssistant(ctUUID(3), ctUUID(4), ctUseContent)
+	for name, tc := range map[string]struct {
+		record, release string
+	}{
+		"the brief":                 {record: ctBrief(ctUUID(1)), release: "2.1.310"},
+		"a model's call":            {record: reply, release: "2.1.310"},
+		"a hook's record":           {record: ctAttachment(ctUUID(5), ctUUID(6), ctBatchSuccess, ""), release: "2.1.310"},
+		"a Stop's summary":          {record: ctSummary(ctUUID(15), ctUUID(16)), release: "2.1.310"},
+		"a subagent's prompt":       {record: ctSubagentPrompt(ctUUID(3)), release: "2.1.310"},
+		"a skill's hook of 2.1.118": {record: ctSkillHook(ctUUID(5), ctUUID(6)), release: "2.1.118"},
+		"a span of 2.1.322":         {record: ctSpan(ctUUID(3), ctUUID(4), ""), release: "2.1.322"},
+		"a reply naming no release": {record: ctReplace(t, reply, ","+release, "")},
+		"a reply of no release's shape": {record: ctReplace(t, reply, release, `"version":"two"`),
+			release: "two"},
+		"a request's shape, bookkeeping": {record: ctRequestShape, release: "2.1.310"},
+		"a checkpoint, bookkeeping":      {record: ctLastPrompt},
+	} {
+		if got, err := ctLine(t, tc.record).Version(); got != tc.release || err != nil {
+			t.Errorf("%s names its writer as %q, %v; want %q", name, got, err, tc.release)
+		}
+	}
+	for name, value := range map[string]string{"a number": `2.1`, "null": `null`, "an object": `{"release":"2.1.310"}`} {
+		line := ctLine(t, ctReplace(t, reply, release, `"version":`+value))
+		if got, err := line.Version(); err == nil {
+			t.Errorf("a reply whose version is %s names its writer as %q, want an error", name, got)
+		}
+		uuid, err := line.UUID()
+		m, merr := line.Message()
+		if h := line.Head; h.Type != recordAssistant || !h.Chained() || !h.Main() || uuid != ctUUID(4) || err != nil ||
+			merr != nil || len(m.Calls()) != 1 {
+			t.Errorf("a reply whose version is %s reads with the head %+v, the uuid %q (%v) and the calls %+v (%v)",
+				name, h, uuid, err, m.Calls(), merr)
 		}
 	}
 }

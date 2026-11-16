@@ -299,8 +299,12 @@ type buildOpts struct {
 	// launcher is the executor's launch seam. Nil is a [playLauncher] of
 	// the fixture's own, which records the launch and starts nothing.
 	launcher runner.AgentLauncher
-	resume   *runner.Resume
-	pub      queue.Publisher
+	// reads is the reading of what a cut-off session holds that a relaunch's
+	// launcher answers ([readingLauncher]), where a case's rig builds that
+	// launcher itself ([lostRelaunchWith]); nil reads none.
+	reads  *reading
+	resume *runner.Resume
+	pub    queue.Publisher
 	// reviewChain overrides the reviewer's provider keys (`llm_review`), so
 	// a test can give the phase a real fallback chain rather than the
 	// single key the fixture's seat runs it on.

@@ -322,12 +322,15 @@ func (r *Runner) OpenCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.
 
 // CheckCarry answers whether archive — a session packed in ANOTHER box — can
 // be continued in box, asked of the box before the run is started there and
-// before its brief is written: the box's harness's release, read in the box with
+// before its brief is chosen (its briefs are written before the box is
+// acquired): the box's harness's release, read in the box with
 // one login-shell exec of its `--version`, the box's own bin directory first
 // on its PATH as the run's wrapper puts it ([withBoxBin]), held against the
 // harness that wrote the session, the archive's format and the harness's own floors
-// ([carrier.Continues]). The release it read is returned either way, for the
-// run's record.
+// ([carrier.Continues]). The release it read is returned either way: the
+// launch hands a brief told by a reading of what the session holds only where
+// it is exactly the release that reading was read for, the writer's
+// ([sandbox.ExactTelling]).
 //
 // THREE ANSWERS, as a lease's are: it can, it cannot (and why), and the box
 // could not be asked — an error, never read as either.
