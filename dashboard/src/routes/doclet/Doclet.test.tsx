@@ -510,7 +510,8 @@ function detailOf(id: string, title: string, body: string, history: unknown[] = 
 }
 
 // THE NEWEST CHANGE LEADS, named by the seat its writer wrote as; the feed
-// beside it holds the rest under the COMPANY's days.
+// beside it holds the rest under the COMPANY's days. Its title is the one way
+// to open the page, under its space's name rather than a bare key.
 test("the newest change leads in its own tile, and the feed holds the rest", async () => {
   landing({
     page_activity: {
@@ -534,11 +535,15 @@ test("the newest change leads in its own tile, and the feed holds the rest", asy
   expect(within(latest).queryByText("jane")).toBeNull();
   // 08:00 on the 25th in Tokyo: today, though it is the 24th in UTC.
   expect(latest.querySelector(".knowledge-latest-who time")?.textContent).toBe("Today 08:00");
-  expect(
-    within(latest)
-      .getByRole("link", { name: /Open page/ })
-      .getAttribute("href"),
-  ).toBe("#/doclet/pages/p-1");
+  const opens = within(latest)
+    .getAllByRole("link")
+    .filter((a) => a.getAttribute("href") === "#/doclet/pages/p-1");
+  expect(opens.map((a) => a.textContent)).toEqual(["Provisioner runbook"]);
+  expect(within(latest).queryByRole("link", { name: /Open page/ })).toBeNull();
+  // THE SPACE BY ITS NAME once the spaces answer, never a bare key beside nothing.
+  await waitFor(() =>
+    expect(latest.querySelector(".knowledge-latest-where")?.textContent).toBe("Engineering"),
+  );
 
   const feed = screen.getByRole("region", { name: /Recent activity/ });
   expect(
@@ -610,9 +615,14 @@ test("recent activity lists each page once, never the featured page, and a lone 
   expect(feed.textContent).not.toContain("Settlement algorithm");
 });
 
-// OPEN TO READ: what each save said, the lines the newest save changed as the
-// page's History draws them, and the page's opening, its title said once.
-test("the newest saves are open to read: each note, the lines changed, and the opening", async () => {
+const TIES =
+  "# Settlement algorithm\n\nNets every balance first, as the [ledger](#/doclet/pages/0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d) records it.\n\n## Ties\n\n";
+
+// SUMMED UP FIRST, THEN READ AS THE PAGE READS: the save's note, who, when
+// and how much; then its change rendered, the changed words marked in place,
+// never the paragraph twice, never its markdown or a link's target, and never
+// the page's opening again. The page's earlier saves follow in the same form.
+test("the newest save is summed up first, and its change is drawn as the page reads", async () => {
   const asked = landing({
     page_activity: {
       changes: [
@@ -631,10 +641,15 @@ test("the newest saves are open to read: each note, the lines changed, and the o
         ? detailOf(
             "p-1",
             "Settlement algorithm",
-            "# Settlement algorithm\n\nNets every balance first.\n\n## Ties\n\nEqual balances are ordered by join order.\n",
+            `${TIES}Equal balances are ordered by join order.\n`,
             [
               { version: 3, author: "swe", created_at: "2026-09-24T23:00:00Z" },
-              { version: 2, author: "swe", created_at: "2026-09-24T22:10:00Z" },
+              {
+                version: 2,
+                author: "swe",
+                message: "Adds a worked example",
+                created_at: "2026-09-24T22:10:00Z",
+              },
               { version: 1, author: "swe", created_at: "2026-09-20T09:00:00Z" },
             ],
           )
@@ -643,40 +658,57 @@ test("the newest saves are open to read: each note, the lines changed, and the o
       page_id: "p-1",
       version: params.version,
       title: "Settlement algorithm",
-      body: "# Settlement algorithm\n\nNets every balance first.\n\n## Ties\n\nEqual balances are paid in any order.\n",
+      body: `${TIES}Equal balances are paid in any order.\n`,
       created_at: "2026-09-24T22:10:00Z",
     }),
   });
   const latest = await screen.findByRole("article", { name: "Newest change" });
-  await waitFor(() =>
-    expect(within(latest).queryByRole("group", { name: "Latest change" })).not.toBeNull(),
+  const diff = await within(latest).findByRole("group", { name: "What this save changed" });
+  expect(latest.querySelector(".knowledge-latest-note")?.textContent).toBe(
+    "Breaks ties by join order",
   );
-  expect(latest.textContent).toContain("Crewlet-SWE saved it twice");
-  const notes = [...latest.querySelectorAll(".knowledge-latest-note")].map((n) => n.textContent);
-  expect(notes).toEqual(["08:00Breaks ties by join order", "07:10Adds a worked example"]);
-  // BY THE WORD READ IN PLACE OF THE MARK, which is what a screen reader hears.
-  const lines = (word: "Added" | "Removed") =>
-    [...latest.querySelectorAll<HTMLElement>(".diff-view__line")]
-      .filter((row) => within(row).queryByText(word))
-      .map((row) => row.querySelector(".diff-view__text")?.textContent);
-  expect(lines("Removed")).toEqual(["Equal balances are paid in any order."]);
-  expect(lines("Added")).toEqual(["Equal balances are ordered by join order."]);
-  // THE PAGE'S OWN BODY IS THE SAVE'S, so only the revision before it is read.
-  expect(asked.filter((a) => a.what === "page_revision").map((a) => a.params.version)).toEqual([2]);
-  const opening = latest.querySelector(".knowledge-latest-opening");
-  expect(opening?.textContent).toContain("Nets every balance first.");
-  expect(latest.textContent?.match(/Settlement algorithm/g)).toHaveLength(1);
+  const who = latest.querySelector(".knowledge-latest-who")?.textContent ?? "";
+  expect(who).toContain("Crewlet-SWE saved it");
+  expect(who).toContain("3 words added, 3 removed");
+  // ONLY THE CHANGED WORDS, each read with what happened to it.
+  expect([...diff.querySelectorAll("del")].map((d) => d.textContent)).toEqual([
+    "removed: paid in any",
+  ]);
+  expect([...diff.querySelectorAll("ins")].map((i) => i.textContent)).toEqual([
+    "added: ordered by join",
+  ]);
+  expect(latest.textContent?.match(/Equal balances are/g)).toHaveLength(1);
+  // THE HEADING THE CHANGE SITS UNDER says where it is; the rest is counted.
+  expect(diff.textContent).toContain("Ties");
+  expect(diff.textContent).toContain("1 unchanged paragraph");
+  expect(diff.textContent).not.toContain("#");
+  expect(latest.textContent).not.toContain("#/doclet/pages/");
+  expect(latest.querySelector(".knowledge-latest-opening")).toBeNull();
+  // THE PAGE'S OWN BODY IS THE SAVE'S, so only older revisions are read.
+  expect(
+    [
+      ...new Set(asked.filter((a) => a.what === "page_revision").map((a) => a.params.version)),
+    ].sort(),
+  ).toEqual([1, 2]);
+  const earlier = within(latest).getByRole("region", { name: "Earlier saves" });
+  expect(
+    [...earlier.querySelectorAll(".knowledge-latest-save-note")].map((n) => n.textContent),
+  ).toEqual(["Adds a worked example", "Wrote the page"]);
+  expect(earlier.textContent).toContain("No words changed");
   // THE TWO SAVES ARE ONE ROW, and it leads: the feed holds only the new page.
   const feed = screen.getByRole("region", { name: /Recent activity/ });
   expect(within(feed).getAllByRole("listitem")).toHaveLength(1);
   expect(feed.textContent).not.toContain("Settlement algorithm");
 });
 
-// A PREVIEW SAYS IT IS ONE: a save that changed more than the tile shows
-// counts the rest and links the whole save in the page's History.
-test("a long save's lines are a preview that counts the rest and opens the save", async () => {
-  const before = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
-  const after = before.replace(/line (\d+)/g, "LINE $1");
+// A LONG CHANGE IS FOLDED behind "Show the change", the summary above it
+// saying how big it is; opened, it shows the first changed blocks and points
+// at the whole save in the page's History for the rest.
+test("a long change is folded behind Show the change, and past the cap points at the whole save", async () => {
+  const before = Array.from({ length: 12 }, (_, i) => `Step ${i} runs on the old host.`).join(
+    "\n\n",
+  );
+  const after = before.replace(/old host/g, "new host");
   landing({
     page_activity: { changes: [written("c-1", "2026-09-24T23:00:00Z")] },
     page: detailOf("p-1", "Settlement algorithm", after, [
@@ -686,21 +718,20 @@ test("a long save's lines are a preview that counts the rest and opens the save"
     page_revision: { page_id: "p-1", version: 4, title: "Settlement algorithm", body: before },
   });
   const latest = await screen.findByRole("article", { name: "Newest change" });
-  await waitFor(() =>
-    expect(within(latest).queryByRole("group", { name: "Latest change" })).not.toBeNull(),
-  );
-  expect(latest.querySelectorAll(".diff-view__line")).toHaveLength(6);
-  // TWENTY-FOUR CHANGED LINES, twelve out and twelve in, and six drawn.
-  expect(latest.textContent).toContain("18 more changed lines in this save");
-  expect(within(latest).getByRole("link", { name: "this save" }).getAttribute("href")).toBe(
+  await waitFor(() => expect(latest.textContent).toContain("12 words added, 12 removed"));
+  expect(within(latest).queryByRole("group", { name: "What this save changed" })).toBeNull();
+  fireEvent.click(within(latest).getByRole("button", { name: "Show the change" }));
+  const diff = await within(latest).findByRole("group", { name: "What this save changed" });
+  expect(diff.querySelectorAll("ins")).toHaveLength(8);
+  expect(latest.textContent).toContain("4 more changes in the whole save.");
+  expect(within(latest).getByRole("link", { name: "the whole save" }).getAttribute("href")).toBe(
     "#/doclet/pages/p-1?version=5",
   );
 });
 
-// A LONG PAGE IS COMPARED, NEVER REPLACED WHOLE: past 2,000 lines the design
-// system's line diff answers every line removed and re-added, and the tile
-// said a typo fixed on line 1,800 removed the page's first six lines.
-test("a save to a long page previews the line it changed, never the page's first lines", async () => {
+// A LONG PAGE IS COMPARED, NEVER REPLACED WHOLE, and a save that touched one
+// item of it shows that item, with the unchanged stretch before it counted.
+test("a save to a long page shows the item it changed, never the page's first lines", async () => {
   const before = Array.from({ length: 2_500 }, (_, i) => `- step ${i}`);
   const after = before.map((line, i) => (i === 1_799 ? "- step 1799, fixed" : line));
   landing({
@@ -712,24 +743,21 @@ test("a save to a long page previews the line it changed, never the page's first
     page_revision: { page_id: "p-1", version: 4, title: "Runbook", body: before.join("\n") },
   });
   const latest = await screen.findByRole("article", { name: "Newest change" });
-  const diff = await within(latest).findByRole("group", { name: "Latest change" });
-  expect(
-    [...diff.querySelectorAll<HTMLElement>(".diff-view__line")].map((row) => [
-      row.dataset.kind,
-      row.querySelector(".diff-view__text")?.textContent,
-    ]),
-  ).toEqual([
-    ["remove", "- step 1799"],
-    ["add", "- step 1799, fixed"],
-  ]);
-  expect(latest.textContent).not.toContain("more changed line");
+  const diff = await within(latest).findByRole("group", { name: "What this save changed" });
+  expect(diff.querySelector(".crewlet-document-diff__skip")?.textContent).toBe(
+    "1,799 unchanged paragraphs",
+  );
+  expect(diff.querySelector(".crewlet-document-diff__block--changed")?.textContent).toBe(
+    "step 1799added: , fixed",
+  );
+  expect(diff.textContent).not.toContain("step 0");
+  expect(latest.textContent).not.toContain("more change");
 });
 
-// A COMPARISON NOT MADE IS SAID: a preview of it would list unchanged lines
-// as removed, so the tile says the save was not compared and links it.
-test("a save the line diff did not compare says so and opens the save", async () => {
-  const before = Array.from({ length: 2_001 }, (_, i) => `old ${i}`).join("\n");
-  const after = Array.from({ length: 2_001 }, (_, i) => `new ${i}`).join("\n");
+// A COMPARISON NOT MADE IS SAID, with the way to the save, and no size.
+test("a save too large to compare says so and opens the save", async () => {
+  const before = Array.from({ length: 2_001 }, (_, i) => `old ${i}`).join("\n\n");
+  const after = Array.from({ length: 2_001 }, (_, i) => `new ${i}`).join("\n\n");
   landing({
     page_activity: { changes: [written("c-1", "2026-09-24T23:00:00Z")] },
     page: detailOf("p-1", "Runbook", after, [
@@ -741,19 +769,19 @@ test("a save the line diff did not compare says so and opens the save", async ()
   const latest = await screen.findByRole("article", { name: "Newest change" });
   await waitFor(() =>
     expect(latest.textContent).toContain(
-      "The save was not compared line by line: more than 4,000 lines were removed or added. Open this save to read it.",
+      "This save is too large to compare here: more than 4,000 blocks were removed or added. Open the whole save to read it.",
     ),
   );
-  expect(within(latest).queryByRole("group", { name: "Latest change" })).toBeNull();
-  expect(latest.querySelector(".diff-view__line")).toBeNull();
-  expect(within(latest).getByRole("link", { name: "this save" }).getAttribute("href")).toBe(
+  expect(within(latest).queryByRole("group", { name: "What this save changed" })).toBeNull();
+  expect(within(latest).getByRole("link", { name: "the whole save" }).getAttribute("href")).toBe(
     "#/doclet/pages/p-1?version=5",
   );
+  expect(latest.textContent).not.toContain("words added");
 });
 
 // A DIFF IS OF ONE PAIR OF VERSIONS: a read keeps its last answer while the
-// next one is asked, so an answer for another version is never diffed.
-test("a revision answered for another version is not diffed against the save", async () => {
+// next one is asked, so an answer for another version is never compared.
+test("a revision answered for another version is not compared with the save", async () => {
   landing({
     page_activity: { changes: [written("c-1", "2026-09-24T23:00:00Z")] },
     page: detailOf("p-1", "Settlement algorithm", "Equal balances are ordered by join order.", [
@@ -763,20 +791,50 @@ test("a revision answered for another version is not diffed against the save", a
     page_revision: { page_id: "p-1", version: 3, title: "Settlement algorithm", body: "Older." },
   });
   const latest = await screen.findByRole("article", { name: "Newest change" });
-  await waitFor(() => expect(latest.querySelector(".knowledge-latest-opening")).not.toBeNull());
-  expect(within(latest).queryByRole("group", { name: "Latest change" })).toBeNull();
+  await waitFor(() => expect(within(latest).getByText("Crewlet-SWE")).toBeTruthy());
+  expect(within(latest).queryByRole("group", { name: "What this save changed" })).toBeNull();
+  expect(latest.textContent).not.toContain("words added");
 });
 
-// A NEW PAGE leads with what it says: no note to repeat its title or its
-// first line, and its opening under it.
-test("a new page leads with its opening, and no note repeats its title", async () => {
+// UNDER A COMMENT, the page's own newest saves follow in the same form.
+test("a comment leads with its words, and the page's recent saves follow", async () => {
+  landing({
+    page_activity: {
+      changes: [
+        written("c-1", "2026-09-24T23:00:00Z", { kind: "comment", excerpt: "Can we ship it?" }),
+      ],
+    },
+    page: detailOf("p-1", "Settlement algorithm", "Equal balances are ordered by join order.", [
+      { version: 2, author: "swe", message: "Orders ties", created_at: "2026-09-24T22:00:00Z" },
+      { version: 1, author: "swe", created_at: "2026-09-20T09:00:00Z" },
+    ]),
+    page_revision: (params: Record<string, unknown>) => ({
+      page_id: "p-1",
+      version: params.version,
+      title: "Settlement algorithm",
+      body: "Equal balances are paid in any order.",
+    }),
+  });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  const recent = await within(latest).findByRole("region", { name: "Recent saves" });
+  expect(latest.querySelector(".knowledge-latest-note")?.textContent).toBe("“Can we ship it?”");
+  expect(within(latest).queryByRole("group", { name: "What this save changed" })).toBeNull();
+  await waitFor(() => expect(recent.textContent).toContain("3 words added, 3 removed"));
+  expect(
+    [...recent.querySelectorAll(".knowledge-latest-save-note")].map((n) => n.textContent),
+  ).toEqual(["Orders ties", "Wrote the page"]);
+});
+
+// A NEW PAGE leads with what it says, once: no note to repeat its title or
+// its first line, its size in words, and its opening under it.
+test("a new page leads with its opening, and no note repeats its title or its first line", async () => {
   landing({
     page_activity: {
       changes: [
         written("c-1", "2026-09-24T23:00:00Z", {
           title: "Split modes",
           kind: "created",
-          excerpt: "Split modes",
+          excerpt: "Equal, exact amounts and percentages.",
         }),
       ],
     },
@@ -794,9 +852,12 @@ test("a new page leads with its opening, and no note repeats its title", async (
     ),
   );
   expect(latest.textContent).toContain("Crewlet-SWE wrote it");
-  expect(latest.querySelector(".knowledge-latest-notes")).toBeNull();
-  expect(within(latest).queryByRole("group", { name: "Latest change" })).toBeNull();
+  expect(latest.querySelector(".knowledge-latest-who")?.textContent).toContain("5 words");
+  expect(latest.querySelector(".knowledge-latest-note")).toBeNull();
+  expect(within(latest).queryByRole("group", { name: "What this save changed" })).toBeNull();
+  expect(within(latest).queryByRole("region", { name: /saves/ })).toBeNull();
   expect(latest.textContent?.match(/Split modes/g)).toHaveLength(1);
+  expect(latest.textContent?.match(/Equal, exact amounts/g)).toHaveLength(1);
   // NOTHING ELSE was written: the big tile is the whole story, and no
   // three-row Recent activity tile beside it says "nothing else".
   expect(screen.queryByRole("region", { name: /Recent activity/ })).toBeNull();

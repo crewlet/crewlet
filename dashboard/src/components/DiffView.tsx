@@ -1,5 +1,6 @@
 /**
- * Every diff the dashboard draws: one component, and no hue.
+ * Every diff of lines the dashboard draws: one component, and no hue. A change
+ * read as prose is the design system's `DocumentDiff` (`components/ProseDiff.tsx`).
  *
  * # Why it is local
  *

@@ -201,11 +201,10 @@ seat that fell over have both stopped, and only one of them is a failure.
 
 ### Diffs carry no hue
 
-Every diff the dashboard draws is one component, `components/DiffView.tsx`,
-and no line of it is coloured: Settings › Configuration's Diff lens, a
-Doclet page's History and its editor's view of a colleague's save, the
-newest change on Doclet's landing, a principle somebody saved while it was
-being written, an artifact's versions compared by file and by line, and an
+Every diff of lines the dashboard draws is one component,
+`components/DiffView.tsx`, and no line of it is coloured: Settings ›
+Configuration's Diff lens, a Doclet page's History and its editor's view of a
+colleague's save, a principle somebody saved while it was being written, an artifact's versions compared by file and by line, and an
 MCP server's changed tool under review. A removed line is not a failure and an
 added one is not done, so the state hues are not spent on them; and on a
 screen that also draws a state, a red removed line beside a red failed check
@@ -242,6 +241,16 @@ A line's kind is said three ways, each enough alone:
   of each. Any other change of a text underlines nothing: one of two lines
   or more a side with unequal counts, where every pair after a line added
   is two neighbours.
+
+**A change read as prose is the design system's `DocumentDiff`**, the one
+place a diff is not of lines: the newest change on Doclet's landing, where a
+reader asks what changed rather than which lines did. `lib/proseDiff.ts`
+compares two versions of a page by block and then by word, with the line
+diff's own comparison (`compareSequences`) and its bounds, and
+`components/ProseDiff.tsx` renders each block with the dashboard's markdown
+renderer, its changed words in `DocumentDiffAdded` and `DocumentDiffRemoved`.
+It carries no hue either: an added run is underlined on the raised rung and a
+removed one struck in the tertiary ink on the sunk rung, each said in words.
 
 Two texts are compared by the dashboard's one line diff, `lib/lineDiff.ts`,
 which every diff, preview and merge of a text compares with: the shortest edit
@@ -9443,17 +9452,28 @@ palette and the trail.
   is kept, and the answer says what served it.
 - **The landing** (no phrase) is TILES SIZED BY WHAT EACH IS WORTH, on one
   screen (the approved Bento layout). The newest save, comment, rename or new
-  page across the company takes the big tile, OPEN TO READ: the page's space
-  and the way into it, its title, who changed it and when, what each save said
-  (back-to-back saves of one page by one writer on one company day are one
-  row, "saved it twice", each note with its time; a single change's time is
-  the line above's alone), the lines the newest save changed as the page's
-  History draws them (six at most, with the count of the rest and a link to
-  that save; a save the line diff did not compare says so and links it, rather
-  than listing the page's first lines as removed), and the page's opening,
-  never ending on a heading with nothing
-  under it. That costs ONE `page` read, of the featured page alone, and the
-  `page_revision` before the save; a change to a page since purged never
+  page across the company takes the big tile, which answers WHAT CHANGED AND
+  WHETHER IT MATTERS, in that order: the page's space by name and its title,
+  which is the one way into the page; the save's note (or the comment's
+  words); who, when and how much, in words ("9 words added, 8 removed, in 3
+  places"; a new page's length); then the change itself, READ AS THE PAGE
+  READS (`lib/proseDiff.ts`, drawn by `components/ProseDiff.tsx` with the
+  design system's `DocumentDiff`). The two versions are compared by block, a
+  list item and a table row each a block, and a removed block and an added
+  one of the same shape that share most of their words are one block edited:
+  only its changed words are marked, in place, as the page renders them, with
+  a link read as its label and compared whole, so no markdown, link target or
+  id reaches the reader and no paragraph is drawn twice. The heading a change
+  sits under is kept, and the unchanged blocks are counted where they stand.
+  A change of three blocks and sixty words at most is shown open; a longer one
+  is folded behind **Show the change**, and past eight changed blocks it
+  counts the rest and links the whole save in the page's History. A save too
+  large to compare says so and links it. A new page shows its opening once,
+  and no note repeats it. Under the change, the page's **Earlier saves** (its
+  **Recent saves** under a comment or a rename), three at most, each said the
+  same way: its note, who, when and how much, with its change one press away.
+  That costs ONE `page` read, of the featured page alone, and a
+  `page_revision` per version compared; a change to a page since purged never
   leads, nor one to a page in the trash, which keeps its title and is told by
   the `status` each change carries. **Recent activity** runs down the right with the rest of the same
   `page_activity` read (forty changes), ONE ROW PER PAGE with its newest
