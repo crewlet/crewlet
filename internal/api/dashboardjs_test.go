@@ -2644,10 +2644,10 @@ const (
 	// main's 6313.4 KiB: 6343 KiB.
 	// Saying a time inside Gitlet's sentences in words added 742 bytes and
 	// took it to 6314.1 KiB (6,465,667 bytes): 6315 KiB.
-	// The Gitlet history, tips, branches, committers and file finder train
-	// measures 6343.0 KiB (6,495,265 bytes), 786 bytes over main: 6344 KiB.
 	// Code host glyphs, colours and kit marks, on kit 0.137.0: 6350.7 KiB, 8,666 bytes over main: 6351 KiB.
-	treeBudget = 5<<20 + 1224<<10
+	// The Gitlet history, tips, branches, committers and file finder train, on
+	// kit 0.137.0, measures 6351.5 KiB (6,503,931 bytes), 9,452 bytes over main: 6352 KiB.
+	treeBudget = 5<<20 + 1232<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
