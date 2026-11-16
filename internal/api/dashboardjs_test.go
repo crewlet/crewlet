@@ -1472,6 +1472,7 @@ const (
 	// Code host glyphs, colours and kit marks, on kit 0.137.0: 419.8 KiB, 1,511 bytes over main: 420 KiB, 2.29 seconds.
 	// The model wizard as a chunk of its own, every harness and reasoning effort, on kit 0.137.0: 421.5 KiB,
 	// the kit's shared modules regrouped around the new chunk: 422 KiB, 2.30 seconds.
+	// Doclet's newest change read as the page reads, on kit 0.141.1, whose one sheet adds its new parts: 420.3 KiB: 421 KiB, 2.30 seconds.
 	initialBudget = 422 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
@@ -2656,6 +2657,8 @@ const (
 	// Gitlet's code host colours (diffs, change states, branches), on kit 0.137.0:
 	// 6358.5 KiB (6,511,153 bytes), 3,100 bytes over main: 6359 KiB.
 	// The Gitlet code host colours train, on kit 0.137.0: 6374.8 KiB (6,527,838 bytes), 3,079 over main: 6375 KiB.
+	// Doclet's newest change read as the page reads, on kit 0.141.1: 6505.7 KiB (6,661,846 bytes), 153,793 over main,
+	// 133,990 of them the kit's coding-harness vendor marks in the icons chunk: 6506 KiB.
 	treeBudget = 5<<20 + 1255<<10
 )
 
