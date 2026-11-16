@@ -53,11 +53,7 @@ import {
   TableTextCell,
   Tag,
 } from "@crewlethq/ui";
-import {
-  ServerGlyph,
-  TriangleAlertGlyph,
-  DatabaseGlyph,
-} from "@crewlethq/icons/glyphs";
+import { ServerGlyph, TriangleAlertGlyph, DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
