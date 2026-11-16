@@ -405,7 +405,7 @@ func (r *Reader) NoticeThreads(ctx context.Context, refs []ThreadRef, fresh stat
 	}
 	held := map[ThreadRef]*NoticeThread{}
 	_, err = r.log.Read(ctx, staleFresh(fresh).Query(DomainScope(), true), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, noticeThreadsSQL, string(list))
+		rows, err := tx.QueryContext(ctx, noticeThreadsSQL, string(list)) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return err
 		}

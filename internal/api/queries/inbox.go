@@ -234,7 +234,7 @@ func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 	}
 	if s.Artifacts != nil && s.Artifacts.Reads != nil {
 		gate := s.Artifacts.Gate
-		gate.Now = func() time.Time { return s.clock() }
+		gate.Now = s.clock
 		sources = append(sources, artifactsInbox{reads: s.Artifacts.Reads, gate: gate, asker: principal,
 			fresh: fresh.On(topics.ArtifactsLogStream), now: s.clock()})
 	}

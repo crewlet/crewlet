@@ -107,7 +107,7 @@ func (w *Writer) MarkInbox(ctx context.Context, c Call, in MarkInput) (Written, 
 	req := request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			at := w.now()
-			prior, _, err := marksIn(ctx, tx, handle)
+			prior, _, err := marksIn(ctx, tx, handle) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
 			}
