@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // fakePulse is a duty whose beat and liveness the test sets directly.
@@ -512,6 +513,66 @@ func TestAPassOfUnansweredRenewsIsStillTurning(t *testing.T) {
 		if n := fired.Load(); n != 0 {
 			t.Fatalf("the watchdog fired on a pass whose every renew returned inside its %v "+
 				"bound", bound)
+		}
+	})
+}
+
+// peerTookThem is a store that, once armed, answers every seat's renewal
+// false: a peer holds every seat now.
+type peerTookThem struct {
+	coord.Backend
+	armed atomic.Bool
+}
+
+func (b *peerTookThem) Renew(ctx context.Context, resource, owner string, epoch int64,
+	ttl time.Duration) (bool, error) {
+
+	if b.armed.Load() && coord.IsSeatResource(resource) {
+		return false, nil
+	}
+	return b.Backend.Renew(ctx, resource, owner, epoch, ttl)
+}
+
+// A PASS THAT DROPS ITS SEATS IS STILL TURNING, however long their teardowns
+// take.
+//
+// Applying a renewal's answer can run a seat's release hook — a lost seat's
+// teardown, an undead seat's retried one — and the engine's waits out its own
+// bound: five seconds on a lifecycle publish the stream will not acknowledge.
+// The renewals all answer a round trip into the pass, and stamped only by
+// them, the beat stood still while the pass applied their answers: twelve
+// seats lost at the shipped TTL, sixty seconds of teardowns, read as a wedge
+// forty-five seconds in, and the watchdog ended the process. Stamped as each
+// answer is applied, the beat is never older than one teardown.
+//
+// Mutation: stamp the beat only as each renewal is asked and answers (the
+// watchdog fires fifty seconds in).
+func TestAPassThatDropsItsSeatsIsStillTurning(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		const ttl, teardown, seats = SeatLeaseTTL, 5 * time.Second, 12
+		store := &peerTookThem{Backend: memory.New()}
+		var judge func()
+		h := holdingWith(t, Config{Backend: store, TTL: ttl, Hooks: HookFuncs{
+			Release: func(context.Context, placement.Seat, coord.Lease, ReleaseReason) error {
+				time.Sleep(teardown)
+				judge()
+				return nil
+			},
+		}}, seats)
+		w, fired := watchedPass(h, ttl)
+		judge = func() { w.check() }
+
+		store.armed.Store(true)
+		start := time.Now()
+		lost := h.Heartbeat(t.Context())
+		if took := time.Since(start); took <= ttl || len(lost) != seats {
+			t.Fatalf("the premise: a pass dropped %d of %d seats in %v against a %v TTL, "+
+				"want every seat, in longer than the TTL", len(lost), seats, took, ttl)
+		}
+		if n := fired.Load(); n != 0 {
+			t.Fatalf("the watchdog fired on a pass whose every teardown returned inside its %v",
+				teardown)
 		}
 	})
 }

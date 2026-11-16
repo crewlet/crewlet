@@ -187,12 +187,24 @@ type renewal struct {
 // the rest.
 //
 // THE RENEWALS GO TOGETHER, up to [renewConcurrency] in flight, and the
-// presence's claim beside them, so a pass is about one round trip however many
-// seats it renews rather than one per seat. Each is still stamped at its own
-// send ([Host.renewAll]), and their answers are still applied one at a time,
-// in the order [Host.heartbeatTargets] gives, each under the locks it always
-// took — so what a pass decides about a seat does not depend on which of its
-// renewals the store happened to answer first.
+// presence's claim beside them, so a pass over N seats is ⌈N/64⌉ round trips
+// rather than N. Each is still stamped at its own send ([Host.renewAll]), and
+// their answers are still applied one at a time, in the order
+// [Host.heartbeatTargets] gives, each under the locks it always took — so what
+// a pass decides about a seat does not depend on which of its renewals the
+// store happened to answer first.
+//
+// THE BEAT AS EACH ANSWER IS APPLIED, as well as as each renewal is asked and
+// answered: applying one can run a seat's release hook — a lost seat's
+// teardown, an undead seat's retried one — and a hook may wait out its own
+// bound (the engine's lifecycle publish waits five seconds on a stream that
+// will not acknowledge). The renewals answer within their batches' round
+// trips, long before the answers are all applied, so stamped only by them, a
+// pass that dropped ten seats at the default TTL read as a wedge and the
+// watchdog ended the process. Stamped here, the
+// beat is never older than one renewal or one application, as when the pass
+// renewed and applied one seat at a time; and a renewal that hangs still
+// freezes it, because this loop waits on each answer in order.
 func (h *Host) Heartbeat(ctx context.Context) []string {
 	h.beatMu.Lock()
 	defer h.beatMu.Unlock()
@@ -216,6 +228,7 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 
 	for i, t := range targets {
 		r := <-answers[i]
+		h.stampBeat()
 		now, alive, err := r.sent, r.alive, r.err
 		if err != nil {
 			// Unknown is not lost — the row is untouched and still held, so
@@ -328,8 +341,9 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 // batch, doing exactly what an unreachable store asks of it: keeping each seat
 // until its own lease's TTL, then dropping it. Stamped only at the pass's end,
 // that read as a wedge once the bounds summed past the TTL, and the watchdog
-// ended the process. Renewals that all hang still freeze the beat, which is
-// the wedge the watchdog is for.
+// ended the process. A renewal that hangs still freezes the beat, once the
+// renewals beside it have answered, because [Host.Heartbeat] waits on each
+// answer in order: that is the wedge the watchdog is for.
 //
 // A renewal that panics is answered as unknown, logged with its stack, so it
 // costs its own seat a renewal and never the process or the rest of the pass.
