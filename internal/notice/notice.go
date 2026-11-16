@@ -69,6 +69,11 @@ type Notice struct {
 	// Alarm is the alarm kind that raised a finding's notice, so a reader
 	// without the finding can still say what stands; empty otherwise.
 	Alarm string `json:"alarm,omitempty"`
+	// Title and Person are the raising alarm's words for a company owner
+	// ([statelog.Alarm.Title]); empty for a notice no alarm raised, and for
+	// a kind this build does not raise.
+	Title  string `json:"title,omitempty"`
+	Person string `json:"person,omitempty"`
 }
 
 // key is what makes two notices one.
@@ -106,6 +111,7 @@ func FromAlarms(nodes []NodeAlarms, now time.Time) []Notice {
 				notice = Notice{Class: ClassAlarm, Subject: advisor.Subject{Kind: SubjectAlarm, Name: m.Kind}}
 			}
 			notice.Since, notice.Nodes = m.Since, []string{n.Node}
+			notice.Title, notice.Person, _ = statelog.PersonWords(statelog.Kind(m.Kind))
 			raised = append(raised, notice)
 		}
 	}

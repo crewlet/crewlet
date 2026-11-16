@@ -1,6 +1,7 @@
 package notice_test
 
 import (
+	"cmp"
 	"encoding/json"
 	"maps"
 	"reflect"
@@ -27,8 +28,36 @@ func marks(node string, kinds map[string]time.Time) notice.NodeAlarms {
 }
 
 func alarm(kind string, since time.Time, nodes ...string) notice.Notice {
+	title, person, _ := statelog.PersonWords(statelog.Kind(kind))
 	return notice.Notice{Class: notice.ClassAlarm, Subject: advisor.Subject{Kind: notice.SubjectAlarm, Name: kind},
-		Since: since, Nodes: nodes}
+		Since: since, Nodes: nodes, Title: title, Person: person}
+}
+
+// AN ALARM'S NOTICE SAYS WHAT IS WRONG IN ITS KIND'S WORDS for a company owner,
+// the backup finding's included, so the Inbox can say it without the alarm. A
+// kind this build does not raise (a newer node's, partway through a roll) is
+// still a notice, with no words rather than a guess.
+//
+// Mutation: drop the words from FromAlarms, or fill them for an unknown kind,
+// and this fails.
+func TestAnAlarmsNoticeCarriesItsKindsWords(t *testing.T) {
+	t.Parallel()
+	backup := string(statelog.KindBackupAge)
+	got := notice.FromAlarms([]notice.NodeAlarms{marks("node-a",
+		map[string]time.Time{"apply_lag": t0, backup: t0, "a_newer_kind": t0})}, t0.Add(notice.AlarmAfter))
+	if len(got) != 3 {
+		t.Fatalf("three standing alarms give %d notices, want 3: %+v", len(got), got)
+	}
+	for _, n := range got {
+		kind := cmp.Or(n.Alarm, n.Subject.Name)
+		title, person, known := statelog.PersonWords(statelog.Kind(kind))
+		if n.Title != title || n.Person != person {
+			t.Errorf("%s's notice says %q, %q, want %q, %q", kind, n.Title, n.Person, title, person)
+		}
+		if known == (n.Title == "") {
+			t.Errorf("%s's notice says %q, and the kind is known to this build: %v", kind, n.Title, known)
+		}
+	}
 }
 
 // AN ALARM PAST ITS THRESHOLD REACHES THE ADMINISTRATORS ONCE: one notice per
@@ -92,8 +121,9 @@ func TestTheBackupAlarmIsTheAdvisorsFinding(t *testing.T) {
 	}
 	backup := string(statelog.KindBackupAge)
 	got := notice.FromAlarms([]notice.NodeAlarms{marks("node-a", map[string]time.Time{backup: t0})}, t0.Add(notice.AlarmAfter))
+	title, person, _ := statelog.PersonWords(statelog.KindBackupAge)
 	want := []notice.Notice{{Class: string(found[0].Class), Subject: found[0].Subject, Since: t0,
-		Nodes: []string{"node-a"}, Alarm: backup}}
+		Nodes: []string{"node-a"}, Alarm: backup, Title: title, Person: person}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the backup alarm's notice is\n%+v\nwant the finding's class and subject\n%+v", got, want)
 	}
@@ -134,7 +164,7 @@ func TestAPlatformNoticeOffersNoAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := slices.Sorted(maps.Keys(fields))
-	if want := []string{"class", "nodes", "since", "subject"}; !slices.Equal(got, want) {
+	if want := []string{"class", "nodes", "person", "since", "subject", "title"}; !slices.Equal(got, want) {
 		t.Errorf("a notice carries %v, want only %v", got, want)
 	}
 }
