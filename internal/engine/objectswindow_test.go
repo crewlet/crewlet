@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,9 +10,13 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/learning/memsync"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A NODE'S UPLOADS SHARE THE WINDOW ITS BROKER KIND CALLS FOR: the small one
@@ -90,6 +95,67 @@ func TestANodesUploadsShareTheWindowItsBrokerKindCallsFor(t *testing.T) {
 		if got := window(t, bootstrap(t, client(url))); got != want {
 			t.Fatalf("a node dialling an external cluster shares a window of %d messages, want the %d "+
 				"a request queued behind it on the link is sized for", got, want)
+		}
+	})
+}
+
+// A NODE'S MEMORY REPLAYS PULL THE WINDOW ITS BROKER KIND CALLS FOR: across a
+// link — a dial to an external cluster here, a leaf's link alike — a replay's
+// pull carries the window a request whose answer queues behind it on the link
+// is sized for, and in a member's own process the connection's whole bound.
+// memsync's own cases build the syncer with the choice made for them; this
+// holds the engine to making it, since a node across a link whose syncer was
+// built as a member's pulls up to 8 MiB at a time, which holds the answer to a
+// request sent behind it four minutes at the floor, past its five-second
+// term.
+//
+// Mutation: build the engine's syncer as a member's (memsync.Config's
+// AcrossLink false), and the client's half goes red.
+func TestANodesReplaysPullTheWindowItsBrokerKindCallsFor(t *testing.T) {
+	t.Parallel()
+	// The window memsync gives a syncer, read from one built with the choice
+	// made explicitly, so the case names no figure of its own.
+	reference := func(t *testing.T, url string, cfg memsync.Config) int {
+		t.Helper()
+		conn, err := nats.Connect(url, nats.Token(externaltest.Token))
+		if err != nil {
+			t.Fatalf("dial the external broker: %v", err)
+		}
+		t.Cleanup(conn.Close)
+		js, err := jetstream.New(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{})
+		return memsync.New(db, js, func(handle string) string { return handle }, cfg).Window()
+	}
+	url := externalBroker(t)
+	across := reference(t, url, memsync.Config{AcrossLink: true})
+	own := reference(t, url, memsync.Config{})
+	if across <= 0 || own != 0 {
+		t.Fatalf("memsync windows a pull across a link at %d bytes and in a member's own process at %d; "+
+			"the case needs a window across a link and none in a member's own process to tell the "+
+			"two apart", across, own)
+	}
+
+	t.Run("a member", func(t *testing.T) {
+		t.Parallel()
+		if got := engine.MemoryWindow(newEngine(t, engine.Options{})); got != own {
+			t.Fatalf("a member's replays pull a window of %d bytes, want none (%d): its own process "+
+				"crosses no link", got, own)
+		}
+	})
+	t.Run("a client of an external cluster", func(t *testing.T) {
+		t.Parallel()
+		b := bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.Type = config.StreamNATS
+			b.Stream.URL = externalBroker(t)
+			b.Stream.Token = externaltest.Token
+			b.Coordination.Type = config.CoordinationEmbeddedKV
+		})
+		if got := engine.MemoryWindow(newEngine(t, engine.Options{Bootstrap: b})); got != across {
+			t.Fatalf("a node dialling an external cluster pulls a window of %d bytes, want the %d a "+
+				"request whose answer queues behind it on the link is sized for", got, across)
 		}
 	})
 }

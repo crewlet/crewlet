@@ -229,6 +229,13 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) *
 	return s
 }
 
+// Window is the most a replay pull carries across this node's link
+// ([pullWindow]), or 0 where [Config.AcrossLink] said the connection crosses
+// none and a pull carries the connection's own bound ([Syncer.pullBytes]).
+// Whoever builds the syncer decides which, and the engine's choice — by the
+// node's broker kind — is held by a test of its own that reads it here.
+func (s *Syncer) Window() int { return s.window }
+
 // info logs one of a hydration's lines at info, and hands it to the said seam
 // where a case set one.
 func (s *Syncer) info(ctx context.Context, msg string, args ...any) {
