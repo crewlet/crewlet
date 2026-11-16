@@ -320,7 +320,26 @@ type rig struct {
 	secrets *fakeSecrets
 	audit   *audit
 	leases  coord.Backend
+	records *coordmemory.Fleet
 	guard   *recordingGuard
+}
+
+// sitsOut has node present and its status record, at its presence epoch, say
+// key sits out for the next hour.
+func (r *rig) sitsOut(t *testing.T, node, key string) {
+	t.Helper()
+	presence, _, err := r.leases.TryAcquire(t.Context(), coord.NodeResource(node), coord.AcquireOptions{
+		Owner: node + ":1", TTL: time.Minute,
+	})
+	if err != nil || presence == nil {
+		t.Fatalf("claim %s's presence: %v, %v", node, presence, err)
+	}
+	if err := r.records.PutNodeStatus(t.Context(), coord.NodeStatusRecord{Node: node, Epoch: presence.Epoch,
+		Models: []coord.ModelStatus{{Key: key, SignIn: "token", Resolves: true,
+			SittingOut: &coord.ModelSitOut{Until: clock.Add(time.Hour), Window: "session"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // recordingGuard is the engine's guard, recording every policy it is asked
@@ -374,9 +393,10 @@ func newRigOver(t *testing.T, caller iam.Principal, store *fakeSecrets) *rig {
 		Lines: []harness.Check{{Name: harness.CheckBinary, OK: true, Detail: "claude at /usr/local/bin/claude"}}},
 		running: 1},
 		config: &fakeConfig{doc: doc}, secrets: store,
-		audit: &audit{}, leases: coordmemory.New(), guard: &recordingGuard{deny: map[authz.Action]bool{}}}
+		audit: &audit{}, leases: coordmemory.New(), records: coordmemory.NewFleet(),
+		guard: &recordingGuard{deny: map[authz.Action]bool{}}}
 	svc, err := llmapi.New(llmapi.Options{Engine: r.engine, Config: r.config, Secrets: r.secrets,
-		Leases: r.leases, Audit: r.audit, Node: "node-a", Now: func() time.Time { return clock },
+		Leases: r.leases, Records: r.records, Audit: r.audit, Node: "node-a", Now: func() time.Time { return clock },
 		Guard: r.guard.decide})
 	if err != nil {
 		t.Fatal(err)
@@ -466,6 +486,53 @@ func TestACredentialIsTestedBeforeItIsStored(t *testing.T) {
 	}
 }
 
+// A CREDENTIAL CLEARS ONLY WHAT THIS NODE'S LIVE INCARNATION HAD SITTING OUT:
+// its status record at its presence's epoch. A peer's sit-out is the peer's,
+// and a record an earlier incarnation of this node left — its presence since
+// claimed again at a new epoch — says nothing of the process answering, so
+// neither is reported as cleared.
+//
+// Mutation: read the record by node without the epoch, or every node's
+// records, and the answer names an entry this node never sat out.
+func TestACredentialClearsOnlyWhatThisNodesLiveRecordSatOut(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.sitsOut(t, "node-b", "default")
+	r.sitsOut(t, "node-a", "default")
+	presence, err := r.leases.Get(t.Context(), coord.NodeResource("node-a"))
+	if err != nil || presence == nil {
+		t.Fatalf("read node-a's presence: %v, %v", presence, err)
+	}
+	if !mustRelease(t, r.leases, presence) {
+		t.Fatal("node-a's presence was not released")
+	}
+	if again, _, err := r.leases.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
+		Owner: "node-a:2", TTL: time.Minute,
+	}); err != nil || again == nil || again.Epoch == presence.Epoch {
+		t.Fatalf("claim node-a's presence again: %v, %v", again, err)
+	}
+	code, body := r.do(t, http.MethodPut, "/llm/providers/default/credential",
+		`{"values": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-a-new-token-Qm4x"}}`,
+		map[string]string{"If-Match": `"r-1"`})
+	if code != http.StatusOK {
+		t.Fatalf("PUT = %d %v", code, body)
+	}
+	if cleared, _ := json.Marshal(body["cleared"]); string(cleared) != `[]` {
+		t.Errorf("cleared = %s, want none: node-b's sit-out is node-b's, and node-a's record is "+
+			"an earlier incarnation's", cleared)
+	}
+}
+
+// mustRelease gives a presence lease back.
+func mustRelease(t *testing.T, leases coord.Backend, l *coord.Lease) bool {
+	t.Helper()
+	released, err := leases.Release(t.Context(), l.Resource, l.Owner, l.Epoch)
+	if err != nil {
+		t.Fatalf("release %s: %v", l.Resource, err)
+	}
+	return released
+}
+
 // A CREDENTIAL THAT SIGNS IN IS SEALED, AND THE REVISION THAT READS IT
 // RE-ACTIVATED, held to what the caller read.
 //
@@ -475,14 +542,7 @@ func TestACredentialIsTestedBeforeItIsStored(t *testing.T) {
 func TestACredentialThatSignsInIsSealedAndReactivated(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	if _, _, err := r.leases.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
-		Owner: "node-a:1", TTL: time.Minute, Meta: map[string]any{coord.StatusKey: coord.NodeStatus{
-			Models: []coord.ModelStatus{{Key: "default", SignIn: "token", Resolves: true,
-				SittingOut: &coord.ModelSitOut{Until: clock.Add(time.Hour), Window: "session"}}},
-		}.Meta()},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	r.sitsOut(t, "node-a", "default")
 	code, body := r.do(t, http.MethodPut, "/llm/providers/default/credential",
 		`{"values": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-a-new-token-Qm4x"}}`,
 		map[string]string{"If-Match": `"r-1"`})
@@ -708,7 +768,7 @@ func TestEveryModelRouteTakesItsVerb(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	svc, err := llmapi.New(llmapi.Options{Engine: r.engine, Config: r.config, Secrets: r.secrets,
-		Leases: r.leases, Audit: r.audit, Node: "node-a"})
+		Leases: r.leases, Records: r.records, Audit: r.audit, Node: "node-a"})
 	if err != nil {
 		t.Fatal(err)
 	}

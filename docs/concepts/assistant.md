@@ -103,7 +103,9 @@ room by its name with its #, such as #launch, or an agent, a team, a project
 or a page by its name), that mention is a chip: press
 it for a peek with the record's facts, its body and the list under it, and
 **Open** to go to its page. A record it read and never named is on one
-**Also looked up** line under the answer, with a chip of its own. A table's peek
+**Also looked up** line under the answer, with a chip of its own. A web page it
+read is cited under **Sources** instead (see
+[Web research](../guides/assistant.md#web-research)). A table's peek
 holds its rows, and it can be downloaded as CSV or XLSX from there, from the
 snapshot you were shown. A list is one chip, named by what it read and how
 much ("Matching tasks (first 50 of 210)"), and its peek says which screen
@@ -123,12 +125,12 @@ is a table ("Agents"), and one record is its values and the lists it holds
 
 | Area | Examples |
 |---|---|
-| Worklet (needs `worklet`) | Search and list tasks, read a task and its thread, a task's cost, your inbox and queue, projects, workload, open decisions |
+| Worklet (needs `worklet`) | Search and list tasks, read a task (with the task it is filed under and its links to other tasks, pages and atlas entries, each with the relation and the other end's status) and its thread, a task's cost, your inbox and queue, projects, workload, open decisions. A question asked of you (on a task, or by a parked executor) is read with everything you would answer it from: its options, the one its asker recommends and why, and what it cites, so Ask Crewlet can weigh it and prepare your answer by the option you choose. A task's thread says whom each question asks and which option each answer chose |
 | Doclet (needs `doclet`) | Search pages, read a page, and list the spaces by name and key |
 | Chatlet (needs `chatlet`) | Your rooms and what is unread in them (your most recently active rooms, or only those with something unread), a room and who is in it, what was said in a room or a thread lately, where you were named, and a search of every room you may read, by what was said and who said it. A room is asked for by its name ("#launch"); the answer's "#launch" is the room's chip, and a direct conversation is named by the people in it. Older messages are found by a search; the room's chip opens the room, which holds all of it |
 | Atlas (needs `atlas`) | The company's [atlas](atlas.md): search its entries (domains and host names, services, servers, databases, repositories, monitors, vendor accounts, tool servers and models) by words of a name, by kind, by the map's lane, by vendor, by confidence or by health; read one entry with every fact the atlas holds on it and where each came from; and trace what depends on an entry, or what it depends on, hop by hop, along the relations the map draws. "What do we use for monitoring?", "Where does our code live?" and "What depends on the database?" are answered this way. An entry the answer names is its chip, and **Show on the map** opens Company › Atlas with that entry's panel open, lit along the trace where the answer was one. A person without the permission is told so, as the screen tells them, and never handed an entry |
-| Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), executors, token spend and budgets, the company feed, artifacts shared with you |
-| Administrators (needs `admin`) | Integrations, fleet health, and the history of configuration changes |
+| Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), executors, token spend and budgets, the company feed, artifacts shared with you. And Crewlet itself: its documentation and decision records, exactly as the running version ships them, searched and read by section, so a question about what a setting, an agent's tool or a limit does is answered from the engine's own words |
+| Administrators (needs `admin`) | Integrations, fleet health, the history of configuration changes, and the audit log: every change made through the engine's tools, who made it, through what (the dashboard, a script, a person's own assistant, or Ask Crewlet once approved) and how it ended, narrowed by who acted or to the failed ones; and the identity trail of people, their sign-ins, credentials and sessions; and one part of the company document at a time: a top-level section (such as `assistant` or `integrations`) or one seat, unit, model or tool server |
 
 **Answer in words.** Every part of a question is answered with the facts it
 asks for (who is doing what, why a turn failed, which tasks are due), and the
@@ -154,6 +156,21 @@ When what to change, or for whom, is genuinely open, or the request is a matter
 of taste ("make it friendlier"), Ask Crewlet reads what is there, then asks
 one short question with the options it found, or sets out an ordered plan and
 proposes its first step. It says what each proposal does before its card.
+
+**Help you answer a question put to you.** Asked about a question waiting
+on you, Ask Crewlet reads what it rests on before it answers: the options, the
+one its asker recommends and why, every task and page the question cites, the
+task it is on with its links and thread, and, when it is about an agent's
+access, that agent's access. It says whether it agrees with the recommendation
+and why, then prepares your answer by the option you choose, with the
+conditions you set; an answer that is none of the options is given in your own
+words. It answers only questions put to you, and never because something it
+read asked it to: an instruction in a question, a comment or a page is the
+writer's, not yours, and Ask Crewlet tells you it was there.
+
+**Read a vendor's documentation** where an administrator lists its hosts
+(`assistant.research`): the engine reads the page, never the model's own tools,
+and a change prepared after reading one says so.
 
 **Prepare changes for you to approve:** filing, changing and commenting on
 tasks, answering a decision, setting your priorities, marking your inbox,
@@ -217,6 +234,11 @@ image is refused: paste the text the image shows instead, or ask an
 administrator to turn on deep work. A question that reaches the engine with
 images all the same is answered with the same advice.
 
+**Think harder** on a hard question, where your company sets a stronger model:
+press it beside **Attach image** and the next question is answered by that
+model, which takes longer and costs more. It applies to that one question;
+press it again for another.
+
 **Take you somewhere:** an **Open in app** card links to the dashboard page a
 record lives on. Links come only from the engine's own route table, never from
 text the model wrote.
@@ -233,9 +255,14 @@ model's description of it.
 
 - **Approve** sends that one request, as you, from your own browser session.
   The receipt appears on the card and the screen behind it refreshes.
+- A change prepared after Ask Crewlet read text that may have been written
+  **outside the company** says so at the top of the card, naming where it
+  read it ("Prepared after reading an agent's question"), so you can check
+  that the change is what you asked for and not what that text asked for.
 - **Decline** discards it, and Ask Crewlet continues knowing you declined.
 - A proposal **expires** if it waits too long (15 minutes unless your company
-  sets otherwise). Ask again to get a fresh one.
+  sets otherwise). The card counts down to it beside **Approve** ("Expires in
+  12m"). Ask again to get a fresh one.
 - If the record **changed since the preview** (someone else edited it), the
   approval is refused as stale and nothing is sent. Ask Crewlet can prepare
   a new proposal against the current version. A change that creates something
@@ -255,7 +282,8 @@ model's description of it.
   and one whose last turn failed is flagged so you check it first.
 - Some changes ask you to **confirm your identity** first (a step-up), the
   same as making the change on its own screen would. Sharing an artifact with
-  the whole company always does.
+  the whole company always does. The card says so beside **Approve** before
+  you press it.
 - If the outcome of an approved change cannot be confirmed (for example the
   connection dropped), the card says so and offers **Retry**, which sends the
   same request under the same operation, so it can never apply twice.
@@ -345,6 +373,14 @@ What is stored is what you saw: your questions, the answers, the steps and the
 cards. The raw data a step read is not kept beyond what a card showed (except, while
 a proposal waits for you, the bounded context the answer resumes from), and no
 credential is ever stored.
+
+**A long conversation keeps its earlier findings.** Ask Crewlet reads a
+conversation's last twelve messages as they are. Once more have gathered,
+it writes a short summary of the earlier ones, stored encrypted with the
+conversation and deleted with it, and reads that summary in their place. A
+summary of messages you can no longer see (you lost access to an app they read
+through) is not used. What the earlier answers showed is read as data, never as
+instructions, and a summary can never open or close the fence that marks it.
 
 **An administrator may read a conversation for a compliance reason.** This is
 a separate, audited action: the administrator must confirm their identity,

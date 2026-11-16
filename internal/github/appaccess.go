@@ -144,9 +144,16 @@ func (c *AppClient) revoke(ctx context.Context, token string) error {
 	return c.send(ctx, token, http.MethodDelete, "/installation/token", nil, nil)
 }
 
-// listRepositories walks GET /installation/repositories to exhaustion, each
-// repository's name trimmed and one without a name left out.
+// listRepositories walks GET /installation/repositories as token.
 func (c *AppClient) listRepositories(ctx context.Context, token string) ([]InventoryRepo, error) {
+	return walkRepositories(func(path string, out any) error {
+		return c.send(ctx, token, http.MethodGet, path, nil, out)
+	})
+}
+
+// walkRepositories walks GET /installation/repositories through get to
+// exhaustion, each repository's name trimmed and one without a name left out.
+func walkRepositories(get func(path string, out any) error) ([]InventoryRepo, error) {
 	var out []InventoryRepo
 	for page := 1; ; page++ {
 		var body struct {
@@ -155,7 +162,7 @@ func (c *AppClient) listRepositories(ctx context.Context, token string) ([]Inven
 		}
 		path := "/installation/repositories?per_page=" + strconv.Itoa(repoPageSize) +
 			"&page=" + strconv.Itoa(page)
-		if err := c.send(ctx, token, http.MethodGet, path, nil, &body); err != nil {
+		if err := get(path, &body); err != nil {
 			return nil, err
 		}
 		for _, repo := range body.Repositories {

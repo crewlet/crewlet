@@ -159,7 +159,7 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	// only a Jira credential, so the entry's confluence_* key is right for
 	// one seat and absent from another's. A warning here would fire on every
 	// such start of a correct configuration. What is wrong is a key NO instance
-	// lists, and only the heartbeat's per-server row (coord.MCPServerStatus)
+	// lists, and only the status record's per-server row (coord.MCPServerStatus)
 	// and the fleet's status answer built from it see every instance.
 	unlisted := unlistedOverrides(spec, defs)
 	s.unlisted = unlisted

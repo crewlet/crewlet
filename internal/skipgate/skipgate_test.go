@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -660,7 +661,20 @@ const runMain = "SKIPGATE_TEST_RUN_MAIN"
 // environment, and only the producer is handed this.
 const emitStream = "-skipgate-test-emit"
 
+// burnAndExit makes this test binary, started with no exec argument, burn a
+// fixed amount of CPU and exit with the code it names: the test binary the
+// wrapper's case runs.
+const burnAndExit = "SKIPGATE_TEST_BURN_AND_EXIT"
+
 func TestMain(m *testing.M) {
+	if code := os.Getenv(burnAndExit); code != "" && (len(os.Args) < 2 || os.Args[1] != execMode) {
+		buf := make([]byte, 1<<20)
+		for range 64 {
+			_ = sha256.Sum256(buf)
+		}
+		n, _ := strconv.Atoi(code)
+		os.Exit(n)
+	}
 	if os.Getenv(runMain) == "1" {
 		if len(os.Args) > 2 && os.Args[1] == emitStream {
 			b, err := os.ReadFile(os.Args[2])
@@ -1225,48 +1239,131 @@ func TestATestIsTimedByWhenSomePartOfItRan(t *testing.T) {
 	}
 }
 
-// A PACKAGE'S CPU IS ITS SHARE OF THE RUN'S, BY ITS SHARE OF THE BUSY TIME.
-//
-// go test reports no package's CPU, only the process tree's, so the run's CPU
-// is shared out by each package's busy time — its top-level tests' — and a
-// package with no busy time is given none. A failed package's tests used the
-// CPU too, so its busy time counts toward the whole even though its line is
-// never written; and a run that measured no busy time at all shares nothing
-// out rather than dividing by it.
-func TestAPackagesCPUIsItsShareOfTheRunsByBusyTime(t *testing.T) {
+// THE TIMINGS NAME EACH PACKAGE'S CPU AS ITS BINARY USED IT, and a package
+// whose binary never ran (no test files) none; a failed package's line is
+// never written, its CPU with it.
+func TestTheTimingsNameEachPackagesCPU(t *testing.T) {
 	t.Parallel()
 
 	r := report{
-		cpu: 120 * time.Second,
-		topLevel: map[string]map[string]float64{
-			"x/heavy": {"TestA": 40, "TestB": 20},
-			"x/light": {"TestC": 15},
-			"x/broke": {"TestD": 5},
+		packageCPU: map[string]float64{"x/heavy": 90, "x/broke": 7.5},
+		topLevel:   map[string]map[string]float64{"x/heavy": {"TestA": 40, "TestB": 20}},
+		finished: map[string]finish{
+			"x/heavy": {action: "pass", elapsed: 30},
+			"x/broke": {action: "fail", elapsed: 3},
+			"x/empty": {action: "skip"},
 		},
-	}
-	got := cpuShares(r)
-	want := map[string]float64{"x/heavy": 90, "x/light": 22.5, "x/broke": 7.5}
-	if !maps.Equal(got, want) {
-		t.Errorf("cpuShares = %v, want %v", got, want)
-	}
-	if got := cpuShares(report{cpu: time.Minute}); len(got) != 0 {
-		t.Errorf("cpuShares of a run with no busy time = %v, want nothing shared out", got)
-	}
-
-	r.finished = map[string]finish{
-		"x/heavy": {action: "pass", elapsed: 30},
-		"x/broke": {action: "fail", elapsed: 3},
-		"x/empty": {action: "skip"},
 	}
 	var lines strings.Builder
 	if err := writeTimings(&lines, r); err != nil {
 		t.Fatal(err)
 	}
-	wantLines := "x/empty\t0.000\t0.000\n" +
+	want := "x/empty\t0.000\t0.000\n" +
 		"x/heavy\t30.000\t90.000\n" +
 		"x/heavy\tTestA\t40.000\n" +
 		"x/heavy\tTestB\t20.000\n"
-	if lines.String() != wantLines {
-		t.Errorf("timings =\n%s\nwant\n%s", lines.String(), wantLines)
+	if lines.String() != want {
+		t.Errorf("timings =\n%s\nwant\n%s", lines.String(), want)
+	}
+}
+
+// THE WRAPPER RECORDS ITS BINARY'S CPU AND EXITS AS IT DID.
+//
+// go test starts each package's test binary through the gate's exec mode in
+// the package's directory; the mode must run the binary, append that
+// directory and the CPU the binary used to the gate's file, and answer the
+// binary's own exit status — a wrapper that answered 0 would pass every
+// failing package. The binary here is this test binary burning a known
+// amount of CPU and exiting 3.
+func TestTheWrapperRecordsItsBinarysCPUAndExitsAsItDid(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	file := filepath.Join(t.TempDir(), "cpu")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], execMode, os.Args[0])
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), runMain+"=1", burnAndExit+"=3", cpuFileVar+"="+file)
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 {
+		t.Fatalf("the wrapper exited %v, want its binary's 3", err)
+	}
+	got, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	where, secs, ok := strings.Cut(strings.TrimSuffix(string(got), "\n"), "\t")
+	cpu, perr := strconv.ParseFloat(secs, 64)
+	if !ok || perr != nil || where != dir || cpu <= 0 {
+		t.Errorf("the wrapper recorded %q, want the binary's directory %s and the CPU it burned", got, dir)
+	}
+}
+
+// -timings HANDS THE GO TEST IT RUNS THIS PROGRAM AS ITS -exec, right after
+// `test`, its path quoted as go test splits the flag; and refuses a command
+// that is no go test, or one with an -exec of its own, rather than write a
+// CPU it never read.
+func TestTimingsHandGoTestTheWrapper(t *testing.T) {
+	t.Parallel()
+
+	got, err := withExec([]string{"/usr/local/go/bin/go", "test", "-json", "./x"}, "/tmp/it's here/skipgate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/usr/local/go/bin/go", "test", "-exec", `'/tmp/it'\''s here/skipgate' exec`, "-json", "./x"}
+	if !slices.Equal(got, want) {
+		t.Errorf("withExec = %q, want %q", got, want)
+	}
+	for _, argv := range [][]string{
+		{"make", "test"},
+		{"go", "vet", "./x"},
+		{"go", "test", "-exec", "other", "./x"},
+		{"go", "test", "-exec=other", "./x"},
+	} {
+		if _, err := withExec(argv, "/s"); err == nil {
+			t.Errorf("withExec(%q) was not refused", argv)
+		}
+	}
+}
+
+// THE WRAPPER'S LINES ARE READ BY IMPORT PATH, under the module the gate runs
+// at the root of: a package's lines summed, and a line the wrapper could not
+// have written refused.
+func TestTheWrappersLinesAreReadByImportPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/m\n\ngo 1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	module, err := moduleAt(root)
+	if err != nil || module != "example.com/m" {
+		t.Fatalf("moduleAt = %q, %v", module, err)
+	}
+	file := filepath.Join(t.TempDir(), "cpu")
+	lines := root + "/internal/a\t1.500\n" + root + "\t0.250\n" + root + "/internal/a\t2.000\n"
+	if err := os.WriteFile(file, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readCPU(file, root, module)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]float64{"example.com/m/internal/a": 3.5, "example.com/m": 0.25}; !maps.Equal(got, want) {
+		t.Errorf("readCPU = %v, want %v", got, want)
+	}
+	for _, bad := range []string{"no tab\n", root + "\tslow\n", "/elsewhere\t1\n"} {
+		if err := os.WriteFile(file, []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readCPU(file, root, module); err == nil {
+			t.Errorf("readCPU over %q was not refused", bad)
+		}
+	}
+	if _, err := moduleAt(t.TempDir()); err == nil {
+		t.Error("moduleAt of a directory without go.mod was not refused")
 	}
 }

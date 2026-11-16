@@ -528,6 +528,21 @@ func DefaultBranchDetail(repo, defaultBranch string) string {
 		"make another branch the default first ("+toolname.CodeUpdateRepo+" default_branch)", defaultBranch, repo)
 }
 
+// RepoStateRefusal refuses every command on an archived, importing or mirrored
+// repository, with its sentence, and "" for one that takes them; a deleted one is
+// the caller's. One rule for the push decide, an engine write and a refs listing.
+func RepoStateRefusal(repo RepoRef) (Refusal, string) {
+	switch {
+	case repo.Status == RepoStatusArchived:
+		return RefusalRepoArchived, ArchivedDetail(repo.Name, repo.ManagedBy)
+	case repo.Status == RepoStatusImporting:
+		return RefusalRepoImporting, ImportingDetail(repo.Name)
+	case repo.Mirrored:
+		return RefusalRepoMirrored, MirroredDetail(repo.Name, repo.ManagedBy)
+	}
+	return "", ""
+}
+
 // reservedRef reports a ref no principal pushes: one outside refs/heads/ and
 // refs/tags/, one under the engine's own refs/crewlet/, and the two kinds of
 // ref under refs/heads/seats that are nobody's ([reservedSeatRef]: a branch

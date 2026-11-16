@@ -117,11 +117,13 @@ func TestAnUnstampedPageIsAFunctionOfWhatItNames(t *testing.T) {
 }
 
 // AN UNSTAMPED READ IS A PAGE'S. A landed-in read's answer is what the node's
-// index says of the push that landed a commit, and a revision's facts, a
-// re-anchoring and a checks file answer no page: none can be asked
-// unstamped, and each is refused before any Gitlet node is.
+// index says of the push that landed a commit, a history narrowed by who
+// pushed it is a page of that index, and a revision's facts, a re-anchoring
+// and a checks file answer no page: none can be asked unstamped, and each is
+// refused before any Gitlet node is.
 //
-// Mutation: drop Validate's unstamped arm — every one of them is accepted.
+// Mutation: drop Validate's unstamped arm → every one of them is accepted;
+// drop its ReadsIndex arm → the narrowed history accepted, red.
 func TestOnlyAPageIsReadUnstamped(t *testing.T) {
 	t.Parallel()
 	const repo, oid = "0e8bd7a4-5a04-4e17-8f3c-7e7d4b2c9a11", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -130,6 +132,7 @@ func TestOnlyAPageIsReadUnstamped(t *testing.T) {
 			Target: "refs/heads/main", TargetOID: oid, At: statelog.Position{Stream: "s", Generation: 1, Seq: 1}}},
 		{Kind: gitlet.GitChecksFile, RepoID: repo, ChecksFile: &gitlet.ChecksFileQuery{Commit: oid}},
 		{Kind: gitlet.GitCodeFiles, RepoID: repo, CodeFiles: &gitlet.CodeFilesQuery{Commit: oid}},
+		logQ(repo, gitlet.LogQuery{Rev: oid, PushedBy: "ceo"}),
 	} {
 		q.Unstamped = true
 		if err := q.Validate(); !errors.Is(err, gitlet.ErrInvalid) {
@@ -137,7 +140,7 @@ func TestOnlyAPageIsReadUnstamped(t *testing.T) {
 		}
 	}
 	for _, q := range []gitlet.GitQuery{treeQ(repo, gitlet.TreeQuery{Rev: oid}), logQ(repo, gitlet.LogQuery{Rev: oid}),
-		compareQ(repo, oid, oid)} {
+		compareQ(repo, oid, oid), findQ(repo, oid, "main", 0)} {
 		q.Unstamped = true
 		if err := q.Validate(); err != nil {
 			t.Errorf("an unstamped %s read refused: %v", q.Kind, err)

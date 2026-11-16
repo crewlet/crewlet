@@ -366,6 +366,7 @@ export async function send(
   page: PageSnapshot | null,
   attachments: readonly AssistantFileRef[] = [],
   mode: AssistantTurnMode = "ask",
+  deliberate = false,
 ): Promise<void> {
   const key = newActOpID();
   const mine = generation;
@@ -387,6 +388,7 @@ export async function send(
         input: { text },
         page_context: page ? page.context : null,
         ...(mode === "ask" ? {} : { mode }),
+        ...(deliberate ? { deliberate: true } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.file_id) } : {}),
       },
       { id, opKey: key },

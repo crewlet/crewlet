@@ -50,6 +50,7 @@ type Sources struct {
 	SeatAccess   SeatAccess
 	ToolServers  ToolServers
 	Nodes        Nodes
+	NodeStatuses NodeStatuses
 	ServerTests  ServerTests
 	AccessLog    AccessLog
 	Usage        Usage

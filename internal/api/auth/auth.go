@@ -407,8 +407,8 @@ type Guard struct {
 	// [Guard.principalFor].
 	admin iam.AdminPosture
 
-	// proof is `api.auth.session.step_up`: how long a proof of identity
-	// authorises a step-up gesture. See [proofWindow].
+	// proof is how long a proof of identity authorises a step-up gesture,
+	// read per request. See [proofWindow] and [Guard.WithSignIn].
 	proof proofWindow
 
 	// now is the clock, injectable so a case can pin what a principal's
@@ -483,7 +483,7 @@ func New(b *config.Bootstrap) *Guard {
 		// AND NO ADMIN POSTURE, whose zero confers nothing rather than
 		// everything — see [iam.AdminPosture.Effective] for why that
 		// direction is the only safe one.
-		return &Guard{now: time.Now}
+		return &Guard{now: time.Now, proof: windowOf(config.DefaultSignInPolicy)}
 	}
 	auth := b.API.Auth
 	tokens := tokensOf(b)
@@ -493,9 +493,20 @@ func New(b *config.Bootstrap) *Guard {
 	}
 	return &Guard{
 		tokens: tokens, admin: auth.Admin,
-		proof: windowOf(auth.Session), now: time.Now,
-		clients: NewClients(b),
+		// THE NODE WITH NO COMPANY'S READING until [Guard.WithSignIn] hands
+		// it the company's: the engine's defaults within this node's limits.
+		proof: windowOf(func() config.SignInPolicy { return auth.SignInPolicy(nil) }),
+		now:   time.Now, clients: NewClients(b),
 	}
+}
+
+// WithSignIn reads the step-up window from policy, the company's sign-in policy
+// as this node holds it, on every request; called once, at wiring time.
+func (g *Guard) WithSignIn(policy func() config.SignInPolicy) *Guard {
+	if policy != nil {
+		g.proof = windowOf(policy)
+	}
+	return g
 }
 
 // Mux is what a surface mounts routes on.

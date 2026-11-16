@@ -126,6 +126,9 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 // whole: [assistanttest.ProposalArgs]' principles change with the parts it
 // leaves out as [assistanttest.World] states them.
 var completedArgs = map[string]map[string]any{
+	// AN ANSWER NAMES ITS QUESTION AND ITS TASK BY THEIR IDS, the question
+	// the one open one on the task asked of the person, as read.
+	"answer_decision": {"item": assistanttest.RecordID, "answers": "c1", "choice": "a"},
 	// A CREATE THAT NAMES NO PROJECT OR CONTAINER carries the person's own,
 	// as GET /viewer answers it.
 	"create_task": {"title": "File the report", "assignee": "pm", "body": "Details.",

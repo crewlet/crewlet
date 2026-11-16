@@ -41,7 +41,7 @@ func TestALaneViewSaysWhatTheGrantLeavesUnused(t *testing.T) {
 				Sync:       &seataccess.SyncResult{At: applied, Outcome: seataccess.OutcomeOK},
 				Tool:       seataccess.ToolLive, Plan: []seataccess.Step{}}}}}}
 
-	view, ok := seataccess.ViewOf(answer, "sre", seataccess.LaneGitHub)
+	view, ok := seataccess.ViewOf(answer, "sre", seataccess.LaneGitHub, seataccess.ViewQuery{})
 	if !ok {
 		t.Fatal("the agent's lane was not found")
 	}
@@ -80,7 +80,7 @@ func TestALaneViewWordsALevelAndARefusal(t *testing.T) {
 						Remedy: "Grant it to the integration's key"}},
 				Plan: []seataccess.Step{{Op: seataccess.OpCreate, Text: "Create the account"}}}}}}}
 
-	view, ok := seataccess.ViewOf(answer, "qa", seataccess.LaneDatadog)
+	view, ok := seataccess.ViewOf(answer, "qa", seataccess.LaneDatadog, seataccess.ViewQuery{})
 	if !ok {
 		t.Fatal("the agent's lane was not found")
 	}
@@ -99,7 +99,7 @@ func TestALaneViewNamesOnlyAnAgentTheAnswerLists(t *testing.T) {
 		Seats: []seataccess.SeatAnswer{{Handle: "gone", Departed: true,
 			Lanes: map[seataccess.Lane]seataccess.LaneAnswer{}}}}
 	for _, handle := range []string{"gone", "nobody"} {
-		if _, ok := seataccess.ViewOf(answer, handle, seataccess.LaneGitHub); ok {
+		if _, ok := seataccess.ViewOf(answer, handle, seataccess.LaneGitHub, seataccess.ViewQuery{}); ok {
 			t.Errorf("%s has a lane view", handle)
 		}
 	}

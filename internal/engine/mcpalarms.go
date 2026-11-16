@@ -13,16 +13,17 @@ import (
 )
 
 // THE MCP ALARMS' INPUTS (M11): each configured server's condition joined
-// across every live node's heartbeat row for it, which the alarm table judges
+// across every live node's status record row for it, which the alarm table judges
 // at the thresholds the restart schedule and the provisioning pass already keep
 // ([statelog.KindMCPServerFailing] and the three beside it).
 //
 // FLEET-WIDE AND NOTHING ELSE: an instance is down on the node running it and a
-// wait is held on the node holding its seat, and every node publishes its
-// servers on every beat, so one listing of the presence leases is every
-// server's condition, and every data node judges the same one. Read off the same
-// listing as the model alarms ([Engine.entriesReading]), which carries the last
-// good one across a blip.
+// wait is held on the node holding its seat, and every node writes its servers
+// on its status record within a renew period of a change, so one listing of the
+// records, joined to the presence leases, is every server's condition, and
+// every data node judges the same one. Read off the same listing as the model
+// alarms ([Engine.entriesReading]), which carries the last good one across a
+// blip of either.
 //
 // THE SUMS ARE THE ANSWER'S: `mcp_servers_status` decides a server's state from
 // the same three counts over the same rows, so the alarm and the page cannot
@@ -38,7 +39,7 @@ import (
 // own, or none held. A service identity's server has none: nobody signs in to
 // it, and a credential its vendor refuses fails its instances, which the
 // failing and partial kinds read.
-func mcpConditions(c *Company, statuses map[string]coord.NodeStatus,
+func mcpConditions(c *Company, statuses map[string]coord.NodeStatusRecord,
 	grants map[string]coord.MCPGrant) []statelog.MCPServerCondition {
 
 	servers := make([]string, 0, len(c.Config.MCPServers))
@@ -113,7 +114,7 @@ func signInCondition(grants map[string]coord.MCPGrant, server string) *statelog.
 
 // grantsReading is every MCP server's OAuth grant, by server, for an alarm
 // reading: read afresh where a person signs c in to any server, and the last
-// good reading carried across a store that cannot answer, as the heartbeats
+// good reading carried across a store that cannot answer, as the status records
 // are. Nil where no server is signed in to by a person's grant.
 func (e *Engine) grantsReading(ctx context.Context, c *Company) map[string]coord.MCPGrant {
 	if !slices.ContainsFunc(c.Config.MCPServers, func(s config.MCPServer) bool { return s.PersonSignIn() }) ||

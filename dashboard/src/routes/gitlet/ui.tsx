@@ -33,7 +33,8 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { shortOID } from "~/lib/code.ts";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { ago } from "~/lib/ago.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import type { CodeTreeEntry } from "~/protocol/index.ts";
 
@@ -115,7 +116,7 @@ export function Byline({
       {verb && <span className="code-byline__verb">{verb}</span>}
       {at && (
         <time className="code-byline__when" dateTime={at} title={fmtDateTime(at)}>
-          {relTime(at, now)}
+          {ago(at, now, { clock: true })}
         </time>
       )}
       {children}

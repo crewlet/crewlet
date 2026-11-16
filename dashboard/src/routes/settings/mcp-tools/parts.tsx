@@ -262,7 +262,7 @@ export function ToolsCell({ server }: { server: McpMemberServerStatus }) {
 
 /**
  * The node cell that names what is wrong with a server: the longest down,
- * which the engine's heartbeat dates. Null where nothing is down.
+ * which the engine's status record dates. Null where nothing is down.
  */
 function failingCell<T extends McpMemberServerNode>(nodes: readonly T[]): T | null {
   const down = nodes.filter((n) => n.failed > 0 && n.down_since);

@@ -38,9 +38,20 @@ import (
 // (chain.Unready over the members). It is what `/viewer` tells a person
 // before they ask and what refuses a question before any round.
 type Models interface {
-	Chain(ctx context.Context, person iam.Principal, use auxspend.Use) (llm.Provider, string, error)
-	Unready(ctx context.Context) error
+	Chain(ctx context.Context, person iam.Principal, use auxspend.Use, strength Strength) (llm.Provider, string, error)
+	Unready(ctx context.Context, strength Strength) error
 }
+
+// Strength is which of Ask Crewlet's chains a call runs on: `assistant.llm`,
+// or the stronger `assistant.deliberate.llm` a person asks for with Think harder.
+type Strength string
+
+const (
+	// Quick is `assistant.llm`, every question's chain.
+	Quick Strength = "quick"
+	// Deliberate is `assistant.deliberate.llm`.
+	Deliberate Strength = "deliberate"
+)
 
 // Budget is the meter a turn charges its rounds through: the company's
 // windows, and the person's own where a company caps one. Nil with a nil
@@ -83,6 +94,7 @@ type Transcripts interface {
 type Records interface {
 	CreateConversation(ctx context.Context, w Write, id uuid.UUID, title string) error
 	TitleConversation(ctx context.Context, w Write, id uuid.UUID, title string) error
+	SummarizeConversation(ctx context.Context, w Write, id uuid.UUID, summary string, through int) error
 	ClearConversation(ctx context.Context, w Write, id uuid.UUID) (Written, error)
 	// OpenTurn answers [assistantdomain.ErrTurnOpen] for a turn already
 	// open (a retry the ledger collapsed, or one finding its turn open).

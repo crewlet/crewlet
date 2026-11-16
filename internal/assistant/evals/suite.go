@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -34,8 +35,12 @@ type Case struct {
 	// needs the page.
 	Mode    wire.TurnMode `yaml:"mode"`
 	Answers []CaseAnswer  `yaml:"answers"`
-	Script  []CaseRound   `yaml:"script"`
-	Expect  Expect        `yaml:"expect"`
+	// Research are the hosts the company lists for web research; none is off.
+	// Search names a search server for them too.
+	Research []string    `yaml:"research"`
+	Search   bool        `yaml:"search"`
+	Script   []CaseRound `yaml:"script"`
+	Expect   Expect      `yaml:"expect"`
 
 	page *wire.PageContext
 }
@@ -73,6 +78,9 @@ type Expect struct {
 	Never []string `yaml:"never"`
 	// Proposals is how many proposals the turn ends with.
 	Proposals *int `yaml:"proposals"`
+	// StepUp is whether every proposal the turn ends with asks the person to confirm
+	// it is them, the engine's word and never the model's.
+	StepUp *bool `yaml:"step_up"`
 	// State is how the turn ends.
 	State wire.TurnState `yaml:"state"`
 	// Says and NeverSays are text the answer contains, and must not,
@@ -84,6 +92,10 @@ type Expect struct {
 	// the person was shown, and what the model read of it, which the answer's
 	// own words cannot stand for.
 	Shows []string `yaml:"shows"`
+	// NeverShows is text no card of the turn carries, ignoring case: what
+	// the person must not be shown (an option row on an answer that chose
+	// none).
+	NeverShows []string `yaml:"never_shows"`
 	// Brief is what a brief turn's card holds.
 	Brief *ExpectBrief `yaml:"brief"`
 	// Refusals are what each refused call's answer names, in the order the
@@ -95,7 +107,14 @@ type Expect struct {
 	// model, which hears every answer; a live model's answers travel inside
 	// its own harness, and the expectation is not judged there.
 	Refusals [][]string `yaml:"refusals"`
+	// Taint is the outside surface every proposal must name (a provenance
+	// source), or TaintNone for none (D25).
+	Taint string `yaml:"taint"`
 }
+
+// TaintNone is the expect.taint of a case whose proposals must carry no
+// taint: the turn read nothing written outside the company first.
+const TaintNone = "none"
 
 // ExpectBrief is what a brief's card must hold: the records its rows cite,
 // in order (none is "Nothing needs you"), the tone each is drawn with, and
@@ -111,9 +130,9 @@ type ExpectBrief struct {
 
 // empty reports whether e expects nothing.
 func (e Expect) empty() bool {
-	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.State == "" &&
-		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 && e.Brief == nil &&
-		len(e.Refusals) == 0
+	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.StepUp == nil && e.State == "" &&
+		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 &&
+		len(e.NeverShows) == 0 && e.Brief == nil && len(e.Refusals) == 0 && e.Taint == ""
 }
 
 // LoadSuite reads every `*.yaml` case in dir, in name order, each checked.
@@ -234,17 +253,24 @@ func (c Case) Validate() error {
 			fail("answers[%d].status: %d is not an HTTP status", i, a.Status)
 		}
 	}
+	if c.Search && len(c.Research) == 0 {
+		fail("search: a search needs the research hosts it keeps to")
+	}
+	offered := func(tool string) bool { // the web reads the case's company is offered
+		return tool == catalog.FetchWebPageToolName && len(c.Research) > 0 ||
+			tool == catalog.SearchWebToolName && c.Search
+	}
 	for i, r := range c.Script {
 		switch {
 		case (r.Call == "") == (r.Say == ""):
 			fail("script[%d]: give exactly one of call and say", i)
-		case r.Call != "" && !known(r.Call):
+		case r.Call != "" && !known(r.Call) && !offered(r.Call):
 			fail("script[%d].call: %q is not a catalogue tool", i, r.Call)
 		}
 	}
 	for field, tools := range map[string][]string{"calls": c.Expect.Calls, "never": c.Expect.Never} {
 		for _, tool := range tools {
-			if !known(tool) {
+			if !known(tool) && tool != catalog.FetchWebPageToolName && tool != catalog.SearchWebToolName {
 				fail("expect.%s: %q is not a catalogue tool", field, tool)
 			}
 		}
@@ -277,6 +303,10 @@ func (c Case) Validate() error {
 				fail("expect.refusals[%d][%d]: is empty", i, j)
 			}
 		}
+	}
+	if t := c.Expect.Taint; t != "" && t != TaintNone && !provenance.Source(t).Valid() {
+		fail("expect.taint: %q is neither %s nor a source (%s)", t, TaintNone,
+			words.Or(provenance.Sources))
 	}
 	if c.Expect.State != "" && !c.Expect.State.Valid() {
 		fail("expect.state: %q is not a turn state (%s)", c.Expect.State,

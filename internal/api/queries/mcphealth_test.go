@@ -145,14 +145,14 @@ func TestTheStatusCellCarriesTheOutageItsClassAndRestarts(t *testing.T) {
 	t.Parallel()
 	down := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
 		{Server: "docs", Shared: true, Failed: 1, Error: "would not start", ErrorClass: "dns",
 			DownSince: down, Restarts: 3},
 	}})
-	presentNode(t, backend, "node-b", &coord.NodeStatus{MCP: []coord.MCPServerStatus{
+	presentNode(t, backend, "node-b", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
 		{Server: "docs", Shared: true, Failed: 1, Error: "would not start", ErrorClass: "quantum"},
 	}})
-	presentNode(t, backend, "node-c", &coord.NodeStatus{MCP: []coord.MCPServerStatus{
+	presentNode(t, backend, "node-c", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
 		{Server: "docs", Shared: true, Started: 1, Tools: 4},
 	}})
 	status := answer(t, mcpSources(t, backend), "mcp_servers_status", nil).(queries.MCPStatusAnswer)
@@ -190,10 +190,10 @@ mcp_servers:
 	}
 	surface, _ := configSurface(t, doc)
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{
 		{Server: "search", Shared: true, Started: 1, Tools: 2},
 	}})
-	s, _ := withHistory(t, queries.Sources{Coord: backend, Company: companySource(t, cfg),
+	s, _ := withHistory(t, queries.Sources{Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg),
 		Config: surface, MCPListings: fakeListings{}})
 	detail, err := s.MCPServer(t.Context(), "search")
 	if err != nil {
@@ -267,8 +267,8 @@ roles:
 	}
 	surface, _ := configSurface(t, doc)
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{}})
-	s, _ := withHistory(t, queries.Sources{Coord: backend, Company: companySource(t, cfg),
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{}})
+	s, _ := withHistory(t, queries.Sources{Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg),
 		Config: surface, MCPListings: fakeListings{}})
 	read := func(name string) *queries.MCPResolved {
 		t.Helper()
@@ -373,8 +373,8 @@ units:
 		"  - {name: Ops, handle: ops, llm: main}\n", 1)
 	surface, _ := configSurface(t, valid)
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{}})
-	s, _ := withHistory(t, queries.Sources{Coord: backend, Company: companySource(t, cfg),
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{}})
+	s, _ := withHistory(t, queries.Sources{Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg),
 		Config: surface, MCPListings: fakeListings{}})
 	via := func(v string) *string { return &v }
 	for name, want := range map[string][]queries.MCPReachView{
@@ -446,8 +446,8 @@ units:
 	}
 	surface, _ := configSurface(t, doc)
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{}})
-	s, _ := withHistory(t, queries.Sources{Coord: backend, Company: companySource(t, cfg),
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{MCP: []coord.MCPServerStatus{}})
+	s, _ := withHistory(t, queries.Sources{Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg),
 		Config: surface, MCPListings: fakeListings{}})
 	got, err := s.MCPServer(t.Context(), "docs")
 	if err != nil {

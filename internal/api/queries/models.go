@@ -138,7 +138,8 @@ type ModelEntriesAnswer struct {
 	Alarms  []ModelsAlarm `json:"alarms"`
 }
 
-// ModelNode is one live node, and whether its latest beat carried its models.
+// ModelNode is one live node, and whether a status record of its live presence
+// is counted, carrying its models.
 type ModelNode struct {
 	ID       string `json:"id"`
 	Reported bool   `json:"reported"`
@@ -372,47 +373,36 @@ type nodeModels struct {
 }
 
 // modelReports is every live node's model rows, ordered by node id. The lease
-// table is the answer, so an unreadable one is an error rather than a fleet
-// with no nodes.
-func (s Sources) modelReports(ctx context.Context) ([]nodeModels, []coord.NodeStatus, error) {
-	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
+// table and the status records are the answer, so an unreadable one is an
+// error rather than a fleet with no nodes.
+func (s Sources) modelReports(ctx context.Context) ([]nodeModels, error) {
+	leases, records, err := s.liveStatuses(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	out := make([]nodeModels, 0, len(leases))
-	statuses := make([]coord.NodeStatus, 0, len(leases))
 	for _, lease := range leases {
 		r := nodeModels{node: nameIn(coord.ClassNode, lease.Resource)}
-		status, ok := coord.StatusFromMeta(lease.Meta)
-		if ok {
+		if record, ok := records[r.node]; ok {
 			r.reported = true
-			r.models = make(map[string]coord.ModelStatus, len(status.Models))
-			for _, m := range status.Models {
+			r.models = make(map[string]coord.ModelStatus, len(record.Models))
+			for _, m := range record.Models {
 				r.models[m.Key] = m
 			}
 		}
 		out = append(out, r)
-		statuses = append(statuses, status)
 	}
-	order := make([]int, len(out))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortFunc(order, func(a, b int) int { return cmp.Compare(out[a].node, out[b].node) })
-	sorted := make([]nodeModels, len(out))
-	sortedStatus := make([]coord.NodeStatus, len(out))
-	for i, j := range order {
-		sorted[i], sortedStatus[i] = out[j], statuses[j]
-	}
-	return sorted, sortedStatus, nil
+	slices.SortFunc(out, func(a, b nodeModels) int { return cmp.Compare(a.node, b.node) })
+	return out, nil
 }
 
 // llmEntries answers what each configured model is doing, across the fleet.
 //
-// FROM THE HEARTBEATS, as `mcp_servers_status` is: every node re-sends its
-// models on its presence lease ([coord.NodeStatus.Models]), so one listing of
-// the lease table is every node's word at once, and a node whose last beat
-// carried no report is a column of its own rather than a row of zeros. What
+// FROM THE STATUS RECORDS, as `mcp_servers_status` is: every node writes its
+// models on its record ([coord.NodeStatusRecord.Models]), so one listing of
+// the records, counted against the lease table, is every node's word at once,
+// and a live node with no record counted is a column of its own rather than a
+// row of zeros. What
 // only THIS node can say (how it resolves each entry's credential, the hint of
 // the value it resolved) comes from its own engine ([ModelSource]), and the
 // answer names this node.
@@ -421,7 +411,7 @@ func (s Sources) modelReports(ctx context.Context) ([]nodeModels, []coord.NodeSt
 // reads each model's condition with nothing that names a credential, an
 // account, a vendor's sentence or a cost.
 func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
-	reports, _, err := s.modelReports(ctx)
+	reports, err := s.modelReports(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -770,9 +760,9 @@ type RunnerNodeCell struct {
 }
 
 // llmRunners answers whether each executor cell can start a box on each node,
-// from the runner probe every node publishes on its heartbeat.
+// from the runner probe every node publishes on its status record.
 func (s Sources) llmRunners(ctx context.Context, _ Params) (any, error) {
-	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
+	leases, records, err := s.liveStatuses(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -788,11 +778,11 @@ func (s Sources) llmRunners(ctx context.Context, _ Params) (any, error) {
 	}
 	for _, lease := range leases {
 		node := RunnerNode{ID: nameIn(coord.ClassNode, lease.Resource)}
-		if status, ok := coord.StatusFromMeta(lease.Meta); ok && status.Runners != nil {
+		if record, ok := records[node.ID]; ok && record.Runners != nil {
 			node.Reported = true
 			for p, cell := range map[config.Placement]coord.RunnerCell{
-				config.PlacementDirect: status.Runners.Direct, config.PlacementContainer: status.Runners.Container,
-				config.PlacementE2B: status.Runners.E2B,
+				config.PlacementDirect: record.Runners.Direct, config.PlacementContainer: record.Runners.Container,
+				config.PlacementE2B: record.Runners.E2B,
 			} {
 				view := &RunnerNodeCell{State: string(cell.State), Detail: cell.Detail, Fix: optional(cell.Fix)}
 				if !cell.CheckedAt.IsZero() {

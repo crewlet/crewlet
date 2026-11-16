@@ -398,10 +398,24 @@ keys that are one key once trimmed are refused rather than collapsed. A
 key is at most 63 bytes — Kubernetes' limit on a label name — and holds no
 whitespace or unprintable character anywhere, because it is matched
 exactly wherever it is named: a key with a space inside it is refused
-rather than accepted as a label nothing could name. Labels are advertised
-to peers on this node's presence lease, so a label change takes effect
-one heartbeat after the restart that made it — not at the next config
+rather than accepted as a label nothing could name. A value is at most
+64 bytes — a seat handle's width, which holds Kubernetes' 63 — of
+printable characters: a space inside it is fine, a tab, a control
+character or a line separator is refused. Labels are advertised to peers
+on this node's presence lease, so a label change takes effect one
+heartbeat after the restart that made it — not at the next config
 activation.
+
+A node carries **at most 16 labels**. The presence lease is re-sent on
+every heartbeat and the coordination store bounds what it carries
+([The presence's bound](coordination.md#the-presences-bound)), so the
+labels are bounded where you write them: a file with a 17th label, or a
+value past 64 bytes, is refused by `crewlet validate` and at startup,
+naming `node.labels` or the key, rather than accepted and then left out
+of every peer's count. The published schema states the count, so an
+editor flags a 17th label as you type; a value's bound is counted in
+bytes, which a schema cannot express, so `crewlet validate` is what
+checks it.
 
 Nothing here means anything to the engine on its own: the org decides
 what to select on.
@@ -1330,7 +1344,7 @@ copied into an image. It grants every app, and `admin` only where
 
 `api.auth.oidc` is retired too: the engine no longer signs anybody in through
 an identity provider. A person signs in with a login, a password and — unless
-`api.auth.totp` says `optional` — a second factor the engine holds. A file that
+the company's `sign_in.require_second_factor` says `false` — a second factor the engine holds. A file that
 still carries the block is refused, and the refusal says it was removed and
 that people sign in with a password and two-step verification instead.
 
@@ -1338,9 +1352,13 @@ There is no switch for password sign-in, either: it is always served. A
 deployment nobody has been invited to already signs nobody in, because nobody
 holds a password to present, so a setting that turned the routes off would
 change nothing a stranger could reach. What a deployment does state is what a
-password sign-in asks for — `api.auth.totp` (unset is `required`, the secure
-value, so `optional` is always somebody's explicit choice),
-`api.auth.accept_insecure` and `api.auth.min_password_length`.
+password sign-in may ask for at most: `api.auth.limits`, the bounds this node
+holds the company's sign-in policy within (its `second_factor` unset is
+`required`, the secure value, so an optional second factor is always the
+operator's explicit choice), and `api.auth.accept_insecure`. What a sign-in
+does ask for is the company's (`sign_in`, see [Identity and access § The
+company sets its sign-in
+policy](identity-and-access.md#the-company-sets-its-sign-in-policy-within-each-nodes-limits)).
 
 ### What is served without a credential
 
@@ -1477,7 +1495,7 @@ line at `WARN`:
 
 | Warning | Why it is not a refusal |
 |---------|-------------------------|
-| `api.auth.accept_insecure` is set | It is what makes an otherwise-refused posture legal — `totp: optional` on an address a browser reaches over the network. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and every start logs it |
+| `api.auth.accept_insecure` is set | It is what makes an otherwise-refused posture legal — `limits.second_factor: optional` on an address a browser reaches over the network. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and every start logs it |
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, an optional second factor, already is one |
 | `api.external_url` is `https://` and `api.trusted_proxies` is empty | The engine never terminates TLS itself, so something in front of it does — and unless it is named, every caller's source is its address. The sign-in throttle then keys every caller's attempts at one login together, so a stranger guessing at somebody's login slows that person's own sign-in, and every audit row names the proxy. Not a refusal because one front end is right with the list empty: a balancer that passes each client's own address through as the peer rather than in a header |
 

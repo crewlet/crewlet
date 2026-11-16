@@ -2,15 +2,7 @@ package coord
 
 import "slices"
 
-// InfraKey is where a presence row carries [NodeInfra].
-//
-// ON THE PRESENCE ROW, for the status's reason: the fact is this node's own,
-// only its current value matters, and it must leave with the node. A record of
-// its own would need a sweep for the nodes that died, and the row already has
-// one: the lease's expiry.
-const InfraKey = "infra"
-
-// The bounds a summary is held to, so one node's row cannot grow with a
+// The bounds a summary is held to, so one node's record cannot grow with a
 // list somebody pasted: an external broker is a handful of servers, and a
 // name is a label.
 const (
@@ -41,8 +33,8 @@ type NodeInfra struct {
 	Endpoint       string
 }
 
-// Meta is the summary as the presence row carries it, nil for one that says
-// nothing. Every text is cut to [MaxInfraText] and the servers to
+// Meta is the summary as a node's status record carries it ([NodeStatusRecord]),
+// nil for one that says nothing. Every text is cut to [MaxInfraText] and the servers to
 // [MaxInfraServers].
 func (n NodeInfra) Meta() map[string]any {
 	out := map[string]any{}
@@ -70,14 +62,9 @@ func (n NodeInfra) Meta() map[string]any {
 	return out
 }
 
-// InfraFromMeta reads a presence row's [NodeInfra], false where the row says
-// none: a node on a build older than the summary, which is not a node with
-// nothing to say. A field of another type reads as absent, as the status does.
-func InfraFromMeta(meta map[string]any) (NodeInfra, bool) {
-	raw, ok := meta[InfraKey].(map[string]any)
-	if !ok {
-		return NodeInfra{}, false
-	}
+// infraFromMeta reads a status record's summary. A field of another type
+// reads as absent, as a status row's does.
+func infraFromMeta(raw map[string]any) NodeInfra {
 	n := NodeInfra{
 		Address: stringFromMeta(raw["address"]), Cluster: stringFromMeta(raw["cluster"]),
 		ObjectsBackend: stringFromMeta(raw["objects"]),
@@ -93,5 +80,5 @@ func InfraFromMeta(meta map[string]any) (NodeInfra, bool) {
 		slices.Sort(n.BrokerServers)
 		n.BrokerServers = slices.Compact(n.BrokerServers)
 	}
-	return n, true
+	return n
 }

@@ -17,7 +17,7 @@ const (
 	// PromptVersion names the system prompt's text, stamped on every turn
 	// row and audit record, so a change in behaviour can be read against a
 	// change in the prompt. A reworded section is a new version.
-	PromptVersion = "assistant.prompt.v7"
+	PromptVersion = "assistant.prompt.v8"
 
 	// ModelResultBytes is the most of one tool result the model reads:
 	// sixteen kibibytes, a quarter of what a call reads at most
@@ -82,6 +82,21 @@ const (
 	// conversation: it is best effort and runs after the answer, so a slow
 	// model costs a title, never the turn.
 	TitleTimeout = 30 * time.Second
+
+	// SummaryBatch is how many messages past the history window a conversation
+	// gathers before they are folded into its summary: a call every few turns.
+	SummaryBatch = 8
+
+	// SummaryTimeout bounds the summary call, best effort after the answer as
+	// a title is; a longer read than a title's, so twice its time.
+	SummaryTimeout = 60 * time.Second
+
+	// summaryTextBytes bounds the summary's text, leaving room in the stored
+	// record (assistantdomain.SummaryMaxBytes) for the apps beside it.
+	summaryTextBytes = 3 << 10
+
+	// summaryEntryBytes bounds each message the summary call reads.
+	summaryEntryBytes = 2000
 
 	// TitleMaxRunes bounds a conversation's title as the model writes it.
 	TitleMaxRunes = 60

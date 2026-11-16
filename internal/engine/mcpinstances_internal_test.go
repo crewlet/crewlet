@@ -50,14 +50,14 @@ func TestAnOutageIsDatedFromWhenItBeganAcrossRetries(t *testing.T) {
 	}
 }
 
-// THE HEARTBEAT'S ROW SAYS SINCE WHEN THE SERVER HAS BEEN DOWN ON THE NODE,
+// THE STATUS RECORD'S ROW SAYS SINCE WHEN THE SERVER HAS BEEN DOWN ON THE NODE,
 // AND WHY IN A CLASS: the earliest outage of its failed instances, and that
 // same instance's failure, seat and class, even where a lower seat id failed
 // later. A waiting instance is no outage, and a serving one has none.
 //
 // Mutation: name the row's failure by the first seat id rather than by the
 // outage it dates, and the row says swe's failure beside pm's outage.
-func TestTheHeartbeatRowDatesTheOutageAndClassesItsFailure(t *testing.T) {
+func TestTheStatusRecordRowDatesTheOutageAndClassesItsFailure(t *testing.T) {
 	t.Parallel()
 	swe := uuid.MustParse("00000000-0000-7000-8000-000000000001")
 	pm := uuid.MustParse("00000000-0000-7000-8000-000000000002")
@@ -91,14 +91,14 @@ func TestTheHeartbeatRowDatesTheOutageAndClassesItsFailure(t *testing.T) {
 	}
 }
 
-// THE HEARTBEAT'S ROW SAYS SINCE WHEN ITS LONGEST WAIT BEGAN, carried across
+// THE STATUS RECORD'S ROW SAYS SINCE WHEN ITS LONGEST WAIT BEGAN, carried across
 // the passes that hold the instance back again: what `mcp_server_waiting_long`
 // measures, so a clock reset by every pass would never let it fire. A failed
 // instance is no wait, however long it has been down.
 //
 // Mutation: name the row's wait by the first seat id, or stamp each pass
 // afresh in [stampSince], and this fails.
-func TestTheHeartbeatRowDatesTheLongestWaitAcrossPasses(t *testing.T) {
+func TestTheStatusRecordRowDatesTheLongestWaitAcrossPasses(t *testing.T) {
 	t.Parallel()
 	swe := uuid.MustParse("00000000-0000-7000-8000-000000000001")
 	pm := uuid.MustParse("00000000-0000-7000-8000-000000000002")

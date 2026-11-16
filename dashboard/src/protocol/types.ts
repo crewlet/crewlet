@@ -67,7 +67,12 @@ import type {
 } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
 import type { SettingsAnswer } from "../contract/settings.ts";
-import type { DelegatedDecisionsAnswer } from "../contract/delegated.ts";
+import type {
+  DelegatedBranchesAnswer,
+  DelegatedChecksAnswer,
+  DelegatedDecisionsAnswer,
+  DelegatedRepositoriesAnswer,
+} from "../contract/delegated.ts";
 import type {
   AtlasActivityAnswer,
   AtlasEntriesAnswer,
@@ -1822,7 +1827,7 @@ export interface OrgSeat {
   /**
    * Where this seat's tools come from, in the registry's origin grammar:
    * `builtin`, then `mcp:<server>` per server it is GRANTED, in declaration
-   * order. The grant, not what is running — the node heartbeat's MCP report
+   * order. The grant, not what is running — the node status record's MCP report
    * says whether a server started. Absent on a human seat and for every
    * reader but an admin.
    */
@@ -6521,6 +6526,9 @@ export interface DecisionItem {
 export interface DecisionsAnswer {
   handle: string;
   items: DecisionItem[];
+  /** Something lies past this page: an item `limit` left out, or an open ask
+   *  past the 50 the tracker reads. */
+  more: boolean;
   /** Everything that waits on the person, not the page: what is put to
    *  them, and on their own record what they may answer that its delegates
    *  escalated or left past their deadline. What the badge says. */
@@ -8111,6 +8119,11 @@ export interface QueryMap {
   /** The rules delegates decide by, and what they decided: an administrator's
    *  and the people a rule escalates to (ADR-0125). */
   delegated_decisions: DelegatedDecisionsAnswer;
+  /** What a rule can name from the company's GitHub: its repositories, one's
+   *  branches and the checks on a branch's newest commit (an administrator's). */
+  delegated_repositories: DelegatedRepositoriesAnswer;
+  delegated_branches: DelegatedBranchesAnswer;
+  delegated_checks: DelegatedChecksAnswer;
   /** The company's atlas (ADR-0126), each read as its asker on the atlas
    *  app: a page of its entries, the map, one entry, a trace from one, and
    *  the counts a filter menu offers. */
@@ -8971,10 +8984,54 @@ export interface CodeRefRow {
   position: LogPosition;
 }
 
-/** `code_refs`: a repository's live refs under one prefix — its branches by default — in name order. */
+/** The push that last moved a ref (`gitlet.RefMover`), drawn as a pusher is. */
+export interface CodeRefMover {
+  push_id: string;
+  actor: string;
+  actor_kind: string;
+  actor_seat?: string;
+  via: CodePushRow["via"];
+}
+
+/** The rules matching a ref (`gitlet.RefProtection`), in order, and what they allow together. */
+export interface CodeRefProtection {
+  patterns: string[];
+  allow_force?: boolean;
+  allow_delete?: boolean;
+  direct_push: "persons" | "none" | (string & {});
+}
+
+/** The change a branch heads, else the newest from it (`gitlet.RefChange`). */
+export interface CodeRefChange {
+  number: number;
+  title: string;
+  state: CodeChangeState;
+}
+
+/** One ref read in detail (`gitlet.RefListing`): when and by whom it moved, its rules, its change, and whether the reader may delete it. */
+export interface CodeRefListing {
+  ref: string;
+  oid: string;
+  position: LogPosition;
+  moved_at: string;
+  /** Absent past the push history's 181 days, or where one record moved it there twice. */
+  moved_by?: CodeRefMover;
+  protection?: CodeRefProtection;
+  change?: CodeRefChange;
+  /** Set where the reader may delete it now; otherwise the refusal and its sentence are. */
+  may_delete?: boolean;
+  delete_refusal?: string;
+  delete_detail?: string;
+}
+
+/** `code_refs`: a repository's live refs under one prefix, its branches by default, in name order, or by when each branch moved. */
 export interface CodeRefsAnswer extends CodePage {
-  /** Absent on a page that holds none. */
+  /** Absent on a page that holds none, and on a page read in detail. */
   refs?: CodeRefRow[];
+  /** A page read with `detail=true`, in place of `refs`. */
+  refs_detail?: CodeRefListing[];
+  /** A first page's count of the branches other than the default moved since `active_since`; `more` past 1 000. */
+  active_branches?: { count: number; more?: boolean };
 }
 
 /** Who acts on a repository (`gitlet.Principal`): a seat, or a credential and the seat it acts as. */
@@ -9032,6 +9089,30 @@ export interface CodeTreeAnswer {
   total: number;
 }
 
+/** One file a find found (`gitlet.FindMatch`). */
+export interface CodeFindMatch {
+  /** From the repository's root; in base64 as `path_b64` where it is no valid UTF-8. */
+  path: string;
+  path_b64?: string;
+  oid: string;
+  /** Git's: 100644 a file, 100755 an executable, 120000 a link. */
+  mode: string;
+  /** The runs of `path` the query matched, each [start, end) in code points of `path`: index `Array.from(path)`, not the string. */
+  spans: [number, number][];
+}
+
+/**
+ * The files of a revision's tree whose path holds a query's characters in
+ * order (`gitlet.FindAnswer`): the best, best first, with how many match and
+ * how many files the tree holds. One answer, no next page.
+ */
+export interface CodeFindAnswer {
+  tree: string;
+  matches: CodeFindMatch[] | null;
+  total: number;
+  files: number;
+}
+
 /** One page of a file's lines (`gitlet.BlobAnswer`). */
 export interface CodeBlobAnswer {
   path?: string;
@@ -9060,6 +9141,14 @@ export interface CodeLogCommit {
   author_bytes?: number;
   author_email?: string;
   author_email_bytes?: number;
+  /** Who committed it, as the commit states it; absent past its bound with `committer_bytes` its size. */
+  committer?: string;
+  committer_bytes?: number;
+  committer_email?: string;
+  committer_email_bytes?: number;
+  /** The engine's committer convention (`Crewlet` at `engine@` on any domain), which authenticates
+   *  nothing; absent from a build that names no committer. */
+  engine_committed?: boolean;
   authored_at: string;
   committed_at: string;
   /** The message's first paragraph; absent past its bound with `subject_bytes` its size. */
@@ -9073,6 +9162,9 @@ export interface CodeLogAnswer {
   commits: CodeLogCommit[] | null;
   scanned: number;
   complete?: boolean;
+  /** On a page narrowed by `pushed_by`: the commits the node's index could not judge, neither listed nor
+   *  ruled out. Absent from every other page. */
+  unjudged?: number;
 }
 
 /** One line of a blame (`gitlet.BlameLine`): its number, the commit that last changed it, and its text. */
@@ -9089,6 +9181,12 @@ export interface CodeBlameLine {
 export interface CodeBlameCommit {
   author?: string;
   author_email?: string;
+  /** Who committed it, as `CodeLogCommit` names it, with the engine's convention marked. */
+  committer?: string;
+  committer_bytes?: number;
+  committer_email?: string;
+  committer_email_bytes?: number;
+  engine_committed?: boolean;
   authored_at: string;
   /** The message's first LINE, as git's blame names it. */
   subject?: string;
@@ -9116,15 +9214,18 @@ export interface CodeBlameAnswer {
  */
 export interface CodeGitAnswer {
   repo: string;
-  kind: "tree" | "blob" | "log" | "blame" | "diff" | "compare" | (string & {});
+  kind: "tree" | "blob" | "log" | "blame" | "diff" | "compare" | "find" | (string & {});
   rev?: string;
   next?: string;
   tree?: CodeTreeAnswer;
   blob?: CodeBlobAnswer;
   log?: CodeLogAnswer;
   blame?: CodeBlameAnswer;
+  find?: CodeFindAnswer;
   diff?: CodeDiffAnswer;
   compare?: CodeCompareFacts;
+  /** A `code_tips` page (kind `tips`). */
+  tips?: CodeTipsAnswer;
   resolved?: Record<string, CodeResolved>;
   position?: LogPosition;
   pushed_by?: Record<string, CodePushedBy>;
@@ -9166,12 +9267,140 @@ export interface CodeComparisonAnswer extends CodeGitAnswer {
   preview: CodeMergePreview;
 }
 
+/** An annotated tag's own facts (`gitlet.TipTag`), each unbounded field described past its bound. */
+export interface CodeTipTag {
+  tagger?: string;
+  tagger_bytes?: number;
+  tagger_email?: string;
+  tagger_email_bytes?: number;
+  tagged_at?: string;
+  subject?: string;
+  subject_bytes?: number;
+}
+
+/** One object of a tips read (`gitlet.Tip`): what it peels to, its tag and commit, and its counts against a base. */
+export interface CodeTip {
+  oid: string;
+  type: "commit" | "tag" | "tree" | "blob" | (string & {});
+  peeled: string;
+  peeled_type: "commit" | "tag" | "tree" | "blob" | (string & {});
+  tag?: CodeTipTag;
+  commit?: CodeLogCommit;
+  /** The commits the base has that the tip lacks, and the reverse; absent where the read ran out of time. */
+  behind?: number;
+  ahead?: number;
+  counts_out_of_time?: boolean;
+}
+
+/** One page of a tips read (`gitlet.TipsAnswer`): the base's commit, and the tips in the order asked. */
+export interface CodeTipsAnswer {
+  base?: string;
+  tips: CodeTip[] | null;
+}
+
 /** A change as a row about it names it (`gitlet.ChangeName`): its repository, reference, title and state. */
 export interface CodeChangeName {
   repo: string;
   ref: string;
   title: string;
   state: CodeChangeState;
+}
+
+/** A check rollup's one word (`gitlet.CheckRollupState`), the first that holds, in this order. */
+export type CodeCheckRollupState =
+  "failing" | "running" | "pending" | "cancelled" | "passed" | (string & {});
+
+/** How many checks' latest attempts are in each state (`gitlet.CheckCounts`); `other` a state a later build records. */
+export interface CodeCheckCounts {
+  queued?: number;
+  running?: number;
+  passed?: number;
+  failed?: number;
+  errored?: number;
+  cancelled?: number;
+  skipped?: number;
+  other?: number;
+}
+
+/** One check that did not pass (`gitlet.FailingCheck`). */
+export interface CodeFailingCheck {
+  name: string;
+  state: (typeof CHECK_STATES)[number] | (string & {});
+  required?: boolean;
+}
+
+/**
+ * Where a set of checks stands (`gitlet.CheckRollup`): each check's latest
+ * attempt of one commit for one branch, judged as the merge gate judges a
+ * check.
+ */
+export interface CodeCheckRollup {
+  state: CodeCheckRollupState;
+  counts: CodeCheckCounts;
+  /** How many of the checks are required, and how many of those passed or were skipped: "Passed 2 of 2". */
+  required: number;
+  required_passed: number;
+  last_ended?: string;
+  running_since?: string;
+  /** Required first, then by name; `failing_more` counts the rest. */
+  failing?: CodeFailingCheck[];
+  failing_more?: number;
+  /** The commit holds more checks for the branch than a rollup reads: the counts are of those it read. */
+  more?: boolean;
+}
+
+/** Where a commit's checks stand for one branch (`gitlet.TargetChecks`). */
+export interface CodeTargetChecks extends CodeCheckRollup {
+  /** The branch, in full: `refs/heads/main`. */
+  target: string;
+}
+
+/** One approval of the merged revision a merge's gate names (`gitlet.GateApproval`). */
+export interface CodeGateApproval {
+  handle: string;
+  kind: CodePartyKind;
+  revision: number;
+}
+
+/** A merge's gate as the rows keep it (`gitlet.LandingGate`), on a commit's page alone. */
+export interface CodeLandingGate {
+  approvals?: CodeGateApproval[];
+  approvals_more?: boolean;
+  /** The commit the gate's checks ran on, and where they stand; both absent where no attempt is kept. */
+  checks_on?: string;
+  checks?: CodeCheckRollup;
+  /** No attempt is kept and the merged revision was pushed over 30 days ago: its checks may have been swept. */
+  gone?: boolean;
+}
+
+/** A change as a commit names it, with how it landed once merged (`gitlet.ChangeLanding`). */
+export interface CodeChangeLanding extends CodeChangeName {
+  merge_oid?: string;
+  merged_at?: string;
+  merged_via?: "push" | "direct" | "queue" | (string & {});
+  merged_by?: string;
+  merged_by_kind?: CodePartyKind;
+  /** A person's reason for merging past the gate, on a commit's page alone. */
+  override_reason?: string;
+  /** The gate it merged through, on a commit's page alone. */
+  gate?: CodeLandingGate;
+}
+
+/** What a history page draws beside one commit (`gitlet.CommitMark`). */
+export interface CodeCommitMark {
+  commit: string;
+  checks?: CodeTargetChecks[];
+  checks_more?: boolean;
+  merged?: CodeChangeLanding[];
+  heads?: { change: CodeChangeLanding; n: number }[];
+  more?: boolean;
+}
+
+/** `code_commit_marks`: the marks of up to 100 commits, in the order they were named. */
+export interface CodeCommitMarksAnswer {
+  commit_marks?: CodeCommitMark[];
+  position: LogPosition;
+  level: ReadLevel;
 }
 
 /**
@@ -9186,8 +9415,8 @@ export interface CodeCommitAnswer {
   pushed_by?: CodePushedBy;
   push?: CodePushRow;
   coverage?: CodeCoverage;
-  merged?: CodeChangeName[];
-  revisions?: { change: CodeChangeName; n: number }[];
+  merged?: CodeChangeLanding[];
+  revisions?: { change: CodeChangeLanding; n: number }[];
   more?: boolean;
   position: LogPosition;
   level: ReadLevel;
@@ -9357,13 +9586,16 @@ export interface CodeQueryMap {
   code_checks: CodeChecksAnswer;
   code_check: CodeCheckAnswer;
   code_check_log: CodeCheckLogPage;
+  code_commit_marks: CodeCommitMarksAnswer;
   code_commit: CodeCommitAnswer;
   code_diff: CodeGitAnswer;
+  code_tips: CodeGitAnswer;
   code_compare: CodeComparisonAnswer;
   code_repos: CodeReposAnswer;
   code_repo: CodeRepoAnswer;
   code_refs: CodeRefsAnswer;
   code_tree: CodeGitAnswer;
+  code_find: CodeGitAnswer;
   code_blob: CodeGitAnswer;
   code_log: CodeGitAnswer;
   code_blame: CodeGitAnswer;

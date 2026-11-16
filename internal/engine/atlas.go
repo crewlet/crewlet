@@ -62,6 +62,7 @@ func (e *Engine) atlasRecords(ctx context.Context) gather.Sources {
 	if e.backends != nil {
 		if e.backends.Fleet != nil {
 			src.ToolServers, src.ServerTests = e.backends.Fleet, e.backends.Fleet
+			src.NodeStatuses = e.backends.Fleet
 		}
 		if e.backends.Coord != nil {
 			src.Nodes = e.backends.Coord

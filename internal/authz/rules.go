@@ -1863,9 +1863,11 @@ var rules = map[Action]rule{
 	// ROLE also needs a person present, so no pipeline holding a token can
 	// make an agent a vendor's administrator; an approved assistant request
 	// is that person, deciding that one request (ADR-0051).
-	ActionSetupAccessWrite: {class: ClassAdmin, recency: iam.RecencyStepUp,
+	// HUMAN-ONLY: no agent changes an agent's access, and choosing a grant
+	// request's option asks both from inside comment_on_work_item (ADR-0118).
+	ActionSetupAccessWrite: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp,
 		assist: AssistApprove},
-	ActionSetupAccessRaise: {class: ClassAdmin, recency: iam.RecencyStepUp,
+	ActionSetupAccessRaise: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp,
 		presence: PresenceRequired, assist: AssistApprove},
 	ActionFleetOperate: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
 	ActionFleetRead:    {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},

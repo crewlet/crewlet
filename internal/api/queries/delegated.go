@@ -111,8 +111,10 @@ func (s Sources) delegatedDecisions(ctx context.Context, p Params) (any, error) 
 			"escalate_to": nonNilStrings(r.EscalateTo), "sample_one_in": r.SampleRate(),
 			"always_escalate_paths": nonNilStrings(r.AlwaysEscalatePaths), "required_checks": checks})
 	}
+	lowest, highest, fallback := config.DelegatedSampleRange()
+	sample := map[string]any{"default": fallback, "min": lowest, "max": highest}
 	return map[string]any{
-		"enabled": company.Enabled, "rules": rules, "limits": s.delegatedLimitRows(),
+		"enabled": company.Enabled, "rules": rules, "limits": s.delegatedLimitRows(), "sample": sample,
 		"day": day.Label, "since": day.Start.UTC(), "until": day.End.UTC(), "complete": !now.Before(day.End),
 		"decided": decided, "decided_more": decidedMore,
 		"spot_checks": samples, "spot_checks_more": samplesMore,

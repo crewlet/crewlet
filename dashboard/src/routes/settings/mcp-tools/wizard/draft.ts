@@ -572,11 +572,13 @@ export function problemAt(
   field: string,
   key?: string,
 ): string | undefined {
-  return problems.find((p) => {
+  const found = problems.find((p) => {
     const at = fieldOf(p);
     const fields = field === "rows" ? ["headers", "env", "values", "optional_keys"] : [field];
     return fields.includes(at.field) && (key === undefined || at.key === key);
-  })?.message;
+  });
+  // The engine's words for a person where its rule wrote them.
+  return found?.said || found?.message;
 }
 
 /** A server name made from a title or a listing's name: what the person may change. */

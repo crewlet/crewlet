@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -955,6 +956,31 @@ units:
 			name: "node facts YAML reads as other types", tier: TierBootstrap,
 			yaml: "node:\n  id: 7\n  labels: {gpu: true, rack: 12}\n",
 		},
+		// A LABEL MAP'S COUNT IS IN THE SCHEMA, a label value's bound is not:
+		// it is counted in bytes and a schema counts characters, so the
+		// validator alone refuses a value past it.
+		{
+			name: "as many node labels as a node carries, each at its widest", tier: TierBootstrap,
+			yaml: "node:\n  labels:\n" + labelLines("    ", 16, strings.Repeat("v", 64)),
+		},
+		{
+			name: "one node label more than a node carries", tier: TierBootstrap, editorCatches: true,
+			yaml: "node:\n  labels:\n" + labelLines("    ", 17, "eu"),
+		},
+		{
+			name: "a node label value past its bound", tier: TierBootstrap, validatorOnly: true,
+			yaml: "node:\n  labels: {zone: " + strings.Repeat("v", 65) + "}\n",
+		},
+		{
+			name: "a selector naming more labels than a node carries", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - name: Builder\n    placement:\n      labels:\n" +
+				labelLines("        ", 17, "eu"),
+		},
+		{
+			name: "a selector value past its bound", tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nroles:\n  - {name: Builder, placement: {labels: {zone: " +
+				strings.Repeat("v", 65) + "}}}\n",
+		},
 
 		// A BOOLEAN READS YAML 1.1's WORDS too — the decoder keeps them.
 		{name: "a flag written as a word", tier: TierBootstrap, yaml: "stream:\n  debug: off\n  store_dir: /var/lib/crewlet/stream\n"},
@@ -1446,6 +1472,80 @@ func TestTheSchemaBoundsATokenIDWhereTheValidatorDoes(t *testing.T) {
 	}
 }
 
+// A LABEL MAP'S COUNT IS BOUNDED IN THE ARTIFACT WHERE THE VALIDATOR BOUNDS
+// IT, on the node and on the selector. A struct tag is a literal that cannot
+// name placement's constant, so this holds the literal to it. A value's bound
+// is NOT in the artifact, and must not be: the validator counts it in bytes
+// and a schema counts characters, so a maxLength of 64 would pass a value of
+// 64 two-byte letters the validator refuses and say the editor checked it.
+//
+// Mutation: drop either tag's maxkeys, or set it to a figure the constant does
+// not carry, and the arm for that field fails; put a maxlen back beside it and
+// the value arm fails.
+func TestTheSchemaBoundsLabelsWhereTheValidatorDoes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		tier       Tier
+		def, field string
+	}{
+		{TierBootstrap, "Node", "labels"},
+		{TierCompany, "RolePlacement", "labels"},
+	} {
+		defs, _ := schemaDoc(t, tc.tier)["$defs"].(map[string]any)
+		def, _ := defs[tc.def].(map[string]any)
+		props, _ := def["properties"].(map[string]any)
+		labels, _ := props[tc.field].(map[string]any)
+		if got, _ := labels["maxProperties"].(float64); int(got) != placement.MaxLabels {
+			t.Errorf("%s.%s: the schema holds %v labels, the validator %d", tc.def, tc.field,
+				labels["maxProperties"], placement.MaxLabels)
+		}
+		value, _ := labels["additionalProperties"].(map[string]any)
+		if bound, err := json.Marshal(value); err != nil || strings.Contains(string(bound), "maxLength") {
+			t.Errorf("%s.%s: the schema bounds a value in characters (%s), where the validator "+
+				"counts %d bytes", tc.def, tc.field, bound, placement.MaxLabelValueBytes)
+		}
+	}
+}
+
+// A LENGTH BOUND WITH NO PATTERN BOUNDS THE FIELD'S OWN SPELLING, never a
+// ${VAR} the tier admits beside it: a reference is as long as its name, which
+// says nothing about the value it resolves to, so a schema that bounded the
+// whole text would flag a file the engine runs. No field carries that shape
+// today, so this holds the generator to it directly, on both tiers' kinds of
+// reference.
+//
+// Mutation: drop textSchema's no-pattern branch, so the bound lands on the
+// whole text, and both arms fail.
+func TestALengthBoundLeavesAReferenceBesideItUnbounded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		resolves   bool
+		directives map[string]string
+		reference  string
+	}{
+		{"a Tier A field", true, map[string]string{"maxlen": "8"}, referencePattern},
+		{"a Tier B pointer", false, map[string]string{"maxlen": "8", "pointer": ""}, wholeReferencePattern},
+	} {
+		out := newSchemaGen(tc.resolves).textSchema(tc.directives)
+		if out["maxLength"] != nil {
+			t.Errorf("%s: the bound sits on the whole text, a long reference included: %v", tc.name, out)
+			continue
+		}
+		branches := anyOf(out)
+		if len(branches) != 2 {
+			t.Errorf("%s: %d branches, want the field's own and the reference: %v", tc.name, len(branches), out)
+			continue
+		}
+		own, _ := branches[0].(map[string]any)
+		reference, _ := branches[1].(map[string]any)
+		if own["maxLength"] != 8 || reference["pattern"] != tc.reference || reference["maxLength"] != nil {
+			t.Errorf("%s: want the bound on the field's own branch and the reference unbounded: %v",
+				tc.name, out)
+		}
+	}
+}
+
 // A KEYRING KEY'S ID IS BOUNDED WHERE A SEALED STREAM CAN NAME IT, in the
 // validator and in the artifact alike: a sealed stream's header names its key
 // in one length byte (secrets.MaxStreamKeyIDBytes), and an id past it refused
@@ -1661,4 +1761,13 @@ func TestEveryByteCeilingHasItsBoundsHeld(t *testing.T) {
 			"holds %v — every *_max_bytes field needs a row there, and every "+
 			"row a field", declared, held)
 	}
+}
+
+// labelLines is n label lines at indent, keyed k00 onward, each holding value.
+func labelLines(indent string, n int, value string) string {
+	var b strings.Builder
+	for i := range n {
+		fmt.Fprintf(&b, "%sk%02d: %s\n", indent, i, value)
+	}
+	return b.String()
 }
