@@ -2,6 +2,7 @@ package toolsession
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -139,6 +140,10 @@ type Call struct {
 type Result struct {
 	Output string
 	Failed bool
+
+	// Images ride after Output as image content, held to [crewletmcp.CheckImages]
+	// as they are written: an answer whose images break it is answered failed.
+	Images []crewletmcp.Image
 }
 
 // Server is one MCP server over a dispatcher: the tool list kept in step with
@@ -381,9 +386,23 @@ func (s *Server) handler(name string) mcp.ToolHandler {
 		if changed && hold {
 			s.awaitRelist(ctx, before)
 		}
-		return &mcp.CallToolResult{
-			IsError: res.Failed,
-			Content: []mcp.Content{&mcp.TextContent{Text: res.Output}},
-		}, nil
+		return answerOf(name, res), nil
 	}
+}
+
+// answerOf is res as the harness reads it: its text first, so a client that
+// reads no image still reads the answer, then each image. Images the rule
+// refuses are never written: the call is answered failed, saying why.
+func answerOf(name string, res Result) *mcp.CallToolResult {
+	if err := crewletmcp.CheckImages(res.Output, res.Images); err != nil {
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{
+			Text: fmt.Sprintf("%s could not be answered: %v. Nothing about the call was wrong.", name, err),
+		}}}
+	}
+	content := make([]mcp.Content, 0, 1+len(res.Images))
+	content = append(content, &mcp.TextContent{Text: res.Output})
+	for _, img := range res.Images {
+		content = append(content, &mcp.ImageContent{Data: img.Data, MIMEType: img.MIMEType})
+	}
+	return &mcp.CallToolResult{IsError: res.Failed, Content: content}
 }

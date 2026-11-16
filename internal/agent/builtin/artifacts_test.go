@@ -1129,7 +1129,7 @@ func TestAnArtifactWriteWhoseOutcomeIsUnknownIsNotReportedDone(t *testing.T) {
 	}
 }
 
-// EVERY WRITE IS A SHARED ONE TO THE SUB-AGENT GUARD, and the five reads are
+// EVERY WRITE IS A SHARED ONE TO THE SUB-AGENT GUARD, and the six reads are
 // reads, so a worker reads artifacts (and the company's brand) and writes none.
 func TestAWorkerReadsArtifactsAndWritesNone(t *testing.T) {
 	t.Parallel()
@@ -1141,12 +1141,14 @@ func TestAWorkerReadsArtifactsAndWritesNone(t *testing.T) {
 		}
 		read := name == builtin.ListArtifactsTool || name == builtin.GetArtifactTool ||
 			name == builtin.DashboardSourcesTool || name == builtin.ArtifactFormatTool ||
-			name == builtin.CompanyBrandTool
+			name == builtin.CompanyBrandTool || name == builtin.ListArtifactCommentsTool
 		if mcp.WritesToSharedSurface(entry.Annotations) == read {
 			t.Errorf("%s: WritesToSharedSurface = %v", name, !read)
 		}
-		if entry.Surface != "" {
-			t.Errorf("%s delivers to %q; publishing reaches nobody by itself", name, entry.Surface)
+		// A COMMENT AND A RESOLVE ANSWER ON THE ARTIFACT; publishing reaches nobody by itself.
+		answers := name == builtin.CommentOnArtifactTool || name == builtin.ResolveArtifactCommentTool
+		if (entry.Surface != "") != answers {
+			t.Errorf("%s delivers to %q", name, entry.Surface)
 		}
 	}
 }

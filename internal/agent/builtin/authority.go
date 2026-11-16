@@ -440,6 +440,13 @@ var subjectOf = map[string]subject{
 	// destination by the folder's top-level owner and shares, neither of
 	// which any argument states (see artifacts_folders.go).
 	MoveArtifactTool: {kind: authz.KindArtifact, inTool: true},
+	// A COMMENT IS DECIDED BY THE SAME STORED ROW, and the writer keeps an
+	// edit to the remark's author (see artifacts_comments.go).
+	ListArtifactCommentsTool:   {kind: authz.KindArtifact, inTool: true},
+	CommentOnArtifactTool:      {kind: authz.KindArtifact, inTool: true},
+	ResolveArtifactCommentTool: {kind: authz.KindArtifact, inTool: true},
+	EditArtifactCommentTool:    {kind: authz.KindArtifact, inTool: true},
+	RemoveArtifactCommentTool:  {kind: authz.KindArtifact, inTool: true},
 
 	// AND ITS DATASTORE, decided by the same stored row and then by each
 	// collection's own rules, which the tool settles once it has read the

@@ -414,6 +414,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		rows, err = a.applyFolder(ctx, tx, c)
 	case KindBrand:
 		rows, err = a.applyBrand(ctx, tx, c)
+	case KindComment:
+		rows, err = a.applyComment(ctx, tx, c)
 	default:
 		// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY AT A VERSION IT
 		// CAN READ, which is a writer publishing a kind it never declared;

@@ -2667,6 +2667,7 @@ const (
 	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
 	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0:
 	// 6521.2 KiB (6,677,673 bytes), 149,862 over main: 6522 KiB.
+	// Anchored comments on kit 0.139.0: 6523.1 KiB (6,679,624 bytes); its vendor marks are 130.8 KiB: 6524 KiB.
 	treeBudget = 5<<20 + 1402<<10
 )
 

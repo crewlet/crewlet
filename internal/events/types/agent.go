@@ -147,6 +147,9 @@ type PromptSection struct {
 // does not know is still arguments not known. Absent on every other call, and
 // on a row a build before it wrote.
 //
+// `images` lists each image a call's answer handed its model as
+// `{"mime_type", "bytes"}`, never the picture; absent when it carried none.
+//
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely
 // because a hand-maintained field list is how a failed tool call got deleted on

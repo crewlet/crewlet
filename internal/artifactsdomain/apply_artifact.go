@@ -901,6 +901,8 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 		`DELETE FROM artifact_reads WHERE artifact_id = ?`,
 		`DELETE FROM artifact_source_claims WHERE artifact_id = ?`,
 		`DELETE FROM artifact_history WHERE artifact_id = ?`,
+		`DELETE FROM artifact_comment_threads WHERE artifact_id = ?`,
+		`DELETE FROM artifact_comments WHERE artifact_id = ?`,
 		`DELETE FROM artifacts WHERE id = ?`,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, id) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml

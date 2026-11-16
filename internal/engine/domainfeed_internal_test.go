@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -274,6 +275,28 @@ func TestTheCodeFeedIsDeclaredWithItsTranslator(t *testing.T) {
 	if !ok || !group.Data {
 		t.Errorf("the code feed's group is declared %+v (%v), want a group only a data node joins — "+
 			"the feed reads the log a data node applies", group, ok)
+	}
+}
+
+// The artifacts feed is declared with its translator, under its own group and
+// source. Mutation: drop the entry's Feed, or declare no group, and feedFor
+// refuses it.
+func TestTheArtifactsFeedIsDeclaredWithItsTranslator(t *testing.T) {
+	t.Parallel()
+	if group := (artifactsdomain.Domain{}).FeedGroup(); group != artifactsdomain.FeedGroup {
+		t.Fatalf("the artifacts log declares the wake feed %q, want %q", group, artifactsdomain.FeedGroup)
+	}
+	translator, opener, err := (&Engine{}).feedFor(&runningLog{domain: artifactsdomain.Domain{}})
+	if err != nil || translator == nil || opener == nil {
+		t.Fatalf("feedFor(artifacts) = (%v, %v, %v), want the artifacts feed", translator, opener, err)
+	}
+	if src := translator.Source(); src.Name != artifactsdomain.Source || src.Group != artifactsdomain.FeedGroup {
+		t.Errorf("the artifacts feed runs as %+v, want source %q under %q", src, artifactsdomain.Source,
+			artifactsdomain.FeedGroup)
+	}
+	if group, ok := fleetGroupNamed(artifactsdomain.FeedGroup); !ok || !group.Data {
+		t.Errorf("the artifacts feed's group is declared %+v (%v), want a group only a data node joins",
+			group, ok)
 	}
 }
 

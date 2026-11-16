@@ -345,7 +345,7 @@ func (c *Conn) call(ctx context.Context, call Call) Result {
 	})
 	got := Result{Name: call.Name, Err: err}
 	if res != nil {
-		got.Output, got.Failed = text(res), res.IsError
+		got.Output, got.Failed, got.Content = text(res), res.IsError, res.Content
 	}
 	return got
 }

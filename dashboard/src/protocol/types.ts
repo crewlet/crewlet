@@ -7268,6 +7268,87 @@ export interface ArtifactSeenByAnswer {
   reads: { seat: string; opened_at: string }[];
 }
 
+/** What a comment thread points at (`commentanchor.Kind`). */
+export type ArtifactCommentAnchorKind = "version" | "html" | "slides" | "design";
+
+/** Where a thread points (`commentanchor.Anchor`): keyed by `kind`, each with its own fields. */
+export interface ArtifactCommentAnchor {
+  kind: ArtifactCommentAnchorKind;
+  /** html: the page's path in the version. */
+  page?: string;
+  /** html: a name the page declares. */
+  name?: string;
+  /** html: a point as fractions (0..1) of the page document, where no name is. */
+  point?: { x: number; y: number };
+  /** slides: the slide's id, the element's path of child indexes ("0/2/1"), its tag and first 200 characters. */
+  slide?: string;
+  path?: string;
+  tag?: string;
+  text?: string;
+  /** design: the artboard's file, and a point in its own pixels (0 is left out on the wire). */
+  board?: string;
+  x?: number;
+  y?: number;
+}
+
+/** Where a thread is on the version asked: as made, moved, gone (outdated), or made later. */
+export type ArtifactCommentPlacement = "here" | "moved" | "outdated" | "later";
+
+/** One remark of a thread. A removed remark keeps its place and author; its words are gone. */
+export interface ArtifactCommentRemark {
+  id: string;
+  author: string;
+  author_kind: string;
+  /** Markdown, as its author wrote it. */
+  body: string;
+  mentions?: string[];
+  reply_to?: string;
+  created_at: string;
+  edited_at?: string;
+  removed?: boolean;
+}
+
+/** One thread, placed on the version asked. */
+export interface ArtifactCommentThread {
+  id: string;
+  /** The version it was made on. */
+  version: number;
+  anchor: ArtifactCommentAnchor;
+  /** Where it points, in words, as the engine says it to people and agents alike. */
+  label: string;
+  placement: ArtifactCommentPlacement;
+  /** The anchor as found on the version asked; absent when outdated. */
+  place?: ArtifactCommentAnchor;
+  /** The anchored part's words as the commenter saw them. */
+  quote?: string;
+  /** A picture of the part as the commenter saw it, as a data URL. */
+  crop?: string;
+  status: "open" | "resolved";
+  resolved_by?: string;
+  resolved_by_kind?: string;
+  resolved_at?: string;
+  /** The version that addressed it. */
+  resolved_version?: number;
+  created_by: string;
+  created_by_kind: string;
+  created_at: string;
+  updated_at: string;
+  remarks: ArtifactCommentRemark[];
+}
+
+/** `artifact_comments{id, version}`: every thread, placed on the version asked. `open` counts open
+ *  threads still placed, `outdated` open ones whose part is gone, `resolved` every resolved one. */
+export interface ArtifactCommentsAnswer {
+  artifact: string;
+  version: number;
+  head: number;
+  counts: { open: number; resolved: number; outdated: number };
+  /** The reader may comment: commenter or above, on a live artifact. */
+  can_comment: boolean;
+  role: ArtifactRole;
+  threads: ArtifactCommentThread[];
+}
+
 /** One share and the seats a unit share reaches today (`artifactsapi.ShareAccess`). */
 export interface ArtifactShareAccess extends ArtifactShare {
   members?: string[];
@@ -8034,15 +8115,25 @@ export interface ArtifactJoined {
   resync: boolean;
 }
 
+/** What an `artifact_changed` push says moved (`artifactsdomain.MoveKinds`). `folder` is a refiling
+ *  (a folder's removal pushes nothing per artifact); `comment` is any write on a thread. */
+export type ArtifactChangedWhat =
+  | "version"
+  | "meta"
+  | "share"
+  | "asset"
+  | "trash"
+  | "restore"
+  | "purge"
+  | "transfer"
+  | "folder"
+  | "comment"
+  | "reset";
+
 /** An `artifact_changed` push (`stream.ArtifactChange`): a hint, never content. */
 export interface ArtifactChangedPush {
   artifact: string;
-  /**
-   * `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`,
-   * `transfer`, `reset` or `folder` (it was filed in another folder; a
-   * folder's removal moves its artifacts up and pushes nothing per artifact).
-   */
-  what: string;
+  what: ArtifactChangedWhat;
   head?: number;
   position: LogPosition;
 }
@@ -8234,6 +8325,7 @@ export interface QueryMap {
   artifact_assets: ArtifactAssetsAnswer;
   artifact_seen_by: ArtifactSeenByAnswer;
   artifact_access: ArtifactAccessAnswer;
+  artifact_comments: ArtifactCommentsAnswer;
   artifact_usage: ArtifactUsageAnswer;
   artifact_trail: ArtifactTrailAnswer;
   artifact_data: DataDocPage;

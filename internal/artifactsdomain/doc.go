@@ -15,8 +15,9 @@
 // removal. A republish-in-place address is a SOURCE subject, create-only, so two
 // first publishes of one source contend there. An asset rides a subject of its
 // own beneath its artifact (never carried, so it needs no artifact ordering),
-// and a reader's pins and opened marks ride the reader's. The `comment` kind is
-// reserved for a later build and has no op here.
+// and a reader's pins and opened marks ride the reader's. A comment thread
+// rides its own beneath its artifact ([CommentSubject], ADR-0154), and its
+// place on a version is found at read by internal/artifacts/commentanchor.
 //
 // # The carry rule, and why the collector needs no lock
 //
@@ -72,8 +73,9 @@
 // version, a narrowing's access epoch, a trash, a purge), built from the rows it
 // wrote, and the engine fans it out to the serving origin's authorization cache
 // and the socket hub ([Moved]). A batch that retained a record this build cannot
-// read moves everything ([MoveReset]). No record wakes a seat in this release, so
-// the domain declares no feed.
+// read moves everything ([MoveReset]). A comment record carries who it wakes
+// ([CommentNotify]), and the domain's wake feed ([FeedGroup]) derives each wake
+// from it.
 //
 // # An artifact lives in one folder, and a folder grants nothing
 //
