@@ -62,6 +62,9 @@ func init() {
 var readBounds = map[string]bound{
 	"search_work": {kind: boundCapped,
 		why: "a ranked search answers its best matches, at most 25, never a page of a list"},
+	"search_grant_catalogue": {kind: boundCapped,
+		why: "a lookup answers its first matches, at most seataccess.MaxLookup, beside one " +
+			"agent's lane, never a vendor's catalogue whole"},
 	"list_tasks":             {kind: boundPage},
 	"get_task":               {kind: boundRecord, record: "item"},
 	"get_task_thread":        {kind: boundPage},

@@ -331,6 +331,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// WHAT DELEGATES DECIDED, read by the people a rule answers to and by
 		// administrators (ADR-0125).
 		"delegated_decisions": "decided_by:" + string(authz.ActionDelegatedRead),
+		// AND WHAT A RULE CAN NAME FROM THE COMPANY'S GITHUB: the
+		// administrator's, who writes the rule into the document.
+		"delegated_repositories": "admin", "delegated_branches": "admin", "delegated_checks": "admin",
 
 		// THE ARTIFACTS: the listing and the folder tree are everybody's and
 		// filtered row by row and folder by folder;

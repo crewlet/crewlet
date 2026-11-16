@@ -748,15 +748,16 @@ const decisionRows, runAskField = "items", "run.question"
 // its answer holds: an executor's question is read by the one rule for an
 // executor's words (provenance.Executor) whichever route carries it, as the
 // curated reads of the same decisions read it.
-func (g generic) trustOf(args Args, answer any) provenance.Trust {
+func (g generic) trustOf(args Args, answer any) Trusted {
 	route, _ := g.table.Lookup(args.String("route"))
 	for _, prefix := range outsideRoutes {
 		if strings.HasPrefix(route.Path(), prefix) {
-			return provenance.TrustExternal
+			return Trusted{Trust: provenance.TrustExternal}
 		}
 	}
 	if carriesRunAsk(answer, decisionRows, runAskField) {
-		return provenance.Executor("").Trust
+		l := provenance.Executor("")
+		return Trusted{Trust: l.Trust, Source: l.Source}
 	}
 	return knowledgeTrust(answer)
 }

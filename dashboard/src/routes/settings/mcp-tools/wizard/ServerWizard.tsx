@@ -414,7 +414,16 @@ export function ServerWizard({
 
   const go = (id: Step) => {
     // REVIEW LISTS EVERYTHING, so reaching it is acting on every step.
-    if (id === "review") setAttempted(new Set(steps));
+    if (id === "review") {
+      setAttempted(new Set(steps));
+      // A step left short is said on its field rather than sent for the engine to refuse.
+      const short = steps.find((s) => s !== "review" && !isComplete(missingIn(draft, s)));
+      if (short) {
+        setStep(short);
+        focusWhenShown(() => firstInvalid(root.current));
+        return;
+      }
+    }
     setStep(id);
     if (steps.indexOf(id) > steps.indexOf(reached)) setReached(id);
   };
@@ -479,7 +488,10 @@ export function ServerWizard({
     }
   }
 
-  const attention = new Set(problems.map((p) => stepOf(p, draft.transport)));
+  const attention = new Set([
+    ...problems.map((p) => stepOf(p, draft.transport)),
+    ...steps.filter((s) => attempted.has(s) && !isComplete(missingIn(draft, s))),
+  ]);
   const stepList: StepperStep[] = steps.map((id) => ({
     id,
     label: LABELS[id],

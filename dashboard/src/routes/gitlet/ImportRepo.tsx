@@ -8,6 +8,7 @@
 
 import { useMemo, useState } from "react";
 import { Button, Checkbox, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { fieldError, holdReason } from "~/lib/formHold.ts";
 import { Modal } from "~/components/Modal.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { importFormHeld, importHeld } from "~/lib/repoWrites.ts";
@@ -46,7 +47,8 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
   const [credential, setCredential] = useState("");
   const [owner, setOwner] = useState("");
   const [mirror, setMirror] = useState(false);
-  const blocked = importFormHeld(name, url, credential, owner);
+  const hold = importFormHeld(name, url, credential, owner);
+  const blocked = holdReason(hold);
   const submit = async () => {
     if (blocked !== undefined) return;
     const result = await write.run(
@@ -88,7 +90,11 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
       <Stack gap={3}>
         {/* LABELLED FIELDS, as every other form here: a placeholder alone is
             gone once a value is typed, and with it which field holds what. */}
-        <FormField label="Name" helper="The repository's name in Crewlet.">
+        <FormField
+          label="Name"
+          helper="The repository's name in Crewlet."
+          error={fieldError(hold, "name")}
+        >
           {(field) => (
             <Input
               id={field.id}
@@ -101,7 +107,11 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
             />
           )}
         </FormField>
-        <FormField label="Source URL" helper="Where it is cloned from, over HTTPS.">
+        <FormField
+          label="Source URL"
+          helper="Where it is cloned from, over HTTPS."
+          error={fieldError(hold, "url")}
+        >
           {(field) => (
             <Input
               id={field.id}
@@ -118,6 +128,7 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
           label="Credential variable"
           optional
           helper="The name of the secret holding a token for a private source."
+          error={fieldError(hold, "credential")}
         >
           {(field) => (
             <Input

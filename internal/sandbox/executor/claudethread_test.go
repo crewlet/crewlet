@@ -778,8 +778,14 @@ func fewestAllocations(read func()) uint64 {
 }
 
 // fewestCalls: under -race sync.Pool drops a quarter of puts and a decode makes
-// about five pool round trips, so one call in four costs only its own objects;
-// the fewest of 200 misses that one run in 10^23 (of 20, one in 250).
+// about five pool round trips, so about one call in four costs only its own
+// objects. The calls are not independent, though: of three hundred measures of
+// one decode under -race, each the fewest of twenty calls, about one in sixty
+// came out one to three objects over the floor, where independent calls would
+// give one in 250. So the fewest of 200 is far likelier than not to reach the
+// floor, but no claim compares two such counts exactly: it allows the measure
+// what the race detector can add, and asks for less than the cost of what it
+// refutes.
 const fewestCalls = 200
 
 // A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: a line whose JSON fails
@@ -873,6 +879,13 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 		t.Error("the zero fault, the zero kind or a kind the load keeps no record of reads as valid")
 	}
 
+	// READ ONCE, held by what reading the line again costs, never by an exact
+	// count ([fewestCalls]): the cheapest second read the load has is the
+	// classifier's own decoder over the line ([refusedFault], four objects
+	// with or without the race detector, where a second whole decode is nine),
+	// above the one to three the race detector's pools were measured to add.
+	// A line the decode takes costs less than its one decode and its head
+	// with that second read on top, or it was read again.
 	good := []byte(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn))
 	read := fewestAllocations(func() { _, _ = decodeThreadLine(1, good) })
 	decode := fewestAllocations(func() {
@@ -880,9 +893,14 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 		_ = wireDecode(good, &w)
 		_, _ = w.head()
 	})
-	if read > decode {
-		t.Errorf("a line the decode takes costs %d allocations, and its one decode and its head %d: the line is "+
-			"read again", read, decode)
+	again := fewestAllocations(func() { _ = refusedFault(good) })
+	if again < 4 {
+		t.Fatalf("reading the line again costs %d allocations, fewer than the race detector's pools can add to a "+
+			"measure: the claim below would not tell a line read again", again)
+	}
+	if read >= decode+again {
+		t.Errorf("a line the decode takes costs %d allocations, and its one decode and its head %d, with %d more "+
+			"for reading it again: the line is read again", read, decode, again)
 	}
 }
 

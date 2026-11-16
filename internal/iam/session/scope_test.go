@@ -15,7 +15,7 @@ func (s *signedIn) restrictedCookie() string {
 	s.t.Helper()
 	cookie, err := s.signer.Mint(session.Mint{
 		Lineage: s.lineage, Person: personID, Epoch: 3, Generation: 1,
-		StartPosition: startPos, AbsoluteExpiresAt: s.clock.now().Add(absolute),
+		StartPosition: startPos, SignedInAt: s.clock.now(), AbsoluteExpiresAt: s.clock.now().Add(absolute),
 		EnrolmentOnly: true,
 	})
 	if err != nil {
@@ -94,7 +94,7 @@ func TestASessionThatMayOnlyEnrolSaysSoInItsOwnBearer(t *testing.T) {
 // a scope THIS build cannot name (a newer build narrowing a session some other
 // way) and a scope cut off to widen the session, which the signature covers.
 //
-// Mutation: always append a scope and the whole row has ten fields; accept an
+// Mutation: always append a scope and the whole row has twelve fields; accept an
 // unknown scope as whole and the forged row is served; leave the scope outside
 // the signed payload and the stripped row validates as a whole session.
 func TestAScopedBearerIsAFormatNoOlderBuildServesWhole(t *testing.T) {
@@ -102,12 +102,12 @@ func TestAScopedBearerIsAFormatNoOlderBuildServesWhole(t *testing.T) {
 	rig := newSignedIn(t)
 	restricted := rig.restrictedCookie()
 
-	if n := len(strings.Split(rig.cookie, ".")); n != 9 {
-		t.Errorf("a whole session's bearer has %d fields, want the nine every "+
-			"build reads", n)
+	if n := len(strings.Split(rig.cookie, ".")); n != 11 {
+		t.Errorf("a whole session's bearer has %d fields, want the eleven every "+
+			"v4 build reads", n)
 	}
-	if n := len(strings.Split(restricted, ".")); n != 10 {
-		t.Fatalf("a restricted session's bearer has %d fields, want ten", n)
+	if n := len(strings.Split(restricted, ".")); n != 12 {
+		t.Fatalf("a restricted session's bearer has %d fields, want twelve", n)
 	}
 
 	// THE FORGE IS SOUND: the restricted bearer re-signed as it stands

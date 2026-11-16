@@ -217,6 +217,11 @@ image is refused: paste the text the image shows instead, or ask an
 administrator to turn on deep work. A question that reaches the engine with
 images all the same is answered with the same advice.
 
+**Think harder** on a hard question, where your company sets a stronger model:
+press it beside **Attach image** and the next question is answered by that
+model, which takes longer and costs more. It applies to that one question;
+press it again for another.
+
 **Take you somewhere:** an **Open in app** card links to the dashboard page a
 record lives on. Links come only from the engine's own route table, never from
 text the model wrote.
@@ -233,9 +238,14 @@ model's description of it.
 
 - **Approve** sends that one request, as you, from your own browser session.
   The receipt appears on the card and the screen behind it refreshes.
+- A change prepared after Ask Crewlet read text that may have been written
+  **outside the company** says so at the top of the card, naming where it
+  read it ("Prepared after reading an agent's question"), so you can check
+  that the change is what you asked for and not what that text asked for.
 - **Decline** discards it, and Ask Crewlet continues knowing you declined.
 - A proposal **expires** if it waits too long (15 minutes unless your company
-  sets otherwise). Ask again to get a fresh one.
+  sets otherwise). The card counts down to it beside **Approve** ("Expires in
+  12m"). Ask again to get a fresh one.
 - If the record **changed since the preview** (someone else edited it), the
   approval is refused as stale and nothing is sent. Ask Crewlet can prepare
   a new proposal against the current version. A change that creates something
@@ -255,7 +265,8 @@ model's description of it.
   and one whose last turn failed is flagged so you check it first.
 - Some changes ask you to **confirm your identity** first (a step-up), the
   same as making the change on its own screen would. Sharing an artifact with
-  the whole company always does.
+  the whole company always does. The card says so beside **Approve** before
+  you press it.
 - If the outcome of an approved change cannot be confirmed (for example the
   connection dropped), the card says so and offers **Retry**, which sends the
   same request under the same operation, so it can never apply twice.

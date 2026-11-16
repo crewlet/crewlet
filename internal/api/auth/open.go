@@ -26,8 +26,8 @@ import (
 //
 // The idle deadline is the bearer's own, moved by a re-issue on a REST
 // response — and a connection can never receive one: its bearer is the one
-// its handshake presented, so its idle deadline is the handshake's plus
-// [session.Idle] however busy the tab has been since. Decided on that, every
+// its handshake presented, so its idle deadline is the handshake's plus the
+// idle limit however busy the tab has been since. Decided on that, every
 // dashboard left open past it would be closed by the first identity event
 // anywhere in the company, while its person was at the screen. An open live
 // view is activity; the session is decided on its ROWS instead — ended,

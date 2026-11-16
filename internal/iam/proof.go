@@ -61,7 +61,7 @@ var SecondFactors = []SecondFactor{SecondFactorRequired, SecondFactorOptional}
 func (s SecondFactor) Valid() bool { return slices.Contains(SecondFactors, s) }
 
 // MinPasswordChars is the shortest password this engine accepts, and the floor
-// under `api.auth.min_password_length`.
+// under the company's `sign_in.min_password_length`.
 //
 // TWELVE, AND NO COMPOSITION RULES — no required digit, no required symbol, no
 // forbidden repeat. That is the current guidance and it is guidance because
@@ -79,9 +79,9 @@ const MinPasswordChars = 12
 // Recency is how recently a gesture needs whoever makes it to have PROVED who
 // they are — the step-up requirement, as a value a rule states.
 //
-// ONE WINDOW, and it is the configuration's: `step_up` is
-// `api.auth.session.step_up` (an hour by default), spelled as its key so the
-// setting an operator would tune and the word a refusal names are one string.
+// ONE WINDOW, and it is the company's: `step_up` is `sign_in.step_up_seconds`
+// (an hour by default), so the setting an administrator tunes and the word a
+// refusal names are one word.
 // Every gesture that asks for a recent proof asks this one — revealing a
 // secret, changing somebody's authority or how they prove who they are,
 // ending every session in the company, writing the configuration — for the
@@ -107,7 +107,7 @@ const (
 	// not a step-up surface.
 	RecencyAny Recency = "any"
 
-	// RecencyStepUp asks for a proof inside `api.auth.session.step_up`: the
+	// RecencyStepUp asks for a proof inside `sign_in.step_up_seconds`: the
 	// company's configuration, its chart, its integrations, its credential
 	// store, the identity directory's writes, how somebody proves who they
 	// are, and the deployment's own controls.

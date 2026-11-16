@@ -1,6 +1,7 @@
 package authz_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -224,20 +225,34 @@ func TestAMachineTokenNeverChangesHowItsOwnerProvesWhoTheyAre(t *testing.T) {
 // assistant's — the operator surface serves the same catalogue over MCP, and
 // an assistant connects with the machine token its person minted for it — so
 // either kind of row needing a person present would refuse every assistant
-// that call. It is also what keeps the act transport's answers to the codes it
-// declares (internal/api/operator's ActTransportCodes, held against the
-// dashboard): a refusal there is mapped by [authz.RefusalFields], and
-// `token_refused` is not among them because no verb the tool gate is asked can
-// be refused it.
+// that call. The one declared exception ([presentInTools]) is why the act
+// transport also answers `token_refused`.
 //
 // Mutation: make `pages.rename` need a person present and this goes red
 // naming internal/agent/builtin, where the rename tool asks it.
 func TestNoToolNeedsAPersonPresent(t *testing.T) {
 	t.Parallel()
+	asked := map[authz.Action]bool{}
 	for _, v := range toolVerbs(t) {
+		asked[v.verb] = true
+		if _, declared := presentInTools[v.verb]; declared && strings.Contains(string(v.verb), ".") {
+			continue
+		}
 		if p, _ := authz.PresenceOf(v.verb); p != authz.PresenceOptional {
 			t.Errorf("%s needs a person present (%s), which no assistant "+
 				"acting through a token can be", v.how, p)
 		}
 	}
+	for verb := range presentInTools {
+		if p, _ := authz.PresenceOf(verb); !asked[verb] || p == authz.PresenceOptional {
+			t.Errorf("presentInTools declares %s, which no tool asks or which needs nobody present", verb)
+		}
+	}
+}
+
+// presentInTools are the verbs a tool asks from inside itself that need a person
+// present, each with why: refused to a token as `token_refused`.
+var presentInTools = map[authz.Action]string{
+	authz.ActionSetupAccessRaise: "choosing an agent's grant request's option for a permission that " +
+		"changes things raises its access (ADR-0118, ADR-0150), which a person makes at a keyboard",
 }

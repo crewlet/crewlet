@@ -77,7 +77,7 @@ func (f *FleetStore) DeleteNodeStatus(ctx context.Context, node string, through 
 		return fmt.Errorf("%w (removing one)", coord.ErrNoNodeStatus)
 	}
 	key := encodeKey(node)
-	kve, err := f.nodeStatus.Get(ctx, key)
+	kve, err := f.get(ctx, f.nodeStatus, key)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return nil

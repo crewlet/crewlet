@@ -423,11 +423,16 @@ providers:
 assistant:
   enabled: true                         # absent or false: off
   llm: [assistant]                      # providers.llm keys, a fallback chain
-  max_steps: 30                         # tool steps per turn, 1..40
+  max_steps: 30                         # model rounds per turn, 1..40
   turn_timeout_seconds: 900             # longest turn, 30..1200
   proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
   retention_days: 30                    # conversation history, 1..365
   token_budget: { day: 200000 }         # per person, optional
+  deliberate:                           # optional: a stronger model for hard questions
+    llm: [assistant-strong]             # held to llm's rules, same budgets
+    decision_briefs: true               # Brief me on this decision uses it too
+  tools:
+    deny: [chat_writes]                 # optional: tool families turned off for everybody
   deep_work:                            # optional: absent is quick mode only
     llm: assistant-deep                 # a Claude Code entry (harness: claude-code)
     timeout_seconds: 1200               # one run's wall clock, 60..1200
@@ -439,11 +444,14 @@ assistant:
 |---|---|---|
 | `enabled` | off | Runs Ask Crewlet. A pointer, so an absent key and `false` both mean off. |
 | `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
-| `max_steps` | 30 | The most tool steps one turn may take: enough to look a route up, read what it touches and propose the change. |
+| `max_steps` | 30 | The most model rounds one turn may take before its answer, each calling any number of tools: enough to look a route up, read what it touches and propose the change. |
 | `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a harness launch of fifteen to twenty-five seconds. |
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
+| `deliberate.llm` | none | A stronger chain for hard questions, first key first. A person asks for it one question at a time with **Think harder** in the drawer, which is offered only when this is set. Every member is held to `llm`'s rules below, and its rounds are charged to the same budgets. Required when `deliberate` is set. |
+| `deliberate.decision_briefs` | false | **Brief me on this decision** runs on `deliberate.llm` too. |
+| `tools.deny` | none | Tool families Ask Crewlet never offers anybody, each once. It only narrows what a person's own permissions offer, never widens them. `writes` turns off every change it could propose, so it only reads; `generic_changes` the change to any API route; `generic_reads` the read of any API route; `chat_writes`, `atlas_writes` and `agent_controls` (pausing, resuming, steering and answering an agent's run) those writes; `page_changes` a change to the screen the person has open; `deep_work` the escalation into deep work, and so reading images. |
 | `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`harness: claude-code`), run as its harness's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
 | `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
 | `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
@@ -1759,33 +1767,26 @@ api:
     admin: serve        # serve | refuse. Required once port is set: whether
                         #   THIS node grants admin to those who hold it.
                         #   refuse clamps admin away here and keeps every app
-    session:
-      absolute: 168h          # 1h..720h (default 168h)
-      step_up: 1h             # 5m..24h  (default 1h): how recent a proof of
-                              #   identity every step-up gesture asks for — a
-                              #   config, setup, credential, deployment or
-                              #   /iam write, revealing a secret, changing
-                              #   how somebody proves who they are. ONE window,
-                              #   as GitHub's sudo mode keeps one. A Tier A
-                              #   token or a machine token is fresh by
-                              #   construction
+    limits:             # THIS node's bounds on the company's sign-in
+                        #   policy (Tier B `sign_in`). A company value past
+                        #   one is refused by this node's writes and held to
+                        #   the limit by its sign-ins
+      second_factor: required    # required (default): the company may not
+                                 #   drop the second factor | optional: it
+                                 #   may. optional off loopback is refused
+                                 #   without accept_insecure
+      min_password_length: 12    # 12..256 (default 12): the lowest password
+                                 #   floor the company may set
+      max_session_lifetime: 720h # 1h..720h (default 720h)
+      max_idle_timeout: 720h     # 15m..720h (default 720h)
+      max_step_up: 24h           # 5m..24h (default 24h)
     audit:
       changes: 9600h    # 2160h..24000h (default 9600h = 400 days)
       sessions: 2160h   # 168h..9600h   (default 2160h = 90 days), and never
                         #   longer than `changes`
-    # People always sign in with a login and a password; these three say
-    #   what that asks of them.
-    totp: required      # required (the default when unset) | optional.
-                        #   required: a password sign-in by somebody who
-                        #   holds no second factor opens a session that may
-                        #   only enrol one (POST /auth/totp). optional off
-                        #   loopback is refused without accept_insecure
-    accept_insecure: false   # acknowledge an insecure posture off loopback
-    min_password_length: 12  # 12..256; 0 takes the engine's floor of 12.
-                             #   Enforced wherever a person sets a password —
-                             #   an invitation's redemption, a change, a reset
-                             #   or first password link — and what
-                             #   /auth/config tells a form to refuse
+    accept_insecure: false   # acknowledge an insecure posture off loopback:
+                             #   what lets limits.second_factor: optional
+                             #   stand on a routable address
     tokens:             # the DEPLOYMENT's machine credentials. At least one
                         #   is required once port is set
       - id: founder     # acts under the login token:founder — lowercase
@@ -1832,7 +1833,7 @@ retention:
                                   #   that intends to keep working
 ```
 
-**The sign-in settings are readable from the dashboard, not editable there.** `api.auth.totp`, `min_password_length` and `session` are this node's own file, so an administrator reads what THIS node enforces through the [`sign_in_policy`](../reference/api-endpoints.md#queries) question, every value as the engine applies it (an unset setting arrives as its default) and the session's idle lifetime beside them, which is a constant of the engine. Nodes of one fleet may disagree, and the answer names the node it describes. Changing any of them is an edit to this file and a restart.
+**The sign-in policy is the company's, and `api.auth.limits` bounds it on this node.** Whether a second factor is required, the shortest password, the session lifetime, the idle limit and the step-up window are Tier B (`sign_in`, see [Sign-in](#sign-in)), changed from Settings › Sign-in policy without a restart; an administrator reads them, this node's limits and what this node enforces through the [`sign_in_policy`](../reference/api-endpoints.md#queries) question. Changing a limit is an edit to this file and a restart.
 
 **`crewlet validate` prints warnings as well as refusals**, and they are
 separate on purpose: the exit code turns on refusals alone, so a CI step gates
@@ -2412,6 +2413,24 @@ Everything else a tracker could be told is either a fact about the **operator** 
 **Every broker member needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded member with no `stream.store_dir` — a single node included — keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot. A node without `data` is no member: it joins the members' broker as a leaf and keeps no stream of its own, so it is refused a `store_dir` instead, and a node dialling an external cluster keeps nothing either — that cluster's storage is its operator's.
 
 It applies whatever backends a company names, and whether the node has a company at all. Worklet, Doclet or Chatlet puts its items, its pages or its messages there, but the **identity estate** (the people who can sign in) is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+
+### Sign-in
+
+```yaml
+sign_in:
+  require_second_factor: true            # default true: a password sign-in also
+                                         #   gives a code from an authenticator app.
+                                         #   false needs the node's
+                                         #   api.auth.limits.second_factor: optional
+  min_password_length: 12                # 12..256 (default 12)
+  session_lifetime_seconds: 604800       # 3600..2592000 (default 7 days): from sign-in
+  idle_timeout_seconds: 43200            # 900..2592000 (default 12 hours): unused
+  step_up_seconds: 3600                  # 300..86400 (default 1 hour): how long a
+                                         #   proof of identity authorises a sensitive
+                                         #   change before it is asked again
+```
+
+How the company's people sign in is the **company's**, the same on every node and changed from Settings › Sign-in policy without a restart. Each node holds it within its operator's [`api.auth.limits`](#tier-a), so a value past one is refused by a write to that node and enforced at the limit if it was set before the operator lowered it. A change asks for a recent proof and is recorded in the revision history and the audit log, and a change that weakens the policy is checked with a warning saying what it allows. A lower lifetime or idle limit ends a live session at its next request; a higher one reaches only sessions signed in after it. Requiring a second factor applies at each person's next sign-in, and a higher password floor to the next password they set. See [Identity and access § The company sets its sign-in policy](../concepts/identity-and-access.md#the-company-sets-its-sign-in-policy-within-each-nodes-limits).
 
 ### Delegated decisions
 

@@ -1342,7 +1342,7 @@ copied into an image. It grants every app, and `admin` only where
 
 `api.auth.oidc` is retired too: the engine no longer signs anybody in through
 an identity provider. A person signs in with a login, a password and — unless
-`api.auth.totp` says `optional` — a second factor the engine holds. A file that
+the company's `sign_in.require_second_factor` says `false` — a second factor the engine holds. A file that
 still carries the block is refused, and the refusal says it was removed and
 that people sign in with a password and two-step verification instead.
 
@@ -1350,9 +1350,13 @@ There is no switch for password sign-in, either: it is always served. A
 deployment nobody has been invited to already signs nobody in, because nobody
 holds a password to present, so a setting that turned the routes off would
 change nothing a stranger could reach. What a deployment does state is what a
-password sign-in asks for — `api.auth.totp` (unset is `required`, the secure
-value, so `optional` is always somebody's explicit choice),
-`api.auth.accept_insecure` and `api.auth.min_password_length`.
+password sign-in may ask for at most: `api.auth.limits`, the bounds this node
+holds the company's sign-in policy within (its `second_factor` unset is
+`required`, the secure value, so an optional second factor is always the
+operator's explicit choice), and `api.auth.accept_insecure`. What a sign-in
+does ask for is the company's (`sign_in`, see [Identity and access § The
+company sets its sign-in
+policy](identity-and-access.md#the-company-sets-its-sign-in-policy-within-each-nodes-limits)).
 
 ### What is served without a credential
 
@@ -1489,7 +1493,7 @@ line at `WARN`:
 
 | Warning | Why it is not a refusal |
 |---------|-------------------------|
-| `api.auth.accept_insecure` is set | It is what makes an otherwise-refused posture legal — `totp: optional` on an address a browser reaches over the network. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and every start logs it |
+| `api.auth.accept_insecure` is set | It is what makes an otherwise-refused posture legal — `limits.second_factor: optional` on an address a browser reaches over the network. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and every start logs it |
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, an optional second factor, already is one |
 | `api.external_url` is `https://` and `api.trusted_proxies` is empty | The engine never terminates TLS itself, so something in front of it does — and unless it is named, every caller's source is its address. The sign-in throttle then keys every caller's attempts at one login together, so a stranger guessing at somebody's login slows that person's own sign-in, and every audit row names the proxy. Not a refusal because one front end is right with the list empty: a balancer that passes each client's own address through as the peer rather than in a header |
 

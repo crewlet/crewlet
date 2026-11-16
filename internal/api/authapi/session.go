@@ -67,7 +67,7 @@ type configResponse struct {
 func (s *Service) Config(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, configResponse{
 		MinPasswordLength: s.passwordFloor(),
-		SecondFactor:      s.boot.API.Auth.SecondFactor(),
+		SecondFactor:      s.policy().SecondFactor,
 	})
 }
 
@@ -101,7 +101,7 @@ type sessionResponse struct {
 	Lineage string `json:"lineage,omitempty"`
 
 	// ReauthAt is when this caller's proof of who they are stops counting
-	// for a step-up gesture (`api.auth.session.step_up`) — the instant the
+	// for a step-up gesture (`sign_in.step_up_seconds`) — the instant the
 	// authority table judges against, so a screen counting down to it
 	// counts to the refusal itself. Absent when nothing was proved.
 	ReauthAt time.Time `json:"reauth_at,omitzero"`
@@ -142,16 +142,15 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
-	// THE DEADLINE IS THE BEARER'S OWN, read off its signature: it was
-	// declared and never filled, so every answer said the session ended in
-	// the year 1. A request whose credential was a header carries no
+	// THE DEADLINE THE SESSION ENDS AT under the limits in force, read off
+	// its signature. A request whose credential was a header carries no
 	// session, and the zero bearer omits it.
 	var expires time.Time
 	var lineage string
 	status := statusSignedIn
 	if r.Header.Get("Authorization") == "" {
 		presented := s.presentedSession(r)
-		expires = presented.Bearer.AbsoluteExpiresAt
+		expires = presented.Ends.Absolute
 		if presented.Bearer.Lineage != uuid.Nil {
 			lineage = presented.Bearer.Lineage.String()
 		}

@@ -2,6 +2,7 @@ package evals
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,6 +82,39 @@ assistant:
 roles:
 %s`
 
+// deliberateDoc is [companyDoc] with a stronger chain for questions asked to
+// think harder, on an entry of its own, taking briefs of a decision where the
+// first verb says so.
+const deliberateDoc = `name: Nimbus
+providers:
+  llm:
+    assistant:
+      harness: claude-code
+      model: sonnet
+      overrides: {web_tools: denied}
+    strong:
+      harness: claude-code
+      model: opus
+      overrides: {web_tools: denied}
+assistant:
+  enabled: %t
+  llm: [assistant]
+  deliberate:
+    llm: [strong]
+    decision_briefs: %t
+roles:
+%s`
+
+// DeliberateCompany is [Company] with a stronger chain (`assistant.deliberate`),
+// which a brief of a decision runs on as well where decisionBriefs is set.
+func DeliberateCompany(decisionBriefs bool, seats ...string) (assistant.Company, error) {
+	var roles string
+	for _, seat := range seats {
+		roles += fmt.Sprintf("  - name: %s\n    handle: %s\n    kind: human\n", seat, seat)
+	}
+	return parsedCompany(fmt.Appendf(nil, deliberateDoc, true, decisionBriefs, roles))
+}
+
 // Company is the company a case's people work for: the assistant on when on
 // is set, and each of seats a human seat of that handle.
 func Company(on bool, seats ...string) (assistant.Company, error) {
@@ -93,12 +127,24 @@ func DeepCompany(seats ...string) (assistant.Company, error) {
 	return company(deepDoc, true, seats)
 }
 
+// DenyingCompany is [DeepCompany] with `assistant.tools.deny` set to deny.
+func DenyingCompany(deny []string, seats ...string) (assistant.Company, error) {
+	doc := strings.Replace(deepDoc, "  llm: [assistant]\n",
+		"  llm: [assistant]\n  tools:\n    deny: ["+strings.Join(deny, ", ")+"]\n", 1)
+	return company(doc, true, seats)
+}
+
 func company(doc string, on bool, seats []string) (assistant.Company, error) {
 	var roles string
 	for _, seat := range seats {
 		roles += fmt.Sprintf("  - name: %s\n    handle: %s\n    kind: human\n", seat, seat)
 	}
-	c, err := config.ParseCompany(fmt.Appendf(nil, doc, on, roles))
+	return parsedCompany(fmt.Appendf(nil, doc, on, roles))
+}
+
+// parsedCompany is the company doc describes, with its org.
+func parsedCompany(doc []byte) (assistant.Company, error) {
+	c, err := config.ParseCompany(doc)
 	if err != nil {
 		return nil, fmt.Errorf("evals: the company does not parse: %w", err)
 	}

@@ -25,6 +25,7 @@
  * seat.
  */
 
+import { fieldHeld, formHeld, type FormHold } from "./formHold.ts";
 import type { CodeRepoDetail, CodeRepoSummary } from "~/protocol/index.ts";
 import { isRepoName } from "./code.ts";
 import { fmtDateTime, plural } from "./format.ts";
@@ -119,17 +120,20 @@ export function detailsFormHeld(
   repo: CodeRepoDetail,
   next: { description: string; defaultBranch: string; owner: string; visibility: string },
   branches: readonly string[],
-): string | undefined {
+): FormHold<"defaultBranch"> | undefined {
   const changed =
     next.description.trim() !== (repo.description ?? "") ||
     next.defaultBranch !== repo.default_branch ||
     next.owner !== ownerKey(repo.owner) ||
     next.visibility !== repo.visibility;
-  if (!changed) return "Nothing is changed yet.";
+  if (!changed) return formHeld("Nothing is changed yet.");
   if (next.defaultBranch !== repo.default_branch && !branches.includes(next.defaultBranch)) {
-    return `${repo.name} holds no branch ${next.defaultBranch}: choose one of its branches.`;
+    return fieldHeld(
+      "defaultBranch",
+      `${repo.name} holds no branch ${next.defaultBranch}: choose one of its branches.`,
+    );
   }
-  if (next.owner === "") return "Choose the unit that owns it.";
+  if (next.owner === "") return formHeld("Choose the unit that owns it.");
   return undefined;
 }
 
@@ -188,21 +192,48 @@ export function renameHeld(repo: CodeRepoDetail, viewer: Reader): string | undef
  * reads, of the repository's own kind. A project's name is one label, and a
  * scratch repository keeps its seat's `<handle>.` (`gitlet.renameForm`).
  */
-export function renameFormHeld(repo: CodeRepoSummary, typed: string): string | undefined {
+export function renameFormHeld(repo: CodeRepoSummary, typed: string): FormHold<"name"> | undefined {
   const name = typed.trim();
-  if (name === repo.name || name === "") return "Type its new name.";
+  if (name === repo.name || name === "") return formHeld("Type its new name.");
   if (repo.kind === "scratch") {
     const prefix = `${repo.owner.ref}.`;
     if (!name.startsWith(prefix) || !isRepoName(name)) {
-      return `A scratch repository keeps its seat's name: ${prefix}<name>, in lowercase letters, digits and hyphens.`;
+      return fieldHeld(
+        "name",
+        `A scratch repository keeps its seat's name: ${prefix}<name>, in lowercase letters, digits and hyphens.`,
+      );
     }
     return undefined;
   }
   if (!isRepoName(name) || name.includes(".")) {
-    return "Name the project: lowercase letters, digits and hyphens.";
+    return fieldHeld("name", PROJECT_NAME);
   }
   return undefined;
 }
+
+/** What a project's name is, said where one is refused. */
+const PROJECT_NAME = "Name the project: lowercase letters, digits and hyphens.";
+
+/** A project's name: refused under its field once typed, so no form opens on an error. */
+function projectNameHeld(typed: string): FormHold<"name"> | undefined {
+  if (typed.trim() === "") return formHeld(PROJECT_NAME);
+  if (!isRepoName(typed.trim()) || typed.includes(".")) return fieldHeld("name", PROJECT_NAME);
+  return undefined;
+}
+
+/** What the other host's address is, said where one is refused. */
+const HTTPS_URL = "Name the other host's repository by its https URL.";
+
+/** The other host's address: refused under its field once typed. */
+function httpsUrlHeld(url: string): FormHold<"url"> | undefined {
+  if (url.trim() === "") return formHeld(HTTPS_URL);
+  if (!url.trim().startsWith("https://")) return fieldHeld("url", HTTPS_URL);
+  return undefined;
+}
+
+/** What a credential is, said under its field where one is refused. */
+const CREDENTIAL_NAME =
+  "The credential is a variable's NAME in upper case, never the token itself.";
 
 /**
  * Why the repository's unreachable history cannot be purged, or undefined —
@@ -342,16 +373,15 @@ export function mirrorFormHeld(
   url: string,
   credential: string,
   as: string,
-): string | undefined {
-  if (!url.trim().startsWith("https://"))
-    return "Name the other host's repository by its https URL.";
+): FormHold<"url" | "credential"> | undefined {
+  const address = httpsUrlHeld(url);
+  if (address) return address;
   const ref = credentialRef(credential);
-  if (ref === null)
-    return "The credential is a variable's NAME in upper case, never the token itself.";
+  if (ref === null) return fieldHeld("credential", CREDENTIAL_NAME);
   if (kind === "push" && ref === "")
-    return "A push authenticates: name the variable holding the token.";
+    return formHeld("A push authenticates: name the variable holding the token.");
   if (kind === "push" && as.trim() === "")
-    return "Name the seat the push is made as, by its handle.";
+    return formHeld("Name the seat the push is made as, by its handle.");
   return undefined;
 }
 
@@ -366,16 +396,13 @@ export function importFormHeld(
   url: string,
   credential: string,
   owner: string,
-): string | undefined {
-  if (!isRepoName(name.trim()) || name.includes(".")) {
-    return "Name the project: lowercase letters, digits and hyphens.";
-  }
-  if (!url.trim().startsWith("https://"))
-    return "Name the other host's repository by its https URL.";
-  if (credentialRef(credential) === null) {
-    return "The credential is a variable's NAME in upper case, never the token itself.";
-  }
-  if (owner === "") return "Choose the unit that owns it.";
+): FormHold<"name" | "url" | "credential"> | undefined {
+  const named = projectNameHeld(name);
+  if (named) return named;
+  const address = httpsUrlHeld(url);
+  if (address) return address;
+  if (credentialRef(credential) === null) return fieldHeld("credential", CREDENTIAL_NAME);
+  if (owner === "") return formHeld("Choose the unit that owns it.");
   return undefined;
 }
 
@@ -388,11 +415,10 @@ export const DECLARED_LIFE =
  * in the engine's grammar (a dotted name is a seat's scratch repository, which
  * only that seat creates) and the unit that owns it.
  */
-export function createFormHeld(name: string, owner: string): string | undefined {
-  if (!isRepoName(name.trim()) || name.includes(".")) {
-    return "Name the project: lowercase letters, digits and hyphens.";
-  }
-  if (owner === "") return "Choose the unit that owns it.";
+export function createFormHeld(name: string, owner: string): FormHold<"name"> | undefined {
+  const named = projectNameHeld(name);
+  if (named) return named;
+  if (owner === "") return formHeld("Choose the unit that owns it.");
   return undefined;
 }
 
@@ -507,17 +533,22 @@ export function pathOwnerFormHeld(
   owner: string,
   wanted: readonly string[],
   had: readonly string[],
-): string | undefined {
-  if (owner === "") return "Choose the unit or seat that owns the paths.";
+): FormHold<"paths"> | undefined {
+  if (owner === "") return formHeld("Choose the unit or seat that owns the paths.");
   const want = globsOf(wanted);
   if (want.length === 0) {
-    return had.length ? "Name a path at least, or remove the owner." : "Name a path at least.";
+    return formHeld(
+      had.length ? "Name a path at least, or remove the owner." : "Name a path at least.",
+    );
   }
   if (want.some((g) => g.startsWith("/") || /\s/.test(g))) {
-    return "Name each path from the repository's root, with no spaces, such as src/** or docs/*.md.";
+    return fieldHeld(
+      "paths",
+      "Name each path from the repository's root, with no spaces, such as src/** or docs/*.md.",
+    );
   }
   if (want.length === had.length && want.every((g) => had.includes(g))) {
-    return "Nothing is changed yet.";
+    return formHeld("Nothing is changed yet.");
   }
   return undefined;
 }
@@ -532,11 +563,13 @@ export function protectionPattern(typed: string): string {
   return `refs/heads/${t}`;
 }
 
-/** Why a protection form cannot be sent yet, or undefined. */
-export function protectFormHeld(pattern: string): string | undefined {
+/** Why a protection form's pattern cannot be sent yet, or undefined. */
+export function protectFormHeld(pattern: string): FormHold<"pattern"> | undefined {
   const p = protectionPattern(pattern);
   if (!/^refs\/(heads|tags)\/\S+$/.test(p)) {
-    return "Name the branches or tags it protects: a branch's name, or refs/heads/<glob> or refs/tags/<glob>.";
+    const words =
+      "Name the branches or tags it protects: a branch's name, or refs/heads/<glob> or refs/tags/<glob>.";
+    return pattern.trim() === "" ? formHeld(words) : fieldHeld("pattern", words);
   }
   return undefined;
 }
