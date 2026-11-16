@@ -2677,7 +2677,9 @@ const (
 	// Gitlet's diffs and search hits coloured by kind: 6598.0 KiB (6,756,345 bytes), 2,640 over main: 6598 KiB.
 	// Gitlet's commits as a timeline on one list, Gitlet split into three chunks:
 	// 6615.3 KiB (6,774,070 bytes), 17,725 over main: 6616 KiB.
-	treeBudget = 5<<20 + 1496<<10
+	// Gitlet's commits with their checks, landing change and tags, filtered by seat and time:
+	// 6627.7 KiB (6,786,791 bytes), 12,721 over main: 6628 KiB.
+	treeBudget = 5<<20 + 1508<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
