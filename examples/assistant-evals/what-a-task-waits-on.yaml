@@ -1,0 +1,49 @@
+# The founder asks what a task waits on; its card carries the task it is filed
+# under and both directions of its links with each end's status.
+person:
+  apps: [worklet]
+page:
+  screen: item
+  title: ENG-41
+  params: {id: ENG-41}
+  query: {}
+  resources: [{kind: task, id: ENG-41}]
+  selection: {kind: task, id: ENG-41}
+  source_revision: url:9e4b2c11
+  accepts: []
+question: What is ENG-41 waiting on, and what is it part of?
+answers:
+  - route: GET /worklet/{id}
+    body:
+      task:
+        id: 7d0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f
+        key: ENG-41
+        title: Serve versioned docs pages from the docs site
+        status: in_progress
+        priority: high
+        assignee: agent-cto
+        project: ENG
+      parent: {id: 2f9a0c1d-3b4e-4f5a-8b6c-7d8e9f0a1b2c, key: ENG-30, title: Docs site 2.0, status: in_progress}
+      links:
+        - {kind: waiting_on, other: 5b7c9d1e-2f3a-4b5c-8d6e-7f8091a2b3c4, key: ENG-38, title: Release the backend, status: in_review}
+        - {kind: linked, other: 6c8d0e2f-3a4b-4c5d-9e7f-8091a2b3c4d5, key: ENG-35, title: Earlier edge rule, status: done}
+        - {kind: waiting_on, other: 7d9e1f3a-4b5c-4d6e-8f80-91a2b3c4d5e6, key: ENG-44, title: Edge rule clean-up, status: todo, derived: true}
+script:
+  - call: get_task
+    args: {item: ENG-41}
+  - say: >-
+      ENG-41 is part of ENG-30, Docs site 2.0, and waits on ENG-38, Release the
+      backend, which is in review. It is linked to ENG-35, the earlier edge
+      rule, which is done, and ENG-44, the edge rule clean-up, waits on it.
+expect:
+  calls: [get_task]
+  never: [update_task, comment_on_task]
+  shows:
+    - Docs site 2.0
+    - Release the backend
+    - waiting_on
+    - in_review
+    - the other end, so it reads from there to this task
+  says: [ENG-38, ENG-30]
+  proposals: 0
+  state: completed

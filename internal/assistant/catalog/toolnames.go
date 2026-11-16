@@ -9,12 +9,14 @@ package catalog
 // word is declared once, here, and every other file of the catalogue reads it:
 // no literal elsewhere in the package spells an engine tool's name (a write's
 // act tool is read off its verb, see [write]), and internal/toolname's walk,
-// which refuses a copy of one, exempts this file alone for these words.
+// which refuses a copy of one, exempts this file alone for these words. The
+// two the assistant's standing rules name (internal/assistant's prompt) are
+// exported, so the rules read them from here too.
 const (
-	answerExecutorTool  = "answer_executor"
+	AnswerExecutorTool  = "answer_executor"
 	searchKnowledgeTool = "search_knowledge"
 	listProjectsTool    = "list_projects"
-	getPageTool         = "get_page"
+	GetPageTool         = "get_page"
 	listArtifactsTool   = "list_artifacts"
 	getArtifactTool     = "get_artifact"
 	markInboxTool       = "mark_inbox"

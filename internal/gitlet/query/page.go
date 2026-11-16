@@ -177,6 +177,7 @@ func (r *read) stamp(a *gitlet.GitAnswer, memo bool) {
 	}
 	a.RepoID, a.Position = r.q.RepoID, r.synced.Position
 	a.PushedBy, a.Coverage, a.Memo = r.pushedBy, r.coverage, memo
+	a.Tagged = r.tagged
 }
 
 // widest is the longest a page's count or position can encode as: every
@@ -198,10 +199,12 @@ func widestCursor(letter byte, numbers int) string {
 // decimal: "e:<n>" the n-th entry of a listing (counted from 0), "f:<n>" the
 // n-th file of a diff's stat, "l:<n>" line n of a file — or of a blame's range
 // — "b:<n>:<o>" byte o of line n, "p:<o>" byte o of a patch, "s:<n>" the n-th
-// commit of a history's walk (counted from 0, the commits git skips first).
-// Each is a position in an answer that is a function of object ids alone —
-// the same listing, file, patch or walk on every node at every position — so a
-// cursor any node issued is sound on any other.
+// commit of a history's walk (counted from 0, the commits git skips first),
+// and "d:<seconds>:<name>" a tags page's last tag (tags.go), a KEY of the
+// listing rather than a position: a listing at another position resumes past
+// the same tag. Each other is a position in an answer that is a function of
+// object ids alone — the same listing, file, patch or walk on every node at
+// every position — so a cursor any node issued is sound on any other.
 
 // cursor is a parsed Next: its letter and positions; the zero cursor is a
 // first page.

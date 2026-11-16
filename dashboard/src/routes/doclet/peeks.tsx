@@ -42,7 +42,7 @@ import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime, tsKey, fmtCount } from "~/lib/format.ts";
+import { fmtCount, openSentence, plural, tsKey } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type {
@@ -56,6 +56,7 @@ import { PageTags, usePeople, type Who } from "./parts.tsx";
 import { firstLines } from "./page/body.ts";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 import { ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
+import { ago } from "~/lib/ago.ts";
 
 /**
  * How many of a space's pages and writers the rail lists before it counts the
@@ -401,7 +402,7 @@ function pageFacts(detail: PageDetail, who: Who, now: number): Fact[] {
       // THE NEWEST REVISION, never the page's `updated_at`: a comment or a
       // label moves that without changing what the page says.
       value: last
-        ? `${relTime(last.created_at, now)} by ${saver ? who(saver).name : "the engine"}`
+        ? openSentence(`${ago(last.created_at, now)} by ${saver ? who(saver).name : "the engine"}`)
         : "Not saved over since it was written",
     },
     // ZERO IS THE READING: the wire drops an empty watcher list.

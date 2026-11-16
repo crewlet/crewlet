@@ -256,6 +256,12 @@ func TestAPageContextIsBoundedPlainAndNamedByID(t *testing.T) {
 		"an unknown resource kind": func(p *wire.PageContext) {
 			p.Resources = []wire.Resource{{Kind: "secret", ID: "x"}}
 		},
+		"a web page in view": func(p *wire.PageContext) {
+			p.Resources = []wire.Resource{{Kind: wire.ResourceWebPage, ID: "https://docs.example.com/a"}}
+		},
+		"a web page selected": func(p *wire.PageContext) {
+			p.Selection = &wire.ResourceRef{Kind: wire.ResourceWebPage, ID: "https://docs.example.com/a"}
+		},
 		"the reserved action": func(p *wire.PageContext) {
 			p.Accepts = []string{wire.ActionContextInvalidate}
 		},

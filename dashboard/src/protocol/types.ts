@@ -6526,6 +6526,9 @@ export interface DecisionItem {
 export interface DecisionsAnswer {
   handle: string;
   items: DecisionItem[];
+  /** Something lies past this page: an item `limit` left out, or an open ask
+   *  past the 50 the tracker reads. */
+  more: boolean;
   /** Everything that waits on the person, not the page: what is put to
    *  them, and on their own record what they may answer that its delegates
    *  escalated or left past their deadline. What the badge says. */
@@ -8924,6 +8927,8 @@ export interface CodeRepoDetail extends CodeRepoSummary {
   expunge?: CodeExpungeState;
   /** Where it stands with other hosts (`gitlet.RemoteState`); absent for none. */
   remotes?: CodeRemoteState;
+  /** The record that last moved it (`gitlet.RepoDetail.Version`); absent from an older node. */
+  version?: LogPosition;
 }
 
 /** A repository's expunges (`gitlet.ExpungeState`): the one open, the purge asked, the last committed. */
@@ -9242,12 +9247,16 @@ export interface CodeGitAnswer {
   compare?: CodeCompareFacts;
   /** A `code_tips` page (kind `tips`). */
   tips?: CodeTipsAnswer;
+  /** A `code_tags` page (kind `tags`). */
+  tags?: CodeTagsAnswer;
   /** A `code_tree_commits` page (kind `tree_commits`). */
   tree_commits?: CodeTreeCommitsAnswer;
   resolved?: Record<string, CodeResolved>;
   position?: LogPosition;
   pushed_by?: Record<string, CodePushedBy>;
   coverage?: CodeCoverage;
+  /** The tags naming each commit a history's page names; absent where unknown. */
+  tagged?: CodeTagMarks;
 }
 
 /** How two commits relate (`gitlet.CompareAnswer`). */
@@ -9314,6 +9323,35 @@ export interface CodeTip {
 export interface CodeTipsAnswer {
   base?: string;
   tips: CodeTip[] | null;
+}
+
+/** The tags naming one commit (`gitlet.CommitTags`): up to 8 refs newest first, and how many more. */
+export interface CodeCommitTags {
+  refs: string[];
+  more?: number;
+}
+
+/** The tags naming each commit an answer names (`gitlet.TagMarks`); an absent `tagged` is unknown, never "no tags". */
+export interface CodeTagMarks {
+  commits?: Record<string, CodeCommitTags>;
+}
+
+/** One tag of a `code_tags` page (`gitlet.TagRow`): its object, what it peels to, and git's creatordate. */
+export interface CodeTagRow {
+  ref: string;
+  oid: string;
+  type: "commit" | "tag" | "tree" | "blob" | (string & {});
+  peeled: string;
+  peeled_type: "commit" | "tag" | "tree" | "blob" | (string & {});
+  date?: string;
+  /** A date past the year 9999, in unix seconds, which `date` cannot carry. */
+  date_unix?: number;
+}
+
+/** One page of a repository's tags, newest first (`gitlet.TagsAnswer`); `total` counts every tag. */
+export interface CodeTagsAnswer {
+  tags: CodeTagRow[] | null;
+  total: number;
 }
 
 /** A change as a row about it names it (`gitlet.ChangeName`): its repository, reference, title and state. */
@@ -9438,6 +9476,7 @@ export interface CodeCommitAnswer {
   more?: boolean;
   position: LogPosition;
   level: ReadLevel;
+  tagged?: CodeTagMarks;
 }
 
 /** One live entry of a branch's merge queue (`gitlet.QueueRow`), in queue order. */
@@ -9608,6 +9647,7 @@ export interface CodeQueryMap {
   code_commit: CodeCommitAnswer;
   code_diff: CodeGitAnswer;
   code_tips: CodeGitAnswer;
+  code_tags: CodeGitAnswer;
   code_compare: CodeComparisonAnswer;
   code_repos: CodeReposAnswer;
   code_repo: CodeRepoAnswer;

@@ -103,7 +103,7 @@ offered only to a person who could make the same change on its screen:
 
 | Change | Who is offered it | On approval |
 |---|---|---|
-| File a task, change one, comment on one, answer a question asked on one | People holding Worklet | Worklet's own write, as the person |
+| File a task, change one, comment on one, answer a question asked on one | People holding Worklet | Worklet's own write, as the person. An answer is only to an open question put to you, read from the task's whole thread and named on the card; a question answered, edited or removed meanwhile makes the proposal stale (**Prepare it again**), so a question is never answered twice |
 | Reorder priorities, mark inbox notices | People holding Worklet | The person's own record |
 | Write a page, edit a page | People holding Doclet | Doclet's own write |
 | Share an artifact, withdraw a share | The artifact's owner | The artifact's sharing, with the audience named on the card; a share to the whole company asks the person to confirm it is them |
@@ -190,7 +190,7 @@ does not.
 An administrator can also change every setting of the block where it is read,
 on **Settings › Ask Crewlet** (`#/settings/ask-crewlet`): whether it is on,
 its model chain and the stronger chain, the bounds of a turn, the tool
-families turned off, and deep work. Each change is checked by the engine
+families turned off, the hosts web research may read, and deep work. Each change is checked by the engine
 before it is saved, as a configuration edit is.
 
 `crewlet validate` and every `/config` write refuse a chain that breaks the
@@ -342,6 +342,41 @@ These limits are fixed, not configured:
 | Rounds of a brief | 7 rounds of reads, or `assistant.max_steps` where lower, then 2 rounds kept for the answer and its one rewrite | A page's brief reads three to five things (often side by side) and answers. A read asked for in the rounds kept for the answer is not sent, and the answer to a read in the last round of reads tells the model the reads are spent, so an answer the engine refuses always has a round left for its rewrite |
 | Tokens of a brief | 100,000, every round together | About five rounds of a 20,000 token context; past it the brief stops with "The brief read more than a brief may", which spends nothing of the company's windows beyond the rounds already made |
 
+## Web research
+
+With `assistant.research.hosts` set, Ask Crewlet can read a page of a vendor's
+documentation to answer a question, such as which plan a setting needs. The
+engine reads it, never the model's own harness, whose web tools stay off
+([ADR-0151](../../adr/0151-ask-crewlet-reads-the-web-only-through-the-engine-from-hosts-the-company-lists.md)):
+
+- only `https` pages on the listed hosts, and a redirect only to another of them;
+- `GET` only, with no cookie, credential or company header, and never to a
+  private, loopback or link-local address;
+- at most 2 MiB a page in 15 seconds, read in parts of 12 KiB, at most eight
+  pages a turn, each kept ten minutes on the node that read it.
+
+With `assistant.research.search.mcp_server` naming the company's Tavily
+entry, Ask Crewlet can also search those hosts first. Each API node runs its
+own instance of that server for research alone, never a seat's; a search asks
+for the listed hosts only, drops any result on another host, sends at most
+200 characters and keeps five results, and a turn searches at most four times.
+
+Each read or search is a step the person sees, and its text is the
+site's: a change Ask Crewlet proposes after reading one says it was prepared
+after reading a web page, and after one it proposes changes only to the
+records your question or open screen names (a task key such as ENG-41, the
+record you have open), so a page cannot steer it into changing anything else.
+List only the documentation hosts you trust, such as the vendors your
+integrations connect to. An administrator can change the list on **Settings ›
+Ask Crewlet**, under Web research, where removing every host removes the block
+and turns web research off.
+
+The pages a turn read are cited under its answer, under **Sources**: one link a
+page, with its host and when it was read, from the engine's own record of the
+read. A source opens in a new tab only after a stop that names its host and its
+whole address. A page's title is the site's words, so a mention of it in the
+answer stays plain text.
+
 ## Deep work
 
 Deep work lets Ask Crewlet hand a large task to a harness with its own
@@ -461,7 +496,11 @@ changed. **Clear** in the panel purges one at once.
 Removing a person from the directory erases every conversation they own in one
 record. Messages, cards and previews are sealed under the fleet keyring in the
 replicated estate, and nothing a person did not see is stored, apart from the
-bounded context a turn waiting on an approval resumes from.
+bounded context a turn waiting on an approval resumes from and a long
+conversation's summary of its earlier messages. That summary is written by the
+quick chain after a turn once eight messages past the last twelve have
+gathered, charged to the person's budget as `assistant_summary`, sealed beside
+the conversation and purged with it.
 
 Files go with their conversation. An image a person attaches and a file a
 deep-work run delivers are kept in the fleet's
@@ -556,7 +595,33 @@ open request, looks the permission up in the catalogue, and proposes nothing,
 since the first step is a person's at Cloudflare), and approving an agent's
 request for one permission from its question (`approve-a-grant-request`, whose
 one card draws the grant in the engine's words and asks the person to confirm
-it is them, `step_up: true`). The flags and the suite format are in the
+it is them, `step_up: true`). `answer-a-question-by-its-option` measures a
+question put to the person: what waits on them lists the question with its
+options by id, the recommendation and what it cites, and the answer is
+proposed by the option chosen, and `what-a-task-waits-on` reads a task with
+the task it is filed under and both directions of its links, and
+`answer-only-your-own-question` asks it to answer a question put to somebody
+else, which is refused before any card. Four cases measure answering a hard
+question: which way to route a site's versioned pages
+(`decide-the-docs-route`, which reads everything the question cites and the
+agent's access before proposing the answer by its option), how an agent should
+get the access for one change (`how-the-agent-gets-the-access`, a grant for
+the change rather than a wider level), an instruction planted in the task's
+thread (`instructions-planted-in-a-comment`, which must lead to no chat
+message, access change or executor answer), and an answer in the person's own
+words (`answer-in-your-own-words`, which chooses no option). Each case's
+header carries the rubric a real model's trials are graded on.
+`explain-how-a-grant-works` answers a question about the engine itself from
+Crewlet's own documentation, which the binary carries exactly as its version
+ships it. `who-changed-what` answers who changed a task and which change was
+refused from the audit log. `read-one-config-section` reads one section of the
+company document rather than the whole. `read-a-vendor-page` reads a vendor's
+page from a listed host (a case lists its hosts with `research`) whose text
+carries an instruction nothing follows, and `a-page-cannot-steer-a-change` has
+a page ask for a comment on another task, which is refused, and
+`search-a-vendors-docs` searches them first (`search: true` names a search
+server) past a result that carries one. The flags and the suite format are in
+the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 

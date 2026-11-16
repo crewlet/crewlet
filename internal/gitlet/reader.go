@@ -2754,9 +2754,9 @@ func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSu
 	return rows.Err()
 }
 
-// repo serves q's repository in detail, to an asker that may read it — and,
-// where it reads for the seat its turn is acting for, that seat may read it
-// too ([JudgeRead]).
+// repo serves q's repository in detail, and the record that last moved it, to
+// an asker that may read it — and, where it reads for the seat its turn is
+// acting for, that seat may read it too ([JudgeRead]).
 //
 // A REPOSITORY THE ASKER MAY NOT READ IS [ErrNotPermitted], and one its
 // ceiling may not [ErrAboveCeiling], each judged after its row is read, and
@@ -2815,13 +2815,14 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	// reads its progress here — the request open until its maintainer serves
 	// it, and what the last commit dropped — and one who imported it, or set
 	// a mirror, the import's progress and the mirror's last sync.
-	out.Repo.Expunge, out.Repo.Remotes, err = detailRowIn(ctx, tx, id)
+	out.Repo.Expunge, out.Repo.Remotes, out.Repo.Version, err = detailRowIn(ctx, tx, id)
 	return err
 }
 
 // detailRowIn reads what a repository's detail serves of its row beyond its
 // summary — its expunges ([expungeState.view]) and its other hosts
-// ([RemoteState]) — in ONE statement by its primary key, in tx.
+// ([RemoteState]), and the record that last moved it — in ONE statement by its
+// primary key, in tx.
 //
 // ONE SEEK, NEVER ONE A PART: every resolution of a repository reads this
 // detail (a git read at HEAD or no branch, a search's repo: filter, a merge,
@@ -2829,27 +2830,32 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 // first had just read, on every one of them. The applier's and the decide's
 // narrower reads ([expungeStateSQL], [remotesSQL]) stay their own: they read
 // what a record needs and nothing of the progress a person reads here.
-func detailRowIn(ctx context.Context, tx *sql.Tx, id string) (ExpungeState, RemoteState, error) {
+func detailRowIn(ctx context.Context, tx *sql.Tx, id string) (ExpungeState, RemoteState, statelog.Position,
+	error) {
 	var (
-		state                    expungeState
-		remotes                  RemoteState
-		from, to, source, failed string
-		chunks, doneAt, syncedAt int64
+		state                             expungeState
+		remotes                           RemoteState
+		from, to, source, failed          string
+		chunks, doneAt, syncedAt, version int64
 	)
-	dests := append(state.dests(), &from, &to, &source, &chunks, &doneAt, &failed, &syncedAt)
+	dests := append(state.dests(), &from, &to, &source, &chunks, &doneAt, &failed, &syncedAt, &version)
 	if err := tx.QueryRowContext(ctx, detailRowSQL, id).Scan(dests...); err != nil {
-		return ExpungeState{}, RemoteState{}, fmt.Errorf("gitlet: read repository %s's detail row: %w", id, err)
+		return ExpungeState{}, RemoteState{}, statelog.Position{},
+			fmt.Errorf("gitlet: read repository %s's detail row: %w", id, err)
 	}
 	var err error
 	if remotes.MirrorFrom, err = remoteOf[MirrorSource](from); err != nil {
-		return ExpungeState{}, RemoteState{}, fmt.Errorf("gitlet: read repository %s's mirror_from: %w", id, err)
+		return ExpungeState{}, RemoteState{}, statelog.Position{},
+			fmt.Errorf("gitlet: read repository %s's mirror_from: %w", id, err)
 	}
 	if remotes.MirrorTo, err = remoteOf[MirrorTarget](to); err != nil {
-		return ExpungeState{}, RemoteState{}, fmt.Errorf("gitlet: read repository %s's mirror_to: %w", id, err)
+		return ExpungeState{}, RemoteState{}, statelog.Position{},
+			fmt.Errorf("gitlet: read repository %s's mirror_to: %w", id, err)
 	}
 	imported, err := remoteOf[ImportSource](source)
 	if err != nil {
-		return ExpungeState{}, RemoteState{}, fmt.Errorf("gitlet: read repository %s's import_source: %w", id, err)
+		return ExpungeState{}, RemoteState{}, statelog.Position{},
+			fmt.Errorf("gitlet: read repository %s's import_source: %w", id, err)
 	}
 	if imported != nil {
 		remotes.Import = &ImportState{Source: *imported, Chunks: chunks, Error: failed}
@@ -2860,15 +2866,15 @@ func detailRowIn(ctx context.Context, tx *sql.Tx, id string) (ExpungeState, Remo
 	if syncedAt != 0 {
 		remotes.MirrorSyncedAt = store.DecodeTime(syncedAt)
 	}
-	return state.view(), remotes, nil
+	return state.view(), remotes, unpacked(version), nil
 }
 
 // detailRowSQL reads what [detailRowIn] serves, by the primary key: the
 // expunge columns first, in [expungeStateSQL]'s order ([expungeState.dests]),
-// then the other hosts' — registered in plan_test.go.
+// then the other hosts', then the row's version — registered in plan_test.go.
 const detailRowSQL = `SELECT drop_epoch, expunge_id, expunge_request, expunge_request_position,
 	expunged_at, expunge_dropped_objects, expunge_dropped_bytes, mirror_from, mirror_to, import_source,
-	import_seq, imported_at, import_error, mirror_synced_at FROM code_repos WHERE id = ?`
+	import_seq, imported_at, import_error, mirror_synced_at, version FROM code_repos WHERE id = ?`
 
 // pushes serves one repository's push history, newest first IN LOG ORDER —
 // the order the pushes landed in — keyset-paged by (position, push_id): the

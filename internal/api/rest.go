@@ -149,6 +149,8 @@ var namedRoutes = []struct {
 	// literal segments above /worklet/{id} for the reason given there.
 	{method: "GET", pattern: "/worklet/flow", what: "work_flow"},
 	{method: "GET", pattern: "/worklet/decisions", what: "decisions"},
+	{method: "GET", pattern: "/research/page", what: "research_page"},
+	{method: "GET", pattern: "/research/search", what: "research_search"},
 	{method: "GET", pattern: "/worklet/decisions/answered", what: "answered_decisions"},
 	{method: "GET", pattern: "/worklet/activity", what: "work_activity"},
 	{method: "GET", pattern: "/worklet/my-work", what: "work_my_work"},
@@ -331,10 +333,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/reviews", what: "code_reviews"},
 	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file found by its
 	// name, a file, a path's history, a file's blame, the last commit of each
-	// entry of a directory, a diff, many tips at once, a comparison with its
-	// merge preview and one commit with the changes it belongs to: each read
-	// by object id of the repository's home Gitlet node, and decided per
-	// repository as the rows are.
+	// entry of a directory, a diff, many tips at once, its tags by their date,
+	// a comparison with its merge preview and one commit with the changes it
+	// belongs to: each read by object id of the repository's home Gitlet node,
+	// and decided per repository as the rows are.
 	{method: "GET", pattern: "/gitlet/repos/{name}/refs", what: "code_refs", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/tree", what: "code_tree", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/find", what: "code_find", path: map[string]string{"name": "name"}},
@@ -344,6 +346,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/gitlet/repos/{name}/tree-commits", what: "code_tree_commits", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/diff", what: "code_diff", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/tips", what: "code_tips", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/gitlet/repos/{name}/tags", what: "code_tags", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/compare", what: "code_compare", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/gitlet/repos/{name}/commits/{sha}", what: "code_commit", path: map[string]string{"name": "name", "sha": "sha"}},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the live queues, the attempts of

@@ -113,7 +113,8 @@ func mustTool(t *testing.T, name string) catalog.Tool {
 func TestEveryToolSendsOnlyItsOwnRoutes(t *testing.T) {
 	t.Parallel()
 	for _, tool := range catalog.Tools() {
-		if tool.Kind == catalog.KindNavigate {
+		// A LINK AND THE ENGINE'S OWN DOCUMENTATION SEND NOTHING.
+		if tool.Kind == catalog.KindNavigate || tool.Kind == catalog.KindDocs {
 			continue
 		}
 		req, err := tool.Request(assistanttest.ExampleArgs(t, tool.Parameters))

@@ -2569,6 +2569,9 @@ type RepoDetail struct {
 	// with its expunge in one seek of its row, never on the [RepoRef] every
 	// push and fetch reads, which needs only [RepoRef.Mirrored].
 	Remotes RemoteState `json:"remotes,omitzero"`
+	// Version is the position of the record that last moved the repository's
+	// row (code_repos.version): a read listing what its refs hold floors there.
+	Version statelog.Position `json:"version,omitzero"`
 }
 
 // RuleSource is who set one of a repository's rules and when, named by the
@@ -3070,8 +3073,9 @@ const MaxDiffPaths = 64
 const MinAbbrevDigits = 7
 
 // maxGitCursorBytes bounds a cursor the asker hands back: every cursor a Gitlet
-// node issues is a kind's letter and up to two decimal numbers.
-const maxGitCursorBytes = 64
+// node issues is a kind's letter and up to two decimal numbers, or a tags
+// page's date and tag name, 349 bytes at the widest.
+const maxGitCursorBytes = 384
 
 // MaxTouchedPaths is the most paths a revision's facts list as the files its
 // change touches ([RevisionFactsAnswer.Touched]). Past it the facts say the
@@ -3209,6 +3213,9 @@ const (
 	// GitTips is many branch heads and tags at once: what each peels to, an
 	// annotated tag's facts, its commit, and how far it is from a base (tips.go).
 	GitTips GitReadKind = "tips"
+	// GitTags is the copy's tags newest first by their own date, read from its
+	// tag index with no git (tags.go).
+	GitTags GitReadKind = "tags"
 	// GitLandedIn is whether a commit is in a ref's history, and the push
 	// that put it there and kept it there: the one question about history a
 	// seat asks the server rather than a clone.
@@ -3277,9 +3284,9 @@ const (
 // the code log names one, so a kind added here moves no RecordVersion and
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
-	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitLandedIn, GitRevisionFacts,
-		GitReanchor, GitInterdiff, GitLog, GitBlame, GitTreeCommits, GitChecksFile, GitCodeFiles, GitSearch,
-		GitFind}
+	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitTips, GitTags, GitLandedIn,
+		GitRevisionFacts, GitReanchor, GitInterdiff, GitLog, GitBlame, GitTreeCommits, GitChecksFile, GitCodeFiles,
+		GitSearch, GitFind}
 }
 
 // Valid reports a kind this build answers.
@@ -3451,6 +3458,7 @@ type GitQuery struct {
 	Diff          *DiffQuery          `json:"diff,omitempty"`
 	Compare       *CompareQuery       `json:"compare,omitempty"`
 	Tips          *TipsQuery          `json:"tips,omitempty"`
+	Tags          *TagsQuery          `json:"tags,omitempty"`
 	LandedIn      *LandedInQuery      `json:"landed_in,omitempty"`
 	RevisionFacts *RevisionFactsQuery `json:"revision_facts,omitempty"`
 	Reanchor      *ReanchorQuery      `json:"reanchor,omitempty"`
@@ -3836,14 +3844,14 @@ func WirePath(p string) (text, b64 string) {
 // not canonical, an asker no principal is, a turn beside an asker that is no
 // seat or past a turn id's bounds, a sub-query other than its kind's or none, a
 // revision [ValidRev] refuses, tips that are not whole ids, named twice or past
-// MaxTips, or a base [ValidRev] refuses, a path [GitPath] refuses — or none
-// where a blame names its file — a line range that runs backwards or past a
-// blame's MaxBlameLines, a diff naming both a file and paths, a log whose
-// literal, limit or date no log takes, a find whose query or limit no find
-// takes, and a read made for a check that names an asker or reads anything
-// but its check's commit. A cursor longer than any a Gitlet node issues is
-// [ErrBadCursor]; whether a shorter one is the kind's own
-// is the Gitlet node's to judge.
+// MaxTips, or a base [ValidRev] refuses, a tags limit past MaxTagsLimit, a
+// path [GitPath] refuses — or none where a blame names its file — a line
+// range that runs backwards or past a blame's MaxBlameLines, a diff naming
+// both a file and paths, a log whose literal, limit or date no log takes, a
+// find whose query or limit no find takes, and a read made for a check that
+// names an asker or reads anything but its check's commit. A cursor longer
+// than any a Gitlet node issues is [ErrBadCursor]; whether a shorter one is
+// the kind's own is the Gitlet node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(GitReadKinds()))
@@ -3895,8 +3903,8 @@ func (q GitQuery) Validate() error {
 		kind    GitReadKind
 		present bool
 	}{{GitTree, q.Tree != nil}, {GitBlob, q.Blob != nil}, {GitDiff, q.Diff != nil},
-		{GitCompare, q.Compare != nil}, {GitTips, q.Tips != nil}, {GitLandedIn, q.LandedIn != nil},
-		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
+		{GitCompare, q.Compare != nil}, {GitTips, q.Tips != nil}, {GitTags, q.Tags != nil},
+		{GitLandedIn, q.LandedIn != nil}, {GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
 		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
 		{GitTreeCommits, q.TreeCommits != nil},
 		{GitChecksFile, q.ChecksFile != nil}, {GitCodeFiles, q.CodeFiles != nil},
@@ -3929,6 +3937,8 @@ func (q GitQuery) Validate() error {
 		return q.Diff.validate()
 	case GitTips:
 		return q.Tips.validate()
+	case GitTags:
+		return q.Tags.validate()
 	case GitLandedIn:
 		return q.LandedIn.validate()
 	case GitRevisionFacts:
@@ -4341,12 +4351,17 @@ type GitAnswer struct {
 	// Coverage is what that index holds, on every answer of a node that keeps
 	// one: an absent PushedBy means nothing beyond it.
 	Coverage *Coverage `json:"coverage,omitempty"`
+	// Tagged is the tags naming each commit a history's page names, from the
+	// answering node's tag index; absent where it keeps none it can read, which
+	// says nothing of any commit's tags.
+	Tagged *TagMarks `json:"tagged,omitempty"`
 
 	Tree          *TreeAnswer          `json:"tree,omitempty"`
 	Blob          *BlobAnswer          `json:"blob,omitempty"`
 	Diff          *DiffAnswer          `json:"diff,omitempty"`
 	Compare       *CompareAnswer       `json:"compare,omitempty"`
 	Tips          *TipsAnswer          `json:"tips,omitempty"`
+	Tags          *TagsAnswer          `json:"tags,omitempty"`
 	LandedIn      *LandedInAnswer      `json:"landed_in,omitempty"`
 	RevisionFacts *RevisionFactsAnswer `json:"revision_facts,omitempty"`
 	Reanchor      *ReanchorAnswer      `json:"reanchor,omitempty"`

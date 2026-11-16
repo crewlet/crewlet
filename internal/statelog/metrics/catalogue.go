@@ -1497,6 +1497,8 @@ func Catalogue() []Instrument {
 				"`codeindex-segment`, `codeindex-tip`: a segment and a tip " +
 				"map of a repository's code index, which no git reads " +
 				"either, held to their own SHA-256 trailers by a scrub; " +
+				"`tags`, a copy's tag index, which no git reads either, " +
+				"held to its own SHA-256 trailer by a scrub; " +
 				"`idx`, `rev`: a " +
 				"pack's index and reverse index, stored with its push; " +
 				"`pack`, the pack itself, read only by a scrub), `outcome` " +
@@ -2557,8 +2559,9 @@ func Catalogue() []Instrument {
 			Name: ObjectsBucketMaxBytes, Kind: KindGauge, Unit: UnitBytes,
 			Shows: "The byte reservation the broker holds the object bucket " +
 				"to (store.objects.nats_max_bytes, or the share the node " +
-				"that created the bucket derived): the ceiling the bucket " +
-				"keeps for its life, whatever a node's Tier A says later.",
+				"that created the bucket derived): a data node raises it to " +
+				"a larger store.objects.nats_max_bytes at boot, and nothing " +
+				"lowers it.",
 		},
 		// ---- artifact uploads and the publish pipeline -------------------
 		{

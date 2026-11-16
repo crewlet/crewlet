@@ -69,6 +69,7 @@ const (
 // The columns a value is sealed for.
 const (
 	ColumnTitle     = "title"
+	ColumnSummary   = "summary"
 	ColumnText      = "text"
 	ColumnPageTitle = "page_title"
 	ColumnBody      = "body"

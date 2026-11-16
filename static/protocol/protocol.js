@@ -166,6 +166,7 @@ var SESSION_QUERIES = {
 		"code_tree_commits",
 		"code_diff",
 		"code_tips",
+		"code_tags",
 		"code_compare",
 		"code_commit",
 		"code_queue",

@@ -68,6 +68,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/research"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -951,6 +952,10 @@ type Engine struct {
 	// engine rather than one per epoch: the children are processes, and an
 	// apply that replaced the bridge would orphan every one of them.
 	mcp *mcp.Bridge
+	// research is this node's research instance of the company's search server
+	// (ADR-0151), on a bridge of its own; made at its first search.
+	research     *research.Searcher
+	researchOnce sync.Once
 
 	// mcpFileMu serialises filing the shared bridge's catalogue into an
 	// epoch's registry outside an apply's own build: what the bridge's
@@ -2270,6 +2275,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	} else {
 		e.startRoutedDirectory(ctx)
 	}
+	// AFTER THE LOGS, so a raise of the bucket is weighed against every
+	// reservation they hold and never takes one a log being created needed.
+	e.raiseObjectsAtBoot(ctx, opts.Bootstrap, incarnation)
 	// THE BOUNDARY: everything above is what this node holds, recovered;
 	// everything below is what its company configures. See
 	// [Options.Recovered]. Logged, because it is the line a deployment sizes

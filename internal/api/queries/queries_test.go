@@ -273,6 +273,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"link_hosts": "everybody",
 		"executors":  "everybody", "company_feed": "everybody",
 		"decisions": "everybody",
+		// A page from a host the company lists, for whoever Ask Crewlet acts for.
+		"research_page":   "everybody",
+		"research_search": "everybody",
 		// The other half of `decisions`: a person's own asks need no app.
 		"answered_decisions": "everybody",
 		// Each model's condition and uses, in two readings: a member's names no
@@ -397,6 +400,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_blame":   string(iam.GrantGitlet),
 		"code_diff":    string(iam.GrantGitlet),
 		"code_tips":    string(iam.GrantGitlet),
+		"code_tags":    string(iam.GrantGitlet),
 		"code_compare": string(iam.GrantGitlet),
 		"code_commit":  string(iam.GrantGitlet),
 		// AND EACH ENTRY'S LAST COMMIT, decided per repository alike.

@@ -13,13 +13,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// unindexed is a node's cache whose index of pushes it cannot read yet: what
-// a node that has not built it answers, so a stamped read names no push.
+// unindexed is a node's cache whose indexes it cannot read yet: what a node
+// that has not built them answers, so a stamped read names no push and no tag.
 type unindexed struct{ query.Cache }
 
 func (unindexed) Provenance(cache.Synced) (cache.Provenance, error) {
 	return cache.Provenance{}, errors.New("unindexed: this copy's index is not built yet")
 }
+func (unindexed) Tags(cache.Synced) (*cache.TagIndex, bool) { return nil, false }
 
 // AN UNSTAMPED PAGE IS A FUNCTION OF WHAT IT NAMES. A stamped page is cut
 // against the room its stamps leave, so the same history by the same whole id

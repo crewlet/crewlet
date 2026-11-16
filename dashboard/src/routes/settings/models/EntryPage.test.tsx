@@ -8,13 +8,17 @@
 import { waitFor, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
+import { fmtDateTime } from "~/lib/format.ts";
 import type { ModelEntry, ModelUse } from "~/protocol/models.ts";
 import { EntryPage, whoRuns } from "./EntryPage.tsx";
 import { apiKeyEntry, modelsData, seat } from "~/routes/settings/models/fixtures.ts";
 
 vi.mock("./api.ts", () => ({ checkHostLogin: vi.fn() }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 const SEATS = [seat("backend-engineer", "Backend Engineer"), seat("qa", "QA"), seat("pm", "PM")];
 
@@ -131,6 +135,21 @@ test("a refusal's own words are quoted and named for the harness that said them"
   expect(quoted.length).toBeGreaterThan(0);
   for (const el of quoted) expect(el.className).not.toMatch(/mono/);
   expect(document.body.textContent).not.toContain("Vendor said");
+});
+
+// A refusal's time sits in its sentence, in words, with the exact instant on hover.
+test("a refusal says when, in words, on the node that was refused", () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-29T12:00:00Z"));
+  page({
+    key: "default",
+    health: "rejected",
+    last_failure: { kind: "auth", at: "2026-10-29T09:00:00Z", said: "", node: "node-1" },
+  });
+  const line = screen.getByText(/^Refused/);
+  expect(line.textContent).toMatch(/^Refused 3 hours ago on node-1\. /);
+  const time = line.querySelector("time")!;
+  expect(time.getAttribute("title")).toBe(fmtDateTime("2026-10-29T09:00:00Z"));
 });
 
 // QA Minor 12: nothing is edited, so a host sign-in stays on the page.

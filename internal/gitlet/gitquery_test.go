@@ -90,7 +90,7 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 			Compare: &gitlet.CompareQuery{Base: id, Head: "HEAD"}}, "compare.head", gitlet.ErrInvalid},
 		{"a cursor longer than any", func() gitlet.GitQuery {
 			q := tree(func(*gitlet.TreeQuery) {})
-			q.Cursor = strings.Repeat("9", 65)
+			q.Cursor = strings.Repeat("9", 385)
 			return q
 		}(), "cursor", gitlet.ErrBadCursor},
 		// ONLY A SEAT READS FOR ANOTHER SEAT, named by its handle: a person's

@@ -3,6 +3,7 @@ package assistantdomain_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -27,10 +28,9 @@ func TestTheAssistantDomainIsACertifiedDomain(t *testing.T) {
 			Applier: assistantdomain.NewApplier(),
 			// Migrate is nil: these tables ship in the replicated estate's
 			// own migration (0048), so a fresh store already has them.
-			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE is empty: every field this domain
-			// writes is in the base format.
+			Encode:     encodeSuiteRecord,
 			Fields:     assistantdomain.VersionedFields(),
+			Carrying:   carryingSuiteRecord,
 			Kinds:      kindNames(),
 			Rows:       assistantdomain.NewRows,
 			Write:      suiteWrite,
@@ -228,4 +228,16 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 		OpID: statelog.NewOpID(time.Now(), "suite"),
 	}, uuid.New(), "Suite")
 	return err
+}
+
+// carryingSuiteRecord is a record carrying exactly one versioned field, its
+// version left for the encoder to stamp.
+func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
+	switch field.Name {
+	case "RecordEnvelope.Op conversation_summarized":
+		return rawRecord(assistantdomain.KindConversation, "carrying", "suite", "carrying",
+			assistantdomain.OpConversationSummarized,
+			assistantdomain.ConversationSummarized{SummarySealed: "sealed-summary", Through: 12})
+	}
+	return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 }

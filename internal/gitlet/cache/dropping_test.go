@@ -644,6 +644,10 @@ var droppingViewers = []struct{ file, word, why string }{
 		"is one the fetch's upload-pack serves, never one a sync could bring"},
 	{"internal/gitlet/cache/refs.go", "cat-file", "a round's peel of the tags it sets, through the view the " +
 		"directory holds (heldView): a ref may reach a dropping tag between an expunge's begin and its commit"},
+	{"internal/gitlet/cache/tags.go", "cat-file", "a round's tag step: the types and dates of the tags it " +
+		"levels, through the view the directory holds (heldView), as the peel reads them"},
+	{"internal/gitlet/cache/tags.go", "log", "a round's tag step: the committer dates of its lightweight tags' " +
+		"commits, through the view the directory holds (heldView)"},
 	{"internal/gitlet/cache/layers.go", "rev-list", "a placement's canary, a bitmapped walk of what the refs " +
 		"reach, through the view the directory holds (heldView)"},
 	{"internal/gitlet/cache/verify.go", "fsck", "Verify's connectivity check of what the copy serves, through " +

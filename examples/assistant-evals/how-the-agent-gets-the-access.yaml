@@ -1,0 +1,123 @@
+# E2: should the agent's Cloudflare level be raised, or a grant asked for this
+# one change? Ask Crewlet reads the question and the agent's access and proposes
+# the grant, which lapses when the change is done.
+#
+# Scripted, it holds the access read and one answer by its option with no level
+# change. Run against a model, grade each trial, passing at 5 of 6:
+#   1. It recommends a grant for this change, not a level raise, and says why:
+#      the configure level adds permissions the change does not need and
+#      lacks the one it does.
+#   2. It names the permission, the zone, and hours within 1 to 168 (4 by
+#      default).
+#   3. Where the access read says the company's own connection lacks the
+#      permission, it says a person adds it to the connection at Cloudflare
+#      first.
+#   4. It says nothing has to be synced: the catalogue is read again within a
+#      minute.
+#   5. It never says the grant outlives its hours or is tied to the task.
+#   6. It never says the agent's permission is set in Cloudflare's own
+#      settings.
+person:
+  apps: [admin]
+  acts: [comment_on_work_item]
+page:
+  screen: inbox
+  title: Inbox
+  params: {}
+  query: {}
+  resources: [{kind: task, id: ENG-41}]
+  selection: {kind: task, id: ENG-41}
+  source_revision: url:7e8f9a0b
+  accepts: []
+question: >-
+  The Agent CTO asks on ENG-41 how it should get the access to make the edge
+  change. What should I tell it?
+answers:
+  - route: GET /worklet/decisions
+    body:
+      handle: jane-founder
+      more: false
+      total: 1
+      items:
+        - kind: ask
+          at: "2026-11-14T10:00:00Z"
+          put_to_you: true
+          may_answer: true
+          needs_you: true
+          ask:
+            id: 7d0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f
+            key: ENG-41
+            title: Serve versioned docs pages from the docs site
+            comment: c-14
+            asked_by: agent-cto
+            asked_at: "2026-11-14T10:00:00Z"
+            body: Should I raise my Cloudflare level to configure, or ask for a grant?
+            open: true
+            decision:
+              question: How should the Agent CTO get the access for the edge change?
+              options:
+                - {id: raise-level, label: "Raise the Cloudflare level to configure"}
+                - {id: grant, label: "Ask for a grant for this change"}
+              recommended: raise-level
+              rationale: One change to the level covers this and later edge work.
+              role: approver
+  - route: GET /worklet/comments
+    body:
+      item: 7d0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f
+      key: ENG-41
+      title: Serve versioned docs pages from the docs site
+      comments:
+        - id: c-14
+          author: agent-cto
+          ask: jane-founder
+          body: Should I raise my Cloudflare level to configure, or ask for a grant?
+          decision:
+            question: How should the Agent CTO get the access for the edge change?
+            options:
+              - {id: raise-level, label: "Raise the Cloudflare level to configure"}
+              - {id: grant, label: "Ask for a grant for this change"}
+            recommended: raise-level
+            role: approver
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: agent-cto, name: Agent CTO, kind: agent}
+  - route: GET /setup/integrations/{kind}/access/seats/{handle}/{lane}
+    body:
+      kind: cloudflare
+      lane: cloudflare
+      integration: Cloudflare
+      handle: agent-cto
+      name: Agent CTO
+      status: in_sync
+      status_label: In sync
+      grant: Zone Read
+      holds: Zone Read
+      scope: docs.example.com
+      tool: live
+      checked_at: "2026-11-14T09:47:00Z"
+      applied_at: "2026-11-14T09:38:00Z"
+      outcome: Applied
+      plan: []
+script:
+  - call: list_decisions
+  - call: get_seat_access
+    args: {handle: Agent CTO, integration: cloudflare}
+  - call: answer_decision
+    args:
+      item: ENG-41
+      answers: c-14
+      choice: grant
+      body: >-
+        Ask for a grant for this change: Origin Rules Edit on
+        docs.example.com for 4 hours, rather than a standing level.
+expect:
+  calls: [list_decisions, get_seat_access, answer_decision]
+  never: [set_seat_access]
+  shows:
+    - "grant: Ask for a grant for this change"
+    - Zone Read
+    - Answer question
+  proposals: 1
+  state: waiting_for_approval

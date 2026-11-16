@@ -152,6 +152,11 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return failed(mcp.RefusalNotFound, fmt.Sprintf("There is no tool named %q here. Use only the tools "+
 			"you are offered.", call.Name)), nil
 	}
+	if !s.t.spend(tool) {
+		return s.refuseBefore(ctx, tool, call.Arguments, "Not run", fmt.Errorf("%w: a turn "+
+			"makes at most %d calls of %s; answer from what you have read",
+			catalog.ErrInvalidArguments, tool.PerTurn, tool.Name)), nil
+	}
 	switch tool.Kind {
 	case catalog.KindRead:
 		if s.t.briefing() {
@@ -384,6 +389,11 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		return s.t.svc.dispatcher.Do(ctx, s.t.read, r)
 	}
 	preview, err := tool.Preview(ctx, read, s.t.svc.now(), args)
+	if err == nil && !s.t.onSubject(scope, preview) {
+		err = fmt.Errorf("%w: this turn read a web page, so it prepares changes only to "+
+			"what the person asked about (%s), never to %s; ask the person to name it",
+			catalog.ErrInvalidArguments, s.t.subjectWords(), orNothing(preview.Target))
+	}
 	if err == nil && tool.Kind == catalog.KindPageAction && s.t.page != nil &&
 		catalog.Args(args).String("action") == catalog.DraftSet {
 		preview.Changes = draftRows(preview.Changes, s.t.page.Draft)
