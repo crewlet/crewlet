@@ -26,9 +26,9 @@ import (
 // row (list_artifacts, get_artifact, list_dashboard_sources,
 // get_artifact_format, get_company_brand, create_artifact, publish_artifact, update_artifact,
 // share_artifact, unshare_artifact, upload_artifact_asset,
-// create_artifact_folder, move_artifact). Registered for seats and in the
-// operator catalogue from the hooks below, which [Register] and
-// [OperatorTools] already append.
+// create_artifact_folder, move_artifact, and the five comment tools of
+// artifacts_comments.go). Registered for seats and in the operator catalogue
+// from the hooks below, which [Register] and [OperatorTools] already append.
 //
 // Nothing that takes an artifact out of circulation is a tool: trash, restore,
 // purge and transfer are a person's gestures on the HTTP surface, so a
@@ -68,10 +68,10 @@ import (
 // A person who asked in a chat thread for a review sheet is waiting in that
 // thread: the seat publishes, then posts the `url` every answer carries with
 // its chat tools, and the delivery check sends the turn back if it only
-// published. So no artifact tool declares a delivery surface. The comment and
-// watch wakes of a later release arrive as changefeed-derived wakes on the
-// artifacts log (ADR-0012), and the tool that answers one on the artifact
-// itself is what will declare the `artifacts` surface.
+// published. So no publishing tool declares a delivery surface. A comment's
+// wake arrives as a changefeed-derived wake on the artifacts log (ADR-0012),
+// and the two tools that answer one on the artifact itself, a comment and a
+// resolve ([ArtifactCommentWrites]), deliver to the artifacts surface.
 
 // The artifacts tools' names: each is its authority row's action.
 const (
@@ -91,11 +91,12 @@ const (
 	MoveArtifactTool         = string(authz.ActionArtifactMove)
 )
 
-// ArtifactTools are the thirteen, reads first.
+// ArtifactTools are the eighteen, reads first and the comment writes last.
 func ArtifactTools() []string {
 	return []string{ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, ArtifactFormatTool, CompanyBrandTool,
-		CreateArtifactTool, PublishArtifactTool, UpdateArtifactTool, ShareArtifactTool,
-		UnshareArtifactTool, UploadArtifactAssetTool, CreateArtifactFolderTool, MoveArtifactTool}
+		ListArtifactCommentsTool, CreateArtifactTool, PublishArtifactTool, UpdateArtifactTool, ShareArtifactTool,
+		UnshareArtifactTool, UploadArtifactAssetTool, CreateArtifactFolderTool, MoveArtifactTool,
+		CommentOnArtifactTool, ResolveArtifactCommentTool, EditArtifactCommentTool, RemoveArtifactCommentTool}
 }
 
 // ArtifactReader is the artifacts domain's read side as these tools ask it,
@@ -253,6 +254,14 @@ type ArtifactDeps struct {
 	// looping turn bury the company's tree.
 	FolderTurns *FolderTurns
 
+	// Comments are the artifacts' comment threads. Nil serves none of the
+	// comment tools ([ArtifactCommentTools]).
+	Comments ArtifactComments
+
+	// Routing decides who each comment record wakes and tells, at write
+	// time ([ArtifactCommentRouter]).
+	Routing ArtifactCommentRouter
+
 	// Set by [Register] and [OperatorTools] from the deps around them; ops,
 	// the one operation rule every family of write tools takes
 	// ([operations]), by [OperatorTools] alone. work carries the surface's
@@ -350,6 +359,11 @@ func artifactToolSet(a ArtifactDeps) []candidate {
 		{&uploadArtifactAsset{deps: a}, on},
 		{&createArtifactFolder{deps: a}, on && a.FolderTurns != nil},
 		{&moveArtifact{deps: a}, on},
+		{&listArtifactComments{deps: a}, a.commentsServed()},
+		{&commentOnArtifact{deps: a}, a.commentsServed()},
+		{&resolveArtifactComment{deps: a}, a.commentsServed()},
+		{&editArtifactComment{deps: a}, a.commentsServed()},
+		{&removeArtifactComment{deps: a}, a.commentsServed()},
 	}
 }
 
@@ -361,7 +375,8 @@ func artifactToolSet(a ArtifactDeps) []candidate {
 // them ([mcp.WritesToSharedSurface]), and handed the five reads.
 func artifactAnnotations(name string) (tools.Annotations, bool) {
 	switch name {
-	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, ArtifactFormatTool, CompanyBrandTool:
+	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, ArtifactFormatTool, CompanyBrandTool,
+		ListArtifactCommentsTool:
 		// Reads, and idempotent. get_artifact may condense a long file a
 		// colleague wrote through the auxiliary model, which is a read's
 		// cost the way query_episodes' condensing is, and writes nothing a
@@ -391,6 +406,21 @@ func artifactAnnotations(name string) (tools.Annotations, bool) {
 		// writes nothing. Not destructive: an audience withdrawn is shared
 		// again by the same call, and nothing anybody wrote is lost.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}, true
+	case CommentOnArtifactTool:
+		// ADDITIVE, and not idempotent as a tool: a second call is a second
+		// remark, and a re-run turn's collapses onto the first by its key.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}, true
+	case ResolveArtifactCommentTool:
+		// IDEMPOTENT: a resolved thread resolved again, or an open one
+		// reopened, writes nothing. Not destructive: a reopen undoes it.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}, true
+	case EditArtifactCommentTool, RemoveArtifactCommentTool:
+		// DESTRUCTIVE: an edit replaces what a remark said and a removal takes
+		// its words down. Idempotent: the same edit, or a removal again,
+		// writes nothing.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}, true
 	case CreateArtifactFolderTool, MoveArtifactTool:
 		// IDEMPOTENT: a chain that already exists is answered as it is, and

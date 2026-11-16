@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -424,6 +425,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			// AND A CODE WRITE REACHES GITLET: a branch moved or a
 			// repository changed is the answer to work that came from it.
 			opts = append(opts, tools.DeliversTo(gitlet.Source))
+		case slices.Contains(ArtifactCommentWrites(), c.tool.Name()):
+			// AND A COMMENT OR A RESOLVE ANSWERS ON THE ARTIFACT, where the
+			// person whose comment woke the turn reads it.
+			opts = append(opts, tools.DeliversTo(artifactsdomain.Source))
 		}
 		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
 		// each tool: the authority table is keyed on the tool's own
