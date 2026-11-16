@@ -1474,7 +1474,8 @@ const (
 	// the kit's shared modules regrouped around the new chunk: 422 KiB, 2.30 seconds.
 	// Doclet's newest change read as the page reads, on kit 0.141.1, whose one sheet adds its new parts: 420.3 KiB: 421 KiB, 2.30 seconds.
 	// The Settings polish, on kit 0.141.1: 420.2 KiB, the kit's shared chunk most of it: 421 KiB, 2.30 seconds.
-	initialBudget = 422 << 10
+	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0: 422.2 KiB: 423 KiB, 2.31 seconds.
+	initialBudget = 423 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -2664,7 +2665,9 @@ const (
 	// kit's newer components most of it: 6489 KiB.
 	// One notice system, on kit 0.142.0: 6511.6 KiB (6,667,924 bytes), 140,086 over main, about
 	// 134 KiB of it the coding harness marks kit 0.139.0 added to the vendor mark chunk: 6512 KiB.
-	treeBudget = 5<<20 + 1255<<10
+	// The clear controls, Doclet changes, Settings polish and notices train, on kit 0.144.0:
+	// 6521.1 KiB (6,677,651 bytes), 149,840 over main: 6522 KiB.
+	treeBudget = 5<<20 + 1402<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
