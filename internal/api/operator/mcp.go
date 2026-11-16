@@ -120,13 +120,20 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 			// a refusal.
 			return nil, err
 		}
-		return &mcp.CallToolResult{
-			IsError: result.Failed,
-			// THE ASSISTANT READS TEXT, so a note on the arguments is
-			// rendered after the answer ([tools.Rendered]).
-			Content: []mcp.Content{&mcp.TextContent{Text: tools.Rendered(result)}},
-		}, nil
+		return mcpAnswer(result), nil
 	}
+}
+
+// mcpAnswer is a tool's answer as an assistant reads it: its text with any note
+// on the arguments after it ([tools.Rendered]), then each image the answer
+// carries, which tools.Invoke held to the rule as the tool returned.
+func mcpAnswer(result tools.Result) *mcp.CallToolResult {
+	content := make([]mcp.Content, 0, 1+len(result.Images))
+	content = append(content, &mcp.TextContent{Text: tools.Rendered(result)})
+	for _, img := range result.Images {
+		content = append(content, &mcp.ImageContent{Data: img.Data, MIMEType: img.MIMEType})
+	}
+	return &mcp.CallToolResult{IsError: result.Failed, Content: content}
 }
 
 // MCPHandler serves the MCP transport at [MCPPattern].

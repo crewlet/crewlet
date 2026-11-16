@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -619,4 +620,27 @@ func (stubPageWriter) Comment(context.Context, doclet.Actor, string, doclet.NewC
 func (stubPageWriter) EditComment(context.Context, doclet.Actor, string, string,
 	string) (doclet.Comment, doclet.Written, error) {
 	return doclet.Comment{}, doclet.Written{}, nil
+}
+
+// AN OPERATOR'S ASSISTANT IS HANDED A TOOL'S PICTURE AFTER ITS TEXT. An answer
+// carrying an image reaches the MCP transport as its text, a note on the
+// arguments after it, and then one image block per picture, so the text that
+// says whose picture it is never arrives without it.
+//
+// Mutation: answer the text alone, and the picture the text names is missing.
+func TestAnOperatorsAssistantIsHandedAToolsPictureAfterItsText(t *testing.T) {
+	t.Parallel()
+	data := []byte("\x89PNG\r\n\x1a\n a crop")
+	got := operator.MCPAnswer(tools.Result{Output: "ana's crop of the chart", Note: "a note",
+		Images: []crewletmcp.Image{{MIMEType: crewletmcp.ImagePNG, Data: data}}})
+	if got.IsError || len(got.Content) != 2 {
+		t.Fatalf("the answer is %d blocks (failed %v), want the text and the picture", len(got.Content), got.IsError)
+	}
+	if text, ok := got.Content[0].(*mcp.TextContent); !ok || text.Text != "ana's crop of the chart\n\nNote: a note" {
+		t.Errorf("the first block is %#v, want the text and its note", got.Content[0])
+	}
+	if img, ok := got.Content[1].(*mcp.ImageContent); !ok || img.MIMEType != crewletmcp.ImagePNG ||
+		string(img.Data) != string(data) {
+		t.Errorf("the second block is %#v, want the PNG", got.Content[1])
+	}
 }
